@@ -1,0 +1,643 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { Sidebar } from './components/Sidebar';
+import { Button, Input, Select, Textarea } from './components/Ui';
+import { Modal } from './components/Modal';
+import { isSupabaseConfigured, supabase, supabaseAuth } from './lib/supabase';
+import {
+  acceptOrganizationInvitation,
+  convertTicketToProject,
+  createOrganization,
+  deleteEntityCascade,
+  disableOrganizationMember,
+  insertRow,
+  inviteOrganizationMember,
+  loadAppData,
+  loadOrganizationContext,
+  revokeOrganizationInvitation,
+  updateOrganizationMemberRole,
+  updateRow,
+  upsertCompanySettings,
+  type Table,
+} from './lib/repository';
+import { uploadToR2 } from './lib/r2';
+import { Dashboard } from './features/Dashboard';
+import { Clients } from './features/Clients';
+import { ProjectPage } from './features/Projects';
+import { Tickets } from './features/Tickets';
+import { Notes } from './features/Notes';
+import { Invoices, Quotes } from './features/Finance';
+import { Archive, Settings, Stats } from './features/SimplePages';
+import { CalendarPage } from './features/CalendarPage';
+import { WeekPlanner } from './features/WeekPlanner';
+import { AttachmentList } from './components/AttachmentList';
+import { exportFinancePDF } from './lib/pdf';
+import type {
+  AppData, Client, CompanySettingsInput, EntityType, FinanceLine, Invoice, Note, OrganizationContext, OrganizationRole, Project, Quote, Task, TaskStatus, Ticket, Subtask, Comment as TaskComment,
+} from './types';
+import { uid } from './lib/format';
+import './styles/globals.css';
+
+type Page = 'dashboard'|'weekplanner'|'calendar'|'stats'|'notes'|'clients'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
+type EditMode =
+  | { kind: 'client'; item?: Client }
+  | { kind: 'project'; item?: Project }
+  | { kind: 'task'; item?: Task; projectId: string }
+  | { kind: 'ticket'; item?: Ticket }
+  | { kind: 'note'; item?: Note }
+  | { kind: 'quote'; item?: Quote }
+  | { kind: 'invoice'; item?: Invoice }
+  | null;
+
+const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], notes: [], quotes: [], invoices: [], attachments: [], companySettings: null };
+const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null };
+const activeOrgStorageKey = 'brandcore.activeOrganizationId';
+
+const editKindToTable: Record<NonNullable<EditMode>['kind'], Table> = {
+  client: 'clients',
+  project: 'projects',
+  task: 'tasks',
+  ticket: 'tickets',
+  note: 'notes',
+  quote: 'quotes',
+  invoice: 'invoices',
+};
+
+const editKindToEntity: Record<NonNullable<EditMode>['kind'], EntityType> = {
+  client: 'client',
+  project: 'project',
+  task: 'task',
+  ticket: 'ticket',
+  note: 'note',
+  quote: 'quote',
+  invoice: 'invoice',
+};
+
+function App() {
+  const [sessionReady, setSessionReady] = useState(false);
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [data, setData] = useState<AppData>(emptyData);
+  const [organizationContext, setOrganizationContext] = useState<OrganizationContext>(emptyOrganizationContext);
+  const [activeOrganizationId, setActiveOrganizationId] = useState<string | null>(() => localStorage.getItem(activeOrgStorageKey));
+  const [page, setPage] = useState<Page>('dashboard');
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [edit, setEdit] = useState<EditMode>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Track which user + organization we have loaded data for, so auth events do not
+  // trigger duplicate refreshes for the same workspace.
+  const loadedForRef = useRef<string | null>(null);
+
+  const activeOrganization = organizationContext.activeOrganization;
+  const activeMembership = organizationContext.activeMembership;
+  const canWrite = activeMembership ? ['owner', 'admin', 'member'].includes(activeMembership.role) : false;
+  const canAdmin = activeMembership ? ['owner', 'admin'].includes(activeMembership.role) : false;
+
+  async function loadWorkspace(preferredOrganizationId = activeOrganizationId) {
+    setLoading(true); setError(null);
+    try {
+      const orgContext = await loadOrganizationContext(preferredOrganizationId);
+      setOrganizationContext(orgContext);
+      const orgId = orgContext.activeOrganization?.id ?? null;
+      setActiveOrganizationId(orgId);
+      if (orgId) {
+        localStorage.setItem(activeOrgStorageKey, orgId);
+        setData(await loadAppData(orgId));
+      } else {
+        localStorage.removeItem(activeOrgStorageKey);
+        setData(emptyData);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Onbekende fout');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refresh() {
+    await loadWorkspace(activeOrganizationId);
+  }
+
+  async function switchOrganization(organizationId: string) {
+    setProjectId(null);
+    setPage('dashboard');
+    loadedForRef.current = null;
+    await loadWorkspace(organizationId);
+  }
+
+  async function createNewOrganization() {
+    const name = prompt('Naam van de nieuwe organisatie');
+    if (!name?.trim()) return;
+    setLoading(true); setError(null);
+    try {
+      const org = await createOrganization(name);
+      await switchOrganization(org.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Organisatie aanmaken mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function inviteMember(email: string, role: OrganizationRole) {
+    if (!ensureCanAdmin()) throw new Error('Alleen owners en admins kunnen teamleden uitnodigen.');
+    if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
+    await inviteOrganizationMember(activeOrganizationId, email, role);
+    await loadWorkspace(activeOrganizationId);
+  }
+
+  async function acceptInvitation(invitationId: string) {
+    const membership = await acceptOrganizationInvitation(invitationId);
+    await switchOrganization(membership.organization_id);
+  }
+
+  async function changeMemberRole(memberId: string, role: OrganizationRole) {
+    if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
+    if (!activeMembership || activeMembership.role !== 'owner') throw new Error('Alleen owners kunnen rollen wijzigen.');
+    await updateOrganizationMemberRole(memberId, activeOrganizationId, role);
+    await loadWorkspace(activeOrganizationId);
+  }
+
+  async function disableMember(memberId: string) {
+    if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
+    if (!activeMembership || activeMembership.role !== 'owner') throw new Error('Alleen owners kunnen teamleden uitschakelen.');
+    await disableOrganizationMember(memberId, activeOrganizationId);
+    await loadWorkspace(activeOrganizationId);
+  }
+
+  async function revokeInvitation(invitationId: string) {
+    if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
+    if (!ensureCanAdmin()) throw new Error('Alleen owners en admins kunnen uitnodigingen intrekken.');
+    await revokeOrganizationInvitation(invitationId, activeOrganizationId);
+    await loadWorkspace(activeOrganizationId);
+  }
+
+  function ensureCanWrite(): boolean {
+    if (canWrite) return true;
+    setError('Je hebt alleen-lezen toegang tot deze organisatie. Vraag een owner/admin om schrijfrechten.');
+    return false;
+  }
+
+  function ensureCanAdmin(): boolean {
+    if (canAdmin) return true;
+    setError('Alleen owners en admins kunnen deze organisatie-instellingen aanpassen.');
+    return false;
+  }
+
+  useEffect(() => {
+    let active = true;
+
+    async function applySession(session: { user: { id: string } } | null) {
+      if (!active) return;
+      const userId = session?.user.id ?? null;
+      setLoggedIn(Boolean(session));
+      setCurrentUserId(userId);
+      setSessionReady(true);
+      if (userId && userId !== loadedForRef.current) {
+        loadedForRef.current = userId;
+        await loadWorkspace(localStorage.getItem(activeOrgStorageKey));
+      } else if (!userId) {
+        loadedForRef.current = null;
+        localStorage.removeItem(activeOrgStorageKey);
+        setActiveOrganizationId(null);
+        setOrganizationContext(emptyOrganizationContext);
+        setData(emptyData);
+      }
+    }
+
+    supabaseAuth.getSession().then(({ data }) => { void applySession(data.session); });
+    const { data: sub } = supabaseAuth.onAuthStateChange((_event, session) => { void applySession(session); });
+
+    return () => { active = false; sub.subscription.unsubscribe(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const project = useMemo(() => data.projects.find(p => p.id === projectId) ?? null, [data.projects, projectId]);
+
+  if (!isSupabaseConfigured) return <div className="boot"><div className="login-card"><h1>Configuratie ontbreekt</h1><p>Vul eerst VITE_SUPABASE_URL en VITE_SUPABASE_ANON_KEY in .env.local in.</p></div></div>;
+  if (!sessionReady) return <div className="boot">BrandCore laden…</div>;
+  if (!loggedIn) return <Login />;
+  if (!activeOrganization) return <div className="boot"><div className="login-card"><h1>Geen organisatie gevonden</h1><p>Er kon geen organisatie voor je account worden geladen.</p><Button variant="primary" onClick={createNewOrganization}>Organisatie maken</Button></div></div>;
+
+  const activeOrg = activeOrganization;
+
+  async function saveEdit(values: Record<string, unknown>) {
+    if (!edit) return;
+    if (!ensureCanWrite()) return;
+    setLoading(true); setError(null);
+    try {
+      switch (edit.kind) {
+        case 'client':
+          edit.item
+            ? await updateRow<Client>('clients', edit.item.id, values, activeOrg.id)
+            : await insertRow<Client>('clients', activeOrg.id, values);
+          break;
+        case 'project': {
+          const projectValues = {
+            ...values,
+            archived: typeof values.archived === 'boolean' ? values.archived : false,
+          };
+
+          edit.item
+            ? await updateRow<Project>('projects', edit.item.id, projectValues, activeOrg.id)
+            : await insertRow<Project>('projects', activeOrg.id, projectValues);
+          break;
+        }
+        case 'task':
+          edit.item
+            ? await updateRow<Task>('tasks', edit.item.id, values, activeOrg.id)
+            : await insertRow<Task>('tasks', activeOrg.id, { ...values, project_id: edit.projectId });
+          break;
+        case 'ticket': {
+          const sanitizedValues = sanitizeTicketValues(values, edit.item);
+          edit.item
+            ? await updateRow<Ticket>('tickets', edit.item.id, sanitizedValues, activeOrg.id)
+            : await insertRow<Ticket>('tickets', activeOrg.id, sanitizedValues);
+          break;
+        }
+        case 'note':
+          edit.item
+            ? await updateRow<Note>('notes', edit.item.id, values, activeOrg.id)
+            : await insertRow<Note>('notes', activeOrg.id, values);
+          break;
+        case 'quote':
+          edit.item
+            ? await updateRow<Quote>('quotes', edit.item.id, values, activeOrg.id)
+            : await insertRow<Quote>('quotes', activeOrg.id, values);
+          break;
+        case 'invoice':
+          edit.item
+            ? await updateRow<Invoice>('invoices', edit.item.id, values, activeOrg.id)
+            : await insertRow<Invoice>('invoices', activeOrg.id, values);
+          break;
+      }
+      setEdit(null);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Opslaan mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeCurrent() {
+    if (!edit || !('item' in edit) || !edit.item) return;
+    if (!ensureCanWrite()) return;
+    if (!confirm('Weet je zeker dat je dit item wilt verwijderen? Bijbehorende bijlagen worden ook verwijderd.')) return;
+    setLoading(true); setError(null);
+    try {
+      const table = editKindToTable[edit.kind];
+      await deleteEntityCascade(table, edit.item.id, activeOrg.id);
+      setEdit(null);
+      // If we just deleted the active project, navigate away.
+      if (edit.kind === 'project' && projectId === edit.item.id) {
+        setProjectId(null);
+        setPage('dashboard');
+      }
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Verwijderen mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function setTaskStatus(task: Task, status: TaskStatus) {
+    if (!ensureCanWrite()) return;
+    setError(null);
+    try { await updateRow<Task>('tasks', task.id, { status }, activeOrg.id); await refresh(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Status bijwerken mislukt'); }
+  }
+
+  async function updateTaskDate(taskId: string, endDate: string | null) {
+    if (!ensureCanWrite()) return;
+    setError(null);
+    await updateRow<Task>('tasks', taskId, { end_date: endDate }, activeOrg.id);
+    await refresh();
+  }
+
+  async function convert(ticket: Ticket) {
+    if (!ensureCanWrite()) return;
+    if (!confirm(`Ticket "${ticket.title}" omzetten naar een project? Dit kan niet ongedaan worden gemaakt.`)) return;
+    setLoading(true); setError(null);
+    try {
+      const project = await convertTicketToProject(ticket, activeOrg.id);
+      await refresh();
+      setProjectId(project.id);
+      setPage('project');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Conversie mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveCompanySettings(values: CompanySettingsInput) {
+    if (!ensureCanAdmin()) throw new Error('Alleen owners en admins kunnen deze organisatie-instellingen aanpassen.');
+    setLoading(true); setError(null);
+    try {
+      await upsertCompanySettings(activeOrg.id, values);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Bedrijfsinstellingen opslaan mislukt');
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const title = page === 'project' ? project?.name ?? 'Project' : ({dashboard:'Dashboard',weekplanner:'Weekplanner',calendar:'Kalender',stats:'Statistieken',notes:'Notities',clients:'Klanten',tickets:'Tickets',quotes:'Offertes',invoices:'Facturen',archive:'Archief',settings:'Instellingen',project:'Project'} as Record<Page,string>)[page];
+
+  return <div className="app">
+    <Sidebar page={page} projects={data.projects.filter(p => !p.archived)} activeProjectId={projectId} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); }} onProject={(id) => { setProjectId(id); setPage('project'); }} onNewProject={() => canWrite ? setEdit({ kind: 'project' }) : setError('Je hebt alleen-lezen toegang tot deze organisatie.')}/>
+    <main className="main"><header className="topbar"><div className="topbar-title">{title}</div>{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button><Button onClick={() => supabaseAuth.signOut()}>Uitloggen</Button></header>
+      <section className="content">{error && <div className="error">{error}</div>}{renderPage()}</section>
+    </main>{edit && <EditModal edit={edit} data={data} organizationId={activeOrg.id} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} />}
+  </div>;
+
+  function renderPage() {
+    if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => setPage('settings')} />;
+    if (page === 'project' && project) return <ProjectPage data={data} project={project} canWrite={canWrite} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} setTaskStatus={setTaskStatus}/>;
+    if (page === 'clients') return <Clients data={data} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onEdit={(item)=>setEdit({kind:'client', item})}/>;
+    if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>setEdit({kind:'ticket', item})} onConvert={convert}/>;
+    if (page === 'notes') return <Notes data={data} onNew={() => ensureCanWrite() && setEdit({kind:'note'})} onEdit={(item)=>setEdit({kind:'note', item})}/>;
+    if (page === 'quotes') return <Quotes data={data} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})}/>;
+    if (page === 'invoices') return <Invoices data={data} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})}/>;
+    if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} onUpdateTaskDate={updateTaskDate} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
+    if (page === 'calendar') return <CalendarPage organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
+    if (page === 'stats') return <Stats data={data}/>;
+    if (page === 'archive') return <Archive data={data} onOpen={(id) => { setProjectId(id); setPage('project'); }} onRestore={async (project) => { if (!ensureCanWrite()) return; setError(null); try { await updateRow<Project>('projects', project.id, { archived: false }, activeOrg.id); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Herstellen mislukt'); } }}/>;
+    if (page === 'settings') return <Settings settings={data.companySettings} organizationContext={organizationContext} currentUserId={currentUserId} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
+    return <div className="empty"><div className="e-big">Geen project geselecteerd</div></div>;
+  }
+}
+
+function Login() {
+  const [email, setEmail] = useState('');
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function signIn() {
+    setError(null);
+    const { error } = await supabaseAuth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
+    if (error) setError(error.message); else setSent(true);
+  }
+  return <main className="login"><div className="login-card"><div className="app-brand"><div className="brand-icon">B</div><span>BrandCore</span></div><h1>Werkruimte</h1><p>Login met je e-mailadres om je CRM/project-app te gebruiken.</p><Input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="jij@bedrijf.nl"/><Button variant="primary" onClick={signIn} disabled={!email}>Stuur magic link</Button>{sent && <p className="success">Check je mailbox. Open de link in dezelfde browser als waar je deze pagina hebt geopend.</p>}{error && <p className="error">{error}</p>}</div></main>;
+}
+
+function EditModal({ edit, data, organizationId, readOnly, onClose, onSave, onDelete, onAttachmentsChanged }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void }) {
+  const item = 'item' in edit ? edit.item : undefined;
+  const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit));
+  const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
+  const title = `${item ? 'Bewerk' : 'Nieuw'} ${edit.kind}`;
+
+  const attachmentBlock = item ? <AttachmentList
+    attachments={data.attachments}
+    entityType={editKindToEntity[edit.kind]}
+    entityId={item.id}
+    onChanged={onAttachmentsChanged}
+    canDelete={!readOnly}
+  /> : null;
+
+  return <Modal title={title} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{readOnly ? 'Sluiten' : 'Annuleren'}</Button>{!readOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!readOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form))}>Opslaan</Button>}</>}>
+    {readOnly && <div className="readonly-note">Je bekijkt dit item met alleen-lezen rechten. Wijzigen, verwijderen en uploaden zijn uitgeschakeld.</div>}
+    {edit.kind === 'client' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Klantnaam"/><Input value={form.client_code} onChange={e=>set('client_code',e.target.value)} placeholder="Klantcode"/><Input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} placeholder="Contactpersoon"/><Input value={form.email} onChange={e=>set('email',e.target.value)} placeholder="Email"/><Input value={form.phone} onChange={e=>set('phone',e.target.value)} placeholder="Telefoon"/><Select value={form.status} onChange={e=>set('status',e.target.value)}><option value="active">Actief</option><option value="prospect">Prospect</option><option value="inactive">Inactief</option></Select><Input type="number" value={form.value_eur} onChange={e=>set('value_eur',Number(e.target.value))} placeholder="Waarde"/><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags, komma gescheiden"/><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Notities"/>{!readOnly && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.client} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'project' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Projectnaam"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Omschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/><Input value={form.color} onChange={e=>set('color',e.target.value)} placeholder="#FFD966"/><label className="check-row"><input type="checkbox" checked={Boolean(form.archived)} onChange={e=>set('archived',e.target.checked)}/><span>Project archiveren</span></label>{!readOnly && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.project} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'task' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Taaktitel"/><Select value={form.status} onChange={e=>set('status',e.target.value)}><option value="todo">Te doen</option><option value="doing">Bezig</option><option value="review">Review</option><option value="done">Klaar</option></Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags"/><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/><TaskDetailEditor subtasks={form.subtasks} comments={form.comments} set={set}/>{!readOnly && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.task} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'ticket' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Ticket titel"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={Boolean((item as Ticket | undefined)?.converted_to_project_id)}><option value="new">Nieuw</option><option value="review">Review</option><option value="approved">Goedgekeurd</option><option value="rejected">Geweigerd</option>{(item as Ticket | undefined)?.converted_to_project_id && <option value="converted">Omgezet</option>}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne notities"/><small className="ticket-status-hint">Gebruik <strong>Project maken</strong> om een ticket om te zetten. <strong>Omgezet</strong> is geen handmatige status.</small>{!readOnly && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.ticket} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'note' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Titel"/><Textarea value={form.content} onChange={e=>set('content',e.target.value)} placeholder="Notitie" style={{minHeight:220}}/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.project_id} onChange={e=>set('project_id',e.target.value)}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>{!readOnly && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.note} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
+    {(edit.kind === 'quote' || edit.kind === 'invoice') && <FinanceForm kind={edit.kind} data={data} organizationId={organizationId} form={form} set={set} item={item} readOnly={readOnly} onUploaded={onAttachmentsChanged} attachmentBlock={attachmentBlock}/>}
+  </Modal>;
+}
+
+function FormGrid({ children }: { children: React.ReactNode }) { return <div className="form-grid">{children}</div>; }
+
+function normalizeSubtasks(value: unknown): Subtask[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const source = item as Partial<Subtask> | undefined;
+      return {
+        id: String(source?.id || uid()),
+        label: String(source?.label || '').trim(),
+        done: Boolean(source?.done),
+      };
+    })
+    .filter((item) => item.id);
+}
+
+function normalizeComments(value: unknown): TaskComment[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const source = item as Partial<TaskComment> | undefined;
+      return {
+        id: String(source?.id || uid()),
+        text: String(source?.text || '').trim(),
+        author: source?.author ? String(source.author).trim() : undefined,
+        created_at: source?.created_at ? String(source.created_at) : new Date().toISOString(),
+      };
+    })
+    .filter((item) => item.id && item.text);
+}
+
+function TaskDetailEditor({ subtasks, comments, set }: { subtasks: Subtask[]; comments: TaskComment[]; set: (k: string, v: unknown) => void }) {
+  const safeSubtasks = normalizeSubtasks(subtasks);
+  const safeComments = normalizeComments(comments);
+  const [draftComment, setDraftComment] = useState('');
+  const doneCount = safeSubtasks.filter(s => s.done).length;
+
+  const updateSubtask = (id: string, patch: Partial<Subtask>) => {
+    set('subtasks', safeSubtasks.map(subtask => subtask.id === id ? { ...subtask, ...patch } : subtask));
+  };
+
+  const addSubtask = () => {
+    set('subtasks', [...safeSubtasks, { id: uid(), label: '', done: false }]);
+  };
+
+  const removeSubtask = (id: string) => {
+    set('subtasks', safeSubtasks.filter(subtask => subtask.id !== id));
+  };
+
+  const addComment = () => {
+    const text = draftComment.trim();
+    if (!text) return;
+    set('comments', [{ id: uid(), text, created_at: new Date().toISOString() }, ...safeComments]);
+    setDraftComment('');
+  };
+
+  const removeComment = (id: string) => {
+    if (!confirm('Deze reactie verwijderen?')) return;
+    set('comments', safeComments.filter(comment => comment.id !== id));
+  };
+
+  return <div className="task-detail-editor">
+    <section className="task-editor-section">
+      <div className="tes-head">
+        <div><strong>Subtaken</strong><span>{doneCount}/{safeSubtasks.length} afgerond</span></div>
+        <Button onClick={addSubtask}>+ Subtaak</Button>
+      </div>
+      <div className="subtask-list">
+        {safeSubtasks.map(subtask => <div className="subtask-row" key={subtask.id}>
+          <input type="checkbox" checked={subtask.done} onChange={e => updateSubtask(subtask.id, { done: e.target.checked })}/>
+          <Input value={subtask.label} onChange={e => updateSubtask(subtask.id, { label: e.target.value })} placeholder="Bijv. feedback verwerken" />
+          <Button variant="ghost" onClick={() => removeSubtask(subtask.id)}>×</Button>
+        </div>)}
+        {safeSubtasks.length === 0 && <div className="task-empty-line">Nog geen subtaken. Voeg concrete stappen toe om voortgang zichtbaar te maken.</div>}
+      </div>
+    </section>
+
+    <section className="task-editor-section">
+      <div className="tes-head"><div><strong>Comments</strong><span>{safeComments.length} reactie(s)</span></div></div>
+      <div className="comment-composer">
+        <Textarea value={draftComment} onChange={e => setDraftComment(e.target.value)} placeholder="Schrijf een update, beslissing of overdracht…" />
+        <Button onClick={addComment} disabled={!draftComment.trim()}>Plaats comment</Button>
+      </div>
+      <div className="comment-list">
+        {safeComments.map(comment => <article className="comment-item" key={comment.id}>
+          <div className="comment-head"><span>{new Date(comment.created_at).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span><button type="button" onClick={() => removeComment(comment.id)}>Verwijderen</button></div>
+          <p>{comment.text}</p>
+        </article>)}
+        {safeComments.length === 0 && <div className="task-empty-line">Nog geen comments.</div>}
+      </div>
+    </section>
+  </div>;
+}
+
+
+function FileUpload({ organizationId, entity, id, onUploaded }: { organizationId: string; entity: EntityType; id: string; onUploaded: () => void }) {
+  const [msg, setMsg] = useState('');
+  return <div className="file-upload">
+    <input type="file" onChange={async e => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      setMsg('Uploaden…');
+      try {
+        await uploadToR2(f, organizationId, { entity_type: entity, entity_id: id });
+        setMsg(`Upload klaar: ${f.name}`);
+        onUploaded();
+      } catch (err) {
+        setMsg(err instanceof Error ? err.message : 'Upload mislukt');
+      } finally {
+        // Allow re-uploading the same file: clear the input.
+        e.target.value = '';
+      }
+    }}/>
+    {msg && <small>{msg}</small>}
+  </div>;
+}
+
+function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, onUploaded, attachmentBlock }: { kind: 'quote'|'invoice'; data: AppData; organizationId: string; form: Record<string, any>; set: (k:string,v:unknown)=>void; item?: { id: string }; readOnly: boolean; onUploaded: () => void; attachmentBlock: React.ReactNode }) {
+  const lines: FinanceLine[] = Array.isArray(form.lines) ? form.lines : [];
+  const updateLine = (id: string, k: keyof FinanceLine, v: string | number) => set('lines', lines.map(l => l.id === id ? { ...l, [k]: k === 'description' ? v : Number(v) } : l));
+  const handleDownloadPdf = () => {
+    const client = data.clients.find(c => c.id === form.client_id) ?? null;
+    // Build a doc-shaped object from the current form so the user can preview before saving.
+    const docLike = {
+      id: item?.id ?? '',
+      number: form.number || (kind === 'quote' ? 'CONCEPT-OFF' : 'CONCEPT-FAC'),
+      date: form.date,
+      valid_until: form.valid_until ?? null,
+      due_date: form.due_date ?? null,
+      lines: lines ?? [],
+      notes: form.notes ?? null,
+      status: form.status ?? 'draft',
+      client_id: form.client_id ?? null,
+      project_id: form.project_id ?? null,
+    } as unknown as Quote & Invoice;
+    void exportFinancePDF(docLike, kind, client, { company: data.companySettings }).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt'));
+  };
+  return <FormGrid><Input value={form.number} onChange={e=>set('number',e.target.value)} placeholder="Nummer"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.project_id} onChange={e=>set('project_id',e.target.value)}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select><Input type="date" value={form.date} onChange={e=>set('date',e.target.value)}/><Input type="date" value={kind==='quote'?form.valid_until:form.due_date} onChange={e=>set(kind==='quote'?'valid_until':'due_date',e.target.value)}/><Select value={form.status} onChange={e=>set('status',e.target.value)}><option value="draft">Concept</option><option value="sent">Verzonden</option><option value="accepted">Geaccepteerd</option><option value="paid">Betaald</option><option value="rejected">Afgewezen</option><option value="expired">Verlopen</option><option value="overdue">Te laat</option><option value="cancelled">Geannuleerd</option></Select><div className="lines-editor"><strong>Regels</strong>{lines.map(l=><div className="line" key={l.id}><Input value={l.description} onChange={e=>updateLine(l.id,'description',e.target.value)} placeholder="Omschrijving"/><Input type="number" value={l.quantity} onChange={e=>updateLine(l.id,'quantity',e.target.value)}/><Input type="number" value={l.unit_price} onChange={e=>updateLine(l.id,'unit_price',e.target.value)}/><Input type="number" value={l.vat} onChange={e=>updateLine(l.id,'vat',e.target.value)}/><Button onClick={()=>set('lines',lines.filter(x=>x.id!==l.id))}>×</Button></div>)}<Button onClick={()=>set('lines',[...lines,{id:uid(),description:'',quantity:1,unit_price:0,vat:21}])}>+ Regel</Button></div><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Notities"/><div className="finance-actions"><Button onClick={handleDownloadPdf} disabled={!lines || lines.length === 0}>Download PDF</Button></div>{!readOnly && item && <FileUpload organizationId={organizationId} entity={editKindToEntity[kind]} id={item.id} onUploaded={onUploaded}/>}{attachmentBlock}</FormGrid>;
+}
+
+
+function sanitizeTicketValues(values: Record<string, unknown>, existingTicket?: Ticket): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = { ...values };
+  delete sanitized.converted_to_project_id;
+
+  const requestedStatus = typeof sanitized.status === 'string' ? sanitized.status : undefined;
+  const ticketIsActuallyConverted = Boolean(existingTicket?.converted_to_project_id);
+
+  if (ticketIsActuallyConverted) {
+    sanitized.status = 'converted';
+    return sanitized;
+  }
+
+  if (requestedStatus === 'converted') {
+    sanitized.status = existingTicket?.status && existingTicket.status !== 'converted' ? existingTicket.status : 'new';
+  }
+
+  return sanitized;
+}
+
+function initialForm(edit: NonNullable<EditMode>): Record<string, any> {
+  if (edit.kind === "client") {
+    const item = edit.item;
+    return { name: item?.name ?? "", client_code: item?.client_code ?? "", contact_name: item?.contact_name ?? "", email: item?.email ?? "", phone: item?.phone ?? "", status: item?.status ?? "active", value_eur: item?.value_eur ?? 0, tags: item?.tags?.join(", ") ?? "", notes: item?.notes ?? "", color: item?.color ?? "#FFD966" };
+  }
+  if (edit.kind === "project") {
+    const item = edit.item;
+    return { name: item?.name ?? "", client_id: item?.client_id ?? "", description: item?.description ?? "", color: item?.color ?? "#FFD966", archived: item?.archived ?? false, start_date: item?.start_date ?? "", end_date: item?.end_date ?? "" };
+  }
+  if (edit.kind === "task") {
+    const item = edit.item;
+    return { title: item?.title ?? "", description: item?.description ?? "", status: item?.status ?? "todo", priority: item?.priority ?? "med", tags: item?.tags?.join(", ") ?? "", start_date: item?.start_date ?? "", end_date: item?.end_date ?? "", subtasks: normalizeSubtasks(item?.subtasks), comments: normalizeComments(item?.comments) };
+  }
+  if (edit.kind === "ticket") {
+    const item = edit.item;
+    return { title: item?.title ?? "", description: item?.description ?? "", client_id: item?.client_id ?? "", priority: item?.priority ?? "med", status: item?.status ?? "new", notes: item?.notes ?? "" };
+  }
+  if (edit.kind === "note") {
+    const item = edit.item;
+    return { title: item?.title ?? "", content: item?.content ?? "", client_id: item?.client_id ?? "", project_id: item?.project_id ?? "" };
+  }
+  const today = new Date().toISOString().slice(0,10);
+  if (edit.kind === "quote") {
+    const item = edit.item;
+    return { number: item?.number ?? "", client_id: item?.client_id ?? "", project_id: item?.project_id ?? "", date: item?.date ?? today, valid_until: item?.valid_until ?? "", status: item?.status ?? "draft", notes: item?.notes ?? "", lines: item?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: 21 }] };
+  }
+  const item = edit.item;
+  return { number: item?.number ?? "", client_id: item?.client_id ?? "", project_id: item?.project_id ?? "", date: item?.date ?? today, due_date: item?.due_date ?? "", status: item?.status ?? "draft", notes: item?.notes ?? "", lines: item?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: 21 }] };
+}
+
+function cleanForm(kind: string, form: Record<string, any>) {
+  const cleaned: Record<string, any> = { ...form };
+  for (const key of ["client_id","project_id","quote_id","valid_until","due_date","start_date","end_date"]) {
+    if (cleaned[key] === "") cleaned[key] = null;
+  }
+  if ("tags" in cleaned && typeof cleaned.tags === "string") {
+    cleaned.tags = cleaned.tags.split(",").map((x:string)=>x.trim()).filter(Boolean);
+  }
+  if (kind === 'task') {
+    cleaned.subtasks = normalizeSubtasks(cleaned.subtasks).filter((subtask: Subtask) => subtask.label.trim().length > 0);
+    cleaned.comments = normalizeComments(cleaned.comments).filter((comment: TaskComment) => comment.text.trim().length > 0);
+  }
+  if (Array.isArray(cleaned.lines)) {
+    cleaned.lines = cleaned.lines
+      .map((line: FinanceLine) => ({
+        id: line.id || uid(),
+        description: String(line.description || "").trim(),
+        quantity: Number.isFinite(Number(line.quantity)) ? Number(line.quantity) : 0,
+        unit_price: Number.isFinite(Number(line.unit_price)) ? Number(line.unit_price) : 0,
+        vat: Number.isFinite(Number(line.vat)) ? Number(line.vat) : 0,
+      }))
+      .filter((line: FinanceLine) => line.description || line.quantity || line.unit_price);
+  }
+  if (kind === "quote") {
+    if (!cleaned.number) cleaned.number = `OFF-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
+    delete cleaned.due_date;
+    delete cleaned.quote_id;
+  }
+  if (kind === "invoice") {
+    if (!cleaned.number) cleaned.number = `FAC-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
+    delete cleaned.valid_until;
+  }
+  if (!["quote","invoice"].includes(kind)) {
+    delete cleaned.lines; delete cleaned.number; delete cleaned.valid_until; delete cleaned.due_date; delete cleaned.quote_id;
+    if (kind !== 'task') { delete cleaned.subtasks; delete cleaned.comments; }
+  }
+  return cleaned;
+}
+
+createRoot(document.getElementById('root')!).render(<App />);

@@ -1,0 +1,12 @@
+name = "brandcore-media"
+main = "worker.ts"
+compatibility_date = "2026-04-26"
+
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "brandcore-media"
+
+[vars]
+ALLOWED_ORIGIN = "http://localhost:5173"
+SUPABASE_URL = "https://YOUR_PROJECT.supabase.co"
+SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY"

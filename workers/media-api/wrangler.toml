@@ -1,0 +1,37 @@
+name = "brandcore-media-api"
+main = "src/index.ts"
+compatibility_date = "2026-04-30"
+
+[vars]
+APP_ENV = "production"
+ALLOWED_ORIGINS = "https://app.brandcore.nl"
+SUPABASE_URL = "https://your-production-project.supabase.co"
+
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "brandcore-media-production"
+preview_bucket_name = "brandcore-media-staging"
+
+[env.staging]
+name = "brandcore-media-api-staging"
+
+[env.staging.vars]
+APP_ENV = "staging"
+ALLOWED_ORIGINS = "https://staging.brandcore.nl,http://localhost:5173"
+SUPABASE_URL = "https://your-staging-project.supabase.co"
+
+[[env.staging.r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "brandcore-media-staging"
+
+[env.production]
+name = "brandcore-media-api"
+
+[env.production.vars]
+APP_ENV = "production"
+ALLOWED_ORIGINS = "https://app.brandcore.nl"
+SUPABASE_URL = "https://your-production-project.supabase.co"
+
+[[env.production.r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "brandcore-media-production"

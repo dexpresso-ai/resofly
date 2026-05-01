@@ -1,0 +1,5 @@
+APP_ENV=local
+ALLOWED_ORIGINS=http://localhost:5173
+SUPABASE_URL=https://your-local-or-staging-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=replace-with-local-dev-service-role-key
+MEDIA_SIGNING_SECRET=replace-with-random-local-secret

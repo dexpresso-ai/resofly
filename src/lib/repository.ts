@@ -1,0 +1,420 @@
+import { supabase, supabaseAuth } from './supabase';
+import { recordInvitationBlockedBySeats } from '../services/licenseService';
+import { deleteR2Object } from './r2-api';
+import type {
+  AppData,
+  AuditLog,
+  Attachment,
+  Client,
+  CompanySettings,
+  CompanySettingsInput,
+  EntityType,
+  Invoice,
+  Note,
+  Organization,
+  OrganizationContext,
+  OrganizationInvitation,
+  OrganizationBillingOverview,
+  OrganizationLicenseUsage,
+  OrganizationMember,
+  OrganizationMembershipView,
+  OrganizationRole,
+  Project,
+  Quote,
+  Task,
+  Ticket,
+  UUID,
+} from '../types';
+
+const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'quotes', 'invoices', 'attachments', 'company_settings'] as const;
+export type Table = typeof tables[number];
+
+type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
+
+type MembershipRow = OrganizationMember & { organization: Organization | Organization[] | null };
+
+const tableToEntity: Record<Table, EntityType | null> = {
+  clients: 'client',
+  projects: 'project',
+  tasks: 'task',
+  tickets: 'ticket',
+  notes: 'note',
+  quotes: 'quote',
+  invoices: 'invoice',
+  attachments: null,
+  company_settings: null,
+};
+
+const protectedMutationFields = new Set(['id', 'organization_id', 'created_by', 'created_at', 'updated_at']);
+
+function sanitizeMutationValues(values: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(values).filter(([key]) => !protectedMutationFields.has(key)),
+  );
+}
+
+export async function loadOrganizationContext(activeOrganizationId?: UUID | null): Promise<OrganizationContext> {
+  await ensureDefaultOrganization();
+  const { data: userData, error: userError } = await supabaseAuth.getUser();
+  if (userError) throw userError;
+
+  const currentUserId = userData.user?.id;
+  if (!currentUserId) throw new Error('Niet ingelogd.');
+  const currentEmail = userData.user?.email?.trim().toLowerCase() ?? '';
+  const nowIso = new Date().toISOString();
+
+  const [{ data: membershipRows, error: membershipError }, { data: invitationRows, error: invitationError }] = await Promise.all([
+    supabase
+      .from('organization_members')
+      .select('*, organization:organizations(*)')
+      .eq('user_id', currentUserId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: true }),
+    currentEmail
+      ? supabase
+        .from('organization_invitations')
+        .select('*')
+        .eq('status', 'pending')
+        .eq('email', currentEmail)
+        .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
+        .order('created_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  if (membershipError) throw membershipError;
+  if (invitationError) throw invitationError;
+
+  const memberships = ((membershipRows ?? []) as MembershipRow[])
+    .map(row => {
+      const organization = Array.isArray(row.organization) ? row.organization[0] : row.organization;
+      if (!organization) return null;
+      return { ...row, organization } as OrganizationMembershipView;
+    })
+    .filter(Boolean) as OrganizationMembershipView[];
+
+  const organizations = memberships.map(membership => membership.organization);
+  const activeOrganization = organizations.find(org => org.id === activeOrganizationId) ?? organizations[0] ?? null;
+  const activeMembership = activeOrganization
+    ? memberships.find(membership => membership.organization_id === activeOrganization.id && membership.user_id === currentUserId) ?? null
+    : null;
+
+  let teamMembers: OrganizationMember[] = [];
+  let organizationInvitations: OrganizationInvitation[] = [];
+  let auditLogs: AuditLog[] = [];
+  let licenseUsage: OrganizationLicenseUsage | null = null;
+  let billingOverview: OrganizationBillingOverview | null = null;
+  if (activeOrganization) {
+    const [{ data: teamRows, error: teamError }, { data: orgInvitationRows, error: orgInvitationError }, { data: auditRows, error: auditError }, { data: licenseRows, error: licenseError }, { data: billingRows, error: billingError }] = await Promise.all([
+      supabase
+        .from('organization_members')
+        .select('*')
+        .eq('organization_id', activeOrganization.id)
+        .eq('status', 'active')
+        .order('created_at', { ascending: true }),
+      supabase
+        .from('organization_invitations')
+        .select('*')
+        .eq('organization_id', activeOrganization.id)
+        .eq('status', 'pending')
+        .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('audit_logs')
+        .select('*')
+        .eq('organization_id', activeOrganization.id)
+        .order('created_at', { ascending: false })
+        .limit(40),
+      supabase.rpc('organization_license_usage', { p_organization_id: activeOrganization.id }),
+      supabase.rpc('organization_billing_overview', { p_organization_id: activeOrganization.id }),
+    ]);
+    if (teamError) throw teamError;
+    if (orgInvitationError) throw orgInvitationError;
+    if (licenseError) throw licenseError;
+    if (billingError) {
+      console.warn('Billing-overview kon niet worden geladen. Controleer of de Sprint 2 database-migratie is uitgevoerd.', billingError);
+    }
+    if (auditError) {
+      console.warn('Audit-log kon niet worden geladen. Controleer of de Sprint 1 database-migratie is uitgevoerd.', auditError);
+    }
+    teamMembers = (teamRows ?? []) as OrganizationMember[];
+    organizationInvitations = (orgInvitationRows ?? []) as OrganizationInvitation[];
+    auditLogs = auditError ? [] : (auditRows ?? []) as AuditLog[];
+    const firstLicenseRow = Array.isArray(licenseRows) ? licenseRows[0] : licenseRows;
+    licenseUsage = (firstLicenseRow ?? null) as OrganizationLicenseUsage | null;
+    const firstBillingRow = Array.isArray(billingRows) ? billingRows[0] : billingRows;
+    billingOverview = billingError ? null : (firstBillingRow ?? null) as OrganizationBillingOverview | null;
+  }
+
+  return {
+    memberships,
+    organizations,
+    activeOrganization,
+    activeMembership,
+    teamMembers,
+    pendingInvitations: (invitationRows ?? []) as OrganizationInvitation[],
+    organizationInvitations,
+    licenseUsage,
+    auditLogs,
+    billingOverview,
+  };
+}
+
+export async function ensureDefaultOrganization(): Promise<void> {
+  const { error } = await supabase.rpc('ensure_user_default_organization');
+  if (error) throw error;
+}
+
+export async function createOrganization(name: string): Promise<Organization> {
+  const cleanName = name.trim();
+  if (!cleanName) throw new Error('Organisatienaam ontbreekt.');
+  const { data, error } = await supabase.rpc('create_organization', { p_name: cleanName });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as Organization;
+}
+
+export async function inviteOrganizationMember(organizationId: UUID, email: string, role: OrganizationRole): Promise<OrganizationInvitation> {
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail) throw new Error('E-mailadres ontbreekt.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) throw new Error('Vul een geldig e-mailadres in.');
+  const { data, error } = await supabase.rpc('invite_organization_member', {
+    p_organization_id: organizationId,
+    p_email: cleanEmail,
+    p_role: role,
+  });
+  if (error) {
+    if (/licentie|seat|Geen vrije/i.test(error.message)) {
+      await recordInvitationBlockedBySeats(organizationId, cleanEmail);
+    }
+    throw error;
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as OrganizationInvitation;
+}
+
+export async function acceptOrganizationInvitation(invitationId: UUID): Promise<OrganizationMember> {
+  const { data, error } = await supabase.rpc('accept_organization_invitation', { p_invitation_id: invitationId });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as OrganizationMember;
+}
+
+export async function revokeOrganizationInvitation(invitationId: UUID, organizationId: UUID): Promise<void> {
+  const { error } = await supabase
+    .from('organization_invitations')
+    .update({ status: 'revoked', consumes_license: false })
+    .eq('id', invitationId)
+    .eq('organization_id', organizationId);
+  if (error) throw error;
+}
+
+export async function updateOrganizationMemberRole(memberId: UUID, organizationId: UUID, role: OrganizationRole): Promise<void> {
+  const { error } = await supabase
+    .from('organization_members')
+    .update({ role })
+    .eq('id', memberId)
+    .eq('organization_id', organizationId);
+  if (error) throw error;
+}
+
+export async function disableOrganizationMember(memberId: UUID, organizationId: UUID): Promise<void> {
+  const { error } = await supabase
+    .from('organization_members')
+    .update({ status: 'disabled' })
+    .eq('id', memberId)
+    .eq('organization_id', organizationId);
+  if (error) throw error;
+}
+
+export async function loadOrganizationMembers(organizationId: UUID): Promise<OrganizationMember[]> {
+  const { data, error } = await supabase
+    .from('organization_members')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as OrganizationMember[];
+}
+
+export async function loadOrganizationInvitations(organizationId: UUID): Promise<OrganizationInvitation[]> {
+  const { data, error } = await supabase
+    .from('organization_invitations')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as OrganizationInvitation[];
+}
+
+export async function loadAppData(organizationId: UUID): Promise<AppData> {
+  const [clients, projects, tasks, tickets, notes, quotes, invoices, attachments, companySettings] = await Promise.all([
+    select<Client>('clients', organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
+    select<Note>('notes', organizationId), select<Quote>('quotes', organizationId), select<Invoice>('invoices', organizationId), select<Attachment>('attachments', organizationId),
+    loadCompanySettings(organizationId),
+  ]);
+  return { clients, projects, tasks, tickets, notes, quotes, invoices, attachments, companySettings };
+}
+
+export async function loadCompanySettings(organizationId: UUID): Promise<CompanySettings | null> {
+  const { data, error } = await supabase
+    .from('company_settings')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data ?? null) as CompanySettings | null;
+}
+
+export async function upsertCompanySettings(organizationId: UUID, values: CompanySettingsInput): Promise<CompanySettings> {
+  const createdBy = await currentUserId();
+  const { data, error } = await supabase
+    .from('company_settings')
+    .upsert({ ...sanitizeMutationValues(values as unknown as Record<string, unknown>), organization_id: organizationId, created_by: createdBy }, { onConflict: 'organization_id' })
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as CompanySettings;
+}
+
+export async function select<T>(table: Table, organizationId: UUID): Promise<T[]> {
+  const { data, error } = await supabase
+    .from(table)
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as T[];
+}
+
+export async function insertRow<T>(table: Table, organizationId: UUID, values: Record<string, unknown>): Promise<T> {
+  const createdBy = await currentUserId();
+  const { data, error } = await supabase
+    .from(table)
+    .insert({ ...sanitizeMutationValues(values), organization_id: organizationId, created_by: createdBy })
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as T;
+}
+
+export async function updateRow<T>(table: Table, id: UUID, values: Record<string, unknown>, organizationId?: UUID): Promise<T> {
+  let query = supabase
+    .from(table)
+    .update({ ...sanitizeMutationValues(values), updated_at: new Date().toISOString() })
+    .eq('id', id);
+  if (organizationId) query = query.eq('organization_id', organizationId);
+  const { data, error } = await query.select('*').single();
+  if (error) throw error;
+  return data as T;
+}
+
+export async function deleteRow(table: Table, id: UUID, organizationId?: UUID): Promise<void> {
+  let query = supabase.from(table).delete().eq('id', id);
+  if (organizationId) query = query.eq('organization_id', organizationId);
+  const { error } = await query;
+  if (error) throw error;
+}
+
+async function currentUserId(): Promise<UUID> {
+  const { data: userData } = await supabaseAuth.getUser();
+  const userId = userData.user?.id;
+  if (!userId) throw new Error('Niet ingelogd.');
+  return userId;
+}
+
+/**
+ * Delete a single attachment: remove the DB row first (so the UI can never show a ghost
+ * pointing at a missing file), then best-effort R2 cleanup. An R2 failure leaves an orphan
+ * in storage but does not block the user.
+ */
+export async function deleteAttachment(att: { id: UUID; storage_key: string; organization_id?: UUID }): Promise<void> {
+  let query = supabase.from('attachments').delete().eq('id', att.id);
+  if (att.organization_id) query = query.eq('organization_id', att.organization_id);
+  const { error } = await query;
+  if (error) throw error;
+  try { await deleteR2Object(att.storage_key); }
+  catch (e) { console.warn('R2 cleanup mislukt voor', att.storage_key, e); }
+}
+
+async function selectAttachmentRefsForEntity(type: EntityType, id: UUID, organizationId?: UUID): Promise<AttachmentRef[]> {
+  let query = supabase
+    .from('attachments')
+    .select('id, storage_key')
+    .eq('entity_type', type)
+    .eq('entity_id', id);
+  if (organizationId) query = query.eq('organization_id', organizationId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data ?? []) as AttachmentRef[];
+}
+
+async function selectSubtaskAttachmentRefsForParentTask(taskId: UUID, organizationId?: UUID): Promise<AttachmentRef[]> {
+  let query = supabase
+    .from('attachments')
+    .select('id, storage_key')
+    .eq('entity_type', 'subtask')
+    .eq('parent_task_id', taskId);
+  if (organizationId) query = query.eq('organization_id', organizationId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data ?? []) as AttachmentRef[];
+}
+
+async function getChildTaskIds(projectId: UUID, organizationId?: UUID): Promise<UUID[]> {
+  let query = supabase.from('tasks').select('id').eq('project_id', projectId);
+  if (organizationId) query = query.eq('organization_id', organizationId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data ?? []).map((row: { id: UUID }) => row.id);
+}
+
+function uniqueAttachmentRefs(refs: AttachmentRef[]): AttachmentRef[] {
+  const byId = new Map<string, AttachmentRef>();
+  for (const ref of refs) byId.set(ref.id, ref);
+  return [...byId.values()];
+}
+
+/**
+ * Delete an entity together with its attachments in R2 and the attachments table.
+ * For tasks, this also cleans latent subtask attachments linked through parent_task_id.
+ * For projects, it also cleans attachments of cascading child tasks and their subtasks.
+ */
+export async function deleteEntityCascade(table: Table, id: UUID, organizationId?: UUID): Promise<void> {
+  const entityType = tableToEntity[table];
+  const refsToDelete: AttachmentRef[] = [];
+
+  if (entityType) {
+    refsToDelete.push(...await selectAttachmentRefsForEntity(entityType, id, organizationId));
+
+    const taskIds: UUID[] = [];
+    if (entityType === 'task') taskIds.push(id);
+    if (entityType === 'project') taskIds.push(...await getChildTaskIds(id, organizationId));
+
+    for (const taskId of taskIds) {
+      refsToDelete.push(...await selectAttachmentRefsForEntity('task', taskId, organizationId));
+      refsToDelete.push(...await selectSubtaskAttachmentRefsForParentTask(taskId, organizationId));
+    }
+  }
+
+  for (const att of uniqueAttachmentRefs(refsToDelete)) {
+    await deleteAttachment({ id: att.id, storage_key: att.storage_key, organization_id: organizationId });
+  }
+
+  await deleteRow(table, id, organizationId);
+}
+
+/** Atomic ticket → project conversion via Postgres function. */
+export async function convertTicketToProject(ticket: Ticket, organizationId = ticket.organization_id): Promise<Project> {
+  const { data, error } = await supabase.rpc('convert_ticket_to_project', { p_ticket_id: ticket.id, p_organization_id: organizationId });
+  if (error) throw error;
+  if (!data) throw new Error('Conversie gaf geen project terug.');
+  return (Array.isArray(data) ? data[0] : data) as Project;
+}
+
+export async function createAttachment(organizationId: UUID, input: {
+  entity_type: EntityType; entity_id: UUID; parent_task_id?: UUID | null; name: string; mime_type: string; size_bytes: number; storage_key: string; public_url?: string | null;
+}) {
+  return insertRow<Attachment>('attachments', organizationId, input);
+}
