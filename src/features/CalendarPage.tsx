@@ -323,8 +323,8 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
   async function refreshSources(connectionId: string) {
     if (!canWrite) { setError('Je hebt alleen-lezen toegang tot deze organisatie.'); return; }
     setLoading(true); setError(null); setMessage(null);
-    try { const n = await refreshCalendarSources(organizationId, connectionId); setIntegrations(n); setMessage('Agenda's opnieuw opgehaald.'); await refreshEventsOnly(); }
-    catch (err) { setError(err instanceof Error ? err.message : 'Agenda's ophalen mislukt.'); }
+    try { const n = await refreshCalendarSources(organizationId, connectionId); setIntegrations(n); setMessage("Agenda\u2019s opnieuw opgehaald."); await refreshEventsOnly(); }
+    catch (err) { setError(err instanceof Error ? err.message : "Agenda\u2019s ophalen mislukt."); }
     finally { setLoading(false); }
   }
   async function disconnect(connectionId: string) {
