@@ -625,6 +625,9 @@ async function createEvent(organizationId: string, requesterUserId: string, inpu
     throw new Error('Deze externe agenda is niet schrijfbaar volgens de provider.');
   }
   const connection = await getConnection(organizationId, calendarSource.connection_id);
+  if (connection.status !== 'active') {
+    throw new Error(`Agenda-koppeling is niet actief (status: ${connection.status}). Koppel het account opnieuw.`);
+  }
   const token = await getToken(organizationId, connection.id);
   const accessToken = await refreshAccessToken(token);
   const event = normalizeNewEventInput(input);
@@ -638,31 +641,61 @@ function normalizeNewEventInput(input: Record<string, unknown>) {
   if (!title) throw new Error('Eventtitel ontbreekt.');
   const startsAt = assertIso(String(input.startsAt || ''), 'startsAt');
   const endsAt = assertIso(String(input.endsAt || ''), 'endsAt');
-  if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) throw new Error('Eindtijd moet na starttijd liggen.');
+  const allDay = Boolean(input.allDay);
+  // For timed events, end must be strictly after start.
+  // For all-day events, start == end is valid (single day).
+  if (!allDay && new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
+    throw new Error('Eindtijd moet na starttijd liggen.');
+  }
+  if (allDay && new Date(endsAt).getTime() < new Date(startsAt).getTime()) {
+    throw new Error('Einddatum mag niet voor startdatum liggen.');
+  }
   return {
     title,
     description: input.description ? String(input.description) : null,
     location: input.location ? String(input.location) : null,
     startsAt,
     endsAt,
-    allDay: Boolean(input.allDay),
+    allDay,
   };
 }
 
+/** Given a date string "YYYY-MM-DD", return the next day as "YYYY-MM-DD". */
+function nextDay(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00Z'); // noon UTC avoids DST edge cases
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
 async function createGoogleEvent(accessToken: string, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
-  const body = event.allDay ? {
-    summary: event.title,
-    description: event.description,
-    location: event.location,
-    start: { date: event.startsAt.slice(0, 10) },
-    end: { date: event.endsAt.slice(0, 10) },
-  } : {
-    summary: event.title,
-    description: event.description,
-    location: event.location,
-    start: { dateTime: event.startsAt },
-    end: { dateTime: event.endsAt },
-  };
+  let body: Record<string, unknown>;
+  if (event.allDay) {
+    const startDate = event.startsAt.slice(0, 10);
+    // Google Calendar API: end.date is EXCLUSIVE. For a single-day event on 2026-05-08,
+    // start.date = "2026-05-08", end.date = "2026-05-09".
+    const endDateRaw = event.endsAt.slice(0, 10);
+    const endExclusive = endDateRaw <= startDate
+      ? nextDay(startDate)
+      : nextDay(endDateRaw);
+    body = {
+      summary: event.title,
+      description: event.description,
+      location: event.location,
+      start: { date: startDate },
+      end: { date: endExclusive },
+    };
+  } else {
+    // Timed events: startsAt/endsAt are already UTC ISO strings (ending in Z).
+    // Optionally set the source timezone so Google can display correctly in the calendar's zone.
+    const tz = source.timezone || undefined;
+    body = {
+      summary: event.title,
+      description: event.description,
+      location: event.location,
+      start: { dateTime: event.startsAt, timeZone: tz },
+      end: { dateTime: event.endsAt, timeZone: tz },
+    };
+  }
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
@@ -690,13 +723,27 @@ async function createGoogleEvent(accessToken: string, source: CalendarSourceRow,
 }
 
 async function createMicrosoftEvent(accessToken: string, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
+  let start: { dateTime: string; timeZone: string };
+  let end: { dateTime: string; timeZone: string };
+  if (event.allDay) {
+    // Microsoft Graph: all-day events also use exclusive end dates.
+    // dateTime should be midnight UTC, timeZone: 'UTC'.
+    const startDate = event.startsAt.slice(0, 10);
+    const endDateRaw = event.endsAt.slice(0, 10);
+    const endExclusive = endDateRaw <= startDate ? nextDay(startDate) : nextDay(endDateRaw);
+    start = { dateTime: `${startDate}T00:00:00`, timeZone: 'UTC' };
+    end = { dateTime: `${endExclusive}T00:00:00`, timeZone: 'UTC' };
+  } else {
+    start = { dateTime: toMicrosoftDateTime(event.startsAt), timeZone: 'UTC' };
+    end = { dateTime: toMicrosoftDateTime(event.endsAt), timeZone: 'UTC' };
+  }
   const body = {
     subject: event.title,
     body: { contentType: 'HTML', content: event.description || '' },
     location: event.location ? { displayName: event.location } : undefined,
     isAllDay: event.allDay,
-    start: { dateTime: toMicrosoftDateTime(event.startsAt), timeZone: 'UTC' },
-    end: { dateTime: toMicrosoftDateTime(event.endsAt), timeZone: 'UTC' },
+    start,
+    end,
   };
   const res = await fetch(`https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(source.provider_calendar_id)}/events`, {
     method: 'POST',

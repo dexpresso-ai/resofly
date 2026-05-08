@@ -179,27 +179,46 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
     }
   }
 
+  function makeDefaultTimes() {
+    const start = new Date();
+    start.setMinutes(0, 0, 0);
+    start.setHours(start.getHours() + 1);
+    const end = new Date(start);
+    end.setHours(end.getHours() + 1);
+    return { startsAt: toInputDateTime(start), endsAt: toInputDateTime(end) };
+  }
+
   async function submitNewEvent(e: FormEvent) {
     e.preventDefault();
     if (!canWrite) { setError('Je hebt alleen-lezen toegang tot deze organisatie.'); return; }
     if (!newEvent.sourceId) { setError('Kies eerst een schrijfbare agenda.'); return; }
     if (!newEvent.title.trim()) { setError('Geef het event een titel.'); return; }
+    const startsIso = inputDateTimeToIso(newEvent.startsAt);
+    const endsIso = inputDateTimeToIso(newEvent.endsAt);
+    if (!newEvent.allDay && new Date(endsIso).getTime() <= new Date(startsIso).getTime()) {
+      setError('Eindtijd moet na starttijd liggen.');
+      return;
+    }
     setLoading(true);
     setError(null);
     setMessage(null);
     try {
-      await createExternalCalendarEvent(organizationId, {
+      const created = await createExternalCalendarEvent(organizationId, {
         sourceId: newEvent.sourceId,
         title: newEvent.title.trim(),
         description: newEvent.description.trim() || null,
         location: newEvent.location.trim() || null,
-        startsAt: inputDateTimeToIso(newEvent.startsAt),
-        endsAt: inputDateTimeToIso(newEvent.endsAt),
+        startsAt: startsIso,
+        endsAt: endsIso,
         allDay: newEvent.allDay,
       });
-      setNewEvent(prev => ({ ...prev, title: '', description: '', location: '' }));
-      setMessage('Extern agenda-event aangemaakt.');
-      await refreshEventsOnly();
+      // Optimistic: voeg het aangemaakte event direct toe aan de lokale state
+      setEvents(prev => [...prev, created].sort((a, b) => a.starts_at.localeCompare(b.starts_at)));
+      const defaults = makeDefaultTimes();
+      setNewEvent(prev => ({ ...prev, title: '', description: '', location: '', allDay: false, startsAt: defaults.startsAt, endsAt: defaults.endsAt }));
+      setMessage('Event aangemaakt en zichtbaar in je externe agenda.');
+      // Achtergrond-refresh om eventuele server-side wijzigingen op te halen; falen is niet blokkerend
+      refreshEventsOnly().catch(() => { /* stille achtergrond-refresh */ });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Event aanmaken mislukt.');
     } finally {
