@@ -183,3 +183,105 @@
 /* Sprint 2 billing */
 .billing-card{gap:12px}.billing-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.billing-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.billing-summary>div{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:11px 12px;display:flex;flex-direction:column;gap:4px}.billing-summary span{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}.billing-summary strong{font-size:15px;color:var(--text)}.billing-summary small{font-size:10px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.billing-control-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:11px 12px}.billing-control-row strong{font-size:12px;color:var(--text)}.billing-control-row.mock-row{border-color:rgba(52,211,153,.25);background:rgba(52,211,153,.06)}.billing-control-row .form-select{min-width:170px}
 @media(max-width:1000px){.billing-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.billing-control-row{grid-template-columns:1fr}.billing-control-row .form-select,.billing-control-row button{width:100%}}
+
+/* ── Timeblock calendar view ──────────────────────────────────────── */
+:root{--tb-h:28px;--tb-gutter:54px}
+
+/* View toggle */
+.tb-view-tog{display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden;margin-left:8px}
+.tb-vbtn{background:transparent;border:none;color:var(--muted);padding:5px 10px;cursor:pointer;display:flex;align-items:center;transition:all .12s}
+.tb-vbtn:hover{color:var(--text);background:var(--bg3)}
+.tb-vbtn.active{background:var(--accent);color:#1a1a1a}
+
+/* Day headers */
+.tb-day-headers{display:grid;grid-template-columns:var(--tb-gutter) repeat(7,1fr);border-bottom:1px solid var(--border);margin:0 -16px;padding:0 16px}
+.tb-gutter{width:var(--tb-gutter);min-width:var(--tb-gutter);flex-shrink:0}
+.tb-dh{display:flex;align-items:center;gap:6px;padding:8px 6px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);justify-content:center}
+.tb-dh-name{font-weight:700}
+.tb-dh-num{font-size:15px;font-weight:900;color:var(--text);letter-spacing:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:50%}
+.tb-today .tb-dh-num,.tb-today-num{background:var(--accent);color:#1a1a1a}
+
+/* Container */
+.tb-container{display:flex;flex-direction:column;margin:0 -16px;padding:0}
+
+/* All-day row */
+.tb-allday-row{display:grid;grid-template-columns:var(--tb-gutter) repeat(7,1fr);border-bottom:1px solid var(--border);min-height:32px;padding:0 16px}
+.tb-allday-label{font-size:9px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;padding:4px 0}
+.tb-allday-cell{display:flex;flex-wrap:wrap;gap:3px;padding:4px 3px;align-items:flex-start;align-content:flex-start;border-left:1px solid var(--border)}
+.tb-ad-chip{font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;border:none;cursor:pointer;font-family:inherit;text-decoration:none;line-height:1.4}
+.tb-ad-chip.ext{background:rgba(167,139,250,.15);color:var(--accent-v)}
+.tb-ad-chip.task{background:rgba(255,217,102,.12);color:var(--accent)}
+.tb-ad-empty{font-size:10px;color:var(--muted);opacity:.4}
+
+/* Scroll area */
+.tb-scroll{overflow-y:auto;overflow-x:hidden;max-height:calc(100vh - 340px);min-height:400px;padding:0 16px}
+
+/* Grid */
+.tb-grid{display:grid;grid-template-columns:var(--tb-gutter) repeat(7,1fr);position:relative}
+
+/* Gutter time labels */
+.tb-gutter{display:flex;align-items:flex-start;justify-content:flex-end;padding-right:8px;position:relative;height:var(--tb-h)}
+.tb-gutter-full span{font-size:10px;font-weight:800;color:var(--muted);letter-spacing:.04em;transform:translateY(-6px);display:block}
+.tb-gutter-half span{display:none}
+
+/* Day column (positioned context for events) */
+.tb-col{position:relative;border-left:1px solid var(--border)}
+.tb-today-col{background:rgba(255,217,102,.025)}
+
+/* Slot cells (interactive) */
+.tb-cell{position:absolute;left:0;right:0;border-bottom:1px solid transparent;z-index:1;user-select:none}
+.tb-cell-hour{border-bottom-color:var(--border)}
+.tb-cell-half{border-bottom-color:rgba(255,255,255,.03)}
+.tb-cell-can{cursor:crosshair}
+.tb-cell-can:hover{background:rgba(255,217,102,.04)}
+
+/* Selection highlight */
+.tb-cell-sel{background:rgba(255,217,102,.12)!important;border-color:rgba(255,217,102,.25)!important;z-index:2}
+.tb-sel-label{position:absolute;top:2px;left:6px;font-size:10px;font-weight:800;color:var(--accent);letter-spacing:.02em;pointer-events:none;white-space:nowrap;z-index:3}
+
+/* Grid lines */
+.tb-line{border-bottom:1px solid rgba(255,255,255,.04);pointer-events:none;height:var(--tb-h)}
+.tb-line-hour{border-bottom-color:var(--border)}
+
+/* Now indicator */
+.tb-now{position:absolute;left:0;right:0;height:0;z-index:10;pointer-events:none}
+.tb-now::after{content:'';position:absolute;left:0;right:0;top:0;height:2px;background:var(--accent-r);border-radius:1px}
+.tb-now-dot{position:absolute;left:-4px;top:-4px;width:9px;height:9px;border-radius:50%;background:var(--accent-r)}
+
+/* Event blocks */
+.tb-ev{position:absolute;left:2px;right:2px;border-radius:6px;padding:3px 7px;display:flex;flex-direction:column;gap:1px;overflow:hidden;z-index:5;cursor:pointer;text-decoration:none;transition:box-shadow .12s,transform .08s;
+  background:rgba(167,139,250,.12);border:1px solid rgba(167,139,250,.25);border-left:3px solid var(--accent-v)}
+.tb-ev:hover{box-shadow:0 4px 16px rgba(0,0,0,.4);transform:scale(1.01);z-index:8}
+.tb-ev-priv{background:rgba(153,153,153,.08);border-color:rgba(153,153,153,.2);border-left-color:var(--muted)}
+.tb-ev-time{font-size:9px;font-weight:800;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.tb-ev-title{font-size:11px;font-weight:700;color:var(--text);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tb-ev-src{font-size:9px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Hint text */
+.tb-hint{font-size:10px;color:var(--muted);text-align:center;padding:6px 16px 10px;letter-spacing:.02em;opacity:.7}
+
+/* FAB (floating action button) */
+.tb-fab{position:fixed;bottom:28px;right:28px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#1a1a1a;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 24px rgba(255,217,102,.3),0 2px 8px rgba(0,0,0,.3);transition:transform .15s,box-shadow .15s;z-index:50}
+.tb-fab:hover{transform:scale(1.08);box-shadow:0 8px 32px rgba(255,217,102,.4),0 4px 12px rgba(0,0,0,.4)}
+
+/* Floating creation overlay */
+.tb-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);z-index:100;display:flex;align-items:center;justify-content:center;padding:20px}
+.tb-panel{background:var(--bg2);border:1px solid var(--border2);border-radius:14px;width:480px;max-width:100%;max-height:90vh;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:10px}
+.tb-panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.tb-panel-title{display:flex;align-items:center;gap:8px}
+.tb-panel-title h3{font-size:15px;font-weight:800}
+.tb-panel-close{background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;border-radius:6px;display:flex;align-items:center;justify-content:center}
+.tb-panel-close:hover{color:var(--text);background:var(--bg3)}
+.tb-panel label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--muted2);font-weight:800;text-transform:uppercase;letter-spacing:.06em}
+.tb-panel .check-row{flex-direction:row;text-transform:none;letter-spacing:0;font-weight:500;color:var(--text)}
+
+@media(max-width:900px){
+  .tb-day-headers{grid-template-columns:var(--tb-gutter) repeat(7,1fr)}
+  .tb-allday-row{grid-template-columns:var(--tb-gutter) repeat(7,1fr)}
+  .tb-grid{grid-template-columns:var(--tb-gutter) repeat(7,1fr)}
+  .tb-dh-name{display:none}
+  :root{--tb-h:24px}
+  .tb-ev-src{display:none}
+  .tb-fab{bottom:16px;right:16px;width:46px;height:46px}
+}
+
