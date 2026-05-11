@@ -1,7 +1,7 @@
 import { Archive, BarChart3, Calendar, FileText, LayoutDashboard, Receipt, Settings, StickyNote, Ticket, Users } from 'lucide-react';
 import type { Organization, OrganizationRole, Project } from '../types';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'stats'|'notes'|'clients'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'weekplanner'|'calendar'|'stats'|'notes'|'clients'|'client'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
 const items = [
   ['dashboard', LayoutDashboard, 'Dashboard'], ['weekplanner', Calendar, 'Weekplanner'], ['calendar', Calendar, 'Kalender'], ['stats', BarChart3, 'Statistieken'], ['notes', StickyNote, 'Notities'], ['clients', Users, 'Klanten'], ['tickets', Ticket, 'Tickets'], ['quotes', FileText, 'Offertes'], ['invoices', Receipt, 'Facturen'], ['archive', Archive, 'Archief'], ['settings', Settings, 'Instellingen'],
 ] as const;

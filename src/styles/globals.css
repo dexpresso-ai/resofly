@@ -378,3 +378,39 @@
   .notes-main-head{flex-direction:column}
   .related-notes-list,.notes-card-grid{grid-template-columns:1fr}
 }
+
+/* Client detail page */
+.client-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.client-alert{font-size:10px;font-weight:800;padding:4px 8px;border-radius:999px;text-transform:uppercase;letter-spacing:.06em;border:1px solid var(--border)}
+.client-alert.danger{background:rgba(240,107,107,.15);color:var(--accent-r);border-color:rgba(240,107,107,.35)}
+.client-alert.warning{background:rgba(255,159,67,.15);color:var(--accent-o);border-color:rgba(255,159,67,.35)}
+.client-card-finance{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;font-size:11px;color:var(--muted2)}
+.client-card-finance span{background:var(--bg3);border:1px solid var(--border);border-radius:999px;padding:3px 8px}
+.client-detail-page{display:flex;flex-direction:column;gap:16px;max-width:1320px;margin:0 auto;width:100%}
+.client-detail-hero{background:linear-gradient(135deg,var(--bg2),var(--bg3));border:1px solid var(--border);border-radius:var(--r2);padding:18px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.client-detail-title{display:flex;flex-direction:column;gap:14px;min-width:260px}
+.client-title-row{display:flex;align-items:center;gap:14px}
+.client-hero-avatar{width:58px;height:58px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900;color:#1a1a1a;box-shadow:0 12px 28px rgba(0,0,0,.28)}
+.client-title-row h2{font-size:28px;line-height:1.1;letter-spacing:-.04em;margin-bottom:5px}
+.client-title-row p{color:var(--muted2);font-size:12px;text-transform:capitalize}
+.client-detail-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.client-billing-alert{border-radius:12px;padding:12px 14px;display:flex;justify-content:space-between;gap:12px;align-items:center;border:1px solid var(--border)}
+.client-billing-alert strong{font-size:14px}.client-billing-alert span{color:var(--muted2);font-size:13px}
+.client-billing-alert.danger{background:rgba(240,107,107,.12);border-color:rgba(240,107,107,.35);color:var(--accent-r)}
+.client-billing-alert.warning{background:rgba(255,159,67,.12);border-color:rgba(255,159,67,.35);color:var(--accent-o)}
+.client-kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.client-kpi{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:15px;display:flex;flex-direction:column;gap:5px}
+.client-kpi span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em;font-weight:800}
+.client-kpi strong{font-size:28px;line-height:1;font-weight:900;letter-spacing:-.04em}
+.client-kpi small{color:var(--muted2);font-size:12px}.client-kpi.warning{border-color:rgba(255,159,67,.35)}.client-kpi.danger{border-color:rgba(240,107,107,.4)}.client-kpi.success{border-color:rgba(52,211,153,.3)}
+.client-detail-grid,.client-finance-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.client-panel{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:16px;min-width:0}
+.client-panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+.client-panel-head h3{font-size:15px}.client-panel-head span{font-size:11px;color:var(--muted);background:var(--bg3);border:1px solid var(--border);border-radius:999px;padding:2px 8px}
+.client-info-list{display:grid;grid-template-columns:1fr 1fr;gap:9px 14px}.client-info-list div{min-width:0}.client-info-list dt{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);font-weight:800;margin-bottom:3px}.client-info-list dd{font-size:13px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.client-inline-notes{margin-top:12px;padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--muted2);font-size:12px;line-height:1.6;white-space:pre-wrap}
+.client-project-list,.client-finance-list{display:flex;flex-direction:column;gap:7px}.client-project-row,.client-finance-row{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:9px;color:var(--text);padding:10px 11px;cursor:pointer;text-align:left;transition:all .15s;font-family:inherit}.client-project-row:hover,.client-finance-row:hover{background:var(--bg4);border-color:var(--border2)}
+.client-project-row{display:flex;align-items:center;gap:8px}.client-project-row span:nth-child(2){font-weight:800;flex:1}.client-project-row em{font-style:normal;font-size:10px;color:var(--muted);background:var(--bg2);border-radius:999px;padding:2px 7px}.client-project-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.client-finance-row{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:10px}.client-finance-row.is-overdue{border-color:rgba(240,107,107,.4);background:rgba(240,107,107,.08)}.client-finance-number{font-weight:900;font-size:12px}.client-finance-meta{font-size:11px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.client-finance-amount{font-weight:900;white-space:nowrap}.client-finance-status{font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:800;padding:4px 8px;border-radius:999px;background:var(--bg4);color:var(--muted2);white-space:nowrap}.client-finance-status.paid{background:rgba(52,211,153,.13);color:var(--accent-g)}.client-finance-status.overdue{background:rgba(240,107,107,.14);color:var(--accent-r)}.client-finance-status.sent,.client-finance-status.accepted{background:rgba(255,159,67,.13);color:var(--accent-o)}
+.client-empty-line{font-size:12px;color:var(--muted);border:1px dashed var(--border);border-radius:8px;padding:12px;text-align:center}
+@media(max-width:1100px){.client-kpi-grid{grid-template-columns:repeat(3,1fr)}.client-detail-grid,.client-finance-grid{grid-template-columns:1fr}.client-finance-row{grid-template-columns:1fr auto}.client-finance-meta{grid-column:1/-1}.client-finance-status{justify-self:start}}
+@media(max-width:700px){.client-kpi-grid{grid-template-columns:1fr 1fr}.client-detail-hero{align-items:flex-start}.client-info-list{grid-template-columns:1fr}.client-billing-alert{flex-direction:column;align-items:flex-start}.client-title-row h2{font-size:23px}}
