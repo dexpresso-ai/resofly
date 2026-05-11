@@ -4,6 +4,7 @@ export type TaskStatus = 'todo' | 'doing' | 'review' | 'done';
 export type Priority = 'low' | 'med' | 'high';
 export type TicketStatus = 'new' | 'review' | 'approved' | 'rejected' | 'converted';
 export type FinanceStatus = 'draft' | 'sent' | 'accepted' | 'rejected' | 'expired' | 'paid' | 'overdue' | 'cancelled';
+export type NoteType = 'general' | 'meeting' | 'action' | 'decision' | 'idea' | 'support';
 export type EntityType = 'client' | 'project' | 'task' | 'subtask' | 'ticket' | 'note' | 'quote' | 'invoice';
 export type InvoiceTemplateKind = 'none' | 'pdf' | 'image';
 export type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
@@ -115,7 +116,7 @@ export interface Ticket extends OrgScopedRow {
   client_id: UUID | null; title: string; description: string | null; priority: Priority; status: TicketStatus; notes: string | null; converted_to_project_id: UUID | null; created_at: string; updated_at: string;
 }
 export interface Note extends OrgScopedRow {
-  client_id: UUID | null; project_id: UUID | null; title: string; content: string; created_at: string; updated_at: string;
+  client_id: UUID | null; project_id: UUID | null; title: string; content: string; note_type: NoteType; tags: string[]; created_at: string; updated_at: string;
 }
 export interface FinanceLine { id: UUID; description: string; quantity: number; unit_price: number; vat: number; }
 export interface Quote extends OrgScopedRow {

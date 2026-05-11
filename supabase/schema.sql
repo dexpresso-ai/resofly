@@ -697,6 +697,8 @@ create table public.notes (
   project_id uuid references public.projects(id) on delete set null,
   title text not null,
   content text not null default '',
+  note_type text not null default 'general' check (note_type in ('general','meeting','action','decision','idea','support')),
+  tags text[] not null default '{}',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -920,6 +922,8 @@ create index idx_tickets_client on public.tickets(client_id);
 create index idx_notes_org on public.notes(organization_id, created_at desc);
 create index idx_notes_client on public.notes(client_id);
 create index idx_notes_project on public.notes(project_id);
+create index idx_notes_type on public.notes(organization_id, note_type, created_at desc);
+create index idx_notes_tags on public.notes using gin(tags);
 create index idx_quotes_org on public.quotes(organization_id, created_at desc);
 create index idx_quotes_client on public.quotes(client_id);
 create index idx_quotes_project on public.quotes(project_id);
