@@ -31,6 +31,15 @@ export function Sidebar({
   onProject: (id: string) => void;
   onNewProject: () => void;
 }) {
+  function openCalendarAnchor(anchor: 'agenda' | 'connections') {
+    onPage('calendar');
+    const hash = `#calendar-${anchor}`;
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${hash}`);
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('brandcore:calendar-anchor', { detail: { anchor } }));
+    }, 80);
+  }
+
   return <aside className="sidebar">
     <div className="sidebar-head">
       <div className="app-brand"><div className="brand-icon">B</div><span>BrandCore</span></div>
@@ -44,7 +53,15 @@ export function Sidebar({
     </div>
     <nav className="sidebar-nav">
       <div className="nav-section"><span>Menu</span></div>
-      {items.map(([key, Icon, label]) => <button key={key} className={`nav-item ${page === key ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span></button>)}
+      {items.map(([key, Icon, label]) => (
+        <div className="nav-item-wrap" key={key}>
+          <button className={`nav-item ${page === key ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span></button>
+          {key === 'calendar' && page === 'calendar' && <div className="nav-submenu">
+            <button type="button" onClick={() => openCalendarAnchor('agenda')}>Agendaweergave</button>
+            <button type="button" onClick={() => openCalendarAnchor('connections')}>Gekoppelde accounts</button>
+          </div>}
+        </div>
+      ))}
       <div className="nav-section"><span>Projecten</span><button onClick={onNewProject}>+</button></div>
       {projects.filter(p => !p.archived).map(project => <button key={project.id} className={`nav-item ${activeProjectId === project.id ? 'active' : ''}`} onClick={() => onProject(project.id)}>
         <span className="ni-dot" style={{ background: project.color }}/><span className="ni-label">{project.name}</span>

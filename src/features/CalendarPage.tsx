@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
-import { CalendarDays, Clock, LayoutList, Plus, RefreshCcw, Unplug, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react';
+import { CalendarDays, ChevronDown, ChevronRight, Clock, LayoutList, Plus, RefreshCcw, Unplug, X } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { addDays, DAY_NAMES_NL, formatISODate, isSameDay, startOfWeek } from '../lib/dates';
 import {
@@ -44,6 +44,35 @@ function providerLabel(p: CalendarProvider): string { return p === 'google' ? 'G
 function providerClass(p: CalendarProvider): string { return p === 'google' ? 'provider-google' : 'provider-microsoft'; }
 function visibilityLabel(v: CalendarVisibility): string { return v === 'organization' ? 'Gedeeld met organisatie' : 'Privé'; }
 
+function normalizeHexColor(color?: string | null): string {
+  if (!color) return '#FFD966';
+  const trimmed = color.trim();
+  if (/^#[0-9a-f]{3}$/i.test(trimmed)) {
+    const [, r, g, b] = trimmed;
+    return `#${r}${r}${g}${g}${b}${b}`;
+  }
+  if (/^#[0-9a-f]{6}$/i.test(trimmed)) return trimmed;
+  return '#FFD966';
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const normalized = normalizeHexColor(hex).slice(1);
+  const r = parseInt(normalized.slice(0, 2), 16);
+  const g = parseInt(normalized.slice(2, 4), 16);
+  const b = parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function eventColorStyle(color?: string | null): CSSProperties {
+  const c = normalizeHexColor(color);
+  return {
+    '--event-color': c,
+    '--event-bg': hexToRgba(c, 0.36),
+    '--event-border': hexToRgba(c, 0.78),
+    '--event-border-soft': hexToRgba(c, 0.45),
+  } as CSSProperties;
+}
+
 function slotToTime(slot: number): { hour: number; minutes: number } {
   const totalMin = HOUR_START * 60 + slot * SLOT_MINUTES;
   return { hour: Math.floor(totalMin / 60), minutes: totalMin % 60 };
@@ -65,11 +94,12 @@ interface DragState { dayIndex: number; startSlot: number; endSlot: number }
 
 /* ── TimeBlockGrid ───────────────────────────────────────────────────── */
 
-function TimeBlockGrid({ days, events, tasks, data, canWrite, writeableSources, onSelectSlot, onEditTask }: {
+function TimeBlockGrid({ days, events, tasks, data, sourceColors, canWrite, writeableSources, onSelectSlot, onEditTask }: {
   days: Date[];
   events: CalendarExternalEvent[];
   tasks: Task[];
   data: AppData;
+  sourceColors: Map<string, string>;
   canWrite: boolean;
   writeableSources: CalendarSource[];
   onSelectSlot: (day: Date, startSlot: number, endSlot: number) => void;
@@ -116,6 +146,7 @@ function TimeBlockGrid({ days, events, tasks, data, canWrite, writeableSources, 
   function timedEventsForDay(day: Date) { return events.filter(e => !e.all_day && isSameDay(new Date(e.starts_at), day)); }
   function allDayEventsForDay(day: Date) { return events.filter(e => e.all_day && isSameDay(new Date(e.starts_at), day)); }
   function tasksForDay(day: Date) { return tasks.filter(t => t.end_date && isSameDay(new Date(`${t.end_date}T12:00:00`), day)); }
+  function eventColor(ev: CalendarExternalEvent): string { return sourceColors.get(ev.source_id) ?? '#FFD966'; }
 
   function isInSelection(di: number, si: number): boolean {
     if (!drag || !isDragging || di !== drag.dayIndex) return false;
@@ -147,7 +178,7 @@ function TimeBlockGrid({ days, events, tasks, data, canWrite, writeableSources, 
           return (
             <div className={`tb-allday-cell${today(day) ? ' tb-today-col' : ''}`} key={di}>
               {ad.map(ev => (
-                <a className="tb-ad-chip ext" key={ev.id} href={ev.html_link || undefined} target="_blank" rel="noreferrer" title={ev.title}>{ev.title}</a>
+                <a className="tb-ad-chip ext" key={ev.id} href={ev.html_link || undefined} target="_blank" rel="noreferrer" title={ev.title} style={eventColorStyle(eventColor(ev))}>{ev.title}</a>
               ))}
               {dt.map(t => (
                 <button className="tb-ad-chip task" key={t.id} onClick={() => onEditTask(t)} title={t.title}>{t.title}</button>
@@ -205,7 +236,7 @@ function TimeBlockGrid({ days, events, tasks, data, canWrite, writeableSources, 
                   return (
                     <a className={`tb-ev${ev.visibility === 'private' ? ' tb-ev-priv' : ''}`} key={ev.id}
                       href={ev.html_link || undefined} target="_blank" rel="noreferrer"
-                      style={{ top: `${t0}%`, height: `${h}%` }}
+                      style={{ ...eventColorStyle(eventColor(ev)), top: `${t0}%`, height: `${h}%` }}
                       title={`${formatTime(ev.starts_at)} – ${formatTime(ev.ends_at)}\n${ev.title}`}>
                       <span className="tb-ev-time">{formatTime(ev.starts_at)}</span>
                       <span className="tb-ev-title">{ev.title}</span>
@@ -279,6 +310,7 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<CalendarView>('timeblock');
   const [showCreatePanel, setShowCreatePanel] = useState(false);
+  const [showConnections, setShowConnections] = useState(() => window.location.hash === '#calendar-connections');
   const [newEvent, setNewEvent] = useState(() => {
     const s = new Date(); s.setMinutes(0, 0, 0); s.setHours(s.getHours() + 1);
     const e = new Date(s); e.setHours(e.getHours() + 1);
@@ -294,9 +326,26 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
     () => integrations.sources.filter(s => s.write_enabled && s.sync_enabled && (s.user_id === currentUserId || s.visibility === 'organization')),
     [integrations.sources, currentUserId],
   );
+  const sourceColors = useMemo(
+    () => new Map(integrations.sources.map(s => [s.id, normalizeHexColor(s.color)])),
+    [integrations.sources],
+  );
 
   useEffect(() => { void refreshAll(); }, [organizationId]); // eslint-disable-line
   useEffect(() => { void refreshEventsOnly(); }, [rangeStart, rangeEnd]); // eslint-disable-line
+  useEffect(() => {
+    const handleCalendarAnchor = (event: Event) => {
+      const anchor = (event as CustomEvent<{ anchor?: string }>).detail?.anchor;
+      if (anchor === 'connections') setShowConnections(true);
+      window.setTimeout(() => document.getElementById(`calendar-${anchor ?? 'agenda'}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40);
+    };
+    window.addEventListener('brandcore:calendar-anchor', handleCalendarAnchor);
+    if (window.location.hash === '#calendar-connections') {
+      setShowConnections(true);
+      window.setTimeout(() => document.getElementById('calendar-connections')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+    }
+    return () => window.removeEventListener('brandcore:calendar-anchor', handleCalendarAnchor);
+  }, []);
   useEffect(() => {
     if (!newEvent.sourceId && writeableSources[0]) setNewEvent(p => ({ ...p, sourceId: writeableSources[0].id }));
     if (newEvent.sourceId && !writeableSources.some(s => s.id === newEvent.sourceId)) setNewEvent(p => ({ ...p, sourceId: writeableSources[0]?.id ?? '' }));
@@ -405,6 +454,7 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
       <div className="calendar-actions">
         <Button variant="primary" onClick={() => connect('google')} disabled={loading || !canWrite}>Google koppelen</Button>
         <Button variant="primary" onClick={() => connect('microsoft')} disabled={loading || !canWrite}>Microsoft koppelen</Button>
+        <Button onClick={() => setShowConnections(prev => !prev)}>{showConnections ? <ChevronDown size={14} /> : <ChevronRight size={14} />} Koppelingen</Button>
         <Button onClick={refreshAll} disabled={loading || eventsLoading}><RefreshCcw size={14} /> Ververs</Button>
       </div>
     </div>
@@ -412,9 +462,72 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
     {error && <div className="error">{error}</div>}
     {message && <div className="success">{message}</div>}
 
+    {/* Calendar view */}
+    <div className="calendar-main-card" id="calendar-agenda">
+      <div className="calendar-toolbar">
+        <Button onClick={() => setAnchor(p => addDays(p, -7))}>Vorige week</Button>
+        <Button onClick={() => setAnchor(startOfWeek(new Date()))}>Vandaag</Button>
+        <Button onClick={() => setAnchor(p => addDays(p, 7))}>Volgende week</Button>
+        <div className="calendar-range">{formatISODate(days[0])} t/m {formatISODate(days[6])}{eventsLoading ? ' · laden…' : ''}</div>
+        <Button className="calendar-link-btn" onClick={() => setShowConnections(prev => !prev)}>{showConnections ? 'Koppelingen verbergen' : 'Koppelingen beheren'}</Button>
+        <div className="tb-view-tog">
+          <button className={`tb-vbtn${view === 'timeblock' ? ' active' : ''}`} onClick={() => setView('timeblock')} title="Tijdlijn"><Clock size={14} /></button>
+          <button className={`tb-vbtn${view === 'list' ? ' active' : ''}`} onClick={() => setView('list')} title="Lijst"><LayoutList size={14} /></button>
+        </div>
+      </div>
+
+      {view === 'timeblock' && (
+        <div className="tb-day-headers">
+          <div className="tb-gutter" />
+          {days.map((day, i) => {
+            const td = isSameDay(day, new Date());
+            return <div className={`tb-dh${td ? ' tb-today' : ''}`} key={i}>
+              <span className="tb-dh-name">{DAY_NAMES_NL[i]}</span>
+              <span className={`tb-dh-num${td ? ' tb-today-num' : ''}`}>{day.getDate()}</span>
+            </div>;
+          })}
+        </div>
+      )}
+
+      {view === 'timeblock' ? (
+        <TimeBlockGrid days={days} events={events} tasks={data.tasks.filter(t => t.status !== 'done')} data={data}
+          sourceColors={sourceColors} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} />
+      ) : (
+        <div className="calendar-week-grid">
+          {days.map((day, idx) => {
+            const dt = tasksForDay(day); const de = eventsForDay(day);
+            return <div className="calendar-day" key={formatISODate(day)}>
+              <div className="calendar-day-head"><span>{DAY_NAMES_NL[idx]}</span><strong>{day.getDate()}</strong></div>
+              <div className="calendar-day-body">
+                {dt.map(t => <button className="calendar-item task" key={t.id} onClick={() => onEditTask(t)}>
+                  <span className="calendar-item-time">Taak</span><strong>{t.title}</strong>
+                  <small>{data.projects.find(p => p.id === t.project_id)?.name ?? 'Project'}</small>
+                </button>)}
+                {de.map(ev => <a className={`calendar-item external${ev.visibility === 'private' ? ' private-event' : ''}`}
+                  key={`${ev.provider}-${ev.provider_event_id}-${ev.starts_at}`} href={ev.html_link || undefined} target="_blank" rel="noreferrer"
+                  style={eventColorStyle(sourceColors.get(ev.source_id))}>
+                  <span className="calendar-item-time">{formatTime(ev.starts_at, ev.all_day)}</span><strong>{ev.title}</strong>
+                  <small>{providerLabel(ev.provider)} · {ev.source_name}{ev.visibility === 'private' ? ' · privé' : ' · team'}</small>
+                </a>)}
+                {dt.length === 0 && de.length === 0 && <div className="calendar-no-items">Geen items</div>}
+              </div>
+            </div>;
+          })}
+        </div>
+      )}
+    </div>
+
+
     {/* Connections */}
-    <section className="calendar-section">
-      <div className="calendar-section-head"><div><h3>Gekoppelde accounts</h3><p>Je ziet je eigen koppelingen en gedeelde agenda's. Tokens blijven versleuteld server-side.</p></div></div>
+    <section className="calendar-section connections-panel" id="calendar-connections">
+      <button className="calendar-section-head calendar-collapse-head" onClick={() => setShowConnections(prev => !prev)} aria-expanded={showConnections}>
+        <div>
+          <h3>Gekoppelde accounts</h3>
+          <p>{integrations.connections.length} account{integrations.connections.length === 1 ? '' : 's'} · {integrations.sources.length} agenda{integrations.sources.length === 1 ? '' : "'s"}. Tokens blijven versleuteld server-side.</p>
+        </div>
+        <span className="calendar-collapse-indicator">{showConnections ? <ChevronDown size={16} /> : <ChevronRight size={16} />} {showConnections ? 'Inklappen' : 'Uitklappen'}</span>
+      </button>
+      {showConnections && (<>
       {integrations.connections.length === 0 ? <div className="calendar-empty">Nog geen agenda gekoppeld of gedeeld.</div> : <div className="connection-list">
         {integrations.connections.map(conn => {
           const srcs = integrations.sources.filter(s => s.connection_id === conn.id);
@@ -450,60 +563,8 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
           </article>;
         })}
       </div>}
+      </>)}
     </section>
-
-    {/* Calendar view */}
-    <div className="calendar-main-card">
-      <div className="calendar-toolbar">
-        <Button onClick={() => setAnchor(p => addDays(p, -7))}>Vorige week</Button>
-        <Button onClick={() => setAnchor(startOfWeek(new Date()))}>Vandaag</Button>
-        <Button onClick={() => setAnchor(p => addDays(p, 7))}>Volgende week</Button>
-        <div className="calendar-range">{formatISODate(days[0])} t/m {formatISODate(days[6])}{eventsLoading ? ' · laden…' : ''}</div>
-        <div className="tb-view-tog">
-          <button className={`tb-vbtn${view === 'timeblock' ? ' active' : ''}`} onClick={() => setView('timeblock')} title="Tijdlijn"><Clock size={14} /></button>
-          <button className={`tb-vbtn${view === 'list' ? ' active' : ''}`} onClick={() => setView('list')} title="Lijst"><LayoutList size={14} /></button>
-        </div>
-      </div>
-
-      {view === 'timeblock' && (
-        <div className="tb-day-headers">
-          <div className="tb-gutter" />
-          {days.map((day, i) => {
-            const td = isSameDay(day, new Date());
-            return <div className={`tb-dh${td ? ' tb-today' : ''}`} key={i}>
-              <span className="tb-dh-name">{DAY_NAMES_NL[i]}</span>
-              <span className={`tb-dh-num${td ? ' tb-today-num' : ''}`}>{day.getDate()}</span>
-            </div>;
-          })}
-        </div>
-      )}
-
-      {view === 'timeblock' ? (
-        <TimeBlockGrid days={days} events={events} tasks={data.tasks.filter(t => t.status !== 'done')} data={data}
-          canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} />
-      ) : (
-        <div className="calendar-week-grid">
-          {days.map((day, idx) => {
-            const dt = tasksForDay(day); const de = eventsForDay(day);
-            return <div className="calendar-day" key={formatISODate(day)}>
-              <div className="calendar-day-head"><span>{DAY_NAMES_NL[idx]}</span><strong>{day.getDate()}</strong></div>
-              <div className="calendar-day-body">
-                {dt.map(t => <button className="calendar-item task" key={t.id} onClick={() => onEditTask(t)}>
-                  <span className="calendar-item-time">Taak</span><strong>{t.title}</strong>
-                  <small>{data.projects.find(p => p.id === t.project_id)?.name ?? 'Project'}</small>
-                </button>)}
-                {de.map(ev => <a className={`calendar-item external${ev.visibility === 'private' ? ' private-event' : ''}`}
-                  key={`${ev.provider}-${ev.provider_event_id}-${ev.starts_at}`} href={ev.html_link || undefined} target="_blank" rel="noreferrer">
-                  <span className="calendar-item-time">{formatTime(ev.starts_at, ev.all_day)}</span><strong>{ev.title}</strong>
-                  <small>{providerLabel(ev.provider)} · {ev.source_name}{ev.visibility === 'private' ? ' · privé' : ' · team'}</small>
-                </a>)}
-                {dt.length === 0 && de.length === 0 && <div className="calendar-no-items">Geen items</div>}
-              </div>
-            </div>;
-          })}
-        </div>
-      )}
-    </div>
 
     {/* List-view sidebar form */}
     {view === 'list' && (
