@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react';
-import { CalendarDays, ChevronDown, ChevronRight, Clock, LayoutList, Plus, RefreshCcw, Unplug, X } from 'lucide-react';
+import { CalendarDays, ChevronDown, ChevronRight, Clock, ExternalLink, LayoutList, MapPin, Plus, RefreshCcw, Unplug, X } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { addDays, DAY_NAMES_NL, formatISODate, isSameDay, startOfWeek } from '../lib/dates';
 import {
@@ -16,10 +16,11 @@ import type { AppData, CalendarExternalEvent, CalendarProvider, CalendarSource, 
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
 
-const HOUR_START = 7;
-const HOUR_END = 22;
+const HOUR_START = 0;
+const HOUR_END = 24;
 const SLOT_MINUTES = 30;
 const TOTAL_SLOTS = (HOUR_END - HOUR_START) * (60 / SLOT_MINUTES);
+const MIN_EVENT_HEIGHT_SLOTS = 0.85;
 
 function toInputDateTime(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -36,8 +37,78 @@ function formatTime(value: string, allDay?: boolean): string {
   return new Intl.DateTimeFormat('nl-NL', { hour: '2-digit', minute: '2-digit' }).format(new Date(value));
 }
 
+function formatDateOnly(value: string): string {
+  return new Intl.DateTimeFormat('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(value));
+}
+
+function formatEventRange(event: CalendarExternalEvent): string {
+  if (event.all_day) return `${formatDateOnly(event.starts_at)} · hele dag`;
+  const sameDay = isSameDay(new Date(event.starts_at), new Date(event.ends_at));
+  if (sameDay) return `${formatDateOnly(event.starts_at)} · ${formatTime(event.starts_at)} – ${formatTime(event.ends_at)}`;
+  return `${formatDateOnly(event.starts_at)} ${formatTime(event.starts_at)} – ${formatDateOnly(event.ends_at)} ${formatTime(event.ends_at)}`;
+}
+
 function formatHour(hour: number, minutes: number): string {
   return `${String(hour).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+function startOfDay(d: Date): Date {
+  const result = new Date(d);
+  result.setHours(0, 0, 0, 0);
+  return result;
+}
+
+function startOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+function addMonths(d: Date, n: number): Date {
+  const result = startOfMonth(d);
+  result.setMonth(result.getMonth() + n);
+  return result;
+}
+
+function dayNameNl(day: Date): string {
+  return DAY_NAMES_NL[(day.getDay() + 6) % 7];
+}
+
+function monthLabelNl(day: Date): string {
+  return new Intl.DateTimeFormat('nl-NL', { month: 'long', year: 'numeric' }).format(day);
+}
+
+function fullDateLabelNl(day: Date): string {
+  return new Intl.DateTimeFormat('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(day);
+}
+
+function isSameMonth(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+}
+
+function dayBounds(day: Date): { start: Date; end: Date } {
+  const start = startOfDay(day);
+  return { start, end: addDays(start, 1) };
+}
+
+function eventOverlapsDay(event: CalendarExternalEvent, day: Date): boolean {
+  const { start, end } = dayBounds(day);
+  const eventStart = new Date(event.starts_at);
+  const eventEnd = new Date(event.ends_at);
+  return eventStart < end && eventEnd > start;
+}
+
+function calendarDaysForView(view: CalendarView, anchor: Date): Date[] {
+  if (view === 'day') return [startOfDay(anchor)];
+  if (view === 'month') {
+    const monthStart = startOfMonth(anchor);
+    const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0);
+    const gridStart = startOfWeek(monthStart);
+    const daysToSunday = monthEnd.getDay() === 0 ? 0 : 7 - monthEnd.getDay();
+    const gridEnd = addDays(monthEnd, daysToSunday);
+    const dayCount = Math.round((startOfDay(gridEnd).getTime() - startOfDay(gridStart).getTime()) / 86400000) + 1;
+    return Array.from({ length: dayCount }, (_, i) => addDays(gridStart, i));
+  }
+  const weekStart = startOfWeek(anchor);
+  return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 }
 
 function providerLabel(p: CalendarProvider): string { return p === 'google' ? 'Google' : 'Microsoft'; }
@@ -78,32 +149,91 @@ function slotToTime(slot: number): { hour: number; minutes: number } {
   return { hour: Math.floor(totalMin / 60), minutes: totalMin % 60 };
 }
 
-/** Fractional position (0..1) within the visible HOUR_START..HOUR_END window */
-function dateToFraction(d: Date): number {
-  const totalMin = d.getHours() * 60 + d.getMinutes();
-  const sMin = HOUR_START * 60;
-  const eMin = HOUR_END * 60;
-  if (totalMin <= sMin) return 0;
-  if (totalMin >= eMin) return 1;
-  return (totalMin - sMin) / (eMin - sMin);
+function dateToDayFraction(day: Date, d: Date): number {
+  const { start, end } = dayBounds(day);
+  const time = d.getTime();
+  if (time <= start.getTime()) return 0;
+  if (time >= end.getTime()) return 1;
+  return (time - start.getTime()) / (end.getTime() - start.getTime());
 }
 
-type CalendarView = 'list' | 'timeblock';
+type CalendarView = 'day' | 'week' | 'month' | 'list';
 
 interface DragState { dayIndex: number; startSlot: number; endSlot: number }
 
 /* ── TimeBlockGrid ───────────────────────────────────────────────────── */
 
-function TimeBlockGrid({ days, events, tasks, data, sourceColors, canWrite, writeableSources, onSelectSlot, onEditTask }: {
+type TimedEventSegment = {
+  event: CalendarExternalEvent;
+  startMinute: number;
+  endMinute: number;
+  top: number;
+  height: number;
+  column: number;
+  columns: number;
+  startsBeforeDay: boolean;
+  endsAfterDay: boolean;
+};
+
+function layoutTimedEventsForDay(day: Date, events: CalendarExternalEvent[]): TimedEventSegment[] {
+  const { start: dayStart, end: dayEnd } = dayBounds(day);
+  const minutesInDay = (HOUR_END - HOUR_START) * 60;
+  const raw = events
+    .filter(ev => !ev.all_day && eventOverlapsDay(ev, day))
+    .map(ev => {
+      const eventStart = new Date(ev.starts_at);
+      const eventEnd = new Date(ev.ends_at);
+      const visibleStart = new Date(Math.max(eventStart.getTime(), dayStart.getTime()));
+      const visibleEnd = new Date(Math.min(eventEnd.getTime(), dayEnd.getTime()));
+      const startMinute = Math.max(0, Math.round((visibleStart.getTime() - dayStart.getTime()) / 60000));
+      const endMinute = Math.max(startMinute + 15, Math.min(minutesInDay, Math.round((visibleEnd.getTime() - dayStart.getTime()) / 60000)));
+      const top = dateToDayFraction(day, visibleStart) * 100;
+      const height = Math.max(dateToDayFraction(day, visibleEnd) * 100 - top, (100 / TOTAL_SLOTS) * MIN_EVENT_HEIGHT_SLOTS);
+      return { event: ev, startMinute, endMinute, top, height, column: 0, columns: 1, startsBeforeDay: eventStart < dayStart, endsAfterDay: eventEnd > dayEnd };
+    })
+    .sort((a, b) => a.startMinute - b.startMinute || a.endMinute - b.endMinute);
+
+  const clusters: TimedEventSegment[][] = [];
+  let current: TimedEventSegment[] = [];
+  let currentEnd = -1;
+
+  raw.forEach(segment => {
+    if (!current.length || segment.startMinute < currentEnd) {
+      current.push(segment);
+      currentEnd = Math.max(currentEnd, segment.endMinute);
+    } else {
+      clusters.push(current);
+      current = [segment];
+      currentEnd = segment.endMinute;
+    }
+  });
+  if (current.length) clusters.push(current);
+
+  clusters.forEach(cluster => {
+    const columnEnds: number[] = [];
+    cluster.forEach(segment => {
+      const reusableColumn = columnEnds.findIndex(end => end <= segment.startMinute);
+      const column = reusableColumn >= 0 ? reusableColumn : columnEnds.length;
+      segment.column = column;
+      columnEnds[column] = segment.endMinute;
+    });
+    const columns = Math.max(1, columnEnds.length);
+    cluster.forEach(segment => { segment.columns = columns; });
+  });
+
+  return raw;
+}
+
+function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent }: {
   days: Date[];
   events: CalendarExternalEvent[];
   tasks: Task[];
-  data: AppData;
   sourceColors: Map<string, string>;
   canWrite: boolean;
   writeableSources: CalendarSource[];
   onSelectSlot: (day: Date, startSlot: number, endSlot: number) => void;
   onEditTask: (task: Task) => void;
+  onOpenEvent: (event: CalendarExternalEvent) => void;
 }) {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -143,8 +273,7 @@ function TimeBlockGrid({ days, events, tasks, data, sourceColors, canWrite, writ
     hourLabels.push({ ...t, label: formatHour(t.hour, t.minutes) });
   }
 
-  function timedEventsForDay(day: Date) { return events.filter(e => !e.all_day && isSameDay(new Date(e.starts_at), day)); }
-  function allDayEventsForDay(day: Date) { return events.filter(e => e.all_day && isSameDay(new Date(e.starts_at), day)); }
+  function allDayEventsForDay(day: Date) { return events.filter(e => e.all_day && eventOverlapsDay(e, day)); }
   function tasksForDay(day: Date) { return tasks.filter(t => t.end_date && isSameDay(new Date(`${t.end_date}T12:00:00`), day)); }
   function eventColor(ev: CalendarExternalEvent): string { return sourceColors.get(ev.source_id) ?? '#FFD966'; }
 
@@ -165,97 +294,186 @@ function TimeBlockGrid({ days, events, tasks, data, sourceColors, canWrite, writ
   }
 
   const today = (d: Date) => isSameDay(d, new Date());
-  const nowFrac = dateToFraction(new Date());
+  const now = new Date();
+  const gridStyle = { '--tb-days': days.length } as CSSProperties;
 
   return (
-    <div className="tb-container" onMouseLeave={() => { if (isDragging) handleMouseUp(); }}>
-      {/* All-day row */}
-      <div className="tb-allday-row">
-        <div className="tb-gutter tb-allday-label">Hele dag</div>
-        {days.map((day, di) => {
-          const ad = allDayEventsForDay(day);
-          const dt = tasksForDay(day);
-          return (
-            <div className={`tb-allday-cell${today(day) ? ' tb-today-col' : ''}`} key={di}>
-              {ad.map(ev => (
-                <a className="tb-ad-chip ext" key={ev.id} href={ev.html_link || undefined} target="_blank" rel="noreferrer" title={ev.title} style={eventColorStyle(eventColor(ev))}>{ev.title}</a>
-              ))}
-              {dt.map(t => (
-                <button className="tb-ad-chip task" key={t.id} onClick={() => onEditTask(t)} title={t.title}>{t.title}</button>
-              ))}
-              {ad.length === 0 && dt.length === 0 && <span className="tb-ad-empty">—</span>}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Scrollable time grid */}
+    <div className={`tb-container${days.length === 1 ? ' tb-single-day' : ''}`} style={gridStyle} onMouseLeave={() => { if (isDragging) handleMouseUp(); }}>
       <div className="tb-scroll">
-        <div className="tb-grid">
-          {/* Gutter labels */}
-          {hourLabels.map((h, si) => (
-            <div className={`tb-gutter${h.minutes === 0 ? ' tb-gutter-full' : ' tb-gutter-half'}`} key={`g${si}`} style={{ gridRow: si + 1 }}>
-              {h.minutes === 0 && <span>{h.label}</span>}
-            </div>
-          ))}
+        <div className="tb-canvas">
+          <div className="tb-day-headers">
+            <div className="tb-gutter tb-sticky-gutter tb-corner" />
+            {days.map(day => {
+              const td = today(day);
+              return <div className={`tb-dh${td ? ' tb-today' : ''}`} key={formatISODate(day)}>
+                <span className="tb-dh-name">{dayNameNl(day)}</span>
+                <span className={`tb-dh-num${td ? ' tb-today-num' : ''}`}>{day.getDate()}</span>
+                <span className="tb-dh-month">{new Intl.DateTimeFormat('nl-NL', { month: 'short' }).format(day)}</span>
+                {td && <span className="tb-dh-today">Vandaag</span>}
+              </div>;
+            })}
+          </div>
 
-          {/* Day columns */}
-          {days.map((day, di) => {
-            const dayEv = timedEventsForDay(day);
-            const isToday = today(day);
-            return (
-              <div className={`tb-col${isToday ? ' tb-today-col' : ''}`} key={di} style={{ gridColumn: di + 2, gridRow: `1 / span ${TOTAL_SLOTS}` }}>
-                {/* Interactive slot cells */}
-                {hourLabels.map((h, si) => {
-                  const selected = isInSelection(di, si);
-                  return (
-                    <div
-                      className={`tb-cell${h.minutes === 0 ? ' tb-cell-hour' : ' tb-cell-half'}${selected ? ' tb-cell-sel' : ''}${canSelect ? ' tb-cell-can' : ''}`}
-                      key={si}
-                      style={{ top: `calc(var(--tb-h) * ${si})`, height: 'var(--tb-h)' }}
-                      onMouseDown={() => handleMouseDown(di, si)}
-                      onMouseEnter={() => handleMouseEnter(di, si)}
-                    >
-                      {selected && si === Math.min(drag!.startSlot, drag!.endSlot) && (
-                        <span className="tb-sel-label">{selectionLabel()}</span>
-                      )}
-                    </div>
-                  );
-                })}
+          <div className="tb-allday-row">
+            <div className="tb-gutter tb-sticky-gutter tb-allday-label">Hele dag</div>
+            {days.map((day, di) => {
+              const ad = allDayEventsForDay(day);
+              const dt = tasksForDay(day);
+              return (
+                <div className={`tb-allday-cell${today(day) ? ' tb-today-col' : ''}`} key={di}>
+                  {ad.map(ev => (
+                    <button type="button" className="tb-ad-chip ext" key={`${ev.provider}-${ev.provider_event_id}-${di}`} onClick={() => onOpenEvent(ev)} title={ev.title} style={eventColorStyle(eventColor(ev))}>{ev.title}</button>
+                  ))}
+                  {dt.map(t => (
+                    <button type="button" className="tb-ad-chip task" key={t.id} onClick={() => onEditTask(t)} title={t.title}>{t.title}</button>
+                  ))}
+                  {ad.length === 0 && dt.length === 0 && <span className="tb-ad-empty">—</span>}
+                </div>
+              );
+            })}
+          </div>
 
-                {/* Now-line */}
-                {isToday && nowFrac > 0 && nowFrac < 1 && (
-                  <div className="tb-now" style={{ top: `${nowFrac * 100}%` }}><div className="tb-now-dot" /></div>
-                )}
-
-                {/* Event blocks */}
-                {dayEv.map(ev => {
-                  const t0 = dateToFraction(new Date(ev.starts_at)) * 100;
-                  const t1 = dateToFraction(new Date(ev.ends_at)) * 100;
-                  const h = Math.max(t1 - t0, 100 / TOTAL_SLOTS * 0.6);
-                  return (
-                    <a className={`tb-ev${ev.visibility === 'private' ? ' tb-ev-priv' : ''}`} key={ev.id}
-                      href={ev.html_link || undefined} target="_blank" rel="noreferrer"
-                      style={{ ...eventColorStyle(eventColor(ev)), top: `${t0}%`, height: `${h}%` }}
-                      title={`${formatTime(ev.starts_at)} – ${formatTime(ev.ends_at)}\n${ev.title}`}>
-                      <span className="tb-ev-time">{formatTime(ev.starts_at)}</span>
-                      <span className="tb-ev-title">{ev.title}</span>
-                      <span className="tb-ev-src">{providerLabel(ev.provider)} · {ev.source_name}</span>
-                    </a>
-                  );
-                })}
+          <div className="tb-grid">
+            {hourLabels.map((h, si) => (
+              <div className={`tb-gutter tb-sticky-gutter tb-time-label${h.minutes === 0 ? ' tb-gutter-full' : ' tb-gutter-half'}`} key={`g${si}`} style={{ gridRow: si + 1 }}>
+                {h.minutes === 0 && <span>{h.label}</span>}
               </div>
-            );
-          })}
+            ))}
 
-          {/* Grid lines */}
-          {hourLabels.map((h, si) => (
-            <div className={`tb-line${h.minutes === 0 ? ' tb-line-hour' : ''}`} key={`l${si}`} style={{ gridRow: si + 1, gridColumn: '2 / -1' }} />
-          ))}
+            {days.map((day, di) => {
+              const daySegments = layoutTimedEventsForDay(day, events);
+              const isToday = today(day);
+              const nowFrac = isToday ? dateToDayFraction(day, now) : 0;
+              return (
+                <div className={`tb-col${isToday ? ' tb-today-col' : ''}`} key={di} style={{ gridColumn: di + 2, gridRow: `1 / span ${TOTAL_SLOTS}` }}>
+                  {hourLabels.map((h, si) => {
+                    const selected = isInSelection(di, si);
+                    return (
+                      <div
+                        className={`tb-cell${h.minutes === 0 ? ' tb-cell-hour' : ' tb-cell-half'}${selected ? ' tb-cell-sel' : ''}${canSelect ? ' tb-cell-can' : ''}`}
+                        key={si}
+                        style={{ top: `calc(var(--tb-h) * ${si})`, height: 'var(--tb-h)' }}
+                        onMouseDown={() => handleMouseDown(di, si)}
+                        onMouseEnter={() => handleMouseEnter(di, si)}
+                      >
+                        {selected && si === Math.min(drag!.startSlot, drag!.endSlot) && (
+                          <span className="tb-sel-label">{selectionLabel()}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {isToday && nowFrac > 0 && nowFrac < 1 && (
+                    <div className="tb-now" style={{ top: `${nowFrac * 100}%` }}>
+                      <div className="tb-now-dot" />
+                      <span className="tb-now-label">{formatTime(now.toISOString())}</span>
+                    </div>
+                  )}
+
+                  {daySegments.map(segment => {
+                    const ev = segment.event;
+                    const columnWidth = 100 / segment.columns;
+                    const left = segment.column * columnWidth;
+                    const right = 100 - (segment.column + 1) * columnWidth;
+                    const visualTime = `${segment.startsBeforeDay ? '↖ ' : ''}${formatTime(ev.starts_at)} – ${segment.endsAfterDay ? '↘ ' : ''}${formatTime(ev.ends_at)}`;
+                    return (
+                      <button type="button" className={`tb-ev${ev.visibility === 'private' ? ' tb-ev-priv' : ''}`} key={`${ev.provider}-${ev.provider_event_id}-${di}`}
+                        onClick={() => onOpenEvent(ev)}
+                        style={{
+                          ...eventColorStyle(eventColor(ev)),
+                          top: `${segment.top}%`,
+                          height: `${segment.height}%`,
+                          left: `calc(${left}% + 2px)`,
+                          right: `calc(${right}% + 2px)`,
+                        }}
+                        title={`${visualTime}\n${ev.title}\n${providerLabel(ev.provider)} · ${ev.source_name}`}>
+                        <span className="tb-ev-time">{visualTime}</span>
+                        <span className="tb-ev-title">{ev.title}</span>
+                        <span className="tb-ev-src">{providerLabel(ev.provider)} · {ev.source_name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+
+            {hourLabels.map((h, si) => (
+              <div className={`tb-line${h.minutes === 0 ? ' tb-line-hour' : ''}`} key={`l${si}`} style={{ gridRow: si + 1, gridColumn: '2 / -1' }} />
+            ))}
+          </div>
         </div>
       </div>
 
       {canSelect && <p className="tb-hint">Sleep over lege tijdslots om snel een event aan te maken</p>}
+    </div>
+  );
+}
+
+/* ── Month view ───────────────────────────────────────────────────────── */
+
+function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, onEditTask, onOpenDay, onOpenEvent }: {
+  days: Date[];
+  anchor: Date;
+  events: CalendarExternalEvent[];
+  tasks: Task[];
+  data: AppData;
+  sourceColors: Map<string, string>;
+  onEditTask: (task: Task) => void;
+  onOpenDay: (day: Date) => void;
+  onOpenEvent: (event: CalendarExternalEvent) => void;
+}) {
+  function tasksForDay(day: Date) { return tasks.filter(t => t.end_date && isSameDay(new Date(`${t.end_date}T12:00:00`), day)); }
+  function eventsForDay(day: Date) { return events.filter(ev => eventOverlapsDay(ev, day)).sort((a, b) => a.starts_at.localeCompare(b.starts_at)); }
+  function eventColor(ev: CalendarExternalEvent): string { return sourceColors.get(ev.source_id) ?? '#FFD966'; }
+
+  return (
+    <div className="calendar-month-view">
+      <div className="calendar-month-weekdays">
+        {DAY_NAMES_NL.map(day => <span key={day}>{day}</span>)}
+      </div>
+      <div className="calendar-month-grid">
+        {days.map(day => {
+          const dayEvents = eventsForDay(day);
+          const dayTasks = tasksForDay(day);
+          const visibleItems = [...dayEvents.map(ev => ({ kind: 'event' as const, ev })), ...dayTasks.map(task => ({ kind: 'task' as const, task }))];
+          const clippedItems = visibleItems.slice(0, 5);
+          const remaining = Math.max(0, visibleItems.length - clippedItems.length);
+          const outsideMonth = !isSameMonth(day, anchor);
+          const today = isSameDay(day, new Date());
+
+          return (
+            <article className={`calendar-month-cell${outsideMonth ? ' is-outside-month' : ''}${today ? ' is-today' : ''}`} key={formatISODate(day)}>
+              <button className="calendar-month-date" onClick={() => onOpenDay(day)} title="Open dagweergave">
+                <span>{dayNameNl(day)}</span>
+                <strong>{day.getDate()}</strong>
+              </button>
+              <div className="calendar-month-items">
+                {clippedItems.map((item, idx) => item.kind === 'event' ? (
+                  <button
+                    type="button"
+                    className={`month-chip external${item.ev.visibility === 'private' ? ' private-event' : ''}`}
+                    onClick={() => onOpenEvent(item.ev)}
+                    key={`${item.ev.provider}-${item.ev.provider_event_id}-${idx}`}
+                    style={eventColorStyle(eventColor(item.ev))}
+                    title={`${formatTime(item.ev.starts_at, item.ev.all_day)} · ${item.ev.title}`}
+                  >
+                    <span>{formatTime(item.ev.starts_at, item.ev.all_day)}</span>
+                    <strong>{item.ev.title}</strong>
+                  </button>
+                ) : (
+                  <button className="month-chip task" key={item.task.id} onClick={() => onEditTask(item.task)} title={item.task.title}>
+                    <span>Taak</span>
+                    <strong>{item.task.title}</strong>
+                    <em>{data.projects.find(p => p.id === item.task.project_id)?.name ?? 'Project'}</em>
+                  </button>
+                ))}
+                {remaining > 0 && <button className="month-chip more" onClick={() => onOpenDay(day)}>+{remaining} meer</button>}
+                {visibleItems.length === 0 && <div className="month-empty">Geen items</div>}
+              </div>
+            </article>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -296,20 +514,76 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, loading, 
   );
 }
 
+
+function CalendarEventDetailPanel({ event, sourceColors, onClose }: {
+  event: CalendarExternalEvent | null;
+  sourceColors: Map<string, string>;
+  onClose: () => void;
+}) {
+  if (!event) return null;
+  const color = sourceColors.get(event.source_id) ?? '#FFD966';
+  return (
+    <div className="event-detail-overlay" onClick={onClose}>
+      <aside className="event-detail-panel" onClick={e => e.stopPropagation()} style={eventColorStyle(color)}>
+        <div className="event-detail-glow" />
+        <div className="event-detail-head">
+          <div>
+            <span className="event-detail-kicker">{providerLabel(event.provider)} · {event.source_name}</span>
+            <h3>{event.title}</h3>
+          </div>
+          <button type="button" className="tb-panel-close" onClick={onClose} aria-label="Sluit eventdetails"><X size={17} /></button>
+        </div>
+
+        <div className="event-detail-meta-grid">
+          <div className="event-detail-meta-card">
+            <Clock size={15} />
+            <span>{formatEventRange(event)}</span>
+          </div>
+          <div className="event-detail-meta-card">
+            <CalendarDays size={15} />
+            <span>{event.visibility === 'private' ? 'Privé-agenda' : 'Gedeeld met organisatie'}{event.is_private_masked ? ' · details afgeschermd' : ''}</span>
+          </div>
+          {event.location && (
+            <div className="event-detail-meta-card">
+              <MapPin size={15} />
+              <span>{event.location}</span>
+            </div>
+          )}
+        </div>
+
+        {event.description ? (
+          <div className="event-detail-description">
+            <span>Omschrijving</span>
+            <p>{event.description}</p>
+          </div>
+        ) : (
+          <div className="event-detail-empty">Geen omschrijving toegevoegd.</div>
+        )}
+
+        <div className="event-detail-actions">
+          {event.html_link && <a className="btn btn-primary" href={event.html_link} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open in agenda</a>}
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Sluiten</button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 /* ── Main CalendarPage ───────────────────────────────────────────────── */
 
 export function CalendarPage({ organizationId, currentUserId, data, canWrite, onEditTask }: {
   organizationId: UUID; currentUserId: UUID | null; data: AppData; canWrite: boolean; onEditTask: (task: Task) => void;
 }) {
-  const [anchor, setAnchor] = useState<Date>(() => startOfWeek(new Date()));
+  const [anchor, setAnchor] = useState<Date>(() => startOfDay(new Date()));
   const [integrations, setIntegrations] = useState<CalendarIntegrationsPayload>({ connections: [], sources: [] });
   const [events, setEvents] = useState<CalendarExternalEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<CalendarView>('timeblock');
+  const [view, setView] = useState<CalendarView>('week');
   const [showCreatePanel, setShowCreatePanel] = useState(false);
+  const [selectedEvent, setSelectedEvent] = useState<CalendarExternalEvent | null>(null);
   const [showConnections, setShowConnections] = useState(() => window.location.hash === '#calendar-connections');
   const [newEvent, setNewEvent] = useState(() => {
     const s = new Date(); s.setMinutes(0, 0, 0); s.setHours(s.getHours() + 1);
@@ -317,9 +591,14 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
     return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false };
   });
 
-  const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(anchor, i)), [anchor]);
+  const days = useMemo(() => calendarDaysForView(view, anchor), [view, anchor]);
   const rangeStart = useMemo(() => days[0].toISOString(), [days]);
-  const rangeEnd = useMemo(() => addDays(days[6], 1).toISOString(), [days]);
+  const rangeEnd = useMemo(() => addDays(days[days.length - 1], 1).toISOString(), [days]);
+  const calendarRangeLabel = useMemo(() => {
+    if (view === 'day') return fullDateLabelNl(anchor);
+    if (view === 'month') return monthLabelNl(anchor);
+    return `${formatISODate(days[0])} t/m ${formatISODate(days[days.length - 1])}`;
+  }, [anchor, days, view]);
   const canManageSource = (src: CalendarSource) => Boolean(canWrite && currentUserId && src.user_id === currentUserId);
   const canManageConnection = (uid: UUID) => Boolean(canWrite && currentUserId && uid === currentUserId);
   const writeableSources = useMemo(
@@ -441,7 +720,36 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
   }
 
   function tasksForDay(day: Date) { return data.tasks.filter(t => t.status !== 'done' && t.end_date && isSameDay(new Date(`${t.end_date}T12:00:00`), day)); }
-  function eventsForDay(day: Date) { return events.filter(ev => isSameDay(new Date(ev.starts_at), day)); }
+  function eventsForDay(day: Date) { return events.filter(ev => eventOverlapsDay(ev, day)).sort((a, b) => a.starts_at.localeCompare(b.starts_at)); }
+
+  function changeView(nextView: CalendarView) {
+    setView(nextView);
+    setAnchor(prev => {
+      if (nextView === 'month') return startOfMonth(prev);
+      if (nextView === 'week' || nextView === 'list') return startOfWeek(prev);
+      return startOfDay(prev);
+    });
+  }
+
+  function movePeriod(direction: -1 | 1) {
+    setAnchor(prev => {
+      if (view === 'day') return addDays(prev, direction);
+      if (view === 'month') return addMonths(prev, direction);
+      return addDays(prev, direction * 7);
+    });
+  }
+
+  function openDay(day: Date) {
+    setAnchor(startOfDay(day));
+    setView('day');
+  }
+
+  function goToday() {
+    setAnchor(startOfDay(new Date()));
+  }
+
+  const previousLabel = view === 'day' ? 'Vorige dag' : view === 'month' ? 'Vorige maand' : 'Vorige week';
+  const nextLabel = view === 'day' ? 'Volgende dag' : view === 'month' ? 'Volgende maand' : 'Volgende week';
 
   return <div className="calendar-page">
     {/* Hero */}
@@ -463,52 +771,49 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
     {message && <div className="success">{message}</div>}
 
     {/* Calendar view */}
-    <div className="calendar-main-card" id="calendar-agenda">
-      <div className="calendar-toolbar">
-        <Button onClick={() => setAnchor(p => addDays(p, -7))}>Vorige week</Button>
-        <Button onClick={() => setAnchor(startOfWeek(new Date()))}>Vandaag</Button>
-        <Button onClick={() => setAnchor(p => addDays(p, 7))}>Volgende week</Button>
-        <div className="calendar-range">{formatISODate(days[0])} t/m {formatISODate(days[6])}{eventsLoading ? ' · laden…' : ''}</div>
+    <div className={`calendar-main-card calendar-main-card-${view}`} id="calendar-agenda">
+      <div className="calendar-toolbar calendar-toolbar-premium">
+        <div className="calendar-period-controls">
+          <Button onClick={() => movePeriod(-1)}>{previousLabel}</Button>
+          <Button onClick={goToday}>Vandaag</Button>
+          <Button onClick={() => movePeriod(1)}>{nextLabel}</Button>
+        </div>
+        <div className="calendar-range-block">
+          <span className="calendar-range-label">{view === 'day' ? 'Dag' : view === 'week' ? 'Week' : view === 'month' ? 'Maand' : 'Lijst'}</span>
+          <div className="calendar-range">{calendarRangeLabel}{eventsLoading ? ' · laden…' : ''}</div>
+        </div>
         <Button className="calendar-link-btn" onClick={() => setShowConnections(prev => !prev)}>{showConnections ? 'Koppelingen verbergen' : 'Koppelingen beheren'}</Button>
-        <div className="tb-view-tog">
-          <button className={`tb-vbtn${view === 'timeblock' ? ' active' : ''}`} onClick={() => setView('timeblock')} title="Tijdlijn"><Clock size={14} /></button>
-          <button className={`tb-vbtn${view === 'list' ? ' active' : ''}`} onClick={() => setView('list')} title="Lijst"><LayoutList size={14} /></button>
+        <div className="tb-view-tog calendar-view-tabs" aria-label="Agendaweergave">
+          <button className={`tb-vbtn${view === 'day' ? ' active' : ''}`} onClick={() => changeView('day')} title="Dagweergave"><CalendarDays size={14} /><span>Dag</span></button>
+          <button className={`tb-vbtn${view === 'week' ? ' active' : ''}`} onClick={() => changeView('week')} title="Weekweergave"><Clock size={14} /><span>Week</span></button>
+          <button className={`tb-vbtn${view === 'month' ? ' active' : ''}`} onClick={() => changeView('month')} title="Maandweergave"><CalendarDays size={14} /><span>Maand</span></button>
+          <button className={`tb-vbtn${view === 'list' ? ' active' : ''}`} onClick={() => changeView('list')} title="Lijst"><LayoutList size={14} /><span>Lijst</span></button>
         </div>
       </div>
 
-      {view === 'timeblock' && (
-        <div className="tb-day-headers">
-          <div className="tb-gutter" />
-          {days.map((day, i) => {
-            const td = isSameDay(day, new Date());
-            return <div className={`tb-dh${td ? ' tb-today' : ''}`} key={i}>
-              <span className="tb-dh-name">{DAY_NAMES_NL[i]}</span>
-              <span className={`tb-dh-num${td ? ' tb-today-num' : ''}`}>{day.getDate()}</span>
-            </div>;
-          })}
-        </div>
-      )}
-
-      {view === 'timeblock' ? (
-        <TimeBlockGrid days={days} events={events} tasks={data.tasks.filter(t => t.status !== 'done')} data={data}
-          sourceColors={sourceColors} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} />
+      {view === 'day' || view === 'week' ? (
+        <TimeBlockGrid days={days} events={events} tasks={data.tasks.filter(t => t.status !== 'done')}
+          sourceColors={sourceColors} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} />
+      ) : view === 'month' ? (
+        <CalendarMonthView days={days} anchor={anchor} events={events} tasks={data.tasks.filter(t => t.status !== 'done')} data={data}
+          sourceColors={sourceColors} onEditTask={onEditTask} onOpenDay={openDay} onOpenEvent={setSelectedEvent} />
       ) : (
-        <div className="calendar-week-grid">
-          {days.map((day, idx) => {
+        <div className="calendar-week-grid calendar-list-grid">
+          {days.map(day => {
             const dt = tasksForDay(day); const de = eventsForDay(day);
             return <div className="calendar-day" key={formatISODate(day)}>
-              <div className="calendar-day-head"><span>{DAY_NAMES_NL[idx]}</span><strong>{day.getDate()}</strong></div>
+              <div className="calendar-day-head"><span>{dayNameNl(day)}</span><strong>{day.getDate()}</strong></div>
               <div className="calendar-day-body">
                 {dt.map(t => <button className="calendar-item task" key={t.id} onClick={() => onEditTask(t)}>
                   <span className="calendar-item-time">Taak</span><strong>{t.title}</strong>
                   <small>{data.projects.find(p => p.id === t.project_id)?.name ?? 'Project'}</small>
                 </button>)}
-                {de.map(ev => <a className={`calendar-item external${ev.visibility === 'private' ? ' private-event' : ''}`}
-                  key={`${ev.provider}-${ev.provider_event_id}-${ev.starts_at}`} href={ev.html_link || undefined} target="_blank" rel="noreferrer"
+                {de.map(ev => <button type="button" className={`calendar-item external${ev.visibility === 'private' ? ' private-event' : ''}`}
+                  key={`${ev.provider}-${ev.provider_event_id}-${ev.starts_at}`} onClick={() => setSelectedEvent(ev)}
                   style={eventColorStyle(sourceColors.get(ev.source_id))}>
-                  <span className="calendar-item-time">{formatTime(ev.starts_at, ev.all_day)}</span><strong>{ev.title}</strong>
+                  <span className="calendar-item-time">{formatTime(ev.starts_at, ev.all_day)}{!ev.all_day ? ` – ${formatTime(ev.ends_at)}` : ''}</span><strong>{ev.title}</strong>
                   <small>{providerLabel(ev.provider)} · {ev.source_name}{ev.visibility === 'private' ? ' · privé' : ' · team'}</small>
-                </a>)}
+                </button>)}
                 {dt.length === 0 && de.length === 0 && <div className="calendar-no-items">Geen items</div>}
               </div>
             </div>;
@@ -587,8 +892,8 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
       </form>
     )}
 
-    {/* FAB for timeblock view */}
-    {view === 'timeblock' && canWrite && writeableSources.length > 0 && !showCreatePanel && (
+    {/* FAB for time-grid views */}
+    {(view === 'day' || view === 'week') && canWrite && writeableSources.length > 0 && !showCreatePanel && (
       <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt })); setShowCreatePanel(true); }} title="Nieuw event aanmaken">
         <Plus size={22} />
       </button>
@@ -597,5 +902,7 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
     {/* Floating panel */}
     {showCreatePanel && <EventCreationPanel newEvent={newEvent} setNewEvent={setNewEvent} writeableSources={writeableSources}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => setShowCreatePanel(false)} />}
+
+    <CalendarEventDetailPanel event={selectedEvent} sourceColors={sourceColors} onClose={() => setSelectedEvent(null)} />
   </div>;
 }

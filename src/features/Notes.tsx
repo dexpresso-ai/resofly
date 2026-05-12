@@ -1,5 +1,6 @@
 import type { AppData, Note, NoteType } from '../types';
 import { Button } from '../components/Ui';
+import { RichTextExcerpt, RichTextViewer } from '../components/RichTextEditor';
 import { dateNL } from '../lib/format';
 
 export const noteTypeLabels: Record<NoteType, string> = {
@@ -26,7 +27,7 @@ export function NoteCard({ note, data, onEdit }: { note: Note; data: AppData; on
       <span className="note-date">{dateNL(note.created_at)}</span>
     </div>
     <h3>{note.title}</h3>
-    <p>{note.content || 'Geen inhoud'}</p>
+    <div className="note-content-preview"><RichTextViewer content={note.content} /></div>
     <div className="note-relations">
       <span>{client ? `Klant: ${client.name}` : 'Geen klant'}</span>
       <span>{project ? `Project: ${project.name}` : 'Geen project'}</span>
@@ -66,7 +67,7 @@ export function RelatedNotes({
       {sorted.map(note => <button type="button" className="related-note-item" key={note.id} onClick={() => onEdit(note)}>
         <div className="related-note-top"><span className={`note-type note-type-${note.note_type ?? 'general'}`}>{getNoteTypeLabel(note.note_type)}</span><span>{dateNL(note.created_at)}</span></div>
         <strong>{note.title}</strong>
-        <p>{note.content || 'Geen inhoud'}</p>
+        <p><RichTextExcerpt content={note.content} /></p>
         {Array.isArray(note.tags) && note.tags.length > 0 && <div className="note-tags compact">{note.tags.map(tag => <span key={tag}>{tag}</span>)}</div>}
       </button>)}
     </div>}
@@ -95,7 +96,7 @@ export function Notes({ data, onNew, onEdit }: { data: AppData; onNew: () => voi
         {sorted.map(note => <div className="note-item" key={note.id} onClick={() => onEdit(note)}>
           <div className="ni-row"><span className={`note-type note-type-${note.note_type ?? 'general'}`}>{getNoteTypeLabel(note.note_type)}</span><span>{dateNL(note.created_at)}</span></div>
           <div className="ni-title">{note.title}</div>
-          <div className="ni-preview">{note.content}</div>
+          <div className="ni-preview"><RichTextExcerpt content={note.content} emptyText="Geen inhoud" /></div>
         </div>)}
       </div>
     </aside>
