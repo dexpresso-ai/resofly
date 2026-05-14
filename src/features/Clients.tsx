@@ -14,6 +14,8 @@ const invoiceStatusLabels: Record<string, string> = {
 
 const quoteStatusLabels: Record<string, string> = {
   draft: 'Concept',
+  pending_internal_approval: 'Wacht op interne goedkeuring',
+  internally_approved: 'Intern goedgekeurd',
   sent: 'Verzonden',
   accepted: 'Geaccepteerd',
   rejected: 'Afgewezen',

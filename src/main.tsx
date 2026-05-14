@@ -8,14 +8,21 @@ import { isSupabaseConfigured, supabase, supabaseAuth } from './lib/supabase';
 import {
   acceptOrganizationInvitation,
   convertTicketToProject,
+  createNoteCalendarLink,
+  createNoteWithCalendarLink,
   createOrganization,
   deleteEntityCascade,
+  deleteNoteCalendarLink,
   disableOrganizationMember,
   insertRow,
   inviteOrganizationMember,
   loadAppData,
   loadOrganizationContext,
   revokeOrganizationInvitation,
+  submitQuoteForInternalApproval,
+  approveQuoteInternal,
+  rejectQuoteInternal,
+  sendQuoteEmailViaResend,
   updateOrganizationMemberRole,
   updateRow,
   upsertCompanySettings,
@@ -28,13 +35,14 @@ import { ProjectPage, ProjectsListPage } from './features/Projects';
 import { Tickets } from './features/Tickets';
 import { Notes, RelatedNotes, noteTypeLabels } from './features/Notes';
 import { Invoices, Quotes } from './features/Finance';
+import { PublicQuotePage } from './features/PublicQuotePage';
 import { Archive, Settings, Stats } from './features/SimplePages';
 import { CalendarPage } from './features/CalendarPage';
 import { WeekPlanner } from './features/WeekPlanner';
 import { AttachmentList } from './components/AttachmentList';
 import { exportFinancePDF } from './lib/pdf';
 import type {
-  AppData, Client, CompanySettingsInput, EntityType, FinanceLine, Invoice, Note, OrganizationContext, OrganizationRole, Project, Quote, Task, TaskStatus, Ticket, Subtask, Comment as TaskComment,
+  AppData, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettingsInput, EntityType, FinanceLine, Invoice, Note, OrganizationContext, OrganizationRole, Project, Quote, Task, TaskStatus, Ticket, Subtask, Comment as TaskComment,
 } from './types';
 import { uid } from './lib/format';
 import './styles/globals.css';
@@ -45,12 +53,12 @@ type EditMode =
   | { kind: 'project'; item?: Project }
   | { kind: 'task'; item?: Task; projectId: string }
   | { kind: 'ticket'; item?: Ticket }
-  | { kind: 'note'; item?: Note; defaults?: Partial<Pick<Note, 'client_id' | 'project_id' | 'note_type' | 'tags'>> }
+  | { kind: 'note'; item?: Note; defaults?: Partial<Pick<Note, 'client_id' | 'project_id' | 'title' | 'content' | 'note_type' | 'tags'>>; calendarLink?: CalendarNoteLinkInput }
   | { kind: 'quote'; item?: Quote; defaults?: Partial<Pick<Quote, 'client_id' | 'project_id'>> }
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id'>> }
   | null;
 
-const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], notes: [], quotes: [], invoices: [], attachments: [], companySettings: null };
+const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], notes: [], noteCalendarLinks: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], attachments: [], companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
@@ -74,6 +82,15 @@ const editKindToEntity: Record<NonNullable<EditMode>['kind'], EntityType> = {
   invoice: 'invoice',
 };
 
+
+function getPublicQuoteTokenFromLocation(): string | null {
+  const url = new URL(window.location.href);
+  const queryToken = url.searchParams.get('quote_token') || url.searchParams.get('token');
+  if (queryToken) return queryToken;
+  const match = url.pathname.match(/^\/quote\/([^/]+)\/?$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function App() {
   const [sessionReady, setSessionReady] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
@@ -87,6 +104,7 @@ function App() {
   const [edit, setEdit] = useState<EditMode>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const publicQuoteToken = getPublicQuoteTokenFromLocation();
 
   // Track which user + organization we have loaded data for, so auth events do not
   // trigger duplicate refreshes for the same workspace.
@@ -221,6 +239,7 @@ function App() {
   const client = useMemo(() => data.clients.find(c => c.id === clientId) ?? null, [data.clients, clientId]);
 
   if (!isSupabaseConfigured) return <div className="boot"><div className="login-card"><h1>Configuratie ontbreekt</h1><p>Vul eerst VITE_SUPABASE_URL en VITE_SUPABASE_ANON_KEY in .env.local in.</p></div></div>;
+  if (publicQuoteToken) return <PublicQuotePage token={publicQuoteToken} />;
   if (!sessionReady) return <div className="boot">BrandCore laden…</div>;
   if (!loggedIn) return <Login />;
   if (!activeOrganization) return <div className="boot"><div className="login-card"><h1>Geen organisatie gevonden</h1><p>Er kon geen organisatie voor je account worden geladen.</p><Button variant="primary" onClick={createNewOrganization}>Organisatie maken</Button></div></div>;
@@ -261,11 +280,16 @@ function App() {
             : await insertRow<Ticket>('tickets', activeOrg.id, sanitizedValues);
           break;
         }
-        case 'note':
-          edit.item
-            ? await updateRow<Note>('notes', edit.item.id, values, activeOrg.id)
-            : await insertRow<Note>('notes', activeOrg.id, values);
+        case 'note': {
+          if (edit.item) {
+            await updateRow<Note>('notes', edit.item.id, values, activeOrg.id);
+          } else if (edit.calendarLink) {
+            await createNoteWithCalendarLink(activeOrg.id, values, edit.calendarLink);
+          } else {
+            await insertRow<Note>('notes', activeOrg.id, values);
+          }
           break;
+        }
         case 'quote':
           edit.item
             ? await updateRow<Quote>('quotes', edit.item.id, values, activeOrg.id)
@@ -342,6 +366,67 @@ function App() {
     }
   }
 
+
+  async function submitQuoteApproval(quote: Quote) {
+    if (!ensureCanWrite()) return;
+    if (!confirm(`Offerte ${quote.number} ter interne goedkeuring indienen?`)) return;
+    setLoading(true); setError(null);
+    try {
+      await submitQuoteForInternalApproval(activeOrg.id, quote.id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Offerte indienen mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function approveQuote(quote: Quote) {
+    if (!ensureCanAdmin()) return;
+    if (!confirm(`Offerte ${quote.number} intern goedkeuren? Daarna kan deze via Resend naar de klant.`)) return;
+    setLoading(true); setError(null);
+    try {
+      await approveQuoteInternal(activeOrg.id, quote.id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Offerte goedkeuren mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function rejectQuote(quote: Quote) {
+    if (!ensureCanAdmin()) return;
+    const note = prompt(`Waarom wijs je offerte ${quote.number} intern af?`, quote.internal_rejection_note || '');
+    if (note === null) return;
+    setLoading(true); setError(null);
+    try {
+      await rejectQuoteInternal(activeOrg.id, quote.id, note);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Offerte afwijzen mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function sendQuote(quote: Quote) {
+    if (!ensureCanWrite()) return;
+    const client = data.clients.find(item => item.id === quote.client_id);
+    const recipientEmail = prompt('Naar welk e-mailadres wil je de offerte versturen?', client?.email || '');
+    if (!recipientEmail) return;
+    const recipientName = prompt('Naam/contactpersoon voor de e-mail', client?.contact_name || client?.name || '') || undefined;
+    setLoading(true); setError(null);
+    try {
+      await sendQuoteEmailViaResend(activeOrg.id, quote.id, { recipientEmail, recipientName });
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Offerte verzenden via Resend mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function saveCompanySettings(values: CompanySettingsInput) {
     if (!ensureCanAdmin()) throw new Error('Alleen owners en admins kunnen deze organisatie-instellingen aanpassen.');
     setLoading(true); setError(null);
@@ -351,6 +436,68 @@ function App() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Bedrijfsinstellingen opslaan mislukt');
       throw e;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function calendarNoteLinkInput(event: CalendarExternalEvent): CalendarNoteLinkInput {
+    return {
+      provider: event.provider,
+      calendar_source_id: event.source_id,
+      provider_event_id: event.provider_event_id,
+      event_starts_at: event.starts_at,
+      event_ends_at: event.ends_at,
+      event_title_snapshot: event.visibility === 'organization' && !event.is_private_masked ? event.title : null,
+      event_location_snapshot: event.visibility === 'organization' && !event.is_private_masked ? event.location : null,
+      event_html_link: event.visibility === 'organization' && !event.is_private_masked ? event.html_link : null,
+      visibility_snapshot: event.visibility,
+      is_private_masked_snapshot: Boolean(event.is_private_masked),
+    };
+  }
+
+  function openNoteForCalendarEvent(event: CalendarExternalEvent) {
+    if (!ensureCanWrite()) return;
+    if (event.visibility !== 'organization' || event.is_private_masked) {
+      setError('Notities koppelen is bewust uitgeschakeld voor privé-afspraken. Deel de agenda eerst met de organisatie of voeg later persoonlijke notities toe.');
+      return;
+    }
+    setError(null);
+    setEdit({
+      kind: 'note',
+      item: undefined,
+      defaults: {
+        title: `Notitie: ${event.title}`,
+        content: '',
+        note_type: 'meeting',
+        tags: ['agenda'],
+      },
+      calendarLink: calendarNoteLinkInput(event),
+    });
+  }
+
+  async function linkExistingNoteToCalendarEvent(noteId: string, event: CalendarExternalEvent) {
+    if (!ensureCanWrite()) return;
+    setLoading(true); setError(null);
+    try {
+      await createNoteCalendarLink(activeOrg.id, noteId, calendarNoteLinkInput(event));
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Notitie koppelen aan agenda-item mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function unlinkNoteFromCalendarEvent(linkId: string) {
+    if (!ensureCanWrite()) return;
+    if (!confirm('Deze notitie loskoppelen van dit agenda-item? De notitie zelf blijft bestaan.')) return;
+    setLoading(true); setError(null);
+    try {
+      await deleteNoteCalendarLink(linkId, activeOrg.id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Notitie ontkoppelen mislukt');
     } finally {
       setLoading(false);
     }
@@ -367,16 +514,16 @@ function App() {
 
   function renderPage() {
     if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => setPage('settings')} />;
-    if (page === 'project' && project) return <ProjectPage data={data} project={project} canWrite={canWrite} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} setTaskStatus={setTaskStatus}/>;
+    if (page === 'project' && project) return <ProjectPage data={data} project={project} canWrite={canWrite} canAdmin={canAdmin} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} setTaskStatus={setTaskStatus}/>;
     if (page === 'projects') return <ProjectsListPage data={data} canWrite={canWrite} onNewProject={() => ensureCanWrite() && setEdit({kind:'project'})} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} onEditProject={(item) => setEdit({kind:'project', item})}/>;
     if (page === 'client' && client) return <ClientDetailPage data={data} client={client} canWrite={canWrite} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onEditNote={(note) => setEdit({kind:'note', item: note})}/>;
     if (page === 'clients') return <Clients data={data} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>setEdit({kind:'ticket', item})} onConvert={convert}/>;
     if (page === 'notes') return <Notes data={data} onNew={() => ensureCanWrite() && setEdit({kind:'note'})} onEdit={(item)=>setEdit({kind:'note', item})}/>;
-    if (page === 'quotes') return <Quotes data={data} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})}/>;
+    if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote}/>;
     if (page === 'invoices') return <Invoices data={data} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} onUpdateTaskDate={updateTaskDate} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
-    if (page === 'calendar') return <CalendarPage organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
+    if (page === 'calendar') return <CalendarPage organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'stats') return <Stats data={data}/>;
     if (page === 'archive') return <Archive data={data} onOpen={(id) => { setProjectId(id); setPage('project'); }} onRestore={async (project) => { if (!ensureCanWrite()) return; setError(null); try { await updateRow<Project>('projects', project.id, { archived: false }, activeOrg.id); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Herstellen mislukt'); } }}/>;
     if (page === 'settings') return <Settings settings={data.companySettings} organizationContext={organizationContext} currentUserId={currentUserId} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
@@ -401,23 +548,27 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
   const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit));
   const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
   const title = `${item ? 'Bewerk' : 'Nieuw'} ${edit.kind}`;
+  const quoteWorkflowLocked = edit.kind === 'quote' && item ? isQuoteWorkflowLocked(item as Quote) : false;
+  const effectiveReadOnly = readOnly || quoteWorkflowLocked;
+  const disabled = effectiveReadOnly;
 
   const attachmentBlock = item ? <AttachmentList
     attachments={data.attachments}
     entityType={editKindToEntity[edit.kind]}
     entityId={item.id}
     onChanged={onAttachmentsChanged}
-    canDelete={!readOnly}
+    canDelete={!effectiveReadOnly}
   /> : null;
 
-  return <Modal title={title} className={edit.kind === 'note' ? 'modal-note-editor' : ''} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{readOnly ? 'Sluiten' : 'Annuleren'}</Button>{!readOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!readOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form))}>Opslaan</Button>}</>}>
+  return <Modal title={title} className={edit.kind === 'note' ? 'modal-note-editor' : ''} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{effectiveReadOnly ? 'Sluiten' : 'Annuleren'}</Button>{!effectiveReadOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!effectiveReadOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form))}>Opslaan</Button>}</>}>
     {readOnly && <div className="readonly-note">Je bekijkt dit item met alleen-lezen rechten. Wijzigen, verwijderen en uploaden zijn uitgeschakeld.</div>}
-    {edit.kind === 'client' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Klantnaam"/><Input value={form.client_code} onChange={e=>set('client_code',e.target.value)} placeholder="Klantcode"/><Input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} placeholder="Contactpersoon"/><Input value={form.email} onChange={e=>set('email',e.target.value)} placeholder="Email"/><Input value={form.phone} onChange={e=>set('phone',e.target.value)} placeholder="Telefoon"/><Select value={form.status} onChange={e=>set('status',e.target.value)}><option value="active">Actief</option><option value="prospect">Prospect</option><option value="inactive">Inactief</option></Select><Input type="number" value={form.value_eur} onChange={e=>set('value_eur',Number(e.target.value))} placeholder="Waarde"/><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags, komma gescheiden"/><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Notities"/>{item && <RelatedNotes title="Klantnotities" notes={data.notes.filter(note => note.client_id === item.id || data.projects.some(project => project.client_id === item.id && project.id === note.project_id))} data={data} canWrite={canWrite} onNew={() => onNewClientNote(item as Client)} onEdit={onEditNote} emptyText="Nog geen notities bij deze klant." />}{!readOnly && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.client} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
-    {edit.kind === 'project' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Projectnaam"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Omschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/><Input value={form.color} onChange={e=>set('color',e.target.value)} placeholder="#FFD966"/><label className="check-row"><input type="checkbox" checked={Boolean(form.archived)} onChange={e=>set('archived',e.target.checked)}/><span>Project archiveren</span></label>{!readOnly && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.project} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
-    {edit.kind === 'task' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Taaktitel"/><Select value={form.status} onChange={e=>set('status',e.target.value)}><option value="todo">Te doen</option><option value="doing">Bezig</option><option value="review">Review</option><option value="done">Klaar</option></Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags"/><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/><TaskDetailEditor subtasks={form.subtasks} comments={form.comments} set={set}/>{!readOnly && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.task} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
-    {edit.kind === 'ticket' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Ticket titel"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={Boolean((item as Ticket | undefined)?.converted_to_project_id)}><option value="new">Nieuw</option><option value="review">Review</option><option value="approved">Goedgekeurd</option><option value="rejected">Geweigerd</option>{(item as Ticket | undefined)?.converted_to_project_id && <option value="converted">Omgezet</option>}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne notities"/><small className="ticket-status-hint">Gebruik <strong>Project maken</strong> om een ticket om te zetten. <strong>Omgezet</strong> is geen handmatige status.</small>{!readOnly && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.ticket} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
-    {edit.kind === 'note' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Titel"/><Select value={form.note_type} onChange={e=>set('note_type',e.target.value)}>{Object.entries(noteTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select><RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf je notitie…" disabled={readOnly}/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.project_id} onChange={e=>set('project_id',e.target.value)}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags, komma gescheiden" />{item && <div className="note-created-meta"><span>Aangemaakt: {new Date((item as Note).created_at).toLocaleString('nl-NL')}</span><span>Bijgewerkt: {new Date((item as Note).updated_at).toLocaleString('nl-NL')}</span></div>}{!readOnly && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.note} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
-    {(edit.kind === 'quote' || edit.kind === 'invoice') && <FinanceForm kind={edit.kind} data={data} organizationId={organizationId} form={form} set={set} item={item} readOnly={readOnly} onUploaded={onAttachmentsChanged} attachmentBlock={attachmentBlock}/>}
+    {quoteWorkflowLocked && <div className="readonly-note">Deze offerte zit al in de goedkeuringsflow. Inhoudelijke velden zijn vergrendeld zodat een goedgekeurde of verzonden offerte niet ongemerkt kan wijzigen.</div>}
+    {edit.kind === 'client' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Klantnaam"/><Input value={form.client_code} onChange={e=>set('client_code',e.target.value)} placeholder="Klantcode"/><Input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} placeholder="Contactpersoon"/><Input value={form.email} onChange={e=>set('email',e.target.value)} placeholder="Email"/><Input value={form.phone} onChange={e=>set('phone',e.target.value)} placeholder="Telefoon"/><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="active">Actief</option><option value="prospect">Prospect</option><option value="inactive">Inactief</option></Select><Input type="number" value={form.value_eur} onChange={e=>set('value_eur',Number(e.target.value))} placeholder="Waarde"/><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags, komma gescheiden"/><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Notities"/>{item && <RelatedNotes title="Klantnotities" notes={data.notes.filter(note => note.client_id === item.id || data.projects.some(project => project.client_id === item.id && project.id === note.project_id))} data={data} canWrite={canWrite} onNew={() => onNewClientNote(item as Client)} onEdit={onEditNote} emptyText="Nog geen notities bij deze klant." />}{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.client} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'project' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Projectnaam"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Omschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/><Input value={form.color} onChange={e=>set('color',e.target.value)} placeholder="#FFD966"/><label className="check-row"><input type="checkbox" checked={Boolean(form.archived)} onChange={e=>set('archived',e.target.checked)}/><span>Project archiveren</span></label>{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.project} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'task' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Taaktitel"/><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="todo">Te doen</option><option value="doing">Bezig</option><option value="review">Review</option><option value="done">Klaar</option></Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags"/><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/><TaskDetailEditor subtasks={form.subtasks} comments={form.comments} set={set}/>{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.task} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'ticket' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Ticket titel"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={Boolean((item as Ticket | undefined)?.converted_to_project_id)}><option value="new">Nieuw</option><option value="review">Review</option><option value="approved">Goedgekeurd</option><option value="rejected">Geweigerd</option>{(item as Ticket | undefined)?.converted_to_project_id && <option value="converted">Omgezet</option>}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne notities"/><small className="ticket-status-hint">Gebruik <strong>Project maken</strong> om een ticket om te zetten. <strong>Omgezet</strong> is geen handmatige status.</small>{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.ticket} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'note' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Titel"/><Select value={form.note_type} onChange={e=>set('note_type',e.target.value)}>{Object.entries(noteTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select><RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf je notitie…" disabled={disabled}/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.project_id} onChange={e=>set('project_id',e.target.value)} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags, komma gescheiden" />{item && <div className="note-created-meta"><span>Aangemaakt: {new Date((item as Note).created_at).toLocaleString('nl-NL')}</span><span>Bijgewerkt: {new Date((item as Note).updated_at).toLocaleString('nl-NL')}</span></div>}{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.note} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
+    {(edit.kind === 'quote' || edit.kind === 'invoice') && <FinanceForm kind={edit.kind} data={data} organizationId={organizationId} form={form} set={set} item={item} readOnly={effectiveReadOnly} onUploaded={onAttachmentsChanged} attachmentBlock={attachmentBlock}/>}
   </Modal>;
 }
 
@@ -538,8 +689,14 @@ function FileUpload({ organizationId, entity, id, onUploaded }: { organizationId
   </div>;
 }
 
+
+function isQuoteWorkflowLocked(quote: Quote): boolean {
+  return quote.status !== 'draft';
+}
+
 function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, onUploaded, attachmentBlock }: { kind: 'quote'|'invoice'; data: AppData; organizationId: string; form: Record<string, any>; set: (k:string,v:unknown)=>void; item?: { id: string }; readOnly: boolean; onUploaded: () => void; attachmentBlock: React.ReactNode }) {
   const lines: FinanceLine[] = Array.isArray(form.lines) ? form.lines : [];
+  const disabled = readOnly;
   const updateLine = (id: string, k: keyof FinanceLine, v: string | number) => set('lines', lines.map(l => l.id === id ? { ...l, [k]: k === 'description' ? v : Number(v) } : l));
   const handleDownloadPdf = () => {
     const client = data.clients.find(c => c.id === form.client_id) ?? null;
@@ -558,7 +715,42 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
     } as unknown as Quote & Invoice;
     void exportFinancePDF(docLike, kind, client, { company: data.companySettings }).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt'));
   };
-  return <FormGrid><Input value={form.number} onChange={e=>set('number',e.target.value)} placeholder="Nummer"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.project_id} onChange={e=>set('project_id',e.target.value)}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select><Input type="date" value={form.date} onChange={e=>set('date',e.target.value)}/><Input type="date" value={kind==='quote'?form.valid_until:form.due_date} onChange={e=>set(kind==='quote'?'valid_until':'due_date',e.target.value)}/><Select value={form.status} onChange={e=>set('status',e.target.value)}><option value="draft">Concept</option><option value="sent">Verzonden</option><option value="accepted">Geaccepteerd</option><option value="paid">Betaald</option><option value="rejected">Afgewezen</option><option value="expired">Verlopen</option><option value="overdue">Te laat</option><option value="cancelled">Geannuleerd</option></Select><div className="lines-editor"><strong>Regels</strong>{lines.map(l=><div className="line" key={l.id}><Input value={l.description} onChange={e=>updateLine(l.id,'description',e.target.value)} placeholder="Omschrijving"/><Input type="number" value={l.quantity} onChange={e=>updateLine(l.id,'quantity',e.target.value)}/><Input type="number" value={l.unit_price} onChange={e=>updateLine(l.id,'unit_price',e.target.value)}/><Input type="number" value={l.vat} onChange={e=>updateLine(l.id,'vat',e.target.value)}/><Button onClick={()=>set('lines',lines.filter(x=>x.id!==l.id))}>×</Button></div>)}<Button onClick={()=>set('lines',[...lines,{id:uid(),description:'',quantity:1,unit_price:0,vat:21}])}>+ Regel</Button></div><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Notities"/><div className="finance-actions"><Button onClick={handleDownloadPdf} disabled={!lines || lines.length === 0}>Download PDF</Button></div>{!readOnly && item && <FileUpload organizationId={organizationId} entity={editKindToEntity[kind]} id={item.id} onUploaded={onUploaded}/>}{attachmentBlock}</FormGrid>;
+
+  return <FormGrid>
+    <Input value={form.number} onChange={e=>set('number',e.target.value)} placeholder="Nummer" disabled={disabled}/>
+    <Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
+    <Select value={form.project_id} onChange={e=>set('project_id',e.target.value)} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
+    <Input type="date" value={form.date} onChange={e=>set('date',e.target.value)} disabled={disabled}/>
+    <Input type="date" value={kind==='quote'?form.valid_until:form.due_date} onChange={e=>set(kind==='quote'?'valid_until':'due_date',e.target.value)} disabled={disabled}/>
+    {kind === 'invoice' ? <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}>
+      <option value="draft">Concept</option>
+      <option value="sent">Verzonden</option>
+      <option value="accepted">Openstaand</option>
+      <option value="paid">Betaald</option>
+      <option value="overdue">Te laat</option>
+      <option value="cancelled">Geannuleerd</option>
+    </Select> : <div className="readonly-workflow-status"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div>}
+    <div className="lines-editor"><strong>Regels</strong>{lines.map(l=><div className="line" key={l.id}><Input value={l.description} onChange={e=>updateLine(l.id,'description',e.target.value)} placeholder="Omschrijving" disabled={disabled}/><Input type="number" value={l.quantity} onChange={e=>updateLine(l.id,'quantity',e.target.value)} disabled={disabled}/><Input type="number" value={l.unit_price} onChange={e=>updateLine(l.id,'unit_price',e.target.value)} disabled={disabled}/><Input type="number" value={l.vat} onChange={e=>updateLine(l.id,'vat',e.target.value)} disabled={disabled}/><Button onClick={()=>set('lines',lines.filter(x=>x.id!==l.id))} disabled={disabled}>×</Button></div>)}<Button onClick={()=>set('lines',[...lines,{id:uid(),description:'',quantity:1,unit_price:0,vat:21}])} disabled={disabled}>+ Regel</Button></div>
+    <Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Notities" disabled={disabled}/>
+    <div className="finance-actions"><Button onClick={handleDownloadPdf} disabled={!lines || lines.length === 0}>Download PDF</Button></div>
+    {!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity[kind]} id={item.id} onUploaded={onUploaded}/>}
+    {attachmentBlock}
+  </FormGrid>;
+}
+
+function quoteFormStatusLabel(status: string, approvalStatus?: string): string {
+  if (status === 'draft' && approvalStatus === 'rejected') return 'Intern afgewezen';
+  const labels: Record<string, string> = {
+    draft: 'Concept',
+    pending_internal_approval: 'Wacht op interne goedkeuring',
+    internally_approved: 'Intern goedgekeurd',
+    sent: 'Verzonden',
+    accepted: 'Geaccepteerd',
+    rejected: 'Afgewezen door klant',
+    expired: 'Verlopen',
+    cancelled: 'Geannuleerd',
+  };
+  return labels[status] || status || 'Concept';
 }
 
 
@@ -600,12 +792,12 @@ function initialForm(edit: NonNullable<EditMode>): Record<string, any> {
   }
   if (edit.kind === "note") {
     const item = edit.item;
-    return { title: item?.title ?? "", content: item?.content ?? "", note_type: item?.note_type ?? edit.defaults?.note_type ?? "general", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", tags: item?.tags?.join(", ") ?? edit.defaults?.tags?.join(", ") ?? "" };
+    return { title: item?.title ?? edit.defaults?.title ?? "", content: item?.content ?? edit.defaults?.content ?? "", note_type: item?.note_type ?? edit.defaults?.note_type ?? "general", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", tags: item?.tags?.join(", ") ?? edit.defaults?.tags?.join(", ") ?? "" };
   }
   const today = new Date().toISOString().slice(0,10);
   if (edit.kind === "quote") {
     const item = edit.item;
-    return { number: item?.number ?? "", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, valid_until: item?.valid_until ?? "", status: item?.status ?? "draft", notes: item?.notes ?? "", lines: item?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: 21 }] };
+    return { number: item?.number ?? "", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, valid_until: item?.valid_until ?? "", status: item?.status ?? "draft", internal_approval_status: item?.internal_approval_status ?? "draft", notes: item?.notes ?? "", lines: item?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: 21 }] };
   }
   const item = edit.item;
   return { number: item?.number ?? "", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, due_date: item?.due_date ?? "", status: item?.status ?? "draft", notes: item?.notes ?? "", lines: item?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: 21 }] };
@@ -643,6 +835,31 @@ function cleanForm(kind: string, form: Record<string, any>) {
     if (!cleaned.number) cleaned.number = `OFF-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
     delete cleaned.due_date;
     delete cleaned.quote_id;
+    // Offerte-status en approvalvelden lopen via de beveiligde workflow/RPC's.
+    delete cleaned.status;
+    delete cleaned.internal_approval_status;
+    delete cleaned.internal_approval_requested_at;
+    delete cleaned.internal_approval_requested_by;
+    delete cleaned.internal_approved_at;
+    delete cleaned.internal_approved_by;
+    delete cleaned.internal_rejected_at;
+    delete cleaned.internal_rejected_by;
+    delete cleaned.internal_rejection_note;
+    delete cleaned.client_decision_at;
+    delete cleaned.client_decision_by_name;
+    delete cleaned.client_decision_by_email;
+    delete cleaned.client_decision_note;
+    delete cleaned.public_token_hash;
+    delete cleaned.public_token_created_at;
+    delete cleaned.public_token_expires_at;
+    delete cleaned.resend_last_email_id;
+    delete cleaned.last_email_delivery_status;
+    delete cleaned.last_email_delivery_at;
+    delete cleaned.last_email_opened_at;
+    delete cleaned.last_email_clicked_at;
+    delete cleaned.last_email_failed_at;
+    delete cleaned.sent_at;
+    delete cleaned.accepted_at;
   }
   if (kind === "invoice") {
     if (!cleaned.number) cleaned.number = `FAC-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;

@@ -2565,3 +2565,3742 @@ create unique index if not exists idx_org_payment_records_one_incomplete_checkou
 
 comment on index public.idx_org_payment_records_one_incomplete_checkout is
   'Sprint 2.5: prevents parallel retries from creating multiple incomplete local checkout records for the same organization/payment shape.';
+
+
+-- Note/calendar links, added 2026-05-12.
+-- Link internal rich-text notes to external Google/Microsoft calendar events.
+-- Events remain external; ResoFly stores only a stable reference + safe snapshots.
+
+create table if not exists public.note_calendar_links (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  created_by uuid references auth.users(id) on delete set null,
+  note_id uuid not null references public.notes(id) on delete cascade,
+  provider text not null check (provider in ('google','microsoft')),
+  calendar_source_id uuid not null references public.calendar_sources(id) on delete cascade,
+  provider_calendar_id text,
+  provider_event_id text not null,
+  event_starts_at timestamptz not null,
+  event_ends_at timestamptz,
+  event_title_snapshot text,
+  event_location_snapshot text,
+  event_html_link text,
+  visibility_snapshot text not null default 'organization' check (visibility_snapshot in ('private','organization')),
+  is_private_masked_snapshot boolean not null default false,
+  created_at timestamptz not null default now(),
+  unique (organization_id, note_id, provider, calendar_source_id, provider_event_id, event_starts_at)
+);
+
+create index if not exists idx_note_calendar_links_event
+  on public.note_calendar_links(organization_id, provider, calendar_source_id, provider_event_id, event_starts_at desc);
+
+create index if not exists idx_note_calendar_links_note
+  on public.note_calendar_links(organization_id, note_id, created_at desc);
+
+create or replace function public.enforce_note_calendar_links_integrity()
+returns trigger language plpgsql as $$
+declare
+  v_note public.notes;
+  v_source public.calendar_sources;
+begin
+  if new.visibility_snapshot <> 'organization' then
+    raise exception 'Notities koppelen aan privé-agenda-items is geblokkeerd' using errcode = '23514';
+  end if;
+
+  if coalesce(new.is_private_masked_snapshot, false) then
+    raise exception 'Notities koppelen aan afgeschermde agenda-items is geblokkeerd' using errcode = '23514';
+  end if;
+
+  select * into v_note from public.notes where id = new.note_id;
+  if not found then
+    raise exception 'note_calendar_links.note_id verwijst naar een niet-bestaande notitie' using errcode = '23514';
+  end if;
+  if v_note.organization_id <> new.organization_id then
+    raise exception 'note_calendar_links.organization_id wijkt af van de gekoppelde notitie' using errcode = '23514';
+  end if;
+
+  select * into v_source from public.calendar_sources where id = new.calendar_source_id;
+  if not found then
+    raise exception 'note_calendar_links.calendar_source_id verwijst naar een niet-bestaande agenda' using errcode = '23514';
+  end if;
+  if v_source.organization_id <> new.organization_id then
+    raise exception 'note_calendar_links.organization_id wijkt af van de gekoppelde agenda' using errcode = '23514';
+  end if;
+  if v_source.provider <> new.provider then
+    raise exception 'note_calendar_links.provider wijkt af van de gekoppelde agenda-provider' using errcode = '23514';
+  end if;
+  if v_source.visibility <> 'organization' then
+    raise exception 'Notities koppelen is alleen toegestaan voor agenda’s die met de organisatie gedeeld zijn' using errcode = '23514';
+  end if;
+
+  new.provider_calendar_id := coalesce(new.provider_calendar_id, v_source.provider_calendar_id);
+  return new;
+end;
+$$;
+
+drop trigger if exists note_calendar_links_prevent_org_change on public.note_calendar_links;
+create trigger note_calendar_links_prevent_org_change
+  before update of organization_id on public.note_calendar_links
+  for each row execute function public.prevent_organization_id_change();
+
+drop trigger if exists note_calendar_links_integrity on public.note_calendar_links;
+create trigger note_calendar_links_integrity
+  before insert or update of note_id, organization_id, provider, calendar_source_id, visibility_snapshot, is_private_masked_snapshot
+  on public.note_calendar_links
+  for each row execute function public.enforce_note_calendar_links_integrity();
+
+drop trigger if exists note_calendar_links_audit on public.note_calendar_links;
+create trigger note_calendar_links_audit
+  after insert or update or delete on public.note_calendar_links
+  for each row execute function public.audit_row_change('note_calendar_link','event_title_snapshot');
+
+alter table public.note_calendar_links enable row level security;
+
+drop policy if exists "note calendar links read" on public.note_calendar_links;
+create policy "note calendar links read" on public.note_calendar_links for select using (
+  public.can_read_org(organization_id)
+  and visibility_snapshot = 'organization'
+  and is_private_masked_snapshot = false
+  and exists (
+    select 1 from public.notes note
+    where note.id = note_calendar_links.note_id
+      and note.organization_id = note_calendar_links.organization_id
+  )
+  and exists (
+    select 1 from public.calendar_sources source
+    where source.id = note_calendar_links.calendar_source_id
+      and source.organization_id = note_calendar_links.organization_id
+      and source.visibility = 'organization'
+  )
+);
+
+drop policy if exists "note calendar links insert" on public.note_calendar_links;
+create policy "note calendar links insert" on public.note_calendar_links for insert with check (
+  public.can_write_org(organization_id)
+  and created_by = auth.uid()
+  and visibility_snapshot = 'organization'
+  and is_private_masked_snapshot = false
+  and exists (
+    select 1 from public.notes note
+    where note.id = note_calendar_links.note_id
+      and note.organization_id = note_calendar_links.organization_id
+  )
+  and exists (
+    select 1 from public.calendar_sources source
+    where source.id = note_calendar_links.calendar_source_id
+      and source.organization_id = note_calendar_links.organization_id
+      and source.visibility = 'organization'
+  )
+);
+
+drop policy if exists "note calendar links update" on public.note_calendar_links;
+create policy "note calendar links update" on public.note_calendar_links for update using (
+  public.can_write_org(organization_id)
+) with check (
+  public.can_write_org(organization_id)
+  and visibility_snapshot = 'organization'
+  and is_private_masked_snapshot = false
+  and exists (
+    select 1 from public.notes note
+    where note.id = note_calendar_links.note_id
+      and note.organization_id = note_calendar_links.organization_id
+  )
+  and exists (
+    select 1 from public.calendar_sources source
+    where source.id = note_calendar_links.calendar_source_id
+      and source.organization_id = note_calendar_links.organization_id
+      and source.visibility = 'organization'
+  )
+);
+
+drop policy if exists "note calendar links delete" on public.note_calendar_links;
+create policy "note calendar links delete" on public.note_calendar_links for delete using (
+  public.can_write_org(organization_id)
+);
+
+-- Transactional creation of a rich-text note plus its calendar-event link.
+-- This prevents orphan notes when creating a note from a calendar event and the link insert fails.
+create or replace function public.create_note_with_calendar_link(
+  p_organization_id uuid,
+  p_client_id uuid,
+  p_project_id uuid,
+  p_title text,
+  p_content text,
+  p_note_type text,
+  p_tags text[],
+  p_provider text,
+  p_calendar_source_id uuid,
+  p_provider_calendar_id text,
+  p_provider_event_id text,
+  p_event_starts_at timestamptz,
+  p_event_ends_at timestamptz,
+  p_event_title_snapshot text,
+  p_event_location_snapshot text,
+  p_event_html_link text,
+  p_visibility_snapshot text,
+  p_is_private_masked_snapshot boolean
+)
+returns public.notes
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_note public.notes;
+  v_clean_title text := nullif(trim(coalesce(p_title, '')), '');
+  v_note_type text := coalesce(nullif(trim(p_note_type), ''), 'general');
+begin
+  if v_user_id is null then
+    raise exception 'Niet ingelogd.' using errcode = '28000';
+  end if;
+
+  if not public.can_write_org(p_organization_id) then
+    raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
+  end if;
+
+  if p_visibility_snapshot <> 'organization' or coalesce(p_is_private_masked_snapshot, false) then
+    raise exception 'Notities koppelen is alleen toegestaan bij gedeelde agenda-items waarvan de details zichtbaar zijn.' using errcode = '23514';
+  end if;
+
+  if v_note_type not in ('general','meeting','action','decision','idea','support') then
+    raise exception 'Ongeldig notitietype: %', v_note_type using errcode = '23514';
+  end if;
+
+  insert into public.notes (
+    organization_id,
+    created_by,
+    client_id,
+    project_id,
+    title,
+    content,
+    note_type,
+    tags
+  ) values (
+    p_organization_id,
+    v_user_id,
+    p_client_id,
+    p_project_id,
+    coalesce(v_clean_title, 'Notitie ' || to_char(now(), 'DD-MM-YYYY')),
+    coalesce(p_content, ''),
+    v_note_type,
+    coalesce(p_tags, '{}'::text[])
+  ) returning * into v_note;
+
+  insert into public.note_calendar_links (
+    organization_id,
+    created_by,
+    note_id,
+    provider,
+    calendar_source_id,
+    provider_calendar_id,
+    provider_event_id,
+    event_starts_at,
+    event_ends_at,
+    event_title_snapshot,
+    event_location_snapshot,
+    event_html_link,
+    visibility_snapshot,
+    is_private_masked_snapshot
+  ) values (
+    p_organization_id,
+    v_user_id,
+    v_note.id,
+    p_provider,
+    p_calendar_source_id,
+    p_provider_calendar_id,
+    p_provider_event_id,
+    p_event_starts_at,
+    p_event_ends_at,
+    p_event_title_snapshot,
+    p_event_location_snapshot,
+    p_event_html_link,
+    p_visibility_snapshot,
+    coalesce(p_is_private_masked_snapshot, false)
+  );
+
+  return v_note;
+end;
+$$;
+
+revoke all on function public.create_note_with_calendar_link(
+  uuid, uuid, uuid, text, text, text, text[], text, uuid, text, text, timestamptz, timestamptz, text, text, text, text, boolean
+) from public;
+grant execute on function public.create_note_with_calendar_link(
+  uuid, uuid, uuid, text, text, text, text[], text, uuid, text, text, timestamptz, timestamptz, text, text, text, text, boolean
+) to authenticated;
+
+-- ============================================================
+-- Included post-schema migration: Quote approval + Resend flow
+-- Source: supabase/migrations/20260515_quote_approval_resend_flow.sql
+-- ============================================================
+-- ============================================================
+-- BrandCore / ResoFly — Quote approval + Resend delivery flow
+-- Date: 2026-05-15
+--
+-- Scope:
+-- - Project-linked quote workflow
+-- - Internal approval state machine
+-- - Public quote approval tokens
+-- - Resend delivery tracking
+-- - Quote timeline events
+-- - Audit-log entries for critical quote actions
+-- ============================================================
+
+create extension if not exists pgcrypto;
+
+begin;
+
+-- Existing quotes get extra workflow states. Invoices keep using the legacy subset.
+alter table public.quotes drop constraint if exists quotes_status_check;
+alter table public.quotes
+  add constraint quotes_status_check
+  check (status in (
+    'draft',
+    'pending_internal_approval',
+    'internally_approved',
+    'sent',
+    'accepted',
+    'rejected',
+    'expired',
+    'paid',
+    'overdue',
+    'cancelled'
+  ));
+
+alter table public.quotes
+  add column if not exists internal_approval_status text not null default 'draft',
+  add column if not exists internal_approval_requested_at timestamptz,
+  add column if not exists internal_approval_requested_by uuid references auth.users(id) on delete set null,
+  add column if not exists internal_approved_at timestamptz,
+  add column if not exists internal_approved_by uuid references auth.users(id) on delete set null,
+  add column if not exists internal_rejected_at timestamptz,
+  add column if not exists internal_rejected_by uuid references auth.users(id) on delete set null,
+  add column if not exists internal_rejection_note text,
+  add column if not exists client_decision_at timestamptz,
+  add column if not exists client_decision_by_name text,
+  add column if not exists client_decision_by_email text,
+  add column if not exists client_decision_note text,
+  add column if not exists public_token_hash text,
+  add column if not exists public_token_created_at timestamptz,
+  add column if not exists public_token_expires_at timestamptz,
+  add column if not exists resend_last_email_id text,
+  add column if not exists last_email_delivery_status text,
+  add column if not exists last_email_delivery_at timestamptz,
+  add column if not exists last_email_opened_at timestamptz,
+  add column if not exists last_email_clicked_at timestamptz,
+  add column if not exists last_email_failed_at timestamptz;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.quotes'::regclass
+      and conname = 'quotes_internal_approval_status_check'
+  ) then
+    alter table public.quotes
+      add constraint quotes_internal_approval_status_check
+      check (internal_approval_status in ('draft','pending','approved','rejected'));
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.quotes'::regclass
+      and conname = 'quotes_public_token_hash_unique'
+  ) then
+    alter table public.quotes
+      add constraint quotes_public_token_hash_unique unique (public_token_hash);
+  end if;
+end $$;
+
+create table if not exists public.quote_approval_events (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  quote_id uuid not null references public.quotes(id) on delete cascade,
+  actor_user_id uuid references auth.users(id) on delete set null,
+  event_type text not null check (event_type in (
+    'created',
+    'updated',
+    'submitted_for_internal_approval',
+    'internal_approval_granted',
+    'internal_approval_rejected',
+    'public_token_created',
+    'sent_to_client',
+    'email_sent',
+    'email_delivered',
+    'email_opened',
+    'email_clicked',
+    'email_bounced',
+    'email_failed',
+    'email_complained',
+    'client_viewed',
+    'client_accepted',
+    'client_rejected',
+    'expired',
+    'cancelled'
+  )),
+  title text not null,
+  description text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.quote_email_deliveries (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  quote_id uuid not null references public.quotes(id) on delete cascade,
+  provider text not null default 'resend',
+  provider_email_id text,
+  recipient_email text not null,
+  recipient_name text,
+  subject text not null,
+  status text not null default 'queued' check (status in ('queued','sent','delivered','opened','clicked','bounced','failed','complained')),
+  sent_at timestamptz,
+  delivered_at timestamptz,
+  opened_at timestamptz,
+  clicked_at timestamptz,
+  bounced_at timestamptz,
+  failed_at timestamptz,
+  complained_at timestamptz,
+  last_event_at timestamptz,
+  error_message text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.quote_email_events (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  quote_id uuid references public.quotes(id) on delete set null,
+  delivery_id uuid references public.quote_email_deliveries(id) on delete set null,
+  provider text not null default 'resend',
+  provider_event_id text not null,
+  provider_email_id text,
+  event_type text not null,
+  payload jsonb not null default '{}'::jsonb,
+  occurred_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  unique (provider, provider_event_id)
+);
+
+create index if not exists idx_quotes_workflow_org_status on public.quotes(organization_id, status, internal_approval_status, created_at desc);
+create index if not exists idx_quotes_public_token_hash on public.quotes(public_token_hash) where public_token_hash is not null;
+create index if not exists idx_quote_approval_events_quote on public.quote_approval_events(organization_id, quote_id, created_at desc);
+create index if not exists idx_quote_email_deliveries_quote on public.quote_email_deliveries(organization_id, quote_id, created_at desc);
+create index if not exists idx_quote_email_deliveries_provider_email on public.quote_email_deliveries(provider, provider_email_id) where provider_email_id is not null;
+create index if not exists idx_quote_email_events_provider_email on public.quote_email_events(provider, provider_email_id, occurred_at desc);
+
+alter table public.quote_approval_events enable row level security;
+alter table public.quote_email_deliveries enable row level security;
+alter table public.quote_email_events enable row level security;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'quote_approval_events' and policyname = 'quote approval events read') then
+    create policy "quote approval events read" on public.quote_approval_events for select using (public.can_read_org(organization_id));
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'quote_approval_events' and policyname = 'quote approval events insert') then
+    create policy "quote approval events insert" on public.quote_approval_events for insert with check (public.can_write_org(organization_id));
+  end if;
+
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'quote_email_deliveries' and policyname = 'quote email deliveries read') then
+    create policy "quote email deliveries read" on public.quote_email_deliveries for select using (public.can_read_org(organization_id));
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'quote_email_deliveries' and policyname = 'quote email deliveries insert') then
+    create policy "quote email deliveries insert" on public.quote_email_deliveries for insert with check (public.can_write_org(organization_id));
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'quote_email_deliveries' and policyname = 'quote email deliveries update') then
+    create policy "quote email deliveries update" on public.quote_email_deliveries for update using (public.can_write_org(organization_id)) with check (public.can_write_org(organization_id));
+  end if;
+
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'quote_email_events' and policyname = 'quote email events read') then
+    create policy "quote email events read" on public.quote_email_events for select using (public.can_read_org(organization_id));
+  end if;
+end $$;
+
+-- Extend explicit audit event vocabulary. Existing row-change triggers keep working.
+do $$
+begin
+  if exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.audit_logs'::regclass
+      and conname = 'audit_logs_action_check'
+  ) then
+    alter table public.audit_logs drop constraint audit_logs_action_check;
+  end if;
+
+  alter table public.audit_logs
+    add constraint audit_logs_action_check
+    check (action in (
+      'created','updated','deleted','invited','accepted','revoked','role_changed','disabled','expired',
+      'mollie_connected','plan_changed','seat_purchased','seat_downgrade_requested',
+      'payment_succeeded','payment_failed','payment_expired','subscription_cancelled',
+      'licensed_seats_changed','invitation_blocked_insufficient_seats','billing_synced',
+      'quote_submitted_for_approval','quote_internal_approved','quote_internal_rejected',
+      'quote_sent_to_client','quote_client_accepted','quote_client_rejected',
+      'quote_email_delivered','quote_email_failed'
+    ));
+end $$;
+
+create or replace function public.quote_token_hash(p_token text)
+returns text
+language sql
+immutable
+as $$
+  select encode(digest(coalesce(p_token, ''), 'sha256'), 'hex');
+$$;
+
+create or replace function public.insert_quote_workflow_event(
+  p_organization_id uuid,
+  p_quote_id uuid,
+  p_event_type text,
+  p_title text,
+  p_description text default null,
+  p_metadata jsonb default '{}'::jsonb,
+  p_actor_user_id uuid default auth.uid()
+)
+returns public.quote_approval_events
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_event public.quote_approval_events;
+begin
+  insert into public.quote_approval_events(
+    organization_id,
+    quote_id,
+    actor_user_id,
+    event_type,
+    title,
+    description,
+    metadata
+  ) values (
+    p_organization_id,
+    p_quote_id,
+    p_actor_user_id,
+    p_event_type,
+    coalesce(nullif(trim(p_title), ''), p_event_type),
+    nullif(trim(coalesce(p_description, '')), ''),
+    coalesce(p_metadata, '{}'::jsonb)
+  ) returning * into v_event;
+
+  return v_event;
+end;
+$$;
+
+create or replace function public.insert_quote_audit_event(
+  p_organization_id uuid,
+  p_quote_id uuid,
+  p_action text,
+  p_entity_label text,
+  p_metadata jsonb default '{}'::jsonb,
+  p_actor_user_id uuid default auth.uid()
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, entity_label, metadata)
+  values (p_organization_id, p_actor_user_id, p_action, 'quote', p_quote_id, p_entity_label, coalesce(p_metadata, '{}'::jsonb));
+exception when others then
+  raise warning 'quote audit event failed for quote % action %: %', p_quote_id, p_action, SQLERRM;
+end;
+$$;
+
+create or replace function public.submit_quote_for_internal_approval(p_quote_id uuid, p_organization_id uuid)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_user_id uuid := auth.uid();
+begin
+  if v_user_id is null then raise exception 'Niet ingelogd' using errcode = '28000'; end if;
+  if not public.can_write_org(p_organization_id) then raise exception 'Geen schrijfrechten voor deze organisatie' using errcode = '42501'; end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status in ('sent','accepted','rejected','expired','cancelled') then
+    raise exception 'Deze offerte kan niet meer intern worden ingediend vanuit status %', v_quote.status using errcode = '23514';
+  end if;
+  if jsonb_array_length(coalesce(v_quote.lines, '[]'::jsonb)) = 0 then
+    raise exception 'Een offerte zonder regels kan niet ter goedkeuring worden ingediend' using errcode = '23514';
+  end if;
+
+  update public.quotes
+  set status = 'pending_internal_approval',
+      internal_approval_status = 'pending',
+      internal_approval_requested_at = now(),
+      internal_approval_requested_by = v_user_id,
+      internal_rejection_note = null,
+      updated_at = now()
+  where id = p_quote_id
+  returning * into v_quote;
+
+  perform public.insert_quote_workflow_event(p_organization_id, p_quote_id, 'submitted_for_internal_approval', 'Ter interne goedkeuring ingediend', null, '{}'::jsonb, v_user_id);
+  perform public.insert_quote_audit_event(p_organization_id, p_quote_id, 'quote_submitted_for_approval', v_quote.number, '{}'::jsonb, v_user_id);
+  return v_quote;
+end;
+$$;
+
+create or replace function public.approve_quote_internal(p_quote_id uuid, p_organization_id uuid)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_user_id uuid := auth.uid();
+begin
+  if v_user_id is null then raise exception 'Niet ingelogd' using errcode = '28000'; end if;
+  if not public.can_admin_org(p_organization_id) then raise exception 'Alleen owners/admins kunnen offertes intern goedkeuren' using errcode = '42501'; end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status not in ('pending_internal_approval','internally_approved','draft') then
+    raise exception 'Deze offerte kan niet intern worden goedgekeurd vanuit status %', v_quote.status using errcode = '23514';
+  end if;
+
+  update public.quotes
+  set status = 'internally_approved',
+      internal_approval_status = 'approved',
+      internal_approved_at = now(),
+      internal_approved_by = v_user_id,
+      internal_rejected_at = null,
+      internal_rejected_by = null,
+      internal_rejection_note = null,
+      updated_at = now()
+  where id = p_quote_id
+  returning * into v_quote;
+
+  perform public.insert_quote_workflow_event(p_organization_id, p_quote_id, 'internal_approval_granted', 'Intern goedgekeurd', null, '{}'::jsonb, v_user_id);
+  perform public.insert_quote_audit_event(p_organization_id, p_quote_id, 'quote_internal_approved', v_quote.number, '{}'::jsonb, v_user_id);
+  return v_quote;
+end;
+$$;
+
+create or replace function public.reject_quote_internal(p_quote_id uuid, p_organization_id uuid, p_note text default null)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_user_id uuid := auth.uid();
+begin
+  if v_user_id is null then raise exception 'Niet ingelogd' using errcode = '28000'; end if;
+  if not public.can_admin_org(p_organization_id) then raise exception 'Alleen owners/admins kunnen offertes intern afwijzen' using errcode = '42501'; end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status in ('sent','accepted','rejected','expired','cancelled') then
+    raise exception 'Deze offerte kan niet intern worden afgewezen vanuit status %', v_quote.status using errcode = '23514';
+  end if;
+
+  update public.quotes
+  set status = 'draft',
+      internal_approval_status = 'rejected',
+      internal_rejected_at = now(),
+      internal_rejected_by = v_user_id,
+      internal_rejection_note = nullif(trim(coalesce(p_note, '')), ''),
+      updated_at = now()
+  where id = p_quote_id
+  returning * into v_quote;
+
+  perform public.insert_quote_workflow_event(p_organization_id, p_quote_id, 'internal_approval_rejected', 'Intern afgewezen', nullif(trim(coalesce(p_note, '')), ''), '{}'::jsonb, v_user_id);
+  perform public.insert_quote_audit_event(p_organization_id, p_quote_id, 'quote_internal_rejected', v_quote.number, jsonb_build_object('note', nullif(trim(coalesce(p_note, '')), '')), v_user_id);
+  return v_quote;
+end;
+$$;
+
+create or replace function public.accept_quote_public(
+  p_token_hash text,
+  p_name text,
+  p_email text,
+  p_note text default null
+)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+begin
+  select * into v_quote
+  from public.quotes
+  where public_token_hash = p_token_hash
+    and public_token_expires_at is not null
+    and public_token_expires_at > now()
+  for update;
+
+  if not found then raise exception 'Offertelink is ongeldig of verlopen' using errcode = '28000'; end if;
+  if v_quote.status <> 'sent' then raise exception 'Deze offerte kan niet meer worden geaccepteerd' using errcode = '23514'; end if;
+
+  update public.quotes
+  set status = 'accepted',
+      accepted_at = now(),
+      client_decision_at = now(),
+      client_decision_by_name = nullif(trim(coalesce(p_name, '')), ''),
+      client_decision_by_email = nullif(lower(trim(coalesce(p_email, ''))), ''),
+      client_decision_note = nullif(trim(coalesce(p_note, '')), ''),
+      updated_at = now()
+  where id = v_quote.id
+  returning * into v_quote;
+
+  perform public.insert_quote_workflow_event(v_quote.organization_id, v_quote.id, 'client_accepted', 'Klant heeft de offerte geaccepteerd', nullif(trim(coalesce(p_note, '')), ''), jsonb_build_object('name', p_name, 'email', p_email), null);
+  perform public.insert_quote_audit_event(v_quote.organization_id, v_quote.id, 'quote_client_accepted', v_quote.number, jsonb_build_object('name', p_name, 'email', p_email), null);
+  return v_quote;
+end;
+$$;
+
+create or replace function public.reject_quote_public(
+  p_token_hash text,
+  p_name text,
+  p_email text,
+  p_note text default null
+)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+begin
+  select * into v_quote
+  from public.quotes
+  where public_token_hash = p_token_hash
+    and public_token_expires_at is not null
+    and public_token_expires_at > now()
+  for update;
+
+  if not found then raise exception 'Offertelink is ongeldig of verlopen' using errcode = '28000'; end if;
+  if v_quote.status <> 'sent' then raise exception 'Deze offerte kan niet meer worden geweigerd' using errcode = '23514'; end if;
+
+  update public.quotes
+  set status = 'rejected',
+      client_decision_at = now(),
+      client_decision_by_name = nullif(trim(coalesce(p_name, '')), ''),
+      client_decision_by_email = nullif(lower(trim(coalesce(p_email, ''))), ''),
+      client_decision_note = nullif(trim(coalesce(p_note, '')), ''),
+      updated_at = now()
+  where id = v_quote.id
+  returning * into v_quote;
+
+  perform public.insert_quote_workflow_event(v_quote.organization_id, v_quote.id, 'client_rejected', 'Klant heeft de offerte geweigerd', nullif(trim(coalesce(p_note, '')), ''), jsonb_build_object('name', p_name, 'email', p_email), null);
+  perform public.insert_quote_audit_event(v_quote.organization_id, v_quote.id, 'quote_client_rejected', v_quote.number, jsonb_build_object('name', p_name, 'email', p_email), null);
+  return v_quote;
+end;
+$$;
+
+
+create or replace function public.enforce_quote_status_transition()
+returns trigger
+language plpgsql
+as $$
+begin
+  if TG_OP <> 'UPDATE' then return new; end if;
+  if old.status is not distinct from new.status then return new; end if;
+
+  if old.status = 'draft' and new.status in ('pending_internal_approval','cancelled') then return new; end if;
+  if old.status = 'pending_internal_approval' and new.status in ('internally_approved','draft','cancelled') then return new; end if;
+  if old.status = 'internally_approved' and new.status in ('sent','draft','cancelled') then return new; end if;
+  if old.status = 'sent' and new.status in ('accepted','rejected','expired','cancelled') then return new; end if;
+  if old.status in ('accepted','rejected','expired','cancelled') and new.status = old.status then return new; end if;
+
+  raise exception 'Ongeldige offerte-statusovergang van % naar %. Gebruik de offerte-workflow acties.', old.status, new.status using errcode = '23514';
+end;
+$$;
+
+drop trigger if exists quotes_status_transition_guard on public.quotes;
+create trigger quotes_status_transition_guard
+  before update of status on public.quotes
+  for each row execute function public.enforce_quote_status_transition();
+
+grant execute on function public.submit_quote_for_internal_approval(uuid, uuid) to authenticated;
+grant execute on function public.approve_quote_internal(uuid, uuid) to authenticated;
+grant execute on function public.reject_quote_internal(uuid, uuid, text) to authenticated;
+grant execute on function public.accept_quote_public(text, text, text, text) to service_role;
+grant execute on function public.reject_quote_public(text, text, text, text) to service_role;
+grant execute on function public.insert_quote_workflow_event(uuid, uuid, text, text, text, jsonb, uuid) to authenticated, service_role;
+grant execute on function public.insert_quote_audit_event(uuid, uuid, text, text, jsonb, uuid) to authenticated, service_role;
+
+commit;
+-- ============================================================
+-- BrandCore / ResoFly — Quote approval + Resend hardening
+-- Scope:
+-- - Lock quote business fields after submission
+-- - Keep timeline/email tables read-only from browser clients
+-- - Add transactional send lifecycle RPCs for Resend
+-- - Harden helper RPC permissions
+-- ============================================================
+
+begin;
+
+-- Browser clients may read timeline/e-mail status, but inserts/updates must flow
+-- through RPCs or service-role Edge Functions to prevent forged events/statuses.
+drop policy if exists "quote approval events insert" on public.quote_approval_events;
+drop policy if exists "quote email deliveries insert" on public.quote_email_deliveries;
+drop policy if exists "quote email deliveries update" on public.quote_email_deliveries;
+
+create or replace function public.insert_quote_workflow_event(
+  p_organization_id uuid,
+  p_quote_id uuid,
+  p_event_type text,
+  p_title text,
+  p_description text default null,
+  p_metadata jsonb default '{}'::jsonb,
+  p_actor_user_id uuid default auth.uid()
+)
+returns public.quote_approval_events
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_event public.quote_approval_events;
+begin
+  if auth.role() = 'authenticated' and not public.can_write_org(p_organization_id) then
+    raise exception 'Geen schrijfrechten voor deze organisatie' using errcode = '42501';
+  end if;
+
+  if not exists (
+    select 1 from public.quotes q
+    where q.id = p_quote_id and q.organization_id = p_organization_id
+  ) then
+    raise exception 'Offerte niet gevonden voor deze organisatie' using errcode = '02000';
+  end if;
+
+  insert into public.quote_approval_events(
+    organization_id,
+    quote_id,
+    actor_user_id,
+    event_type,
+    title,
+    description,
+    metadata
+  ) values (
+    p_organization_id,
+    p_quote_id,
+    p_actor_user_id,
+    p_event_type,
+    coalesce(nullif(trim(p_title), ''), p_event_type),
+    nullif(trim(coalesce(p_description, '')), ''),
+    coalesce(p_metadata, '{}'::jsonb)
+  ) returning * into v_event;
+
+  return v_event;
+end;
+$$;
+
+create or replace function public.insert_quote_audit_event(
+  p_organization_id uuid,
+  p_quote_id uuid,
+  p_action text,
+  p_entity_label text,
+  p_metadata jsonb default '{}'::jsonb,
+  p_actor_user_id uuid default auth.uid()
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.role() = 'authenticated' and not public.can_write_org(p_organization_id) then
+    raise exception 'Geen schrijfrechten voor deze organisatie' using errcode = '42501';
+  end if;
+
+  if not exists (
+    select 1 from public.quotes q
+    where q.id = p_quote_id and q.organization_id = p_organization_id
+  ) then
+    raise exception 'Offerte niet gevonden voor deze organisatie' using errcode = '02000';
+  end if;
+
+  begin
+    insert into public.audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, entity_label, metadata)
+    values (p_organization_id, p_actor_user_id, p_action, 'quote', p_quote_id, p_entity_label, coalesce(p_metadata, '{}'::jsonb));
+  exception when others then
+    raise warning 'quote audit event failed for quote % action %: %', p_quote_id, p_action, SQLERRM;
+  end;
+end;
+$$;
+
+create or replace function public.enforce_quote_immutable_after_submission()
+returns trigger
+language plpgsql
+as $$
+begin
+  if TG_OP <> 'UPDATE' then return new; end if;
+
+  if old.status = 'draft' then
+    return new;
+  end if;
+
+  if old.number is distinct from new.number
+    or old.date is distinct from new.date
+    or old.valid_until is distinct from new.valid_until
+    or old.client_id is distinct from new.client_id
+    or old.project_id is distinct from new.project_id
+    or old.lines is distinct from new.lines
+    or old.notes is distinct from new.notes then
+    raise exception 'Deze offerte is al onderdeel van de goedkeuringsflow. Maak een nieuwe offerte of reset de workflow voordat je inhoudelijke velden wijzigt.' using errcode = '23514';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists quotes_immutable_after_submission_guard on public.quotes;
+create trigger quotes_immutable_after_submission_guard
+  before update of number, date, valid_until, client_id, project_id, lines, notes on public.quotes
+  for each row execute function public.enforce_quote_immutable_after_submission();
+
+create or replace function public.begin_quote_email_send(
+  p_quote_id uuid,
+  p_organization_id uuid,
+  p_actor_user_id uuid,
+  p_token_hash text,
+  p_token_expires_at timestamptz,
+  p_recipient_email text,
+  p_recipient_name text,
+  p_subject text,
+  p_public_url text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_delivery public.quote_email_deliveries;
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'Alleen de server mag een offerte-e-mail voorbereiden' using errcode = '42501';
+  end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status <> 'internally_approved' or v_quote.internal_approval_status <> 'approved' then
+    raise exception 'Alleen intern goedgekeurde offertes kunnen worden verstuurd' using errcode = '23514';
+  end if;
+
+  if exists (
+    select 1 from public.quote_email_deliveries d
+    where d.quote_id = p_quote_id
+      and d.organization_id = p_organization_id
+      and d.status = 'queued'
+      and d.created_at > now() - interval '15 minutes'
+  ) then
+    raise exception 'Er loopt al een recente Resend-verzendpoging voor deze offerte' using errcode = '23505';
+  end if;
+
+  update public.quotes
+  set public_token_hash = p_token_hash,
+      public_token_created_at = now(),
+      public_token_expires_at = p_token_expires_at,
+      last_email_delivery_status = 'queued',
+      updated_at = now()
+  where id = p_quote_id
+  returning * into v_quote;
+
+  insert into public.quote_email_deliveries(
+    organization_id,
+    quote_id,
+    provider,
+    provider_email_id,
+    recipient_email,
+    recipient_name,
+    subject,
+    status,
+    last_event_at,
+    metadata
+  ) values (
+    p_organization_id,
+    p_quote_id,
+    'resend',
+    null,
+    lower(trim(p_recipient_email)),
+    nullif(trim(coalesce(p_recipient_name, '')), ''),
+    p_subject,
+    'queued',
+    now(),
+    jsonb_build_object('publicUrl', p_public_url, 'expiresAt', p_token_expires_at)
+  ) returning * into v_delivery;
+
+  perform public.insert_quote_workflow_event(p_organization_id, p_quote_id, 'public_token_created', 'Publieke offertelink aangemaakt', 'Link voorbereid voor verzending via Resend.', jsonb_build_object('expiresAt', p_token_expires_at), p_actor_user_id);
+
+  return jsonb_build_object('deliveryId', v_delivery.id, 'quoteId', v_quote.id);
+end;
+$$;
+
+create or replace function public.complete_quote_email_send(
+  p_delivery_id uuid,
+  p_organization_id uuid,
+  p_actor_user_id uuid,
+  p_provider_email_id text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_delivery public.quote_email_deliveries;
+  v_quote public.quotes;
+  v_now timestamptz := now();
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'Alleen de server mag een offerte-e-mail afronden' using errcode = '42501';
+  end if;
+
+  select * into v_delivery
+  from public.quote_email_deliveries
+  where id = p_delivery_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'E-maildelivery niet gevonden' using errcode = '02000'; end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = v_delivery.quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status <> 'internally_approved' or v_quote.internal_approval_status <> 'approved' then
+    raise exception 'Offerte staat niet meer klaar om te verzenden' using errcode = '23514';
+  end if;
+
+  update public.quote_email_deliveries
+  set provider_email_id = nullif(trim(coalesce(p_provider_email_id, '')), ''),
+      status = 'sent',
+      sent_at = v_now,
+      last_event_at = v_now,
+      updated_at = v_now
+  where id = v_delivery.id
+  returning * into v_delivery;
+
+  update public.quotes
+  set status = 'sent',
+      sent_at = v_now,
+      resend_last_email_id = nullif(trim(coalesce(p_provider_email_id, '')), ''),
+      last_email_delivery_status = 'sent',
+      updated_at = v_now
+  where id = v_quote.id
+  returning * into v_quote;
+
+  perform public.insert_quote_workflow_event(p_organization_id, v_quote.id, 'email_sent', 'E-mail geaccepteerd door Resend', null, jsonb_build_object('providerEmailId', p_provider_email_id), p_actor_user_id);
+  perform public.insert_quote_workflow_event(p_organization_id, v_quote.id, 'sent_to_client', 'Offerte naar klant verzonden', 'Verstuurd naar ' || v_delivery.recipient_email || '.', jsonb_build_object('recipientEmail', v_delivery.recipient_email, 'providerEmailId', p_provider_email_id), p_actor_user_id);
+  perform public.insert_quote_audit_event(p_organization_id, v_quote.id, 'quote_sent_to_client', v_quote.number, jsonb_build_object('recipientEmail', v_delivery.recipient_email, 'providerEmailId', p_provider_email_id), p_actor_user_id);
+
+  return jsonb_build_object('delivery', to_jsonb(v_delivery), 'quote', to_jsonb(v_quote));
+end;
+$$;
+
+create or replace function public.fail_quote_email_send(
+  p_delivery_id uuid,
+  p_organization_id uuid,
+  p_actor_user_id uuid,
+  p_error_message text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_delivery public.quote_email_deliveries;
+  v_quote public.quotes;
+  v_now timestamptz := now();
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'Alleen de server mag een offerte-e-mail markeren als mislukt' using errcode = '42501';
+  end if;
+
+  select * into v_delivery
+  from public.quote_email_deliveries
+  where id = p_delivery_id and organization_id = p_organization_id
+  for update;
+
+  if not found then return; end if;
+
+  update public.quote_email_deliveries
+  set status = 'failed',
+      failed_at = v_now,
+      last_event_at = v_now,
+      error_message = nullif(trim(coalesce(p_error_message, '')), ''),
+      updated_at = v_now
+  where id = v_delivery.id
+  returning * into v_delivery;
+
+  select * into v_quote
+  from public.quotes
+  where id = v_delivery.quote_id and organization_id = p_organization_id
+  for update;
+
+  if found and v_quote.status = 'internally_approved' then
+    update public.quotes
+    set last_email_delivery_status = 'failed',
+        last_email_failed_at = v_now,
+        updated_at = v_now
+    where id = v_quote.id;
+
+    perform public.insert_quote_workflow_event(p_organization_id, v_quote.id, 'email_failed', 'E-mail verzenden via Resend mislukt', nullif(trim(coalesce(p_error_message, '')), ''), '{}'::jsonb, p_actor_user_id);
+    perform public.insert_quote_audit_event(p_organization_id, v_quote.id, 'quote_email_failed', v_quote.number, jsonb_build_object('error', p_error_message), p_actor_user_id);
+  end if;
+end;
+$$;
+
+grant execute on function public.begin_quote_email_send(uuid, uuid, uuid, text, timestamptz, text, text, text, text) to service_role;
+grant execute on function public.complete_quote_email_send(uuid, uuid, uuid, text) to service_role;
+grant execute on function public.fail_quote_email_send(uuid, uuid, uuid, text) to service_role;
+
+commit;
+
+-- ============================================================
+-- Source: supabase/migrations/20260515_quote_approval_resend_flow_final_recheck.sql
+-- ============================================================
+-- ============================================================
+-- BrandCore / ResoFly — Quote approval + Resend final recheck hardening
+-- Date: 2026-05-15
+-- Scope:
+-- - Prevent browser clients from directly mutating quote workflow fields
+-- - Prevent direct helper-RPC event/audit forgery
+-- - Require proper pending state before internal approval
+-- - Enforce quote validity date during public acceptance
+-- ============================================================
+
+begin;
+
+-- Direct table updates from browser clients may edit draft business fields,
+-- but workflow/status/delivery fields must only change through trusted RPCs
+-- and service-role Edge Functions. SECURITY DEFINER RPCs run as the function
+-- owner and are therefore not blocked by this guard.
+create or replace function public.enforce_quote_workflow_fields_server_only()
+returns trigger
+language plpgsql
+as $$
+begin
+  if current_user not in ('anon', 'authenticated', 'authenticator') then
+    return new;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    if coalesce(new.status, 'draft') <> 'draft'
+      or coalesce(new.internal_approval_status, 'draft') <> 'draft'
+      or new.internal_approval_requested_at is not null
+      or new.internal_approval_requested_by is not null
+      or new.internal_approved_at is not null
+      or new.internal_approved_by is not null
+      or new.internal_rejected_at is not null
+      or new.internal_rejected_by is not null
+      or new.internal_rejection_note is not null
+      or new.client_decision_at is not null
+      or new.client_decision_by_name is not null
+      or new.client_decision_by_email is not null
+      or new.client_decision_note is not null
+      or new.public_token_hash is not null
+      or new.public_token_created_at is not null
+      or new.public_token_expires_at is not null
+      or new.resend_last_email_id is not null
+      or new.last_email_delivery_status is not null
+      or new.last_email_delivery_at is not null
+      or new.last_email_opened_at is not null
+      or new.last_email_clicked_at is not null
+      or new.last_email_failed_at is not null
+      or new.sent_at is not null
+      or new.accepted_at is not null then
+      raise exception 'Offerte-workflowvelden mogen niet rechtstreeks vanuit de browser worden gezet. Gebruik de offerte-workflow acties.' using errcode = '42501';
+    end if;
+    return new;
+  end if;
+
+  if TG_OP = 'UPDATE' then
+    if old.status is distinct from new.status
+      or old.internal_approval_status is distinct from new.internal_approval_status
+      or old.internal_approval_requested_at is distinct from new.internal_approval_requested_at
+      or old.internal_approval_requested_by is distinct from new.internal_approval_requested_by
+      or old.internal_approved_at is distinct from new.internal_approved_at
+      or old.internal_approved_by is distinct from new.internal_approved_by
+      or old.internal_rejected_at is distinct from new.internal_rejected_at
+      or old.internal_rejected_by is distinct from new.internal_rejected_by
+      or old.internal_rejection_note is distinct from new.internal_rejection_note
+      or old.client_decision_at is distinct from new.client_decision_at
+      or old.client_decision_by_name is distinct from new.client_decision_by_name
+      or old.client_decision_by_email is distinct from new.client_decision_by_email
+      or old.client_decision_note is distinct from new.client_decision_note
+      or old.public_token_hash is distinct from new.public_token_hash
+      or old.public_token_created_at is distinct from new.public_token_created_at
+      or old.public_token_expires_at is distinct from new.public_token_expires_at
+      or old.resend_last_email_id is distinct from new.resend_last_email_id
+      or old.last_email_delivery_status is distinct from new.last_email_delivery_status
+      or old.last_email_delivery_at is distinct from new.last_email_delivery_at
+      or old.last_email_opened_at is distinct from new.last_email_opened_at
+      or old.last_email_clicked_at is distinct from new.last_email_clicked_at
+      or old.last_email_failed_at is distinct from new.last_email_failed_at
+      or old.sent_at is distinct from new.sent_at
+      or old.accepted_at is distinct from new.accepted_at then
+      raise exception 'Offerte-workflowvelden mogen niet rechtstreeks vanuit de browser worden gewijzigd. Gebruik de offerte-workflow acties.' using errcode = '42501';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists quotes_workflow_fields_server_only_guard on public.quotes;
+create trigger quotes_workflow_fields_server_only_guard
+  before insert or update of
+    status,
+    internal_approval_status,
+    internal_approval_requested_at,
+    internal_approval_requested_by,
+    internal_approved_at,
+    internal_approved_by,
+    internal_rejected_at,
+    internal_rejected_by,
+    internal_rejection_note,
+    client_decision_at,
+    client_decision_by_name,
+    client_decision_by_email,
+    client_decision_note,
+    public_token_hash,
+    public_token_created_at,
+    public_token_expires_at,
+    resend_last_email_id,
+    last_email_delivery_status,
+    last_email_delivery_at,
+    last_email_opened_at,
+    last_email_clicked_at,
+    last_email_failed_at,
+    sent_at,
+    accepted_at
+  on public.quotes
+  for each row execute function public.enforce_quote_workflow_fields_server_only();
+
+-- Prevent direct browser RPC calls that could forge timeline/audit records.
+-- Workflow RPCs and Edge Functions can still call these helpers from trusted
+-- SECURITY DEFINER/server-role contexts.
+revoke execute on function public.insert_quote_workflow_event(uuid, uuid, text, text, text, jsonb, uuid) from public, anon, authenticated;
+revoke execute on function public.insert_quote_audit_event(uuid, uuid, text, text, jsonb, uuid) from public, anon, authenticated;
+grant execute on function public.insert_quote_workflow_event(uuid, uuid, text, text, text, jsonb, uuid) to service_role;
+grant execute on function public.insert_quote_audit_event(uuid, uuid, text, text, jsonb, uuid) to service_role;
+
+revoke execute on function public.accept_quote_public(text, text, text, text) from public, anon, authenticated;
+revoke execute on function public.reject_quote_public(text, text, text, text) from public, anon, authenticated;
+revoke execute on function public.begin_quote_email_send(uuid, uuid, uuid, text, timestamptz, text, text, text, text) from public, anon, authenticated;
+revoke execute on function public.complete_quote_email_send(uuid, uuid, uuid, text) from public, anon, authenticated;
+revoke execute on function public.fail_quote_email_send(uuid, uuid, uuid, text) from public, anon, authenticated;
+grant execute on function public.accept_quote_public(text, text, text, text) to service_role;
+grant execute on function public.reject_quote_public(text, text, text, text) to service_role;
+grant execute on function public.begin_quote_email_send(uuid, uuid, uuid, text, timestamptz, text, text, text, text) to service_role;
+grant execute on function public.complete_quote_email_send(uuid, uuid, uuid, text) to service_role;
+grant execute on function public.fail_quote_email_send(uuid, uuid, uuid, text) to service_role;
+
+create or replace function public.submit_quote_for_internal_approval(p_quote_id uuid, p_organization_id uuid)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_user_id uuid := auth.uid();
+begin
+  if v_user_id is null then raise exception 'Niet ingelogd' using errcode = '28000'; end if;
+  if not public.can_write_org(p_organization_id) then raise exception 'Geen schrijfrechten voor deze organisatie' using errcode = '42501'; end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status <> 'draft' then
+    raise exception 'Deze offerte kan niet ter goedkeuring worden ingediend vanuit status %', v_quote.status using errcode = '23514';
+  end if;
+  if jsonb_array_length(coalesce(v_quote.lines, '[]'::jsonb)) = 0 then
+    raise exception 'Een offerte zonder regels kan niet ter goedkeuring worden ingediend' using errcode = '23514';
+  end if;
+
+  update public.quotes
+  set status = 'pending_internal_approval',
+      internal_approval_status = 'pending',
+      internal_approval_requested_at = now(),
+      internal_approval_requested_by = v_user_id,
+      internal_approved_at = null,
+      internal_approved_by = null,
+      internal_rejected_at = null,
+      internal_rejected_by = null,
+      internal_rejection_note = null,
+      updated_at = now()
+  where id = p_quote_id
+  returning * into v_quote;
+
+  perform public.insert_quote_workflow_event(p_organization_id, p_quote_id, 'submitted_for_internal_approval', 'Ter interne goedkeuring ingediend', null, '{}'::jsonb, v_user_id);
+  perform public.insert_quote_audit_event(p_organization_id, p_quote_id, 'quote_submitted_for_approval', v_quote.number, '{}'::jsonb, v_user_id);
+  return v_quote;
+end;
+$$;
+
+create or replace function public.approve_quote_internal(p_quote_id uuid, p_organization_id uuid)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_user_id uuid := auth.uid();
+begin
+  if v_user_id is null then raise exception 'Niet ingelogd' using errcode = '28000'; end if;
+  if not public.can_admin_org(p_organization_id) then raise exception 'Alleen owners/admins kunnen offertes intern goedkeuren' using errcode = '42501'; end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status <> 'pending_internal_approval' or v_quote.internal_approval_status <> 'pending' then
+    raise exception 'Deze offerte moet eerst ter interne goedkeuring worden ingediend voordat deze kan worden goedgekeurd' using errcode = '23514';
+  end if;
+  if jsonb_array_length(coalesce(v_quote.lines, '[]'::jsonb)) = 0 then
+    raise exception 'Een offerte zonder regels kan niet intern worden goedgekeurd' using errcode = '23514';
+  end if;
+
+  update public.quotes
+  set status = 'internally_approved',
+      internal_approval_status = 'approved',
+      internal_approved_at = now(),
+      internal_approved_by = v_user_id,
+      internal_rejected_at = null,
+      internal_rejected_by = null,
+      internal_rejection_note = null,
+      updated_at = now()
+  where id = p_quote_id
+  returning * into v_quote;
+
+  perform public.insert_quote_workflow_event(p_organization_id, p_quote_id, 'internal_approval_granted', 'Intern goedgekeurd', null, '{}'::jsonb, v_user_id);
+  perform public.insert_quote_audit_event(p_organization_id, p_quote_id, 'quote_internal_approved', v_quote.number, '{}'::jsonb, v_user_id);
+  return v_quote;
+end;
+$$;
+
+create or replace function public.reject_quote_internal(p_quote_id uuid, p_organization_id uuid, p_note text default null)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_user_id uuid := auth.uid();
+begin
+  if v_user_id is null then raise exception 'Niet ingelogd' using errcode = '28000'; end if;
+  if not public.can_admin_org(p_organization_id) then raise exception 'Alleen owners/admins kunnen offertes intern afwijzen' using errcode = '42501'; end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status not in ('pending_internal_approval','internally_approved') then
+    raise exception 'Deze offerte kan niet intern worden afgewezen vanuit status %', v_quote.status using errcode = '23514';
+  end if;
+
+  update public.quotes
+  set status = 'draft',
+      internal_approval_status = 'rejected',
+      internal_rejected_at = now(),
+      internal_rejected_by = v_user_id,
+      internal_rejection_note = nullif(trim(coalesce(p_note, '')), ''),
+      internal_approved_at = null,
+      internal_approved_by = null,
+      updated_at = now()
+  where id = p_quote_id
+  returning * into v_quote;
+
+  perform public.insert_quote_workflow_event(p_organization_id, p_quote_id, 'internal_approval_rejected', 'Intern afgewezen', nullif(trim(coalesce(p_note, '')), ''), '{}'::jsonb, v_user_id);
+  perform public.insert_quote_audit_event(p_organization_id, p_quote_id, 'quote_internal_rejected', v_quote.number, jsonb_build_object('note', nullif(trim(coalesce(p_note, '')), '')), v_user_id);
+  return v_quote;
+end;
+$$;
+
+create or replace function public.accept_quote_public(
+  p_token_hash text,
+  p_name text,
+  p_email text,
+  p_note text default null
+)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'Alleen de publieke offerte-service mag klantbeslissingen verwerken' using errcode = '42501';
+  end if;
+
+  select * into v_quote
+  from public.quotes
+  where public_token_hash = p_token_hash
+    and public_token_expires_at is not null
+    and public_token_expires_at > now()
+  for update;
+
+  if not found then raise exception 'Offertelink is ongeldig of verlopen' using errcode = '28000'; end if;
+  if v_quote.status <> 'sent' then raise exception 'Deze offerte kan niet meer worden geaccepteerd' using errcode = '23514'; end if;
+  if v_quote.valid_until is not null and v_quote.valid_until < current_date then
+    raise exception 'Deze offerte is verlopen en kan niet meer worden geaccepteerd' using errcode = '23514';
+  end if;
+  if nullif(trim(coalesce(p_name, '')), '') is null then
+    raise exception 'Naam is verplicht om de offerte te accepteren' using errcode = '23514';
+  end if;
+  if nullif(lower(trim(coalesce(p_email, ''))), '') is null or lower(trim(coalesce(p_email, ''))) !~ '^[^\s@]+@[^\s@]+\.[^\s@]+$' then
+    raise exception 'Geldig e-mailadres is verplicht om de offerte te accepteren' using errcode = '23514';
+  end if;
+
+  update public.quotes
+  set status = 'accepted',
+      accepted_at = now(),
+      client_decision_at = now(),
+      client_decision_by_name = nullif(trim(coalesce(p_name, '')), ''),
+      client_decision_by_email = nullif(lower(trim(coalesce(p_email, ''))), ''),
+      client_decision_note = nullif(trim(coalesce(p_note, '')), ''),
+      updated_at = now()
+  where id = v_quote.id
+  returning * into v_quote;
+
+  perform public.insert_quote_workflow_event(v_quote.organization_id, v_quote.id, 'client_accepted', 'Klant heeft de offerte geaccepteerd', nullif(trim(coalesce(p_note, '')), ''), jsonb_build_object('name', p_name, 'email', p_email), null);
+  perform public.insert_quote_audit_event(v_quote.organization_id, v_quote.id, 'quote_client_accepted', v_quote.number, jsonb_build_object('name', p_name, 'email', p_email), null);
+  return v_quote;
+end;
+$$;
+
+create or replace function public.reject_quote_public(
+  p_token_hash text,
+  p_name text,
+  p_email text,
+  p_note text default null
+)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'Alleen de publieke offerte-service mag klantbeslissingen verwerken' using errcode = '42501';
+  end if;
+
+  select * into v_quote
+  from public.quotes
+  where public_token_hash = p_token_hash
+    and public_token_expires_at is not null
+    and public_token_expires_at > now()
+  for update;
+
+  if not found then raise exception 'Offertelink is ongeldig of verlopen' using errcode = '28000'; end if;
+  if v_quote.status <> 'sent' then raise exception 'Deze offerte kan niet meer worden geweigerd' using errcode = '23514'; end if;
+  if nullif(trim(coalesce(p_name, '')), '') is null then
+    raise exception 'Naam is verplicht om de offerte te weigeren' using errcode = '23514';
+  end if;
+  if nullif(lower(trim(coalesce(p_email, ''))), '') is null or lower(trim(coalesce(p_email, ''))) !~ '^[^\s@]+@[^\s@]+\.[^\s@]+$' then
+    raise exception 'Geldig e-mailadres is verplicht om de offerte te weigeren' using errcode = '23514';
+  end if;
+
+  update public.quotes
+  set status = 'rejected',
+      client_decision_at = now(),
+      client_decision_by_name = nullif(trim(coalesce(p_name, '')), ''),
+      client_decision_by_email = nullif(lower(trim(coalesce(p_email, ''))), ''),
+      client_decision_note = nullif(trim(coalesce(p_note, '')), ''),
+      updated_at = now()
+  where id = v_quote.id
+  returning * into v_quote;
+
+  perform public.insert_quote_workflow_event(v_quote.organization_id, v_quote.id, 'client_rejected', 'Klant heeft de offerte geweigerd', nullif(trim(coalesce(p_note, '')), ''), jsonb_build_object('name', p_name, 'email', p_email), null);
+  perform public.insert_quote_audit_event(v_quote.organization_id, v_quote.id, 'quote_client_rejected', v_quote.number, jsonb_build_object('name', p_name, 'email', p_email), null);
+  return v_quote;
+end;
+$$;
+
+create or replace function public.begin_quote_email_send(
+  p_quote_id uuid,
+  p_organization_id uuid,
+  p_actor_user_id uuid,
+  p_token_hash text,
+  p_token_expires_at timestamptz,
+  p_recipient_email text,
+  p_recipient_name text,
+  p_subject text,
+  p_public_url text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_delivery public.quote_email_deliveries;
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'Alleen de server mag een offerte-e-mail voorbereiden' using errcode = '42501';
+  end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status <> 'internally_approved' or v_quote.internal_approval_status <> 'approved' then
+    raise exception 'Alleen intern goedgekeurde offertes kunnen worden verstuurd' using errcode = '23514';
+  end if;
+  if v_quote.valid_until is not null and v_quote.valid_until < current_date then
+    raise exception 'Deze offerte is verlopen en kan niet meer worden verstuurd' using errcode = '23514';
+  end if;
+
+  if exists (
+    select 1 from public.quote_email_deliveries d
+    where d.quote_id = p_quote_id
+      and d.organization_id = p_organization_id
+      and d.status = 'queued'
+      and d.created_at > now() - interval '15 minutes'
+  ) then
+    raise exception 'Er loopt al een recente Resend-verzendpoging voor deze offerte' using errcode = '23505';
+  end if;
+
+  update public.quotes
+  set public_token_hash = p_token_hash,
+      public_token_created_at = now(),
+      public_token_expires_at = p_token_expires_at,
+      last_email_delivery_status = 'queued',
+      updated_at = now()
+  where id = p_quote_id
+  returning * into v_quote;
+
+  insert into public.quote_email_deliveries(
+    organization_id,
+    quote_id,
+    provider,
+    provider_email_id,
+    recipient_email,
+    recipient_name,
+    subject,
+    status,
+    last_event_at,
+    metadata
+  ) values (
+    p_organization_id,
+    p_quote_id,
+    'resend',
+    null,
+    lower(trim(p_recipient_email)),
+    nullif(trim(coalesce(p_recipient_name, '')), ''),
+    p_subject,
+    'queued',
+    now(),
+    jsonb_build_object('publicUrl', p_public_url, 'expiresAt', p_token_expires_at)
+  ) returning * into v_delivery;
+
+  perform public.insert_quote_workflow_event(p_organization_id, p_quote_id, 'public_token_created', 'Publieke offertelink aangemaakt', 'Link voorbereid voor verzending via Resend.', jsonb_build_object('expiresAt', p_token_expires_at), p_actor_user_id);
+
+  return jsonb_build_object('deliveryId', v_delivery.id, 'quoteId', v_quote.id);
+end;
+$$;
+
+
+grant execute on function public.submit_quote_for_internal_approval(uuid, uuid) to authenticated;
+grant execute on function public.approve_quote_internal(uuid, uuid) to authenticated;
+grant execute on function public.reject_quote_internal(uuid, uuid, text) to authenticated;
+grant execute on function public.accept_quote_public(text, text, text, text) to service_role;
+grant execute on function public.reject_quote_public(text, text, text, text) to service_role;
+
+commit;
+
+
+
+-- ============================================================
+-- Included latest migration: 20260517_quote_versions_pdf_attachments.sql
+-- ============================================================
+
+-- ============================================================
+-- BrandCore / ResoFly — Quote versions + server-side PDF attachments
+-- Date: 2026-05-17
+-- Scope:
+-- - Attach a server-generated quote PDF to Resend quote e-mails
+-- - Store quote versions/snapshots at internal approval, send and accept
+-- - Link sent PDF metadata/hash to the quote delivery and sent quote version
+-- ============================================================
+
+begin;
+
+create table if not exists public.quote_versions (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  quote_id uuid not null references public.quotes(id) on delete cascade,
+  delivery_id uuid references public.quote_email_deliveries(id) on delete set null,
+  version_number integer not null,
+  snapshot_reason text not null check (snapshot_reason in ('internal_approval','sent_to_client','client_accepted','manual')),
+  status_at_snapshot text not null,
+  internal_approval_status_at_snapshot text,
+  quote_number text not null,
+  client_id uuid references public.clients(id) on delete set null,
+  project_id uuid references public.projects(id) on delete set null,
+  quote_date date not null,
+  valid_until date,
+  notes text,
+  subtotal_amount numeric(12,2) not null default 0,
+  vat_amount numeric(12,2) not null default 0,
+  total_amount numeric(12,2) not null default 0,
+  quote_version_pdf_url text,
+  pdf_file_name text,
+  pdf_mime_type text,
+  pdf_size_bytes integer,
+  pdf_sha256 text,
+  snapshot_data jsonb not null default '{}'::jsonb,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  unique (organization_id, quote_id, version_number)
+);
+
+create table if not exists public.quote_version_items (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  quote_id uuid not null references public.quotes(id) on delete cascade,
+  quote_version_id uuid not null references public.quote_versions(id) on delete cascade,
+  source_line_id text,
+  line_index integer not null,
+  description text not null,
+  quantity numeric(12,2) not null default 0,
+  unit_price numeric(12,2) not null default 0,
+  vat_percentage numeric(6,2) not null default 0,
+  line_subtotal numeric(12,2) not null default 0,
+  line_vat numeric(12,2) not null default 0,
+  line_total numeric(12,2) not null default 0,
+  created_at timestamptz not null default now(),
+  unique (quote_version_id, line_index)
+);
+
+alter table public.quote_email_deliveries
+  add column if not exists quote_version_id uuid references public.quote_versions(id) on delete set null,
+  add column if not exists attachment_file_name text,
+  add column if not exists attachment_mime_type text,
+  add column if not exists attachment_size_bytes integer,
+  add column if not exists attachment_sha256 text;
+
+alter table public.quotes
+  add column if not exists latest_version_id uuid references public.quote_versions(id) on delete set null,
+  add column if not exists internal_approved_version_id uuid references public.quote_versions(id) on delete set null,
+  add column if not exists sent_version_id uuid references public.quote_versions(id) on delete set null,
+  add column if not exists accepted_version_id uuid references public.quote_versions(id) on delete set null,
+  add column if not exists last_pdf_file_name text,
+  add column if not exists last_pdf_mime_type text,
+  add column if not exists last_pdf_size_bytes integer,
+  add column if not exists last_pdf_sha256 text;
+
+create index if not exists idx_quote_versions_quote on public.quote_versions(organization_id, quote_id, version_number desc);
+create index if not exists idx_quote_versions_reason on public.quote_versions(organization_id, snapshot_reason, created_at desc);
+create index if not exists idx_quote_version_items_version on public.quote_version_items(quote_version_id, line_index);
+create index if not exists idx_quote_email_deliveries_version on public.quote_email_deliveries(quote_version_id) where quote_version_id is not null;
+
+alter table public.quote_versions enable row level security;
+alter table public.quote_version_items enable row level security;
+
+drop policy if exists "quote versions read" on public.quote_versions;
+create policy "quote versions read" on public.quote_versions for select using (public.can_read_org(organization_id));
+
+drop policy if exists "quote version items read" on public.quote_version_items;
+create policy "quote version items read" on public.quote_version_items for select using (public.can_read_org(organization_id));
+
+-- Keep browser clients read-only for immutable quote snapshots. Creation happens
+-- through trusted workflow RPCs/Edge Functions only.
+drop policy if exists "quote versions insert" on public.quote_versions;
+drop policy if exists "quote versions update" on public.quote_versions;
+drop policy if exists "quote versions delete" on public.quote_versions;
+drop policy if exists "quote version items insert" on public.quote_version_items;
+drop policy if exists "quote version items update" on public.quote_version_items;
+drop policy if exists "quote version items delete" on public.quote_version_items;
+
+alter table public.quote_approval_events drop constraint if exists quote_approval_events_event_type_check;
+alter table public.quote_approval_events
+  add constraint quote_approval_events_event_type_check
+  check (event_type in (
+    'created',
+    'updated',
+    'submitted_for_internal_approval',
+    'internal_approval_granted',
+    'internal_approval_rejected',
+    'public_token_created',
+    'sent_to_client',
+    'email_sent',
+    'email_delivered',
+    'email_opened',
+    'email_clicked',
+    'email_bounced',
+    'email_failed',
+    'email_complained',
+    'client_viewed',
+    'client_accepted',
+    'client_rejected',
+    'quote_version_created',
+    'quote_pdf_attached',
+    'expired',
+    'cancelled'
+  ));
+
+-- Extend explicit audit event vocabulary.
+do $$
+begin
+  if exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.audit_logs'::regclass
+      and conname = 'audit_logs_action_check'
+  ) then
+    alter table public.audit_logs drop constraint audit_logs_action_check;
+  end if;
+
+  alter table public.audit_logs
+    add constraint audit_logs_action_check
+    check (action in (
+      'created','updated','deleted','invited','accepted','revoked','role_changed','disabled','expired',
+      'mollie_connected','plan_changed','seat_purchased','seat_downgrade_requested',
+      'payment_succeeded','payment_failed','payment_expired','subscription_cancelled',
+      'licensed_seats_changed','invitation_blocked_insufficient_seats','billing_synced',
+      'quote_submitted_for_approval','quote_internal_approved','quote_internal_rejected',
+      'quote_sent_to_client','quote_client_accepted','quote_client_rejected',
+      'quote_email_delivered','quote_email_failed','quote_version_created','quote_pdf_attached'
+    ));
+end $$;
+
+create or replace function public.create_quote_version_snapshot(
+  p_quote_id uuid,
+  p_organization_id uuid,
+  p_snapshot_reason text,
+  p_actor_user_id uuid default null,
+  p_delivery_id uuid default null,
+  p_pdf_file_name text default null,
+  p_pdf_mime_type text default null,
+  p_pdf_size_bytes integer default null,
+  p_pdf_sha256 text default null,
+  p_quote_version_pdf_url text default null,
+  p_metadata jsonb default '{}'::jsonb
+)
+returns public.quote_versions
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_delivery public.quote_email_deliveries;
+  v_version public.quote_versions;
+  v_version_number integer;
+  v_line jsonb;
+  v_index integer := 0;
+  v_quantity numeric := 0;
+  v_unit_price numeric := 0;
+  v_vat_percentage numeric := 0;
+  v_line_subtotal numeric := 0;
+  v_line_vat numeric := 0;
+  v_line_total numeric := 0;
+  v_subtotal numeric := 0;
+  v_vat_total numeric := 0;
+  v_total numeric := 0;
+  v_pdf_mime_type text := coalesce(nullif(trim(coalesce(p_pdf_mime_type, '')), ''), 'application/pdf');
+begin
+  if p_snapshot_reason not in ('internal_approval','sent_to_client','client_accepted','manual') then
+    raise exception 'Ongeldige offerte snapshot reason: %', p_snapshot_reason using errcode = '23514';
+  end if;
+
+  if auth.role() = 'authenticated' and not public.can_write_org(p_organization_id) then
+    raise exception 'Geen schrijfrechten voor deze organisatie' using errcode = '42501';
+  end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+
+  if p_delivery_id is not null then
+    select * into v_delivery
+    from public.quote_email_deliveries
+    where id = p_delivery_id
+      and quote_id = p_quote_id
+      and organization_id = p_organization_id
+    for update;
+
+    if not found then raise exception 'E-maildelivery hoort niet bij deze offerte' using errcode = '23514'; end if;
+  end if;
+
+  for v_line in select * from jsonb_array_elements(coalesce(v_quote.lines, '[]'::jsonb)) loop
+    v_quantity := coalesce(nullif(v_line->>'quantity', '')::numeric, 0);
+    v_unit_price := coalesce(nullif(v_line->>'unit_price', '')::numeric, 0);
+    v_vat_percentage := coalesce(nullif(v_line->>'vat', '')::numeric, 0);
+    v_line_subtotal := round(v_quantity * v_unit_price, 2);
+    v_line_vat := round(v_line_subtotal * (v_vat_percentage / 100), 2);
+    v_line_total := round(v_line_subtotal + v_line_vat, 2);
+    v_subtotal := v_subtotal + v_line_subtotal;
+    v_vat_total := v_vat_total + v_line_vat;
+    v_total := v_total + v_line_total;
+  end loop;
+
+  select coalesce(max(version_number), 0) + 1
+  into v_version_number
+  from public.quote_versions
+  where organization_id = p_organization_id
+    and quote_id = p_quote_id;
+
+  insert into public.quote_versions(
+    organization_id,
+    quote_id,
+    delivery_id,
+    version_number,
+    snapshot_reason,
+    status_at_snapshot,
+    internal_approval_status_at_snapshot,
+    quote_number,
+    client_id,
+    project_id,
+    quote_date,
+    valid_until,
+    notes,
+    subtotal_amount,
+    vat_amount,
+    total_amount,
+    quote_version_pdf_url,
+    pdf_file_name,
+    pdf_mime_type,
+    pdf_size_bytes,
+    pdf_sha256,
+    snapshot_data,
+    created_by
+  ) values (
+    p_organization_id,
+    p_quote_id,
+    p_delivery_id,
+    v_version_number,
+    p_snapshot_reason,
+    v_quote.status,
+    v_quote.internal_approval_status,
+    v_quote.number,
+    v_quote.client_id,
+    v_quote.project_id,
+    v_quote.date,
+    v_quote.valid_until,
+    v_quote.notes,
+    round(v_subtotal, 2),
+    round(v_vat_total, 2),
+    round(v_total, 2),
+    nullif(trim(coalesce(p_quote_version_pdf_url, '')), ''),
+    nullif(trim(coalesce(p_pdf_file_name, '')), ''),
+    v_pdf_mime_type,
+    p_pdf_size_bytes,
+    nullif(trim(coalesce(p_pdf_sha256, '')), ''),
+    jsonb_build_object(
+      'quote', to_jsonb(v_quote) - 'public_token_hash',
+      'totals', jsonb_build_object('subtotal', round(v_subtotal, 2), 'vat', round(v_vat_total, 2), 'total', round(v_total, 2)),
+      'reason', p_snapshot_reason,
+      'deliveryId', p_delivery_id,
+      'pdf', jsonb_build_object(
+        'fileName', nullif(trim(coalesce(p_pdf_file_name, '')), ''),
+        'mimeType', v_pdf_mime_type,
+        'sizeBytes', p_pdf_size_bytes,
+        'sha256', nullif(trim(coalesce(p_pdf_sha256, '')), ''),
+        'url', nullif(trim(coalesce(p_quote_version_pdf_url, '')), '')
+      ),
+      'metadata', coalesce(p_metadata, '{}'::jsonb)
+    ),
+    p_actor_user_id
+  ) returning * into v_version;
+
+  v_index := 0;
+  for v_line in select * from jsonb_array_elements(coalesce(v_quote.lines, '[]'::jsonb)) loop
+    v_quantity := coalesce(nullif(v_line->>'quantity', '')::numeric, 0);
+    v_unit_price := coalesce(nullif(v_line->>'unit_price', '')::numeric, 0);
+    v_vat_percentage := coalesce(nullif(v_line->>'vat', '')::numeric, 0);
+    v_line_subtotal := round(v_quantity * v_unit_price, 2);
+    v_line_vat := round(v_line_subtotal * (v_vat_percentage / 100), 2);
+    v_line_total := round(v_line_subtotal + v_line_vat, 2);
+
+    insert into public.quote_version_items(
+      organization_id,
+      quote_id,
+      quote_version_id,
+      source_line_id,
+      line_index,
+      description,
+      quantity,
+      unit_price,
+      vat_percentage,
+      line_subtotal,
+      line_vat,
+      line_total
+    ) values (
+      p_organization_id,
+      p_quote_id,
+      v_version.id,
+      nullif(v_line->>'id', ''),
+      v_index,
+      coalesce(nullif(v_line->>'description', ''), '-'),
+      v_quantity,
+      v_unit_price,
+      v_vat_percentage,
+      v_line_subtotal,
+      v_line_vat,
+      v_line_total
+    );
+
+    v_index := v_index + 1;
+  end loop;
+
+  update public.quotes
+  set latest_version_id = v_version.id,
+      internal_approved_version_id = case when p_snapshot_reason = 'internal_approval' then v_version.id else internal_approved_version_id end,
+      sent_version_id = case when p_snapshot_reason = 'sent_to_client' then v_version.id else sent_version_id end,
+      accepted_version_id = case when p_snapshot_reason = 'client_accepted' then v_version.id else accepted_version_id end,
+      last_pdf_file_name = coalesce(nullif(trim(coalesce(p_pdf_file_name, '')), ''), last_pdf_file_name),
+      last_pdf_mime_type = coalesce(v_pdf_mime_type, last_pdf_mime_type),
+      last_pdf_size_bytes = coalesce(p_pdf_size_bytes, last_pdf_size_bytes),
+      last_pdf_sha256 = coalesce(nullif(trim(coalesce(p_pdf_sha256, '')), ''), last_pdf_sha256),
+      updated_at = now()
+  where id = p_quote_id
+    and organization_id = p_organization_id;
+
+  if p_delivery_id is not null then
+    update public.quote_email_deliveries
+    set quote_version_id = v_version.id,
+        attachment_file_name = coalesce(nullif(trim(coalesce(p_pdf_file_name, '')), ''), attachment_file_name),
+        attachment_mime_type = coalesce(v_pdf_mime_type, attachment_mime_type),
+        attachment_size_bytes = coalesce(p_pdf_size_bytes, attachment_size_bytes),
+        attachment_sha256 = coalesce(nullif(trim(coalesce(p_pdf_sha256, '')), ''), attachment_sha256),
+        updated_at = now()
+    where id = p_delivery_id;
+  end if;
+
+  perform public.insert_quote_workflow_event(
+    p_organization_id,
+    p_quote_id,
+    'quote_version_created',
+    'Offerteversie vastgelegd',
+    'Versie ' || v_version.version_number || ' opgeslagen voor ' || p_snapshot_reason || '.',
+    jsonb_build_object('versionId', v_version.id, 'versionNumber', v_version.version_number, 'reason', p_snapshot_reason, 'pdfSha256', p_pdf_sha256),
+    p_actor_user_id
+  );
+
+  if p_pdf_sha256 is not null then
+    perform public.insert_quote_workflow_event(
+      p_organization_id,
+      p_quote_id,
+      'quote_pdf_attached',
+      'PDF-bijlage vastgelegd',
+      coalesce(nullif(trim(coalesce(p_pdf_file_name, '')), ''), 'Offerte PDF') || ' is als verzonden PDF-snapshot geregistreerd.',
+      jsonb_build_object('versionId', v_version.id, 'fileName', p_pdf_file_name, 'sizeBytes', p_pdf_size_bytes, 'sha256', p_pdf_sha256),
+      p_actor_user_id
+    );
+    perform public.insert_quote_audit_event(
+      p_organization_id,
+      p_quote_id,
+      'quote_pdf_attached',
+      v_quote.number,
+      jsonb_build_object('versionId', v_version.id, 'fileName', p_pdf_file_name, 'sizeBytes', p_pdf_size_bytes, 'sha256', p_pdf_sha256),
+      p_actor_user_id
+    );
+  end if;
+
+  perform public.insert_quote_audit_event(
+    p_organization_id,
+    p_quote_id,
+    'quote_version_created',
+    v_quote.number,
+    jsonb_build_object('versionId', v_version.id, 'versionNumber', v_version.version_number, 'reason', p_snapshot_reason),
+    p_actor_user_id
+  );
+
+  return v_version;
+end;
+$$;
+
+-- Recreate internal approval to snapshot the approved version.
+create or replace function public.approve_quote_internal(p_quote_id uuid, p_organization_id uuid)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_user_id uuid := auth.uid();
+begin
+  if v_user_id is null then raise exception 'Niet ingelogd' using errcode = '28000'; end if;
+  if not public.can_admin_org(p_organization_id) then raise exception 'Alleen owners/admins kunnen offertes intern goedkeuren' using errcode = '42501'; end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status <> 'pending_internal_approval' or v_quote.internal_approval_status <> 'pending' then
+    raise exception 'Deze offerte moet eerst ter interne goedkeuring worden ingediend voordat deze kan worden goedgekeurd' using errcode = '23514';
+  end if;
+  if jsonb_array_length(coalesce(v_quote.lines, '[]'::jsonb)) = 0 then
+    raise exception 'Een offerte zonder regels kan niet intern worden goedgekeurd' using errcode = '23514';
+  end if;
+
+  update public.quotes
+  set status = 'internally_approved',
+      internal_approval_status = 'approved',
+      internal_approved_at = now(),
+      internal_approved_by = v_user_id,
+      internal_rejected_at = null,
+      internal_rejected_by = null,
+      internal_rejection_note = null,
+      updated_at = now()
+  where id = p_quote_id
+  returning * into v_quote;
+
+  perform public.create_quote_version_snapshot(p_quote_id, p_organization_id, 'internal_approval', v_user_id, null, null, null, null, null, null, jsonb_build_object('source', 'approve_quote_internal'));
+  perform public.insert_quote_workflow_event(p_organization_id, p_quote_id, 'internal_approval_granted', 'Intern goedgekeurd', null, '{}'::jsonb, v_user_id);
+  perform public.insert_quote_audit_event(p_organization_id, p_quote_id, 'quote_internal_approved', v_quote.number, '{}'::jsonb, v_user_id);
+  return v_quote;
+end;
+$$;
+
+-- New begin RPC stores attachment metadata with the queued delivery. The PDF bytes
+-- themselves are sent to Resend and not written to Postgres.
+drop function if exists public.begin_quote_email_send(uuid, uuid, uuid, text, timestamptz, text, text, text, text);
+create or replace function public.begin_quote_email_send(
+  p_quote_id uuid,
+  p_organization_id uuid,
+  p_actor_user_id uuid,
+  p_token_hash text,
+  p_token_expires_at timestamptz,
+  p_recipient_email text,
+  p_recipient_name text,
+  p_subject text,
+  p_public_url text,
+  p_attachment_file_name text default null,
+  p_attachment_mime_type text default 'application/pdf',
+  p_attachment_size_bytes integer default null,
+  p_attachment_sha256 text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_delivery public.quote_email_deliveries;
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'Alleen de server mag een offerte-e-mail voorbereiden' using errcode = '42501';
+  end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status <> 'internally_approved' or v_quote.internal_approval_status <> 'approved' then
+    raise exception 'Alleen intern goedgekeurde offertes kunnen worden verstuurd' using errcode = '23514';
+  end if;
+  if v_quote.valid_until is not null and v_quote.valid_until < current_date then
+    raise exception 'Deze offerte is verlopen en kan niet meer worden verstuurd' using errcode = '23514';
+  end if;
+
+  if exists (
+    select 1 from public.quote_email_deliveries d
+    where d.quote_id = p_quote_id
+      and d.organization_id = p_organization_id
+      and d.status = 'queued'
+      and d.created_at > now() - interval '15 minutes'
+  ) then
+    raise exception 'Er loopt al een recente Resend-verzendpoging voor deze offerte' using errcode = '23505';
+  end if;
+
+  update public.quotes
+  set public_token_hash = p_token_hash,
+      public_token_created_at = now(),
+      public_token_expires_at = p_token_expires_at,
+      last_email_delivery_status = 'queued',
+      last_pdf_file_name = coalesce(nullif(trim(coalesce(p_attachment_file_name, '')), ''), last_pdf_file_name),
+      last_pdf_mime_type = coalesce(nullif(trim(coalesce(p_attachment_mime_type, '')), ''), last_pdf_mime_type),
+      last_pdf_size_bytes = coalesce(p_attachment_size_bytes, last_pdf_size_bytes),
+      last_pdf_sha256 = coalesce(nullif(trim(coalesce(p_attachment_sha256, '')), ''), last_pdf_sha256),
+      updated_at = now()
+  where id = p_quote_id
+  returning * into v_quote;
+
+  insert into public.quote_email_deliveries(
+    organization_id,
+    quote_id,
+    provider,
+    provider_email_id,
+    recipient_email,
+    recipient_name,
+    subject,
+    status,
+    last_event_at,
+    attachment_file_name,
+    attachment_mime_type,
+    attachment_size_bytes,
+    attachment_sha256,
+    metadata
+  ) values (
+    p_organization_id,
+    p_quote_id,
+    'resend',
+    null,
+    lower(trim(p_recipient_email)),
+    nullif(trim(coalesce(p_recipient_name, '')), ''),
+    p_subject,
+    'queued',
+    now(),
+    nullif(trim(coalesce(p_attachment_file_name, '')), ''),
+    coalesce(nullif(trim(coalesce(p_attachment_mime_type, '')), ''), 'application/pdf'),
+    p_attachment_size_bytes,
+    nullif(trim(coalesce(p_attachment_sha256, '')), ''),
+    jsonb_build_object(
+      'publicUrl', p_public_url,
+      'expiresAt', p_token_expires_at,
+      'attachment', jsonb_build_object(
+        'fileName', nullif(trim(coalesce(p_attachment_file_name, '')), ''),
+        'mimeType', coalesce(nullif(trim(coalesce(p_attachment_mime_type, '')), ''), 'application/pdf'),
+        'sizeBytes', p_attachment_size_bytes,
+        'sha256', nullif(trim(coalesce(p_attachment_sha256, '')), '')
+      )
+    )
+  ) returning * into v_delivery;
+
+  perform public.insert_quote_workflow_event(p_organization_id, p_quote_id, 'public_token_created', 'Publieke offertelink aangemaakt', 'Link voorbereid voor verzending via Resend.', jsonb_build_object('expiresAt', p_token_expires_at), p_actor_user_id);
+
+  return jsonb_build_object('deliveryId', v_delivery.id, 'quoteId', v_quote.id);
+end;
+$$;
+
+create or replace function public.complete_quote_email_send(
+  p_delivery_id uuid,
+  p_organization_id uuid,
+  p_actor_user_id uuid,
+  p_provider_email_id text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_delivery public.quote_email_deliveries;
+  v_quote public.quotes;
+  v_version public.quote_versions;
+  v_now timestamptz := now();
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'Alleen de server mag een offerte-e-mail afronden' using errcode = '42501';
+  end if;
+
+  select * into v_delivery
+  from public.quote_email_deliveries
+  where id = p_delivery_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'E-maildelivery niet gevonden' using errcode = '02000'; end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = v_delivery.quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status <> 'internally_approved' or v_quote.internal_approval_status <> 'approved' then
+    raise exception 'Offerte staat niet meer klaar om te verzenden' using errcode = '23514';
+  end if;
+
+  update public.quote_email_deliveries
+  set provider_email_id = nullif(trim(coalesce(p_provider_email_id, '')), ''),
+      status = 'sent',
+      sent_at = v_now,
+      last_event_at = v_now,
+      updated_at = v_now
+  where id = v_delivery.id
+  returning * into v_delivery;
+
+  update public.quotes
+  set status = 'sent',
+      sent_at = v_now,
+      resend_last_email_id = nullif(trim(coalesce(p_provider_email_id, '')), ''),
+      last_email_delivery_status = 'sent',
+      updated_at = v_now
+  where id = v_quote.id
+  returning * into v_quote;
+
+  v_version := public.create_quote_version_snapshot(
+    v_quote.id,
+    p_organization_id,
+    'sent_to_client',
+    p_actor_user_id,
+    v_delivery.id,
+    v_delivery.attachment_file_name,
+    v_delivery.attachment_mime_type,
+    v_delivery.attachment_size_bytes,
+    v_delivery.attachment_sha256,
+    null,
+    jsonb_build_object('provider', 'resend', 'providerEmailId', p_provider_email_id, 'recipientEmail', v_delivery.recipient_email)
+  );
+
+  perform public.insert_quote_workflow_event(p_organization_id, v_quote.id, 'email_sent', 'E-mail geaccepteerd door Resend', null, jsonb_build_object('providerEmailId', p_provider_email_id, 'versionId', v_version.id), p_actor_user_id);
+  perform public.insert_quote_workflow_event(p_organization_id, v_quote.id, 'sent_to_client', 'Offerte naar klant verzonden', 'Verstuurd naar ' || v_delivery.recipient_email || '.', jsonb_build_object('recipientEmail', v_delivery.recipient_email, 'providerEmailId', p_provider_email_id, 'versionId', v_version.id), p_actor_user_id);
+  perform public.insert_quote_audit_event(p_organization_id, v_quote.id, 'quote_sent_to_client', v_quote.number, jsonb_build_object('recipientEmail', v_delivery.recipient_email, 'providerEmailId', p_provider_email_id, 'versionId', v_version.id), p_actor_user_id);
+
+  return jsonb_build_object('delivery', to_jsonb(v_delivery), 'quote', to_jsonb(v_quote), 'version', to_jsonb(v_version));
+end;
+$$;
+
+create or replace function public.accept_quote_public(
+  p_token_hash text,
+  p_name text,
+  p_email text,
+  p_note text default null
+)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'Alleen de publieke offerte-service mag klantbeslissingen verwerken' using errcode = '42501';
+  end if;
+
+  select * into v_quote
+  from public.quotes
+  where public_token_hash = p_token_hash
+    and public_token_expires_at is not null
+    and public_token_expires_at > now()
+  for update;
+
+  if not found then raise exception 'Offertelink is ongeldig of verlopen' using errcode = '28000'; end if;
+  if v_quote.status <> 'sent' then raise exception 'Deze offerte kan niet meer worden geaccepteerd' using errcode = '23514'; end if;
+  if v_quote.valid_until is not null and v_quote.valid_until < current_date then
+    raise exception 'Deze offerte is verlopen en kan niet meer worden geaccepteerd' using errcode = '23514';
+  end if;
+  if nullif(trim(coalesce(p_name, '')), '') is null then
+    raise exception 'Naam is verplicht om de offerte te accepteren' using errcode = '23514';
+  end if;
+  if nullif(lower(trim(coalesce(p_email, ''))), '') is null or lower(trim(coalesce(p_email, ''))) !~ '^[^\s@]+@[^\s@]+\.[^\s@]+$' then
+    raise exception 'Geldig e-mailadres is verplicht om de offerte te accepteren' using errcode = '23514';
+  end if;
+
+  update public.quotes
+  set status = 'accepted',
+      accepted_at = now(),
+      client_decision_at = now(),
+      client_decision_by_name = nullif(trim(coalesce(p_name, '')), ''),
+      client_decision_by_email = nullif(lower(trim(coalesce(p_email, ''))), ''),
+      client_decision_note = nullif(trim(coalesce(p_note, '')), ''),
+      updated_at = now()
+  where id = v_quote.id
+  returning * into v_quote;
+
+  perform public.create_quote_version_snapshot(
+    v_quote.id,
+    v_quote.organization_id,
+    'client_accepted',
+    null,
+    null,
+    v_quote.last_pdf_file_name,
+    v_quote.last_pdf_mime_type,
+    v_quote.last_pdf_size_bytes,
+    v_quote.last_pdf_sha256,
+    null,
+    jsonb_build_object('clientDecisionName', p_name, 'clientDecisionEmail', p_email)
+  );
+
+  perform public.insert_quote_workflow_event(v_quote.organization_id, v_quote.id, 'client_accepted', 'Klant heeft de offerte geaccepteerd', nullif(trim(coalesce(p_note, '')), ''), jsonb_build_object('name', p_name, 'email', p_email), null);
+  perform public.insert_quote_audit_event(v_quote.organization_id, v_quote.id, 'quote_client_accepted', v_quote.number, jsonb_build_object('name', p_name, 'email', p_email), null);
+  return v_quote;
+end;
+$$;
+
+create or replace function public.enforce_quote_workflow_fields_server_only()
+returns trigger
+language plpgsql
+as $$
+begin
+  if current_user not in ('anon', 'authenticated', 'authenticator') then
+    return new;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    if coalesce(new.status, 'draft') <> 'draft'
+      or coalesce(new.internal_approval_status, 'draft') <> 'draft'
+      or new.internal_approval_requested_at is not null
+      or new.internal_approval_requested_by is not null
+      or new.internal_approved_at is not null
+      or new.internal_approved_by is not null
+      or new.internal_rejected_at is not null
+      or new.internal_rejected_by is not null
+      or new.internal_rejection_note is not null
+      or new.client_decision_at is not null
+      or new.client_decision_by_name is not null
+      or new.client_decision_by_email is not null
+      or new.client_decision_note is not null
+      or new.public_token_hash is not null
+      or new.public_token_created_at is not null
+      or new.public_token_expires_at is not null
+      or new.resend_last_email_id is not null
+      or new.last_email_delivery_status is not null
+      or new.last_email_delivery_at is not null
+      or new.last_email_opened_at is not null
+      or new.last_email_clicked_at is not null
+      or new.last_email_failed_at is not null
+      or new.sent_at is not null
+      or new.accepted_at is not null
+      or new.latest_version_id is not null
+      or new.internal_approved_version_id is not null
+      or new.sent_version_id is not null
+      or new.accepted_version_id is not null
+      or new.last_pdf_file_name is not null
+      or new.last_pdf_mime_type is not null
+      or new.last_pdf_size_bytes is not null
+      or new.last_pdf_sha256 is not null then
+      raise exception 'Offerte-workflowvelden mogen niet rechtstreeks vanuit de browser worden gezet. Gebruik de offerte-workflow acties.' using errcode = '42501';
+    end if;
+    return new;
+  end if;
+
+  if TG_OP = 'UPDATE' then
+    if old.status is distinct from new.status
+      or old.internal_approval_status is distinct from new.internal_approval_status
+      or old.internal_approval_requested_at is distinct from new.internal_approval_requested_at
+      or old.internal_approval_requested_by is distinct from new.internal_approval_requested_by
+      or old.internal_approved_at is distinct from new.internal_approved_at
+      or old.internal_approved_by is distinct from new.internal_approved_by
+      or old.internal_rejected_at is distinct from new.internal_rejected_at
+      or old.internal_rejected_by is distinct from new.internal_rejected_by
+      or old.internal_rejection_note is distinct from new.internal_rejection_note
+      or old.client_decision_at is distinct from new.client_decision_at
+      or old.client_decision_by_name is distinct from new.client_decision_by_name
+      or old.client_decision_by_email is distinct from new.client_decision_by_email
+      or old.client_decision_note is distinct from new.client_decision_note
+      or old.public_token_hash is distinct from new.public_token_hash
+      or old.public_token_created_at is distinct from new.public_token_created_at
+      or old.public_token_expires_at is distinct from new.public_token_expires_at
+      or old.resend_last_email_id is distinct from new.resend_last_email_id
+      or old.last_email_delivery_status is distinct from new.last_email_delivery_status
+      or old.last_email_delivery_at is distinct from new.last_email_delivery_at
+      or old.last_email_opened_at is distinct from new.last_email_opened_at
+      or old.last_email_clicked_at is distinct from new.last_email_clicked_at
+      or old.last_email_failed_at is distinct from new.last_email_failed_at
+      or old.sent_at is distinct from new.sent_at
+      or old.accepted_at is distinct from new.accepted_at
+      or old.latest_version_id is distinct from new.latest_version_id
+      or old.internal_approved_version_id is distinct from new.internal_approved_version_id
+      or old.sent_version_id is distinct from new.sent_version_id
+      or old.accepted_version_id is distinct from new.accepted_version_id
+      or old.last_pdf_file_name is distinct from new.last_pdf_file_name
+      or old.last_pdf_mime_type is distinct from new.last_pdf_mime_type
+      or old.last_pdf_size_bytes is distinct from new.last_pdf_size_bytes
+      or old.last_pdf_sha256 is distinct from new.last_pdf_sha256 then
+      raise exception 'Offerte-workflowvelden mogen niet rechtstreeks vanuit de browser worden gewijzigd. Gebruik de offerte-workflow acties.' using errcode = '42501';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists quotes_workflow_fields_server_only_guard on public.quotes;
+create trigger quotes_workflow_fields_server_only_guard
+  before insert or update of
+    status,
+    internal_approval_status,
+    internal_approval_requested_at,
+    internal_approval_requested_by,
+    internal_approved_at,
+    internal_approved_by,
+    internal_rejected_at,
+    internal_rejected_by,
+    internal_rejection_note,
+    client_decision_at,
+    client_decision_by_name,
+    client_decision_by_email,
+    client_decision_note,
+    public_token_hash,
+    public_token_created_at,
+    public_token_expires_at,
+    resend_last_email_id,
+    last_email_delivery_status,
+    last_email_delivery_at,
+    last_email_opened_at,
+    last_email_clicked_at,
+    last_email_failed_at,
+    sent_at,
+    accepted_at,
+    latest_version_id,
+    internal_approved_version_id,
+    sent_version_id,
+    accepted_version_id,
+    last_pdf_file_name,
+    last_pdf_mime_type,
+    last_pdf_size_bytes,
+    last_pdf_sha256
+  on public.quotes
+  for each row execute function public.enforce_quote_workflow_fields_server_only();
+
+revoke execute on function public.create_quote_version_snapshot(uuid, uuid, text, uuid, uuid, text, text, integer, text, text, jsonb) from public, anon, authenticated;
+revoke execute on function public.begin_quote_email_send(uuid, uuid, uuid, text, timestamptz, text, text, text, text, text, text, integer, text) from public, anon, authenticated;
+revoke execute on function public.complete_quote_email_send(uuid, uuid, uuid, text) from public, anon, authenticated;
+revoke execute on function public.accept_quote_public(text, text, text, text) from public, anon, authenticated;
+
+grant execute on function public.create_quote_version_snapshot(uuid, uuid, text, uuid, uuid, text, text, integer, text, text, jsonb) to service_role;
+grant execute on function public.begin_quote_email_send(uuid, uuid, uuid, text, timestamptz, text, text, text, text, text, text, integer, text) to service_role;
+grant execute on function public.complete_quote_email_send(uuid, uuid, uuid, text) to service_role;
+grant execute on function public.accept_quote_public(text, text, text, text) to service_role;
+grant execute on function public.approve_quote_internal(uuid, uuid) to authenticated;
+
+commit;
+
+-- ============================================================
+-- BrandCore / ResoFly — Quote versions + PDF attachment review hardening
+-- Date: 2026-05-18
+-- Scope:
+-- - Do not write PDF metadata for non-PDF snapshots
+-- - Require real PDF metadata/hash for sent quote snapshots
+-- - Return quote rows after snapshot pointers are updated
+-- - Add consistency checks for immutable quote version items
+-- ============================================================
+
+begin;
+
+-- Guardrails around generated PDF metadata.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.quote_versions'::regclass
+      and conname = 'quote_versions_pdf_size_positive_check'
+  ) then
+    alter table public.quote_versions
+      add constraint quote_versions_pdf_size_positive_check
+      check (pdf_size_bytes is null or pdf_size_bytes > 0);
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.quote_versions'::regclass
+      and conname = 'quote_versions_pdf_sha256_check'
+  ) then
+    alter table public.quote_versions
+      add constraint quote_versions_pdf_sha256_check
+      check (pdf_sha256 is null or pdf_sha256 ~ '^[0-9a-f]{64}$');
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.quote_email_deliveries'::regclass
+      and conname = 'quote_email_deliveries_attachment_size_positive_check'
+  ) then
+    alter table public.quote_email_deliveries
+      add constraint quote_email_deliveries_attachment_size_positive_check
+      check (attachment_size_bytes is null or attachment_size_bytes > 0);
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.quote_email_deliveries'::regclass
+      and conname = 'quote_email_deliveries_attachment_sha256_check'
+  ) then
+    alter table public.quote_email_deliveries
+      add constraint quote_email_deliveries_attachment_sha256_check
+      check (attachment_sha256 is null or attachment_sha256 ~ '^[0-9a-f]{64}$');
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.quote_versions'::regclass
+      and conname = 'quote_versions_identity_scope_unique'
+  ) then
+    alter table public.quote_versions
+      add constraint quote_versions_identity_scope_unique unique (id, organization_id, quote_id);
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.quote_version_items'::regclass
+      and conname = 'quote_version_items_version_scope_fk'
+  ) then
+    alter table public.quote_version_items
+      add constraint quote_version_items_version_scope_fk
+      foreign key (quote_version_id, organization_id, quote_id)
+      references public.quote_versions(id, organization_id, quote_id)
+      on delete cascade;
+  end if;
+end $$;
+
+create or replace function public.create_quote_version_snapshot(
+  p_quote_id uuid,
+  p_organization_id uuid,
+  p_snapshot_reason text,
+  p_actor_user_id uuid default null,
+  p_delivery_id uuid default null,
+  p_pdf_file_name text default null,
+  p_pdf_mime_type text default null,
+  p_pdf_size_bytes integer default null,
+  p_pdf_sha256 text default null,
+  p_quote_version_pdf_url text default null,
+  p_metadata jsonb default '{}'::jsonb
+)
+returns public.quote_versions
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_delivery public.quote_email_deliveries;
+  v_version public.quote_versions;
+  v_version_number integer;
+  v_line jsonb;
+  v_lines jsonb;
+  v_index integer := 0;
+  v_quantity numeric := 0;
+  v_unit_price numeric := 0;
+  v_vat_percentage numeric := 0;
+  v_line_subtotal numeric := 0;
+  v_line_vat numeric := 0;
+  v_line_total numeric := 0;
+  v_subtotal numeric := 0;
+  v_vat_total numeric := 0;
+  v_total numeric := 0;
+  v_pdf_file_name text := nullif(trim(coalesce(p_pdf_file_name, '')), '');
+  v_pdf_sha256 text := lower(nullif(trim(coalesce(p_pdf_sha256, '')), ''));
+  v_pdf_url text := nullif(trim(coalesce(p_quote_version_pdf_url, '')), '');
+  v_has_pdf boolean;
+  v_pdf_mime_type text;
+begin
+  if p_snapshot_reason not in ('internal_approval','sent_to_client','client_accepted','manual') then
+    raise exception 'Ongeldige offerte snapshot reason: %', p_snapshot_reason using errcode = '23514';
+  end if;
+
+  if auth.role() = 'authenticated' and not public.can_write_org(p_organization_id) then
+    raise exception 'Geen schrijfrechten voor deze organisatie' using errcode = '42501';
+  end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+
+  if p_delivery_id is not null then
+    select * into v_delivery
+    from public.quote_email_deliveries
+    where id = p_delivery_id
+      and quote_id = p_quote_id
+      and organization_id = p_organization_id
+    for update;
+
+    if not found then raise exception 'E-maildelivery hoort niet bij deze offerte' using errcode = '23514'; end if;
+  end if;
+
+  v_has_pdf := v_pdf_file_name is not null or v_pdf_sha256 is not null or p_pdf_size_bytes is not null or v_pdf_url is not null;
+  v_pdf_mime_type := case
+    when v_has_pdf then coalesce(nullif(trim(coalesce(p_pdf_mime_type, '')), ''), 'application/pdf')
+    else null
+  end;
+
+  if p_snapshot_reason = 'sent_to_client' then
+    if not v_has_pdf or v_pdf_file_name is null or p_pdf_size_bytes is null or p_pdf_size_bytes <= 0 or v_pdf_sha256 is null then
+      raise exception 'Een verzonden offerteversie vereist een echte PDF-bijlage met bestandsnaam, grootte en SHA-256 hash' using errcode = '23514';
+    end if;
+  end if;
+
+  if v_pdf_sha256 is not null and v_pdf_sha256 !~ '^[0-9a-f]{64}$' then
+    raise exception 'PDF SHA-256 hash is ongeldig' using errcode = '23514';
+  end if;
+
+  if p_pdf_size_bytes is not null and p_pdf_size_bytes <= 0 then
+    raise exception 'PDF-bestandsgrootte moet groter zijn dan 0 bytes' using errcode = '23514';
+  end if;
+
+  if v_has_pdf and v_pdf_mime_type <> 'application/pdf' then
+    raise exception 'Alleen application/pdf is toegestaan als offertebijlage' using errcode = '23514';
+  end if;
+
+  v_lines := coalesce(v_quote.lines, '[]'::jsonb);
+  if jsonb_typeof(v_lines) <> 'array' then
+    v_lines := '[]'::jsonb;
+  end if;
+
+  for v_line in select * from jsonb_array_elements(v_lines) loop
+    v_quantity := case when coalesce(v_line->>'quantity', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line->>'quantity')::numeric else 0 end;
+    v_unit_price := case when coalesce(v_line->>'unit_price', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line->>'unit_price')::numeric else 0 end;
+    v_vat_percentage := case when coalesce(v_line->>'vat', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line->>'vat')::numeric else 0 end;
+    v_line_subtotal := round(v_quantity * v_unit_price, 2);
+    v_line_vat := round(v_line_subtotal * (v_vat_percentage / 100), 2);
+    v_line_total := round(v_line_subtotal + v_line_vat, 2);
+    v_subtotal := v_subtotal + v_line_subtotal;
+    v_vat_total := v_vat_total + v_line_vat;
+    v_total := v_total + v_line_total;
+  end loop;
+
+  select coalesce(max(version_number), 0) + 1
+  into v_version_number
+  from public.quote_versions
+  where organization_id = p_organization_id
+    and quote_id = p_quote_id;
+
+  insert into public.quote_versions(
+    organization_id,
+    quote_id,
+    delivery_id,
+    version_number,
+    snapshot_reason,
+    status_at_snapshot,
+    internal_approval_status_at_snapshot,
+    quote_number,
+    client_id,
+    project_id,
+    quote_date,
+    valid_until,
+    notes,
+    subtotal_amount,
+    vat_amount,
+    total_amount,
+    quote_version_pdf_url,
+    pdf_file_name,
+    pdf_mime_type,
+    pdf_size_bytes,
+    pdf_sha256,
+    snapshot_data,
+    created_by
+  ) values (
+    p_organization_id,
+    p_quote_id,
+    p_delivery_id,
+    v_version_number,
+    p_snapshot_reason,
+    v_quote.status,
+    v_quote.internal_approval_status,
+    v_quote.number,
+    v_quote.client_id,
+    v_quote.project_id,
+    v_quote.date,
+    v_quote.valid_until,
+    v_quote.notes,
+    round(v_subtotal, 2),
+    round(v_vat_total, 2),
+    round(v_total, 2),
+    v_pdf_url,
+    v_pdf_file_name,
+    v_pdf_mime_type,
+    case when v_has_pdf then p_pdf_size_bytes else null end,
+    v_pdf_sha256,
+    jsonb_build_object(
+      'quote', to_jsonb(v_quote) - 'public_token_hash',
+      'totals', jsonb_build_object('subtotal', round(v_subtotal, 2), 'vat', round(v_vat_total, 2), 'total', round(v_total, 2)),
+      'reason', p_snapshot_reason,
+      'deliveryId', p_delivery_id,
+      'pdf', case when v_has_pdf then jsonb_build_object(
+        'fileName', v_pdf_file_name,
+        'mimeType', v_pdf_mime_type,
+        'sizeBytes', p_pdf_size_bytes,
+        'sha256', v_pdf_sha256,
+        'url', v_pdf_url
+      ) else '{}'::jsonb end,
+      'metadata', coalesce(p_metadata, '{}'::jsonb)
+    ),
+    p_actor_user_id
+  ) returning * into v_version;
+
+  v_index := 0;
+  for v_line in select * from jsonb_array_elements(v_lines) loop
+    v_quantity := case when coalesce(v_line->>'quantity', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line->>'quantity')::numeric else 0 end;
+    v_unit_price := case when coalesce(v_line->>'unit_price', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line->>'unit_price')::numeric else 0 end;
+    v_vat_percentage := case when coalesce(v_line->>'vat', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line->>'vat')::numeric else 0 end;
+    v_line_subtotal := round(v_quantity * v_unit_price, 2);
+    v_line_vat := round(v_line_subtotal * (v_vat_percentage / 100), 2);
+    v_line_total := round(v_line_subtotal + v_line_vat, 2);
+
+    insert into public.quote_version_items(
+      organization_id,
+      quote_id,
+      quote_version_id,
+      source_line_id,
+      line_index,
+      description,
+      quantity,
+      unit_price,
+      vat_percentage,
+      line_subtotal,
+      line_vat,
+      line_total
+    ) values (
+      p_organization_id,
+      p_quote_id,
+      v_version.id,
+      nullif(v_line->>'id', ''),
+      v_index,
+      coalesce(nullif(trim(coalesce(v_line->>'description', '')), ''), '-'),
+      v_quantity,
+      v_unit_price,
+      v_vat_percentage,
+      v_line_subtotal,
+      v_line_vat,
+      v_line_total
+    );
+
+    v_index := v_index + 1;
+  end loop;
+
+  update public.quotes
+  set latest_version_id = v_version.id,
+      internal_approved_version_id = case when p_snapshot_reason = 'internal_approval' then v_version.id else internal_approved_version_id end,
+      sent_version_id = case when p_snapshot_reason = 'sent_to_client' then v_version.id else sent_version_id end,
+      accepted_version_id = case when p_snapshot_reason = 'client_accepted' then v_version.id else accepted_version_id end,
+      last_pdf_file_name = case when v_has_pdf then coalesce(v_pdf_file_name, last_pdf_file_name) else last_pdf_file_name end,
+      last_pdf_mime_type = case when v_has_pdf then coalesce(v_pdf_mime_type, last_pdf_mime_type) else last_pdf_mime_type end,
+      last_pdf_size_bytes = case when v_has_pdf then coalesce(p_pdf_size_bytes, last_pdf_size_bytes) else last_pdf_size_bytes end,
+      last_pdf_sha256 = case when v_has_pdf then coalesce(v_pdf_sha256, last_pdf_sha256) else last_pdf_sha256 end,
+      updated_at = now()
+  where id = p_quote_id
+    and organization_id = p_organization_id;
+
+  if p_delivery_id is not null then
+    update public.quote_email_deliveries
+    set quote_version_id = v_version.id,
+        attachment_file_name = case when v_has_pdf then coalesce(v_pdf_file_name, attachment_file_name) else attachment_file_name end,
+        attachment_mime_type = case when v_has_pdf then coalesce(v_pdf_mime_type, attachment_mime_type) else attachment_mime_type end,
+        attachment_size_bytes = case when v_has_pdf then coalesce(p_pdf_size_bytes, attachment_size_bytes) else attachment_size_bytes end,
+        attachment_sha256 = case when v_has_pdf then coalesce(v_pdf_sha256, attachment_sha256) else attachment_sha256 end,
+        updated_at = now()
+    where id = p_delivery_id;
+  end if;
+
+  perform public.insert_quote_workflow_event(
+    p_organization_id,
+    p_quote_id,
+    'quote_version_created',
+    'Offerteversie vastgelegd',
+    'Versie ' || v_version.version_number || ' opgeslagen voor ' || p_snapshot_reason || '.',
+    jsonb_build_object('versionId', v_version.id, 'versionNumber', v_version.version_number, 'reason', p_snapshot_reason, 'pdfSha256', v_pdf_sha256),
+    p_actor_user_id
+  );
+
+  if v_has_pdf and v_pdf_sha256 is not null then
+    perform public.insert_quote_workflow_event(
+      p_organization_id,
+      p_quote_id,
+      'quote_pdf_attached',
+      'PDF-bijlage vastgelegd',
+      coalesce(v_pdf_file_name, 'Offerte PDF') || ' is als verzonden PDF-snapshot geregistreerd.',
+      jsonb_build_object('versionId', v_version.id, 'fileName', v_pdf_file_name, 'sizeBytes', p_pdf_size_bytes, 'sha256', v_pdf_sha256),
+      p_actor_user_id
+    );
+    perform public.insert_quote_audit_event(
+      p_organization_id,
+      p_quote_id,
+      'quote_pdf_attached',
+      v_quote.number,
+      jsonb_build_object('versionId', v_version.id, 'fileName', v_pdf_file_name, 'sizeBytes', p_pdf_size_bytes, 'sha256', v_pdf_sha256),
+      p_actor_user_id
+    );
+  end if;
+
+  perform public.insert_quote_audit_event(
+    p_organization_id,
+    p_quote_id,
+    'quote_version_created',
+    v_quote.number,
+    jsonb_build_object('versionId', v_version.id, 'versionNumber', v_version.version_number, 'reason', p_snapshot_reason),
+    p_actor_user_id
+  );
+
+  return v_version;
+end;
+$$;
+
+create or replace function public.approve_quote_internal(p_quote_id uuid, p_organization_id uuid)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_user_id uuid := auth.uid();
+begin
+  if v_user_id is null then raise exception 'Niet ingelogd' using errcode = '28000'; end if;
+  if not public.can_admin_org(p_organization_id) then raise exception 'Alleen owners/admins kunnen offertes intern goedkeuren' using errcode = '42501'; end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status <> 'pending_internal_approval' or v_quote.internal_approval_status <> 'pending' then
+    raise exception 'Deze offerte kan alleen vanuit de status ter interne goedkeuring worden goedgekeurd' using errcode = '23514';
+  end if;
+  if jsonb_typeof(coalesce(v_quote.lines, '[]'::jsonb)) <> 'array' then
+    raise exception 'Offerte-regels hebben een ongeldig formaat' using errcode = '23514';
+  end if;
+  if jsonb_array_length(coalesce(v_quote.lines, '[]'::jsonb)) = 0 then
+    raise exception 'Een offerte zonder regels kan niet intern worden goedgekeurd' using errcode = '23514';
+  end if;
+  if v_quote.valid_until is not null and v_quote.valid_until < current_date then
+    raise exception 'Deze offerte is verlopen en kan niet intern worden goedgekeurd' using errcode = '23514';
+  end if;
+
+  update public.quotes
+  set status = 'internally_approved',
+      internal_approval_status = 'approved',
+      internal_approved_at = now(),
+      internal_approved_by = v_user_id,
+      internal_rejected_at = null,
+      internal_rejected_by = null,
+      internal_rejection_note = null,
+      updated_at = now()
+  where id = p_quote_id
+  returning * into v_quote;
+
+  perform public.create_quote_version_snapshot(p_quote_id, p_organization_id, 'internal_approval', v_user_id, null, null, null, null, null, null, jsonb_build_object('source', 'approve_quote_internal'));
+  perform public.insert_quote_workflow_event(p_organization_id, p_quote_id, 'internal_approval_granted', 'Intern goedgekeurd', null, '{}'::jsonb, v_user_id);
+  perform public.insert_quote_audit_event(p_organization_id, p_quote_id, 'quote_internal_approved', v_quote.number, '{}'::jsonb, v_user_id);
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id;
+
+  return v_quote;
+end;
+$$;
+
+create or replace function public.begin_quote_email_send(
+  p_quote_id uuid,
+  p_organization_id uuid,
+  p_actor_user_id uuid,
+  p_token_hash text,
+  p_token_expires_at timestamptz,
+  p_recipient_email text,
+  p_recipient_name text,
+  p_subject text,
+  p_public_url text,
+  p_attachment_file_name text default null,
+  p_attachment_mime_type text default 'application/pdf',
+  p_attachment_size_bytes integer default null,
+  p_attachment_sha256 text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_delivery public.quote_email_deliveries;
+  v_attachment_file_name text := nullif(trim(coalesce(p_attachment_file_name, '')), '');
+  v_attachment_mime_type text := coalesce(nullif(trim(coalesce(p_attachment_mime_type, '')), ''), 'application/pdf');
+  v_attachment_sha256 text := lower(nullif(trim(coalesce(p_attachment_sha256, '')), ''));
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'Alleen de server mag een offerte-e-mail voorbereiden' using errcode = '42501';
+  end if;
+
+  if lower(trim(coalesce(p_recipient_email, ''))) !~ '^[^\s@]+@[^\s@]+\.[^\s@]+$' then
+    raise exception 'Geldig klant-e-mailadres is verplicht' using errcode = '23514';
+  end if;
+
+  if v_attachment_file_name is null or p_attachment_size_bytes is null or p_attachment_size_bytes <= 0 or v_attachment_sha256 is null then
+    raise exception 'Een offerte-e-mail vereist een servergegenereerde PDF-bijlage met bestandsnaam, grootte en SHA-256 hash' using errcode = '23514';
+  end if;
+
+  if v_attachment_mime_type <> 'application/pdf' then
+    raise exception 'Alleen application/pdf is toegestaan als offertebijlage' using errcode = '23514';
+  end if;
+
+  if v_attachment_sha256 !~ '^[0-9a-f]{64}$' then
+    raise exception 'PDF SHA-256 hash is ongeldig' using errcode = '23514';
+  end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status <> 'internally_approved' or v_quote.internal_approval_status <> 'approved' then
+    raise exception 'Alleen intern goedgekeurde offertes kunnen worden verstuurd' using errcode = '23514';
+  end if;
+  if v_quote.valid_until is not null and v_quote.valid_until < current_date then
+    raise exception 'Deze offerte is verlopen en kan niet meer worden verstuurd' using errcode = '23514';
+  end if;
+
+  if exists (
+    select 1 from public.quote_email_deliveries d
+    where d.quote_id = p_quote_id
+      and d.organization_id = p_organization_id
+      and d.status = 'queued'
+      and d.created_at > now() - interval '15 minutes'
+  ) then
+    raise exception 'Er loopt al een recente Resend-verzendpoging voor deze offerte' using errcode = '23505';
+  end if;
+
+  update public.quotes
+  set public_token_hash = p_token_hash,
+      public_token_created_at = now(),
+      public_token_expires_at = p_token_expires_at,
+      last_email_delivery_status = 'queued',
+      last_pdf_file_name = v_attachment_file_name,
+      last_pdf_mime_type = v_attachment_mime_type,
+      last_pdf_size_bytes = p_attachment_size_bytes,
+      last_pdf_sha256 = v_attachment_sha256,
+      updated_at = now()
+  where id = p_quote_id
+  returning * into v_quote;
+
+  insert into public.quote_email_deliveries(
+    organization_id,
+    quote_id,
+    provider,
+    provider_email_id,
+    recipient_email,
+    recipient_name,
+    subject,
+    status,
+    last_event_at,
+    attachment_file_name,
+    attachment_mime_type,
+    attachment_size_bytes,
+    attachment_sha256,
+    metadata
+  ) values (
+    p_organization_id,
+    p_quote_id,
+    'resend',
+    null,
+    lower(trim(p_recipient_email)),
+    nullif(trim(coalesce(p_recipient_name, '')), ''),
+    p_subject,
+    'queued',
+    now(),
+    v_attachment_file_name,
+    v_attachment_mime_type,
+    p_attachment_size_bytes,
+    v_attachment_sha256,
+    jsonb_build_object(
+      'publicUrl', p_public_url,
+      'expiresAt', p_token_expires_at,
+      'attachment', jsonb_build_object(
+        'fileName', v_attachment_file_name,
+        'mimeType', v_attachment_mime_type,
+        'sizeBytes', p_attachment_size_bytes,
+        'sha256', v_attachment_sha256
+      )
+    )
+  ) returning * into v_delivery;
+
+  perform public.insert_quote_workflow_event(p_organization_id, p_quote_id, 'public_token_created', 'Publieke offertelink aangemaakt', 'Link voorbereid voor verzending via Resend.', jsonb_build_object('expiresAt', p_token_expires_at, 'deliveryId', v_delivery.id), p_actor_user_id);
+
+  return jsonb_build_object('deliveryId', v_delivery.id, 'quoteId', v_quote.id);
+end;
+$$;
+
+create or replace function public.complete_quote_email_send(
+  p_delivery_id uuid,
+  p_organization_id uuid,
+  p_actor_user_id uuid,
+  p_provider_email_id text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_delivery public.quote_email_deliveries;
+  v_quote public.quotes;
+  v_version public.quote_versions;
+  v_now timestamptz := now();
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'Alleen de server mag een offerte-e-mail afronden' using errcode = '42501';
+  end if;
+
+  select * into v_delivery
+  from public.quote_email_deliveries
+  where id = p_delivery_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'E-maildelivery niet gevonden' using errcode = '02000'; end if;
+
+  if v_delivery.attachment_file_name is null or v_delivery.attachment_size_bytes is null or v_delivery.attachment_size_bytes <= 0 or v_delivery.attachment_sha256 is null then
+    raise exception 'Delivery mist PDF-bijlagemetadata en kan niet als verzonden offerteversie worden afgerond' using errcode = '23514';
+  end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = v_delivery.quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status <> 'internally_approved' or v_quote.internal_approval_status <> 'approved' then
+    raise exception 'Offerte staat niet meer klaar om te verzenden' using errcode = '23514';
+  end if;
+
+  update public.quote_email_deliveries
+  set provider_email_id = nullif(trim(coalesce(p_provider_email_id, '')), ''),
+      status = 'sent',
+      sent_at = v_now,
+      last_event_at = v_now,
+      updated_at = v_now
+  where id = v_delivery.id
+  returning * into v_delivery;
+
+  update public.quotes
+  set status = 'sent',
+      sent_at = v_now,
+      resend_last_email_id = nullif(trim(coalesce(p_provider_email_id, '')), ''),
+      last_email_delivery_status = 'sent',
+      updated_at = v_now
+  where id = v_quote.id
+  returning * into v_quote;
+
+  v_version := public.create_quote_version_snapshot(
+    v_quote.id,
+    p_organization_id,
+    'sent_to_client',
+    p_actor_user_id,
+    v_delivery.id,
+    v_delivery.attachment_file_name,
+    v_delivery.attachment_mime_type,
+    v_delivery.attachment_size_bytes,
+    v_delivery.attachment_sha256,
+    null,
+    jsonb_build_object('provider', 'resend', 'providerEmailId', p_provider_email_id, 'recipientEmail', v_delivery.recipient_email)
+  );
+
+  select * into v_delivery
+  from public.quote_email_deliveries
+  where id = p_delivery_id and organization_id = p_organization_id;
+
+  select * into v_quote
+  from public.quotes
+  where id = v_delivery.quote_id and organization_id = p_organization_id;
+
+  perform public.insert_quote_workflow_event(p_organization_id, v_quote.id, 'email_sent', 'E-mail geaccepteerd door Resend', null, jsonb_build_object('providerEmailId', p_provider_email_id, 'versionId', v_version.id), p_actor_user_id);
+  perform public.insert_quote_workflow_event(p_organization_id, v_quote.id, 'sent_to_client', 'Offerte naar klant verzonden', 'Verstuurd naar ' || v_delivery.recipient_email || '.', jsonb_build_object('recipientEmail', v_delivery.recipient_email, 'providerEmailId', p_provider_email_id, 'versionId', v_version.id), p_actor_user_id);
+  perform public.insert_quote_audit_event(p_organization_id, v_quote.id, 'quote_sent_to_client', v_quote.number, jsonb_build_object('recipientEmail', v_delivery.recipient_email, 'providerEmailId', p_provider_email_id, 'versionId', v_version.id), p_actor_user_id);
+
+  return jsonb_build_object('delivery', to_jsonb(v_delivery), 'quote', to_jsonb(v_quote), 'version', to_jsonb(v_version));
+end;
+$$;
+
+create or replace function public.accept_quote_public(
+  p_token_hash text,
+  p_name text,
+  p_email text,
+  p_note text default null
+)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+begin
+  select * into v_quote
+  from public.quotes
+  where public_token_hash = p_token_hash
+    and public_token_expires_at is not null
+    and public_token_expires_at > now()
+  for update;
+
+  if not found then raise exception 'Offertelink is ongeldig of verlopen' using errcode = '28000'; end if;
+  if v_quote.status <> 'sent' then raise exception 'Deze offerte kan niet meer worden geaccepteerd' using errcode = '23514'; end if;
+  if v_quote.valid_until is not null and v_quote.valid_until < current_date then
+    raise exception 'Deze offerte is verlopen en kan niet meer worden geaccepteerd' using errcode = '23514';
+  end if;
+  if nullif(trim(coalesce(p_name, '')), '') is null then
+    raise exception 'Naam is verplicht om de offerte te accepteren' using errcode = '23514';
+  end if;
+  if nullif(lower(trim(coalesce(p_email, ''))), '') is null or lower(trim(coalesce(p_email, ''))) !~ '^[^\s@]+@[^\s@]+\.[^\s@]+$' then
+    raise exception 'Geldig e-mailadres is verplicht om de offerte te accepteren' using errcode = '23514';
+  end if;
+
+  update public.quotes
+  set status = 'accepted',
+      accepted_at = now(),
+      client_decision_at = now(),
+      client_decision_by_name = nullif(trim(coalesce(p_name, '')), ''),
+      client_decision_by_email = nullif(lower(trim(coalesce(p_email, ''))), ''),
+      client_decision_note = nullif(trim(coalesce(p_note, '')), ''),
+      updated_at = now()
+  where id = v_quote.id
+  returning * into v_quote;
+
+  perform public.create_quote_version_snapshot(
+    v_quote.id,
+    v_quote.organization_id,
+    'client_accepted',
+    null,
+    null,
+    v_quote.last_pdf_file_name,
+    v_quote.last_pdf_mime_type,
+    v_quote.last_pdf_size_bytes,
+    v_quote.last_pdf_sha256,
+    null,
+    jsonb_build_object('clientDecisionName', p_name, 'clientDecisionEmail', p_email)
+  );
+
+  perform public.insert_quote_workflow_event(v_quote.organization_id, v_quote.id, 'client_accepted', 'Klant heeft de offerte geaccepteerd', nullif(trim(coalesce(p_note, '')), ''), jsonb_build_object('name', p_name, 'email', p_email), null);
+  perform public.insert_quote_audit_event(v_quote.organization_id, v_quote.id, 'quote_client_accepted', v_quote.number, jsonb_build_object('name', p_name, 'email', p_email), null);
+
+  select * into v_quote
+  from public.quotes
+  where id = v_quote.id and organization_id = v_quote.organization_id;
+
+  return v_quote;
+end;
+$$;
+
+revoke execute on function public.create_quote_version_snapshot(uuid, uuid, text, uuid, uuid, text, text, integer, text, text, jsonb) from public, anon, authenticated;
+revoke execute on function public.begin_quote_email_send(uuid, uuid, uuid, text, timestamptz, text, text, text, text, text, text, integer, text) from public, anon, authenticated;
+revoke execute on function public.complete_quote_email_send(uuid, uuid, uuid, text) from public, anon, authenticated;
+revoke execute on function public.accept_quote_public(text, text, text, text) from public, anon, authenticated;
+
+grant execute on function public.create_quote_version_snapshot(uuid, uuid, text, uuid, uuid, text, text, integer, text, text, jsonb) to service_role;
+grant execute on function public.begin_quote_email_send(uuid, uuid, uuid, text, timestamptz, text, text, text, text, text, text, integer, text) to service_role;
+grant execute on function public.complete_quote_email_send(uuid, uuid, uuid, text) to service_role;
+grant execute on function public.accept_quote_public(text, text, text, text) to service_role;
+grant execute on function public.approve_quote_internal(uuid, uuid) to authenticated;
+
+commit;
+
+
+
+-- Included latest migration: 20260519_quote_versions_audit_context_hardening.sql
+-- ============================================================
+-- BrandCore / ResoFly — Quote version audit context hardening
+-- Date: 2026-05-19
+-- Scope:
+-- - Enrich quote version snapshots with client/project/company context
+-- - Explicitly link client acceptance snapshots to the sent quote version
+-- - Require a real Resend provider e-mail id before marking delivery sent
+-- - Add production flow verification documentation in the codebase
+-- Note: physical PDF storage is intentionally out of scope for this migration.
+-- ============================================================
+
+begin;
+
+alter table public.quote_versions
+  add column if not exists accepted_sent_version_id uuid references public.quote_versions(id) on delete set null;
+
+alter table public.quotes
+  add column if not exists accepted_sent_version_id uuid references public.quote_versions(id) on delete set null;
+
+create index if not exists idx_quote_versions_accepted_sent_version
+  on public.quote_versions(accepted_sent_version_id)
+  where accepted_sent_version_id is not null;
+
+create index if not exists idx_quotes_accepted_sent_version
+  on public.quotes(accepted_sent_version_id)
+  where accepted_sent_version_id is not null;
+
+-- New sent deliveries must always have a provider id. NOT VALID prevents
+-- old production data from blocking deployment, while still enforcing future writes.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.quote_email_deliveries'::regclass
+      and conname = 'quote_email_deliveries_sent_provider_id_check'
+  ) then
+    alter table public.quote_email_deliveries
+      add constraint quote_email_deliveries_sent_provider_id_check
+      check (status <> 'sent' or nullif(trim(coalesce(provider_email_id, '')), '') is not null)
+      not valid;
+  end if;
+end $$;
+
+create or replace function public.create_quote_version_snapshot(
+  p_quote_id uuid,
+  p_organization_id uuid,
+  p_snapshot_reason text,
+  p_actor_user_id uuid default null,
+  p_delivery_id uuid default null,
+  p_pdf_file_name text default null,
+  p_pdf_mime_type text default null,
+  p_pdf_size_bytes integer default null,
+  p_pdf_sha256 text default null,
+  p_quote_version_pdf_url text default null,
+  p_metadata jsonb default '{}'::jsonb
+)
+returns public.quote_versions
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_delivery public.quote_email_deliveries;
+  v_version public.quote_versions;
+  v_sent_version public.quote_versions;
+  v_version_number integer;
+  v_line jsonb;
+  v_lines jsonb;
+  v_index integer := 0;
+  v_quantity numeric := 0;
+  v_unit_price numeric := 0;
+  v_vat_percentage numeric := 0;
+  v_line_subtotal numeric := 0;
+  v_line_vat numeric := 0;
+  v_line_total numeric := 0;
+  v_subtotal numeric := 0;
+  v_vat_total numeric := 0;
+  v_total numeric := 0;
+  v_pdf_file_name text := nullif(trim(coalesce(p_pdf_file_name, '')), '');
+  v_pdf_sha256 text := lower(nullif(trim(coalesce(p_pdf_sha256, '')), ''));
+  v_pdf_url text := nullif(trim(coalesce(p_quote_version_pdf_url, '')), '');
+  v_has_pdf boolean;
+  v_pdf_mime_type text;
+  v_client_snapshot jsonb := 'null'::jsonb;
+  v_project_snapshot jsonb := 'null'::jsonb;
+  v_company_snapshot jsonb := 'null'::jsonb;
+  v_delivery_snapshot jsonb := 'null'::jsonb;
+  v_sent_version_snapshot jsonb := 'null'::jsonb;
+  v_accepted_sent_version_id uuid := null;
+begin
+  if p_snapshot_reason not in ('internal_approval','sent_to_client','client_accepted','manual') then
+    raise exception 'Ongeldige offerte snapshot reason: %', p_snapshot_reason using errcode = '23514';
+  end if;
+
+  if auth.role() = 'authenticated' and not public.can_write_org(p_organization_id) then
+    raise exception 'Geen schrijfrechten voor deze organisatie' using errcode = '42501';
+  end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = p_quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+
+  if p_delivery_id is not null then
+    select * into v_delivery
+    from public.quote_email_deliveries
+    where id = p_delivery_id
+      and quote_id = p_quote_id
+      and organization_id = p_organization_id
+    for update;
+
+    if not found then raise exception 'E-maildelivery hoort niet bij deze offerte' using errcode = '23514'; end if;
+    v_delivery_snapshot := to_jsonb(v_delivery);
+  end if;
+
+  if v_quote.client_id is not null then
+    select to_jsonb(c) into v_client_snapshot
+    from public.clients c
+    where c.id = v_quote.client_id
+      and c.organization_id = p_organization_id;
+    v_client_snapshot := coalesce(v_client_snapshot, 'null'::jsonb);
+  end if;
+
+  if v_quote.project_id is not null then
+    select to_jsonb(p) into v_project_snapshot
+    from public.projects p
+    where p.id = v_quote.project_id
+      and p.organization_id = p_organization_id;
+    v_project_snapshot := coalesce(v_project_snapshot, 'null'::jsonb);
+  end if;
+
+  select to_jsonb(cs) into v_company_snapshot
+  from public.company_settings cs
+  where cs.organization_id = p_organization_id;
+  v_company_snapshot := coalesce(v_company_snapshot, 'null'::jsonb);
+
+  v_has_pdf := v_pdf_file_name is not null or v_pdf_sha256 is not null or p_pdf_size_bytes is not null or v_pdf_url is not null;
+  v_pdf_mime_type := case
+    when v_has_pdf then coalesce(nullif(trim(coalesce(p_pdf_mime_type, '')), ''), 'application/pdf')
+    else null
+  end;
+
+  if p_snapshot_reason = 'sent_to_client' then
+    if not v_has_pdf or v_pdf_file_name is null or p_pdf_size_bytes is null or p_pdf_size_bytes <= 0 or v_pdf_sha256 is null then
+      raise exception 'Een verzonden offerteversie vereist een echte PDF-bijlage met bestandsnaam, grootte en SHA-256 hash' using errcode = '23514';
+    end if;
+  end if;
+
+  if v_pdf_sha256 is not null and v_pdf_sha256 !~ '^[0-9a-f]{64}$' then
+    raise exception 'PDF SHA-256 hash is ongeldig' using errcode = '23514';
+  end if;
+
+  if p_pdf_size_bytes is not null and p_pdf_size_bytes <= 0 then
+    raise exception 'PDF-bestandsgrootte moet groter zijn dan 0 bytes' using errcode = '23514';
+  end if;
+
+  if v_has_pdf and v_pdf_mime_type <> 'application/pdf' then
+    raise exception 'Alleen application/pdf is toegestaan als offertebijlage' using errcode = '23514';
+  end if;
+
+  if p_snapshot_reason = 'client_accepted' then
+    v_accepted_sent_version_id := v_quote.sent_version_id;
+
+    if v_accepted_sent_version_id is null then
+      raise exception 'Acceptatie kan niet worden vastgelegd zonder gekoppelde verzonden offerteversie' using errcode = '23514';
+    end if;
+
+    select * into v_sent_version
+    from public.quote_versions
+    where id = v_accepted_sent_version_id
+      and organization_id = p_organization_id
+      and quote_id = p_quote_id
+      and snapshot_reason = 'sent_to_client';
+
+    if not found then
+      raise exception 'Gekoppelde verzonden offerteversie is niet gevonden' using errcode = '23514';
+    end if;
+
+    if v_quote.last_pdf_sha256 is not null and v_sent_version.pdf_sha256 is not null and v_quote.last_pdf_sha256 <> v_sent_version.pdf_sha256 then
+      raise exception 'Acceptatie-PDF hash komt niet overeen met de verzonden offerteversie' using errcode = '23514';
+    end if;
+
+    v_sent_version_snapshot := jsonb_build_object(
+      'id', v_sent_version.id,
+      'versionNumber', v_sent_version.version_number,
+      'snapshotReason', v_sent_version.snapshot_reason,
+      'pdfSha256', v_sent_version.pdf_sha256,
+      'pdfFileName', v_sent_version.pdf_file_name,
+      'pdfSizeBytes', v_sent_version.pdf_size_bytes,
+      'createdAt', v_sent_version.created_at
+    );
+  end if;
+
+  v_lines := coalesce(v_quote.lines, '[]'::jsonb);
+  if jsonb_typeof(v_lines) <> 'array' then
+    v_lines := '[]'::jsonb;
+  end if;
+
+  for v_line in select * from jsonb_array_elements(v_lines) loop
+    v_quantity := case when coalesce(v_line->>'quantity', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line->>'quantity')::numeric else 0 end;
+    v_unit_price := case when coalesce(v_line->>'unit_price', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line->>'unit_price')::numeric else 0 end;
+    v_vat_percentage := case when coalesce(v_line->>'vat', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line->>'vat')::numeric else 0 end;
+    v_line_subtotal := round(v_quantity * v_unit_price, 2);
+    v_line_vat := round(v_line_subtotal * (v_vat_percentage / 100), 2);
+    v_line_total := round(v_line_subtotal + v_line_vat, 2);
+    v_subtotal := v_subtotal + v_line_subtotal;
+    v_vat_total := v_vat_total + v_line_vat;
+    v_total := v_total + v_line_total;
+  end loop;
+
+  select coalesce(max(version_number), 0) + 1
+  into v_version_number
+  from public.quote_versions
+  where organization_id = p_organization_id
+    and quote_id = p_quote_id;
+
+  insert into public.quote_versions(
+    organization_id,
+    quote_id,
+    delivery_id,
+    accepted_sent_version_id,
+    version_number,
+    snapshot_reason,
+    status_at_snapshot,
+    internal_approval_status_at_snapshot,
+    quote_number,
+    client_id,
+    project_id,
+    quote_date,
+    valid_until,
+    notes,
+    subtotal_amount,
+    vat_amount,
+    total_amount,
+    quote_version_pdf_url,
+    pdf_file_name,
+    pdf_mime_type,
+    pdf_size_bytes,
+    pdf_sha256,
+    snapshot_data,
+    created_by
+  ) values (
+    p_organization_id,
+    p_quote_id,
+    p_delivery_id,
+    v_accepted_sent_version_id,
+    v_version_number,
+    p_snapshot_reason,
+    v_quote.status,
+    v_quote.internal_approval_status,
+    v_quote.number,
+    v_quote.client_id,
+    v_quote.project_id,
+    v_quote.date,
+    v_quote.valid_until,
+    v_quote.notes,
+    round(v_subtotal, 2),
+    round(v_vat_total, 2),
+    round(v_total, 2),
+    v_pdf_url,
+    v_pdf_file_name,
+    v_pdf_mime_type,
+    case when v_has_pdf then p_pdf_size_bytes else null end,
+    v_pdf_sha256,
+    jsonb_build_object(
+      'quote', to_jsonb(v_quote) - 'public_token_hash',
+      'quoteLines', v_lines,
+      'clientSnapshot', v_client_snapshot,
+      'projectSnapshot', v_project_snapshot,
+      'companySnapshot', v_company_snapshot,
+      'deliverySnapshot', v_delivery_snapshot,
+      'sentVersionSnapshot', v_sent_version_snapshot,
+      'acceptedSentVersionId', v_accepted_sent_version_id,
+      'totals', jsonb_build_object('subtotal', round(v_subtotal, 2), 'vat', round(v_vat_total, 2), 'total', round(v_total, 2)),
+      'reason', p_snapshot_reason,
+      'deliveryId', p_delivery_id,
+      'pdf', case when v_has_pdf then jsonb_build_object(
+        'fileName', v_pdf_file_name,
+        'mimeType', v_pdf_mime_type,
+        'sizeBytes', p_pdf_size_bytes,
+        'sha256', v_pdf_sha256,
+        'url', v_pdf_url
+      ) else '{}'::jsonb end,
+      'metadata', coalesce(p_metadata, '{}'::jsonb)
+    ),
+    p_actor_user_id
+  ) returning * into v_version;
+
+  v_index := 0;
+  for v_line in select * from jsonb_array_elements(v_lines) loop
+    v_quantity := case when coalesce(v_line->>'quantity', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line->>'quantity')::numeric else 0 end;
+    v_unit_price := case when coalesce(v_line->>'unit_price', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line->>'unit_price')::numeric else 0 end;
+    v_vat_percentage := case when coalesce(v_line->>'vat', '') ~ '^-?[0-9]+(\.[0-9]+)?$' then (v_line->>'vat')::numeric else 0 end;
+    v_line_subtotal := round(v_quantity * v_unit_price, 2);
+    v_line_vat := round(v_line_subtotal * (v_vat_percentage / 100), 2);
+    v_line_total := round(v_line_subtotal + v_line_vat, 2);
+
+    insert into public.quote_version_items(
+      organization_id,
+      quote_id,
+      quote_version_id,
+      source_line_id,
+      line_index,
+      description,
+      quantity,
+      unit_price,
+      vat_percentage,
+      line_subtotal,
+      line_vat,
+      line_total
+    ) values (
+      p_organization_id,
+      p_quote_id,
+      v_version.id,
+      nullif(v_line->>'id', ''),
+      v_index,
+      coalesce(nullif(trim(coalesce(v_line->>'description', '')), ''), '-'),
+      v_quantity,
+      v_unit_price,
+      v_vat_percentage,
+      v_line_subtotal,
+      v_line_vat,
+      v_line_total
+    );
+
+    v_index := v_index + 1;
+  end loop;
+
+  update public.quotes
+  set latest_version_id = v_version.id,
+      internal_approved_version_id = case when p_snapshot_reason = 'internal_approval' then v_version.id else internal_approved_version_id end,
+      sent_version_id = case when p_snapshot_reason = 'sent_to_client' then v_version.id else sent_version_id end,
+      accepted_version_id = case when p_snapshot_reason = 'client_accepted' then v_version.id else accepted_version_id end,
+      accepted_sent_version_id = case when p_snapshot_reason = 'client_accepted' then v_accepted_sent_version_id else accepted_sent_version_id end,
+      last_pdf_file_name = case when v_has_pdf then coalesce(v_pdf_file_name, last_pdf_file_name) else last_pdf_file_name end,
+      last_pdf_mime_type = case when v_has_pdf then coalesce(v_pdf_mime_type, last_pdf_mime_type) else last_pdf_mime_type end,
+      last_pdf_size_bytes = case when v_has_pdf then coalesce(p_pdf_size_bytes, last_pdf_size_bytes) else last_pdf_size_bytes end,
+      last_pdf_sha256 = case when v_has_pdf then coalesce(v_pdf_sha256, last_pdf_sha256) else last_pdf_sha256 end,
+      updated_at = now()
+  where id = p_quote_id
+    and organization_id = p_organization_id;
+
+  if p_delivery_id is not null then
+    update public.quote_email_deliveries
+    set quote_version_id = v_version.id,
+        attachment_file_name = case when v_has_pdf then coalesce(v_pdf_file_name, attachment_file_name) else attachment_file_name end,
+        attachment_mime_type = case when v_has_pdf then coalesce(v_pdf_mime_type, attachment_mime_type) else attachment_mime_type end,
+        attachment_size_bytes = case when v_has_pdf then coalesce(p_pdf_size_bytes, attachment_size_bytes) else attachment_size_bytes end,
+        attachment_sha256 = case when v_has_pdf then coalesce(v_pdf_sha256, attachment_sha256) else attachment_sha256 end,
+        updated_at = now()
+    where id = p_delivery_id;
+  end if;
+
+  perform public.insert_quote_workflow_event(
+    p_organization_id,
+    p_quote_id,
+    'quote_version_created',
+    'Offerteversie vastgelegd',
+    'Versie ' || v_version.version_number || ' opgeslagen voor ' || p_snapshot_reason || '.',
+    jsonb_build_object('versionId', v_version.id, 'versionNumber', v_version.version_number, 'reason', p_snapshot_reason, 'pdfSha256', v_pdf_sha256, 'acceptedSentVersionId', v_accepted_sent_version_id),
+    p_actor_user_id
+  );
+
+  if v_has_pdf and v_pdf_sha256 is not null then
+    perform public.insert_quote_workflow_event(
+      p_organization_id,
+      p_quote_id,
+      'quote_pdf_attached',
+      'PDF-bijlage vastgelegd',
+      coalesce(v_pdf_file_name, 'Offerte PDF') || ' is als verzonden PDF-snapshot geregistreerd.',
+      jsonb_build_object('versionId', v_version.id, 'fileName', v_pdf_file_name, 'sizeBytes', p_pdf_size_bytes, 'sha256', v_pdf_sha256, 'acceptedSentVersionId', v_accepted_sent_version_id),
+      p_actor_user_id
+    );
+    perform public.insert_quote_audit_event(
+      p_organization_id,
+      p_quote_id,
+      'quote_pdf_attached',
+      v_quote.number,
+      jsonb_build_object('versionId', v_version.id, 'fileName', v_pdf_file_name, 'sizeBytes', p_pdf_size_bytes, 'sha256', v_pdf_sha256, 'acceptedSentVersionId', v_accepted_sent_version_id),
+      p_actor_user_id
+    );
+  end if;
+
+  perform public.insert_quote_audit_event(
+    p_organization_id,
+    p_quote_id,
+    'quote_version_created',
+    v_quote.number,
+    jsonb_build_object('versionId', v_version.id, 'versionNumber', v_version.version_number, 'reason', p_snapshot_reason, 'acceptedSentVersionId', v_accepted_sent_version_id),
+    p_actor_user_id
+  );
+
+  return v_version;
+end;
+$$;
+
+create or replace function public.complete_quote_email_send(
+  p_delivery_id uuid,
+  p_organization_id uuid,
+  p_actor_user_id uuid,
+  p_provider_email_id text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_delivery public.quote_email_deliveries;
+  v_quote public.quotes;
+  v_version public.quote_versions;
+  v_now timestamptz := now();
+  v_provider_email_id text := nullif(trim(coalesce(p_provider_email_id, '')), '');
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'Alleen de server mag een offerte-e-mail afronden' using errcode = '42501';
+  end if;
+
+  if v_provider_email_id is null then
+    raise exception 'Resend provider e-mail-ID is verplicht om een offerte als verzonden te markeren' using errcode = '23514';
+  end if;
+
+  select * into v_delivery
+  from public.quote_email_deliveries
+  where id = p_delivery_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'E-maildelivery niet gevonden' using errcode = '02000'; end if;
+
+  if v_delivery.attachment_file_name is null or v_delivery.attachment_size_bytes is null or v_delivery.attachment_size_bytes <= 0 or v_delivery.attachment_sha256 is null then
+    raise exception 'Delivery mist PDF-bijlagemetadata en kan niet als verzonden offerteversie worden afgerond' using errcode = '23514';
+  end if;
+
+  select * into v_quote
+  from public.quotes
+  where id = v_delivery.quote_id and organization_id = p_organization_id
+  for update;
+
+  if not found then raise exception 'Offerte niet gevonden' using errcode = '02000'; end if;
+  if v_quote.status <> 'internally_approved' or v_quote.internal_approval_status <> 'approved' then
+    raise exception 'Offerte staat niet meer klaar om te verzenden' using errcode = '23514';
+  end if;
+
+  update public.quote_email_deliveries
+  set provider_email_id = v_provider_email_id,
+      status = 'sent',
+      sent_at = v_now,
+      last_event_at = v_now,
+      updated_at = v_now
+  where id = v_delivery.id
+  returning * into v_delivery;
+
+  update public.quotes
+  set status = 'sent',
+      sent_at = v_now,
+      resend_last_email_id = v_provider_email_id,
+      last_email_delivery_status = 'sent',
+      updated_at = v_now
+  where id = v_quote.id
+  returning * into v_quote;
+
+  v_version := public.create_quote_version_snapshot(
+    v_quote.id,
+    p_organization_id,
+    'sent_to_client',
+    p_actor_user_id,
+    v_delivery.id,
+    v_delivery.attachment_file_name,
+    v_delivery.attachment_mime_type,
+    v_delivery.attachment_size_bytes,
+    v_delivery.attachment_sha256,
+    null,
+    jsonb_build_object('provider', 'resend', 'providerEmailId', v_provider_email_id, 'recipientEmail', v_delivery.recipient_email)
+  );
+
+  select * into v_delivery
+  from public.quote_email_deliveries
+  where id = p_delivery_id and organization_id = p_organization_id;
+
+  select * into v_quote
+  from public.quotes
+  where id = v_delivery.quote_id and organization_id = p_organization_id;
+
+  perform public.insert_quote_workflow_event(p_organization_id, v_quote.id, 'email_sent', 'E-mail geaccepteerd door Resend', null, jsonb_build_object('providerEmailId', v_provider_email_id, 'versionId', v_version.id), p_actor_user_id);
+  perform public.insert_quote_workflow_event(p_organization_id, v_quote.id, 'sent_to_client', 'Offerte naar klant verzonden', 'Verstuurd naar ' || v_delivery.recipient_email || '.', jsonb_build_object('recipientEmail', v_delivery.recipient_email, 'providerEmailId', v_provider_email_id, 'versionId', v_version.id), p_actor_user_id);
+  perform public.insert_quote_audit_event(p_organization_id, v_quote.id, 'quote_sent_to_client', v_quote.number, jsonb_build_object('recipientEmail', v_delivery.recipient_email, 'providerEmailId', v_provider_email_id, 'versionId', v_version.id), p_actor_user_id);
+
+  return jsonb_build_object('delivery', to_jsonb(v_delivery), 'quote', to_jsonb(v_quote), 'version', to_jsonb(v_version));
+end;
+$$;
+
+create or replace function public.accept_quote_public(
+  p_token_hash text,
+  p_name text,
+  p_email text,
+  p_note text default null
+)
+returns public.quotes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote public.quotes;
+  v_version public.quote_versions;
+  v_sent_version_id uuid;
+begin
+  select * into v_quote
+  from public.quotes
+  where public_token_hash = p_token_hash
+    and public_token_expires_at is not null
+    and public_token_expires_at > now()
+  for update;
+
+  if not found then raise exception 'Offertelink is ongeldig of verlopen' using errcode = '28000'; end if;
+  if v_quote.status <> 'sent' then raise exception 'Deze offerte kan niet meer worden geaccepteerd' using errcode = '23514'; end if;
+  if v_quote.sent_version_id is null then raise exception 'Deze offerte mist een verzonden versie en kan niet worden geaccepteerd' using errcode = '23514'; end if;
+  if v_quote.valid_until is not null and v_quote.valid_until < current_date then
+    raise exception 'Deze offerte is verlopen en kan niet meer worden geaccepteerd' using errcode = '23514';
+  end if;
+  if nullif(trim(coalesce(p_name, '')), '') is null then
+    raise exception 'Naam is verplicht om de offerte te accepteren' using errcode = '23514';
+  end if;
+  if nullif(lower(trim(coalesce(p_email, ''))), '') is null or lower(trim(coalesce(p_email, ''))) !~ '^[^\s@]+@[^\s@]+\.[^\s@]+$' then
+    raise exception 'Geldig e-mailadres is verplicht om de offerte te accepteren' using errcode = '23514';
+  end if;
+
+  v_sent_version_id := v_quote.sent_version_id;
+
+  update public.quotes
+  set status = 'accepted',
+      accepted_at = now(),
+      client_decision_at = now(),
+      client_decision_by_name = nullif(trim(coalesce(p_name, '')), ''),
+      client_decision_by_email = nullif(lower(trim(coalesce(p_email, ''))), ''),
+      client_decision_note = nullif(trim(coalesce(p_note, '')), ''),
+      accepted_sent_version_id = v_sent_version_id,
+      updated_at = now()
+  where id = v_quote.id
+  returning * into v_quote;
+
+  v_version := public.create_quote_version_snapshot(
+    v_quote.id,
+    v_quote.organization_id,
+    'client_accepted',
+    null,
+    null,
+    v_quote.last_pdf_file_name,
+    v_quote.last_pdf_mime_type,
+    v_quote.last_pdf_size_bytes,
+    v_quote.last_pdf_sha256,
+    null,
+    jsonb_build_object('clientDecisionName', p_name, 'clientDecisionEmail', p_email, 'acceptedSentVersionId', v_sent_version_id)
+  );
+
+  perform public.insert_quote_workflow_event(v_quote.organization_id, v_quote.id, 'client_accepted', 'Klant heeft de offerte geaccepteerd', nullif(trim(coalesce(p_note, '')), ''), jsonb_build_object('name', p_name, 'email', p_email, 'acceptedVersionId', v_version.id, 'acceptedSentVersionId', v_sent_version_id), null);
+  perform public.insert_quote_audit_event(v_quote.organization_id, v_quote.id, 'quote_client_accepted', v_quote.number, jsonb_build_object('name', p_name, 'email', p_email, 'acceptedVersionId', v_version.id, 'acceptedSentVersionId', v_sent_version_id), null);
+
+  select * into v_quote
+  from public.quotes
+  where id = v_quote.id and organization_id = v_quote.organization_id;
+
+  return v_quote;
+end;
+$$;
+
+revoke execute on function public.create_quote_version_snapshot(uuid, uuid, text, uuid, uuid, text, text, integer, text, text, jsonb) from public, anon, authenticated;
+revoke execute on function public.complete_quote_email_send(uuid, uuid, uuid, text) from public, anon, authenticated;
+revoke execute on function public.accept_quote_public(text, text, text, text) from public, anon, authenticated;
+
+grant execute on function public.create_quote_version_snapshot(uuid, uuid, text, uuid, uuid, text, text, integer, text, text, jsonb) to service_role;
+grant execute on function public.complete_quote_email_send(uuid, uuid, uuid, text) to service_role;
+grant execute on function public.accept_quote_public(text, text, text, text) to service_role;
+
+commit;

@@ -1,6 +1,6 @@
 {
   "name": "brandcore-webapp",
-  "version": "2.2.3-sprint2-production-ready",
+  "version": "2.4.2-quote-versions-audit-context-hardening",
   "private": true,
   "type": "module",
   "scripts": {

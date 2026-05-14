@@ -3,15 +3,18 @@ export type ClientStatus = 'active' | 'prospect' | 'inactive';
 export type TaskStatus = 'todo' | 'doing' | 'review' | 'done';
 export type Priority = 'low' | 'med' | 'high';
 export type TicketStatus = 'new' | 'review' | 'approved' | 'rejected' | 'converted';
-export type FinanceStatus = 'draft' | 'sent' | 'accepted' | 'rejected' | 'expired' | 'paid' | 'overdue' | 'cancelled';
+export type FinanceStatus = 'draft' | 'pending_internal_approval' | 'internally_approved' | 'sent' | 'accepted' | 'rejected' | 'expired' | 'paid' | 'overdue' | 'cancelled';
 export type NoteType = 'general' | 'meeting' | 'action' | 'decision' | 'idea' | 'support';
 export type EntityType = 'client' | 'project' | 'task' | 'subtask' | 'ticket' | 'note' | 'quote' | 'invoice';
+export type QuoteApprovalStatus = 'draft' | 'pending' | 'approved' | 'rejected';
+export type QuoteWorkflowEventType = 'created' | 'updated' | 'submitted_for_internal_approval' | 'internal_approval_granted' | 'internal_approval_rejected' | 'public_token_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'client_accepted' | 'client_rejected' | 'quote_version_created' | 'quote_pdf_attached' | 'expired' | 'cancelled';
+export type QuoteEmailDeliveryStatus = 'queued' | 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'failed' | 'complained';
 export type InvoiceTemplateKind = 'none' | 'pdf' | 'image';
 export type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 export type OrganizationMemberStatus = 'active' | 'disabled';
 export type InvitationStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
 export type LicenseStatus = 'trialing' | 'active' | 'past_due' | 'cancelled';
-export type AuditAction = 'created' | 'updated' | 'deleted' | 'invited' | 'accepted' | 'revoked' | 'role_changed' | 'disabled';
+export type AuditAction = 'created' | 'updated' | 'deleted' | 'invited' | 'accepted' | 'revoked' | 'role_changed' | 'disabled' | string;
 
 export interface Organization {
   id: UUID;
@@ -118,9 +121,169 @@ export interface Ticket extends OrgScopedRow {
 export interface Note extends OrgScopedRow {
   client_id: UUID | null; project_id: UUID | null; title: string; content: string; note_type: NoteType; tags: string[]; created_at: string; updated_at: string;
 }
+
+export interface NoteCalendarLink extends OrgScopedRow {
+  note_id: UUID;
+  provider: CalendarProvider;
+  calendar_source_id: UUID;
+  provider_calendar_id: string | null;
+  provider_event_id: string;
+  event_starts_at: string;
+  event_ends_at: string | null;
+  event_title_snapshot: string | null;
+  event_location_snapshot: string | null;
+  event_html_link: string | null;
+  visibility_snapshot: CalendarVisibility;
+  is_private_masked_snapshot: boolean;
+  created_at: string;
+}
+
+export interface CalendarNoteLinkInput {
+  provider: CalendarProvider;
+  calendar_source_id: UUID;
+  provider_calendar_id?: string | null;
+  provider_event_id: string;
+  event_starts_at: string;
+  event_ends_at?: string | null;
+  event_title_snapshot?: string | null;
+  event_location_snapshot?: string | null;
+  event_html_link?: string | null;
+  visibility_snapshot: CalendarVisibility;
+  is_private_masked_snapshot: boolean;
+}
 export interface FinanceLine { id: UUID; description: string; quantity: number; unit_price: number; vat: number; }
 export interface Quote extends OrgScopedRow {
-  client_id: UUID | null; project_id: UUID | null; number: string; date: string; valid_until: string | null; lines: FinanceLine[]; status: FinanceStatus; notes: string | null; sent_at: string | null; accepted_at: string | null; created_at: string; updated_at: string;
+  client_id: UUID | null;
+  project_id: UUID | null;
+  number: string;
+  date: string;
+  valid_until: string | null;
+  lines: FinanceLine[];
+  status: FinanceStatus;
+  notes: string | null;
+  sent_at: string | null;
+  accepted_at: string | null;
+  internal_approval_status: QuoteApprovalStatus;
+  internal_approval_requested_at: string | null;
+  internal_approval_requested_by: UUID | null;
+  internal_approved_at: string | null;
+  internal_approved_by: UUID | null;
+  internal_rejected_at: string | null;
+  internal_rejected_by: UUID | null;
+  internal_rejection_note: string | null;
+  client_decision_at: string | null;
+  client_decision_by_name: string | null;
+  client_decision_by_email: string | null;
+  client_decision_note: string | null;
+  public_token_hash: string | null;
+  public_token_created_at: string | null;
+  public_token_expires_at: string | null;
+  resend_last_email_id: string | null;
+  last_email_delivery_status: QuoteEmailDeliveryStatus | null;
+  last_email_delivery_at: string | null;
+  last_email_opened_at: string | null;
+  last_email_clicked_at: string | null;
+  last_email_failed_at: string | null;
+  latest_version_id: UUID | null;
+  internal_approved_version_id: UUID | null;
+  sent_version_id: UUID | null;
+  accepted_version_id: UUID | null;
+  accepted_sent_version_id: UUID | null;
+  last_pdf_file_name: string | null;
+  last_pdf_mime_type: string | null;
+  last_pdf_size_bytes: number | null;
+  last_pdf_sha256: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type QuoteVersionReason = 'internal_approval' | 'sent_to_client' | 'client_accepted' | 'manual';
+
+export interface QuoteVersion {
+  id: UUID;
+  organization_id: UUID;
+  quote_id: UUID;
+  delivery_id: UUID | null;
+  accepted_sent_version_id: UUID | null;
+  version_number: number;
+  snapshot_reason: QuoteVersionReason | string;
+  status_at_snapshot: FinanceStatus | string;
+  internal_approval_status_at_snapshot: QuoteApprovalStatus | string | null;
+  quote_number: string;
+  client_id: UUID | null;
+  project_id: UUID | null;
+  quote_date: string;
+  valid_until: string | null;
+  notes: string | null;
+  subtotal_amount: number;
+  vat_amount: number;
+  total_amount: number;
+  quote_version_pdf_url: string | null;
+  pdf_file_name: string | null;
+  pdf_mime_type: string | null;
+  pdf_size_bytes: number | null;
+  pdf_sha256: string | null;
+  snapshot_data: Record<string, unknown>;
+  created_by: UUID | null;
+  created_at: string;
+}
+
+export interface QuoteVersionItem {
+  id: UUID;
+  organization_id: UUID;
+  quote_id: UUID;
+  quote_version_id: UUID;
+  source_line_id: string | null;
+  line_index: number;
+  description: string;
+  quantity: number;
+  unit_price: number;
+  vat_percentage: number;
+  line_subtotal: number;
+  line_vat: number;
+  line_total: number;
+  created_at: string;
+}
+
+export interface QuoteApprovalEvent {
+  id: UUID;
+  organization_id: UUID;
+  quote_id: UUID;
+  actor_user_id: UUID | null;
+  event_type: QuoteWorkflowEventType | string;
+  title: string;
+  description: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface QuoteEmailDelivery {
+  id: UUID;
+  organization_id: UUID;
+  quote_id: UUID;
+  provider: 'resend' | string;
+  provider_email_id: string | null;
+  recipient_email: string;
+  recipient_name: string | null;
+  subject: string;
+  status: QuoteEmailDeliveryStatus;
+  sent_at: string | null;
+  delivered_at: string | null;
+  opened_at: string | null;
+  clicked_at: string | null;
+  bounced_at: string | null;
+  failed_at: string | null;
+  complained_at: string | null;
+  last_event_at: string | null;
+  quote_version_id: UUID | null;
+  attachment_file_name: string | null;
+  attachment_mime_type: string | null;
+  attachment_size_bytes: number | null;
+  attachment_sha256: string | null;
+  error_message: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 }
 export interface Invoice extends OrgScopedRow {
   client_id: UUID | null; project_id: UUID | null; quote_id: UUID | null; number: string; date: string; due_date: string | null; lines: FinanceLine[]; status: FinanceStatus; notes: string | null; sent_at: string | null; paid_at: string | null; created_at: string; updated_at: string;
@@ -157,7 +320,7 @@ export interface CompanySettings extends OrgScopedRow {
 }
 export type CompanySettingsInput = Omit<CompanySettings, 'id' | 'organization_id' | 'created_by' | 'created_at' | 'updated_at'>;
 
-export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; notes: Note[]; quotes: Quote[]; invoices: Invoice[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; notes: Note[]; noteCalendarLinks: NoteCalendarLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';

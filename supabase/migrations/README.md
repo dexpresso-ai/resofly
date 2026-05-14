@@ -47,3 +47,73 @@ Als de eerste drie Sprint 2-migraties al zijn uitgevoerd, is alleen deze migrati
 Voor een nieuwe database is `supabase/BRANDCORE_DATABASE_SETUP.sql` de snelste en minst foutgevoelige route. De losse migraties zijn vooral bedoeld voor bestaande databases die al op een oudere BrandCore-versie draaien.
 
 Voor een oude pre-v2/user-scoped database blijft een aparte datamigratie nodig waarin bestaande `user_id`-data naar `organizations` en `organization_members` wordt omgezet voordat je de organisatie-SaaS migraties toepast.
+
+
+## Agenda-notities migratie
+
+Voor de agenda-item-notities feature is er nog maar één migratiebestand nodig:
+
+```text
+20260514_calendar_event_notes_complete.sql
+```
+
+Deze gecombineerde migratie bevat:
+- `note_calendar_links`
+- indexes
+- integrity trigger
+- RLS policies
+- audit trigger
+- `public.create_note_with_calendar_link(...)` RPC voor transactioneel aanmaken van een notitie + kalenderlink
+
+De eerdere losse migraties `20260512_note_calendar_links.sql` en `20260513_calendar_note_transaction_rpc.sql` zijn bewust samengevoegd en verwijderd uit deze codebase, zodat je deze feature met één query kunt toepassen.
+
+## Aanvinkbare takenlijsten in notities
+
+De aanvinkbare takenlijsten in rich-text notities vereisen geen extra databasekolom en dus geen nieuwe migratie. De status wordt veilig opgeslagen in het bestaande `notes.content` HTML-veld via `data-checked="true|false"` op checklist-items.
+
+Daarom blijft de laatst samengevoegde agenda-notities migratie ongewijzigd:
+
+```text
+20260514_calendar_event_notes_complete.sql
+```
+
+## Offerte-goedkeuringsflow + Resend
+
+Voor de nieuwe offerteflow zijn drie aanvullende migraties toegevoegd. De tweede hardent de eerste met browser-read-only workflowtabellen, transactionele Resend-send RPC's en immutability guards. De derde is de extra final-recheck hardening na de tweede review: directe workflowveld-mutaties vanuit de browser worden geblokkeerd, helper-RPC's zijn niet meer direct aanroepbaar door browserrollen, goedkeuring vereist eerst een pending-state en verlopen offertes kunnen niet meer publiek worden geaccepteerd:
+
+```text
+20260515_quote_approval_resend_flow.sql
+20260515_quote_approval_resend_flow_hardening.sql
+20260515_quote_approval_resend_flow_final_recheck.sql
+```
+
+De basismigratie bevat:
+- workflowvelden op `quotes`
+- extra offertestatussen
+- `quote_approval_events`
+- `quote_email_deliveries`
+- `quote_email_events`
+- RLS policies
+- audit-log acties
+- RPC's voor interne goedkeuring en publieke klantbeslissing
+- status-transition guard trigger
+
+De hardening-migratie bevat:
+- vergrendeling van offerte-inhoud na indienen/goedkeuren/versturen
+- read-only RLS voor timeline- en e-mailtabellen vanuit browserclients
+- transactionele RPC's voor Resend queued/sent/failed lifecycle
+- geharde helper-RPC's voor workflow/audit events
+
+De final-recheck migratie bevat:
+- server-only guard op workflow-, token-, klantbeslissing- en e-mailstatusvelden in `quotes`
+- intrekken van directe browserrechten op helper-RPC's en publieke klantbeslissing-RPC's
+- striktere interne goedkeuring: eerst indienen, daarna pas goedkeuren
+- geldigheidsdatumcontrole vóór publieke acceptatie en vóór Resend-verzending
+
+Voer deze migraties in deze volgorde uit na:
+
+```text
+20260514_calendar_event_notes_complete.sql
+```
+
+Daarna moeten de Edge Functions `quote-workflow`, `quote-public` en `resend-webhook` gedeployed worden en moeten de Resend/quote secrets in Supabase gezet worden.

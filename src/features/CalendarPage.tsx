@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react';
 import { CalendarDays, ChevronDown, ChevronRight, Clock, ExternalLink, LayoutList, MapPin, Plus, RefreshCcw, Unplug, X } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
+import { RichTextExcerpt } from '../components/RichTextEditor';
 import { addDays, DAY_NAMES_NL, formatISODate, isSameDay, startOfWeek } from '../lib/dates';
+import { dateNL } from '../lib/format';
 import {
   createExternalCalendarEvent,
   disconnectCalendarConnection,
@@ -12,7 +14,8 @@ import {
   updateCalendarSource,
   type CalendarIntegrationsPayload,
 } from '../lib/calendar-api';
-import type { AppData, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, Task, UUID } from '../types';
+import type { AppData, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, Note, NoteCalendarLink, Task, UUID } from '../types';
+import { getNoteTypeLabel } from './Notes';
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
 
@@ -142,6 +145,19 @@ function eventColorStyle(color?: string | null): CSSProperties {
     '--event-border': hexToRgba(c, 0.78),
     '--event-border-soft': hexToRgba(c, 0.45),
   } as CSSProperties;
+}
+
+function timeValue(value?: string | null): number {
+  if (!value) return Number.NaN;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
+function noteCalendarLinkMatchesEvent(link: NoteCalendarLink, event: CalendarExternalEvent): boolean {
+  return link.provider === event.provider
+    && link.calendar_source_id === event.source_id
+    && link.provider_event_id === event.provider_event_id
+    && timeValue(link.event_starts_at) === timeValue(event.starts_at);
 }
 
 function slotToTime(slot: number): { hour: number; minutes: number } {
@@ -515,13 +531,43 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, loading, 
 }
 
 
-function CalendarEventDetailPanel({ event, sourceColors, onClose }: {
+function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNote, onEditNote, onLinkExistingNote, onUnlinkNote, onClose }: {
   event: CalendarExternalEvent | null;
+  data: AppData;
   sourceColors: Map<string, string>;
+  canWrite: boolean;
+  onNewNote: (event: CalendarExternalEvent) => void;
+  onEditNote: (note: Note) => void;
+  onLinkExistingNote: (noteId: UUID, event: CalendarExternalEvent) => void | Promise<void>;
+  onUnlinkNote: (linkId: UUID) => void | Promise<void>;
   onClose: () => void;
 }) {
+  const [selectedNoteId, setSelectedNoteId] = useState('');
+
+  useEffect(() => {
+    setSelectedNoteId('');
+  }, [event?.id, event?.provider_event_id, event?.starts_at]);
+
   if (!event) return null;
+
   const color = sourceColors.get(event.source_id) ?? '#FFD966';
+  const linkedRows = data.noteCalendarLinks
+    .filter(link => noteCalendarLinkMatchesEvent(link, event))
+    .map(link => ({ link, note: data.notes.find(note => note.id === link.note_id) ?? null }))
+    .filter((row): row is { link: NoteCalendarLink; note: Note } => Boolean(row.note));
+  const linkedNoteIds = new Set(linkedRows.map(row => row.note.id));
+  const linkableNotes = data.notes
+    .filter(note => !linkedNoteIds.has(note.id))
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  const canAttachNotes = canWrite && event.visibility === 'organization' && !event.is_private_masked;
+  const lockedReason = event.visibility !== 'organization'
+    ? 'Notities koppelen is uitgeschakeld voor privé-agenda-items, zodat persoonlijke agenda-informatie niet per ongeluk organisatiebreed zichtbaar wordt.'
+    : event.is_private_masked
+      ? 'Dit agenda-item is afgeschermd. Koppelen is geblokkeerd totdat de details zichtbaar gedeeld zijn.'
+      : !canWrite
+        ? 'Je hebt alleen-lezen toegang tot deze organisatie.'
+        : null;
+
   return (
     <div className="event-detail-overlay" onClick={onClose}>
       <aside className="event-detail-panel" onClick={e => e.stopPropagation()} style={eventColorStyle(color)}>
@@ -560,6 +606,55 @@ function CalendarEventDetailPanel({ event, sourceColors, onClose }: {
           <div className="event-detail-empty">Geen omschrijving toegevoegd.</div>
         )}
 
+        <section className="event-notes-panel">
+          <div className="event-notes-head">
+            <div>
+              <span className="event-notes-kicker">Context</span>
+              <h4>Notities bij dit agenda-item</h4>
+              <p>{linkedRows.length} gekoppelde notitie{linkedRows.length === 1 ? '' : 's'}</p>
+            </div>
+            {canAttachNotes && <Button onClick={() => { onClose(); onNewNote(event); }}>+ Notitie</Button>}
+          </div>
+
+          {lockedReason && <div className="event-notes-locked">{lockedReason}</div>}
+
+          {linkedRows.length === 0 ? (
+            <div className="event-notes-empty">Nog geen notities gekoppeld aan deze afspraak.</div>
+          ) : (
+            <div className="event-notes-list">
+              {linkedRows.map(({ link, note }) => (
+                <article className="event-note-card" key={link.id}>
+                  <button type="button" className="event-note-main" onClick={() => { onClose(); onEditNote(note); }}>
+                    <div className="event-note-top">
+                      <span className={`note-type note-type-${note.note_type ?? 'general'}`}>{getNoteTypeLabel(note.note_type)}</span>
+                      <span>{dateNL(note.created_at)}</span>
+                    </div>
+                    <strong>{note.title}</strong>
+                    <p><RichTextExcerpt content={note.content} emptyText="Geen inhoud" /></p>
+                    {Array.isArray(note.tags) && note.tags.length > 0 && <div className="note-tags compact">{note.tags.map(tag => <span key={tag}>{tag}</span>)}</div>}
+                  </button>
+                  {canAttachNotes && <button type="button" className="event-note-unlink" onClick={() => onUnlinkNote(link.id)}>Ontkoppel</button>}
+                </article>
+              ))}
+            </div>
+          )}
+
+          {canAttachNotes && linkableNotes.length > 0 && (
+            <div className="event-note-linker">
+              <Select value={selectedNoteId} onChange={e => setSelectedNoteId(e.target.value)} aria-label="Bestaande notitie kiezen">
+                <option value="">Bestaande notitie koppelen…</option>
+                {linkableNotes.map(note => <option key={note.id} value={note.id}>{note.title} · {getNoteTypeLabel(note.note_type)}</option>)}
+              </Select>
+              <Button variant="ghost" disabled={!selectedNoteId} onClick={() => {
+                if (!selectedNoteId) return;
+                const noteId = selectedNoteId;
+                setSelectedNoteId('');
+                void onLinkExistingNote(noteId, event);
+              }}>Koppelen</Button>
+            </div>
+          )}
+        </section>
+
         <div className="event-detail-actions">
           {event.html_link && <a className="btn btn-primary" href={event.html_link} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open in agenda</a>}
           <button type="button" className="btn btn-ghost" onClick={onClose}>Sluiten</button>
@@ -571,8 +666,12 @@ function CalendarEventDetailPanel({ event, sourceColors, onClose }: {
 
 /* ── Main CalendarPage ───────────────────────────────────────────────── */
 
-export function CalendarPage({ organizationId, currentUserId, data, canWrite, onEditTask }: {
+export function CalendarPage({ organizationId, currentUserId, data, canWrite, onEditTask, onNewNoteForEvent, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
   organizationId: UUID; currentUserId: UUID | null; data: AppData; canWrite: boolean; onEditTask: (task: Task) => void;
+  onNewNoteForEvent: (event: CalendarExternalEvent) => void;
+  onEditNote: (note: Note) => void;
+  onLinkExistingNoteToEvent: (noteId: UUID, event: CalendarExternalEvent) => void | Promise<void>;
+  onUnlinkNoteFromEvent: (linkId: UUID) => void | Promise<void>;
 }) {
   const [anchor, setAnchor] = useState<Date>(() => startOfDay(new Date()));
   const [integrations, setIntegrations] = useState<CalendarIntegrationsPayload>({ connections: [], sources: [] });
@@ -903,6 +1002,6 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
     {showCreatePanel && <EventCreationPanel newEvent={newEvent} setNewEvent={setNewEvent} writeableSources={writeableSources}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => setShowCreatePanel(false)} />}
 
-    <CalendarEventDetailPanel event={selectedEvent} sourceColors={sourceColors} onClose={() => setSelectedEvent(null)} />
+    <CalendarEventDetailPanel event={selectedEvent} data={data} sourceColors={sourceColors} canWrite={canWrite} onNewNote={onNewNoteForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onClose={() => setSelectedEvent(null)} />
   </div>;
 }

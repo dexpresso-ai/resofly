@@ -11,6 +11,8 @@ import type {
   EntityType,
   Invoice,
   Note,
+  CalendarNoteLinkInput,
+  NoteCalendarLink,
   Organization,
   OrganizationContext,
   OrganizationInvitation,
@@ -21,6 +23,9 @@ import type {
   OrganizationRole,
   Project,
   Quote,
+  QuoteApprovalEvent,
+  QuoteEmailDelivery,
+  QuoteVersion,
   Task,
   Ticket,
   UUID,
@@ -249,12 +254,89 @@ export async function loadOrganizationInvitations(organizationId: UUID): Promise
 }
 
 export async function loadAppData(organizationId: UUID): Promise<AppData> {
-  const [clients, projects, tasks, tickets, notes, quotes, invoices, attachments, companySettings] = await Promise.all([
+  const [clients, projects, tasks, tickets, notes, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, attachments, companySettings] = await Promise.all([
     select<Client>('clients', organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
-    select<Note>('notes', organizationId), select<Quote>('quotes', organizationId), select<Invoice>('invoices', organizationId), select<Attachment>('attachments', organizationId),
+    select<Note>('notes', organizationId), selectNoteCalendarLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId), select<Attachment>('attachments', organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, notes, quotes, invoices, attachments, companySettings };
+  return { clients, projects, tasks, tickets, notes, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, attachments, companySettings };
+}
+
+export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
+  const { data, error } = await supabase
+    .from('quote_approval_events')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/quote_approval_events|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('quote_approval_events is nog niet beschikbaar. Voer de migratie 20260515_quote_approval_resend_flow.sql uit om offerte-timeline te activeren.', error);
+      return [];
+    }
+    throw error;
+  }
+
+  return (data ?? []) as QuoteApprovalEvent[];
+}
+
+
+export async function selectQuoteVersions(organizationId: UUID): Promise<QuoteVersion[]> {
+  const { data, error } = await supabase
+    .from('quote_versions')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('version_number', { ascending: false });
+
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/quote_versions|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('quote_versions is nog niet beschikbaar. Voer de migraties t/m 20260519_quote_versions_audit_context_hardening.sql uit om offerteversies te activeren.', error);
+      return [];
+    }
+    throw error;
+  }
+
+  return (data ?? []) as QuoteVersion[];
+}
+
+export async function selectQuoteEmailDeliveries(organizationId: UUID): Promise<QuoteEmailDelivery[]> {
+  const { data, error } = await supabase
+    .from('quote_email_deliveries')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/quote_email_deliveries|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('quote_email_deliveries is nog niet beschikbaar. Voer de migratie 20260515_quote_approval_resend_flow.sql uit om Resend e-mailstatus te activeren.', error);
+      return [];
+    }
+    throw error;
+  }
+
+  return (data ?? []) as QuoteEmailDelivery[];
+}
+
+export async function selectNoteCalendarLinks(organizationId: UUID): Promise<NoteCalendarLink[]> {
+  const { data, error } = await supabase
+    .from('note_calendar_links')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/note_calendar_links|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('note_calendar_links is nog niet beschikbaar. Voer de migratie 20260514_calendar_event_notes_complete.sql uit om agenda-notities te activeren.', error);
+      return [];
+    }
+    throw error;
+  }
+
+  return (data ?? []) as NoteCalendarLink[];
 }
 
 export async function loadCompanySettings(organizationId: UUID): Promise<CompanySettings | null> {
@@ -322,6 +404,127 @@ async function currentUserId(): Promise<UUID> {
   const userId = userData.user?.id;
   if (!userId) throw new Error('Niet ingelogd.');
   return userId;
+}
+
+
+export async function createNoteWithCalendarLink(organizationId: UUID, values: Record<string, unknown>, input: CalendarNoteLinkInput): Promise<Note> {
+  if (input.visibility_snapshot !== 'organization' || input.is_private_masked_snapshot) {
+    throw new Error('Notities koppelen is alleen toegestaan bij gedeelde agenda-items waarvan de details zichtbaar zijn.');
+  }
+
+  const cleanValues = sanitizeMutationValues(values);
+  const { data, error } = await supabase.rpc('create_note_with_calendar_link', {
+    p_organization_id: organizationId,
+    p_client_id: (cleanValues.client_id as UUID | null) ?? null,
+    p_project_id: (cleanValues.project_id as UUID | null) ?? null,
+    p_title: String(cleanValues.title ?? '').trim(),
+    p_content: String(cleanValues.content ?? ''),
+    p_note_type: String(cleanValues.note_type ?? 'general'),
+    p_tags: Array.isArray(cleanValues.tags) ? cleanValues.tags : [],
+    p_provider: input.provider,
+    p_calendar_source_id: input.calendar_source_id,
+    p_provider_calendar_id: input.provider_calendar_id ?? null,
+    p_provider_event_id: input.provider_event_id,
+    p_event_starts_at: input.event_starts_at,
+    p_event_ends_at: input.event_ends_at ?? null,
+    p_event_title_snapshot: input.event_title_snapshot ?? null,
+    p_event_location_snapshot: input.event_location_snapshot ?? null,
+    p_event_html_link: input.event_html_link ?? null,
+    p_visibility_snapshot: input.visibility_snapshot,
+    p_is_private_masked_snapshot: input.is_private_masked_snapshot,
+  });
+
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as Note;
+}
+
+export async function createNoteCalendarLink(organizationId: UUID, noteId: UUID, input: CalendarNoteLinkInput): Promise<NoteCalendarLink> {
+  if (input.visibility_snapshot !== 'organization' || input.is_private_masked_snapshot) {
+    throw new Error('Notities koppelen is alleen toegestaan bij gedeelde agenda-items waarvan de details zichtbaar zijn.');
+  }
+
+  const createdBy = await currentUserId();
+  const row = {
+    organization_id: organizationId,
+    created_by: createdBy,
+    note_id: noteId,
+    provider: input.provider,
+    calendar_source_id: input.calendar_source_id,
+    provider_calendar_id: input.provider_calendar_id ?? null,
+    provider_event_id: input.provider_event_id,
+    event_starts_at: input.event_starts_at,
+    event_ends_at: input.event_ends_at ?? null,
+    event_title_snapshot: input.event_title_snapshot ?? null,
+    event_location_snapshot: input.event_location_snapshot ?? null,
+    event_html_link: input.event_html_link ?? null,
+    visibility_snapshot: input.visibility_snapshot,
+    is_private_masked_snapshot: input.is_private_masked_snapshot,
+  };
+
+  const { data, error } = await supabase
+    .from('note_calendar_links')
+    .upsert(row, { onConflict: 'organization_id,note_id,provider,calendar_source_id,provider_event_id,event_starts_at' })
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data as NoteCalendarLink;
+}
+
+export async function deleteNoteCalendarLink(linkId: UUID, organizationId: UUID): Promise<void> {
+  const { error } = await supabase
+    .from('note_calendar_links')
+    .delete()
+    .eq('id', linkId)
+    .eq('organization_id', organizationId);
+  if (error) throw error;
+}
+
+
+export async function submitQuoteForInternalApproval(organizationId: UUID, quoteId: UUID): Promise<Quote> {
+  const { data, error } = await supabase.rpc('submit_quote_for_internal_approval', {
+    p_quote_id: quoteId,
+    p_organization_id: organizationId,
+  });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as Quote;
+}
+
+export async function approveQuoteInternal(organizationId: UUID, quoteId: UUID): Promise<Quote> {
+  const { data, error } = await supabase.rpc('approve_quote_internal', {
+    p_quote_id: quoteId,
+    p_organization_id: organizationId,
+  });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as Quote;
+}
+
+export async function rejectQuoteInternal(organizationId: UUID, quoteId: UUID, note?: string): Promise<Quote> {
+  const { data, error } = await supabase.rpc('reject_quote_internal', {
+    p_quote_id: quoteId,
+    p_organization_id: organizationId,
+    p_note: note ?? null,
+  });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as Quote;
+}
+
+export async function sendQuoteEmailViaResend(organizationId: UUID, quoteId: UUID, input: { recipientEmail?: string; recipientName?: string; subject?: string } = {}): Promise<{ publicUrl?: string; providerEmailId?: string }> {
+  const { data, error } = await supabase.functions.invoke('quote-workflow', {
+    body: {
+      action: 'sendQuoteEmail',
+      organizationId,
+      quoteId,
+      ...input,
+    },
+  });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || 'Offerte verzenden mislukt');
+  return data as { publicUrl?: string; providerEmailId?: string };
 }
 
 /**

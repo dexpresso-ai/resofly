@@ -5,6 +5,9 @@ const allowedTags = new Set([
 ]);
 const blockTags = new Set(['p', 'ul', 'ol', 'li', 'h2', 'h3', 'h4', 'blockquote', 'div']);
 const checklistClass = 'rf-task-list';
+const taskCheckboxClass = 'rf-task-checkbox';
+const taskContentClass = 'rf-task-content';
+const checkedTaskMarkers = new Set(['☑', '✅', '✔', '✓', '☒']);
 
 function canUseDom() {
   return typeof window !== 'undefined' && typeof DOMParser !== 'undefined' && typeof document !== 'undefined';
@@ -42,6 +45,77 @@ function normalizeInput(value: string | null | undefined) {
 function isSafeHref(href: string) {
   const trimmed = href.trim();
   return /^(https?:|mailto:|tel:|#)/i.test(trimmed);
+}
+
+function hasTaskListAncestor(element: Element) {
+  return Boolean(element.closest(`ul.${checklistClass}, ol.${checklistClass}`));
+}
+
+function createTaskCheckbox(targetDocument: Document, checked: boolean) {
+  const checkbox = targetDocument.createElement('span');
+  checkbox.className = taskCheckboxClass;
+  checkbox.setAttribute('contenteditable', 'false');
+  checkbox.setAttribute('role', 'checkbox');
+  checkbox.setAttribute('aria-checked', String(checked));
+  checkbox.setAttribute('tabindex', '0');
+  return checkbox;
+}
+
+function firstTextNode(root: HTMLElement, targetDocument: Document): Text | null {
+  const walker = targetDocument.createTreeWalker(root, 4);
+  return walker.nextNode() as Text | null;
+}
+
+function detectLegacyTaskMarker(text: string) {
+  const match = text.match(/^\s*(☑|✅|✔|✓|☒|☐|□)\s*/);
+  if (!match) return null;
+  return {
+    marker: match[1],
+    checked: checkedTaskMarkers.has(match[1]),
+    length: match[0].length,
+  };
+}
+
+function removeDecorativeTaskCheckboxes(cleanElement: HTMLElement) {
+  cleanElement.querySelectorAll(`.${taskCheckboxClass}`).forEach(node => node.remove());
+}
+
+function unwrapTaskContentContainers(cleanElement: HTMLElement) {
+  cleanElement.querySelectorAll(`.${taskContentClass}`).forEach(node => {
+    node.replaceWith(...Array.from(node.childNodes));
+  });
+}
+
+function normalizeTaskItem(cleanElement: HTMLElement, sourceElement: HTMLElement, targetDocument: Document) {
+  removeDecorativeTaskCheckboxes(cleanElement);
+  unwrapTaskContentContainers(cleanElement);
+
+  const sourceChecked = sourceElement.getAttribute('data-checked');
+  const sourceAriaChecked = sourceElement.getAttribute('aria-checked');
+  let checked = sourceChecked === 'true' || sourceAriaChecked === 'true';
+
+  const textNode = firstTextNode(cleanElement, targetDocument);
+  if (textNode) {
+    const legacy = detectLegacyTaskMarker(textNode.data);
+    if (legacy) {
+      checked = legacy.checked;
+      textNode.data = textNode.data.slice(legacy.length);
+    }
+  }
+
+  const content = targetDocument.createElement('span');
+  content.className = taskContentClass;
+  while (cleanElement.firstChild) {
+    content.appendChild(cleanElement.firstChild);
+  }
+  if (!content.textContent?.trim() && content.querySelector('br') === null) {
+    content.appendChild(targetDocument.createElement('br'));
+  }
+
+  cleanElement.setAttribute('data-checked', String(checked));
+  cleanElement.setAttribute('aria-checked', String(checked));
+  cleanElement.appendChild(createTaskCheckbox(targetDocument, checked));
+  cleanElement.appendChild(content);
 }
 
 export function sanitizeRichText(value: string | null | undefined): string {
@@ -86,6 +160,14 @@ export function sanitizeRichText(value: string | null | undefined): string {
       cleanElement.className = checklistClass;
     }
 
+    const isTaskCheckbox = tag === 'span' && element.classList.contains(taskCheckboxClass) && hasTaskListAncestor(element);
+    if (isTaskCheckbox) {
+      cleanElement.className = taskCheckboxClass;
+      cleanElement.setAttribute('contenteditable', 'false');
+      cleanElement.setAttribute('role', 'checkbox');
+      cleanElement.setAttribute('tabindex', '0');
+    }
+
     if (tag === 'a') {
       const href = element.getAttribute('href') ?? '';
       if (isSafeHref(href)) {
@@ -100,7 +182,17 @@ export function sanitizeRichText(value: string | null | undefined): string {
       if (cleanChild) cleanElement.appendChild(cleanChild);
     });
 
-    if (blockTags.has(tag) && !cleanElement.textContent?.trim() && cleanElement.querySelector('br') === null) {
+    if (tag === 'li' && hasTaskListAncestor(element)) {
+      normalizeTaskItem(cleanElement, element, targetDocument);
+    }
+
+    if (isTaskCheckbox) {
+      const li = element.closest('li');
+      const checked = li?.getAttribute('data-checked') === 'true' || element.getAttribute('aria-checked') === 'true';
+      cleanElement.setAttribute('aria-checked', String(checked));
+    }
+
+    if (blockTags.has(tag) && !cleanElement.textContent?.trim() && cleanElement.querySelector('br') === null && cleanElement.querySelector(`.${taskCheckboxClass}`) === null) {
       cleanElement.appendChild(targetDocument.createElement('br'));
     }
 
@@ -124,6 +216,7 @@ export function richTextToPlainText(value: string | null | undefined): string {
   }
 
   const parsed = new DOMParser().parseFromString(html, 'text/html');
+  parsed.body.querySelectorAll(`.${taskCheckboxClass}`).forEach(node => node.remove());
   return (parsed.body.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
@@ -138,6 +231,13 @@ export function RichTextViewer({ content, emptyText = 'Geen inhoud', className =
 export function RichTextExcerpt({ content, emptyText = 'Geen inhoud' }: { content?: string | null; emptyText?: string }) {
   const text = useMemo(() => richTextToPlainText(content), [content]);
   return <>{text || emptyText}</>;
+}
+
+
+function eventTargetElement(target: EventTarget | null): HTMLElement | null {
+  if (target instanceof HTMLElement) return target;
+  if (target instanceof Node) return target.parentElement;
+  return null;
 }
 
 function ToolbarButton({ children, label, disabled, onAction }: { children: React.ReactNode; label: string; disabled?: boolean; onAction: () => void }) {
@@ -203,7 +303,19 @@ export function RichTextEditor({
   const insertTaskList = () => {
     if (disabled) return;
     focusEditor();
-    document.execCommand('insertHTML', false, '<ul class="rf-task-list"><li>☐ Nieuwe taak</li></ul><p><br></p>');
+    document.execCommand('insertHTML', false, '<ul class="rf-task-list"><li data-checked="false"><span class="rf-task-checkbox" contenteditable="false" role="checkbox" aria-checked="false" tabindex="0"></span>Nieuwe taak</li></ul><p><br></p>');
+    commit();
+  };
+
+  const toggleTaskItem = (checkbox: HTMLElement) => {
+    if (disabled) return;
+    const li = checkbox.closest('li');
+    if (!li || !editorRef.current?.contains(li)) return;
+
+    const nextChecked = li.getAttribute('data-checked') !== 'true';
+    li.setAttribute('data-checked', String(nextChecked));
+    li.setAttribute('aria-checked', String(nextChecked));
+    li.querySelectorAll(`.${taskCheckboxClass}`).forEach(node => node.setAttribute('aria-checked', String(nextChecked)));
     commit();
   };
 
@@ -249,6 +361,19 @@ export function RichTextEditor({
         commit();
       }}
       onInput={commit}
+      onClick={(event) => {
+        const checkbox = eventTargetElement(event.target)?.closest(`.${taskCheckboxClass}`) as HTMLElement | null;
+        if (!checkbox) return;
+        event.preventDefault();
+        event.stopPropagation();
+        toggleTaskItem(checkbox);
+      }}
+      onKeyDown={(event) => {
+        const checkbox = eventTargetElement(event.target)?.closest(`.${taskCheckboxClass}`) as HTMLElement | null;
+        if (!checkbox || ![' ', 'Enter'].includes(event.key)) return;
+        event.preventDefault();
+        toggleTaskItem(checkbox);
+      }}
       onPaste={(event) => {
         if (disabled) return;
         event.preventDefault();
@@ -257,6 +382,6 @@ export function RichTextEditor({
         commit();
       }}
     />
-    <div className="rich-text-help">Ondersteunt titels, subtitels, vet, italic, bullets, genummerde lijsten, takenlijsten, quotes en links.</div>
+    <div className="rich-text-help">Ondersteunt titels, subtitels, vet, italic, bullets, genummerde lijsten, aanvinkbare takenlijsten, quotes en links.</div>
   </div>;
 }
