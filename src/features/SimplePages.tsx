@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationRole, Project } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startMollieConnect } from '../services/billingService';
-import { sendResendTestEmail } from '../services/mailService';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -104,10 +103,6 @@ export function Settings({
   const [billingMessage, setBillingMessage] = useState<string | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<string>(organizationContext.billingOverview?.plan_key ?? 'starter');
   const [lastMockPaymentId, setLastMockPaymentId] = useState<string | null>(null);
-  const [mailTestEmail, setMailTestEmail] = useState(settings?.email ?? '');
-  const [mailBusy, setMailBusy] = useState(false);
-  const [mailMessage, setMailMessage] = useState<string | null>(null);
-  const [mailError, setMailError] = useState<string | null>(null);
 
   const activeOrganization = organizationContext.activeOrganization;
   const activeMembership = organizationContext.activeMembership;
@@ -123,10 +118,7 @@ export function Settings({
   const hasAvailableLicense = seatOverview ? seatOverview.available_seats > 0 : true;
   const inviteDisabled = !canAdminOrganization || !activeOrganization || !inviteEmail.trim() || !hasAvailableLicense;
 
-  useEffect(() => {
-    setForm(settingsToForm(settings));
-    setMailTestEmail(prev => prev || settings?.email || '');
-  }, [settings]);
+  useEffect(() => { setForm(settingsToForm(settings)); }, [settings]);
   useEffect(() => {
     setBillingOverview(organizationContext.billingOverview);
     setSelectedPlan(organizationContext.billingOverview?.plan_key ?? 'starter');
@@ -329,23 +321,6 @@ export function Settings({
       setBillingError(error instanceof Error ? error.message : 'Plan wijzigen mislukt.');
     } finally {
       setBillingBusy(null);
-    }
-  }
-
-  async function sendResendTest() {
-    if (!activeOrganization || !canAdminOrganization) return;
-    setMailBusy(true);
-    setMailMessage(null);
-    setMailError(null);
-    try {
-      const result = await sendResendTestEmail(activeOrganization.id, {
-        recipientEmail: mailTestEmail,
-      });
-      setMailMessage(`Testmail verzonden naar ${result.recipientEmail}. Resend ID: ${result.providerEmailId}`);
-    } catch (error) {
-      setMailError(error instanceof Error ? error.message : 'Resend-testmail verzenden mislukt.');
-    } finally {
-      setMailBusy(false);
     }
   }
 
@@ -571,24 +546,6 @@ export function Settings({
           <Button variant="danger" disabled={!canAdminOrganization || busyInvitationId === invitation.id} onClick={() => revokeInvitation(invitation.id)}>Intrekken</Button>
         </div>)}
       </div>}
-    </section>
-
-    <section className="settings-card organization-card">
-      <div className="settings-card-head">
-        <div>
-          <h3>E-mail via Resend</h3>
-          <p className="settings-help">Resend wordt server-side gebruikt via Supabase Edge Functions. De API-key blijft dus buiten de browser. Gebruik deze test om je domein, afzender en secrets te controleren.</p>
-        </div>
-      </div>
-      {mailMessage && <div className="success">{mailMessage}</div>}
-      {mailError && <div className="error">{mailError}</div>}
-      <div className="invite-row">
-        <Input type="email" value={mailTestEmail} onChange={event => { setMailTestEmail(event.target.value); setMailMessage(null); setMailError(null); }} placeholder="test@jouwdomein.nl" />
-        <Button variant="primary" onClick={sendResendTest} disabled={!canAdminOrganization || !activeOrganization || mailBusy || !mailTestEmail.trim()}>
-          {mailBusy ? 'Verzenden…' : 'Verstuur testmail'}
-        </Button>
-      </div>
-      {!canAdminOrganization && <p className="settings-help">Alleen owners en admins kunnen een testmail verzenden.</p>}
     </section>
 
     <section className="settings-card activity-card">
