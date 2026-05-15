@@ -1,3 +1,4 @@
+import { throwFunctionError } from './functionErrors';
 import { supabase, supabaseAuth } from './supabase';
 import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
@@ -522,7 +523,7 @@ export async function sendQuoteEmailViaResend(organizationId: UUID, quoteId: UUI
       ...input,
     },
   });
-  if (error) throw error;
+  if (error) await throwFunctionError(error, 'Offerte verzenden via Resend mislukt.');
   if (!data?.ok) throw new Error(data?.error || 'Offerte verzenden mislukt');
   return data as { publicUrl?: string; providerEmailId?: string };
 }

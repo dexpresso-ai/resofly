@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB } from 'https://esm.sh/pdf-lib@1.17.1';
+import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 type QuoteLine = { id?: string; description: string; quantity: number; unit_price: number; vat?: number };
@@ -131,9 +132,8 @@ async function sendQuoteEmail(userId: string, organizationId: string, quoteId: s
   const tokenHash = await sha256Hex(token);
   const expiresAt = new Date(Date.now() + Math.max(1, QUOTE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000).toISOString();
   const publicUrl = `${QUOTE_PUBLIC_BASE_URL.replace(/\/$/, '')}/quote/${encodeURIComponent(token)}`;
-  const subject = String(body.subject || `Offerte ${quote.number} van ${company?.trade_name || company?.company_name || 'BrandCore'}`).trim();
-  const html = buildQuoteEmailHtml({ quote, client, project, company, publicUrl, recipientName, expiresAt });
-  const text = buildQuoteEmailText({ quote, client, project, company, publicUrl, recipientName, expiresAt });
+  const email = renderEmailTemplate('quote.sent', { quote, client, project, company, publicUrl, recipientName, expiresAt });
+  const subject = String(body.subject || email.subject).trim();
   const pdfAttachment = await createQuotePdfAttachment({ quote, client, project, company, publicUrl });
   validateQuotePdfAttachment(pdfAttachment);
 
@@ -165,14 +165,15 @@ async function sendQuoteEmail(userId: string, organizationId: string, quoteId: s
       to: [recipientEmail],
       reply_to: RESEND_REPLY_TO || undefined,
       subject,
-      html,
-      text,
+      html: email.html,
+      text: email.text,
       attachments: [
-        { filename: pdfAttachment.fileName, content: pdfAttachment.base64, contentType: pdfAttachment.mimeType },
+        { filename: pdfAttachment.fileName, content: pdfAttachment.base64 },
       ],
       tags: [
-        { name: 'organization_id', value: organizationId },
-        { name: 'quote_id', value: quoteId },
+        { name: 'template_key', value: email.templateKey },
+        { name: 'organization_id', value: sanitizeTagValue(organizationId) },
+        { name: 'quote_id', value: sanitizeTagValue(quoteId) },
         { name: 'quote_number', value: sanitizeTagValue(quote.number) },
       ],
     }),
@@ -193,7 +194,9 @@ async function sendQuoteEmail(userId: string, organizationId: string, quoteId: s
   }
   const finalized = await completeQuoteEmailSend(prepared.deliveryId, organizationId, userId, providerEmailId);
 
-  return { delivery: finalized.delivery, version: finalized.version, publicUrl, providerEmailId, attachment: { fileName: pdfAttachment.fileName, sizeBytes: pdfAttachment.sizeBytes, sha256: pdfAttachment.sha256 } };
+  await markQuoteEmailTemplateKey(prepared.deliveryId, organizationId, email.templateKey);
+
+  return { delivery: finalized.delivery, version: finalized.version, publicUrl, providerEmailId, templateKey: email.templateKey, attachment: { fileName: pdfAttachment.fileName, sizeBytes: pdfAttachment.sizeBytes, sha256: pdfAttachment.sha256 } };
 }
 
 async function loadQuote(organizationId: string, quoteId: string): Promise<QuoteRow> {
@@ -324,42 +327,13 @@ async function failQuoteEmailSend(deliveryId: string, organizationId: string, us
   if (error) console.warn('Quote email send failure registration failed', error.message);
 }
 
-function buildQuoteEmailHtml(input: { quote: QuoteRow; client: ClientRow; project: ProjectRow | null; company: CompanySettingsRow | null; publicUrl: string; recipientName: string; expiresAt: string }): string {
-  const { quote, client, project, company, publicUrl, recipientName, expiresAt } = input;
-  const companyName = escapeHtml(company?.trade_name || company?.company_name || 'BrandCore');
-  const introName = escapeHtml(recipientName || client.contact_name || client.name || '');
-  const totalAmount = formatEuro(calculateTotal(quote.lines));
-  const expiry = new Date(expiresAt).toLocaleDateString('nl-NL');
-  return `<!doctype html><html><body style="margin:0;background:#111111;font-family:Arial,sans-serif;color:#f5f5f5;">
-  <div style="max-width:640px;margin:0 auto;padding:32px 20px;">
-    <div style="background:#1b1b1f;border:1px solid #303038;border-radius:24px;padding:28px;">
-      <p style="margin:0 0 8px;color:#b6b6c2;font-size:13px;text-transform:uppercase;letter-spacing:.08em;">${companyName}</p>
-      <h1 style="margin:0 0 16px;font-size:28px;line-height:1.15;">Offerte ${escapeHtml(quote.number)} staat klaar</h1>
-      <p style="margin:0 0 18px;color:#d8d8df;font-size:16px;line-height:1.6;">Beste ${introName || 'relatie'},<br/>Je offerte staat klaar om te bekijken en digitaal goed te keuren.</p>
-      <div style="background:#121215;border:1px solid #2a2a31;border-radius:18px;padding:18px;margin:18px 0;">
-        <p style="margin:0;color:#b6b6c2;">${project ? `Project: ${escapeHtml(project.name)}<br/>` : ''}Totaalbedrag: <strong style="color:#ffffff;">${totalAmount}</strong><br/>Geldig tot: ${escapeHtml(quote.valid_until || expiry)}</p>
-      </div>
-      <p style="margin:26px 0;"><a href="${escapeHtml(publicUrl)}" style="display:inline-block;background:#FFD966;color:#111111;text-decoration:none;font-weight:bold;padding:14px 20px;border-radius:14px;">Bekijk en keur offerte goed</a></p>
-      <p style="margin:0;color:#9b9ba7;font-size:13px;line-height:1.5;">Deze beveiligde link is geldig tot ${expiry}. Werkt de knop niet? Kopieer deze link: ${escapeHtml(publicUrl)}</p>
-    </div>
-  </div></body></html>`;
-}
-
-function buildQuoteEmailText(input: { quote: QuoteRow; client: ClientRow; project: ProjectRow | null; company: CompanySettingsRow | null; publicUrl: string; recipientName: string; expiresAt: string }): string {
-  const { quote, client, project, company, publicUrl, recipientName, expiresAt } = input;
-  const companyName = company?.trade_name || company?.company_name || 'BrandCore';
-  return [
-    `${companyName}`,
-    `Offerte ${quote.number} staat klaar`,
-    '',
-    `Beste ${recipientName || client.contact_name || client.name || 'relatie'},`,
-    'Je offerte staat klaar om te bekijken en digitaal goed te keuren.',
-    project ? `Project: ${project.name}` : '',
-    `Totaalbedrag: ${formatEuro(calculateTotal(quote.lines))}`,
-    quote.valid_until ? `Geldig tot: ${quote.valid_until}` : `Link geldig tot: ${new Date(expiresAt).toLocaleDateString('nl-NL')}`,
-    '',
-    publicUrl,
-  ].filter(Boolean).join('\n');
+async function markQuoteEmailTemplateKey(deliveryId: string, organizationId: string, templateKey: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from('quote_email_deliveries')
+    .update({ template_key: templateKey })
+    .eq('id', deliveryId)
+    .eq('organization_id', organizationId);
+  if (error) console.warn('Quote email template key registration failed', error.message);
 }
 
 
@@ -644,21 +618,10 @@ async function sha256HexBytes(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
-function calculateTotal(lines: QuoteLine[] = []): number {
-  return lines.reduce((sum, line) => {
-    const subtotal = Number(line.quantity || 0) * Number(line.unit_price || 0);
-    const vat = subtotal * (Number(line.vat || 0) / 100);
-    return sum + subtotal + vat;
-  }, 0);
-}
-
 function formatEuro(value: number): string {
   return new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' }).format(value || 0);
 }
 
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char] || char));
-}
 
 function sanitizeTagValue(value: string): string {
   return value.replace(/[^a-zA-Z0-9_\-.]/g, '_').slice(0, 256) || 'quote';

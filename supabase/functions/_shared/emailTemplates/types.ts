@@ -1,0 +1,53 @@
+export type EmailTemplateKey = 'test.resend' | 'quote.sent';
+
+export type RenderedEmailTemplate = {
+  templateKey: EmailTemplateKey;
+  subject: string;
+  html: string;
+  text: string;
+};
+
+export type TestResendEmailInput = {
+  organizationName: string;
+  recipientName?: string | null;
+};
+
+export type QuoteEmailLine = {
+  description?: string | null;
+  quantity?: number | null;
+  unit_price?: number | null;
+  vat?: number | null;
+};
+
+export type QuoteSentEmailInput = {
+  quote: {
+    number: string;
+    valid_until?: string | null;
+    lines?: QuoteEmailLine[] | null;
+  };
+  client: {
+    name: string;
+    contact_name?: string | null;
+    email?: string | null;
+  };
+  project?: {
+    name: string;
+    description?: string | null;
+  } | null;
+  company?: {
+    company_name?: string | null;
+    trade_name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    website?: string | null;
+    invoice_accent_color?: string | null;
+  } | null;
+  publicUrl: string;
+  recipientName?: string | null;
+  expiresAt: string;
+};
+
+export type EmailTemplateInputMap = {
+  'test.resend': TestResendEmailInput;
+  'quote.sent': QuoteSentEmailInput;
+};

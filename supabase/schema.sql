@@ -2951,6 +2951,7 @@ create table if not exists public.quote_email_deliveries (
   quote_id uuid not null references public.quotes(id) on delete cascade,
   provider text not null default 'resend',
   provider_email_id text,
+  template_key text not null default 'quote.sent',
   recipient_email text not null,
   recipient_name text,
   subject text not null,
@@ -2989,6 +2990,7 @@ create index if not exists idx_quotes_public_token_hash on public.quotes(public_
 create index if not exists idx_quote_approval_events_quote on public.quote_approval_events(organization_id, quote_id, created_at desc);
 create index if not exists idx_quote_email_deliveries_quote on public.quote_email_deliveries(organization_id, quote_id, created_at desc);
 create index if not exists idx_quote_email_deliveries_provider_email on public.quote_email_deliveries(provider, provider_email_id) where provider_email_id is not null;
+create index if not exists idx_quote_email_deliveries_template on public.quote_email_deliveries(organization_id, template_key, created_at desc);
 create index if not exists idx_quote_email_events_provider_email on public.quote_email_events(provider, provider_email_id, occurred_at desc);
 
 alter table public.quote_approval_events enable row level security;

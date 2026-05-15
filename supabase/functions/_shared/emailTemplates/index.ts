@@ -1,0 +1,18 @@
+import { renderQuoteSentEmail } from './quoteSent.ts';
+import { renderResendTestEmail } from './testResend.ts';
+import type { EmailTemplateInputMap, EmailTemplateKey, RenderedEmailTemplate } from './types.ts';
+
+export type { EmailTemplateInputMap, EmailTemplateKey, RenderedEmailTemplate } from './types.ts';
+
+export function renderEmailTemplate<K extends EmailTemplateKey>(templateKey: K, data: EmailTemplateInputMap[K]): RenderedEmailTemplate {
+  switch (templateKey) {
+    case 'test.resend':
+      return renderResendTestEmail(data as EmailTemplateInputMap['test.resend']);
+    case 'quote.sent':
+      return renderQuoteSentEmail(data as EmailTemplateInputMap['quote.sent']);
+    default: {
+      const exhaustiveCheck: never = templateKey;
+      throw new Error(`Unknown email template: ${exhaustiveCheck}`);
+    }
+  }
+}
