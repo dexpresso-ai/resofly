@@ -247,9 +247,16 @@ function sanitizeReturnTo(raw: string): string {
   const fallback = ALLOWED_RETURN_ORIGINS[0] || 'http://localhost:5173';
   const candidate = raw || fallback;
   const url = new URL(candidate);
-  if (ALLOWED_RETURN_ORIGINS.length > 0 && !ALLOWED_RETURN_ORIGINS.includes(url.origin)) {
+
+  const isConfiguredOrigin = ALLOWED_RETURN_ORIGINS.includes(url.origin);
+  const isResoflyCloudflarePreview =
+    url.protocol === 'https:' &&
+    (url.hostname === 'resofly.pages.dev' || url.hostname.endsWith('.resofly.pages.dev'));
+
+  if (ALLOWED_RETURN_ORIGINS.length > 0 && !isConfiguredOrigin && !isResoflyCloudflarePreview) {
     throw new Error(`Return URL origin niet toegestaan: ${url.origin}`);
   }
+
   return url.toString();
 }
 

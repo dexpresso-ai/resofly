@@ -7,7 +7,7 @@ Deze codebase gebruikt Resend server-side via Supabase Edge Functions. De browse
 - `supabase/functions/mail/index.ts` — generieke mailfunctie met een veilige testmail voor owners/admins.
 - `src/services/mailService.ts` — frontend service die de `mail` Edge Function aanroept.
 - Instellingenpagina — nieuwe kaart **E-mail via Resend** met knop **Verstuur testmail**.
-- `supabase/functions/quote-workflow/index.ts` — offerte-mails via Resend, inclusief publieke offertelink en PDF-bijlage.
+- `supabase/functions/quote-workflow/index.ts` — offerte-mails via Resend, inclusief publieke offertelink en PDF-bijlage, waarbij de mailinhoud uit de centrale template-registry komt.
 - `supabase/functions/resend-webhook/index.ts` — webhookverwerking voor delivery/open/click/bounce/fail-statussen.
 
 ## 1. Resend-domein instellen
@@ -155,4 +155,4 @@ Daarna gaat naar Resend:
 }
 ```
 
-Nieuwe mailflows moeten dus niet zelf losse HTML-snippets bouwen. Voeg een nieuw templatebestand toe, registreer de key in `types.ts` en koppel hem in `index.ts`.
+Nieuwe mailflows moeten dus niet zelf losse HTML-snippets bouwen. Voeg een nieuw templatebestand toe, registreer de key in `types.ts` en koppel hem in `index.ts`. Resend tags mogen alleen veilige ASCII-waarden bevatten; gebruik daarom altijd de bestaande `sanitizeTagValue` helper voordat je template keys of nummers als tag value meestuurt.

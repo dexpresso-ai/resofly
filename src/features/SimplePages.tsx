@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationRole, Project } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startMollieConnect } from '../services/billingService';
+import { sendResendTestEmail } from '../services/mailService';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -103,6 +104,11 @@ export function Settings({
   const [billingMessage, setBillingMessage] = useState<string | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<string>(organizationContext.billingOverview?.plan_key ?? 'starter');
   const [lastMockPaymentId, setLastMockPaymentId] = useState<string | null>(null);
+  const [resendTestEmail, setResendTestEmail] = useState(settings?.email ?? '');
+  const [resendTestName, setResendTestName] = useState(settings?.trade_name || settings?.company_name || '');
+  const [resendBusy, setResendBusy] = useState(false);
+  const [resendError, setResendError] = useState<string | null>(null);
+  const [resendMessage, setResendMessage] = useState<string | null>(null);
 
   const activeOrganization = organizationContext.activeOrganization;
   const activeMembership = organizationContext.activeMembership;
@@ -118,7 +124,11 @@ export function Settings({
   const hasAvailableLicense = seatOverview ? seatOverview.available_seats > 0 : true;
   const inviteDisabled = !canAdminOrganization || !activeOrganization || !inviteEmail.trim() || !hasAvailableLicense;
 
-  useEffect(() => { setForm(settingsToForm(settings)); }, [settings]);
+  useEffect(() => {
+    setForm(settingsToForm(settings));
+    setResendTestEmail(settings?.email ?? '');
+    setResendTestName(settings?.trade_name || settings?.company_name || '');
+  }, [settings]);
   useEffect(() => {
     setBillingOverview(organizationContext.billingOverview);
     setSelectedPlan(organizationContext.billingOverview?.plan_key ?? 'starter');
@@ -297,6 +307,24 @@ export function Settings({
       setBillingError(error instanceof Error ? error.message : 'Mockbetaling verwerken mislukt.');
     } finally {
       setBillingBusy(null);
+    }
+  }
+
+  async function sendTestMail() {
+    if (!activeOrganization || !canAdminOrganization) return;
+    setResendBusy(true);
+    setResendError(null);
+    setResendMessage(null);
+    try {
+      const result = await sendResendTestEmail(activeOrganization.id, {
+        recipientEmail: resendTestEmail,
+        recipientName: resendTestName,
+      });
+      setResendMessage(`Testmail verzonden naar ${result.recipientEmail}. Resend-id: ${result.providerEmailId || 'onbekend'}.`);
+    } catch (error) {
+      setResendError(error instanceof Error ? error.message : 'Resend-testmail verzenden mislukt.');
+    } finally {
+      setResendBusy(false);
     }
   }
 
@@ -563,6 +591,27 @@ export function Settings({
 
     {message && <div className="success">{message}</div>}
     {templateError && <div className="error">{templateError}</div>}
+
+    <section className="settings-card organization-card">
+      <div className="settings-card-head">
+        <div>
+          <h3>E-mail via Resend</h3>
+          <p className="settings-help">Verstuur een server-side testmail met dezelfde centrale template-registry als de offerteflow. De API-key blijft in Supabase Edge Function secrets.</p>
+        </div>
+        <Button variant="primary" onClick={sendTestMail} disabled={!canAdminOrganization || resendBusy || !resendTestEmail.trim()}>{resendBusy ? 'Versturen…' : 'Verstuur testmail'}</Button>
+      </div>
+      {resendMessage && <div className="success">{resendMessage}</div>}
+      {resendError && <div className="error">{resendError}</div>}
+      <div className="settings-grid compact">
+        <label>Testmail naar
+          <Input type="email" value={resendTestEmail} onChange={event => { setResendTestEmail(event.target.value); setResendError(null); setResendMessage(null); }} placeholder="jij@bedrijf.nl" />
+        </label>
+        <label>Naam/contactpersoon
+          <Input value={resendTestName} onChange={event => { setResendTestName(event.target.value); setResendError(null); setResendMessage(null); }} placeholder="Naam voor aanhef" />
+        </label>
+      </div>
+      {!canAdminOrganization && <p className="settings-help">Alleen owners en admins kunnen testmails verzenden.</p>}
+    </section>
 
     <section className="settings-card">
       <h3>Bedrijfsgegevens op factuur</h3>
