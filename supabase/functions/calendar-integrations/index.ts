@@ -547,7 +547,19 @@ async function listEvents(organizationId: string, requesterUserId: string, start
       await supabaseAdmin.from('calendar_connections').update({ status: 'error', last_error: err instanceof Error ? err.message : 'Event sync mislukt' }).eq('id', source.connection_id);
     }
   }
-  return events.sort((a, b) => String(a.starts_at).localeCompare(String(b.starts_at)));
+  return dedupeCalendarEvents(events).sort((a, b) => String(a.starts_at).localeCompare(String(b.starts_at)));
+}
+
+function dedupeCalendarEvents(events: Record<string, unknown>[]): Record<string, unknown>[] {
+  const seen = new Set<string>();
+  const deduped: Record<string, unknown>[] = [];
+  for (const event of events) {
+    const key = [event.provider, event.source_id, event.provider_event_id, event.starts_at].map(value => String(value || '')).join('|');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(event);
+  }
+  return deduped;
 }
 
 function maskPrivateEventForRequester(event: Record<string, unknown>, source: CalendarSourceRow, requesterUserId: string) {
@@ -571,6 +583,7 @@ async function fetchGoogleEvents(accessToken: string, source: CalendarSourceRow,
     const startObj = (item.start ?? {}) as Record<string, string>;
     const endObj = (item.end ?? {}) as Record<string, string>;
     const allDay = Boolean(startObj.date && !startObj.dateTime);
+    const allDayRange = allDay ? normalizeAllDayEventRange(startObj.date, endObj.date) : null;
     return {
       id: `${source.id}:${String(item.id)}`,
       provider: 'google' as Provider,
@@ -580,8 +593,8 @@ async function fetchGoogleEvents(accessToken: string, source: CalendarSourceRow,
       title: String(item.summary || '(Geen titel)'),
       description: item.description ? String(item.description) : null,
       location: item.location ? String(item.location) : null,
-      starts_at: allDay ? `${startObj.date}T00:00:00.000Z` : String(startObj.dateTime),
-      ends_at: allDay ? `${endObj.date}T00:00:00.000Z` : String(endObj.dateTime),
+      starts_at: allDayRange ? allDayRange.starts_at : String(startObj.dateTime),
+      ends_at: allDayRange ? allDayRange.ends_at : String(endObj.dateTime),
       all_day: allDay,
       html_link: item.htmlLink ? String(item.htmlLink) : null,
       visibility: source.visibility,
@@ -601,6 +614,8 @@ async function fetchMicrosoftEvents(accessToken: string, source: CalendarSourceR
     const startObj = (item.start ?? {}) as Record<string, string>;
     const endObj = (item.end ?? {}) as Record<string, string>;
     const location = (item.location ?? {}) as Record<string, string>;
+    const allDay = Boolean(item.isAllDay);
+    const allDayRange = allDay ? normalizeAllDayEventRange(startObj.dateTime, endObj.dateTime) : null;
     return {
       id: `${source.id}:${String(item.id)}`,
       provider: 'microsoft' as Provider,
@@ -610,9 +625,9 @@ async function fetchMicrosoftEvents(accessToken: string, source: CalendarSourceR
       title: String(item.subject || '(Geen titel)'),
       description: item.bodyPreview ? String(item.bodyPreview) : null,
       location: location.displayName ? String(location.displayName) : null,
-      starts_at: normalizeMicrosoftDateTime(startObj.dateTime),
-      ends_at: normalizeMicrosoftDateTime(endObj.dateTime),
-      all_day: Boolean(item.isAllDay),
+      starts_at: allDayRange ? allDayRange.starts_at : normalizeMicrosoftDateTime(startObj.dateTime),
+      ends_at: allDayRange ? allDayRange.ends_at : normalizeMicrosoftDateTime(endObj.dateTime),
+      all_day: allDay,
       html_link: item.webLink ? String(item.webLink) : null,
       visibility: source.visibility,
       is_private_masked: false,
@@ -674,6 +689,22 @@ function nextDay(dateStr: string): string {
   return d.toISOString().slice(0, 10);
 }
 
+function providerDateKey(value?: string | null): string | null {
+  if (!value) return null;
+  const match = String(value).match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : null;
+}
+
+function normalizeAllDayEventRange(startValue?: string | null, endExclusiveValue?: string | null): { starts_at: string; ends_at: string } {
+  const startDate = providerDateKey(startValue) || new Date().toISOString().slice(0, 10);
+  const rawEndExclusive = providerDateKey(endExclusiveValue) || nextDay(startDate);
+  const endExclusive = rawEndExclusive <= startDate ? nextDay(startDate) : rawEndExclusive;
+  return {
+    starts_at: `${startDate}T00:00:00.000Z`,
+    ends_at: `${endExclusive}T00:00:00.000Z`,
+  };
+}
+
 async function createGoogleEvent(accessToken: string, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
   let body: Record<string, unknown>;
   if (event.allDay) {
@@ -711,6 +742,7 @@ async function createGoogleEvent(accessToken: string, source: CalendarSourceRow,
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(payload.error?.message || 'Google event aanmaken mislukt.');
   const allDay = Boolean(payload.start?.date && !payload.start?.dateTime);
+  const allDayRange = allDay ? normalizeAllDayEventRange(payload.start?.date, payload.end?.date) : null;
   return {
     id: `${source.id}:${String(payload.id)}`,
     provider: 'google' as Provider,
@@ -720,8 +752,8 @@ async function createGoogleEvent(accessToken: string, source: CalendarSourceRow,
     title: String(payload.summary || event.title),
     description: payload.description ? String(payload.description) : event.description,
     location: payload.location ? String(payload.location) : event.location,
-    starts_at: allDay ? `${payload.start.date}T00:00:00.000Z` : String(payload.start.dateTime),
-    ends_at: allDay ? `${payload.end.date}T00:00:00.000Z` : String(payload.end.dateTime),
+    starts_at: allDayRange ? allDayRange.starts_at : String(payload.start.dateTime),
+    ends_at: allDayRange ? allDayRange.ends_at : String(payload.end.dateTime),
     all_day: allDay,
     html_link: payload.htmlLink ? String(payload.htmlLink) : null,
     visibility: source.visibility,
@@ -760,6 +792,8 @@ async function createMicrosoftEvent(accessToken: string, source: CalendarSourceR
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(payload.error?.message || 'Microsoft event aanmaken mislukt.');
   const location = (payload.location ?? {}) as Record<string, string>;
+  const allDay = Boolean(payload.isAllDay);
+  const allDayRange = allDay ? normalizeAllDayEventRange(payload.start?.dateTime || event.startsAt, payload.end?.dateTime || event.endsAt) : null;
   return {
     id: `${source.id}:${String(payload.id)}`,
     provider: 'microsoft' as Provider,
@@ -769,9 +803,9 @@ async function createMicrosoftEvent(accessToken: string, source: CalendarSourceR
     title: String(payload.subject || event.title),
     description: payload.bodyPreview ? String(payload.bodyPreview) : event.description,
     location: location.displayName ? String(location.displayName) : event.location,
-    starts_at: normalizeMicrosoftDateTime(payload.start?.dateTime || event.startsAt),
-    ends_at: normalizeMicrosoftDateTime(payload.end?.dateTime || event.endsAt),
-    all_day: Boolean(payload.isAllDay),
+    starts_at: allDayRange ? allDayRange.starts_at : normalizeMicrosoftDateTime(payload.start?.dateTime || event.startsAt),
+    ends_at: allDayRange ? allDayRange.ends_at : normalizeMicrosoftDateTime(payload.end?.dateTime || event.endsAt),
+    all_day: allDay,
     html_link: payload.webLink ? String(payload.webLink) : null,
     visibility: source.visibility,
     is_private_masked: false,

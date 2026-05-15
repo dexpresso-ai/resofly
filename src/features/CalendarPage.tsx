@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties, type For
 import { CalendarDays, ChevronDown, ChevronRight, Clock, ExternalLink, LayoutList, MapPin, Plus, RefreshCcw, Unplug, X } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { RichTextExcerpt } from '../components/RichTextEditor';
-import { addDays, DAY_NAMES_NL, formatISODate, isSameDay, startOfWeek } from '../lib/dates';
+import { addDays, DAY_NAMES_NL, formatISODate, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
 import { dateNL } from '../lib/format';
 import {
   createExternalCalendarEvent,
@@ -40,12 +40,44 @@ function formatTime(value: string, allDay?: boolean): string {
   return new Intl.DateTimeFormat('nl-NL', { hour: '2-digit', minute: '2-digit' }).format(new Date(value));
 }
 
+function dateKeyFromValue(value?: string | null): string {
+  if (!value) return formatISODate(new Date());
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match) return match[1];
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? formatISODate(new Date()) : formatISODate(parsed);
+}
+
+function addDateKeyDays(dateKey: string, days: number): string {
+  return formatISODate(addDays(parseISODate(dateKey), days));
+}
+
+function formatDateKey(dateKey: string): string {
+  return new Intl.DateTimeFormat('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(parseISODate(dateKey));
+}
+
 function formatDateOnly(value: string): string {
   return new Intl.DateTimeFormat('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(value));
 }
 
+function allDayStartDateKey(event: CalendarExternalEvent): string {
+  return dateKeyFromValue(event.starts_at);
+}
+
+function allDayEndDateKeyExclusive(event: CalendarExternalEvent): string {
+  const start = allDayStartDateKey(event);
+  const end = dateKeyFromValue(event.ends_at);
+  return end <= start ? addDateKeyDays(start, 1) : end;
+}
+
 function formatEventRange(event: CalendarExternalEvent): string {
-  if (event.all_day) return `${formatDateOnly(event.starts_at)} · hele dag`;
+  if (event.all_day) {
+    const start = allDayStartDateKey(event);
+    const endExclusive = allDayEndDateKeyExclusive(event);
+    const lastVisibleDay = addDateKeyDays(endExclusive, -1);
+    if (lastVisibleDay <= start) return `${formatDateKey(start)} · hele dag`;
+    return `${formatDateKey(start)} – ${formatDateKey(lastVisibleDay)} · hele dag`;
+  }
   const sameDay = isSameDay(new Date(event.starts_at), new Date(event.ends_at));
   if (sameDay) return `${formatDateOnly(event.starts_at)} · ${formatTime(event.starts_at)} – ${formatTime(event.ends_at)}`;
   return `${formatDateOnly(event.starts_at)} ${formatTime(event.starts_at)} – ${formatDateOnly(event.ends_at)} ${formatTime(event.ends_at)}`;
@@ -93,6 +125,15 @@ function dayBounds(day: Date): { start: Date; end: Date } {
 }
 
 function eventOverlapsDay(event: CalendarExternalEvent, day: Date): boolean {
+  if (event.all_day) {
+    // Google and Microsoft both use an exclusive end date for all-day events.
+    // Keep the comparison date-only so UTC/local timezone conversion can never
+    // leak a holiday into the next day in NL time.
+    const dayKey = formatISODate(day);
+    const startKey = allDayStartDateKey(event);
+    const endKeyExclusive = allDayEndDateKeyExclusive(event);
+    return startKey <= dayKey && dayKey < endKeyExclusive;
+  }
   const { start, end } = dayBounds(day);
   const eventStart = new Date(event.starts_at);
   const eventEnd = new Date(event.ends_at);
@@ -798,9 +839,10 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
     if (!canWrite) { setError('Je hebt alleen-lezen toegang.'); return; }
     if (!newEvent.sourceId) { setError('Kies eerst een schrijfbare agenda.'); return; }
     if (!newEvent.title.trim()) { setError('Geef het event een titel.'); return; }
-    const sIso = inputDateTimeToIso(newEvent.startsAt);
-    const eIso = inputDateTimeToIso(newEvent.endsAt);
+    const sIso = newEvent.allDay ? `${newEvent.startsAt.slice(0, 10)}T00:00:00.000Z` : inputDateTimeToIso(newEvent.startsAt);
+    const eIso = newEvent.allDay ? `${newEvent.endsAt.slice(0, 10)}T00:00:00.000Z` : inputDateTimeToIso(newEvent.endsAt);
     if (!newEvent.allDay && new Date(eIso).getTime() <= new Date(sIso).getTime()) { setError('Eindtijd moet na starttijd liggen.'); return; }
+    if (newEvent.allDay && dateKeyFromValue(eIso) < dateKeyFromValue(sIso)) { setError('Einddatum mag niet voor startdatum liggen.'); return; }
     setLoading(true); setError(null); setMessage(null);
     try {
       const created = await createExternalCalendarEvent(organizationId, {
