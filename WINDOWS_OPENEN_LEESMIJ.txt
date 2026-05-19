@@ -1,0 +1,18 @@
+Windows-clean ResoFly codebase
+
+Deze zip is opnieuw ingepakt voor Windows Verkenner.
+
+Niet meegeleverd:
+- node_modules/
+- dist/
+- .env.local / .env / .dev.vars
+- Supabase .temp/
+- build caches en logbestanden
+
+Installeren:
+1. Pak deze map uit.
+2. Open PowerShell in de uitgepakte map.
+3. Run: npm install
+4. Run: npm run build
+
+Belangrijk: zet je eigen environment variables opnieuw in .env.local lokaal en in Cloudflare/Supabase secrets voor staging/productie.

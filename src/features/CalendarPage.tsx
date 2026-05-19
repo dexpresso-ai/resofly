@@ -707,7 +707,8 @@ function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNo
 
 /* ── Main CalendarPage ───────────────────────────────────────────────── */
 
-export function CalendarPage({ organizationId, currentUserId, data, canWrite, onEditTask, onNewNoteForEvent, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
+export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, data, canWrite, onEditTask, onNewNoteForEvent, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
+  mode?: 'agenda' | 'settings';
   organizationId: UUID; currentUserId: UUID | null; data: AppData; canWrite: boolean; onEditTask: (task: Task) => void;
   onNewNoteForEvent: (event: CalendarExternalEvent) => void;
   onEditNote: (note: Note) => void;
@@ -724,7 +725,7 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
   const [view, setView] = useState<CalendarView>('week');
   const [showCreatePanel, setShowCreatePanel] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<CalendarExternalEvent | null>(null);
-  const [showConnections, setShowConnections] = useState(() => window.location.hash === '#calendar-connections');
+  const [showConnections, setShowConnections] = useState(() => mode === 'settings' || window.location.hash === '#calendar-connections');
   const [newEvent, setNewEvent] = useState(() => {
     const s = new Date(); s.setMinutes(0, 0, 0); s.setHours(s.getHours() + 1);
     const e = new Date(s); e.setHours(e.getHours() + 1);
@@ -750,18 +751,19 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
     [integrations.sources],
   );
 
-  useEffect(() => { void refreshAll(); }, [organizationId]); // eslint-disable-line
-  useEffect(() => { void refreshEventsOnly(); }, [rangeStart, rangeEnd]); // eslint-disable-line
+  useEffect(() => { void refreshAll(); }, [organizationId, mode]); // eslint-disable-line
+  useEffect(() => { if (mode === 'agenda') void refreshEventsOnly(); }, [rangeStart, rangeEnd, mode]); // eslint-disable-line
+  useEffect(() => { if (mode === 'settings') setShowConnections(true); }, [mode]);
   useEffect(() => {
     const handleCalendarAnchor = (event: Event) => {
       const anchor = (event as CustomEvent<{ anchor?: string }>).detail?.anchor;
-      if (anchor === 'connections') setShowConnections(true);
+      if (anchor === 'connections' || anchor === 'settings') setShowConnections(true);
       window.setTimeout(() => document.getElementById(`calendar-${anchor ?? 'agenda'}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40);
     };
     window.addEventListener('brandcore:calendar-anchor', handleCalendarAnchor);
-    if (window.location.hash === '#calendar-connections') {
+    if (window.location.hash === '#calendar-connections' || window.location.hash === '#calendar-settings') {
       setShowConnections(true);
-      window.setTimeout(() => document.getElementById('calendar-connections')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+      window.setTimeout(() => document.getElementById(window.location.hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
     }
     return () => window.removeEventListener('brandcore:calendar-anchor', handleCalendarAnchor);
   }, []);
@@ -772,7 +774,7 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
 
   async function refreshAll() {
     setLoading(true); setError(null); setMessage(null);
-    try { const n = await loadCalendarIntegrations(organizationId); setIntegrations(n); await refreshEventsOnly(); }
+    try { const n = await loadCalendarIntegrations(organizationId); setIntegrations(n); if (mode === 'agenda') await refreshEventsOnly(); }
     catch (err) { setError(err instanceof Error ? err.message : 'Agenda-koppelingen laden mislukt.'); }
     finally { setLoading(false); }
   }
@@ -791,7 +793,7 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
   async function refreshSources(connectionId: string) {
     if (!canWrite) { setError('Je hebt alleen-lezen toegang tot deze organisatie.'); return; }
     setLoading(true); setError(null); setMessage(null);
-    try { const n = await refreshCalendarSources(organizationId, connectionId); setIntegrations(n); setMessage("Agenda\u2019s opnieuw opgehaald."); await refreshEventsOnly(); }
+    try { const n = await refreshCalendarSources(organizationId, connectionId); setIntegrations(n); setMessage("Agenda\u2019s opnieuw opgehaald."); if (mode === 'agenda') await refreshEventsOnly(); }
     catch (err) { setError(err instanceof Error ? err.message : "Agenda\u2019s ophalen mislukt."); }
     finally { setLoading(false); }
   }
@@ -799,7 +801,7 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
     if (!canWrite) { setError('Je hebt alleen-lezen toegang tot deze organisatie.'); return; }
     if (!confirm('Deze persoonlijke agenda-koppeling loskoppelen?')) return;
     setLoading(true); setError(null); setMessage(null);
-    try { await disconnectCalendarConnection(organizationId, connectionId); setIntegrations(await loadCalendarIntegrations(organizationId)); setMessage('Agenda-koppeling losgekoppeld.'); await refreshEventsOnly(); }
+    try { await disconnectCalendarConnection(organizationId, connectionId); setIntegrations(await loadCalendarIntegrations(organizationId)); setMessage('Agenda-koppeling losgekoppeld.'); if (mode === 'agenda') await refreshEventsOnly(); }
     catch (err) { setError(err instanceof Error ? err.message : 'Loskoppelen mislukt.'); }
     finally { setLoading(false); }
   }
@@ -814,7 +816,7 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
     try {
       const upd = await updateCalendarSource(organizationId, source.id, patch);
       setIntegrations(prev => ({ ...prev, sources: prev.sources.map(s => s.id === upd.id ? upd : s) }));
-      if (key === 'sync_enabled' || key === 'visibility') await refreshEventsOnly();
+      if (mode === 'agenda' && (key === 'sync_enabled' || key === 'visibility')) await refreshEventsOnly();
       if (key === 'visibility') setMessage(upd.visibility === 'organization' ? 'Agenda gedeeld met de organisatie.' : 'Agenda staat weer privé.');
     } catch (err) { setError(err instanceof Error ? err.message : 'Instelling bijwerken mislukt.'); }
   }
@@ -892,22 +894,94 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
   const previousLabel = view === 'day' ? 'Vorige dag' : view === 'month' ? 'Vorige maand' : 'Vorige week';
   const nextLabel = view === 'day' ? 'Volgende dag' : view === 'month' ? 'Volgende maand' : 'Volgende week';
 
-  return <div className="calendar-page">
-    {/* Hero */}
-    <div className="calendar-hero">
+  const connectionsSection = <section className="calendar-section connections-panel" id="calendar-connections">
+    <button className="calendar-section-head calendar-collapse-head" onClick={() => setShowConnections(prev => !prev)} aria-expanded={showConnections}>
       <div>
-        <h2>Agenda</h2>
-        <p>Koppel Google Calendar en Microsoft Outlook. Agenda's staan standaard privé; deel ze expliciet met de organisatie.</p>
-        {!canWrite && <p className="calendar-help">Je hebt alleen-lezen toegang.</p>}
+        <h3>Gekoppelde accounts</h3>
+        <p>{integrations.connections.length} account{integrations.connections.length === 1 ? '' : 's'} · {integrations.sources.length} agenda{integrations.sources.length === 1 ? '' : "'s"}. Tokens blijven versleuteld server-side.</p>
       </div>
-      <div className="calendar-actions">
-        <Button variant="primary" onClick={() => connect('google')} disabled={loading || !canWrite}>Google koppelen</Button>
-        <Button variant="primary" onClick={() => connect('microsoft')} disabled={loading || !canWrite}>Microsoft koppelen</Button>
-        <Button onClick={() => setShowConnections(prev => !prev)}>{showConnections ? <ChevronDown size={14} /> : <ChevronRight size={14} />} Koppelingen</Button>
-        <Button onClick={refreshAll} disabled={loading || eventsLoading}><RefreshCcw size={14} /> Ververs</Button>
-      </div>
-    </div>
+      <span className="calendar-collapse-indicator">{showConnections ? <ChevronDown size={16} /> : <ChevronRight size={16} />} {showConnections ? 'Inklappen' : 'Uitklappen'}</span>
+    </button>
+    {showConnections && (<>
+    {integrations.connections.length === 0 ? <div className="calendar-empty">Nog geen agenda gekoppeld of gedeeld.</div> : <div className="connection-list">
+      {integrations.connections.map(conn => {
+        const srcs = integrations.sources.filter(s => s.connection_id === conn.id);
+        const owns = canManageConnection(conn.user_id);
+        return <article className="connection-card" key={conn.id}>
+          <div className="connection-top">
+            <div className={`provider-badge ${providerClass(conn.provider)}`}>{providerLabel(conn.provider)}</div>
+            <div className="connection-info">
+              <strong>{owns ? (conn.display_name || conn.provider_account_email || 'Mijn account') : 'Gedeelde agenda'}</strong>
+              <span>{owns ? (conn.provider_account_email || conn.provider_account_id) : 'Accountgegevens afgeschermd'}</span>
+            </div>
+            <span className={`connection-status status-${conn.status}`}>{conn.status}</span>
+            <Button onClick={() => refreshSources(conn.id)} disabled={loading || !owns}><RefreshCcw size={14} /> Agenda's</Button>
+            <Button variant="danger" onClick={() => disconnect(conn.id)} disabled={loading || !owns}><Unplug size={14} /> Loskoppelen</Button>
+          </div>
+          <div className="source-list">
+            {srcs.map(src => {
+              const ownsSrc = canManageSource(src);
+              return <div className="source-row privacy" key={src.id}>
+                <span className="source-dot" style={{ background: src.color || '#FFD966' }} />
+                <div className="source-info">
+                  <strong>{src.name}</strong>
+                  <span>{src.is_primary ? 'Primair · ' : ''}{src.access_role || 'geen rol'}{src.timezone ? ` · ${src.timezone}` : ''}</span>
+                  <span className={`privacy-pill ${src.visibility === 'organization' ? 'shared' : 'private'}`}>{visibilityLabel(src.visibility)}{src.user_id === currentUserId ? ' · van jou' : ''}</span>
+                </div>
+                <label className="toggle-row"><input type="checkbox" checked={src.sync_enabled} disabled={!ownsSrc} onChange={() => toggleSource(src, 'sync_enabled')} /> Tonen</label>
+                <label className="toggle-row"><input type="checkbox" checked={src.visibility === 'organization'} disabled={!ownsSrc} onChange={() => toggleSource(src, 'visibility')} /> Delen</label>
+                <label className="toggle-row"><input type="checkbox" checked={src.write_enabled} disabled={!ownsSrc} onChange={() => toggleSource(src, 'write_enabled')} /> Schrijven</label>
+              </div>;
+            })}
+            {srcs.length === 0 && <div className="calendar-empty small">Klik "Agenda's" om beschikbare agenda's op te halen.</div>}
+          </div>
+        </article>;
+      })}
+    </div>}
+    </>)}
+  </section>;
 
+  if (mode === 'settings') {
+    return <div className="calendar-page calendar-settings-page">
+      <section className="calendar-hero calendar-settings-hero" id="calendar-settings">
+        <div>
+          <h2>Agenda-instellingen</h2>
+          <p>Koppel Google Calendar en Microsoft Outlook hier, los van de agendaweergave. Agenda's blijven standaard privé en worden alleen gedeeld als je dat expliciet aanzet.</p>
+          {!canWrite && <p className="calendar-help">Je hebt alleen-lezen toegang.</p>}
+        </div>
+        <div className="calendar-actions">
+          <Button variant="primary" onClick={() => connect('google')} disabled={loading || !canWrite}>Google koppelen</Button>
+          <Button variant="primary" onClick={() => connect('microsoft')} disabled={loading || !canWrite}>Microsoft koppelen</Button>
+          <Button onClick={refreshAll} disabled={loading}><RefreshCcw size={14} /> Ververs</Button>
+        </div>
+      </section>
+
+      {error && <div className="error">{error}</div>}
+      {message && <div className="success">{message}</div>}
+
+      <section className="calendar-section calendar-settings-overview">
+        <div className="calendar-settings-metric">
+          <span>Accounts</span>
+          <strong>{integrations.connections.length}</strong>
+          <small>Google en Microsoft koppelingen</small>
+        </div>
+        <div className="calendar-settings-metric">
+          <span>Agenda's</span>
+          <strong>{integrations.sources.length}</strong>
+          <small>Beschikbare bronnen binnen deze workspace</small>
+        </div>
+        <div className="calendar-settings-metric">
+          <span>Schrijfbaar</span>
+          <strong>{writeableSources.length}</strong>
+          <small>Agenda's waarop nieuwe events kunnen worden aangemaakt</small>
+        </div>
+      </section>
+
+      {connectionsSection}
+    </div>;
+  }
+
+  return <div className="calendar-page calendar-agenda-page">
     {error && <div className="error">{error}</div>}
     {message && <div className="success">{message}</div>}
 
@@ -923,7 +997,7 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
           <span className="calendar-range-label">{view === 'day' ? 'Dag' : view === 'week' ? 'Week' : view === 'month' ? 'Maand' : 'Lijst'}</span>
           <div className="calendar-range">{calendarRangeLabel}{eventsLoading ? ' · laden…' : ''}</div>
         </div>
-        <Button className="calendar-link-btn" onClick={() => setShowConnections(prev => !prev)}>{showConnections ? 'Koppelingen verbergen' : 'Koppelingen beheren'}</Button>
+        <Button className="calendar-link-btn" onClick={refreshAll} disabled={loading || eventsLoading}><RefreshCcw size={14} /> Ververs</Button>
         <div className="tb-view-tog calendar-view-tabs" aria-label="Agendaweergave">
           <button className={`tb-vbtn${view === 'day' ? ' active' : ''}`} onClick={() => changeView('day')} title="Dagweergave"><CalendarDays size={14} /><span>Dag</span></button>
           <button className={`tb-vbtn${view === 'week' ? ' active' : ''}`} onClick={() => changeView('week')} title="Weekweergave"><Clock size={14} /><span>Week</span></button>
@@ -963,54 +1037,6 @@ export function CalendarPage({ organizationId, currentUserId, data, canWrite, on
       )}
     </div>
 
-
-    {/* Connections */}
-    <section className="calendar-section connections-panel" id="calendar-connections">
-      <button className="calendar-section-head calendar-collapse-head" onClick={() => setShowConnections(prev => !prev)} aria-expanded={showConnections}>
-        <div>
-          <h3>Gekoppelde accounts</h3>
-          <p>{integrations.connections.length} account{integrations.connections.length === 1 ? '' : 's'} · {integrations.sources.length} agenda{integrations.sources.length === 1 ? '' : "'s"}. Tokens blijven versleuteld server-side.</p>
-        </div>
-        <span className="calendar-collapse-indicator">{showConnections ? <ChevronDown size={16} /> : <ChevronRight size={16} />} {showConnections ? 'Inklappen' : 'Uitklappen'}</span>
-      </button>
-      {showConnections && (<>
-      {integrations.connections.length === 0 ? <div className="calendar-empty">Nog geen agenda gekoppeld of gedeeld.</div> : <div className="connection-list">
-        {integrations.connections.map(conn => {
-          const srcs = integrations.sources.filter(s => s.connection_id === conn.id);
-          const owns = canManageConnection(conn.user_id);
-          return <article className="connection-card" key={conn.id}>
-            <div className="connection-top">
-              <div className={`provider-badge ${providerClass(conn.provider)}`}>{providerLabel(conn.provider)}</div>
-              <div className="connection-info">
-                <strong>{owns ? (conn.display_name || conn.provider_account_email || 'Mijn account') : 'Gedeelde agenda'}</strong>
-                <span>{owns ? (conn.provider_account_email || conn.provider_account_id) : 'Accountgegevens afgeschermd'}</span>
-              </div>
-              <span className={`connection-status status-${conn.status}`}>{conn.status}</span>
-              <Button onClick={() => refreshSources(conn.id)} disabled={loading || !owns}><RefreshCcw size={14} /> Agenda's</Button>
-              <Button variant="danger" onClick={() => disconnect(conn.id)} disabled={loading || !owns}><Unplug size={14} /> Loskoppelen</Button>
-            </div>
-            <div className="source-list">
-              {srcs.map(src => {
-                const ownsSrc = canManageSource(src);
-                return <div className="source-row privacy" key={src.id}>
-                  <span className="source-dot" style={{ background: src.color || '#FFD966' }} />
-                  <div className="source-info">
-                    <strong>{src.name}</strong>
-                    <span>{src.is_primary ? 'Primair · ' : ''}{src.access_role || 'geen rol'}{src.timezone ? ` · ${src.timezone}` : ''}</span>
-                    <span className={`privacy-pill ${src.visibility === 'organization' ? 'shared' : 'private'}`}>{visibilityLabel(src.visibility)}{src.user_id === currentUserId ? ' · van jou' : ''}</span>
-                  </div>
-                  <label className="toggle-row"><input type="checkbox" checked={src.sync_enabled} disabled={!ownsSrc} onChange={() => toggleSource(src, 'sync_enabled')} /> Tonen</label>
-                  <label className="toggle-row"><input type="checkbox" checked={src.visibility === 'organization'} disabled={!ownsSrc} onChange={() => toggleSource(src, 'visibility')} /> Delen</label>
-                  <label className="toggle-row"><input type="checkbox" checked={src.write_enabled} disabled={!ownsSrc} onChange={() => toggleSource(src, 'write_enabled')} /> Schrijven</label>
-                </div>;
-              })}
-              {srcs.length === 0 && <div className="calendar-empty small">Klik "Agenda's" om beschikbare agenda's op te halen.</div>}
-            </div>
-          </article>;
-        })}
-      </div>}
-      </>)}
-    </section>
 
     {/* List-view sidebar form */}
     {view === 'list' && (

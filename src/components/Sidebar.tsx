@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Archive, BarChart3, Calendar, ChevronDown, ChevronRight, FileText, FolderOpen, LayoutDashboard, Receipt, Settings, StickyNote, Ticket, Users } from 'lucide-react';
 import type { Organization, OrganizationRole } from '../types';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'stats'|'notes'|'clients'|'client'|'projects'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'notes'|'clients'|'client'|'projects'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
 
 const items = [
   ['dashboard', LayoutDashboard, 'Dashboard'],
@@ -19,6 +19,7 @@ const items = [
 ] as const;
 
 const financePages: Page[] = ['quotes', 'invoices'];
+const calendarPages: Page[] = ['calendar', 'calendar-settings'];
 
 export function Sidebar({
   page,
@@ -43,12 +44,21 @@ export function Sidebar({
     if (financePages.includes(page)) setFinanceOpen(true);
   }, [page]);
 
-  function openCalendarAnchor(anchor: 'agenda' | 'connections') {
-    onPage('calendar');
-    const hash = `#calendar-${anchor}`;
+  function openCalendarSubPage(target: 'agenda' | 'connections' | 'settings') {
+    if (target === 'agenda') {
+      onPage('calendar');
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#calendar-agenda`);
+      window.setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('brandcore:calendar-anchor', { detail: { anchor: 'agenda' } }));
+      }, 80);
+      return;
+    }
+
+    onPage('calendar-settings');
+    const hash = target === 'connections' ? '#calendar-connections' : '#calendar-settings';
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${hash}`);
     window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('brandcore:calendar-anchor', { detail: { anchor } }));
+      window.dispatchEvent(new CustomEvent('brandcore:calendar-anchor', { detail: { anchor: target } }));
     }, 80);
   }
 
@@ -71,9 +81,11 @@ export function Sidebar({
     <nav className="sidebar-nav">
       <div className="nav-section"><span>Menu</span></div>
       {items.map(([key, Icon, label]) => {
+        const calendarHash = window.location.hash;
         const isProjectsActive = key === 'projects' && page === 'project';
+        const isCalendarActive = key === 'calendar' && calendarPages.includes(page);
         const isFinanceActive = key === 'finance' && financePages.includes(page);
-        const isActive = key === page || isProjectsActive || isFinanceActive;
+        const isActive = key === page || isProjectsActive || isCalendarActive || isFinanceActive;
 
         return <div className="nav-item-wrap" key={key}>
           {key === 'finance'
@@ -89,9 +101,10 @@ export function Sidebar({
               </button>
             : <button className={`nav-item ${isActive ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span></button>}
 
-          {key === 'calendar' && page === 'calendar' && <div className="nav-submenu">
-            <button type="button" onClick={() => openCalendarAnchor('agenda')}>Agendaweergave</button>
-            <button type="button" onClick={() => openCalendarAnchor('connections')}>Gekoppelde accounts</button>
+          {key === 'calendar' && calendarPages.includes(page) && <div className="nav-submenu">
+            <button type="button" className={page === 'calendar' ? 'active' : ''} onClick={() => openCalendarSubPage('agenda')}>Agendaweergave</button>
+            <button type="button" className={page === 'calendar-settings' && calendarHash === '#calendar-connections' ? 'active' : ''} onClick={() => openCalendarSubPage('connections')}>Gekoppelde accounts</button>
+            <button type="button" className={page === 'calendar-settings' && calendarHash !== '#calendar-connections' ? 'active' : ''} onClick={() => openCalendarSubPage('settings')}>Agenda-instellingen</button>
           </div>}
 
           {key === 'finance' && financeOpen && <div className="nav-submenu nav-submenu-finance">
