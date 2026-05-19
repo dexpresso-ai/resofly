@@ -205,11 +205,11 @@ function drawSectionLabel(page: PDFPage, label: string, x: number, y: number, ct
 }
 
 function companyDisplayName(company?: CompanySettings | null, opts?: PdfOptions): string {
-  return clean(company?.company_name) || clean(company?.trade_name) || opts?.brandName || 'BrandCore';
+  return clean(company?.company_name) || clean(company?.trade_name) || opts?.brandName || 'ResoFly';
 }
 
 function companyLines(company?: CompanySettings | null, opts?: PdfOptions): string[] {
-  const fallbackName = opts?.brandName ?? 'BrandCore';
+  const fallbackName = opts?.brandName ?? 'ResoFly';
   if (!company) return [fallbackName, opts?.brandTagline ?? 'Werkruimte'];
 
   const cityLine = [company.postal_code, company.city].filter(hasText).map(clean).join(' ');

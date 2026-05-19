@@ -65,9 +65,9 @@ export function Dashboard({
   return <>
     <section className="workspace-hero">
       <div>
-        <span className="eyebrow">Werkruimte</span>
-        <h1>{activeOrganization?.name ?? 'BrandCore'}</h1>
-        <p>Dagelijkse cockpit voor je organisatie: klanten, projecten, taken, tickets, offertes, facturen en teamtoegang zitten onder dezelfde tenant.</p>
+        <span className="eyebrow">ResoFly cockpit</span>
+        <h1>{activeOrganization?.name ?? 'ResoFly'}</h1>
+        <p>Direct overzicht over klanten, projecten, tickets, offertes, facturen en teamtoegang — ontworpen als één strakke flow in plaats van losse schermen.</p>
       </div>
       <div className="workspace-meta-card">
         <span>Jouw rol</span>
@@ -92,7 +92,7 @@ export function Dashboard({
       <aside className="dash-side">
         <div className="onboarding-card">
           <div className="onboarding-head">
-            <div><h3>Sprint 1 setup</h3><p>{onboardingDone}/{onboardingItems.length} stappen afgerond</p></div>
+            <div><h3>Workspace setup</h3><p>{onboardingDone}/{onboardingItems.length} stappen afgerond</p></div>
             <strong>{onboardingPct}%</strong>
           </div>
           <div className="prog-bar setup"><div className="prog-fill" style={{ width: `${onboardingPct}%` }}/></div>

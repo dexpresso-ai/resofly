@@ -59,7 +59,7 @@ export function Sidebar({
 
   return <aside className="sidebar">
     <div className="sidebar-head">
-      <div className="app-brand"><div className="brand-icon">B</div><span>BrandCore</span></div>
+      <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div>
       <div className="org-switcher">
         <label>Organisatie</label>
         <select value={activeOrganizationId ?? ''} onChange={event => onOrganization(event.target.value)}>

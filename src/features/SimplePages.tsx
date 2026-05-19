@@ -399,7 +399,7 @@ export function Settings({
     <div className="settings-head">
       <div>
         <h2>Organisatie & instellingen</h2>
-        <p>Beheer je BrandCore-werkruimte, teamrollen, audit-log en factuurgegevens vanuit één centrale tenant-instelling.</p>
+        <p>Beheer je ResoFly-werkruimte, teamrollen, audit-log en factuurgegevens vanuit één centrale tenant-instelling.</p>
       </div>
       <Button variant="primary" onClick={save} disabled={isSaving || !canAdminOrganization}>{isSaving ? 'Opslaan…' : 'Opslaan'}</Button>
       {!canAdminOrganization && <p className="settings-help">Je kunt deze instellingen bekijken, maar alleen owners en admins kunnen ze aanpassen.</p>}
@@ -645,7 +645,7 @@ export function Settings({
       {form.invoice_template_file_name ? <div className="template-meta">
         <strong>{form.invoice_template_file_name}</strong>
         <span>{form.invoice_template_kind === 'pdf' ? 'PDF-template' : 'Afbeelding-template'} · {Math.round((form.invoice_template_file_size || 0) / 1024)} KB</span>
-      </div> : <div className="template-meta muted">Nog geen template ingesteld. Zonder template gebruikt BrandCore een nette standaardfactuur.</div>}
+      </div> : <div className="template-meta muted">Nog geen template ingesteld. Zonder template gebruikt ResoFly een nette standaardfactuur.</div>}
       <div className="settings-grid compact">
         <Input value={form.invoice_template_text_color ?? '#1a1a1a'} onChange={e=>set('invoice_template_text_color', e.target.value)} placeholder="Tekstkleur, bijv. #1a1a1a" />
         <Input value={form.invoice_accent_color ?? '#FFD966'} onChange={e=>set('invoice_accent_color', e.target.value)} placeholder="Accentkleur, bijv. #FFD966" />

@@ -81,7 +81,7 @@ export function PublicQuotePage({ token }: { token: string }) {
   }
 
   const quote = payload?.quote;
-  const companyName = payload?.company?.trade_name || payload?.company?.company_name || 'BrandCore';
+  const companyName = payload?.company?.trade_name || payload?.company?.company_name || 'ResoFly';
   const totals = useMemo(() => total(quote?.lines || []), [quote?.lines]);
   const finalStatus = quote?.status === 'accepted' || quote?.status === 'rejected';
 
