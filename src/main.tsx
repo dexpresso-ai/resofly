@@ -44,7 +44,7 @@ import { exportFinancePDF } from './lib/pdf';
 import type {
   AppData, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettingsInput, EntityType, FinanceLine, Invoice, Note, OrganizationContext, OrganizationRole, Project, Quote, Task, TaskStatus, Ticket, Subtask, Comment as TaskComment,
 } from './types';
-import { uid } from './lib/format';
+import { euro, total, uid } from './lib/format';
 import './styles/globals.css';
 
 type Page = 'dashboard'|'weekplanner'|'calendar'|'stats'|'notes'|'clients'|'client'|'projects'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
@@ -545,7 +545,7 @@ function Login() {
 
 function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void }) {
   const item = 'item' in edit ? edit.item : undefined;
-  const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit));
+  const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit, data));
   const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
   const title = `${item ? 'Bewerk' : 'Nieuw'} ${edit.kind}`;
   const quoteWorkflowLocked = edit.kind === 'quote' && item ? isQuoteWorkflowLocked(item as Quote) : false;
@@ -560,7 +560,13 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
     canDelete={!effectiveReadOnly}
   /> : null;
 
-  return <Modal title={title} className={edit.kind === 'note' ? 'modal-note-editor' : ''} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{effectiveReadOnly ? 'Sluiten' : 'Annuleren'}</Button>{!effectiveReadOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!effectiveReadOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form))}>Opslaan</Button>}</>}>
+  const modalClassName = [
+    edit.kind === 'note' ? 'modal-note-editor' : '',
+    edit.kind === 'quote' || edit.kind === 'invoice' ? 'modal-finance-editor' : '',
+    edit.kind === 'quote' ? 'modal-quote-editor' : '',
+  ].filter(Boolean).join(' ');
+
+  return <Modal title={title} className={modalClassName} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{effectiveReadOnly ? 'Sluiten' : 'Annuleren'}</Button>{!effectiveReadOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!effectiveReadOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form))}>Opslaan</Button>}</>}>
     {readOnly && <div className="readonly-note">Je bekijkt dit item met alleen-lezen rechten. Wijzigen, verwijderen en uploaden zijn uitgeschakeld.</div>}
     {quoteWorkflowLocked && <div className="readonly-note">Deze offerte zit al in de goedkeuringsflow. Inhoudelijke velden zijn vergrendeld zodat een goedgekeurde of verzonden offerte niet ongemerkt kan wijzigen.</div>}
     {edit.kind === 'client' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Klantnaam"/><Input value={form.client_code} onChange={e=>set('client_code',e.target.value)} placeholder="Klantcode"/><Input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} placeholder="Contactpersoon"/><Input value={form.email} onChange={e=>set('email',e.target.value)} placeholder="Email"/><Input value={form.phone} onChange={e=>set('phone',e.target.value)} placeholder="Telefoon"/><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="active">Actief</option><option value="prospect">Prospect</option><option value="inactive">Inactief</option></Select><Input type="number" value={form.value_eur} onChange={e=>set('value_eur',Number(e.target.value))} placeholder="Waarde"/><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags, komma gescheiden"/><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Notities"/>{item && <RelatedNotes title="Klantnotities" notes={data.notes.filter(note => note.client_id === item.id || data.projects.some(project => project.client_id === item.id && project.id === note.project_id))} data={data} canWrite={canWrite} onNew={() => onNewClientNote(item as Client)} onEdit={onEditNote} emptyText="Nog geen notities bij deze klant." />}{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.client} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
@@ -697,13 +703,24 @@ function isQuoteWorkflowLocked(quote: Quote): boolean {
 function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, onUploaded, attachmentBlock }: { kind: 'quote'|'invoice'; data: AppData; organizationId: string; form: Record<string, any>; set: (k:string,v:unknown)=>void; item?: { id: string }; readOnly: boolean; onUploaded: () => void; attachmentBlock: React.ReactNode }) {
   const lines: FinanceLine[] = Array.isArray(form.lines) ? form.lines : [];
   const disabled = readOnly;
+  const isQuote = kind === 'quote';
+  const amounts = total(lines);
+  const selectedClientId = typeof form.client_id === 'string' ? form.client_id : '';
+  const projectOptions = data.projects.filter(project => {
+    if (!selectedClientId) return true;
+    return project.client_id === selectedClientId || !project.client_id || project.id === form.project_id;
+  });
+
   const updateLine = (id: string, k: keyof FinanceLine, v: string | number) => set('lines', lines.map(l => l.id === id ? { ...l, [k]: k === 'description' ? v : Number(v) } : l));
+  const addLine = () => set('lines', [...lines, { id: uid(), description: '', quantity: 1, unit_price: 0, vat: 21 }]);
+  const removeLine = (id: string) => set('lines', lines.length <= 1 ? lines : lines.filter(x => x.id !== id));
+
   const handleDownloadPdf = () => {
     const client = data.clients.find(c => c.id === form.client_id) ?? null;
     // Build a doc-shaped object from the current form so the user can preview before saving.
     const docLike = {
       id: item?.id ?? '',
-      number: form.number || (kind === 'quote' ? 'CONCEPT-OFF' : 'CONCEPT-FAC'),
+      number: form.number || createFallbackFinanceNumber(kind),
       date: form.date,
       valid_until: form.valid_until ?? null,
       due_date: form.due_date ?? null,
@@ -716,26 +733,140 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
     void exportFinancePDF(docLike, kind, client, { company: data.companySettings }).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt'));
   };
 
-  return <FormGrid>
-    <Input value={form.number} onChange={e=>set('number',e.target.value)} placeholder="Nummer" disabled={disabled}/>
-    <Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
-    <Select value={form.project_id} onChange={e=>set('project_id',e.target.value)} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
-    <Input type="date" value={form.date} onChange={e=>set('date',e.target.value)} disabled={disabled}/>
-    <Input type="date" value={kind==='quote'?form.valid_until:form.due_date} onChange={e=>set(kind==='quote'?'valid_until':'due_date',e.target.value)} disabled={disabled}/>
-    {kind === 'invoice' ? <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}>
-      <option value="draft">Concept</option>
-      <option value="sent">Verzonden</option>
-      <option value="accepted">Openstaand</option>
-      <option value="paid">Betaald</option>
-      <option value="overdue">Te laat</option>
-      <option value="cancelled">Geannuleerd</option>
-    </Select> : <div className="readonly-workflow-status"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div>}
-    <div className="lines-editor"><strong>Regels</strong>{lines.map(l=><div className="line" key={l.id}><Input value={l.description} onChange={e=>updateLine(l.id,'description',e.target.value)} placeholder="Omschrijving" disabled={disabled}/><Input type="number" value={l.quantity} onChange={e=>updateLine(l.id,'quantity',e.target.value)} disabled={disabled}/><Input type="number" value={l.unit_price} onChange={e=>updateLine(l.id,'unit_price',e.target.value)} disabled={disabled}/><Input type="number" value={l.vat} onChange={e=>updateLine(l.id,'vat',e.target.value)} disabled={disabled}/><Button onClick={()=>set('lines',lines.filter(x=>x.id!==l.id))} disabled={disabled}>×</Button></div>)}<Button onClick={()=>set('lines',[...lines,{id:uid(),description:'',quantity:1,unit_price:0,vat:21}])} disabled={disabled}>+ Regel</Button></div>
-    <Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Notities" disabled={disabled}/>
+  return <div className={`finance-editor ${isQuote ? 'quote-editor' : 'invoice-editor'}`}>
+    <section className="finance-editor-hero">
+      <div>
+        <span>{isQuote ? 'Offerte aanmaken' : 'Factuur aanmaken'}</span>
+        <h3>{form.number || createFallbackFinanceNumber(kind)}</h3>
+        <p>{isQuote ? 'Het offertenummer wordt automatisch voorgesteld en is direct zichtbaar. Je kunt het nummer nog wijzigen vóór opslaan.' : 'Het factuurnummer wordt automatisch voorgesteld en is direct zichtbaar.'}</p>
+      </div>
+      <div className="finance-editor-totals" aria-label="Totaalberekening">
+        <FinanceTotal label="Excl. btw" value={euro(amounts.subtotal)} />
+        <FinanceTotal label="BTW" value={euro(amounts.vat)} />
+        <FinanceTotal label="Totaal" value={euro(amounts.total)} strong />
+      </div>
+    </section>
+
+    <section className="finance-editor-section">
+      <div className="finance-section-head"><strong>Basisgegevens</strong><span>Klant, project en documentnummer</span></div>
+      <div className="finance-form-grid">
+        <Field label={isQuote ? 'Offertenummer' : 'Factuurnummer'} hint="Automatisch gegenereerd, maar nog handmatig aanpasbaar vóór opslaan.">
+          <Input value={form.number} onChange={e=>set('number',e.target.value)} placeholder={isQuote ? 'OFF-2026-0001' : 'FAC-2026-0001'} disabled={disabled}/>
+        </Field>
+        <Field label="Klant" hint="Koppel de offerte aan de juiste relatie.">
+          <Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}>
+            <option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+          </Select>
+        </Field>
+        <Field label="Project" hint="Optioneel, maar sterk aanbevolen voor context en rapportage.">
+          <Select value={form.project_id} onChange={e=>set('project_id',e.target.value)} disabled={disabled}>
+            <option value="">Geen project</option>{projectOptions.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </Select>
+        </Field>
+        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint="Status van de factuur.">
+          <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}>
+            <option value="draft">Concept</option>
+            <option value="sent">Verzonden</option>
+            <option value="accepted">Openstaand</option>
+            <option value="paid">Betaald</option>
+            <option value="overdue">Te laat</option>
+            <option value="cancelled">Geannuleerd</option>
+          </Select>
+        </Field>}
+      </div>
+    </section>
+
+    <section className="finance-editor-section finance-date-section">
+      <div className="finance-section-head"><strong>{isQuote ? 'Offertedatums' : 'Factuurdatums'}</strong><span>Maak publicatie- en verloopdatum expliciet zichtbaar</span></div>
+      <div className="finance-date-grid">
+        <Field label={isQuote ? 'Offertedatum' : 'Factuurdatum'} hint="De datum waarop het document wordt opgesteld.">
+          <Input type="date" value={form.date} onChange={e=>set('date',e.target.value)} disabled={disabled}/>
+        </Field>
+        <Field label={isQuote ? 'Verloopdatum' : 'Vervaldatum'} hint={isQuote ? 'Tot wanneer de offerte geldig blijft.' : 'Uiterste betaaldatum voor de factuur.'}>
+          <Input type="date" value={isQuote ? form.valid_until : form.due_date} onChange={e=>set(isQuote ? 'valid_until' : 'due_date',e.target.value)} disabled={disabled}/>
+        </Field>
+      </div>
+    </section>
+
+    <section className="finance-editor-section finance-lines-section">
+      <div className="finance-section-head finance-lines-head">
+        <div><strong>{isQuote ? 'Offerteregels' : 'Factuurregels'}</strong><span>Omschrijving, aantallen, prijs per stuk en btw staan nu duidelijk naast elkaar.</span></div>
+        <Button onClick={addLine} disabled={disabled}>+ Regel</Button>
+      </div>
+      <div className="finance-lines-table" role="table" aria-label={isQuote ? 'Offerteregels' : 'Factuurregels'}>
+        <div className="finance-line-header" role="row">
+          <span>Regelomschrijving</span>
+          <span>Aantal</span>
+          <span>Prijs ex. btw</span>
+          <span>BTW %</span>
+          <span>Regeltotaal</span>
+          <span />
+        </div>
+        {lines.map(line => {
+          const subtotal = Number(line.quantity || 0) * Number(line.unit_price || 0);
+          const vatAmount = subtotal * Number(line.vat || 0) / 100;
+          return <div className="finance-line-row" role="row" key={line.id}>
+            <Field label="Regelomschrijving" compact>
+              <Input value={line.description} onChange={e=>updateLine(line.id,'description',e.target.value)} placeholder="Bijv. Strategie, ontwerp en implementatie" disabled={disabled}/>
+            </Field>
+            <Field label="Aantal" compact>
+              <Input type="number" min="0" step="0.01" value={line.quantity} onChange={e=>updateLine(line.id,'quantity',e.target.value)} disabled={disabled}/>
+            </Field>
+            <Field label="Prijs ex. btw" compact>
+              <Input type="number" min="0" step="0.01" value={line.unit_price} onChange={e=>updateLine(line.id,'unit_price',e.target.value)} disabled={disabled}/>
+            </Field>
+            <Field label="BTW %" compact>
+              <Input type="number" min="0" step="0.01" value={line.vat} onChange={e=>updateLine(line.id,'vat',e.target.value)} disabled={disabled}/>
+            </Field>
+            <div className="finance-line-total"><span>Regeltotaal</span><strong>{euro(subtotal + vatAmount)}</strong></div>
+            <Button className="finance-line-remove" onClick={()=>removeLine(line.id)} disabled={disabled || lines.length <= 1} title="Regel verwijderen">×</Button>
+          </div>;
+        })}
+      </div>
+    </section>
+
+    <section className="finance-editor-section">
+      <div className="finance-section-head"><strong>Notities</strong><span>Interne toelichting of aanvullende voorwaarden</span></div>
+      <Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Bijv. geldigheid, voorwaarden of aanvullende afspraken" disabled={disabled}/>
+    </section>
+
     <div className="finance-actions"><Button onClick={handleDownloadPdf} disabled={!lines || lines.length === 0}>Download PDF</Button></div>
-    {!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity[kind]} id={item.id} onUploaded={onUploaded}/>}
+    {!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity[kind]} id={item.id} onUploaded={onUploaded}/>} 
     {attachmentBlock}
-  </FormGrid>;
+  </div>;
+}
+
+function Field({ label, hint, compact = false, children }: { label: string; hint?: string; compact?: boolean; children: React.ReactNode }) {
+  return <label className={`field ${compact ? 'field-compact' : ''}`}>
+    <span>{label}</span>
+    {children}
+    {hint && <small>{hint}</small>}
+  </label>;
+}
+
+function FinanceTotal({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
+  return <div className={`finance-total ${strong ? 'strong' : ''}`}>
+    <span>{label}</span>
+    <strong>{value}</strong>
+  </div>;
+}
+
+function createNextFinanceNumber(kind: 'quote' | 'invoice', data: AppData, date = new Date()): string {
+  const prefix = kind === 'quote' ? 'OFF' : 'FAC';
+  const year = date.getFullYear();
+  const documents = kind === 'quote' ? data.quotes : data.invoices;
+  const pattern = new RegExp(`^${prefix}-${year}-(\\d+)$`, 'i');
+  const highest = documents.reduce((max, document) => {
+    const match = String(document.number || '').match(pattern);
+    const parsed = match ? Number.parseInt(match[1], 10) : NaN;
+    return Number.isFinite(parsed) ? Math.max(max, parsed) : max;
+  }, 0);
+  return `${prefix}-${year}-${String(highest + 1).padStart(4, '0')}`;
+}
+
+function createFallbackFinanceNumber(kind: 'quote' | 'invoice'): string {
+  const prefix = kind === 'quote' ? 'OFF' : 'FAC';
+  return `${prefix}-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
 }
 
 function quoteFormStatusLabel(status: string, approvalStatus?: string): string {
@@ -773,7 +904,7 @@ function sanitizeTicketValues(values: Record<string, unknown>, existingTicket?: 
   return sanitized;
 }
 
-function initialForm(edit: NonNullable<EditMode>): Record<string, any> {
+function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string, any> {
   if (edit.kind === "client") {
     const item = edit.item;
     return { name: item?.name ?? "", client_code: item?.client_code ?? "", contact_name: item?.contact_name ?? "", email: item?.email ?? "", phone: item?.phone ?? "", status: item?.status ?? "active", value_eur: item?.value_eur ?? 0, tags: item?.tags?.join(", ") ?? "", notes: item?.notes ?? "", color: item?.color ?? "#FFD966" };
@@ -797,10 +928,10 @@ function initialForm(edit: NonNullable<EditMode>): Record<string, any> {
   const today = new Date().toISOString().slice(0,10);
   if (edit.kind === "quote") {
     const item = edit.item;
-    return { number: item?.number ?? "", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, valid_until: item?.valid_until ?? "", status: item?.status ?? "draft", internal_approval_status: item?.internal_approval_status ?? "draft", notes: item?.notes ?? "", lines: item?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: 21 }] };
+    return { number: item?.number ?? createNextFinanceNumber('quote', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, valid_until: item?.valid_until ?? "", status: item?.status ?? "draft", internal_approval_status: item?.internal_approval_status ?? "draft", notes: item?.notes ?? "", lines: item?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: 21 }] };
   }
   const item = edit.item;
-  return { number: item?.number ?? "", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, due_date: item?.due_date ?? "", status: item?.status ?? "draft", notes: item?.notes ?? "", lines: item?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: 21 }] };
+  return { number: item?.number ?? createNextFinanceNumber('invoice', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, due_date: item?.due_date ?? "", status: item?.status ?? "draft", notes: item?.notes ?? "", lines: item?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: 21 }] };
 }
 
 function cleanForm(kind: string, form: Record<string, any>) {
@@ -832,7 +963,7 @@ function cleanForm(kind: string, form: Record<string, any>) {
       .filter((line: FinanceLine) => line.description || line.quantity || line.unit_price);
   }
   if (kind === "quote") {
-    if (!cleaned.number) cleaned.number = `OFF-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
+    if (!cleaned.number) cleaned.number = createFallbackFinanceNumber('quote');
     delete cleaned.due_date;
     delete cleaned.quote_id;
     // Offerte-status en approvalvelden lopen via de beveiligde workflow/RPC's.
@@ -862,7 +993,7 @@ function cleanForm(kind: string, form: Record<string, any>) {
     delete cleaned.accepted_at;
   }
   if (kind === "invoice") {
-    if (!cleaned.number) cleaned.number = `FAC-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
+    if (!cleaned.number) cleaned.number = createFallbackFinanceNumber('invoice');
     delete cleaned.valid_until;
   }
   if (!["quote","invoice"].includes(kind)) {

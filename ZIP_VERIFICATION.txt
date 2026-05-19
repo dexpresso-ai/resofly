@@ -1,13 +1,7 @@
-Deze codebase is opnieuw verpakt als CLEAN build.
-
-Verificatie uitgevoerd:
-- zip-integriteit getest met unzip -t
-- dependencies niet mee verpakt: node_modules uitgesloten
-- lokale secrets niet mee verpakt: .env.local/.env/.dev.vars uitgesloten
-- Supabase tijdelijke linkbestanden uitgesloten: supabase/.temp
-- Cloudflare tijdelijke worker-state uitgesloten: .wrangler
-- production build succesvol uitgevoerd met: npm ci --ignore-scripts && npm run build
-
-Let op:
-- Voer lokaal npm install of npm ci uit voor node_modules.
-- Supabase CLI kan tijdens npm ci postinstall internet/GitHub nodig hebben; als dat blokkeert, gebruik tijdelijk npm ci --ignore-scripts voor frontend-builds.
+Clean package verification
+- node_modules excluded
+- .env, .env.local and .dev.vars excluded
+- supabase/.temp excluded
+- .wrangler excluded
+- npm ci --ignore-scripts executed on source
+- npm run build executed successfully on source
