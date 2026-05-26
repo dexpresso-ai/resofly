@@ -9,6 +9,10 @@ export type EntityType = 'client' | 'project' | 'task' | 'subtask' | 'ticket' | 
 export type QuoteApprovalStatus = 'draft' | 'pending' | 'approved' | 'rejected';
 export type QuoteWorkflowEventType = 'created' | 'updated' | 'submitted_for_internal_approval' | 'internal_approval_granted' | 'internal_approval_rejected' | 'public_token_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'client_accepted' | 'client_rejected' | 'quote_version_created' | 'quote_pdf_attached' | 'expired' | 'cancelled';
 export type QuoteEmailDeliveryStatus = 'queued' | 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'failed' | 'complained';
+export type InvoiceEmailDeliveryStatus = QuoteEmailDeliveryStatus;
+export type InvoiceWorkflowEventType = 'created_from_quote' | 'public_token_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'payment_link_created' | 'payment_open' | 'payment_paid' | 'payment_failed' | 'payment_expired' | 'invoice_version_created' | 'invoice_pdf_attached' | 'expired' | 'cancelled';
+export type InvoiceVersionReason = 'sent_to_client' | 'payment_created' | 'paid' | 'manual';
+export type InvoicePaymentStatus = 'open' | 'pending' | 'authorized' | 'paid' | 'failed' | 'expired' | 'canceled' | 'refunded' | 'charged_back';
 export type InvoiceTemplateKind = 'none' | 'pdf' | 'image';
 export type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 export type OrganizationMemberStatus = 'active' | 'disabled';
@@ -286,7 +290,126 @@ export interface QuoteEmailDelivery {
   updated_at: string;
 }
 export interface Invoice extends OrgScopedRow {
-  client_id: UUID | null; project_id: UUID | null; quote_id: UUID | null; number: string; date: string; due_date: string | null; lines: FinanceLine[]; status: FinanceStatus; notes: string | null; sent_at: string | null; paid_at: string | null; created_at: string; updated_at: string;
+  client_id: UUID | null;
+  project_id: UUID | null;
+  quote_id: UUID | null;
+  number: string;
+  date: string;
+  due_date: string | null;
+  lines: FinanceLine[];
+  status: FinanceStatus;
+  notes: string | null;
+  sent_at: string | null;
+  paid_at: string | null;
+  public_token_hash?: string | null;
+  public_token_created_at?: string | null;
+  public_token_expires_at?: string | null;
+  resend_last_email_id?: string | null;
+  last_email_delivery_status?: InvoiceEmailDeliveryStatus | null;
+  last_email_delivery_at?: string | null;
+  last_email_opened_at?: string | null;
+  last_email_clicked_at?: string | null;
+  last_email_failed_at?: string | null;
+  latest_version_id?: UUID | null;
+  sent_version_id?: UUID | null;
+  paid_version_id?: UUID | null;
+  last_pdf_file_name?: string | null;
+  last_pdf_mime_type?: string | null;
+  last_pdf_size_bytes?: number | null;
+  last_pdf_sha256?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InvoiceWorkflowEvent {
+  id: UUID;
+  organization_id: UUID;
+  invoice_id: UUID;
+  actor_user_id: UUID | null;
+  event_type: InvoiceWorkflowEventType | string;
+  title: string;
+  description: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface InvoiceEmailDelivery {
+  id: UUID;
+  organization_id: UUID;
+  invoice_id: UUID;
+  provider: 'resend' | string;
+  provider_email_id: string | null;
+  recipient_email: string;
+  recipient_name: string | null;
+  subject: string;
+  status: InvoiceEmailDeliveryStatus;
+  sent_at: string | null;
+  delivered_at: string | null;
+  opened_at: string | null;
+  clicked_at: string | null;
+  bounced_at: string | null;
+  failed_at: string | null;
+  complained_at: string | null;
+  last_event_at: string | null;
+  invoice_version_id: UUID | null;
+  attachment_file_name: string | null;
+  attachment_mime_type: string | null;
+  attachment_size_bytes: number | null;
+  attachment_sha256: string | null;
+  error_message: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InvoicePaymentRecord {
+  id: UUID;
+  organization_id: UUID;
+  invoice_id: UUID;
+  provider: 'mollie' | string;
+  provider_payment_id: string | null;
+  provider_checkout_url: string | null;
+  idempotency_key: string | null;
+  status: InvoicePaymentStatus;
+  amount_cents: number;
+  currency: string;
+  checkout_expires_at: string | null;
+  paid_at: string | null;
+  last_webhook_at: string | null;
+  error_message: string | null;
+  metadata: Record<string, unknown>;
+  created_by: UUID | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InvoiceVersion {
+  id: UUID;
+  organization_id: UUID;
+  invoice_id: UUID;
+  delivery_id: UUID | null;
+  payment_record_id: UUID | null;
+  version_number: number;
+  snapshot_reason: InvoiceVersionReason | string;
+  status_at_snapshot: FinanceStatus | string;
+  invoice_number: string;
+  client_id: UUID | null;
+  project_id: UUID | null;
+  quote_id: UUID | null;
+  invoice_date: string | null;
+  due_date: string | null;
+  notes: string | null;
+  subtotal_amount: number;
+  vat_amount: number;
+  total_amount: number;
+  invoice_version_pdf_url: string | null;
+  pdf_file_name: string | null;
+  pdf_mime_type: string | null;
+  pdf_size_bytes: number | null;
+  pdf_sha256: string | null;
+  snapshot_data: Record<string, unknown>;
+  created_by: UUID | null;
+  created_at: string;
 }
 export interface Attachment extends OrgScopedRow {
   entity_type: EntityType; entity_id: UUID; parent_task_id: UUID | null; name: string; mime_type: string; size_bytes: number; storage_key: string; public_url: string | null; created_at: string;
@@ -320,7 +443,7 @@ export interface CompanySettings extends OrgScopedRow {
 }
 export type CompanySettingsInput = Omit<CompanySettings, 'id' | 'organization_id' | 'created_by' | 'created_at' | 'updated_at'>;
 
-export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; notes: Note[]; noteCalendarLinks: NoteCalendarLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; notes: Note[]; noteCalendarLinks: NoteCalendarLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';

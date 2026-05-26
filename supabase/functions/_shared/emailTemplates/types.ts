@@ -1,4 +1,4 @@
-export type EmailTemplateKey = 'test.resend' | 'quote.sent';
+export type EmailTemplateKey = 'test.resend' | 'quote.sent' | 'invoice.sent';
 
 export type RenderedEmailTemplate = {
   templateKey: EmailTemplateKey;
@@ -17,6 +17,41 @@ export type QuoteEmailLine = {
   quantity?: number | null;
   unit_price?: number | null;
   vat?: number | null;
+};
+
+
+export type InvoiceEmailLine = QuoteEmailLine;
+
+export type InvoiceSentEmailInput = {
+  invoice: {
+    number: string;
+    due_date?: string | null;
+    lines?: InvoiceEmailLine[] | null;
+  };
+  client: {
+    name: string;
+    contact_name?: string | null;
+    email?: string | null;
+  };
+  project?: {
+    name: string;
+    description?: string | null;
+  } | null;
+  quote?: {
+    number: string;
+  } | null;
+  company?: {
+    company_name?: string | null;
+    trade_name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    website?: string | null;
+    invoice_accent_color?: string | null;
+  } | null;
+  publicUrl: string;
+  paymentUrl?: string | null;
+  recipientName?: string | null;
+  expiresAt: string;
 };
 
 export type QuoteSentEmailInput = {
@@ -50,4 +85,5 @@ export type QuoteSentEmailInput = {
 export type EmailTemplateInputMap = {
   'test.resend': TestResendEmailInput;
   'quote.sent': QuoteSentEmailInput;
+  'invoice.sent': InvoiceSentEmailInput;
 };

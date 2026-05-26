@@ -37,14 +37,19 @@ async function handleResendEvent(req: Request, payload: Record<string, unknown>)
   const providerEventId = req.headers.get('svix-id') || String(payload.id || `${providerEmailId}:${type}:${createdAt}`);
   if (!type || !providerEmailId) throw new Error('Resend webhook mist type of email id.');
 
-  const delivery = await findDelivery(providerEmailId);
-  if (!delivery) {
-    console.warn('No quote_email_delivery found for Resend email id', providerEmailId);
-    return;
-  }
-
   const eventType = normalizeEventType(type);
   const occurredAt = parseDate(createdAt) || new Date().toISOString();
+
+  const delivery = await findDelivery(providerEmailId);
+  if (!delivery) {
+    const invoiceDelivery = await findInvoiceDelivery(providerEmailId);
+    if (invoiceDelivery) {
+      await handleInvoiceDeliveryEvent(invoiceDelivery, type, eventType, occurredAt, providerEventId, providerEmailId, payload, data);
+      return;
+    }
+    console.warn('No quote_email_delivery or invoice_email_delivery found for Resend email id', providerEmailId);
+    return;
+  }
 
   const { error: eventError } = await supabaseAdmin
     .from('quote_email_events')
@@ -120,12 +125,97 @@ async function findDelivery(providerEmailId: string): Promise<any | null> {
   return data ?? null;
 }
 
+async function findInvoiceDelivery(providerEmailId: string): Promise<any | null> {
+  const { data, error } = await supabaseAdmin
+    .from('invoice_email_deliveries')
+    .select('id,organization_id,invoice_id,subject,status,sent_at,delivered_at,opened_at,clicked_at,bounced_at,failed_at,complained_at,last_event_at')
+    .eq('provider', 'resend')
+    .eq('provider_email_id', providerEmailId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    if (/invoice_email_deliveries|schema cache|does not exist|relation/i.test(`${error.message ?? ''} ${error.details ?? ''}`)) return null;
+    throw error;
+  }
+  return data ?? null;
+}
+
+async function handleInvoiceDeliveryEvent(delivery: any, rawType: string, eventType: string, occurredAt: string, providerEventId: string, providerEmailId: string, payload: Record<string, unknown>, data: Record<string, unknown>) {
+  const { error: eventError } = await supabaseAdmin
+    .from('invoice_email_events')
+    .insert({
+      organization_id: delivery.organization_id,
+      invoice_id: delivery.invoice_id,
+      delivery_id: delivery.id,
+      provider: 'resend',
+      provider_event_id: providerEventId,
+      provider_email_id: providerEmailId,
+      event_type: rawType,
+      payload,
+      occurred_at: occurredAt,
+    });
+  if (eventError && !/duplicate key/i.test(eventError.message)) throw eventError;
+  if (eventError && /duplicate key/i.test(eventError.message)) return;
+
+  const nextDeliveryStatus = strongestEmailStatus(String(delivery.status || 'queued'), eventType);
+  const deliveryPatch: Record<string, unknown> = {
+    status: nextDeliveryStatus,
+    last_event_at: maxIso(delivery.last_event_at, occurredAt),
+    updated_at: new Date().toISOString(),
+  };
+  if (eventType === 'sent') deliveryPatch.sent_at = maxIso(delivery.sent_at, occurredAt);
+  if (eventType === 'delivered') deliveryPatch.delivered_at = maxIso(delivery.delivered_at, occurredAt);
+  if (eventType === 'opened') deliveryPatch.opened_at = maxIso(delivery.opened_at, occurredAt);
+  if (eventType === 'clicked') deliveryPatch.clicked_at = maxIso(delivery.clicked_at, occurredAt);
+  if (eventType === 'bounced') deliveryPatch.bounced_at = maxIso(delivery.bounced_at, occurredAt);
+  if (eventType === 'failed') deliveryPatch.failed_at = maxIso(delivery.failed_at, occurredAt);
+  if (eventType === 'complained') deliveryPatch.complained_at = maxIso(delivery.complained_at, occurredAt);
+  if (eventType === 'failed' || eventType === 'bounced' || eventType === 'complained') deliveryPatch.error_message = String(data.reason || data.error || data.message || rawType);
+
+  const { error: deliveryError } = await supabaseAdmin
+    .from('invoice_email_deliveries')
+    .update(deliveryPatch)
+    .eq('id', delivery.id);
+  if (deliveryError) throw deliveryError;
+
+  const invoiceSummary = await loadInvoiceEmailSummary(delivery.organization_id, delivery.invoice_id);
+  const isCurrentInvoiceEmail = invoiceSummary?.resend_last_email_id === providerEmailId;
+  if (isCurrentInvoiceEmail) {
+    const nextInvoiceStatus = strongestEmailStatus(String(invoiceSummary?.last_email_delivery_status || 'queued'), eventType);
+    const invoicePatch: Record<string, unknown> = { last_email_delivery_status: nextInvoiceStatus, updated_at: new Date().toISOString() };
+    if (eventType === 'delivered') invoicePatch.last_email_delivery_at = maxIso(invoiceSummary?.last_email_delivery_at, occurredAt);
+    if (eventType === 'opened') invoicePatch.last_email_opened_at = maxIso(invoiceSummary?.last_email_opened_at, occurredAt);
+    if (eventType === 'clicked') invoicePatch.last_email_clicked_at = maxIso(invoiceSummary?.last_email_clicked_at, occurredAt);
+    if (eventType === 'failed' || eventType === 'bounced' || eventType === 'complained') invoicePatch.last_email_failed_at = maxIso(invoiceSummary?.last_email_failed_at, occurredAt);
+    const { error: invoiceError } = await supabaseAdmin
+      .from('invoices')
+      .update(invoicePatch)
+      .eq('id', delivery.invoice_id)
+      .eq('organization_id', delivery.organization_id);
+    if (invoiceError) throw invoiceError;
+  }
+
+  await insertInvoiceWorkflowEvent(delivery.organization_id, delivery.invoice_id, null, `email_${eventType}`, invoiceEventTitle(eventType), null, { providerEmailId, providerEventId });
+}
+
 async function loadQuoteEmailSummary(organizationId: string, quoteId: string): Promise<any | null> {
   const { data, error } = await supabaseAdmin
     .from('quotes')
     .select('id,resend_last_email_id,last_email_delivery_status,last_email_delivery_at,last_email_opened_at,last_email_clicked_at,last_email_failed_at')
     .eq('organization_id', organizationId)
     .eq('id', quoteId)
+    .maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
+async function loadInvoiceEmailSummary(organizationId: string, invoiceId: string): Promise<any | null> {
+  const { data, error } = await supabaseAdmin
+    .from('invoices')
+    .select('id,resend_last_email_id,last_email_delivery_status,last_email_delivery_at,last_email_opened_at,last_email_clicked_at,last_email_failed_at')
+    .eq('organization_id', organizationId)
+    .eq('id', invoiceId)
     .maybeSingle();
   if (error) throw error;
   return data ?? null;
@@ -182,6 +272,19 @@ function eventTitle(eventType: string): string {
   return labels[eventType] || `Resend event: ${eventType}`;
 }
 
+function invoiceEventTitle(eventType: string): string {
+  const labels: Record<string, string> = {
+    sent: 'Factuurmail geaccepteerd door Resend',
+    delivered: 'Factuurmail afgeleverd bij klant',
+    opened: 'Klant opende de factuurmail',
+    clicked: 'Klant klikte op de factuurlink',
+    bounced: 'Factuurmail bounced',
+    failed: 'Factuurmail verzenden mislukt',
+    complained: 'Klant markeerde factuurmail als spam',
+  };
+  return labels[eventType] || `Resend event: ${eventType}`;
+}
+
 async function insertQuoteWorkflowEvent(organizationId: string, quoteId: string, actorUserId: string | null, eventType: string, title: string, description?: string | null, metadata: Record<string, unknown> = {}) {
   const { error } = await supabaseAdmin.rpc('insert_quote_workflow_event', {
     p_organization_id: organizationId,
@@ -205,6 +308,19 @@ async function insertQuoteAuditEvent(organizationId: string, quoteId: string, ac
     p_actor_user_id: actorUserId,
   });
   if (error) console.warn('Quote audit event insert failed', error.message);
+}
+
+async function insertInvoiceWorkflowEvent(organizationId: string, invoiceId: string, actorUserId: string | null, eventType: string, title: string, description?: string | null, metadata: Record<string, unknown> = {}) {
+  const { error } = await supabaseAdmin.rpc('insert_invoice_workflow_event', {
+    p_organization_id: organizationId,
+    p_invoice_id: invoiceId,
+    p_event_type: eventType,
+    p_title: title,
+    p_description: description ?? null,
+    p_metadata: metadata,
+    p_actor_user_id: actorUserId,
+  });
+  if (error) console.warn('Invoice workflow event insert failed', error.message);
 }
 
 async function verifySvixSignature(req: Request, rawBody: string, secret: string): Promise<void> {

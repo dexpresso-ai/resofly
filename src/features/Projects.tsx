@@ -162,6 +162,7 @@ export function ProjectPage({
   onApproveQuote,
   onRejectQuote,
   onSendQuote,
+  onConvertQuoteToInvoice,
   onNewNote,
   onEditNote,
   setTaskStatus,
@@ -179,6 +180,7 @@ export function ProjectPage({
   onApproveQuote: (quote: Quote) => void;
   onRejectQuote: (quote: Quote) => void;
   onSendQuote: (quote: Quote) => void;
+  onConvertQuoteToInvoice?: (quote: Quote) => void;
   onNewNote: () => void;
   onEditNote: (note: Note) => void;
   setTaskStatus: (task: Task, status: TaskStatus) => void;
@@ -204,7 +206,7 @@ export function ProjectPage({
         {!project.archived && canWrite && <div className="quick-status">{columns.filter(c=>c.key!==task.status).map(c=><button key={c.key} onClick={(e)=>{e.stopPropagation(); setTaskStatus(task,c.key);}}>{c.label}</button>)}</div>}
       </article>)}
       </div></div>)}</section>
-    <ProjectQuotesPanel data={data} projectId={project.id} canWrite={canWrite && !project.archived} canAdmin={canAdmin && !project.archived} onNewQuote={onNewQuote} onEditQuote={onEditQuote} onSubmitApproval={onSubmitQuoteApproval} onApprove={onApproveQuote} onReject={onRejectQuote} onSend={onSendQuote} />
+    <ProjectQuotesPanel data={data} projectId={project.id} canWrite={canWrite && !project.archived} canAdmin={canAdmin && !project.archived} onNewQuote={onNewQuote} onEditQuote={onEditQuote} onSubmitApproval={onSubmitQuoteApproval} onApprove={onApproveQuote} onReject={onRejectQuote} onSend={onSendQuote} onConvertToInvoice={onConvertQuoteToInvoice} />
     <RelatedNotes title="Projectnotities" notes={projectNotes} data={data} canWrite={canWrite && !project.archived} onNew={onNewNote} onEdit={onEditNote} emptyText="Nog geen notities bij dit project." />
   </>;
 }

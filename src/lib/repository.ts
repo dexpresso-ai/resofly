@@ -10,6 +10,10 @@ import type {
   CompanySettingsInput,
   EntityType,
   Invoice,
+  InvoiceEmailDelivery,
+  InvoicePaymentRecord,
+  InvoiceVersion,
+  InvoiceWorkflowEvent,
   Note,
   CalendarNoteLinkInput,
   NoteCalendarLink,
@@ -254,12 +258,32 @@ export async function loadOrganizationInvitations(organizationId: UUID): Promise
 }
 
 export async function loadAppData(organizationId: UUID): Promise<AppData> {
-  const [clients, projects, tasks, tickets, notes, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, attachments, companySettings] = await Promise.all([
+  const [
+    clients,
+    projects,
+    tasks,
+    tickets,
+    notes,
+    noteCalendarLinks,
+    quotes,
+    quoteApprovalEvents,
+    quoteEmailDeliveries,
+    quoteVersions,
+    invoices,
+    invoiceWorkflowEvents,
+    invoiceEmailDeliveries,
+    invoicePaymentRecords,
+    invoiceVersions,
+    attachments,
+    companySettings,
+  ] = await Promise.all([
     select<Client>('clients', organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
-    select<Note>('notes', organizationId), selectNoteCalendarLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId), select<Attachment>('attachments', organizationId),
+    select<Note>('notes', organizationId), selectNoteCalendarLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
+    selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
+    select<Attachment>('attachments', organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, notes, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, attachments, companySettings };
+  return { clients, projects, tasks, tickets, notes, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, attachments, companySettings };
 }
 
 export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
@@ -318,6 +342,75 @@ export async function selectQuoteEmailDeliveries(organizationId: UUID): Promise<
   }
 
   return (data ?? []) as QuoteEmailDelivery[];
+}
+
+
+export async function selectInvoiceWorkflowEvents(organizationId: UUID): Promise<InvoiceWorkflowEvent[]> {
+  const { data, error } = await supabase
+    .from('invoice_workflow_events')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/invoice_workflow_events|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('invoice_workflow_events is nog niet beschikbaar. Voer de migratie 20260526_invoice_workflow_public_payment.sql uit.', error);
+      return [];
+    }
+    throw error;
+  }
+  return (data ?? []) as InvoiceWorkflowEvent[];
+}
+
+export async function selectInvoiceEmailDeliveries(organizationId: UUID): Promise<InvoiceEmailDelivery[]> {
+  const { data, error } = await supabase
+    .from('invoice_email_deliveries')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/invoice_email_deliveries|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('invoice_email_deliveries is nog niet beschikbaar. Voer de migratie 20260526_invoice_workflow_public_payment.sql uit.', error);
+      return [];
+    }
+    throw error;
+  }
+  return (data ?? []) as InvoiceEmailDelivery[];
+}
+
+export async function selectInvoicePaymentRecords(organizationId: UUID): Promise<InvoicePaymentRecord[]> {
+  const { data, error } = await supabase
+    .from('invoice_payment_records')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/invoice_payment_records|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('invoice_payment_records is nog niet beschikbaar. Voer de migratie 20260526_invoice_workflow_public_payment.sql uit.', error);
+      return [];
+    }
+    throw error;
+  }
+  return (data ?? []) as InvoicePaymentRecord[];
+}
+
+export async function selectInvoiceVersions(organizationId: UUID): Promise<InvoiceVersion[]> {
+  const { data, error } = await supabase
+    .from('invoice_versions')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('version_number', { ascending: false });
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/invoice_versions|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('invoice_versions is nog niet beschikbaar. Voer de migratie 20260526_invoice_workflow_public_payment.sql uit.', error);
+      return [];
+    }
+    throw error;
+  }
+  return (data ?? []) as InvoiceVersion[];
 }
 
 export async function selectNoteCalendarLinks(organizationId: UUID): Promise<NoteCalendarLink[]> {
@@ -549,6 +642,45 @@ export async function sendQuoteEmailViaResend(organizationId: UUID, quoteId: UUI
   if (error) throw error;
   if (!data?.ok) throw new Error(data?.error || 'Offerte verzenden mislukt');
   return data as { publicUrl?: string; providerEmailId?: string };
+}
+
+
+export async function convertAcceptedQuoteToInvoice(organizationId: UUID, quoteId: UUID): Promise<Invoice> {
+  const { data, error } = await supabase.rpc('convert_accepted_quote_to_invoice', {
+    p_quote_id: quoteId,
+    p_organization_id: organizationId,
+  });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as Invoice;
+}
+
+export async function sendInvoiceEmailViaResend(organizationId: UUID, invoiceId: UUID, input: { recipientEmail?: string; recipientName?: string; subject?: string } = {}): Promise<{ publicUrl?: string; providerEmailId?: string }> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: {
+      action: 'sendInvoiceEmail',
+      organizationId,
+      invoiceId,
+      ...input,
+    },
+  });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || 'Factuur verzenden mislukt');
+  return data as { publicUrl?: string; providerEmailId?: string };
+}
+
+export async function createInvoicePaymentCheckout(organizationId: UUID, invoiceId: UUID, input: { redirectUrl?: string; idempotencyKey?: string } = {}): Promise<{ checkoutUrl?: string; providerPaymentId?: string; reused?: boolean; mock?: boolean }> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: {
+      action: 'createInvoicePaymentCheckout',
+      organizationId,
+      invoiceId,
+      ...input,
+    },
+  });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || 'Betaallink aanmaken mislukt');
+  return data as { checkoutUrl?: string; providerPaymentId?: string; reused?: boolean; mock?: boolean };
 }
 
 /**

@@ -7,6 +7,7 @@ import { Modal } from './components/Modal';
 import { isSupabaseConfigured, supabase, supabaseAuth } from './lib/supabase';
 import {
   acceptOrganizationInvitation,
+  convertAcceptedQuoteToInvoice,
   convertTicketToProject,
   createClientWithServerCode,
   createNoteCalendarLink,
@@ -24,7 +25,9 @@ import {
   submitQuoteForInternalApproval,
   approveQuoteInternal,
   rejectQuoteInternal,
+  sendInvoiceEmailViaResend,
   sendQuoteEmailViaResend,
+  createInvoicePaymentCheckout,
   updateOrganizationMemberRole,
   updateRow,
   upsertCompanySettings,
@@ -38,6 +41,7 @@ import { Tickets } from './features/Tickets';
 import { Notes, RelatedNotes, noteTypeLabels } from './features/Notes';
 import { Invoices, Quotes } from './features/Finance';
 import { PublicQuotePage } from './features/PublicQuotePage';
+import { PublicInvoicePage } from './features/PublicInvoicePage';
 import { Archive, Settings, Stats } from './features/SimplePages';
 import { CalendarPage } from './features/CalendarPage';
 import { WeekPlanner } from './features/WeekPlanner';
@@ -60,7 +64,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id'>> }
   | null;
 
-const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], notes: [], noteCalendarLinks: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], attachments: [], companySettings: null };
+const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], notes: [], noteCalendarLinks: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], attachments: [], companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
@@ -93,6 +97,14 @@ function getPublicQuoteTokenFromLocation(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+function getPublicInvoiceTokenFromLocation(): string | null {
+  const url = new URL(window.location.href);
+  const queryToken = url.searchParams.get('invoice_token');
+  if (queryToken) return queryToken;
+  const match = url.pathname.match(/^\/invoice\/([^/]+)\/?$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function App() {
   const [sessionReady, setSessionReady] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
@@ -107,6 +119,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const publicQuoteToken = getPublicQuoteTokenFromLocation();
+  const publicInvoiceToken = getPublicInvoiceTokenFromLocation();
 
   // Track which user + organization we have loaded data for, so auth events do not
   // trigger duplicate refreshes for the same workspace.
@@ -242,6 +255,7 @@ function App() {
 
   if (!isSupabaseConfigured) return <div className="boot"><div className="login-card"><h1>Configuratie ontbreekt</h1><p>Vul eerst VITE_SUPABASE_URL en VITE_SUPABASE_ANON_KEY in .env.local in.</p></div></div>;
   if (publicQuoteToken) return <PublicQuotePage token={publicQuoteToken} />;
+  if (publicInvoiceToken) return <PublicInvoicePage token={publicInvoiceToken} />;
   if (!sessionReady) return <div className="boot">ResoFly laden…</div>;
   if (!loggedIn) return <Login />;
   if (!activeOrganization) return <div className="boot"><div className="login-card"><h1>Geen organisatie gevonden</h1><p>Er kon geen organisatie voor je account worden geladen.</p><Button variant="primary" onClick={createNewOrganization}>Organisatie maken</Button></div></div>;
@@ -433,6 +447,67 @@ function App() {
     }
   }
 
+
+  async function convertQuoteToInvoice(quote: Quote) {
+    if (!ensureCanWrite()) return;
+    if (quote.status !== 'accepted') {
+      setError('Alleen geaccepteerde offertes kunnen worden omgezet naar een factuur.');
+      return;
+    }
+    if (!confirm(`Factuur maken van offerte ${quote.number}? Dit gebeurt server-side en voorkomt dubbele facturen bij dubbelklikken.`)) return;
+    setLoading(true); setError(null);
+    try {
+      const invoice = await convertAcceptedQuoteToInvoice(activeOrg.id, quote.id);
+      await refresh();
+      setPage('invoices');
+      setEdit({ kind: 'invoice', item: invoice });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Offerte omzetten naar factuur mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function sendInvoice(invoice: Invoice) {
+    if (!ensureCanWrite()) return;
+    const client = data.clients.find(item => item.id === invoice.client_id);
+    const recipientEmail = prompt('Naar welk e-mailadres wil je de factuur versturen?', client?.email || '');
+    if (!recipientEmail) return;
+    const recipientName = prompt('Naam/contactpersoon voor de e-mail', client?.contact_name || client?.name || '') || undefined;
+    setLoading(true); setError(null);
+    try {
+      await sendInvoiceEmailViaResend(activeOrg.id, invoice.id, { recipientEmail, recipientName });
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Factuur verzenden via Resend mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function createInvoicePayment(invoice: Invoice) {
+    if (!ensureCanWrite()) return;
+    if (invoice.status === 'paid') {
+      setError('Deze factuur is al betaald.');
+      return;
+    }
+    setLoading(true); setError(null);
+    try {
+      const result = await createInvoicePaymentCheckout(activeOrg.id, invoice.id, {
+        redirectUrl: window.location.origin,
+        idempotencyKey: `${invoice.id}-${Date.now()}`,
+      });
+      await refresh();
+      if (result.checkoutUrl && confirm('Betaallink is aangemaakt. Wil je de link nu openen?')) {
+        window.open(result.checkoutUrl, '_blank', 'noopener,noreferrer');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Mollie-betaallink aanmaken mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function saveCompanySettings(values: CompanySettingsInput) {
     if (!ensureCanAdmin()) throw new Error('Alleen owners en admins kunnen deze organisatie-instellingen aanpassen.');
     setLoading(true); setError(null);
@@ -520,14 +595,14 @@ function App() {
 
   function renderPage() {
     if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => setPage('settings')} />;
-    if (page === 'project' && project) return <ProjectPage data={data} project={project} canWrite={canWrite} canAdmin={canAdmin} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} setTaskStatus={setTaskStatus}/>;
+    if (page === 'project' && project) return <ProjectPage data={data} project={project} canWrite={canWrite} canAdmin={canAdmin} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} setTaskStatus={setTaskStatus}/>;
     if (page === 'projects') return <ProjectsListPage data={data} canWrite={canWrite} onNewProject={() => ensureCanWrite() && setEdit({kind:'project'})} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} onEditProject={(item) => setEdit({kind:'project', item})}/>;
     if (page === 'client' && client) return <ClientDetailPage data={data} client={client} canWrite={canWrite} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onEditNote={(note) => setEdit({kind:'note', item: note})}/>;
     if (page === 'clients') return <Clients data={data} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>setEdit({kind:'ticket', item})} onConvert={convert}/>;
     if (page === 'notes') return <Notes data={data} onNew={() => ensureCanWrite() && setEdit({kind:'note'})} onEdit={(item)=>setEdit({kind:'note', item})}/>;
-    if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote}/>;
-    if (page === 'invoices') return <Invoices data={data} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})}/>;
+    if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice}/>;
+    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onCreatePayment={createInvoicePayment}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} onUpdateTaskDate={updateTaskDate} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'calendar-settings') return <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
