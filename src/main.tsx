@@ -8,6 +8,7 @@ import { isSupabaseConfigured, supabase, supabaseAuth } from './lib/supabase';
 import {
   acceptOrganizationInvitation,
   convertTicketToProject,
+  createClientWithServerCode,
   createNoteCalendarLink,
   createNoteWithCalendarLink,
   createOrganization,
@@ -18,6 +19,7 @@ import {
   inviteOrganizationMember,
   loadAppData,
   loadOrganizationContext,
+  previewNextClientCode,
   revokeOrganizationInvitation,
   submitQuoteForInternalApproval,
   approveQuoteInternal,
@@ -252,11 +254,15 @@ function App() {
     setLoading(true); setError(null);
     try {
       switch (edit.kind) {
-        case 'client':
+        case 'client': {
+          const duplicateIssue = findClientDuplicateIssue(data.clients, values, edit.item);
+          if (duplicateIssue?.blocksSave) throw new Error(duplicateIssue.message);
+
           edit.item
             ? await updateRow<Client>('clients', edit.item.id, values, activeOrg.id)
-            : await insertRow<Client>('clients', activeOrg.id, values);
+            : await createClientWithServerCode(activeOrg.id, values);
           break;
+        }
         case 'project': {
           const projectValues = {
             ...values,
@@ -548,10 +554,38 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
   const item = 'item' in edit ? edit.item : undefined;
   const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit, data));
   const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
+
+  useEffect(() => {
+    let cancelled = false;
+    if (edit.kind !== 'client' || item || readOnly || !canWrite) return;
+
+    previewNextClientCode(organizationId)
+      .then(code => {
+        if (!cancelled && code) {
+          setForm(prev => ({ ...prev, client_code: code }));
+        }
+      })
+      .catch(error => {
+        console.warn('Klantnummer-preview kon niet worden opgehaald.', error);
+      });
+
+    return () => { cancelled = true; };
+  }, [canWrite, edit.kind, item, organizationId, readOnly]);
+
   const title = `${item ? 'Bewerk' : 'Nieuw'} ${edit.kind}`;
   const quoteWorkflowLocked = edit.kind === 'quote' && item ? isQuoteWorkflowLocked(item as Quote) : false;
   const effectiveReadOnly = readOnly || quoteWorkflowLocked;
   const disabled = effectiveReadOnly;
+  const clientDuplicateIssue = useMemo(() => {
+    if (edit.kind !== 'client') return null;
+
+    // Bij een nieuwe klant is client_code slechts een server-preview.
+    // De definitieve waarde wordt atomair in Postgres/RPC toegekend, dus voorkom
+    // dat een stale preview de frontend onterecht blokkeert.
+    const duplicateValues = item ? form : { ...form, client_code: '' };
+    return findClientDuplicateIssue(data.clients, duplicateValues, item as Client | undefined);
+  }, [data.clients, edit.kind, form, item]);
+  const saveBlockedByDuplicate = Boolean(clientDuplicateIssue?.blocksSave);
 
   const attachmentBlock = item ? <AttachmentList
     attachments={data.attachments}
@@ -565,12 +599,56 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
     edit.kind === 'note' ? 'modal-note-editor' : '',
     edit.kind === 'quote' || edit.kind === 'invoice' ? 'modal-finance-editor' : '',
     edit.kind === 'quote' ? 'modal-quote-editor' : '',
+    edit.kind === 'client' ? 'modal-client-editor' : '',
   ].filter(Boolean).join(' ');
 
-  return <Modal title={title} className={modalClassName} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{effectiveReadOnly ? 'Sluiten' : 'Annuleren'}</Button>{!effectiveReadOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!effectiveReadOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form))}>Opslaan</Button>}</>}>
+  return <Modal title={title} className={modalClassName} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{effectiveReadOnly ? 'Sluiten' : 'Annuleren'}</Button>{!effectiveReadOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!effectiveReadOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form))} disabled={saveBlockedByDuplicate}>Opslaan</Button>}</>}>
     {readOnly && <div className="readonly-note">Je bekijkt dit item met alleen-lezen rechten. Wijzigen, verwijderen en uploaden zijn uitgeschakeld.</div>}
     {quoteWorkflowLocked && <div className="readonly-note">Deze offerte zit al in de goedkeuringsflow. Inhoudelijke velden zijn vergrendeld zodat een goedgekeurde of verzonden offerte niet ongemerkt kan wijzigen.</div>}
-    {edit.kind === 'client' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Klantnaam"/><Input value={form.client_code} onChange={e=>set('client_code',e.target.value)} placeholder="Klantcode"/><Input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} placeholder="Contactpersoon"/><Input value={form.email} onChange={e=>set('email',e.target.value)} placeholder="Email"/><Input value={form.phone} onChange={e=>set('phone',e.target.value)} placeholder="Telefoon"/><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="active">Actief</option><option value="prospect">Prospect</option><option value="inactive">Inactief</option></Select><Input type="number" value={form.value_eur} onChange={e=>set('value_eur',Number(e.target.value))} placeholder="Waarde"/><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags, komma gescheiden"/><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Notities"/>{item && <RelatedNotes title="Klantnotities" notes={data.notes.filter(note => note.client_id === item.id || data.projects.some(project => project.client_id === item.id && project.id === note.project_id))} data={data} canWrite={canWrite} onNew={() => onNewClientNote(item as Client)} onEdit={onEditNote} emptyText="Nog geen notities bij deze klant." />}{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.client} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'client' && <FormGrid className="client-form-grid">
+      <section className="client-form-intro">
+        <div>
+          <span>Klantdossier</span>
+          <h3>{item ? 'Klantgegevens bijwerken' : 'Nieuwe klant aanmaken'}</h3>
+          <p>Het klantnummer wordt server-side voorgesteld en definitief toegekend bij opslaan. Zo blijft de reeks veilig, ook als twee teamleden tegelijk een klant aanmaken.</p>
+        </div>
+        <strong>{form.client_code || 'Wordt automatisch gevuld'}</strong>
+      </section>
+      <Field label="Klantnaam">
+        <Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Bijv. Acme BV" disabled={disabled}/>
+      </Field>
+      <Field label="Klantnummer" hint={item ? "Bestaand klantnummer. Wijzig dit alleen bewust." : "Preview vanuit Supabase. Bij opslaan wordt het definitieve nummer atomair gereserveerd."}>
+        <Input value={form.client_code} onChange={e=>set('client_code',e.target.value)} placeholder="Wordt door de server aangemaakt" disabled={disabled || !item}/>
+      </Field>
+      <Field label="Contactpersoon">
+        <Input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} placeholder="Naam contactpersoon" disabled={disabled}/>
+      </Field>
+      <Field label="E-mail">
+        <Input value={form.email} onChange={e=>set('email',e.target.value)} placeholder="contact@bedrijf.nl" disabled={disabled}/>
+      </Field>
+      {clientDuplicateIssue && <div className={`client-duplicate-notice ${clientDuplicateIssue.severity}`}>
+        <strong>{clientDuplicateIssue.title}</strong>
+        <span>{clientDuplicateIssue.message}</span>
+      </div>}
+      <Field label="Telefoon">
+        <Input value={form.phone} onChange={e=>set('phone',e.target.value)} placeholder="Telefoonnummer" disabled={disabled}/>
+      </Field>
+      <Field label="Status">
+        <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="active">Actief</option><option value="prospect">Prospect</option><option value="inactive">Inactief</option></Select>
+      </Field>
+      <Field label="Klantwaarde" hint="Indicatieve waarde voor dashboard en klantoverzicht.">
+        <Input type="number" value={form.value_eur} onChange={e=>set('value_eur',Number(e.target.value))} placeholder="Waarde" disabled={disabled}/>
+      </Field>
+      <Field label="Tags" hint="Gebruik komma’s om meerdere tags toe te voegen.">
+        <Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="VIP, Retainer, Lead" disabled={disabled}/>
+      </Field>
+      <Field label="Notities">
+        <Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne klantnotities" disabled={disabled}/>
+      </Field>
+      {item && <RelatedNotes title="Klantnotities" notes={data.notes.filter(note => note.client_id === item.id || data.projects.some(project => project.client_id === item.id && project.id === note.project_id))} data={data} canWrite={canWrite} onNew={() => onNewClientNote(item as Client)} onEdit={onEditNote} emptyText="Nog geen notities bij deze klant." />}
+      {!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.client} id={item.id} onUploaded={onAttachmentsChanged}/>}
+      {attachmentBlock}
+    </FormGrid>}
     {edit.kind === 'project' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Projectnaam"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Omschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/><Input value={form.color} onChange={e=>set('color',e.target.value)} placeholder="#FFD966"/><label className="check-row"><input type="checkbox" checked={Boolean(form.archived)} onChange={e=>set('archived',e.target.checked)}/><span>Project archiveren</span></label>{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.project} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
     {edit.kind === 'task' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Taaktitel"/><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="todo">Te doen</option><option value="doing">Bezig</option><option value="review">Review</option><option value="done">Klaar</option></Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags"/><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/><TaskDetailEditor subtasks={form.subtasks} comments={form.comments} set={set}/>{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.task} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
     {edit.kind === 'ticket' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Ticket titel"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={Boolean((item as Ticket | undefined)?.converted_to_project_id)}><option value="new">Nieuw</option><option value="review">Review</option><option value="approved">Goedgekeurd</option><option value="rejected">Geweigerd</option>{(item as Ticket | undefined)?.converted_to_project_id && <option value="converted">Omgezet</option>}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne notities"/><small className="ticket-status-hint">Gebruik <strong>Project maken</strong> om een ticket om te zetten. <strong>Omgezet</strong> is geen handmatige status.</small>{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.ticket} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
@@ -579,7 +657,7 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
   </Modal>;
 }
 
-function FormGrid({ children }: { children: React.ReactNode }) { return <div className="form-grid">{children}</div>; }
+function FormGrid({ children, className = '' }: { children: React.ReactNode; className?: string }) { return <div className={`form-grid ${className}`.trim()}>{children}</div>; }
 
 function normalizeSubtasks(value: unknown): Subtask[] {
   if (!Array.isArray(value)) return [];
@@ -852,6 +930,104 @@ function FinanceTotal({ label, value, strong = false }: { label: string; value: 
   </div>;
 }
 
+type ClientDuplicateIssue = {
+  severity: 'warning' | 'block';
+  blocksSave: boolean;
+  title: string;
+  message: string;
+};
+
+function normalizeClientText(value: unknown): string {
+  return String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function normalizeClientEmail(value: unknown): string {
+  return normalizeClientText(value);
+}
+
+function normalizeClientCode(value: unknown): string {
+  return normalizeClientText(value);
+}
+
+function normalizeClientPhone(value: unknown): string {
+  return String(value ?? '').replace(/[^0-9]/g, '');
+}
+
+function clientLabel(client: Client): string {
+  return `${client.name}${client.client_code ? ` (${client.client_code})` : ''}`;
+}
+
+function findClientDuplicateIssue(clients: Client[], values: Record<string, unknown>, currentClient?: Client): ClientDuplicateIssue | null {
+  const candidates = clients.filter(client => client.id !== currentClient?.id);
+  const code = normalizeClientCode(values.client_code);
+  const email = normalizeClientEmail(values.email);
+  const name = normalizeClientText(values.name);
+  const phone = normalizeClientPhone(values.phone);
+  const contactName = normalizeClientText(values.contact_name);
+
+  if (code) {
+    const duplicate = candidates.find(client => normalizeClientCode(client.client_code) === code);
+    if (duplicate) {
+      return {
+        severity: 'block',
+        blocksSave: true,
+        title: 'Klantnummer bestaat al',
+        message: `Klantnummer ${values.client_code} is al gekoppeld aan ${clientLabel(duplicate)}. Kies een ander nummer of open de bestaande klant.`,
+      };
+    }
+  }
+
+  if (email) {
+    const duplicate = candidates.find(client => normalizeClientEmail(client.email) === email);
+    if (duplicate) {
+      return {
+        severity: 'block',
+        blocksSave: true,
+        title: 'Deze klant lijkt al te bestaan',
+        message: `Er bestaat binnen deze organisatie al een klant met dit e-mailadres: ${clientLabel(duplicate)}. Open de bestaande klant of gebruik een ander e-mailadres.`,
+      };
+    }
+  }
+
+  if (name && phone) {
+    const duplicate = candidates.find(client => normalizeClientText(client.name) === name && normalizeClientPhone(client.phone) === phone);
+    if (duplicate) {
+      return {
+        severity: 'block',
+        blocksSave: true,
+        title: 'Dubbele klant gevonden',
+        message: `Naam en telefoonnummer komen overeen met ${clientLabel(duplicate)}. Open de bestaande klant of pas de gegevens aan.`,
+      };
+    }
+  }
+
+  if (name && contactName) {
+    const duplicate = candidates.find(client => normalizeClientText(client.name) === name && normalizeClientText(client.contact_name) === contactName);
+    if (duplicate) {
+      return {
+        severity: 'block',
+        blocksSave: true,
+        title: 'Dubbele klant gevonden',
+        message: `Naam en contactpersoon komen overeen met ${clientLabel(duplicate)}. Open de bestaande klant of pas de gegevens aan.`,
+      };
+    }
+  }
+
+  if (name) {
+    const duplicate = candidates.find(client => normalizeClientText(client.name) === name);
+    if (duplicate) {
+      return {
+        severity: 'warning',
+        blocksSave: false,
+        title: 'Let op: dezelfde klantnaam bestaat al',
+        message: `Er staat al een klant met deze naam in deze organisatie: ${clientLabel(duplicate)}. Opslaan mag nog, maar controleer even of dit geen dubbel dossier wordt.`,
+      };
+    }
+  }
+
+  return null;
+}
+
 function createNextFinanceNumber(kind: 'quote' | 'invoice', data: AppData, date = new Date()): string {
   const prefix = kind === 'quote' ? 'OFF' : 'FAC';
   const year = date.getFullYear();
@@ -885,6 +1061,11 @@ function quoteFormStatusLabel(status: string, approvalStatus?: string): string {
   return labels[status] || status || 'Concept';
 }
 
+
+function normalizeOptionalText(value: unknown): string | null {
+  const text = String(value ?? '').trim();
+  return text ? text : null;
+}
 
 function sanitizeTicketValues(values: Record<string, unknown>, existingTicket?: Ticket): Record<string, unknown> {
   const sanitized: Record<string, unknown> = { ...values };
@@ -937,6 +1118,14 @@ function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string,
 
 function cleanForm(kind: string, form: Record<string, any>) {
   const cleaned: Record<string, any> = { ...form };
+  if (kind === 'client') {
+    cleaned.name = String(cleaned.name ?? '').trim();
+    cleaned.client_code = normalizeOptionalText(cleaned.client_code);
+    cleaned.contact_name = normalizeOptionalText(cleaned.contact_name);
+    cleaned.email = normalizeOptionalText(cleaned.email)?.toLowerCase() ?? null;
+    cleaned.phone = normalizeOptionalText(cleaned.phone);
+    cleaned.notes = normalizeOptionalText(cleaned.notes);
+  }
   for (const key of ["client_id","project_id","quote_id","valid_until","due_date","start_date","end_date"]) {
     if (cleaned[key] === "") cleaned[key] = null;
   }

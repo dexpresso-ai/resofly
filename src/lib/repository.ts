@@ -381,6 +381,30 @@ export async function insertRow<T>(table: Table, organizationId: UUID, values: R
   return data as T;
 }
 
+export async function previewNextClientCode(organizationId: UUID): Promise<string> {
+  const { data, error } = await supabase.rpc('preview_next_client_code', {
+    p_organization_id: organizationId,
+  });
+  if (error) throw error;
+  return String(data || '');
+}
+
+export async function createClientWithServerCode(organizationId: UUID, values: Record<string, unknown>): Promise<Client> {
+  const payload = sanitizeMutationValues(values);
+
+  // Nieuwe klantnummers worden vanaf nu uitsluitend server-side/RPC toegekend.
+  // Een eventuele UI-preview wordt bewust niet meegestuurd als bron van waarheid.
+  delete payload.client_code;
+
+  const { data, error } = await supabase.rpc('create_client_with_next_code', {
+    p_organization_id: organizationId,
+    p_payload: payload,
+  });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as Client;
+}
+
 export async function updateRow<T>(table: Table, id: UUID, values: Record<string, unknown>, organizationId?: UUID): Promise<T> {
   let query = supabase
     .from(table)

@@ -1,4 +1,5 @@
-import type { AppData, Client, Invoice, Note, Project, Quote } from '../types';
+import { useMemo, useState } from 'react';
+import type { AppData, Client, ClientStatus, Invoice, Note, Project, Quote } from '../types';
 import { dateNL, euro, total } from '../lib/format';
 import { Button } from '../components/Ui';
 import { RelatedNotes } from './Notes';
@@ -23,6 +24,26 @@ const quoteStatusLabels: Record<string, string> = {
   cancelled: 'Geannuleerd',
 };
 
+type ClientViewMode = 'cards' | 'table';
+
+type ClientOverviewRow = {
+  client: Client;
+  noteCount: number;
+  invoiceCount: number;
+  quoteCount: number;
+  overdueInvoiceCount: number;
+  openInvoiceCount: number;
+  openInvoiceTotal: number;
+};
+
+const clientViewStorageKey = 'resofly.clients.viewMode';
+
+const clientStatusLabels: Record<ClientStatus, string> = {
+  active: 'Actief',
+  prospect: 'Prospect',
+  inactive: 'Inactief',
+};
+
 export function Clients({
   data,
   onNew,
@@ -32,37 +53,150 @@ export function Clients({
   onNew: () => void;
   onOpen: (c: Client) => void;
 }) {
-  const notesForClient = (client: Client) => getClientNotes(data, client.id);
+  const [viewMode, setViewMode] = useState<ClientViewMode>(readClientViewMode);
 
-  return <>
-    <div className="crm-toolbar"><Button variant="primary" onClick={onNew}>+ Nieuwe klant</Button></div>
-    <div className="clients-grid">
-      {data.clients.map(client => {
-        const noteCount = notesForClient(client).length;
-        const invoices = getClientInvoices(data, client.id);
-        const quotes = getClientQuotes(data, client.id);
-        const overdueInvoices = invoices.filter(isInvoiceOverdue);
-        const openInvoices = invoices.filter(isInvoiceOpen);
+  const rows = useMemo<ClientOverviewRow[]>(() => data.clients.map(client => {
+    const invoices = getClientInvoices(data, client.id);
+    const openInvoices = invoices.filter(isInvoiceOpen);
+    const overdueInvoices = invoices.filter(isInvoiceOverdue);
 
-        return <article className="client-card" key={client.id} onClick={() => onOpen(client)}>
-          <div className="client-card-head">
-            <div className="cc-avatar" style={{ background: client.color }}>{client.name.slice(0, 2).toUpperCase()}</div>
-            {overdueInvoices.length > 0 && <span className="client-alert danger">{overdueInvoices.length} vervallen</span>}
-            {overdueInvoices.length === 0 && openInvoices.length > 0 && <span className="client-alert warning">{openInvoices.length} open</span>}
-          </div>
-          <div className="cc-name">{client.name}</div>
-          <div className="cc-id">{client.client_code ?? '—'}</div>
-          <div className="cc-meta"><span>{client.contact_name ?? 'Geen contact'}</span><span>{euro(client.value_eur)}</span></div>
-          <div className="client-card-finance">
-            <span>{quotes.length} offerte{quotes.length === 1 ? '' : 's'}</span>
-            <span>{invoices.length} factu{invoices.length === 1 ? 'ur' : 'ren'}</span>
-          </div>
-          <div className="cc-note-count">📝 {noteCount} notitie{noteCount === 1 ? '' : 's'}</div>
-          <div className="cd-tags">{client.tags?.map(tag => <span className="cd-tag" key={tag}>{tag}</span>)}</div>
-        </article>;
-      })}
+    return {
+      client,
+      noteCount: getClientNotes(data, client.id).length,
+      invoiceCount: invoices.length,
+      quoteCount: getClientQuotes(data, client.id).length,
+      overdueInvoiceCount: overdueInvoices.length,
+      openInvoiceCount: openInvoices.length,
+      openInvoiceTotal: openInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0),
+    };
+  }), [data]);
+
+  const changeViewMode = (nextViewMode: ClientViewMode) => {
+    setViewMode(nextViewMode);
+    try {
+      window.localStorage.setItem(clientViewStorageKey, nextViewMode);
+    } catch {
+      // LocalStorage is een UX-voorkeur; als dit faalt blijft de toggle gewoon werken tijdens de sessie.
+    }
+  };
+
+  return <div className="clients-page">
+    <div className="clients-page-head">
+      <div>
+        <p className="eyebrow">CRM</p>
+        <h2>Klanten</h2>
+        <span>{rows.length} klant{rows.length === 1 ? '' : 'en'} in deze werkruimte</span>
+      </div>
+      <div className="clients-toolbar-actions">
+        <div className="client-view-toggle" role="group" aria-label="Klantweergave">
+          <button type="button" className={viewMode === 'cards' ? 'active' : ''} onClick={() => changeViewMode('cards')} aria-pressed={viewMode === 'cards'}>Kaarten</button>
+          <button type="button" className={viewMode === 'table' ? 'active' : ''} onClick={() => changeViewMode('table')} aria-pressed={viewMode === 'table'}>Tabel</button>
+        </div>
+        <Button variant="primary" onClick={onNew}>+ Nieuwe klant</Button>
+      </div>
     </div>
-  </>;
+
+    {rows.length === 0 && <div className="client-empty-state">
+      <strong>Nog geen klanten</strong>
+      <span>Maak je eerste klant aan om offertes, facturen, projecten en notities netjes te bundelen.</span>
+      <Button variant="primary" onClick={onNew}>+ Nieuwe klant</Button>
+    </div>}
+
+    {rows.length > 0 && viewMode === 'cards' && <ClientCardGrid rows={rows} onOpen={onOpen} />}
+    {rows.length > 0 && viewMode === 'table' && <ClientTable rows={rows} onOpen={onOpen} />}
+  </div>;
+}
+
+function ClientCardGrid({ rows, onOpen }: { rows: ClientOverviewRow[]; onOpen: (client: Client) => void }) {
+  return <div className="clients-grid">
+    {rows.map(row => {
+      const { client } = row;
+
+      return <article className="client-card" key={client.id} onClick={() => onOpen(client)}>
+        <div className="client-card-head">
+          <div className="cc-avatar" style={{ background: client.color }}>{client.name.slice(0, 2).toUpperCase()}</div>
+          {row.overdueInvoiceCount > 0 && <span className="client-alert danger">{row.overdueInvoiceCount} vervallen</span>}
+          {row.overdueInvoiceCount === 0 && row.openInvoiceCount > 0 && <span className="client-alert warning">{row.openInvoiceCount} open</span>}
+        </div>
+        <div className="cc-name">{client.name}</div>
+        <div className="cc-id">{client.client_code ?? '—'}</div>
+        <div className="cc-meta"><span>{client.contact_name ?? 'Geen contact'}</span><span>{euro(client.value_eur)}</span></div>
+        <div className="client-card-finance">
+          <span>{row.quoteCount} offerte{row.quoteCount === 1 ? '' : 's'}</span>
+          <span>{row.invoiceCount} factu{row.invoiceCount === 1 ? 'ur' : 'ren'}</span>
+        </div>
+        <div className="cc-note-count">📝 {row.noteCount} notitie{row.noteCount === 1 ? '' : 's'}</div>
+        <div className="cd-tags">{client.tags?.map(tag => <span className="cd-tag" key={tag}>{tag}</span>)}</div>
+      </article>;
+    })}
+  </div>;
+}
+
+function ClientTable({ rows, onOpen }: { rows: ClientOverviewRow[]; onOpen: (client: Client) => void }) {
+  return <section className="clients-table-card" aria-label="Klanten tabelweergave">
+    <div className="clients-table-scroll">
+      <table className="clients-table">
+        <thead>
+          <tr>
+            <th>Klantnummer</th>
+            <th>Klant</th>
+            <th>Contact</th>
+            <th>Status</th>
+            <th className="number">Offertes</th>
+            <th className="number">Facturen</th>
+            <th className="money">Openstaand</th>
+            <th className="money">Waarde</th>
+            <th>Bijgewerkt</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(row => {
+            const { client } = row;
+            return <tr
+              key={client.id}
+              className="clients-table-row"
+              tabIndex={0}
+              onClick={() => onOpen(client)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onOpen(client);
+                }
+              }}
+            >
+              <td><strong>{client.client_code ?? '—'}</strong></td>
+              <td>
+                <div className="clients-table-name">
+                  <span className="clients-table-avatar" style={{ background: client.color }}>{client.name.slice(0, 2).toUpperCase()}</span>
+                  <span>{client.name}</span>
+                </div>
+              </td>
+              <td><span>{client.contact_name || client.email || '—'}</span></td>
+              <td><span className={`client-status-pill ${client.status}`}>{clientStatusLabels[client.status] ?? client.status}</span></td>
+              <td className="number">{row.quoteCount}</td>
+              <td className="number">
+                <span className="client-table-finance-count">{row.invoiceCount}</span>
+                {row.overdueInvoiceCount > 0 && <em className="client-table-alert danger">{row.overdueInvoiceCount} vervallen</em>}
+                {row.overdueInvoiceCount === 0 && row.openInvoiceCount > 0 && <em className="client-table-alert warning">{row.openInvoiceCount} open</em>}
+              </td>
+              <td className="money">{euro(row.openInvoiceTotal)}</td>
+              <td className="money">{euro(client.value_eur)}</td>
+              <td>{dateNL(client.updated_at)}</td>
+            </tr>;
+          })}
+        </tbody>
+      </table>
+    </div>
+  </section>;
+}
+
+function readClientViewMode(): ClientViewMode {
+  try {
+    const saved = window.localStorage.getItem(clientViewStorageKey);
+    return saved === 'table' ? 'table' : 'cards';
+  } catch {
+    return 'cards';
+  }
 }
 
 export function ClientDetailPage({

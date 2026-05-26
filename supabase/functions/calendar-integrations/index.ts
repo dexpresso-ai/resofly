@@ -57,6 +57,7 @@ type OAuthState = {
   organizationId: string;
   returnTo: string;
   nonce: string;
+  iat: number;
   exp: number;
 };
 
@@ -81,6 +82,10 @@ const GOOGLE_CLIENT_SECRET = Deno.env.get('GOOGLE_CALENDAR_CLIENT_SECRET') || ''
 const MICROSOFT_CLIENT_ID = Deno.env.get('MICROSOFT_CALENDAR_CLIENT_ID') || '';
 const MICROSOFT_CLIENT_SECRET = Deno.env.get('MICROSOFT_CALENDAR_CLIENT_SECRET') || '';
 const MICROSOFT_TENANT_ID = Deno.env.get('MICROSOFT_CALENDAR_TENANT_ID') || 'common';
+const OAUTH_STATE_TTL_SECONDS = 10 * 60;
+const OAUTH_STATE_MAX_LENGTH = 4096;
+const OAUTH_STATE_CLOCK_SKEW_SECONDS = 60;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -139,7 +144,7 @@ async function requireUser(req: Request): Promise<{ id: string; email?: string }
 }
 
 async function requireOrganizationAccess(userId: string, organizationId: string): Promise<OrganizationRole> {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(organizationId)) {
+  if (!UUID_RE.test(organizationId)) {
     throw new Error('Ongeldige organisatie.');
   }
   const { data, error } = await supabaseAdmin
@@ -163,7 +168,16 @@ async function startOAuth(userId: string, organizationId: string, body: Record<s
   const provider = parseProvider(body.provider);
   assertProviderConfigured(provider);
   const returnTo = sanitizeReturnTo(String(body.returnTo || ''));
-  const state = await signState({ provider, userId, organizationId, returnTo, nonce: crypto.randomUUID(), exp: Math.floor(Date.now() / 1000) + 600 });
+  const now = Math.floor(Date.now() / 1000);
+  const state = await signState({
+    provider,
+    userId,
+    organizationId,
+    returnTo,
+    nonce: crypto.randomUUID(),
+    iat: now,
+    exp: now + OAUTH_STATE_TTL_SECONDS,
+  });
 
   if (provider === 'google') {
     const params = new URLSearchParams({
@@ -196,7 +210,14 @@ async function handleOAuthCallback(req: Request): Promise<Response> {
   const errorDescription = url.searchParams.get('error_description');
   const stateRaw = url.searchParams.get('state');
   if (!stateRaw) return json({ ok: false, error: 'OAuth state ontbreekt.' }, 400);
-  const state = await verifyState(stateRaw);
+
+  let state: OAuthState;
+  try {
+    state = await verifyState(stateRaw);
+  } catch (stateError) {
+    console.warn('calendar OAuth callback rejected invalid state', stateError);
+    return json({ ok: false, error: 'Ongeldige of verlopen OAuth state.' }, 400);
+  }
 
   if (error) return redirectWithStatus(state.returnTo, { calendar_error: errorDescription || error });
 
@@ -834,15 +855,59 @@ async function signState(state: OAuthState): Promise<string> {
 }
 
 async function verifyState(raw: string): Promise<OAuthState> {
-  const [payload, signature] = raw.split('.');
+  if (!raw || raw.length > OAUTH_STATE_MAX_LENGTH) throw new Error('Ongeldige OAuth state lengte.');
+
+  const parts = raw.split('.');
+  if (parts.length !== 2) throw new Error('Ongeldig OAuth state formaat.');
+  const [payload, signature] = parts;
   if (!payload || !signature) throw new Error('Ongeldig OAuth state formaat.');
+
   const expected = await hmac(payload, STATE_SECRET);
   if (!timingSafeEqual(signature, expected)) throw new Error('Ongeldige OAuth state handtekening.');
-  const state = JSON.parse(new TextDecoder().decode(base64UrlDecode(payload))) as OAuthState;
-  if (!state.exp || state.exp < Math.floor(Date.now() / 1000)) throw new Error('OAuth state is verlopen.');
-  state.provider = parseProvider(state.provider);
-  state.returnTo = sanitizeReturnTo(state.returnTo);
-  return state;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(base64UrlDecode(payload)));
+  } catch {
+    throw new Error('OAuth state payload is ongeldig.');
+  }
+  if (!parsed || typeof parsed !== 'object') throw new Error('OAuth state payload ontbreekt.');
+  const candidate = parsed as Partial<OAuthState>;
+
+  const provider = parseProvider(candidate.provider);
+  const userId = assertUuid(candidate.userId, 'OAuth user');
+  const organizationId = assertUuid(candidate.organizationId, 'OAuth organisatie');
+  const returnTo = sanitizeReturnTo(String(candidate.returnTo || ''));
+  const nonce = assertOAuthNonce(candidate.nonce);
+  const iat = assertUnixTimestamp(candidate.iat, 'OAuth state issued-at');
+  const exp = assertUnixTimestamp(candidate.exp, 'OAuth state expiration');
+
+  const now = Math.floor(Date.now() / 1000);
+  if (exp < now) throw new Error('OAuth state is verlopen.');
+  if (iat > now + OAUTH_STATE_CLOCK_SKEW_SECONDS) throw new Error('OAuth state ligt te ver in de toekomst.');
+  if (exp <= iat) throw new Error('OAuth state tijdvenster is ongeldig.');
+  if (exp - iat > OAUTH_STATE_TTL_SECONDS + OAUTH_STATE_CLOCK_SKEW_SECONDS) {
+    throw new Error('OAuth state is te lang geldig.');
+  }
+
+  return { provider, userId, organizationId, returnTo, nonce, iat, exp };
+}
+
+function assertUuid(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !UUID_RE.test(value)) throw new Error(`${label} is ongeldig.`);
+  return value;
+}
+
+function assertOAuthNonce(value: unknown): string {
+  if (typeof value !== 'string' || !UUID_RE.test(value)) throw new Error('OAuth nonce is ongeldig.');
+  return value;
+}
+
+function assertUnixTimestamp(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${label} is ongeldig.`);
+  }
+  return value;
 }
 
 async function hmac(payload: string, secret: string): Promise<string> {

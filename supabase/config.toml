@@ -1,0 +1,6 @@
+# Supabase function configuration.
+# calendar-integrations must be callable by Google/Microsoft during the OAuth callback.
+# The function itself still requires a valid Supabase bearer token for all POST app actions.
+
+[functions.calendar-integrations]
+verify_jwt = false

@@ -117,3 +117,37 @@ Voer deze migraties in deze volgorde uit na:
 ```
 
 Daarna moeten de Edge Functions `quote-workflow`, `quote-public` en `resend-webhook` gedeployed worden en moeten de Resend/quote secrets in Supabase gezet worden.
+
+## Klant-deduplicatie binnen organisatie
+
+Voor bestaande databases is de volgende aanvullende migratie toegevoegd:
+
+```text
+20260520_clients_duplicate_guard.sql
+```
+
+Deze migratie voorkomt dat dezelfde klant dubbel wordt aangemaakt binnen dezelfde organisatie, terwijl dezelfde klantgegevens in een andere organisatie wel toegestaan blijven. De guard controleert:
+
+- dubbel klantnummer binnen dezelfde organisatie;
+- dubbel e-mailadres binnen dezelfde organisatie;
+- dezelfde klantnaam + hetzelfde telefoonnummer;
+- dezelfde klantnaam + dezelfde contactpersoon.
+
+De trigger gebruikt een transactionele advisory lock per organisatie, zodat twee gelijktijdige inserts niet langs dezelfde duplicate-check kunnen glippen. Alleen dezelfde naam zonder extra overeenkomst blijft toegestaan, maar de frontend toont daar wel een waarschuwing voor.
+
+## Server-side klantnummer-generator per organisatie
+
+Voor bestaande databases is deze aanvullende migratie toegevoegd:
+
+```text
+20260520_client_number_rpc_generator.sql
+```
+
+Deze migratie verplaatst het aanmaken van klantnummers naar Supabase/Postgres. Nieuwe klanten worden via `create_client_with_next_code(...)` aangemaakt en krijgen binnen dezelfde transactie een atomair gereserveerd klantnummer uit `organization_client_number_sequences`.
+
+Belangrijk:
+
+- de browser toont alleen nog een preview via `preview_next_client_code(...)`;
+- het definitieve klantnummer wordt pas bij opslaan server-side vastgelegd;
+- directe REST-inserts krijgen alsnog server-side een nummer via de `clients_duplicate_guard` trigger;
+- de volgorde is per organisatie geserialiseerd met dezelfde advisory lock als de duplicate-guard, zodat twee gelijktijdige gebruikers nooit hetzelfde klantnummer krijgen.

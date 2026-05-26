@@ -23,7 +23,16 @@ Niet nodig bij een lege database:
 ## 2. Edge Function deployen
 
 ```bash
-supabase functions deploy calendar-integrations
+supabase functions deploy calendar-integrations --no-verify-jwt
+```
+
+Waarom `--no-verify-jwt` hier bewust nodig is: Google en Microsoft sturen na OAuth-autorisatie een browser-callback naar deze Edge Function zonder Supabase `Authorization` header. De function is daarom publiek bereikbaar voor de callback, maar alle normale app-acties via `POST` vereisen nog steeds een geldige Supabase bearer token. De callback wordt beveiligd via een HMAC-ondertekende, kort geldige OAuth `state`.
+
+De repo bevat hiervoor ook `supabase/config.toml`:
+
+```toml
+[functions.calendar-integrations]
+verify_jwt = false
 ```
 
 De frontend roept deze functie aan via `supabase.functions.invoke('calendar-integrations', ...)`.
@@ -35,7 +44,7 @@ Zet deze secrets in Supabase. Deze waarden mogen nooit in de frontend of in Vite
 ```bash
 supabase secrets set \
   CALENDAR_REDIRECT_URL="https://YOUR_PROJECT.supabase.co/functions/v1/calendar-integrations" \
-  CALENDAR_ALLOWED_RETURN_ORIGINS="http://localhost:5173,https://jouw-productiedomein.nl" \
+  CALENDAR_ALLOWED_RETURN_ORIGINS="http://localhost:5173,https://staging.resofly.com,https://resofly.com,https://www.resofly.com,https://staging.resofly.pages.dev" \
   CALENDAR_OAUTH_STATE_SECRET="lange-random-string-minimaal-32-tekens" \
   CALENDAR_TOKEN_ENCRYPTION_KEY="lange-random-string-minimaal-32-tekens" \
   GOOGLE_CALENDAR_CLIENT_ID="..." \
@@ -142,6 +151,8 @@ npm run dev
 - `calendar_connections` en `calendar_sources` zijn per gebruiker te lezen.
 - Tenant-integriteit wordt afgedwongen via triggers op `calendar_sources` en `calendar_connection_tokens`.
 - OAuth `state` is HMAC-ondertekend en verloopt na 10 minuten.
+- OAuth `state` bevat provider, user ID, organisatie ID, return URL, nonce, issued-at en expiration.
+- De callback accepteert alleen een geldige state-handtekening, geldige UUIDs, toegestane return-origin en een kort tijdvenster.
 - `CALENDAR_ALLOWED_RETURN_ORIGINS` voorkomt open redirect misbruik.
 
 ## 9. Belangrijke bestanden
@@ -150,6 +161,7 @@ npm run dev
 src/features/CalendarPage.tsx
 src/lib/calendar-api.ts
 supabase/functions/calendar-integrations/index.ts
+supabase/config.toml
 supabase/schema.sql
 supabase/BRANDCORE_DATABASE_SETUP.sql
 supabase/migrations/20260428_calendar_integrations.sql

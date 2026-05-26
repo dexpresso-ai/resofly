@@ -1,7 +1,20 @@
-Clean package verification
-- node_modules excluded
-- .env, .env.local and .dev.vars excluded
-- supabase/.temp excluded
-- .wrangler excluded
-- npm ci --ignore-scripts executed on source
-- npm run build executed successfully on source
+ResoFly client table view + automatic client number package
+Generated: 2026-05-20
+
+Verification performed:
+- Source zip extracted successfully.
+- Client overview updated with card/table toggle.
+- Client create/edit modal widened for desktop.
+- Automatic client_code generation added in frontend initial form.
+- No Supabase migration required; client_code already exists.
+- npm ci --ignore-scripts completed successfully in sandbox.
+- npm run typecheck completed successfully.
+- npm run build completed successfully.
+
+Note:
+A normal npm ci attempt was blocked in this sandbox by the Supabase CLI postinstall GitHub download. This is an environment/network limitation. Frontend verification was completed with npm ci --ignore-scripts.
+
+Windows compatibility:
+- Archive generated with standard zip.
+- node_modules and dist are not included.
+- No macOS resource fork files are included.
