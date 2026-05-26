@@ -47,12 +47,18 @@ export function PublicInvoicePage({ token }: { token: string }) {
   async function load() {
     setLoading(true); setError(null);
     try {
+      const params = new URLSearchParams(window.location.search);
+      const mockPaymentId = params.get('mock_payment') || undefined;
       const { data, error } = await supabase.functions.invoke('invoice-public', {
-        body: { action: 'getInvoice', token },
+        body: { action: 'getInvoice', token, mockPaymentId },
       });
       if (error) throw error;
       if (!data?.ok) throw new Error(data?.error || 'Factuur laden mislukt');
       setPayload(data as PublicInvoicePayload & { ok: true });
+      if (mockPaymentId) {
+        const cleanUrl = `${window.location.origin}${window.location.pathname}`;
+        window.history.replaceState({}, document.title, cleanUrl);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Factuur laden mislukt');
     } finally {

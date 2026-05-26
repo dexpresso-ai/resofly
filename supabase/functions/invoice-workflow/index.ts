@@ -34,7 +34,7 @@ const INVOICE_ALLOWED_ORIGINS = parseAllowedOrigins([
   Deno.env.get('INVOICE_ALLOWED_ORIGINS'), Deno.env.get('QUOTE_ALLOWED_ORIGINS'), Deno.env.get('APP_PUBLIC_URL'), Deno.env.get('BILLING_ALLOWED_RETURN_ORIGINS'),
 ]);
 const INVOICE_ALLOW_LOCAL_DEV = (Deno.env.get('INVOICE_ALLOW_LOCAL_DEV') || Deno.env.get('QUOTE_ALLOW_LOCAL_DEV') || 'false').toLowerCase() === 'true';
-const MOLLIE_API_KEY = Deno.env.get('MOLLIE_API_KEY') || Deno.env.get('MOLLIE_INVOICE_API_KEY') || '';
+const MOLLIE_API_KEY = Deno.env.get('MOLLIE_INVOICE_API_KEY') || Deno.env.get('MOLLIE_API_KEY') || '';
 const MOLLIE_WEBHOOK_URL = Deno.env.get('INVOICE_MOLLIE_WEBHOOK_URL') || Deno.env.get('MOLLIE_WEBHOOK_URL') || '';
 const MOLLIE_WEBHOOK_SECRET = Deno.env.get('INVOICE_MOLLIE_WEBHOOK_SECRET') || Deno.env.get('MOLLIE_WEBHOOK_SECRET') || '';
 const MOLLIE_ALLOW_MOCK = (Deno.env.get('MOLLIE_ALLOW_MOCK') || 'false').toLowerCase() === 'true';
@@ -165,15 +165,26 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
   const amountCents = Math.round(calculateTotals(invoice.lines).total * 100);
   if (amountCents <= 0) throw new WorkflowHttpError('Factuurbedrag moet groter zijn dan 0.', 422);
 
-  const client = await loadClient(organizationId, invoice.client_id);
-  const token = invoice.public_token_hash ? null : randomToken();
-  const tokenHash = token ? await sha256Hex(token) : null;
-  const tokenExpiresAt = token ? new Date(Date.now() + Math.max(1, INVOICE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000).toISOString() : null;
-  const publicUrl = token ? `${INVOICE_PUBLIC_BASE_URL.replace(/\/$/, '')}/invoice/${encodeURIComponent(token)}` : undefined;
-  const checkoutExpiresAt = new Date(Date.now() + CHECKOUT_TTL_MINUTES * 60 * 1000).toISOString();
-  const idempotencyKey = String(body.idempotencyKey || `invoice-${invoice.id}-${amountCents}`).slice(0, 200);
+  const existingPayment = await loadLatestOpenPayment(organizationId, invoiceId);
+  if (existingPayment?.provider_checkout_url && isReusableCheckoutUrl(existingPayment.provider_checkout_url)) {
+    return {
+      payment: existingPayment,
+      checkoutUrl: existingPayment.provider_checkout_url,
+      providerPaymentId: existingPayment.provider_payment_id,
+      mock: existingPayment.provider_payment_id?.startsWith('mock_') ?? false,
+      reused: true,
+    };
+  }
 
-  const payment = await beginInvoicePaymentCheckout({ invoiceId, organizationId, userId, amountCents, publicTokenHash: tokenHash, publicTokenExpiresAt: tokenExpiresAt, idempotencyKey, checkoutExpiresAt, metadata: publicUrl ? { publicUrl } : {} });
+  const client = await loadClient(organizationId, invoice.client_id);
+  const token = randomToken();
+  const tokenHash = await sha256Hex(token);
+  const tokenExpiresAt = new Date(Date.now() + Math.max(1, INVOICE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000).toISOString();
+  const publicUrl = `${INVOICE_PUBLIC_BASE_URL.replace(/\/$/, '')}/invoice/${encodeURIComponent(token)}`;
+  const checkoutExpiresAt = new Date(Date.now() + CHECKOUT_TTL_MINUTES * 60 * 1000).toISOString();
+  const idempotencyKey = String(body.idempotencyKey || `invoice-${invoice.id}-${amountCents}-${tokenHash.slice(0, 16)}`).slice(0, 200);
+
+  const payment = await beginInvoicePaymentCheckout({ invoiceId, organizationId, userId, amountCents, publicTokenHash: tokenHash, publicTokenExpiresAt: tokenExpiresAt, idempotencyKey, checkoutExpiresAt, metadata: { publicUrl } });
   if (payment.provider_checkout_url) return { payment, checkoutUrl: payment.provider_checkout_url, providerPaymentId: payment.provider_payment_id, mock: payment.provider_payment_id?.startsWith('mock_') ?? false, reused: true };
 
   let providerPaymentId = '';
@@ -183,12 +194,12 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
 
   if (MOLLIE_ALLOW_MOCK && !MOLLIE_API_KEY) {
     providerPaymentId = `mock_invoice_payment_${crypto.randomUUID()}`;
-    checkoutUrl = publicUrl ? `${publicUrl}?mock_payment=${encodeURIComponent(providerPaymentId)}` : INVOICE_PUBLIC_BASE_URL.replace(/\/$/, '');
-    metadata = { mock: true };
+    checkoutUrl = `${publicUrl}?mock_payment=${encodeURIComponent(providerPaymentId)}`;
+    metadata = { mock: true, publicUrl };
   } else {
     if (!MOLLIE_API_KEY) throw new WorkflowHttpError('MOLLIE_API_KEY of MOLLIE_INVOICE_API_KEY ontbreekt.', 500);
     if (!MOLLIE_WEBHOOK_URL) throw new WorkflowHttpError('INVOICE_MOLLIE_WEBHOOK_URL of MOLLIE_WEBHOOK_URL ontbreekt.', 500);
-    const redirectUrl = String(publicUrl || body.redirectUrl || INVOICE_PUBLIC_BASE_URL).trim();
+    const redirectUrl = String(body.redirectUrl || publicUrl).trim();
     const webhookUrl = MOLLIE_WEBHOOK_SECRET ? `${MOLLIE_WEBHOOK_URL}${MOLLIE_WEBHOOK_URL.includes('?') ? '&' : '?'}webhook=mollie&secret=${encodeURIComponent(MOLLIE_WEBHOOK_SECRET)}` : `${MOLLIE_WEBHOOK_URL}${MOLLIE_WEBHOOK_URL.includes('?') ? '&' : '?'}webhook=mollie`;
     const mollieResponse = await fetch('https://api.mollie.com/v2/payments', {
       method: 'POST',
@@ -274,9 +285,18 @@ async function loadCompanySettings(organizationId: string): Promise<CompanySetti
   const { data, error } = await supabaseAdmin.from('company_settings').select('company_name,trade_name,address_line1,address_line2,postal_code,city,country,email,phone,website,kvk_number,vat_number,iban,invoice_payment_terms,invoice_footer,invoice_accent_color').eq('organization_id', organizationId).maybeSingle();
   if (error) throw error; return (data ?? null) as CompanySettingsRow | null;
 }
-async function loadLatestOpenPayment(organizationId: string, invoiceId: string): Promise<{ provider_checkout_url: string | null } | null> {
-  const { data, error } = await supabaseAdmin.from('invoice_payment_records').select('provider_checkout_url,status').eq('organization_id', organizationId).eq('invoice_id', invoiceId).in('status', ['open','pending','authorized']).order('created_at', { ascending: false }).limit(1).maybeSingle();
-  if (error) return null; return (data ?? null) as { provider_checkout_url: string | null } | null;
+async function loadLatestOpenPayment(organizationId: string, invoiceId: string): Promise<{ id: string; provider_checkout_url: string | null; provider_payment_id: string | null; status: string; checkout_expires_at?: string | null } | null> {
+  const { data, error } = await supabaseAdmin
+    .from('invoice_payment_records')
+    .select('id,provider_checkout_url,provider_payment_id,status,checkout_expires_at')
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', invoiceId)
+    .in('status', ['open','pending','authorized'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return null;
+  return (data ?? null) as { id: string; provider_checkout_url: string | null; provider_payment_id: string | null; status: string; checkout_expires_at?: string | null } | null;
 }
 
 async function beginInvoiceEmailSend(input: { invoiceId: string; organizationId: string; userId: string; tokenHash: string; expiresAt: string; recipientEmail: string; recipientName: string; subject: string; publicUrl: string; attachmentFileName?: string; attachmentMimeType?: string; attachmentSizeBytes?: number; attachmentSha256?: string }): Promise<{ deliveryId: string; invoiceId?: string }> {
@@ -390,6 +410,21 @@ async function requireOrganizationAccess(userId: string, organizationId: string)
 function isUuid(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
 function isEmail(value: string): boolean { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value); }
 async function parseBody(req: Request, contentType: string): Promise<Record<string, string>> { if (contentType.includes('application/json')) return await req.json().catch(() => ({})); const text = await req.text(); return Object.fromEntries(new URLSearchParams(text)); }
+
+function isReusableCheckoutUrl(value: string | null | undefined): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol)) return false;
+    // Broken staging records used to contain only the app base URL. Reuse only
+    // real Mollie checkout URLs or mock/public invoice URLs that point at /invoice/<token>.
+    if (/\/invoice\/[^/?#]+/.test(url.pathname)) return true;
+    return /(^|\.)mollie\./i.test(url.hostname) || /checkout\.mollie/i.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function normalizeMollieStatus(status: string): string { if (status === 'paid') return 'paid'; if (status === 'expired') return 'expired'; if (status === 'canceled' || status === 'failed') return status; if (status === 'authorized') return 'authorized'; if (status === 'pending') return 'pending'; return 'open'; }
 function timingSafeEqual(a: string, b: string): boolean { const enc = new TextEncoder(); const left = enc.encode(a); const right = enc.encode(b); if (left.length !== right.length) return false; let out = 0; for (let i = 0; i < left.length; i++) out |= left[i] ^ right[i]; return out === 0; }
 function requiredEnv(name: string): string { const value = Deno.env.get(name); if (!value) throw new Error(`Missing required env var: ${name}`); return value; }
