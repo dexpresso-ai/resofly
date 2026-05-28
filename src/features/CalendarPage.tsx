@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { CalendarDays, ChevronDown, ChevronRight, Clock, ExternalLink, LayoutList, MapPin, Plus, RefreshCcw, Unplug, X } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { RichTextExcerpt } from '../components/RichTextEditor';
@@ -19,8 +19,10 @@ import { getNoteTypeLabel } from './Notes';
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
 
-const HOUR_START = 8;
-const HOUR_END = 18;
+const HOUR_START = 0;
+const HOUR_END = 24;
+const WORKDAY_START = 8;
+const WORKDAY_END = 18;
 const SLOT_MINUTES = 30;
 const TOTAL_SLOTS = (HOUR_END - HOUR_START) * (60 / SLOT_MINUTES);
 const MIN_EVENT_HEIGHT_SLOTS = 0.85;
@@ -318,7 +320,21 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
 }) {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const canSelect = canWrite && writeableSources.length > 0;
+  const daysKey = days.map(formatISODate).join('|');
+
+  useEffect(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+
+    const firstSlot = scrollEl.querySelector<HTMLElement>('.tb-time-label');
+    const grid = scrollEl.querySelector<HTMLElement>('.tb-grid');
+    const slotHeight = firstSlot?.getBoundingClientRect().height ?? 24;
+    const workdayStartSlot = ((WORKDAY_START - HOUR_START) * 60) / SLOT_MINUTES;
+    const gridOffsetTop = grid?.offsetTop ?? 0;
+    scrollEl.scrollTop = Math.max(0, gridOffsetTop + Math.round(workdayStartSlot * slotHeight) - 2);
+  }, [daysKey]);
 
   const handleMouseDown = useCallback((dayIndex: number, slot: number) => {
     if (!canSelect) return;
@@ -355,20 +371,8 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
   }
 
   function allDayEventsForDay(day: Date) { return events.filter(e => e.all_day && eventOverlapsDay(e, day)); }
-  function outsideWorkdayEventsForDay(day: Date) {
-    const { start, end } = visibleTimeBounds(day);
-    return events
-      .filter(e => {
-        if (e.all_day || !eventOverlapsDay(e, day) || eventOverlapsVisibleWindow(e, day)) return false;
-        const eventStart = new Date(e.starts_at);
-        const eventEnd = new Date(e.ends_at);
-        return eventEnd <= start || eventStart >= end;
-      })
-      .sort((a, b) => a.starts_at.localeCompare(b.starts_at));
-  }
   function tasksForDay(day: Date) { return tasks.filter(t => t.end_date && isSameDay(new Date(`${t.end_date}T12:00:00`), day)); }
   function eventColor(ev: CalendarExternalEvent): string { return sourceColors.get(ev.source_id) ?? '#FFD966'; }
-  const hasOutsideWorkdayEvents = days.some(day => outsideWorkdayEventsForDay(day).length > 0);
 
   function isInSelection(di: number, si: number): boolean {
     if (!drag || !isDragging || di !== drag.dayIndex) return false;
@@ -389,10 +393,14 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
   const today = (d: Date) => isSameDay(d, new Date());
   const now = new Date();
   const gridStyle = { '--tb-days': days.length, '--tb-slots': TOTAL_SLOTS } as CSSProperties;
+  const workdayOverlayStyle = {
+    top: `${(((WORKDAY_START - HOUR_START) * 60) / ((HOUR_END - HOUR_START) * 60)) * 100}%`,
+    height: `${(((WORKDAY_END - WORKDAY_START) * 60) / ((HOUR_END - HOUR_START) * 60)) * 100}%`,
+  } as CSSProperties;
 
   return (
     <div className={`tb-container${days.length === 1 ? ' tb-single-day' : ''}`} style={gridStyle} onMouseLeave={() => { if (isDragging) handleMouseUp(); }}>
-      <div className="tb-scroll">
+      <div className="tb-scroll" ref={scrollRef}>
         <div className="tb-canvas">
           <div className="tb-day-headers">
             <div className="tb-gutter tb-sticky-gutter tb-corner" />
@@ -426,34 +434,9 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
             })}
           </div>
 
-          {hasOutsideWorkdayEvents && (
-            <div className="tb-edge-row">
-              <div className="tb-gutter tb-sticky-gutter tb-edge-label">Buiten werktijd</div>
-              {days.map((day, di) => {
-                const edgeEvents = outsideWorkdayEventsForDay(day);
-                return (
-                  <div className={`tb-edge-cell${today(day) ? ' tb-today-col' : ''}`} key={di}>
-                    {edgeEvents.map(ev => (
-                      <button
-                        type="button"
-                        className={`tb-edge-chip${ev.visibility === 'private' ? ' private-event' : ''}`}
-                        key={`${ev.provider}-${ev.provider_event_id}-${di}`}
-                        onClick={() => onOpenEvent(ev)}
-                        title={`${formatTime(ev.starts_at)} – ${formatTime(ev.ends_at)}\n${ev.title}\n${providerLabel(ev.provider)} · ${ev.source_name}`}
-                        style={eventColorStyle(eventColor(ev))}
-                      >
-                        <span>{formatTime(ev.starts_at)} – {formatTime(ev.ends_at)}</span>
-                        <strong>{ev.title}</strong>
-                      </button>
-                    ))}
-                    {edgeEvents.length === 0 && <span className="tb-ad-empty">—</span>}
-                  </div>
-                );
-              })}
-            </div>
-          )}
 
           <div className="tb-grid">
+            <div className="tb-workday-window" style={workdayOverlayStyle} />
             {hourLabels.map((h, si) => (
               <div className={`tb-gutter tb-sticky-gutter tb-time-label${h.minutes === 0 ? ' tb-gutter-full' : ' tb-gutter-half'}`} key={`g${si}`} style={{ gridRow: si + 1 }}>
                 {h.minutes === 0 && <span>{h.label}</span>}

@@ -913,3 +913,20 @@ body::before{
 @media(max-width:1200px){:root{--tb-h:clamp(23px,calc((100vh - 300px) / 20),30px)}.tb-canvas{min-width:980px}.tb-dh{min-height:42px}.tb-allday-row{top:42px}.calendar-toolbar-premium{grid-template-columns:1fr}.calendar-range-block{justify-self:start;text-align:left}}
 @media(max-width:900px){:root{--tb-h:26px;--tb-gutter:52px}.calendar-main-card-day,.calendar-main-card-week{min-height:0}.calendar-main-card{padding:10px}.calendar-toolbar-premium{padding:9px}.tb-scroll{height:auto;min-height:0}.tb-canvas{min-width:900px}.tb-single-day .tb-canvas{min-width:0}.tb-dh{min-height:40px}.tb-allday-row{top:40px}.tb-edge-chip span{display:none}.tb-ev-src{display:none}.tb-ev-title{font-size:10.5px}.tb-ev-roomy .tb-ev-title{font-size:11px}}
 @media(max-width:620px){:root{--tb-h:25px;--tb-gutter:46px}.tb-canvas{min-width:820px}.tb-single-day .tb-canvas{min-width:0}.tb-dh-name,.tb-dh-month,.tb-dh-today{display:none}.tb-dh{min-height:36px}.tb-allday-row{top:36px}.tb-gutter-full span{font-size:9px}.tb-edge-label{font-size:7px}.tb-edge-cell{padding:3px}.tb-ev{padding:3px 5px}.tb-ev-time{font-size:7.5px}.tb-ev-title{font-size:10px}}
+
+/* Calendar full-day scroll refinement: keep 08:00-18:00 compact, but make early/late hours scrollable */
+:root{--tb-h:clamp(24px,calc((100vh - 340px) / 20),31px);--tb-gutter:58px}
+.calendar-agenda-page .calendar-main-card-day,.calendar-agenda-page .calendar-main-card-week{min-height:0}
+.calendar-agenda-page .tb-scroll,.tb-scroll{height:clamp(560px,calc(100vh - 230px),760px);min-height:520px;max-height:none;overflow:auto;padding:0;scrollbar-gutter:stable;background:radial-gradient(circle at top right,rgba(255,217,102,.045),transparent 34%),linear-gradient(180deg,rgba(255,255,255,.018),rgba(255,255,255,.006));scroll-behavior:smooth}
+.tb-canvas{min-width:1080px;position:relative}.tb-single-day .tb-canvas{min-width:0}
+.tb-day-headers,.tb-allday-row,.tb-grid{grid-template-columns:var(--tb-gutter) repeat(var(--tb-days,7),minmax(0,1fr));padding:0;margin:0}
+.tb-day-headers{position:sticky;top:0;z-index:42;background:rgba(37,37,37,.97);backdrop-filter:blur(14px);box-shadow:0 14px 24px rgba(0,0,0,.18)}
+.tb-allday-row{position:sticky;top:44px;z-index:36;background:rgba(31,31,31,.96);backdrop-filter:blur(14px);border-bottom:1px solid var(--border)}
+.tb-grid{position:relative;min-width:0;min-height:calc(var(--tb-h) * var(--tb-slots,48))}
+.tb-col{min-height:calc(var(--tb-h) * var(--tb-slots,48));background:linear-gradient(180deg,rgba(255,255,255,.012),transparent);z-index:2}
+.tb-workday-window{position:absolute;left:var(--tb-gutter);right:0;z-index:0;pointer-events:none;border-top:1px solid rgba(255,217,102,.16);border-bottom:1px solid rgba(255,217,102,.16);background:linear-gradient(180deg,rgba(255,217,102,.038),rgba(255,217,102,.018))}
+.tb-line{position:relative;z-index:1}.tb-time-label{z-index:32}.tb-ev{z-index:6}.tb-now{z-index:14}
+.tb-edge-row{display:none}
+@media(max-width:1200px){:root{--tb-h:clamp(23px,calc((100vh - 330px) / 20),30px)}.tb-canvas{min-width:980px}.calendar-agenda-page .tb-scroll,.tb-scroll{height:clamp(540px,calc(100vh - 225px),730px);min-height:500px}}
+@media(max-width:900px){:root{--tb-h:26px;--tb-gutter:52px}.calendar-main-card-day,.calendar-main-card-week{min-height:0}.calendar-main-card{padding:10px}.calendar-toolbar-premium{padding:9px}.calendar-agenda-page .tb-scroll,.tb-scroll{height:clamp(500px,calc(100vh - 230px),680px);min-height:430px;overflow:auto}.tb-canvas{min-width:900px}.tb-single-day .tb-canvas{min-width:0}.tb-dh{min-height:40px}.tb-allday-row{top:40px}.tb-ev-src{display:none}.tb-ev-title{font-size:10.5px}.tb-ev-roomy .tb-ev-title{font-size:11px}}
+@media(max-width:620px){:root{--tb-h:25px;--tb-gutter:46px}.calendar-agenda-page .tb-scroll,.tb-scroll{height:clamp(460px,calc(100vh - 210px),620px);min-height:390px}.tb-canvas{min-width:820px}.tb-single-day .tb-canvas{min-width:0}.tb-dh-name,.tb-dh-month,.tb-dh-today{display:none}.tb-dh{min-height:36px}.tb-allday-row{top:36px}.tb-gutter-full span{font-size:9px}.tb-ev{padding:3px 5px}.tb-ev-time{font-size:7.5px}.tb-ev-title{font-size:10px}}
