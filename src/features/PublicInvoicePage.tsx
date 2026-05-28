@@ -1,8 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '../components/Ui';
 import { supabase } from '../lib/supabase';
-import { dateNL, euro, total } from '../lib/format';
+import { dateNL, euro, total, lineGross } from '../lib/format';
 import type { FinanceLine } from '../types';
+
+// Supabase functions.invoke geeft een non-2xx terug als FunctionsHttpError, waarvan
+// .message altijd de generieke "Edge Function returned a non-2xx status code" is.
+// De echte foutreden zit in de response-body (error.context). Deze helper haalt die
+// op, zodat de gebruiker ziet WAAROM een link niet werkt (verlopen, origin geblokkeerd, etc.).
+async function extractFunctionError(error: unknown, fallback: string): Promise<string> {
+  const context = (error as { context?: unknown })?.context;
+  if (context instanceof Response) {
+    try {
+      const payload = await context.clone().json().catch(() => null) as { error?: string } | null;
+      if (payload?.error) return payload.error;
+      const text = await context.text().catch(() => '');
+      if (text) return text;
+    } catch {
+      // val terug op message hieronder
+    }
+  }
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
 
 type PublicInvoice = {
   number: string;
@@ -49,7 +69,7 @@ export function PublicInvoicePage({ token }: { token: string }) {
       const { data, error } = await supabase.functions.invoke('invoice-public', {
         body: { action: 'getInvoice', token, mockPaymentId },
       });
-      if (error) throw error;
+      if (error) throw new Error(await extractFunctionError(error, 'Factuur laden mislukt'));
       if (!data?.ok) throw new Error(data?.error || 'Factuur laden mislukt');
       setPayload(data as PublicInvoicePayload & { ok: true });
       if (mockPaymentId) {
@@ -81,7 +101,7 @@ export function PublicInvoicePage({ token }: { token: string }) {
       const { data, error } = await supabase.functions.invoke('invoice-public', {
         body: { action: 'getInvoicePdf', token },
       });
-      if (error) throw error;
+      if (error) throw new Error(await extractFunctionError(error, 'PDF-snapshot downloaden mislukt'));
       if (!data?.ok || !data.pdf?.base64) throw new Error(data?.error || 'PDF-snapshot downloaden mislukt');
       downloadBase64File(data.pdf.base64, data.pdf.fileName || `factuur-${payload.invoice.number}.pdf`, data.pdf.mimeType || 'application/pdf');
     } catch (e) {
@@ -134,16 +154,16 @@ export function PublicInvoicePage({ token }: { token: string }) {
       <h2>Regels</h2>
       <div className="public-lines">
         {(invoice.lines || []).map(line => {
-          const subtotal = Number(line.quantity || 0) * Number(line.unit_price || 0);
-          const vat = subtotal * (Number(line.vat || 0) / 100);
           return <div className="public-line" key={line.id || line.description}>
             <div><strong>{line.description}</strong><span>{line.quantity} × {euro(line.unit_price)} · btw {line.vat ?? 0}%</span></div>
-            <strong>{euro(subtotal + vat)}</strong>
+            <strong>{euro(lineGross(line))}</strong>
           </div>;
         })}
       </div>
       <div className="public-total-row"><span>Totaal excl. btw</span><strong>{euro(totals.subtotal)}</strong></div>
-      <div className="public-total-row"><span>Btw</span><strong>{euro(totals.vat)}</strong></div>
+      {totals.vatBreakdown.length > 1
+        ? totals.vatBreakdown.map(row => <div className="public-total-row" key={row.rate}><span>Btw {row.rate}% over {euro(row.base)}</span><strong>{euro(row.vat)}</strong></div>)
+        : <div className="public-total-row"><span>Btw</span><strong>{euro(totals.vat)}</strong></div>}
       <div className="public-total-row grand"><span>Totaal incl. btw</span><strong>{euro(totals.total)}</strong></div>
       {invoice.notes && <div className="public-notes"><strong>Toelichting</strong><p>{invoice.notes}</p></div>}
     </section>
