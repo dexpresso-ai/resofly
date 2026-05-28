@@ -41,6 +41,7 @@ const MOLLIE_API_KEY = Deno.env.get('MOLLIE_INVOICE_API_KEY') || Deno.env.get('M
 const MOLLIE_WEBHOOK_URL = Deno.env.get('INVOICE_MOLLIE_WEBHOOK_URL') || Deno.env.get('MOLLIE_WEBHOOK_URL') || '';
 const MOLLIE_WEBHOOK_SECRET = Deno.env.get('INVOICE_MOLLIE_WEBHOOK_SECRET') || Deno.env.get('MOLLIE_WEBHOOK_SECRET') || '';
 const MOLLIE_ALLOW_MOCK = (Deno.env.get('MOLLIE_ALLOW_MOCK') || 'false').toLowerCase() === 'true';
+const INVOICE_DEBUG_ERRORS = (Deno.env.get('INVOICE_DEBUG_ERRORS') || 'false').toLowerCase() === 'true';
 const CHECKOUT_TTL_MINUTES = parsePositiveInt(Deno.env.get('INVOICE_CHECKOUT_TTL_MINUTES'), 30);
 
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
@@ -79,9 +80,17 @@ serve(async (req) => {
     }
   } catch (error) {
     const status = error instanceof WorkflowHttpError ? error.status : 500;
-    const internalMessage = error instanceof Error ? error.message : 'Onbekende fout.';
-    if (status >= 500) console.error('invoice-workflow error', internalMessage);
-    const publicMessage = error instanceof WorkflowHttpError ? error.message : 'Invoice workflow-actie mislukt door een server- of providerfout. Controleer de Edge Function logs.';
+    const internalMessage = describeError(error);
+    if (status >= 500) {
+      console.error('invoice-workflow error', internalMessage, serializeError(error));
+    } else {
+      console.warn('invoice-workflow warning', internalMessage, serializeError(error));
+    }
+    const publicMessage = error instanceof WorkflowHttpError
+      ? error.message
+      : INVOICE_DEBUG_ERRORS
+        ? `Invoice workflow-actie mislukt: ${internalMessage}`
+        : 'Invoice workflow-actie mislukt door een server- of providerfout. Controleer de Edge Function logs.';
     return json(req, { ok: false, error: publicMessage }, status);
   }
 });
@@ -230,7 +239,7 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
   let metadata: Record<string, unknown> = {};
 
   try {
-    if (MOLLIE_ALLOW_MOCK && !MOLLIE_API_KEY) {
+    if (MOLLIE_ALLOW_MOCK) {
       providerPaymentId = `mock_invoice_payment_${crypto.randomUUID()}`;
       checkoutUrl = `${publicUrl}?mock_payment=${encodeURIComponent(providerPaymentId)}`;
       metadata = { mock: true, publicUrl };
@@ -317,7 +326,7 @@ async function handleMollieWebhook(req: Request, url: URL, body: Record<string, 
 async function markMockInvoicePaymentPaid(providerPaymentId: string) {
   if (!MOLLIE_ALLOW_MOCK) throw new WorkflowHttpError('Mock payments zijn uitgeschakeld.', 403);
   const { data, error } = await supabaseAdmin.rpc('update_invoice_payment_status', { p_provider_payment_id: providerPaymentId, p_status: 'paid', p_paid_at: new Date().toISOString(), p_metadata: { mock: true, manual: true } });
-  if (error) throw error;
+  if (error) throwRpcError('update_invoice_payment_status', error);
   return data;
 }
 
@@ -333,15 +342,15 @@ async function loadClient(organizationId: string, clientId: string): Promise<Cli
 }
 async function loadProject(organizationId: string, projectId: string): Promise<ProjectRow | null> {
   const { data, error } = await supabaseAdmin.from('projects').select('id,name,description').eq('id', projectId).eq('organization_id', organizationId).maybeSingle();
-  if (error) throw error; return (data ?? null) as ProjectRow | null;
+  if (error) throwSupabaseError('projects lookup', error); return (data ?? null) as ProjectRow | null;
 }
 async function loadQuote(organizationId: string, quoteId: string): Promise<QuoteRow | null> {
   const { data, error } = await supabaseAdmin.from('quotes').select('id,number').eq('id', quoteId).eq('organization_id', organizationId).maybeSingle();
-  if (error) throw error; return (data ?? null) as QuoteRow | null;
+  if (error) throwSupabaseError('quotes lookup', error); return (data ?? null) as QuoteRow | null;
 }
 async function loadCompanySettings(organizationId: string): Promise<CompanySettingsRow | null> {
   const { data, error } = await supabaseAdmin.from('company_settings').select('company_name,trade_name,address_line1,address_line2,postal_code,city,country,email,phone,website,kvk_number,vat_number,iban,invoice_payment_terms,invoice_footer,invoice_accent_color').eq('organization_id', organizationId).maybeSingle();
-  if (error) throw error; return (data ?? null) as CompanySettingsRow | null;
+  if (error) throwSupabaseError('company_settings lookup', error); return (data ?? null) as CompanySettingsRow | null;
 }
 async function loadLatestOpenPayment(organizationId: string, invoiceId: string): Promise<{ id: string; provider_checkout_url: string | null; provider_payment_id: string | null; status: string; checkout_expires_at?: string | null } | null> {
   const { data, error } = await supabaseAdmin
@@ -376,14 +385,14 @@ async function beginInvoiceEmailSend(input: { invoiceId: string; organizationId:
     p_attachment_storage_provider: input.attachmentStorageProvider ?? null,
     p_attachment_storage_key: input.attachmentStorageKey ?? null,
   });
-  if (error) throw error;
+  if (error) throwRpcError('begin_invoice_email_send', error);
   const payload = data as { deliveryId?: string } | null;
   if (!payload?.deliveryId) throw new WorkflowHttpError('Verzendpoging kon niet worden voorbereid.', 500);
   return payload as { deliveryId: string; invoiceId?: string };
 }
 async function completeInvoiceEmailSend(deliveryId: string, organizationId: string, userId: string, providerEmailId: string): Promise<{ delivery?: unknown; invoice?: unknown; version?: unknown }> {
   const { data, error } = await supabaseAdmin.rpc('complete_invoice_email_send', { p_delivery_id: deliveryId, p_organization_id: organizationId, p_actor_user_id: userId, p_provider_email_id: providerEmailId });
-  if (error) throw error; return (data ?? {}) as { delivery?: unknown; invoice?: unknown; version?: unknown };
+  if (error) throwRpcError('complete_invoice_email_send', error); return (data ?? {}) as { delivery?: unknown; invoice?: unknown; version?: unknown };
 }
 async function failInvoiceEmailSend(deliveryId: string, organizationId: string, userId: string, errorMessage: string): Promise<void> {
   const { error } = await supabaseAdmin.rpc('fail_invoice_email_send', { p_delivery_id: deliveryId, p_organization_id: organizationId, p_actor_user_id: userId, p_error_message: errorMessage });
@@ -391,11 +400,11 @@ async function failInvoiceEmailSend(deliveryId: string, organizationId: string, 
 }
 async function beginInvoicePaymentCheckout(input: { invoiceId: string; organizationId: string; userId: string; amountCents: number; publicTokenHash: string | null; publicTokenExpiresAt: string | null; idempotencyKey: string; checkoutExpiresAt: string; metadata: Record<string, unknown> }) {
   const { data, error } = await supabaseAdmin.rpc('begin_invoice_payment_checkout', { p_invoice_id: input.invoiceId, p_organization_id: input.organizationId, p_actor_user_id: input.userId, p_amount_cents: input.amountCents, p_public_token_hash: input.publicTokenHash, p_public_token_expires_at: input.publicTokenExpiresAt, p_currency: 'EUR', p_idempotency_key: input.idempotencyKey, p_checkout_expires_at: input.checkoutExpiresAt, p_metadata: input.metadata });
-  if (error) throw error; return data as { id: string; provider_checkout_url: string | null; provider_payment_id: string | null };
+  if (error) throwRpcError('begin_invoice_payment_checkout', error); return data as { id: string; provider_checkout_url: string | null; provider_payment_id: string | null };
 }
 async function completeInvoicePaymentCheckout(paymentRecordId: string, organizationId: string, userId: string, providerPaymentId: string, checkoutUrl: string, status: string, metadata: Record<string, unknown>) {
   const { data, error } = await supabaseAdmin.rpc('complete_invoice_payment_checkout', { p_payment_record_id: paymentRecordId, p_organization_id: organizationId, p_actor_user_id: userId, p_provider_payment_id: providerPaymentId, p_provider_checkout_url: checkoutUrl, p_status: status, p_metadata: metadata });
-  if (error) throw error; return data;
+  if (error) throwRpcError('complete_invoice_payment_checkout', error); return data;
 }
 async function failInvoicePaymentCheckout(paymentRecordId: string, organizationId: string, userId: string, errorMessage: string, metadata: Record<string, unknown>) {
   const { data, error } = await supabaseAdmin.rpc('fail_invoice_payment_checkout', {
@@ -407,18 +416,52 @@ async function failInvoicePaymentCheckout(paymentRecordId: string, organizationI
     p_retry_after_seconds: 300,
     p_max_retries: 5,
   });
-  if (error) throw error;
+  if (error) throwRpcError('fail_invoice_payment_checkout', error);
   return data;
 }
 
 function describeError(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>;
+    const parts = [
+      record.message,
+      record.details,
+      record.hint,
+      record.code ? `code=${String(record.code)}` : null,
+    ].filter(Boolean).map(String);
+    if (parts.length > 0) return parts.join(' | ');
+  }
   try {
     return JSON.stringify(error);
   } catch {
     return 'Onbekende fout.';
   }
+}
+
+function serializeError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message, stack: error.stack };
+  }
+
+  if (error && typeof error === 'object') {
+    try {
+      return JSON.parse(JSON.stringify(error)) as Record<string, unknown>;
+    } catch {
+      return { value: String(error) };
+    }
+  }
+
+  return { value: error ?? null };
+}
+
+function throwSupabaseError(context: string, error: unknown): never {
+  throw new WorkflowHttpError(`${context} mislukt: ${describeError(error)}`, 500);
+}
+
+function throwRpcError(functionName: string, error: unknown): never {
+  throw new WorkflowHttpError(`Databasefunctie ${functionName} mislukt: ${describeError(error)}`, 500);
 }
 
 async function storeInvoicePdfSnapshot(organizationId: string, invoiceId: string, attachment: InvoicePdfAttachment): Promise<StoredInvoicePdfSnapshot> {
@@ -532,7 +575,7 @@ function json(req: Request, payload: unknown, status = 200): Response { return n
 function assertAllowedOrigin(req: Request): void { const origin = req.headers.get('origin') || ''; if (!origin && INVOICE_ALLOW_LOCAL_DEV) return; if (INVOICE_ALLOWED_ORIGINS.includes(origin)) return; if (INVOICE_ALLOW_LOCAL_DEV && isLocalOrigin(origin)) return; if (INVOICE_ALLOWED_ORIGINS.length === 0 && INVOICE_ALLOW_LOCAL_DEV) return; if (INVOICE_ALLOWED_ORIGINS.length === 0) throw new WorkflowHttpError('INVOICE_ALLOWED_ORIGINS of APP_PUBLIC_URL is verplicht in productie.', 500); throw new WorkflowHttpError('Deze frontend-origin is niet toegestaan voor invoice workflow-acties.', 403); }
 function isLocalOrigin(origin: string): boolean { return ['http://localhost:5173', 'http://127.0.0.1:5173'].includes(origin); }
 async function requireUser(req: Request): Promise<{ id: string; email?: string }> { const auth = req.headers.get('Authorization') || ''; const token = auth.replace(/^Bearer\s+/i, ''); if (!token) throw new WorkflowHttpError('Niet ingelogd: Authorization header ontbreekt.', 401); const { data, error } = await supabaseAdmin.auth.getUser(token); if (error || !data.user) throw new WorkflowHttpError('Niet ingelogd of ongeldig sessietoken.', 401); return { id: data.user.id, email: data.user.email || undefined }; }
-async function requireOrganizationAccess(userId: string, organizationId: string): Promise<OrganizationRole> { if (!isUuid(organizationId)) throw new WorkflowHttpError('Ongeldige organisatie.', 400); const { data, error } = await supabaseAdmin.from('organization_members').select('role').eq('organization_id', organizationId).eq('user_id', userId).eq('status', 'active').limit(1); if (error) throw error; const role = data?.[0]?.role as OrganizationRole | undefined; if (!role) throw new WorkflowHttpError('Geen toegang tot deze organisatie.', 403); return role; }
+async function requireOrganizationAccess(userId: string, organizationId: string): Promise<OrganizationRole> { if (!isUuid(organizationId)) throw new WorkflowHttpError('Ongeldige organisatie.', 400); const { data, error } = await supabaseAdmin.from('organization_members').select('role').eq('organization_id', organizationId).eq('user_id', userId).eq('status', 'active').limit(1); if (error) throwSupabaseError('organization_members lookup', error); const role = data?.[0]?.role as OrganizationRole | undefined; if (!role) throw new WorkflowHttpError('Geen toegang tot deze organisatie.', 403); return role; }
 function isUuid(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
 function isEmail(value: string): boolean { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value); }
 async function parseBody(req: Request, contentType: string): Promise<Record<string, string>> { if (contentType.includes('application/json')) return await req.json().catch(() => ({})); const text = await req.text(); return Object.fromEntries(new URLSearchParams(text)); }

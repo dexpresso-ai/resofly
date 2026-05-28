@@ -104,13 +104,23 @@ create trigger invoices_normalize_totals
   before insert or update of lines, currency on public.invoices
   for each row execute function public.normalize_invoice_totals();
 
+with invoice_totals as (
+  select
+    i.id,
+    t.subtotal,
+    t.vat,
+    t.total
+  from public.invoices i
+  cross join lateral public.invoice_calculated_totals(i.lines) t
+)
 update public.invoices i
-   set subtotal_amount = t.subtotal,
-       vat_amount = t.vat,
-       total_amount = t.total,
-       currency = coalesce(nullif(btrim(i.currency), ''), 'EUR'),
+   set subtotal_amount = coalesce(invoice_totals.subtotal, 0),
+       vat_amount = coalesce(invoice_totals.vat, 0),
+       total_amount = coalesce(invoice_totals.total, 0),
+       currency = upper(coalesce(nullif(btrim(i.currency), ''), 'EUR')),
        updated_at = now()
-  from lateral public.invoice_calculated_totals(i.lines) t;
+  from invoice_totals
+ where invoice_totals.id = i.id;
 
 -- ------------------------------------------------------------
 -- 1. Versioned public invoice links
