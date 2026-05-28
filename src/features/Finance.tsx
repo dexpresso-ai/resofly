@@ -3,7 +3,7 @@ import { CreditCard, Download, Eye, FileText, Mail, ShieldCheck, Send, XCircle }
 import type { AppData, FinanceLine, FinanceStatus, Invoice, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
 import { Modal } from '../components/Modal';
 import { Button } from '../components/Ui';
-import { dateNL, euro, total } from '../lib/format';
+import { dateNL, euro, total, lineGross } from '../lib/format';
 import { exportFinancePDF } from '../lib/pdf';
 
 export function Quotes({
@@ -403,6 +403,10 @@ function InvoiceDetailModal({
         <QuoteMetric label="Betaalstatus" value={latestPayment ? paymentStatusLabel(latestPayment.status) : statusLabel(invoice.status)} />
       </section>
 
+      {amounts.vatBreakdown.length > 1 && <section className="quote-detail-metrics" aria-label="BTW-uitsplitsing per tarief">
+        {amounts.vatBreakdown.map(row => <QuoteMetric key={row.rate} label={`BTW ${row.rate}% over ${euro(row.base)}`} value={euro(row.vat)} />)}
+      </section>}
+
       <section className="quote-detail-section">
         <div className="quote-detail-section-head"><div><span>Acties</span><strong>Versturen, betaallink en PDF-snapshot</strong></div></div>
         <InvoiceStatusStrip invoice={invoice} delivery={latestDelivery} payment={latestPayment} />
@@ -434,9 +438,7 @@ function FinanceLineTable({ lines, emptyText }: { lines: FinanceLine[]; emptyTex
     <table className="quote-lines-table">
       <thead><tr><th>Omschrijving</th><th>Aantal</th><th>Prijs</th><th>BTW</th><th>Totaal</th></tr></thead>
       <tbody>{lines.map(line => {
-        const subtotal = Number(line.quantity || 0) * Number(line.unit_price || 0);
-        const lineVat = subtotal * Number(line.vat || 0) / 100;
-        return <tr key={line.id}><td>{line.description || '—'}</td><td>{line.quantity}</td><td>{euro(line.unit_price)}</td><td>{line.vat}%</td><td>{euro(subtotal + lineVat)}</td></tr>;
+        return <tr key={line.id}><td>{line.description || '—'}</td><td>{line.quantity}</td><td>{euro(line.unit_price)}</td><td>{line.vat}%</td><td>{euro(lineGross(line))}</td></tr>;
       })}</tbody>
     </table>
   </div>;

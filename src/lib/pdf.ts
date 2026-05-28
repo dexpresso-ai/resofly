@@ -1,6 +1,7 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage, type RGB } from 'pdf-lib';
 import type { Client, CompanySettings, Invoice, Quote } from '../types';
 import { dateNL, total } from './format';
+import { lineGross as centExactLineGross } from './money';
 
 const A4: [number, number] = [595.28, 841.89];
 const DEFAULT_TEXT = '#1a1a1a';
@@ -337,8 +338,7 @@ export async function createFinancePDFBlob(doc: Quote | Invoice, kind: 'quote' |
       cursorY -= 28;
     }
 
-    const lineNet = Number(line.quantity || 0) * Number(line.unit_price || 0);
-    const lineGross = lineNet * (1 + Number(line.vat || 0) / 100);
+    const lineGrossValue = centExactLineGross(line);
     const x = 48;
     page.drawLine({ start: { x, y: cursorY + 7 }, end: { x: x + 500, y: cursorY + 7 }, thickness: 0.4, color: ctx.mutedColor, opacity: 0.25 });
     let descY = cursorY;
@@ -349,7 +349,7 @@ export async function createFinancePDFBlob(doc: Quote | Invoice, kind: 'quote' |
     drawText(page, String(line.quantity ?? 0), x + 322, cursorY, ctx, { size: 9, align: 'right' });
     drawText(page, fmtMoney(Number(line.unit_price || 0)), x + 405, cursorY, ctx, { size: 9, align: 'right' });
     drawText(page, `${line.vat ?? 0}%`, x + 449, cursorY, ctx, { size: 9, align: 'right' });
-    drawText(page, fmtMoney(lineGross), x + 500, cursorY, ctx, { size: 9, bold: true, align: 'right' });
+    drawText(page, fmtMoney(lineGrossValue), x + 500, cursorY, ctx, { size: 9, bold: true, align: 'right' });
     cursorY -= rowHeight;
   }
 
@@ -362,16 +362,24 @@ export async function createFinancePDFBlob(doc: Quote | Invoice, kind: 'quote' |
 
   const totalX = page.getWidth() - 248;
   page.drawLine({ start: { x: totalX, y: cursorY + 10 }, end: { x: page.getWidth() - 48, y: cursorY + 10 }, thickness: 0.8, color: ctx.accentColor });
-  const summaryRows: Array<[string, string, boolean]> = [
-    ['Subtotaal', fmtMoney(totals.subtotal), false],
-    ['BTW', fmtMoney(totals.vat), false],
-    ['Totaal', fmtMoney(totals.total), true],
-  ];
-  for (const [label, value, isBold] of summaryRows) {
-    drawText(page, label, totalX, cursorY, ctx, { size: isBold ? 12 : 9, bold: isBold });
-    drawText(page, value, page.getWidth() - 48, cursorY, ctx, { size: isBold ? 12 : 9, bold: isBold, align: 'right' });
-    cursorY -= isBold ? 20 : 16;
+  drawText(page, 'Subtotaal', totalX, cursorY, ctx, { size: 9 });
+  drawText(page, fmtMoney(totals.subtotal), page.getWidth() - 48, cursorY, ctx, { size: 9, align: 'right' });
+  cursorY -= 16;
+  // Wettelijk: btw per tarief uitsplitsen op de factuur. Bij één tarief tonen we
+  // het percentage in het label; bij meerdere tarieven elk apart.
+  for (const row of totals.vatBreakdown) {
+    drawText(page, `BTW ${row.rate}%`, totalX, cursorY, ctx, { size: 9 });
+    drawText(page, fmtMoney(row.vat), page.getWidth() - 48, cursorY, ctx, { size: 9, align: 'right' });
+    cursorY -= 16;
   }
+  if (totals.vatBreakdown.length === 0) {
+    drawText(page, 'BTW', totalX, cursorY, ctx, { size: 9 });
+    drawText(page, fmtMoney(totals.vat), page.getWidth() - 48, cursorY, ctx, { size: 9, align: 'right' });
+    cursorY -= 16;
+  }
+  drawText(page, 'Totaal', totalX, cursorY, ctx, { size: 12, bold: true });
+  drawText(page, fmtMoney(totals.total), page.getWidth() - 48, cursorY, ctx, { size: 12, bold: true, align: 'right' });
+  cursorY -= 20;
 
   if (doc.notes) {
     cursorY -= 8;

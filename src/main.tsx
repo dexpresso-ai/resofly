@@ -50,7 +50,7 @@ import { exportFinancePDF } from './lib/pdf';
 import type {
   AppData, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettingsInput, EntityType, FinanceLine, Invoice, Note, OrganizationContext, OrganizationRole, Project, Quote, Task, TaskStatus, Ticket, Subtask, Comment as TaskComment,
 } from './types';
-import { euro, total, uid } from './lib/format';
+import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
 
 type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'notes'|'clients'|'client'|'projects'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
@@ -265,6 +265,19 @@ function App() {
   async function saveEdit(values: Record<string, unknown>) {
     if (!edit) return;
     if (!ensureCanWrite()) return;
+    if (edit.kind === 'quote' || edit.kind === 'invoice') {
+      const financeLines = Array.isArray(values.lines) ? (values.lines as FinanceLine[]) : [];
+      const meaningfulLines = financeLines.filter(line => String(line.description || '').trim().length > 0 && Number(line.quantity || 0) > 0);
+      if (meaningfulLines.length === 0) {
+        setError('Voeg minimaal één regel toe met een omschrijving en een aantal groter dan 0.');
+        return;
+      }
+      const docTotal = total(financeLines).total;
+      if (!(docTotal > 0)) {
+        setError('Het documenttotaal moet groter zijn dan € 0,00.');
+        return;
+      }
+    }
     setLoading(true); setError(null);
     try {
       switch (edit.kind) {
@@ -864,7 +877,15 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
     return project.client_id === selectedClientId || !project.client_id || project.id === form.project_id;
   });
 
-  const updateLine = (id: string, k: keyof FinanceLine, v: string | number) => set('lines', lines.map(l => l.id === id ? { ...l, [k]: k === 'description' ? v : Number(v) } : l));
+  const updateLine = (id: string, k: keyof FinanceLine, v: string | number) => set('lines', lines.map(l => {
+    if (l.id !== id) return l;
+    if (k === 'description') return { ...l, description: v };
+    // Geldvelden: nooit negatief, en btw op een realistisch maximum begrenzen.
+    const numeric = Number(v);
+    const safe = Number.isFinite(numeric) ? Math.max(0, numeric) : 0;
+    const clamped = k === 'vat' ? Math.min(safe, 100) : safe;
+    return { ...l, [k]: clamped };
+  }));
   const addLine = () => set('lines', [...lines, { id: uid(), description: '', quantity: 1, unit_price: 0, vat: 21 }]);
   const removeLine = (id: string) => set('lines', lines.length <= 1 ? lines : lines.filter(x => x.id !== id));
 
@@ -957,8 +978,7 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
           <span />
         </div>
         {lines.map(line => {
-          const subtotal = Number(line.quantity || 0) * Number(line.unit_price || 0);
-          const vatAmount = subtotal * Number(line.vat || 0) / 100;
+          const lineTotal = lineGross(line);
           return <div className="finance-line-row" role="row" key={line.id}>
             <Field label="Regelomschrijving" compact>
               <Input value={line.description} onChange={e=>updateLine(line.id,'description',e.target.value)} placeholder="Bijv. Strategie, ontwerp en implementatie" disabled={disabled}/>
@@ -972,7 +992,7 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
             <Field label="BTW %" compact>
               <Input type="number" min="0" step="0.01" value={line.vat} onChange={e=>updateLine(line.id,'vat',e.target.value)} disabled={disabled}/>
             </Field>
-            <div className="finance-line-total"><span>Regeltotaal</span><strong>{euro(subtotal + vatAmount)}</strong></div>
+            <div className="finance-line-total"><span>Regeltotaal</span><strong>{euro(lineTotal)}</strong></div>
             <Button className="finance-line-remove" onClick={()=>removeLine(line.id)} disabled={disabled || lines.length <= 1} title="Regel verwijderen">×</Button>
           </div>;
         })}

@@ -1,3 +1,5 @@
+import { computeTotals, lineGross, lineNet, type MoneyTotals } from './money';
+
 export const euro = (amount: number | null | undefined) =>
   new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' }).format(Number(amount ?? 0));
 
@@ -18,9 +20,12 @@ export const dateNL = (date?: string | null) => {
 };
 
 export const uid = () => crypto.randomUUID();
-export const total = (lines: { quantity: number; unit_price: number; vat: number }[] = []) => {
-  const subtotal = lines.reduce((sum, l) => sum + Number(l.quantity || 0) * Number(l.unit_price || 0), 0);
-  const vat = lines.reduce((sum, l) => sum + Number(l.quantity || 0) * Number(l.unit_price || 0) * Number(l.vat || 0) / 100, 0);
-  return { subtotal, vat, total: subtotal + vat };
-};
+
+// `total` blijft de publieke API voor de hele app, maar rekent nu cent-exact en
+// per btw-tarief via de centrale geldmodule. Subtotaal + btw sluit gegarandeerd
+// aan op het totaal, en `total.total` is identiek aan wat naar Mollie gaat.
+export const total = (lines: { quantity: number; unit_price: number; vat: number }[] = []): MoneyTotals =>
+  computeTotals(lines);
+
+export { lineGross, lineNet };
 export const priorityLabel = (p: string) => p === 'high' ? 'Hoog' : p === 'med' ? 'Normaal' : 'Laag';

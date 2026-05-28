@@ -1,6 +1,6 @@
 {
   "name": "brandcore-webapp",
-  "version": "2.4.2-quote-versions-audit-context-hardening",
+  "version": "2.5.0-finance-money-precision-payment-hardening",
   "private": true,
   "type": "module",
   "scripts": {
@@ -21,8 +21,8 @@
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
-    "supabase": "^2.98.0",
     "typescript": "^5.5.3",
-    "vite": "^5.4.0"
+    "vite": "^5.4.0",
+    "supabase": "^2.98.0"
   }
 }

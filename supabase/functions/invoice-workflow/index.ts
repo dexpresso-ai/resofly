@@ -202,7 +202,7 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
   const invoice = await loadInvoice(organizationId, invoiceId);
   if (['paid','cancelled','void','written_off'].includes(invoice.status)) throw new WorkflowHttpError('Voor deze factuur kan geen betaallink worden aangemaakt.', 409);
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
-  const amountCents = Math.round(calculateTotals(invoice.lines).total * 100);
+  const amountCents = calculateTotals(invoice.lines).totalCents;
   if (amountCents <= 0) throw new WorkflowHttpError('Factuurbedrag moet groter zijn dan 0.', 422);
 
   const existingPayment = await loadLatestOpenPayment(organizationId, invoiceId);
@@ -529,7 +529,14 @@ async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: 
   if (y < 230) { drawPdfFooter(page, regular, company); page = pdfDoc.addPage([595.28, 841.89]); y = 760; }
   y -= 10;
   drawPdfText(page, 'Subtotaal', 365, y, regular, 10); drawPdfText(page, formatEuro(totals.subtotal), 547, y, regular, 10, { align: 'right' }); y -= 18;
-  drawPdfText(page, 'BTW', 365, y, regular, 10); drawPdfText(page, formatEuro(totals.vat), 547, y, regular, 10, { align: 'right' }); y -= 22;
+  if (totals.vatBreakdown.length > 0) {
+    for (const row of totals.vatBreakdown) {
+      drawPdfText(page, `BTW ${row.rate}%`, 365, y, regular, 10); drawPdfText(page, formatEuro(row.vat), 547, y, regular, 10, { align: 'right' }); y -= 18;
+    }
+    y -= 4;
+  } else {
+    drawPdfText(page, 'BTW', 365, y, regular, 10); drawPdfText(page, formatEuro(totals.vat), 547, y, regular, 10, { align: 'right' }); y -= 22;
+  }
   page.drawLine({ start: { x: 365, y: y + 12 }, end: { x: 547, y: y + 12 }, thickness: 0.8, color: accent });
   drawPdfText(page, 'Totaal', 365, y, bold, 13); drawPdfText(page, formatEuro(totals.total), 547, y, bold, 13, { align: 'right' });
   if (company?.iban) { y -= 30; drawPdfText(page, `Betalen op IBAN: ${company.iban}`, 365, y, regular, 9, { color: muted }); }
@@ -545,7 +552,7 @@ async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: 
 }
 
 function drawTableHeader(page: PDFPage, y: number, bold: PDFFont, accent: RGB, muted: RGB): void { page.drawRectangle({ x: 48, y: y - 8, width: 499, height: 24, color: accent, opacity: 0.18 }); drawPdfText(page, 'Omschrijving', 56, y, bold, 8, { color: muted }); drawPdfText(page, 'Aantal', 356, y, bold, 8, { align: 'right', color: muted }); drawPdfText(page, 'Prijs', 424, y, bold, 8, { align: 'right', color: muted }); drawPdfText(page, 'BTW', 470, y, bold, 8, { align: 'right', color: muted }); drawPdfText(page, 'Totaal', 547, y, bold, 8, { align: 'right', color: muted }); }
-function drawLine(page: PDFPage, line: InvoiceLine, y: number, regular: PDFFont, bold: PDFFont, muted: RGB): number { const descriptionLines = wrapPdfText(line.description || '-', regular, 9, 270); const quantity = Number(line.quantity || 0); const unitPrice = Number(line.unit_price || 0); const vatPercentage = Number(line.vat || 0); const lineSubtotal = quantity * unitPrice; const lineTotal = lineSubtotal * (1 + vatPercentage / 100); page.drawLine({ start: { x: 48, y: y + 8 }, end: { x: 547, y: y + 8 }, thickness: 0.35, color: muted, opacity: 0.25 }); let descY = y; for (const desc of descriptionLines) { drawPdfText(page, desc, 56, descY, regular, 9); descY -= 12; } drawPdfText(page, String(quantity), 356, y, regular, 9, { align: 'right' }); drawPdfText(page, formatEuro(unitPrice), 424, y, regular, 9, { align: 'right' }); drawPdfText(page, `${vatPercentage}%`, 470, y, regular, 9, { align: 'right' }); drawPdfText(page, formatEuro(lineTotal), 547, y, bold, 9, { align: 'right' }); return Math.max(26, descriptionLines.length * 12 + 12); }
+function drawLine(page: PDFPage, line: InvoiceLine, y: number, regular: PDFFont, bold: PDFFont, muted: RGB): number { const descriptionLines = wrapPdfText(line.description || '-', regular, 9, 270); const quantity = Number(line.quantity || 0); const unitPrice = Number(line.unit_price || 0); const vatPercentage = Number(line.vat || 0); const lineTotal = lineGrossEuro(line); page.drawLine({ start: { x: 48, y: y + 8 }, end: { x: 547, y: y + 8 }, thickness: 0.35, color: muted, opacity: 0.25 }); let descY = y; for (const desc of descriptionLines) { drawPdfText(page, desc, 56, descY, regular, 9); descY -= 12; } drawPdfText(page, String(quantity), 356, y, regular, 9, { align: 'right' }); drawPdfText(page, formatEuro(unitPrice), 424, y, regular, 9, { align: 'right' }); drawPdfText(page, `${vatPercentage}%`, 470, y, regular, 9, { align: 'right' }); drawPdfText(page, formatEuro(lineTotal), 547, y, bold, 9, { align: 'right' }); return Math.max(26, descriptionLines.length * 12 + 12); }
 function drawSectionTitle(page: PDFPage, title: string, x: number, y: number, bold: PDFFont, accent: RGB, muted: RGB): void { drawPdfText(page, title.toUpperCase(), x, y, bold, 8, { color: muted }); page.drawLine({ start: { x, y: y - 5 }, end: { x: x + 180, y: y - 5 }, thickness: 0.6, color: accent }); }
 function drawPdfFooter(page: PDFPage, font: PDFFont, company: CompanySettingsRow | null): void { const footer = company?.invoice_footer || company?.invoice_payment_terms || 'Bedankt voor het vertrouwen.'; page.drawLine({ start: { x: 48, y: 58 }, end: { x: 547, y: 58 }, thickness: 0.45, color: rgb(0.38, 0.38, 0.38), opacity: 0.35 }); drawWrappedPdfText(page, footer, 48, 42, 499, font, 8, 10, rgb(0.38, 0.38, 0.38)); }
 function drawPdfText(page: PDFPage, text: string, x: number, y: number, font: PDFFont, size: number, opts: { align?: 'left' | 'right'; color?: RGB } = {}): void { const safe = normalizePdfText(text); if (!safe) return; const width = font.widthOfTextAtSize(safe, size); page.drawText(safe, { x: opts.align === 'right' ? x - width : x, y, font, size, color: opts.color || rgb(0.1, 0.1, 0.1) }); }
@@ -555,7 +562,37 @@ function splitLongPdfWord(word: string, font: PDFFont, size: number, maxWidth: n
 function normalizePdfText(value: unknown): string { return String(value ?? '').normalize('NFKC').replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"').replace(/[\u2013\u2014\u2212]/g, '-').replace(/\u2026/g, '...').replace(/\u2022/g, '-').replace(/€/g, 'EUR').replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').split('').filter((char) => { const code = char.charCodeAt(0); return (code >= 32 && code <= 126) || (code >= 160 && code <= 255); }).join('').trim(); }
 function companyAddressLines(company: CompanySettingsRow | null): string[] { if (!company) return ['ResoFly']; const cityLine = [company.postal_code, company.city].filter(Boolean).join(' '); return [company.company_name, company.trade_name && company.trade_name !== company.company_name ? company.trade_name : '', company.address_line1, company.address_line2, cityLine, company.country, company.email ? `E-mail: ${company.email}` : '', company.phone ? `Tel: ${company.phone}` : '', company.website ? `Web: ${company.website}` : '', company.kvk_number ? `KvK: ${company.kvk_number}` : '', company.vat_number ? `BTW: ${company.vat_number}` : '', company.iban ? `IBAN: ${company.iban}` : ''].filter((value) => normalizePdfText(value).length > 0).map(normalizePdfText); }
 function clientAddressLines(client: ClientRow): string[] { return [client.name, client.contact_name ? `T.a.v. ${client.contact_name}` : '', client.email ? `E-mail: ${client.email}` : ''].filter((value) => normalizePdfText(value).length > 0).map(normalizePdfText); }
-function calculateTotals(lines: InvoiceLine[] = []): { subtotal: number; vat: number; total: number } { return lines.reduce((acc, line) => { const subtotal = Number(line.quantity || 0) * Number(line.unit_price || 0); const vat = subtotal * (Number(line.vat || 0) / 100); acc.subtotal += subtotal; acc.vat += vat; acc.total += subtotal + vat; return acc; }, { subtotal: 0, vat: 0, total: 0 }); }
+function toCents(euros: number): number {
+  if (!Number.isFinite(euros)) return 0;
+  const scaled = euros * 100;
+  return scaled >= 0 ? Math.round(scaled + 1e-6) : -Math.round(Math.abs(scaled) + 1e-6);
+}
+
+function calculateTotals(lines: InvoiceLine[] = []): { subtotal: number; vat: number; total: number; totalCents: number; vatBreakdown: Array<{ rate: number; base: number; vat: number }> } {
+  const baseCentsByRate = new Map<number, number>();
+  let subtotalCents = 0;
+  for (const line of lines) {
+    const netCents = toCents(Number(line.quantity || 0) * Number(line.unit_price || 0));
+    subtotalCents += netCents;
+    const rate = Number(line.vat || 0);
+    baseCentsByRate.set(rate, (baseCentsByRate.get(rate) ?? 0) + netCents);
+  }
+  let vatCents = 0;
+  const vatBreakdown: Array<{ rate: number; base: number; vat: number }> = [];
+  for (const [rate, baseCents] of [...baseCentsByRate.entries()].sort((a, b) => a[0] - b[0])) {
+    const rateVatCents = toCents((baseCents / 100) * (rate / 100));
+    vatCents += rateVatCents;
+    vatBreakdown.push({ rate, base: baseCents / 100, vat: rateVatCents / 100 });
+  }
+  const totalCents = subtotalCents + vatCents;
+  return { subtotal: subtotalCents / 100, vat: vatCents / 100, total: totalCents / 100, totalCents, vatBreakdown };
+}
+
+function lineGrossEuro(line: InvoiceLine): number {
+  const netCents = toCents(Number(line.quantity || 0) * Number(line.unit_price || 0));
+  const vatCents = toCents((netCents / 100) * (Number(line.vat || 0) / 100));
+  return (netCents + vatCents) / 100;
+}
 function validateInvoicePdfAttachment(attachment: InvoicePdfAttachment): void { if (attachment.mimeType !== 'application/pdf') throw new WorkflowHttpError('De gegenereerde factuurbijlage is geen PDF.', 500); if (!attachment.fileName.toLowerCase().endsWith('.pdf')) throw new WorkflowHttpError('De gegenereerde factuurbijlage heeft geen PDF-bestandsnaam.', 500); if (!Number.isFinite(attachment.sizeBytes) || attachment.sizeBytes <= 0) throw new WorkflowHttpError('De gegenereerde factuur-PDF is leeg.', 500); if (attachment.sizeBytes > INVOICE_PDF_MAX_ATTACHMENT_BYTES) throw new WorkflowHttpError(`De factuur-PDF is te groot om als e-mailbijlage te versturen (${Math.ceil(attachment.sizeBytes / 1024 / 1024)} MB).`, 422); if (!/^[a-f0-9]{64}$/i.test(attachment.sha256)) throw new WorkflowHttpError('De factuur-PDF kon niet betrouwbaar worden gehasht.', 500); }
 function formatDateNl(value: string | null): string { if (!value) return '-'; const date = new Date(value); if (Number.isNaN(date.getTime())) return value; return date.toLocaleDateString('nl-NL'); }
 function formatEuro(value: number): string { return new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' }).format(value || 0); }
