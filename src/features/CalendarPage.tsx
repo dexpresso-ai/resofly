@@ -19,8 +19,8 @@ import { getNoteTypeLabel } from './Notes';
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
 
-const HOUR_START = 0;
-const HOUR_END = 24;
+const HOUR_START = 8;
+const HOUR_END = 18;
 const SLOT_MINUTES = 30;
 const TOTAL_SLOTS = (HOUR_END - HOUR_START) * (60 / SLOT_MINUTES);
 const MIN_EVENT_HEIGHT_SLOTS = 0.85;
@@ -124,6 +124,14 @@ function dayBounds(day: Date): { start: Date; end: Date } {
   return { start, end: addDays(start, 1) };
 }
 
+function visibleTimeBounds(day: Date): { start: Date; end: Date } {
+  const start = startOfDay(day);
+  start.setHours(HOUR_START, 0, 0, 0);
+  const end = startOfDay(day);
+  end.setHours(HOUR_END, 0, 0, 0);
+  return { start, end };
+}
+
 function eventOverlapsDay(event: CalendarExternalEvent, day: Date): boolean {
   if (event.all_day) {
     // Google and Microsoft both use an exclusive end date for all-day events.
@@ -214,6 +222,22 @@ function dateToDayFraction(day: Date, d: Date): number {
   return (time - start.getTime()) / (end.getTime() - start.getTime());
 }
 
+function dateToVisibleDayFraction(day: Date, d: Date): number {
+  const { start, end } = visibleTimeBounds(day);
+  const time = d.getTime();
+  if (time <= start.getTime()) return 0;
+  if (time >= end.getTime()) return 1;
+  return (time - start.getTime()) / (end.getTime() - start.getTime());
+}
+
+function eventOverlapsVisibleWindow(event: CalendarExternalEvent, day: Date): boolean {
+  if (event.all_day) return false;
+  const { start, end } = visibleTimeBounds(day);
+  const eventStart = new Date(event.starts_at);
+  const eventEnd = new Date(event.ends_at);
+  return eventStart < end && eventEnd > start;
+}
+
 type CalendarView = 'day' | 'week' | 'month' | 'list';
 
 interface DragState { dayIndex: number; startSlot: number; endSlot: number }
@@ -233,20 +257,20 @@ type TimedEventSegment = {
 };
 
 function layoutTimedEventsForDay(day: Date, events: CalendarExternalEvent[]): TimedEventSegment[] {
-  const { start: dayStart, end: dayEnd } = dayBounds(day);
-  const minutesInDay = (HOUR_END - HOUR_START) * 60;
+  const { start: visibleStartBound, end: visibleEndBound } = visibleTimeBounds(day);
+  const minutesInWindow = (HOUR_END - HOUR_START) * 60;
   const raw = events
-    .filter(ev => !ev.all_day && eventOverlapsDay(ev, day))
+    .filter(ev => eventOverlapsVisibleWindow(ev, day))
     .map(ev => {
       const eventStart = new Date(ev.starts_at);
       const eventEnd = new Date(ev.ends_at);
-      const visibleStart = new Date(Math.max(eventStart.getTime(), dayStart.getTime()));
-      const visibleEnd = new Date(Math.min(eventEnd.getTime(), dayEnd.getTime()));
-      const startMinute = Math.max(0, Math.round((visibleStart.getTime() - dayStart.getTime()) / 60000));
-      const endMinute = Math.max(startMinute + 15, Math.min(minutesInDay, Math.round((visibleEnd.getTime() - dayStart.getTime()) / 60000)));
-      const top = dateToDayFraction(day, visibleStart) * 100;
-      const height = Math.max(dateToDayFraction(day, visibleEnd) * 100 - top, (100 / TOTAL_SLOTS) * MIN_EVENT_HEIGHT_SLOTS);
-      return { event: ev, startMinute, endMinute, top, height, column: 0, columns: 1, startsBeforeDay: eventStart < dayStart, endsAfterDay: eventEnd > dayEnd };
+      const visibleStart = new Date(Math.max(eventStart.getTime(), visibleStartBound.getTime()));
+      const visibleEnd = new Date(Math.min(eventEnd.getTime(), visibleEndBound.getTime()));
+      const startMinute = Math.max(0, Math.round((visibleStart.getTime() - visibleStartBound.getTime()) / 60000));
+      const endMinute = Math.max(startMinute + 15, Math.min(minutesInWindow, Math.round((visibleEnd.getTime() - visibleStartBound.getTime()) / 60000)));
+      const top = dateToVisibleDayFraction(day, visibleStart) * 100;
+      const height = Math.max(dateToVisibleDayFraction(day, visibleEnd) * 100 - top, (100 / TOTAL_SLOTS) * MIN_EVENT_HEIGHT_SLOTS);
+      return { event: ev, startMinute, endMinute, top, height, column: 0, columns: 1, startsBeforeDay: eventStart < visibleStartBound, endsAfterDay: eventEnd > visibleEndBound };
     })
     .sort((a, b) => a.startMinute - b.startMinute || a.endMinute - b.endMinute);
 
@@ -331,8 +355,20 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
   }
 
   function allDayEventsForDay(day: Date) { return events.filter(e => e.all_day && eventOverlapsDay(e, day)); }
+  function outsideWorkdayEventsForDay(day: Date) {
+    const { start, end } = visibleTimeBounds(day);
+    return events
+      .filter(e => {
+        if (e.all_day || !eventOverlapsDay(e, day) || eventOverlapsVisibleWindow(e, day)) return false;
+        const eventStart = new Date(e.starts_at);
+        const eventEnd = new Date(e.ends_at);
+        return eventEnd <= start || eventStart >= end;
+      })
+      .sort((a, b) => a.starts_at.localeCompare(b.starts_at));
+  }
   function tasksForDay(day: Date) { return tasks.filter(t => t.end_date && isSameDay(new Date(`${t.end_date}T12:00:00`), day)); }
   function eventColor(ev: CalendarExternalEvent): string { return sourceColors.get(ev.source_id) ?? '#FFD966'; }
+  const hasOutsideWorkdayEvents = days.some(day => outsideWorkdayEventsForDay(day).length > 0);
 
   function isInSelection(di: number, si: number): boolean {
     if (!drag || !isDragging || di !== drag.dayIndex) return false;
@@ -352,7 +388,7 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
 
   const today = (d: Date) => isSameDay(d, new Date());
   const now = new Date();
-  const gridStyle = { '--tb-days': days.length } as CSSProperties;
+  const gridStyle = { '--tb-days': days.length, '--tb-slots': TOTAL_SLOTS } as CSSProperties;
 
   return (
     <div className={`tb-container${days.length === 1 ? ' tb-single-day' : ''}`} style={gridStyle} onMouseLeave={() => { if (isDragging) handleMouseUp(); }}>
@@ -390,6 +426,33 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
             })}
           </div>
 
+          {hasOutsideWorkdayEvents && (
+            <div className="tb-edge-row">
+              <div className="tb-gutter tb-sticky-gutter tb-edge-label">Buiten werktijd</div>
+              {days.map((day, di) => {
+                const edgeEvents = outsideWorkdayEventsForDay(day);
+                return (
+                  <div className={`tb-edge-cell${today(day) ? ' tb-today-col' : ''}`} key={di}>
+                    {edgeEvents.map(ev => (
+                      <button
+                        type="button"
+                        className={`tb-edge-chip${ev.visibility === 'private' ? ' private-event' : ''}`}
+                        key={`${ev.provider}-${ev.provider_event_id}-${di}`}
+                        onClick={() => onOpenEvent(ev)}
+                        title={`${formatTime(ev.starts_at)} – ${formatTime(ev.ends_at)}\n${ev.title}\n${providerLabel(ev.provider)} · ${ev.source_name}`}
+                        style={eventColorStyle(eventColor(ev))}
+                      >
+                        <span>{formatTime(ev.starts_at)} – {formatTime(ev.ends_at)}</span>
+                        <strong>{ev.title}</strong>
+                      </button>
+                    ))}
+                    {edgeEvents.length === 0 && <span className="tb-ad-empty">—</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           <div className="tb-grid">
             {hourLabels.map((h, si) => (
               <div className={`tb-gutter tb-sticky-gutter tb-time-label${h.minutes === 0 ? ' tb-gutter-full' : ' tb-gutter-half'}`} key={`g${si}`} style={{ gridRow: si + 1 }}>
@@ -400,7 +463,7 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
             {days.map((day, di) => {
               const daySegments = layoutTimedEventsForDay(day, events);
               const isToday = today(day);
-              const nowFrac = isToday ? dateToDayFraction(day, now) : 0;
+              const nowFrac = isToday ? dateToVisibleDayFraction(day, now) : 0;
               return (
                 <div className={`tb-col${isToday ? ' tb-today-col' : ''}`} key={di} style={{ gridColumn: di + 2, gridRow: `1 / span ${TOTAL_SLOTS}` }}>
                   {hourLabels.map((h, si) => {
@@ -433,8 +496,11 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
                     const left = segment.column * columnWidth;
                     const right = 100 - (segment.column + 1) * columnWidth;
                     const visualTime = `${segment.startsBeforeDay ? '↖ ' : ''}${formatTime(ev.starts_at)} – ${segment.endsAfterDay ? '↘ ' : ''}${formatTime(ev.ends_at)}`;
+                    const visibleDuration = segment.endMinute - segment.startMinute;
+                    const densityClass = visibleDuration < 30 ? ' tb-ev-tight' : visibleDuration < 60 ? ' tb-ev-compact' : ' tb-ev-roomy';
+                    const eventMeta = [providerLabel(ev.provider), ev.source_name, ev.location].filter(Boolean).join(' · ');
                     return (
-                      <button type="button" className={`tb-ev${ev.visibility === 'private' ? ' tb-ev-priv' : ''}`} key={`${ev.provider}-${ev.provider_event_id}-${di}`}
+                      <button type="button" className={`tb-ev${densityClass}${ev.visibility === 'private' ? ' tb-ev-priv' : ''}`} key={`${ev.provider}-${ev.provider_event_id}-${di}`}
                         onClick={() => onOpenEvent(ev)}
                         style={{
                           ...eventColorStyle(eventColor(ev)),
@@ -443,10 +509,10 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
                           left: `calc(${left}% + 2px)`,
                           right: `calc(${right}% + 2px)`,
                         }}
-                        title={`${visualTime}\n${ev.title}\n${providerLabel(ev.provider)} · ${ev.source_name}`}>
+                        title={`${visualTime}\n${ev.title}\n${eventMeta}`}>
                         <span className="tb-ev-time">{visualTime}</span>
                         <span className="tb-ev-title">{ev.title}</span>
-                        <span className="tb-ev-src">{providerLabel(ev.provider)} · {ev.source_name}</span>
+                        <span className="tb-ev-src">{eventMeta}</span>
                       </button>
                     );
                   })}
