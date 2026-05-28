@@ -3,6 +3,7 @@ export interface Env {
   ALLOWED_ORIGIN: string; // comma-separated list, or '*' for any origin
   SUPABASE_URL: string;
   SUPABASE_ANON_KEY: string;
+  INTERNAL_UPLOAD_SECRET?: string; // server-to-server only, used by Supabase Edge Functions for immutable finance PDFs
 }
 
 const allowedEntityTypes = new Set(['client','project','task','subtask','ticket','note','quote','invoice']);
@@ -17,6 +18,42 @@ export default {
 
     const url = new URL(request.url);
     try {
+      if (url.pathname === '/internal/invoice-snapshot' && request.method === 'POST') {
+        if (!isInternalRequest(request, env)) return json({ error: 'Unauthorized' }, 401, cors);
+        if (!request.body) return json({ error: 'Missing body' }, 400, cors);
+        const key = request.headers.get('x-storage-key') || '';
+        const type = request.headers.get('content-type') || 'application/pdf';
+        const declaredLength = Number(request.headers.get('content-length') || '0');
+        const sha256 = request.headers.get('x-sha256') || '';
+        if (!isPrivateInvoiceSnapshotKey(key)) return json({ error: 'Invalid storage key' }, 400, cors);
+        if (type !== 'application/pdf') return json({ error: 'Only application/pdf is allowed' }, 400, cors);
+        if (declaredLength > MAX_UPLOAD_BYTES) return json({ error: 'Bestand is te groot' }, 413, cors);
+        const limited = limitBodySize(request.body, MAX_UPLOAD_BYTES);
+        try {
+          await env.MEDIA_BUCKET.put(key, limited, {
+            httpMetadata: { contentType: type },
+            customMetadata: { private: 'true', entity_type: 'invoice_pdf_snapshot', sha256 },
+          });
+        } catch (e) {
+          if (e instanceof Error && e.message === 'PAYLOAD_TOO_LARGE') return json({ error: 'Bestand is te groot' }, 413, cors);
+          throw e;
+        }
+        return json({ ok: true, key }, 200, cors);
+      }
+
+      if (url.pathname.startsWith('/internal/invoice-snapshot/') && request.method === 'GET') {
+        if (!isInternalRequest(request, env)) return json({ error: 'Unauthorized' }, 401, cors);
+        const key = decodeURIComponent(url.pathname.replace('/internal/invoice-snapshot/', ''));
+        if (!isPrivateInvoiceSnapshotKey(key)) return json({ error: 'Invalid storage key' }, 400, cors);
+        const object = await env.MEDIA_BUCKET.get(key);
+        if (!object) return json({ error: 'Not found' }, 404, cors);
+        const headers = new Headers(cors);
+        object.writeHttpMetadata(headers);
+        headers.set('cache-control', 'private, max-age=300');
+        headers.set('x-resofly-private-snapshot', 'true');
+        return new Response(object.body, { headers });
+      }
+
       if (request.method === 'POST' && url.pathname === '/upload') {
         const user = await verifySupabaseUser(request, env);
         if (!user?.id) return json({ error: 'Unauthorized' }, 401, cors);
@@ -147,6 +184,29 @@ async function verifySubtaskOwnership(env: Env, request: Request, organizationId
   const task = rows[0];
   if (!task) return false;
   return Array.isArray(task.subtasks) && task.subtasks.some(subtask => subtask?.id === subtaskId);
+}
+
+function isInternalRequest(request: Request, env: Env): boolean {
+  const configured = env.INTERNAL_UPLOAD_SECRET || '';
+  if (!configured) return false;
+  const auth = request.headers.get('authorization') || '';
+  const token = auth.replace(/^Bearer\s+/i, '');
+  return timingSafeEqual(token, configured);
+}
+
+function isPrivateInvoiceSnapshotKey(key: string): boolean {
+  if (key.includes('..') || key.startsWith('/') || key.length > 900) return false;
+  return /^[0-9a-f-]{36}\/invoice-pdfs\/[0-9a-f-]{36}\/[0-9a-f-]{36}-[a-z0-9._-]+\.pdf$/i.test(key);
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const left = new TextEncoder().encode(a);
+  const right = new TextEncoder().encode(b);
+  if (left.length !== right.length) return false;
+  let out = 0;
+  for (let i = 0; i < left.length; i++) out |= left[i] ^ right[i];
+  return out === 0;
 }
 
 function decodeHeaderFileName(value: string): string {

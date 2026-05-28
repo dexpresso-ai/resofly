@@ -2,18 +2,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { Button } from '../components/Ui';
 import { supabase } from '../lib/supabase';
 import { dateNL, euro, total } from '../lib/format';
-import { exportFinancePDF } from '../lib/pdf';
-import type { FinanceLine, Invoice } from '../types';
+import type { FinanceLine } from '../types';
 
 type PublicInvoice = {
-  id: string;
   number: string;
   date: string;
   due_date: string | null;
   lines: FinanceLine[];
   status: string;
   notes: string | null;
-  quote_id: string | null;
   sent_at: string | null;
   paid_at: string | null;
   public_token_expires_at: string | null;
@@ -21,11 +18,11 @@ type PublicInvoice = {
 
 type PublicClient = { name?: string; contact_name?: string | null; email?: string | null; phone?: string | null } | null;
 type PublicProject = { name?: string; description?: string | null; start_date?: string | null; end_date?: string | null } | null;
-type PublicQuote = { id: string; number?: string | null; status?: string | null } | null;
+type PublicQuote = { id?: string; number?: string | null; status?: string | null; date?: string | null; total_amount?: number | null } | null;
 type PublicCompany = { company_name?: string; trade_name?: string | null; email?: string | null; phone?: string | null; website?: string | null; city?: string | null; country?: string | null; iban?: string | null; vat_number?: string | null; kvk_number?: string | null } | null;
-type PublicEvent = { id: string; event_type: string; title: string; description: string | null; created_at: string };
-type PublicPayment = { id: string; status: string; amount_cents: number; currency: string; provider_checkout_url: string | null; paid_at: string | null; checkout_expires_at: string | null; created_at: string };
-type PublicVersion = { id: string; version_number: number; snapshot_reason: string; pdf_file_name: string | null; created_at: string };
+type PublicEvent = { event_type: string; title: string; description: string | null; created_at: string };
+type PublicPayment = { status: string; amount_cents: number; currency: string; checkout_url: string | null; paid_at: string | null; checkout_expires_at: string | null; created_at: string };
+type PublicVersion = { version_number: number; snapshot_reason: string; pdf_file_name: string | null; created_at: string };
 
 type PublicInvoicePayload = {
   invoice: PublicInvoice;
@@ -73,7 +70,7 @@ export function PublicInvoicePage({ token }: { token: string }) {
   const totals = useMemo(() => total(invoice?.lines || []), [invoice?.lines]);
   const payment = useMemo(() => {
     const records = payload?.payments || [];
-    return records.find(record => record.status === 'open' && record.provider_checkout_url) || records.find(record => record.provider_checkout_url) || null;
+    return records.find(record => record.status === 'open' && record.checkout_url) || records.find(record => record.checkout_url) || null;
   }, [payload?.payments]);
   const isPaid = invoice?.status === 'paid' || Boolean(invoice?.paid_at);
 
@@ -81,7 +78,12 @@ export function PublicInvoicePage({ token }: { token: string }) {
     if (!payload?.invoice) return;
     setDownloading(true);
     try {
-      await exportFinancePDF(payload.invoice as unknown as Invoice, 'invoice', payload.client as never, { company: payload.company as never });
+      const { data, error } = await supabase.functions.invoke('invoice-public', {
+        body: { action: 'getInvoicePdf', token },
+      });
+      if (error) throw error;
+      if (!data?.ok || !data.pdf?.base64) throw new Error(data?.error || 'PDF-snapshot downloaden mislukt');
+      downloadBase64File(data.pdf.base64, data.pdf.fileName || `factuur-${payload.invoice.number}.pdf`, data.pdf.mimeType || 'application/pdf');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'PDF downloaden mislukt');
     } finally {
@@ -113,9 +115,9 @@ export function PublicInvoicePage({ token }: { token: string }) {
         <strong className="public-invoice-amount">{euro(totals.total)}</strong>
         <div className="public-decision-actions public-invoice-actions">
           <Button onClick={downloadPdf} disabled={downloading}>{downloading ? 'PDF maken…' : 'PDF downloaden'}</Button>
-          <Button variant="primary" disabled={isPaid || !payment?.provider_checkout_url} onClick={() => payment?.provider_checkout_url && window.open(payment.provider_checkout_url, '_blank', 'noopener,noreferrer')}>{isPaid ? 'Betaald' : 'Betaal nu'}</Button>
+          <Button variant="primary" disabled={isPaid || !payment?.checkout_url} onClick={() => payment?.checkout_url && window.open(payment.checkout_url, '_blank', 'noopener,noreferrer')}>{isPaid ? 'Betaald' : 'Betaal nu'}</Button>
         </div>
-        {!payment?.provider_checkout_url && !isPaid && <p className="muted">Er is nog geen actieve betaallink beschikbaar. Neem contact op met {companyName}.</p>}
+        {!payment?.checkout_url && !isPaid && <p className="muted">Er is nog geen actieve betaallink beschikbaar. Neem contact op met {companyName}.</p>}
       </article>
       <article className="public-quote-card">
         <h2>Factuurgegevens</h2>
@@ -168,7 +170,7 @@ export function PublicInvoicePage({ token }: { token: string }) {
     {payload.versions?.length > 0 && <section className="public-quote-card">
       <h2>PDF-snapshot</h2>
       <div className="quote-timeline public">
-        {payload.versions.slice(0, 3).map(version => <div className="quote-timeline-item" key={version.id}>
+        {payload.versions.slice(0, 3).map(version => <div className="quote-timeline-item" key={`${version.version_number}-${version.created_at}`}>
           <span>v{version.version_number} · {dateNL(version.created_at)}</span>
           <strong>{version.pdf_file_name || 'Factuur PDF'}</strong>
           <p>{version.snapshot_reason}</p>
@@ -179,7 +181,7 @@ export function PublicInvoicePage({ token }: { token: string }) {
     <section className="public-quote-card">
       <h2>Tijdlijn</h2>
       <div className="quote-timeline public">
-        {(payload?.events || []).map(event => <div className="quote-timeline-item" key={event.id}>
+        {(payload?.events || []).map(event => <div className="quote-timeline-item" key={`${event.event_type}-${event.created_at}-${event.title}`}>
           <span>{new Date(event.created_at).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
           <strong>{event.title}</strong>
           {event.description && <p>{event.description}</p>}
@@ -187,6 +189,24 @@ export function PublicInvoicePage({ token }: { token: string }) {
       </div>
     </section>
   </main>;
+}
+
+
+function downloadBase64File(base64: string, fileName: string, mimeType: string) {
+  const byteCharacters = atob(base64);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i += 1) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const blob = new Blob([new Uint8Array(byteNumbers)], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function statusLabel(status: string, paidAt?: string | null): string {
@@ -197,6 +217,8 @@ function statusLabel(status: string, paidAt?: string | null): string {
     overdue: 'Verlopen',
     paid: 'Betaald',
     cancelled: 'Geannuleerd',
+    void: 'Ongeldig gemaakt',
+    written_off: 'Afgeboekt',
   };
   return labels[status] || status;
 }

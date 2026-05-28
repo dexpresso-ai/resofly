@@ -20,6 +20,7 @@ type CompanySettingsRow = {
   invoice_payment_terms?: string | null; invoice_footer?: string | null; invoice_accent_color?: string | null;
 };
 type InvoicePdfAttachment = { fileName: string; mimeType: 'application/pdf'; bytes: Uint8Array; base64: string; sizeBytes: number; sha256: string };
+type StoredInvoicePdfSnapshot = { provider: 'r2' | 'database'; key: string | null; shouldStoreBase64InDatabase: boolean };
 type WorkflowHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
@@ -30,6 +31,8 @@ const RESEND_REPLY_TO = Deno.env.get('RESEND_REPLY_TO') || '';
 const INVOICE_PUBLIC_BASE_URL = Deno.env.get('INVOICE_PUBLIC_BASE_URL') || Deno.env.get('APP_PUBLIC_URL') || '';
 const INVOICE_TOKEN_TTL_DAYS = parsePositiveInt(Deno.env.get('INVOICE_TOKEN_TTL_DAYS'), 60);
 const INVOICE_PDF_MAX_ATTACHMENT_BYTES = parsePositiveInt(Deno.env.get('INVOICE_PDF_MAX_ATTACHMENT_BYTES'), 8 * 1024 * 1024);
+const INVOICE_PDF_STORAGE_WORKER_URL = (Deno.env.get('INVOICE_PDF_STORAGE_WORKER_URL') || '').replace(/\/$/, '');
+const INVOICE_PDF_STORAGE_SECRET = Deno.env.get('INVOICE_PDF_STORAGE_SECRET') || '';
 const INVOICE_ALLOWED_ORIGINS = parseAllowedOrigins([
   Deno.env.get('INVOICE_ALLOWED_ORIGINS'), Deno.env.get('QUOTE_ALLOWED_ORIGINS'), Deno.env.get('APP_PUBLIC_URL'), Deno.env.get('BILLING_ALLOWED_RETURN_ORIGINS'),
 ]);
@@ -90,7 +93,7 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
 
   const invoice = await loadInvoice(organizationId, invoiceId);
-  if (invoice.status === 'paid' || invoice.status === 'cancelled') throw new WorkflowHttpError('Betaalde of geannuleerde facturen kunnen niet worden verstuurd.', 409);
+  if (['paid','cancelled','void','written_off'].includes(invoice.status)) throw new WorkflowHttpError('Betaalde, geannuleerde of afgeboekte facturen kunnen niet worden verstuurd.', 409);
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
 
   const [client, project, quote, company, latestPayment] = await Promise.all([
@@ -117,8 +120,26 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
 
   const pdfAttachment = await createInvoicePdfAttachment({ invoice, client, project, quote, company, publicUrl, paymentUrl });
   validateInvoicePdfAttachment(pdfAttachment);
+  const storedPdf = await storeInvoicePdfSnapshot(organizationId, invoiceId, pdfAttachment);
 
-  const prepared = await beginInvoiceEmailSend({ invoiceId, organizationId, userId, tokenHash, expiresAt, recipientEmail, recipientName, subject, publicUrl, attachmentFileName: pdfAttachment.fileName, attachmentMimeType: pdfAttachment.mimeType, attachmentSizeBytes: pdfAttachment.sizeBytes, attachmentSha256: pdfAttachment.sha256 });
+  const prepared = await beginInvoiceEmailSend({
+    invoiceId,
+    organizationId,
+    userId,
+    tokenHash,
+    expiresAt,
+    recipientEmail,
+    recipientName,
+    subject,
+    publicUrl,
+    attachmentFileName: pdfAttachment.fileName,
+    attachmentMimeType: pdfAttachment.mimeType,
+    attachmentSizeBytes: pdfAttachment.sizeBytes,
+    attachmentSha256: pdfAttachment.sha256,
+    attachmentDataBase64: storedPdf.shouldStoreBase64InDatabase ? pdfAttachment.base64 : undefined,
+    attachmentStorageProvider: storedPdf.provider,
+    attachmentStorageKey: storedPdf.key ?? undefined,
+  });
 
   const resendPayload = {
     from: RESEND_FROM_EMAIL,
@@ -136,12 +157,22 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     ],
   };
 
-  const resendResponse = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(`invoice-${invoiceId}-${prepared.deliveryId}`) },
-    body: JSON.stringify(resendPayload),
-  });
-  const resendPayloadResponse = (await resendResponse.json().catch(() => ({}))) as Record<string, unknown>;
+  let resendResponse: Response;
+  let resendPayloadResponse: Record<string, unknown> = {};
+
+  try {
+    resendResponse = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(`invoice-${invoiceId}-${prepared.deliveryId}`) },
+      body: JSON.stringify(resendPayload),
+    });
+    resendPayloadResponse = (await resendResponse.json().catch(() => ({}))) as Record<string, unknown>;
+  } catch (error) {
+    const errorMessage = `Resend provider request failed before a response was received: ${describeError(error)}`;
+    await failInvoiceEmailSend(prepared.deliveryId, organizationId, userId, errorMessage);
+    throw new WorkflowHttpError(`Resend kon de factuur-e-mail niet versturen: ${errorMessage}`, 502);
+  }
+
   if (!resendResponse.ok) {
     const errorMessage = String(resendPayloadResponse.message || resendPayloadResponse.error || resendResponse.statusText || 'Resend send failed');
     await failInvoiceEmailSend(prepared.deliveryId, organizationId, userId, errorMessage);
@@ -154,13 +185,13 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   }
 
   const finalized = await completeInvoiceEmailSend(prepared.deliveryId, organizationId, userId, providerEmailId);
-  return { delivery: finalized.delivery, version: finalized.version, publicUrl, providerEmailId, attachment: { fileName: pdfAttachment.fileName, sizeBytes: pdfAttachment.sizeBytes, sha256: pdfAttachment.sha256 } };
+  return { delivery: finalized.delivery, version: finalized.version, publicUrl, providerEmailId, attachment: { fileName: pdfAttachment.fileName, sizeBytes: pdfAttachment.sizeBytes, sha256: pdfAttachment.sha256, storageProvider: storedPdf.provider, storageKey: storedPdf.key } };
 }
 
 async function createInvoicePaymentCheckout(userId: string, organizationId: string, invoiceId: string, body: Record<string, unknown>) {
   if (!INVOICE_PUBLIC_BASE_URL) throw new WorkflowHttpError('INVOICE_PUBLIC_BASE_URL of APP_PUBLIC_URL ontbreekt.', 500);
   const invoice = await loadInvoice(organizationId, invoiceId);
-  if (invoice.status === 'paid') throw new WorkflowHttpError('Deze factuur is al betaald.', 409);
+  if (['paid','cancelled','void','written_off'].includes(invoice.status)) throw new WorkflowHttpError('Voor deze factuur kan geen betaallink worden aangemaakt.', 409);
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
   const amountCents = Math.round(calculateTotals(invoice.lines).total * 100);
   if (amountCents <= 0) throw new WorkflowHttpError('Factuurbedrag moet groter zijn dan 0.', 422);
@@ -175,6 +206,9 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
       reused: true,
     };
   }
+  if (existingPayment?.status === 'creating' && !existingPayment.provider_checkout_url) {
+    throw new WorkflowHttpError('Er wordt al een betaallink voor deze factuur voorbereid. Probeer het over enkele seconden opnieuw.', 409);
+  }
 
   const client = await loadClient(organizationId, invoice.client_id);
   const token = randomToken();
@@ -182,9 +216,12 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
   const tokenExpiresAt = new Date(Date.now() + Math.max(1, INVOICE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000).toISOString();
   const publicUrl = `${INVOICE_PUBLIC_BASE_URL.replace(/\/$/, '')}/invoice/${encodeURIComponent(token)}`;
   const checkoutExpiresAt = new Date(Date.now() + CHECKOUT_TTL_MINUTES * 60 * 1000).toISOString();
-  const idempotencyKey = String(body.idempotencyKey || `invoice-${invoice.id}-${amountCents}-${tokenHash.slice(0, 16)}`).slice(0, 200);
+  // Use a server-side stable idempotency key. Do not trust a frontend-supplied
+  // timestamp/random key here, because a double click must not create multiple
+  // active Mollie payments for the same invoice.
+  const idempotencyKey = `invoice-${invoice.id}-active-payment`;
 
-  const payment = await beginInvoicePaymentCheckout({ invoiceId, organizationId, userId, amountCents, publicTokenHash: tokenHash, publicTokenExpiresAt: tokenExpiresAt, idempotencyKey, checkoutExpiresAt, metadata: { publicUrl } });
+  const payment = await beginInvoicePaymentCheckout({ invoiceId, organizationId, userId, amountCents, publicTokenHash: null, publicTokenExpiresAt: null, idempotencyKey, checkoutExpiresAt, metadata: { publicUrl } });
   if (payment.provider_checkout_url) return { payment, checkoutUrl: payment.provider_checkout_url, providerPaymentId: payment.provider_payment_id, mock: payment.provider_payment_id?.startsWith('mock_') ?? false, reused: true };
 
   let providerPaymentId = '';
@@ -192,37 +229,58 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
   let providerStatus = 'open';
   let metadata: Record<string, unknown> = {};
 
-  if (MOLLIE_ALLOW_MOCK && !MOLLIE_API_KEY) {
-    providerPaymentId = `mock_invoice_payment_${crypto.randomUUID()}`;
-    checkoutUrl = `${publicUrl}?mock_payment=${encodeURIComponent(providerPaymentId)}`;
-    metadata = { mock: true, publicUrl };
-  } else {
-    if (!MOLLIE_API_KEY) throw new WorkflowHttpError('MOLLIE_API_KEY of MOLLIE_INVOICE_API_KEY ontbreekt.', 500);
-    if (!MOLLIE_WEBHOOK_URL) throw new WorkflowHttpError('INVOICE_MOLLIE_WEBHOOK_URL of MOLLIE_WEBHOOK_URL ontbreekt.', 500);
-    const redirectUrl = String(body.redirectUrl || publicUrl).trim();
-    const webhookUrl = MOLLIE_WEBHOOK_SECRET ? `${MOLLIE_WEBHOOK_URL}${MOLLIE_WEBHOOK_URL.includes('?') ? '&' : '?'}webhook=mollie&secret=${encodeURIComponent(MOLLIE_WEBHOOK_SECRET)}` : `${MOLLIE_WEBHOOK_URL}${MOLLIE_WEBHOOK_URL.includes('?') ? '&' : '?'}webhook=mollie`;
-    const mollieResponse = await fetch('https://api.mollie.com/v2/payments', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${MOLLIE_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(idempotencyKey) },
-      body: JSON.stringify({
-        amount: { currency: 'EUR', value: (amountCents / 100).toFixed(2) },
-        description: `Factuur ${invoice.number}`,
-        redirectUrl,
-        webhookUrl,
-        metadata: { organizationId, invoiceId, invoiceNumber: invoice.number, paymentRecordId: payment.id, clientEmail: client.email },
-      }),
-    });
-    const molliePayload = (await mollieResponse.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!mollieResponse.ok) throw new WorkflowHttpError(`Mollie kon geen betaallink maken: ${String(molliePayload.detail || molliePayload.title || mollieResponse.statusText)}`, 502);
-    providerPaymentId = String(molliePayload.id || '').trim();
-    checkoutUrl = String(((molliePayload._links as Record<string, { href?: string }> | undefined)?.checkout?.href) || '').trim();
-    providerStatus = String(molliePayload.status || 'open');
-    metadata = { mollie: molliePayload };
-    if (!providerPaymentId || !checkoutUrl) throw new WorkflowHttpError('Mollie gaf geen payment-id of checkout-url terug.', 502);
-  }
+  try {
+    if (MOLLIE_ALLOW_MOCK && !MOLLIE_API_KEY) {
+      providerPaymentId = `mock_invoice_payment_${crypto.randomUUID()}`;
+      checkoutUrl = `${publicUrl}?mock_payment=${encodeURIComponent(providerPaymentId)}`;
+      metadata = { mock: true, publicUrl };
+    } else {
+      if (!MOLLIE_API_KEY) throw new WorkflowHttpError('MOLLIE_API_KEY of MOLLIE_INVOICE_API_KEY ontbreekt.', 500);
+      if (!MOLLIE_WEBHOOK_URL) throw new WorkflowHttpError('INVOICE_MOLLIE_WEBHOOK_URL of MOLLIE_WEBHOOK_URL ontbreekt.', 500);
+      const requestedRedirectUrl = String(body.redirectUrl || '').trim();
+      const redirectUrl = isValidInvoiceRedirectUrl(requestedRedirectUrl, publicUrl) ? requestedRedirectUrl : publicUrl;
+      const webhookUrl = MOLLIE_WEBHOOK_SECRET ? `${MOLLIE_WEBHOOK_URL}${MOLLIE_WEBHOOK_URL.includes('?') ? '&' : '?'}webhook=mollie&secret=${encodeURIComponent(MOLLIE_WEBHOOK_SECRET)}` : `${MOLLIE_WEBHOOK_URL}${MOLLIE_WEBHOOK_URL.includes('?') ? '&' : '?'}webhook=mollie`;
+      const mollieResponse = await fetch('https://api.mollie.com/v2/payments', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${MOLLIE_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(idempotencyKey) },
+        body: JSON.stringify({
+          amount: { currency: 'EUR', value: (amountCents / 100).toFixed(2) },
+          description: `Factuur ${invoice.number}`,
+          redirectUrl,
+          webhookUrl,
+          metadata: { organizationId, invoiceId, invoiceNumber: invoice.number, paymentRecordId: payment.id, clientEmail: client.email },
+        }),
+      });
+      const molliePayload = (await mollieResponse.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!mollieResponse.ok) throw new WorkflowHttpError(`Mollie kon geen betaallink maken: ${String(molliePayload.detail || molliePayload.title || mollieResponse.statusText)}`, 502);
+      providerPaymentId = String(molliePayload.id || '').trim();
+      checkoutUrl = String(((molliePayload._links as Record<string, { href?: string }> | undefined)?.checkout?.href) || '').trim();
+      providerStatus = String(molliePayload.status || 'open');
+      metadata = { mollie: molliePayload };
+      if (!providerPaymentId || !checkoutUrl) throw new WorkflowHttpError('Mollie gaf geen payment-id of checkout-url terug.', 502);
+    }
 
-  const completed = await completeInvoicePaymentCheckout(payment.id, organizationId, userId, providerPaymentId, checkoutUrl, providerStatus, metadata);
-  return { payment: completed, checkoutUrl, providerPaymentId, mock: providerPaymentId.startsWith('mock_'), reused: false };
+    const completed = await completeInvoicePaymentCheckout(payment.id, organizationId, userId, providerPaymentId, checkoutUrl, providerStatus, metadata);
+    return { payment: completed, checkoutUrl, providerPaymentId, mock: providerPaymentId.startsWith('mock_'), reused: false };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Onbekende Mollie checkout-fout.';
+
+    await failInvoicePaymentCheckout(payment.id, organizationId, userId, errorMessage, {
+      publicUrl,
+      providerPaymentId: providerPaymentId || null,
+      checkoutUrl: checkoutUrl || null,
+      providerStatus,
+      metadata,
+    }).catch((failError) => {
+      console.warn(
+        'Invoice payment checkout failure registration failed',
+        failError instanceof Error ? failError.message : failError,
+      );
+    });
+
+    if (error instanceof WorkflowHttpError) throw error;
+    throw new WorkflowHttpError(`Mollie checkout kon niet worden afgerond: ${errorMessage}`, 502);
+  }
 }
 
 async function handleMollieWebhook(req: Request, url: URL, body: Record<string, string>) {
@@ -291,7 +349,7 @@ async function loadLatestOpenPayment(organizationId: string, invoiceId: string):
     .select('id,provider_checkout_url,provider_payment_id,status,checkout_expires_at')
     .eq('organization_id', organizationId)
     .eq('invoice_id', invoiceId)
-    .in('status', ['open','pending','authorized'])
+    .in('status', ['creating','open','pending','authorized'])
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -299,8 +357,25 @@ async function loadLatestOpenPayment(organizationId: string, invoiceId: string):
   return (data ?? null) as { id: string; provider_checkout_url: string | null; provider_payment_id: string | null; status: string; checkout_expires_at?: string | null } | null;
 }
 
-async function beginInvoiceEmailSend(input: { invoiceId: string; organizationId: string; userId: string; tokenHash: string; expiresAt: string; recipientEmail: string; recipientName: string; subject: string; publicUrl: string; attachmentFileName?: string; attachmentMimeType?: string; attachmentSizeBytes?: number; attachmentSha256?: string }): Promise<{ deliveryId: string; invoiceId?: string }> {
-  const { data, error } = await supabaseAdmin.rpc('begin_invoice_email_send', { p_invoice_id: input.invoiceId, p_organization_id: input.organizationId, p_actor_user_id: input.userId, p_token_hash: input.tokenHash, p_token_expires_at: input.expiresAt, p_recipient_email: input.recipientEmail, p_recipient_name: input.recipientName, p_subject: input.subject, p_public_url: input.publicUrl, p_attachment_file_name: input.attachmentFileName ?? null, p_attachment_mime_type: input.attachmentMimeType ?? 'application/pdf', p_attachment_size_bytes: input.attachmentSizeBytes ?? null, p_attachment_sha256: input.attachmentSha256 ?? null });
+async function beginInvoiceEmailSend(input: { invoiceId: string; organizationId: string; userId: string; tokenHash: string; expiresAt: string; recipientEmail: string; recipientName: string; subject: string; publicUrl: string; attachmentFileName?: string; attachmentMimeType?: string; attachmentSizeBytes?: number; attachmentSha256?: string; attachmentDataBase64?: string; attachmentStorageProvider?: string; attachmentStorageKey?: string }): Promise<{ deliveryId: string; invoiceId?: string }> {
+  const { data, error } = await supabaseAdmin.rpc('begin_invoice_email_send', {
+    p_invoice_id: input.invoiceId,
+    p_organization_id: input.organizationId,
+    p_actor_user_id: input.userId,
+    p_token_hash: input.tokenHash,
+    p_token_expires_at: input.expiresAt,
+    p_recipient_email: input.recipientEmail,
+    p_recipient_name: input.recipientName,
+    p_subject: input.subject,
+    p_public_url: input.publicUrl,
+    p_attachment_file_name: input.attachmentFileName ?? null,
+    p_attachment_mime_type: input.attachmentMimeType ?? 'application/pdf',
+    p_attachment_size_bytes: input.attachmentSizeBytes ?? null,
+    p_attachment_sha256: input.attachmentSha256 ?? null,
+    p_attachment_data_base64: input.attachmentDataBase64 ?? null,
+    p_attachment_storage_provider: input.attachmentStorageProvider ?? null,
+    p_attachment_storage_key: input.attachmentStorageKey ?? null,
+  });
   if (error) throw error;
   const payload = data as { deliveryId?: string } | null;
   if (!payload?.deliveryId) throw new WorkflowHttpError('Verzendpoging kon niet worden voorbereid.', 500);
@@ -321,6 +396,57 @@ async function beginInvoicePaymentCheckout(input: { invoiceId: string; organizat
 async function completeInvoicePaymentCheckout(paymentRecordId: string, organizationId: string, userId: string, providerPaymentId: string, checkoutUrl: string, status: string, metadata: Record<string, unknown>) {
   const { data, error } = await supabaseAdmin.rpc('complete_invoice_payment_checkout', { p_payment_record_id: paymentRecordId, p_organization_id: organizationId, p_actor_user_id: userId, p_provider_payment_id: providerPaymentId, p_provider_checkout_url: checkoutUrl, p_status: status, p_metadata: metadata });
   if (error) throw error; return data;
+}
+async function failInvoicePaymentCheckout(paymentRecordId: string, organizationId: string, userId: string, errorMessage: string, metadata: Record<string, unknown>) {
+  const { data, error } = await supabaseAdmin.rpc('fail_invoice_payment_checkout', {
+    p_payment_record_id: paymentRecordId,
+    p_organization_id: organizationId,
+    p_actor_user_id: userId,
+    p_error_message: errorMessage,
+    p_metadata: metadata,
+    p_retry_after_seconds: 300,
+    p_max_retries: 5,
+  });
+  if (error) throw error;
+  return data;
+}
+
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return 'Onbekende fout.';
+  }
+}
+
+async function storeInvoicePdfSnapshot(organizationId: string, invoiceId: string, attachment: InvoicePdfAttachment): Promise<StoredInvoicePdfSnapshot> {
+  const storageConfigured = Boolean(INVOICE_PDF_STORAGE_WORKER_URL && INVOICE_PDF_STORAGE_SECRET);
+
+  if (!storageConfigured) {
+    return { provider: 'database', key: null, shouldStoreBase64InDatabase: true };
+  }
+
+  const key = `${organizationId}/invoice-pdfs/${invoiceId}/${crypto.randomUUID()}-${sanitizeFileName(attachment.fileName)}`;
+  const response = await fetch(`${INVOICE_PDF_STORAGE_WORKER_URL}/internal/invoice-snapshot`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${INVOICE_PDF_STORAGE_SECRET}`,
+      'Content-Type': attachment.mimeType,
+      'X-Storage-Key': key,
+      'X-SHA256': attachment.sha256,
+      'X-Size-Bytes': String(attachment.sizeBytes),
+    },
+    body: attachment.bytes,
+  });
+
+  if (!response.ok) {
+    const message = await response.text().catch(() => response.statusText);
+    throw new WorkflowHttpError(`Factuur-PDF kon niet in private R2 storage worden opgeslagen: ${message || response.statusText}`, 502);
+  }
+
+  return { provider: 'r2', key, shouldStoreBase64InDatabase: false };
 }
 
 async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: ClientRow; project: ProjectRow | null; quote: QuoteRow | null; company: CompanySettingsRow | null; publicUrl: string; paymentUrl?: string | null }): Promise<InvoicePdfAttachment> {
@@ -420,6 +546,20 @@ function isReusableCheckoutUrl(value: string | null | undefined): boolean {
     // real Mollie checkout URLs or mock/public invoice URLs that point at /invoice/<token>.
     if (/\/invoice\/[^/?#]+/.test(url.pathname)) return true;
     return /(^|\.)mollie\./i.test(url.hostname) || /checkout\.mollie/i.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+
+function isValidInvoiceRedirectUrl(candidate: string, expectedPublicUrl: string): boolean {
+  if (!candidate) return false;
+  try {
+    const candidateUrl = new URL(candidate);
+    const expectedUrl = new URL(expectedPublicUrl);
+    if (candidateUrl.origin !== expectedUrl.origin) return false;
+    // Mollie should always return to the exact public invoice route, never the app root/dashboard.
+    return candidateUrl.pathname === expectedUrl.pathname;
   } catch {
     return false;
   }

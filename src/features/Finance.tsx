@@ -534,10 +534,12 @@ function InvoiceStatusStrip({ invoice, delivery, payment }: { invoice: Invoice; 
 }
 
 function InvoiceActions({ invoice, canWrite, payment, onEdit, onSend, onCreatePayment }: { invoice: Invoice; canWrite: boolean; payment: InvoicePaymentRecord | null; onEdit: () => void; onSend?: (invoice: Invoice) => void; onCreatePayment?: (invoice: Invoice) => void }) {
-  const canSend = canWrite && !['paid', 'cancelled'].includes(invoice.status);
-  const canPay = canWrite && invoice.status !== 'paid' && payment?.status !== 'paid';
+  const invoiceClosed = ['paid', 'cancelled', 'void', 'written_off'].includes(invoice.status);
+  const isLocked = Boolean(invoice.locked_at) || ['sent','overdue','paid','cancelled','void','written_off'].includes(invoice.status) || Boolean(payment);
+  const canSend = canWrite && !invoiceClosed;
+  const canPay = canWrite && !invoiceClosed && !['paid','creating','open','pending','authorized'].includes(payment?.status || '');
   return <div className="quote-actions invoice-actions">
-    <Button onClick={onEdit}>Bewerken</Button>
+    <Button onClick={onEdit} disabled={isLocked} title={isLocked ? 'Deze factuur is vergrendeld na verzending of betaallink.' : undefined}>Bewerken</Button>
     {canSend && <Button variant="primary" onClick={() => onSend?.(invoice)}><Send size={14}/> Verstuur via Resend</Button>}
     {canPay && <Button variant="primary" onClick={() => onCreatePayment?.(invoice)}><CreditCard size={14}/> Maak Mollie-betaallink</Button>}
   </div>;
@@ -580,7 +582,7 @@ function quoteStatusLabel(quote: Quote): string {
 }
 
 function statusLabel(status: FinanceStatus | string): string {
-  const labels: Record<string, string> = { draft: 'Concept', pending_internal_approval: 'Wacht op interne goedkeuring', internally_approved: 'Intern goedgekeurd', sent: 'Verzonden', accepted: 'Openstaand', paid: 'Betaald', rejected: 'Afgewezen', expired: 'Verlopen', overdue: 'Te laat', cancelled: 'Geannuleerd' };
+  const labels: Record<string, string> = { draft: 'Concept', pending_internal_approval: 'Wacht op interne goedkeuring', internally_approved: 'Intern goedgekeurd', sent: 'Verzonden', accepted: 'Openstaand', paid: 'Betaald', rejected: 'Afgewezen', expired: 'Verlopen', overdue: 'Te laat', cancelled: 'Geannuleerd', void: 'Ongeldig gemaakt', written_off: 'Afgeboekt' };
   return labels[status] || status;
 }
 
@@ -590,7 +592,7 @@ function emailStatusLabel(status: string): string {
 }
 
 function paymentStatusLabel(status: string): string {
-  const labels: Record<string, string> = { open: 'Open', pending: 'In behandeling', authorized: 'Geautoriseerd', paid: 'Betaald', failed: 'Mislukt', expired: 'Verlopen', canceled: 'Geannuleerd', refunded: 'Terugbetaald', charged_back: 'Teruggeboekt' };
+  const labels: Record<string, string> = { creating: 'Wordt aangemaakt', open: 'Open', pending: 'In behandeling', authorized: 'Geautoriseerd', paid: 'Betaald', failed: 'Mislukt', expired: 'Verlopen', canceled: 'Geannuleerd', refunded: 'Terugbetaald', charged_back: 'Teruggeboekt' };
   return labels[status] || status;
 }
 

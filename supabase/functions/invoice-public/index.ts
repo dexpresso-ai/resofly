@@ -4,6 +4,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
 const MOLLIE_ALLOW_MOCK = (Deno.env.get('MOLLIE_ALLOW_MOCK') || 'false').toLowerCase() === 'true';
+const INVOICE_PDF_STORAGE_WORKER_URL = (Deno.env.get('INVOICE_PDF_STORAGE_WORKER_URL') || '').replace(/\/$/, '');
+const INVOICE_PDF_STORAGE_SECRET = Deno.env.get('INVOICE_PDF_STORAGE_SECRET') || '';
 
 const allowedOrigins = parseAllowedOrigins([
   Deno.env.get('INVOICE_PUBLIC_ALLOWED_ORIGINS'),
@@ -13,15 +15,11 @@ const allowedOrigins = parseAllowedOrigins([
 ]);
 
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false,
-  },
+  auth: { autoRefreshToken: false, persistSession: false },
 });
 
 class PublicInvoiceError extends Error {
   status: number;
-
   constructor(message: string, status = 400) {
     super(message);
     this.status = status;
@@ -29,65 +27,49 @@ class PublicInvoiceError extends Error {
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return json(req, { ok: true });
-  }
+  if (req.method === 'OPTIONS') return json(req, { ok: true });
 
   try {
     assertAllowedOrigin(req);
-
-    if (req.method !== 'POST') {
-      return json(req, { ok: false, error: 'Method not allowed.' }, 405);
-    }
+    if (req.method !== 'POST') return json(req, { ok: false, error: 'Method not allowed.' }, 405);
 
     const body = await req.json().catch(() => ({}));
     const action = String(body.action || 'getInvoice');
     const token = String(body.token || '').trim();
+    const mockPaymentId = String(body.mockPaymentId || body.mock_payment || '').trim();
 
-    if (!token) {
-      throw new PublicInvoiceError('Factuurlink ontbreekt.', 400);
+    if (!token) throw new PublicInvoiceError('Factuurlink ontbreekt.', 400);
+    if (action === 'getInvoicePdf') {
+      return json(req, { ok: true, ...(await getInvoicePdf(token)) });
     }
-
     if (action !== 'getInvoice' && action !== 'markMockInvoicePaymentPaid') {
       throw new PublicInvoiceError(`Onbekende actie: ${action}`, 400);
     }
 
     const result = await getInvoice(token, {
-      mockPaymentId: String(body.mockPaymentId || body.mock_payment || '').trim(),
+      mockPaymentId,
       markMockOnly: action === 'markMockInvoicePaymentPaid',
     });
 
-    return json(req, {
-      ok: true,
-      ...result,
-    });
+    return json(req, { ok: true, ...result });
   } catch (error) {
     const status = error instanceof PublicInvoiceError ? error.status : 500;
-    const message =
-      error instanceof PublicInvoiceError
-        ? error.message
-        : 'Publieke factuur kon niet worden geladen.';
-
-    if (status >= 500) {
-      console.error('invoice-public error', error instanceof Error ? error.message : error);
-    }
-
+    const message = error instanceof PublicInvoiceError ? error.message : 'Publieke factuur kon niet worden geladen.';
+    if (status >= 500) console.error('invoice-public error', error instanceof Error ? error.message : error);
     return json(req, { ok: false, error: message }, status);
   }
 });
 
 async function getInvoice(token: string, options: { mockPaymentId?: string; markMockOnly?: boolean } = {}) {
-  const tokenHash = await sha256Hex(token);
-  let invoiceRow = await loadInvoiceByTokenHash(tokenHash);
+  const link = await resolvePublicLink(token);
+  let invoiceRow = await loadInvoice(link.organization_id, link.invoice_id);
 
   if (options.mockPaymentId) {
     await maybeMarkMockPaymentPaid(invoiceRow, options.mockPaymentId);
-    invoiceRow = await loadInvoiceByTokenHash(tokenHash);
+    invoiceRow = await loadInvoice(link.organization_id, link.invoice_id);
   }
 
-  if (options.markMockOnly) {
-    return { invoice: sanitizeInvoice(invoiceRow) };
-  }
+  if (options.markMockOnly) return { invoice: sanitizeInvoice(invoiceRow, link) };
 
   const [clientRow, projectRow, quoteRow, companyRow, events, payments, versions] = await Promise.all([
     invoiceRow.client_id ? optionalOne('clients', invoiceRow.organization_id, invoiceRow.client_id) : Promise.resolve(null),
@@ -97,45 +79,42 @@ async function getInvoice(token: string, options: { mockPaymentId?: string; mark
     optionalList('invoice_workflow_events', async () => {
       const { data, error } = await supabaseAdmin
         .from('invoice_workflow_events')
-        .select('*')
+        .select('event_type,title,description,created_at')
         .eq('organization_id', invoiceRow.organization_id)
         .eq('invoice_id', invoiceRow.id)
         .order('created_at', { ascending: false })
         .limit(20);
-
       if (error) throw error;
       return data || [];
     }),
     optionalList('invoice_payment_records', async () => {
       const { data, error } = await supabaseAdmin
         .from('invoice_payment_records')
-        .select('*')
+        .select('status,amount_cents,currency,provider_checkout_url,checkout_expires_at,paid_at,created_at')
         .eq('organization_id', invoiceRow.organization_id)
         .eq('invoice_id', invoiceRow.id)
         .order('created_at', { ascending: false })
         .limit(5);
-
       if (error) throw error;
       return data || [];
     }),
     optionalList('invoice_versions', async () => {
       const { data, error } = await supabaseAdmin
         .from('invoice_versions')
-        .select('*')
+        .select('version_number,snapshot_reason,pdf_file_name,pdf_mime_type,pdf_size_bytes,pdf_sha256,created_at,total_amount')
         .eq('organization_id', invoiceRow.organization_id)
         .eq('invoice_id', invoiceRow.id)
         .order('version_number', { ascending: false })
         .limit(5);
-
       if (error) throw error;
       return data || [];
     }),
   ]);
 
-  await logInvoiceViewed(invoiceRow.organization_id, invoiceRow.id);
+  await logInvoiceViewed(invoiceRow.organization_id, invoiceRow.id, link.link_id);
 
   return {
-    invoice: sanitizeInvoice(invoiceRow),
+    invoice: sanitizeInvoice(invoiceRow, link),
     client: sanitizeClient(clientRow),
     project: sanitizeProject(projectRow),
     quote: sanitizeQuote(quoteRow),
@@ -146,42 +125,99 @@ async function getInvoice(token: string, options: { mockPaymentId?: string; mark
   };
 }
 
-async function loadInvoiceByTokenHash(tokenHash: string) {
-  const { data: invoiceRow, error: invoiceError } = await supabaseAdmin
-    .from('invoices')
-    .select('*')
-    .eq('public_token_hash', tokenHash)
-    .maybeSingle();
 
-  if (invoiceError) {
-    throw invoiceError;
+async function getInvoicePdf(token: string) {
+  const link = await resolvePublicLink(token);
+  const invoiceRow = await loadInvoice(link.organization_id, link.invoice_id);
+
+  const { data: versions, error } = await supabaseAdmin
+    .from('invoice_versions')
+    .select('snapshot_reason,pdf_file_name,pdf_mime_type,pdf_size_bytes,pdf_sha256,pdf_data_base64,pdf_storage_provider,pdf_storage_key,created_at,version_number')
+    .eq('organization_id', invoiceRow.organization_id)
+    .eq('invoice_id', invoiceRow.id)
+    .not('pdf_file_name', 'is', null)
+    .order('version_number', { ascending: false })
+    .limit(20);
+
+  if (error) throw error;
+
+  const usableVersions = (versions || []).filter((candidate: any) => {
+    const hasDatabasePdf = Boolean(String(candidate.pdf_data_base64 || '').trim());
+    const hasPrivateStoragePdf = candidate.pdf_storage_provider === 'r2' && Boolean(candidate.pdf_storage_key);
+    return hasDatabasePdf || hasPrivateStoragePdf;
+  });
+
+  const version =
+    usableVersions.find((candidate: any) => candidate.snapshot_reason === 'sent_to_client') ||
+    usableVersions[0];
+
+  if (!version) {
+    throw new PublicInvoiceError('Er is nog geen beschikbare PDF-snapshot voor deze factuur.', 404);
   }
 
-  if (!invoiceRow) {
+  let base64 = String(version.pdf_data_base64 || '').trim();
+
+  if (!base64 && version.pdf_storage_provider === 'r2' && version.pdf_storage_key) {
+    if (!INVOICE_PDF_STORAGE_WORKER_URL || !INVOICE_PDF_STORAGE_SECRET) {
+      throw new PublicInvoiceError('PDF-snapshot is opgeslagen in private storage, maar de storage-koppeling ontbreekt.', 500);
+    }
+
+    const response = await fetch(`${INVOICE_PDF_STORAGE_WORKER_URL}/internal/invoice-snapshot/${encodeURIComponent(version.pdf_storage_key)}`, {
+      headers: { Authorization: `Bearer ${INVOICE_PDF_STORAGE_SECRET}` },
+    });
+
+    if (!response.ok) {
+      throw new PublicInvoiceError('PDF-snapshot kon niet uit private storage worden opgehaald.', 502);
+    }
+
+    base64 = arrayBufferToBase64(await response.arrayBuffer());
+  }
+
+  if (!base64) throw new PublicInvoiceError('PDF-snapshot ontbreekt of is niet beschikbaar.', 404);
+
+  return {
+    pdf: {
+      fileName: version.pdf_file_name || `factuur-${invoiceRow.number}.pdf`,
+      mimeType: version.pdf_mime_type || 'application/pdf',
+      sizeBytes: version.pdf_size_bytes || null,
+      sha256: version.pdf_sha256 || null,
+      base64,
+    },
+  };
+}
+
+async function resolvePublicLink(token: string): Promise<{ link_id: string | null; organization_id: string; invoice_id: string; purpose: string; expires_at: string | null }> {
+  const { data, error } = await supabaseAdmin.rpc('resolve_invoice_public_link', {
+    p_token: token,
+    p_touch: true,
+  });
+  if (error) throw error;
+  const rows = Array.isArray(data) ? data : data ? [data] : [];
+  const row = rows[0];
+  if (!row?.invoice_id || !row?.organization_id) {
     throw new PublicInvoiceError('Deze factuurlink is ongeldig of verlopen.', 404);
   }
+  return row;
+}
 
-  if (
-    invoiceRow.public_token_expires_at &&
-    new Date(invoiceRow.public_token_expires_at).getTime() < Date.now()
-  ) {
-    throw new PublicInvoiceError('Deze factuurlink is verlopen.', 410);
-  }
+async function loadInvoice(organizationId: string, invoiceId: string) {
+  const { data, error } = await supabaseAdmin
+    .from('invoices')
+    .select('*')
+    .eq('id', invoiceId)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
 
-  if (invoiceRow.status === 'cancelled') {
-    throw new PublicInvoiceError('Deze factuur is geannuleerd.', 410);
-  }
-
-  return invoiceRow;
+  if (error) throw error;
+  if (!data) throw new PublicInvoiceError('Factuur niet gevonden.', 404);
+  if (data.status === 'cancelled' || data.status === 'void') throw new PublicInvoiceError('Deze factuur is geannuleerd.', 410);
+  return data;
 }
 
 async function maybeMarkMockPaymentPaid(invoiceRow: any, providerPaymentId: string) {
   if (!providerPaymentId) return;
   if (!providerPaymentId.startsWith('mock_invoice_payment_')) return;
-
-  if (!MOLLIE_ALLOW_MOCK) {
-    throw new PublicInvoiceError('Mock-betalingen zijn uitgeschakeld.', 403);
-  }
+  if (!MOLLIE_ALLOW_MOCK) throw new PublicInvoiceError('Mock-betalingen zijn uitgeschakeld.', 403);
 
   const { data: payment, error: paymentLookupError } = await supabaseAdmin
     .from('invoice_payment_records')
@@ -202,7 +238,6 @@ async function maybeMarkMockPaymentPaid(invoiceRow: any, providerPaymentId: stri
     p_paid_at: new Date().toISOString(),
     p_metadata: { mock: true, source: 'public_invoice_page' },
   });
-
   if (error) throw error;
 }
 
@@ -214,18 +249,13 @@ async function optionalOne(tableName: string, organizationId: string, id: string
       .eq('id', id)
       .eq('organization_id', organizationId)
       .maybeSingle();
-
     if (error) {
       console.warn(`invoice-public optional lookup failed: ${tableName}`, error.message);
       return null;
     }
-
     return data || null;
   } catch (error) {
-    console.warn(
-      `invoice-public optional lookup crashed: ${tableName}`,
-      error instanceof Error ? error.message : error,
-    );
+    console.warn(`invoice-public optional lookup crashed: ${tableName}`, error instanceof Error ? error.message : error);
     return null;
   }
 }
@@ -237,18 +267,13 @@ async function optionalCompany(organizationId: string) {
       .select('*')
       .eq('organization_id', organizationId)
       .maybeSingle();
-
     if (error) {
       console.warn('invoice-public company lookup failed', error.message);
       return null;
     }
-
     return data || null;
   } catch (error) {
-    console.warn(
-      'invoice-public company lookup crashed',
-      error instanceof Error ? error.message : error,
-    );
+    console.warn('invoice-public company lookup crashed', error instanceof Error ? error.message : error);
     return null;
   }
 }
@@ -257,15 +282,12 @@ async function optionalList(name: string, loader: () => Promise<any[]>) {
   try {
     return await loader();
   } catch (error) {
-    console.warn(
-      `invoice-public optional list failed: ${name}`,
-      error instanceof Error ? error.message : error,
-    );
+    console.warn(`invoice-public optional list failed: ${name}`, error instanceof Error ? error.message : error);
     return [];
   }
 }
 
-async function logInvoiceViewed(organizationId: string, invoiceId: string) {
+async function logInvoiceViewed(organizationId: string, invoiceId: string, publicLinkId: string | null) {
   try {
     const { error } = await supabaseAdmin.rpc('insert_invoice_workflow_event', {
       p_organization_id: organizationId,
@@ -273,52 +295,36 @@ async function logInvoiceViewed(organizationId: string, invoiceId: string) {
       p_event_type: 'client_viewed',
       p_title: 'Factuur bekeken',
       p_description: 'Publieke factuurpagina is geopend.',
-      p_metadata: {},
+      p_metadata: { public_link_id: publicLinkId },
       p_actor_user_id: null,
     });
-
     if (error) console.warn('invoice-public view event insert failed', error.message);
   } catch (error) {
-    console.warn(
-      'invoice-public view event insert crashed',
-      error instanceof Error ? error.message : error,
-    );
+    console.warn('invoice-public view event insert crashed', error instanceof Error ? error.message : error);
   }
 }
 
-function sanitizeInvoice(row: any) {
+function sanitizeInvoice(row: any, link: { expires_at?: string | null }) {
   return {
-    id: row.id,
     number: row.number,
     status: row.status,
     date: row.date,
     due_date: row.due_date,
     sent_at: row.sent_at,
     paid_at: row.paid_at,
-    client_id: row.client_id,
-    project_id: row.project_id,
-    quote_id: row.quote_id,
-    lines: row.lines || [],
+    lines: Array.isArray(row.lines) ? row.lines : [],
     notes: row.notes,
-    subtotal: row.subtotal,
-    tax_amount: row.tax_amount,
+    subtotal_amount: row.subtotal_amount,
+    vat_amount: row.vat_amount,
     total_amount: row.total_amount,
-    total_excl_vat: row.total_excl_vat,
-    total_vat: row.total_vat,
-    total_incl_vat: row.total_incl_vat,
     currency: row.currency || 'EUR',
-    public_token_created_at: row.public_token_created_at,
-    public_token_expires_at: row.public_token_expires_at,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
+    public_token_expires_at: link.expires_at || row.public_token_expires_at || null,
   };
 }
 
 function sanitizeClient(row: any) {
   if (!row) return null;
-
   return {
-    id: row.id,
     name: row.name,
     contact_name: row.contact_name,
     email: row.email,
@@ -327,52 +333,34 @@ function sanitizeClient(row: any) {
     postal_code: row.postal_code,
     city: row.city,
     country: row.country,
-    vat_number: row.vat_number,
-    chamber_of_commerce: row.chamber_of_commerce,
   };
 }
 
 function sanitizeProject(row: any) {
   if (!row) return null;
-
-  return {
-    id: row.id,
-    name: row.name,
-    description: row.description,
-    status: row.status,
-    start_date: row.start_date,
-    end_date: row.end_date,
-  };
+  return { name: row.name, description: row.description, status: row.status, start_date: row.start_date, end_date: row.end_date };
 }
 
 function sanitizeQuote(row: any) {
   if (!row) return null;
-
-  return {
-    id: row.id,
-    number: row.number,
-    status: row.status,
-    date: row.date,
-    total_amount: row.total_amount,
-  };
+  return { number: row.number, status: row.status, date: row.date, total_amount: row.total_amount };
 }
 
 function sanitizeCompany(row: any) {
   if (!row) return null;
-
   return {
     company_name: row.company_name,
     trade_name: row.trade_name,
     email: row.email,
     phone: row.phone,
     website: row.website,
-    address: row.address,
+    address: row.address || row.address_line1,
     postal_code: row.postal_code,
     city: row.city,
     country: row.country,
     iban: row.iban,
     vat_number: row.vat_number,
-    chamber_of_commerce: row.chamber_of_commerce,
+    kvk_number: row.kvk_number || row.chamber_of_commerce,
     invoice_payment_terms: row.invoice_payment_terms,
     invoice_footer: row.invoice_footer,
   };
@@ -380,90 +368,70 @@ function sanitizeCompany(row: any) {
 
 function sanitizeEvent(row: any) {
   return {
-    id: row.id,
     event_type: row.event_type,
     title: row.title,
     description: row.description,
-    metadata: row.metadata,
     created_at: row.created_at,
   };
 }
 
 function sanitizePayment(row: any) {
   return {
-    id: row.id,
     status: row.status,
     amount_cents: row.amount_cents,
     currency: row.currency || 'EUR',
-    provider: row.provider,
-    provider_payment_id: row.provider_payment_id,
-    provider_checkout_url: row.provider_checkout_url,
+    checkout_url: row.provider_checkout_url,
     checkout_expires_at: row.checkout_expires_at,
     paid_at: row.paid_at,
     created_at: row.created_at,
-    updated_at: row.updated_at,
   };
 }
 
 function sanitizeVersion(row: any) {
   return {
-    id: row.id,
     version_number: row.version_number,
     snapshot_reason: row.snapshot_reason,
     pdf_file_name: row.pdf_file_name,
     pdf_mime_type: row.pdf_mime_type,
     pdf_size_bytes: row.pdf_size_bytes,
     pdf_sha256: row.pdf_sha256,
-    total_amount: row.total_amount,
     created_at: row.created_at,
   };
 }
 
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function parseAllowedOrigins(values: Array<string | null>): string[] {
   const origins = new Set<string>();
-
   for (const value of values) {
     if (!value) continue;
-
     for (const rawPart of value.split(',')) {
       const part = rawPart.trim().replace(/\/$/, '');
       if (!part) continue;
-
-      try {
-        origins.add(new URL(part).origin);
-      } catch {
-        origins.add(part);
-      }
+      try { origins.add(new URL(part).origin); } catch { origins.add(part); }
     }
   }
-
   return Array.from(origins);
 }
 
 function assertAllowedOrigin(req: Request) {
   const origin = req.headers.get('origin') || '';
-
   if (!origin) return;
   if (allowedOrigins.includes(origin)) return;
-
-  throw new PublicInvoiceError(
-    'Deze frontend-origin is niet toegestaan voor publieke factuurpagina.',
-    403,
-  );
+  throw new PublicInvoiceError('Deze frontend-origin is niet toegestaan voor publieke factuurpagina.', 403);
 }
 
 function corsHeaders(req: Request): HeadersInit {
   const origin = req.headers.get('origin') || '';
   const allowOrigin = allowedOrigins.includes(origin) ? origin : '*';
-
   return {
     'Access-Control-Allow-Origin': allowOrigin,
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -473,21 +441,11 @@ function corsHeaders(req: Request): HeadersInit {
 }
 
 function json(req: Request, payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: {
-      ...corsHeaders(req),
-      'Content-Type': 'application/json',
-    },
-  });
+  return new Response(JSON.stringify(payload), { status, headers: { ...corsHeaders(req), 'Content-Type': 'application/json' } });
 }
 
 function requiredEnv(name: string): string {
   const value = Deno.env.get(name);
-
-  if (!value) {
-    throw new Error(`Missing required env var: ${name}`);
-  }
-
+  if (!value) throw new Error(`Missing required env var: ${name}`);
   return value;
 }

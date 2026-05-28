@@ -487,15 +487,14 @@ function App() {
 
   async function createInvoicePayment(invoice: Invoice) {
     if (!ensureCanWrite()) return;
-    if (invoice.status === 'paid') {
-      setError('Deze factuur is al betaald.');
+    if (['paid','cancelled','void','written_off'].includes(invoice.status)) {
+      setError('Voor deze factuur kan geen betaallink worden aangemaakt.');
       return;
     }
     setLoading(true); setError(null);
     try {
       const result = await createInvoicePaymentCheckout(activeOrg.id, invoice.id, {
-        redirectUrl: window.location.origin,
-        idempotencyKey: `${invoice.id}-${Date.now()}`,
+        idempotencyKey: `invoice-${invoice.id}-active-payment`,
       });
       await refresh();
       if (result.checkoutUrl && confirm('Betaallink is aangemaakt. Wil je de link nu openen?')) {
@@ -921,10 +920,11 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
           <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}>
             <option value="draft">Concept</option>
             <option value="sent">Verzonden</option>
-            <option value="accepted">Openstaand</option>
-            <option value="paid">Betaald</option>
             <option value="overdue">Te laat</option>
+            <option value="paid">Betaald</option>
             <option value="cancelled">Geannuleerd</option>
+            <option value="void">Ongeldig gemaakt</option>
+            <option value="written_off">Afgeboekt</option>
           </Select>
         </Field>}
       </div>
