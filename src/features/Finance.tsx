@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { CreditCard, Download, Eye, FileText, Mail, ShieldCheck, Send, XCircle } from 'lucide-react';
+import { CreditCard, Download, Eye, FileText, Mail, RotateCcw, Search, ShieldCheck, SlidersHorizontal, Send, XCircle } from 'lucide-react';
 import type { AppData, FinanceLine, FinanceStatus, Invoice, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
 import { Modal } from '../components/Modal';
 import { Button } from '../components/Ui';
@@ -112,6 +112,233 @@ function FinanceList<T extends Quote | Invoice>({
   />;
 }
 
+
+type FinanceKind = 'quote' | 'invoice';
+
+type FinanceSearchFilters = {
+  query: string;
+  clientId: string;
+  projectId: string;
+  status: string;
+  dateFrom: string;
+  dateTo: string;
+  amountMin: string;
+  amountMax: string;
+};
+
+const emptyFinanceSearchFilters: FinanceSearchFilters = {
+  query: '',
+  clientId: '',
+  projectId: '',
+  status: '',
+  dateFrom: '',
+  dateTo: '',
+  amountMin: '',
+  amountMax: '',
+};
+
+function createDefaultFinanceSearchFilters(): FinanceSearchFilters {
+  return { ...emptyFinanceSearchFilters };
+}
+
+function FinanceSearchPanel<T extends Quote | Invoice>({
+  kind,
+  docs,
+  data,
+  filters,
+  visibleCount,
+  visibleTotalAmount,
+  onChange,
+}: {
+  kind: FinanceKind;
+  docs: T[];
+  data: AppData;
+  filters: FinanceSearchFilters;
+  visibleCount: number;
+  visibleTotalAmount: number;
+  onChange: (filters: FinanceSearchFilters) => void;
+}) {
+  const isQuote = kind === 'quote';
+  const activeFilterCount = countActiveFinanceFilters(filters);
+  const clientOptions = useMemo(() => {
+    const clientIds = new Set(docs.map(doc => doc.client_id).filter(Boolean));
+    return data.clients
+      .filter(client => clientIds.has(client.id))
+      .sort((a, b) => a.name.localeCompare(b.name, 'nl-NL'));
+  }, [data.clients, docs]);
+  const projectOptions = useMemo(() => {
+    const projectIds = new Set(docs.map(doc => doc.project_id).filter(Boolean));
+    return data.projects
+      .filter(project => projectIds.has(project.id))
+      .sort((a, b) => a.name.localeCompare(b.name, 'nl-NL'));
+  }, [data.projects, docs]);
+  const statusOptions = useMemo(() => buildFinanceStatusOptions(kind, docs), [docs, kind]);
+
+  const updateFilters = (patch: Partial<FinanceSearchFilters>) => onChange({ ...filters, ...patch });
+  const resetFilters = () => onChange(createDefaultFinanceSearchFilters());
+  const label = isQuote ? 'offertes' : 'facturen';
+
+  return <section className="finance-search-card" aria-label={`${isQuote ? 'Offertes' : 'Facturen'} zoeken en filteren`}>
+    <div className="finance-search-main">
+      <label className="finance-search-query">
+        <span><Search size={15}/> Snel zoeken</span>
+        <input
+          className="form-input"
+          value={filters.query}
+          onChange={event => updateFilters({ query: event.target.value })}
+          placeholder={isQuote ? 'Zoek op offertenummer, klant, project, omschrijving, status of bedrag…' : 'Zoek op factuurnummer, klant, project, offerte, omschrijving, status of bedrag…'}
+          autoComplete="off"
+        />
+      </label>
+      <div className="finance-search-result-card">
+        <SlidersHorizontal size={16}/>
+        <div><strong>{visibleCount} van {docs.length}</strong><span>{label} zichtbaar</span></div>
+        <small>{euro(visibleTotalAmount)} totaal</small>
+      </div>
+    </div>
+
+    <div className="finance-search-grid">
+      <label className="field finance-search-field"><span>Klant</span><select className="form-select" value={filters.clientId} onChange={event => updateFilters({ clientId: event.target.value })}><option value="">Alle klanten</option>{clientOptions.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
+      <label className="field finance-search-field"><span>Project</span><select className="form-select" value={filters.projectId} onChange={event => updateFilters({ projectId: event.target.value })}><option value="">Alle projecten</option>{projectOptions.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+      <label className="field finance-search-field"><span>Status</span><select className="form-select" value={filters.status} onChange={event => updateFilters({ status: event.target.value })}><option value="">Alle statussen</option>{statusOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+      <label className="field finance-search-field"><span>{isQuote ? 'Offertedatum vanaf' : 'Factuurdatum vanaf'}</span><input className="form-input" type="date" value={filters.dateFrom} onChange={event => updateFilters({ dateFrom: event.target.value })}/></label>
+      <label className="field finance-search-field"><span>{isQuote ? 'Offertedatum t/m' : 'Factuurdatum t/m'}</span><input className="form-input" type="date" value={filters.dateTo} onChange={event => updateFilters({ dateTo: event.target.value })}/></label>
+      <label className="field finance-search-field"><span>Bedrag vanaf</span><input className="form-input" inputMode="decimal" value={filters.amountMin} onChange={event => updateFilters({ amountMin: event.target.value })} placeholder="€ min."/></label>
+      <label className="field finance-search-field"><span>Bedrag t/m</span><input className="form-input" inputMode="decimal" value={filters.amountMax} onChange={event => updateFilters({ amountMax: event.target.value })} placeholder="€ max."/></label>
+    </div>
+
+    {activeFilterCount > 0 && <div className="finance-search-active-row">
+      <span>{activeFilterCount} filter{activeFilterCount === 1 ? '' : 's'} actief</span>
+      <button type="button" onClick={resetFilters}><RotateCcw size={14}/> Filters wissen</button>
+    </div>}
+  </section>;
+}
+
+function buildFinanceStatusOptions<T extends Quote | Invoice>(kind: FinanceKind, docs: T[]): Array<{ value: string; label: string }> {
+  const options = new Map<string, string>();
+  docs.forEach(doc => {
+    const key = getFinanceStatusKey(kind, doc);
+    options.set(key, getFinanceStatusLabel(kind, doc));
+  });
+  return [...options.entries()]
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'nl-NL'));
+}
+
+function filterFinanceDocs<T extends Quote | Invoice>(kind: FinanceKind, docs: T[], data: AppData, filters: FinanceSearchFilters): T[] {
+  const query = normalizeSearchValue(filters.query);
+  const amountMin = parseAmountFilter(filters.amountMin);
+  const amountMax = parseAmountFilter(filters.amountMax);
+
+  return docs.filter(doc => {
+    if (filters.clientId && doc.client_id !== filters.clientId) return false;
+    if (filters.projectId && doc.project_id !== filters.projectId) return false;
+    if (filters.status && getFinanceStatusKey(kind, doc) !== filters.status) return false;
+
+    const docDate = normalizeDateInput(doc.date);
+    if (filters.dateFrom && (!docDate || docDate < filters.dateFrom)) return false;
+    if (filters.dateTo && (!docDate || docDate > filters.dateTo)) return false;
+
+    const amount = total(doc.lines).total;
+    if (amountMin !== null && amount < amountMin) return false;
+    if (amountMax !== null && amount > amountMax) return false;
+
+    if (!query) return true;
+    return buildFinanceSearchText(kind, doc, data).includes(query);
+  });
+}
+
+function buildFinanceSearchText<T extends Quote | Invoice>(kind: FinanceKind, doc: T, data: AppData): string {
+  const client = data.clients.find(item => item.id === doc.client_id) ?? null;
+  const project = data.projects.find(item => item.id === doc.project_id) ?? null;
+  const amounts = total(doc.lines);
+  const linkedQuote = kind === 'invoice' ? data.quotes.find(item => item.id === (doc as Invoice).quote_id) ?? null : null;
+  const emailDeliveryText = kind === 'quote'
+    ? data.quoteEmailDeliveries.filter(delivery => delivery.quote_id === doc.id).map(delivery => `${delivery.recipient_email} ${delivery.recipient_name ?? ''} ${delivery.subject} ${emailStatusLabel(delivery.status)} ${delivery.attachment_file_name ?? ''}`).join(' ')
+    : data.invoiceEmailDeliveries.filter(delivery => delivery.invoice_id === doc.id).map(delivery => `${delivery.recipient_email} ${delivery.recipient_name ?? ''} ${delivery.subject} ${emailStatusLabel(delivery.status)} ${delivery.attachment_file_name ?? ''}`).join(' ');
+  const invoicePaymentText = kind === 'invoice'
+    ? data.invoicePaymentRecords.filter(payment => payment.invoice_id === doc.id).map(payment => `${paymentStatusLabel(payment.status)} ${payment.provider_payment_id ?? ''} ${payment.currency} ${euro(payment.amount_cents / 100)}`).join(' ')
+    : '';
+
+  const rawParts = [
+    doc.number,
+    getFinanceStatusLabel(kind, doc),
+    statusLabel(doc.status),
+    doc.status,
+    doc.notes,
+    doc.date,
+    dateNL(doc.date),
+    kind === 'quote' ? (doc as Quote).valid_until : (doc as Invoice).due_date,
+    kind === 'quote' ? dateNL((doc as Quote).valid_until) : dateNL((doc as Invoice).due_date),
+    client?.name,
+    client?.client_code,
+    client?.contact_name,
+    client?.email,
+    project?.name,
+    project?.description,
+    linkedQuote?.number,
+    euro(amounts.subtotal),
+    euro(amounts.vat),
+    euro(amounts.total),
+    amounts.subtotal.toFixed(2),
+    amounts.vat.toFixed(2),
+    amounts.total.toFixed(2),
+    ...doc.lines.flatMap(line => [line.description, line.quantity, line.unit_price, line.vat, euro(lineGross(line))]),
+    emailDeliveryText,
+    invoicePaymentText,
+  ];
+
+  return normalizeSearchValue(rawParts.filter(part => part !== null && part !== undefined).join(' '));
+}
+
+function getFinanceStatusKey<T extends Quote | Invoice>(kind: FinanceKind, doc: T): string {
+  if (kind === 'quote') {
+    const quote = doc as Quote;
+    if (quote.status === 'draft' && quote.internal_approval_status === 'rejected') return 'internal_rejected';
+  }
+  return doc.status;
+}
+
+function getFinanceStatusLabel<T extends Quote | Invoice>(kind: FinanceKind, doc: T): string {
+  if (kind === 'quote') return quoteStatusLabel(doc as Quote);
+  return statusLabel((doc as Invoice).status);
+}
+
+function countActiveFinanceFilters(filters: FinanceSearchFilters): number {
+  return Object.values(filters).filter(value => value.trim() !== '').length;
+}
+
+function parseAmountFilter(value: string): number | null {
+  const compact = value.replace(/\s/g, '').replace(/[€]/g, '');
+  const normalized = compact.includes(',') && compact.includes('.')
+    ? compact.replace(/\./g, '').replace(',', '.')
+    : compact.includes(',')
+      ? compact.replace(',', '.')
+      : compact;
+  const safeValue = normalized.replace(/[^0-9.-]/g, '');
+  if (!safeValue) return null;
+  const parsed = Number(safeValue);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeDateInput(value: string | null | undefined): string {
+  return value ? value.slice(0, 10) : '';
+}
+
+function normalizeSearchValue(value: string): string {
+  return value
+    .toLocaleLowerCase('nl-NL')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[€.,]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function FinanceSearchEmptyState({ kind, onReset }: { kind: FinanceKind; onReset: () => void }) {
+  return <div className="empty quote-table-empty finance-search-empty"><div className="e-big">Geen {kind === 'quote' ? 'offertes' : 'facturen'} gevonden</div><p>Pas je zoekterm of filters aan om meer resultaten te tonen.</p><button type="button" onClick={onReset}><RotateCcw size={14}/> Filters wissen</button></div>;
+}
+
 function QuoteTable({
   title,
   quotes,
@@ -140,7 +367,10 @@ function QuoteTable({
   onConvertToInvoice?: (quote: Quote) => void;
 }) {
   const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(null);
+  const [searchFilters, setSearchFilters] = useState<FinanceSearchFilters>(() => createDefaultFinanceSearchFilters());
+  const filteredQuotes = useMemo(() => filterFinanceDocs('quote', quotes, data, searchFilters), [data, quotes, searchFilters]);
   const selectedQuote = useMemo(() => quotes.find(quote => quote.id === selectedQuoteId) ?? null, [quotes, selectedQuoteId]);
+  const visibleTotalAmount = useMemo(() => filteredQuotes.reduce((sum, quote) => sum + total(quote.lines).total, 0), [filteredQuotes]);
 
   return <>
     <div className="fin-header quote-table-header">
@@ -151,6 +381,8 @@ function QuoteTable({
       <Button variant="primary" onClick={onNew}>+ Nieuw</Button>
     </div>
 
+    <FinanceSearchPanel kind="quote" docs={quotes} data={data} filters={searchFilters} visibleCount={filteredQuotes.length} visibleTotalAmount={visibleTotalAmount} onChange={setSearchFilters} />
+
     <div className="quote-table-card">
       <div className="quote-table-scroll" role="region" aria-label="Offertes tabel">
         <table className="quote-table">
@@ -160,7 +392,7 @@ function QuoteTable({
             </tr>
           </thead>
           <tbody>
-            {quotes.map(quote => {
+            {filteredQuotes.map(quote => {
               const client = data.clients.find(c => c.id === quote.client_id) ?? null;
               const project = data.projects.find(p => p.id === quote.project_id) ?? null;
               const amounts = total(quote.lines);
@@ -186,6 +418,7 @@ function QuoteTable({
         </table>
       </div>
       {quotes.length === 0 && <div className="empty quote-table-empty"><div className="e-big">Nog geen offertes</div><p>Maak je eerste offerte aan om de workflow te starten.</p></div>}
+      {quotes.length > 0 && filteredQuotes.length === 0 && <FinanceSearchEmptyState kind="quote" onReset={() => setSearchFilters(createDefaultFinanceSearchFilters())} />}
     </div>
 
     {selectedQuote && <QuoteDetailModal
@@ -224,7 +457,10 @@ function InvoiceTable({
   onCreatePayment?: (invoice: Invoice) => void;
 }) {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
+  const [searchFilters, setSearchFilters] = useState<FinanceSearchFilters>(() => createDefaultFinanceSearchFilters());
+  const filteredInvoices = useMemo(() => filterFinanceDocs('invoice', invoices, data, searchFilters), [data, invoices, searchFilters]);
   const selectedInvoice = useMemo(() => invoices.find(invoice => invoice.id === selectedInvoiceId) ?? null, [invoices, selectedInvoiceId]);
+  const visibleTotalAmount = useMemo(() => filteredInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0), [filteredInvoices]);
 
   return <>
     <div className="fin-header quote-table-header">
@@ -235,6 +471,8 @@ function InvoiceTable({
       <Button variant="primary" onClick={onNew}>+ Nieuw</Button>
     </div>
 
+    <FinanceSearchPanel kind="invoice" docs={invoices} data={data} filters={searchFilters} visibleCount={filteredInvoices.length} visibleTotalAmount={visibleTotalAmount} onChange={setSearchFilters} />
+
     <div className="quote-table-card invoice-table-card">
       <div className="quote-table-scroll" role="region" aria-label="Facturen tabel">
         <table className="quote-table invoice-table">
@@ -242,7 +480,7 @@ function InvoiceTable({
             <tr><th>Factuur</th><th>Klant</th><th>Project</th><th>Offerte</th><th>Datum</th><th>Vervalt</th><th className="money">Bedrag ex.</th><th className="money">BTW</th><th className="money">Totaal</th><th>Status</th><th aria-label="Acties" /></tr>
           </thead>
           <tbody>
-            {invoices.map(invoice => {
+            {filteredInvoices.map(invoice => {
               const client = data.clients.find(c => c.id === invoice.client_id) ?? null;
               const project = data.projects.find(p => p.id === invoice.project_id) ?? null;
               const quote = data.quotes.find(q => q.id === invoice.quote_id) ?? null;
@@ -270,6 +508,7 @@ function InvoiceTable({
         </table>
       </div>
       {invoices.length === 0 && <div className="empty quote-table-empty"><div className="e-big">Nog geen facturen</div><p>Zet een geaccepteerde offerte om of maak handmatig een conceptfactuur aan.</p></div>}
+      {invoices.length > 0 && filteredInvoices.length === 0 && <FinanceSearchEmptyState kind="invoice" onReset={() => setSearchFilters(createDefaultFinanceSearchFilters())} />}
     </div>
 
     {selectedInvoice && <InvoiceDetailModal
