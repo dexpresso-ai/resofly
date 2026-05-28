@@ -53,6 +53,7 @@ type PublicInvoicePayload = {
   events: PublicEvent[];
   payments: PublicPayment[];
   versions: PublicVersion[];
+  mockPaymentWarning?: string | null;
 };
 
 export function PublicInvoicePage({ token }: { token: string }) {
@@ -128,6 +129,7 @@ export function PublicInvoicePage({ token }: { token: string }) {
     </section>
 
     {error && <div className="public-quote-alert">{error}</div>}
+    {payload?.mockPaymentWarning && <div className="public-quote-alert">{payload.mockPaymentWarning}</div>}
 
     <section className="public-quote-grid">
       <article className="public-quote-card public-payment-card">

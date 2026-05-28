@@ -1,66 +1,72 @@
-# Diagnose — Publieke factuurpagina: "Deze link werkt niet meer" — 2026-05-28
+# Diagnose — Publieke factuurpagina: "Deze link werkt niet meer" — 2026-05-28 (update 2)
 
-## Symptoom
-`staging.resofly.com/invoice/<token>` toont "Deze link werkt niet meer" met als
-detail "Edge Function returned a non-2xx status code".
+## Wat de eerste fix opleverde
+De frontend-fix legde bloot wat de edge function teruggaf:
+"Publieke factuur kon niet worden geladen." Dat is geen rauwe Supabase-fout meer
+maar een eigen tekst van de functie — concreet de **catch-all 500** in
+`invoice-public/index.ts`. Alle echte fouten die geen `PublicInvoiceError` zijn
+(rauwe Postgres-/Supabase-fouten) werden daar onder dezelfde generieke tekst
+weggepoetst en alleen naar `console.error` gelogd.
 
-## Oorzaak van de onleesbare melding
-`supabase.functions.invoke` levert elke non-2xx-respons op als een
-`FunctionsHttpError`, en `error.message` is dan ALTIJD de generieke tekst
-"Edge Function returned a non-2xx status code". De werkelijke reden zit in de
-response-body (`error.context`), die de pagina niet uitlas. Daardoor was nooit
-zichtbaar waaróm de link faalde.
+## Wat er nu in deze build verandert (twee edge functions)
 
-## Codefix (in deze build)
-`PublicInvoicePage.tsx` en `PublicQuotePage.tsx` lezen nu `error.context` uit en
-tonen de echte foutmelding van de edge function. Na deze deploy zie je op de
-pagina de concrete reden, bijvoorbeeld een van:
+### `invoice-public`
+1. De 500-catch-all geeft nu de werkelijke foutreden terug (afgekapt op 500 chars).
+   Dus na deze deploy zie je op de pagina precies wat er misging, zoals
+   "function public.update_invoice_payment_status(...) does not exist" of
+   "permission denied for table invoice_payment_records".
+2. De mock-payment markering is nu **non-fataal**: als het markeren als betaald
+   na de mock-checkout faalt, wordt de factuur tóch getoond en verschijnt er een
+   niet-blokkerende waarschuwing (`mockPaymentWarning`) op de pagina. De webhook
+   regelt de status dan alsnog.
 
-- "Deze frontend-origin is niet toegestaan voor publieke factuurpagina." (403)
-- "Deze factuurlink is ongeldig of verlopen." (404)
-- "Factuur niet gevonden." / "Deze factuur is geannuleerd." (404/410)
-- "PDF-snapshot ... storage-koppeling ontbreekt." (500/502)
+### `quote-public`
+Zelfde diagnostische verbetering in de catch-all.
 
-## Meest waarschijnlijke werkelijke oorzaak op staging
-De edge function `invoice-public` blokkeert elke origin die niet in de allowlist
-staat (`assertAllowedOrigin`, 403). De allowlist komt uit deze env-vars (de eerste
-die gevuld is telt mee):
-
-- `INVOICE_PUBLIC_ALLOWED_ORIGINS`
-- `INVOICE_ALLOWED_ORIGINS`
-- `APP_PUBLIC_URL`
-- `INVOICE_PUBLIC_BASE_URL`
-
-Als geen daarvan `https://staging.resofly.com` bevat, geeft de functie voor élke
-weergave een 403 — exact het patroon "continu een foutmelding".
-
-### Oplossing (Supabase project → Edge Functions → Secrets)
-Voeg de staging-origin toe, bijvoorbeeld:
+## Belangrijk: deze fix vereist een edge-function deploy
+De frontend is niet voldoende — `invoice-public` en `quote-public` draaien op
+Supabase, niet op Cloudflare Pages. Deploy ze met:
 
 ```
-INVOICE_PUBLIC_ALLOWED_ORIGINS=https://staging.resofly.com,https://resofly.com,https://app.resofly.com
+supabase functions deploy invoice-public --project-ref <project-ref>
+supabase functions deploy quote-public --project-ref <project-ref>
 ```
 
-Gebruik de origin (schema + host, zonder pad/slash). Meerdere door komma's
-gescheiden. Zet vervolgens dezelfde waarde ook voor de quote-functie als je de
-publieke offertepagina op staging gebruikt (`QUOTE_PUBLIC_ALLOWED_ORIGINS` /
-`APP_PUBLIC_URL`).
+(Of vanuit de Supabase Dashboard, of je CI-pipeline als die de functies ook deployt.)
 
-Let er ook op dat `INVOICE_PUBLIC_BASE_URL` (gebruikt om de publieke links te
-bouwen) naar dezelfde staging-host wijst, zodat nieuw gegenereerde links kloppen.
+## Onmiddellijke check zonder deploy
+De huidige Supabase-functie logt de echte fout al via `console.error`:
 
-## Als de echte melding tóch "ongeldig of verlopen" is
-Dan ligt het niet aan de origin maar aan de token zelf:
-- De link is verlopen (`INVOICE_TOKEN_TTL_DAYS` / `CHECKOUT_TTL_MINUTES`), of
-- de link hoort bij een factuur op een ander Supabase-project dan staging (links
-  zijn niet overdraagbaar tussen databases), of
-- de migraties voor `invoice_public_links` / `resolve_invoice_public_link` zijn
-  nog niet toegepast op de staging-database.
+*Supabase Dashboard → Project → Edge Functions → `invoice-public` → Logs.*
 
-Genereer in dat geval een nieuwe betaallink/verzending vanuit de app en test de
-verse link.
+Open de mislukte invocatie en lees de regel die begint met `invoice-public error` —
+daar staat de werkelijke Postgres-/Supabase-foutmelding.
 
-## Niet de oorzaak
-De eerdere geldprecisie- en Mollie-wijzigingen raken deze functie niet:
-`invoice-public` is ongewijzigd en de payment-status-migratie wordt alleen door de
-webhook gebruikt, niet door de publieke pagina.
+## Snelle isolatietest
+De getoonde URL bevat `?mock_payment=mock_invoice_payment_…`. Test of de
+weergavecode op zich werkt door de query-string te strippen:
+
+```
+https://staging.resofly.com/invoice/<token>
+```
+
+- Laadt hij **wel**: het probleem zit in de mock-payment-markeerflow
+  (`maybeMarkMockPaymentPaid`), waarschijnlijk de RPC
+  `update_invoice_payment_status` of de daarbinnen aangeroepen
+  `create_invoice_version_snapshot`. Met de nieuwe non-fatale markering blijft de
+  pagina ook met mock_payment in de URL gewoon werken.
+- Laadt hij **ook niet**: het probleem zit dieper (resolveLink, loadInvoice,
+  ontbrekende migratie). De nieuwe foutmelding op de pagina geeft dan precies aan
+  welke.
+
+## Meest waarschijnlijke onderliggende oorzaken (op volgorde van waarschijnlijkheid)
+
+1. **`update_invoice_payment_status` of `create_invoice_version_snapshot` gooit een
+   fout** op staging tijdens het mock-markeren. Door de non-fatale wrap blokkeert
+   dat de pagina niet meer; de echte foutreden komt mee in `mockPaymentWarning`.
+2. **`MOLLIE_ALLOW_MOCK` staat op `false` op staging**, terwijl de oorspronkelijke
+   betaallink wél in mock-modus is aangemaakt. Geeft 403 met heldere tekst, niet de
+   generieke 500.
+3. **Migraties van 2026-05-27 (`finance_core_*`) zijn nog niet op staging
+   toegepast**, waardoor `update_invoice_payment_status` of `resolve_invoice_public_link`
+   ontbreekt of een oude signatuur heeft.

@@ -26,6 +26,27 @@ class PublicInvoiceError extends Error {
   }
 }
 
+/**
+ * Geef een leesbare omschrijving van een willekeurige fout. Supabase/Postgres
+ * geven errors terug als plain objects (geen Error-instance) met velden zoals
+ * `message`, `code`, `details`, `hint`. `String(error)` op zo'n object geeft
+ * "[object Object]" — daarom unpacken we de bekende velden expliciet.
+ */
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message || error.name || 'Error';
+  if (error && typeof error === 'object') {
+    const obj = error as Record<string, unknown>;
+    const parts: string[] = [];
+    if (typeof obj.message === 'string' && obj.message) parts.push(obj.message);
+    if (typeof obj.code === 'string' && obj.code) parts.push(`(code ${obj.code})`);
+    if (typeof obj.details === 'string' && obj.details) parts.push(`details: ${obj.details}`);
+    if (typeof obj.hint === 'string' && obj.hint) parts.push(`hint: ${obj.hint}`);
+    if (parts.length) return parts.join(' ');
+    try { return JSON.stringify(obj); } catch { /* val terug op String() */ }
+  }
+  return String(error);
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return json(req, { ok: true });
 
@@ -54,8 +75,19 @@ serve(async (req) => {
     return json(req, { ok: true, ...result });
   } catch (error) {
     const status = error instanceof PublicInvoiceError ? error.status : 500;
-    const message = error instanceof PublicInvoiceError ? error.message : 'Publieke factuur kon niet worden geladen.';
-    if (status >= 500) console.error('invoice-public error', error instanceof Error ? error.message : error);
+    let message: string;
+    if (error instanceof PublicInvoiceError) {
+      message = error.message;
+    } else {
+      // Bewust de werkelijke foutreden teruggeven (afgekapt op 500 chars) zodat de
+      // publieke factuurpagina diagnostisch is zonder dat de Supabase functie-logs
+      // geopend hoeven worden. Supabase/Postgres-foutmeldingen bevatten doorgaans
+      // veldnamen en constraint-namen, geen secrets, dus dit is veilig.
+      message = `Publieke factuur kon niet worden geladen: ${describeError(error)}`.slice(0, 500);
+    }
+    if (status >= 500) {
+      console.error('invoice-public error', describeError(error), error instanceof Error ? error.stack : undefined);
+    }
     return json(req, { ok: false, error: message }, status);
   }
 });
@@ -63,13 +95,23 @@ serve(async (req) => {
 async function getInvoice(token: string, options: { mockPaymentId?: string; markMockOnly?: boolean } = {}) {
   const link = await resolvePublicLink(token);
   let invoiceRow = await loadInvoice(link.organization_id, link.invoice_id);
+  let mockPaymentWarning: string | null = null;
 
   if (options.mockPaymentId) {
-    await maybeMarkMockPaymentPaid(invoiceRow, options.mockPaymentId);
-    invoiceRow = await loadInvoice(link.organization_id, link.invoice_id);
+    try {
+      await maybeMarkMockPaymentPaid(invoiceRow, options.mockPaymentId);
+      invoiceRow = await loadInvoice(link.organization_id, link.invoice_id);
+    } catch (markError) {
+      // Markeren als betaald is een neveneffect bij het terugkomen van de mock-
+      // checkout. Een storing daar mag de hele factuurweergave niet platleggen —
+      // de factuur is gewoon zichtbaar, alleen de status volgt later via webhook.
+      const detail = markError instanceof PublicInvoiceError ? markError.message : describeError(markError);
+      console.warn('invoice-public mock payment mark failed', detail);
+      mockPaymentWarning = `Mock-betaling kon niet automatisch worden gemarkeerd als betaald: ${detail}`.slice(0, 400);
+    }
   }
 
-  if (options.markMockOnly) return { invoice: sanitizeInvoice(invoiceRow, link) };
+  if (options.markMockOnly) return { invoice: sanitizeInvoice(invoiceRow, link), mockPaymentWarning };
 
   const [clientRow, projectRow, quoteRow, companyRow, events, payments, versions] = await Promise.all([
     invoiceRow.client_id ? optionalOne('clients', invoiceRow.organization_id, invoiceRow.client_id) : Promise.resolve(null),
@@ -122,6 +164,7 @@ async function getInvoice(token: string, options: { mockPaymentId?: string; mark
     events: events.map(sanitizeEvent),
     payments: payments.map(sanitizePayment),
     versions: versions.map(sanitizeVersion),
+    mockPaymentWarning,
   };
 }
 

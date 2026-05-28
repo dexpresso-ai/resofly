@@ -44,6 +44,27 @@ class PublicHttpError extends Error {
   }
 }
 
+/**
+ * Geef een leesbare omschrijving van een willekeurige fout. Supabase/Postgres
+ * geven errors terug als plain objects (geen Error-instance) met velden zoals
+ * `message`, `code`, `details`, `hint`. `String(error)` op zo'n object geeft
+ * "[object Object]" — daarom unpacken we de bekende velden expliciet.
+ */
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message || error.name || 'Error';
+  if (error && typeof error === 'object') {
+    const obj = error as Record<string, unknown>;
+    const parts: string[] = [];
+    if (typeof obj.message === 'string' && obj.message) parts.push(obj.message);
+    if (typeof obj.code === 'string' && obj.code) parts.push(`(code ${obj.code})`);
+    if (typeof obj.details === 'string' && obj.details) parts.push(`details: ${obj.details}`);
+    if (typeof obj.hint === 'string' && obj.hint) parts.push(`hint: ${obj.hint}`);
+    if (parts.length) return parts.join(' ');
+    try { return JSON.stringify(obj); } catch { /* val terug op String() */ }
+  }
+  return String(error);
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return json(req, { ok: true });
   try {
@@ -63,11 +84,15 @@ serve(async (req) => {
     }
   } catch (error) {
     const status = error instanceof PublicHttpError ? error.status : 500;
-    const internalMessage = error instanceof Error ? error.message : 'Onbekende fout.';
-    if (status >= 500) console.error('quote-public error', internalMessage);
+    const internalMessage = describeError(error);
+    if (status >= 500) console.error('quote-public error', internalMessage, error instanceof Error ? error.stack : undefined);
+    // Voor non-PublicHttpError fouten geven we de werkelijke reden mee (afgekapt op
+    // 500 chars). Postgres/Supabase-foutmeldingen bevatten doorgaans veldnamen en
+    // constraint-namen, geen secrets — diagnostisch te zien is veilig en cruciaal
+    // bij het opsporen van migratie- of configuratieproblemen op staging.
     const publicMessage = error instanceof PublicHttpError
       ? error.message
-      : 'Offerte kon niet worden geladen. Controleer de link of neem contact op met de afzender.';
+      : `Offerte kon niet worden geladen: ${internalMessage}`.slice(0, 500);
     return json(req, { ok: false, error: publicMessage }, status);
   }
 });
