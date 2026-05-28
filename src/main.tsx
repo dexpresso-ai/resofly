@@ -21,6 +21,7 @@ import {
   loadAppData,
   loadOrganizationContext,
   previewNextClientCode,
+  planTaskInWeek,
   revokeOrganizationInvitation,
   submitQuoteForInternalApproval,
   approveQuoteInternal,
@@ -376,10 +377,10 @@ function App() {
     catch (e) { setError(e instanceof Error ? e.message : 'Status bijwerken mislukt'); }
   }
 
-  async function updateTaskDate(taskId: string, endDate: string | null) {
+  async function updateTaskPlanning(taskId: string, plannedDate: string | null, beforeTaskId?: string | null) {
     if (!ensureCanWrite()) return;
     setError(null);
-    await updateRow<Task>('tasks', taskId, { end_date: endDate }, activeOrg.id);
+    await planTaskInWeek(activeOrg.id, taskId, plannedDate, beforeTaskId ?? null);
     await refresh();
   }
 
@@ -615,7 +616,7 @@ function App() {
     if (page === 'notes') return <Notes data={data} onNew={() => ensureCanWrite() && setEdit({kind:'note'})} onEdit={(item)=>setEdit({kind:'note', item})}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice}/>;
     if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onCreatePayment={createInvoicePayment}/>;
-    if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} onUpdateTaskDate={updateTaskDate} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
+    if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} onPlanTask={updateTaskPlanning} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'calendar-settings') return <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'stats') return <Stats data={data}/>;
@@ -737,7 +738,7 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
       {attachmentBlock}
     </FormGrid>}
     {edit.kind === 'project' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Projectnaam"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Omschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/><Input value={form.color} onChange={e=>set('color',e.target.value)} placeholder="#FFD966"/><label className="check-row"><input type="checkbox" checked={Boolean(form.archived)} onChange={e=>set('archived',e.target.checked)}/><span>Project archiveren</span></label>{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.project} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
-    {edit.kind === 'task' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Taaktitel"/><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="todo">Te doen</option><option value="doing">Bezig</option><option value="review">Review</option><option value="done">Klaar</option></Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags"/><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/><TaskDetailEditor subtasks={form.subtasks} comments={form.comments} set={set}/>{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.task} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'task' && <FormGrid><Field label="Taaktitel"><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Taaktitel" disabled={disabled}/></Field><Field label="Status"><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="todo">Te doen</option><option value="doing">Bezig</option><option value="review">Review</option><option value="done">Klaar</option></Select></Field><Field label="Prioriteit"><Select value={form.priority} onChange={e=>set('priority',e.target.value)} disabled={disabled}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select></Field><Field label="Tags" hint="Gebruik komma’s om meerdere tags toe te voegen."><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags" disabled={disabled}/></Field><Field label="Beschrijving"><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving" disabled={disabled}/></Field><Field label="Startdatum"><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)} disabled={disabled}/></Field><Field label="Deadline" hint="Deze datum blijft de inhoudelijke deadline en wordt niet meer aangepast door de weekplanner."><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)} disabled={disabled}/></Field><Field label="Plandatum" hint="Deze datum bepaalt op welke dag de taak in de weekplanner staat."><Input type="date" value={form.planned_date} onChange={e=>set('planned_date',e.target.value)} disabled={disabled}/></Field><Field label="Geschatte duur" hint="In minuten. Wordt gebruikt voor de dag- en weekcapaciteit."><Input type="number" min="0" max="1440" step="15" value={form.estimated_minutes} onChange={e=>set('estimated_minutes',Number(e.target.value))} disabled={disabled}/></Field><TaskDetailEditor subtasks={form.subtasks} comments={form.comments} set={set}/>{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.task} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
     {edit.kind === 'ticket' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Ticket titel"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={Boolean((item as Ticket | undefined)?.converted_to_project_id)}><option value="new">Nieuw</option><option value="review">Review</option><option value="approved">Goedgekeurd</option><option value="rejected">Geweigerd</option>{(item as Ticket | undefined)?.converted_to_project_id && <option value="converted">Omgezet</option>}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne notities"/><small className="ticket-status-hint">Gebruik <strong>Project maken</strong> om een ticket om te zetten. <strong>Omgezet</strong> is geen handmatige status.</small>{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.ticket} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
     {edit.kind === 'note' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Titel"/><Select value={form.note_type} onChange={e=>set('note_type',e.target.value)}>{Object.entries(noteTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select><RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf je notitie…" disabled={disabled}/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.project_id} onChange={e=>set('project_id',e.target.value)} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags, komma gescheiden" />{item && <div className="note-created-meta"><span>Aangemaakt: {new Date((item as Note).created_at).toLocaleString('nl-NL')}</span><span>Bijgewerkt: {new Date((item as Note).updated_at).toLocaleString('nl-NL')}</span></div>}{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.note} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
     {(edit.kind === 'quote' || edit.kind === 'invoice') && <FinanceForm kind={edit.kind} data={data} organizationId={organizationId} form={form} set={set} item={item} readOnly={effectiveReadOnly} onUploaded={onAttachmentsChanged} attachmentBlock={attachmentBlock}/>}
@@ -1192,7 +1193,7 @@ function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string,
   }
   if (edit.kind === "task") {
     const item = edit.item;
-    return { title: item?.title ?? "", description: item?.description ?? "", status: item?.status ?? "todo", priority: item?.priority ?? "med", tags: item?.tags?.join(", ") ?? "", start_date: item?.start_date ?? "", end_date: item?.end_date ?? "", subtasks: normalizeSubtasks(item?.subtasks), comments: normalizeComments(item?.comments) };
+    return { title: item?.title ?? "", description: item?.description ?? "", status: item?.status ?? "todo", priority: item?.priority ?? "med", tags: item?.tags?.join(", ") ?? "", start_date: item?.start_date ?? "", end_date: item?.end_date ?? "", planned_date: item?.planned_date ?? "", estimated_minutes: item?.estimated_minutes ?? 60, subtasks: normalizeSubtasks(item?.subtasks), comments: normalizeComments(item?.comments) };
   }
   if (edit.kind === "ticket") {
     const item = edit.item;
@@ -1221,7 +1222,7 @@ function cleanForm(kind: string, form: Record<string, any>) {
     cleaned.phone = normalizeOptionalText(cleaned.phone);
     cleaned.notes = normalizeOptionalText(cleaned.notes);
   }
-  for (const key of ["client_id","project_id","quote_id","valid_until","due_date","start_date","end_date"]) {
+  for (const key of ["client_id","project_id","quote_id","valid_until","due_date","start_date","end_date","planned_date"]) {
     if (cleaned[key] === "") cleaned[key] = null;
   }
   if ("tags" in cleaned && typeof cleaned.tags === "string") {
@@ -1235,6 +1236,9 @@ function cleanForm(kind: string, form: Record<string, any>) {
   if (kind === 'task') {
     cleaned.subtasks = normalizeSubtasks(cleaned.subtasks).filter((subtask: Subtask) => subtask.label.trim().length > 0);
     cleaned.comments = normalizeComments(cleaned.comments).filter((comment: TaskComment) => comment.text.trim().length > 0);
+    const estimatedMinutes = Number(cleaned.estimated_minutes);
+    cleaned.estimated_minutes = Number.isFinite(estimatedMinutes) ? Math.max(0, Math.min(1440, Math.round(estimatedMinutes))) : 60;
+    delete cleaned.planned_order;
   }
   if (Array.isArray(cleaned.lines)) {
     cleaned.lines = cleaned.lines

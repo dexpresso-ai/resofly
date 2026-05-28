@@ -509,6 +509,26 @@ export async function updateRow<T>(table: Table, id: UUID, values: Record<string
   return data as T;
 }
 
+export async function planTaskInWeek(organizationId: UUID, taskId: UUID, plannedDate: string | null, beforeTaskId?: UUID | null): Promise<Task> {
+  const { data, error } = await supabase.rpc('reorder_task_planning', {
+    p_organization_id: organizationId,
+    p_task_id: taskId,
+    p_planned_date: plannedDate,
+    p_before_task_id: beforeTaskId ?? null,
+  });
+
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/reorder_task_planning|schema cache|does not exist|function/i.test(message)) {
+      throw new Error('Weekplanner-databasefunctie ontbreekt. Voer eerst de migratie 20260528_weekplanner_planning_fields.sql uit in Supabase.');
+    }
+    throw error;
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as Task;
+}
+
 export async function deleteRow(table: Table, id: UUID, organizationId?: UUID): Promise<void> {
   let query = supabase.from(table).delete().eq('id', id);
   if (organizationId) query = query.eq('organization_id', organizationId);

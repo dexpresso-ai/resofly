@@ -118,7 +118,7 @@ export interface Project extends OrgScopedRow {
 export interface Subtask { id: UUID; label: string; done: boolean; }
 export interface Comment { id: UUID; text: string; author?: string; created_at: string; }
 export interface Task extends OrgScopedRow {
-  project_id: UUID; title: string; description: string | null; status: TaskStatus; priority: Priority; tags: string[]; start_date: string | null; end_date: string | null; subtasks: Subtask[]; comments: Comment[]; created_at: string; updated_at: string;
+  project_id: UUID; title: string; description: string | null; status: TaskStatus; priority: Priority; tags: string[]; start_date: string | null; end_date: string | null; planned_date: string | null; planned_order: number | null; estimated_minutes: number; subtasks: Subtask[]; comments: Comment[]; created_at: string; updated_at: string;
 }
 export interface Ticket extends OrgScopedRow {
   client_id: UUID | null; title: string; description: string | null; priority: Priority; status: TicketStatus; notes: string | null; converted_to_project_id: UUID | null; created_at: string; updated_at: string;
