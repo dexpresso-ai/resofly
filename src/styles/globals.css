@@ -1042,3 +1042,20 @@ body::before{
 .color-swatch:disabled{cursor:not-allowed}
 .color-picker:has(.color-swatch:disabled) .color-swatch{opacity:.6}
 @media(prefers-reduced-motion:reduce){.color-swatch{transition:none}.color-swatch:hover:not(:disabled){transform:none}}
+
+/* === Full-screen pages: Klanten full-width + Kalender fills viewport height === */
+/* Klanten: edge-to-edge like Notities/Projecten */
+.clients-page{max-width:none;margin:0;width:100%}
+
+/* Kalender: let the agenda card fill the full viewport height and the scroll
+   grid stretch to fill it, so there is no empty black space below the grid. */
+.calendar-agenda-page{flex:1;min-height:0}
+.calendar-agenda-page .calendar-main-card,
+.calendar-agenda-page .calendar-main-card-week,
+.calendar-agenda-page .calendar-main-card-day{min-height:calc(100vh - 118px);height:calc(100vh - 118px)}
+.calendar-agenda-page .tb-scroll{flex:1 1 auto;height:auto!important;min-height:0;max-height:none}
+@media(max-width:900px){
+  .calendar-agenda-page .calendar-main-card,
+  .calendar-agenda-page .calendar-main-card-week,
+  .calendar-agenda-page .calendar-main-card-day{min-height:calc(100vh - 96px);height:calc(100vh - 96px)}
+}
