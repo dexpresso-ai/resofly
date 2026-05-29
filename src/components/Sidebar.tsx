@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Archive, BarChart3, Calendar, ChevronDown, ChevronRight, FileText, FolderOpen, LayoutDashboard, Receipt, Settings, StickyNote, Ticket, Users } from 'lucide-react';
 import type { Organization, OrganizationRole } from '../types';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'notes'|'clients'|'client'|'projects'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'notes'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
 
 const items = [
   ['dashboard', LayoutDashboard, 'Dashboard'],
@@ -20,6 +20,7 @@ const items = [
 
 const financePages: Page[] = ['quotes', 'invoices'];
 const calendarPages: Page[] = ['calendar', 'calendar-settings'];
+const projectPages: Page[] = ['projects', 'project', 'project-planning'];
 
 export function Sidebar({
   page,
@@ -39,9 +40,11 @@ export function Sidebar({
   onPage: (p: Page) => void;
 }) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
+  const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
 
   useEffect(() => {
     if (financePages.includes(page)) setFinanceOpen(true);
+    if (projectPages.includes(page)) setProjectsOpen(true);
   }, [page]);
 
   function openCalendarSubPage(target: 'agenda' | 'connections' | 'settings') {
@@ -67,6 +70,11 @@ export function Sidebar({
     onPage(target);
   }
 
+  function openProjectPage(target: 'projects' | 'project-planning') {
+    setProjectsOpen(true);
+    onPage(target);
+  }
+
   return <aside className="sidebar">
     <div className="sidebar-head">
       <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div>
@@ -82,7 +90,7 @@ export function Sidebar({
       <div className="nav-section"><span>Menu</span></div>
       {items.map(([key, Icon, label]) => {
         const calendarHash = window.location.hash;
-        const isProjectsActive = key === 'projects' && page === 'project';
+        const isProjectsActive = key === 'projects' && projectPages.includes(page);
         const isCalendarActive = key === 'calendar' && calendarPages.includes(page);
         const isFinanceActive = key === 'finance' && financePages.includes(page);
         const isActive = key === page || isProjectsActive || isCalendarActive || isFinanceActive;
@@ -99,12 +107,28 @@ export function Sidebar({
                 <span className="ni-label">{label}</span>
                 <span className="nav-chevron" aria-hidden="true">{financeOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}</span>
               </button>
-            : <button className={`nav-item ${isActive ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span></button>}
+            : key === 'projects'
+              ? <button
+                  type="button"
+                  className={`nav-item nav-item-parent ${isActive ? 'active' : ''}`}
+                  aria-expanded={projectsOpen}
+                  onClick={() => { setProjectsOpen(true); onPage('projects'); }}
+                >
+                  <Icon size={16}/>
+                  <span className="ni-label">{label}</span>
+                  <span className="nav-chevron" aria-hidden="true">{projectsOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}</span>
+                </button>
+              : <button className={`nav-item ${isActive ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span></button>}
 
           {key === 'calendar' && calendarPages.includes(page) && <div className="nav-submenu">
             <button type="button" className={page === 'calendar' ? 'active' : ''} onClick={() => openCalendarSubPage('agenda')}>Agendaweergave</button>
             <button type="button" className={page === 'calendar-settings' && calendarHash === '#calendar-connections' ? 'active' : ''} onClick={() => openCalendarSubPage('connections')}>Gekoppelde accounts</button>
             <button type="button" className={page === 'calendar-settings' && calendarHash !== '#calendar-connections' ? 'active' : ''} onClick={() => openCalendarSubPage('settings')}>Agenda-instellingen</button>
+          </div>}
+
+          {key === 'projects' && projectsOpen && <div className="nav-submenu nav-submenu-projects">
+            <button type="button" className={page === 'projects' || page === 'project' ? 'active' : ''} onClick={() => openProjectPage('projects')}><FolderOpen size={13}/><span>Projectoverzicht</span></button>
+            <button type="button" className={page === 'project-planning' ? 'active' : ''} onClick={() => openProjectPage('project-planning')}><Calendar size={13}/><span>Planningstimeline</span></button>
           </div>}
 
           {key === 'finance' && financeOpen && <div className="nav-submenu nav-submenu-finance">

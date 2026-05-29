@@ -3,8 +3,32 @@ import { Button } from '../components/Ui';
 import { dateNL, priorityLabel } from '../lib/format';
 import { RelatedNotes } from './Notes';
 import { ProjectQuotesPanel } from './Finance';
+import { ProjectTimeline } from './ProjectTimeline';
 
 const columns: {key: TaskStatus; label: string}[] = [{key:'todo',label:'Te doen'}, {key:'doing',label:'Bezig'}, {key:'review',label:'Review'}, {key:'done',label:'Klaar'}];
+
+
+export function ProjectsPlanningPage({
+  data,
+  onOpenProject,
+}: {
+  data: AppData;
+  onOpenProject: (project: Project) => void;
+}) {
+  return <div className="projects-page projects-planning-page">
+    <section className="projects-hero projects-planning-hero">
+      <div>
+        <span className="eyebrow">Projectplanning</span>
+        <h1>Planning en overlap per project</h1>
+        <p>Een aparte, ruimere timeline-view onder Projecten. Zo blijft het dashboard compact, terwijl je hier rustig kunt sturen op planning, overlap, open taken en fases.</p>
+      </div>
+    </section>
+    <ProjectTimeline data={data} variant="full" openProject={(id) => {
+      const project = data.projects.find(item => item.id === id);
+      if (project) onOpenProject(project);
+    }} />
+  </div>;
+}
 
 export function ProjectsListPage({
   data,
