@@ -21,6 +21,6 @@ binding = "MEDIA_BUCKET"
 bucket_name = "resofly-media-staging"
 
 [env.staging.vars]
-ALLOWED_ORIGIN = "http://localhost:5173,https://staging.resofly.nl"
+ALLOWED_ORIGIN = "http://localhost:5173,https://staging.resofly.com"
 SUPABASE_URL = "https://YOUR_STAGING_PROJECT.supabase.co"
 SUPABASE_ANON_KEY = "YOUR_STAGING_SUPABASE_ANON_KEY"
