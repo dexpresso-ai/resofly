@@ -9,11 +9,11 @@ SUPABASE_URL = "https://your-production-project.supabase.co"
 
 [[r2_buckets]]
 binding = "MEDIA_BUCKET"
-bucket_name = "resofly-media-staging"
-preview_bucket_name = "resofly-medlia-staging"
+bucket_name = "resofly-media-production"
+preview_bucket_name = "resofly-media-staging"
 
 [env.staging]
-name = "brandcore-media-api-staging"
+name = "resofly-media-api-staging"
 
 [env.staging.vars]
 APP_ENV = "staging"

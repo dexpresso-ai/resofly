@@ -42,7 +42,7 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
     return jsonResponse(
       {
         status: 'ok',
-        service: 'brandcore-media-api',
+        service: 'resofly-media-api',
         environment: normalizeEnvironment(env.APP_ENV),
       },
       200,

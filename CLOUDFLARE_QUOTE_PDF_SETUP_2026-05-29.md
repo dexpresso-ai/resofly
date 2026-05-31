@@ -55,7 +55,7 @@ al gezet zijn, valt de offerteflow daar automatisch op terug.
 ### Optie B — aparte offerte-config
 ```bash
 supabase secrets set \
-  QUOTE_PDF_STORAGE_WORKER_URL="https://brandcore-media.JOUW_SUBDOMAIN.workers.dev" \
+  QUOTE_PDF_STORAGE_WORKER_URL="https://resofly-media.JOUW_SUBDOMAIN.workers.dev" \
   QUOTE_PDF_STORAGE_SECRET="ZELFDE-waarde-als-INTERNAL_UPLOAD_SECRET"
 ```
 

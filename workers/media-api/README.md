@@ -74,10 +74,10 @@ De Worker verwacht deze binding:
 ```toml
 [[r2_buckets]]
 binding = "MEDIA_BUCKET"
-bucket_name = "brandcore-media-production"
+bucket_name = "resofly-media-production"
 ```
 
-Voor staging wordt `brandcore-media-staging` gebruikt.
+Voor staging wordt `resofly-media-staging` gebruikt.
 
 ## CORS
 

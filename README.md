@@ -76,7 +76,7 @@ Vul in `.env.local`:
 ```env
 VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 VITE_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_KEY
-VITE_R2_WORKER_URL=https://brandcore-media.YOUR_SUBDOMAIN.workers.dev
+VITE_R2_WORKER_URL=https://resofly-media.YOUR_SUBDOMAIN.workers.dev
 VITE_R2_PUBLIC_BASE_URL=
 ```
 
@@ -106,7 +106,7 @@ De Worker gebruikt private R2 buckets via de binding `MEDIA_BUCKET` en leest toe
 
 ## Cloudflare R2 Worker
 
-1. Maak een R2 bucket, bijvoorbeeld `brandcore-media`.
+1. Maak een R2 bucket aan: `resofly-media-staging` (staging) of `resofly-media-production` (productie).
 2. `cd cloudflare-worker`
 3. `cp wrangler.toml.example wrangler.toml` en vul in:
    - `ALLOWED_ORIGIN` — comma-separated lijst van expliciet toegestane origins, bijvoorbeeld `http://localhost:5173` voor dev

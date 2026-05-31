@@ -35,8 +35,8 @@ curl http://localhost:8787/health
 
 ## Te verifiëren in Cloudflare
 
-[ ] R2 bucket `brandcore-media-staging` bestaat  
-[ ] R2 bucket `brandcore-media-production` bestaat  
+[ ] R2 bucket `resofly-media-staging` bestaat  
+[ ] R2 bucket `resofly-media-production` bestaat  
 [ ] Worker secret `SUPABASE_SERVICE_ROLE_KEY` staat in staging  
 [ ] Worker secret `MEDIA_SIGNING_SECRET` staat in staging  
 [ ] Worker secret `SUPABASE_SERVICE_ROLE_KEY` staat in production  

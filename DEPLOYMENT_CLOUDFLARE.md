@@ -52,7 +52,7 @@ Frontend environment variables:
 ```text
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-key
-VITE_MEDIA_API_URL=https://brandcore-media-api.your-subdomain.workers.dev
+VITE_MEDIA_API_URL=https://resofly-media-api.your-subdomain.workers.dev
 VITE_APP_ENV=production
 ```
 
@@ -61,7 +61,7 @@ Voor staging gebruik je aparte waarden:
 ```text
 VITE_SUPABASE_URL=https://your-staging-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-staging-anon-key
-VITE_MEDIA_API_URL=https://brandcore-media-api-staging.your-subdomain.workers.dev
+VITE_MEDIA_API_URL=https://resofly-media-api-staging.your-subdomain.workers.dev
 VITE_APP_ENV=staging
 ```
 
@@ -70,8 +70,8 @@ VITE_APP_ENV=staging
 Maak twee private R2 buckets aan:
 
 ```text
-brandcore-media-staging
-brandcore-media-production
+resofly-media-staging
+resofly-media-production
 ```
 
 Richtlijnen:
@@ -201,10 +201,10 @@ De service-role key hoort alleen als Cloudflare secret ingesteld te worden.
 [ ] Staging frontend gebruikt staging Supabase URL en anon key  
 [ ] Production frontend gebruikt production Supabase URL en anon key  
 [ ] `VITE_MEDIA_API_URL` wijst per omgeving naar de juiste Worker  
-[ ] R2 bucket `brandcore-media-staging` bestaat en is private  
-[ ] R2 bucket `brandcore-media-production` bestaat en is private  
-[ ] Worker staging gebruikt `brandcore-media-staging`  
-[ ] Worker production gebruikt `brandcore-media-production`  
+[ ] R2 bucket `resofly-media-staging` bestaat en is private  
+[ ] R2 bucket `resofly-media-production` bestaat en is private  
+[ ] Worker staging gebruikt `resofly-media-staging`  
+[ ] Worker production gebruikt `resofly-media-production`  
 [ ] Worker secrets zijn gezet via Cloudflare/Wrangler  
 [ ] Echte secrets staan niet in GitHub  
 [ ] `.dev.vars` en `.env` bestanden worden genegeerd  
