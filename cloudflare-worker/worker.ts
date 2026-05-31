@@ -29,16 +29,15 @@ export default {
         if (!isPrivateInvoiceSnapshotKey(key)) return json({ error: 'Invalid storage key' }, 400, cors);
         if (type !== 'application/pdf') return json({ error: 'Only application/pdf is allowed' }, 400, cors);
         if (declaredLength > MAX_UPLOAD_BYTES) return json({ error: 'Bestand is te groot' }, 413, cors);
-        const limited = limitBodySize(request.body, MAX_UPLOAD_BYTES);
-        try {
-          await env.MEDIA_BUCKET.put(key, limited, {
-            httpMetadata: { contentType: type },
-            customMetadata: { private: 'true', entity_type: 'invoice_pdf_snapshot', sha256 },
-          });
-        } catch (e) {
-          if (e instanceof Error && e.message === 'PAYLOAD_TOO_LARGE') return json({ error: 'Bestand is te groot' }, 413, cors);
-          throw e;
-        }
+        // R2 .put() requires a known content length. Buffer the (bounded)
+        // snapshot fully so the byte length is known; a wrapped ReadableStream
+        // loses that info and R2 rejects it.
+        const invoiceBuffer = await request.arrayBuffer();
+        if (invoiceBuffer.byteLength > MAX_UPLOAD_BYTES) return json({ error: 'Bestand is te groot' }, 413, cors);
+        await env.MEDIA_BUCKET.put(key, invoiceBuffer, {
+          httpMetadata: { contentType: type },
+          customMetadata: { private: 'true', entity_type: 'invoice_pdf_snapshot', sha256 },
+        });
         return json({ ok: true, key }, 200, cors);
       }
 
@@ -66,16 +65,15 @@ export default {
         if (!isPrivateQuoteSnapshotKey(key)) return json({ error: 'Invalid storage key' }, 400, cors);
         if (type !== 'application/pdf') return json({ error: 'Only application/pdf is allowed' }, 400, cors);
         if (declaredLength > MAX_UPLOAD_BYTES) return json({ error: 'Bestand is te groot' }, 413, cors);
-        const limited = limitBodySize(request.body, MAX_UPLOAD_BYTES);
-        try {
-          await env.MEDIA_BUCKET.put(key, limited, {
-            httpMetadata: { contentType: type },
-            customMetadata: { private: 'true', entity_type: 'quote_pdf_snapshot', sha256 },
-          });
-        } catch (e) {
-          if (e instanceof Error && e.message === 'PAYLOAD_TOO_LARGE') return json({ error: 'Bestand is te groot' }, 413, cors);
-          throw e;
-        }
+        // R2 .put() requires a known content length. Buffer the (bounded)
+        // snapshot fully so the byte length is known; a wrapped ReadableStream
+        // loses that info and R2 rejects it.
+        const quoteBuffer = await request.arrayBuffer();
+        if (quoteBuffer.byteLength > MAX_UPLOAD_BYTES) return json({ error: 'Bestand is te groot' }, 413, cors);
+        await env.MEDIA_BUCKET.put(key, quoteBuffer, {
+          httpMetadata: { contentType: type },
+          customMetadata: { private: 'true', entity_type: 'quote_pdf_snapshot', sha256 },
+        });
         return json({ ok: true, key }, 200, cors);
       }
 

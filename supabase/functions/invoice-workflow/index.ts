@@ -31,8 +31,17 @@ const RESEND_REPLY_TO = Deno.env.get('RESEND_REPLY_TO') || '';
 const INVOICE_PUBLIC_BASE_URL = Deno.env.get('INVOICE_PUBLIC_BASE_URL') || Deno.env.get('APP_PUBLIC_URL') || '';
 const INVOICE_TOKEN_TTL_DAYS = parsePositiveInt(Deno.env.get('INVOICE_TOKEN_TTL_DAYS'), 60);
 const INVOICE_PDF_MAX_ATTACHMENT_BYTES = parsePositiveInt(Deno.env.get('INVOICE_PDF_MAX_ATTACHMENT_BYTES'), 8 * 1024 * 1024);
-const INVOICE_PDF_STORAGE_WORKER_URL = (Deno.env.get('INVOICE_PDF_STORAGE_WORKER_URL') || '').replace(/\/$/, '');
-const INVOICE_PDF_STORAGE_SECRET = Deno.env.get('INVOICE_PDF_STORAGE_SECRET') || '';
+// Falls back to the shared quote storage config so a single Worker + secret
+// powers both the invoice and quote PDF snapshot flows.
+const INVOICE_PDF_STORAGE_WORKER_URL = (
+  Deno.env.get('INVOICE_PDF_STORAGE_WORKER_URL') ||
+  Deno.env.get('QUOTE_PDF_STORAGE_WORKER_URL') ||
+  ''
+).replace(/\/$/, '');
+const INVOICE_PDF_STORAGE_SECRET =
+  Deno.env.get('INVOICE_PDF_STORAGE_SECRET') ||
+  Deno.env.get('QUOTE_PDF_STORAGE_SECRET') ||
+  '';
 const INVOICE_ALLOWED_ORIGINS = parseAllowedOrigins([
   Deno.env.get('INVOICE_ALLOWED_ORIGINS'), Deno.env.get('QUOTE_ALLOWED_ORIGINS'), Deno.env.get('APP_PUBLIC_URL'), Deno.env.get('BILLING_ALLOWED_RETURN_ORIGINS'),
 ]);
@@ -471,7 +480,11 @@ async function storeInvoicePdfSnapshot(organizationId: string, invoiceId: string
     return { provider: 'database', key: null, shouldStoreBase64InDatabase: true };
   }
 
-  const key = `${organizationId}/invoice-pdfs/${invoiceId}/${crypto.randomUUID()}-${sanitizeFileName(attachment.fileName)}`;
+  // Preserve the .pdf extension: sanitizeFileName() strips dots, which would
+  // turn "...-INV-2026-001.pdf" into "...-INV-2026-001-pdf" and fail the
+  // Worker's isPrivateInvoiceSnapshotKey() check (it requires a trailing .pdf).
+  const safeName = `${sanitizeFileName(attachment.fileName.replace(/\.pdf$/i, ''))}.pdf`;
+  const key = `${organizationId}/invoice-pdfs/${invoiceId}/${crypto.randomUUID()}-${safeName}`;
   const response = await fetch(`${INVOICE_PDF_STORAGE_WORKER_URL}/internal/invoice-snapshot`, {
     method: 'POST',
     headers: {
@@ -486,6 +499,13 @@ async function storeInvoicePdfSnapshot(organizationId: string, invoiceId: string
 
   if (!response.ok) {
     const message = await response.text().catch(() => response.statusText);
+    console.error('invoice-workflow R2 snapshot upload failed', {
+      status: response.status,
+      message,
+      key,
+      organizationId,
+      invoiceId,
+    });
     throw new WorkflowHttpError(`Factuur-PDF kon niet in private R2 storage worden opgeslagen: ${message || response.statusText}`, 502);
   }
 
