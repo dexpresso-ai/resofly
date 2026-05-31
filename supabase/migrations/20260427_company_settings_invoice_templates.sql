@@ -48,6 +48,4 @@ for each row execute function public.set_updated_at();
 alter table public.company_settings enable row level security;
 
 drop policy if exists "own company settings" on public.company_settings;
-create policy "own company settings" on public.company_settings
-for all using (auth.uid() = user_id)
-with check (auth.uid() = user_id);
+-- Policy skipped: schema already exists from manual migration

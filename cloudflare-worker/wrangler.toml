@@ -1,0 +1,28 @@
+name = "resofly-media"
+main = "worker.ts"
+compatibility_date = "2026-04-26"
+
+# Default = production
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "resofly-media-production"
+
+[vars]
+ALLOWED_ORIGIN = "https://app.resofly.nl"
+SUPABASE_URL = "https://YOUR_PRODUCTION_PROJECT.supabase.co"
+SUPABASE_ANON_KEY = "YOUR_PRODUCTION_SUPABASE_ANON_KEY"
+
+
+
+# ---- staging ----
+[env.staging]
+name = "resofly-media-staging"
+
+[[env.staging.r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "resofly-media-staging"
+
+[env.staging.vars]
+ALLOWED_ORIGIN = "http://localhost:5173,https://staging.resofly.nl"
+SUPABASE_URL = "https://enzghpduqwaojcxgwarr.supabase.co"
+SUPABASE_ANON_KEY = "sb_publishable_ncbdkXNefibNJily24a30w_flrxI3B6"
