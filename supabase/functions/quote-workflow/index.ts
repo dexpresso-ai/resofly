@@ -92,6 +92,12 @@ type PreparedQuoteEmailSend = {
   quoteId?: string;
 };
 
+type StoredQuotePdfSnapshot = {
+  provider: 'r2' | 'database';
+  key: string | null;
+  shouldStoreBase64InDatabase: boolean;
+};
+
 type CompletedQuoteEmailSend = {
   delivery?: unknown;
   quote?: unknown;
@@ -117,6 +123,21 @@ const QUOTE_PDF_MAX_ATTACHMENT_BYTES = parsePositiveInt(
   Deno.env.get('QUOTE_PDF_MAX_ATTACHMENT_BYTES'),
   8 * 1024 * 1024,
 );
+
+// Private R2 storage for immutable quote PDF snapshots, via the Cloudflare
+// Worker. Falls back to the shared invoice storage config so a single Worker +
+// secret powers both flows. When neither is set, the PDF is stored as a base64
+// database fallback so downloads keep working in local/dev.
+const QUOTE_PDF_STORAGE_WORKER_URL = (
+  Deno.env.get('QUOTE_PDF_STORAGE_WORKER_URL') ||
+  Deno.env.get('INVOICE_PDF_STORAGE_WORKER_URL') ||
+  ''
+).replace(/\/$/, '');
+
+const QUOTE_PDF_STORAGE_SECRET =
+  Deno.env.get('QUOTE_PDF_STORAGE_SECRET') ||
+  Deno.env.get('INVOICE_PDF_STORAGE_SECRET') ||
+  '';
 
 const QUOTE_ALLOWED_ORIGINS = parseAllowedOrigins([
   Deno.env.get('QUOTE_ALLOWED_ORIGINS'),
@@ -184,6 +205,21 @@ serve(async (req) => {
         );
 
         return json(req, { ok: true, ...result });
+      }
+
+      case 'downloadQuotePdf': {
+        // Any organization member (including viewers) may download the stored
+        // PDF. Reading does not mutate anything, so no write role is required.
+        if (!isUuid(quoteId)) {
+          throw new WorkflowHttpError('Ongeldige offerte.', 400);
+        }
+
+        // Confirm the quote belongs to this organization before returning bytes.
+        await loadQuote(organizationId, quoteId);
+
+        const pdf = await loadQuotePdfSnapshot(organizationId, quoteId);
+
+        return json(req, { ok: true, pdf });
       }
 
       default:
@@ -332,6 +368,11 @@ async function sendQuoteEmail(
 
   validateQuotePdfAttachment(pdfAttachment);
 
+  // Persist the exact PDF the client receives as an immutable snapshot. Uses
+  // private R2 through the Cloudflare Worker when configured, otherwise a
+  // base64 database fallback. Either way the quote PDF stays downloadable.
+  const storedPdf = await storeQuotePdfSnapshot(organizationId, quoteId, pdfAttachment);
+
   const prepared = await beginQuoteEmailSend({
     quoteId,
     organizationId,
@@ -346,6 +387,9 @@ async function sendQuoteEmail(
     attachmentMimeType: pdfAttachment.mimeType,
     attachmentSizeBytes: pdfAttachment.sizeBytes,
     attachmentSha256: pdfAttachment.sha256,
+    attachmentDataBase64: storedPdf.shouldStoreBase64InDatabase ? pdfAttachment.base64 : undefined,
+    attachmentStorageProvider: storedPdf.provider,
+    attachmentStorageKey: storedPdf.key ?? undefined,
   });
 
   const resendPayload = {
@@ -533,6 +577,9 @@ async function beginQuoteEmailSend(input: {
   attachmentMimeType?: string | null;
   attachmentSizeBytes?: number | null;
   attachmentSha256?: string | null;
+  attachmentDataBase64?: string;
+  attachmentStorageProvider?: string;
+  attachmentStorageKey?: string;
 }): Promise<PreparedQuoteEmailSend> {
   const { data, error } = await supabaseAdmin.rpc('begin_quote_email_send', {
     p_quote_id: input.quoteId,
@@ -548,6 +595,9 @@ async function beginQuoteEmailSend(input: {
     p_attachment_mime_type: input.attachmentMimeType ?? 'application/pdf',
     p_attachment_size_bytes: input.attachmentSizeBytes ?? null,
     p_attachment_sha256: input.attachmentSha256 ?? null,
+    p_attachment_data_base64: input.attachmentDataBase64 ?? null,
+    p_attachment_storage_provider: input.attachmentStorageProvider ?? null,
+    p_attachment_storage_key: input.attachmentStorageKey ?? null,
   });
 
   if (error) {
@@ -602,6 +652,143 @@ async function failQuoteEmailSend(
   if (error) {
     console.warn('Quote email send failure registration failed', error.message);
   }
+}
+
+async function storeQuotePdfSnapshot(
+  organizationId: string,
+  quoteId: string,
+  attachment: QuotePdfAttachment,
+): Promise<StoredQuotePdfSnapshot> {
+  const storageConfigured = Boolean(
+    QUOTE_PDF_STORAGE_WORKER_URL && QUOTE_PDF_STORAGE_SECRET,
+  );
+
+  if (!storageConfigured) {
+    // No private storage configured (e.g. local dev): keep the PDF as a base64
+    // database fallback so it can still be downloaded later.
+    return { provider: 'database', key: null, shouldStoreBase64InDatabase: true };
+  }
+
+  const key = `${organizationId}/quote-pdfs/${quoteId}/${crypto.randomUUID()}-${sanitizeFileName(
+    attachment.fileName,
+  )}`;
+
+  const response = await fetch(`${QUOTE_PDF_STORAGE_WORKER_URL}/internal/quote-snapshot`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${QUOTE_PDF_STORAGE_SECRET}`,
+      'Content-Type': attachment.mimeType,
+      'X-Storage-Key': key,
+      'X-SHA256': attachment.sha256,
+      'X-Size-Bytes': String(attachment.sizeBytes),
+    },
+    body: attachment.bytes,
+  });
+
+  if (!response.ok) {
+    const message = await response.text().catch(() => response.statusText);
+    console.error('quote-workflow R2 snapshot upload failed', {
+      status: response.status,
+      message,
+      key,
+      organizationId,
+      quoteId,
+    });
+    throw new WorkflowHttpError(
+      `Offerte-PDF kon niet in private R2 storage worden opgeslagen: ${message || response.statusText}`,
+      502,
+    );
+  }
+
+  return { provider: 'r2', key, shouldStoreBase64InDatabase: false };
+}
+
+async function loadQuotePdfSnapshot(
+  organizationId: string,
+  quoteId: string,
+): Promise<{ fileName: string; mimeType: string; base64: string; sizeBytes: number | null; sha256: string | null }> {
+  const { data: versions, error } = await supabaseAdmin
+    .from('quote_versions')
+    .select(
+      'snapshot_reason,pdf_file_name,pdf_mime_type,pdf_size_bytes,pdf_sha256,pdf_data_base64,pdf_storage_provider,pdf_storage_key,created_at,version_number',
+    )
+    .eq('organization_id', organizationId)
+    .eq('quote_id', quoteId)
+    .not('pdf_file_name', 'is', null)
+    .order('version_number', { ascending: false })
+    .limit(20);
+
+  if (error) {
+    throw error;
+  }
+
+  const usableVersions = (versions || []).filter((candidate: Record<string, unknown>) => {
+    const hasDatabasePdf = Boolean(String(candidate.pdf_data_base64 || '').trim());
+    const hasPrivateStoragePdf =
+      candidate.pdf_storage_provider === 'r2' && Boolean(candidate.pdf_storage_key);
+    return hasDatabasePdf || hasPrivateStoragePdf;
+  });
+
+  // Prefer the version that was actually sent to the client; fall back to the
+  // most recent usable snapshot.
+  const version =
+    usableVersions.find(
+      (candidate: Record<string, unknown>) => candidate.snapshot_reason === 'sent_to_client',
+    ) || usableVersions[0];
+
+  if (!version) {
+    throw new WorkflowHttpError(
+      'Er is nog geen opgeslagen PDF-snapshot voor deze offerte. Verstuur de offerte eerst naar de klant.',
+      404,
+    );
+  }
+
+  let base64 = String(version.pdf_data_base64 || '').trim();
+
+  if (!base64 && version.pdf_storage_provider === 'r2' && version.pdf_storage_key) {
+    if (!QUOTE_PDF_STORAGE_WORKER_URL || !QUOTE_PDF_STORAGE_SECRET) {
+      throw new WorkflowHttpError(
+        'PDF-snapshot staat in private storage, maar de storage-koppeling ontbreekt in de Edge Function secrets.',
+        500,
+      );
+    }
+
+    const response = await fetch(
+      `${QUOTE_PDF_STORAGE_WORKER_URL}/internal/quote-snapshot/${encodeURIComponent(
+        String(version.pdf_storage_key),
+      )}`,
+      { headers: { Authorization: `Bearer ${QUOTE_PDF_STORAGE_SECRET}` } },
+    );
+
+    if (!response.ok) {
+      const message = await response.text().catch(() => response.statusText);
+      console.error('quote-workflow R2 snapshot fetch failed', {
+        status: response.status,
+        message,
+        key: version.pdf_storage_key,
+        organizationId,
+        quoteId,
+      });
+      throw new WorkflowHttpError(
+        'PDF-snapshot kon niet uit private storage worden opgehaald.',
+        502,
+      );
+    }
+
+    base64 = bytesToBase64(new Uint8Array(await response.arrayBuffer()));
+  }
+
+  if (!base64) {
+    throw new WorkflowHttpError('PDF-snapshot ontbreekt of is niet beschikbaar.', 404);
+  }
+
+  return {
+    fileName: String(version.pdf_file_name || `offerte-${quoteId}.pdf`),
+    mimeType: String(version.pdf_mime_type || 'application/pdf'),
+    sizeBytes: (version.pdf_size_bytes as number | null) ?? null,
+    sha256: (version.pdf_sha256 as string | null) ?? null,
+    base64,
+  };
 }
 
 async function createQuotePdfAttachment(input: {

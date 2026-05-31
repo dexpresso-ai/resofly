@@ -17,6 +17,7 @@ export function Quotes({
   onReject,
   onSend,
   onConvertToInvoice,
+  onDownloadPdf,
 }: {
   data: AppData;
   canWrite: boolean;
@@ -28,6 +29,7 @@ export function Quotes({
   onReject: (q: Quote) => void;
   onSend: (q: Quote) => void;
   onConvertToInvoice?: (q: Quote) => void;
+  onDownloadPdf?: (q: Quote) => void;
 }) {
   return <FinanceList
     kind="quote"
@@ -43,6 +45,7 @@ export function Quotes({
     onReject={onReject}
     onSend={onSend}
     onConvertToInvoice={onConvertToInvoice}
+    onDownloadPdf={onDownloadPdf}
   />;
 }
 
@@ -66,6 +69,7 @@ function FinanceList<T extends Quote | Invoice>({
   onConvertToInvoice,
   onSendInvoice,
   onCreatePayment,
+  onDownloadPdf,
 }: {
   kind: 'quote' | 'invoice';
   title: string;
@@ -82,6 +86,7 @@ function FinanceList<T extends Quote | Invoice>({
   onConvertToInvoice?: (q: Quote) => void;
   onSendInvoice?: (i: Invoice) => void;
   onCreatePayment?: (i: Invoice) => void;
+  onDownloadPdf?: (q: Quote) => void;
 }) {
   if (kind === 'quote') {
     return <QuoteTable
@@ -97,6 +102,7 @@ function FinanceList<T extends Quote | Invoice>({
       onReject={onReject}
       onSend={onSend}
       onConvertToInvoice={onConvertToInvoice}
+      onDownloadPdf={onDownloadPdf}
     />;
   }
 
@@ -352,6 +358,7 @@ function QuoteTable({
   onReject,
   onSend,
   onConvertToInvoice,
+  onDownloadPdf,
 }: {
   title: string;
   quotes: Quote[];
@@ -365,6 +372,7 @@ function QuoteTable({
   onReject?: (quote: Quote) => void;
   onSend?: (quote: Quote) => void;
   onConvertToInvoice?: (quote: Quote) => void;
+  onDownloadPdf?: (quote: Quote) => void;
 }) {
   const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(null);
   const [searchFilters, setSearchFilters] = useState<FinanceSearchFilters>(() => createDefaultFinanceSearchFilters());
@@ -410,7 +418,9 @@ function QuoteTable({
                 <td data-label="Status"><span className={`fin-status ${quote.status}`}>{quoteStatusLabel(quote)}</span></td>
                 <td className="quote-row-actions" onClick={event => event.stopPropagation()}>
                   <button type="button" className="att-btn" onClick={() => setSelectedQuoteId(quote.id)} title="Bekijk details"><Eye size={14}/></button>
-                  <button type="button" className="att-btn" onClick={() => { void exportFinancePDF(quote, 'quote', client, { company: data.companySettings }).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt')); }} title="Download PDF"><Download size={14}/></button>
+                  {quoteHasStoredPdf(quote)
+                    ? <button type="button" className="att-btn" onClick={() => onDownloadPdf?.(quote)} title="Download verzonden PDF"><Download size={14}/></button>
+                    : <button type="button" className="att-btn" onClick={() => { void exportFinancePDF(quote, 'quote', client, { company: data.companySettings }).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt')); }} title="Download concept-PDF"><Download size={14}/></button>}
                 </td>
               </tr>;
             })}
@@ -433,6 +443,7 @@ function QuoteTable({
       onReject={onReject}
       onSend={onSend}
       onConvertToInvoice={onConvertToInvoice}
+      onDownloadPdf={onDownloadPdf}
     />}
   </>;
 }
@@ -535,6 +546,7 @@ function QuoteDetailModal({
   onReject,
   onSend,
   onConvertToInvoice,
+  onDownloadPdf,
 }: {
   quote: Quote;
   data: AppData;
@@ -547,6 +559,7 @@ function QuoteDetailModal({
   onReject?: (quote: Quote) => void;
   onSend?: (quote: Quote) => void;
   onConvertToInvoice?: (quote: Quote) => void;
+  onDownloadPdf?: (quote: Quote) => void;
 }) {
   const client = data.clients.find(c => c.id === quote.client_id) ?? null;
   const project = data.projects.find(p => p.id === quote.project_id) ?? null;
@@ -581,7 +594,7 @@ function QuoteDetailModal({
         <div className="quote-detail-section-head"><div><span>Workflow</span><strong>Goedkeuring, verzending, klantbeslissing en factuurconversie</strong></div></div>
         <QuoteProgress quote={quote} />
         <QuoteEmailStatus delivery={latestDelivery} quote={quote} />
-        <QuoteActions quote={quote} canWrite={canWrite} canAdmin={canAdmin} linkedInvoice={linkedInvoice} onSubmitApproval={onSubmitApproval} onApprove={onApprove} onReject={onReject} onSend={onSend} onConvertToInvoice={onConvertToInvoice} onEdit={() => onEdit(quote)} />
+        <QuoteActions quote={quote} canWrite={canWrite} canAdmin={canAdmin} linkedInvoice={linkedInvoice} onSubmitApproval={onSubmitApproval} onApprove={onApprove} onReject={onReject} onSend={onSend} onConvertToInvoice={onConvertToInvoice} onDownloadPdf={onDownloadPdf} onEdit={() => onEdit(quote)} />
       </section>
 
       <section className="quote-detail-split">
@@ -747,20 +760,31 @@ function QuoteEmailStatus({ quote, delivery }: { quote: Quote; delivery: QuoteEm
   return <div className="quote-email-status"><Mail size={14}/><span>{status ? emailStatusLabel(status) : 'Nog niet verstuurd'}</span>{delivery?.recipient_email && <small>{delivery.recipient_email}</small>}{delivery?.attachment_file_name && <small>PDF: {delivery.attachment_file_name}</small>}{quote.public_token_expires_at && <small>Link tot {dateNL(quote.public_token_expires_at)}</small>}</div>;
 }
 
-function QuoteActions({ quote, canWrite, canAdmin, linkedInvoice, onSubmitApproval, onApprove, onReject, onSend, onConvertToInvoice, onEdit, compact = false }: { quote: Quote; canWrite: boolean; canAdmin: boolean; linkedInvoice?: Invoice | null; onSubmitApproval?: (quote: Quote) => void; onApprove?: (quote: Quote) => void; onReject?: (quote: Quote) => void; onSend?: (quote: Quote) => void; onConvertToInvoice?: (quote: Quote) => void; onEdit: () => void; compact?: boolean }) {
+function QuoteActions({ quote, canWrite, canAdmin, linkedInvoice, onSubmitApproval, onApprove, onReject, onSend, onConvertToInvoice, onDownloadPdf, onEdit, compact = false }: { quote: Quote; canWrite: boolean; canAdmin: boolean; linkedInvoice?: Invoice | null; onSubmitApproval?: (quote: Quote) => void; onApprove?: (quote: Quote) => void; onReject?: (quote: Quote) => void; onSend?: (quote: Quote) => void; onConvertToInvoice?: (quote: Quote) => void; onDownloadPdf?: (quote: Quote) => void; onEdit: () => void; compact?: boolean }) {
   const canSubmit = canWrite && ['draft'].includes(quote.status) && quote.internal_approval_status !== 'pending';
   const canApprove = canAdmin && quote.status === 'pending_internal_approval';
   const canSend = canWrite && quote.status === 'internally_approved' && quote.internal_approval_status === 'approved';
   const canConvert = canWrite && quote.status === 'accepted' && !linkedInvoice;
+  const canDownloadStored = Boolean(onDownloadPdf) && quoteHasStoredPdf(quote);
   return <div className={`quote-actions ${compact ? 'compact' : ''}`}>
     <Button onClick={onEdit}>Bewerken</Button>
     {canSubmit && <Button onClick={() => onSubmitApproval?.(quote)}><ShieldCheck size={14}/> Ter goedkeuring</Button>}
     {canApprove && <Button variant="primary" onClick={() => onApprove?.(quote)}><ShieldCheck size={14}/> Goedkeuren</Button>}
     {canApprove && <Button variant="danger" onClick={() => onReject?.(quote)}><XCircle size={14}/> Afwijzen</Button>}
     {canSend && <Button variant="primary" onClick={() => onSend?.(quote)}><Send size={14}/> Verstuur via Resend</Button>}
+    {canDownloadStored && <Button onClick={() => onDownloadPdf?.(quote)}><Download size={14}/> Download verzonden PDF</Button>}
     {canConvert && <Button variant="primary" onClick={() => onConvertToInvoice?.(quote)}><FileText size={14}/> Maak factuur van offerte</Button>}
     {linkedInvoice && <span className="quote-converted-pill"><FileText size={14}/> Factuur {linkedInvoice.number}</span>}
   </div>;
+}
+
+/**
+ * A quote has an immutable, server-stored PDF snapshot once it has been sent to
+ * the client (or progressed beyond that). Used to decide whether the download
+ * button should fetch the stored snapshot or regenerate a draft PDF.
+ */
+function quoteHasStoredPdf(quote: Quote): boolean {
+  return ['sent', 'accepted', 'rejected', 'expired'].includes(quote.status) || Boolean(quote.sent_at);
 }
 
 function InvoiceStatusStrip({ invoice, delivery, payment }: { invoice: Invoice; delivery: InvoiceEmailDelivery | null; payment: InvoicePaymentRecord | null }) {
