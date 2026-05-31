@@ -718,6 +718,7 @@ export function ProjectQuotesPanel({
   onReject,
   onSend,
   onConvertToInvoice,
+  hideHeader = false,
 }: {
   data: AppData;
   projectId: string;
@@ -730,10 +731,11 @@ export function ProjectQuotesPanel({
   onReject: (quote: Quote) => void;
   onSend: (quote: Quote) => void;
   onConvertToInvoice?: (quote: Quote) => void;
+  hideHeader?: boolean;
 }) {
   const quotes = data.quotes.filter(quote => quote.project_id === projectId);
   return <section className="project-quotes-panel">
-    <div className="section-head-inline project-section-head"><div><h2>Offertes</h2><p>Projectgekoppelde offertes met interne goedkeuring, Resend-status, klantbeslissing en factuurconversie.</p></div><Button variant="primary" onClick={onNewQuote} disabled={!canWrite}>+ Offerte</Button></div>
+    {!hideHeader && <div className="section-head-inline project-section-head"><div><h2>Offertes</h2><p>Projectgekoppelde offertes met interne goedkeuring, Resend-status, klantbeslissing en factuurconversie.</p></div><Button variant="primary" onClick={onNewQuote} disabled={!canWrite}>+ Offerte</Button></div>}
     {quotes.length === 0 ? <div className="empty project-empty"><div className="e-big">Nog geen offertes bij dit project</div><p>Maak een offerte direct vanuit het project, dan worden klant en project automatisch gekoppeld.</p></div> : <div className="project-quotes-list">
       {quotes.map(quote => {
         const client = data.clients.find(item => item.id === quote.client_id) ?? null;

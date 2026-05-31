@@ -44,6 +44,7 @@ export function RelatedNotes({
   onNew,
   onEdit,
   emptyText = 'Nog geen notities gekoppeld.',
+  hideHeader = false,
 }: {
   title?: string;
   notes: Note[];
@@ -52,17 +53,18 @@ export function RelatedNotes({
   onNew: () => void;
   onEdit: (n: Note) => void;
   emptyText?: string;
+  hideHeader?: boolean;
 }) {
   const sorted = [...notes].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   return <section className="related-notes-panel">
-    <div className="related-notes-head">
+    {!hideHeader && <div className="related-notes-head">
       <div>
         <h3>{title}</h3>
         <span>{sorted.length} gekoppelde notitie{sorted.length === 1 ? '' : 's'}</span>
       </div>
       {canWrite && <Button onClick={onNew}>+ Notitie</Button>}
-    </div>
+    </div>}
     {sorted.length === 0 ? <div className="related-notes-empty">{emptyText}</div> : <div className="related-notes-list">
       {sorted.map(note => <button type="button" className="related-note-item" key={note.id} onClick={() => onEdit(note)}>
         <div className="related-note-top"><span className={`note-type note-type-${note.note_type ?? 'general'}`}>{getNoteTypeLabel(note.note_type)}</span><span>{dateNL(note.created_at)}</span></div>

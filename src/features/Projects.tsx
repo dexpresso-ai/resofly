@@ -1,10 +1,64 @@
 import { useMemo, useState } from 'react';
 import type { AppData, Note, Project, Quote, Task, TaskStatus } from '../types';
 import { Button } from '../components/Ui';
-import { dateNL, priorityLabel } from '../lib/format';
+import { dateNL, euro, priorityLabel } from '../lib/format';
 import { RelatedNotes } from './Notes';
 import { ProjectQuotesPanel } from './Finance';
 import { ProjectTimeline } from './ProjectTimeline';
+import { ChevronDown, ChevronRight, LayoutGrid, FileText, StickyNote, Receipt } from 'lucide-react';
+
+/** Uitklapbare dashboard-sectie */
+function DashboardSection({
+  icon,
+  title,
+  subtitle,
+  badge,
+  accentColor,
+  defaultOpen = true,
+  action,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  subtitle?: string;
+  badge?: number | string;
+  accentColor?: string;
+  defaultOpen?: boolean;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className={`proj-dash-section ${open ? 'open' : 'closed'}`}>
+      <button
+        type="button"
+        className="proj-dash-section-header"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+      >
+        <div className="proj-dash-section-left">
+          <span className="proj-dash-section-icon" style={accentColor ? { color: accentColor } : undefined}>
+            {icon}
+          </span>
+          <div className="proj-dash-section-titles">
+            <span className="proj-dash-section-title">{title}</span>
+            {subtitle && <span className="proj-dash-section-sub">{subtitle}</span>}
+          </div>
+          {badge !== undefined && badge !== 0 && (
+            <span className="proj-dash-section-badge">{badge}</span>
+          )}
+        </div>
+        <div className="proj-dash-section-right" onClick={e => e.stopPropagation()}>
+          {action}
+          <span className="proj-dash-chevron">
+            {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+          </span>
+        </div>
+      </button>
+      {open && <div className="proj-dash-section-body">{children}</div>}
+    </div>
+  );
+}
 
 const columns: {key: TaskStatus; label: string}[] = [{key:'todo',label:'Te doen'}, {key:'doing',label:'Bezig'}, {key:'review',label:'Review'}, {key:'done',label:'Klaar'}];
 
@@ -514,25 +568,203 @@ export function ProjectPage({
   const tasks = data.tasks.filter(t => t.project_id === project.id);
   const client = data.clients.find(c => c.id === project.client_id);
   const projectNotes = data.notes.filter(note => note.project_id === project.id);
+  const projectQuotes = data.quotes.filter(q => q.project_id === project.id);
+  const projectInvoices = data.invoices.filter(i => i.project_id === project.id);
 
-  return <>
-    <div className="proj-fin-panel">
-      <div className="proj-fin-header">
-        <div>
-          <h3>{project.name}</h3>
-          <p className="pc-desc">{client?.name ?? 'Geen klant'} · {project.description ?? ''}</p>
-          {project.archived && <span className="status-pill archived">Gearchiveerd</span>}
+  const doneTasks = tasks.filter(t => t.status === 'done').length;
+  const progress = tasks.length > 0 ? Math.round((doneTasks / tasks.length) * 100) : 0;
+  const openTasks = tasks.filter(t => t.status !== 'done').length;
+  const overdueTasks = tasks.filter(t => t.end_date && new Date(t.end_date) < new Date() && t.status !== 'done').length;
+  const invoiceTotal = projectInvoices.reduce((sum, i) => sum + (i.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0), 0);
+
+  return (
+    <div className="proj-dashboard">
+
+      {/* ── Hero header ── */}
+      <div className="proj-dash-hero">
+        <div className="proj-dash-hero-accent" style={{ background: project.color ?? 'var(--accent)' }} />
+        <div className="proj-dash-hero-content">
+          <div className="proj-dash-hero-text">
+            <div className="proj-dash-hero-kicker">{client?.name ?? 'Geen klant'}</div>
+            <h2 className="proj-dash-hero-name">{project.name}</h2>
+            {project.description && <p className="proj-dash-hero-desc">{project.description}</p>}
+            {project.archived && <span className="status-pill archived">Gearchiveerd</span>}
+          </div>
+          <div className="proj-dash-hero-actions">
+            <Button onClick={onEditProject}>Bewerken</Button>
+            <Button variant="primary" onClick={onNewTask} disabled={project.archived || !canWrite}>+ Taak</Button>
+          </div>
         </div>
-        <div className="proj-actions"><Button onClick={onEditProject}>Project bewerken</Button><Button variant="primary" onClick={onNewTask} disabled={project.archived || !canWrite}>+ Taak</Button></div>
+
+        {/* ── Stat strip ── */}
+        <div className="proj-dash-stats">
+          <div className="proj-dash-stat">
+            <span className="proj-dash-stat-val">{tasks.length}</span>
+            <span className="proj-dash-stat-lbl">Taken totaal</span>
+          </div>
+          <div className="proj-dash-stat">
+            <span className="proj-dash-stat-val" style={{ color: 'var(--accent)' }}>{openTasks}</span>
+            <span className="proj-dash-stat-lbl">Open</span>
+          </div>
+          <div className="proj-dash-stat">
+            <span className="proj-dash-stat-val" style={{ color: overdueTasks > 0 ? '#f87171' : 'inherit' }}>{overdueTasks}</span>
+            <span className="proj-dash-stat-lbl">Te laat</span>
+          </div>
+          <div className="proj-dash-stat">
+            <span className="proj-dash-stat-val">{projectQuotes.length}</span>
+            <span className="proj-dash-stat-lbl">Offertes</span>
+          </div>
+          <div className="proj-dash-stat">
+            <span className="proj-dash-stat-val">{projectInvoices.length > 0 ? euro(invoiceTotal) : '—'}</span>
+            <span className="proj-dash-stat-lbl">Gefactureerd</span>
+          </div>
+          <div className="proj-dash-stat proj-dash-stat-progress">
+            <div className="proj-dash-progress-bar">
+              <div className="proj-dash-progress-fill" style={{ width: `${progress}%`, background: project.color ?? 'var(--accent)' }} />
+            </div>
+            <span className="proj-dash-stat-lbl">{progress}% klaar</span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Uitklapbare secties ── */}
+      <div className="proj-dash-sections">
+
+        <DashboardSection
+          icon={<LayoutGrid size={16} />}
+          title="Kanban board"
+          subtitle="Taken per status"
+          badge={openTasks}
+          accentColor={project.color}
+          defaultOpen={true}
+          action={
+            <Button variant="primary" onClick={onNewTask} disabled={project.archived || !canWrite}>+ Taak</Button>
+          }
+        >
+          <div className="kanban proj-dash-kanban">
+            {columns.map(col => (
+              <div className="kan-col" key={col.key}>
+                <header className="kan-col-head">
+                  <span className="kan-dot" style={{ background: project.color }} />
+                  {col.label}
+                  <span className="kan-count">{tasks.filter(t => t.status === col.key).length}</span>
+                </header>
+                <div className="kan-body">
+                  {tasks.filter(t => t.status === col.key).map(task => (
+                    <article className="task-card" key={task.id} onClick={() => onEditTask(task)}>
+                      <div className="tc-title">{task.title}</div>
+                      <div className="tc-desc">{task.description}</div>
+                      <div className="tc-meta">
+                        <span className={`pri-badge pri-${task.priority}`}>{priorityLabel(task.priority)}</span>
+                        {task.tags?.map(tag => <span className="tag-pill" key={tag}>{tag}</span>)}
+                      </div>
+                      <div className="tc-footer">
+                        <span>☑ {task.subtasks?.filter(s => s.done).length ?? 0}/{task.subtasks?.length ?? 0}</span>
+                        <span>💬 {task.comments?.length ?? 0}</span>
+                        <span className="tc-deadline">{dateNL(task.end_date)}</span>
+                      </div>
+                      {!project.archived && canWrite && (
+                        <div className="quick-status">
+                          {columns.filter(c => c.key !== task.status).map(c => (
+                            <button key={c.key} onClick={e => { e.stopPropagation(); setTaskStatus(task, c.key); }}>{c.label}</button>
+                          ))}
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                  {tasks.filter(t => t.status === col.key).length === 0 && (
+                    <div className="kan-empty">Geen taken</div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </DashboardSection>
+
+        <DashboardSection
+          icon={<FileText size={16} />}
+          title="Offertes"
+          subtitle="Goedkeuring, verzending en factuurconversie"
+          badge={projectQuotes.length}
+          accentColor={project.color}
+          defaultOpen={projectQuotes.length > 0}
+          action={
+            <Button variant="primary" onClick={onNewQuote} disabled={project.archived || !canWrite}>+ Offerte</Button>
+          }
+        >
+          <ProjectQuotesPanel
+            data={data}
+            projectId={project.id}
+            canWrite={canWrite && !project.archived}
+            canAdmin={canAdmin && !project.archived}
+            onNewQuote={onNewQuote}
+            onEditQuote={onEditQuote}
+            onSubmitApproval={onSubmitQuoteApproval}
+            onApprove={onApproveQuote}
+            onReject={onRejectQuote}
+            onSend={onSendQuote}
+            onConvertToInvoice={onConvertQuoteToInvoice}
+            hideHeader
+          />
+        </DashboardSection>
+
+        <DashboardSection
+          icon={<Receipt size={16} />}
+          title="Facturen"
+          subtitle="Gefactureerde bedragen bij dit project"
+          badge={projectInvoices.length}
+          accentColor={project.color}
+          defaultOpen={projectInvoices.length > 0}
+        >
+          {projectInvoices.length === 0 ? (
+            <div className="proj-dash-empty">Nog geen facturen bij dit project. Zet een geaccepteerde offerte om.</div>
+          ) : (
+            <div className="proj-dash-invoice-list">
+              {projectInvoices.map(inv => {
+                const invTotal = inv.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0;
+                return (
+                  <div key={inv.id} className="proj-dash-invoice-row">
+                    <div>
+                      <strong>{inv.number}</strong>
+                      <span>{dateNL(inv.date)}</span>
+                    </div>
+                    <div>
+                      <strong>{euro(invTotal)}</strong>
+                      <span className={`fin-status ${inv.status}`}>{inv.status}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </DashboardSection>
+
+        <DashboardSection
+          icon={<StickyNote size={16} />}
+          title="Notities"
+          subtitle="Projectgekoppelde notities"
+          badge={projectNotes.length}
+          accentColor={project.color}
+          defaultOpen={projectNotes.length > 0}
+          action={
+            canWrite && !project.archived
+              ? <Button onClick={onNewNote}>+ Notitie</Button>
+              : undefined
+          }
+        >
+          <RelatedNotes
+            title=""
+            notes={projectNotes}
+            data={data}
+            canWrite={canWrite && !project.archived}
+            onNew={onNewNote}
+            onEdit={onEditNote}
+            emptyText="Nog geen notities bij dit project."
+            hideHeader
+          />
+        </DashboardSection>
+
       </div>
     </div>
-    <section className="kanban">{columns.map(col => <div className="kan-col" key={col.key}><header className="kan-col-head"><span className="kan-dot" style={{background: project.color}} />{col.label}<span className="kan-count">{tasks.filter(t=>t.status===col.key).length}</span></header><div className="kan-body">
-      {tasks.filter(t=>t.status===col.key).map(task => <article className="task-card" key={task.id} onClick={() => onEditTask(task)}>
-        <div className="tc-title">{task.title}</div><div className="tc-desc">{task.description}</div><div className="tc-meta"><span className={`pri-badge pri-${task.priority}`}>{priorityLabel(task.priority)}</span>{task.tags?.map(tag=><span className="tag-pill" key={tag}>{tag}</span>)}</div><div className="tc-footer"><span>☑ {task.subtasks?.filter(s=>s.done).length ?? 0}/{task.subtasks?.length ?? 0}</span><span>💬 {task.comments?.length ?? 0}</span><span className="tc-deadline">{dateNL(task.end_date)}</span></div>
-        {!project.archived && canWrite && <div className="quick-status">{columns.filter(c=>c.key!==task.status).map(c=><button key={c.key} onClick={(e)=>{e.stopPropagation(); setTaskStatus(task,c.key);}}>{c.label}</button>)}</div>}
-      </article>)}
-      </div></div>)}</section>
-    <ProjectQuotesPanel data={data} projectId={project.id} canWrite={canWrite && !project.archived} canAdmin={canAdmin && !project.archived} onNewQuote={onNewQuote} onEditQuote={onEditQuote} onSubmitApproval={onSubmitQuoteApproval} onApprove={onApproveQuote} onReject={onRejectQuote} onSend={onSendQuote} onConvertToInvoice={onConvertQuoteToInvoice} />
-    <RelatedNotes title="Projectnotities" notes={projectNotes} data={data} canWrite={canWrite && !project.archived} onNew={onNewNote} onEdit={onEditNote} emptyText="Nog geen notities bij dit project." />
-  </>;
+  );
 }
