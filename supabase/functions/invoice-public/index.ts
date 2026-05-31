@@ -4,8 +4,17 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
 const MOLLIE_ALLOW_MOCK = (Deno.env.get('MOLLIE_ALLOW_MOCK') || 'false').toLowerCase() === 'true';
-const INVOICE_PDF_STORAGE_WORKER_URL = (Deno.env.get('INVOICE_PDF_STORAGE_WORKER_URL') || '').replace(/\/$/, '');
-const INVOICE_PDF_STORAGE_SECRET = Deno.env.get('INVOICE_PDF_STORAGE_SECRET') || '';
+// Falls back to the shared quote storage config so a single Worker + secret
+// powers the invoice and quote PDF snapshot flows (parity with invoice-workflow).
+const INVOICE_PDF_STORAGE_WORKER_URL = (
+  Deno.env.get('INVOICE_PDF_STORAGE_WORKER_URL') ||
+  Deno.env.get('QUOTE_PDF_STORAGE_WORKER_URL') ||
+  ''
+).replace(/\/$/, '');
+const INVOICE_PDF_STORAGE_SECRET =
+  Deno.env.get('INVOICE_PDF_STORAGE_SECRET') ||
+  Deno.env.get('QUOTE_PDF_STORAGE_SECRET') ||
+  '';
 
 const allowedOrigins = parseAllowedOrigins([
   Deno.env.get('INVOICE_PUBLIC_ALLOWED_ORIGINS'),
