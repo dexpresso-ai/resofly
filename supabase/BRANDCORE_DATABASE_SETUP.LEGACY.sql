@@ -1,8 +1,22 @@
 -- ============================================================
--- BrandCore Database Setup — Fresh Supabase Project
+-- ⚠️  VEROUDERD / LEGACY — NIET MEER GEBRUIKEN  ⚠️
+-- ============================================================
+-- Dit bestand staat op versie 2.2.1 (sprint 2, ~april 2026) en mist alle
+-- latere migraties (offerte-/factuurflow, finance core, PDF-snapshots in R2,
+-- enz.). Een verse database hiermee opbouwen levert een ONVOLLEDIG schema op.
+--
+-- DE ENIGE BETROUWBARE MANIER om een nieuwe/productie-database op te bouwen:
+--
+--     supabase db push --linked
+--
+-- Dat speelt alle migraties in supabase/migrations/ in de juiste volgorde af.
+-- Dit bestand blijft alleen bewaard als historische referentie.
+-- ============================================================
+--
+-- BrandCore Database Setup — Fresh Supabase Project (LEGACY)
 -- Version: 2.2.1-sprint2-mollie-connect-hardening
 --
--- Gebruik dit bestand voor een NIEUWE / LEGE Supabase database.
+-- (Historisch) Gebruik dit bestand voor een NIEUWE / LEGE Supabase database.
 -- Plak de volledige inhoud in Supabase SQL Editor en klik Run.
 --
 -- Multi-tenant opzet:
