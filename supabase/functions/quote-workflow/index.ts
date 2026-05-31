@@ -669,9 +669,11 @@ async function storeQuotePdfSnapshot(
     return { provider: 'database', key: null, shouldStoreBase64InDatabase: true };
   }
 
-  const key = `${organizationId}/quote-pdfs/${quoteId}/${crypto.randomUUID()}-${sanitizeFileName(
-    attachment.fileName,
-  )}`;
+  // Preserve the .pdf extension: sanitizeFileName() strips dots, which would
+  // turn "...-OFF-2026-7612.pdf" into "...-OFF-2026-7612-pdf" and fail the
+  // Worker's isPrivateQuoteSnapshotKey() check (it requires a trailing .pdf).
+  const safeName = `${sanitizeFileName(attachment.fileName.replace(/\.pdf$/i, ''))}.pdf`;
+  const key = `${organizationId}/quote-pdfs/${quoteId}/${crypto.randomUUID()}-${safeName}`;
 
   const response = await fetch(`${QUOTE_PDF_STORAGE_WORKER_URL}/internal/quote-snapshot`, {
     method: 'POST',
