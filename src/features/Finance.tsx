@@ -49,8 +49,8 @@ export function Quotes({
   />;
 }
 
-export function Invoices({ data, canWrite, onNew, onEdit, onSend, onCreatePayment }: { data: AppData; canWrite: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onCreatePayment: (i: Invoice) => void }) {
-  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onCreatePayment={onCreatePayment}/>;
+export function Invoices({ data, canWrite, onNew, onEdit, onSend, onCreatePayment, onDownloadPdf }: { data: AppData; canWrite: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onCreatePayment: (i: Invoice) => void; onDownloadPdf?: (i: Invoice) => void }) {
+  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onCreatePayment={onCreatePayment} onDownloadInvoicePdf={onDownloadPdf}/>;
 }
 
 function FinanceList<T extends Quote | Invoice>({
@@ -70,6 +70,7 @@ function FinanceList<T extends Quote | Invoice>({
   onSendInvoice,
   onCreatePayment,
   onDownloadPdf,
+  onDownloadInvoicePdf,
 }: {
   kind: 'quote' | 'invoice';
   title: string;
@@ -87,6 +88,7 @@ function FinanceList<T extends Quote | Invoice>({
   onSendInvoice?: (i: Invoice) => void;
   onCreatePayment?: (i: Invoice) => void;
   onDownloadPdf?: (q: Quote) => void;
+  onDownloadInvoicePdf?: (i: Invoice) => void;
 }) {
   if (kind === 'quote') {
     return <QuoteTable
@@ -115,6 +117,7 @@ function FinanceList<T extends Quote | Invoice>({
     onEdit={onEdit as (doc: Invoice) => void}
     onSend={onSendInvoice}
     onCreatePayment={onCreatePayment}
+    onDownloadPdf={onDownloadInvoicePdf}
   />;
 }
 
@@ -457,6 +460,7 @@ function InvoiceTable({
   onEdit,
   onSend,
   onCreatePayment,
+  onDownloadPdf,
 }: {
   title: string;
   invoices: Invoice[];
@@ -466,6 +470,7 @@ function InvoiceTable({
   onEdit: (invoice: Invoice) => void;
   onSend?: (invoice: Invoice) => void;
   onCreatePayment?: (invoice: Invoice) => void;
+  onDownloadPdf?: (invoice: Invoice) => void;
 }) {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
   const [searchFilters, setSearchFilters] = useState<FinanceSearchFilters>(() => createDefaultFinanceSearchFilters());
@@ -511,7 +516,9 @@ function InvoiceTable({
                 <td data-label="Status"><span className={`fin-status ${invoice.status}`}>{statusLabel(invoice.status)}</span></td>
                 <td className="quote-row-actions" onClick={event => event.stopPropagation()}>
                   <button type="button" className="att-btn" onClick={() => setSelectedInvoiceId(invoice.id)} title="Bekijk details"><Eye size={14}/></button>
-                  <button type="button" className="att-btn" onClick={() => { void exportFinancePDF(invoice, 'invoice', client, { company: data.companySettings }).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt')); }} title="Download PDF"><Download size={14}/></button>
+                  {invoiceHasStoredPdf(invoice) && onDownloadPdf
+                    ? <button type="button" className="att-btn" onClick={() => onDownloadPdf(invoice)} title="Download verzonden PDF"><Download size={14}/></button>
+                    : <button type="button" className="att-btn" onClick={() => { void exportFinancePDF(invoice, 'invoice', client, { company: data.companySettings }).catch(error => alert(error instanceof Error ? error.message : 'PDF-export mislukt')); }} title="Download concept-PDF"><Download size={14}/></button>}
                 </td>
               </tr>;
             })}
@@ -530,6 +537,7 @@ function InvoiceTable({
       onEdit={(invoice) => { setSelectedInvoiceId(null); onEdit(invoice); }}
       onSend={onSend}
       onCreatePayment={onCreatePayment}
+      onDownloadPdf={onDownloadPdf}
     />}
   </>;
 }
@@ -615,6 +623,7 @@ function InvoiceDetailModal({
   onEdit,
   onSend,
   onCreatePayment,
+  onDownloadPdf,
 }: {
   invoice: Invoice;
   data: AppData;
@@ -623,6 +632,7 @@ function InvoiceDetailModal({
   onEdit: (invoice: Invoice) => void;
   onSend?: (invoice: Invoice) => void;
   onCreatePayment?: (invoice: Invoice) => void;
+  onDownloadPdf?: (invoice: Invoice) => void;
 }) {
   const client = data.clients.find(c => c.id === invoice.client_id) ?? null;
   const project = data.projects.find(p => p.id === invoice.project_id) ?? null;
@@ -662,7 +672,7 @@ function InvoiceDetailModal({
       <section className="quote-detail-section">
         <div className="quote-detail-section-head"><div><span>Acties</span><strong>Versturen, betaallink en PDF-snapshot</strong></div></div>
         <InvoiceStatusStrip invoice={invoice} delivery={latestDelivery} payment={latestPayment} />
-        <InvoiceActions invoice={invoice} canWrite={canWrite} payment={latestPayment} onEdit={() => onEdit(invoice)} onSend={onSend} onCreatePayment={onCreatePayment} />
+        <InvoiceActions invoice={invoice} canWrite={canWrite} payment={latestPayment} onEdit={() => onEdit(invoice)} onSend={onSend} onCreatePayment={onCreatePayment} onDownloadPdf={onDownloadPdf} />
       </section>
 
       <section className="quote-detail-split">
@@ -798,16 +808,26 @@ function InvoiceStatusStrip({ invoice, delivery, payment }: { invoice: Invoice; 
   </div>;
 }
 
-function InvoiceActions({ invoice, canWrite, payment, onEdit, onSend, onCreatePayment }: { invoice: Invoice; canWrite: boolean; payment: InvoicePaymentRecord | null; onEdit: () => void; onSend?: (invoice: Invoice) => void; onCreatePayment?: (invoice: Invoice) => void }) {
+function InvoiceActions({ invoice, canWrite, payment, onEdit, onSend, onCreatePayment, onDownloadPdf }: { invoice: Invoice; canWrite: boolean; payment: InvoicePaymentRecord | null; onEdit: () => void; onSend?: (invoice: Invoice) => void; onCreatePayment?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void }) {
   const invoiceClosed = ['paid', 'cancelled', 'void', 'written_off'].includes(invoice.status);
   const isLocked = Boolean(invoice.locked_at) || ['sent','overdue','paid','cancelled','void','written_off'].includes(invoice.status) || Boolean(payment);
   const canSend = canWrite && !invoiceClosed;
   const canPay = canWrite && !invoiceClosed && !['paid','creating','open','pending','authorized'].includes(payment?.status || '');
+  const canDownloadStored = Boolean(onDownloadPdf) && invoiceHasStoredPdf(invoice);
   return <div className="quote-actions invoice-actions">
     <Button onClick={onEdit} disabled={isLocked} title={isLocked ? 'Deze factuur is vergrendeld na verzending of betaallink.' : undefined}>Bewerken</Button>
     {canSend && <Button variant="primary" onClick={() => onSend?.(invoice)}><Send size={14}/> Verstuur via Resend</Button>}
     {canPay && <Button variant="primary" onClick={() => onCreatePayment?.(invoice)}><CreditCard size={14}/> Maak Mollie-betaallink</Button>}
+    {canDownloadStored && <Button onClick={() => onDownloadPdf?.(invoice)}><Download size={14}/> Download verzonden PDF</Button>}
   </div>;
+}
+
+/**
+ * True when an invoice has (or should have) a stored PDF snapshot because it was
+ * sent to the client or progressed beyond that. Mirrors quoteHasStoredPdf().
+ */
+function invoiceHasStoredPdf(invoice: Invoice): boolean {
+  return ['sent', 'overdue', 'paid', 'cancelled', 'void', 'written_off'].includes(invoice.status) || Boolean(invoice.sent_at);
 }
 
 function QuoteVersions({ versions, compact = false }: { versions: QuoteVersion[]; compact?: boolean }) {

@@ -29,6 +29,7 @@ import {
   sendInvoiceEmailViaResend,
   sendQuoteEmailViaResend,
   downloadQuotePdfSnapshot,
+  downloadInvoicePdfSnapshot,
   createInvoicePaymentCheckout,
   updateOrganizationMemberRole,
   updateRow,
@@ -494,6 +495,17 @@ function App() {
     }
   }
 
+  async function downloadInvoicePdf(invoice: Invoice) {
+    setLoading(true); setError(null);
+    try {
+      await downloadInvoicePdfSnapshot(activeOrg.id, invoice.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Factuur-PDF downloaden mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function sendInvoice(invoice: Invoice) {
     if (!ensureCanWrite()) return;
     const client = data.clients.find(item => item.id === invoice.client_id);
@@ -628,7 +640,7 @@ function App() {
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>setEdit({kind:'ticket', item})} onConvert={convert}/>;
     if (page === 'notes') return <Notes data={data} onNew={() => ensureCanWrite() && setEdit({kind:'note'})} onEdit={(item)=>setEdit({kind:'note', item})}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
-    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onCreatePayment={createInvoicePayment}/>;
+    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onCreatePayment={createInvoicePayment} onDownloadPdf={downloadInvoicePdf}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} onPlanTask={updateTaskPlanning} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'calendar-settings') return <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;

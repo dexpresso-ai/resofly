@@ -702,6 +702,44 @@ export async function downloadQuotePdfSnapshot(organizationId: UUID, quoteId: UU
   }
 }
 
+/**
+ * Download the immutable, server-stored PDF snapshot for an invoice (the exact
+ * PDF that was e-mailed to the client). Mirrors downloadQuotePdfSnapshot: the
+ * Edge Function returns base64, which we turn into a Blob and download. Never
+ * regenerates the PDF, so the file always matches what was sent.
+ */
+export async function downloadInvoicePdfSnapshot(organizationId: UUID, invoiceId: UUID): Promise<void> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: {
+      action: 'downloadInvoicePdf',
+      organizationId,
+      invoiceId,
+    },
+  });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || 'Factuur-PDF downloaden mislukt');
+
+  const pdf = data.pdf as { fileName?: string; mimeType?: string; base64?: string } | undefined;
+  if (!pdf?.base64) throw new Error('Geen PDF-snapshot beschikbaar voor deze factuur.');
+
+  const binary = atob(pdf.base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  const blob = new Blob([bytes], { type: pdf.mimeType || 'application/pdf' });
+
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = pdf.fileName || `factuur-${invoiceId}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+}
+
 
 export async function convertAcceptedQuoteToInvoice(organizationId: UUID, quoteId: UUID): Promise<Invoice> {
   const { data, error } = await supabase.rpc('convert_accepted_quote_to_invoice', {

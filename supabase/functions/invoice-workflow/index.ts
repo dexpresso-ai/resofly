@@ -79,6 +79,17 @@ serve(async (req) => {
     const invoiceId = String(body.invoiceId || '');
     const user = await requireUser(req);
     const role = await requireOrganizationAccess(user.id, organizationId);
+
+    // Reading the stored PDF snapshot doesn't mutate anything, so any
+    // organization member (including viewers) may download it. Handle it
+    // before the write-role gate below.
+    if (action === 'downloadInvoicePdf') {
+      if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
+      await loadInvoice(organizationId, invoiceId);
+      const pdf = await loadInvoicePdfSnapshot(organizationId, invoiceId);
+      return json(req, { ok: true, pdf });
+    }
+
     if (!['owner', 'admin', 'member'].includes(role)) throw new WorkflowHttpError('Geen schrijfrechten voor deze organisatie.', 403);
 
     switch (action) {
@@ -510,6 +521,68 @@ async function storeInvoicePdfSnapshot(organizationId: string, invoiceId: string
   }
 
   return { provider: 'r2', key, shouldStoreBase64InDatabase: false };
+}
+
+async function loadInvoicePdfSnapshot(organizationId: string, invoiceId: string): Promise<{ fileName: string; mimeType: string; base64: string; sizeBytes: number | null; sha256: string | null }> {
+  const { data: versions, error } = await supabaseAdmin
+    .from('invoice_versions')
+    .select('snapshot_reason,pdf_file_name,pdf_mime_type,pdf_size_bytes,pdf_sha256,pdf_data_base64,pdf_storage_provider,pdf_storage_key,created_at,version_number')
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', invoiceId)
+    .not('pdf_file_name', 'is', null)
+    .order('version_number', { ascending: false })
+    .limit(20);
+
+  if (error) throw error;
+
+  const usableVersions = (versions || []).filter((candidate: Record<string, unknown>) => {
+    const hasDatabasePdf = Boolean(String(candidate.pdf_data_base64 || '').trim());
+    const hasPrivateStoragePdf = candidate.pdf_storage_provider === 'r2' && Boolean(candidate.pdf_storage_key);
+    return hasDatabasePdf || hasPrivateStoragePdf;
+  });
+
+  // Prefer the version that was actually sent to the client; fall back to the
+  // most recent usable snapshot.
+  const version =
+    usableVersions.find((candidate: Record<string, unknown>) => candidate.snapshot_reason === 'sent_to_client') ||
+    usableVersions[0];
+
+  if (!version) {
+    throw new WorkflowHttpError('Er is nog geen opgeslagen PDF-snapshot voor deze factuur. Verstuur de factuur eerst naar de klant.', 404);
+  }
+
+  let base64 = String(version.pdf_data_base64 || '').trim();
+
+  if (!base64 && version.pdf_storage_provider === 'r2' && version.pdf_storage_key) {
+    if (!INVOICE_PDF_STORAGE_WORKER_URL || !INVOICE_PDF_STORAGE_SECRET) {
+      throw new WorkflowHttpError('PDF-snapshot staat in private storage, maar de storage-koppeling ontbreekt in de Edge Function secrets.', 500);
+    }
+
+    const response = await fetch(
+      `${INVOICE_PDF_STORAGE_WORKER_URL}/internal/invoice-snapshot/${encodeURIComponent(String(version.pdf_storage_key))}`,
+      { headers: { Authorization: `Bearer ${INVOICE_PDF_STORAGE_SECRET}` } },
+    );
+
+    if (!response.ok) {
+      const message = await response.text().catch(() => response.statusText);
+      console.error('invoice-workflow R2 snapshot fetch failed', { status: response.status, message, key: version.pdf_storage_key, organizationId, invoiceId });
+      throw new WorkflowHttpError('PDF-snapshot kon niet uit private storage worden opgehaald.', 502);
+    }
+
+    base64 = bytesToBase64(new Uint8Array(await response.arrayBuffer()));
+  }
+
+  if (!base64) {
+    throw new WorkflowHttpError('PDF-snapshot ontbreekt of is niet beschikbaar.', 404);
+  }
+
+  return {
+    fileName: String(version.pdf_file_name || `factuur-${invoiceId}.pdf`),
+    mimeType: String(version.pdf_mime_type || 'application/pdf'),
+    sizeBytes: (version.pdf_size_bytes as number | null) ?? null,
+    sha256: (version.pdf_sha256 as string | null) ?? null,
+    base64,
+  };
 }
 
 async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: ClientRow; project: ProjectRow | null; quote: QuoteRow | null; company: CompanySettingsRow | null; publicUrl: string; paymentUrl?: string | null }): Promise<InvoicePdfAttachment> {
