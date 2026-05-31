@@ -636,7 +636,7 @@ export function ProjectPage({
           subtitle="Taken per status"
           badge={openTasks}
           accentColor={project.color}
-          defaultOpen={true}
+          defaultOpen={false}
           action={
             <Button variant="primary" onClick={onNewTask} disabled={project.archived || !canWrite}>+ Taak</Button>
           }
@@ -687,25 +687,38 @@ export function ProjectPage({
           subtitle="Goedkeuring, verzending en factuurconversie"
           badge={projectQuotes.length}
           accentColor={project.color}
-          defaultOpen={projectQuotes.length > 0}
+          defaultOpen={false}
           action={
             <Button variant="primary" onClick={onNewQuote} disabled={project.archived || !canWrite}>+ Offerte</Button>
           }
         >
-          <ProjectQuotesPanel
-            data={data}
-            projectId={project.id}
-            canWrite={canWrite && !project.archived}
-            canAdmin={canAdmin && !project.archived}
-            onNewQuote={onNewQuote}
-            onEditQuote={onEditQuote}
-            onSubmitApproval={onSubmitQuoteApproval}
-            onApprove={onApproveQuote}
-            onReject={onRejectQuote}
-            onSend={onSendQuote}
-            onConvertToInvoice={onConvertQuoteToInvoice}
-            hideHeader
-          />
+          {projectQuotes.length === 0 ? (
+            <div className="proj-dash-empty">Nog geen offertes bij dit project. Maak een nieuwe offerte.</div>
+          ) : (
+            <div className="proj-dash-quote-list">
+              {projectQuotes.map(quote => {
+                const client = data.clients.find(c => c.id === quote.client_id);
+                const quoteTotal = quote.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0;
+                return (
+                  <button
+                    key={quote.id}
+                    type="button"
+                    className="proj-dash-quote-row"
+                    onClick={() => onEditQuote(quote)}
+                  >
+                    <div>
+                      <strong>{quote.number}</strong>
+                      <span>{dateNL(quote.date)}</span>
+                    </div>
+                    <div>
+                      <strong>{euro(quoteTotal)}</strong>
+                      <span className={`quote-status ${quote.status}`}>{quote.status}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </DashboardSection>
 
         <DashboardSection
@@ -714,7 +727,7 @@ export function ProjectPage({
           subtitle="Gefactureerde bedragen bij dit project"
           badge={projectInvoices.length}
           accentColor={project.color}
-          defaultOpen={projectInvoices.length > 0}
+          defaultOpen={false}
         >
           {projectInvoices.length === 0 ? (
             <div className="proj-dash-empty">Nog geen facturen bij dit project. Zet een geaccepteerde offerte om.</div>
@@ -745,7 +758,7 @@ export function ProjectPage({
           subtitle="Projectgekoppelde notities"
           badge={projectNotes.length}
           accentColor={project.color}
-          defaultOpen={projectNotes.length > 0}
+          defaultOpen={false}
           action={
             canWrite && !project.archived
               ? <Button onClick={onNewNote}>+ Notitie</Button>

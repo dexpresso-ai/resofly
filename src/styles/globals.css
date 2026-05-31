@@ -806,9 +806,9 @@ body::before{
 .proj-dash-section-header:hover{background:rgba(255,255,255,.03)}
 .proj-dash-section-left{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
 .proj-dash-section-icon{display:flex;align-items:center;opacity:.85;flex-shrink:0}
-.proj-dash-section-titles{display:flex;flex-direction:column;gap:1px;min-width:0}
-.proj-dash-section-title{font-size:13px;font-weight:800;letter-spacing:-.01em}
-.proj-dash-section-sub{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.proj-dash-section-titles{display:flex;flex-direction:column;gap:1px;min-width:0;text-align:left}
+.proj-dash-section-title{font-size:13px;font-weight:800;letter-spacing:-.01em;text-align:left}
+.proj-dash-section-sub{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left}
 .proj-dash-section-badge{background:rgba(255,255,255,.1);border:1px solid var(--border);border-radius:999px;padding:1px 8px;font-size:11px;font-weight:700;flex-shrink:0}
 .proj-dash-section-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .proj-dash-chevron{display:flex;align-items:center;color:var(--muted);margin-left:4px;transition:transform .15s}
@@ -817,11 +817,19 @@ body::before{
 .proj-dash-kanban{display:grid;grid-template-columns:repeat(4,1fr);padding-top:14px}
 .proj-dash-empty{padding:20px;text-align:center;font-size:12px;color:var(--muted);border:1px dashed var(--border2);border-radius:10px;margin-top:14px}
 .proj-dash-invoice-list{display:flex;flex-direction:column;gap:6px;margin-top:14px}
-.proj-dash-invoice-row{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:10px}
+.proj-dash-invoice-row{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:10px;cursor:pointer;transition:background .12s}
+.proj-dash-invoice-row:hover{background:rgba(255,255,255,.06)}
 .proj-dash-invoice-row div{display:flex;flex-direction:column;gap:2px}
 .proj-dash-invoice-row div:last-child{align-items:flex-end}
 .proj-dash-invoice-row strong{font-size:13px;font-weight:800}
 .proj-dash-invoice-row span{font-size:11px;color:var(--muted)}
+.proj-dash-quote-list{display:flex;flex-direction:column;gap:6px;margin-top:14px}
+.proj-dash-quote-row{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:10px;cursor:pointer;transition:background .12s;color:var(--text);font-family:inherit;width:100%;text-align:left}
+.proj-dash-quote-row:hover{background:rgba(255,255,255,.06)}
+.proj-dash-quote-row div{display:flex;flex-direction:column;gap:2px}
+.proj-dash-quote-row div:last-child{align-items:flex-end}
+.proj-dash-quote-row strong{font-size:13px;font-weight:800}
+.proj-dash-quote-row span{font-size:11px;color:var(--muted)}
 .proj-dash-section-body .related-notes-panel{border:none;background:none;padding:0;margin-top:14px}
 .proj-dash-section-body .project-quotes-panel{margin:14px 0 0}
 
