@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { AppData, Note, Project, Quote, Task, TaskStatus } from '../types';
+import type { AppData, Invoice, Note, Project, Quote, Task, TaskStatus } from '../types';
 import { Button } from '../components/Ui';
 import { dateNL, euro, priorityLabel } from '../lib/format';
 import { RelatedNotes } from './Notes';
@@ -543,6 +543,7 @@ export function ProjectPage({
   onRejectQuote,
   onSendQuote,
   onConvertQuoteToInvoice,
+  onEditInvoice,
   onNewNote,
   onEditNote,
   setTaskStatus,
@@ -561,6 +562,7 @@ export function ProjectPage({
   onRejectQuote: (quote: Quote) => void;
   onSendQuote: (quote: Quote) => void;
   onConvertQuoteToInvoice?: (quote: Quote) => void;
+  onEditInvoice: (invoice: Invoice) => void;
   onNewNote: () => void;
   onEditNote: (note: Note) => void;
   setTaskStatus: (task: Task, status: TaskStatus) => void;
@@ -736,7 +738,12 @@ export function ProjectPage({
               {projectInvoices.map(inv => {
                 const invTotal = inv.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0;
                 return (
-                  <div key={inv.id} className="proj-dash-invoice-row">
+                  <button
+                    key={inv.id}
+                    type="button"
+                    className="proj-dash-invoice-row"
+                    onClick={() => onEditInvoice(inv)}
+                  >
                     <div>
                       <strong>{inv.number}</strong>
                       <span>{dateNL(inv.date)}</span>
@@ -745,7 +752,7 @@ export function ProjectPage({
                       <strong>{euro(invTotal)}</strong>
                       <span className={`fin-status ${inv.status}`}>{inv.status}</span>
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
