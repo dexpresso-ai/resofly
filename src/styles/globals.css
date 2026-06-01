@@ -814,7 +814,8 @@ body::before{
 .proj-dash-chevron{display:flex;align-items:center;color:var(--muted);margin-left:4px;transition:transform .15s}
 .proj-dash-section.closed .proj-dash-chevron{transform:none}
 .proj-dash-section-body{padding:0 14px 14px;border-top:1px solid var(--border)}
-.proj-dash-kanban{display:grid;grid-template-columns:repeat(4,1fr);padding-top:14px}
+.proj-dash-kanban{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding-top:14px}
+.proj-dash-kanban .kan-col{width:100%;min-width:0}
 .proj-dash-empty{padding:20px;text-align:center;font-size:12px;color:var(--muted);border:1px dashed var(--border2);border-radius:10px;margin-top:14px}
 .proj-dash-invoice-list{display:flex;flex-direction:column;gap:6px;margin-top:14px}
 .proj-dash-invoice-row{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:10px;cursor:pointer;transition:background .12s}
