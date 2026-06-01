@@ -148,10 +148,10 @@ export function Settings({
   }, []);
   useEffect(() => {
     let cancelled = false;
-    if (!activeOrganization || !canAdminOrganization) { setInvoiceMollie(null); return; }
+    if (!activeOrganization || !canAdminOrganization) { setInvoiceMollie(null); setInvoiceMollieError(null); return; }
     loadInvoiceMollieStatus(activeOrganization.id)
-      .then(status => { if (!cancelled) setInvoiceMollie(status); })
-      .catch(() => { if (!cancelled) setInvoiceMollie(null); });
+      .then(status => { if (!cancelled) { setInvoiceMollie(status); setInvoiceMollieError(null); } })
+      .catch(err => { if (!cancelled) { setInvoiceMollie(null); setInvoiceMollieError(err instanceof Error ? err.message : 'Status laden mislukt.'); } });
     return () => { cancelled = true; };
   }, [activeOrganization?.id, canAdminOrganization]);
 
