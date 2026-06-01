@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationRole, Project } from '../types';
+import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, InvoiceMollieSettingsStatus, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationRole, Project } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startMollieConnect } from '../services/billingService';
 import { sendResendTestEmail } from '../services/mailService';
+import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey } from '../lib/repository';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -109,6 +110,11 @@ export function Settings({
   const [resendBusy, setResendBusy] = useState(false);
   const [resendError, setResendError] = useState<string | null>(null);
   const [resendMessage, setResendMessage] = useState<string | null>(null);
+  const [invoiceMollie, setInvoiceMollie] = useState<InvoiceMollieSettingsStatus | null>(null);
+  const [invoiceMollieKey, setInvoiceMollieKey] = useState('');
+  const [invoiceMollieBusy, setInvoiceMollieBusy] = useState<string | null>(null);
+  const [invoiceMollieError, setInvoiceMollieError] = useState<string | null>(null);
+  const [invoiceMollieMessage, setInvoiceMollieMessage] = useState<string | null>(null);
 
   const activeOrganization = organizationContext.activeOrganization;
   const activeMembership = organizationContext.activeMembership;
@@ -140,6 +146,14 @@ export function Settings({
     });
     return () => { cancelled = true; };
   }, []);
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeOrganization || !canAdminOrganization) { setInvoiceMollie(null); return; }
+    loadInvoiceMollieStatus(activeOrganization.id)
+      .then(status => { if (!cancelled) setInvoiceMollie(status); })
+      .catch(() => { if (!cancelled) setInvoiceMollie(null); });
+    return () => { cancelled = true; };
+  }, [activeOrganization?.id, canAdminOrganization]);
 
   const set = (key: keyof CompanySettingsInput, value: string | number | InvoiceTemplateKind | null) => {
     setForm(prev => ({ ...prev, [key]: value }));
@@ -269,6 +283,45 @@ export function Settings({
       setBillingError(error instanceof Error ? error.message : 'Mollie koppelen mislukt.');
     } finally {
       setBillingBusy(null);
+    }
+  }
+
+  async function connectInvoiceMollie() {
+    if (!activeOrganization || !canAdminOrganization) return;
+    const apiKey = invoiceMollieKey.trim();
+    if (!apiKey) { setInvoiceMollieError('Vul je Mollie API-key in.'); return; }
+    setInvoiceMollieBusy('connect');
+    setInvoiceMollieError(null);
+    setInvoiceMollieMessage(null);
+    try {
+      const status = await saveInvoiceMollieKey(activeOrganization.id, apiKey);
+      setInvoiceMollie(status);
+      setInvoiceMollieKey('');
+      setInvoiceMollieMessage(`Mollie gekoppeld (${status.mode === 'live' ? 'live' : 'test'}-modus). Bij het versturen van een factuur kun je nu een betaallink meesturen.`);
+    } catch (error) {
+      setInvoiceMollieError(error instanceof Error ? error.message : 'Mollie koppelen mislukt.');
+    } finally {
+      setInvoiceMollieBusy(null);
+    }
+  }
+
+  async function disconnectInvoiceMollie() {
+    if (!activeOrganization || !canAdminOrganization) return;
+    if (!confirm('Mollie ontkoppelen voor facturen?\n\nDe opgeslagen API-key wordt direct verwijderd. Vergeet niet de key ook in je eigen Mollie-dashboard in te trekken.')) return;
+    setInvoiceMollieBusy('disconnect');
+    setInvoiceMollieError(null);
+    setInvoiceMollieMessage(null);
+    try {
+      const result = await deleteInvoiceMollieKey(activeOrganization.id);
+      setInvoiceMollie(result.status);
+      setInvoiceMollieKey('');
+      setInvoiceMollieMessage(result.hadOpenPayments
+        ? 'Mollie ontkoppeld. Let op: er stonden nog open betaallinks; die kunnen niet meer automatisch worden geverifieerd. Trek de key ook in je Mollie-dashboard in.'
+        : 'Mollie ontkoppeld. Trek de key ook in je eigen Mollie-dashboard in.');
+    } catch (error) {
+      setInvoiceMollieError(error instanceof Error ? error.message : 'Mollie ontkoppelen mislukt.');
+    } finally {
+      setInvoiceMollieBusy(null);
     }
   }
 
@@ -525,6 +578,60 @@ export function Settings({
 
       {!canAdminOrganization && <p className="settings-help">Alleen owners en admins kunnen billing-acties uitvoeren.</p>}
       {seatOverview && seatOverview.available_seats <= 0 && <div className="error">Geen vrije gebruikerslicentie beschikbaar. Koop eerst een extra gebruikerslicentie voordat je iemand uitnodigt.</div>}
+    </section>
+
+    <section className="settings-card organization-card billing-card">
+      <div className="settings-card-head">
+        <div>
+          <h3>Online betalen (Mollie)</h3>
+          <p className="settings-help">Koppel het eigen Mollie-account van deze organisatie. Daarna kun je bij het versturen van een factuur een betaallink meesturen zodat klanten direct online kunnen betalen. Mollie is optioneel — zonder koppeling verstuur je gewoon de factuur-PDF.</p>
+        </div>
+      </div>
+
+      {invoiceMollieMessage && <div className="success">{invoiceMollieMessage}</div>}
+      {invoiceMollieError && <div className="error">{invoiceMollieError}</div>}
+
+      {canAdminOrganization ? <>
+        <div className="billing-summary">
+          <div>
+            <span>Status</span>
+            <strong>{invoiceMollie?.status === 'connected' ? 'Gekoppeld' : 'Niet gekoppeld'}</strong>
+            <small>{invoiceMollie?.status === 'connected'
+              ? `${invoiceMollie.mode === 'live' ? 'Live' : 'Test'}-modus${invoiceMollie.key_suffix ? ' · key ••••' + invoiceMollie.key_suffix : ''}`
+              : 'Facturen worden zonder betaallink verstuurd.'}</small>
+          </div>
+          {invoiceMollie?.status === 'connected' && invoiceMollie.connected_at && <div>
+            <span>Gekoppeld sinds</span>
+            <strong>{formatDate(invoiceMollie.connected_at)}</strong>
+            <small>{invoiceMollie.last_validated_at ? 'Laatst gevalideerd ' + formatDate(invoiceMollie.last_validated_at) : 'Nog niet opnieuw gevalideerd'}</small>
+          </div>}
+        </div>
+
+        {invoiceMollie?.status === 'connected' ? <>
+          <div className="billing-control-row">
+            <div>
+              <strong>Key vervangen</strong>
+              <p className="settings-help">Plak een nieuwe API-key om de bestaande te vervangen, bijvoorbeeld na rotatie in je Mollie-dashboard.</p>
+              <Input type="password" value={invoiceMollieKey} onChange={event => setInvoiceMollieKey(event.target.value)} placeholder="Nieuwe live_… of test_…" autoComplete="off" />
+            </div>
+            <Button onClick={connectInvoiceMollie} disabled={invoiceMollieBusy === 'connect' || !invoiceMollieKey.trim()}>{invoiceMollieBusy === 'connect' ? 'Opslaan…' : 'Key vervangen'}</Button>
+          </div>
+          <div className="billing-control-row">
+            <div>
+              <strong>Mollie ontkoppelen</strong>
+              <p className="settings-help">Verwijdert de opgeslagen key direct. Trek de key daarna ook in je eigen Mollie-dashboard in.</p>
+            </div>
+            <Button variant="danger" onClick={disconnectInvoiceMollie} disabled={invoiceMollieBusy === 'disconnect'}>{invoiceMollieBusy === 'disconnect' ? 'Ontkoppelen…' : 'Mollie ontkoppelen'}</Button>
+          </div>
+        </> : <div className="billing-control-row">
+          <div>
+            <strong>Mollie koppelen</strong>
+            <p className="settings-help">Plak je Mollie API-key (begint met <code>live_</code> of <code>test_</code>). Te vinden in je Mollie-dashboard onder Developers → API-keys.</p>
+            <Input type="password" value={invoiceMollieKey} onChange={event => setInvoiceMollieKey(event.target.value)} placeholder="live_… of test_…" autoComplete="off" />
+          </div>
+          <Button variant="primary" onClick={connectInvoiceMollie} disabled={invoiceMollieBusy === 'connect' || !invoiceMollieKey.trim()}>{invoiceMollieBusy === 'connect' ? 'Koppelen…' : 'Mollie koppelen'}</Button>
+        </div>}
+      </> : <p className="settings-help">Alleen owners en admins kunnen de Mollie-koppeling beheren.</p>}
     </section>
 
     <section className="settings-card organization-card">

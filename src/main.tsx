@@ -31,6 +31,7 @@ import {
   downloadQuotePdfSnapshot,
   downloadInvoicePdfSnapshot,
   createInvoicePaymentCheckout,
+  loadInvoiceMollieStatus,
   updateOrganizationMemberRole,
   updateRow,
   upsertCompanySettings,
@@ -512,9 +513,25 @@ function App() {
     const recipientEmail = prompt('Naar welk e-mailadres wil je de factuur versturen?', client?.email || '');
     if (!recipientEmail) return;
     const recipientName = prompt('Naam/contactpersoon voor de e-mail', client?.contact_name || client?.name || '') || undefined;
+
+    // Offer a Mollie payment link only when this organization has connected its
+    // own Mollie account; otherwise the invoice always goes out as PDF-only.
+    let includePaymentLink = false;
+    const invoiceIsPayable = !['paid', 'cancelled', 'void', 'written_off'].includes(invoice.status);
+    if (invoiceIsPayable) {
+      try {
+        const mollie = await loadInvoiceMollieStatus(activeOrg.id);
+        if (mollie.status === 'connected') {
+          includePaymentLink = confirm('Mollie is gekoppeld. Wil je een online betaallink meesturen met deze factuur?\n\nOK = factuur mét betaallink · Annuleren = alleen de PDF');
+        }
+      } catch {
+        // Status niet kunnen ophalen mag het versturen niet blokkeren: dan PDF-only.
+      }
+    }
+
     setLoading(true); setError(null);
     try {
-      await sendInvoiceEmailViaResend(activeOrg.id, invoice.id, { recipientEmail, recipientName });
+      await sendInvoiceEmailViaResend(activeOrg.id, invoice.id, { recipientEmail, recipientName, includePaymentLink });
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Factuur verzenden via Resend mislukt');

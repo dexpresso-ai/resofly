@@ -14,6 +14,7 @@ import type {
   InvoicePaymentRecord,
   InvoiceVersion,
   InvoiceWorkflowEvent,
+  InvoiceMollieSettingsStatus,
   Note,
   CalendarNoteLinkInput,
   NoteCalendarLink,
@@ -751,7 +752,7 @@ export async function convertAcceptedQuoteToInvoice(organizationId: UUID, quoteI
   return row as Invoice;
 }
 
-export async function sendInvoiceEmailViaResend(organizationId: UUID, invoiceId: UUID, input: { recipientEmail?: string; recipientName?: string; subject?: string } = {}): Promise<{ publicUrl?: string; providerEmailId?: string }> {
+export async function sendInvoiceEmailViaResend(organizationId: UUID, invoiceId: UUID, input: { recipientEmail?: string; recipientName?: string; subject?: string; includePaymentLink?: boolean } = {}): Promise<{ publicUrl?: string; providerEmailId?: string }> {
   const { data, error } = await supabase.functions.invoke('invoice-workflow', {
     body: {
       action: 'sendInvoiceEmail',
@@ -777,6 +778,38 @@ export async function createInvoicePaymentCheckout(organizationId: UUID, invoice
   if (error) throw error;
   if (!data?.ok) throw new Error(data?.error || 'Betaallink aanmaken mislukt');
   return data as { checkoutUrl?: string; providerPaymentId?: string; reused?: boolean; mock?: boolean };
+}
+
+/**
+ * Per-organization invoice Mollie key management. The plaintext key only ever
+ * travels (over HTTPS) to the invoice-workflow Edge Function, which validates,
+ * encrypts and stores it. These helpers only ever receive masked status back.
+ */
+export async function loadInvoiceMollieStatus(organizationId: UUID): Promise<InvoiceMollieSettingsStatus> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'getInvoiceMollieStatus', organizationId },
+  });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || 'Mollie-status laden mislukt');
+  return data.status as InvoiceMollieSettingsStatus;
+}
+
+export async function saveInvoiceMollieKey(organizationId: UUID, apiKey: string): Promise<InvoiceMollieSettingsStatus> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'saveInvoiceMollieKey', organizationId, apiKey },
+  });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || 'Mollie koppelen mislukt');
+  return data.status as InvoiceMollieSettingsStatus;
+}
+
+export async function deleteInvoiceMollieKey(organizationId: UUID): Promise<{ status: InvoiceMollieSettingsStatus; hadOpenPayments: boolean }> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'deleteInvoiceMollieKey', organizationId },
+  });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || 'Mollie ontkoppelen mislukt');
+  return { status: data.status as InvoiceMollieSettingsStatus, hadOpenPayments: Boolean(data.hadOpenPayments) };
 }
 
 /**

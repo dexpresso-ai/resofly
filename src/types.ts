@@ -455,6 +455,15 @@ export interface CompanySettings extends OrgScopedRow {
 }
 export type CompanySettingsInput = Omit<CompanySettings, 'id' | 'organization_id' | 'created_by' | 'created_at' | 'updated_at'>;
 
+export type InvoiceMollieConnectionStatus = 'not_connected' | 'connected' | 'revoked';
+export interface InvoiceMollieSettingsStatus {
+  status: InvoiceMollieConnectionStatus;
+  mode: 'test' | 'live' | null;
+  key_suffix: string | null;
+  connected_at: string | null;
+  last_validated_at: string | null;
+}
+
 export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; notes: Note[]; noteCalendarLinks: NoteCalendarLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft';
