@@ -12,9 +12,11 @@ import type {
   Invoice,
   InvoiceEmailDelivery,
   InvoicePaymentRecord,
+  InvoiceRefund,
   InvoiceVersion,
   InvoiceWorkflowEvent,
   InvoiceMollieSettingsStatus,
+  CreditNote,
   Note,
   CalendarNoteLinkInput,
   NoteCalendarLink,
@@ -275,16 +277,19 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     invoiceEmailDeliveries,
     invoicePaymentRecords,
     invoiceVersions,
+    invoiceRefunds,
+    creditNotes,
     attachments,
     companySettings,
   ] = await Promise.all([
     select<Client>('clients', organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
     select<Note>('notes', organizationId), selectNoteCalendarLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
+    selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId),
     select<Attachment>('attachments', organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, notes, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, attachments, companySettings };
+  return { clients, projects, tasks, tickets, notes, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, attachments, companySettings };
 }
 
 export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
@@ -395,6 +400,41 @@ export async function selectInvoicePaymentRecords(organizationId: UUID): Promise
     throw error;
   }
   return (data ?? []) as InvoicePaymentRecord[];
+}
+
+export async function selectInvoiceRefunds(organizationId: UUID): Promise<InvoiceRefund[]> {
+  const { data, error } = await supabase
+    .from('invoice_refunds')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/invoice_refunds|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('invoice_refunds is nog niet beschikbaar. Voer de migratie 20260602_invoice_refunds_credit_notes.sql uit.', error);
+      return [];
+    }
+    throw error;
+  }
+  return (data ?? []) as InvoiceRefund[];
+}
+
+export async function selectCreditNotes(organizationId: UUID): Promise<CreditNote[]> {
+  // pdf_data_base64 bewust NIET meeladen: dat blob hoort alleen bij de download.
+  const { data, error } = await supabase
+    .from('credit_notes')
+    .select('id,organization_id,invoice_id,refund_id,number,date,reason,currency,subtotal_amount,vat_amount,total_amount,lines,status,pdf_file_name,pdf_mime_type,pdf_size_bytes,pdf_sha256,pdf_storage_provider,pdf_storage_key,issued_by,created_at,updated_at')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/credit_notes|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('credit_notes is nog niet beschikbaar. Voer de migratie 20260602_invoice_refunds_credit_notes.sql uit.', error);
+      return [];
+    }
+    throw error;
+  }
+  return (data ?? []) as CreditNote[];
 }
 
 export async function selectInvoiceVersions(organizationId: UUID): Promise<InvoiceVersion[]> {
@@ -778,6 +818,58 @@ export async function createInvoicePaymentCheckout(organizationId: UUID, invoice
   if (error) throw error;
   if (!data?.ok) throw new Error(data?.error || 'Betaallink aanmaken mislukt');
   return data as { checkoutUrl?: string; providerPaymentId?: string; reused?: boolean; mock?: boolean };
+}
+
+/**
+ * Register a refund for a paid invoice (Fase 1: handmatige/offline terugbetaling)
+ * and optionally issue a credit note. The amount is in cents; the Edge Function
+ * validates it against the remaining refundable amount and books it atomically.
+ * idempotencyKey should be stable per refund action (generate once per modal) so
+ * a double-click never books two refunds.
+ */
+export async function createInvoiceRefund(
+  organizationId: UUID,
+  invoiceId: UUID,
+  input: { amountCents: number; reason?: string; createCreditNote?: boolean; idempotencyKey?: string },
+): Promise<{ refund: InvoiceRefund; creditNote: CreditNote | null }> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'createInvoiceRefund', organizationId, invoiceId, ...input },
+  });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || 'Terugbetaling registreren mislukt');
+  return data as { refund: InvoiceRefund; creditNote: CreditNote | null };
+}
+
+/**
+ * Download the stored credit-note PDF (mirrors downloadInvoicePdfSnapshot). The
+ * Edge Function returns base64, which we turn into a Blob and download.
+ */
+export async function downloadCreditNotePdf(organizationId: UUID, creditNoteId: UUID): Promise<void> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'downloadCreditNotePdf', organizationId, creditNoteId },
+  });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || 'Creditfactuur-PDF downloaden mislukt');
+
+  const pdf = data.pdf as { fileName?: string; mimeType?: string; base64?: string } | undefined;
+  if (!pdf?.base64) throw new Error('Geen PDF beschikbaar voor deze creditfactuur.');
+
+  const binary = atob(pdf.base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  const blob = new Blob([bytes], { type: pdf.mimeType || 'application/pdf' });
+
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = pdf.fileName || `creditfactuur-${creditNoteId}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
 }
 
 /**

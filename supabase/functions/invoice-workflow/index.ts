@@ -98,6 +98,12 @@ serve(async (req) => {
       return json(req, { ok: true, pdf });
     }
 
+    // Reading a stored credit-note PDF is non-mutating, so any active member may
+    // download it (mirrors downloadInvoicePdf). Handle before the write gate.
+    if (action === 'downloadCreditNotePdf') {
+      return json(req, { ok: true, ...(await downloadCreditNotePdf(organizationId, body)) });
+    }
+
     // Masked Mollie status is readable by any active member (no secret leaves the
     // server), so the send dialog can decide whether to offer a payment link.
     if (action === 'getInvoiceMollieStatus') {
@@ -109,6 +115,7 @@ serve(async (req) => {
     switch (action) {
       case 'sendInvoiceEmail': return json(req, { ok: true, ...(await sendInvoiceEmail(user.id, organizationId, invoiceId, body)) });
       case 'createInvoicePaymentCheckout': return json(req, { ok: true, ...(await createInvoicePaymentCheckout(user.id, organizationId, invoiceId, body)) });
+      case 'createInvoiceRefund': return json(req, { ok: true, ...(await createInvoiceRefund(user.id, organizationId, role, invoiceId, body)) });
       case 'markMockInvoicePaymentPaid': return json(req, { ok: true, payment: await markMockInvoicePaymentPaid(String(body.providerPaymentId || '')) });
       case 'saveInvoiceMollieKey': return json(req, { ok: true, status: await saveInvoiceMollieKey(user.id, organizationId, role, body) });
       case 'deleteInvoiceMollieKey': return json(req, { ok: true, ...(await deleteInvoiceMollieKey(organizationId, role)) });
@@ -346,6 +353,170 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
     if (error instanceof WorkflowHttpError) throw error;
     throw new WorkflowHttpError(`Mollie checkout kon niet worden afgerond: ${errorMessage}`, 502);
   }
+}
+
+async function createInvoiceRefund(userId: string, organizationId: string, role: OrganizationRole, invoiceId: string, body: Record<string, unknown>) {
+  // Terugbetalingen zijn gevoelig: alleen owners en admins mogen ze registreren.
+  if (!['owner', 'admin'].includes(role)) throw new WorkflowHttpError('Alleen owners en admins mogen terugbetalingen registreren.', 403);
+  if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
+
+  const invoice = await loadInvoice(organizationId, invoiceId);
+  if (!['paid', 'refunded'].includes(invoice.status)) throw new WorkflowHttpError('Alleen betaalde facturen kunnen worden terugbetaald.', 409);
+  if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
+
+  const totals = calculateTotals(invoice.lines);
+  const invoiceTotalCents = totals.totalCents;
+  if (invoiceTotalCents <= 0) throw new WorkflowHttpError('Deze factuur heeft geen positief bedrag om terug te betalen.', 422);
+
+  const amountCents = Math.round(Number(body.amountCents));
+  if (!Number.isFinite(amountCents) || amountCents <= 0) throw new WorkflowHttpError('Vul een geldig terugbetaalbedrag (in centen) in.', 422);
+  if (amountCents > invoiceTotalCents) throw new WorkflowHttpError('Het terugbetaalbedrag mag niet groter zijn dan het factuurbedrag.', 422);
+
+  const reason = String(body.reason || '').trim() || null;
+  const createCreditNote = body.createCreditNote !== false; // standaard: wel een creditfactuur
+  // Stabiele idempotency-key per terugbetaalactie (voorkomt dubbel boeken bij
+  // dubbelklik/retry), maar staat bewust meerdere losse (deel)terugbetalingen toe.
+  const idempotencyKey = sanitizeIdempotencyKey(String(body.idempotencyKey || `invoice-${invoiceId}-refund-${crypto.randomUUID()}`));
+
+  // Fase 1: handmatige (offline) terugbetaling — de Mollie-uitvoering volgt in
+  // fase 2 via kind='mollie' + complete/fail_invoice_refund.
+  const refund = await beginInvoiceRefund({ invoiceId, organizationId, userId, amountCents, reason, kind: 'manual', idempotencyKey });
+
+  let creditNote: Record<string, unknown> | null = null;
+  if (refund.credit_note_id) {
+    // Idempotente retry: er was al een creditfactuur voor deze terugbetaling.
+    creditNote = await loadCreditNote(organizationId, String(refund.credit_note_id));
+  } else if (createCreditNote) {
+    const [client, company] = await Promise.all([
+      loadClient(organizationId, invoice.client_id),
+      loadCompanySettings(organizationId),
+    ]);
+    creditNote = await issueCreditNoteForRefund({ userId, organizationId, invoice, client, company, refund, amountCents, invoiceTotalCents, totals, reason });
+  }
+
+  return { refund, creditNote };
+}
+
+async function issueCreditNoteForRefund(input: { userId: string; organizationId: string; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; refund: { id: string }; amountCents: number; invoiceTotalCents: number; totals: ReturnType<typeof calculateTotals>; reason: string | null }) {
+  const { userId, organizationId, invoice, client, company, refund, amountCents, invoiceTotalCents, totals, reason } = input;
+  const currency = invoice.currency || 'EUR';
+  const isFull = amountCents >= invoiceTotalCents;
+
+  let subtotal: number;
+  let vat: number;
+  let total: number;
+  let lines: InvoiceLine[];
+
+  if (isFull) {
+    // Volledige terugbetaling: spiegel de factuur exact, zodat de btw netjes terugloopt.
+    subtotal = totals.subtotal;
+    vat = totals.vat;
+    total = totals.total;
+    lines = Array.isArray(invoice.lines) ? invoice.lines : [];
+  } else {
+    // Gedeeltelijk: één creditregel, btw pro-rata over het terugbetaalde brutobedrag.
+    total = amountCents / 100;
+    const ratio = amountCents / invoiceTotalCents;
+    subtotal = Math.round(totals.subtotal * ratio * 100) / 100;
+    vat = Math.round((total - subtotal) * 100) / 100;
+    const blendedRate = subtotal > 0 ? Math.round((vat / subtotal) * 10000) / 100 : 0;
+    lines = [{ description: `Gedeeltelijke terugbetaling factuur ${invoice.number}${reason ? ` – ${reason}` : ''}`, quantity: 1, unit_price: subtotal, vat: blendedRate }];
+  }
+
+  // 1. Creditfactuur server-side aanmaken (kent atomair het CN-nummer toe).
+  const created = await issueCreditNote({ organizationId, invoiceId: invoice.id, refundId: refund.id, userId, reason, currency, subtotal, vat, total, lines });
+  const creditNoteNumber = String(created.number || '');
+
+  // 2. PDF renderen met het toegekende nummer en als base64 in de DB opslaan
+  //    (Fase 1 bewust geen R2: creditfactuur-PDF's zijn klein en self-contained).
+  //    De creditfactuur (ledger + nummer) is nu al definitief; een PDF-fout mag
+  //    de terugbetaling niet alsnog laten falen. Bij een fout loggen we en geven
+  //    we de creditnota zonder PDF terug (de PDF kan later opnieuw worden gemaakt).
+  try {
+    const attachment = await createCreditNotePdfAttachment({ creditNoteNumber, date: String(created.date || ''), invoice, client, company, currency, subtotal, vat, total, lines, reason });
+    validateInvoicePdfAttachment(attachment);
+
+    const { error } = await supabaseAdmin
+      .from('credit_notes')
+      .update({
+        pdf_file_name: attachment.fileName,
+        pdf_mime_type: attachment.mimeType,
+        pdf_size_bytes: attachment.sizeBytes,
+        pdf_sha256: attachment.sha256,
+        pdf_data_base64: attachment.base64,
+        pdf_storage_provider: 'database',
+      })
+      .eq('id', created.id)
+      .eq('organization_id', organizationId);
+    if (error) throw new Error(error.message);
+
+    return { ...created, pdf_file_name: attachment.fileName, pdf_mime_type: attachment.mimeType, pdf_size_bytes: attachment.sizeBytes, pdf_sha256: attachment.sha256, pdf_storage_provider: 'database' };
+  } catch (pdfError) {
+    console.warn('Creditfactuur-PDF kon niet worden gegenereerd/opgeslagen; de creditnota zelf is wel aangemaakt.', pdfError instanceof Error ? pdfError.message : pdfError);
+    return created;
+  }
+}
+
+async function beginInvoiceRefund(input: { invoiceId: string; organizationId: string; userId: string; amountCents: number; reason: string | null; kind: 'manual' | 'mollie'; idempotencyKey: string; paymentRecordId?: string | null }): Promise<{ id: string; credit_note_id: string | null; status: string; amount_cents: number; currency: string }> {
+  const { data, error } = await supabaseAdmin.rpc('begin_invoice_refund', {
+    p_invoice_id: input.invoiceId,
+    p_organization_id: input.organizationId,
+    p_actor_user_id: input.userId,
+    p_amount_cents: input.amountCents,
+    p_reason: input.reason,
+    p_kind: input.kind,
+    p_payment_record_id: input.paymentRecordId ?? null,
+    p_idempotency_key: input.idempotencyKey,
+    p_metadata: {},
+  });
+  if (error) throwRpcError('begin_invoice_refund', error);
+  return data as { id: string; credit_note_id: string | null; status: string; amount_cents: number; currency: string };
+}
+
+async function issueCreditNote(input: { organizationId: string; invoiceId: string; refundId: string; userId: string; reason: string | null; currency: string; subtotal: number; vat: number; total: number; lines: InvoiceLine[] }): Promise<Record<string, unknown> & { id: string; number: string; date: string }> {
+  const { data, error } = await supabaseAdmin.rpc('issue_credit_note', {
+    p_organization_id: input.organizationId,
+    p_invoice_id: input.invoiceId,
+    p_refund_id: input.refundId,
+    p_actor_user_id: input.userId,
+    p_reason: input.reason,
+    p_currency: input.currency,
+    p_subtotal: input.subtotal,
+    p_vat: input.vat,
+    p_total: input.total,
+    p_lines: input.lines,
+  });
+  if (error) throwRpcError('issue_credit_note', error);
+  return data as Record<string, unknown> & { id: string; number: string; date: string };
+}
+
+async function loadCreditNote(organizationId: string, creditNoteId: string): Promise<Record<string, unknown> | null> {
+  const { data, error } = await supabaseAdmin
+    .from('credit_notes')
+    .select('id,organization_id,invoice_id,refund_id,number,date,reason,currency,subtotal_amount,vat_amount,total_amount,status,pdf_file_name,pdf_mime_type,pdf_size_bytes,pdf_sha256,pdf_data_base64,created_at')
+    .eq('id', creditNoteId)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) throwSupabaseError('creditnota laden', error);
+  return (data ?? null) as Record<string, unknown> | null;
+}
+
+async function downloadCreditNotePdf(organizationId: string, body: Record<string, unknown>): Promise<{ pdf: { fileName: string; mimeType: string; base64: string; sizeBytes: number | null; sha256: string | null } }> {
+  const creditNoteId = String(body.creditNoteId || '');
+  if (!isUuid(creditNoteId)) throw new WorkflowHttpError('Ongeldige creditfactuur.', 400);
+  const creditNote = await loadCreditNote(organizationId, creditNoteId);
+  if (!creditNote) throw new WorkflowHttpError('Creditfactuur niet gevonden.', 404);
+  const base64 = String(creditNote.pdf_data_base64 || '').trim();
+  if (!base64) throw new WorkflowHttpError('Voor deze creditfactuur is nog geen PDF beschikbaar.', 404);
+  return {
+    pdf: {
+      fileName: String(creditNote.pdf_file_name || `creditfactuur-${creditNoteId}.pdf`),
+      mimeType: String(creditNote.pdf_mime_type || 'application/pdf'),
+      base64,
+      sizeBytes: (creditNote.pdf_size_bytes as number | null) ?? null,
+      sha256: (creditNote.pdf_sha256 as string | null) ?? null,
+    },
+  };
 }
 
 async function handleMollieWebhook(req: Request, url: URL, body: Record<string, string>) {
@@ -794,6 +965,57 @@ async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: 
   const bytes = await pdfDoc.save();
   const sha256 = await sha256HexBytes(bytes);
   const fileName = `factuur-${sanitizeFileName(invoice.number || invoice.id)}.pdf`;
+  return { fileName, mimeType: 'application/pdf', bytes, base64: bytesToBase64(bytes), sizeBytes: bytes.byteLength, sha256 };
+}
+
+async function createCreditNotePdfAttachment(input: { creditNoteNumber: string; date: string; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; currency: string; subtotal: number; vat: number; total: number; lines: InvoiceLine[]; reason: string | null }): Promise<InvoicePdfAttachment> {
+  const { creditNoteNumber, date, invoice, client, company, subtotal, vat, total, lines, reason } = input;
+  const pdfDoc = await PDFDocument.create();
+  const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const accent = hexToPdfRgb(company?.invoice_accent_color || '#FFD966');
+  const muted = rgb(0.38, 0.38, 0.38);
+  let page = pdfDoc.addPage([595.28, 841.89]);
+  let y = 780;
+  const companyName = company?.trade_name || company?.company_name || 'ResoFly';
+
+  page.drawRectangle({ x: 0, y: 824, width: 595.28, height: 18, color: accent, opacity: 0.85 });
+  drawPdfText(page, 'CREDITFACTUUR', 48, y, bold, 24);
+  drawPdfText(page, creditNoteNumber || '-', 547, y + 6, bold, 12, { align: 'right' });
+  y -= 28;
+  drawPdfText(page, companyName, 48, y, bold, 13); y -= 18;
+  for (const line of companyAddressLines(company).slice(0, 8)) { drawPdfText(page, line, 48, y, regular, 9, { color: muted }); y -= 12; }
+  let rightY = 742;
+  drawPdfText(page, `Datum: ${formatDateNl(date)}`, 547, rightY, regular, 9, { align: 'right', color: muted }); rightY -= 14;
+  drawPdfText(page, `Creditering van factuur: ${invoice.number}`, 547, rightY, regular, 9, { align: 'right', color: muted }); rightY -= 14;
+  if (invoice.date) drawPdfText(page, `Factuurdatum: ${formatDateNl(invoice.date)}`, 547, rightY, regular, 9, { align: 'right', color: muted });
+
+  y = 620;
+  drawSectionTitle(page, 'Klant', 48, y, bold, accent, muted); y -= 24;
+  for (const line of clientAddressLines(client)) { drawPdfText(page, line, 48, y, line === client.name ? bold : regular, 10); y -= 14; }
+
+  y = 510;
+  drawTableHeader(page, y, bold, accent, muted); y -= 28;
+  for (const line of (Array.isArray(lines) ? lines : [])) {
+    if (y < 180) { drawPdfFooter(page, regular, company); page = pdfDoc.addPage([595.28, 841.89]); y = 780; drawTableHeader(page, y, bold, accent, muted); y -= 28; }
+    y -= drawLine(page, line, y, regular, bold, muted);
+  }
+  if (y < 230) { drawPdfFooter(page, regular, company); page = pdfDoc.addPage([595.28, 841.89]); y = 760; }
+  // Bedragen komen uit de opgeslagen creditnota (autoritatief), niet uit een
+  // herberekening van de regels — zo matcht de PDF exact het geboekte bedrag.
+  y -= 10;
+  drawPdfText(page, 'Subtotaal', 365, y, regular, 10); drawPdfText(page, `- ${formatEuro(subtotal)}`, 547, y, regular, 10, { align: 'right' }); y -= 18;
+  drawPdfText(page, 'BTW', 365, y, regular, 10); drawPdfText(page, `- ${formatEuro(vat)}`, 547, y, regular, 10, { align: 'right' }); y -= 22;
+  page.drawLine({ start: { x: 365, y: y + 12 }, end: { x: 547, y: y + 12 }, thickness: 0.8, color: accent });
+  drawPdfText(page, 'Totaal credit', 365, y, bold, 13); drawPdfText(page, `- ${formatEuro(total)}`, 547, y, bold, 13, { align: 'right' });
+  y -= 28;
+  drawPdfText(page, 'Dit bedrag wordt aan u terugbetaald.', 365, y, regular, 9, { color: muted });
+  if (reason) { y -= 40; drawSectionTitle(page, 'Reden', 48, y, bold, accent, muted); y -= 24; y = drawWrappedPdfText(page, reason, 48, y, 310, regular, 9, 12, muted); }
+  drawPdfFooter(page, regular, company);
+
+  const bytes = await pdfDoc.save();
+  const sha256 = await sha256HexBytes(bytes);
+  const fileName = `creditfactuur-${sanitizeFileName(creditNoteNumber || invoice.id)}.pdf`;
   return { fileName, mimeType: 'application/pdf', bytes, base64: bytesToBase64(bytes), sizeBytes: bytes.byteLength, sha256 };
 }
 

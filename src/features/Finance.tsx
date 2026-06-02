@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react';
 import { CreditCard, Download, Eye, FileText, Mail, RotateCcw, Search, ShieldCheck, SlidersHorizontal, Send, XCircle } from 'lucide-react';
-import type { AppData, FinanceLine, FinanceStatus, Invoice, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
+import type { AppData, CreditNote, FinanceLine, FinanceStatus, Invoice, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceRefund, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
 import { Modal } from '../components/Modal';
 import { Button } from '../components/Ui';
 import { dateNL, euro, total, lineGross } from '../lib/format';
 import { exportFinancePDF } from '../lib/pdf';
+
+export type RefundInput = { amountCents: number; reason: string; createCreditNote: boolean; idempotencyKey: string };
 
 export function Quotes({
   data,
@@ -49,8 +51,8 @@ export function Quotes({
   />;
 }
 
-export function Invoices({ data, canWrite, onNew, onEdit, onSend, onDownloadPdf }: { data: AppData; canWrite: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onDownloadPdf?: (i: Invoice) => void }) {
-  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onDownloadInvoicePdf={onDownloadPdf}/>;
+export function Invoices({ data, canWrite, canAdmin = false, onNew, onEdit, onSend, onDownloadPdf, onRefund, onDownloadCreditNote }: { data: AppData; canWrite: boolean; canAdmin?: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onDownloadPdf?: (i: Invoice) => void; onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>; onDownloadCreditNote?: (creditNote: CreditNote) => void }) {
+  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onDownloadInvoicePdf={onDownloadPdf} onRefundInvoice={onRefund} onDownloadCreditNote={onDownloadCreditNote}/>;
 }
 
 function FinanceList<T extends Quote | Invoice>({
@@ -70,6 +72,8 @@ function FinanceList<T extends Quote | Invoice>({
   onSendInvoice,
   onDownloadPdf,
   onDownloadInvoicePdf,
+  onRefundInvoice,
+  onDownloadCreditNote,
 }: {
   kind: 'quote' | 'invoice';
   title: string;
@@ -87,6 +91,8 @@ function FinanceList<T extends Quote | Invoice>({
   onSendInvoice?: (i: Invoice) => void;
   onDownloadPdf?: (q: Quote) => void;
   onDownloadInvoicePdf?: (i: Invoice) => void;
+  onRefundInvoice?: (invoice: Invoice, input: RefundInput) => Promise<void>;
+  onDownloadCreditNote?: (creditNote: CreditNote) => void;
 }) {
   if (kind === 'quote') {
     return <QuoteTable
@@ -111,10 +117,13 @@ function FinanceList<T extends Quote | Invoice>({
     invoices={docs as Invoice[]}
     data={data}
     canWrite={canWrite}
+    canAdmin={canAdmin}
     onNew={onNew}
     onEdit={onEdit as (doc: Invoice) => void}
     onSend={onSendInvoice}
     onDownloadPdf={onDownloadInvoicePdf}
+    onRefund={onRefundInvoice}
+    onDownloadCreditNote={onDownloadCreditNote}
   />;
 }
 
@@ -453,19 +462,25 @@ function InvoiceTable({
   invoices,
   data,
   canWrite,
+  canAdmin = false,
   onNew,
   onEdit,
   onSend,
   onDownloadPdf,
+  onRefund,
+  onDownloadCreditNote,
 }: {
   title: string;
   invoices: Invoice[];
   data: AppData;
   canWrite: boolean;
+  canAdmin?: boolean;
   onNew: () => void;
   onEdit: (invoice: Invoice) => void;
   onSend?: (invoice: Invoice) => void;
   onDownloadPdf?: (invoice: Invoice) => void;
+  onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>;
+  onDownloadCreditNote?: (creditNote: CreditNote) => void;
 }) {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
   const [searchFilters, setSearchFilters] = useState<FinanceSearchFilters>(() => createDefaultFinanceSearchFilters());
@@ -528,10 +543,13 @@ function InvoiceTable({
       invoice={selectedInvoice}
       data={data}
       canWrite={canWrite}
+      canAdmin={canAdmin}
       onClose={() => setSelectedInvoiceId(null)}
       onEdit={(invoice) => { setSelectedInvoiceId(null); onEdit(invoice); }}
       onSend={onSend}
       onDownloadPdf={onDownloadPdf}
+      onRefund={onRefund}
+      onDownloadCreditNote={onDownloadCreditNote}
     />}
   </>;
 }
@@ -613,18 +631,24 @@ function InvoiceDetailModal({
   invoice,
   data,
   canWrite,
+  canAdmin = false,
   onClose,
   onEdit,
   onSend,
   onDownloadPdf,
+  onRefund,
+  onDownloadCreditNote,
 }: {
   invoice: Invoice;
   data: AppData;
   canWrite: boolean;
+  canAdmin?: boolean;
   onClose: () => void;
   onEdit: (invoice: Invoice) => void;
   onSend?: (invoice: Invoice) => void;
   onDownloadPdf?: (invoice: Invoice) => void;
+  onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>;
+  onDownloadCreditNote?: (creditNote: CreditNote) => void;
 }) {
   const client = data.clients.find(c => c.id === invoice.client_id) ?? null;
   const project = data.projects.find(p => p.id === invoice.project_id) ?? null;
@@ -636,6 +660,10 @@ function InvoiceDetailModal({
   const payments = data.invoicePaymentRecords.filter(payment => payment.invoice_id === invoice.id);
   const latestPayment = payments[0] ?? null;
   const versions = data.invoiceVersions.filter(version => version.invoice_id === invoice.id);
+  const refunds = data.invoiceRefunds.filter(refund => refund.invoice_id === invoice.id);
+  const creditNotes = data.creditNotes.filter(creditNote => creditNote.invoice_id === invoice.id);
+  const refundedAmount = invoice.refunded_amount ?? 0;
+  const [showRefund, setShowRefund] = useState(false);
 
   return <Modal title={`Factuur ${invoice.number}`} onClose={onClose} className="quote-detail-modal invoice-detail-modal">
     <div className="quote-detail invoice-detail">
@@ -645,7 +673,7 @@ function InvoiceDetailModal({
           <h2>{client?.name ?? 'Geen klant'}</h2>
           <p>{project?.name ?? 'Geen project gekoppeld'} · {dateNL(invoice.date)} · vervalt {dateNL(invoice.due_date)}</p>
         </div>
-        <div className="quote-detail-total"><small>Totaal incl. btw</small><strong>{euro(amounts.total)}</strong><span className={`fin-status ${invoice.status}`}>{statusLabel(invoice.status)}</span></div>
+        <div className="quote-detail-total"><small>Totaal incl. btw</small><strong>{euro(amounts.total)}</strong><span className={`fin-status ${invoice.status}`}>{statusLabel(invoice.status)}</span>{refundedAmount > 0 && invoice.status !== 'refunded' && <span className="fin-status refunded">Gedeeltelijk terugbetaald · {euro(refundedAmount)}</span>}</div>
       </section>
 
       <section className="quote-detail-metrics" aria-label="Factuur bedragen en statussen">
@@ -655,6 +683,7 @@ function InvoiceDetailModal({
         <QuoteMetric label="Gekoppelde offerte" value={quote?.number ?? 'Geen'} />
         <QuoteMetric label="Mailstatus" value={latestDelivery?.status ? emailStatusLabel(latestDelivery.status) : (invoice.last_email_delivery_status ? emailStatusLabel(invoice.last_email_delivery_status) : 'Nog niet verstuurd')} />
         <QuoteMetric label="Betaalstatus" value={latestPayment ? paymentStatusLabel(latestPayment.status) : statusLabel(invoice.status)} />
+        {refundedAmount > 0 && <QuoteMetric label="Terugbetaald" value={euro(refundedAmount)} />}
       </section>
 
       {amounts.vatBreakdown.length > 1 && <section className="quote-detail-metrics" aria-label="BTW-uitsplitsing per tarief">
@@ -664,7 +693,8 @@ function InvoiceDetailModal({
       <section className="quote-detail-section">
         <div className="quote-detail-section-head"><div><span>Acties</span><strong>Versturen, betaallink en PDF-snapshot</strong></div></div>
         <InvoiceStatusStrip invoice={invoice} delivery={latestDelivery} payment={latestPayment} />
-        <InvoiceActions invoice={invoice} canWrite={canWrite} payment={latestPayment} onEdit={() => onEdit(invoice)} onSend={onSend} onDownloadPdf={onDownloadPdf} />
+        <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} onEdit={() => onEdit(invoice)} onSend={onSend} onDownloadPdf={onDownloadPdf} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} />
+        {showRefund && onRefund && <RefundModal invoice={invoice} onClose={() => setShowRefund(false)} onSubmit={(input) => onRefund(invoice, input)} />}
       </section>
 
       <section className="quote-detail-split">
@@ -676,6 +706,11 @@ function InvoiceDetailModal({
         <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Betalingen</span><strong>Mollie records</strong></div></div><InvoicePayments payments={payments} /></div>
         <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>PDF-snapshots</span><strong>Factuurversies</strong></div></div><InvoiceVersions versions={versions} /></div>
       </section>
+
+      {(refunds.length > 0 || creditNotes.length > 0) && <section className="quote-detail-split">
+        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Terugbetalingen</span><strong>Refund-ledger</strong></div></div><InvoiceRefunds refunds={refunds} /></div>
+        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Creditfacturen</span><strong>Credit notes</strong></div></div><CreditNotes creditNotes={creditNotes} onDownload={onDownloadCreditNote} /></div>
+      </section>}
 
       <section className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Audit-timeline</span><strong>Alle factuur-events</strong></div></div><InvoiceTimeline events={events} emptyText="Nog geen factuur-events." /></section>
     </div>
@@ -802,11 +837,16 @@ function InvoiceStatusStrip({ invoice, delivery, payment }: { invoice: Invoice; 
   </div>;
 }
 
-function InvoiceActions({ invoice, canWrite, payment, onEdit, onSend, onDownloadPdf }: { invoice: Invoice; canWrite: boolean; payment: InvoicePaymentRecord | null; onEdit: () => void; onSend?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void }) {
-  const invoiceClosed = ['paid', 'cancelled', 'void', 'written_off'].includes(invoice.status);
-  const isLocked = Boolean(invoice.locked_at) || ['sent','overdue','paid','cancelled','void','written_off'].includes(invoice.status) || Boolean(payment);
+function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, onEdit, onSend, onDownloadPdf, onRefund }: { invoice: Invoice; canWrite: boolean; canAdmin?: boolean; payment: InvoicePaymentRecord | null; onEdit: () => void; onSend?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void; onRefund?: () => void }) {
+  const invoiceClosed = ['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status);
+  const isLocked = Boolean(invoice.locked_at) || ['sent','overdue','paid','cancelled','void','written_off','refunded'].includes(invoice.status) || Boolean(payment);
   const canSend = canWrite && !invoiceClosed;
   const canDownloadStored = Boolean(onDownloadPdf) && invoiceHasStoredPdf(invoice);
+  // A refund is only possible for a paid invoice that still has a non-refunded
+  // remainder. Gated to owners/admins (passed as onRefund only when allowed).
+  const refundedCents = Math.round((invoice.refunded_amount ?? 0) * 100);
+  const remainingCents = Math.max(total(invoice.lines).totalCents - refundedCents, 0);
+  const canRefund = Boolean(canAdmin && onRefund) && ['paid', 'refunded'].includes(invoice.status) && remainingCents > 0;
   // The Mollie payment link is created automatically while sending (when the
   // organisation has Mollie connected), so there is no separate "create link"
   // button — sending is the single action that produces invoice + betaallink.
@@ -814,6 +854,7 @@ function InvoiceActions({ invoice, canWrite, payment, onEdit, onSend, onDownload
     <Button onClick={onEdit} disabled={isLocked} title={isLocked ? 'Deze factuur is vergrendeld na verzending of betaallink.' : undefined}>Bewerken</Button>
     {canSend && <Button variant="primary" onClick={() => onSend?.(invoice)}><Send size={14}/> Verstuur via Resend</Button>}
     {canDownloadStored && <Button onClick={() => onDownloadPdf?.(invoice)}><Download size={14}/> Download verzonden PDF</Button>}
+    {canRefund && <Button variant="danger" onClick={() => onRefund?.()}><RotateCcw size={14}/> Terugbetaling</Button>}
   </div>;
 }
 
@@ -862,12 +903,105 @@ function quoteStatusLabel(quote: Quote): string {
 }
 
 function statusLabel(status: FinanceStatus | string): string {
-  const labels: Record<string, string> = { draft: 'Concept', pending_internal_approval: 'Wacht op interne goedkeuring', internally_approved: 'Intern goedgekeurd', sent: 'Verzonden', accepted: 'Openstaand', paid: 'Betaald', rejected: 'Afgewezen', expired: 'Verlopen', overdue: 'Te laat', cancelled: 'Geannuleerd', void: 'Ongeldig gemaakt', written_off: 'Afgeboekt' };
+  const labels: Record<string, string> = { draft: 'Concept', pending_internal_approval: 'Wacht op interne goedkeuring', internally_approved: 'Intern goedgekeurd', sent: 'Verzonden', accepted: 'Openstaand', paid: 'Betaald', rejected: 'Afgewezen', expired: 'Verlopen', overdue: 'Te laat', cancelled: 'Geannuleerd', void: 'Ongeldig gemaakt', written_off: 'Afgeboekt', refunded: 'Terugbetaald' };
   return labels[status] || status;
 }
 
 function emailStatusLabel(status: string): string {
   const labels: Record<string, string> = { queued: 'E-mail in wachtrij', sent: 'E-mail verzonden', delivered: 'E-mail afgeleverd', opened: 'E-mail geopend', clicked: 'Link aangeklikt', bounced: 'E-mail bounced', failed: 'E-mail mislukt', complained: 'Spamklacht' };
+  return labels[status] || status;
+}
+
+function RefundModal({ invoice, onClose, onSubmit }: { invoice: Invoice; onClose: () => void; onSubmit: (input: RefundInput) => Promise<void> }) {
+  const totals = total(invoice.lines);
+  const refundedCents = Math.round((invoice.refunded_amount ?? 0) * 100);
+  const remainingCents = Math.max(totals.totalCents - refundedCents, 0);
+  const idempotencyKey = useMemo(() => crypto.randomUUID(), []);
+  const [amountEuro, setAmountEuro] = useState((remainingCents / 100).toFixed(2));
+  const [reason, setReason] = useState('');
+  const [createCreditNote, setCreateCreditNote] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const amountCents = Math.round(Number(String(amountEuro).replace(',', '.')) * 100);
+  const amountValid = Number.isFinite(amountCents) && amountCents > 0 && amountCents <= remainingCents;
+
+  async function submit() {
+    if (!amountValid || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit({ amountCents, reason: reason.trim(), createCreditNote, idempotencyKey });
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Terugbetaling registreren mislukt');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <Modal
+    title={`Terugbetaling — factuur ${invoice.number}`}
+    onClose={onClose}
+    className="refund-modal"
+    footer={<>
+      <Button onClick={onClose} disabled={busy}>Annuleren</Button>
+      <Button variant="primary" onClick={() => void submit()} disabled={!amountValid || busy}>{busy ? 'Bezig…' : 'Terugbetaling registreren'}</Button>
+    </>}
+  >
+    <div className="refund-form">
+      <div className="refund-summary">
+        <div><span>Factuurtotaal</span><strong>{euro(totals.total)}</strong></div>
+        <div><span>Al terugbetaald</span><strong>{euro(refundedCents / 100)}</strong></div>
+        <div><span>Resterend</span><strong>{euro(remainingCents / 100)}</strong></div>
+      </div>
+
+      <label className="refund-field">
+        <span>Bedrag (EUR)</span>
+        <input type="number" inputMode="decimal" min="0" step="0.01" max={(remainingCents / 100).toFixed(2)} value={amountEuro} disabled={busy} onChange={event => setAmountEuro(event.target.value)} />
+      </label>
+      <button type="button" className="refund-full-btn" disabled={busy} onClick={() => setAmountEuro((remainingCents / 100).toFixed(2))}>Volledig restbedrag ({euro(remainingCents / 100)})</button>
+
+      <label className="refund-field">
+        <span>Reden (optioneel)</span>
+        <textarea rows={3} value={reason} disabled={busy} placeholder="Bijv. annulering, prijscorrectie, dubbele betaling…" onChange={event => setReason(event.target.value)} />
+      </label>
+
+      <label className="refund-checkbox">
+        <input type="checkbox" checked={createCreditNote} disabled={busy} onChange={event => setCreateCreditNote(event.target.checked)} />
+        <span>Creditfactuur aanmaken (aanbevolen voor de boekhouding)</span>
+      </label>
+
+      <p className="refund-note">Dit registreert een <strong>handmatige</strong> terugbetaling: maak het bedrag zelf over (bijv. via je bank). De factuurstatus en aggregaten worden bijgewerkt; bij een volledige terugbetaling gaat de factuur naar “Terugbetaald”.</p>
+
+      {amountCents > remainingCents && <p className="refund-error">Bedrag mag niet groter zijn dan het resterende bedrag ({euro(remainingCents / 100)}).</p>}
+      {error && <p className="refund-error">{error}</p>}
+    </div>
+  </Modal>;
+}
+
+function InvoiceRefunds({ refunds }: { refunds: InvoiceRefund[] }) {
+  if (refunds.length === 0) return <div className="quote-timeline-empty">Nog geen terugbetalingen.</div>;
+  return <div className="quote-versions">{refunds.map(refund => <div className="quote-version-pill" key={refund.id}>
+    <strong>{refundStatusLabel(refund.status)}</strong>
+    <span>{euro(refund.amount_cents / 100)} {refund.currency}</span>
+    <small>{dateNL(refund.created_at)} · {refund.kind === 'manual' ? 'Handmatig' : 'Mollie'}</small>
+    {refund.reason && <small>{refund.reason}</small>}
+  </div>)}</div>;
+}
+
+function CreditNotes({ creditNotes, onDownload }: { creditNotes: CreditNote[]; onDownload?: (creditNote: CreditNote) => void }) {
+  if (creditNotes.length === 0) return <div className="quote-timeline-empty">Nog geen creditfacturen.</div>;
+  return <div className="quote-versions">{creditNotes.map(creditNote => <div className="quote-version-pill" key={creditNote.id}>
+    <strong>{creditNote.number}</strong>
+    <span>- {euro(Number(creditNote.total_amount || 0))}</span>
+    <small>{dateNL(creditNote.date)}</small>
+    {onDownload && creditNote.pdf_file_name && <button type="button" className="att-btn" title="Download creditfactuur-PDF" onClick={() => onDownload(creditNote)}><Download size={14}/> PDF</button>}
+  </div>)}</div>;
+}
+
+function refundStatusLabel(status: string): string {
+  const labels: Record<string, string> = { queued: 'In wachtrij', pending: 'In behandeling', processing: 'Wordt verwerkt', refunded: 'Terugbetaald', failed: 'Mislukt', canceled: 'Geannuleerd' };
   return labels[status] || status;
 }
 
