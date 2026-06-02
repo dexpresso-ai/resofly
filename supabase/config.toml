@@ -4,3 +4,10 @@
 
 [functions.calendar-integrations]
 verify_jwt = false
+
+# invoice-workflow must be callable by Mollie's server-to-server payment webhook,
+# which carries no Supabase JWT. The webhook path is verified instead by the
+# Mollie webhook secret (?secret=...), and every authenticated app action still
+# enforces its own auth via requireUser() + requireOrganizationAccess() in code.
+[functions.invoice-workflow]
+verify_jwt = false

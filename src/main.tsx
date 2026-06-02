@@ -30,7 +30,6 @@ import {
   sendQuoteEmailViaResend,
   downloadQuotePdfSnapshot,
   downloadInvoicePdfSnapshot,
-  createInvoicePaymentCheckout,
   loadInvoiceMollieStatus,
   updateOrganizationMemberRole,
   updateRow,
@@ -514,16 +513,16 @@ function App() {
     if (!recipientEmail) return;
     const recipientName = prompt('Naam/contactpersoon voor de e-mail', client?.contact_name || client?.name || '') || undefined;
 
-    // Offer a Mollie payment link only when this organization has connected its
-    // own Mollie account; otherwise the invoice always goes out as PDF-only.
+    // A Mollie payment link is included automatically whenever this organization
+    // has its own Mollie account connected and the invoice is still payable. No
+    // per-send prompt: connecting Mollie is the opt-in, disconnecting is the
+    // opt-out. Organizations without a Mollie key simply send the PDF only.
     let includePaymentLink = false;
     const invoiceIsPayable = !['paid', 'cancelled', 'void', 'written_off'].includes(invoice.status);
     if (invoiceIsPayable) {
       try {
         const mollie = await loadInvoiceMollieStatus(activeOrg.id);
-        if (mollie.status === 'connected') {
-          includePaymentLink = confirm('Mollie is gekoppeld. Wil je een online betaallink meesturen met deze factuur?\n\nOK = factuur mét betaallink · Annuleren = alleen de PDF');
-        }
+        includePaymentLink = mollie.status === 'connected';
       } catch {
         // Status niet kunnen ophalen mag het versturen niet blokkeren: dan PDF-only.
       }
@@ -531,32 +530,15 @@ function App() {
 
     setLoading(true); setError(null);
     try {
-      await sendInvoiceEmailViaResend(activeOrg.id, invoice.id, { recipientEmail, recipientName, includePaymentLink });
+      const result = await sendInvoiceEmailViaResend(activeOrg.id, invoice.id, { recipientEmail, recipientName, includePaymentLink });
       await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Factuur verzenden via Resend mislukt');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function createInvoicePayment(invoice: Invoice) {
-    if (!ensureCanWrite()) return;
-    if (['paid','cancelled','void','written_off'].includes(invoice.status)) {
-      setError('Voor deze factuur kan geen betaallink worden aangemaakt.');
-      return;
-    }
-    setLoading(true); setError(null);
-    try {
-      const result = await createInvoicePaymentCheckout(activeOrg.id, invoice.id, {
-        idempotencyKey: `invoice-${invoice.id}-active-payment`,
-      });
-      await refresh();
-      if (result.checkoutUrl && confirm('Betaallink is aangemaakt. Wil je de link nu openen?')) {
-        window.open(result.checkoutUrl, '_blank', 'noopener,noreferrer');
+      // The invoice itself went out fine; only the optional Mollie link failed.
+      // Surface it as a non-blocking warning so the user can fix Mollie config.
+      if (includePaymentLink && result.paymentLinkError) {
+        setError(`Factuur is verstuurd, maar de Mollie-betaallink kon niet worden aangemaakt (alleen de PDF is meegestuurd): ${result.paymentLinkError}`);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Mollie-betaallink aanmaken mislukt');
+      setError(e instanceof Error ? e.message : 'Factuur verzenden via Resend mislukt');
     } finally {
       setLoading(false);
     }
@@ -657,7 +639,7 @@ function App() {
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>setEdit({kind:'ticket', item})} onConvert={convert}/>;
     if (page === 'notes') return <Notes data={data} onNew={() => ensureCanWrite() && setEdit({kind:'note'})} onEdit={(item)=>setEdit({kind:'note', item})}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
-    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onCreatePayment={createInvoicePayment} onDownloadPdf={downloadInvoicePdf}/>;
+    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onDownloadPdf={downloadInvoicePdf}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} onPlanTask={updateTaskPlanning} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'calendar-settings') return <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;

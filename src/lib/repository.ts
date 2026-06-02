@@ -752,7 +752,7 @@ export async function convertAcceptedQuoteToInvoice(organizationId: UUID, quoteI
   return row as Invoice;
 }
 
-export async function sendInvoiceEmailViaResend(organizationId: UUID, invoiceId: UUID, input: { recipientEmail?: string; recipientName?: string; subject?: string; includePaymentLink?: boolean } = {}): Promise<{ publicUrl?: string; providerEmailId?: string }> {
+export async function sendInvoiceEmailViaResend(organizationId: UUID, invoiceId: UUID, input: { recipientEmail?: string; recipientName?: string; subject?: string; includePaymentLink?: boolean } = {}): Promise<{ publicUrl?: string; providerEmailId?: string; paymentLinkIncluded?: boolean; paymentLinkError?: string | null }> {
   const { data, error } = await supabase.functions.invoke('invoice-workflow', {
     body: {
       action: 'sendInvoiceEmail',
@@ -763,7 +763,7 @@ export async function sendInvoiceEmailViaResend(organizationId: UUID, invoiceId:
   });
   if (error) throw error;
   if (!data?.ok) throw new Error(data?.error || 'Factuur verzenden mislukt');
-  return data as { publicUrl?: string; providerEmailId?: string };
+  return data as { publicUrl?: string; providerEmailId?: string; paymentLinkIncluded?: boolean; paymentLinkError?: string | null };
 }
 
 export async function createInvoicePaymentCheckout(organizationId: UUID, invoiceId: UUID, input: { redirectUrl?: string; idempotencyKey?: string } = {}): Promise<{ checkoutUrl?: string; providerPaymentId?: string; reused?: boolean; mock?: boolean }> {

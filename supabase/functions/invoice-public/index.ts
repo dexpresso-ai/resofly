@@ -3,7 +3,10 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
-const MOLLIE_ALLOW_MOCK = (Deno.env.get('MOLLIE_ALLOW_MOCK') || 'false').toLowerCase() === 'true';
+// Independent of the platform billing mock flag (MOLLIE_ALLOW_MOCK) — see the
+// invoice-workflow function for the rationale. Real customer invoice payments
+// must never be auto-marked paid via the mock path on a live/staging org.
+const INVOICE_ALLOW_MOCK = (Deno.env.get('INVOICE_MOLLIE_ALLOW_MOCK') || 'false').toLowerCase() === 'true';
 // Falls back to the shared quote storage config so a single Worker + secret
 // powers the invoice and quote PDF snapshot flows (parity with invoice-workflow).
 const INVOICE_PDF_STORAGE_WORKER_URL = (
@@ -269,7 +272,7 @@ async function loadInvoice(organizationId: string, invoiceId: string) {
 async function maybeMarkMockPaymentPaid(invoiceRow: any, providerPaymentId: string) {
   if (!providerPaymentId) return;
   if (!providerPaymentId.startsWith('mock_invoice_payment_')) return;
-  if (!MOLLIE_ALLOW_MOCK) throw new PublicInvoiceError('Mock-betalingen zijn uitgeschakeld.', 403);
+  if (!INVOICE_ALLOW_MOCK) throw new PublicInvoiceError('Mock-betalingen zijn uitgeschakeld.', 403);
 
   const { data: payment, error: paymentLookupError } = await supabaseAdmin
     .from('invoice_payment_records')

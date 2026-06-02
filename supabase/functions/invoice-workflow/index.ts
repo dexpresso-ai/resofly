@@ -51,7 +51,13 @@ const INVOICE_ALLOW_LOCAL_DEV = (Deno.env.get('INVOICE_ALLOW_LOCAL_DEV') || Deno
 // not a shared platform key — so the client's payment lands in the right account.
 const MOLLIE_WEBHOOK_URL = Deno.env.get('INVOICE_MOLLIE_WEBHOOK_URL') || Deno.env.get('MOLLIE_WEBHOOK_URL') || '';
 const MOLLIE_WEBHOOK_SECRET = Deno.env.get('INVOICE_MOLLIE_WEBHOOK_SECRET') || Deno.env.get('MOLLIE_WEBHOOK_SECRET') || '';
-const MOLLIE_ALLOW_MOCK = (Deno.env.get('MOLLIE_ALLOW_MOCK') || 'false').toLowerCase() === 'true';
+// Mock mode for INVOICE payments is deliberately independent of the platform
+// billing flag (MOLLIE_ALLOW_MOCK). On staging the billing function runs in mock
+// mode because it lacks Mollie Connect OAuth credentials, but customer invoice
+// payments must always hit the REAL Mollie API with the organisation's own key —
+// otherwise links get faked and auto-marked paid. Only set INVOICE_MOLLIE_ALLOW_MOCK
+// =true for isolated local testing, never on an environment with real org keys.
+const INVOICE_ALLOW_MOCK = (Deno.env.get('INVOICE_MOLLIE_ALLOW_MOCK') || 'false').toLowerCase() === 'true';
 const INVOICE_DEBUG_ERRORS = (Deno.env.get('INVOICE_DEBUG_ERRORS') || 'false').toLowerCase() === 'true';
 const CHECKOUT_TTL_MINUTES = parsePositiveInt(Deno.env.get('INVOICE_CHECKOUT_TTL_MINUTES'), 30);
 
@@ -156,9 +162,20 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   // that would route the client's payment into the platform account.
   const includePaymentLink = body.includePaymentLink === true;
   let paymentUrl: string | null = null;
+  let paymentLinkError: string | null = null;
   if (includePaymentLink) {
-    const paymentCheckout = await createInvoicePaymentCheckout(userId, organizationId, invoiceId, body);
-    paymentUrl = paymentCheckout.checkoutUrl || null;
+    try {
+      const paymentCheckout = await createInvoicePaymentCheckout(userId, organizationId, invoiceId, body);
+      paymentUrl = paymentCheckout.checkoutUrl || null;
+    } catch (error) {
+      // A payment-link failure (missing Mollie/webhook config, a Mollie API
+      // error, a revoked key, …) must NEVER block sending the invoice itself.
+      // We fall back to a PDF-only email and report the reason back so the user
+      // can fix the configuration without losing the send.
+      paymentLinkError = error instanceof Error ? error.message : 'Mollie-betaallink kon niet worden aangemaakt.';
+      console.warn('Invoice payment link creation failed, sending PDF-only:', paymentLinkError);
+      paymentUrl = null;
+    }
   }
 
   const renderedEmail = renderEmailTemplate('invoice.sent', { invoice, client, project, quote, company, publicUrl, paymentUrl, recipientName, expiresAt });
@@ -232,7 +249,7 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   }
 
   const finalized = await completeInvoiceEmailSend(prepared.deliveryId, organizationId, userId, providerEmailId);
-  return { delivery: finalized.delivery, version: finalized.version, publicUrl, providerEmailId, attachment: { fileName: pdfAttachment.fileName, sizeBytes: pdfAttachment.sizeBytes, sha256: pdfAttachment.sha256, storageProvider: storedPdf.provider, storageKey: storedPdf.key } };
+  return { delivery: finalized.delivery, version: finalized.version, publicUrl, providerEmailId, paymentLinkIncluded: Boolean(paymentUrl), paymentLinkError, attachment: { fileName: pdfAttachment.fileName, sizeBytes: pdfAttachment.sizeBytes, sha256: pdfAttachment.sha256, storageProvider: storedPdf.provider, storageKey: storedPdf.key } };
 }
 
 async function createInvoicePaymentCheckout(userId: string, organizationId: string, invoiceId: string, body: Record<string, unknown>) {
@@ -277,7 +294,7 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
   let metadata: Record<string, unknown> = {};
 
   try {
-    if (MOLLIE_ALLOW_MOCK) {
+    if (INVOICE_ALLOW_MOCK) {
       providerPaymentId = `mock_invoice_payment_${crypto.randomUUID()}`;
       checkoutUrl = `${publicUrl}?mock_payment=${encodeURIComponent(providerPaymentId)}`;
       metadata = { mock: true, publicUrl };
@@ -332,7 +349,7 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
 }
 
 async function handleMollieWebhook(req: Request, url: URL, body: Record<string, string>) {
-  if (!MOLLIE_ALLOW_MOCK) {
+  if (!INVOICE_ALLOW_MOCK) {
     if (MOLLIE_WEBHOOK_SECRET && !timingSafeEqual(url.searchParams.get('secret') || '', MOLLIE_WEBHOOK_SECRET)) return json(req, { ok: false, error: 'Invalid webhook secret' }, 403);
     if (!MOLLIE_WEBHOOK_SECRET) return json(req, { ok: false, error: 'Webhook secret ontbreekt.' }, 500);
   }
@@ -343,7 +360,7 @@ async function handleMollieWebhook(req: Request, url: URL, body: Record<string, 
   let paidAt: string | null = null;
   let metadata: Record<string, unknown> = {};
 
-  if (MOLLIE_ALLOW_MOCK && paymentId.startsWith('mock_invoice_payment_')) {
+  if (INVOICE_ALLOW_MOCK && paymentId.startsWith('mock_invoice_payment_')) {
     status = 'paid';
     paidAt = new Date().toISOString();
     metadata = { mock: true, webhook: body };
@@ -366,7 +383,7 @@ async function handleMollieWebhook(req: Request, url: URL, body: Record<string, 
 }
 
 async function markMockInvoicePaymentPaid(providerPaymentId: string) {
-  if (!MOLLIE_ALLOW_MOCK) throw new WorkflowHttpError('Mock payments zijn uitgeschakeld.', 403);
+  if (!INVOICE_ALLOW_MOCK) throw new WorkflowHttpError('Mock payments zijn uitgeschakeld.', 403);
   const { data, error } = await supabaseAdmin.rpc('update_invoice_payment_status', { p_provider_payment_id: providerPaymentId, p_status: 'paid', p_paid_at: new Date().toISOString(), p_metadata: { mock: true, manual: true } });
   if (error) throwRpcError('update_invoice_payment_status', error);
   return data;
