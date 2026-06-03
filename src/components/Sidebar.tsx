@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Archive, BarChart3, Calendar, ChevronDown, ChevronRight, FileText, FolderOpen, LayoutDashboard, Receipt, Settings, StickyNote, Ticket, Users } from 'lucide-react';
 import type { Organization, OrganizationRole } from '../types';
+import { Select } from './Ui';
 
 type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'notes'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
 
@@ -80,9 +81,9 @@ export function Sidebar({
       <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div>
       <div className="org-switcher">
         <label>Organisatie</label>
-        <select value={activeOrganizationId ?? ''} onChange={event => onOrganization(event.target.value)}>
+        <Select value={activeOrganizationId ?? ''} onChange={event => onOrganization(event.target.value)}>
           {organizations.map(org => <option key={org.id} value={org.id}>{org.name}</option>)}
-        </select>
+        </Select>
         <div className="org-meta"><span>{activeRole ?? 'geen rol'}</span><button onClick={onNewOrganization}>+ organisatie</button></div>
       </div>
     </div>

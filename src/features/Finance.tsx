@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { CreditCard, Download, Eye, FileText, Mail, RotateCcw, Search, ShieldCheck, SlidersHorizontal, Send, XCircle } from 'lucide-react';
 import type { AppData, CreditNote, FinanceLine, FinanceStatus, Invoice, InvoiceChargeback, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceRefund, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
 import { Modal } from '../components/Modal';
-import { Button } from '../components/Ui';
+import { Button, Select } from '../components/Ui';
 import { dateNL, euro, total, lineGross } from '../lib/format';
 import { exportFinancePDF } from '../lib/pdf';
 
@@ -215,9 +215,9 @@ function FinanceSearchPanel<T extends Quote | Invoice>({
     </div>
 
     <div className="finance-search-grid">
-      <label className="field finance-search-field"><span>Klant</span><select className="form-select" value={filters.clientId} onChange={event => updateFilters({ clientId: event.target.value })}><option value="">Alle klanten</option>{clientOptions.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
-      <label className="field finance-search-field"><span>Project</span><select className="form-select" value={filters.projectId} onChange={event => updateFilters({ projectId: event.target.value })}><option value="">Alle projecten</option>{projectOptions.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-      <label className="field finance-search-field"><span>Status</span><select className="form-select" value={filters.status} onChange={event => updateFilters({ status: event.target.value })}><option value="">Alle statussen</option>{statusOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+      <label className="field finance-search-field"><span>Klant</span><Select className="form-select" value={filters.clientId} onChange={event => updateFilters({ clientId: event.target.value })}><option value="">Alle klanten</option>{clientOptions.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</Select></label>
+      <label className="field finance-search-field"><span>Project</span><Select className="form-select" value={filters.projectId} onChange={event => updateFilters({ projectId: event.target.value })}><option value="">Alle projecten</option>{projectOptions.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</Select></label>
+      <label className="field finance-search-field"><span>Status</span><Select className="form-select" value={filters.status} onChange={event => updateFilters({ status: event.target.value })}><option value="">Alle statussen</option>{statusOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</Select></label>
       <label className="field finance-search-field"><span>{isQuote ? 'Offertedatum vanaf' : 'Factuurdatum vanaf'}</span><input className="form-input" type="date" value={filters.dateFrom} onChange={event => updateFilters({ dateFrom: event.target.value })}/></label>
       <label className="field finance-search-field"><span>{isQuote ? 'Offertedatum t/m' : 'Factuurdatum t/m'}</span><input className="form-input" type="date" value={filters.dateTo} onChange={event => updateFilters({ dateTo: event.target.value })}/></label>
       <label className="field finance-search-field"><span>Bedrag vanaf</span><input className="form-input" inputMode="decimal" value={filters.amountMin} onChange={event => updateFilters({ amountMin: event.target.value })} placeholder="€ min."/></label>

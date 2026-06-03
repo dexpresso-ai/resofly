@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { AppData, Invoice, Note, Project, Quote, Task, TaskStatus } from '../types';
-import { Button } from '../components/Ui';
+import { Button, Select } from '../components/Ui';
 import { dateNL, euro, priorityLabel } from '../lib/format';
 import { RelatedNotes } from './Notes';
 import { ProjectQuotesPanel } from './Finance';
@@ -298,8 +298,9 @@ export function ProjectsListPage({
           aria-label="Projecten zoeken"
         />
       </div>
-      <select
+      <Select
         className="projects-filter-select"
+        inline
         value={clientFilter}
         onChange={event => setClientFilter(event.target.value)}
         aria-label="Filter op klant"
@@ -307,15 +308,16 @@ export function ProjectsListPage({
         <option value="all">Alle klanten</option>
         <option value="unassigned">Zonder klant</option>
         {filterClients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
-      </select>
-      <select
+      </Select>
+      <Select
         className="projects-filter-select"
+        inline
         value={sortKey}
         onChange={event => changeSortKey(event.target.value as ProjectSortKey)}
         aria-label="Sorteren"
       >
         {projectSortOptions.map(option => <option key={option.key} value={option.key}>Sorteer: {option.label}</option>)}
-      </select>
+      </Select>
       {isFiltering && <button type="button" className="projects-filter-reset" onClick={resetFilters}>Wis filters</button>}
     </div>
 
