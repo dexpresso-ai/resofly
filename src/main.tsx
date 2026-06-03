@@ -124,6 +124,10 @@ function App() {
   const [clientId, setClientId] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditMode>(null);
   const [loading, setLoading] = useState(false);
+  // Wanneer dit een tekst bevat, draait er een schermvullende laad-overlay. Wordt
+  // gezet bij trage Resend-verzendacties (offerte/factuur/creditfactuur) zodat de
+  // gebruiker ziet dat de app bezig is en niet per ongeluk dubbel verstuurt.
+  const [sending, setSending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const publicQuoteToken = getPublicQuoteTokenFromLocation();
   const publicInvoiceToken = getPublicInvoiceTokenFromLocation();
@@ -456,14 +460,14 @@ function App() {
     const recipientEmail = prompt('Naar welk e-mailadres wil je de offerte versturen?', client?.email || '');
     if (!recipientEmail) return;
     const recipientName = prompt('Naam/contactpersoon voor de e-mail', client?.contact_name || client?.name || '') || undefined;
-    setLoading(true); setError(null);
+    setLoading(true); setSending('Offerte wordt verstuurd via Resend…'); setError(null);
     try {
       await sendQuoteEmailViaResend(activeOrg.id, quote.id, { recipientEmail, recipientName });
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Offerte verzenden via Resend mislukt');
     } finally {
-      setLoading(false);
+      setLoading(false); setSending(null);
     }
   }
 
@@ -517,6 +521,10 @@ function App() {
     if (!recipientEmail) return;
     const recipientName = prompt('Naam/contactpersoon voor de e-mail', client?.contact_name || client?.name || '') || undefined;
 
+    // Toon meteen de laad-overlay: de Mollie-statuscheck hieronder plus het
+    // versturen zelf kunnen samen enkele seconden duren.
+    setSending('Factuur wordt verstuurd via Resend…');
+
     // A Mollie payment link is included automatically whenever this organization
     // has its own Mollie account connected and the invoice is still payable. No
     // per-send prompt: connecting Mollie is the opt-in, disconnecting is the
@@ -544,7 +552,7 @@ function App() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Factuur verzenden via Resend mislukt');
     } finally {
-      setLoading(false);
+      setLoading(false); setSending(null);
     }
   }
 
@@ -582,14 +590,14 @@ function App() {
 
   async function emailCreditNote(creditNote: CreditNote) {
     if (!ensureCanWrite()) return;
-    setLoading(true); setError(null);
+    setLoading(true); setSending('Creditfactuur wordt gemaild via Resend…'); setError(null);
     try {
       await sendCreditNoteEmail(activeOrg.id, creditNote.id);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Creditfactuur mailen mislukt');
     } finally {
-      setLoading(false);
+      setLoading(false); setSending(null);
     }
   }
 
@@ -677,6 +685,13 @@ function App() {
       <section className="content">{error && <div className="error">{error}</div>}{renderPage()}</section>
     </main>{edit && <EditModal edit={edit} data={data} organizationId={activeOrg.id} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} />}
     <GerrieChat />
+    {sending && <div className="send-overlay" role="status" aria-live="polite">
+      <div className="send-overlay-card">
+        <span className="send-spinner" aria-hidden="true" />
+        <span>{sending}</span>
+        <small>Sluit dit venster niet — dit kan enkele seconden duren.</small>
+      </div>
+    </div>}
   </div>;
 
   function renderPage() {

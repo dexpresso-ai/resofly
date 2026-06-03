@@ -1255,3 +1255,15 @@ body::before{
 @media(max-width:480px){
   .gerrie-root{right:12px;bottom:12px}
 }
+
+/* ── Verzend-laadoverlay ──────────────────────────────────────────────
+ * Schermvullende overlay met draaiend icoon tijdens trage Resend-acties
+ * (offerte/factuur/creditfactuur versturen). Maakt zichtbaar dat de app
+ * bezig is en blokkeert interactie zodat er niet dubbel verstuurd wordt. */
+.send-overlay{position:fixed;inset:0;z-index:4000;display:flex;align-items:center;justify-content:center;background:rgba(10,10,10,.66);backdrop-filter:blur(3px);animation:send-overlay-fade .14s ease}
+@keyframes send-overlay-fade{from{opacity:0}to{opacity:1}}
+.send-overlay-card{display:flex;flex-direction:column;align-items:center;gap:15px;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);padding:28px 36px;box-shadow:0 24px 64px rgba(0,0,0,.55);color:var(--text);text-align:center;max-width:340px}
+.send-overlay-card span{font-size:14px;font-weight:700}
+.send-overlay-card small{font-size:11px;color:var(--muted2);line-height:1.45}
+.send-spinner{display:block;width:38px;height:38px;border-radius:50%;border:3px solid var(--bg4);border-top-color:var(--accent);animation:send-spin .7s linear infinite}
+@keyframes send-spin{to{transform:rotate(360deg)}}
