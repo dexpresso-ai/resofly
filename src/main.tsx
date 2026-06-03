@@ -52,6 +52,7 @@ import { Archive, Settings, Stats } from './features/SimplePages';
 import { CalendarPage } from './features/CalendarPage';
 import { WeekPlanner } from './features/WeekPlanner';
 import { AttachmentList } from './components/AttachmentList';
+import { GerrieChat } from './components/GerrieChat';
 import { exportFinancePDF } from './lib/pdf';
 import type {
   AppData, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettingsInput, CreditNote, EntityType, FinanceLine, Invoice, Note, OrganizationContext, OrganizationRole, Project, Quote, Task, TaskStatus, Ticket, Subtask, Comment as TaskComment,
@@ -675,6 +676,7 @@ function App() {
     <main className="main"><header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button><Button onClick={() => supabaseAuth.signOut()}>Uitloggen</Button></div></header>
       <section className="content">{error && <div className="error">{error}</div>}{renderPage()}</section>
     </main>{edit && <EditModal edit={edit} data={data} organizationId={activeOrg.id} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} />}
+    <GerrieChat />
   </div>;
 
   function renderPage() {

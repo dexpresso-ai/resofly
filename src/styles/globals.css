@@ -1153,3 +1153,80 @@ body::before{
   .calendar-agenda-page .calendar-main-card-week,
   .calendar-agenda-page .calendar-main-card-day{min-height:calc(100vh - 96px);height:calc(100vh - 96px)}
 }
+
+/* ── Gerrie — drijvende AI-chatassistent (rechtsonder) ─────────────── */
+/* Het goud is afgeleid van --accent zodat Gerrie automatisch meekleurt met
+   het actieve thema (incl. de design-refresh). */
+.gerrie-root{position:fixed;right:22px;bottom:22px;z-index:60;display:flex;flex-direction:column;align-items:flex-end;gap:14px;font-family:inherit;--g-gold-hi:color-mix(in srgb, var(--accent) 80%, #fff 20%);--g-gold-lo:color-mix(in srgb, var(--accent) 90%, #000 10%);--g-ink:#1a1a1a}
+
+/* Floating action button */
+.gerrie-fab{position:relative;width:58px;height:58px;border-radius:50%;border:none;cursor:pointer;background:var(--accent);background:linear-gradient(145deg,var(--g-gold-hi),var(--g-gold-lo));color:var(--g-ink);display:flex;align-items:center;justify-content:center;box-shadow:0 12px 32px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.12);transition:transform .18s,box-shadow .18s}
+.gerrie-fab:hover{transform:translateY(-3px) scale(1.05);box-shadow:0 18px 42px rgba(0,0,0,.55)}
+.gerrie-fab:active{transform:translateY(-1px) scale(1.0)}
+.gerrie-fab svg{width:30px;height:30px}
+.gerrie-fab.is-open svg{width:26px;height:26px}
+.gerrie-fab-dot{position:absolute;top:5px;right:6px;width:11px;height:11px;border-radius:50%;background:var(--accent-g);border:2px solid #1a1a1a;box-shadow:0 0 0 2px rgba(52,211,153,.35)}
+
+/* Panel */
+.gerrie-panel{width:380px;max-width:calc(100vw - 32px);height:560px;max-height:calc(100vh - 140px);background:var(--bg2);border:1px solid var(--border2);border-radius:18px;box-shadow:0 26px 64px rgba(0,0,0,.6);display:flex;flex-direction:column;overflow:hidden;animation:gerrie-in .22s cubic-bezier(.2,.8,.2,1)}
+@keyframes gerrie-in{from{opacity:0;transform:translateY(16px) scale(.97)}to{opacity:1;transform:none}}
+
+/* Header */
+.gerrie-head{display:flex;align-items:center;gap:11px;padding:13px 14px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,rgba(255,217,102,.09),transparent)}
+.gerrie-avatar{width:38px;height:38px;border-radius:12px;background:var(--accent);background:linear-gradient(145deg,var(--g-gold-hi),var(--g-gold-lo));color:var(--g-ink);display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 4px 14px rgba(0,0,0,.35)}
+.gerrie-avatar svg{width:23px;height:23px}
+.gerrie-id{flex:1;min-width:0}
+.gerrie-name{font-weight:800;font-size:15px;display:flex;align-items:center;gap:7px;line-height:1.2}
+.gerrie-badge{font-size:9px;font-weight:900;letter-spacing:.08em;color:#1a1a1a;background:var(--accent);border-radius:5px;padding:2px 5px}
+.gerrie-status{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-top:2px}
+.gerrie-status .dot{width:7px;height:7px;border-radius:50%;background:var(--accent-g);box-shadow:0 0 0 3px rgba(52,211,153,.18)}
+.gerrie-head-close{background:transparent;border:none;color:var(--muted);cursor:pointer;width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .14s}
+.gerrie-head-close:hover{background:var(--bg3);color:var(--text)}
+.gerrie-head-close svg{width:18px;height:18px}
+
+/* Messages */
+.gerrie-msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;background:var(--bg)}
+.gerrie-msg{display:flex;gap:9px;align-items:flex-end;max-width:100%}
+.gerrie-msg.user{flex-direction:row-reverse}
+.gerrie-msg-avatar{width:28px;height:28px;border-radius:9px;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.gerrie-msg-avatar svg{width:16px;height:16px}
+.gerrie-msg.assistant .gerrie-msg-avatar{background:var(--accent);background:linear-gradient(145deg,var(--g-gold-hi),var(--g-gold-lo));color:var(--g-ink)}
+.gerrie-msg.user .gerrie-msg-avatar{background:var(--bg4);color:var(--muted2)}
+.gerrie-bubble{padding:10px 13px;border-radius:14px;font-size:13px;line-height:1.55;max-width:80%;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere}
+.gerrie-msg.assistant .gerrie-bubble{background:var(--bg3);border:1px solid var(--border);border-bottom-left-radius:4px;color:var(--text)}
+.gerrie-msg.user .gerrie-bubble{background:var(--accent);color:#1a1a1a;border-bottom-right-radius:4px;font-weight:500}
+
+/* Typing indicator */
+.gerrie-typing{display:flex;gap:4px;align-items:center;padding:13px 14px;background:var(--bg3);border:1px solid var(--border);border-radius:14px;border-bottom-left-radius:4px;width:fit-content}
+.gerrie-typing span{width:7px;height:7px;border-radius:50%;background:var(--muted);animation:gerrie-bounce 1.2s infinite ease-in-out}
+.gerrie-typing span:nth-child(2){animation-delay:.18s}
+.gerrie-typing span:nth-child(3){animation-delay:.36s}
+@keyframes gerrie-bounce{0%,60%,100%{transform:translateY(0);opacity:.45}30%{transform:translateY(-5px);opacity:1}}
+
+/* Suggestion chips */
+.gerrie-suggestions{display:flex;flex-wrap:wrap;gap:7px;padding:0 16px 14px;background:var(--bg)}
+.gerrie-chip{font-size:12px;font-weight:600;padding:7px 11px;border-radius:999px;background:var(--bg3);border:1px solid var(--border2);color:var(--muted2);cursor:pointer;font-family:inherit;transition:all .14s}
+.gerrie-chip:hover{background:var(--bg4);color:var(--text);border-color:var(--accent)}
+
+/* Composer */
+.gerrie-composer{padding:12px;border-top:1px solid var(--border);background:var(--bg2);display:flex;gap:8px;align-items:flex-end}
+.gerrie-input{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:10px 12px;color:var(--text);font-family:inherit;font-size:13px;line-height:1.5;resize:none;outline:none;max-height:120px;overflow-y:auto}
+.gerrie-input:focus{border-color:var(--accent)}
+.gerrie-input::placeholder{color:var(--muted)}
+.gerrie-send{width:38px;height:38px;border-radius:11px;border:none;background:var(--accent);color:#1a1a1a;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:transform .15s,opacity .15s}
+.gerrie-send svg{width:18px;height:18px}
+.gerrie-send:hover:not(:disabled){transform:scale(1.08)}
+.gerrie-send:disabled{opacity:.4;cursor:not-allowed}
+.gerrie-foot-note{font-size:10px;color:var(--muted);text-align:center;padding:0 12px 10px;background:var(--bg2);line-height:1.4}
+
+/* Lift the calendar create-FAB above Gerrie so they never overlap. */
+.tb-fab{bottom:94px;right:24px;z-index:55}
+
+@media(max-width:900px){
+  .gerrie-root{right:16px;bottom:16px}
+  .gerrie-panel{width:calc(100vw - 24px);height:calc(100vh - 110px)}
+  .tb-fab{bottom:84px;right:18px}
+}
+@media(max-width:480px){
+  .gerrie-root{right:12px;bottom:12px}
+}
