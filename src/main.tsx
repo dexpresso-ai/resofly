@@ -112,6 +112,13 @@ function getPublicInvoiceTokenFromLocation(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+/** Schermvullend opstartscherm met draaiend laadicoon. Wordt getoond zolang de
+ *  sessie of de werkruimte nog wordt opgehaald, zodat er niet kort een lege of
+ *  misleidende staat ("Geen organisatie gevonden") in beeld flitst. */
+function BootLoading({ message = 'ResoFly is aan het laden…' }: { message?: string }) {
+  return <div className="boot"><div className="boot-loading"><span className="boot-spinner" aria-hidden="true" /><span>{message}</span></div></div>;
+}
+
 function App() {
   const [sessionReady, setSessionReady] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
@@ -267,8 +274,12 @@ function App() {
   if (!isSupabaseConfigured) return <div className="boot"><div className="login-card"><h1>Configuratie ontbreekt</h1><p>Vul eerst VITE_SUPABASE_URL en VITE_SUPABASE_ANON_KEY in .env.local in.</p></div></div>;
   if (publicQuoteToken) return <PublicQuotePage token={publicQuoteToken} />;
   if (publicInvoiceToken) return <PublicInvoicePage token={publicInvoiceToken} />;
-  if (!sessionReady) return <div className="boot">ResoFly laden…</div>;
+  if (!sessionReady) return <BootLoading />;
   if (!loggedIn) return <Login />;
+  // Zolang de werkruimte nog wordt geladen weten we nog niet of er een organisatie
+  // is. Toon dan het laadscherm i.p.v. kort "Geen organisatie gevonden" te flitsen;
+  // die melding is alléén terecht als het laden klaar is en er echt geen org is.
+  if (!activeOrganization && loading) return <BootLoading />;
   if (!activeOrganization) return <div className="boot"><div className="login-card"><h1>Geen organisatie gevonden</h1><p>Er kon geen organisatie voor je account worden geladen.</p><Button variant="primary" onClick={createNewOrganization}>Organisatie maken</Button></div></div>;
 
   const activeOrg = activeOrganization;

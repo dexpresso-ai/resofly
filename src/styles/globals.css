@@ -1265,5 +1265,13 @@ body::before{
 .send-overlay-card{display:flex;flex-direction:column;align-items:center;gap:15px;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);padding:28px 36px;box-shadow:0 24px 64px rgba(0,0,0,.55);color:var(--text);text-align:center;max-width:340px}
 .send-overlay-card span{font-size:14px;font-weight:700}
 .send-overlay-card small{font-size:11px;color:var(--muted2);line-height:1.45}
-.send-spinner{display:block;width:38px;height:38px;border-radius:50%;border:3px solid var(--bg4);border-top-color:var(--accent);animation:send-spin .7s linear infinite}
-@keyframes send-spin{to{transform:rotate(360deg)}}
+.send-spinner,.boot-spinner{display:block;border-radius:50%;border:3px solid var(--bg4);border-top-color:var(--accent);animation:spin .7s linear infinite}
+.send-spinner{width:38px;height:38px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Opstart-/werkruimte-laadscherm ───────────────────────────────────
+ * Getoond binnen .boot terwijl de sessie of de werkruimte nog laadt, zodat
+ * er niet kort "Geen organisatie gevonden" in beeld flitst tijdens het laden. */
+.boot-loading{display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;color:var(--text)}
+.boot-loading span{font-size:15px;font-weight:800;letter-spacing:.01em}
+.boot-spinner{width:34px;height:34px}
