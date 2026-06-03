@@ -788,6 +788,7 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
     edit.kind === 'quote' || edit.kind === 'invoice' ? 'modal-finance-editor' : '',
     edit.kind === 'quote' ? 'modal-quote-editor' : '',
     edit.kind === 'client' ? 'modal-client-editor' : '',
+    edit.kind === 'task' || edit.kind === 'ticket' || edit.kind === 'project' ? 'modal-task-editor' : '',
   ].filter(Boolean).join(' ');
 
   return <Modal title={title} className={modalClassName} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{effectiveReadOnly ? 'Sluiten' : 'Annuleren'}</Button>{!effectiveReadOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!effectiveReadOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form))} disabled={saveBlockedByDuplicate}>Opslaan</Button>}</>}>

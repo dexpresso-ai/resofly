@@ -1275,3 +1275,16 @@ body::before{
 .boot-loading{display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;color:var(--text)}
 .boot-loading span{font-size:15px;font-weight:800;letter-spacing:.01em}
 .boot-spinner{width:34px;height:34px}
+
+/* ── Bredere werk-item-editor op desktop ──────────────────────────────
+ * Taak-, ticket- en projecteditors gebruikten de smalle basis-modal (620px).
+ * Op desktop krijgen ze nu meer ruimte; op mobiel blijft het een full-width
+ * bottom-sheet, gelijk aan de andere editors. */
+.modal-task-editor{width:min(1000px,calc(100vw - 48px));max-width:calc(100vw - 48px)}
+@media(max-width:900px){.modal-task-editor{width:100%;max-width:100%;border-radius:14px 14px 0 0}}
+
+/* ── Zoek/filter-balk op de klantdetailpagina ─────────────────────────
+ * Hergebruikt de finance-search-stijl; alleen de dropdown-grid is op twee
+ * kolommen gezet i.p.v. de zeven van het finance-filter. */
+.client-search-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media(max-width:560px){.client-search-grid{grid-template-columns:1fr}}

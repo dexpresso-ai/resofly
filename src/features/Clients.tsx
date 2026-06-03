@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
+import { Search, SlidersHorizontal, RotateCcw } from 'lucide-react';
 import type { AppData, Client, ClientStatus, Invoice, Note, Project, Quote } from '../types';
 import { dateNL, euro, total } from '../lib/format';
-import { Button } from '../components/Ui';
+import { Button, Select } from '../components/Ui';
 import { RelatedNotes } from './Notes';
 
 const invoiceStatusLabels: Record<string, string> = {
@@ -238,6 +239,49 @@ export function ClientDetailPage({
   const overdueInvoiceTotal = overdueInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
   const quoteTotal = quotes.reduce((sum, quote) => sum + total(quote.lines).total, 0);
 
+  // Zoek/filter over het volledige klantdossier (projecten, offertes, facturen
+  // en notities). De KPI's en facturatie-waarschuwing blijven het totaalbeeld
+  // tonen; alleen de detaillijsten hieronder reageren op de filters.
+  const [query, setQuery] = useState('');
+  const [section, setSection] = useState<ClientDetailSection>('all');
+  const [statusFilter, setStatusFilter] = useState('');
+  const normalizedQuery = clientSearchNormalize(query.trim());
+
+  const filteredProjects = useMemo(
+    () => projects.filter(project => projectMatchesQuery(project, normalizedQuery)),
+    [projects, normalizedQuery],
+  );
+  const filteredQuotes = useMemo(
+    () => quotes.filter(quote => quoteMatchesQuery(quote, normalizedQuery) && quoteMatchesStatus(quote, statusFilter)),
+    [quotes, normalizedQuery, statusFilter],
+  );
+  const filteredInvoices = useMemo(
+    () => invoices.filter(invoice => invoiceMatchesQuery(invoice, normalizedQuery) && invoiceMatchesStatus(invoice, statusFilter)),
+    [invoices, normalizedQuery, statusFilter],
+  );
+  const filteredNotes = useMemo(
+    () => notes.filter(note => noteMatchesQuery(note, normalizedQuery)),
+    [notes, normalizedQuery],
+  );
+
+  const showProjects = section === 'all' || section === 'projects';
+  const showQuotes = section === 'all' || section === 'quotes';
+  const showInvoices = section === 'all' || section === 'invoices';
+  const showNotes = section === 'all' || section === 'notes';
+  const visibleCount =
+    (showProjects ? filteredProjects.length : 0) +
+    (showQuotes ? filteredQuotes.length : 0) +
+    (showInvoices ? filteredInvoices.length : 0) +
+    (showNotes ? filteredNotes.length : 0);
+  const activeFilterCount = (normalizedQuery ? 1 : 0) + (section !== 'all' ? 1 : 0) + (statusFilter ? 1 : 0);
+  const resetFilters = () => { setQuery(''); setSection('all'); setStatusFilter(''); };
+  const summaryText = [
+    showProjects ? `${filteredProjects.length} ${filteredProjects.length === 1 ? 'project' : 'projecten'}` : null,
+    showQuotes ? `${filteredQuotes.length} ${filteredQuotes.length === 1 ? 'offerte' : 'offertes'}` : null,
+    showInvoices ? `${filteredInvoices.length} ${filteredInvoices.length === 1 ? 'factuur' : 'facturen'}` : null,
+    showNotes ? `${filteredNotes.length} ${filteredNotes.length === 1 ? 'notitie' : 'notities'}` : null,
+  ].filter(Boolean).join(' · ');
+
   return <div className="client-detail-page">
     <section className="client-detail-hero">
       <div className="client-detail-title">
@@ -270,6 +314,48 @@ export function ClientDetailPage({
       <ClientKpi label="Betaald" value={paidInvoices.length} sub={euro(paidInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0))} tone="success" />
     </section>
 
+    <section className="finance-search-card" aria-label="Zoeken en filteren in dit klantdossier">
+      <div className="finance-search-main">
+        <label className="finance-search-query">
+          <span><Search size={15}/> Zoek in dit klantdossier</span>
+          <input
+            className="form-input"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder="Zoek op projectnaam, offerte-/factuurnummer, status, bedrag of notitie…"
+            autoComplete="off"
+          />
+        </label>
+        <div className="finance-search-result-card">
+          <SlidersHorizontal size={16}/>
+          <div><strong>{visibleCount} {visibleCount === 1 ? 'resultaat' : 'resultaten'}</strong><span>in beeld</span></div>
+        </div>
+      </div>
+
+      <div className="finance-search-grid client-search-grid">
+        <label className="field finance-search-field"><span>Sectie</span>
+          <Select className="form-select" value={section} onChange={event => setSection(event.target.value as ClientDetailSection)}>
+            <option value="all">Alles</option>
+            <option value="projects">Projecten</option>
+            <option value="quotes">Offertes</option>
+            <option value="invoices">Facturen</option>
+            <option value="notes">Notities</option>
+          </Select>
+        </label>
+        <label className="field finance-search-field"><span>Status</span>
+          <Select className="form-select" value={statusFilter} onChange={event => setStatusFilter(event.target.value)}>
+            <option value="">Alle statussen</option>
+            {clientStatusFilterOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </Select>
+        </label>
+      </div>
+
+      {activeFilterCount > 0 && <div className="finance-search-active-row">
+        <span>{summaryText} zichtbaar</span>
+        <button type="button" onClick={resetFilters}><RotateCcw size={14}/> Filters wissen</button>
+      </div>}
+    </section>
+
     <section className="client-detail-grid">
       <article className="client-panel client-info-panel">
         <div className="client-panel-head"><h3>Klantgegevens</h3></div>
@@ -285,37 +371,37 @@ export function ClientDetailPage({
         <div className="cd-tags">{client.tags?.map(tag => <span className="cd-tag" key={tag}>{tag}</span>)}</div>
       </article>
 
-      <article className="client-panel">
-        <div className="client-panel-head"><h3>Projecten</h3><span>{projects.length}</span></div>
+      {showProjects && <article className="client-panel">
+        <div className="client-panel-head"><h3>Projecten</h3><span>{filteredProjects.length}</span></div>
         <div className="client-project-list">
-          {projects.length === 0 && <div className="client-empty-line">Nog geen projecten gekoppeld.</div>}
-          {projects.map(project => <button key={project.id} type="button" className="client-project-row" onClick={() => onOpenProject(project)}>
+          {filteredProjects.length === 0 && <div className="client-empty-line">{projects.length === 0 ? 'Nog geen projecten gekoppeld.' : 'Geen projecten voor deze zoekopdracht of filter.'}</div>}
+          {filteredProjects.map(project => <button key={project.id} type="button" className="client-project-row" onClick={() => onOpenProject(project)}>
             <span className="client-project-dot" style={{ background: project.color }} />
             <span>{project.name}</span>
             {project.archived && <em>Gearchiveerd</em>}
           </button>)}
         </div>
-      </article>
+      </article>}
     </section>
 
-    <section className="client-finance-grid">
-      <FinancePanel
+    {(showQuotes || showInvoices) && <section className="client-finance-grid">
+      {showQuotes && <FinancePanel
         title="Offertes"
-        emptyText="Nog geen offertes voor deze klant."
-        items={quotes}
+        emptyText={quotes.length === 0 ? 'Nog geen offertes voor deze klant.' : 'Geen offertes voor deze zoekopdracht of filter.'}
+        items={filteredQuotes}
         kind="quote"
         onEdit={onEditQuote}
-      />
-      <FinancePanel
+      />}
+      {showInvoices && <FinancePanel
         title="Facturen"
-        emptyText="Nog geen facturen voor deze klant."
-        items={invoices}
+        emptyText={invoices.length === 0 ? 'Nog geen facturen voor deze klant.' : 'Geen facturen voor deze zoekopdracht of filter.'}
+        items={filteredInvoices}
         kind="invoice"
         onEdit={onEditInvoice}
-      />
-    </section>
+      />}
+    </section>}
 
-    <RelatedNotes title="Klantnotities" notes={notes} data={data} canWrite={canWrite} onNew={onNewNote} onEdit={onEditNote} emptyText="Nog geen notities bij deze klant." />
+    {showNotes && <RelatedNotes title="Klantnotities" notes={filteredNotes} data={data} canWrite={canWrite} onNew={onNewNote} onEdit={onEditNote} emptyText={notes.length === 0 ? 'Nog geen notities bij deze klant.' : 'Geen notities voor deze zoekopdracht of filter.'} />}
   </div>;
 }
 
@@ -394,4 +480,71 @@ function isInvoiceOverdue(invoice: Invoice) {
   if (invoice.status === 'overdue') return true;
   if (!invoice.due_date) return false;
   return invoice.due_date.slice(0, 10) < new Date().toISOString().slice(0, 10);
+}
+
+// ── Zoeken/filteren op de klantdetailpagina ────────────────────────────
+type ClientDetailSection = 'all' | 'projects' | 'quotes' | 'invoices' | 'notes';
+
+// Statussen die zowel op offertes als facturen slaan staan zonder suffix; de
+// finance- of offerte-specifieke statussen krijgen een suffix zodat duidelijk is
+// welke sectie ze versmallen. Niet-relevante secties worden er niet door verborgen.
+const clientStatusFilterOptions: Array<{ value: string; label: string }> = [
+  { value: 'draft', label: 'Concept' },
+  { value: 'sent', label: 'Verzonden' },
+  { value: 'open', label: 'Openstaand · facturen' },
+  { value: 'overdue', label: 'Vervallen · facturen' },
+  { value: 'paid', label: 'Betaald · facturen' },
+  { value: 'accepted', label: 'Geaccepteerd · offertes' },
+  { value: 'rejected', label: 'Afgewezen · offertes' },
+];
+
+function clientSearchNormalize(value: unknown): string {
+  return String(value ?? '').toLowerCase();
+}
+
+function projectMatchesQuery(project: Project, query: string): boolean {
+  if (!query) return true;
+  return [project.name, project.description, project.archived ? 'gearchiveerd' : '']
+    .map(clientSearchNormalize).join(' ').includes(query);
+}
+
+function quoteMatchesQuery(quote: Quote, query: string): boolean {
+  if (!query) return true;
+  return [quote.number, quoteStatusLabels[quote.status] ?? quote.status, quote.notes, euro(total(quote.lines).total), dateNL(quote.date)]
+    .map(clientSearchNormalize).join(' ').includes(query);
+}
+
+function invoiceMatchesQuery(invoice: Invoice, query: string): boolean {
+  if (!query) return true;
+  return [invoice.number, invoiceStatusLabels[invoice.status] ?? invoice.status, isInvoiceOverdue(invoice) ? 'vervallen' : '', invoice.notes, euro(total(invoice.lines).total), dateNL(invoice.date), dateNL(invoice.due_date)]
+    .map(clientSearchNormalize).join(' ').includes(query);
+}
+
+function noteMatchesQuery(note: Note, query: string): boolean {
+  if (!query) return true;
+  return [note.title, note.content, (note.tags ?? []).join(' ')]
+    .map(clientSearchNormalize).join(' ').includes(query);
+}
+
+function quoteMatchesStatus(quote: Quote, status: string): boolean {
+  switch (status) {
+    case 'draft': return quote.status === 'draft';
+    case 'sent': return quote.status === 'sent';
+    case 'accepted': return quote.status === 'accepted';
+    case 'rejected': return quote.status === 'rejected';
+    // Lege keuze of een factuur-specifieke status laat offertes ongemoeid.
+    default: return true;
+  }
+}
+
+function invoiceMatchesStatus(invoice: Invoice, status: string): boolean {
+  switch (status) {
+    case 'draft': return invoice.status === 'draft';
+    case 'sent': return invoice.status === 'sent';
+    case 'open': return isInvoiceOpen(invoice);
+    case 'overdue': return isInvoiceOverdue(invoice);
+    case 'paid': return invoice.status === 'paid';
+    // Lege keuze of een offerte-specifieke status laat facturen ongemoeid.
+    default: return true;
+  }
 }
