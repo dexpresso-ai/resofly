@@ -5,7 +5,7 @@ compatibility_date = "2026-04-30"
 [vars]
 APP_ENV = "production"
 ALLOWED_ORIGINS = "https://app.resofly.nl"
-SUPABASE_URL = "https://your-production-project.supabase.co"
+SUPABASE_URL = "https://enzghpduqwaojcxgwarr.supabase.co"
 
 [[r2_buckets]]
 binding = "MEDIA_BUCKET"
@@ -17,8 +17,8 @@ name = "resofly-media-api-staging"
 
 [env.staging.vars]
 APP_ENV = "staging"
-ALLOWED_ORIGINS = "https://staging.resofly.nl,http://localhost:5173"
-SUPABASE_URL = "https://your-staging-project.supabase.co"
+ALLOWED_ORIGINS = "https://staging.resofly.nl,https://staging.resofly.pages.dev,http://localhost:5173"
+SUPABASE_URL = "https://enzghpduqwaojcxgwarr.supabase.co"
 
 [[env.staging.r2_buckets]]
 binding = "MEDIA_BUCKET"
@@ -30,7 +30,7 @@ name = "resofly-media-api"
 [env.production.vars]
 APP_ENV = "production"
 ALLOWED_ORIGINS = "https://app.resofly.nl"
-SUPABASE_URL = "https://your-production-project.supabase.co"
+SUPABASE_URL = "https://enzghpduqwaojcxgwarr.supabase.co"
 
 [[env.production.r2_buckets]]
 binding = "MEDIA_BUCKET"
