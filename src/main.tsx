@@ -555,6 +555,7 @@ function App() {
         reason: input.reason,
         createCreditNote: input.createCreditNote,
         idempotencyKey: input.idempotencyKey,
+        kind: input.kind,
       });
       await refresh();
     } catch (e) {

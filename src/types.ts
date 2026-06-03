@@ -385,6 +385,7 @@ export interface InvoicePaymentRecord {
   idempotency_key: string | null;
   status: InvoicePaymentStatus;
   amount_cents: number;
+  amount_refunded_cents: number;
   currency: string;
   checkout_expires_at: string | null;
   paid_at: string | null;

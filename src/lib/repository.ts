@@ -830,7 +830,7 @@ export async function createInvoicePaymentCheckout(organizationId: UUID, invoice
 export async function createInvoiceRefund(
   organizationId: UUID,
   invoiceId: UUID,
-  input: { amountCents: number; reason?: string; createCreditNote?: boolean; idempotencyKey?: string },
+  input: { amountCents: number; reason?: string; createCreditNote?: boolean; idempotencyKey?: string; kind?: 'manual' | 'mollie' },
 ): Promise<{ refund: InvoiceRefund; creditNote: CreditNote | null }> {
   const { data, error } = await supabase.functions.invoke('invoice-workflow', {
     body: { action: 'createInvoiceRefund', organizationId, invoiceId, ...input },

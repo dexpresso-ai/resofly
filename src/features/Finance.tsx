@@ -6,7 +6,7 @@ import { Button } from '../components/Ui';
 import { dateNL, euro, total, lineGross } from '../lib/format';
 import { exportFinancePDF } from '../lib/pdf';
 
-export type RefundInput = { amountCents: number; reason: string; createCreditNote: boolean; idempotencyKey: string };
+export type RefundInput = { amountCents: number; reason: string; createCreditNote: boolean; idempotencyKey: string; kind: 'manual' | 'mollie' };
 
 export function Quotes({
   data,
@@ -663,6 +663,18 @@ function InvoiceDetailModal({
   const refunds = data.invoiceRefunds.filter(refund => refund.invoice_id === invoice.id);
   const creditNotes = data.creditNotes.filter(creditNote => creditNote.invoice_id === invoice.id);
   const refundedAmount = invoice.refunded_amount ?? 0;
+  // Nog niet-afgeronde (Mollie-)terugbetalingen tellen wel mee in de over-refund-guard
+  // maar nog niet in refunded_amount; trek ze af voor een eerlijk "resterend" bedrag.
+  const inFlightCents = refunds
+    .filter(refund => refund.status === 'queued' || refund.status === 'pending' || refund.status === 'processing')
+    .reduce((sum, refund) => sum + refund.amount_cents, 0);
+  // Mollie-terugbetaling is alleen mogelijk als de factuur via Mollie is betaald en er
+  // nog terugbetaalbaar bedrag op die betaling staat.
+  const mollieRefundable = payments.some(payment =>
+    payment.provider === 'mollie'
+    && (payment.status === 'paid' || payment.status === 'refunded')
+    && !!payment.provider_payment_id
+    && ((payment.amount_cents || 0) - (payment.amount_refunded_cents || 0)) > 0);
   const [showRefund, setShowRefund] = useState(false);
 
   return <Modal title={`Factuur ${invoice.number}`} onClose={onClose} className="quote-detail-modal invoice-detail-modal">
@@ -694,7 +706,7 @@ function InvoiceDetailModal({
         <div className="quote-detail-section-head"><div><span>Acties</span><strong>Versturen, betaallink en PDF-snapshot</strong></div></div>
         <InvoiceStatusStrip invoice={invoice} delivery={latestDelivery} payment={latestPayment} />
         <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} onEdit={() => onEdit(invoice)} onSend={onSend} onDownloadPdf={onDownloadPdf} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} />
-        {showRefund && onRefund && <RefundModal invoice={invoice} onClose={() => setShowRefund(false)} onSubmit={(input) => onRefund(invoice, input)} />}
+        {showRefund && onRefund && <RefundModal invoice={invoice} mollieRefundable={mollieRefundable} inFlightCents={inFlightCents} onClose={() => setShowRefund(false)} onSubmit={(input) => onRefund(invoice, input)} />}
       </section>
 
       <section className="quote-detail-split">
@@ -912,11 +924,12 @@ function emailStatusLabel(status: string): string {
   return labels[status] || status;
 }
 
-function RefundModal({ invoice, onClose, onSubmit }: { invoice: Invoice; onClose: () => void; onSubmit: (input: RefundInput) => Promise<void> }) {
+function RefundModal({ invoice, mollieRefundable, inFlightCents = 0, onClose, onSubmit }: { invoice: Invoice; mollieRefundable: boolean; inFlightCents?: number; onClose: () => void; onSubmit: (input: RefundInput) => Promise<void> }) {
   const totals = total(invoice.lines);
   const refundedCents = Math.round((invoice.refunded_amount ?? 0) * 100);
-  const remainingCents = Math.max(totals.totalCents - refundedCents, 0);
+  const remainingCents = Math.max(totals.totalCents - refundedCents - inFlightCents, 0);
   const idempotencyKey = useMemo(() => crypto.randomUUID(), []);
+  const [method, setMethod] = useState<'manual' | 'mollie'>(mollieRefundable ? 'mollie' : 'manual');
   const [amountEuro, setAmountEuro] = useState((remainingCents / 100).toFixed(2));
   const [reason, setReason] = useState('');
   const [createCreditNote, setCreateCreditNote] = useState(true);
@@ -925,16 +938,17 @@ function RefundModal({ invoice, onClose, onSubmit }: { invoice: Invoice; onClose
 
   const amountCents = Math.round(Number(String(amountEuro).replace(',', '.')) * 100);
   const amountValid = Number.isFinite(amountCents) && amountCents > 0 && amountCents <= remainingCents;
+  const isMollie = method === 'mollie';
 
   async function submit() {
     if (!amountValid || busy) return;
     setBusy(true);
     setError(null);
     try {
-      await onSubmit({ amountCents, reason: reason.trim(), createCreditNote, idempotencyKey });
+      await onSubmit({ amountCents, reason: reason.trim(), createCreditNote, idempotencyKey, kind: method });
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Terugbetaling registreren mislukt');
+      setError(e instanceof Error ? e.message : 'Terugbetaling mislukt');
     } finally {
       setBusy(false);
     }
@@ -946,15 +960,25 @@ function RefundModal({ invoice, onClose, onSubmit }: { invoice: Invoice; onClose
     className="refund-modal"
     footer={<>
       <Button onClick={onClose} disabled={busy}>Annuleren</Button>
-      <Button variant="primary" onClick={() => void submit()} disabled={!amountValid || busy}>{busy ? 'Bezig…' : 'Terugbetaling registreren'}</Button>
+      <Button variant="primary" onClick={() => void submit()} disabled={!amountValid || busy}>{busy ? 'Bezig…' : (isMollie ? 'Via Mollie terugbetalen' : 'Terugbetaling registreren')}</Button>
     </>}
   >
     <div className="refund-form">
       <div className="refund-summary">
         <div><span>Factuurtotaal</span><strong>{euro(totals.total)}</strong></div>
         <div><span>Al terugbetaald</span><strong>{euro(refundedCents / 100)}</strong></div>
+        {inFlightCents > 0 && <div><span>In behandeling</span><strong>{euro(inFlightCents / 100)}</strong></div>}
         <div><span>Resterend</span><strong>{euro(remainingCents / 100)}</strong></div>
       </div>
+
+      {mollieRefundable && <div className="refund-method" role="radiogroup" aria-label="Terugbetaalmethode">
+        <button type="button" role="radio" aria-checked={isMollie} className={isMollie ? 'is-active' : ''} disabled={busy} onClick={() => setMethod('mollie')}>
+          <strong>Via Mollie</strong><small>Automatisch terug naar de klant</small>
+        </button>
+        <button type="button" role="radio" aria-checked={!isMollie} className={!isMollie ? 'is-active' : ''} disabled={busy} onClick={() => setMethod('manual')}>
+          <strong>Handmatig</strong><small>Zelf overmaken (bijv. bank)</small>
+        </button>
+      </div>}
 
       <label className="refund-field">
         <span>Bedrag (EUR)</span>
@@ -972,7 +996,9 @@ function RefundModal({ invoice, onClose, onSubmit }: { invoice: Invoice; onClose
         <span>Creditfactuur aanmaken (aanbevolen voor de boekhouding)</span>
       </label>
 
-      <p className="refund-note">Dit registreert een <strong>handmatige</strong> terugbetaling: maak het bedrag zelf over (bijv. via je bank). De factuurstatus en aggregaten worden bijgewerkt; bij een volledige terugbetaling gaat de factuur naar “Terugbetaald”.</p>
+      {isMollie
+        ? <p className="refund-note">Dit stuurt de terugbetaling naar <strong>Mollie</strong>; de klant krijgt het bedrag automatisch terug op de oorspronkelijke betaalmethode. De terugbetaling kan even “in behandeling” staan — de status en de creditfactuur volgen automatisch zodra Mollie de terugbetaling heeft verwerkt.</p>
+        : <p className="refund-note">Dit registreert een <strong>handmatige</strong> terugbetaling: maak het bedrag zelf over (bijv. via je bank). De factuurstatus en aggregaten worden direct bijgewerkt; bij een volledige terugbetaling gaat de factuur naar “Terugbetaald”.</p>}
 
       {amountCents > remainingCents && <p className="refund-error">Bedrag mag niet groter zijn dan het resterende bedrag ({euro(remainingCents / 100)}).</p>}
       {error && <p className="refund-error">{error}</p>}
@@ -987,6 +1013,7 @@ function InvoiceRefunds({ refunds }: { refunds: InvoiceRefund[] }) {
     <span>{euro(refund.amount_cents / 100)} {refund.currency}</span>
     <small>{dateNL(refund.created_at)} · {refund.kind === 'manual' ? 'Handmatig' : 'Mollie'}</small>
     {refund.reason && <small>{refund.reason}</small>}
+    {refund.status === 'failed' && refund.error_message && <small className="refund-error">{refund.error_message}</small>}
   </div>)}</div>;
 }
 

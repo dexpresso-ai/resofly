@@ -374,13 +374,18 @@ async function createInvoiceRefund(userId: string, organizationId: string, role:
 
   const reason = String(body.reason || '').trim() || null;
   const createCreditNote = body.createCreditNote !== false; // standaard: wel een creditfactuur
+  const kind: 'manual' | 'mollie' = body.kind === 'mollie' ? 'mollie' : 'manual';
   // Stabiele idempotency-key per terugbetaalactie (voorkomt dubbel boeken bij
   // dubbelklik/retry), maar staat bewust meerdere losse (deel)terugbetalingen toe.
   const idempotencyKey = sanitizeIdempotencyKey(String(body.idempotencyKey || `invoice-${invoiceId}-refund-${crypto.randomUUID()}`));
 
-  // Fase 1: handmatige (offline) terugbetaling — de Mollie-uitvoering volgt in
-  // fase 2 via kind='mollie' + complete/fail_invoice_refund.
-  const refund = await beginInvoiceRefund({ invoiceId, organizationId, userId, amountCents, reason, kind: 'manual', idempotencyKey });
+  // Fase 2: echte Mollie-terugbetaling (async afgehandeld via webhook).
+  if (kind === 'mollie') {
+    return await createMollieInvoiceRefund({ userId, organizationId, invoice, invoiceTotalCents, totals, amountCents, reason, createCreditNote, idempotencyKey });
+  }
+
+  // Fase 1: handmatige (offline) terugbetaling — direct als 'refunded' geboekt.
+  const refund = await beginInvoiceRefund({ invoiceId, organizationId, userId, amountCents, reason, kind: 'manual', idempotencyKey, metadata: { create_credit_note: createCreditNote } });
 
   let creditNote: Record<string, unknown> | null = null;
   if (refund.credit_note_id) {
@@ -397,7 +402,80 @@ async function createInvoiceRefund(userId: string, organizationId: string, role:
   return { refund, creditNote };
 }
 
-async function issueCreditNoteForRefund(input: { userId: string; organizationId: string; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; refund: { id: string }; amountCents: number; invoiceTotalCents: number; totals: ReturnType<typeof calculateTotals>; reason: string | null }) {
+// ------------------------------------------------------------
+// Fase 2: Mollie-terugbetaling uitvoeren
+// ------------------------------------------------------------
+// Het geld loopt terug via de oorspronkelijke Mollie-betaling. De terugbetaling
+// is asynchroon: Mollie zet de refund eerst op queued/pending/processing en pingt
+// later de payment-webhook met de eindstatus. De creditfactuur wordt daarom pas
+// aangemaakt wanneer de refund de status 'refunded' bereikt (synchroon bij mock,
+// anders via de webhook-reconciliatie).
+async function createMollieInvoiceRefund(input: {
+  userId: string; organizationId: string; invoice: InvoiceRow; invoiceTotalCents: number;
+  totals: ReturnType<typeof calculateTotals>; amountCents: number; reason: string | null;
+  createCreditNote: boolean; idempotencyKey: string;
+}): Promise<{ refund: RefundRow; creditNote: Record<string, unknown> | null }> {
+  const { userId, organizationId, invoice, amountCents, reason, createCreditNote, idempotencyKey } = input;
+
+  // 1. Vind de betaalde Mollie-betaling met genoeg resterend terugbetaalbaar bedrag.
+  const payment = await findRefundableMolliePayment(organizationId, invoice.id, amountCents);
+  if (!payment) {
+    throw new WorkflowHttpError('Geen terugbetaalbare Mollie-betaling gevonden voor deze factuur. Is de factuur wel via Mollie betaald, en is er nog voldoende terug te betalen? Gebruik anders een handmatige terugbetaling.', 409);
+  }
+
+  // 2. Registreer de terugbetaling als 'queued' (telt mee in de over-refund-guard).
+  const refund = await beginInvoiceRefund({
+    invoiceId: invoice.id, organizationId, userId, amountCents, reason,
+    kind: 'mollie', idempotencyKey, paymentRecordId: payment.id,
+    metadata: { create_credit_note: createCreditNote },
+  });
+
+  // Idempotente retry: deze terugbetaling is al (deels) verwerkt.
+  if (refund.status === 'refunded' || refund.provider_refund_id) {
+    const creditNote = refund.credit_note_id ? await loadCreditNote(organizationId, String(refund.credit_note_id)) : null;
+    return { refund, creditNote };
+  }
+
+  // 3. Voer de terugbetaling uit bij Mollie (of simuleer bij mock).
+  let providerRefundId = '';
+  let mollieStatus = 'queued';
+  let molliePayload: Record<string, unknown> = {};
+  try {
+    if (INVOICE_ALLOW_MOCK && (payment.provider_payment_id || '').startsWith('mock_')) {
+      providerRefundId = `mock_refund_${crypto.randomUUID()}`;
+      mollieStatus = 'refunded'; // mock: direct verwerkt zodat de dev-flow synchroon afrondt
+      molliePayload = { mock: true };
+    } else {
+      const orgKey = await resolveOrganizationMollieKey(organizationId);
+      if (!orgKey) throw new WorkflowHttpError('De Mollie-koppeling van deze organisatie ontbreekt; de terugbetaling kan niet worden uitgevoerd.', 409);
+      if (!payment.provider_payment_id) throw new WorkflowHttpError('De Mollie-betaling heeft geen geldig payment-id.', 422);
+      const created = await createMollieRefund(orgKey.apiKey, payment.provider_payment_id, amountCents, invoice, refund.id, organizationId);
+      providerRefundId = created.id;
+      mollieStatus = created.status;
+      molliePayload = created.payload;
+    }
+  } catch (error) {
+    // Mollie heeft niets (of niet bevestigd iets) geboekt → de terugbetaling vrijgeven
+    // zodat het bedrag niet onterecht in de over-refund-guard blijft hangen.
+    const message = error instanceof Error ? error.message : 'Onbekende Mollie-fout bij terugbetaling.';
+    await failInvoiceRefund(refund.id, organizationId, message, 'failed', { stage: 'create_refund' })
+      .catch((failError) => console.warn('fail_invoice_refund na Mollie-fout mislukte', failError instanceof Error ? failError.message : failError));
+    if (error instanceof WorkflowHttpError) throw error;
+    throw new WorkflowHttpError(`Mollie kon de terugbetaling niet aanmaken: ${message}`, 502);
+  }
+
+  // 4. Sla provider_refund_id + status op. 'refunded' = direct verwerkt (mock/zeldzaam).
+  const normalized = normalizeMollieRefundStatus(mollieStatus);
+  const updated = await completeInvoiceRefund(refund.id, organizationId, providerRefundId, normalized, { mollie_refund: molliePayload });
+
+  let creditNote: Record<string, unknown> | null = null;
+  if (normalized === 'refunded') {
+    creditNote = await ensureCreditNoteForRefund(updated);
+  }
+  return { refund: updated, creditNote };
+}
+
+async function issueCreditNoteForRefund(input: { userId: string | null; organizationId: string; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; refund: { id: string }; amountCents: number; invoiceTotalCents: number; totals: ReturnType<typeof calculateTotals>; reason: string | null }) {
   const { userId, organizationId, invoice, client, company, refund, amountCents, invoiceTotalCents, totals, reason } = input;
   const currency = invoice.currency || 'EUR';
   const isFull = amountCents >= invoiceTotalCents;
@@ -457,7 +535,16 @@ async function issueCreditNoteForRefund(input: { userId: string; organizationId:
   }
 }
 
-async function beginInvoiceRefund(input: { invoiceId: string; organizationId: string; userId: string; amountCents: number; reason: string | null; kind: 'manual' | 'mollie'; idempotencyKey: string; paymentRecordId?: string | null }): Promise<{ id: string; credit_note_id: string | null; status: string; amount_cents: number; currency: string }> {
+// Volledige rijvorm van public.invoice_refunds zoals de RPC's die teruggeven.
+type RefundRow = {
+  id: string; organization_id: string; invoice_id: string; payment_record_id: string | null;
+  kind: string; provider: string | null; provider_refund_id: string | null; status: string;
+  amount_cents: number; currency: string; reason: string | null; credit_note_id: string | null;
+  idempotency_key: string | null; initiated_by: string | null; metadata: Record<string, unknown> | null;
+  refunded_at: string | null; failed_at: string | null; error_message: string | null;
+};
+
+async function beginInvoiceRefund(input: { invoiceId: string; organizationId: string; userId: string; amountCents: number; reason: string | null; kind: 'manual' | 'mollie'; idempotencyKey: string; paymentRecordId?: string | null; metadata?: Record<string, unknown> }): Promise<RefundRow> {
   const { data, error } = await supabaseAdmin.rpc('begin_invoice_refund', {
     p_invoice_id: input.invoiceId,
     p_organization_id: input.organizationId,
@@ -467,13 +554,124 @@ async function beginInvoiceRefund(input: { invoiceId: string; organizationId: st
     p_kind: input.kind,
     p_payment_record_id: input.paymentRecordId ?? null,
     p_idempotency_key: input.idempotencyKey,
-    p_metadata: {},
+    p_metadata: input.metadata ?? {},
   });
   if (error) throwRpcError('begin_invoice_refund', error);
-  return data as { id: string; credit_note_id: string | null; status: string; amount_cents: number; currency: string };
+  return data as RefundRow;
 }
 
-async function issueCreditNote(input: { organizationId: string; invoiceId: string; refundId: string; userId: string; reason: string | null; currency: string; subtotal: number; vat: number; total: number; lines: InvoiceLine[] }): Promise<Record<string, unknown> & { id: string; number: string; date: string }> {
+// Werk een terugbetaling bij naar (in-flight of finale) status + provider_refund_id.
+// Bij status 'refunded' logt de RPC zelf het event/audit en herberekent de aggregaten.
+async function completeInvoiceRefund(refundId: string, organizationId: string, providerRefundId: string | null, status: string, metadata: Record<string, unknown> = {}): Promise<RefundRow> {
+  const { data, error } = await supabaseAdmin.rpc('complete_invoice_refund', {
+    p_refund_id: refundId,
+    p_organization_id: organizationId,
+    p_provider_refund_id: providerRefundId || null,
+    p_status: status,
+    p_metadata: metadata,
+  });
+  if (error) throwRpcError('complete_invoice_refund', error);
+  return data as RefundRow;
+}
+
+// Markeer een terugbetaling als mislukt/geannuleerd (geeft het bedrag vrij in de guard).
+async function failInvoiceRefund(refundId: string, organizationId: string, errorMessage: string | null, status: 'failed' | 'canceled' = 'failed', metadata: Record<string, unknown> = {}): Promise<RefundRow> {
+  const { data, error } = await supabaseAdmin.rpc('fail_invoice_refund', {
+    p_refund_id: refundId,
+    p_organization_id: organizationId,
+    p_error_message: errorMessage || null,
+    p_status: status,
+    p_metadata: metadata,
+  });
+  if (error) throwRpcError('fail_invoice_refund', error);
+  return data as RefundRow;
+}
+
+// Vind de betaalde Mollie-betaling met genoeg resterend terugbetaalbaar bedrag.
+// amount_refunded_cents wordt door recompute_invoice_refund_state bijgehouden; we
+// gebruiken het als lokale proxy — Mollie doet alsnog de autoritatieve controle.
+async function findRefundableMolliePayment(organizationId: string, invoiceId: string, amountCents: number): Promise<{ id: string; provider_payment_id: string | null; amount_cents: number; amount_refunded_cents: number } | null> {
+  const { data, error } = await supabaseAdmin
+    .from('invoice_payment_records')
+    .select('id,provider_payment_id,amount_cents,amount_refunded_cents,status')
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', invoiceId)
+    .eq('provider', 'mollie')
+    .in('status', ['paid', 'refunded'])
+    .order('paid_at', { ascending: false, nullsFirst: false });
+  if (error) throwSupabaseError('Mollie-betaling zoeken', error);
+  const rows = (data ?? []) as Array<{ id: string; provider_payment_id: string | null; amount_cents: number; amount_refunded_cents: number | null }>;
+  for (const row of rows) {
+    if (!row.provider_payment_id) continue;
+    if (!INVOICE_ALLOW_MOCK && row.provider_payment_id.startsWith('mock_')) continue;
+    const remaining = (row.amount_cents || 0) - (row.amount_refunded_cents || 0);
+    if (remaining >= amountCents) return { id: row.id, provider_payment_id: row.provider_payment_id, amount_cents: row.amount_cents, amount_refunded_cents: row.amount_refunded_cents || 0 };
+  }
+  return null;
+}
+
+// Maak een terugbetaling aan bij Mollie tegen de oorspronkelijke betaling.
+async function createMollieRefund(apiKey: string, molliePaymentId: string, amountCents: number, invoice: InvoiceRow, refundId: string, organizationId: string): Promise<{ id: string; status: string; payload: Record<string, unknown> }> {
+  const response = await fetch(`https://api.mollie.com/v2/payments/${encodeURIComponent(molliePaymentId)}/refunds`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      // Stabiele key per terugbetaalrij: een retry boekt nooit een dubbele Mollie-refund.
+      'Idempotency-Key': sanitizeIdempotencyKey(`invoice-refund-${refundId}`),
+    },
+    body: JSON.stringify({
+      amount: { currency: invoice.currency || 'EUR', value: (amountCents / 100).toFixed(2) },
+      description: `Terugbetaling factuur ${invoice.number}`,
+      metadata: { organizationId, invoiceId: invoice.id, invoiceNumber: invoice.number, refundId },
+    }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    const detail = String((payload as Record<string, unknown>).detail || (payload as Record<string, unknown>).title || response.statusText);
+    throw new WorkflowHttpError(`Mollie weigerde de terugbetaling: ${detail}`, 502);
+  }
+  const id = String(payload.id || '').trim();
+  const status = String(payload.status || 'queued');
+  if (!id) throw new WorkflowHttpError('Mollie gaf geen refund-id terug.', 502);
+  return { id, status, payload };
+}
+
+function normalizeMollieRefundStatus(status: string): 'queued' | 'pending' | 'processing' | 'refunded' | 'failed' | 'canceled' {
+  switch ((status || '').toLowerCase()) {
+    case 'queued': return 'queued';
+    case 'pending': return 'pending';
+    case 'processing': return 'processing';
+    case 'refunded': return 'refunded';
+    case 'failed': return 'failed';
+    case 'canceled':
+    case 'cancelled': return 'canceled';
+    default: return 'pending';
+  }
+}
+
+// Maak (idempotent) de creditfactuur voor een terugbetaalde refund. Respecteert de
+// create_credit_note-intentie uit de metadata en doet niets als er al een CN bestaat.
+async function ensureCreditNoteForRefund(refund: RefundRow): Promise<Record<string, unknown> | null> {
+  if (refund.credit_note_id) return await loadCreditNote(refund.organization_id, String(refund.credit_note_id));
+  const wantsCreditNote = !(refund.metadata && (refund.metadata as Record<string, unknown>).create_credit_note === false);
+  if (!wantsCreditNote) return null;
+  if (refund.status !== 'refunded') return null;
+
+  const invoice = await loadInvoice(refund.organization_id, refund.invoice_id);
+  if (!invoice.client_id) { console.warn('Creditfactuur overgeslagen: factuur heeft geen klant.'); return null; }
+  const totals = calculateTotals(invoice.lines);
+  const [client, company] = await Promise.all([
+    loadClient(refund.organization_id, invoice.client_id),
+    loadCompanySettings(refund.organization_id),
+  ]);
+  return await issueCreditNoteForRefund({
+    userId: refund.initiated_by, organizationId: refund.organization_id, invoice, client, company,
+    refund: { id: refund.id }, amountCents: refund.amount_cents, invoiceTotalCents: totals.totalCents, totals, reason: refund.reason,
+  });
+}
+
+async function issueCreditNote(input: { organizationId: string; invoiceId: string; refundId: string; userId: string | null; reason: string | null; currency: string; subtotal: number; vat: number; total: number; lines: InvoiceLine[] }): Promise<Record<string, unknown> & { id: string; number: string; date: string }> {
   const { data, error } = await supabaseAdmin.rpc('issue_credit_note', {
     p_organization_id: input.organizationId,
     p_invoice_id: input.invoiceId,
@@ -524,33 +722,114 @@ async function handleMollieWebhook(req: Request, url: URL, body: Record<string, 
     if (MOLLIE_WEBHOOK_SECRET && !timingSafeEqual(url.searchParams.get('secret') || '', MOLLIE_WEBHOOK_SECRET)) return json(req, { ok: false, error: 'Invalid webhook secret' }, 403);
     if (!MOLLIE_WEBHOOK_SECRET) return json(req, { ok: false, error: 'Webhook secret ontbreekt.' }, 500);
   }
-  const paymentId = String(body.id || body.payment_id || '').trim();
-  if (!paymentId) return json(req, { ok: false, error: 'Payment id ontbreekt.' }, 400);
+  const eventId = String(body.id || body.payment_id || '').trim();
+  if (!eventId) return json(req, { ok: false, error: 'Payment id ontbreekt.' }, 400);
 
-  let status = 'open';
-  let paidAt: string | null = null;
-  let metadata: Record<string, unknown> = {};
-
-  if (INVOICE_ALLOW_MOCK && paymentId.startsWith('mock_invoice_payment_')) {
-    status = 'paid';
-    paidAt = new Date().toISOString();
-    metadata = { mock: true, webhook: body };
-  } else {
-    const record = await findInvoicePaymentRecordByProviderId(paymentId);
-    if (!record) { console.warn('invoice-workflow webhook: unknown Mollie payment id'); return json(req, { ok: true, ignored: true }); }
-    const orgKey = await resolveOrganizationMollieKey(record.organization_id);
-    if (!orgKey) { console.warn('invoice-workflow webhook: no Mollie key for organization; cannot verify payment'); return json(req, { ok: true, unverifiable: true }); }
-    const response = await fetch(`https://api.mollie.com/v2/payments/${encodeURIComponent(paymentId)}`, { headers: { Authorization: `Bearer ${orgKey.apiKey}` } });
-    const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!response.ok) return json(req, { ok: false, error: 'Mollie payment ophalen mislukt.' }, 502);
-    status = normalizeMollieStatus(String(payload.status || 'open'));
-    paidAt = typeof payload.paidAt === 'string' ? payload.paidAt : null;
-    metadata = { mollie: payload };
+  // Mock-betaling: direct als betaald markeren (mock-refunds zijn al synchroon afgehandeld).
+  if (INVOICE_ALLOW_MOCK && eventId.startsWith('mock_invoice_payment_')) {
+    const { error } = await supabaseAdmin.rpc('update_invoice_payment_status', { p_provider_payment_id: eventId, p_status: 'paid', p_paid_at: new Date().toISOString(), p_metadata: { mock: true, webhook: body } });
+    if (error) return json(req, { ok: false, error: error.message }, 500);
+    return json(req, { ok: true });
   }
 
-  const { error } = await supabaseAdmin.rpc('update_invoice_payment_status', { p_provider_payment_id: paymentId, p_status: status, p_paid_at: paidAt, p_metadata: metadata });
+  // Mollie pingt de payment-webhook met de payment-id (tr_) — óók bij refund-
+  // statuswijzigingen. Voor de zekerheid vangen we ook een refund-id (re_) op.
+  let record = await findInvoicePaymentRecordByProviderId(eventId);
+  let molliePaymentId = eventId;
+  if (!record && eventId.startsWith('re_')) {
+    const viaRefund = await findPaymentRecordByRefundId(eventId);
+    if (viaRefund?.provider_payment_id) {
+      record = { id: viaRefund.id, organization_id: viaRefund.organization_id };
+      molliePaymentId = viaRefund.provider_payment_id;
+    }
+  }
+  if (!record) { console.warn('invoice-workflow webhook: unknown Mollie id'); return json(req, { ok: true, ignored: true }); }
+
+  const orgKey = await resolveOrganizationMollieKey(record.organization_id);
+  if (!orgKey) { console.warn('invoice-workflow webhook: no Mollie key for organization; cannot verify payment'); return json(req, { ok: true, unverifiable: true }); }
+
+  // embed=refunds: in één call zowel de betaalstatus als alle refund-statussen ophalen.
+  const response = await fetch(`https://api.mollie.com/v2/payments/${encodeURIComponent(molliePaymentId)}?embed=refunds`, { headers: { Authorization: `Bearer ${orgKey.apiKey}` } });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) return json(req, { ok: false, error: 'Mollie payment ophalen mislukt.' }, 502);
+
+  const status = normalizeMollieStatus(String(payload.status || 'open'));
+  const paidAt = typeof payload.paidAt === 'string' ? payload.paidAt : null;
+  const { error } = await supabaseAdmin.rpc('update_invoice_payment_status', { p_provider_payment_id: molliePaymentId, p_status: status, p_paid_at: paidAt, p_metadata: { mollie: payload } });
   if (error) return json(req, { ok: false, error: error.message }, 500);
+
+  // Refunds reconciliëren (Fase 2). Reconciliatiefouten mogen de webhook niet 500'en —
+  // Mollie zou dan blijven retryen; de creditfactuur-stap is bovendien idempotent.
+  await reconcilePaymentRefunds(record.organization_id, payload)
+    .catch((reconcileError) => console.warn('refund-reconciliatie mislukte', reconcileError instanceof Error ? reconcileError.message : reconcileError));
+
   return json(req, { ok: true });
+}
+
+// Werk de refund-ledger bij op basis van de in de payment ge-embedde refunds.
+async function reconcilePaymentRefunds(organizationId: string, paymentPayload: Record<string, unknown>): Promise<void> {
+  const embedded = paymentPayload._embedded as Record<string, unknown> | undefined;
+  const refunds = Array.isArray(embedded?.refunds) ? (embedded!.refunds as Array<Record<string, unknown>>) : [];
+  for (const mollieRefund of refunds) {
+    const providerRefundId = String(mollieRefund.id || '').trim();
+    if (!providerRefundId) continue;
+    const status = normalizeMollieRefundStatus(String(mollieRefund.status || ''));
+    try {
+      await reconcileOneRefund(organizationId, providerRefundId, status, mollieRefund);
+    } catch (refundError) {
+      console.warn(`refund ${providerRefundId} reconciliatie mislukte`, refundError instanceof Error ? refundError.message : refundError);
+    }
+  }
+}
+
+async function reconcileOneRefund(organizationId: string, providerRefundId: string, status: 'queued' | 'pending' | 'processing' | 'refunded' | 'failed' | 'canceled', mollieRefund: Record<string, unknown>): Promise<void> {
+  const refund = await findRefundByProviderId(organizationId, providerRefundId);
+  if (!refund) return; // Externe refund (bijv. via Mollie-dashboard): buiten scope van fase 2.
+
+  if (refund.status === status) {
+    // Status ongewijzigd; vang alleen het geval op dat 'refunded' is maar de
+    // creditfactuur eerder niet kon worden aangemaakt.
+    if (status === 'refunded' && !refund.credit_note_id) await ensureCreditNoteForRefund(refund);
+    return;
+  }
+
+  if (status === 'refunded') {
+    const updated = await completeInvoiceRefund(refund.id, organizationId, providerRefundId, 'refunded', { mollie_refund: mollieRefund });
+    await ensureCreditNoteForRefund(updated);
+  } else if (status === 'failed' || status === 'canceled') {
+    await failInvoiceRefund(refund.id, organizationId, `Mollie meldde status '${status}'.`, status, { mollie_refund: mollieRefund });
+  } else {
+    // In-flight (queued/pending/processing): status verversen, geen creditfactuur.
+    await completeInvoiceRefund(refund.id, organizationId, providerRefundId, status, { mollie_refund: mollieRefund });
+  }
+}
+
+async function findRefundByProviderId(organizationId: string, providerRefundId: string): Promise<RefundRow | null> {
+  const { data, error } = await supabaseAdmin
+    .from('invoice_refunds')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('provider_refund_id', providerRefundId)
+    .maybeSingle();
+  if (error) { console.warn('refund lookup mislukte', error.message); return null; }
+  return (data ?? null) as RefundRow | null;
+}
+
+// Fallback voor een webhook met een refund-id (re_): zoek het bijbehorende payment-record.
+async function findPaymentRecordByRefundId(providerRefundId: string): Promise<{ id: string; organization_id: string; provider_payment_id: string | null } | null> {
+  const { data: refund } = await supabaseAdmin
+    .from('invoice_refunds')
+    .select('id,organization_id,payment_record_id')
+    .eq('provider_refund_id', providerRefundId)
+    .maybeSingle();
+  const paymentRecordId = (refund as { payment_record_id?: string | null } | null)?.payment_record_id;
+  if (!paymentRecordId) return null;
+  const { data: payment } = await supabaseAdmin
+    .from('invoice_payment_records')
+    .select('id,organization_id,provider_payment_id')
+    .eq('id', paymentRecordId)
+    .maybeSingle();
+  return (payment ?? null) as { id: string; organization_id: string; provider_payment_id: string | null } | null;
 }
 
 async function markMockInvoicePaymentPaid(providerPaymentId: string) {
