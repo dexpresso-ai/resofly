@@ -541,12 +541,14 @@ async function issueCreditNoteForRefund(input: { userId: string | null; organiza
 
   // 3. Creditfactuur automatisch naar de klant mailen (best-effort). Een mailfout
   //    mag de terugbetaling niet laten falen; de handmatige knop kan 'm opnieuw sturen.
-  try {
-    if (client.email && RESEND_API_KEY && RESEND_FROM_EMAIL) {
+  //    Enkel als alle vereiste voorwaarden zijn vervuld en de PDF beschikbaar is.
+  const hasPdfAvailable = Boolean(finalCreditNote.pdf_data_base64 || (finalCreditNote.pdf_storage_provider === 'r2' && finalCreditNote.pdf_storage_key));
+  if (client.email && RESEND_API_KEY && RESEND_FROM_EMAIL && hasPdfAvailable) {
+    try {
       await deliverCreditNoteEmail({ organizationId, userId, creditNote: finalCreditNote, invoice, client, company, recipientEmail: client.email, recipientName: null, pdfBase64: pdfBase64 ?? undefined });
+    } catch (emailError) {
+      console.warn('Creditfactuur automatisch mailen mislukt; de creditnota is wel aangemaakt.', emailError instanceof Error ? emailError.message : emailError);
     }
-  } catch (emailError) {
-    console.warn('Creditfactuur automatisch mailen mislukte; de creditnota is wel aangemaakt.', emailError instanceof Error ? emailError.message : emailError);
   }
 
   return finalCreditNote;
@@ -719,16 +721,23 @@ async function loadCreditNote(organizationId: string, creditNoteId: string): Pro
 // Haal de creditfactuur-PDF als base64 op uit de DB of (bij R2-opslag) uit private storage.
 async function loadCreditNotePdfBase64(creditNote: Record<string, unknown>): Promise<string> {
   let base64 = String(creditNote.pdf_data_base64 || '').trim();
-  if (!base64 && creditNote.pdf_storage_provider === 'r2' && creditNote.pdf_storage_key) {
+  if (base64) return base64;
+
+  if (creditNote.pdf_storage_provider === 'r2' && creditNote.pdf_storage_key) {
     if (!INVOICE_PDF_STORAGE_WORKER_URL || !INVOICE_PDF_STORAGE_SECRET) {
       throw new WorkflowHttpError('Creditfactuur-PDF staat in private storage, maar de storage-koppeling ontbreekt in de Edge Function secrets.', 500);
     }
-    const response = await fetch(
-      `${INVOICE_PDF_STORAGE_WORKER_URL}/internal/invoice-snapshot/${encodeURIComponent(String(creditNote.pdf_storage_key))}`,
-      { headers: { Authorization: `Bearer ${INVOICE_PDF_STORAGE_SECRET}` } },
-    );
-    if (!response.ok) throw new WorkflowHttpError('Creditfactuur-PDF kon niet uit private storage worden opgehaald.', 502);
-    base64 = bytesToBase64(new Uint8Array(await response.arrayBuffer()));
+    try {
+      const response = await fetch(
+        `${INVOICE_PDF_STORAGE_WORKER_URL}/internal/invoice-snapshot/${encodeURIComponent(String(creditNote.pdf_storage_key))}`,
+        { headers: { Authorization: `Bearer ${INVOICE_PDF_STORAGE_SECRET}` } },
+      );
+      if (!response.ok) throw new WorkflowHttpError('Creditfactuur-PDF kon niet uit private storage worden opgehaald.', 502);
+      base64 = bytesToBase64(new Uint8Array(await response.arrayBuffer()));
+    } catch (error) {
+      if (error instanceof WorkflowHttpError) throw error;
+      throw new WorkflowHttpError('Creditfactuur-PDF kon niet uit private storage worden opgehaald.', 502);
+    }
   }
   return base64;
 }
