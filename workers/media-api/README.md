@@ -7,21 +7,25 @@ Dit is nadrukkelijk nog geen Sprint 3-klantportaalfunctionaliteit. De Worker bev
 ## Wat deze Worker doet
 
 - Biedt een `/health` endpoint voor deployment- en smoke-tests.
-- Handelt `OPTIONS` preflight requests veilig af.
-- Leest toegestane origins uit `ALLOWED_ORIGINS`.
-- Gebruikt geen wildcard-CORS.
-- Definieert de `MEDIA_BUCKET` R2-binding.
-- Bereidt Supabase JWT-validatie, private uploads, downloads en deletes voor.
+- Handelt `OPTIONS` preflight requests veilig af (geen wildcard-CORS; origins uit `ALLOWED_ORIGINS`).
+- Slaat gebruikersuploads privé op in de `MEDIA_BUCKET` R2-bucket.
+- Valideert de Supabase user-JWT via `/auth/v1/user` en autoriseert per organisatie­lidmaatschap (`organization_members`).
+- Levert downloads geauthenticeerd terug (privé, `no-store`); deletes verwijderen het R2-object.
+- Ondersteunt een intern, met een gedeeld secret beveiligd pad voor server-side factuur/offerte-PDF-snapshots.
 
 ## Routes
 
-| Methode | Route | Status |
-| --- | --- | --- |
-| `GET` | `/health` | Actief |
-| `OPTIONS` | `*` | Actief |
-| `POST` | `/upload/request` | Placeholder, geeft `501 Not Implemented` |
-| `GET` | `/files/:fileId` | Placeholder, geeft `501 Not Implemented` |
-| `DELETE` | `/files/:fileId` | Placeholder, geeft `501 Not Implemented` |
+| Methode | Route | Auth | Omschrijving |
+| --- | --- | --- | --- |
+| `GET` | `/health` | — | Smoke-test |
+| `OPTIONS` | `*` | — | CORS preflight |
+| `POST` | `/upload` | Supabase JWT | Upload bijlage. Headers: `X-Organization-Id`, `X-Entity-Type`, `X-Entity-Id`, `X-File-Name`, `X-File-Type`, optioneel `X-Parent-Task-Id`. Body = bestand. Antwoord: `{ ok: true, key }` |
+| `GET` | `/file/:key` | Supabase JWT | Download bijlage (key mag slashes bevatten) |
+| `DELETE` | `/file/:key` | Supabase JWT | Verwijder R2-object |
+| `POST` | `/internal/invoice-snapshot` | `INTERNAL_UPLOAD_SECRET` | Server-side PDF-opslag. Header `X-Storage-Key`, body = bytes |
+| `GET` | `/internal/invoice-snapshot/:key` | `INTERNAL_UPLOAD_SECRET` | Server-side PDF-ophaal |
+
+Toegangscontrole: de `:key` begint met `{organization_id}/…`; de Worker controleert dat de ingelogde gebruiker lid is van die organisatie voordat hij leest/verwijdert. Maximale uploadgrootte is 25 MB (in sync met `MAX_UPLOAD_BYTES` in `src/lib/r2.ts`).
 
 ## Lokaal draaien
 
@@ -61,11 +65,17 @@ Zet echte secrets nooit in GitHub, `wrangler.toml` of `.dev.vars.example`.
 Benodigd via Cloudflare Dashboard of Wrangler secrets:
 
 ```bash
+# Vereist: validatie van de user-JWT + lidmaatschapscheck via Supabase REST.
 npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env staging
-npx wrangler secret put MEDIA_SIGNING_SECRET --env staging
 npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env production
-npx wrangler secret put MEDIA_SIGNING_SECRET --env production
+
+# Vereist voor het interne PDF-snapshot-pad. Moet exact gelijk zijn aan de
+# Supabase Edge Function secret INVOICE_PDF_STORAGE_SECRET (zie .env.example).
+npx wrangler secret put INTERNAL_UPLOAD_SECRET --env staging
+npx wrangler secret put INTERNAL_UPLOAD_SECRET --env production
 ```
+
+Werk daarnaast in `wrangler.toml` de placeholder `SUPABASE_URL` per environment bij naar de echte projecturl, en zorg dat de R2-buckets (`resofly-media-staging` / `resofly-media-production`) bestaan. Stel in de frontend `VITE_R2_WORKER_URL` in op de gedeployde Worker-URL.
 
 ## R2 binding
 
