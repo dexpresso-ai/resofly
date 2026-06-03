@@ -1,3 +1,4 @@
+import { renderCreditNoteSentEmail } from './creditNoteSent.ts';
 import { renderInvoiceSentEmail } from './invoiceSent.ts';
 import { renderQuoteSentEmail } from './quoteSent.ts';
 import { renderResendTestEmail } from './testResend.ts';
@@ -13,6 +14,8 @@ export function renderEmailTemplate<K extends EmailTemplateKey>(templateKey: K, 
       return renderQuoteSentEmail(data as EmailTemplateInputMap['quote.sent']);
     case 'invoice.sent':
       return renderInvoiceSentEmail(data as EmailTemplateInputMap['invoice.sent']);
+    case 'creditNote.sent':
+      return renderCreditNoteSentEmail(data as EmailTemplateInputMap['creditNote.sent']);
     default: {
       const exhaustiveCheck: never = templateKey;
       throw new Error(`Unknown email template: ${exhaustiveCheck}`);

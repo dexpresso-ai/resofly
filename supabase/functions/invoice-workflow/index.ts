@@ -116,6 +116,7 @@ serve(async (req) => {
       case 'sendInvoiceEmail': return json(req, { ok: true, ...(await sendInvoiceEmail(user.id, organizationId, invoiceId, body)) });
       case 'createInvoicePaymentCheckout': return json(req, { ok: true, ...(await createInvoicePaymentCheckout(user.id, organizationId, invoiceId, body)) });
       case 'createInvoiceRefund': return json(req, { ok: true, ...(await createInvoiceRefund(user.id, organizationId, role, invoiceId, body)) });
+      case 'sendCreditNoteEmail': return json(req, { ok: true, ...(await sendCreditNoteEmail(user.id, organizationId, body)) });
       case 'markMockInvoicePaymentPaid': return json(req, { ok: true, payment: await markMockInvoicePaymentPaid(String(body.providerPaymentId || '')) });
       case 'saveInvoiceMollieKey': return json(req, { ok: true, status: await saveInvoiceMollieKey(user.id, organizationId, role, body) });
       case 'deleteInvoiceMollieKey': return json(req, { ok: true, ...(await deleteInvoiceMollieKey(organizationId, role)) });
@@ -505,14 +506,17 @@ async function issueCreditNoteForRefund(input: { userId: string | null; organiza
   const created = await issueCreditNote({ organizationId, invoiceId: invoice.id, refundId: refund.id, userId, reason, currency, subtotal, vat, total, lines });
   const creditNoteNumber = String(created.number || '');
 
-  // 2. PDF renderen met het toegekende nummer en als base64 in de DB opslaan
-  //    (Fase 1 bewust geen R2: creditfactuur-PDF's zijn klein en self-contained).
-  //    De creditfactuur (ledger + nummer) is nu al definitief; een PDF-fout mag
-  //    de terugbetaling niet alsnog laten falen. Bij een fout loggen we en geven
-  //    we de creditnota zonder PDF terug (de PDF kan later opnieuw worden gemaakt).
+  // 2. PDF renderen met het toegekende nummer. Bij geconfigureerde storage gaat de
+  //    PDF naar private R2 (consistent met facturen), anders als base64 in de DB.
+  //    De creditfactuur (ledger + nummer) is al definitief; een PDF- of mailfout
+  //    mag de terugbetaling niet laten falen.
+  let finalCreditNote: Record<string, unknown> = created;
+  let pdfBase64: string | null = null;
   try {
     const attachment = await createCreditNotePdfAttachment({ creditNoteNumber, date: String(created.date || ''), invoice, client, company, currency, subtotal, vat, total, lines, reason });
     validateInvoicePdfAttachment(attachment);
+    const stored = await storeCreditNotePdfSnapshot(organizationId, invoice.id, String(created.id), attachment);
+    pdfBase64 = attachment.base64;
 
     const { error } = await supabaseAdmin
       .from('credit_notes')
@@ -521,18 +525,31 @@ async function issueCreditNoteForRefund(input: { userId: string | null; organiza
         pdf_mime_type: attachment.mimeType,
         pdf_size_bytes: attachment.sizeBytes,
         pdf_sha256: attachment.sha256,
-        pdf_data_base64: attachment.base64,
-        pdf_storage_provider: 'database',
+        pdf_data_base64: stored.shouldStoreBase64InDatabase ? attachment.base64 : null,
+        pdf_storage_provider: stored.provider,
+        pdf_storage_key: stored.key,
       })
       .eq('id', created.id)
       .eq('organization_id', organizationId);
     if (error) throw new Error(error.message);
 
-    return { ...created, pdf_file_name: attachment.fileName, pdf_mime_type: attachment.mimeType, pdf_size_bytes: attachment.sizeBytes, pdf_sha256: attachment.sha256, pdf_storage_provider: 'database' };
+    finalCreditNote = { ...created, pdf_file_name: attachment.fileName, pdf_mime_type: attachment.mimeType, pdf_size_bytes: attachment.sizeBytes, pdf_sha256: attachment.sha256, pdf_data_base64: stored.shouldStoreBase64InDatabase ? attachment.base64 : null, pdf_storage_provider: stored.provider, pdf_storage_key: stored.key };
   } catch (pdfError) {
     console.warn('Creditfactuur-PDF kon niet worden gegenereerd/opgeslagen; de creditnota zelf is wel aangemaakt.', pdfError instanceof Error ? pdfError.message : pdfError);
     return created;
   }
+
+  // 3. Creditfactuur automatisch naar de klant mailen (best-effort). Een mailfout
+  //    mag de terugbetaling niet laten falen; de handmatige knop kan 'm opnieuw sturen.
+  try {
+    if (client.email && RESEND_API_KEY && RESEND_FROM_EMAIL) {
+      await deliverCreditNoteEmail({ organizationId, userId, creditNote: finalCreditNote, invoice, client, company, recipientEmail: client.email, recipientName: null, pdfBase64: pdfBase64 ?? undefined });
+    }
+  } catch (emailError) {
+    console.warn('Creditfactuur automatisch mailen mislukte; de creditnota is wel aangemaakt.', emailError instanceof Error ? emailError.message : emailError);
+  }
+
+  return finalCreditNote;
 }
 
 // Volledige rijvorm van public.invoice_refunds zoals de RPC's die teruggeven.
@@ -691,7 +708,7 @@ async function issueCreditNote(input: { organizationId: string; invoiceId: strin
 async function loadCreditNote(organizationId: string, creditNoteId: string): Promise<Record<string, unknown> | null> {
   const { data, error } = await supabaseAdmin
     .from('credit_notes')
-    .select('id,organization_id,invoice_id,refund_id,number,date,reason,currency,subtotal_amount,vat_amount,total_amount,status,pdf_file_name,pdf_mime_type,pdf_size_bytes,pdf_sha256,pdf_data_base64,created_at')
+    .select('id,organization_id,invoice_id,refund_id,number,date,reason,currency,subtotal_amount,vat_amount,total_amount,status,pdf_file_name,pdf_mime_type,pdf_size_bytes,pdf_sha256,pdf_data_base64,pdf_storage_provider,pdf_storage_key,created_at')
     .eq('id', creditNoteId)
     .eq('organization_id', organizationId)
     .maybeSingle();
@@ -699,12 +716,29 @@ async function loadCreditNote(organizationId: string, creditNoteId: string): Pro
   return (data ?? null) as Record<string, unknown> | null;
 }
 
+// Haal de creditfactuur-PDF als base64 op uit de DB of (bij R2-opslag) uit private storage.
+async function loadCreditNotePdfBase64(creditNote: Record<string, unknown>): Promise<string> {
+  let base64 = String(creditNote.pdf_data_base64 || '').trim();
+  if (!base64 && creditNote.pdf_storage_provider === 'r2' && creditNote.pdf_storage_key) {
+    if (!INVOICE_PDF_STORAGE_WORKER_URL || !INVOICE_PDF_STORAGE_SECRET) {
+      throw new WorkflowHttpError('Creditfactuur-PDF staat in private storage, maar de storage-koppeling ontbreekt in de Edge Function secrets.', 500);
+    }
+    const response = await fetch(
+      `${INVOICE_PDF_STORAGE_WORKER_URL}/internal/invoice-snapshot/${encodeURIComponent(String(creditNote.pdf_storage_key))}`,
+      { headers: { Authorization: `Bearer ${INVOICE_PDF_STORAGE_SECRET}` } },
+    );
+    if (!response.ok) throw new WorkflowHttpError('Creditfactuur-PDF kon niet uit private storage worden opgehaald.', 502);
+    base64 = bytesToBase64(new Uint8Array(await response.arrayBuffer()));
+  }
+  return base64;
+}
+
 async function downloadCreditNotePdf(organizationId: string, body: Record<string, unknown>): Promise<{ pdf: { fileName: string; mimeType: string; base64: string; sizeBytes: number | null; sha256: string | null } }> {
   const creditNoteId = String(body.creditNoteId || '');
   if (!isUuid(creditNoteId)) throw new WorkflowHttpError('Ongeldige creditfactuur.', 400);
   const creditNote = await loadCreditNote(organizationId, creditNoteId);
   if (!creditNote) throw new WorkflowHttpError('Creditfactuur niet gevonden.', 404);
-  const base64 = String(creditNote.pdf_data_base64 || '').trim();
+  const base64 = await loadCreditNotePdfBase64(creditNote);
   if (!base64) throw new WorkflowHttpError('Voor deze creditfactuur is nog geen PDF beschikbaar.', 404);
   return {
     pdf: {
@@ -715,6 +749,137 @@ async function downloadCreditNotePdf(organizationId: string, body: Record<string
       sha256: (creditNote.pdf_sha256 as string | null) ?? null,
     },
   };
+}
+
+// Stuur de creditfactuur-PDF naar de klant via Resend. Gedeeld door de automatische
+// verzending (bij aanmaken) en de handmatige 'Mail creditfactuur'-actie.
+async function deliverCreditNoteEmail(input: { organizationId: string; userId: string | null; creditNote: Record<string, unknown>; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; recipientEmail: string; recipientName: string | null; pdfBase64?: string }): Promise<{ providerEmailId: string; recipientEmail: string }> {
+  if (!RESEND_API_KEY) throw new WorkflowHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
+  if (!RESEND_FROM_EMAIL) throw new WorkflowHttpError('RESEND_FROM_EMAIL ontbreekt in de Edge Function secrets.', 500);
+  const recipientEmail = String(input.recipientEmail || '').trim().toLowerCase();
+  if (!isEmail(recipientEmail)) throw new WorkflowHttpError('Vul een geldig klant-e-mailadres in voor de creditfactuur.', 422);
+
+  const base64 = input.pdfBase64 || await loadCreditNotePdfBase64(input.creditNote);
+  if (!base64) throw new WorkflowHttpError('Voor deze creditfactuur is nog geen PDF beschikbaar om te mailen.', 404);
+
+  const creditNoteNumber = String(input.creditNote.number || '');
+  const fileName = String(input.creditNote.pdf_file_name || `creditfactuur-${creditNoteNumber}.pdf`);
+  const recipientName = input.recipientName?.trim() || input.client.contact_name || input.client.name || null;
+
+  const rendered = renderEmailTemplate('creditNote.sent', {
+    creditNote: {
+      number: creditNoteNumber,
+      date: String(input.creditNote.date || ''),
+      total_amount: (input.creditNote.total_amount as number | string | null) ?? 0,
+      currency: String(input.creditNote.currency || input.invoice.currency || 'EUR'),
+      reason: (input.creditNote.reason as string | null) ?? null,
+    },
+    invoice: { number: input.invoice.number },
+    client: { name: input.client.name, contact_name: input.client.contact_name, email: input.client.email },
+    company: input.company,
+    recipientName,
+  });
+
+  const resendPayload = {
+    from: RESEND_FROM_EMAIL,
+    to: [recipientEmail],
+    reply_to: RESEND_REPLY_TO || undefined,
+    subject: rendered.subject,
+    html: rendered.html,
+    text: rendered.text,
+    attachments: [{ filename: fileName, content: base64 }],
+    tags: [
+      { name: 'organization_id', value: sanitizeTagValue(input.organizationId) },
+      { name: 'invoice_id', value: sanitizeTagValue(input.invoice.id) },
+      { name: 'credit_note_number', value: sanitizeTagValue(creditNoteNumber) },
+      { name: 'template_key', value: 'credit_note_sent' },
+    ],
+  };
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(`credit-note-${String(input.creditNote.id)}-${recipientEmail}`) },
+    body: JSON.stringify(resendPayload),
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    const message = String(payload.message || payload.error || response.statusText || 'Resend send failed');
+    throw new WorkflowHttpError(`Resend kon de creditfactuur niet versturen: ${message}`, 502);
+  }
+  const providerEmailId = String(payload.id || payload.email_id || '').trim();
+
+  // Event + audit (best-effort: een log-fout mag de geslaagde verzending niet ongedaan maken).
+  await supabaseAdmin.rpc('insert_invoice_workflow_event', {
+    p_organization_id: input.organizationId,
+    p_invoice_id: input.invoice.id,
+    p_event_type: 'credit_note_emailed',
+    p_title: 'Creditfactuur gemaild',
+    p_description: `Creditfactuur ${creditNoteNumber} verstuurd naar ${recipientEmail}.`,
+    p_metadata: { credit_note_id: input.creditNote.id, recipient_email: recipientEmail, provider_email_id: providerEmailId },
+    p_actor_user_id: input.userId,
+  }).catch((eventError) => console.warn('credit_note_emailed event insert mislukte', eventError instanceof Error ? eventError.message : eventError));
+
+  await supabaseAdmin.from('audit_logs').insert({
+    organization_id: input.organizationId,
+    actor_user_id: input.userId,
+    action: 'credit_note_emailed',
+    entity_type: 'credit_note',
+    entity_id: String(input.creditNote.id),
+    entity_label: creditNoteNumber,
+    metadata: { invoice_id: input.invoice.id, recipient_email: recipientEmail, provider_email_id: providerEmailId },
+  }).then(({ error }) => { if (error) console.warn('credit_note_emailed audit insert mislukte', error.message); });
+
+  return { providerEmailId, recipientEmail };
+}
+
+// Handmatige 'Mail creditfactuur'-actie (owner/admin/member via de write-gate).
+async function sendCreditNoteEmail(userId: string, organizationId: string, body: Record<string, unknown>) {
+  const creditNoteId = String(body.creditNoteId || '');
+  if (!isUuid(creditNoteId)) throw new WorkflowHttpError('Ongeldige creditfactuur.', 400);
+  const creditNote = await loadCreditNote(organizationId, creditNoteId);
+  if (!creditNote) throw new WorkflowHttpError('Creditfactuur niet gevonden.', 404);
+  const invoice = await loadInvoice(organizationId, String(creditNote.invoice_id));
+  if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
+  const [client, company] = await Promise.all([loadClient(organizationId, invoice.client_id), loadCompanySettings(organizationId)]);
+  const recipientEmail = String(body.recipientEmail || client.email || '').trim().toLowerCase();
+  const recipientName = String(body.recipientName || '').trim() || null;
+  const result = await deliverCreditNoteEmail({ organizationId, userId, creditNote, invoice, client, company, recipientEmail, recipientName });
+  return { sent: true, ...result };
+}
+
+// Slaat de creditfactuur-PDF op in private R2 (zelfde worker-route als facturen). De
+// key voldoet aan de worker-keyvalidatie {org}/invoice-pdfs/{uuid}/{uuid}-{naam}.pdf:
+// de factuur-id als midden-UUID, de creditnota-id als bestandsprefix. Een R2-fout is
+// niet fataal: dan vallen we terug op database-opslag (base64), zodat de creditfactuur
+// altijd beschikbaar blijft.
+async function storeCreditNotePdfSnapshot(organizationId: string, invoiceId: string, creditNoteId: string, attachment: InvoicePdfAttachment): Promise<StoredInvoicePdfSnapshot> {
+  const storageConfigured = Boolean(INVOICE_PDF_STORAGE_WORKER_URL && INVOICE_PDF_STORAGE_SECRET);
+  if (!storageConfigured) return { provider: 'database', key: null, shouldStoreBase64InDatabase: true };
+
+  const safeName = `${sanitizeFileName(attachment.fileName.replace(/\.pdf$/i, ''))}.pdf`;
+  const key = `${organizationId}/invoice-pdfs/${invoiceId}/${creditNoteId}-${safeName}`;
+  try {
+    const response = await fetch(`${INVOICE_PDF_STORAGE_WORKER_URL}/internal/invoice-snapshot`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${INVOICE_PDF_STORAGE_SECRET}`,
+        'Content-Type': attachment.mimeType,
+        'X-Storage-Key': key,
+        'X-SHA256': attachment.sha256,
+        'X-Size-Bytes': String(attachment.sizeBytes),
+      },
+      body: attachment.bytes,
+    });
+    if (!response.ok) {
+      const message = await response.text().catch(() => response.statusText);
+      console.warn('Creditfactuur R2-upload mislukte; val terug op database-opslag.', { status: response.status, message, key });
+      return { provider: 'database', key: null, shouldStoreBase64InDatabase: true };
+    }
+    return { provider: 'r2', key, shouldStoreBase64InDatabase: false };
+  } catch (error) {
+    console.warn('Creditfactuur R2-upload gooide een fout; val terug op database-opslag.', error instanceof Error ? error.message : error);
+    return { provider: 'database', key: null, shouldStoreBase64InDatabase: true };
+  }
 }
 
 async function handleMollieWebhook(req: Request, url: URL, body: Record<string, string>) {
@@ -732,14 +897,14 @@ async function handleMollieWebhook(req: Request, url: URL, body: Record<string, 
     return json(req, { ok: true });
   }
 
-  // Mollie pingt de payment-webhook met de payment-id (tr_) — óók bij refund-
-  // statuswijzigingen. Voor de zekerheid vangen we ook een refund-id (re_) op.
+  // Mollie pingt de payment-webhook met de payment-id (tr_) — óók bij refund- en
+  // chargeback-statuswijzigingen. Voor de zekerheid vangen we ook een refund-id (re_) op.
   let record = await findInvoicePaymentRecordByProviderId(eventId);
   let molliePaymentId = eventId;
   if (!record && eventId.startsWith('re_')) {
     const viaRefund = await findPaymentRecordByRefundId(eventId);
     if (viaRefund?.provider_payment_id) {
-      record = { id: viaRefund.id, organization_id: viaRefund.organization_id };
+      record = { id: viaRefund.id, organization_id: viaRefund.organization_id, invoice_id: viaRefund.invoice_id };
       molliePaymentId = viaRefund.provider_payment_id;
     }
   }
@@ -748,8 +913,8 @@ async function handleMollieWebhook(req: Request, url: URL, body: Record<string, 
   const orgKey = await resolveOrganizationMollieKey(record.organization_id);
   if (!orgKey) { console.warn('invoice-workflow webhook: no Mollie key for organization; cannot verify payment'); return json(req, { ok: true, unverifiable: true }); }
 
-  // embed=refunds: in één call zowel de betaalstatus als alle refund-statussen ophalen.
-  const response = await fetch(`https://api.mollie.com/v2/payments/${encodeURIComponent(molliePaymentId)}?embed=refunds`, { headers: { Authorization: `Bearer ${orgKey.apiKey}` } });
+  // embed=refunds,chargebacks: in één call de betaalstatus + alle refunds + chargebacks.
+  const response = await fetch(`https://api.mollie.com/v2/payments/${encodeURIComponent(molliePaymentId)}?embed=refunds,chargebacks`, { headers: { Authorization: `Bearer ${orgKey.apiKey}` } });
   const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) return json(req, { ok: false, error: 'Mollie payment ophalen mislukt.' }, 502);
 
@@ -758,16 +923,34 @@ async function handleMollieWebhook(req: Request, url: URL, body: Record<string, 
   const { error } = await supabaseAdmin.rpc('update_invoice_payment_status', { p_provider_payment_id: molliePaymentId, p_status: status, p_paid_at: paidAt, p_metadata: { mollie: payload } });
   if (error) return json(req, { ok: false, error: error.message }, 500);
 
-  // Refunds reconciliëren (Fase 2). Reconciliatiefouten mogen de webhook niet 500'en —
-  // Mollie zou dan blijven retryen; de creditfactuur-stap is bovendien idempotent.
-  await reconcilePaymentRefunds(record.organization_id, payload)
+  // Refunds + chargebacks reconciliëren (Fase 2/3). Fouten hier mogen de webhook niet
+  // 500'en — Mollie zou dan blijven retryen; alle vervolgstappen zijn idempotent.
+  const paymentContext: PaymentContext = { invoiceId: record.invoice_id, paymentRecordId: record.id };
+  await reconcilePaymentRefunds(record.organization_id, payload, paymentContext)
     .catch((reconcileError) => console.warn('refund-reconciliatie mislukte', reconcileError instanceof Error ? reconcileError.message : reconcileError));
+  await reconcilePaymentChargebacks(record.organization_id, payload, paymentContext)
+    .catch((reconcileError) => console.warn('chargeback-reconciliatie mislukte', reconcileError instanceof Error ? reconcileError.message : reconcileError));
 
   return json(req, { ok: true });
 }
 
+type PaymentContext = { invoiceId: string; paymentRecordId: string };
+
+// Reken een Mollie-bedrag ({ currency, value: "10.00" }) om naar hele centen.
+function mollieAmountToCents(amount: unknown): number {
+  const value = (amount && typeof amount === 'object') ? (amount as Record<string, unknown>).value : amount;
+  const parsed = Number(String(value ?? '').trim());
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.round(parsed * 100);
+}
+
+function mollieAmountCurrency(amount: unknown, fallback = 'EUR'): string {
+  const currency = (amount && typeof amount === 'object') ? (amount as Record<string, unknown>).currency : null;
+  return String(currency || fallback) || fallback;
+}
+
 // Werk de refund-ledger bij op basis van de in de payment ge-embedde refunds.
-async function reconcilePaymentRefunds(organizationId: string, paymentPayload: Record<string, unknown>): Promise<void> {
+async function reconcilePaymentRefunds(organizationId: string, paymentPayload: Record<string, unknown>, context: PaymentContext): Promise<void> {
   const embedded = paymentPayload._embedded as Record<string, unknown> | undefined;
   const refunds = Array.isArray(embedded?.refunds) ? (embedded!.refunds as Array<Record<string, unknown>>) : [];
   for (const mollieRefund of refunds) {
@@ -775,16 +958,25 @@ async function reconcilePaymentRefunds(organizationId: string, paymentPayload: R
     if (!providerRefundId) continue;
     const status = normalizeMollieRefundStatus(String(mollieRefund.status || ''));
     try {
-      await reconcileOneRefund(organizationId, providerRefundId, status, mollieRefund);
+      await reconcileOneRefund(organizationId, providerRefundId, status, mollieRefund, context);
     } catch (refundError) {
       console.warn(`refund ${providerRefundId} reconciliatie mislukte`, refundError instanceof Error ? refundError.message : refundError);
     }
   }
 }
 
-async function reconcileOneRefund(organizationId: string, providerRefundId: string, status: 'queued' | 'pending' | 'processing' | 'refunded' | 'failed' | 'canceled', mollieRefund: Record<string, unknown>): Promise<void> {
-  const refund = await findRefundByProviderId(organizationId, providerRefundId);
-  if (!refund) return; // Externe refund (bijv. via Mollie-dashboard): buiten scope van fase 2.
+async function reconcileOneRefund(organizationId: string, providerRefundId: string, status: 'queued' | 'pending' | 'processing' | 'refunded' | 'failed' | 'canceled', mollieRefund: Record<string, unknown>, context: PaymentContext): Promise<void> {
+  let refund = await findRefundByProviderId(organizationId, providerRefundId);
+
+  // Externe refund (bijv. via het Mollie-dashboard): in de administratie opnemen (Fase 3).
+  if (!refund) {
+    const amountCents = mollieAmountToCents(mollieRefund.amount);
+    if (amountCents <= 0) return;
+    refund = await ingestExternalRefund(
+      organizationId, context.invoiceId, context.paymentRecordId, providerRefundId,
+      amountCents, status, mollieAmountCurrency(mollieRefund.amount), String(mollieRefund.description || '') || null, { mollie_refund: mollieRefund },
+    );
+  }
 
   if (refund.status === status) {
     // Status ongewijzigd; vang alleen het geval op dat 'refunded' is maar de
@@ -815,8 +1007,62 @@ async function findRefundByProviderId(organizationId: string, providerRefundId: 
   return (data ?? null) as RefundRow | null;
 }
 
+// Neem een in Mollie aangemaakte refund op in de ledger (idempotent op provider_refund_id).
+async function ingestExternalRefund(organizationId: string, invoiceId: string, paymentRecordId: string, providerRefundId: string, amountCents: number, status: string, currency: string, reason: string | null, metadata: Record<string, unknown>): Promise<RefundRow> {
+  const { data, error } = await supabaseAdmin.rpc('ingest_external_refund', {
+    p_organization_id: organizationId,
+    p_invoice_id: invoiceId,
+    p_payment_record_id: paymentRecordId,
+    p_provider_refund_id: providerRefundId,
+    p_amount_cents: amountCents,
+    p_status: status,
+    p_currency: currency,
+    p_reason: reason,
+    p_metadata: metadata,
+  });
+  if (error) throwRpcError('ingest_external_refund', error);
+  return data as RefundRow;
+}
+
+// Werk de chargeback-ledger bij op basis van de in de payment ge-embedde chargebacks.
+async function reconcilePaymentChargebacks(organizationId: string, paymentPayload: Record<string, unknown>, context: PaymentContext): Promise<void> {
+  const embedded = paymentPayload._embedded as Record<string, unknown> | undefined;
+  const chargebacks = Array.isArray(embedded?.chargebacks) ? (embedded!.chargebacks as Array<Record<string, unknown>>) : [];
+  for (const mollieChargeback of chargebacks) {
+    const providerChargebackId = String(mollieChargeback.id || '').trim();
+    if (!providerChargebackId) continue;
+    try {
+      await reconcileOneChargeback(organizationId, providerChargebackId, mollieChargeback, context);
+    } catch (chargebackError) {
+      console.warn(`chargeback ${providerChargebackId} reconciliatie mislukte`, chargebackError instanceof Error ? chargebackError.message : chargebackError);
+    }
+  }
+}
+
+async function reconcileOneChargeback(organizationId: string, providerChargebackId: string, mollieChargeback: Record<string, unknown>, context: PaymentContext): Promise<void> {
+  const amountCents = mollieAmountToCents(mollieChargeback.amount);
+  if (amountCents <= 0) return;
+  const settlementCents = mollieChargeback.settlementAmount ? mollieAmountToCents(mollieChargeback.settlementAmount) : null;
+  const reversed = Boolean(mollieChargeback.reversedAt);
+  const reasonObj = mollieChargeback.reason as Record<string, unknown> | string | undefined;
+  const reason = typeof reasonObj === 'object' && reasonObj ? String(reasonObj.description || '') : String(reasonObj || '');
+  const { error } = await supabaseAdmin.rpc('record_invoice_chargeback', {
+    p_organization_id: organizationId,
+    p_invoice_id: context.invoiceId,
+    p_payment_record_id: context.paymentRecordId,
+    p_provider_chargeback_id: providerChargebackId,
+    p_amount_cents: amountCents,
+    p_currency: mollieAmountCurrency(mollieChargeback.amount),
+    p_reason: reason || null,
+    p_reversed: reversed,
+    p_settlement_amount_cents: settlementCents,
+    p_metadata: { mollie_chargeback: mollieChargeback },
+  });
+  if (error) throwRpcError('record_invoice_chargeback', error);
+}
+
 // Fallback voor een webhook met een refund-id (re_): zoek het bijbehorende payment-record.
-async function findPaymentRecordByRefundId(providerRefundId: string): Promise<{ id: string; organization_id: string; provider_payment_id: string | null } | null> {
+async function findPaymentRecordByRefundId(providerRefundId: string): Promise<{ id: string; organization_id: string; invoice_id: string; provider_payment_id: string | null } | null> {
   const { data: refund } = await supabaseAdmin
     .from('invoice_refunds')
     .select('id,organization_id,payment_record_id')
@@ -826,10 +1072,10 @@ async function findPaymentRecordByRefundId(providerRefundId: string): Promise<{ 
   if (!paymentRecordId) return null;
   const { data: payment } = await supabaseAdmin
     .from('invoice_payment_records')
-    .select('id,organization_id,provider_payment_id')
+    .select('id,organization_id,invoice_id,provider_payment_id')
     .eq('id', paymentRecordId)
     .maybeSingle();
-  return (payment ?? null) as { id: string; organization_id: string; provider_payment_id: string | null } | null;
+  return (payment ?? null) as { id: string; organization_id: string; invoice_id: string; provider_payment_id: string | null } | null;
 }
 
 async function markMockInvoicePaymentPaid(providerPaymentId: string) {
@@ -942,15 +1188,15 @@ async function resolveOrganizationMollieKey(organizationId: string): Promise<{ a
   }
 }
 
-async function findInvoicePaymentRecordByProviderId(providerPaymentId: string): Promise<{ id: string; organization_id: string } | null> {
+async function findInvoicePaymentRecordByProviderId(providerPaymentId: string): Promise<{ id: string; organization_id: string; invoice_id: string } | null> {
   const { data, error } = await supabaseAdmin
     .from('invoice_payment_records')
-    .select('id,organization_id')
+    .select('id,organization_id,invoice_id')
     .eq('provider', 'mollie')
     .eq('provider_payment_id', providerPaymentId)
     .maybeSingle();
   if (error) return null;
-  return (data ?? null) as { id: string; organization_id: string } | null;
+  return (data ?? null) as { id: string; organization_id: string; invoice_id: string } | null;
 }
 
 async function loadInvoice(organizationId: string, invoiceId: string): Promise<InvoiceRow> {

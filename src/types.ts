@@ -11,11 +11,12 @@ export type QuoteApprovalStatus = 'draft' | 'pending' | 'approved' | 'rejected';
 export type QuoteWorkflowEventType = 'created' | 'updated' | 'submitted_for_internal_approval' | 'internal_approval_granted' | 'internal_approval_rejected' | 'public_token_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'client_accepted' | 'client_rejected' | 'quote_version_created' | 'quote_pdf_attached' | 'expired' | 'cancelled' | 'void' | 'written_off';
 export type QuoteEmailDeliveryStatus = 'queued' | 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'failed' | 'complained';
 export type InvoiceEmailDeliveryStatus = QuoteEmailDeliveryStatus;
-export type InvoiceWorkflowEventType = 'created_from_quote' | 'public_token_created' | 'public_link_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'payment_link_created' | 'payment_open' | 'payment_paid' | 'payment_failed' | 'payment_expired' | 'invoice_version_created' | 'invoice_pdf_attached' | 'locked' | 'expired' | 'cancelled' | 'void' | 'written_off' | 'payment_refunded' | 'credit_note_issued';
+export type InvoiceWorkflowEventType = 'created_from_quote' | 'public_token_created' | 'public_link_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'payment_link_created' | 'payment_open' | 'payment_paid' | 'payment_failed' | 'payment_expired' | 'invoice_version_created' | 'invoice_pdf_attached' | 'locked' | 'expired' | 'cancelled' | 'void' | 'written_off' | 'payment_refunded' | 'credit_note_issued' | 'payment_charged_back' | 'chargeback_reversed' | 'credit_note_emailed';
 export type InvoiceVersionReason = 'sent_to_client' | 'payment_created' | 'paid' | 'manual';
 export type InvoicePaymentStatus = 'creating' | 'open' | 'pending' | 'authorized' | 'paid' | 'failed' | 'expired' | 'canceled' | 'refunded' | 'charged_back';
 export type InvoiceRefundKind = 'manual' | 'mollie';
 export type InvoiceRefundStatus = 'queued' | 'pending' | 'processing' | 'refunded' | 'failed' | 'canceled';
+export type InvoiceChargebackStatus = 'charged_back' | 'reversed';
 export type CreditNoteStatus = 'draft' | 'issued' | 'void';
 export type InvoiceTemplateKind = 'none' | 'pdf' | 'image';
 export type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
@@ -312,6 +313,8 @@ export interface Invoice extends OrgScopedRow {
   currency?: string;
   refunded_amount?: number;
   refunded_at?: string | null;
+  charged_back_amount?: number;
+  charged_back_at?: string | null;
   locked_at?: string | null;
   locked_reason?: string | null;
   public_token_hash?: string | null;
@@ -452,6 +455,25 @@ export interface InvoiceRefund {
   updated_at: string;
 }
 
+export interface InvoiceChargeback {
+  id: UUID;
+  organization_id: UUID;
+  invoice_id: UUID;
+  payment_record_id: UUID | null;
+  provider: string;
+  provider_chargeback_id: string | null;
+  status: InvoiceChargebackStatus;
+  amount_cents: number;
+  settlement_amount_cents: number | null;
+  currency: string;
+  reason: string | null;
+  charged_back_at: string;
+  reversed_at: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CreditNote {
   id: UUID;
   organization_id: UUID;
@@ -518,7 +540,7 @@ export interface InvoiceMollieSettingsStatus {
   last_validated_at: string | null;
 }
 
-export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; notes: Note[]; noteCalendarLinks: NoteCalendarLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; notes: Note[]; noteCalendarLinks: NoteCalendarLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';

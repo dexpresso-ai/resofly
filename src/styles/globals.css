@@ -986,6 +986,8 @@ body::before{
 
 /* Refunds + credit notes — 2026-06-02 */
 .fin-status.refunded { background:rgba(255,149,89,.15); color:#ffb27a; }
+.fin-status.charged-back { background:rgba(240,107,107,.16); color:#ff9b9b; }
+.cn-pill-actions { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
 .refund-form { display:grid; gap:14px; }
 .refund-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; }
 .refund-method { display:grid; grid-template-columns:1fr 1fr; gap:8px; }

@@ -32,6 +32,7 @@ import {
   downloadInvoicePdfSnapshot,
   createInvoiceRefund,
   downloadCreditNotePdf,
+  sendCreditNoteEmail,
   loadInvoiceMollieStatus,
   updateOrganizationMemberRole,
   updateRow,
@@ -69,7 +70,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id'>> }
   | null;
 
-const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], notes: [], noteCalendarLinks: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], attachments: [], companySettings: null };
+const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], notes: [], noteCalendarLinks: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], attachments: [], companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
@@ -578,6 +579,19 @@ function App() {
     }
   }
 
+  async function emailCreditNote(creditNote: CreditNote) {
+    if (!ensureCanWrite()) return;
+    setLoading(true); setError(null);
+    try {
+      await sendCreditNoteEmail(activeOrg.id, creditNote.id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Creditfactuur mailen mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function saveCompanySettings(values: CompanySettingsInput) {
     if (!ensureCanAdmin()) throw new Error('Alleen owners en admins kunnen deze organisatie-instellingen aanpassen.');
     setLoading(true); setError(null);
@@ -673,7 +687,7 @@ function App() {
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>setEdit({kind:'ticket', item})} onConvert={convert}/>;
     if (page === 'notes') return <Notes data={data} onNew={() => ensureCanWrite() && setEdit({kind:'note'})} onEdit={(item)=>setEdit({kind:'note', item})}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
-    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onDownloadPdf={downloadInvoicePdf} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote}/>;
+    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onDownloadPdf={downloadInvoicePdf} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onEmailCreditNote={emailCreditNote}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} onPlanTask={updateTaskPlanning} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'calendar-settings') return <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;

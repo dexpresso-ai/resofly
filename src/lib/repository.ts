@@ -17,6 +17,7 @@ import type {
   InvoiceWorkflowEvent,
   InvoiceMollieSettingsStatus,
   CreditNote,
+  InvoiceChargeback,
   Note,
   CalendarNoteLinkInput,
   NoteCalendarLink,
@@ -279,17 +280,18 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     invoiceVersions,
     invoiceRefunds,
     creditNotes,
+    invoiceChargebacks,
     attachments,
     companySettings,
   ] = await Promise.all([
     select<Client>('clients', organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
     select<Note>('notes', organizationId), selectNoteCalendarLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
-    selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId),
+    selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId),
     select<Attachment>('attachments', organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, notes, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, attachments, companySettings };
+  return { clients, projects, tasks, tickets, notes, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, attachments, companySettings };
 }
 
 export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
@@ -435,6 +437,23 @@ export async function selectCreditNotes(organizationId: UUID): Promise<CreditNot
     throw error;
   }
   return (data ?? []) as CreditNote[];
+}
+
+export async function selectInvoiceChargebacks(organizationId: UUID): Promise<InvoiceChargeback[]> {
+  const { data, error } = await supabase
+    .from('invoice_chargebacks')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/invoice_chargebacks|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('invoice_chargebacks is nog niet beschikbaar. Voer de migratie 20260603_invoice_chargebacks_external_refunds.sql uit.', error);
+      return [];
+    }
+    throw error;
+  }
+  return (data ?? []) as InvoiceChargeback[];
 }
 
 export async function selectInvoiceVersions(organizationId: UUID): Promise<InvoiceVersion[]> {
@@ -870,6 +889,19 @@ export async function downloadCreditNotePdf(organizationId: UUID, creditNoteId: 
   } finally {
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
+}
+
+/**
+ * Mail de creditfactuur-PDF naar de klant via de Edge Function (Resend). Optioneel
+ * een afwijkend e-mailadres; standaard gaat hij naar het klant-e-mailadres.
+ */
+export async function sendCreditNoteEmail(organizationId: UUID, creditNoteId: UUID, recipientEmail?: string): Promise<{ providerEmailId: string; recipientEmail: string }> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'sendCreditNoteEmail', organizationId, creditNoteId, recipientEmail },
+  });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || 'Creditfactuur mailen mislukt');
+  return data as { providerEmailId: string; recipientEmail: string };
 }
 
 /**
