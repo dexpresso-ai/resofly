@@ -246,6 +246,8 @@ interface DragState { dayIndex: number; startSlot: number; endSlot: number }
 
 /* ── TimeBlockGrid ───────────────────────────────────────────────────── */
 
+const MAX_OVERLAP_COLS = 2;
+
 type TimedEventSegment = {
   event: CalendarExternalEvent;
   startMinute: number;
@@ -258,7 +260,12 @@ type TimedEventSegment = {
   endsAfterDay: boolean;
 };
 
-function layoutTimedEventsForDay(day: Date, events: CalendarExternalEvent[]): TimedEventSegment[] {
+type OverflowChip = { top: number; count: number };
+
+function layoutTimedEventsForDay(
+  day: Date,
+  events: CalendarExternalEvent[],
+): { segments: TimedEventSegment[]; overflows: OverflowChip[] } {
   const { start: visibleStartBound, end: visibleEndBound } = visibleTimeBounds(day);
   const minutesInWindow = (HOUR_END - HOUR_START) * 60;
   const raw = events
@@ -292,6 +299,8 @@ function layoutTimedEventsForDay(day: Date, events: CalendarExternalEvent[]): Ti
   });
   if (current.length) clusters.push(current);
 
+  const overflows: OverflowChip[] = [];
+
   clusters.forEach(cluster => {
     const columnEnds: number[] = [];
     cluster.forEach(segment => {
@@ -300,11 +309,15 @@ function layoutTimedEventsForDay(day: Date, events: CalendarExternalEvent[]): Ti
       segment.column = column;
       columnEnds[column] = segment.endMinute;
     });
-    const columns = Math.max(1, columnEnds.length);
-    cluster.forEach(segment => { segment.columns = columns; });
+    const visibleCols = Math.min(Math.max(1, columnEnds.length), MAX_OVERLAP_COLS);
+    const hidden = cluster.filter(s => s.column >= MAX_OVERLAP_COLS);
+    if (hidden.length > 0) {
+      overflows.push({ top: hidden[0].top, count: hidden.length });
+    }
+    cluster.forEach(segment => { segment.columns = visibleCols; });
   });
 
-  return raw;
+  return { segments: raw.filter(s => s.column < MAX_OVERLAP_COLS), overflows };
 }
 
 function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent }: {
@@ -444,7 +457,7 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
             ))}
 
             {days.map((day, di) => {
-              const daySegments = layoutTimedEventsForDay(day, events);
+              const { segments: daySegments, overflows: dayOverflows } = layoutTimedEventsForDay(day, events);
               const isToday = today(day);
               const nowFrac = isToday ? dateToVisibleDayFraction(day, now) : 0;
               return (
@@ -499,6 +512,12 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
                       </button>
                     );
                   })}
+
+                  {dayOverflows.map((ov, i) => (
+                    <div key={`ov-${di}-${i}`} className="tb-overflow-chip" style={{ top: `${ov.top}%` }}>
+                      +{ov.count}
+                    </div>
+                  ))}
                 </div>
               );
             })}
