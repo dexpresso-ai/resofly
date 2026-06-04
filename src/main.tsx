@@ -46,6 +46,7 @@ import { ClientDetailPage, Clients } from './features/Clients';
 import { ProjectPage, ProjectsListPage, ProjectsPlanningPage } from './features/Projects';
 import { Tickets } from './features/Tickets';
 import { Notes, RelatedNotes, noteTypeLabels } from './features/Notes';
+import { Documents, documentTypeLabels } from './features/Documents';
 import { Invoices, Quotes, type RefundInput } from './features/Finance';
 import { PublicQuotePage } from './features/PublicQuotePage';
 import { PublicInvoicePage } from './features/PublicInvoicePage';
@@ -56,23 +57,24 @@ import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat } from './components/GerrieChat';
 import { exportFinancePDF } from './lib/pdf';
 import type {
-  AppData, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettingsInput, CreditNote, EntityType, FinanceLine, Invoice, Note, OrganizationContext, OrganizationRole, Project, Quote, Task, TaskStatus, Ticket, Subtask, Comment as TaskComment,
+  AppData, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettingsInput, CreditNote, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationRole, Project, Quote, Task, TaskStatus, Ticket, Subtask, Comment as TaskComment,
 } from './types';
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'notes'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
 type EditMode =
   | { kind: 'client'; item?: Client }
   | { kind: 'project'; item?: Project }
   | { kind: 'task'; item?: Task; projectId: string }
   | { kind: 'ticket'; item?: Ticket }
   | { kind: 'note'; item?: Note; defaults?: Partial<Pick<Note, 'client_id' | 'project_id' | 'title' | 'content' | 'note_type' | 'tags'>>; calendarLink?: CalendarNoteLinkInput }
+  | { kind: 'document'; item?: InternalDocument; defaults?: Partial<Pick<InternalDocument, 'client_id' | 'project_id' | 'title' | 'content' | 'document_type'>> }
   | { kind: 'quote'; item?: Quote; defaults?: Partial<Pick<Quote, 'client_id' | 'project_id'>> }
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id'>> }
   | null;
 
-const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], notes: [], noteCalendarLinks: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], attachments: [], companySettings: null };
+const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], notes: [], documents: [], noteCalendarLinks: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], attachments: [], companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
@@ -82,11 +84,12 @@ const editKindToTable: Record<NonNullable<EditMode>['kind'], Table> = {
   task: 'tasks',
   ticket: 'tickets',
   note: 'notes',
+  document: 'documents',
   quote: 'quotes',
   invoice: 'invoices',
 };
 
-const editKindToEntity: Record<NonNullable<EditMode>['kind'], EntityType> = {
+const editKindToEntity: Record<Exclude<NonNullable<EditMode>['kind'], 'document'>, EntityType> = {
   client: 'client',
   project: 'project',
   task: 'task',
@@ -348,6 +351,11 @@ function App() {
           }
           break;
         }
+        case 'document':
+          edit.item
+            ? await updateRow<InternalDocument>('documents', edit.item.id, values, activeOrg.id)
+            : await insertRow<InternalDocument>('documents', activeOrg.id, values);
+          break;
         case 'quote':
           edit.item
             ? await updateRow<Quote>('quotes', edit.item.id, values, activeOrg.id)
@@ -680,7 +688,7 @@ function App() {
     }
   }
 
-  const title = page === 'project' ? project?.name ?? 'Project' : page === 'client' ? client?.name ?? 'Klant' : ({dashboard:'Dashboard',weekplanner:'Weekplanner',calendar:'Kalender','calendar-settings':'Agenda-instellingen',stats:'Statistieken',notes:'Notities',clients:'Klanten',projects:'Projecten','project-planning':'Projectplanning',tickets:'Tickets',quotes:'Offertes',invoices:'Facturen',archive:'Archief',settings:'Instellingen',project:'Project',client:'Klant'} as Record<Page,string>)[page];
+  const title = page === 'project' ? project?.name ?? 'Project' : page === 'client' ? client?.name ?? 'Klant' : ({dashboard:'Dashboard',weekplanner:'Weekplanner',calendar:'Kalender','calendar-settings':'Agenda-instellingen',stats:'Statistieken',notes:'Notities',documents:'Documenten',clients:'Klanten',projects:'Projecten','project-planning':'Projectplanning',tickets:'Tickets',quotes:'Offertes',invoices:'Facturen',archive:'Archief',settings:'Instellingen',project:'Project',client:'Klant'} as Record<Page,string>)[page];
 
   return <div className="app">
     <Sidebar page={page} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); }}/>
@@ -706,6 +714,7 @@ function App() {
     if (page === 'clients') return <Clients data={data} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>setEdit({kind:'ticket', item})} onConvert={convert}/>;
     if (page === 'notes') return <Notes data={data} onNew={() => ensureCanWrite() && setEdit({kind:'note'})} onEdit={(item)=>setEdit({kind:'note', item})}/>;
+    if (page === 'documents') return <Documents data={data} onNew={() => ensureCanWrite() && setEdit({kind:'document'})} onEdit={(item)=>setEdit({kind:'document', item})}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onDownloadPdf={downloadInvoicePdf} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onEmailCreditNote={emailCreditNote}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} onPlanTask={updateTaskPlanning} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
@@ -851,7 +860,7 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
   }, [data.clients, edit.kind, form, item]);
   const saveBlockedByDuplicate = Boolean(clientDuplicateIssue?.blocksSave);
 
-  const attachmentBlock = item ? <AttachmentList
+  const attachmentBlock = item && edit.kind !== 'document' ? <AttachmentList
     attachments={data.attachments}
     entityType={editKindToEntity[edit.kind]}
     entityId={item.id}
@@ -860,7 +869,7 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
   /> : null;
 
   const modalClassName = [
-    edit.kind === 'note' ? 'modal-note-editor' : '',
+    edit.kind === 'note' || edit.kind === 'document' ? 'modal-note-editor' : '',
     edit.kind === 'quote' || edit.kind === 'invoice' ? 'modal-finance-editor' : '',
     edit.kind === 'quote' ? 'modal-quote-editor' : '',
     edit.kind === 'client' ? 'modal-client-editor' : '',
@@ -938,6 +947,20 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
       {item && <div className="note-created-meta"><span>Aangemaakt: {new Date((item as Note).created_at).toLocaleString('nl-NL')}</span><span>Bijgewerkt: {new Date((item as Note).updated_at).toLocaleString('nl-NL')}</span></div>}
       {!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.note} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}
       {attachmentBlock}
+    </FormGrid>}
+    {edit.kind === 'document' && <FormGrid>
+      <Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Documenttitel"/>
+      <Field label="Categorie">
+        <Select value={form.document_type} onChange={e=>set('document_type',e.target.value)} disabled={disabled}>{Object.entries(documentTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select>
+      </Field>
+      <RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf de inhoud van het document…" disabled={disabled}/>
+      <Field label="Klant">
+        <Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
+      </Field>
+      <Field label="Project">
+        <Select value={form.project_id} onChange={e=>set('project_id',e.target.value)} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
+      </Field>
+      {item && <div className="note-created-meta"><span>Aangemaakt: {new Date((item as InternalDocument).created_at).toLocaleString('nl-NL')}</span><span>Bijgewerkt: {new Date((item as InternalDocument).updated_at).toLocaleString('nl-NL')}</span></div>}
     </FormGrid>}
     {(edit.kind === 'quote' || edit.kind === 'invoice') && <FinanceForm kind={edit.kind} data={data} organizationId={organizationId} form={form} set={set} item={item} readOnly={effectiveReadOnly} onUploaded={onAttachmentsChanged} attachmentBlock={attachmentBlock}/>}
   </Modal>;
@@ -1412,6 +1435,10 @@ function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string,
     const item = edit.item;
     return { title: item?.title ?? edit.defaults?.title ?? "", content: item?.content ?? edit.defaults?.content ?? "", note_type: item?.note_type ?? edit.defaults?.note_type ?? "general", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", tags: item?.tags?.join(", ") ?? edit.defaults?.tags?.join(", ") ?? "", _calLink: edit.calendarLink ?? null };
   }
+  if (edit.kind === "document") {
+    const item = edit.item;
+    return { title: item?.title ?? edit.defaults?.title ?? "", content: item?.content ?? edit.defaults?.content ?? "", document_type: item?.document_type ?? edit.defaults?.document_type ?? "general", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "" };
+  }
   const today = new Date().toISOString().slice(0,10);
   if (edit.kind === "quote") {
     const item = edit.item;
@@ -1440,6 +1467,11 @@ function cleanForm(kind: string, form: Record<string, any>) {
   if (kind === 'note') {
     cleaned.note_type = typeof cleaned.note_type === 'string' && cleaned.note_type ? cleaned.note_type : 'general';
     cleaned.title = String(cleaned.title || '').trim() || `Notitie ${new Date().toLocaleDateString('nl-NL')}`;
+    cleaned.content = sanitizeRichText(String(cleaned.content || ''));
+  }
+  if (kind === 'document') {
+    cleaned.document_type = typeof cleaned.document_type === 'string' && cleaned.document_type ? cleaned.document_type : 'general';
+    cleaned.title = String(cleaned.title || '').trim() || `Document ${new Date().toLocaleDateString('nl-NL')}`;
     cleaned.content = sanitizeRichText(String(cleaned.content || ''));
   }
   if (kind === 'task') {

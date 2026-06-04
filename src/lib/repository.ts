@@ -19,6 +19,7 @@ import type {
   CreditNote,
   InvoiceChargeback,
   Note,
+  InternalDocument,
   CalendarNoteLinkInput,
   NoteCalendarLink,
   Organization,
@@ -39,7 +40,7 @@ import type {
   UUID,
 } from '../types';
 
-const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'quotes', 'invoices', 'attachments', 'company_settings'] as const;
+const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'quotes', 'invoices', 'attachments', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -52,6 +53,7 @@ const tableToEntity: Record<Table, EntityType | null> = {
   tasks: 'task',
   tickets: 'ticket',
   notes: 'note',
+  documents: null,
   quotes: 'quote',
   invoices: 'invoice',
   attachments: null,
@@ -268,6 +270,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     tasks,
     tickets,
     notes,
+    documents,
     noteCalendarLinks,
     quotes,
     quoteApprovalEvents,
@@ -285,13 +288,13 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     companySettings,
   ] = await Promise.all([
     select<Client>('clients', organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
-    select<Note>('notes', organizationId), selectNoteCalendarLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
+    select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId),
     select<Attachment>('attachments', organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, notes, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, attachments, companySettings };
+  return { clients, projects, tasks, tickets, notes, documents, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, attachments, companySettings };
 }
 
 export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
@@ -471,6 +474,25 @@ export async function selectInvoiceVersions(organizationId: UUID): Promise<Invoi
     throw error;
   }
   return (data ?? []) as InvoiceVersion[];
+}
+
+export async function selectDocuments(organizationId: UUID): Promise<InternalDocument[]> {
+  const { data, error } = await supabase
+    .from('documents')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/documents|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('documents is nog niet beschikbaar. Voer de migratie 20260604000000_internal_documents.sql uit om interne documenten te activeren.', error);
+      return [];
+    }
+    throw error;
+  }
+
+  return (data ?? []) as InternalDocument[];
 }
 
 export async function selectNoteCalendarLinks(organizationId: UUID): Promise<NoteCalendarLink[]> {

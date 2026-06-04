@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Archive, BarChart3, Calendar, ChevronDown, ChevronRight, FileText, FolderOpen, LayoutDashboard, Receipt, Settings, StickyNote, Ticket, Users } from 'lucide-react';
+import { Archive, BarChart3, Calendar, ChevronDown, ChevronRight, FileText, Files, FolderOpen, LayoutDashboard, Receipt, Settings, StickyNote, Ticket, Users } from 'lucide-react';
 import type { Organization, OrganizationRole } from '../types';
 import { Select } from './Ui';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'notes'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
 
 const items = [
   ['dashboard', LayoutDashboard, 'Dashboard'],
@@ -11,6 +11,7 @@ const items = [
   ['calendar', Calendar, 'Kalender'],
   ['stats', BarChart3, 'Statistieken'],
   ['notes', StickyNote, 'Notities'],
+  ['documents', Files, 'Documenten'],
   ['clients', Users, 'Klanten'],
   ['projects', FolderOpen, 'Projecten'],
   ['tickets', Ticket, 'Tickets'],
