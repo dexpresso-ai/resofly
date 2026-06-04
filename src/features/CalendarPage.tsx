@@ -192,9 +192,9 @@ function eventColorStyle(color?: string | null): CSSProperties {
   const c = normalizeHexColor(color);
   return {
     '--event-color': c,
-    '--event-bg': hexToRgba(c, 0.36),
-    '--event-border': hexToRgba(c, 0.78),
-    '--event-border-soft': hexToRgba(c, 0.45),
+    '--event-bg': hexToRgba(c, 0.62),
+    '--event-border': hexToRgba(c, 0.88),
+    '--event-border-soft': hexToRgba(c, 0.72),
   } as CSSProperties;
 }
 
