@@ -32,6 +32,7 @@ const ENTITY_TYPES = new Set([
   'subtask',
   'ticket',
   'note',
+  'document',
   'quote',
   'invoice',
 ]);

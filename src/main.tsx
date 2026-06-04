@@ -10,6 +10,7 @@ import {
   convertAcceptedQuoteToInvoice,
   convertTicketToProject,
   createClientWithServerCode,
+  deleteAttachment,
   createNoteCalendarLink,
   createNoteWithCalendarLink,
   createOrganization,
@@ -41,6 +42,7 @@ import {
 } from './lib/repository';
 import { uploadToR2 } from './lib/r2';
 import { listExternalCalendarEvents } from './lib/calendar-api';
+import { buildDocumentPdfBlob, buildDocumentDocxBlob, downloadBlob, documentFileBaseName, type DocumentExportMeta } from './lib/documentExport';
 import { Dashboard } from './features/Dashboard';
 import { ClientDetailPage, Clients } from './features/Clients';
 import { ProjectPage, ProjectsListPage, ProjectsPlanningPage } from './features/Projects';
@@ -89,12 +91,13 @@ const editKindToTable: Record<NonNullable<EditMode>['kind'], Table> = {
   invoice: 'invoices',
 };
 
-const editKindToEntity: Record<Exclude<NonNullable<EditMode>['kind'], 'document'>, EntityType> = {
+const editKindToEntity: Record<NonNullable<EditMode>['kind'], EntityType> = {
   client: 'client',
   project: 'project',
   task: 'task',
   ticket: 'ticket',
   note: 'note',
+  document: 'document',
   quote: 'quote',
   invoice: 'invoice',
 };
@@ -845,6 +848,56 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
     return () => { cancelled = true; };
   }, [canWrite, edit.kind, item, organizationId, readOnly]);
 
+  const [docExport, setDocExport] = useState<{ busy: 'pdf' | 'docx' | null; error: string | null }>({ busy: null, error: null });
+
+  function buildDocumentMeta(): DocumentExportMeta {
+    const client = data.clients.find(c => c.id === form.client_id);
+    const project = data.projects.find(p => p.id === form.project_id);
+    const created = item ? (item as InternalDocument).created_at : new Date().toISOString();
+    return {
+      title: String(form.title || '').trim() || 'Document',
+      categoryLabel: documentTypeLabels[(form.document_type || 'general') as keyof typeof documentTypeLabels] ?? 'Algemeen',
+      clientName: client?.name ?? null,
+      projectName: project?.name ?? null,
+      dateLabel: new Date(created).toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' }),
+      companyName: data.companySettings?.company_name ?? null,
+      content: String(form.content || ''),
+    };
+  }
+
+  async function handleDownloadDocx() {
+    setDocExport({ busy: 'docx', error: null });
+    try {
+      const meta = buildDocumentMeta();
+      const blob = buildDocumentDocxBlob(meta);
+      downloadBlob(blob, `${documentFileBaseName(meta.title)}.docx`);
+      setDocExport({ busy: null, error: null });
+    } catch (e) {
+      setDocExport({ busy: null, error: e instanceof Error ? e.message : 'Word-export mislukt' });
+    }
+  }
+
+  async function handleDownloadPdf() {
+    setDocExport({ busy: 'pdf', error: null });
+    try {
+      const meta = buildDocumentMeta();
+      const filename = `${documentFileBaseName(meta.title)}.pdf`;
+      const blob = await buildDocumentPdfBlob(meta);
+      downloadBlob(blob, filename);
+      // Store the generated PDF in Cloudflare R2 as an attachment on the saved document.
+      if (item) {
+        const stale = data.attachments.filter(a => a.entity_type === 'document' && a.entity_id === item.id && a.name === filename);
+        for (const att of stale) await deleteAttachment({ id: att.id, storage_key: att.storage_key, organization_id: organizationId }).catch(() => undefined);
+        const pdfFile = new File([blob], filename, { type: 'application/pdf' });
+        await uploadToR2(pdfFile, organizationId, { entity_type: 'document', entity_id: item.id });
+        onAttachmentsChanged();
+      }
+      setDocExport({ busy: null, error: null });
+    } catch (e) {
+      setDocExport({ busy: null, error: e instanceof Error ? e.message : 'PDF-export mislukt' });
+    }
+  }
+
   const title = `${item ? 'Bewerk' : 'Nieuw'} ${edit.kind}`;
   const quoteWorkflowLocked = edit.kind === 'quote' && item ? isQuoteWorkflowLocked(item as Quote) : false;
   const effectiveReadOnly = readOnly || quoteWorkflowLocked;
@@ -860,7 +913,7 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
   }, [data.clients, edit.kind, form, item]);
   const saveBlockedByDuplicate = Boolean(clientDuplicateIssue?.blocksSave);
 
-  const attachmentBlock = item && edit.kind !== 'document' ? <AttachmentList
+  const attachmentBlock = item ? <AttachmentList
     attachments={data.attachments}
     entityType={editKindToEntity[edit.kind]}
     entityId={item.id}
@@ -960,7 +1013,17 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
       <Field label="Project">
         <Select value={form.project_id} onChange={e=>set('project_id',e.target.value)} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
       </Field>
+      <div className="document-export">
+        <div className="document-export-actions">
+          <Button onClick={handleDownloadPdf} disabled={docExport.busy !== null}>{docExport.busy === 'pdf' ? 'PDF maken…' : 'Download PDF'}</Button>
+          <Button onClick={handleDownloadDocx} disabled={docExport.busy !== null}>{docExport.busy === 'docx' ? 'Word maken…' : 'Download Word (.docx)'}</Button>
+        </div>
+        <span className="document-export-hint">{item ? 'De PDF wordt ook opgeslagen in Cloudflare R2 en verschijnt hieronder als bijlage.' : 'Sla het document eerst op om de PDF ook in Cloudflare R2 te bewaren.'}</span>
+        {docExport.error && <span className="document-export-error">{docExport.error}</span>}
+      </div>
       {item && <div className="note-created-meta"><span>Aangemaakt: {new Date((item as InternalDocument).created_at).toLocaleString('nl-NL')}</span><span>Bijgewerkt: {new Date((item as InternalDocument).updated_at).toLocaleString('nl-NL')}</span></div>}
+      {!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.document} id={item.id} onUploaded={onAttachmentsChanged}/>}
+      {attachmentBlock}
     </FormGrid>}
     {(edit.kind === 'quote' || edit.kind === 'invoice') && <FinanceForm kind={edit.kind} data={data} organizationId={organizationId} form={form} set={set} item={item} readOnly={effectiveReadOnly} onUploaded={onAttachmentsChanged} attachmentBlock={attachmentBlock}/>}
   </Modal>;

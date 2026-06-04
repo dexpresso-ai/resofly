@@ -53,7 +53,7 @@ const tableToEntity: Record<Table, EntityType | null> = {
   tasks: 'task',
   tickets: 'ticket',
   notes: 'note',
-  documents: null,
+  documents: 'document',
   quotes: 'quote',
   invoices: 'invoice',
   attachments: null,

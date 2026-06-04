@@ -384,6 +384,10 @@
 .doc-filter-row:hover{background:rgba(255,255,255,.04)}
 .doc-filter-row.active{background:rgba(255,189,89,.12)}
 .doc-filter-row.active span,.doc-filter-row.active strong{color:var(--accent)}
+.document-export{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border);border-radius:10px;background:rgba(255,255,255,.025)}
+.document-export-actions{display:flex;gap:8px;flex-wrap:wrap}
+.document-export-hint{font-size:11px;color:var(--muted);line-height:1.4}
+.document-export-error{font-size:11px;color:var(--accent-r)}
 .note-relations{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;font-size:10px;color:var(--muted);border-top:1px solid var(--border);padding-top:10px}
 .note-relations span{background:var(--bg2);border:1px solid var(--border);border-radius:999px;padding:3px 7px}
 .note-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
