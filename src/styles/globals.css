@@ -1251,6 +1251,22 @@ body::before{
 /* Lift the calendar create-FAB above Gerrie so they never overlap. */
 .tb-fab{bottom:94px;right:24px;z-index:55}
 
+/* ── Meeting picker (note ↔ calendar link) ────────────────────────────── */
+.meeting-picker{display:flex;flex-direction:column;gap:6px}
+.meeting-picker-selected{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;background:rgba(255,217,102,.1);border:1px solid rgba(255,217,102,.3);border-radius:9px;font-size:12px;font-weight:700;color:var(--accent);min-width:0}
+.meeting-picker-selected span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.meeting-picker-clear{flex-shrink:0;background:transparent;border:0;color:var(--muted2);font-size:18px;line-height:1;cursor:pointer;padding:0 2px}
+.meeting-picker-clear:hover{color:var(--text)}
+.meeting-picker-search{width:100%}
+.meeting-picker-list{max-height:210px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;border:1px solid var(--border);border-radius:9px;padding:4px;background:var(--bg2);scrollbar-color:rgba(255,189,89,.22) transparent}
+.meeting-picker-item{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:7px;border:0;background:transparent;color:var(--text);text-align:left;cursor:pointer;font-size:12px;font-family:inherit;transition:background .12s;width:100%}
+.meeting-picker-item:hover{background:var(--bg3)}
+.meeting-picker-item.selected{background:rgba(255,217,102,.1);color:var(--accent)}
+.meeting-picker-check{margin-left:auto;flex-shrink:0;color:var(--accent);font-weight:900;font-size:13px}
+.meeting-picker-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meeting-picker-empty{padding:12px;text-align:center;font-size:11px;color:var(--muted)}
+.note-cal-hint{font-size:11px;color:var(--muted);padding:4px 2px}
+
 @media(max-width:900px){
   .gerrie-root{right:16px;bottom:16px}
   .gerrie-panel{width:calc(100vw - 24px);height:calc(100vh - 110px)}

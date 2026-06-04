@@ -337,12 +337,14 @@ function App() {
           break;
         }
         case 'note': {
+          const calLink = (values._calLink as CalendarNoteLinkInput | null) ?? edit.calendarLink ?? null;
+          const { _calLink, ...noteValues } = values;
           if (edit.item) {
-            await updateRow<Note>('notes', edit.item.id, values, activeOrg.id);
-          } else if (edit.calendarLink) {
-            await createNoteWithCalendarLink(activeOrg.id, values, edit.calendarLink);
+            await updateRow<Note>('notes', edit.item.id, noteValues, activeOrg.id);
+          } else if (calLink) {
+            await createNoteWithCalendarLink(activeOrg.id, noteValues, calLink);
           } else {
-            await insertRow<Note>('notes', activeOrg.id, values);
+            await insertRow<Note>('notes', activeOrg.id, noteValues);
           }
           break;
         }
@@ -684,7 +686,7 @@ function App() {
     <Sidebar page={page} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); }}/>
     <main className="main"><header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button><Button onClick={() => supabaseAuth.signOut()}>Uitloggen</Button></div></header>
       <section className="content">{error && <div className="error">{error}</div>}{renderPage()}</section>
-    </main>{edit && <EditModal edit={edit} data={data} organizationId={activeOrg.id} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onCalendarLinkChange={(link) => setEdit(prev => prev?.kind === 'note' ? { ...prev, calendarLink: link ?? undefined } : prev)} />}
+    </main>{edit && <EditModal edit={edit} data={data} organizationId={activeOrg.id} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} />}
     <GerrieChat />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
       <div className="send-overlay-card">
@@ -728,6 +730,51 @@ function Login() {
   return <main className="login"><div className="login-card"><div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div><p className="eyebrow login-eyebrow">Tickets • Projecten • Serviceflows</p><h1>Werkruimte</h1><p>Login met je e-mailadres om je CRM/project-app te gebruiken.</p><Input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="jij@bedrijf.nl"/><Button variant="primary" onClick={signIn} disabled={!email}>Stuur magic link</Button>{sent && <p className="success">Check je mailbox. Open de link in dezelfde browser als waar je deze pagina hebt geopend.</p>}{error && <p className="error">{error}</p>}</div></main>;
 }
 
+function formatMeetingLabel(ev: CalendarExternalEvent): string {
+  const d = new Date(ev.starts_at);
+  return `${d.toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short' })} ${d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })} – ${ev.title}`;
+}
+
+function MeetingPicker({ events, selectedId, onSelect, disabled }: {
+  events: CalendarExternalEvent[];
+  selectedId: string | null;
+  onSelect: (event: CalendarExternalEvent | null) => void;
+  disabled?: boolean;
+}) {
+  const [search, setSearch] = useState('');
+  const filtered = search.trim()
+    ? events.filter(ev => {
+        const q = search.toLowerCase();
+        return ev.title.toLowerCase().includes(q) ||
+          new Date(ev.starts_at).toLocaleDateString('nl-NL').includes(q);
+      })
+    : events;
+  const selectedEvent = events.find(ev => ev.provider_event_id === selectedId);
+  return (
+    <div className="meeting-picker">
+      {selectedEvent && (
+        <div className="meeting-picker-selected">
+          <span>✓ {formatMeetingLabel(selectedEvent)}</span>
+          {!disabled && <button type="button" className="meeting-picker-clear" onClick={() => onSelect(null)}>×</button>}
+        </div>
+      )}
+      <input type="text" className="form-input meeting-picker-search" placeholder="Zoek op naam of datum…" value={search} onChange={e => setSearch(e.target.value)} disabled={disabled} />
+      <div className="meeting-picker-list">
+        {filtered.length === 0 && <div className="meeting-picker-empty">Geen meetings gevonden</div>}
+        {filtered.map(ev => (
+          <button type="button" key={`${ev.provider}-${ev.provider_event_id}`}
+            className={`meeting-picker-item${ev.provider_event_id === selectedId ? ' selected' : ''}`}
+            onClick={() => !disabled && onSelect(ev.provider_event_id === selectedId ? null : ev)}
+          >
+            <span className="meeting-picker-label">{formatMeetingLabel(ev)}</span>
+            {ev.provider_event_id === selectedId && <span className="meeting-picker-check">✓</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function buildCalendarNoteLinkInput(event: CalendarExternalEvent): CalendarNoteLinkInput {
   return {
     provider: event.provider,
@@ -743,31 +790,33 @@ function buildCalendarNoteLinkInput(event: CalendarExternalEvent): CalendarNoteL
   };
 }
 
-function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onCalendarLinkChange }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onCalendarLinkChange: (link: CalendarNoteLinkInput | null) => void }) {
+function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void }) {
   const item = 'item' in edit ? edit.item : undefined;
   const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit, data));
   const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
 
   const [noteCalEvents, setNoteCalEvents] = useState<CalendarExternalEvent[]>([]);
   const [noteCalEventsLoading, setNoteCalEventsLoading] = useState(false);
-  const [selectedCalEventId, setSelectedCalEventId] = useState<string | null>(
-    edit.kind === 'note' && edit.calendarLink ? edit.calendarLink.provider_event_id : null
-  );
 
   useEffect(() => {
     if (edit.kind !== 'note') return;
+    let cancelled = false;
     setNoteCalEventsLoading(true);
     const now = new Date();
     const start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
     listExternalCalendarEvents(organizationId, start, end)
-      .then(events => setNoteCalEvents(
-        events
-          .filter(e => e.visibility === 'organization' && !e.is_private_masked && !e.all_day)
-          .sort((a, b) => new Date(b.starts_at).getTime() - new Date(a.starts_at).getTime())
-      ))
-      .catch(() => setNoteCalEvents([]))
-      .finally(() => setNoteCalEventsLoading(false));
+      .then(events => {
+        if (cancelled) return;
+        setNoteCalEvents(
+          events
+            .filter(e => e.visibility === 'organization' && !e.is_private_masked && !e.all_day)
+            .sort((a, b) => new Date(b.starts_at).getTime() - new Date(a.starts_at).getTime())
+        );
+      })
+      .catch(() => { if (!cancelled) setNoteCalEvents([]); })
+      .finally(() => { if (!cancelled) setNoteCalEventsLoading(false); });
+    return () => { cancelled = true; };
   }, [organizationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -876,24 +925,13 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
       <Select value={form.project_id} onChange={e=>set('project_id',e.target.value)} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
       {noteCalEventsLoading && <div className="note-cal-hint">Meetings laden…</div>}
       {!noteCalEventsLoading && noteCalEvents.length > 0 && (
-        <Field label="Koppel aan meeting" hint="Meetings van de afgelopen 7 en komende 14 dagen uit je gekoppelde agenda.">
-          <Select
-            value={selectedCalEventId ?? ''}
-            onChange={e => {
-              const id = e.target.value || null;
-              setSelectedCalEventId(id);
-              const ev = id ? noteCalEvents.find(ev => ev.provider_event_id === id) : null;
-              onCalendarLinkChange(ev ? buildCalendarNoteLinkInput(ev) : null);
-            }}
+        <Field label="Koppel aan meeting" hint="Afgelopen 7 dagen en komende 14 dagen uit je gekoppelde agenda.">
+          <MeetingPicker
+            events={noteCalEvents}
+            selectedId={(form._calLink as CalendarNoteLinkInput | null)?.provider_event_id ?? null}
+            onSelect={ev => set('_calLink', ev ? buildCalendarNoteLinkInput(ev) : null)}
             disabled={disabled}
-          >
-            <option value="">Geen meeting koppelen</option>
-            {noteCalEvents.map(ev => {
-              const d = new Date(ev.starts_at);
-              const label = `${d.toLocaleDateString('nl-NL', {weekday:'short',day:'numeric',month:'short'})} ${d.toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit'})} – ${ev.title}`;
-              return <option key={`${ev.provider}-${ev.provider_event_id}`} value={ev.provider_event_id}>{label}</option>;
-            })}
-          </Select>
+          />
         </Field>
       )}
       <Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags, komma gescheiden" />
@@ -1372,7 +1410,7 @@ function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string,
   }
   if (edit.kind === "note") {
     const item = edit.item;
-    return { title: item?.title ?? edit.defaults?.title ?? "", content: item?.content ?? edit.defaults?.content ?? "", note_type: item?.note_type ?? edit.defaults?.note_type ?? "general", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", tags: item?.tags?.join(", ") ?? edit.defaults?.tags?.join(", ") ?? "" };
+    return { title: item?.title ?? edit.defaults?.title ?? "", content: item?.content ?? edit.defaults?.content ?? "", note_type: item?.note_type ?? edit.defaults?.note_type ?? "general", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", tags: item?.tags?.join(", ") ?? edit.defaults?.tags?.join(", ") ?? "", _calLink: edit.calendarLink ?? null };
   }
   const today = new Date().toISOString().slice(0,10);
   if (edit.kind === "quote") {
