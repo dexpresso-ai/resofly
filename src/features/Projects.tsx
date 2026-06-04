@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { AppData, Invoice, Note, Project, Quote, Task, TaskStatus } from '../types';
 import { Button, Select } from '../components/Ui';
 import { dateNL, euro, priorityLabel } from '../lib/format';
@@ -569,6 +569,9 @@ export function ProjectPage({
   onEditNote: (note: Note) => void;
   setTaskStatus: (task: Task, status: TaskStatus) => void;
 }) {
+  const dragTaskId = useRef<string | null>(null);
+  const [dragOverCol, setDragOverCol] = useState<TaskStatus | null>(null);
+
   const tasks = data.tasks.filter(t => t.project_id === project.id);
   const client = data.clients.find(c => c.id === project.client_id);
   const projectNotes = data.notes.filter(note => note.project_id === project.id);
@@ -647,7 +650,21 @@ export function ProjectPage({
         >
           <div className="kanban proj-dash-kanban">
             {columns.map(col => (
-              <div className="kan-col" key={col.key}>
+              <div
+                className={`kan-col${dragOverCol === col.key ? ' kan-drag-over' : ''}`}
+                key={col.key}
+                onDragOver={e => { e.preventDefault(); setDragOverCol(col.key); }}
+                onDragLeave={() => setDragOverCol(null)}
+                onDrop={e => {
+                  e.preventDefault();
+                  setDragOverCol(null);
+                  if (dragTaskId.current) {
+                    const task = tasks.find(t => t.id === dragTaskId.current);
+                    if (task && task.status !== col.key) setTaskStatus(task, col.key);
+                    dragTaskId.current = null;
+                  }
+                }}
+              >
                 <header className="kan-col-head">
                   <span className="kan-dot" style={{ background: project.color }} />
                   {col.label}
@@ -655,7 +672,17 @@ export function ProjectPage({
                 </header>
                 <div className="kan-body">
                   {tasks.filter(t => t.status === col.key).map(task => (
-                    <article className="task-card" key={task.id} onClick={() => onEditTask(task)}>
+                    <article
+                      className="task-card"
+                      key={task.id}
+                      draggable={!project.archived && canWrite}
+                      onDragStart={e => {
+                        dragTaskId.current = task.id;
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      onDragEnd={() => { dragTaskId.current = null; setDragOverCol(null); }}
+                      onClick={() => onEditTask(task)}
+                    >
                       <div className="tc-title">{task.title}</div>
                       <div className="tc-desc">{task.description}</div>
                       <div className="tc-meta">
@@ -667,13 +694,6 @@ export function ProjectPage({
                         <span>💬 {task.comments?.length ?? 0}</span>
                         <span className="tc-deadline">{dateNL(task.end_date)}</span>
                       </div>
-                      {!project.archived && canWrite && (
-                        <div className="quick-status">
-                          {columns.filter(c => c.key !== task.status).map(c => (
-                            <button key={c.key} onClick={e => { e.stopPropagation(); setTaskStatus(task, c.key); }}>{c.label}</button>
-                          ))}
-                        </div>
-                      )}
                     </article>
                   ))}
                   {tasks.filter(t => t.status === col.key).length === 0 && (

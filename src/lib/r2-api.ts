@@ -3,7 +3,7 @@ import { supabaseAuth } from './supabase';
 const workerUrl = import.meta.env.VITE_R2_WORKER_URL as string | undefined;
 
 export function getWorkerBase(): string {
-  if (!workerUrl) throw new Error('R2 Worker URL ontbreekt in .env.local');
+  if (!workerUrl) throw new Error('VITE_R2_WORKER_URL is niet geconfigureerd. Stel deze in als environment variable in Cloudflare Pages (of .env.local voor lokale ontwikkeling).');
   return workerUrl.replace(/\/$/, '');
 }
 
