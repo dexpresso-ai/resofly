@@ -40,6 +40,7 @@ import {
   type Table,
 } from './lib/repository';
 import { uploadToR2 } from './lib/r2';
+import { listExternalCalendarEvents } from './lib/calendar-api';
 import { Dashboard } from './features/Dashboard';
 import { ClientDetailPage, Clients } from './features/Clients';
 import { ProjectPage, ProjectsListPage, ProjectsPlanningPage } from './features/Projects';
@@ -627,18 +628,7 @@ function App() {
   }
 
   function calendarNoteLinkInput(event: CalendarExternalEvent): CalendarNoteLinkInput {
-    return {
-      provider: event.provider,
-      calendar_source_id: event.source_id,
-      provider_event_id: event.provider_event_id,
-      event_starts_at: event.starts_at,
-      event_ends_at: event.ends_at,
-      event_title_snapshot: event.visibility === 'organization' && !event.is_private_masked ? event.title : null,
-      event_location_snapshot: event.visibility === 'organization' && !event.is_private_masked ? event.location : null,
-      event_html_link: event.visibility === 'organization' && !event.is_private_masked ? event.html_link : null,
-      visibility_snapshot: event.visibility,
-      is_private_masked_snapshot: Boolean(event.is_private_masked),
-    };
+    return buildCalendarNoteLinkInput(event);
   }
 
   function openNoteForCalendarEvent(event: CalendarExternalEvent) {
@@ -694,7 +684,7 @@ function App() {
     <Sidebar page={page} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); }}/>
     <main className="main"><header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button><Button onClick={() => supabaseAuth.signOut()}>Uitloggen</Button></div></header>
       <section className="content">{error && <div className="error">{error}</div>}{renderPage()}</section>
-    </main>{edit && <EditModal edit={edit} data={data} organizationId={activeOrg.id} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} />}
+    </main>{edit && <EditModal edit={edit} data={data} organizationId={activeOrg.id} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onCalendarLinkChange={(link) => setEdit(prev => prev?.kind === 'note' ? { ...prev, calendarLink: link ?? undefined } : prev)} />}
     <GerrieChat />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
       <div className="send-overlay-card">
@@ -738,10 +728,47 @@ function Login() {
   return <main className="login"><div className="login-card"><div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div><p className="eyebrow login-eyebrow">Tickets • Projecten • Serviceflows</p><h1>Werkruimte</h1><p>Login met je e-mailadres om je CRM/project-app te gebruiken.</p><Input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="jij@bedrijf.nl"/><Button variant="primary" onClick={signIn} disabled={!email}>Stuur magic link</Button>{sent && <p className="success">Check je mailbox. Open de link in dezelfde browser als waar je deze pagina hebt geopend.</p>}{error && <p className="error">{error}</p>}</div></main>;
 }
 
-function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void }) {
+function buildCalendarNoteLinkInput(event: CalendarExternalEvent): CalendarNoteLinkInput {
+  return {
+    provider: event.provider,
+    calendar_source_id: event.source_id,
+    provider_event_id: event.provider_event_id,
+    event_starts_at: event.starts_at,
+    event_ends_at: event.ends_at,
+    event_title_snapshot: event.visibility === 'organization' && !event.is_private_masked ? event.title : null,
+    event_location_snapshot: event.visibility === 'organization' && !event.is_private_masked ? event.location : null,
+    event_html_link: event.visibility === 'organization' && !event.is_private_masked ? event.html_link : null,
+    visibility_snapshot: event.visibility,
+    is_private_masked_snapshot: Boolean(event.is_private_masked),
+  };
+}
+
+function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onCalendarLinkChange }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onCalendarLinkChange: (link: CalendarNoteLinkInput | null) => void }) {
   const item = 'item' in edit ? edit.item : undefined;
   const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit, data));
   const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
+
+  const [noteCalEvents, setNoteCalEvents] = useState<CalendarExternalEvent[]>([]);
+  const [noteCalEventsLoading, setNoteCalEventsLoading] = useState(false);
+  const [selectedCalEventId, setSelectedCalEventId] = useState<string | null>(
+    edit.kind === 'note' && edit.calendarLink ? edit.calendarLink.provider_event_id : null
+  );
+
+  useEffect(() => {
+    if (edit.kind !== 'note') return;
+    setNoteCalEventsLoading(true);
+    const now = new Date();
+    const start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    listExternalCalendarEvents(organizationId, start, end)
+      .then(events => setNoteCalEvents(
+        events
+          .filter(e => e.visibility === 'organization' && !e.is_private_masked && !e.all_day)
+          .sort((a, b) => new Date(b.starts_at).getTime() - new Date(a.starts_at).getTime())
+      ))
+      .catch(() => setNoteCalEvents([]))
+      .finally(() => setNoteCalEventsLoading(false));
+  }, [organizationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     let cancelled = false;
@@ -841,7 +868,39 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
     {edit.kind === 'project' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Projectnaam"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Omschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/><Field label="Projectkleur" hint="Bepaalt de kleur van het project in lijsten, kanban en de timeline."><ColorPicker value={form.color} onChange={color=>set('color',color)} disabled={disabled}/></Field><label className="check-row"><input type="checkbox" checked={Boolean(form.archived)} onChange={e=>set('archived',e.target.checked)}/><span>Project archiveren</span></label>{!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.project} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}{attachmentBlock}</FormGrid>}
     {edit.kind === 'task' && <FormGrid><Field label="Taaktitel"><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Taaktitel" disabled={disabled}/></Field><Field label="Status"><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="todo">Te doen</option><option value="doing">Bezig</option><option value="review">Review</option><option value="done">Klaar</option></Select></Field><Field label="Prioriteit"><Select value={form.priority} onChange={e=>set('priority',e.target.value)} disabled={disabled}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select></Field><Field label="Tags" hint="Gebruik komma’s om meerdere tags toe te voegen."><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags" disabled={disabled}/></Field><Field label="Beschrijving"><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving" disabled={disabled}/></Field><Field label="Startdatum"><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)} disabled={disabled}/></Field><Field label="Deadline" hint="Deze datum blijft de inhoudelijke deadline en wordt niet meer aangepast door de weekplanner."><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)} disabled={disabled}/></Field><Field label="Plandatum" hint="Deze datum bepaalt op welke dag de taak in de weekplanner staat."><Input type="date" value={form.planned_date} onChange={e=>set('planned_date',e.target.value)} disabled={disabled}/></Field><Field label="Geschatte duur" hint="In minuten. Wordt gebruikt voor de dag- en weekcapaciteit."><Input type="number" min="0" max="1440" step="15" value={form.estimated_minutes} onChange={e=>set('estimated_minutes',Number(e.target.value))} disabled={disabled}/></Field><TaskDetailEditor subtasks={form.subtasks} comments={form.comments} set={set}/>{!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.task} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}{attachmentBlock}</FormGrid>}
     {edit.kind === 'ticket' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Ticket titel"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={Boolean((item as Ticket | undefined)?.converted_to_project_id)}><option value="new">Nieuw</option><option value="review">Review</option><option value="approved">Goedgekeurd</option><option value="rejected">Geweigerd</option>{(item as Ticket | undefined)?.converted_to_project_id && <option value="converted">Omgezet</option>}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne notities"/><small className="ticket-status-hint">Gebruik <strong>Project maken</strong> om een ticket om te zetten. <strong>Omgezet</strong> is geen handmatige status.</small>{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.ticket} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
-    {edit.kind === 'note' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Titel"/><Select value={form.note_type} onChange={e=>set('note_type',e.target.value)}>{Object.entries(noteTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select><RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf je notitie…" disabled={disabled}/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.project_id} onChange={e=>set('project_id',e.target.value)} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags, komma gescheiden" />{item && <div className="note-created-meta"><span>Aangemaakt: {new Date((item as Note).created_at).toLocaleString('nl-NL')}</span><span>Bijgewerkt: {new Date((item as Note).updated_at).toLocaleString('nl-NL')}</span></div>}{!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.note} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'note' && <FormGrid>
+      <Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Titel"/>
+      <Select value={form.note_type} onChange={e=>set('note_type',e.target.value)}>{Object.entries(noteTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select>
+      <RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf je notitie…" disabled={disabled}/>
+      <Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
+      <Select value={form.project_id} onChange={e=>set('project_id',e.target.value)} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
+      {noteCalEventsLoading && <div className="note-cal-hint">Meetings laden…</div>}
+      {!noteCalEventsLoading && noteCalEvents.length > 0 && (
+        <Field label="Koppel aan meeting" hint="Meetings van de afgelopen 7 en komende 14 dagen uit je gekoppelde agenda.">
+          <Select
+            value={selectedCalEventId ?? ''}
+            onChange={e => {
+              const id = e.target.value || null;
+              setSelectedCalEventId(id);
+              const ev = id ? noteCalEvents.find(ev => ev.provider_event_id === id) : null;
+              onCalendarLinkChange(ev ? buildCalendarNoteLinkInput(ev) : null);
+            }}
+            disabled={disabled}
+          >
+            <option value="">Geen meeting koppelen</option>
+            {noteCalEvents.map(ev => {
+              const d = new Date(ev.starts_at);
+              const label = `${d.toLocaleDateString('nl-NL', {weekday:'short',day:'numeric',month:'short'})} ${d.toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit'})} – ${ev.title}`;
+              return <option key={`${ev.provider}-${ev.provider_event_id}`} value={ev.provider_event_id}>{label}</option>;
+            })}
+          </Select>
+        </Field>
+      )}
+      <Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags, komma gescheiden" />
+      {item && <div className="note-created-meta"><span>Aangemaakt: {new Date((item as Note).created_at).toLocaleString('nl-NL')}</span><span>Bijgewerkt: {new Date((item as Note).updated_at).toLocaleString('nl-NL')}</span></div>}
+      {!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.note} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}
+      {attachmentBlock}
+    </FormGrid>}
     {(edit.kind === 'quote' || edit.kind === 'invoice') && <FinanceForm kind={edit.kind} data={data} organizationId={organizationId} form={form} set={set} item={item} readOnly={effectiveReadOnly} onUploaded={onAttachmentsChanged} attachmentBlock={attachmentBlock}/>}
   </Modal>;
 }
