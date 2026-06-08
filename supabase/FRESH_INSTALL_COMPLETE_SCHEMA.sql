@@ -732,6 +732,7 @@ create table public.company_settings (
   invoice_template_data_url text,
   invoice_template_text_color text not null default '#1a1a1a',
   invoice_accent_color text not null default '#FFD966',
+  invoice_font_size integer not null default 10,
   invoice_template_updated_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()

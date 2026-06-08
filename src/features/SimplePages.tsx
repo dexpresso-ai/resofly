@@ -39,6 +39,7 @@ const emptySettings: CompanySettingsInput = {
   invoice_template_data_url: null,
   invoice_template_text_color: '#1a1a1a',
   invoice_accent_color: '#FFD966',
+  invoice_font_size: 10,
   invoice_template_updated_at: null,
 };
 
@@ -740,8 +741,8 @@ export function Settings({
     </section>
 
     <section className="settings-card">
-      <h3>Factuurtemplate</h3>
-      <p className="settings-help">Upload een eigen A4 PDF-template of een afbeelding. De datavelden blijven vast: bedrijfsgegevens, klant, factuurnummer, datums, regels, BTW, totaal, notities en betaalinformatie.</p>
+      <h3>Factuurtemplate &amp; stijl</h3>
+      <p className="settings-help">Upload een eigen A4 afbeelding of PDF als achtergrond. Stel de tekstkleur, accentkleur en lettergrootte in — alle wijzigingen zijn direct zichtbaar in het voorbeeld hieronder.</p>
       <div className="field-list">
         {TEMPLATE_FIELD_LABELS.map(label => <span key={label}>{label}</span>)}
       </div>
@@ -749,13 +750,104 @@ export function Settings({
         <input type="file" accept="application/pdf,image/png,image/jpeg" onChange={e => { void onTemplateSelected(e.target.files?.[0]); e.currentTarget.value = ''; }} />
         {form.invoice_template_file_name && <Button variant="danger" onClick={removeTemplate}>Template verwijderen</Button>}
       </div>
-      {form.invoice_template_file_name ? <div className="template-meta">
-        <strong>{form.invoice_template_file_name}</strong>
-        <span>{form.invoice_template_kind === 'pdf' ? 'PDF-template' : 'Afbeelding-template'} · {Math.round((form.invoice_template_file_size || 0) / 1024)} KB</span>
-      </div> : <div className="template-meta muted">Nog geen template ingesteld. Zonder template gebruikt ResoFly een nette standaardfactuur.</div>}
-      <div className="settings-grid compact">
-        <Input value={form.invoice_template_text_color ?? '#1a1a1a'} onChange={e=>set('invoice_template_text_color', e.target.value)} placeholder="Tekstkleur, bijv. #1a1a1a" />
-        <Input value={form.invoice_accent_color ?? '#FFD966'} onChange={e=>set('invoice_accent_color', e.target.value)} placeholder="Accentkleur, bijv. #FFD966" />
+      {form.invoice_template_file_name ? (
+        <div className="template-meta">
+          <div className="template-meta-row">
+            <div>
+              <strong>{form.invoice_template_file_name}</strong>
+              <span>{form.invoice_template_kind === 'pdf' ? 'PDF-template' : 'Afbeelding-template'} · {Math.round((form.invoice_template_file_size || 0) / 1024)} KB</span>
+            </div>
+            {form.invoice_template_kind === 'image' && form.invoice_template_data_url && (
+              <img src={form.invoice_template_data_url} alt="Template voorvertoning" className="template-thumb" />
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="template-meta muted">Nog geen template ingesteld. Zonder template gebruikt ResoFly een nette standaardfactuur.</div>
+      )}
+
+      <div className="invoice-style-grid">
+        <div className="invoice-style-controls">
+          <div className="color-setting">
+            <span className="style-label">Tekstkleur</span>
+            <div className="color-input-pair">
+              <input
+                type="color"
+                className="color-dot-input"
+                value={/^#[0-9a-f]{6}$/i.test(form.invoice_template_text_color ?? '') ? (form.invoice_template_text_color as string) : '#1a1a1a'}
+                onChange={e => set('invoice_template_text_color', e.target.value)}
+              />
+              <Input value={form.invoice_template_text_color ?? '#1a1a1a'} onChange={e => set('invoice_template_text_color', e.target.value)} placeholder="#1a1a1a" />
+            </div>
+          </div>
+          <div className="color-setting">
+            <span className="style-label">Accentkleur</span>
+            <div className="color-input-pair">
+              <input
+                type="color"
+                className="color-dot-input"
+                value={/^#[0-9a-f]{6}$/i.test(form.invoice_accent_color ?? '') ? (form.invoice_accent_color as string) : '#FFD966'}
+                onChange={e => set('invoice_accent_color', e.target.value)}
+              />
+              <Input value={form.invoice_accent_color ?? '#FFD966'} onChange={e => set('invoice_accent_color', e.target.value)} placeholder="#FFD966" />
+            </div>
+          </div>
+          <div className="font-size-setting">
+            <span className="style-label">Lettergrootte — {form.invoice_font_size ?? 10}pt</span>
+            <div className="font-size-row">
+              <span className="font-size-bound">8</span>
+              <input
+                type="range"
+                min="8"
+                max="14"
+                step="1"
+                value={form.invoice_font_size ?? 10}
+                onChange={e => set('invoice_font_size', Number(e.target.value))}
+                className="font-size-slider"
+              />
+              <span className="font-size-bound">14</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="invoice-preview-wrap">
+          <span className="style-label">Voorbeeld</span>
+          <div
+            className="invoice-preview-card"
+            style={{ color: form.invoice_template_text_color ?? '#1a1a1a', fontSize: `${form.invoice_font_size ?? 10}px` }}
+          >
+            <div className="invoice-preview-accent-bar" style={{ background: form.invoice_accent_color ?? '#FFD966' }} />
+            <div className="invoice-preview-body">
+              <div className="invoice-preview-header-row">
+                <div>
+                  <div style={{ fontSize: `${(form.invoice_font_size ?? 10) + 6}px`, fontWeight: 700, marginBottom: 2 }}>
+                    {form.company_name || 'Uw Bedrijfsnaam'}
+                  </div>
+                  <div style={{ opacity: 0.5, fontSize: `${Math.max(7, (form.invoice_font_size ?? 10) - 1)}px` }}>
+                    Straatnaam 1 · 1234 AB Amsterdam
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <div style={{ fontSize: `${(form.invoice_font_size ?? 10) + 12}px`, fontWeight: 800, lineHeight: 1.1 }}>FACTUUR</div>
+                  <div style={{ opacity: 0.5, fontSize: `${Math.max(7, (form.invoice_font_size ?? 10) - 1)}px` }}>Nummer: 2025-001</div>
+                </div>
+              </div>
+              <div style={{ height: 1.5, background: form.invoice_accent_color ?? '#FFD966', margin: '6px 0' }} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Werkzaamheden Q1 2025</span>
+                <span style={{ fontWeight: 600 }}>EUR 1.000,00</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', opacity: 0.5, fontSize: `${Math.max(7, (form.invoice_font_size ?? 10) - 1)}px` }}>
+                <span>BTW 21%</span>
+                <span>EUR 210,00</span>
+              </div>
+              <div style={{ borderTop: `1.5px solid ${form.invoice_accent_color ?? '#FFD966'}`, marginTop: 6, paddingTop: 6, display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: `${(form.invoice_font_size ?? 10) + 2}px` }}>
+                <span>Totaal</span>
+                <span>EUR 1.210,00</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -837,6 +929,7 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     invoice_template_data_url: settings.invoice_template_data_url ?? null,
     invoice_template_text_color: settings.invoice_template_text_color ?? '#1a1a1a',
     invoice_accent_color: settings.invoice_accent_color ?? '#FFD966',
+    invoice_font_size: settings.invoice_font_size ?? 10,
     invoice_template_updated_at: settings.invoice_template_updated_at ?? null,
   };
 }
@@ -876,6 +969,7 @@ function cleanSettingsInput(input: CompanySettingsInput): CompanySettingsInput {
     invoice_template_updated_at: templateKind === 'none' ? null : input.invoice_template_updated_at,
     invoice_template_text_color: normalizeHex(input.invoice_template_text_color, '#1a1a1a'),
     invoice_accent_color: normalizeHex(input.invoice_accent_color, '#FFD966'),
+    invoice_font_size: Math.max(8, Math.min(14, Number(input.invoice_font_size ?? 10))),
   };
 }
 

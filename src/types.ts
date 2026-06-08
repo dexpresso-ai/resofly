@@ -529,6 +529,7 @@ export interface CompanySettings extends OrgScopedRow {
   invoice_template_data_url: string | null;
   invoice_template_text_color: string;
   invoice_accent_color: string;
+  invoice_font_size: number;
   invoice_template_updated_at: string | null;
   created_at: string;
   updated_at: string;

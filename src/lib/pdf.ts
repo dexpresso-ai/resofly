@@ -44,6 +44,11 @@ interface DrawContext {
   textColor: RGB;
   mutedColor: RGB;
   accentColor: RGB;
+  base: number;
+}
+
+function sz(base: number, delta: number): number {
+  return Math.max(6, base + delta);
 }
 
 function normalizePdfText(value: string): string {
@@ -201,7 +206,7 @@ function drawWrappedText(page: PDFPage, text: string, x: number, y: number, maxW
 }
 
 function drawSectionLabel(page: PDFPage, label: string, x: number, y: number, ctx: DrawContext) {
-  drawText(page, label.toUpperCase(), x, y, ctx, { size: 8, bold: true, color: ctx.mutedColor });
+  drawText(page, label.toUpperCase(), x, y, ctx, { size: sz(ctx.base, -2), bold: true, color: ctx.mutedColor });
   page.drawLine({ start: { x, y: y - 5 }, end: { x: x + 180, y: y - 5 }, thickness: 0.6, color: ctx.accentColor });
 }
 
@@ -257,23 +262,24 @@ function drawDocumentHeader(page: PDFPage, doc: Quote | Invoice, kind: 'quote' |
     page.drawRectangle({ x: 0, y: height - 18, width, height: 18, color: ctx.accentColor, opacity: 0.9 });
   }
 
-  drawWrappedText(page, companyDisplayName(opts.company, opts), marginX, height - 58, 260, ctx, { size: 16, bold: true, lineHeight: 18 });
+  const b = ctx.base;
+  drawWrappedText(page, companyDisplayName(opts.company, opts), marginX, height - 58, 260, ctx, { size: sz(b, 6), bold: true, lineHeight: sz(b, 8) });
   let y = height - 86;
   for (const line of companyLines(opts.company, opts).slice(1, 8)) {
-    drawText(page, line, marginX, y, ctx, { size: 9, color: ctx.mutedColor });
+    drawText(page, line, marginX, y, ctx, { size: sz(b, -1), color: ctx.mutedColor });
     y -= 12;
   }
 
-  drawText(page, title, width - marginX, height - 62, ctx, { size: 25, bold: true, align: 'right' });
-  drawText(page, `${isQuote ? 'Offertenummer' : 'Factuurnummer'}: ${doc.number || '-'}`, width - marginX, height - 94, ctx, { size: 10, bold: true, align: 'right' });
-  drawText(page, `Datum: ${dateNL(doc.date)}`, width - marginX, height - 110, ctx, { size: 9, align: 'right', color: ctx.mutedColor });
-  drawText(page, `${secondDateLabel}: ${dateNL(secondDateValue)}`, width - marginX, height - 124, ctx, { size: 9, align: 'right', color: ctx.mutedColor });
+  drawText(page, title, width - marginX, height - 62, ctx, { size: sz(b, 15), bold: true, align: 'right' });
+  drawText(page, `${isQuote ? 'Offertenummer' : 'Factuurnummer'}: ${doc.number || '-'}`, width - marginX, height - 94, ctx, { size: b, bold: true, align: 'right' });
+  drawText(page, `Datum: ${dateNL(doc.date)}`, width - marginX, height - 110, ctx, { size: sz(b, -1), align: 'right', color: ctx.mutedColor });
+  drawText(page, `${secondDateLabel}: ${dateNL(secondDateValue)}`, width - marginX, height - 124, ctx, { size: sz(b, -1), align: 'right', color: ctx.mutedColor });
 
   const blockY = height - 190;
   drawSectionLabel(page, 'Factuur aan', marginX, blockY, ctx);
   y = blockY - 24;
   for (const line of clientLines(client)) {
-    drawText(page, line, marginX, y, ctx, { size: 10, bold: y === blockY - 24 });
+    drawText(page, line, marginX, y, ctx, { size: b, bold: y === blockY - 24 });
     y -= 14;
   }
 
@@ -282,7 +288,7 @@ function drawDocumentHeader(page: PDFPage, doc: Quote | Invoice, kind: 'quote' |
     drawSectionLabel(page, 'Bedrijfsgegevens', width - 235, blockY, ctx);
     y = blockY - 24;
     for (const line of legal) {
-      drawText(page, line, width - 235, y, ctx, { size: 9, color: ctx.mutedColor });
+      drawText(page, line, width - 235, y, ctx, { size: sz(b, -1), color: ctx.mutedColor });
       y -= 13;
     }
   }
@@ -290,12 +296,13 @@ function drawDocumentHeader(page: PDFPage, doc: Quote | Invoice, kind: 'quote' |
 
 function drawTableHeader(page: PDFPage, y: number, ctx: DrawContext) {
   const x = 48;
+  const lbl = sz(ctx.base, -2);
   page.drawRectangle({ x, y: y - 8, width: 500, height: 24, color: ctx.accentColor, opacity: 0.18 });
-  drawText(page, 'Omschrijving', x + 8, y, ctx, { size: 8, bold: true, color: ctx.mutedColor });
-  drawText(page, 'Aantal', x + 302, y, ctx, { size: 8, bold: true, color: ctx.mutedColor });
-  drawText(page, 'Prijs', x + 362, y, ctx, { size: 8, bold: true, color: ctx.mutedColor });
-  drawText(page, 'BTW', x + 428, y, ctx, { size: 8, bold: true, color: ctx.mutedColor });
-  drawText(page, 'Totaal', x + 500, y, ctx, { size: 8, bold: true, color: ctx.mutedColor, align: 'right' });
+  drawText(page, 'Omschrijving', x + 8, y, ctx, { size: lbl, bold: true, color: ctx.mutedColor });
+  drawText(page, 'Aantal', x + 302, y, ctx, { size: lbl, bold: true, color: ctx.mutedColor });
+  drawText(page, 'Prijs', x + 362, y, ctx, { size: lbl, bold: true, color: ctx.mutedColor });
+  drawText(page, 'BTW', x + 428, y, ctx, { size: lbl, bold: true, color: ctx.mutedColor });
+  drawText(page, 'Totaal', x + 500, y, ctx, { size: lbl, bold: true, color: ctx.mutedColor, align: 'right' });
 }
 
 function drawFooter(page: PDFPage, ctx: DrawContext, company?: CompanySettings | null) {
@@ -303,7 +310,7 @@ function drawFooter(page: PDFPage, ctx: DrawContext, company?: CompanySettings |
   const footer = clean(company?.invoice_footer) || 'Bedankt voor het vertrouwen.';
   const payment = clean(company?.invoice_payment_terms);
   page.drawLine({ start: { x: 48, y: 58 }, end: { x: width - 48, y: 58 }, thickness: 0.5, color: ctx.mutedColor, opacity: 0.35 });
-  drawWrappedText(page, payment || footer, 48, 42, width - 96, ctx, { size: 8, lineHeight: 10, color: ctx.mutedColor });
+  drawWrappedText(page, payment || footer, 48, 42, width - 96, ctx, { size: sz(ctx.base, -2), lineHeight: sz(ctx.base, 0), color: ctx.mutedColor });
 }
 
 export async function createFinancePDFBlob(doc: Quote | Invoice, kind: 'quote' | 'invoice', client: Client | null, opts: PdfOptions = {}): Promise<Blob> {
@@ -311,12 +318,14 @@ export async function createFinancePDFBlob(doc: Quote | Invoice, kind: 'quote' |
   const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const template = await prepareTemplate(pdfDoc, opts.company);
+  const base = Math.max(8, Math.min(14, Number(opts.company?.invoice_font_size ?? 10)));
   const ctx: DrawContext = {
     regular,
     bold,
     textColor: hexToRgb(opts.company?.invoice_template_text_color, DEFAULT_TEXT),
     mutedColor: rgb(0.38, 0.38, 0.38),
     accentColor: hexToRgb(opts.company?.invoice_accent_color, DEFAULT_ACCENT),
+    base,
   };
 
   let page = await addPage(pdfDoc, template);
@@ -328,7 +337,7 @@ export async function createFinancePDFBlob(doc: Quote | Invoice, kind: 'quote' |
 
   const lines = Array.isArray(doc.lines) ? doc.lines : [];
   for (const line of lines) {
-    const descLines = wrapText(line.description || '-', regular, 9, 270);
+    const descLines = wrapText(line.description || '-', regular, sz(base, -1), 270);
     const rowHeight = Math.max(24, descLines.length * 12 + 10);
     if (cursorY - rowHeight < 132) {
       drawFooter(page, ctx, opts.company);
@@ -343,13 +352,13 @@ export async function createFinancePDFBlob(doc: Quote | Invoice, kind: 'quote' |
     page.drawLine({ start: { x, y: cursorY + 7 }, end: { x: x + 500, y: cursorY + 7 }, thickness: 0.4, color: ctx.mutedColor, opacity: 0.25 });
     let descY = cursorY;
     for (const descLine of descLines) {
-      drawText(page, descLine, x + 8, descY, ctx, { size: 9 });
+      drawText(page, descLine, x + 8, descY, ctx, { size: sz(base, -1) });
       descY -= 12;
     }
-    drawText(page, String(line.quantity ?? 0), x + 322, cursorY, ctx, { size: 9, align: 'right' });
-    drawText(page, fmtMoney(Number(line.unit_price || 0)), x + 405, cursorY, ctx, { size: 9, align: 'right' });
-    drawText(page, `${line.vat ?? 0}%`, x + 449, cursorY, ctx, { size: 9, align: 'right' });
-    drawText(page, fmtMoney(lineGrossValue), x + 500, cursorY, ctx, { size: 9, bold: true, align: 'right' });
+    drawText(page, String(line.quantity ?? 0), x + 322, cursorY, ctx, { size: sz(base, -1), align: 'right' });
+    drawText(page, fmtMoney(Number(line.unit_price || 0)), x + 405, cursorY, ctx, { size: sz(base, -1), align: 'right' });
+    drawText(page, `${line.vat ?? 0}%`, x + 449, cursorY, ctx, { size: sz(base, -1), align: 'right' });
+    drawText(page, fmtMoney(lineGrossValue), x + 500, cursorY, ctx, { size: sz(base, -1), bold: true, align: 'right' });
     cursorY -= rowHeight;
   }
 
@@ -362,29 +371,29 @@ export async function createFinancePDFBlob(doc: Quote | Invoice, kind: 'quote' |
 
   const totalX = page.getWidth() - 248;
   page.drawLine({ start: { x: totalX, y: cursorY + 10 }, end: { x: page.getWidth() - 48, y: cursorY + 10 }, thickness: 0.8, color: ctx.accentColor });
-  drawText(page, 'Subtotaal', totalX, cursorY, ctx, { size: 9 });
-  drawText(page, fmtMoney(totals.subtotal), page.getWidth() - 48, cursorY, ctx, { size: 9, align: 'right' });
+  drawText(page, 'Subtotaal', totalX, cursorY, ctx, { size: sz(base, -1) });
+  drawText(page, fmtMoney(totals.subtotal), page.getWidth() - 48, cursorY, ctx, { size: sz(base, -1), align: 'right' });
   cursorY -= 16;
   // Wettelijk: btw per tarief uitsplitsen op de factuur. Bij één tarief tonen we
   // het percentage in het label; bij meerdere tarieven elk apart.
   for (const row of totals.vatBreakdown) {
-    drawText(page, `BTW ${row.rate}%`, totalX, cursorY, ctx, { size: 9 });
-    drawText(page, fmtMoney(row.vat), page.getWidth() - 48, cursorY, ctx, { size: 9, align: 'right' });
+    drawText(page, `BTW ${row.rate}%`, totalX, cursorY, ctx, { size: sz(base, -1) });
+    drawText(page, fmtMoney(row.vat), page.getWidth() - 48, cursorY, ctx, { size: sz(base, -1), align: 'right' });
     cursorY -= 16;
   }
   if (totals.vatBreakdown.length === 0) {
-    drawText(page, 'BTW', totalX, cursorY, ctx, { size: 9 });
-    drawText(page, fmtMoney(totals.vat), page.getWidth() - 48, cursorY, ctx, { size: 9, align: 'right' });
+    drawText(page, 'BTW', totalX, cursorY, ctx, { size: sz(base, -1) });
+    drawText(page, fmtMoney(totals.vat), page.getWidth() - 48, cursorY, ctx, { size: sz(base, -1), align: 'right' });
     cursorY -= 16;
   }
-  drawText(page, 'Totaal', totalX, cursorY, ctx, { size: 12, bold: true });
-  drawText(page, fmtMoney(totals.total), page.getWidth() - 48, cursorY, ctx, { size: 12, bold: true, align: 'right' });
+  drawText(page, 'Totaal', totalX, cursorY, ctx, { size: sz(base, 2), bold: true });
+  drawText(page, fmtMoney(totals.total), page.getWidth() - 48, cursorY, ctx, { size: sz(base, 2), bold: true, align: 'right' });
   cursorY -= 20;
 
   if (doc.notes) {
     cursorY -= 8;
     drawSectionLabel(page, 'Notities', 48, cursorY, ctx);
-    drawWrappedText(page, doc.notes, 48, cursorY - 24, 300, ctx, { size: 9, lineHeight: 12, color: ctx.mutedColor });
+    drawWrappedText(page, doc.notes, 48, cursorY - 24, 300, ctx, { size: sz(base, -1), lineHeight: 12, color: ctx.mutedColor });
   }
 
   drawFooter(page, ctx, opts.company);
