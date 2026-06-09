@@ -1,11 +1,12 @@
 import { useMemo, useRef, useState } from 'react';
-import type { AppData, Invoice, Note, Project, Quote, Task, TaskStatus } from '../types';
+import type { AppData, InternalDocument, Invoice, Note, Project, Quote, Task, TaskStatus } from '../types';
 import { Button, Select } from '../components/Ui';
 import { dateNL, euro, priorityLabel } from '../lib/format';
 import { RelatedNotes } from './Notes';
+import { RelatedDocuments } from './Documents';
 import { ProjectQuotesPanel } from './Finance';
 import { ProjectTimeline } from './ProjectTimeline';
-import { ChevronDown, ChevronRight, LayoutGrid, FileText, StickyNote, Receipt } from 'lucide-react';
+import { ChevronDown, ChevronRight, LayoutGrid, FileText, StickyNote, Receipt, FolderOpen } from 'lucide-react';
 
 /** Uitklapbare dashboard-sectie */
 function DashboardSection({
@@ -548,6 +549,8 @@ export function ProjectPage({
   onEditInvoice,
   onNewNote,
   onEditNote,
+  onNewDocument,
+  onEditDocument,
   setTaskStatus,
 }: {
   data: AppData;
@@ -567,6 +570,8 @@ export function ProjectPage({
   onEditInvoice: (invoice: Invoice) => void;
   onNewNote: () => void;
   onEditNote: (note: Note) => void;
+  onNewDocument: () => void;
+  onEditDocument: (doc: InternalDocument) => void;
   setTaskStatus: (task: Task, status: TaskStatus) => void;
 }) {
   const dragTaskId = useRef<string | null>(null);
@@ -575,6 +580,7 @@ export function ProjectPage({
   const tasks = data.tasks.filter(t => t.project_id === project.id);
   const client = data.clients.find(c => c.id === project.client_id);
   const projectNotes = data.notes.filter(note => note.project_id === project.id);
+  const projectDocuments = data.documents.filter(doc => doc.project_id === project.id);
   const projectQuotes = data.quotes.filter(q => q.project_id === project.id);
   const projectInvoices = data.invoices.filter(i => i.project_id === project.id);
 
@@ -802,6 +808,31 @@ export function ProjectPage({
             onNew={onNewNote}
             onEdit={onEditNote}
             emptyText="Nog geen notities bij dit project."
+            hideHeader
+          />
+        </DashboardSection>
+
+        <DashboardSection
+          icon={<FolderOpen size={16} />}
+          title="Documenten"
+          subtitle="Contracten, beleid en overige documenten"
+          badge={projectDocuments.length}
+          accentColor={project.color}
+          defaultOpen={false}
+          action={
+            canWrite && !project.archived
+              ? <Button onClick={onNewDocument}>+ Document</Button>
+              : undefined
+          }
+        >
+          <RelatedDocuments
+            title=""
+            documents={projectDocuments}
+            data={data}
+            canWrite={canWrite && !project.archived}
+            onNew={onNewDocument}
+            onEdit={onEditDocument}
+            emptyText="Nog geen documenten bij dit project."
             hideHeader
           />
         </DashboardSection>

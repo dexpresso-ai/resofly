@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import { Search, SlidersHorizontal, RotateCcw } from 'lucide-react';
-import type { AppData, Client, ClientStatus, Invoice, Note, Project, Quote } from '../types';
+import type { AppData, Client, ClientStatus, InternalDocument, Invoice, Note, Project, Quote } from '../types';
 import { dateNL, euro, total } from '../lib/format';
 import { Button, Select } from '../components/Ui';
 import { RelatedNotes } from './Notes';
+import { RelatedDocuments } from './Documents';
 
 const invoiceStatusLabels: Record<string, string> = {
   draft: 'Concept',
@@ -213,6 +214,8 @@ export function ClientDetailPage({
   onOpenProject,
   onNewNote,
   onEditNote,
+  onNewDocument,
+  onEditDocument,
 }: {
   data: AppData;
   client: Client;
@@ -226,9 +229,12 @@ export function ClientDetailPage({
   onOpenProject: (project: Project) => void;
   onNewNote: () => void;
   onEditNote: (note: Note) => void;
+  onNewDocument: () => void;
+  onEditDocument: (doc: InternalDocument) => void;
 }) {
   const projects = data.projects.filter(project => project.client_id === client.id);
   const notes = getClientNotes(data, client.id);
+  const documents = getClientDocuments(data, client.id);
   const quotes = getClientQuotes(data, client.id);
   const invoices = getClientInvoices(data, client.id);
   const openInvoices = invoices.filter(isInvoiceOpen);
@@ -263,16 +269,22 @@ export function ClientDetailPage({
     () => notes.filter(note => noteMatchesQuery(note, normalizedQuery)),
     [notes, normalizedQuery],
   );
+  const filteredDocuments = useMemo(
+    () => documents.filter(doc => documentMatchesQuery(doc, normalizedQuery)),
+    [documents, normalizedQuery],
+  );
 
   const showProjects = section === 'all' || section === 'projects';
   const showQuotes = section === 'all' || section === 'quotes';
   const showInvoices = section === 'all' || section === 'invoices';
   const showNotes = section === 'all' || section === 'notes';
+  const showDocuments = section === 'all' || section === 'documents';
   const visibleCount =
     (showProjects ? filteredProjects.length : 0) +
     (showQuotes ? filteredQuotes.length : 0) +
     (showInvoices ? filteredInvoices.length : 0) +
-    (showNotes ? filteredNotes.length : 0);
+    (showNotes ? filteredNotes.length : 0) +
+    (showDocuments ? filteredDocuments.length : 0);
   const activeFilterCount = (normalizedQuery ? 1 : 0) + (section !== 'all' ? 1 : 0) + (statusFilter ? 1 : 0);
   const resetFilters = () => { setQuery(''); setSection('all'); setStatusFilter(''); };
   const summaryText = [
@@ -280,6 +292,7 @@ export function ClientDetailPage({
     showQuotes ? `${filteredQuotes.length} ${filteredQuotes.length === 1 ? 'offerte' : 'offertes'}` : null,
     showInvoices ? `${filteredInvoices.length} ${filteredInvoices.length === 1 ? 'factuur' : 'facturen'}` : null,
     showNotes ? `${filteredNotes.length} ${filteredNotes.length === 1 ? 'notitie' : 'notities'}` : null,
+    showDocuments ? `${filteredDocuments.length} ${filteredDocuments.length === 1 ? 'document' : 'documenten'}` : null,
   ].filter(Boolean).join(' · ');
 
   return <div className="client-detail-page">
@@ -340,6 +353,7 @@ export function ClientDetailPage({
             <option value="quotes">Offertes</option>
             <option value="invoices">Facturen</option>
             <option value="notes">Notities</option>
+            <option value="documents">Documenten</option>
           </Select>
         </label>
         <label className="field finance-search-field"><span>Status</span>
@@ -402,6 +416,7 @@ export function ClientDetailPage({
     </section>}
 
     {showNotes && <RelatedNotes title="Klantnotities" notes={filteredNotes} data={data} canWrite={canWrite} onNew={onNewNote} onEdit={onEditNote} emptyText={notes.length === 0 ? 'Nog geen notities bij deze klant.' : 'Geen notities voor deze zoekopdracht of filter.'} />}
+    {showDocuments && <RelatedDocuments title="Documenten" documents={filteredDocuments} data={data} canWrite={canWrite} onNew={onNewDocument} onEdit={onEditDocument} emptyText={documents.length === 0 ? 'Nog geen documenten gekoppeld aan deze klant.' : 'Geen documenten voor deze zoekopdracht of filter.'} />}
   </div>;
 }
 
@@ -471,6 +486,11 @@ function getClientNotes(data: AppData, clientId: string) {
   return data.notes.filter(note => note.client_id === clientId || Boolean(note.project_id && projectIds.has(note.project_id)));
 }
 
+function getClientDocuments(data: AppData, clientId: string) {
+  const projectIds = getClientProjectIds(data, clientId);
+  return data.documents.filter(doc => doc.client_id === clientId || Boolean(doc.project_id && projectIds.has(doc.project_id)));
+}
+
 function isInvoiceOpen(invoice: Invoice) {
   return !['paid', 'cancelled', 'draft'].includes(invoice.status);
 }
@@ -483,7 +503,7 @@ function isInvoiceOverdue(invoice: Invoice) {
 }
 
 // ── Zoeken/filteren op de klantdetailpagina ────────────────────────────
-type ClientDetailSection = 'all' | 'projects' | 'quotes' | 'invoices' | 'notes';
+type ClientDetailSection = 'all' | 'projects' | 'quotes' | 'invoices' | 'notes' | 'documents';
 
 // Statussen die zowel op offertes als facturen slaan staan zonder suffix; de
 // finance- of offerte-specifieke statussen krijgen een suffix zodat duidelijk is
@@ -523,6 +543,12 @@ function invoiceMatchesQuery(invoice: Invoice, query: string): boolean {
 function noteMatchesQuery(note: Note, query: string): boolean {
   if (!query) return true;
   return [note.title, note.content, (note.tags ?? []).join(' ')]
+    .map(clientSearchNormalize).join(' ').includes(query);
+}
+
+function documentMatchesQuery(doc: InternalDocument, query: string): boolean {
+  if (!query) return true;
+  return [doc.title, doc.content, doc.document_type]
     .map(clientSearchNormalize).join(' ').includes(query);
 }
 
