@@ -925,6 +925,26 @@ body::before{
 .proj-dash-section-body .related-notes-panel{border:none;background:none;padding:0;margin-top:14px}
 .proj-dash-section-body .project-quotes-panel{margin:14px 0 0}
 
+/* Project detail — klikbare stat-strip */
+.proj-dash-stat-btn{cursor:pointer;background:none;border:none;font-family:inherit;color:inherit;text-align:left;transition:background .12s}.proj-dash-stat-btn:hover{background:rgba(255,255,255,.05)}
+
+/* Project detail — overzicht tab */
+.proj-task-status-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.proj-task-status-card{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px 13px;display:flex;flex-direction:column;gap:4px;cursor:pointer;font-family:inherit;text-align:left;transition:all .15s}
+.proj-task-status-card:hover{background:var(--bg4);border-color:var(--border2);transform:translateY(-1px)}
+.proj-task-status-card strong{font-size:22px;font-weight:900;letter-spacing:-.04em;color:var(--text)}
+.proj-task-status-card span{font-size:10px;text-transform:uppercase;letter-spacing:.1em;font-weight:800;color:var(--muted)}
+.proj-task-status-card.doing strong{color:var(--accent-o)}.proj-task-status-card.review strong{color:var(--accent-v)}.proj-task-status-card.done strong{color:var(--accent-g)}
+.proj-overview-progress{margin-top:12px}
+.proj-overview-progress-bar{height:6px;background:var(--bg4);border-radius:999px;overflow:hidden;margin-bottom:6px}
+.proj-overview-progress-fill{height:100%;border-radius:999px;transition:width .4s ease}
+.proj-overview-progress-pct{font-size:11px;color:var(--muted2);font-weight:700}
+
+/* Project detail — kanban tab */
+.proj-kanban-tab{display:flex;flex-direction:column;gap:12px}
+.proj-kanban-tab-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.proj-kanban-tab-head span{font-size:13px;color:var(--muted2);font-weight:700}
+
 @media(max-width:900px){
   .proj-dash-kanban{grid-template-columns:repeat(2,1fr)}
   .proj-dash-stats{flex-wrap:wrap}

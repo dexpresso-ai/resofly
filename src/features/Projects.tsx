@@ -6,7 +6,7 @@ import { RelatedNotes } from './Notes';
 import { RelatedDocuments } from './Documents';
 import { ProjectQuotesPanel } from './Finance';
 import { ProjectTimeline } from './ProjectTimeline';
-import { ChevronDown, ChevronRight, LayoutGrid, FileText, StickyNote, Receipt, FolderOpen } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
 /** Uitklapbare dashboard-sectie */
 function DashboardSection({
@@ -62,6 +62,28 @@ function DashboardSection({
 }
 
 const columns: {key: TaskStatus; label: string}[] = [{key:'todo',label:'Te doen'}, {key:'doing',label:'Bezig'}, {key:'review',label:'Review'}, {key:'done',label:'Klaar'}];
+
+type ProjectTab = 'overview' | 'kanban' | 'quotes' | 'invoices' | 'notes' | 'documents';
+
+const projectQuoteStatusLabels: Record<string, string> = {
+  draft: 'Concept',
+  pending_internal_approval: 'Wacht op goedkeuring',
+  internally_approved: 'Intern goedgekeurd',
+  sent: 'Verzonden',
+  accepted: 'Geaccepteerd',
+  rejected: 'Afgewezen',
+  expired: 'Verlopen',
+  cancelled: 'Geannuleerd',
+};
+
+const projectInvoiceStatusLabels: Record<string, string> = {
+  draft: 'Concept',
+  sent: 'Verzonden',
+  accepted: 'Openstaand',
+  paid: 'Betaald',
+  overdue: 'Vervallen',
+  cancelled: 'Geannuleerd',
+};
 
 type ProjectViewMode = 'cards' | 'table';
 const projectViewStorageKey = 'resofly.projects.viewMode';
@@ -576,6 +598,7 @@ export function ProjectPage({
 }) {
   const dragTaskId = useRef<string | null>(null);
   const [dragOverCol, setDragOverCol] = useState<TaskStatus | null>(null);
+  const [activeTab, setActiveTab] = useState<ProjectTab>('overview');
 
   const tasks = data.tasks.filter(t => t.project_id === project.id);
   const client = data.clients.find(c => c.id === project.client_id);
@@ -589,6 +612,17 @@ export function ProjectPage({
   const openTasks = tasks.filter(t => t.status !== 'done').length;
   const overdueTasks = tasks.filter(t => t.end_date && new Date(t.end_date) < new Date() && t.status !== 'done').length;
   const invoiceTotal = projectInvoices.reduce((sum, i) => sum + (i.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0), 0);
+
+  const switchTab = (tab: ProjectTab) => setActiveTab(tab);
+
+  const tabs: Array<{ id: ProjectTab; label: string; count: number }> = [
+    { id: 'overview', label: 'Overzicht', count: 0 },
+    { id: 'kanban', label: 'Kanban', count: openTasks },
+    { id: 'quotes', label: 'Offertes', count: projectQuotes.length },
+    { id: 'invoices', label: 'Facturen', count: projectInvoices.length },
+    { id: 'notes', label: 'Notities', count: projectNotes.length },
+    { id: 'documents', label: 'Documenten', count: projectDocuments.length },
+  ];
 
   return (
     <div className="proj-dashboard">
@@ -609,28 +643,28 @@ export function ProjectPage({
           </div>
         </div>
 
-        {/* ── Stat strip ── */}
+        {/* ── Klikbare stat strip ── */}
         <div className="proj-dash-stats">
-          <div className="proj-dash-stat">
+          <button type="button" className="proj-dash-stat proj-dash-stat-btn" onClick={() => switchTab('kanban')}>
             <span className="proj-dash-stat-val">{tasks.length}</span>
             <span className="proj-dash-stat-lbl">Taken totaal</span>
-          </div>
-          <div className="proj-dash-stat">
+          </button>
+          <button type="button" className="proj-dash-stat proj-dash-stat-btn" onClick={() => switchTab('kanban')}>
             <span className="proj-dash-stat-val" style={{ color: 'var(--accent)' }}>{openTasks}</span>
             <span className="proj-dash-stat-lbl">Open</span>
-          </div>
-          <div className="proj-dash-stat">
-            <span className="proj-dash-stat-val" style={{ color: overdueTasks > 0 ? '#f87171' : 'inherit' }}>{overdueTasks}</span>
+          </button>
+          <button type="button" className="proj-dash-stat proj-dash-stat-btn" onClick={() => switchTab('kanban')}>
+            <span className="proj-dash-stat-val" style={{ color: overdueTasks > 0 ? 'var(--accent-r)' : 'inherit' }}>{overdueTasks}</span>
             <span className="proj-dash-stat-lbl">Te laat</span>
-          </div>
-          <div className="proj-dash-stat">
+          </button>
+          <button type="button" className="proj-dash-stat proj-dash-stat-btn" onClick={() => switchTab('quotes')}>
             <span className="proj-dash-stat-val">{projectQuotes.length}</span>
             <span className="proj-dash-stat-lbl">Offertes</span>
-          </div>
-          <div className="proj-dash-stat">
+          </button>
+          <button type="button" className="proj-dash-stat proj-dash-stat-btn" onClick={() => switchTab('invoices')}>
             <span className="proj-dash-stat-val">{projectInvoices.length > 0 ? euro(invoiceTotal) : '—'}</span>
             <span className="proj-dash-stat-lbl">Gefactureerd</span>
-          </div>
+          </button>
           <div className="proj-dash-stat proj-dash-stat-progress">
             <div className="proj-dash-progress-bar">
               <div className="proj-dash-progress-fill" style={{ width: `${progress}%`, background: project.color ?? 'var(--accent)' }} />
@@ -640,204 +674,235 @@ export function ProjectPage({
         </div>
       </div>
 
-      {/* ── Uitklapbare secties ── */}
-      <div className="proj-dash-sections">
-
-        <DashboardSection
-          icon={<LayoutGrid size={16} />}
-          title="Kanban board"
-          subtitle="Taken per status"
-          badge={openTasks}
-          accentColor={project.color}
-          defaultOpen={false}
-          action={
-            <Button variant="primary" onClick={onNewTask} disabled={project.archived || !canWrite}>+ Taak</Button>
-          }
-        >
-          <div className="kanban proj-dash-kanban">
-            {columns.map(col => (
-              <div
-                className={`kan-col${dragOverCol === col.key ? ' kan-drag-over' : ''}`}
-                key={col.key}
-                onDragOver={e => { e.preventDefault(); setDragOverCol(col.key); }}
-                onDragLeave={() => setDragOverCol(null)}
-                onDrop={e => {
-                  e.preventDefault();
-                  setDragOverCol(null);
-                  if (dragTaskId.current) {
-                    const task = tasks.find(t => t.id === dragTaskId.current);
-                    if (task && task.status !== col.key) setTaskStatus(task, col.key);
-                    dragTaskId.current = null;
-                  }
-                }}
-              >
-                <header className="kan-col-head">
-                  <span className="kan-dot" style={{ background: project.color }} />
-                  {col.label}
-                  <span className="kan-count">{tasks.filter(t => t.status === col.key).length}</span>
-                </header>
-                <div className="kan-body">
-                  {tasks.filter(t => t.status === col.key).map(task => (
-                    <article
-                      className="task-card"
-                      key={task.id}
-                      draggable={!project.archived && canWrite}
-                      onDragStart={e => {
-                        dragTaskId.current = task.id;
-                        e.dataTransfer.effectAllowed = 'move';
-                      }}
-                      onDragEnd={() => { dragTaskId.current = null; setDragOverCol(null); }}
-                      onClick={() => onEditTask(task)}
-                    >
-                      <div className="tc-title">{task.title}</div>
-                      <div className="tc-desc">{task.description}</div>
-                      <div className="tc-meta">
-                        <span className={`pri-badge pri-${task.priority}`}>{priorityLabel(task.priority)}</span>
-                        {task.tags?.map(tag => <span className="tag-pill" key={tag}>{tag}</span>)}
-                      </div>
-                      <div className="tc-footer">
-                        <span>☑ {task.subtasks?.filter(s => s.done).length ?? 0}/{task.subtasks?.length ?? 0}</span>
-                        <span>💬 {task.comments?.length ?? 0}</span>
-                        <span className="tc-deadline">{dateNL(task.end_date)}</span>
-                      </div>
-                    </article>
-                  ))}
-                  {tasks.filter(t => t.status === col.key).length === 0 && (
-                    <div className="kan-empty">Geen taken</div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </DashboardSection>
-
-        <DashboardSection
-          icon={<FileText size={16} />}
-          title="Offertes"
-          subtitle="Goedkeuring, verzending en factuurconversie"
-          badge={projectQuotes.length}
-          accentColor={project.color}
-          defaultOpen={false}
-          action={
-            <Button variant="primary" onClick={onNewQuote} disabled={project.archived || !canWrite}>+ Offerte</Button>
-          }
-        >
-          {projectQuotes.length === 0 ? (
-            <div className="proj-dash-empty">Nog geen offertes bij dit project. Maak een nieuwe offerte.</div>
-          ) : (
-            <div className="proj-dash-quote-list">
-              {projectQuotes.map(quote => {
-                const client = data.clients.find(c => c.id === quote.client_id);
-                const quoteTotal = quote.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0;
-                return (
-                  <button
-                    key={quote.id}
-                    type="button"
-                    className="proj-dash-quote-row"
-                    onClick={() => onEditQuote(quote)}
-                  >
-                    <div>
-                      <strong>{quote.number}</strong>
-                      <span>{dateNL(quote.date)}</span>
-                    </div>
-                    <div>
-                      <strong>{euro(quoteTotal)}</strong>
-                      <span className={`quote-status ${quote.status}`}>{quote.status}</span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </DashboardSection>
-
-        <DashboardSection
-          icon={<Receipt size={16} />}
-          title="Facturen"
-          subtitle="Gefactureerde bedragen bij dit project"
-          badge={projectInvoices.length}
-          accentColor={project.color}
-          defaultOpen={false}
-        >
-          {projectInvoices.length === 0 ? (
-            <div className="proj-dash-empty">Nog geen facturen bij dit project. Zet een geaccepteerde offerte om.</div>
-          ) : (
-            <div className="proj-dash-invoice-list">
-              {projectInvoices.map(inv => {
-                const invTotal = inv.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0;
-                return (
-                  <button
-                    key={inv.id}
-                    type="button"
-                    className="proj-dash-invoice-row"
-                    onClick={() => onEditInvoice(inv)}
-                  >
-                    <div>
-                      <strong>{inv.number}</strong>
-                      <span>{dateNL(inv.date)}</span>
-                    </div>
-                    <div>
-                      <strong>{euro(invTotal)}</strong>
-                      <span className={`fin-status ${inv.status}`}>{inv.status}</span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </DashboardSection>
-
-        <DashboardSection
-          icon={<StickyNote size={16} />}
-          title="Notities"
-          subtitle="Projectgekoppelde notities"
-          badge={projectNotes.length}
-          accentColor={project.color}
-          defaultOpen={false}
-          action={
-            canWrite && !project.archived
-              ? <Button onClick={onNewNote}>+ Notitie</Button>
-              : undefined
-          }
-        >
-          <RelatedNotes
-            title=""
-            notes={projectNotes}
-            data={data}
-            canWrite={canWrite && !project.archived}
-            onNew={onNewNote}
-            onEdit={onEditNote}
-            emptyText="Nog geen notities bij dit project."
-            hideHeader
-          />
-        </DashboardSection>
-
-        <DashboardSection
-          icon={<FolderOpen size={16} />}
-          title="Documenten"
-          subtitle="Contracten, beleid en overige documenten"
-          badge={projectDocuments.length}
-          accentColor={project.color}
-          defaultOpen={false}
-          action={
-            canWrite && !project.archived
-              ? <Button onClick={onNewDocument}>+ Document</Button>
-              : undefined
-          }
-        >
-          <RelatedDocuments
-            title=""
-            documents={projectDocuments}
-            data={data}
-            canWrite={canWrite && !project.archived}
-            onNew={onNewDocument}
-            onEdit={onEditDocument}
-            emptyText="Nog geen documenten bij dit project."
-            hideHeader
-          />
-        </DashboardSection>
-
+      {/* ── Tab bar ── */}
+      <div className="client-tabs-bar" role="tablist">
+        {tabs.map(tab => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            className={`client-tab-btn${activeTab === tab.id ? ' active' : ''}`}
+            onClick={() => switchTab(tab.id)}
+          >
+            {tab.label}
+            {tab.count > 0 && <span className="client-tab-badge">{tab.count}</span>}
+          </button>
+        ))}
       </div>
+
+      {/* ── Tab: Overzicht ── */}
+      {activeTab === 'overview' && <div className="client-overview-layout">
+        <aside className="client-overview-sidebar">
+          <article className="client-panel">
+            <div className="client-panel-head"><h3>Projectgegevens</h3></div>
+            <dl className="client-info-list">
+              <div><dt>Klant</dt><dd>{client?.name ?? '—'}</dd></div>
+              <div><dt>Startdatum</dt><dd>{dateNL(project.start_date) || '—'}</dd></div>
+              <div><dt>Einddatum</dt><dd>{dateNL(project.end_date) || '—'}</dd></div>
+              <div><dt>Aangemaakt</dt><dd>{dateNL(project.created_at)}</dd></div>
+            </dl>
+            <div className="proj-overview-progress">
+              <div className="proj-overview-progress-bar">
+                <div className="proj-overview-progress-fill" style={{ width: `${progress}%`, background: project.color ?? 'var(--accent)' }} />
+              </div>
+              <span className="proj-overview-progress-pct">{progress}% klaar · {doneTasks}/{tasks.length} taken</span>
+            </div>
+          </article>
+
+          <article className="client-panel">
+            <div className="client-panel-head">
+              <h3>Taken per status</h3>
+              <button type="button" className="client-overview-more-btn" onClick={() => switchTab('kanban')}>Kanban →</button>
+            </div>
+            <div className="proj-task-status-grid">
+              {columns.map(col => (
+                <button key={col.key} type="button" className={`proj-task-status-card ${col.key}`} onClick={() => switchTab('kanban')}>
+                  <strong>{tasks.filter(t => t.status === col.key).length}</strong>
+                  <span>{col.label}</span>
+                </button>
+              ))}
+            </div>
+          </article>
+        </aside>
+
+        <div className="client-overview-main">
+          <article className="client-panel">
+            <div className="client-panel-head">
+              <h3>Recente offertes</h3>
+              <button type="button" className="client-overview-more-btn" onClick={() => switchTab('quotes')}>
+                Alle {projectQuotes.length} offertes →
+              </button>
+            </div>
+            <div className="client-finance-list">
+              {projectQuotes.length === 0 && <div className="client-empty-line">Nog geen offertes bij dit project.</div>}
+              {projectQuotes.slice(0, 4).map(quote => {
+                const qt = quote.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0;
+                return <button key={quote.id} type="button" className="client-finance-row" onClick={() => onEditQuote(quote)}>
+                  <span className="client-finance-number">{quote.number}</span>
+                  <span className="client-finance-meta">{dateNL(quote.date)}</span>
+                  <span className="client-finance-amount">{euro(qt)}</span>
+                  <span className={`client-finance-status ${quote.status}`}>{projectQuoteStatusLabels[quote.status] ?? quote.status}</span>
+                </button>;
+              })}
+              {projectQuotes.length > 4 && <button type="button" className="client-overview-more-link" onClick={() => switchTab('quotes')}>+{projectQuotes.length - 4} meer offertes</button>}
+            </div>
+          </article>
+
+          <article className="client-panel">
+            <div className="client-panel-head">
+              <h3>Recente facturen</h3>
+              <button type="button" className="client-overview-more-btn" onClick={() => switchTab('invoices')}>
+                Alle {projectInvoices.length} facturen →
+              </button>
+            </div>
+            <div className="client-finance-list">
+              {projectInvoices.length === 0 && <div className="client-empty-line">Nog geen facturen bij dit project.</div>}
+              {projectInvoices.slice(0, 4).map(inv => {
+                const invTotal = inv.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0;
+                const overdue = inv.status !== 'paid' && inv.status !== 'cancelled' && !!inv.due_date && inv.due_date.slice(0, 10) < new Date().toISOString().slice(0, 10);
+                return <button key={inv.id} type="button" className={`client-finance-row ${overdue ? 'is-overdue' : ''}`} onClick={() => onEditInvoice(inv)}>
+                  <span className="client-finance-number">{inv.number}</span>
+                  <span className="client-finance-meta">{dateNL(inv.date)} · Vervalt {dateNL(inv.due_date)}</span>
+                  <span className="client-finance-amount">{euro(invTotal)}</span>
+                  <span className={`client-finance-status ${overdue ? 'overdue' : inv.status}`}>{overdue ? 'Vervallen' : (projectInvoiceStatusLabels[inv.status] ?? inv.status)}</span>
+                </button>;
+              })}
+              {projectInvoices.length > 4 && <button type="button" className="client-overview-more-link" onClick={() => switchTab('invoices')}>+{projectInvoices.length - 4} meer facturen</button>}
+            </div>
+          </article>
+        </div>
+      </div>}
+
+      {/* ── Tab: Kanban ── */}
+      {activeTab === 'kanban' && <div className="proj-kanban-tab">
+        <div className="proj-kanban-tab-head">
+          <span>{openTasks} open {openTasks === 1 ? 'taak' : 'taken'}{overdueTasks > 0 ? ` · ${overdueTasks} te laat` : ''}</span>
+          {canWrite && !project.archived && <Button variant="primary" onClick={onNewTask}>+ Taak</Button>}
+        </div>
+        <div className="kanban proj-dash-kanban">
+          {columns.map(col => (
+            <div
+              className={`kan-col${dragOverCol === col.key ? ' kan-drag-over' : ''}`}
+              key={col.key}
+              onDragOver={e => { e.preventDefault(); setDragOverCol(col.key); }}
+              onDragLeave={() => setDragOverCol(null)}
+              onDrop={e => {
+                e.preventDefault();
+                setDragOverCol(null);
+                if (dragTaskId.current) {
+                  const task = tasks.find(t => t.id === dragTaskId.current);
+                  if (task && task.status !== col.key) setTaskStatus(task, col.key);
+                  dragTaskId.current = null;
+                }
+              }}
+            >
+              <header className="kan-col-head">
+                <span className="kan-dot" style={{ background: project.color }} />
+                {col.label}
+                <span className="kan-count">{tasks.filter(t => t.status === col.key).length}</span>
+              </header>
+              <div className="kan-body">
+                {tasks.filter(t => t.status === col.key).map(task => (
+                  <article
+                    className="task-card"
+                    key={task.id}
+                    draggable={!project.archived && canWrite}
+                    onDragStart={e => {
+                      dragTaskId.current = task.id;
+                      e.dataTransfer.effectAllowed = 'move';
+                    }}
+                    onDragEnd={() => { dragTaskId.current = null; setDragOverCol(null); }}
+                    onClick={() => onEditTask(task)}
+                  >
+                    <div className="tc-title">{task.title}</div>
+                    <div className="tc-desc">{task.description}</div>
+                    <div className="tc-meta">
+                      <span className={`pri-badge pri-${task.priority}`}>{priorityLabel(task.priority)}</span>
+                      {task.tags?.map(tag => <span className="tag-pill" key={tag}>{tag}</span>)}
+                    </div>
+                    <div className="tc-footer">
+                      <span>☑ {task.subtasks?.filter(s => s.done).length ?? 0}/{task.subtasks?.length ?? 0}</span>
+                      <span>💬 {task.comments?.length ?? 0}</span>
+                      <span className="tc-deadline">{dateNL(task.end_date)}</span>
+                    </div>
+                  </article>
+                ))}
+                {tasks.filter(t => t.status === col.key).length === 0 && (
+                  <div className="kan-empty">Geen taken</div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>}
+
+      {/* ── Tab: Offertes ── */}
+      {activeTab === 'quotes' && <article className="client-panel">
+        <div className="client-panel-head">
+          <h3>Offertes</h3>
+          <div className="client-panel-head-right">
+            <span>{projectQuotes.length}</span>
+            {canWrite && !project.archived && <Button variant="primary" onClick={onNewQuote}>+ Offerte</Button>}
+          </div>
+        </div>
+        <div className="client-finance-list">
+          {projectQuotes.length === 0 && <div className="client-empty-line">Nog geen offertes bij dit project. Maak een nieuwe offerte aan.</div>}
+          {projectQuotes.map(quote => {
+            const qt = quote.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0;
+            return <button key={quote.id} type="button" className="client-finance-row" onClick={() => onEditQuote(quote)}>
+              <span className="client-finance-number">{quote.number}</span>
+              <span className="client-finance-meta">{dateNL(quote.date)} · Geldig tot {dateNL(quote.valid_until)}</span>
+              <span className="client-finance-amount">{euro(qt)}</span>
+              <span className={`client-finance-status ${quote.status}`}>{projectQuoteStatusLabels[quote.status] ?? quote.status}</span>
+            </button>;
+          })}
+        </div>
+      </article>}
+
+      {/* ── Tab: Facturen ── */}
+      {activeTab === 'invoices' && <article className="client-panel">
+        <div className="client-panel-head">
+          <h3>Facturen</h3>
+          <span>{projectInvoices.length}</span>
+        </div>
+        <div className="client-finance-list">
+          {projectInvoices.length === 0 && <div className="client-empty-line">Nog geen facturen bij dit project. Zet een geaccepteerde offerte om naar factuur.</div>}
+          {projectInvoices.map(inv => {
+            const invTotal = inv.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0;
+            const overdue = inv.status !== 'paid' && inv.status !== 'cancelled' && !!inv.due_date && inv.due_date.slice(0, 10) < new Date().toISOString().slice(0, 10);
+            return <button key={inv.id} type="button" className={`client-finance-row ${overdue ? 'is-overdue' : ''}`} onClick={() => onEditInvoice(inv)}>
+              <span className="client-finance-number">{inv.number}</span>
+              <span className="client-finance-meta">{dateNL(inv.date)} · Vervalt {dateNL(inv.due_date)}</span>
+              <span className="client-finance-amount">{euro(invTotal)}</span>
+              <span className={`client-finance-status ${overdue ? 'overdue' : inv.status}`}>{overdue ? 'Vervallen' : (projectInvoiceStatusLabels[inv.status] ?? inv.status)}</span>
+            </button>;
+          })}
+        </div>
+      </article>}
+
+      {/* ── Tab: Notities ── */}
+      {activeTab === 'notes' && <RelatedNotes
+        title="Projectnotities"
+        notes={projectNotes}
+        data={data}
+        canWrite={canWrite && !project.archived}
+        onNew={onNewNote}
+        onEdit={onEditNote}
+        emptyText="Nog geen notities bij dit project."
+      />}
+
+      {/* ── Tab: Documenten ── */}
+      {activeTab === 'documents' && <RelatedDocuments
+        title="Documenten"
+        documents={projectDocuments}
+        data={data}
+        canWrite={canWrite && !project.archived}
+        onNew={onNewDocument}
+        onEdit={onEditDocument}
+        emptyText="Nog geen documenten bij dit project."
+      />}
+
     </div>
   );
 }
