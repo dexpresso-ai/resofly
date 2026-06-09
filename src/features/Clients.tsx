@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Search, SlidersHorizontal, RotateCcw } from 'lucide-react';
+import { Search, RotateCcw } from 'lucide-react';
 import type { AppData, Client, ClientStatus, InternalDocument, Invoice, Note, Project, Quote } from '../types';
 import { dateNL, euro, total } from '../lib/format';
 import { Button, Select } from '../components/Ui';
@@ -248,8 +248,8 @@ export function ClientDetailPage({
   // Zoek/filter over het volledige klantdossier (projecten, offertes, facturen
   // en notities). De KPI's en facturatie-waarschuwing blijven het totaalbeeld
   // tonen; alleen de detaillijsten hieronder reageren op de filters.
+  const [activeTab, setActiveTab] = useState<ClientTab>('overview');
   const [query, setQuery] = useState('');
-  const [section, setSection] = useState<ClientDetailSection>('all');
   const [statusFilter, setStatusFilter] = useState('');
   const normalizedQuery = clientSearchNormalize(query.trim());
 
@@ -274,26 +274,23 @@ export function ClientDetailPage({
     [documents, normalizedQuery],
   );
 
-  const showProjects = section === 'all' || section === 'projects';
-  const showQuotes = section === 'all' || section === 'quotes';
-  const showInvoices = section === 'all' || section === 'invoices';
-  const showNotes = section === 'all' || section === 'notes';
-  const showDocuments = section === 'all' || section === 'documents';
-  const visibleCount =
-    (showProjects ? filteredProjects.length : 0) +
-    (showQuotes ? filteredQuotes.length : 0) +
-    (showInvoices ? filteredInvoices.length : 0) +
-    (showNotes ? filteredNotes.length : 0) +
-    (showDocuments ? filteredDocuments.length : 0);
-  const activeFilterCount = (normalizedQuery ? 1 : 0) + (section !== 'all' ? 1 : 0) + (statusFilter ? 1 : 0);
-  const resetFilters = () => { setQuery(''); setSection('all'); setStatusFilter(''); };
-  const summaryText = [
-    showProjects ? `${filteredProjects.length} ${filteredProjects.length === 1 ? 'project' : 'projecten'}` : null,
-    showQuotes ? `${filteredQuotes.length} ${filteredQuotes.length === 1 ? 'offerte' : 'offertes'}` : null,
-    showInvoices ? `${filteredInvoices.length} ${filteredInvoices.length === 1 ? 'factuur' : 'facturen'}` : null,
-    showNotes ? `${filteredNotes.length} ${filteredNotes.length === 1 ? 'notitie' : 'notities'}` : null,
-    showDocuments ? `${filteredDocuments.length} ${filteredDocuments.length === 1 ? 'document' : 'documenten'}` : null,
-  ].filter(Boolean).join(' · ');
+  const switchTab = (tab: ClientTab) => {
+    setActiveTab(tab);
+    setQuery('');
+    setStatusFilter('');
+  };
+
+  const activeFilterCount = (normalizedQuery ? 1 : 0) + (statusFilter ? 1 : 0);
+  const resetFilters = () => { setQuery(''); setStatusFilter(''); };
+
+  const tabs: Array<{ id: ClientTab; label: string; count: number }> = [
+    { id: 'overview', label: 'Overzicht', count: 0 },
+    { id: 'projects', label: 'Projecten', count: projects.length },
+    { id: 'quotes', label: 'Offertes', count: quotes.length },
+    { id: 'invoices', label: 'Facturen', count: invoices.length },
+    { id: 'notes', label: 'Notities', count: notes.length },
+    { id: 'documents', label: 'Documenten', count: documents.length },
+  ];
 
   return <div className="client-detail-page">
     <section className="client-detail-hero">
@@ -303,7 +300,10 @@ export function ClientDetailPage({
           <div className="client-hero-avatar" style={{ background: client.color }}>{client.name.slice(0, 2).toUpperCase()}</div>
           <div>
             <h2>{client.name}</h2>
-            <p>{client.client_code ?? 'Geen klantcode'} · {client.status}</p>
+            <div className="client-hero-meta">
+              <span className={`client-status-pill ${client.status}`}>{clientStatusLabels[client.status] ?? client.status}</span>
+              {client.client_code && <span className="client-hero-code">{client.client_code}</span>}
+            </div>
           </div>
         </div>
       </div>
@@ -320,112 +320,178 @@ export function ClientDetailPage({
     </section>}
 
     <section className="client-kpi-grid">
-      <ClientKpi label="Offertes" value={quotes.length} sub={euro(quoteTotal)} />
-      <ClientKpi label="Facturen" value={invoices.length} sub={euro(invoiceTotal)} />
-      <ClientKpi label="Openstaand" value={openInvoices.length} sub={euro(openInvoiceTotal)} tone={openInvoices.length ? 'warning' : undefined} />
-      <ClientKpi label="Vervallen" value={overdueInvoices.length} sub={euro(overdueInvoiceTotal)} tone={overdueInvoices.length ? 'danger' : undefined} />
-      <ClientKpi label="Betaald" value={paidInvoices.length} sub={euro(paidInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0))} tone="success" />
+      <ClientKpi label="Offertes" value={quotes.length} sub={euro(quoteTotal)} onClick={() => switchTab('quotes')} />
+      <ClientKpi label="Facturen" value={invoices.length} sub={euro(invoiceTotal)} onClick={() => switchTab('invoices')} />
+      <ClientKpi label="Openstaand" value={openInvoices.length} sub={euro(openInvoiceTotal)} tone={openInvoices.length ? 'warning' : undefined} onClick={() => switchTab('invoices')} />
+      <ClientKpi label="Vervallen" value={overdueInvoices.length} sub={euro(overdueInvoiceTotal)} tone={overdueInvoices.length ? 'danger' : undefined} onClick={() => switchTab('invoices')} />
+      <ClientKpi label="Betaald" value={paidInvoices.length} sub={euro(paidInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0))} tone="success" onClick={() => switchTab('invoices')} />
     </section>
 
-    <section className="finance-search-card" aria-label="Zoeken en filteren in dit klantdossier">
-      <div className="finance-search-main">
-        <label className="finance-search-query">
-          <span><Search size={15}/> Zoek in dit klantdossier</span>
-          <input
-            className="form-input"
-            value={query}
-            onChange={event => setQuery(event.target.value)}
-            placeholder="Zoek op projectnaam, offerte-/factuurnummer, status, bedrag of notitie…"
-            autoComplete="off"
-          />
-        </label>
-        <div className="finance-search-result-card">
-          <SlidersHorizontal size={16}/>
-          <div><strong>{visibleCount} {visibleCount === 1 ? 'resultaat' : 'resultaten'}</strong><span>in beeld</span></div>
-        </div>
+    <div className="client-tabs-bar" role="tablist">
+      {tabs.map(tab => (
+        <button
+          key={tab.id}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === tab.id}
+          className={`client-tab-btn${activeTab === tab.id ? ' active' : ''}`}
+          onClick={() => switchTab(tab.id)}
+        >
+          {tab.label}
+          {tab.count > 0 && <span className="client-tab-badge">{tab.count}</span>}
+        </button>
+      ))}
+    </div>
+
+    {activeTab !== 'overview' && <div className="client-tab-search">
+      <label className="client-tab-search-field">
+        <Search size={14} />
+        <input
+          className="client-tab-search-input"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder={`Zoek in ${tabs.find(t => t.id === activeTab)?.label.toLowerCase() ?? 'dossier'}…`}
+          autoComplete="off"
+        />
+      </label>
+      {(activeTab === 'quotes' || activeTab === 'invoices') && (
+        <Select className="form-select client-tab-status-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+          <option value="">Alle statussen</option>
+          {clientStatusFilterOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+        </Select>
+      )}
+      {activeFilterCount > 0 && (
+        <button type="button" className="client-tab-reset" onClick={resetFilters}>
+          <RotateCcw size={13} /> Wissen
+        </button>
+      )}
+    </div>}
+
+    {activeTab === 'overview' && <div className="client-overview-layout">
+      <aside className="client-overview-sidebar">
+        <article className="client-panel">
+          <div className="client-panel-head"><h3>Klantgegevens</h3></div>
+          <dl className="client-info-list">
+            <div><dt>Contactpersoon</dt><dd>{client.contact_name || '—'}</dd></div>
+            <div><dt>E-mail</dt><dd>{client.email || '—'}</dd></div>
+            <div><dt>Telefoon</dt><dd>{client.phone || '—'}</dd></div>
+            <div><dt>Waarde</dt><dd>{euro(client.value_eur)}</dd></div>
+            <div><dt>Aangemaakt</dt><dd>{dateNL(client.created_at)}</dd></div>
+            <div><dt>Bijgewerkt</dt><dd>{dateNL(client.updated_at)}</dd></div>
+          </dl>
+          {client.notes && <p className="client-inline-notes">{client.notes}</p>}
+          <div className="cd-tags">{client.tags?.map(tag => <span className="cd-tag" key={tag}>{tag}</span>)}</div>
+        </article>
+
+        <article className="client-panel">
+          <div className="client-panel-head">
+            <h3>Projecten</h3>
+            <div className="client-panel-head-right">
+              <span>{projects.length}</span>
+              {projects.length > 0 && <button type="button" className="client-overview-more-btn" onClick={() => switchTab('projects')}>Bekijk alle →</button>}
+            </div>
+          </div>
+          <div className="client-project-list">
+            {projects.length === 0 && <div className="client-empty-line">Nog geen projecten gekoppeld.</div>}
+            {projects.slice(0, 6).map(project => <button key={project.id} type="button" className="client-project-row" onClick={() => onOpenProject(project)}>
+              <span className="client-project-dot" style={{ background: project.color }} />
+              <span>{project.name}</span>
+              {project.archived && <em>Gearchiveerd</em>}
+            </button>)}
+            {projects.length > 6 && <button type="button" className="client-overview-more-link" onClick={() => switchTab('projects')}>+{projects.length - 6} meer projecten</button>}
+          </div>
+        </article>
+      </aside>
+
+      <div className="client-overview-main">
+        <article className="client-panel">
+          <div className="client-panel-head">
+            <h3>Recente offertes</h3>
+            <button type="button" className="client-overview-more-btn" onClick={() => switchTab('quotes')}>
+              Alle {quotes.length} offertes →
+            </button>
+          </div>
+          <div className="client-finance-list">
+            {quotes.length === 0 && <div className="client-empty-line">Nog geen offertes voor deze klant.</div>}
+            {quotes.slice(0, 4).map(quote => {
+              const amount = total(quote.lines).total;
+              const statusLabel = quoteStatusLabels[quote.status] ?? quote.status;
+              return <button key={quote.id} type="button" className="client-finance-row" onClick={() => onEditQuote(quote)}>
+                <span className="client-finance-number">{quote.number}</span>
+                <span className="client-finance-meta">{dateNL(quote.date)} · Geldig tot {dateNL((quote as Quote).valid_until)}</span>
+                <span className="client-finance-amount">{euro(amount)}</span>
+                <span className={`client-finance-status ${quote.status}`}>{statusLabel}</span>
+              </button>;
+            })}
+            {quotes.length > 4 && <button type="button" className="client-overview-more-link" onClick={() => switchTab('quotes')}>+{quotes.length - 4} meer offertes bekijken</button>}
+          </div>
+        </article>
+
+        <article className="client-panel">
+          <div className="client-panel-head">
+            <h3>Recente facturen</h3>
+            <button type="button" className="client-overview-more-btn" onClick={() => switchTab('invoices')}>
+              Alle {invoices.length} facturen →
+            </button>
+          </div>
+          <div className="client-finance-list">
+            {invoices.length === 0 && <div className="client-empty-line">Nog geen facturen voor deze klant.</div>}
+            {invoices.slice(0, 4).map(invoice => {
+              const overdue = isInvoiceOverdue(invoice);
+              const amount = total(invoice.lines).total;
+              const statusLabel = invoiceStatusLabels[invoice.status] ?? invoice.status;
+              return <button key={invoice.id} type="button" className={`client-finance-row ${overdue ? 'is-overdue' : ''}`} onClick={() => onEditInvoice(invoice)}>
+                <span className="client-finance-number">{invoice.number}</span>
+                <span className="client-finance-meta">{dateNL(invoice.date)} · Vervalt {dateNL(invoice.due_date)}</span>
+                <span className="client-finance-amount">{euro(amount)}</span>
+                <span className={`client-finance-status ${overdue ? 'overdue' : invoice.status}`}>{overdue ? 'Vervallen' : statusLabel}</span>
+              </button>;
+            })}
+            {invoices.length > 4 && <button type="button" className="client-overview-more-link" onClick={() => switchTab('invoices')}>+{invoices.length - 4} meer facturen bekijken</button>}
+          </div>
+        </article>
       </div>
+    </div>}
 
-      <div className="finance-search-grid client-search-grid">
-        <label className="field finance-search-field"><span>Sectie</span>
-          <Select className="form-select" value={section} onChange={event => setSection(event.target.value as ClientDetailSection)}>
-            <option value="all">Alles</option>
-            <option value="projects">Projecten</option>
-            <option value="quotes">Offertes</option>
-            <option value="invoices">Facturen</option>
-            <option value="notes">Notities</option>
-            <option value="documents">Documenten</option>
-          </Select>
-        </label>
-        <label className="field finance-search-field"><span>Status</span>
-          <Select className="form-select" value={statusFilter} onChange={event => setStatusFilter(event.target.value)}>
-            <option value="">Alle statussen</option>
-            {clientStatusFilterOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </Select>
-        </label>
+    {activeTab === 'projects' && <article className="client-panel">
+      <div className="client-panel-head"><h3>Projecten</h3><span>{filteredProjects.length}</span></div>
+      <div className="client-project-list">
+        {filteredProjects.length === 0 && <div className="client-empty-line">{projects.length === 0 ? 'Nog geen projecten gekoppeld.' : 'Geen projecten voor deze zoekopdracht.'}</div>}
+        {filteredProjects.map(project => <button key={project.id} type="button" className="client-project-row" onClick={() => onOpenProject(project)}>
+          <span className="client-project-dot" style={{ background: project.color }} />
+          <span>{project.name}</span>
+          {project.archived && <em>Gearchiveerd</em>}
+        </button>)}
       </div>
+    </article>}
 
-      {activeFilterCount > 0 && <div className="finance-search-active-row">
-        <span>{summaryText} zichtbaar</span>
-        <button type="button" onClick={resetFilters}><RotateCcw size={14}/> Filters wissen</button>
-      </div>}
-    </section>
+    {activeTab === 'quotes' && <FinancePanel
+      title="Offertes"
+      emptyText={quotes.length === 0 ? 'Nog geen offertes voor deze klant.' : 'Geen offertes voor deze zoekopdracht of filter.'}
+      items={filteredQuotes}
+      kind="quote"
+      onEdit={onEditQuote}
+    />}
 
-    <section className="client-detail-grid">
-      <article className="client-panel client-info-panel">
-        <div className="client-panel-head"><h3>Klantgegevens</h3></div>
-        <dl className="client-info-list">
-          <div><dt>Contactpersoon</dt><dd>{client.contact_name || '—'}</dd></div>
-          <div><dt>E-mail</dt><dd>{client.email || '—'}</dd></div>
-          <div><dt>Telefoon</dt><dd>{client.phone || '—'}</dd></div>
-          <div><dt>Waarde</dt><dd>{euro(client.value_eur)}</dd></div>
-          <div><dt>Aangemaakt</dt><dd>{dateNL(client.created_at)}</dd></div>
-          <div><dt>Bijgewerkt</dt><dd>{dateNL(client.updated_at)}</dd></div>
-        </dl>
-        {client.notes && <p className="client-inline-notes">{client.notes}</p>}
-        <div className="cd-tags">{client.tags?.map(tag => <span className="cd-tag" key={tag}>{tag}</span>)}</div>
-      </article>
+    {activeTab === 'invoices' && <FinancePanel
+      title="Facturen"
+      emptyText={invoices.length === 0 ? 'Nog geen facturen voor deze klant.' : 'Geen facturen voor deze zoekopdracht of filter.'}
+      items={filteredInvoices}
+      kind="invoice"
+      onEdit={onEditInvoice}
+    />}
 
-      {showProjects && <article className="client-panel">
-        <div className="client-panel-head"><h3>Projecten</h3><span>{filteredProjects.length}</span></div>
-        <div className="client-project-list">
-          {filteredProjects.length === 0 && <div className="client-empty-line">{projects.length === 0 ? 'Nog geen projecten gekoppeld.' : 'Geen projecten voor deze zoekopdracht of filter.'}</div>}
-          {filteredProjects.map(project => <button key={project.id} type="button" className="client-project-row" onClick={() => onOpenProject(project)}>
-            <span className="client-project-dot" style={{ background: project.color }} />
-            <span>{project.name}</span>
-            {project.archived && <em>Gearchiveerd</em>}
-          </button>)}
-        </div>
-      </article>}
-    </section>
-
-    {(showQuotes || showInvoices) && <section className="client-finance-grid">
-      {showQuotes && <FinancePanel
-        title="Offertes"
-        emptyText={quotes.length === 0 ? 'Nog geen offertes voor deze klant.' : 'Geen offertes voor deze zoekopdracht of filter.'}
-        items={filteredQuotes}
-        kind="quote"
-        onEdit={onEditQuote}
-      />}
-      {showInvoices && <FinancePanel
-        title="Facturen"
-        emptyText={invoices.length === 0 ? 'Nog geen facturen voor deze klant.' : 'Geen facturen voor deze zoekopdracht of filter.'}
-        items={filteredInvoices}
-        kind="invoice"
-        onEdit={onEditInvoice}
-      />}
-    </section>}
-
-    {showNotes && <RelatedNotes title="Klantnotities" notes={filteredNotes} data={data} canWrite={canWrite} onNew={onNewNote} onEdit={onEditNote} emptyText={notes.length === 0 ? 'Nog geen notities bij deze klant.' : 'Geen notities voor deze zoekopdracht of filter.'} />}
-    {showDocuments && <RelatedDocuments title="Documenten" documents={filteredDocuments} data={data} canWrite={canWrite} onNew={onNewDocument} onEdit={onEditDocument} emptyText={documents.length === 0 ? 'Nog geen documenten gekoppeld aan deze klant.' : 'Geen documenten voor deze zoekopdracht of filter.'} />}
+    {activeTab === 'notes' && <RelatedNotes title="Klantnotities" notes={filteredNotes} data={data} canWrite={canWrite} onNew={onNewNote} onEdit={onEditNote} emptyText={notes.length === 0 ? 'Nog geen notities bij deze klant.' : 'Geen notities voor deze zoekopdracht.'} />}
+    {activeTab === 'documents' && <RelatedDocuments title="Documenten" documents={filteredDocuments} data={data} canWrite={canWrite} onNew={onNewDocument} onEdit={onEditDocument} emptyText={documents.length === 0 ? 'Nog geen documenten gekoppeld aan deze klant.' : 'Geen documenten voor deze zoekopdracht.'} />}
   </div>;
 }
 
-function ClientKpi({ label, value, sub, tone }: { label: string; value: number; sub: string; tone?: 'warning' | 'danger' | 'success' }) {
-  return <article className={`client-kpi ${tone ?? ''}`}>
+function ClientKpi({ label, value, sub, tone, onClick }: { label: string; value: number; sub: string; tone?: 'warning' | 'danger' | 'success'; onClick?: () => void }) {
+  return <button type="button" className={`client-kpi${tone ? ` ${tone}` : ''}${onClick ? ' is-clickable' : ''}`} onClick={onClick}>
     <span>{label}</span>
     <strong>{value}</strong>
     <small>{sub}</small>
-  </article>;
+  </button>;
 }
 
 function FinancePanel<T extends Quote | Invoice>({
@@ -503,7 +569,7 @@ function isInvoiceOverdue(invoice: Invoice) {
 }
 
 // ── Zoeken/filteren op de klantdetailpagina ────────────────────────────
-type ClientDetailSection = 'all' | 'projects' | 'quotes' | 'invoices' | 'notes' | 'documents';
+type ClientTab = 'overview' | 'projects' | 'quotes' | 'invoices' | 'notes' | 'documents';
 
 // Statussen die zowel op offertes als facturen slaan staan zonder suffix; de
 // finance- of offerte-specifieke statussen krijgen een suffix zodat duidelijk is
