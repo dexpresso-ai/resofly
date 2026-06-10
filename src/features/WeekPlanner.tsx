@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import type { DragEvent } from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import type { AppData, Priority, Task, TaskStatus, UUID } from '../types';
 import { Button, Input, Select } from '../components/Ui';
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
@@ -25,6 +25,12 @@ type PlannerBucket = {
   tasks: Task[];
   count: number;
   minutes: number;
+};
+
+type ChecklistItem = {
+  id: string;
+  text: string;
+  done: boolean;
 };
 
 const DEFAULT_TASK_ESTIMATE_MINUTES = 60;
@@ -237,6 +243,8 @@ export function WeekPlanner({
       </div>
     </section>
 
+    <WeekChecklist weekKey={formatISODate(anchor)} />
+
     <section className="wp-filters" aria-label="Weekplanner filters">
       <Input value={filters.query} onChange={e => updateFilter('query', e.target.value)} placeholder="Zoek op taak, project, klant of tag" />
       <Select value={filters.clientId} onChange={e => updateFilter('clientId', e.target.value)}>
@@ -384,6 +392,90 @@ function PlannerSection({ title, mutedText, className, children, onDragOver, onD
     <div className="wp-unscheduled-head">{title}{mutedText && <span className="wp-outside"> · {mutedText}</span>}</div>
     <div className="wp-unscheduled-body">{children}</div>
   </section>;
+}
+
+function WeekChecklist({ weekKey }: { weekKey: string }) {
+  const storageKey = `resofly-checklist-${weekKey}`;
+
+  function load(): ChecklistItem[] {
+    try { return JSON.parse(localStorage.getItem(storageKey) ?? '[]'); } catch { return []; }
+  }
+
+  const [items, setItems] = useState<ChecklistItem[]>(load);
+  const [input, setInput] = useState('');
+  const prevKey = useRef(weekKey);
+
+  if (prevKey.current !== weekKey) {
+    prevKey.current = weekKey;
+    setItems(load());
+    setInput('');
+  }
+
+  function save(next: ChecklistItem[]) {
+    setItems(next);
+    localStorage.setItem(`resofly-checklist-${weekKey}`, JSON.stringify(next));
+  }
+
+  function addItem() {
+    const text = input.trim();
+    if (!text) return;
+    save([...items, { id: crypto.randomUUID(), text, done: false }]);
+    setInput('');
+  }
+
+  const openItems = items.filter(i => !i.done);
+  const doneItems = items.filter(i => i.done);
+
+  return (
+    <section className="wp-checklist">
+      <div className="wp-checklist-head">
+        <span>Actiepunten deze week</span>
+        {items.length > 0 && (
+          <span className="wp-checklist-count">{openItems.length} open · {doneItems.length} afgerond</span>
+        )}
+      </div>
+      <div className="wp-checklist-body">
+        <div className="wp-checklist-input-row">
+          <input
+            className="wp-checklist-input"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') addItem(); }}
+            placeholder="Voeg een actiepunt toe…"
+          />
+          <button className="wp-checklist-add" onClick={addItem} disabled={!input.trim()} title="Toevoegen">
+            <Plus size={14} />
+          </button>
+        </div>
+        {items.length === 0 && (
+          <div className="wp-checklist-empty">Nog geen actiepunten voor deze week. Typ hierboven en druk op Enter.</div>
+        )}
+        {items.length > 0 && (
+          <ul className="wp-checklist-list">
+            {[...openItems, ...doneItems].map(item => (
+              <li key={item.id} className={`wp-checklist-item ${item.done ? 'is-done' : ''}`}>
+                <input
+                  type="checkbox"
+                  className="wp-checklist-checkbox"
+                  checked={item.done}
+                  id={`chk-${item.id}`}
+                  onChange={() => save(items.map(i => i.id === item.id ? { ...i, done: !i.done } : i))}
+                />
+                <label htmlFor={`chk-${item.id}`} className="wp-checklist-label">{item.text}</label>
+                <button
+                  className="wp-checklist-delete"
+                  onClick={() => save(items.filter(i => i.id !== item.id))}
+                  title="Verwijderen"
+                >
+                  <X size={11} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
 }
 
 function taskEstimateMinutes(task: Task): number {

@@ -71,6 +71,28 @@
 .wp-unscheduled-head{padding:10px 14px;border-bottom:1px solid var(--border);font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted2)}
 .wp-outside{color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0}
 .wp-unscheduled-body{padding:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px}
+/* Week checklist */
+.wp-checklist{background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.wp-checklist-head{padding:10px 14px;border-bottom:1px solid var(--border);font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted2);display:flex;align-items:center;justify-content:space-between}
+.wp-checklist-count{font-size:10px;font-weight:500;color:var(--muted);text-transform:none;letter-spacing:0;background:var(--bg3);padding:2px 8px;border-radius:99px}
+.wp-checklist-body{padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.wp-checklist-input-row{display:flex;gap:6px;align-items:center}
+.wp-checklist-input{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:6px 10px;font-size:12px;color:var(--text);outline:none}
+.wp-checklist-input:focus{border-color:var(--accent)}
+.wp-checklist-input::placeholder{color:var(--muted)}
+.wp-checklist-add{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:7px;border:1px solid var(--border);background:var(--bg3);color:var(--muted2);cursor:pointer;flex-shrink:0;transition:background .12s,border-color .12s}
+.wp-checklist-add:hover:not(:disabled){background:var(--bg4);border-color:var(--accent);color:var(--accent)}
+.wp-checklist-add:disabled{opacity:.4;cursor:default}
+.wp-checklist-empty{font-size:11px;color:var(--muted);padding:6px 2px}
+.wp-checklist-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.wp-checklist-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:7px;background:var(--bg3);border:1px solid var(--border);transition:opacity .15s}
+.wp-checklist-item.is-done{opacity:.55}
+.wp-checklist-checkbox{width:15px;height:15px;accent-color:var(--accent);flex-shrink:0;cursor:pointer}
+.wp-checklist-label{flex:1;font-size:12px;color:var(--text);cursor:pointer;line-height:1.3;min-width:0}
+.wp-checklist-item.is-done .wp-checklist-label{text-decoration:line-through;color:var(--muted)}
+.wp-checklist-delete{display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;border:none;background:transparent;color:var(--muted);cursor:pointer;flex-shrink:0;opacity:0;transition:opacity .12s,background .12s,color .12s}
+.wp-checklist-item:hover .wp-checklist-delete{opacity:1}
+.wp-checklist-delete:hover{background:var(--bg4);color:var(--text)}
 
 @media(max-width:900px){
   .wp-grid{grid-template-columns:repeat(2,1fr)}
