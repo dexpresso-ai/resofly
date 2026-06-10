@@ -15,13 +15,12 @@ const items = [
   ['projects', FolderOpen, 'Projecten'],
   ['tickets', Ticket, 'Tickets'],
   ['finance', Receipt, 'Financiën'],
-  ['archive', Archive, 'Archief'],
   ['settings', Settings, 'Instellingen'],
 ] as const;
 
 const financePages: Page[] = ['quotes', 'invoices'];
 const calendarPages: Page[] = ['calendar', 'calendar-settings'];
-const projectPages: Page[] = ['projects', 'project', 'project-planning'];
+const projectPages: Page[] = ['projects', 'project', 'project-planning', 'archive'];
 const contentPages: Page[] = ['notes', 'documents'];
 
 export function Sidebar({
@@ -74,7 +73,7 @@ export function Sidebar({
     onPage(target);
   }
 
-  function openProjectPage(target: 'projects' | 'project-planning') {
+  function openProjectPage(target: 'projects' | 'project-planning' | 'archive') {
     setProjectsOpen(true);
     onPage(target);
   }
@@ -122,7 +121,7 @@ export function Sidebar({
                   type="button"
                   className={`nav-item nav-item-parent ${isActive ? 'active' : ''}`}
                   aria-expanded={projectsOpen}
-                  onClick={() => { setProjectsOpen(true); onPage('projects'); }}
+                  onClick={() => setProjectsOpen(open => !open)}
                 >
                   <Icon size={16}/>
                   <span className="ni-label">{label}</span>
@@ -150,6 +149,7 @@ export function Sidebar({
           {key === 'projects' && projectsOpen && <div className="nav-submenu nav-submenu-projects">
             <button type="button" className={page === 'projects' || page === 'project' ? 'active' : ''} onClick={() => openProjectPage('projects')}><FolderOpen size={13}/><span>Projectoverzicht</span></button>
             <button type="button" className={page === 'project-planning' ? 'active' : ''} onClick={() => openProjectPage('project-planning')}><Calendar size={13}/><span>Planningstimeline</span></button>
+            <button type="button" className={page === 'archive' ? 'active' : ''} onClick={() => openProjectPage('archive')}><Archive size={13}/><span>Archief</span></button>
           </div>}
 
           {key === 'finance' && financeOpen && <div className="nav-submenu nav-submenu-finance">
