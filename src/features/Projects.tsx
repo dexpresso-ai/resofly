@@ -563,6 +563,7 @@ export function ProjectPage({
   onEditProject,
   onNewQuote,
   onEditQuote,
+  onNewInvoice,
   onSubmitQuoteApproval,
   onApproveQuote,
   onRejectQuote,
@@ -584,6 +585,7 @@ export function ProjectPage({
   onEditProject: () => void;
   onNewQuote: () => void;
   onEditQuote: (quote: Quote) => void;
+  onNewInvoice: () => void;
   onSubmitQuoteApproval: (quote: Quote) => void;
   onApproveQuote: (quote: Quote) => void;
   onRejectQuote: (quote: Quote) => void;
@@ -864,7 +866,10 @@ export function ProjectPage({
       {activeTab === 'invoices' && <article className="client-panel">
         <div className="client-panel-head">
           <h3>Facturen</h3>
-          <span>{projectInvoices.length}</span>
+          <div className="client-panel-head-right">
+            <span>{projectInvoices.length}</span>
+            {canWrite && !project.archived && <Button variant="primary" onClick={onNewInvoice}>+ Factuur</Button>}
+          </div>
         </div>
         <div className="client-finance-list">
           {projectInvoices.length === 0 && <div className="client-empty-line">Nog geen facturen bij dit project. Zet een geaccepteerde offerte om naar factuur.</div>}
