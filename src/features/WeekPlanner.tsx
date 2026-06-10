@@ -243,8 +243,6 @@ export function WeekPlanner({
       </div>
     </section>
 
-    <WeekChecklist weekKey={formatISODate(anchor)} />
-
     <section className="wp-filters" aria-label="Weekplanner filters">
       <Input value={filters.query} onChange={e => updateFilter('query', e.target.value)} placeholder="Zoek op taak, project, klant of tag" />
       <Select value={filters.clientId} onChange={e => updateFilter('clientId', e.target.value)}>
@@ -304,21 +302,25 @@ export function WeekPlanner({
       })}
     </div>
 
-    <PlannerSection
-      title={`Niet ingepland (${unscheduled.length})`}
-      className={`wp-unscheduled ${dragOverKey === '__unscheduled__' ? 'is-drop' : ''}`}
-      onDragOver={(e) => onDragOver(e, '__unscheduled__')}
-      onDragLeave={() => dragOverKey === '__unscheduled__' && setDragOverKey(null)}
-      onDrop={(e) => onDrop(e, { type: 'unscheduled' })}
-    >
-      {unscheduled.map(task => taskCard(task))}
-      {unscheduled.length === 0 && <div className="wp-day-empty">Geen taken zonder planning binnen deze filterselectie</div>}
-    </PlannerSection>
+    <div className="wp-bottom-row">
+      <PlannerSection
+        title={`Niet ingepland (${unscheduled.length})`}
+        className={`wp-unscheduled ${dragOverKey === '__unscheduled__' ? 'is-drop' : ''}`}
+        onDragOver={(e) => onDragOver(e, '__unscheduled__')}
+        onDragLeave={() => dragOverKey === '__unscheduled__' && setDragOverKey(null)}
+        onDrop={(e) => onDrop(e, { type: 'unscheduled' })}
+      >
+        {unscheduled.map(task => taskCard(task))}
+        {unscheduled.length === 0 && <div className="wp-day-empty">Geen taken zonder planning binnen deze filterselectie</div>}
+      </PlannerSection>
 
-    <PlannerSection title={`Buiten deze week (${outsideThisWeek.length})`} mutedText="Deze taken hebben wel een plandatum, maar vallen buiten de huidige week.">
-      {outsideThisWeek.map(task => taskCard(task, { showPlannedDate: true }))}
-      {outsideThisWeek.length === 0 && <div className="wp-day-empty">Geen geplande taken buiten deze week binnen deze filterselectie</div>}
-    </PlannerSection>
+      <PlannerSection title={`Buiten deze week (${outsideThisWeek.length})`} mutedText="Deze taken hebben wel een plandatum, maar vallen buiten de huidige week.">
+        {outsideThisWeek.map(task => taskCard(task, { showPlannedDate: true }))}
+        {outsideThisWeek.length === 0 && <div className="wp-day-empty">Geen geplande taken buiten deze week binnen deze filterselectie</div>}
+      </PlannerSection>
+
+      <WeekChecklist weekKey={formatISODate(anchor)} />
+    </div>
   </div>;
 }
 

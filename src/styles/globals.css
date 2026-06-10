@@ -71,6 +71,11 @@
 .wp-unscheduled-head{padding:10px 14px;border-bottom:1px solid var(--border);font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted2)}
 .wp-outside{color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0}
 .wp-unscheduled-body{padding:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px}
+/* Weekplanner bottom row: 3 kolommen */
+.wp-bottom-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;align-items:start}
+.wp-bottom-row .wp-unscheduled-body{grid-template-columns:1fr;max-height:360px;overflow-y:auto}
+@media(max-width:1200px){.wp-bottom-row{grid-template-columns:1fr 1fr}}
+@media(max-width:900px){.wp-bottom-row{grid-template-columns:1fr}}
 /* Week checklist */
 .wp-checklist{background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden}
 .wp-checklist-head{padding:10px 14px;border-bottom:1px solid var(--border);font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted2);display:flex;align-items:center;justify-content:space-between}
@@ -84,7 +89,7 @@
 .wp-checklist-add:hover:not(:disabled){background:var(--bg4);border-color:var(--accent);color:var(--accent)}
 .wp-checklist-add:disabled{opacity:.4;cursor:default}
 .wp-checklist-empty{font-size:11px;color:var(--muted);padding:6px 2px}
-.wp-checklist-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.wp-checklist-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;max-height:300px;overflow-y:auto}
 .wp-checklist-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:7px;background:var(--bg3);border:1px solid var(--border);transition:opacity .15s}
 .wp-checklist-item.is-done{opacity:.55}
 .wp-checklist-checkbox{width:15px;height:15px;accent-color:var(--accent);flex-shrink:0;cursor:pointer}
