@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { CreditCard, Mail, Receipt, ShieldCheck, Users } from 'lucide-react';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, InvoiceMollieSettingsStatus, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationRole, Project } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startMollieConnect } from '../services/billingService';
@@ -50,6 +51,16 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   viewer: 'Viewer',
 };
 
+type SettingsTab = 'organisatie' | 'facturatie' | 'betalen' | 'abonnement' | 'email';
+
+const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof Users; description: string }> = [
+  { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen, en bekijk de recente activiteit.' },
+  { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens, factuurtemplate en betaalteksten die op je facturen en offertes verschijnen.' },
+  { id: 'betalen', label: 'Online betalen', Icon: CreditCard, description: 'Koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
+  { id: 'abonnement', label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
+  { id: 'email', label: 'E-mail', Icon: Mail, description: 'Verstuur een testmail om je e-mailconfiguratie te controleren.' },
+];
+
 export function CalendarPage() {
   return <div className="empty"><div className="e-big">Kalender</div><p>V1 toont deadlines in projecten. Koppeling met Google/Microsoft Calendar kan hierop worden gebouwd.</p></div>;
 }
@@ -89,6 +100,7 @@ export function Settings({
   onRevokeInvitation: (invitationId: string) => Promise<void>;
   onSave: (settings: CompanySettingsInput) => Promise<void>;
 }) {
+  const [activeTab, setActiveTab] = useState<SettingsTab>('organisatie');
   const [form, setForm] = useState<CompanySettingsInput>(() => settingsToForm(settings));
   const [message, setMessage] = useState<string | null>(null);
   const [templateError, setTemplateError] = useState<string | null>(null);
@@ -449,16 +461,34 @@ export function Settings({
     setMessage('Template verwijderd uit het formulier. Klik op Opslaan om dit vast te leggen.');
   }
 
+  const activeTabMeta = SETTINGS_TABS.find(tab => tab.id === activeTab) ?? SETTINGS_TABS[0];
+
   return <div className="settings-page">
     <div className="settings-head">
       <div>
-        <h2>Organisatie & instellingen</h2>
-        <p>Beheer je ResoFly-werkruimte, teamrollen, audit-log en factuurgegevens vanuit één centrale tenant-instelling.</p>
+        <h2>Instellingen</h2>
+        <p>{activeTabMeta.description}</p>
       </div>
-      <Button variant="primary" onClick={save} disabled={isSaving || !canAdminOrganization}>{isSaving ? 'Opslaan…' : 'Opslaan'}</Button>
       {!canAdminOrganization && <p className="settings-help">Je kunt deze instellingen bekijken, maar alleen owners en admins kunnen ze aanpassen.</p>}
     </div>
 
+    <div className="client-tabs-bar settings-tabs-bar" role="tablist">
+      {SETTINGS_TABS.map(tab => (
+        <button
+          key={tab.id}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === tab.id}
+          className={`client-tab-btn${activeTab === tab.id ? ' active' : ''}`}
+          onClick={() => setActiveTab(tab.id)}
+        >
+          <tab.Icon size={15} aria-hidden="true" />
+          {tab.label}
+        </button>
+      ))}
+    </div>
+
+    {activeTab === 'organisatie' && <div className="settings-tab-panel">
     <section className="settings-card organization-card">
       <div className="settings-card-head">
         <div>
@@ -489,150 +519,6 @@ export function Settings({
           <Button variant="primary" onClick={() => acceptInvitation(invitation.id)}>Accepteren</Button>
         </div>)}
       </div>}
-    </section>
-
-    <section className="settings-card organization-card billing-card">
-      <div className="settings-card-head">
-        <div>
-          <h3>Billing & licenties</h3>
-          <p className="settings-help">Het billing-profiel stuurt het compatibele organisatieveld <code>licensed_seats</code> aan. Actieve gebruikers plus pending uitnodigingen mogen nooit boven de beschikbare seats uitkomen.</p>
-        </div>
-        {canAdminOrganization && <div className="billing-actions">
-          <Button onClick={refreshBilling} disabled={billingBusy === 'refresh'}>{billingBusy === 'refresh' ? 'Verversen…' : 'Billing verversen'}</Button>
-          <Button variant="primary" onClick={connectMollie} disabled={billingBusy === 'connect'}>{billingBusy === 'connect' ? 'Koppelen…' : 'Mollie koppelen'}</Button>
-        </div>}
-      </div>
-
-      {billingMessage && <div className="success">{billingMessage}</div>}
-      {billingError && <div className="error">{billingError}</div>}
-      {hasPendingCheckout && <div className="success">Er staat een checkout open of pending. Rond de betaling af of ververs de billingstatus na terugkeer uit Mollie.</div>}
-
-      {billingOverview ? <>
-        <div className="billing-summary">
-          <div>
-            <span>Huidig plan</span>
-            <strong>{billingOverview.plan_name}</strong>
-            <small>{billingOverview.subscription_status}</small>
-          </div>
-          <div>
-            <span>Betaalstatus</span>
-            <strong>{paymentStatusLabel(billingOverview.payment_status)}</strong>
-            <small>Laatste: {billingOverview.last_payment_status ?? 'nog geen betaling'}</small>
-          </div>
-          <div>
-            <span>Mollie-status</span>
-            <strong>{mollieStatusLabel(billingOverview.mollie_connect_status)}</strong>
-            <small>{billingOverview.mollie_customer_id ? 'Customer: ' + billingOverview.mollie_customer_id : 'Nog geen customer-id'}</small>
-          </div>
-          <div>
-            <span>Volgende factuur</span>
-            <strong>{formatDate(billingOverview.next_invoice_date)}</strong>
-            <small>{billingOverview.current_period_ends_at ? 'Periode tot ' + formatDate(billingOverview.current_period_ends_at) : 'Nog niet ingesteld'}</small>
-          </div>
-        </div>
-
-        <div className="license-grid">
-          <div className="license-metric"><span>Inbegrepen</span><strong>{billingOverview.included_seats}</strong></div>
-          <div className="license-metric"><span>Aangekocht extra</span><strong>{billingOverview.purchased_seats}</strong></div>
-          <div className="license-metric"><span>Actief</span><strong>{billingOverview.active_members}</strong></div>
-          <div className="license-metric"><span>Pending</span><strong>{billingOverview.pending_invitations}</strong></div>
-          <div className="license-metric"><span>Totaal seats</span><strong>{billingOverview.licensed_seats}</strong></div>
-          <div className="license-metric"><span>Vrij</span><strong>{billingOverview.available_seats}</strong></div>
-        </div>
-
-{canAdminOrganization && <div className="billing-control-row">
-          <div>
-            <strong>Extra gebruiker toevoegen</strong>
-            <p className="settings-help">Maak een Mollie-checkout aan. Pas na een succesvolle webhook/RPC-verwerking wordt de extra seat definitief toegevoegd.</p>
-          </div>
-          <Button variant="primary" onClick={buyExtraSeat} disabled={billingBusy === 'seat' || !['connected','mock_connected'].includes(billingOverview.mollie_connect_status)}>{billingBusy === 'seat' ? 'Checkout…' : 'Extra licentie kopen'}</Button>
-        </div>}
-
-        {canAdminOrganization && lastMockPaymentId && <div className="billing-control-row mock-row">
-          <div>
-            <strong>Mockbetaling klaar</strong>
-            <p className="settings-help">Payment-id: {lastMockPaymentId}. Gebruik dit alleen lokaal met <code>MOLLIE_ALLOW_MOCK=true</code>.</p>
-          </div>
-          <Button variant="primary" onClick={completeMockPayment} disabled={billingBusy === 'mock-paid'}>{billingBusy === 'mock-paid' ? 'Verwerken…' : 'Mockbetaling afronden'}</Button>
-        </div>}
-
-{canAdminOrganization && <div className="billing-control-row">
-          <div>
-            <strong>Plan wijzigen</strong>
-            <p className="settings-help">Betaalde upgrades lopen via Mollie-checkout. Downgrades en Custom-plannen blijven handmatig, zodat proratie en contractafspraken kloppen.</p>
-          </div>
-          <Select value={selectedPlan} onChange={event => setSelectedPlan(event.target.value)} disabled={billingBusy === 'plan'}>
-            {!selectedPlanIsSelfService && <option value={selectedPlan} disabled>{billingOverview.plan_name} · handmatig beheerd</option>}
-            {selfServiceBillingPlans.map(plan => <option key={plan.plan_key} value={plan.plan_key}>{plan.name} · {plan.included_seats ?? 'custom'} seats</option>)}
-          </Select>
-          <Button onClick={changePlan} disabled={billingBusy === 'plan' || selectedPlan === billingOverview.plan_key || !selectedPlanIsSelfService}>{billingBusy === 'plan' ? 'Checkout…' : 'Plan checkout starten'}</Button>
-        </div>}
-
-        {customBillingPlans.length > 0 && <div className="billing-control-row">
-          <div>
-            <strong>Custom-plan</strong>
-            <p className="settings-help">Custom-plannen worden niet als self-service checkout aangeboden. Neem contact op voor contractafspraken, seats en facturatie.</p>
-          </div>
-          <span className="badge">Neem contact op</span>
-        </div>}
-      </> : <p className="settings-help">Billinggegevens konden nog niet worden geladen. Controleer of de Sprint 2 migratie is uitgevoerd.</p>}
-
-      {!canAdminOrganization && <p className="settings-help">Alleen owners en admins kunnen billing-acties uitvoeren.</p>}
-      {seatOverview && seatOverview.available_seats <= 0 && <div className="error">Geen vrije gebruikerslicentie beschikbaar. Koop eerst een extra gebruikerslicentie voordat je iemand uitnodigt.</div>}
-    </section>
-
-    <section className="settings-card organization-card billing-card">
-      <div className="settings-card-head">
-        <div>
-          <h3>Online betalen (Mollie)</h3>
-          <p className="settings-help">Koppel het eigen Mollie-account van deze organisatie. Daarna kun je bij het versturen van een factuur een betaallink meesturen zodat klanten direct online kunnen betalen. Mollie is optioneel — zonder koppeling verstuur je gewoon de factuur-PDF.</p>
-        </div>
-      </div>
-
-      {invoiceMollieMessage && <div className="success">{invoiceMollieMessage}</div>}
-      {invoiceMollieError && <div className="error">{invoiceMollieError}</div>}
-
-      {canAdminOrganization ? <>
-        <div className="billing-summary">
-          <div>
-            <span>Status</span>
-            <strong>{invoiceMollie?.status === 'connected' ? 'Gekoppeld' : 'Niet gekoppeld'}</strong>
-            <small>{invoiceMollie?.status === 'connected'
-              ? `${invoiceMollie.mode === 'live' ? 'Live' : 'Test'}-modus${invoiceMollie.key_suffix ? ' · key ••••' + invoiceMollie.key_suffix : ''}`
-              : 'Facturen worden zonder betaallink verstuurd.'}</small>
-          </div>
-          {invoiceMollie?.status === 'connected' && invoiceMollie.connected_at && <div>
-            <span>Gekoppeld sinds</span>
-            <strong>{formatDate(invoiceMollie.connected_at)}</strong>
-            <small>{invoiceMollie.last_validated_at ? 'Laatst gevalideerd ' + formatDate(invoiceMollie.last_validated_at) : 'Nog niet opnieuw gevalideerd'}</small>
-          </div>}
-        </div>
-
-        {invoiceMollie?.status === 'connected' ? <>
-          <div className="billing-control-row">
-            <div>
-              <strong>Key vervangen</strong>
-              <p className="settings-help">Plak een nieuwe API-key om de bestaande te vervangen, bijvoorbeeld na rotatie in je Mollie-dashboard.</p>
-              <Input type="password" value={invoiceMollieKey} onChange={event => setInvoiceMollieKey(event.target.value)} placeholder="Nieuwe live_… of test_…" autoComplete="off" />
-            </div>
-            <Button onClick={connectInvoiceMollie} disabled={invoiceMollieBusy === 'connect' || !invoiceMollieKey.trim()}>{invoiceMollieBusy === 'connect' ? 'Opslaan…' : 'Key vervangen'}</Button>
-          </div>
-          <div className="billing-control-row">
-            <div>
-              <strong>Mollie ontkoppelen</strong>
-              <p className="settings-help">Verwijdert de opgeslagen key direct. Trek de key daarna ook in je eigen Mollie-dashboard in.</p>
-            </div>
-            <Button variant="danger" onClick={disconnectInvoiceMollie} disabled={invoiceMollieBusy === 'disconnect'}>{invoiceMollieBusy === 'disconnect' ? 'Ontkoppelen…' : 'Mollie ontkoppelen'}</Button>
-          </div>
-        </> : <div className="billing-control-row">
-          <div>
-            <strong>Mollie koppelen</strong>
-            <p className="settings-help">Plak je Mollie API-key (begint met <code>live_</code> of <code>test_</code>). Te vinden in je Mollie-dashboard onder Developers → API-keys.</p>
-            <Input type="password" value={invoiceMollieKey} onChange={event => setInvoiceMollieKey(event.target.value)} placeholder="live_… of test_…" autoComplete="off" />
-          </div>
-          <Button variant="primary" onClick={connectInvoiceMollie} disabled={invoiceMollieBusy === 'connect' || !invoiceMollieKey.trim()}>{invoiceMollieBusy === 'connect' ? 'Koppelen…' : 'Mollie koppelen'}</Button>
-        </div>}
-      </> : <p className="settings-help">Alleen owners en admins kunnen de Mollie-koppeling beheren.</p>}
     </section>
 
     <section className="settings-card organization-card">
@@ -696,30 +582,15 @@ export function Settings({
         {organizationContext.auditLogs.length === 0 && <p className="settings-help">Nog geen audit-events. Voer de Sprint 1 SQL-migratie uit en maak daarna een wijziging om dit te vullen.</p>}
       </div>
     </section>
+    </div>}
 
+    {activeTab === 'facturatie' && <div className="settings-tab-panel">
+    <div className="settings-save-bar">
+      <p className="settings-help">Wijzigingen aan bedrijfsgegevens, factuurtemplate en betaalteksten worden pas actief nadat je ze opslaat. Nieuwe factuur-PDFs gebruiken deze gegevens direct.</p>
+      <Button variant="primary" onClick={save} disabled={isSaving || !canAdminOrganization}>{isSaving ? 'Opslaan…' : 'Opslaan'}</Button>
+    </div>
     {message && <div className="success">{message}</div>}
     {templateError && <div className="error">{templateError}</div>}
-
-    <section className="settings-card organization-card">
-      <div className="settings-card-head">
-        <div>
-          <h3>E-mail via Resend</h3>
-          <p className="settings-help">Verstuur een server-side testmail met dezelfde centrale template-registry als de offerteflow. De API-key blijft in Supabase Edge Function secrets.</p>
-        </div>
-        <Button variant="primary" onClick={sendTestMail} disabled={!canAdminOrganization || resendBusy || !resendTestEmail.trim()}>{resendBusy ? 'Versturen…' : 'Verstuur testmail'}</Button>
-      </div>
-      {resendMessage && <div className="success">{resendMessage}</div>}
-      {resendError && <div className="error">{resendError}</div>}
-      <div className="settings-grid compact">
-        <label>Testmail naar
-          <Input type="email" value={resendTestEmail} onChange={event => { setResendTestEmail(event.target.value); setResendError(null); setResendMessage(null); }} placeholder="jij@bedrijf.nl" />
-        </label>
-        <label>Naam/contactpersoon
-          <Input value={resendTestName} onChange={event => { setResendTestName(event.target.value); setResendError(null); setResendMessage(null); }} placeholder="Naam voor aanhef" />
-        </label>
-      </div>
-      {!canAdminOrganization && <p className="settings-help">Alleen owners en admins kunnen testmails verzenden.</p>}
-    </section>
 
     <section className="settings-card">
       <h3>Bedrijfsgegevens op factuur</h3>
@@ -856,6 +727,178 @@ export function Settings({
       <Textarea value={form.invoice_payment_terms ?? ''} onChange={e=>set('invoice_payment_terms', e.target.value)} placeholder="Betaalinstructies" />
       <Textarea value={form.invoice_footer ?? ''} onChange={e=>set('invoice_footer', e.target.value)} placeholder="Footertekst" />
     </section>
+    </div>}
+
+    {activeTab === 'betalen' && <div className="settings-tab-panel">
+    <section className="settings-card organization-card billing-card">
+      <div className="settings-card-head">
+        <div>
+          <h3>Online betalen (Mollie)</h3>
+          <p className="settings-help">Koppel het eigen Mollie-account van deze organisatie. Daarna kun je bij het versturen van een factuur een betaallink meesturen zodat klanten direct online kunnen betalen. Mollie is optioneel — zonder koppeling verstuur je gewoon de factuur-PDF.</p>
+        </div>
+      </div>
+
+      {invoiceMollieMessage && <div className="success">{invoiceMollieMessage}</div>}
+      {invoiceMollieError && <div className="error">{invoiceMollieError}</div>}
+
+      {canAdminOrganization ? <>
+        <div className="billing-summary">
+          <div>
+            <span>Status</span>
+            <strong>{invoiceMollie?.status === 'connected' ? 'Gekoppeld' : 'Niet gekoppeld'}</strong>
+            <small>{invoiceMollie?.status === 'connected'
+              ? `${invoiceMollie.mode === 'live' ? 'Live' : 'Test'}-modus${invoiceMollie.key_suffix ? ' · key ••••' + invoiceMollie.key_suffix : ''}`
+              : 'Facturen worden zonder betaallink verstuurd.'}</small>
+          </div>
+          {invoiceMollie?.status === 'connected' && invoiceMollie.connected_at && <div>
+            <span>Gekoppeld sinds</span>
+            <strong>{formatDate(invoiceMollie.connected_at)}</strong>
+            <small>{invoiceMollie.last_validated_at ? 'Laatst gevalideerd ' + formatDate(invoiceMollie.last_validated_at) : 'Nog niet opnieuw gevalideerd'}</small>
+          </div>}
+        </div>
+
+        {invoiceMollie?.status === 'connected' ? <>
+          <div className="billing-control-row">
+            <div>
+              <strong>Key vervangen</strong>
+              <p className="settings-help">Plak een nieuwe API-key om de bestaande te vervangen, bijvoorbeeld na rotatie in je Mollie-dashboard.</p>
+              <Input type="password" value={invoiceMollieKey} onChange={event => setInvoiceMollieKey(event.target.value)} placeholder="Nieuwe live_… of test_…" autoComplete="off" />
+            </div>
+            <Button onClick={connectInvoiceMollie} disabled={invoiceMollieBusy === 'connect' || !invoiceMollieKey.trim()}>{invoiceMollieBusy === 'connect' ? 'Opslaan…' : 'Key vervangen'}</Button>
+          </div>
+          <div className="billing-control-row">
+            <div>
+              <strong>Mollie ontkoppelen</strong>
+              <p className="settings-help">Verwijdert de opgeslagen key direct. Trek de key daarna ook in je eigen Mollie-dashboard in.</p>
+            </div>
+            <Button variant="danger" onClick={disconnectInvoiceMollie} disabled={invoiceMollieBusy === 'disconnect'}>{invoiceMollieBusy === 'disconnect' ? 'Ontkoppelen…' : 'Mollie ontkoppelen'}</Button>
+          </div>
+        </> : <div className="billing-control-row">
+          <div>
+            <strong>Mollie koppelen</strong>
+            <p className="settings-help">Plak je Mollie API-key (begint met <code>live_</code> of <code>test_</code>). Te vinden in je Mollie-dashboard onder Developers → API-keys.</p>
+            <Input type="password" value={invoiceMollieKey} onChange={event => setInvoiceMollieKey(event.target.value)} placeholder="live_… of test_…" autoComplete="off" />
+          </div>
+          <Button variant="primary" onClick={connectInvoiceMollie} disabled={invoiceMollieBusy === 'connect' || !invoiceMollieKey.trim()}>{invoiceMollieBusy === 'connect' ? 'Koppelen…' : 'Mollie koppelen'}</Button>
+        </div>}
+      </> : <p className="settings-help">Alleen owners en admins kunnen de Mollie-koppeling beheren.</p>}
+    </section>
+    </div>}
+
+    {activeTab === 'abonnement' && <div className="settings-tab-panel">
+    <section className="settings-card organization-card billing-card">
+      <div className="settings-card-head">
+        <div>
+          <h3>Billing & licenties</h3>
+          <p className="settings-help">Het billing-profiel stuurt het compatibele organisatieveld <code>licensed_seats</code> aan. Actieve gebruikers plus pending uitnodigingen mogen nooit boven de beschikbare seats uitkomen.</p>
+        </div>
+        {canAdminOrganization && <div className="billing-actions">
+          <Button onClick={refreshBilling} disabled={billingBusy === 'refresh'}>{billingBusy === 'refresh' ? 'Verversen…' : 'Billing verversen'}</Button>
+          <Button variant="primary" onClick={connectMollie} disabled={billingBusy === 'connect'}>{billingBusy === 'connect' ? 'Koppelen…' : 'Mollie koppelen'}</Button>
+        </div>}
+      </div>
+
+      {billingMessage && <div className="success">{billingMessage}</div>}
+      {billingError && <div className="error">{billingError}</div>}
+      {hasPendingCheckout && <div className="success">Er staat een checkout open of pending. Rond de betaling af of ververs de billingstatus na terugkeer uit Mollie.</div>}
+
+      {billingOverview ? <>
+        <div className="billing-summary">
+          <div>
+            <span>Huidig plan</span>
+            <strong>{billingOverview.plan_name}</strong>
+            <small>{billingOverview.subscription_status}</small>
+          </div>
+          <div>
+            <span>Betaalstatus</span>
+            <strong>{paymentStatusLabel(billingOverview.payment_status)}</strong>
+            <small>Laatste: {billingOverview.last_payment_status ?? 'nog geen betaling'}</small>
+          </div>
+          <div>
+            <span>Mollie-status</span>
+            <strong>{mollieStatusLabel(billingOverview.mollie_connect_status)}</strong>
+            <small>{billingOverview.mollie_customer_id ? 'Customer: ' + billingOverview.mollie_customer_id : 'Nog geen customer-id'}</small>
+          </div>
+          <div>
+            <span>Volgende factuur</span>
+            <strong>{formatDate(billingOverview.next_invoice_date)}</strong>
+            <small>{billingOverview.current_period_ends_at ? 'Periode tot ' + formatDate(billingOverview.current_period_ends_at) : 'Nog niet ingesteld'}</small>
+          </div>
+        </div>
+
+        <div className="license-grid">
+          <div className="license-metric"><span>Inbegrepen</span><strong>{billingOverview.included_seats}</strong></div>
+          <div className="license-metric"><span>Aangekocht extra</span><strong>{billingOverview.purchased_seats}</strong></div>
+          <div className="license-metric"><span>Actief</span><strong>{billingOverview.active_members}</strong></div>
+          <div className="license-metric"><span>Pending</span><strong>{billingOverview.pending_invitations}</strong></div>
+          <div className="license-metric"><span>Totaal seats</span><strong>{billingOverview.licensed_seats}</strong></div>
+          <div className="license-metric"><span>Vrij</span><strong>{billingOverview.available_seats}</strong></div>
+        </div>
+
+{canAdminOrganization && <div className="billing-control-row">
+          <div>
+            <strong>Extra gebruiker toevoegen</strong>
+            <p className="settings-help">Maak een Mollie-checkout aan. Pas na een succesvolle webhook/RPC-verwerking wordt de extra seat definitief toegevoegd.</p>
+          </div>
+          <Button variant="primary" onClick={buyExtraSeat} disabled={billingBusy === 'seat' || !['connected','mock_connected'].includes(billingOverview.mollie_connect_status)}>{billingBusy === 'seat' ? 'Checkout…' : 'Extra licentie kopen'}</Button>
+        </div>}
+
+        {canAdminOrganization && lastMockPaymentId && <div className="billing-control-row mock-row">
+          <div>
+            <strong>Mockbetaling klaar</strong>
+            <p className="settings-help">Payment-id: {lastMockPaymentId}. Gebruik dit alleen lokaal met <code>MOLLIE_ALLOW_MOCK=true</code>.</p>
+          </div>
+          <Button variant="primary" onClick={completeMockPayment} disabled={billingBusy === 'mock-paid'}>{billingBusy === 'mock-paid' ? 'Verwerken…' : 'Mockbetaling afronden'}</Button>
+        </div>}
+
+{canAdminOrganization && <div className="billing-control-row">
+          <div>
+            <strong>Plan wijzigen</strong>
+            <p className="settings-help">Betaalde upgrades lopen via Mollie-checkout. Downgrades en Custom-plannen blijven handmatig, zodat proratie en contractafspraken kloppen.</p>
+          </div>
+          <Select value={selectedPlan} onChange={event => setSelectedPlan(event.target.value)} disabled={billingBusy === 'plan'}>
+            {!selectedPlanIsSelfService && <option value={selectedPlan} disabled>{billingOverview.plan_name} · handmatig beheerd</option>}
+            {selfServiceBillingPlans.map(plan => <option key={plan.plan_key} value={plan.plan_key}>{plan.name} · {plan.included_seats ?? 'custom'} seats</option>)}
+          </Select>
+          <Button onClick={changePlan} disabled={billingBusy === 'plan' || selectedPlan === billingOverview.plan_key || !selectedPlanIsSelfService}>{billingBusy === 'plan' ? 'Checkout…' : 'Plan checkout starten'}</Button>
+        </div>}
+
+        {customBillingPlans.length > 0 && <div className="billing-control-row">
+          <div>
+            <strong>Custom-plan</strong>
+            <p className="settings-help">Custom-plannen worden niet als self-service checkout aangeboden. Neem contact op voor contractafspraken, seats en facturatie.</p>
+          </div>
+          <span className="badge">Neem contact op</span>
+        </div>}
+      </> : <p className="settings-help">Billinggegevens konden nog niet worden geladen. Controleer of de Sprint 2 migratie is uitgevoerd.</p>}
+
+      {!canAdminOrganization && <p className="settings-help">Alleen owners en admins kunnen billing-acties uitvoeren.</p>}
+      {seatOverview && seatOverview.available_seats <= 0 && <div className="error">Geen vrije gebruikerslicentie beschikbaar. Koop eerst een extra gebruikerslicentie voordat je iemand uitnodigt.</div>}
+    </section>
+    </div>}
+
+    {activeTab === 'email' && <div className="settings-tab-panel">
+    <section className="settings-card organization-card">
+      <div className="settings-card-head">
+        <div>
+          <h3>E-mail via Resend</h3>
+          <p className="settings-help">Verstuur een server-side testmail met dezelfde centrale template-registry als de offerteflow. De API-key blijft in Supabase Edge Function secrets.</p>
+        </div>
+        <Button variant="primary" onClick={sendTestMail} disabled={!canAdminOrganization || resendBusy || !resendTestEmail.trim()}>{resendBusy ? 'Versturen…' : 'Verstuur testmail'}</Button>
+      </div>
+      {resendMessage && <div className="success">{resendMessage}</div>}
+      {resendError && <div className="error">{resendError}</div>}
+      <div className="settings-grid compact">
+        <label>Testmail naar
+          <Input type="email" value={resendTestEmail} onChange={event => { setResendTestEmail(event.target.value); setResendError(null); setResendMessage(null); }} placeholder="jij@bedrijf.nl" />
+        </label>
+        <label>Naam/contactpersoon
+          <Input value={resendTestName} onChange={event => { setResendTestName(event.target.value); setResendError(null); setResendMessage(null); }} placeholder="Naam voor aanhef" />
+        </label>
+      </div>
+      {!canAdminOrganization && <p className="settings-help">Alleen owners en admins kunnen testmails verzenden.</p>}
+    </section>
+    </div>}
   </div>;
 }
 

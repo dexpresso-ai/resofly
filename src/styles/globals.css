@@ -142,6 +142,13 @@
 .settings-card h3{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted2)}
 .settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .settings-grid.compact{margin-top:4px}
+.settings-tabs-bar{position:sticky;top:0;z-index:5}
+.settings-tab-panel{display:flex;flex-direction:column;gap:14px;animation:settings-tab-in .18s ease}
+@keyframes settings-tab-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.settings-save-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:12px 16px}
+.settings-save-bar .settings-help{margin:0}
+.settings-save-bar .btn{flex-shrink:0}
+@media(max-width:900px){.settings-save-bar{flex-direction:column;align-items:stretch}}
 .field-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:-2px}
 .field-list span{font-size:11px;color:var(--muted2);background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:7px 9px;line-height:1.35}
 @media(max-width:900px){.field-list{grid-template-columns:1fr}}
