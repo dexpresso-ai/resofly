@@ -11,6 +11,16 @@ const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
 const RESEND_FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || '';
 const RESEND_REPLY_TO = Deno.env.get('RESEND_REPLY_TO') || '';
 
+// Basis-URL van de frontend voor de portaallink in de welkomstmail. Valt terug op
+// de (al via assertAllowedOrigin gevalideerde) request-origin als er geen env staat.
+const CLIENT_PORTAL_BASE_URL = (
+  Deno.env.get('CLIENT_PORTAL_BASE_URL') ||
+  Deno.env.get('APP_PUBLIC_URL') ||
+  Deno.env.get('QUOTE_PUBLIC_BASE_URL') ||
+  Deno.env.get('INVOICE_PUBLIC_BASE_URL') ||
+  ''
+).replace(/\/$/, '');
+
 const MAIL_ALLOWED_ORIGINS = (
   Deno.env.get('MAIL_ALLOWED_ORIGINS') ||
   Deno.env.get('QUOTE_ALLOWED_ORIGINS') ||
@@ -71,6 +81,18 @@ serve(async (req) => {
         }
 
         const result = await sendTestEmail(organizationId, body);
+        return json(req, { ok: true, ...result });
+      }
+
+      case 'sendClientPortalWelcome': {
+        if (!['owner', 'admin', 'member'].includes(role)) {
+          throw new MailHttpError(
+            'Je hebt geen rechten om de welkomstmail te versturen.',
+            403,
+          );
+        }
+
+        const result = await sendClientPortalWelcome(req, organizationId, body);
         return json(req, { ok: true, ...result });
       }
 
@@ -172,6 +194,166 @@ async function sendTestEmail(
   };
 }
 
+async function sendClientPortalWelcome(
+  req: Request,
+  organizationId: string,
+  body: Record<string, unknown>,
+): Promise<{ providerEmailId: string; recipientEmail: string }> {
+  if (!RESEND_API_KEY) {
+    throw new MailHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
+  }
+  if (!RESEND_FROM_EMAIL) {
+    throw new MailHttpError('RESEND_FROM_EMAIL ontbreekt in de Edge Function secrets.', 500);
+  }
+
+  const clientId = String(body.clientId || '').trim();
+  if (!isUuid(clientId)) {
+    throw new MailHttpError('Ongeldige klant.', 400);
+  }
+
+  const client = await loadClient(organizationId, clientId);
+  const recipientEmail = String(client.email || '').trim().toLowerCase();
+  if (!isEmail(recipientEmail)) {
+    throw new MailHttpError(
+      'Deze klant heeft geen geldig e-mailadres, dus er kan geen welkomstmail worden verstuurd.',
+      422,
+    );
+  }
+
+  const organization = await loadOrganization(organizationId);
+  const company = await loadCompanySettings(organizationId);
+  const organizationName =
+    company?.trade_name || company?.company_name || organization.name || 'ResoFly';
+
+  const portalUrl = `${resolvePortalBaseUrl(req)}/portal`;
+  const recipientName = String(client.contact_name || client.name || '').trim();
+
+  const subject = `Welkom bij ${organizationName} — je klantportaal staat klaar`;
+  const html = buildClientWelcomeHtml({ organizationName, recipientName, recipientEmail, portalUrl });
+  const text = buildClientWelcomeText({ organizationName, recipientName, recipientEmail, portalUrl });
+
+  const resendPayload = await sendViaResend(
+    {
+      from: RESEND_FROM_EMAIL,
+      to: [recipientEmail],
+      reply_to: RESEND_REPLY_TO || undefined,
+      subject,
+      html,
+      text,
+    },
+    `client-welcome-${sanitizeIdempotencyPart(organizationId)}-${sanitizeIdempotencyPart(clientId)}`,
+  );
+
+  const providerEmailId = String(resendPayload.id || resendPayload.email_id || '').trim();
+  if (!providerEmailId) {
+    throw new MailHttpError(
+      'Resend heeft de welkomstmail aangenomen, maar gaf geen e-mail-ID terug.',
+      502,
+    );
+  }
+
+  return { providerEmailId, recipientEmail };
+}
+
+async function loadClient(
+  organizationId: string,
+  clientId: string,
+): Promise<{ id: string; name: string; contact_name: string | null; email: string | null }> {
+  const { data, error } = await supabaseAdmin
+    .from('clients')
+    .select('id,name,contact_name,email')
+    .eq('id', clientId)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+  if (!data) {
+    throw new MailHttpError('Klant niet gevonden.', 404);
+  }
+
+  return data as { id: string; name: string; contact_name: string | null; email: string | null };
+}
+
+function resolvePortalBaseUrl(req: Request): string {
+  if (CLIENT_PORTAL_BASE_URL) return CLIENT_PORTAL_BASE_URL;
+  // De origin is hierboven al gevalideerd via assertAllowedOrigin, dus veilig als basis.
+  return (req.headers.get('origin') || '').replace(/\/$/, '');
+}
+
+function buildClientWelcomeHtml(input: {
+  organizationName: string;
+  recipientName: string;
+  recipientEmail: string;
+  portalUrl: string;
+}): string {
+  const name = escapeHtml(input.recipientName || 'daar');
+  const org = escapeHtml(input.organizationName);
+  const email = escapeHtml(input.recipientEmail);
+  const url = escapeHtml(input.portalUrl);
+
+  return `<!doctype html>
+<html>
+  <body style="margin:0;background:#111111;font-family:Arial,sans-serif;color:#f5f5f5;">
+    <div style="max-width:640px;margin:0 auto;padding:32px 20px;">
+      <div style="background:#1b1b1f;border:1px solid #303038;border-radius:24px;padding:28px;">
+        <p style="margin:0 0 8px;color:#FFD966;font-size:13px;text-transform:uppercase;letter-spacing:.08em;">
+          ${org}
+        </p>
+
+        <h1 style="margin:0 0 16px;font-size:26px;line-height:1.2;color:#ffffff;">
+          Welkom in je klantportaal
+        </h1>
+
+        <p style="margin:0 0 16px;color:#d8d8df;font-size:16px;line-height:1.6;">
+          Hoi ${name},<br/>
+          ${org} werkt met een online klantportaal. Daar vind je op één plek je
+          <strong>facturen, offertes, tickets en lopende projecten</strong>.
+        </p>
+
+        <p style="margin:0 0 24px;color:#d8d8df;font-size:16px;line-height:1.6;">
+          Inloggen kan zonder wachtwoord: ga naar het portaal en vul je e-mailadres
+          (<strong>${email}</strong>) in. Je ontvangt dan een veilige inloglink in je mailbox.
+        </p>
+
+        <a href="${url}" style="display:inline-block;background:#FFD966;color:#1a1a1a;text-decoration:none;font-weight:bold;font-size:15px;padding:13px 22px;border-radius:10px;">
+          Open het klantportaal
+        </a>
+
+        <p style="margin:24px 0 0;color:#9b9ba7;font-size:13px;line-height:1.5;">
+          Werkt de knop niet? Kopieer deze link naar je browser:<br/>${url}
+        </p>
+      </div>
+      <p style="margin:16px 4px 0;color:#6f6f78;font-size:12px;line-height:1.5;">
+        Je ontvangt deze e-mail omdat ${org} een klantdossier voor je heeft aangemaakt.
+      </p>
+    </div>
+  </body>
+</html>`;
+}
+
+function buildClientWelcomeText(input: {
+  organizationName: string;
+  recipientName: string;
+  recipientEmail: string;
+  portalUrl: string;
+}): string {
+  return [
+    input.organizationName,
+    'Welkom in je klantportaal',
+    '',
+    `Hoi ${input.recipientName || 'daar'},`,
+    `${input.organizationName} werkt met een online klantportaal. Daar vind je op één plek je facturen, offertes, tickets en lopende projecten.`,
+    '',
+    `Inloggen kan zonder wachtwoord: ga naar ${input.portalUrl} en vul je e-mailadres (${input.recipientEmail}) in. Je ontvangt dan een veilige inloglink in je mailbox.`,
+    '',
+    `Open het klantportaal: ${input.portalUrl}`,
+    '',
+    `Je ontvangt deze e-mail omdat ${input.organizationName} een klantdossier voor je heeft aangemaakt.`,
+  ].join('\n');
+}
+
 async function sendViaResend(
   payload: Record<string, unknown>,
   idempotencyKey: string,
@@ -192,7 +374,7 @@ async function sendViaResend(
   >;
 
   if (!response.ok) {
-    console.error('Resend testmail failed', responsePayload);
+    console.error('Resend send failed', responsePayload);
 
     const providerMessage = String(
       responsePayload.message ||
@@ -202,7 +384,7 @@ async function sendViaResend(
     );
 
     throw new MailHttpError(
-      `Resend kon de testmail niet versturen: ${providerMessage}`,
+      `Resend kon de e-mail niet versturen: ${providerMessage}`,
       502,
     );
   }

@@ -1491,3 +1491,5 @@ body::before{
 .client-portal-access-link{color:var(--accent);font-weight:700;text-decoration:none}
 .client-portal-access-link:hover{text-decoration:underline}
 .client-portal-access-hint{color:var(--muted)}
+.client-welcome-toggle{grid-column:1/-1}
+.client-welcome-hint{color:var(--muted);font-style:normal}

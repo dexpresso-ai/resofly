@@ -10,6 +10,7 @@ import {
   convertAcceptedQuoteToInvoice,
   convertTicketToProject,
   createClientWithServerCode,
+  sendClientPortalWelcomeEmail,
   deleteAttachment,
   createNoteCalendarLink,
   createNoteWithCalendarLink,
@@ -322,15 +323,31 @@ function App() {
       }
     }
     setLoading(true); setError(null);
+    // Niet-blokkerende waarschuwing die we pas ná refresh tonen (refresh wist de
+    // foutbanner): bijv. klant aangemaakt maar welkomstmail mislukt.
+    let deferredWarning: string | null = null;
     try {
       switch (edit.kind) {
         case 'client': {
           const duplicateIssue = findClientDuplicateIssue(data.clients, values, edit.item);
           if (duplicateIssue?.blocksSave) throw new Error(duplicateIssue.message);
 
-          edit.item
-            ? await updateRow<Client>('clients', edit.item.id, values, activeOrg.id)
-            : await createClientWithServerCode(activeOrg.id, values);
+          // _sendWelcomeEmail is een UI-keuze, geen klantkolom: eruit halen vóór opslaan.
+          const { _sendWelcomeEmail, ...clientValues } = values;
+          if (edit.item) {
+            await updateRow<Client>('clients', edit.item.id, clientValues, activeOrg.id);
+          } else {
+            const newClient = await createClientWithServerCode(activeOrg.id, clientValues);
+            if (_sendWelcomeEmail && newClient.email) {
+              try {
+                await sendClientPortalWelcomeEmail(activeOrg.id, newClient.id);
+              } catch (mailError) {
+                // De klant is wél aangemaakt; alleen de welkomstmail faalde. De opslag
+                // niet laten klappen, maar de gebruiker wel waarschuwen.
+                deferredWarning = `Klant is aangemaakt, maar de welkomstmail kon niet worden verzonden: ${mailError instanceof Error ? mailError.message : 'onbekende fout'}`;
+              }
+            }
+          }
           break;
         }
         case 'project': {
@@ -386,6 +403,7 @@ function App() {
       }
       setEdit(null);
       await refresh();
+      if (deferredWarning) setError(deferredWarning);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Opslaan mislukt');
     } finally {
@@ -986,6 +1004,10 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
       <Field label="Notities">
         <Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne klantnotities" disabled={disabled}/>
       </Field>
+      {!item && <label className="check-row client-welcome-toggle">
+        <input type="checkbox" checked={Boolean(form._sendWelcomeEmail)} onChange={e=>set('_sendWelcomeEmail', e.target.checked)} disabled={disabled || !String(form.email || '').trim()}/>
+        <span>Welkomstmail met portaaltoegang sturen naar de klant{!String(form.email || '').trim() && <em className="client-welcome-hint"> — vul eerst een e-mailadres in</em>}</span>
+      </label>}
       {item && <RelatedNotes title="Klantnotities" notes={data.notes.filter(note => note.client_id === item.id || data.projects.some(project => project.client_id === item.id && project.id === note.project_id))} data={data} canWrite={canWrite} onNew={() => onNewClientNote(item as Client)} onEdit={onEditNote} emptyText="Nog geen notities bij deze klant." />}
       {!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.client} id={item.id} onUploaded={onAttachmentsChanged}/>}
       {attachmentBlock}
@@ -1494,7 +1516,7 @@ function sanitizeTicketValues(values: Record<string, unknown>, existingTicket?: 
 function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string, any> {
   if (edit.kind === "client") {
     const item = edit.item;
-    return { name: item?.name ?? "", client_code: item?.client_code ?? "", contact_name: item?.contact_name ?? "", email: item?.email ?? "", phone: item?.phone ?? "", status: item?.status ?? "active", value_eur: item?.value_eur ?? 0, tags: item?.tags?.join(", ") ?? "", notes: item?.notes ?? "", color: item?.color ?? "#FFD966" };
+    return { name: item?.name ?? "", client_code: item?.client_code ?? "", contact_name: item?.contact_name ?? "", email: item?.email ?? "", phone: item?.phone ?? "", status: item?.status ?? "active", value_eur: item?.value_eur ?? 0, tags: item?.tags?.join(", ") ?? "", notes: item?.notes ?? "", color: item?.color ?? "#FFD966", _sendWelcomeEmail: !item };
   }
   if (edit.kind === "project") {
     const item = edit.item;

@@ -1,6 +1,7 @@
 import { supabase, supabaseAuth } from './supabase';
 import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
+import { throwFunctionError } from './functionErrors';
 import type {
   AppData,
   AuditLog,
@@ -578,6 +579,24 @@ export async function createClientWithServerCode(organizationId: UUID, values: R
   if (error) throw error;
   const row = Array.isArray(data) ? data[0] : data;
   return row as Client;
+}
+
+/**
+ * Stuurt de klant een welkomstmail met een link naar het klantportaal (/portal).
+ * Server-side via de `mail`-edge function (Resend), zodat de API-key niet in de
+ * browser staat. De klant moet een e-mailadres hebben.
+ */
+export async function sendClientPortalWelcomeEmail(organizationId: UUID, clientId: UUID): Promise<{ providerEmailId?: string; recipientEmail?: string }> {
+  const { data, error } = await supabase.functions.invoke('mail', {
+    body: {
+      action: 'sendClientPortalWelcome',
+      organizationId,
+      clientId,
+    },
+  });
+  if (error) await throwFunctionError(error, 'Welkomstmail verzenden mislukt.');
+  if (!data?.ok) throw new Error(data?.error || 'Welkomstmail verzenden mislukt.');
+  return data as { providerEmailId?: string; recipientEmail?: string };
 }
 
 export async function updateRow<T>(table: Table, id: UUID, values: Record<string, unknown>, organizationId?: UUID): Promise<T> {
