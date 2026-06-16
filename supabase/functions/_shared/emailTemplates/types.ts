@@ -1,4 +1,4 @@
-export type EmailTemplateKey = 'test.resend' | 'quote.sent' | 'invoice.sent' | 'creditNote.sent';
+export type EmailTemplateKey = 'test.resend' | 'quote.sent' | 'invoice.sent' | 'invoice.reminder' | 'creditNote.sent';
 
 export type RenderedEmailTemplate = {
   templateKey: EmailTemplateKey;
@@ -52,6 +52,36 @@ export type InvoiceSentEmailInput = {
   paymentUrl?: string | null;
   recipientName?: string | null;
   expiresAt: string;
+};
+
+export type InvoiceReminderEmailInput = {
+  level: 1 | 2 | 3;
+  invoice: {
+    number: string;
+    due_date?: string | null;
+    lines?: InvoiceEmailLine[] | null;
+  };
+  client: {
+    name: string;
+    contact_name?: string | null;
+    email?: string | null;
+  };
+  project?: {
+    name: string;
+    description?: string | null;
+  } | null;
+  company?: {
+    company_name?: string | null;
+    trade_name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    website?: string | null;
+    invoice_accent_color?: string | null;
+  } | null;
+  publicUrl: string;
+  paymentUrl?: string | null;
+  recipientName?: string | null;
+  daysOverdue?: number | null;
 };
 
 export type QuoteSentEmailInput = {
@@ -113,5 +143,6 @@ export type EmailTemplateInputMap = {
   'test.resend': TestResendEmailInput;
   'quote.sent': QuoteSentEmailInput;
   'invoice.sent': InvoiceSentEmailInput;
+  'invoice.reminder': InvoiceReminderEmailInput;
   'creditNote.sent': CreditNoteSentEmailInput;
 };

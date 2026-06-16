@@ -17,6 +17,7 @@ import type {
   InvoiceVersion,
   InvoiceWorkflowEvent,
   InvoiceMollieSettingsStatus,
+  InvoiceReminderSettings,
   CreditNote,
   InvoiceChargeback,
   Note,
@@ -983,6 +984,76 @@ export async function sendInvoiceEmailViaResend(organizationId: UUID, invoiceId:
   if (error) throw error;
   if (!data?.ok) throw new Error(data?.error || 'Factuur verzenden mislukt');
   return data as { publicUrl?: string; providerEmailId?: string; paymentLinkIncluded?: boolean; paymentLinkError?: string | null };
+}
+
+/**
+ * Stuur handmatig een betalingsherinnering voor een te late factuur via Resend.
+ * Zonder `level` pakt de Edge Function automatisch het eerstvolgende niveau
+ * (reminder_level + 1, max 3). De automatische cron-flow gebruikt dezelfde kern.
+ */
+export async function sendInvoiceReminderEmail(
+  organizationId: UUID,
+  invoiceId: UUID,
+  input: { level?: 1 | 2 | 3; recipientEmail?: string; recipientName?: string; includePaymentLink?: boolean } = {},
+): Promise<{ level?: number; publicUrl?: string; providerEmailId?: string; paymentLinkIncluded?: boolean; paymentLinkError?: string | null; recipientEmail?: string }> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'sendInvoiceReminderEmail', organizationId, invoiceId, ...input },
+  });
+  if (error) await throwFunctionError(error, 'Herinnering verzenden mislukt.');
+  if (!data?.ok) throw new Error(data?.error || 'Herinnering verzenden mislukt');
+  return data as { level?: number; publicUrl?: string; providerEmailId?: string; paymentLinkIncluded?: boolean; paymentLinkError?: string | null; recipientEmail?: string };
+}
+
+/**
+ * Lees de automatische-herinneringsinstellingen van een organisatie. Geeft de
+ * standaardwaarden terug (auto uit) als er nog geen rij bestaat.
+ */
+export async function loadInvoiceReminderSettings(organizationId: UUID): Promise<InvoiceReminderSettings> {
+  const { data, error } = await supabase
+    .from('invoice_reminder_settings')
+    .select('organization_id,auto_reminders_enabled,level1_offset_days,level2_offset_days,level3_offset_days,include_payment_link,created_at,updated_at')
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  if (data) return data as InvoiceReminderSettings;
+  return {
+    organization_id: organizationId,
+    auto_reminders_enabled: false,
+    level1_offset_days: 3,
+    level2_offset_days: 10,
+    level3_offset_days: 17,
+    include_payment_link: true,
+  };
+}
+
+/**
+ * Sla de automatische-herinneringsinstellingen op (RLS: alleen schrijfbevoegde
+ * leden). Een directe upsert volstaat — er zit geen secret in deze instellingen.
+ */
+export async function saveInvoiceReminderSettings(
+  organizationId: UUID,
+  input: Pick<InvoiceReminderSettings, 'auto_reminders_enabled' | 'level1_offset_days' | 'level2_offset_days' | 'level3_offset_days' | 'include_payment_link'>,
+): Promise<InvoiceReminderSettings> {
+  const { data, error } = await supabase
+    .from('invoice_reminder_settings')
+    .upsert({ organization_id: organizationId, ...input, updated_at: new Date().toISOString() }, { onConflict: 'organization_id' })
+    .select('organization_id,auto_reminders_enabled,level1_offset_days,level2_offset_days,level3_offset_days,include_payment_link,created_at,updated_at')
+    .single();
+  if (error) throw error;
+  return data as InvoiceReminderSettings;
+}
+
+/**
+ * Pauzeer of hervat de (automatische) herinneringen voor één factuur. Gepauzeerde
+ * facturen worden door de cron-zoekopdracht overgeslagen.
+ */
+export async function setInvoiceRemindersPaused(organizationId: UUID, invoiceId: UUID, paused: boolean): Promise<void> {
+  const { error } = await supabase
+    .from('invoices')
+    .update({ reminders_paused: paused })
+    .eq('organization_id', organizationId)
+    .eq('id', invoiceId);
+  if (error) throw error;
 }
 
 export async function createInvoicePaymentCheckout(organizationId: UUID, invoiceId: UUID, input: { redirectUrl?: string; idempotencyKey?: string } = {}): Promise<{ checkoutUrl?: string; providerPaymentId?: string; reused?: boolean; mock?: boolean }> {

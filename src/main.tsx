@@ -32,6 +32,8 @@ import {
   approveQuoteInternal,
   rejectQuoteInternal,
   sendInvoiceEmailViaResend,
+  sendInvoiceReminderEmail,
+  setInvoiceRemindersPaused,
   sendQuoteEmailViaResend,
   downloadQuotePdfSnapshot,
   downloadInvoicePdfSnapshot,
@@ -618,6 +620,45 @@ function App() {
     }
   }
 
+  async function sendInvoiceReminder(invoice: Invoice) {
+    if (!ensureCanWrite()) return;
+    const client = data.clients.find(item => item.id === invoice.client_id);
+    if (!client?.email) {
+      setError('Deze factuur heeft geen klant met e-mailadres; vul eerst een e-mailadres in bij de klant.');
+      return;
+    }
+    const nextLevel = Math.min(3, (invoice.reminder_level ?? 0) + 1);
+    const levelLabel = nextLevel === 3 ? 'aanmaning (niveau 3)' : `herinnering (niveau ${nextLevel})`;
+    if (!confirm(`Betalings${levelLabel} versturen voor factuur ${invoice.number} naar ${client.email}?`)) return;
+
+    setSending('Herinnering wordt verstuurd via Resend…');
+    setLoading(true); setError(null);
+    try {
+      const result = await sendInvoiceReminderEmail(activeOrg.id, invoice.id);
+      await refresh();
+      if (result.paymentLinkError) {
+        setError(`Herinnering is verstuurd, maar de Mollie-betaallink kon niet worden aangemaakt (alleen de PDF is meegestuurd): ${result.paymentLinkError}`);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Herinnering verzenden via Resend mislukt');
+    } finally {
+      setLoading(false); setSending(null);
+    }
+  }
+
+  async function toggleInvoiceRemindersPaused(invoice: Invoice, paused: boolean) {
+    if (!ensureCanWrite()) return;
+    setLoading(true); setError(null);
+    try {
+      await setInvoiceRemindersPaused(activeOrg.id, invoice.id, paused);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Herinneringsstatus bijwerken mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function refundInvoice(invoice: Invoice, input: RefundInput) {
     if (!ensureCanAdmin()) throw new Error('Alleen owners en admins mogen terugbetalingen registreren.');
     setLoading(true); setError(null);
@@ -755,7 +796,7 @@ function App() {
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>setEdit({kind:'ticket', item})} onConvert={convert}/>;
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={() => ensureCanWrite() && setEdit({kind:'note'})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document'})} onEditDocument={(item)=>setEdit({kind:'document', item})}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
-    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onDownloadPdf={downloadInvoicePdf} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onEmailCreditNote={emailCreditNote}/>;
+    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onEmailCreditNote={emailCreditNote}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} onPlanTask={updateTaskPlanning} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'calendar-settings') return <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;

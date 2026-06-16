@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { CreditCard, Mail, Receipt, ShieldCheck, Users } from 'lucide-react';
-import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, InvoiceMollieSettingsStatus, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationRole, Project } from '../types';
+import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationRole, Project } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startMollieConnect } from '../services/billingService';
 import { sendResendTestEmail } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey } from '../lib/repository';
+import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings } from '../lib/repository';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -73,6 +73,111 @@ export function Archive({ data, onOpen, onRestore }: { data: AppData; onOpen: (i
   const archived = data.projects.filter(p=>p.archived);
   if (!archived.length) return <div className="empty"><div className="e-big">Geen gearchiveerde projecten</div><p>Archiveer een project via “Project bewerken”.</p></div>;
   return <div className="archive-list">{archived.map(p=><div className="archive-item" key={p.id}><span className="archive-dot" style={{background:p.color}}/><div className="archive-info"><div className="archive-name">{p.name}</div><small>{p.description ?? 'Geen omschrijving'}</small></div><div className="archive-actions"><Button onClick={() => onOpen(p.id)}>Open</Button><Button onClick={() => onRestore(p)}>Herstellen</Button></div></div>)}</div>;
+}
+
+function clampReminderDays(value: string): number {
+  const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return Math.min(parsed, 365);
+}
+
+function InvoiceReminderSettingsCard({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
+  const [settings, setSettings] = useState<InvoiceReminderSettings | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setError(null);
+    loadInvoiceReminderSettings(organizationId)
+      .then(loaded => { if (!cancelled) setSettings(loaded); })
+      .catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : 'Herinneringsinstellingen laden mislukt.'); });
+    return () => { cancelled = true; };
+  }, [organizationId]);
+
+  function update<K extends keyof InvoiceReminderSettings>(key: K, value: InvoiceReminderSettings[K]) {
+    setSettings(prev => prev ? { ...prev, [key]: value } : prev);
+    setMessage(null);
+  }
+
+  async function save() {
+    if (!settings) return;
+    // Spiegelt de DB-constraints: niet-negatief en oplopend.
+    if (settings.level1_offset_days < 0 || settings.level2_offset_days < 0 || settings.level3_offset_days < 0) {
+      setError('Het aantal dagen mag niet negatief zijn.'); return;
+    }
+    if (!(settings.level1_offset_days <= settings.level2_offset_days && settings.level2_offset_days <= settings.level3_offset_days)) {
+      setError('De dagen moeten oplopen: niveau 1 ≤ niveau 2 ≤ niveau 3.'); return;
+    }
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      const saved = await saveInvoiceReminderSettings(organizationId, {
+        auto_reminders_enabled: settings.auto_reminders_enabled,
+        level1_offset_days: settings.level1_offset_days,
+        level2_offset_days: settings.level2_offset_days,
+        level3_offset_days: settings.level3_offset_days,
+        include_payment_link: settings.include_payment_link,
+      });
+      setSettings(saved);
+      setMessage('Herinneringsinstellingen opgeslagen.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Herinneringsinstellingen opslaan mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <section className="settings-card organization-card billing-card">
+    <div className="settings-card-head">
+      <div>
+        <h3>Automatische betalingsherinneringen</h3>
+        <p className="settings-help">Stuur automatisch getrapte herinneringen voor te late facturen: een vriendelijke herinnering, een tweede herinnering en een aanmaning. Het aantal dagen telt vanaf de vervaldatum. Per factuur kun je herinneringen pauzeren in het factuurdetail.</p>
+      </div>
+    </div>
+    {message && <div className="success">{message}</div>}
+    {error && <div className="error">{error}</div>}
+    {!canAdmin ? <p className="settings-help">Alleen owners en admins kunnen de herinneringsinstellingen aanpassen.</p>
+      : !settings ? <p className="settings-help">Instellingen laden…</p>
+      : <>
+        <div className="billing-control-row">
+          <div>
+            <strong>Automatische herinneringen</strong>
+            <p className="settings-help">Staat dit uit, dan kun je nog steeds handmatig een herinnering sturen vanuit een factuur.</p>
+          </div>
+          <label className="settings-toggle"><input type="checkbox" checked={settings.auto_reminders_enabled} onChange={e => update('auto_reminders_enabled', e.target.checked)} /> {settings.auto_reminders_enabled ? 'Aan' : 'Uit'}</label>
+        </div>
+        <div className="billing-control-row">
+          <div>
+            <strong>Niveau 1 · Vriendelijke herinnering</strong>
+            <p className="settings-help">Aantal dagen ná de vervaldatum.</p>
+            <Input type="number" min={0} value={String(settings.level1_offset_days)} onChange={e => update('level1_offset_days', clampReminderDays(e.target.value))} />
+          </div>
+        </div>
+        <div className="billing-control-row">
+          <div>
+            <strong>Niveau 2 · Tweede herinnering</strong>
+            <p className="settings-help">Aantal dagen ná de vervaldatum (≥ niveau 1).</p>
+            <Input type="number" min={0} value={String(settings.level2_offset_days)} onChange={e => update('level2_offset_days', clampReminderDays(e.target.value))} />
+          </div>
+        </div>
+        <div className="billing-control-row">
+          <div>
+            <strong>Niveau 3 · Aanmaning</strong>
+            <p className="settings-help">Aantal dagen ná de vervaldatum (≥ niveau 2).</p>
+            <Input type="number" min={0} value={String(settings.level3_offset_days)} onChange={e => update('level3_offset_days', clampReminderDays(e.target.value))} />
+          </div>
+        </div>
+        <div className="billing-control-row">
+          <div>
+            <strong>Betaallink meesturen</strong>
+            <p className="settings-help">Voegt een Mollie-betaallink toe als deze organisatie Mollie gekoppeld heeft.</p>
+          </div>
+          <label className="settings-toggle"><input type="checkbox" checked={settings.include_payment_link} onChange={e => update('include_payment_link', e.target.checked)} /> {settings.include_payment_link ? 'Aan' : 'Uit'}</label>
+        </div>
+        <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Opslaan…' : 'Herinneringen opslaan'}</Button>
+      </>}
+  </section>;
 }
 
 export function Settings({
@@ -783,6 +888,8 @@ export function Settings({
         </div>}
       </> : <p className="settings-help">Alleen owners en admins kunnen de Mollie-koppeling beheren.</p>}
     </section>
+
+    {activeOrganization && <InvoiceReminderSettingsCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     </div>}
 
     {activeTab === 'abonnement' && <div className="settings-tab-panel">

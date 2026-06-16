@@ -10,6 +10,7 @@ type InvoiceRow = {
   id: string; organization_id: string; client_id: string | null; project_id: string | null; quote_id: string | null;
   number: string; date: string; due_date: string | null; lines: InvoiceLine[]; status: string; notes: string | null;
   public_token_hash?: string | null; public_token_expires_at?: string | null;
+  reminder_level?: number | null; last_reminder_at?: string | null; reminders_paused?: boolean | null; currency?: string | null;
 };
 type ClientRow = { id: string; name: string; contact_name: string | null; email: string | null };
 type ProjectRow = { id: string; name: string; description: string | null };
@@ -29,6 +30,10 @@ const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
 const RESEND_FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || '';
 const RESEND_REPLY_TO = Deno.env.get('RESEND_REPLY_TO') || '';
+// Gedeeld secret waarmee de pg_cron-job (via pg_net) de herinneringsbatch mag
+// triggeren. Zonder dit secret weigert de ?cron=reminders-ingang elke aanroep.
+const INVOICE_REMINDER_CRON_SECRET = Deno.env.get('INVOICE_REMINDER_CRON_SECRET') || '';
+const INVOICE_REMINDER_BATCH_LIMIT = parsePositiveInt(Deno.env.get('INVOICE_REMINDER_BATCH_LIMIT'), 200);
 const INVOICE_PUBLIC_BASE_URL = Deno.env.get('INVOICE_PUBLIC_BASE_URL') || Deno.env.get('APP_PUBLIC_URL') || '';
 const INVOICE_TOKEN_TTL_DAYS = parsePositiveInt(Deno.env.get('INVOICE_TOKEN_TTL_DAYS'), 60);
 const INVOICE_PDF_MAX_ATTACHMENT_BYTES = parsePositiveInt(Deno.env.get('INVOICE_PDF_MAX_ATTACHMENT_BYTES'), 8 * 1024 * 1024);
@@ -80,6 +85,13 @@ serve(async (req) => {
       return await handleMollieWebhook(req, url, body);
     }
 
+    // Machine-to-machine ingang voor de dagelijkse herinneringsbatch (pg_cron +
+    // pg_net). Geauthenticeerd met een gedeeld secret i.p.v. een gebruikerssessie,
+    // net als de Mollie-webhook hierboven — dus vóór assertAllowedOrigin/requireUser.
+    if (url.searchParams.get('cron') === 'reminders') {
+      return await handleReminderCron(req, url);
+    }
+
     assertAllowedOrigin(req);
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const action = String(body.action || '');
@@ -114,6 +126,7 @@ serve(async (req) => {
 
     switch (action) {
       case 'sendInvoiceEmail': return json(req, { ok: true, ...(await sendInvoiceEmail(user.id, organizationId, invoiceId, body)) });
+      case 'sendInvoiceReminderEmail': return json(req, { ok: true, ...(await sendInvoiceReminderEmail(user.id, organizationId, invoiceId, body)) });
       case 'createInvoicePaymentCheckout': return json(req, { ok: true, ...(await createInvoicePaymentCheckout(user.id, organizationId, invoiceId, body)) });
       case 'createInvoiceRefund': return json(req, { ok: true, ...(await createInvoiceRefund(user.id, organizationId, role, invoiceId, body)) });
       case 'sendCreditNoteEmail': return json(req, { ok: true, ...(await sendCreditNoteEmail(user.id, organizationId, body)) });
@@ -258,6 +271,290 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
 
   const finalized = await completeInvoiceEmailSend(prepared.deliveryId, organizationId, userId, providerEmailId);
   return { delivery: finalized.delivery, version: finalized.version, publicUrl, providerEmailId, paymentLinkIncluded: Boolean(paymentUrl), paymentLinkError, attachment: { fileName: pdfAttachment.fileName, sizeBytes: pdfAttachment.sizeBytes, sha256: pdfAttachment.sha256, storageProvider: storedPdf.provider, storageKey: storedPdf.key } };
+}
+
+// ============================================================
+// Betalingsherinneringen (getrapt, 3 niveaus) — automatisch + handmatig.
+// ============================================================
+
+type ReminderSettingsRow = {
+  auto_reminders_enabled: boolean;
+  include_payment_link: boolean;
+  level1_offset_days: number;
+  level2_offset_days: number;
+  level3_offset_days: number;
+};
+
+// Cron-ingang: door pg_cron (via pg_net) dagelijks aangeroepen met een gedeeld
+// secret. Markeert te-late facturen en stuurt de openstaande herinneringen.
+async function handleReminderCron(req: Request, url: URL): Promise<Response> {
+  if (!INVOICE_REMINDER_CRON_SECRET) return json(req, { ok: false, error: 'INVOICE_REMINDER_CRON_SECRET ontbreekt in de Edge Function secrets.' }, 500);
+  const provided = req.headers.get('x-cron-secret') || url.searchParams.get('secret') || '';
+  if (!timingSafeEqual(provided, INVOICE_REMINDER_CRON_SECRET)) return json(req, { ok: false, error: 'Invalid cron secret' }, 401);
+  try {
+    const summary = await runInvoiceReminderBatch();
+    return json(req, { ok: true, ...summary });
+  } catch (error) {
+    console.error('invoice reminder cron error', describeError(error), serializeError(error));
+    return json(req, { ok: false, error: describeError(error) }, 500);
+  }
+}
+
+// Markeer te-late facturen en verstuur per kandidaat het eerstvolgende niveau.
+// Eén factuurfout stopt de batch niet — die wordt geregistreerd en overgeslagen.
+async function runInvoiceReminderBatch(): Promise<{ markedOverdue: number; candidates: number; sent: number; failed: number; errors: Array<{ invoiceId: string; level: number; error: string }> }> {
+  if (!RESEND_API_KEY || !RESEND_FROM_EMAIL) throw new WorkflowHttpError('Resend-secrets ontbreken; herinneringen kunnen niet worden verstuurd.', 500);
+  if (!INVOICE_PUBLIC_BASE_URL) throw new WorkflowHttpError('INVOICE_PUBLIC_BASE_URL of APP_PUBLIC_URL ontbreekt.', 500);
+
+  const markedOverdue = await markInvoicesOverdue(null);
+  const candidates = await findDueInvoiceReminders(INVOICE_REMINDER_BATCH_LIMIT);
+
+  let sent = 0;
+  let failed = 0;
+  const errors: Array<{ invoiceId: string; level: number; error: string }> = [];
+  for (const candidate of candidates) {
+    try {
+      const settings = await loadReminderSettings(candidate.organization_id);
+      const actorUserId = await resolveOrgActorUserId(candidate.organization_id);
+      await deliverInvoiceReminder({
+        organizationId: candidate.organization_id,
+        invoiceId: candidate.invoice_id,
+        level: candidate.next_level,
+        daysOverdue: candidate.days_overdue,
+        actorUserId,
+        includePaymentLink: settings?.include_payment_link ?? true,
+      });
+      sent += 1;
+    } catch (error) {
+      failed += 1;
+      errors.push({ invoiceId: candidate.invoice_id, level: candidate.next_level, error: describeError(error) });
+      console.warn('Herinnering voor factuur mislukt', candidate.invoice_id, describeError(error));
+    }
+  }
+  return { markedOverdue, candidates: candidates.length, sent, failed, errors };
+}
+
+// Handmatige actie (owner/admin/member): stuur één herinnering op afroep. Het
+// niveau is expliciet (body.level) of automatisch het volgende (reminder_level + 1).
+async function sendInvoiceReminderEmail(userId: string, organizationId: string, invoiceId: string, body: Record<string, unknown>) {
+  if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
+  const invoice = await loadInvoice(organizationId, invoiceId);
+  if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) throw new WorkflowHttpError('Voor een betaalde, geannuleerde of afgeboekte factuur kan geen herinnering worden verstuurd.', 409);
+
+  const explicitLevel = Number(body.level);
+  const level = Number.isFinite(explicitLevel) && explicitLevel >= 1 && explicitLevel <= 3
+    ? Math.round(explicitLevel)
+    : Math.min(3, (Number(invoice.reminder_level) || 0) + 1);
+
+  const settings = await loadReminderSettings(organizationId);
+  const includePaymentLink = body.includePaymentLink === undefined
+    ? (settings?.include_payment_link ?? true)
+    : body.includePaymentLink === true;
+
+  return await deliverInvoiceReminder({
+    organizationId,
+    invoiceId,
+    level,
+    actorUserId: userId,
+    includePaymentLink,
+    recipientEmail: body.recipientEmail ? String(body.recipientEmail) : undefined,
+    recipientName: body.recipientName ? String(body.recipientName) : undefined,
+  });
+}
+
+// Gedeelde verzendkern voor cron én handmatig. Hergebruikt de factuur-PDF-snapshot,
+// publieke token en (optioneel) de Mollie-betaallink-logica van de gewone verzending.
+async function deliverInvoiceReminder(input: { organizationId: string; invoiceId: string; level: number; daysOverdue?: number | null; actorUserId: string | null; includePaymentLink: boolean; recipientEmail?: string; recipientName?: string }) {
+  const { organizationId, invoiceId, actorUserId, includePaymentLink } = input;
+  const level = Math.min(3, Math.max(1, Math.round(input.level))) as 1 | 2 | 3;
+  if (!RESEND_API_KEY) throw new WorkflowHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
+  if (!RESEND_FROM_EMAIL) throw new WorkflowHttpError('RESEND_FROM_EMAIL ontbreekt in de Edge Function secrets.', 500);
+  if (!INVOICE_PUBLIC_BASE_URL) throw new WorkflowHttpError('INVOICE_PUBLIC_BASE_URL of APP_PUBLIC_URL ontbreekt.', 500);
+  if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
+
+  const invoice = await loadInvoice(organizationId, invoiceId);
+  if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) throw new WorkflowHttpError('Voor deze factuur kan geen herinnering worden verstuurd.', 409);
+  if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
+
+  const [client, project, company] = await Promise.all([
+    loadClient(organizationId, invoice.client_id),
+    invoice.project_id ? loadProject(organizationId, invoice.project_id) : Promise.resolve(null),
+    loadCompanySettings(organizationId),
+  ]);
+
+  const recipientEmail = String(input.recipientEmail || client.email || '').trim().toLowerCase();
+  const recipientName = String(input.recipientName || client.contact_name || client.name || '').trim();
+  if (!isEmail(recipientEmail)) throw new WorkflowHttpError('Vul een geldig klant-e-mailadres in voordat je een herinnering verstuurt.', 422);
+
+  const token = randomToken();
+  const tokenHash = await sha256Hex(token);
+  const expiresAt = new Date(Date.now() + Math.max(1, INVOICE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000).toISOString();
+  const publicUrl = `${INVOICE_PUBLIC_BASE_URL.replace(/\/$/, '')}/invoice/${encodeURIComponent(token)}`;
+
+  // Betaallink is best-effort: de Mollie-checkout vereist een echte actor-user, en
+  // een fout (geen Mollie, revoked key, …) mag de herinnering nooit blokkeren.
+  let paymentUrl: string | null = null;
+  let paymentLinkError: string | null = null;
+  if (includePaymentLink && actorUserId) {
+    try {
+      const checkout = await createInvoicePaymentCheckout(actorUserId, organizationId, invoiceId, {});
+      paymentUrl = checkout.checkoutUrl || null;
+    } catch (error) {
+      paymentLinkError = error instanceof Error ? error.message : 'Mollie-betaallink kon niet worden aangemaakt.';
+      console.warn('Reminder payment link creation failed, sending without link:', paymentLinkError);
+      paymentUrl = null;
+    }
+  }
+
+  const rendered = renderEmailTemplate('invoice.reminder', { level, invoice, client, project, company, publicUrl, paymentUrl, recipientName, daysOverdue: input.daysOverdue ?? null });
+  const subject = rendered.subject;
+
+  // PDF: hergebruik de opgeslagen snapshot (exact wat de klant eerder kreeg). Is er
+  // nog geen snapshot, dan genereren we er één en slaan die best-effort op.
+  let pdfFileName: string;
+  let pdfBase64: string;
+  let pdfMime = 'application/pdf';
+  let pdfSize: number | null = null;
+  let pdfSha: string | null = null;
+  try {
+    const snapshot = await loadInvoicePdfSnapshot(organizationId, invoiceId);
+    pdfFileName = snapshot.fileName; pdfBase64 = snapshot.base64; pdfMime = snapshot.mimeType; pdfSize = snapshot.sizeBytes; pdfSha = snapshot.sha256;
+  } catch {
+    const quote = invoice.quote_id ? await loadQuote(organizationId, invoice.quote_id) : null;
+    const attachment = await createInvoicePdfAttachment({ invoice, client, project, quote, company, publicUrl, paymentUrl });
+    validateInvoicePdfAttachment(attachment);
+    await storeInvoicePdfSnapshot(organizationId, invoiceId, attachment).catch((storeError) => console.warn('Reminder PDF-snapshot opslaan mislukte (niet fataal):', storeError instanceof Error ? storeError.message : storeError));
+    pdfFileName = attachment.fileName; pdfBase64 = attachment.base64; pdfMime = attachment.mimeType; pdfSize = attachment.sizeBytes; pdfSha = attachment.sha256;
+  }
+
+  const prepared = await beginInvoiceReminderSend({
+    invoiceId, organizationId, userId: actorUserId, level, tokenHash, expiresAt, recipientEmail, recipientName, subject, publicUrl,
+    attachmentFileName: pdfFileName, attachmentMimeType: pdfMime, attachmentSizeBytes: pdfSize ?? undefined, attachmentSha256: pdfSha ?? undefined,
+  });
+
+  const resendPayload = {
+    from: RESEND_FROM_EMAIL,
+    to: [recipientEmail],
+    reply_to: RESEND_REPLY_TO || undefined,
+    subject,
+    html: rendered.html,
+    text: rendered.text,
+    attachments: [{ filename: pdfFileName, content: pdfBase64 }],
+    tags: [
+      { name: 'organization_id', value: sanitizeTagValue(organizationId) },
+      { name: 'invoice_id', value: sanitizeTagValue(invoiceId) },
+      { name: 'invoice_number', value: sanitizeTagValue(invoice.number) },
+      { name: 'template_key', value: 'invoice_reminder' },
+      { name: 'reminder_level', value: sanitizeTagValue(`L${level}`) },
+    ],
+  };
+
+  let resendResponse: Response;
+  let resendPayloadResponse: Record<string, unknown> = {};
+  try {
+    resendResponse = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(`reminder-${invoiceId}-L${level}-${prepared.deliveryId}`) },
+      body: JSON.stringify(resendPayload),
+    });
+    resendPayloadResponse = (await resendResponse.json().catch(() => ({}))) as Record<string, unknown>;
+  } catch (error) {
+    const message = `Resend provider request failed before a response was received: ${describeError(error)}`;
+    await failInvoiceReminderSend(prepared.deliveryId, organizationId, actorUserId, message);
+    throw new WorkflowHttpError(`Resend kon de herinnering niet versturen: ${message}`, 502);
+  }
+
+  if (!resendResponse.ok) {
+    const message = String(resendPayloadResponse.message || resendPayloadResponse.error || resendResponse.statusText || 'Resend send failed');
+    await failInvoiceReminderSend(prepared.deliveryId, organizationId, actorUserId, message);
+    throw new WorkflowHttpError(`Resend kon de herinnering niet versturen: ${message}`, 502);
+  }
+  const providerEmailId = String(resendPayloadResponse.id || resendPayloadResponse.email_id || '').trim();
+  if (!providerEmailId) {
+    await failInvoiceReminderSend(prepared.deliveryId, organizationId, actorUserId, 'Resend accepted the request but did not return a provider email id.');
+    throw new WorkflowHttpError('Resend gaf geen e-mail-ID terug. De herinnering is niet definitief gemarkeerd.', 502);
+  }
+
+  const finalized = await completeInvoiceReminderSend(prepared.deliveryId, organizationId, actorUserId, providerEmailId, level);
+  return { delivery: finalized.delivery, invoice: finalized.invoice, level, publicUrl, providerEmailId, paymentLinkIncluded: Boolean(paymentUrl), paymentLinkError, recipientEmail };
+}
+
+async function markInvoicesOverdue(organizationId: string | null): Promise<number> {
+  const { data, error } = await supabaseAdmin.rpc('mark_invoices_overdue', { p_organization_id: organizationId });
+  if (error) throwRpcError('mark_invoices_overdue', error);
+  return Number(data ?? 0) || 0;
+}
+
+async function findDueInvoiceReminders(limit: number): Promise<Array<{ organization_id: string; invoice_id: string; next_level: number; days_overdue: number }>> {
+  const { data, error } = await supabaseAdmin.rpc('find_due_invoice_reminders', { p_now: new Date().toISOString(), p_limit: limit });
+  if (error) throwRpcError('find_due_invoice_reminders', error);
+  return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    organization_id: String(row.organization_id),
+    invoice_id: String(row.invoice_id),
+    next_level: Number(row.next_level) || 1,
+    days_overdue: Number(row.days_overdue) || 0,
+  }));
+}
+
+async function loadReminderSettings(organizationId: string): Promise<ReminderSettingsRow | null> {
+  const { data, error } = await supabaseAdmin
+    .from('invoice_reminder_settings')
+    .select('auto_reminders_enabled,include_payment_link,level1_offset_days,level2_offset_days,level3_offset_days')
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) { console.warn('reminder settings lookup mislukte', error.message); return null; }
+  return (data ?? null) as ReminderSettingsRow | null;
+}
+
+// Resolve een schrijfbevoegde actor (owner > admin > member) voor cron-acties die
+// een echte gebruiker vereisen (de Mollie-betaallink-checkout). Geeft null als de
+// organisatie geen actieve leden heeft — dan gaat de herinnering zonder betaallink.
+async function resolveOrgActorUserId(organizationId: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin
+    .from('organization_members')
+    .select('user_id,role')
+    .eq('organization_id', organizationId)
+    .eq('status', 'active')
+    .in('role', ['owner', 'admin', 'member'])
+    .limit(20);
+  if (error) { console.warn('actor lookup mislukte', error.message); return null; }
+  const rows = (data ?? []) as Array<{ user_id: string; role: string }>;
+  const pick = rows.find((r) => r.role === 'owner') ?? rows.find((r) => r.role === 'admin') ?? rows[0];
+  return pick?.user_id ?? null;
+}
+
+async function beginInvoiceReminderSend(input: { invoiceId: string; organizationId: string; userId: string | null; level: number; tokenHash: string; expiresAt: string; recipientEmail: string; recipientName: string; subject: string; publicUrl: string; attachmentFileName?: string; attachmentMimeType?: string; attachmentSizeBytes?: number; attachmentSha256?: string }): Promise<{ deliveryId: string }> {
+  const { data, error } = await supabaseAdmin.rpc('begin_invoice_reminder_send', {
+    p_invoice_id: input.invoiceId,
+    p_organization_id: input.organizationId,
+    p_actor_user_id: input.userId,
+    p_level: input.level,
+    p_token_hash: input.tokenHash,
+    p_token_expires_at: input.expiresAt,
+    p_recipient_email: input.recipientEmail,
+    p_recipient_name: input.recipientName,
+    p_subject: input.subject,
+    p_public_url: input.publicUrl,
+    p_attachment_file_name: input.attachmentFileName ?? null,
+    p_attachment_mime_type: input.attachmentMimeType ?? 'application/pdf',
+    p_attachment_size_bytes: input.attachmentSizeBytes ?? null,
+    p_attachment_sha256: input.attachmentSha256 ?? null,
+  });
+  if (error) throwRpcError('begin_invoice_reminder_send', error);
+  const payload = data as { deliveryId?: string } | null;
+  if (!payload?.deliveryId) throw new WorkflowHttpError('Herinnering kon niet worden voorbereid.', 500);
+  return { deliveryId: payload.deliveryId };
+}
+
+async function completeInvoiceReminderSend(deliveryId: string, organizationId: string, userId: string | null, providerEmailId: string, level: number): Promise<{ delivery?: unknown; invoice?: unknown }> {
+  const { data, error } = await supabaseAdmin.rpc('complete_invoice_reminder_send', { p_delivery_id: deliveryId, p_organization_id: organizationId, p_actor_user_id: userId, p_provider_email_id: providerEmailId, p_level: level });
+  if (error) throwRpcError('complete_invoice_reminder_send', error);
+  return (data ?? {}) as { delivery?: unknown; invoice?: unknown };
+}
+
+async function failInvoiceReminderSend(deliveryId: string, organizationId: string, userId: string | null, errorMessage: string): Promise<void> {
+  const { error } = await supabaseAdmin.rpc('fail_invoice_reminder_send', { p_delivery_id: deliveryId, p_organization_id: organizationId, p_actor_user_id: userId, p_error_message: errorMessage });
+  if (error) console.warn('Reminder failure registration failed', error.message);
 }
 
 async function createInvoicePaymentCheckout(userId: string, organizationId: string, invoiceId: string, body: Record<string, unknown>) {

@@ -337,6 +337,9 @@ export interface Invoice extends OrgScopedRow {
   last_email_opened_at?: string | null;
   last_email_clicked_at?: string | null;
   last_email_failed_at?: string | null;
+  reminder_level?: number;
+  last_reminder_at?: string | null;
+  reminders_paused?: boolean;
   latest_version_id?: UUID | null;
   sent_version_id?: UUID | null;
   paid_version_id?: UUID | null;
@@ -346,6 +349,17 @@ export interface Invoice extends OrgScopedRow {
   last_pdf_sha256?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface InvoiceReminderSettings {
+  organization_id: UUID;
+  auto_reminders_enabled: boolean;
+  level1_offset_days: number;
+  level2_offset_days: number;
+  level3_offset_days: number;
+  include_payment_link: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface InvoiceWorkflowEvent {
@@ -370,6 +384,8 @@ export interface InvoiceEmailDelivery {
   recipient_name: string | null;
   subject: string;
   status: InvoiceEmailDeliveryStatus;
+  delivery_kind?: 'invoice' | 'reminder';
+  reminder_level?: number | null;
   sent_at: string | null;
   delivered_at: string | null;
   opened_at: string | null;

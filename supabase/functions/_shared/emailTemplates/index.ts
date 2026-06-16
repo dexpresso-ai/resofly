@@ -1,4 +1,5 @@
 import { renderCreditNoteSentEmail } from './creditNoteSent.ts';
+import { renderInvoiceReminderEmail } from './invoiceReminder.ts';
 import { renderInvoiceSentEmail } from './invoiceSent.ts';
 import { renderQuoteSentEmail } from './quoteSent.ts';
 import { renderResendTestEmail } from './testResend.ts';
@@ -14,6 +15,8 @@ export function renderEmailTemplate<K extends EmailTemplateKey>(templateKey: K, 
       return renderQuoteSentEmail(data as EmailTemplateInputMap['quote.sent']);
     case 'invoice.sent':
       return renderInvoiceSentEmail(data as EmailTemplateInputMap['invoice.sent']);
+    case 'invoice.reminder':
+      return renderInvoiceReminderEmail(data as EmailTemplateInputMap['invoice.reminder']);
     case 'creditNote.sent':
       return renderCreditNoteSentEmail(data as EmailTemplateInputMap['creditNote.sent']);
     default: {

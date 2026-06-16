@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { CreditCard, Download, Eye, FileText, Mail, RotateCcw, Search, ShieldCheck, SlidersHorizontal, Send, XCircle } from 'lucide-react';
+import { Bell, CreditCard, Download, Eye, FileText, Mail, Pause, Play, RotateCcw, Search, ShieldCheck, SlidersHorizontal, Send, XCircle } from 'lucide-react';
 import type { AppData, CreditNote, FinanceLine, FinanceStatus, Invoice, InvoiceChargeback, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceRefund, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
 import { Modal } from '../components/Modal';
 import { Button, Select } from '../components/Ui';
@@ -51,8 +51,8 @@ export function Quotes({
   />;
 }
 
-export function Invoices({ data, canWrite, canAdmin = false, onNew, onEdit, onSend, onDownloadPdf, onRefund, onDownloadCreditNote, onEmailCreditNote }: { data: AppData; canWrite: boolean; canAdmin?: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onDownloadPdf?: (i: Invoice) => void; onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>; onDownloadCreditNote?: (creditNote: CreditNote) => void; onEmailCreditNote?: (creditNote: CreditNote) => void }) {
-  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onDownloadInvoicePdf={onDownloadPdf} onRefundInvoice={onRefund} onDownloadCreditNote={onDownloadCreditNote} onEmailCreditNote={onEmailCreditNote}/>;
+export function Invoices({ data, canWrite, canAdmin = false, onNew, onEdit, onSend, onSendReminder, onToggleRemindersPaused, onDownloadPdf, onRefund, onDownloadCreditNote, onEmailCreditNote }: { data: AppData; canWrite: boolean; canAdmin?: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onSendReminder?: (i: Invoice) => void; onToggleRemindersPaused?: (i: Invoice, paused: boolean) => void; onDownloadPdf?: (i: Invoice) => void; onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>; onDownloadCreditNote?: (creditNote: CreditNote) => void; onEmailCreditNote?: (creditNote: CreditNote) => void }) {
+  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onSendInvoiceReminder={onSendReminder} onToggleInvoiceRemindersPaused={onToggleRemindersPaused} onDownloadInvoicePdf={onDownloadPdf} onRefundInvoice={onRefund} onDownloadCreditNote={onDownloadCreditNote} onEmailCreditNote={onEmailCreditNote}/>;
 }
 
 function FinanceList<T extends Quote | Invoice>({
@@ -70,6 +70,8 @@ function FinanceList<T extends Quote | Invoice>({
   onSend,
   onConvertToInvoice,
   onSendInvoice,
+  onSendInvoiceReminder,
+  onToggleInvoiceRemindersPaused,
   onDownloadPdf,
   onDownloadInvoicePdf,
   onRefundInvoice,
@@ -90,6 +92,8 @@ function FinanceList<T extends Quote | Invoice>({
   onSend?: (q: Quote) => void;
   onConvertToInvoice?: (q: Quote) => void;
   onSendInvoice?: (i: Invoice) => void;
+  onSendInvoiceReminder?: (i: Invoice) => void;
+  onToggleInvoiceRemindersPaused?: (i: Invoice, paused: boolean) => void;
   onDownloadPdf?: (q: Quote) => void;
   onDownloadInvoicePdf?: (i: Invoice) => void;
   onRefundInvoice?: (invoice: Invoice, input: RefundInput) => Promise<void>;
@@ -123,6 +127,8 @@ function FinanceList<T extends Quote | Invoice>({
     onNew={onNew}
     onEdit={onEdit as (doc: Invoice) => void}
     onSend={onSendInvoice}
+    onSendReminder={onSendInvoiceReminder}
+    onToggleRemindersPaused={onToggleInvoiceRemindersPaused}
     onDownloadPdf={onDownloadInvoicePdf}
     onRefund={onRefundInvoice}
     onDownloadCreditNote={onDownloadCreditNote}
@@ -468,6 +474,8 @@ function InvoiceTable({
   onNew,
   onEdit,
   onSend,
+  onSendReminder,
+  onToggleRemindersPaused,
   onDownloadPdf,
   onRefund,
   onDownloadCreditNote,
@@ -481,6 +489,8 @@ function InvoiceTable({
   onNew: () => void;
   onEdit: (invoice: Invoice) => void;
   onSend?: (invoice: Invoice) => void;
+  onSendReminder?: (invoice: Invoice) => void;
+  onToggleRemindersPaused?: (invoice: Invoice, paused: boolean) => void;
   onDownloadPdf?: (invoice: Invoice) => void;
   onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>;
   onDownloadCreditNote?: (creditNote: CreditNote) => void;
@@ -527,7 +537,7 @@ function InvoiceTable({
                 <td data-label="Bedrag ex." className="money"><span>{euro(amounts.subtotal)}</span></td>
                 <td data-label="BTW" className="money"><span>{euro(amounts.vat)}</span></td>
                 <td data-label="Totaal" className="money total"><strong>{euro(amounts.total)}</strong></td>
-                <td data-label="Status"><span className={`fin-status ${invoice.status}`}>{statusLabel(invoice.status)}</span></td>
+                <td data-label="Status"><span className={`fin-status ${invoice.status}`}>{statusLabel(invoice.status)}</span>{(invoice.reminder_level ?? 0) > 0 && <span className="fin-reminder-pill" title={`Laatste herinnering verstuurd: niveau ${invoice.reminder_level}${invoice.last_reminder_at ? ` op ${dateNL(invoice.last_reminder_at)}` : ''}`}>H{invoice.reminder_level}</span>}{invoice.reminders_paused && <span className="fin-reminder-pill paused" title="Automatische herinneringen gepauzeerd">⏸</span>}</td>
                 <td className="quote-row-actions" onClick={event => event.stopPropagation()}>
                   <button type="button" className="att-btn" onClick={() => setSelectedInvoiceId(invoice.id)} title="Bekijk details"><Eye size={14}/></button>
                   {invoiceHasStoredPdf(invoice) && onDownloadPdf
@@ -551,6 +561,8 @@ function InvoiceTable({
       onClose={() => setSelectedInvoiceId(null)}
       onEdit={(invoice) => { setSelectedInvoiceId(null); onEdit(invoice); }}
       onSend={onSend}
+      onSendReminder={onSendReminder}
+      onToggleRemindersPaused={onToggleRemindersPaused}
       onDownloadPdf={onDownloadPdf}
       onRefund={onRefund}
       onDownloadCreditNote={onDownloadCreditNote}
@@ -640,6 +652,8 @@ function InvoiceDetailModal({
   onClose,
   onEdit,
   onSend,
+  onSendReminder,
+  onToggleRemindersPaused,
   onDownloadPdf,
   onRefund,
   onDownloadCreditNote,
@@ -652,6 +666,8 @@ function InvoiceDetailModal({
   onClose: () => void;
   onEdit: (invoice: Invoice) => void;
   onSend?: (invoice: Invoice) => void;
+  onSendReminder?: (invoice: Invoice) => void;
+  onToggleRemindersPaused?: (invoice: Invoice, paused: boolean) => void;
   onDownloadPdf?: (invoice: Invoice) => void;
   onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>;
   onDownloadCreditNote?: (creditNote: CreditNote) => void;
@@ -663,6 +679,7 @@ function InvoiceDetailModal({
   const amounts = total(invoice.lines);
   const events = data.invoiceWorkflowEvents.filter(event => event.invoice_id === invoice.id);
   const deliveries = data.invoiceEmailDeliveries.filter(delivery => delivery.invoice_id === invoice.id);
+  const reminderDeliveries = deliveries.filter(delivery => delivery.delivery_kind === 'reminder');
   const latestDelivery = deliveries[0] ?? null;
   const payments = data.invoicePaymentRecords.filter(payment => payment.invoice_id === invoice.id);
   const latestPayment = payments[0] ?? null;
@@ -715,9 +732,14 @@ function InvoiceDetailModal({
       <section className="quote-detail-section">
         <div className="quote-detail-section-head"><div><span>Acties</span><strong>Versturen, betaallink en PDF-snapshot</strong></div></div>
         <InvoiceStatusStrip invoice={invoice} delivery={latestDelivery} payment={latestPayment} />
-        <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} onEdit={() => onEdit(invoice)} onSend={onSend} onDownloadPdf={onDownloadPdf} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} />
+        <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} onEdit={() => onEdit(invoice)} onSend={onSend} onSendReminder={onSendReminder} onDownloadPdf={onDownloadPdf} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} />
         {showRefund && onRefund && <RefundModal invoice={invoice} mollieRefundable={mollieRefundable} inFlightCents={inFlightCents} onClose={() => setShowRefund(false)} onSubmit={(input) => onRefund(invoice, input)} />}
       </section>
+
+      {(invoiceIsReminderEligible(invoice) || (invoice.reminder_level ?? 0) > 0 || reminderDeliveries.length > 0) && <section className="quote-detail-section">
+        <div className="quote-detail-section-head"><div><span>Betalingsherinneringen</span><strong>Getrapte aanmaningen</strong></div></div>
+        <InvoiceReminderPanel invoice={invoice} reminders={reminderDeliveries} canWrite={canWrite} onToggleRemindersPaused={onToggleRemindersPaused} />
+      </section>}
 
       <section className="quote-detail-split">
         <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Regels</span><strong>Factuurbedragen</strong></div></div><FinanceLineTable lines={invoice.lines} emptyText="Geen factuurregels." /></div>
@@ -864,7 +886,7 @@ function InvoiceStatusStrip({ invoice, delivery, payment }: { invoice: Invoice; 
   </div>;
 }
 
-function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, onEdit, onSend, onDownloadPdf, onRefund }: { invoice: Invoice; canWrite: boolean; canAdmin?: boolean; payment: InvoicePaymentRecord | null; onEdit: () => void; onSend?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void; onRefund?: () => void }) {
+function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, onEdit, onSend, onSendReminder, onDownloadPdf, onRefund }: { invoice: Invoice; canWrite: boolean; canAdmin?: boolean; payment: InvoicePaymentRecord | null; onEdit: () => void; onSend?: (invoice: Invoice) => void; onSendReminder?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void; onRefund?: () => void }) {
   const invoiceClosed = ['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status);
   const isLocked = Boolean(invoice.locked_at) || ['sent','overdue','paid','cancelled','void','written_off','refunded'].includes(invoice.status) || Boolean(payment);
   const canSend = canWrite && !invoiceClosed;
@@ -874,15 +896,30 @@ function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, onEdit, 
   const refundedCents = Math.round((invoice.refunded_amount ?? 0) * 100);
   const remainingCents = Math.max(total(invoice.lines).totalCents - refundedCents, 0);
   const canRefund = Boolean(canAdmin && onRefund) && ['paid', 'refunded'].includes(invoice.status) && remainingCents > 0;
+  // Herinnering kan zodra de factuur onbetaald én over de vervaldatum is. Het
+  // volgende niveau is reminder_level + 1 (max 3); de Edge Function kiest 'm zelf.
+  const canRemind = Boolean(canWrite && onSendReminder) && invoiceIsReminderEligible(invoice);
+  const nextReminderLevel = Math.min(3, (invoice.reminder_level ?? 0) + 1);
   // The Mollie payment link is created automatically while sending (when the
   // organisation has Mollie connected), so there is no separate "create link"
   // button — sending is the single action that produces invoice + betaallink.
   return <div className="quote-actions invoice-actions">
     <Button onClick={onEdit} disabled={isLocked} title={isLocked ? 'Deze factuur is vergrendeld na verzending of betaallink.' : undefined}>Bewerken</Button>
     {canSend && <Button variant="primary" onClick={() => onSend?.(invoice)}><Send size={14}/> Verstuur via Resend</Button>}
+    {canRemind && <Button onClick={() => onSendReminder?.(invoice)} title={`Stuurt betalingsherinnering niveau ${nextReminderLevel} naar de klant.`}><Bell size={14}/> Stuur herinnering (niveau {nextReminderLevel})</Button>}
     {canDownloadStored && <Button onClick={() => onDownloadPdf?.(invoice)}><Download size={14}/> Download verzonden PDF</Button>}
     {canRefund && <Button variant="danger" onClick={() => onRefund?.()}><RotateCcw size={14}/> Terugbetaling</Button>}
   </div>;
+}
+
+// True zodra een factuur onbetaald is én de vervaldatum is verstreken (status
+// 'overdue', of berekend op basis van due_date < vandaag). Spiegelt de cron-logica.
+function invoiceIsReminderEligible(invoice: Invoice): boolean {
+  if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) return false;
+  if (invoice.status === 'overdue') return true;
+  if (!invoice.due_date) return false;
+  const due = new Date(invoice.due_date);
+  return !Number.isNaN(due.getTime()) && due.getTime() < Date.now();
 }
 
 /**
@@ -905,7 +942,30 @@ function InvoiceVersions({ versions }: { versions: InvoiceVersion[] }) {
 
 function InvoiceDeliveries({ deliveries }: { deliveries: InvoiceEmailDelivery[] }) {
   if (deliveries.length === 0) return <div className="quote-timeline-empty">Nog geen factuurmail verzonden.</div>;
-  return <div className="quote-versions">{deliveries.map(delivery => <div className="quote-version-pill" key={delivery.id}><strong>{emailStatusLabel(delivery.status)}</strong><span>{delivery.recipient_email}</span><small>{dateNL(delivery.created_at)} · {delivery.subject}</small>{delivery.attachment_file_name && <small>{delivery.attachment_file_name}</small>}{delivery.error_message && <small>{delivery.error_message}</small>}</div>)}</div>;
+  return <div className="quote-versions">{deliveries.map(delivery => <div className="quote-version-pill" key={delivery.id}><strong>{delivery.delivery_kind === 'reminder' ? `Herinnering N${delivery.reminder_level ?? '?'} · ` : ''}{emailStatusLabel(delivery.status)}</strong><span>{delivery.recipient_email}</span><small>{dateNL(delivery.created_at)} · {delivery.subject}</small>{delivery.attachment_file_name && <small>{delivery.attachment_file_name}</small>}{delivery.error_message && <small>{delivery.error_message}</small>}</div>)}</div>;
+}
+
+function reminderLevelLabel(level: number): string {
+  switch (level) {
+    case 1: return 'Niveau 1 · Vriendelijke herinnering verstuurd';
+    case 2: return 'Niveau 2 · Tweede herinnering verstuurd';
+    case 3: return 'Niveau 3 · Aanmaning verstuurd';
+    default: return 'Nog geen herinnering verstuurd';
+  }
+}
+
+function InvoiceReminderPanel({ invoice, reminders, canWrite, onToggleRemindersPaused }: { invoice: Invoice; reminders: InvoiceEmailDelivery[]; canWrite: boolean; onToggleRemindersPaused?: (invoice: Invoice, paused: boolean) => void }) {
+  const level = invoice.reminder_level ?? 0;
+  const paused = Boolean(invoice.reminders_paused);
+  return <div className="invoice-reminder-panel">
+    <div className="invoice-reminder-summary">
+      <span className="quote-version-pill"><strong>{reminderLevelLabel(level)}</strong>{invoice.last_reminder_at && <small>Laatste herinnering: {dateNL(invoice.last_reminder_at)}</small>}{paused && <small>Automatische herinneringen gepauzeerd</small>}</span>
+      {canWrite && onToggleRemindersPaused && <Button onClick={() => onToggleRemindersPaused(invoice, !paused)} title={paused ? 'Automatische herinneringen hervatten voor deze factuur' : 'Automatische herinneringen pauzeren voor deze factuur'}>{paused ? <><Play size={14}/> Hervat herinneringen</> : <><Pause size={14}/> Pauzeer herinneringen</>}</Button>}
+    </div>
+    {reminders.length === 0
+      ? <div className="quote-timeline-empty">Nog geen herinnering verstuurd.</div>
+      : <div className="quote-versions">{reminders.map(delivery => <div className="quote-version-pill" key={delivery.id}><strong>Niveau {delivery.reminder_level ?? '-'} · {emailStatusLabel(delivery.status)}</strong><span>{delivery.recipient_email}</span><small>{dateNL(delivery.created_at)} · {delivery.subject}</small>{delivery.error_message && <small>{delivery.error_message}</small>}</div>)}</div>}
+  </div>;
 }
 
 function InvoicePayments({ payments }: { payments: InvoicePaymentRecord[] }) {
