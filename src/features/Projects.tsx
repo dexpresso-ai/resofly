@@ -165,13 +165,6 @@ export function ProjectsPlanningPage({
   onOpenProject: (project: Project) => void;
 }) {
   return <div className="projects-page projects-planning-page">
-    <section className="projects-hero projects-planning-hero">
-      <div>
-        <span className="eyebrow">Projectplanning</span>
-        <h1>Planning en overlap per project</h1>
-        <p>Een aparte, ruimere timeline-view onder Projecten. Zo blijft het dashboard compact, terwijl je hier rustig kunt sturen op planning, overlap, open taken en fases.</p>
-      </div>
-    </section>
     <ProjectTimeline data={data} variant="full" openProject={(id) => {
       const project = data.projects.find(item => item.id === id);
       if (project) onOpenProject(project);
