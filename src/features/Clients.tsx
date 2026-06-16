@@ -378,6 +378,9 @@ export function ClientDetailPage({
             <div><dt>Waarde</dt><dd>{euro(client.value_eur)}</dd></div>
             <div><dt>Aangemaakt</dt><dd>{dateNL(client.created_at)}</dd></div>
             <div><dt>Bijgewerkt</dt><dd>{dateNL(client.updated_at)}</dd></div>
+            <div><dt>Klantportaal</dt><dd>{client.email
+              ? <a className="client-portal-access-link" href="/portal" target="_blank" rel="noopener noreferrer">Inloggen via /portal</a>
+              : <span className="client-portal-access-hint">E-mailadres nodig om in te loggen</span>}</dd></div>
           </dl>
           {client.notes && <p className="client-inline-notes">{client.notes}</p>}
           <div className="cd-tags">{client.tags?.map(tag => <span className="cd-tag" key={tag}>{tag}</span>)}</div>

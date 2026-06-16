@@ -11,3 +11,10 @@ verify_jwt = false
 # enforces its own auth via requireUser() + requireOrganizationAccess() in code.
 [functions.invoice-workflow]
 verify_jwt = false
+
+# client-portal serves the customer portal at /portal. Every request must come
+# from a logged-in client (magic-link session), so the platform verifies the JWT
+# and the function re-verifies it via requireUser(). Access to data is derived
+# solely from the verified email (RPC portal_clients_for_email).
+[functions.client-portal]
+verify_jwt = true

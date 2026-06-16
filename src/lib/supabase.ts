@@ -9,10 +9,16 @@ if (!isSupabaseConfigured) {
   console.warn('Missing Supabase settings. Copy .env.example to .env.local and fill VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY.');
 }
 
+// Op /portal mag de medewerkers-client de magische-link-hash in de URL NIET
+// opslokken: daar verwerkt de aparte portaal-client (src/lib/supabasePortal.ts,
+// eigen storageKey) de klant-login. Buiten /portal blijft URL-detectie aan voor
+// de normale medewerkers-magic-link.
+const onPortalRoute = typeof window !== 'undefined' && window.location.pathname.startsWith('/portal');
+
 export const supabase = createClient(
   isSupabaseConfigured ? url! : 'https://example.supabase.co',
   isSupabaseConfigured ? anon! : 'placeholder-anon-key',
-  { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } },
+  { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: !onPortalRoute } },
 );
 
 

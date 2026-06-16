@@ -52,6 +52,7 @@ import { Documents, documentTypeLabels } from './features/Documents';
 import { Invoices, Quotes, type RefundInput } from './features/Finance';
 import { PublicQuotePage } from './features/PublicQuotePage';
 import { PublicInvoicePage } from './features/PublicInvoicePage';
+import { ClientPortal } from './features/portal/ClientPortal';
 import { Archive, Settings, Stats } from './features/SimplePages';
 import { CalendarPage } from './features/CalendarPage';
 import { WeekPlanner } from './features/WeekPlanner';
@@ -119,6 +120,13 @@ function getPublicInvoiceTokenFromLocation(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+/** Het klantportaal leeft op /portal. Aparte route met eigen, wachtwoordloze
+ *  login (magische e-maillink) en eigen Supabase-client (src/lib/supabasePortal.ts);
+ *  los van de medewerkers-app en -sessie. */
+function isClientPortalRoute(): boolean {
+  return window.location.pathname === '/portal' || window.location.pathname.startsWith('/portal/');
+}
+
 /** Schermvullend opstartscherm met draaiend laadicoon. Wordt getoond zolang de
  *  sessie of de werkruimte nog wordt opgehaald, zodat er niet kort een lege of
  *  misleidende staat ("Geen organisatie gevonden") in beeld flitst. */
@@ -145,6 +153,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const publicQuoteToken = getPublicQuoteTokenFromLocation();
   const publicInvoiceToken = getPublicInvoiceTokenFromLocation();
+  const portalRoute = isClientPortalRoute();
 
   // Track which user + organization we have loaded data for, so auth events do not
   // trigger duplicate refreshes for the same workspace.
@@ -248,6 +257,10 @@ function App() {
   }
 
   useEffect(() => {
+    // Op /portal draait de medewerkers-auth niet: het klantportaal heeft een eigen
+    // Supabase-client en sessie. Zo blijft de medewerkers-sessie ongemoeid en wordt
+    // er geen werkruimte voor een klant-account geladen.
+    if (portalRoute) { setSessionReady(true); return; }
     let active = true;
 
     async function applySession(session: { user: { id: string } } | null) {
@@ -278,6 +291,7 @@ function App() {
   const project = useMemo(() => data.projects.find(p => p.id === projectId) ?? null, [data.projects, projectId]);
   const client = useMemo(() => data.clients.find(c => c.id === clientId) ?? null, [data.clients, clientId]);
 
+  if (portalRoute) return <ClientPortal />;
   if (!isSupabaseConfigured) return <div className="boot"><div className="login-card"><h1>Configuratie ontbreekt</h1><p>Vul eerst VITE_SUPABASE_URL en VITE_SUPABASE_ANON_KEY in .env.local in.</p></div></div>;
   if (publicQuoteToken) return <PublicQuotePage token={publicQuoteToken} />;
   if (publicInvoiceToken) return <PublicInvoicePage token={publicInvoiceToken} />;
