@@ -484,6 +484,10 @@
 .doc-filter-row:hover{background:rgba(255,255,255,.04)}
 .doc-filter-row.active{background:rgba(255,189,89,.12)}
 .doc-filter-row.active span,.doc-filter-row.active strong{color:var(--accent)}
+.content-toggle{user-select:none}
+.content-toggle span{display:inline-flex;align-items:center;gap:6px}
+.content-toggle:not(.active){opacity:.62}
+.content-actions{display:flex;gap:8px;flex-shrink:0}
 .document-export{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border);border-radius:10px;background:rgba(255,255,255,.025)}
 .document-export-actions{display:flex;gap:8px;flex-wrap:wrap}
 .document-export-hint{font-size:11px;color:var(--muted);line-height:1.4}

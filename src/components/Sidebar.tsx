@@ -3,7 +3,7 @@ import { Archive, BarChart3, Calendar, ChevronDown, ChevronRight, FileText, File
 import type { Organization, OrganizationRole } from '../types';
 import { Select } from './Ui';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'invoices'|'archive'|'settings'|'project';
 
 const items = [
   ['dashboard', LayoutDashboard, 'Dashboard'],
@@ -21,7 +21,7 @@ const items = [
 const financePages: Page[] = ['quotes', 'invoices'];
 const calendarPages: Page[] = ['calendar', 'calendar-settings'];
 const projectPages: Page[] = ['projects', 'project', 'project-planning', 'archive'];
-const contentPages: Page[] = ['notes', 'documents'];
+const contentPages: Page[] = ['content', 'notes', 'documents'];
 
 export function Sidebar({
   page,
@@ -42,12 +42,10 @@ export function Sidebar({
 }) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
   const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
-  const [contentOpen, setContentOpen] = useState(() => contentPages.includes(page));
 
   useEffect(() => {
     if (financePages.includes(page)) setFinanceOpen(true);
     if (projectPages.includes(page)) setProjectsOpen(true);
-    if (contentPages.includes(page)) setContentOpen(true);
   }, [page]);
 
   function openCalendarSubPage(target: 'agenda' | 'connections' | 'settings') {
@@ -75,11 +73,6 @@ export function Sidebar({
 
   function openProjectPage(target: 'projects' | 'project-planning' | 'archive') {
     setProjectsOpen(true);
-    onPage(target);
-  }
-
-  function openContentPage(target: 'notes' | 'documents') {
-    setContentOpen(true);
     onPage(target);
   }
 
@@ -127,18 +120,7 @@ export function Sidebar({
                   <span className="ni-label">{label}</span>
                   <span className="nav-chevron" aria-hidden="true">{projectsOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}</span>
                 </button>
-              : key === 'content'
-                ? <button
-                    type="button"
-                    className={`nav-item nav-item-parent ${isActive ? 'active' : ''}`}
-                    aria-expanded={contentOpen}
-                    onClick={() => setContentOpen(open => !open)}
-                  >
-                    <Icon size={16}/>
-                    <span className="ni-label">{label}</span>
-                    <span className="nav-chevron" aria-hidden="true">{contentOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}</span>
-                  </button>
-                : <button className={`nav-item ${isActive ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span></button>}
+              : <button className={`nav-item ${isActive ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span></button>}
 
           {key === 'calendar' && calendarPages.includes(page) && <div className="nav-submenu">
             <button type="button" className={page === 'calendar' ? 'active' : ''} onClick={() => openCalendarSubPage('agenda')}>Agendaweergave</button>
@@ -157,9 +139,10 @@ export function Sidebar({
             <button type="button" className={page === 'invoices' ? 'active' : ''} onClick={() => openFinancePage('invoices')}><Receipt size={13}/><span>Facturen</span></button>
           </div>}
 
-          {key === 'content' && contentOpen && <div className="nav-submenu nav-submenu-finance">
-            <button type="button" className={page === 'notes' ? 'active' : ''} onClick={() => openContentPage('notes')}><StickyNote size={13}/><span>Notities</span></button>
-            <button type="button" className={page === 'documents' ? 'active' : ''} onClick={() => openContentPage('documents')}><Files size={13}/><span>Documenten</span></button>
+          {key === 'content' && contentPages.includes(page) && <div className="nav-submenu nav-submenu-finance">
+            <button type="button" className={page === 'content' ? 'active' : ''} onClick={() => onPage('content')}><Library size={13}/><span>Overzicht</span></button>
+            <button type="button" className={page === 'notes' ? 'active' : ''} onClick={() => onPage('notes')}><StickyNote size={13}/><span>Notities</span></button>
+            <button type="button" className={page === 'documents' ? 'active' : ''} onClick={() => onPage('documents')}><Files size={13}/><span>Documenten</span></button>
           </div>}
         </div>;
       })}
