@@ -488,6 +488,53 @@
 .content-toggle span{display:inline-flex;align-items:center;gap:6px}
 .content-toggle:not(.active){opacity:.62}
 .content-actions{display:flex;gap:8px;flex-shrink:0}
+/* Mappenstructuur per klant */
+.folders-view{display:flex;flex-direction:column;gap:16px}
+.folders-crumbs{display:flex;align-items:center;flex-wrap:wrap;gap:2px;font-size:13px}
+.folders-crumbs button{background:none;border:none;color:var(--muted2);cursor:pointer;padding:3px 6px;border-radius:6px;font-size:13px}
+.folders-crumbs button:hover{background:var(--bg3);color:var(--text)}
+.folders-crumbs button.active{color:var(--text);font-weight:700}
+.folders-crumb{display:inline-flex;align-items:center;gap:2px;color:var(--muted)}
+.folders-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.folders-toolbar button{display:inline-flex;align-items:center;gap:6px}
+.folders-upload-btn{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;font-weight:600;padding:7px 12px;border:1px solid var(--border2);border-radius:8px;background:var(--bg3);color:var(--text)}
+.folders-upload-btn:hover{background:var(--bg4)}
+.folders-upload-btn.busy{opacity:.6;cursor:default}
+.folders-upload-btn input{display:none}
+.folder-section{display:flex;flex-direction:column;gap:10px}
+.folder-section-head{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.folder-section-count{background:var(--bg4);color:var(--muted2);border-radius:99px;padding:1px 8px;font-size:10px;letter-spacing:.04em}
+.folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+.folder-card{position:relative;display:flex;background:var(--bg2);border:1px solid var(--border);border-radius:10px;transition:border-color .15s}
+.folder-card:hover{border-color:var(--border2)}
+.folder-card-open{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;padding:14px;background:none;border:none;cursor:pointer;text-align:left;color:var(--text)}
+.folder-card-open svg{color:var(--accent)}
+.folder-card-name{font-weight:800;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.folder-card-meta{font-size:11px;color:var(--muted)}
+.folder-card-actions{display:flex;flex-direction:column;gap:4px;padding:8px}
+.folder-card-actions button{background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;border-radius:6px}
+.folder-card-actions button:hover{background:var(--bg4);color:var(--text)}
+.folder-card-actions button.danger:hover{color:var(--accent-r)}
+.folder-item-list{display:flex;flex-direction:column;gap:7px}
+.folder-item{display:flex;align-items:stretch;gap:8px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.folder-item:hover{border-color:var(--border2)}
+.folder-item-main{flex:1;min-width:0;display:flex;align-items:center;gap:12px;padding:12px 14px;background:none;border:none;cursor:pointer;text-align:left;color:var(--text)}
+.folder-item-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.folder-item-title{font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.folder-item-preview{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.folder-item-date{font-size:11px;color:var(--muted);white-space:nowrap;flex-shrink:0}
+.folder-move-select{align-self:center;margin-right:10px;max-width:160px;font-size:12px}
+.folder-link-panel{background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}
+.folder-link-head{display:flex;align-items:center;justify-content:space-between;font-size:13px}
+.folder-link-close{background:none;border:none;color:var(--muted);cursor:pointer}
+.folder-link-close:hover{color:var(--text)}
+.folder-link-list{display:flex;flex-direction:column;gap:6px;max-height:280px;overflow:auto}
+.folder-link-row{display:flex;align-items:center;gap:10px;padding:9px 11px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;cursor:pointer;color:var(--text);font-size:13px;text-align:left}
+.folder-link-row:hover{background:var(--bg4);border-color:var(--border2)}
+.folder-link-row span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.folder-link-row em{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-style:normal}
+.folder-link-row svg{color:var(--accent);flex-shrink:0}
+@media(max-width:680px){.folder-item-main{flex-wrap:wrap}.folder-move-select{max-width:120px}}
 .document-export{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border);border-radius:10px;background:rgba(255,255,255,.025)}
 .document-export-actions{display:flex;gap:8px;flex-wrap:wrap}
 .document-export-hint{font-size:11px;color:var(--muted);line-height:1.4}

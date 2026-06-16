@@ -21,6 +21,7 @@ import type {
   InvoiceChargeback,
   Note,
   InternalDocument,
+  ContentFolder,
   CalendarNoteLinkInput,
   NoteCalendarLink,
   Organization,
@@ -42,7 +43,7 @@ import type {
   UUID,
 } from '../types';
 
-const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'quotes', 'invoices', 'attachments', 'company_settings'] as const;
+const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'attachments', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -56,6 +57,7 @@ const tableToEntity: Record<Table, EntityType | null> = {
   tickets: 'ticket',
   notes: 'note',
   documents: 'document',
+  content_folders: null,
   quotes: 'quote',
   invoices: 'invoice',
   attachments: null,
@@ -288,6 +290,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     creditNotes,
     invoiceChargebacks,
     attachments,
+    folders,
     companySettings,
   ] = await Promise.all([
     select<Client>('clients', organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
@@ -295,9 +298,10 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId),
     select<Attachment>('attachments', organizationId),
+    selectFolders(organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, attachments, companySettings };
+  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, attachments, companySettings };
 }
 
 export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
@@ -572,6 +576,43 @@ export async function selectDocuments(organizationId: UUID): Promise<InternalDoc
   }
 
   return (data ?? []) as InternalDocument[];
+}
+
+export async function selectFolders(organizationId: UUID): Promise<ContentFolder[]> {
+  const { data, error } = await supabase
+    .from('content_folders')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('position', { ascending: true })
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/content_folders|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('content_folders is nog niet beschikbaar. Voer de migratie 20260616000002_content_folders.sql uit om mappen te activeren.', error);
+      return [];
+    }
+    throw error;
+  }
+
+  return (data ?? []) as ContentFolder[];
+}
+
+/**
+ * Verwijdert een map inclusief alle submappen (DB-cascade via parent_id) en
+ * ruimt de geüploade bestanden (attachments met entity_type 'folder') van de
+ * map én submappen op in R2. Notities/documenten in deze mappen blijven bestaan:
+ * hun folder_id valt terug naar null (FK on delete set null).
+ */
+export async function deleteContentFolder(folderId: UUID, descendantFolderIds: UUID[], organizationId: UUID): Promise<void> {
+  const allIds = [folderId, ...descendantFolderIds];
+  for (const id of allIds) {
+    const refs = await selectAttachmentRefsForEntity('folder', id, organizationId);
+    for (const att of refs) {
+      await deleteAttachment({ id: att.id, storage_key: att.storage_key, organization_id: organizationId });
+    }
+  }
+  await deleteRow('content_folders', folderId, organizationId);
 }
 
 export async function selectNoteCalendarLinks(organizationId: UUID): Promise<NoteCalendarLink[]> {

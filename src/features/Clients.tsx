@@ -5,6 +5,7 @@ import { dateNL, euro, total } from '../lib/format';
 import { Button, Select } from '../components/Ui';
 import { RelatedNotes } from './Notes';
 import { RelatedDocuments } from './Documents';
+import { ClientFolders } from './ClientFolders';
 
 const invoiceStatusLabels: Record<string, string> = {
   draft: 'Concept',
@@ -205,6 +206,8 @@ export function ClientDetailPage({
   data,
   client,
   canWrite,
+  organizationId,
+  onChanged,
   onBack,
   onEditClient,
   onNewQuote,
@@ -220,6 +223,8 @@ export function ClientDetailPage({
   data: AppData;
   client: Client;
   canWrite: boolean;
+  organizationId: string;
+  onChanged: () => void;
   onBack: () => void;
   onEditClient: () => void;
   onNewQuote: () => void;
@@ -227,9 +232,9 @@ export function ClientDetailPage({
   onNewInvoice: () => void;
   onEditInvoice: (invoice: Invoice) => void;
   onOpenProject: (project: Project) => void;
-  onNewNote: () => void;
+  onNewNote: (folderId?: string | null) => void;
   onEditNote: (note: Note) => void;
-  onNewDocument: () => void;
+  onNewDocument: (folderId?: string | null) => void;
   onEditDocument: (doc: InternalDocument) => void;
 }) {
   const projects = data.projects.filter(project => project.client_id === client.id);
@@ -290,6 +295,7 @@ export function ClientDetailPage({
     { id: 'invoices', label: 'Facturen', count: invoices.length },
     { id: 'notes', label: 'Notities', count: notes.length },
     { id: 'documents', label: 'Documenten', count: documents.length },
+    { id: 'folders', label: 'Mappen', count: data.folders.filter(folder => folder.client_id === client.id).length },
   ];
 
   return <div className="client-detail-page">
@@ -343,7 +349,7 @@ export function ClientDetailPage({
       ))}
     </div>
 
-    {activeTab !== 'overview' && <div className="client-tab-search">
+    {activeTab !== 'overview' && activeTab !== 'folders' && <div className="client-tab-search">
       <label className="client-tab-search-field">
         <Search size={14} />
         <input
@@ -486,6 +492,17 @@ export function ClientDetailPage({
 
     {activeTab === 'notes' && <RelatedNotes title="Klantnotities" notes={filteredNotes} data={data} canWrite={canWrite} onNew={onNewNote} onEdit={onEditNote} emptyText={notes.length === 0 ? 'Nog geen notities bij deze klant.' : 'Geen notities voor deze zoekopdracht.'} />}
     {activeTab === 'documents' && <RelatedDocuments title="Documenten" documents={filteredDocuments} data={data} canWrite={canWrite} onNew={onNewDocument} onEdit={onEditDocument} emptyText={documents.length === 0 ? 'Nog geen documenten gekoppeld aan deze klant.' : 'Geen documenten voor deze zoekopdracht.'} />}
+    {activeTab === 'folders' && <ClientFolders
+      data={data}
+      client={client}
+      canWrite={canWrite}
+      organizationId={organizationId}
+      onChanged={onChanged}
+      onNewNote={onNewNote}
+      onEditNote={onEditNote}
+      onNewDocument={onNewDocument}
+      onEditDocument={onEditDocument}
+    />}
   </div>;
 }
 
@@ -572,7 +589,7 @@ function isInvoiceOverdue(invoice: Invoice) {
 }
 
 // ── Zoeken/filteren op de klantdetailpagina ────────────────────────────
-type ClientTab = 'overview' | 'projects' | 'quotes' | 'invoices' | 'notes' | 'documents';
+type ClientTab = 'overview' | 'projects' | 'quotes' | 'invoices' | 'notes' | 'documents' | 'folders';
 
 // Statussen die zowel op offertes als facturen slaan staan zonder suffix; de
 // finance- of offerte-specifieke statussen krijgen een suffix zodat duidelijk is

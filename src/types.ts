@@ -7,7 +7,7 @@ export type FinanceStatus = 'draft' | 'pending_internal_approval' | 'internally_
 export type InvoiceStatus = 'draft' | 'sent' | 'overdue' | 'paid' | 'cancelled' | 'void' | 'written_off' | 'refunded';
 export type NoteType = 'general' | 'meeting' | 'action' | 'decision' | 'idea' | 'support';
 export type DocumentType = 'contract' | 'general' | 'policy' | 'procedure' | 'other';
-export type EntityType = 'client' | 'project' | 'task' | 'subtask' | 'ticket' | 'note' | 'document' | 'quote' | 'invoice';
+export type EntityType = 'client' | 'project' | 'task' | 'subtask' | 'ticket' | 'note' | 'document' | 'quote' | 'invoice' | 'folder';
 export type QuoteApprovalStatus = 'draft' | 'pending' | 'approved' | 'rejected';
 export type QuoteWorkflowEventType = 'created' | 'updated' | 'submitted_for_internal_approval' | 'internal_approval_granted' | 'internal_approval_rejected' | 'public_token_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'client_accepted' | 'client_rejected' | 'quote_version_created' | 'quote_pdf_attached' | 'expired' | 'cancelled' | 'void' | 'written_off';
 export type QuoteEmailDeliveryStatus = 'queued' | 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'failed' | 'complained';
@@ -133,10 +133,13 @@ export interface TicketNote extends OrgScopedRow {
   ticket_id: UUID; author_type: TicketNoteAuthorType; author_user_id: UUID | null; author_name: string | null; body: string; is_internal: boolean; created_at: string; updated_at: string;
 }
 export interface Note extends OrgScopedRow {
-  client_id: UUID | null; project_id: UUID | null; title: string; content: string; note_type: NoteType; tags: string[]; created_at: string; updated_at: string;
+  client_id: UUID | null; project_id: UUID | null; folder_id: UUID | null; title: string; content: string; note_type: NoteType; tags: string[]; created_at: string; updated_at: string;
 }
 export interface InternalDocument extends OrgScopedRow {
-  client_id: UUID | null; project_id: UUID | null; title: string; content: string; document_type: DocumentType; created_at: string; updated_at: string;
+  client_id: UUID | null; project_id: UUID | null; folder_id: UUID | null; title: string; content: string; document_type: DocumentType; created_at: string; updated_at: string;
+}
+export interface ContentFolder extends OrgScopedRow {
+  client_id: UUID | null; parent_id: UUID | null; name: string; position: number; created_at: string; updated_at: string;
 }
 
 export interface NoteCalendarLink extends OrgScopedRow {
@@ -549,7 +552,7 @@ export interface InvoiceMollieSettingsStatus {
   last_validated_at: string | null;
 }
 
-export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; noteCalendarLinks: NoteCalendarLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';

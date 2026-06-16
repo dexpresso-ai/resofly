@@ -54,6 +54,7 @@ import { Tickets } from './features/Tickets';
 import { RelatedNotes, noteTypeLabels } from './features/Notes';
 import { documentTypeLabels } from './features/Documents';
 import { ContentLibrary } from './features/ContentLibrary';
+import { clientFolderOptions } from './lib/folders';
 import { Invoices, Quotes, type RefundInput } from './features/Finance';
 import { PublicQuotePage } from './features/PublicQuotePage';
 import { PublicInvoicePage } from './features/PublicInvoicePage';
@@ -76,13 +77,13 @@ type EditMode =
   | { kind: 'project'; item?: Project }
   | { kind: 'task'; item?: Task; projectId: string }
   | { kind: 'ticket'; item?: Ticket }
-  | { kind: 'note'; item?: Note; defaults?: Partial<Pick<Note, 'client_id' | 'project_id' | 'title' | 'content' | 'note_type' | 'tags'>>; calendarLink?: CalendarNoteLinkInput }
-  | { kind: 'document'; item?: InternalDocument; defaults?: Partial<Pick<InternalDocument, 'client_id' | 'project_id' | 'title' | 'content' | 'document_type'>> }
+  | { kind: 'note'; item?: Note; defaults?: Partial<Pick<Note, 'client_id' | 'project_id' | 'folder_id' | 'title' | 'content' | 'note_type' | 'tags'>>; calendarLink?: CalendarNoteLinkInput }
+  | { kind: 'document'; item?: InternalDocument; defaults?: Partial<Pick<InternalDocument, 'client_id' | 'project_id' | 'folder_id' | 'title' | 'content' | 'document_type'>> }
   | { kind: 'quote'; item?: Quote; defaults?: Partial<Pick<Quote, 'client_id' | 'project_id'>> }
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id'>> }
   | null;
 
-const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], ticketNotes: [], notes: [], documents: [], noteCalendarLinks: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], attachments: [], companySettings: null };
+const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], attachments: [], companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
@@ -749,7 +750,7 @@ function App() {
     if (page === 'project' && project) return <ProjectPage data={data} project={project} canWrite={canWrite} canAdmin={canAdmin} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={(doc) => setEdit({kind:'document', item: doc})} setTaskStatus={setTaskStatus}/>;
     if (page === 'projects') return <ProjectsListPage data={data} canWrite={canWrite} onNewProject={() => ensureCanWrite() && setEdit({kind:'project'})} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} onEditProject={(item) => setEdit({kind:'project', item})}/>;
     if (page === 'project-planning') return <ProjectsPlanningPage data={data} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} />;
-    if (page === 'client' && client) return <ClientDetailPage data={data} client={client} canWrite={canWrite} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: client.id }})} onEditDocument={(doc) => setEdit({kind:'document', item: doc})}/>;
+    if (page === 'client' && client) return <ClientDetailPage data={data} client={client} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewNote={(folderId) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(folderId) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditDocument={(doc) => setEdit({kind:'document', item: doc})}/>;
     if (page === 'clients') return <Clients data={data} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>setEdit({kind:'ticket', item})} onConvert={convert}/>;
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={() => ensureCanWrite() && setEdit({kind:'note'})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document'})} onEditDocument={(item)=>setEdit({kind:'document', item})}/>;
@@ -1022,8 +1023,11 @@ function EditModal({ edit, data, organizationId, currentUserId, canWrite, readOn
       <Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Titel"/>
       <Select value={form.note_type} onChange={e=>set('note_type',e.target.value)}>{Object.entries(noteTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select>
       <RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf je notitie…" disabled={disabled}/>
-      <Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
+      <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
       <Select value={form.project_id} onChange={e=>set('project_id',e.target.value)} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
+      {form.client_id && <Field label="Map" hint="Plaats deze notitie in een map van de gekozen klant.">
+        <Select value={form.folder_id} onChange={e=>set('folder_id',e.target.value)} disabled={disabled}><option value="">Geen map</option>{clientFolderOptions(data.folders, form.client_id || null).map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</Select>
+      </Field>}
       {noteCalEventsLoading && <div className="note-cal-hint">Meetings laden…</div>}
       {!noteCalEventsLoading && noteCalEvents.length > 0 && (
         <Field label="Koppel aan meeting" hint="Afgelopen 7 dagen en komende 14 dagen uit je gekoppelde agenda.">
@@ -1047,11 +1051,14 @@ function EditModal({ edit, data, organizationId, currentUserId, canWrite, readOn
       </Field>
       <RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf de inhoud van het document…" disabled={disabled}/>
       <Field label="Klant">
-        <Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
+        <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
       </Field>
       <Field label="Project">
         <Select value={form.project_id} onChange={e=>set('project_id',e.target.value)} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
       </Field>
+      {form.client_id && <Field label="Map" hint="Plaats dit document in een map van de gekozen klant.">
+        <Select value={form.folder_id} onChange={e=>set('folder_id',e.target.value)} disabled={disabled}><option value="">Geen map</option>{clientFolderOptions(data.folders, form.client_id || null).map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</Select>
+      </Field>}
       <div className="document-export">
         <div className="document-export-actions">
           <Button onClick={handleDownloadPdf} disabled={docExport.busy !== null}>{docExport.busy === 'pdf' ? 'PDF maken…' : 'Download PDF'}</Button>
@@ -1627,11 +1634,11 @@ function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string,
   }
   if (edit.kind === "note") {
     const item = edit.item;
-    return { title: item?.title ?? edit.defaults?.title ?? "", content: item?.content ?? edit.defaults?.content ?? "", note_type: item?.note_type ?? edit.defaults?.note_type ?? "general", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", tags: item?.tags?.join(", ") ?? edit.defaults?.tags?.join(", ") ?? "", _calLink: edit.calendarLink ?? null };
+    return { title: item?.title ?? edit.defaults?.title ?? "", content: item?.content ?? edit.defaults?.content ?? "", note_type: item?.note_type ?? edit.defaults?.note_type ?? "general", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", folder_id: item?.folder_id ?? edit.defaults?.folder_id ?? "", tags: item?.tags?.join(", ") ?? edit.defaults?.tags?.join(", ") ?? "", _calLink: edit.calendarLink ?? null };
   }
   if (edit.kind === "document") {
     const item = edit.item;
-    return { title: item?.title ?? edit.defaults?.title ?? "", content: item?.content ?? edit.defaults?.content ?? "", document_type: item?.document_type ?? edit.defaults?.document_type ?? "general", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "" };
+    return { title: item?.title ?? edit.defaults?.title ?? "", content: item?.content ?? edit.defaults?.content ?? "", document_type: item?.document_type ?? edit.defaults?.document_type ?? "general", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", folder_id: item?.folder_id ?? edit.defaults?.folder_id ?? "" };
   }
   const today = new Date().toISOString().slice(0,10);
   if (edit.kind === "quote") {
@@ -1652,7 +1659,7 @@ function cleanForm(kind: string, form: Record<string, any>) {
     cleaned.phone = normalizeOptionalText(cleaned.phone);
     cleaned.notes = normalizeOptionalText(cleaned.notes);
   }
-  for (const key of ["client_id","project_id","quote_id","valid_until","due_date","start_date","end_date","planned_date"]) {
+  for (const key of ["client_id","project_id","folder_id","quote_id","valid_until","due_date","start_date","end_date","planned_date"]) {
     if (cleaned[key] === "") cleaned[key] = null;
   }
   if ("tags" in cleaned && typeof cleaned.tags === "string") {
