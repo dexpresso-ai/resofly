@@ -1212,39 +1212,45 @@ function TicketNotesTimeline({ ticketId, organizationId, currentUserId, notes, c
       </div>
     </div>
 
-    {canWrite && <div className="ticket-timeline-composer">
-      <Textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Schrijf een update voor de klant of een interne notitie…" rows={3} disabled={busy} />
-      <div className="ticket-timeline-composer-actions">
-        <label className={`ticket-visibility-toggle${internal ? ' is-internal' : ''}`}>
-          <input type="checkbox" checked={internal} onChange={e => setInternal(e.target.checked)} disabled={busy} />
-          <span>{internal ? 'Verborgen voor klant' : 'Zichtbaar voor klant'}</span>
-        </label>
-        <Button variant="primary" onClick={add} disabled={busy || !draft.trim()}>{busy ? 'Plaatsen…' : (internal ? 'Plaats interne notitie' : 'Plaats notitie')}</Button>
-      </div>
-    </div>}
-    {error && <p className="error">{error}</p>}
-
-    {sorted.length === 0 ? <div className="ticket-timeline-empty">Nog geen notities. Plaats de eerste update — de klant ziet zichtbare notities terug in het portaal.</div> : <ol className="ticket-timeline-list">
-      {sorted.map(note => {
-        const isClient = note.author_type === 'client';
-        const mine = note.author_user_id && currentUserId && note.author_user_id === currentUserId;
-        return <li className={`ticket-timeline-item${isClient ? ' from-client' : ''}${note.is_internal ? ' is-internal' : ''}`} key={note.id}>
-          <span className="ttl-dot" aria-hidden="true" />
-          <div className="ttl-body">
-            <div className="ttl-meta">
-              <span className="ttl-author">{isClient ? (note.author_name ? `${note.author_name} (klant)` : 'Klant') : (mine ? 'Jij' : (note.author_name || 'Teamlid'))}</span>
-              <span className={`ttl-badge ${isClient ? 'client' : note.is_internal ? 'internal' : 'visible'}`}>{isClient ? 'Klant' : note.is_internal ? 'Intern' : 'Zichtbaar voor klant'}</span>
-              <span className="ttl-time">{new Date(note.created_at).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
-            </div>
-            <p className="ttl-text">{note.body}</p>
-            {canWrite && <div className="ttl-actions">
-              {!isClient && <button type="button" disabled={busy} onClick={() => run(() => setTicketNoteInternal(note.id, !note.is_internal, organizationId))}>{note.is_internal ? 'Zichtbaar maken voor klant' : 'Verbergen voor klant'}</button>}
-              <button type="button" className="ttl-delete" disabled={busy} onClick={() => { if (confirm('Deze notitie uit de tijdlijn verwijderen?')) void run(() => deleteTicketNote(note.id, organizationId)); }}>Verwijderen</button>
-            </div>}
+    <div className={`ticket-timeline-grid${canWrite ? '' : ' is-readonly'}`}>
+      {canWrite && <div className="ticket-timeline-compose-col">
+        <div className="ticket-timeline-composer">
+          <Textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Schrijf een update voor de klant of een interne notitie…" rows={4} disabled={busy} />
+          <div className="ticket-timeline-composer-actions">
+            <label className={`ticket-visibility-toggle${internal ? ' is-internal' : ''}`}>
+              <input type="checkbox" checked={internal} onChange={e => setInternal(e.target.checked)} disabled={busy} />
+              <span>{internal ? 'Verborgen voor klant' : 'Zichtbaar voor klant'}</span>
+            </label>
+            <Button variant="primary" onClick={add} disabled={busy || !draft.trim()}>{busy ? 'Plaatsen…' : (internal ? 'Plaats interne notitie' : 'Plaats notitie')}</Button>
           </div>
-        </li>;
-      })}
-    </ol>}
+        </div>
+        {error && <p className="error">{error}</p>}
+      </div>}
+
+      <div className="ticket-timeline-feed-col">
+        {sorted.length === 0 ? <div className="ticket-timeline-empty">Nog geen notities. Plaats de eerste update — de klant ziet zichtbare notities terug in het portaal.</div> : <ol className="ticket-timeline-list">
+          {sorted.map(note => {
+            const isClient = note.author_type === 'client';
+            const mine = note.author_user_id && currentUserId && note.author_user_id === currentUserId;
+            return <li className={`ticket-timeline-item${isClient ? ' from-client' : ''}${note.is_internal ? ' is-internal' : ''}`} key={note.id}>
+              <span className="ttl-dot" aria-hidden="true" />
+              <div className="ttl-body">
+                <div className="ttl-meta">
+                  <span className="ttl-author">{isClient ? (note.author_name ? `${note.author_name} (klant)` : 'Klant') : (mine ? 'Jij' : (note.author_name || 'Teamlid'))}</span>
+                  <span className={`ttl-badge ${isClient ? 'client' : note.is_internal ? 'internal' : 'visible'}`}>{isClient ? 'Klant' : note.is_internal ? 'Intern' : 'Zichtbaar voor klant'}</span>
+                  <span className="ttl-time">{new Date(note.created_at).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
+                <p className="ttl-text">{note.body}</p>
+                {canWrite && <div className="ttl-actions">
+                  {!isClient && <button type="button" disabled={busy} onClick={() => run(() => setTicketNoteInternal(note.id, !note.is_internal, organizationId))}>{note.is_internal ? 'Zichtbaar maken voor klant' : 'Verbergen voor klant'}</button>}
+                  <button type="button" className="ttl-delete" disabled={busy} onClick={() => { if (confirm('Deze notitie uit de tijdlijn verwijderen?')) void run(() => deleteTicketNote(note.id, organizationId)); }}>Verwijderen</button>
+                </div>}
+              </div>
+            </li>;
+          })}
+        </ol>}
+      </div>
+    </div>
   </section>;
 }
 

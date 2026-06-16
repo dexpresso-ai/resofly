@@ -137,9 +137,14 @@
 .ticket-timeline-head strong{font-size:12px;text-transform:uppercase;letter-spacing:.08em}
 .ticket-timeline-head span{display:block;font-size:11px;color:var(--muted);margin-top:2px}
 .ticket-timeline-hint{font-size:11px;color:var(--muted);border:1px dashed var(--border);border-radius:7px;padding:10px;text-align:center}
+.ticket-timeline-grid{display:grid;grid-template-columns:minmax(240px,330px) 1fr;gap:18px;align-items:start}
+.ticket-timeline-grid.is-readonly{grid-template-columns:1fr}
+.ticket-timeline-compose-col{display:flex;flex-direction:column;gap:8px;position:sticky;top:4px}
+.ticket-timeline-feed-col{min-width:0}
 .ticket-timeline-composer{display:flex;flex-direction:column;gap:9px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;padding:11px}
 .ticket-timeline-composer .form-textarea{min-height:70px}
-.ticket-timeline-composer-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.ticket-timeline-composer-actions{display:flex;flex-direction:column;align-items:stretch;gap:10px}
+.ticket-timeline-composer-actions .btn{width:100%}
 .ticket-visibility-toggle{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--accent-g);cursor:pointer;user-select:none}
 .ticket-visibility-toggle input{width:15px;height:15px;accent-color:var(--accent-o)}
 .ticket-visibility-toggle.is-internal{color:var(--accent-o)}
