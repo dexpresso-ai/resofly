@@ -18,3 +18,10 @@ verify_jwt = false
 # solely from the verified email (RPC portal_clients_for_email).
 [functions.client-portal]
 verify_jwt = true
+
+# portal-login runs BEFORE the client is logged in (to provision the auth user for
+# known client emails when self-signup is disabled), so it cannot require a JWT.
+# It is instead guarded by an origin allowlist and only ever creates an account for
+# an email that matches an existing clients.email (RPC portal_clients_for_email).
+[functions.portal-login]
+verify_jwt = false

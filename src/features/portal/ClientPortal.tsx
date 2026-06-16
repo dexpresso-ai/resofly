@@ -6,6 +6,7 @@ import {
   createPortalTicket,
   downloadPortalInvoicePdf,
   fetchPortalData,
+  requestPortalLogin,
   type PortalAccount,
   type PortalInvoice,
   type PortalQuote,
@@ -58,11 +59,21 @@ function PortalLogin() {
   async function signIn() {
     setError(null); setBusy(true);
     try {
+      const cleanEmail = email.trim();
+      // Eerst server-side het account klaarzetten voor bekende klanten (zelf-
+      // registratie staat uit). Onbekende e-mailadressen krijgen geen link.
+      const { known } = await requestPortalLogin(cleanEmail);
+      if (!known) {
+        setError('Dit e-mailadres is bij ons niet als klant bekend. Neem contact op met je leverancier om toegang tot het portaal te krijgen.');
+        return;
+      }
       const { error } = await supabasePortalAuth.signInWithOtp({
-        email: email.trim(),
-        options: { emailRedirectTo: `${window.location.origin}/portal` },
+        email: cleanEmail,
+        options: { emailRedirectTo: `${window.location.origin}/portal`, shouldCreateUser: false },
       });
       if (error) setError(error.message); else setSent(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Inloggen mislukt');
     } finally {
       setBusy(false);
     }

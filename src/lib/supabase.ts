@@ -40,7 +40,7 @@ export interface SupabaseAuthAdapter {
   onAuthStateChange(handler: SupabaseAuthChangeHandler): {
     data: { subscription: { unsubscribe(): void } };
   };
-  signInWithOtp(args: { email: string; options?: { emailRedirectTo?: string } }): Promise<{ error: Error | null }>;
+  signInWithOtp(args: { email: string; options?: { emailRedirectTo?: string; shouldCreateUser?: boolean } }): Promise<{ error: Error | null }>;
   signOut(): Promise<{ error: Error | null }>;
 }
 
