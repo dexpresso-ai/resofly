@@ -73,6 +73,34 @@ export interface PortalTicket {
   updated_at: string;
 }
 
+export interface PortalTicketNote {
+  id: string;
+  ticket_id: string;
+  author_type: 'user' | 'client';
+  author_name: string | null;
+  body: string;
+  created_at: string;
+}
+
+export interface PortalTask {
+  id: string;
+  title: string;
+  status: string;
+  start_date: string | null;
+  end_date: string | null;
+  planned_date: string | null;
+}
+
+export interface PortalProjectDetail {
+  project: PortalProject;
+  tasks: PortalTask[];
+}
+
+export interface PortalTicketThread {
+  ticket: PortalTicket;
+  notes: PortalTicketNote[];
+}
+
 export interface PortalAccount {
   id: string;
   organizationId: string;
@@ -132,6 +160,33 @@ export async function createPortalTicket(input: CreatePortalTicketInput): Promis
   if (error) throw new Error(await extractFunctionError(error, 'Ticket aanmaken mislukt'));
   if (!data?.ok) throw new Error(data?.error || 'Ticket aanmaken mislukt');
   return data.ticket as PortalTicket;
+}
+
+export async function fetchPortalTicketThread(ticketId: string): Promise<PortalTicketThread> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'getTicketThread', ticketId },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Ticket laden mislukt'));
+  if (!data?.ok) throw new Error(data?.error || 'Ticket laden mislukt');
+  return { ticket: data.ticket as PortalTicket, notes: Array.isArray(data.notes) ? data.notes : [] };
+}
+
+export async function addPortalTicketNote(ticketId: string, body: string): Promise<PortalTicketNote> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'addTicketNote', ticketId, body },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Notitie plaatsen mislukt'));
+  if (!data?.ok) throw new Error(data?.error || 'Notitie plaatsen mislukt');
+  return data.note as PortalTicketNote;
+}
+
+export async function fetchPortalProjectDetail(projectId: string): Promise<PortalProjectDetail> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'getProjectDetail', projectId },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Project laden mislukt'));
+  if (!data?.ok) throw new Error(data?.error || 'Project laden mislukt');
+  return { project: data.project as PortalProject, tasks: Array.isArray(data.tasks) ? data.tasks : [] };
 }
 
 export async function downloadPortalInvoicePdf(invoiceId: string): Promise<{ fileName: string; mimeType: string; base64: string }> {

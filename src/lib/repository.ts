@@ -38,6 +38,7 @@ import type {
   QuoteVersion,
   Task,
   Ticket,
+  TicketNote,
   UUID,
 } from '../types';
 
@@ -270,6 +271,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     projects,
     tasks,
     tickets,
+    ticketNotes,
     notes,
     documents,
     noteCalendarLinks,
@@ -289,13 +291,13 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     companySettings,
   ] = await Promise.all([
     select<Client>('clients', organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
-    select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
+    selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId),
     select<Attachment>('attachments', organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, notes, documents, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, attachments, companySettings };
+  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, attachments, companySettings };
 }
 
 export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
@@ -475,6 +477,82 @@ export async function selectInvoiceVersions(organizationId: UUID): Promise<Invoi
     throw error;
   }
   return (data ?? []) as InvoiceVersion[];
+}
+
+export async function selectTicketNotes(organizationId: UUID): Promise<TicketNote[]> {
+  const { data, error } = await supabase
+    .from('ticket_notes')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/ticket_notes|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('ticket_notes is nog niet beschikbaar. Voer de migratie 20260616000001_ticket_notes_timeline.sql uit om de tickettijdlijn te activeren.', error);
+      return [];
+    }
+    throw error;
+  }
+
+  return (data ?? []) as TicketNote[];
+}
+
+/**
+ * Voeg een notitie toe aan de tickettijdlijn vanuit de medewerkers-app
+ * (author_type = 'user'). `isInternal` bepaalt of de notitie verborgen blijft
+ * voor de klant. De auteursnaam wordt als snapshot meegegeven zodat de tijdlijn
+ * leesbaar blijft, ook als het lidmaatschap later wijzigt.
+ */
+export async function createTicketNote(
+  organizationId: UUID,
+  input: { ticketId: UUID; body: string; isInternal: boolean },
+): Promise<TicketNote> {
+  const body = input.body.trim();
+  if (!body) throw new Error('Een notitie mag niet leeg zijn.');
+
+  const { data: userData } = await supabaseAuth.getUser();
+  const userId = userData.user?.id;
+  if (!userId) throw new Error('Niet ingelogd.');
+  const authorName = userData.user?.email ?? null;
+
+  const { data, error } = await supabase
+    .from('ticket_notes')
+    .insert({
+      organization_id: organizationId,
+      ticket_id: input.ticketId,
+      created_by: userId,
+      author_type: 'user',
+      author_user_id: userId,
+      author_name: authorName,
+      body,
+      is_internal: input.isInternal,
+    })
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as TicketNote;
+}
+
+export async function setTicketNoteInternal(noteId: UUID, isInternal: boolean, organizationId: UUID): Promise<TicketNote> {
+  const { data, error } = await supabase
+    .from('ticket_notes')
+    .update({ is_internal: isInternal })
+    .eq('id', noteId)
+    .eq('organization_id', organizationId)
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as TicketNote;
+}
+
+export async function deleteTicketNote(noteId: UUID, organizationId: UUID): Promise<void> {
+  const { error } = await supabase
+    .from('ticket_notes')
+    .delete()
+    .eq('id', noteId)
+    .eq('organization_id', organizationId);
+  if (error) throw error;
 }
 
 export async function selectDocuments(organizationId: UUID): Promise<InternalDocument[]> {

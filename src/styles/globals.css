@@ -131,6 +131,42 @@
 .wp-task-counts{color:var(--muted);font-size:10px}
 @media(max-width:900px){.task-detail-editor{grid-template-columns:1fr}}
 
+/* ── Tickettijdlijn (gedeelde notities medewerker ↔ klant) ────────────── */
+.ticket-timeline{margin-top:6px;border-top:1px solid var(--border);padding-top:14px;display:flex;flex-direction:column;gap:12px}
+.ticket-timeline-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.ticket-timeline-head strong{font-size:12px;text-transform:uppercase;letter-spacing:.08em}
+.ticket-timeline-head span{display:block;font-size:11px;color:var(--muted);margin-top:2px}
+.ticket-timeline-hint{font-size:11px;color:var(--muted);border:1px dashed var(--border);border-radius:7px;padding:10px;text-align:center}
+.ticket-timeline-composer{display:flex;flex-direction:column;gap:9px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;padding:11px}
+.ticket-timeline-composer .form-textarea{min-height:70px}
+.ticket-timeline-composer-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.ticket-visibility-toggle{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--accent-g);cursor:pointer;user-select:none}
+.ticket-visibility-toggle input{width:15px;height:15px;accent-color:var(--accent-o)}
+.ticket-visibility-toggle.is-internal{color:var(--accent-o)}
+.ticket-timeline-empty{font-size:11px;color:var(--muted);border:1px dashed var(--border);border-radius:7px;padding:14px;text-align:center}
+.ticket-timeline-list{list-style:none;display:flex;flex-direction:column;gap:2px;position:relative;padding-left:18px}
+.ticket-timeline-item{position:relative;padding:0 0 14px 14px;border-left:2px solid var(--border)}
+.ticket-timeline-item:last-child{border-left-color:transparent;padding-bottom:0}
+.ttl-dot{position:absolute;left:-7px;top:3px;width:11px;height:11px;border-radius:50%;background:var(--bg5);border:2px solid var(--bg)}
+.ticket-timeline-item.from-client .ttl-dot{background:var(--accent-v)}
+.ticket-timeline-item.is-internal .ttl-dot{background:var(--accent-o)}
+.ticket-timeline-item:not(.from-client):not(.is-internal) .ttl-dot{background:var(--accent-g)}
+.ttl-body{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 11px}
+.ticket-timeline-item.is-internal .ttl-body{background:rgba(255,159,67,.07);border-color:rgba(255,159,67,.32)}
+.ticket-timeline-item.from-client .ttl-body{background:rgba(167,139,250,.08);border-color:rgba(167,139,250,.3)}
+.ttl-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px}
+.ttl-author{font-size:12px;font-weight:800}
+.ttl-time{font-size:10px;color:var(--muted);margin-left:auto}
+.ttl-badge{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;padding:2px 7px;border-radius:5px}
+.ttl-badge.visible{background:rgba(52,211,153,.16);color:var(--accent-g)}
+.ttl-badge.internal{background:rgba(255,159,67,.16);color:var(--accent-o)}
+.ttl-badge.client{background:rgba(167,139,250,.16);color:var(--accent-v)}
+.ttl-text{font-size:12px;line-height:1.55;color:var(--muted2);white-space:pre-wrap}
+.ttl-actions{display:flex;gap:12px;margin-top:7px}
+.ttl-actions button{background:transparent;border:0;color:var(--muted);font:inherit;font-size:11px;font-weight:700;cursor:pointer;padding:0}
+.ttl-actions button:hover{color:var(--text)}
+.ttl-actions .ttl-delete:hover{color:var(--accent-r)}
+
 .ticket-status-hint{grid-column:1/-1;font-size:11px;color:var(--muted);margin-top:-2px;line-height:1.5}
 
 /* Settings / invoice templates */
@@ -1490,6 +1526,44 @@ body::before{
 @media(max-width:760px){.portal-kpis{grid-template-columns:repeat(2,1fr)}.portal-row{flex-wrap:wrap}.portal-content{padding:16px}.portal-topbar-actions .select-trigger,.portal-topbar-actions .form-select{min-width:140px}}
 .client-portal-access-link{color:var(--accent);font-weight:700;text-decoration:none}
 .client-portal-access-link:hover{text-decoration:underline}
+
+/* ── Klantportaal: doorklik-detail (ticket & project) ─────────────────── */
+.portal-row-clickable{width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;transition:border-color .14s,background .14s}
+.portal-row-clickable:hover{border-color:var(--border2);background:var(--bg4)}
+.portal-row-chevron{font-size:20px;color:var(--muted);line-height:1;flex-shrink:0}
+.portal-detail-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
+.portal-back{background:none;border:0;color:var(--accent);font:inherit;font-weight:700;cursor:pointer;padding:0}
+.portal-back:hover{text-decoration:underline}
+.portal-detail-title{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.portal-detail-title h2{font-size:18px;font-weight:800;display:flex;align-items:center;gap:9px}
+.portal-detail-desc{font-size:13px;line-height:1.6;color:var(--muted2);white-space:pre-wrap;margin:12px 0;padding:12px 14px;background:var(--bg3);border:1px solid var(--border);border-radius:9px}
+
+.portal-thread{display:flex;flex-direction:column;gap:10px;margin:16px 0}
+.portal-thread-item{padding:10px 13px;border:1px solid var(--border);border-radius:10px;max-width:88%}
+.portal-thread-item.is-team{background:var(--bg3);align-self:flex-start;border-bottom-left-radius:3px}
+.portal-thread-item.is-mine{background:rgba(255,217,102,.1);border-color:rgba(255,217,102,.32);align-self:flex-end;border-bottom-right-radius:3px}
+.portal-thread-meta{display:flex;align-items:baseline;gap:9px;margin-bottom:4px}
+.portal-thread-meta strong{font-size:12px;font-weight:800}
+.portal-thread-meta span{font-size:10px;color:var(--muted)}
+.portal-thread-item p{font-size:13px;line-height:1.55;color:var(--text);white-space:pre-wrap}
+.portal-thread-composer{display:flex;flex-direction:column;gap:9px;border-top:1px solid var(--border);padding-top:14px}
+.portal-thread-composer-actions{display:flex;justify-content:flex-end}
+
+.portal-progress{margin:16px 0;display:flex;flex-direction:column;gap:6px}
+.portal-progress-head{display:flex;align-items:center;justify-content:space-between}
+.portal-progress-head span{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.portal-progress-head strong{font-size:18px;font-weight:900}
+.portal-progress-bar{height:8px;background:var(--bg5);border-radius:99px;overflow:hidden}
+.portal-progress-bar span{display:block;height:100%;background:var(--accent-g);border-radius:99px;transition:width .3s}
+.portal-task-list{display:flex;flex-direction:column;gap:7px;margin-top:6px}
+.portal-task-row{display:flex;align-items:center;gap:11px;padding:10px 13px;background:var(--bg3);border:1px solid var(--border);border-radius:9px}
+.portal-task-title{flex:1;font-size:13px;font-weight:600;min-width:0}
+.portal-task-date{white-space:nowrap}
+.portal-task-status{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;padding:3px 9px;border-radius:5px;background:var(--bg5);color:var(--muted2);white-space:nowrap;flex-shrink:0}
+.portal-task-status.status-done{background:rgba(52,211,153,.16);color:var(--accent-g)}
+.portal-task-status.status-doing{background:rgba(255,217,102,.16);color:var(--accent)}
+.portal-task-status.status-review{background:rgba(167,139,250,.16);color:var(--accent-v)}
+@media(max-width:760px){.portal-thread-item{max-width:100%}}
 .client-portal-access-hint{color:var(--muted)}
 .client-welcome-toggle{grid-column:1/-1}
 .client-welcome-hint{color:var(--muted);font-style:normal}

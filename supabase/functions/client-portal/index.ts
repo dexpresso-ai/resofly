@@ -79,6 +79,12 @@ serve(async (req) => {
         return json(req, { ok: true, ...(await getPortalData(user)) });
       case 'createTicket':
         return json(req, { ok: true, ...(await createTicket(user, body)) });
+      case 'getTicketThread':
+        return json(req, { ok: true, ...(await getTicketThread(user, body)) });
+      case 'addTicketNote':
+        return json(req, { ok: true, ...(await addTicketNote(user, body)) });
+      case 'getProjectDetail':
+        return json(req, { ok: true, ...(await getProjectDetail(user, body)) });
       case 'getInvoicePdf':
         return json(req, { ok: true, ...(await getInvoicePdf(user, body)) });
       default:
@@ -140,6 +146,115 @@ async function createTicket(user: { id: string; email: string }, body: Record<st
 
   if (error) throw error;
   return { ticket: sanitizeTicket(data) };
+}
+
+/**
+ * Haalt één ticket op met zijn klantzichtbare tijdlijn. Interne notities
+ * (is_internal = true) worden hier NOOIT teruggegeven: ze verlaten de server niet.
+ */
+async function getTicketThread(user: { id: string; email: string }, body: Record<string, unknown>) {
+  const ticketId = String(body.ticketId || '').trim();
+  if (!isUuid(ticketId)) throw new PortalError('Ongeldig ticket.', 400);
+
+  const clients = await resolveAccountsForEmail(user.email);
+  if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
+
+  const { data: ticket, error } = await supabaseAdmin
+    .from('tickets')
+    .select('id,organization_id,client_id,title,description,status,priority,created_at,updated_at,converted_to_project_id')
+    .eq('id', ticketId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!ticket) throw new PortalError('Ticket niet gevonden.', 404);
+  await assertEntityBelongsToClients({ client_id: ticket.client_id, project_id: null, organization_id: ticket.organization_id }, clients);
+
+  const { data: notes, error: notesError } = await supabaseAdmin
+    .from('ticket_notes')
+    .select('id,ticket_id,author_type,author_name,body,created_at')
+    .eq('organization_id', ticket.organization_id)
+    .eq('ticket_id', ticket.id)
+    .eq('is_internal', false)
+    .order('created_at', { ascending: true });
+  if (notesError) throw notesError;
+
+  return { ticket: sanitizeTicket(ticket), notes: (notes || []).map(sanitizeTicketNote) };
+}
+
+/**
+ * Laat de ingelogde klant een notitie aan de tickettijdlijn toevoegen. Altijd
+ * zichtbaar (is_internal = false) en gemarkeerd als afkomstig van de klant.
+ */
+async function addTicketNote(user: { id: string; email: string }, body: Record<string, unknown>) {
+  const ticketId = String(body.ticketId || '').trim();
+  const noteBody = String(body.body || '').trim();
+  if (!isUuid(ticketId)) throw new PortalError('Ongeldig ticket.', 400);
+  if (!noteBody) throw new PortalError('Een notitie mag niet leeg zijn.', 400);
+  if (noteBody.length > 5000) throw new PortalError('De notitie mag maximaal 5000 tekens zijn.', 400);
+
+  const clients = await resolveAccountsForEmail(user.email);
+  const { data: ticket, error } = await supabaseAdmin
+    .from('tickets')
+    .select('id,organization_id,client_id')
+    .eq('id', ticketId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!ticket) throw new PortalError('Ticket niet gevonden.', 404);
+  await assertEntityBelongsToClients({ client_id: ticket.client_id, project_id: null, organization_id: ticket.organization_id }, clients);
+
+  const client = clients.find((row) => row.id === ticket.client_id) || clients[0];
+  const authorName = client?.contact_name || client?.name || user.email;
+
+  const { data, error: insertError } = await supabaseAdmin
+    .from('ticket_notes')
+    .insert({
+      organization_id: ticket.organization_id,
+      ticket_id: ticket.id,
+      created_by: user.id,
+      author_type: 'client',
+      author_user_id: null,
+      author_name: authorName,
+      body: noteBody,
+      is_internal: false,
+    })
+    .select('id,ticket_id,author_type,author_name,body,created_at')
+    .single();
+  if (insertError) throw insertError;
+
+  return { note: sanitizeTicketNote(data) };
+}
+
+/**
+ * Geeft een project met zijn live taakstatussen terug zodat de klant "live kan
+ * meekijken". Alleen klantveilige taakvelden (titel, status, planning) gaan mee —
+ * geen interne omschrijvingen, schattingen, tags of comments.
+ */
+async function getProjectDetail(user: { id: string; email: string }, body: Record<string, unknown>) {
+  const projectId = String(body.projectId || '').trim();
+  if (!isUuid(projectId)) throw new PortalError('Ongeldig project.', 400);
+
+  const clients = await resolveAccountsForEmail(user.email);
+  if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
+
+  const { data: project, error } = await supabaseAdmin
+    .from('projects')
+    .select('*')
+    .eq('id', projectId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!project) throw new PortalError('Project niet gevonden.', 404);
+
+  const clientIds = new Set(clients.map((c) => c.id));
+  if (!project.client_id || !clientIds.has(project.client_id)) throw new PortalError('Geen toegang tot dit project.', 403);
+
+  const { data: tasks, error: tasksError } = await supabaseAdmin
+    .from('tasks')
+    .select('id,title,status,start_date,end_date,planned_date,created_at,updated_at')
+    .eq('organization_id', project.organization_id)
+    .eq('project_id', project.id)
+    .order('created_at', { ascending: true });
+  if (tasksError) throw tasksError;
+
+  return { project: sanitizeProject(project), tasks: (tasks || []).map(sanitizeTask) };
 }
 
 async function getInvoicePdf(user: { id: string; email: string }, body: Record<string, unknown>) {
@@ -372,6 +487,28 @@ function sanitizeTicket(row: Record<string, unknown>) {
     priority: row.priority,
     created_at: row.created_at,
     updated_at: row.updated_at,
+  };
+}
+
+function sanitizeTicketNote(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    ticket_id: row.ticket_id,
+    author_type: row.author_type === 'client' ? 'client' : 'user',
+    author_name: row.author_name ?? null,
+    body: row.body,
+    created_at: row.created_at,
+  };
+}
+
+function sanitizeTask(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    title: row.title,
+    status: row.status,
+    start_date: row.start_date ?? null,
+    end_date: row.end_date ?? null,
+    planned_date: row.planned_date ?? null,
   };
 }
 

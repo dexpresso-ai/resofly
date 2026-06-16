@@ -3,14 +3,21 @@ import { Button, Input, Select, Textarea } from '../../components/Ui';
 import { isSupabaseConfigured } from '../../lib/supabase';
 import { supabasePortalAuth } from '../../lib/supabasePortal';
 import {
+  addPortalTicketNote,
   createPortalTicket,
   downloadPortalInvoicePdf,
   fetchPortalData,
+  fetchPortalProjectDetail,
+  fetchPortalTicketThread,
   requestPortalLogin,
   type PortalAccount,
   type PortalInvoice,
+  type PortalProject,
   type PortalQuote,
+  type PortalTask,
   type PortalTicket,
+  type PortalTicketNote,
+  type PortalTicketThread,
 } from '../../lib/portalApi';
 import { dateNL, euro, lineGross, priorityLabel, total } from '../../lib/format';
 import type { Priority } from '../../types';
@@ -229,20 +236,7 @@ function PortalAccountView({ account, onTicketCreated }: { account: PortalAccoun
 
     {tab === 'tickets' && <TicketsTab account={account} onTicketCreated={onTicketCreated} />}
 
-    {tab === 'projects' && <article className="portal-card">
-      <div className="portal-card-head"><h2>Projecten</h2><span>{account.projects.length}</span></div>
-      {account.projects.length === 0 && <p className="portal-muted">Er zijn nog geen projecten voor je.</p>}
-      <div className="portal-project-list">
-        {account.projects.map(p => <div key={p.id} className="portal-project">
-          <span className="portal-project-dot" style={{ background: p.color || '#FFD966' }} />
-          <div className="portal-project-body">
-            <strong>{p.name}{p.archived && <em className="portal-archived"> · Afgerond</em>}</strong>
-            {p.description && <p>{p.description}</p>}
-            <span className="portal-muted">{p.start_date ? `Start ${dateNL(p.start_date)}` : 'Nog geen startdatum'}{p.end_date ? ` · Eind ${dateNL(p.end_date)}` : ''}</span>
-          </div>
-        </div>)}
-      </div>
-    </article>}
+    {tab === 'projects' && <ProjectsTab account={account} />}
   </div>;
 }
 
@@ -321,6 +315,7 @@ function TicketsTab({ account, onTicketCreated }: { account: PortalAccount; onTi
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createdId, setCreatedId] = useState<string | null>(null);
+  const [openTicketId, setOpenTicketId] = useState<string | null>(null);
 
   async function submit() {
     if (!title.trim()) { setError('Geef een korte titel op.'); return; }
@@ -335,6 +330,10 @@ function TicketsTab({ account, onTicketCreated }: { account: PortalAccount; onTi
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (openTicketId) {
+    return <PortalTicketDetail ticketId={openTicketId} onBack={() => setOpenTicketId(null)} onChanged={onTicketCreated} />;
   }
 
   return <article className="portal-card">
@@ -363,20 +362,192 @@ function TicketsTab({ account, onTicketCreated }: { account: PortalAccount; onTi
     {account.tickets.length === 0 && !showForm && <p className="portal-muted">Je hebt nog geen tickets. Maak er een aan om een vraag of melding door te geven.</p>}
 
     <div className="portal-rows">
-      {account.tickets.map(t => <TicketRow key={t.id} ticket={t} highlight={t.id === createdId} />)}
+      {account.tickets.map(t => <TicketRow key={t.id} ticket={t} highlight={t.id === createdId} onOpen={() => setOpenTicketId(t.id)} />)}
     </div>
   </article>;
 }
 
-function TicketRow({ ticket, highlight }: { ticket: PortalTicket; highlight?: boolean }) {
-  return <div className={`portal-row portal-ticket${highlight ? ' is-new' : ''}`}>
+function TicketRow({ ticket, highlight, onOpen }: { ticket: PortalTicket; highlight?: boolean; onOpen: () => void }) {
+  return <button type="button" className={`portal-row portal-ticket portal-row-clickable${highlight ? ' is-new' : ''}`} onClick={onOpen}>
     <div className="portal-row-main">
       <span className="portal-row-number">{ticket.title}</span>
       <span className="portal-muted">{dateNL(ticket.created_at)} · Prioriteit {priorityLabel(ticket.priority)}</span>
       {ticket.description && <p className="portal-ticket-desc">{ticket.description}</p>}
     </div>
     <span className={`portal-status ticket-${ticket.status}`}>{ticketStatusLabels[ticket.status] ?? ticket.status}</span>
+    <span className="portal-row-chevron" aria-hidden="true">›</span>
+  </button>;
+}
+
+// ── Ticketdetail met tijdlijn ────────────────────────────────────────
+
+function PortalTicketDetail({ ticketId, onBack, onChanged }: { ticketId: string; onBack: () => void; onChanged: () => void }) {
+  const [thread, setThread] = useState<PortalTicketThread | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [posting, setPosting] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true); setError(null);
+    fetchPortalTicketThread(ticketId)
+      .then(result => { if (active) setThread(result); })
+      .catch(e => { if (active) setError(e instanceof Error ? e.message : 'Ticket laden mislukt'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [ticketId]);
+
+  async function submit() {
+    const body = draft.trim();
+    if (!body) return;
+    setPosting(true); setError(null);
+    try {
+      const note = await addPortalTicketNote(ticketId, body);
+      setThread(prev => prev ? { ...prev, notes: [...prev.notes, note] } : prev);
+      setDraft('');
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Notitie plaatsen mislukt');
+    } finally {
+      setPosting(false);
+    }
+  }
+
+  return <article className="portal-card portal-detail">
+    <div className="portal-detail-head">
+      <button type="button" className="portal-back" onClick={onBack}>← Terug naar tickets</button>
+    </div>
+
+    {loading && !thread && <div className="portal-boot"><span className="boot-spinner" aria-hidden="true" /><span>Ticket laden…</span></div>}
+    {error && <p className="error">{error}</p>}
+
+    {thread && <>
+      <div className="portal-detail-title">
+        <h2>{thread.ticket.title}</h2>
+        <span className={`portal-status ticket-${thread.ticket.status}`}>{ticketStatusLabels[thread.ticket.status] ?? thread.ticket.status}</span>
+      </div>
+      <p className="portal-muted">Aangemaakt {dateNL(thread.ticket.created_at)} · Prioriteit {priorityLabel(thread.ticket.priority)}</p>
+      {thread.ticket.description && <p className="portal-detail-desc">{thread.ticket.description}</p>}
+
+      <div className="portal-thread">
+        {thread.notes.length === 0 && <p className="portal-muted">Nog geen berichten. Stel hieronder je vraag of voeg informatie toe.</p>}
+        {thread.notes.map(note => <PortalThreadItem key={note.id} note={note} />)}
+      </div>
+
+      <div className="portal-thread-composer">
+        <Textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Typ een bericht aan ons team…" rows={3} maxLength={5000} disabled={posting} />
+        <div className="portal-thread-composer-actions">
+          <Button variant="primary" onClick={submit} disabled={posting || !draft.trim()}>{posting ? 'Versturen…' : 'Bericht versturen'}</Button>
+        </div>
+      </div>
+    </>}
+  </article>;
+}
+
+function PortalThreadItem({ note }: { note: PortalTicketNote }) {
+  const fromClient = note.author_type === 'client';
+  return <div className={`portal-thread-item ${fromClient ? 'is-mine' : 'is-team'}`}>
+    <div className="portal-thread-meta">
+      <strong>{fromClient ? (note.author_name || 'U') : 'Support team'}</strong>
+      <span>{new Date(note.created_at).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+    </div>
+    <p>{note.body}</p>
   </div>;
+}
+
+// ── Projecten met live meekijken ─────────────────────────────────────
+
+function ProjectsTab({ account }: { account: PortalAccount }) {
+  const [openProjectId, setOpenProjectId] = useState<string | null>(null);
+
+  if (openProjectId) {
+    return <PortalProjectDetail projectId={openProjectId} onBack={() => setOpenProjectId(null)} />;
+  }
+
+  return <article className="portal-card">
+    <div className="portal-card-head"><h2>Projecten</h2><span>{account.projects.length}</span></div>
+    {account.projects.length === 0 && <p className="portal-muted">Er zijn nog geen projecten voor je.</p>}
+    <div className="portal-project-list">
+      {account.projects.map(p => <button type="button" key={p.id} className="portal-project portal-row-clickable" onClick={() => setOpenProjectId(p.id)}>
+        <span className="portal-project-dot" style={{ background: p.color || '#FFD966' }} />
+        <div className="portal-project-body">
+          <strong>{p.name}{p.archived && <em className="portal-archived"> · Afgerond</em>}</strong>
+          {p.description && <p>{p.description}</p>}
+          <span className="portal-muted">{p.start_date ? `Start ${dateNL(p.start_date)}` : 'Nog geen startdatum'}{p.end_date ? ` · Eind ${dateNL(p.end_date)}` : ''}</span>
+        </div>
+        <span className="portal-row-chevron" aria-hidden="true">›</span>
+      </button>)}
+    </div>
+  </article>;
+}
+
+function PortalProjectDetail({ projectId, onBack }: { projectId: string; onBack: () => void }) {
+  const [project, setProject] = useState<PortalProject | null>(null);
+  const [tasks, setTasks] = useState<PortalTask[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [refreshing, setRefreshing] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true); setError(null);
+    fetchPortalProjectDetail(projectId)
+      .then(result => { if (active) { setProject(result.project); setTasks(result.tasks); } })
+      .catch(e => { if (active) setError(e instanceof Error ? e.message : 'Project laden mislukt'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [projectId]);
+
+  async function refresh() {
+    setRefreshing(true); setError(null);
+    try {
+      const result = await fetchPortalProjectDetail(projectId);
+      setProject(result.project); setTasks(result.tasks);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Project laden mislukt');
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  const doneCount = tasks.filter(t => t.status === 'done').length;
+  const progress = tasks.length ? Math.round((doneCount / tasks.length) * 100) : 0;
+
+  return <article className="portal-card portal-detail">
+    <div className="portal-detail-head">
+      <button type="button" className="portal-back" onClick={onBack}>← Terug naar projecten</button>
+      <button type="button" className="portal-more" onClick={refresh} disabled={refreshing}>{refreshing ? 'Verversen…' : 'Ververs'}</button>
+    </div>
+
+    {loading && !project && <div className="portal-boot"><span className="boot-spinner" aria-hidden="true" /><span>Project laden…</span></div>}
+    {error && <p className="error">{error}</p>}
+
+    {project && <>
+      <div className="portal-detail-title">
+        <h2><span className="portal-project-dot" style={{ background: project.color || '#FFD966' }} /> {project.name}</h2>
+        {project.archived && <span className="portal-status">Afgerond</span>}
+      </div>
+      <p className="portal-muted">{project.start_date ? `Start ${dateNL(project.start_date)}` : 'Nog geen startdatum'}{project.end_date ? ` · Eind ${dateNL(project.end_date)}` : ''}</p>
+      {project.description && <p className="portal-detail-desc">{project.description}</p>}
+
+      <div className="portal-progress">
+        <div className="portal-progress-head"><span>Voortgang</span><strong>{progress}%</strong></div>
+        <div className="portal-progress-bar"><span style={{ width: `${progress}%` }} /></div>
+        <span className="portal-muted">{doneCount} van {tasks.length} {tasks.length === 1 ? 'taak' : 'taken'} afgerond</span>
+      </div>
+
+      <div className="portal-task-list">
+        {tasks.length === 0 && <p className="portal-muted">Er zijn nog geen taken ingepland voor dit project.</p>}
+        {tasks.map(task => <div key={task.id} className="portal-task-row">
+          <span className={`portal-task-status status-${task.status}`}>{taskStatusLabels[task.status] ?? task.status}</span>
+          <span className="portal-task-title">{task.title}</span>
+          {(task.end_date || task.planned_date) && <span className="portal-muted portal-task-date">{task.end_date ? `Deadline ${dateNL(task.end_date)}` : `Gepland ${dateNL(task.planned_date)}`}</span>}
+        </div>)}
+      </div>
+    </>}
+  </article>;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -408,6 +579,13 @@ const ticketStatusLabels: Record<string, string> = {
   approved: 'Goedgekeurd',
   rejected: 'Afgewezen',
   converted: 'Omgezet naar project',
+};
+
+const taskStatusLabels: Record<string, string> = {
+  todo: 'Te doen',
+  doing: 'Bezig',
+  review: 'Review',
+  done: 'Klaar',
 };
 
 function isInvoiceOpen(invoice: PortalInvoice): boolean {

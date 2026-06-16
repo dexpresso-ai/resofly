@@ -10,6 +10,9 @@ import {
   convertAcceptedQuoteToInvoice,
   convertTicketToProject,
   createClientWithServerCode,
+  createTicketNote,
+  setTicketNoteInternal,
+  deleteTicketNote,
   sendClientPortalWelcomeEmail,
   deleteAttachment,
   createNoteCalendarLink,
@@ -61,7 +64,7 @@ import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat } from './components/GerrieChat';
 import { exportFinancePDF } from './lib/pdf';
 import type {
-  AppData, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettingsInput, CreditNote, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationRole, Project, Quote, Task, TaskStatus, Ticket, Subtask, Comment as TaskComment,
+  AppData, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettingsInput, CreditNote, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationRole, Project, Quote, Task, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
 } from './types';
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
@@ -78,7 +81,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id'>> }
   | null;
 
-const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], notes: [], documents: [], noteCalendarLinks: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], attachments: [], companySettings: null };
+const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], ticketNotes: [], notes: [], documents: [], noteCalendarLinks: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], attachments: [], companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
@@ -729,7 +732,7 @@ function App() {
     <Sidebar page={page} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); }}/>
     <main className="main"><header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button><Button onClick={() => supabaseAuth.signOut()}>Uitloggen</Button></div></header>
       <section className="content">{error && <div className="error">{error}</div>}{renderPage()}</section>
-    </main>{edit && <EditModal edit={edit} data={data} organizationId={activeOrg.id} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} />}
+    </main>{edit && <EditModal edit={edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} />}
     <GerrieChat />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
       <div className="send-overlay-card">
@@ -834,7 +837,7 @@ function buildCalendarNoteLinkInput(event: CalendarExternalEvent): CalendarNoteL
   };
 }
 
-function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void }) {
+function EditModal({ edit, data, organizationId, currentUserId, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; currentUserId: string | null; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void }) {
   const item = 'item' in edit ? edit.item : undefined;
   const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit, data));
   const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
@@ -1014,7 +1017,7 @@ function EditModal({ edit, data, organizationId, canWrite, readOnly, onClose, on
     </FormGrid>}
     {edit.kind === 'project' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Projectnaam"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Omschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/><Field label="Projectkleur" hint="Bepaalt de kleur van het project in lijsten, kanban en de timeline."><ColorPicker value={form.color} onChange={color=>set('color',color)} disabled={disabled}/></Field><label className="check-row"><input type="checkbox" checked={Boolean(form.archived)} onChange={e=>set('archived',e.target.checked)}/><span>Project archiveren</span></label>{!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.project} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}{attachmentBlock}</FormGrid>}
     {edit.kind === 'task' && <FormGrid><Field label="Taaktitel"><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Taaktitel" disabled={disabled}/></Field><Field label="Status"><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="todo">Te doen</option><option value="doing">Bezig</option><option value="review">Review</option><option value="done">Klaar</option></Select></Field><Field label="Prioriteit"><Select value={form.priority} onChange={e=>set('priority',e.target.value)} disabled={disabled}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select></Field><Field label="Tags" hint="Gebruik komma’s om meerdere tags toe te voegen."><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags" disabled={disabled}/></Field><Field label="Beschrijving"><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving" disabled={disabled}/></Field><Field label="Startdatum"><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)} disabled={disabled}/></Field><Field label="Deadline" hint="Deze datum blijft de inhoudelijke deadline en wordt niet meer aangepast door de weekplanner."><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)} disabled={disabled}/></Field><Field label="Plandatum" hint="Deze datum bepaalt op welke dag de taak in de weekplanner staat."><Input type="date" value={form.planned_date} onChange={e=>set('planned_date',e.target.value)} disabled={disabled}/></Field><Field label="Geschatte duur" hint="In minuten. Wordt gebruikt voor de dag- en weekcapaciteit."><Input type="number" min="0" max="1440" step="15" value={form.estimated_minutes} onChange={e=>set('estimated_minutes',Number(e.target.value))} disabled={disabled}/></Field><TaskDetailEditor subtasks={form.subtasks} comments={form.comments} set={set}/>{!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.task} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}{attachmentBlock}</FormGrid>}
-    {edit.kind === 'ticket' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Ticket titel"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={Boolean((item as Ticket | undefined)?.converted_to_project_id)}><option value="new">Nieuw</option><option value="review">Review</option><option value="approved">Goedgekeurd</option><option value="rejected">Geweigerd</option>{(item as Ticket | undefined)?.converted_to_project_id && <option value="converted">Omgezet</option>}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne notities"/><small className="ticket-status-hint">Gebruik <strong>Project maken</strong> om een ticket om te zetten. <strong>Omgezet</strong> is geen handmatige status.</small>{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.ticket} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'ticket' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Ticket titel"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={Boolean((item as Ticket | undefined)?.converted_to_project_id)}><option value="new">Nieuw</option><option value="review">Review</option><option value="approved">Goedgekeurd</option><option value="rejected">Geweigerd</option>{(item as Ticket | undefined)?.converted_to_project_id && <option value="converted">Omgezet</option>}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Field label="Korte interne notitie" hint="Privé memo op het ticket. Voor een gesprek met de klant gebruik je de tijdlijn hieronder."><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne notities (privé, niet in de tijdlijn)"/></Field><small className="ticket-status-hint">Gebruik <strong>Project maken</strong> om een ticket om te zetten. <strong>Omgezet</strong> is geen handmatige status.</small>{item ? <TicketNotesTimeline ticketId={item.id} organizationId={organizationId} currentUserId={currentUserId} notes={data.ticketNotes.filter(n => n.ticket_id === item.id)} canWrite={!disabled} onChanged={onAttachmentsChanged}/> : <div className="ticket-timeline-hint">Sla het ticket eerst op om de notitietijdlijn te gebruiken — daar kunnen jij en de klant berichten plaatsen.</div>}{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.ticket} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
     {edit.kind === 'note' && <FormGrid>
       <Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Titel"/>
       <Select value={form.note_type} onChange={e=>set('note_type',e.target.value)}>{Object.entries(noteTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select>
@@ -1157,6 +1160,92 @@ function TaskDetailEditor({ subtasks, comments, set }: { subtasks: Subtask[]; co
       </div>
     </section>
   </div>;
+}
+
+
+/**
+ * Tickettijdlijn: gedeelde notities/conversatie tussen medewerker en klant.
+ * Toont alle notities chronologisch (nieuwste bovenaan). De medewerker kan een
+ * notitie als intern markeren (verborgen voor de klant) en eigen/teamnotities
+ * weer zichtbaar maken of verwijderen. Klantnotities komen binnen via het
+ * portaal en zijn hier herkenbaar gelabeld.
+ */
+function TicketNotesTimeline({ ticketId, organizationId, currentUserId, notes, canWrite, onChanged }: { ticketId: string; organizationId: string; currentUserId: string | null; notes: TicketNote[]; canWrite: boolean; onChanged: () => void }) {
+  const [draft, setDraft] = useState('');
+  const [internal, setInternal] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const sorted = useMemo(
+    () => [...notes].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+    [notes],
+  );
+  const clientCount = sorted.filter(n => n.author_type === 'client').length;
+  const hiddenCount = sorted.filter(n => n.is_internal).length;
+
+  async function run(action: () => Promise<unknown>) {
+    setBusy(true); setError(null);
+    try {
+      await action();
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Actie mislukt');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function add() {
+    const body = draft.trim();
+    if (!body) return;
+    await run(async () => {
+      await createTicketNote(organizationId, { ticketId, body, isInternal: internal });
+      setDraft(''); setInternal(false);
+    });
+  }
+
+  return <section className="ticket-timeline">
+    <div className="ticket-timeline-head">
+      <div>
+        <strong>Tijdlijn</strong>
+        <span>{sorted.length} notitie{sorted.length === 1 ? '' : 's'}{clientCount > 0 ? ` · ${clientCount} van klant` : ''}{hiddenCount > 0 ? ` · ${hiddenCount} verborgen` : ''}</span>
+      </div>
+    </div>
+
+    {canWrite && <div className="ticket-timeline-composer">
+      <Textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Schrijf een update voor de klant of een interne notitie…" rows={3} disabled={busy} />
+      <div className="ticket-timeline-composer-actions">
+        <label className={`ticket-visibility-toggle${internal ? ' is-internal' : ''}`}>
+          <input type="checkbox" checked={internal} onChange={e => setInternal(e.target.checked)} disabled={busy} />
+          <span>{internal ? 'Verborgen voor klant' : 'Zichtbaar voor klant'}</span>
+        </label>
+        <Button variant="primary" onClick={add} disabled={busy || !draft.trim()}>{busy ? 'Plaatsen…' : (internal ? 'Plaats interne notitie' : 'Plaats notitie')}</Button>
+      </div>
+    </div>}
+    {error && <p className="error">{error}</p>}
+
+    {sorted.length === 0 ? <div className="ticket-timeline-empty">Nog geen notities. Plaats de eerste update — de klant ziet zichtbare notities terug in het portaal.</div> : <ol className="ticket-timeline-list">
+      {sorted.map(note => {
+        const isClient = note.author_type === 'client';
+        const mine = note.author_user_id && currentUserId && note.author_user_id === currentUserId;
+        return <li className={`ticket-timeline-item${isClient ? ' from-client' : ''}${note.is_internal ? ' is-internal' : ''}`} key={note.id}>
+          <span className="ttl-dot" aria-hidden="true" />
+          <div className="ttl-body">
+            <div className="ttl-meta">
+              <span className="ttl-author">{isClient ? (note.author_name ? `${note.author_name} (klant)` : 'Klant') : (mine ? 'Jij' : (note.author_name || 'Teamlid'))}</span>
+              <span className={`ttl-badge ${isClient ? 'client' : note.is_internal ? 'internal' : 'visible'}`}>{isClient ? 'Klant' : note.is_internal ? 'Intern' : 'Zichtbaar voor klant'}</span>
+              <span className="ttl-time">{new Date(note.created_at).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+            </div>
+            <p className="ttl-text">{note.body}</p>
+            {canWrite && <div className="ttl-actions">
+              {!isClient && <button type="button" disabled={busy} onClick={() => run(() => setTicketNoteInternal(note.id, !note.is_internal, organizationId))}>{note.is_internal ? 'Zichtbaar maken voor klant' : 'Verbergen voor klant'}</button>}
+              <button type="button" className="ttl-delete" disabled={busy} onClick={() => { if (confirm('Deze notitie uit de tijdlijn verwijderen?')) void run(() => deleteTicketNote(note.id, organizationId)); }}>Verwijderen</button>
+            </div>}
+          </div>
+        </li>;
+      })}
+    </ol>}
+  </section>;
 }
 
 

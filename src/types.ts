@@ -128,6 +128,10 @@ export interface Task extends OrgScopedRow {
 export interface Ticket extends OrgScopedRow {
   client_id: UUID | null; title: string; description: string | null; priority: Priority; status: TicketStatus; notes: string | null; converted_to_project_id: UUID | null; created_at: string; updated_at: string;
 }
+export type TicketNoteAuthorType = 'user' | 'client';
+export interface TicketNote extends OrgScopedRow {
+  ticket_id: UUID; author_type: TicketNoteAuthorType; author_user_id: UUID | null; author_name: string | null; body: string; is_internal: boolean; created_at: string; updated_at: string;
+}
 export interface Note extends OrgScopedRow {
   client_id: UUID | null; project_id: UUID | null; title: string; content: string; note_type: NoteType; tags: string[]; created_at: string; updated_at: string;
 }
@@ -545,7 +549,7 @@ export interface InvoiceMollieSettingsStatus {
   last_validated_at: string | null;
 }
 
-export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; notes: Note[]; documents: InternalDocument[]; noteCalendarLinks: NoteCalendarLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; noteCalendarLinks: NoteCalendarLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';
