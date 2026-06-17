@@ -20,6 +20,8 @@ import {
   createOrganization,
   deleteEntityCascade,
   deleteNoteCalendarLink,
+  upsertCalendarEventLink,
+  deleteCalendarEventLink,
   disableOrganizationMember,
   insertRow,
   inviteOrganizationMember,
@@ -68,7 +70,7 @@ import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat } from './components/GerrieChat';
 import { exportFinancePDF } from './lib/pdf';
 import type {
-  AppData, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettingsInput, CreditNote, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationRole, Project, Quote, Task, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
+  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettingsInput, CreditNote, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationRole, Project, Quote, Task, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
 } from './types';
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
@@ -85,7 +87,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id'>> }
   | null;
 
-const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], attachments: [], companySettings: null };
+const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], calendarEventLinks: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], attachments: [], companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
@@ -722,6 +724,10 @@ function App() {
     return buildCalendarNoteLinkInput(event);
   }
 
+  function eventLinkFor(event: CalendarExternalEvent): CalendarEventLink | undefined {
+    return data.calendarEventLinks.find(link => calendarEventLinkMatchesEvent(link, event));
+  }
+
   function openNoteForCalendarEvent(event: CalendarExternalEvent) {
     if (!ensureCanWrite()) return;
     if (event.visibility !== 'organization' || event.is_private_masked) {
@@ -729,6 +735,7 @@ function App() {
       return;
     }
     setError(null);
+    const link = eventLinkFor(event);
     setEdit({
       kind: 'note',
       item: undefined,
@@ -737,9 +744,57 @@ function App() {
         content: '',
         note_type: 'meeting',
         tags: ['agenda'],
+        client_id: link?.client_id ?? null,
+        project_id: link?.project_id ?? null,
       },
       calendarLink: calendarNoteLinkInput(event),
     });
+  }
+
+  function openDocumentForCalendarEvent(event: CalendarExternalEvent) {
+    if (!ensureCanWrite()) return;
+    if (event.visibility !== 'organization' || event.is_private_masked) {
+      setError('Documenten maken vanuit een agenda-item is uitgeschakeld voor privé-afspraken. Deel de agenda eerst met de organisatie.');
+      return;
+    }
+    setError(null);
+    const link = eventLinkFor(event);
+    setEdit({
+      kind: 'document',
+      item: undefined,
+      defaults: {
+        title: event.title,
+        client_id: link?.client_id ?? null,
+        project_id: link?.project_id ?? null,
+      },
+    });
+  }
+
+  async function setCalendarEventLink(event: CalendarExternalEvent, clientId: string | null, projectId: string | null) {
+    if (!ensureCanWrite()) return;
+    setLoading(true); setError(null);
+    try {
+      if (!clientId && !projectId) {
+        const existing = eventLinkFor(event);
+        if (existing) await deleteCalendarEventLink(existing.id, activeOrg.id);
+      } else {
+        await upsertCalendarEventLink(activeOrg.id, {
+          provider: event.provider,
+          calendar_source_id: event.source_id,
+          provider_event_id: event.provider_event_id,
+          event_starts_at: event.starts_at,
+          // Bewaar de titel niet voor privé-agenda-items: de koppeltabel is org-breed leesbaar.
+          event_title_snapshot: event.visibility === 'organization' && !event.is_private_masked ? event.title : null,
+          client_id: clientId,
+          project_id: projectId,
+        });
+      }
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Agenda-koppeling opslaan mislukt');
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function linkExistingNoteToCalendarEvent(noteId: string, event: CalendarExternalEvent) {
@@ -798,8 +853,8 @@ function App() {
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onEmailCreditNote={emailCreditNote}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} onPlanTask={updateTaskPlanning} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
-    if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
-    if (page === 'calendar-settings') return <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
+    if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
+    if (page === 'calendar-settings') return <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'stats') return <Stats data={data}/>;
     if (page === 'archive') return <Archive data={data} onOpen={(id) => { setProjectId(id); setPage('project'); }} onRestore={async (project) => { if (!ensureCanWrite()) return; setError(null); try { await updateRow<Project>('projects', project.id, { archived: false }, activeOrg.id); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Herstellen mislukt'); } }}/>;
     if (page === 'settings') return <Settings settings={data.companySettings} organizationContext={organizationContext} currentUserId={currentUserId} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
@@ -877,6 +932,14 @@ function buildCalendarNoteLinkInput(event: CalendarExternalEvent): CalendarNoteL
     visibility_snapshot: event.visibility,
     is_private_masked_snapshot: Boolean(event.is_private_masked),
   };
+}
+
+/** Identificeert dezelfde event-instantie als de UI: provider + agenda + event-id + starttijd. */
+function calendarEventLinkMatchesEvent(link: CalendarEventLink, event: CalendarExternalEvent): boolean {
+  return link.provider === event.provider
+    && link.calendar_source_id === event.source_id
+    && link.provider_event_id === event.provider_event_id
+    && new Date(link.event_starts_at).getTime() === new Date(event.starts_at).getTime();
 }
 
 function EditModal({ edit, data, organizationId, currentUserId, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; currentUserId: string | null; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void }) {

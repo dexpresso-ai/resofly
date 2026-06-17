@@ -25,6 +25,8 @@ import type {
   ContentFolder,
   CalendarNoteLinkInput,
   NoteCalendarLink,
+  CalendarEventLink,
+  CalendarEventLinkInput,
   Organization,
   OrganizationContext,
   OrganizationInvitation,
@@ -278,6 +280,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     notes,
     documents,
     noteCalendarLinks,
+    calendarEventLinks,
     quotes,
     quoteApprovalEvents,
     quoteEmailDeliveries,
@@ -295,14 +298,14 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     companySettings,
   ] = await Promise.all([
     select<Client>('clients', organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
-    selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
+    selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectCalendarEventLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId),
     select<Attachment>('attachments', organizationId),
     selectFolders(organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, attachments, companySettings };
+  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, attachments, companySettings };
 }
 
 export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
@@ -633,6 +636,60 @@ export async function selectNoteCalendarLinks(organizationId: UUID): Promise<Not
   }
 
   return (data ?? []) as NoteCalendarLink[];
+}
+
+export async function selectCalendarEventLinks(organizationId: UUID): Promise<CalendarEventLink[]> {
+  const { data, error } = await supabase
+    .from('calendar_event_links')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('event_starts_at', { ascending: false });
+
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/calendar_event_links|schema cache|does not exist|relation/i.test(message)) {
+      console.warn('calendar_event_links is nog niet beschikbaar. Voer de migratie 20260617000002_calendar_event_links.sql uit om agenda-koppelingen te activeren.', error);
+      return [];
+    }
+    throw error;
+  }
+
+  return (data ?? []) as CalendarEventLink[];
+}
+
+/**
+ * Maakt of werkt de klant/project-koppeling van een agenda-item bij. De
+ * koppeling wordt geïdentificeerd door provider + agenda + provider_event_id +
+ * starttijd (unieke sleutel), zodat opnieuw koppelen het bestaande record
+ * overschrijft in plaats van te dupliceren.
+ */
+export async function upsertCalendarEventLink(organizationId: UUID, input: CalendarEventLinkInput): Promise<CalendarEventLink> {
+  const { data, error } = await supabase
+    .from('calendar_event_links')
+    .upsert({
+      organization_id: organizationId,
+      provider: input.provider,
+      calendar_source_id: input.calendar_source_id,
+      provider_calendar_id: input.provider_calendar_id ?? null,
+      provider_event_id: input.provider_event_id,
+      event_starts_at: input.event_starts_at,
+      event_title_snapshot: input.event_title_snapshot ?? null,
+      client_id: input.client_id,
+      project_id: input.project_id,
+    }, { onConflict: 'organization_id,provider,calendar_source_id,provider_event_id,event_starts_at' })
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as CalendarEventLink;
+}
+
+export async function deleteCalendarEventLink(linkId: UUID, organizationId: UUID): Promise<void> {
+  const { error } = await supabase
+    .from('calendar_event_links')
+    .delete()
+    .eq('id', linkId)
+    .eq('organization_id', organizationId);
+  if (error) throw error;
 }
 
 export async function loadCompanySettings(organizationId: UUID): Promise<CompanySettings | null> {

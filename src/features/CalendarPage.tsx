@@ -14,7 +14,7 @@ import {
   updateCalendarSource,
   type CalendarIntegrationsPayload,
 } from '../lib/calendar-api';
-import type { AppData, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, Note, NoteCalendarLink, Task, UUID } from '../types';
+import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, Client, Note, NoteCalendarLink, Project, Task, UUID } from '../types';
 import { getNoteTypeLabel } from './Notes';
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
@@ -209,6 +209,60 @@ function noteCalendarLinkMatchesEvent(link: NoteCalendarLink, event: CalendarExt
     && link.calendar_source_id === event.source_id
     && link.provider_event_id === event.provider_event_id
     && timeValue(link.event_starts_at) === timeValue(event.starts_at);
+}
+
+function calendarEventLinkMatchesEvent(link: CalendarEventLink, event: CalendarExternalEvent): boolean {
+  return link.provider === event.provider
+    && link.calendar_source_id === event.source_id
+    && link.provider_event_id === event.provider_event_id
+    && timeValue(link.event_starts_at) === timeValue(event.starts_at);
+}
+
+/**
+ * Klant- en projectkeuze voor een agenda-item. Het projectmenu filtert op de
+ * gekozen klant; bij het kiezen van een project wordt de klant automatisch
+ * afgeleid als die nog leeg is. Wordt gebruikt bij het aanmaken én bij het
+ * bewerken van de koppeling in het eventdetail.
+ */
+function ClientProjectPicker({ clients, projects, clientId, projectId, onChange, disabled = false }: {
+  clients: Client[];
+  projects: Project[];
+  clientId: string;
+  projectId: string;
+  onChange: (next: { clientId: string; projectId: string }) => void;
+  disabled?: boolean;
+}) {
+  const sortedClients = useMemo(() => [...clients].sort((a, b) => a.name.localeCompare(b.name, 'nl')), [clients]);
+  const projectOptions = useMemo(
+    () => projects
+      .filter(p => !p.archived && (!clientId || p.client_id === clientId))
+      .sort((a, b) => a.name.localeCompare(b.name, 'nl')),
+    [projects, clientId],
+  );
+  return (
+    <div className="settings-grid compact">
+      <label>Klant
+        <Select value={clientId} disabled={disabled} onChange={e => {
+          const nextClient = e.target.value;
+          const keepProject = projectId && projects.find(p => p.id === projectId)?.client_id === nextClient;
+          onChange({ clientId: nextClient, projectId: keepProject ? projectId : '' });
+        }}>
+          <option value="">Geen klant</option>
+          {sortedClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </Select>
+      </label>
+      <label>Project
+        <Select value={projectId} disabled={disabled} onChange={e => {
+          const nextProject = e.target.value;
+          const proj = projects.find(p => p.id === nextProject);
+          onChange({ clientId: clientId || (proj?.client_id ?? ''), projectId: nextProject });
+        }}>
+          <option value="">Geen project</option>
+          {projectOptions.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </Select>
+      </label>
+    </div>
+  );
 }
 
 function slotToTime(slot: number): { hour: number; minutes: number } {
@@ -605,10 +659,12 @@ function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, on
 
 /* ── Floating creation panel ─────────────────────────────────────────── */
 
-function EventCreationPanel({ newEvent, setNewEvent, writeableSources, loading, canWrite, onSubmit, onClose }: {
-  newEvent: { sourceId: string; title: string; description: string; location: string; startsAt: string; endsAt: string; allDay: boolean };
+function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, projects, loading, canWrite, onSubmit, onClose }: {
+  newEvent: { sourceId: string; title: string; description: string; location: string; startsAt: string; endsAt: string; allDay: boolean; clientId: string; projectId: string };
   setNewEvent: (fn: (prev: typeof newEvent) => typeof newEvent) => void;
   writeableSources: CalendarSource[];
+  clients: Client[];
+  projects: Project[];
   loading: boolean;
   canWrite: boolean;
   onSubmit: (e: FormEvent) => void;
@@ -633,6 +689,9 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, loading, 
         </div>
         <label>Omschrijving<Textarea value={newEvent.description} onChange={e => setNewEvent(p => ({ ...p, description: e.target.value }))} placeholder="Optioneel" /></label>
         <label className="check-row"><input type="checkbox" checked={newEvent.allDay} onChange={e => setNewEvent(p => ({ ...p, allDay: e.target.checked }))} /> Hele dag</label>
+        <div className="tb-panel-section-label">Koppelen aan</div>
+        <ClientProjectPicker clients={clients} projects={projects} clientId={newEvent.clientId} projectId={newEvent.projectId}
+          onChange={next => setNewEvent(p => ({ ...p, clientId: next.clientId, projectId: next.projectId }))} />
         <Button variant="primary" disabled={loading || !canWrite || !writeableSources.length}>Event aanmaken</Button>
       </form>
     </div>
@@ -640,12 +699,14 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, loading, 
 }
 
 
-function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNote, onEditNote, onLinkExistingNote, onUnlinkNote, onClose }: {
+function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNote, onNewDocument, onSetEventLink, onEditNote, onLinkExistingNote, onUnlinkNote, onClose }: {
   event: CalendarExternalEvent | null;
   data: AppData;
   sourceColors: Map<string, string>;
   canWrite: boolean;
   onNewNote: (event: CalendarExternalEvent) => void;
+  onNewDocument: (event: CalendarExternalEvent) => void;
+  onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null) => void | Promise<void>;
   onEditNote: (note: Note) => void;
   onLinkExistingNote: (noteId: UUID, event: CalendarExternalEvent) => void | Promise<void>;
   onUnlinkNote: (linkId: UUID) => void | Promise<void>;
@@ -669,6 +730,9 @@ function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNo
     .filter(note => !linkedNoteIds.has(note.id))
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   const canAttachNotes = canWrite && event.visibility === 'organization' && !event.is_private_masked;
+  const eventLink = data.calendarEventLinks.find(link => calendarEventLinkMatchesEvent(link, event)) ?? null;
+  const linkedClient = eventLink?.client_id ? data.clients.find(c => c.id === eventLink.client_id) ?? null : null;
+  const linkedProject = eventLink?.project_id ? data.projects.find(p => p.id === eventLink.project_id) ?? null : null;
   const lockedReason = event.visibility !== 'organization'
     ? 'Notities koppelen is uitgeschakeld voor privé-agenda-items, zodat persoonlijke agenda-informatie niet per ongeluk organisatiebreed zichtbaar wordt.'
     : event.is_private_masked
@@ -715,14 +779,40 @@ function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNo
           <div className="event-detail-empty">Geen omschrijving toegevoegd.</div>
         )}
 
+        <section className="event-link-panel">
+          <div className="event-link-head">
+            <span className="event-notes-kicker">Koppeling</span>
+            <h4>Klant &amp; project</h4>
+            <p>Koppel dit agenda-item aan een klant en project, zodat je er makkelijk notities en documenten bij maakt.</p>
+          </div>
+          {canAttachNotes ? (
+            <ClientProjectPicker
+              clients={data.clients}
+              projects={data.projects}
+              clientId={eventLink?.client_id ?? ''}
+              projectId={eventLink?.project_id ?? ''}
+              onChange={next => onSetEventLink(event, next.clientId || null, next.projectId || null)}
+            />
+          ) : (
+            <div className="event-link-readonly">
+              {linkedClient || linkedProject
+                ? <>{linkedClient ? `Klant: ${linkedClient.name}` : 'Geen klant'} · {linkedProject ? `Project: ${linkedProject.name}` : 'Geen project'}</>
+                : 'Nog niet gekoppeld aan een klant of project.'}
+            </div>
+          )}
+        </section>
+
         <section className="event-notes-panel">
           <div className="event-notes-head">
             <div>
               <span className="event-notes-kicker">Context</span>
-              <h4>Notities bij dit agenda-item</h4>
+              <h4>Notities &amp; documenten</h4>
               <p>{linkedRows.length} gekoppelde notitie{linkedRows.length === 1 ? '' : 's'}</p>
             </div>
-            {canAttachNotes && <Button onClick={() => { onClose(); onNewNote(event); }}>+ Notitie</Button>}
+            {canAttachNotes && <div className="event-notes-actions">
+              <Button onClick={() => { onClose(); onNewNote(event); }}>+ Notitie</Button>
+              <Button onClick={() => { onClose(); onNewDocument(event); }}>+ Document</Button>
+            </div>}
           </div>
 
           {lockedReason && <div className="event-notes-locked">{lockedReason}</div>}
@@ -775,10 +865,12 @@ function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNo
 
 /* ── Main CalendarPage ───────────────────────────────────────────────── */
 
-export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, data, canWrite, onEditTask, onNewNoteForEvent, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
+export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, data, canWrite, onEditTask, onNewNoteForEvent, onNewDocumentForEvent, onSetEventLink, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
   mode?: 'agenda' | 'settings';
   organizationId: UUID; currentUserId: UUID | null; data: AppData; canWrite: boolean; onEditTask: (task: Task) => void;
   onNewNoteForEvent: (event: CalendarExternalEvent) => void;
+  onNewDocumentForEvent: (event: CalendarExternalEvent) => void;
+  onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null) => void | Promise<void>;
   onEditNote: (note: Note) => void;
   onLinkExistingNoteToEvent: (noteId: UUID, event: CalendarExternalEvent) => void | Promise<void>;
   onUnlinkNoteFromEvent: (linkId: UUID) => void | Promise<void>;
@@ -797,7 +889,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   const [newEvent, setNewEvent] = useState(() => {
     const s = new Date(); s.setMinutes(0, 0, 0); s.setHours(s.getHours() + 1);
     const e = new Date(s); e.setHours(e.getHours() + 1);
-    return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false };
+    return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false, clientId: '', projectId: '' };
   });
 
   const days = useMemo(() => calendarDaysForView(view, anchor), [view, anchor]);
@@ -900,7 +992,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     const et = slotToTime(endSlot + 1);
     const sd = new Date(day); sd.setHours(st.hour, st.minutes, 0, 0);
     const ed = new Date(day); ed.setHours(et.hour, et.minutes, 0, 0);
-    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed) }));
+    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '' }));
     setShowCreatePanel(true);
   }, []);
 
@@ -921,9 +1013,14 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         startsAt: sIso, endsAt: eIso, allDay: newEvent.allDay,
       });
       setEvents(prev => [...prev, created].sort((a, b) => a.starts_at.localeCompare(b.starts_at)));
+      if (newEvent.clientId || newEvent.projectId) {
+        await onSetEventLink(created, newEvent.clientId || null, newEvent.projectId || null);
+      }
       const d = makeDefaultTimes();
-      setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt }));
-      setMessage('Event aangemaakt en zichtbaar in je externe agenda.');
+      setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '' }));
+      setMessage(newEvent.clientId || newEvent.projectId
+        ? 'Event aangemaakt, gekoppeld aan klant/project en zichtbaar in je externe agenda.'
+        : 'Event aangemaakt en zichtbaar in je externe agenda.');
       setShowCreatePanel(false);
       refreshEventsOnly().catch(() => {});
     } catch (err) { setError(err instanceof Error ? err.message : 'Event aanmaken mislukt.'); }
@@ -1122,6 +1219,9 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         </div>
         <label>Omschrijving<Textarea value={newEvent.description} onChange={e => setNewEvent(p => ({ ...p, description: e.target.value }))} placeholder="Optioneel" /></label>
         <label className="check-row"><input type="checkbox" checked={newEvent.allDay} onChange={e => setNewEvent(p => ({ ...p, allDay: e.target.checked }))} /> Hele dag</label>
+        <div className="tb-panel-section-label">Koppelen aan</div>
+        <ClientProjectPicker clients={data.clients} projects={data.projects} clientId={newEvent.clientId} projectId={newEvent.projectId}
+          onChange={next => setNewEvent(p => ({ ...p, clientId: next.clientId, projectId: next.projectId }))} />
         <Button variant="primary" disabled={loading || !canWrite || !writeableSources.length}>Event aanmaken</Button>
         {!writeableSources.length && <p className="calendar-help">Zet bij je eigen agenda eerst "Schrijven" aan.</p>}
       </form>
@@ -1129,15 +1229,16 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
 
     {/* FAB for time-grid views */}
     {(view === 'day' || view === 'week') && canWrite && writeableSources.length > 0 && !showCreatePanel && (
-      <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt })); setShowCreatePanel(true); }} title="Nieuw event aanmaken">
+      <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '' })); setShowCreatePanel(true); }} title="Nieuw event aanmaken">
         <Plus size={22} />
       </button>
     )}
 
     {/* Floating panel */}
     {showCreatePanel && <EventCreationPanel newEvent={newEvent} setNewEvent={setNewEvent} writeableSources={writeableSources}
+      clients={data.clients} projects={data.projects}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => setShowCreatePanel(false)} />}
 
-    <CalendarEventDetailPanel event={selectedEvent} data={data} sourceColors={sourceColors} canWrite={canWrite} onNewNote={onNewNoteForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onClose={() => setSelectedEvent(null)} />
+    <CalendarEventDetailPanel event={selectedEvent} data={data} sourceColors={sourceColors} canWrite={canWrite} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onClose={() => setSelectedEvent(null)} />
   </div>;
 }
