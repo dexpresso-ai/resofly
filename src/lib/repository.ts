@@ -23,6 +23,13 @@ import type {
   Note,
   InternalDocument,
   ContentFolder,
+  LedgerAccount,
+  VatCode,
+  JournalEntry,
+  JournalLine,
+  ClosedPeriod,
+  Supplier,
+  PurchaseInvoice,
   CalendarNoteLinkInput,
   NoteCalendarLink,
   CalendarEventLink,
@@ -46,7 +53,7 @@ import type {
   UUID,
 } from '../types';
 
-const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'attachments', 'company_settings'] as const;
+const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'attachments', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -63,6 +70,10 @@ const tableToEntity: Record<Table, EntityType | null> = {
   content_folders: null,
   quotes: 'quote',
   invoices: 'invoice',
+  ledger_accounts: null,
+  vat_codes: null,
+  suppliers: 'supplier',
+  purchase_invoices: 'purchase_invoice',
   attachments: null,
   company_settings: null,
 };
@@ -293,6 +304,13 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     invoiceRefunds,
     creditNotes,
     invoiceChargebacks,
+    ledgerAccounts,
+    vatCodes,
+    journalEntries,
+    journalLines,
+    closedPeriods,
+    suppliers,
+    purchaseInvoices,
     attachments,
     folders,
     companySettings,
@@ -301,11 +319,12 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectCalendarEventLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId),
+    selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId),
     select<Attachment>('attachments', organizationId),
     selectFolders(organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, attachments, companySettings };
+  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, suppliers, purchaseInvoices, attachments, companySettings };
 }
 
 export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
@@ -721,6 +740,128 @@ export async function select<T>(table: Table, organizationId: UUID): Promise<T[]
     .order('created_at', { ascending: false });
   if (error) throw error;
   return (data ?? []) as T[];
+}
+
+const BOOKKEEPING_MIGRATION_HINT =
+  'Voer de migratie 20260618000000_bookkeeping_ledger_core.sql uit in Supabase om de boekhoudmodule te activeren.';
+
+/**
+ * Leest een nog-jonge tabel en degradeert gracieus: ontbreekt de tabel (migratie
+ * nog niet uitgevoerd), dan een waarschuwing + lege lijst i.p.v. een harde fout.
+ * Zelfde patroon als selectQuoteVersions/selectInvoiceVersions.
+ */
+async function selectOptional<T>(
+  table: string,
+  organizationId: UUID,
+  opts: { orderBy: string; ascending: boolean; hint: string },
+): Promise<T[]> {
+  const { data, error } = await supabase
+    .from(table)
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order(opts.orderBy, { ascending: opts.ascending });
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (new RegExp(`${table}|schema cache|does not exist|relation`, 'i').test(message)) {
+      console.warn(`${table} is nog niet beschikbaar. ${opts.hint}`, error);
+      return [];
+    }
+    throw error;
+  }
+  return (data ?? []) as T[];
+}
+
+export const selectLedgerAccounts = (organizationId: UUID) =>
+  selectOptional<LedgerAccount>('ledger_accounts', organizationId, { orderBy: 'code', ascending: true, hint: BOOKKEEPING_MIGRATION_HINT });
+export const selectVatCodes = (organizationId: UUID) =>
+  selectOptional<VatCode>('vat_codes', organizationId, { orderBy: 'code', ascending: true, hint: BOOKKEEPING_MIGRATION_HINT });
+export const selectJournalEntries = (organizationId: UUID) =>
+  selectOptional<JournalEntry>('journal_entries', organizationId, { orderBy: 'date', ascending: false, hint: BOOKKEEPING_MIGRATION_HINT });
+export const selectJournalLines = (organizationId: UUID) =>
+  selectOptional<JournalLine>('journal_lines', organizationId, { orderBy: 'created_at', ascending: false, hint: BOOKKEEPING_MIGRATION_HINT });
+export const selectClosedPeriods = (organizationId: UUID) =>
+  selectOptional<ClosedPeriod>('closed_periods', organizationId, { orderBy: 'closed_at', ascending: false, hint: BOOKKEEPING_MIGRATION_HINT });
+export const selectSuppliers = (organizationId: UUID) =>
+  selectOptional<Supplier>('suppliers', organizationId, { orderBy: 'name', ascending: true, hint: BOOKKEEPING_MIGRATION_HINT });
+export const selectPurchaseInvoices = (organizationId: UUID) =>
+  selectOptional<PurchaseInvoice>('purchase_invoices', organizationId, { orderBy: 'date', ascending: false, hint: BOOKKEEPING_MIGRATION_HINT });
+
+/** Boekt een inkoopfactuur naar het grootboek (server-side, security definer). */
+export async function bookPurchaseInvoice(organizationId: UUID, purchaseInvoiceId: UUID): Promise<JournalEntry> {
+  const { data, error } = await supabase.rpc('book_purchase_invoice', {
+    p_organization_id: organizationId,
+    p_purchase_invoice_id: purchaseInvoiceId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
+/** Boekt een verkoopfactuur naar het grootboek (omzet + af te dragen BTW). */
+export async function postSalesInvoiceToLedger(organizationId: UUID, invoiceId: UUID): Promise<JournalEntry> {
+  const { data, error } = await supabase.rpc('post_sales_invoice_to_ledger', {
+    p_organization_id: organizationId,
+    p_invoice_id: invoiceId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
+/** Maakt een tegenboeking van een geboekt boekstuk. */
+export async function reverseJournalEntry(entryId: UUID, date?: string): Promise<JournalEntry> {
+  const { data, error } = await supabase.rpc('reverse_journal_entry', {
+    p_entry_id: entryId,
+    p_date: date ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
+/** Boekt een vrije/handmatige journaalpost. p_lines is een array van boekingsregels. */
+export async function postManualJournalEntry(
+  organizationId: UUID,
+  input: { date: string; description: string; lines: Array<Record<string, unknown>> },
+): Promise<JournalEntry> {
+  const { data, error } = await supabase.rpc('post_journal_entry', {
+    p_organization_id: organizationId,
+    p_date: input.date,
+    p_description: input.description,
+    p_source_type: 'manual',
+    p_source_id: null,
+    p_lines: input.lines,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
+/** Legt de beginbalans vast als één onveranderbaar openingsbalans-boekstuk. */
+export async function createOpeningBalance(
+  organizationId: UUID,
+  asOfDate: string,
+  lines: Array<Record<string, unknown>>,
+): Promise<JournalEntry> {
+  const { data, error } = await supabase.rpc('create_opening_balance', {
+    p_organization_id: organizationId,
+    p_as_of_date: asOfDate,
+    p_lines: lines,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
+/** Zorgt dat het standaard rekeningschema + BTW-codes geseed zijn voor de organisatie. */
+export async function ensureDefaultLedgerAccounts(organizationId: UUID): Promise<void> {
+  const { error } = await supabase.rpc('ensure_default_ledger_accounts', {
+    p_organization_id: organizationId,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+function bookkeepingError(error: { message?: string; details?: string }): Error {
+  const message = `${error.message ?? ''} ${error.details ?? ''}`;
+  if (/does not exist|schema cache|function|relation/i.test(message)) {
+    return new Error(`Boekhoud-databasefunctie ontbreekt. ${BOOKKEEPING_MIGRATION_HINT}`);
+  }
+  return new Error(error.message || 'Boekhoudbewerking mislukt.');
 }
 
 export async function insertRow<T>(table: Table, organizationId: UUID, values: Record<string, unknown>): Promise<T> {

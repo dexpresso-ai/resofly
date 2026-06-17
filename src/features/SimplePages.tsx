@@ -42,6 +42,8 @@ const emptySettings: CompanySettingsInput = {
   invoice_accent_color: '#FFD966',
   invoice_font_size: 10,
   invoice_template_updated_at: null,
+  bookkeeping_start_date: null,
+  kor_enabled: false,
 };
 
 const ROLE_LABELS: Record<OrganizationRole, string> = {
@@ -273,7 +275,7 @@ export function Settings({
     return () => { cancelled = true; };
   }, [activeOrganization?.id, canAdminOrganization]);
 
-  const set = (key: keyof CompanySettingsInput, value: string | number | InvoiceTemplateKind | null) => {
+  const set = (key: keyof CompanySettingsInput, value: string | number | boolean | InvoiceTemplateKind | null) => {
     setForm(prev => ({ ...prev, [key]: value }));
     setMessage(null);
     setTemplateError(null);
@@ -717,6 +719,20 @@ export function Settings({
     </section>
 
     <section className="settings-card">
+      <h3>Boekhouding</h3>
+      <p className="settings-help">De boekhoud-startdatum is de knipdatum vanaf wanneer het grootboek leidend is: verkoopfacturen van vóór deze datum worden niet meer naar het grootboek geboekt (die stand zit in je beginbalans). Kies bij voorkeur een kwartaal- of jaargrens. Met de KOR-regeling wordt geen BTW in rekening gebracht en is voorbelasting niet aftrekbaar.</p>
+      <div className="settings-grid">
+        <label className="bk-setting-field"><span>Boekhouding leidend vanaf</span>
+          <Input type="date" value={form.bookkeeping_start_date ?? ''} onChange={e=>set('bookkeeping_start_date', e.target.value || null)} />
+        </label>
+        <label className="bk-setting-check">
+          <input type="checkbox" checked={Boolean(form.kor_enabled)} onChange={e=>set('kor_enabled', e.target.checked)} />
+          <span>KOR (kleineondernemersregeling) actief</span>
+        </label>
+      </div>
+    </section>
+
+    <section className="settings-card">
       <h3>Factuurtemplate &amp; stijl</h3>
       <p className="settings-help">Upload een eigen A4 afbeelding of PDF als achtergrond. Stel de tekstkleur, accentkleur en lettergrootte in — alle wijzigingen zijn direct zichtbaar in het voorbeeld hieronder.</p>
       <div className="field-list">
@@ -1081,6 +1097,8 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     invoice_accent_color: settings.invoice_accent_color ?? '#FFD966',
     invoice_font_size: settings.invoice_font_size ?? 10,
     invoice_template_updated_at: settings.invoice_template_updated_at ?? null,
+    bookkeeping_start_date: settings.bookkeeping_start_date ?? null,
+    kor_enabled: settings.kor_enabled ?? false,
   };
 }
 

@@ -7,7 +7,7 @@ export type FinanceStatus = 'draft' | 'pending_internal_approval' | 'internally_
 export type InvoiceStatus = 'draft' | 'sent' | 'overdue' | 'paid' | 'cancelled' | 'void' | 'written_off' | 'refunded';
 export type NoteType = 'general' | 'meeting' | 'action' | 'decision' | 'idea' | 'support';
 export type DocumentType = 'contract' | 'general' | 'policy' | 'procedure' | 'other';
-export type EntityType = 'client' | 'project' | 'task' | 'subtask' | 'ticket' | 'note' | 'document' | 'quote' | 'invoice' | 'folder';
+export type EntityType = 'client' | 'project' | 'task' | 'subtask' | 'ticket' | 'note' | 'document' | 'quote' | 'invoice' | 'folder' | 'supplier' | 'purchase_invoice';
 export type QuoteApprovalStatus = 'draft' | 'pending' | 'approved' | 'rejected';
 export type QuoteWorkflowEventType = 'created' | 'updated' | 'submitted_for_internal_approval' | 'internal_approval_granted' | 'internal_approval_rejected' | 'public_token_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'client_accepted' | 'client_rejected' | 'quote_version_created' | 'quote_pdf_attached' | 'expired' | 'cancelled' | 'void' | 'written_off';
 export type QuoteEmailDeliveryStatus = 'queued' | 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'failed' | 'complained';
@@ -369,6 +369,7 @@ export interface Invoice extends OrgScopedRow {
   last_pdf_mime_type?: string | null;
   last_pdf_size_bytes?: number | null;
   last_pdf_sha256?: string | null;
+  journal_entry_id?: UUID | null;
   created_at: string;
   updated_at: string;
 }
@@ -548,6 +549,147 @@ export interface CreditNote {
   updated_at: string;
 }
 
+// ---------------------------------------------------------------------------
+// Boekhouding (dubbel boekhouden): grootboek, BTW-codes, journaalposten, inkoop.
+// ---------------------------------------------------------------------------
+export type LedgerAccountType = 'asset' | 'liability' | 'equity' | 'revenue' | 'expense';
+export type VatCodeKind =
+  | 'standard' | 'reduced' | 'zero' | 'exempt'
+  | 'reverse_charge_sales' | 'reverse_charge_purchase'
+  | 'icp_goods' | 'icp_services' | 'eu_acquisition' | 'kor';
+export type JournalEntryStatus = 'draft' | 'posted' | 'reversed';
+export type JournalSourceType =
+  | 'sales_invoice' | 'purchase_invoice' | 'asset_depreciation'
+  | 'vat_return' | 'payment' | 'opening_balance' | 'manual';
+export type PurchaseInvoiceStatus = 'draft' | 'booked' | 'paid' | 'cancelled';
+export type PurchaseInvoicePaymentStatus = 'unpaid' | 'partially_paid' | 'paid';
+export type SupplierStatus = 'active' | 'inactive';
+
+export interface LedgerAccount extends OrgScopedRow {
+  code: string;
+  name: string;
+  type: LedgerAccountType;
+  subtype: string | null;
+  default_vat_code: string | null;
+  is_system: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VatCode extends OrgScopedRow {
+  code: string;
+  label: string;
+  rate: number;
+  kind: VatCodeKind;
+  sales_box: string | null;
+  vat_box: string | null;
+  is_system: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface JournalEntry extends OrgScopedRow {
+  entry_number: string | null;
+  date: string;
+  year: number;
+  quarter: number;
+  month: number;
+  description: string | null;
+  source_type: JournalSourceType;
+  source_id: UUID | null;
+  status: JournalEntryStatus;
+  reverses_entry_id: UUID | null;
+  reversed_by_entry_id: UUID | null;
+  posted_at: string | null;
+  posted_by: UUID | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface JournalLine {
+  id: UUID;
+  organization_id: UUID;
+  entry_id: UUID;
+  account_id: UUID;
+  line_index: number;
+  description: string | null;
+  debit_cents: number;
+  credit_cents: number;
+  vat_code: string | null;
+  vat_rate: number | null;
+  vat_base_cents: number | null;
+  vat_amount_cents: number | null;
+  client_id: UUID | null;
+  supplier_id: UUID | null;
+  project_id: UUID | null;
+  created_at: string;
+}
+
+export interface ClosedPeriod {
+  id: UUID;
+  organization_id: UUID;
+  year: number;
+  quarter: number;
+  closed_at: string;
+  closed_by: UUID | null;
+  created_at: string;
+}
+
+export interface Supplier extends OrgScopedRow {
+  name: string;
+  supplier_code: string | null;
+  contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  address_line1: string | null;
+  address_line2: string | null;
+  postal_code: string | null;
+  city: string | null;
+  country: string | null;
+  vat_number: string | null;
+  kvk_number: string | null;
+  iban: string | null;
+  default_expense_account_id: UUID | null;
+  default_vat_code: string | null;
+  notes: string | null;
+  status: SupplierStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Inkoopfactuur-regel: bedrag excl. btw in centen, met doelrekening + btw-code. */
+export interface PurchaseInvoiceLine {
+  id: UUID;
+  description: string;
+  amount_cents: number;
+  vat_code: string;
+  vat_rate: number;
+  account_id: UUID | null;
+}
+
+export interface PurchaseInvoice extends OrgScopedRow {
+  supplier_id: UUID | null;
+  supplier_invoice_number: string | null;
+  internal_number: string | null;
+  date: string;
+  due_date: string | null;
+  lines: PurchaseInvoiceLine[];
+  subtotal_cents: number;
+  vat_cents: number;
+  total_cents: number;
+  currency: string;
+  status: PurchaseInvoiceStatus;
+  payment_status: PurchaseInvoicePaymentStatus;
+  paid_at: string | null;
+  project_id: UUID | null;
+  journal_entry_id: UUID | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Attachment extends OrgScopedRow {
   entity_type: EntityType; entity_id: UUID; parent_task_id: UUID | null; name: string; mime_type: string; size_bytes: number; storage_key: string; public_url: string | null; created_at: string;
 }
@@ -576,6 +718,8 @@ export interface CompanySettings extends OrgScopedRow {
   invoice_accent_color: string;
   invoice_font_size: number;
   invoice_template_updated_at: string | null;
+  bookkeeping_start_date: string | null;
+  kor_enabled: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -590,7 +734,7 @@ export interface InvoiceMollieSettingsStatus {
   last_validated_at: string | null;
 }
 
-export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';
