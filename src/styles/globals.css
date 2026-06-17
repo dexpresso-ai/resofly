@@ -488,6 +488,19 @@
 .content-toggle span{display:inline-flex;align-items:center;gap:6px}
 .content-toggle:not(.active){opacity:.62}
 .content-actions{display:flex;gap:8px;flex-shrink:0}
+/* Inhoud — zoekbalk + klantnavigator in de sidebar */
+.content-search{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--muted)}
+.content-search svg{flex-shrink:0}
+.content-search input{flex:1;min-width:0;background:none;border:none;color:var(--text);font-size:12px;outline:none;padding:0}
+.content-search input::placeholder{color:var(--muted)}
+.content-nav{display:flex;flex-direction:column;gap:2px;padding:6px}
+.content-nav-row{display:flex;align-items:center;gap:9px;width:100%;background:none;border:none;color:var(--muted2);cursor:pointer;padding:8px 10px;border-radius:8px;text-align:left;font-size:12px}
+.content-nav-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.content-nav-row strong{color:var(--muted);font-size:11px;flex-shrink:0}
+.content-nav-row svg{flex-shrink:0}
+.content-nav-row:hover{background:var(--bg3);color:var(--text)}
+.content-nav-row.active{background:var(--bg4);color:var(--text)}
+.content-nav-row.active strong{color:var(--accent)}
 /* Mappenstructuur per klant */
 .folders-view{display:flex;flex-direction:column;gap:16px}
 .folders-crumbs{display:flex;align-items:center;flex-wrap:wrap;gap:2px;font-size:13px}
