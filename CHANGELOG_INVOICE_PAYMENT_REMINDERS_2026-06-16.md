@@ -39,6 +39,9 @@ vervaldatum automatisch op `overdue` gezet. Maximaal hergebruik van de bestaande
 - `INVOICE_REMINDERS_SETUP_2026-06-16.md`: secrets, migratie, `cron.schedule`-SQL (pg_cron + pg_net), curl-test en gedragsregels.
 - `.env.example`: `INVOICE_REMINDER_CRON_SECRET` + `INVOICE_REMINDER_BATCH_LIMIT`.
 
+## Fix na deploy (20260617000001)
+- `complete_invoice_reminder_send` schrijft een audit-log met action `invoice_reminder_sent`, maar die waarde ontbrak in de bestaande `audit_logs_action_check`-constraint (laatst gezet in `20260603000000`). De eerste herinnering faalde daardoor met code 23514. Migratie `20260617000001_invoice_reminder_audit_action.sql` voegt de actie toe aan de constraint.
+
 ## Bediening / impact
 - Automatische herinneringen staan per organisatie **standaard uit**; de handmatige knop werkt direct.
 - De cron (dagelijks) moet eenmalig worden ingericht met de projectspecifieke URL + secret (zie setup-doc). Zonder cron blijft alleen de handmatige knop actief.
