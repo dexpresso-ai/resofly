@@ -1785,13 +1785,12 @@ body::before{
 .bk-asset-kpis strong{font-size:1.2rem;font-variant-numeric:tabular-nums}
 .bk-asset-kpi-main{border-color:rgba(255,189,89,.4)!important;background:linear-gradient(145deg,rgba(255,189,89,.10),rgba(255,255,255,.02))!important}
 .bk-asset-kpi-main strong{color:var(--accent)}
-/* Sidebar: uitklapbare activalijst met boekwaarde */
-.nav-asset-toggle .nav-asset-chevron{margin-left:auto;display:inline-flex;opacity:.7}
-.nav-asset-list{display:flex;flex-direction:column;margin:2px 0 4px;padding-left:8px;border-left:1px solid var(--border);margin-left:10px}
-.nav-asset{display:flex;align-items:center;justify-content:space-between;gap:8px;background:none;border:none;cursor:pointer;padding:5px 8px;border-radius:8px;color:var(--muted,rgba(245,245,245,.62));font-size:.78rem;text-align:left;width:100%}
-.nav-asset:hover{background:rgba(255,255,255,.05);color:var(--text)}
-.nav-asset-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.nav-asset-value{font-variant-numeric:tabular-nums;font-weight:700;flex-shrink:0;color:var(--text)}
+/* Balans: uitklapbare boekwaarderegel voor vaste activa */
+.bk-balance-group{cursor:pointer}
+.bk-balance-group td{font-weight:700}
+.bk-balance-group:hover td{background:rgba(255,255,255,.04)}
+.bk-group-toggle{display:inline-flex;vertical-align:middle;margin-right:6px;opacity:.75}
+.bk-balance-sub td:first-child{padding-left:30px;color:var(--muted,rgba(245,245,245,.7));font-size:.82rem}
 .bk-report-controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
 .bk-seg{display:inline-flex;border:1px solid var(--border);border-radius:11px;overflow:hidden}
 .bk-seg button{background:none;border:none;padding:8px 14px;color:var(--muted,rgba(245,245,245,.6));cursor:pointer;font-size:.84rem;font-weight:600;display:inline-flex;align-items:center;gap:6px}

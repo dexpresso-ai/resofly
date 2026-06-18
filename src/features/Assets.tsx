@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { CalendarClock, Landmark, Layers, Plus, Trash2 } from 'lucide-react';
 import type { AppData, AssetDepreciation, FixedAsset } from '../types';
 import { Modal } from '../components/Modal';
@@ -57,7 +57,7 @@ function assetBookValue(asset: FixedAsset, deps: AssetDepreciation[]): { posted:
   return { posted, bookValue: asset.acquisition_cost_cents - posted };
 }
 
-export function AssetsPage({ data, organizationId, canWrite, onChanged, openAssetId, onOpened }: PageProps & { openAssetId?: string | null; onOpened?: () => void }) {
+export function AssetsPage({ data, organizationId, canWrite, onChanged }: PageProps) {
   const [edit, setEdit] = useState<FixedAsset | 'new' | null>(null);
   const depsByAsset = useMemo(() => {
     const map = new Map<string, AssetDepreciation[]>();
@@ -67,14 +67,6 @@ export function AssetsPage({ data, organizationId, canWrite, onChanged, openAsse
     }
     return map;
   }, [data.assetDepreciations]);
-
-  // Open een specifiek activum wanneer er vanuit de sidebar op doorgeklikt is.
-  useEffect(() => {
-    if (!openAssetId) return;
-    const asset = data.fixedAssets.find(a => a.id === openAssetId);
-    if (asset) setEdit(asset);
-    onOpened?.();
-  }, [openAssetId, data.fixedAssets, onOpened]);
 
   const totals = useMemo(() => data.fixedAssets.reduce((acc, a) => {
     const { posted, bookValue } = assetBookValue(a, depsByAsset.get(a.id) ?? []);

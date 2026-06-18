@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, Scale, TrendingUp } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Download, Scale, TrendingUp } from 'lucide-react';
 import type { AppData, BalanceSheetRow, ProfitAndLossRow } from '../types';
 import { Button } from '../components/Ui';
 import { euro } from '../lib/format';
@@ -132,7 +132,7 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
         ? <div className="bk-muted bk-report-loading">Laden…</div>
         : view === 'pnl'
           ? <PnlReport current={pnlCurrent} previous={pnlPrevious} period={period} />
-          : <BalanceReport rows={balance} asOf={period.current.to} label={period.current.label} />}
+          : <BalanceReport rows={balance} label={period.current.label} data={data} />}
     </div>
   );
 }
@@ -204,13 +204,31 @@ function PnlReport({ current, previous, period }: { current: ProfitAndLossRow[];
   );
 }
 
-function BalanceReport({ rows, asOf, label }: { rows: BalanceSheetRow[]; asOf: string; label: string }) {
+function BalanceReport({ rows, label, data }: { rows: BalanceSheetRow[]; label: string; data: AppData }) {
+  const [assetsExpanded, setAssetsExpanded] = useState(true);
   const assets = rows.filter(r => r.section === 'asset');
   const liabilities = rows.filter(r => r.section === 'liability');
   const equityAccounts = rows.filter(r => r.section === 'equity');
-  const resultRow = rows.find(r => r.section === 'result');
-  const result = resultRow?.amount_cents ?? 0;
+  const result = rows.find(r => r.section === 'result')?.amount_cents ?? 0;
   const sum = (rs: BalanceSheetRow[]) => rs.reduce((s, r) => s + r.amount_cents, 0);
+
+  // De grootboekrekeningen die de activamodule gebruikt (activarekening +
+  // cumulatieve afschrijving) bundelen tot één boekwaarderegel = aanschaf − afschrijving.
+  const fixedAccountIds = new Set<string>();
+  for (const a of data.fixedAssets) {
+    if (a.asset_account_id) fixedAccountIds.add(a.asset_account_id);
+    if (a.accumulated_depreciation_account_id) fixedAccountIds.add(a.accumulated_depreciation_account_id);
+  }
+  const fixedRows = assets.filter(r => r.account_id && fixedAccountIds.has(r.account_id));
+  const otherAssets = assets.filter(r => !(r.account_id && fixedAccountIds.has(r.account_id)));
+  const fixedNet = sum(fixedRows);
+
+  const postedByAsset = new Map<string, number>();
+  for (const d of data.assetDepreciations) if (d.status === 'posted') postedByAsset.set(d.asset_id, (postedByAsset.get(d.asset_id) ?? 0) + d.amount_cents);
+  const perAsset = data.fixedAssets
+    .map(a => ({ id: a.id, name: a.asset_number ? `${a.asset_number} · ${a.name}` : a.name, bookValue: a.acquisition_cost_cents - (postedByAsset.get(a.id) ?? 0) }))
+    .sort((x, y) => x.name.localeCompare(y.name));
+
   const totalAssets = sum(assets);
   const totalEquity = sum(equityAccounts) + result;
   const totalPassiva = sum(liabilities) + totalEquity;
@@ -220,7 +238,9 @@ function BalanceReport({ rows, asOf, label }: { rows: BalanceSheetRow[]; asOf: s
     `balans-${label.replace(/\s/g, '-')}.csv`,
     ['Sectie', 'Rekening', 'Bedrag'],
     [
-      ...assets.map(r => ['Activa', `${r.code ? r.code + ' · ' : ''}${r.name}`, (r.amount_cents / 100).toFixed(2)]),
+      ...otherAssets.map(r => ['Activa', `${r.code ? r.code + ' · ' : ''}${r.name}`, (r.amount_cents / 100).toFixed(2)] as (string | number)[]),
+      ...(fixedRows.length ? [['Activa', 'Vaste activa (boekwaarde)', (fixedNet / 100).toFixed(2)] as (string | number)[]] : []),
+      ...(fixedRows.length ? perAsset.map(a => ['Activa · vaste activa', a.name, (a.bookValue / 100).toFixed(2)] as (string | number)[]) : []),
       ['', 'Totaal activa', (totalAssets / 100).toFixed(2)],
       ...liabilities.map(r => ['Vreemd vermogen', `${r.code ? r.code + ' · ' : ''}${r.name}`, (r.amount_cents / 100).toFixed(2)]),
       ...equityAccounts.map(r => ['Eigen vermogen', `${r.code ? r.code + ' · ' : ''}${r.name}`, (r.amount_cents / 100).toFixed(2)]),
@@ -246,7 +266,17 @@ function BalanceReport({ rows, asOf, label }: { rows: BalanceSheetRow[]; asOf: s
         <div className="bk-table-wrap"><table className="bk-table bk-report-table">
           <thead><tr><th>Activa</th><th className="bk-num">Bedrag</th></tr></thead>
           <tbody>
-            {assets.length ? assets.map(r => line(`${r.code ? r.code + ' · ' : ''}${r.name}`, r.amount_cents)) : <tr><td colSpan={2} className="bk-muted">Geen activa.</td></tr>}
+            {otherAssets.map(r => line(`${r.code ? r.code + ' · ' : ''}${r.name}`, r.amount_cents))}
+            {fixedRows.length > 0 && <>
+              <tr className="bk-balance-group" onClick={() => setAssetsExpanded(e => !e)} title="Klik om de afzonderlijke activa te tonen">
+                <td><span className="bk-group-toggle">{assetsExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</span> Vaste activa (boekwaarde)</td>
+                <td className="bk-num">{euroCents(fixedNet)}</td>
+              </tr>
+              {assetsExpanded && (perAsset.length
+                ? perAsset.map(a => <tr className="bk-balance-sub" key={a.id}><td>{a.name}</td><td className="bk-num">{euroCents(a.bookValue)}</td></tr>)
+                : <tr className="bk-balance-sub"><td colSpan={2} className="bk-muted">Geen activa geregistreerd.</td></tr>)}
+            </>}
+            {otherAssets.length === 0 && fixedRows.length === 0 && <tr><td colSpan={2} className="bk-muted">Geen activa.</td></tr>}
           </tbody>
           <tfoot><tr className="bk-report-result"><td>Totaal activa</td><td className="bk-num">{euroCents(totalAssets)}</td></tr></tfoot>
         </table></div>
