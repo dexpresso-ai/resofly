@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CreditCard, Mail, Receipt, ShieldCheck, Users } from 'lucide-react';
+import { BookOpen, CreditCard, Mail, Receipt, ShieldCheck, Users } from 'lucide-react';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationRole, Project } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startMollieConnect } from '../services/billingService';
@@ -54,11 +54,12 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   viewer: 'Viewer',
 };
 
-type SettingsTab = 'organisatie' | 'facturatie' | 'betalen' | 'abonnement' | 'email';
+type SettingsTab = 'organisatie' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'email';
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof Users; description: string }> = [
   { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen, en bekijk de recente activiteit.' },
   { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens, factuurtemplate en betaalteksten die op je facturen en offertes verschijnen.' },
+  { id: 'boekhouding', label: 'Boekhouding', Icon: BookOpen, description: 'De boekhoud-startdatum (knipdatum) en de KOR-regeling voor je grootboek en BTW-aangifte.' },
   { id: 'betalen', label: 'Online betalen', Icon: CreditCard, description: 'Koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
   { id: 'abonnement', label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
   { id: 'email', label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails aan, en verstuur een testmail om je configuratie te controleren.' },
@@ -883,20 +884,6 @@ export function Settings({
     </section>
 
     <section className="settings-card">
-      <h3>Boekhouding</h3>
-      <p className="settings-help">De boekhoud-startdatum is de knipdatum vanaf wanneer het grootboek leidend is: verkoopfacturen van vóór deze datum worden niet meer naar het grootboek geboekt (die stand zit in je beginbalans). Kies bij voorkeur een kwartaal- of jaargrens. Met de KOR-regeling wordt geen BTW in rekening gebracht en is voorbelasting niet aftrekbaar.</p>
-      <div className="settings-grid">
-        <label className="bk-setting-field"><span>Boekhouding leidend vanaf</span>
-          <Input type="date" value={form.bookkeeping_start_date ?? ''} onChange={e=>set('bookkeeping_start_date', e.target.value || null)} />
-        </label>
-        <label className="bk-setting-check">
-          <input type="checkbox" checked={Boolean(form.kor_enabled)} onChange={e=>set('kor_enabled', e.target.checked)} />
-          <span>KOR (kleineondernemersregeling) actief</span>
-        </label>
-      </div>
-    </section>
-
-    <section className="settings-card">
       <h3>Factuurtemplate &amp; stijl</h3>
       <p className="settings-help">Upload een eigen A4 afbeelding of PDF als achtergrond. Stel de tekstkleur, accentkleur en lettergrootte in — alle wijzigingen zijn direct zichtbaar in het voorbeeld hieronder.</p>
       <div className="field-list">
@@ -1011,6 +998,27 @@ export function Settings({
       <h3>Betaling en footer</h3>
       <Textarea value={form.invoice_payment_terms ?? ''} onChange={e=>set('invoice_payment_terms', e.target.value)} placeholder="Betaalinstructies" />
       <Textarea value={form.invoice_footer ?? ''} onChange={e=>set('invoice_footer', e.target.value)} placeholder="Footertekst" />
+    </section>
+    </div>}
+
+    {activeTab === 'boekhouding' && <div className="settings-tab-panel">
+    <div className="settings-save-bar">
+      <p className="settings-help">Deze instellingen sturen het grootboek en de BTW-aangifte aan. Wijzigingen worden pas actief nadat je ze opslaat.</p>
+      <Button variant="primary" onClick={save} disabled={isSaving || !canAdminOrganization}>{isSaving ? 'Opslaan…' : 'Opslaan'}</Button>
+    </div>
+    {message && <div className="success">{message}</div>}
+    <section className="settings-card">
+      <h3>Boekhouding</h3>
+      <p className="settings-help">De boekhoud-startdatum is de knipdatum vanaf wanneer het grootboek leidend is: verkoopfacturen van vóór deze datum worden niet meer naar het grootboek geboekt (die stand zit in je beginbalans). Kies bij voorkeur een kwartaal- of jaargrens. Met de KOR-regeling wordt geen BTW in rekening gebracht en is voorbelasting niet aftrekbaar.</p>
+      <div className="settings-grid">
+        <label className="bk-setting-field"><span>Boekhouding leidend vanaf</span>
+          <Input type="date" value={form.bookkeeping_start_date ?? ''} onChange={e=>set('bookkeeping_start_date', e.target.value || null)} disabled={!canAdminOrganization} />
+        </label>
+        <label className="bk-setting-check">
+          <input type="checkbox" checked={Boolean(form.kor_enabled)} onChange={e=>set('kor_enabled', e.target.checked)} disabled={!canAdminOrganization} />
+          <span>KOR (kleineondernemersregeling) actief</span>
+        </label>
+      </div>
     </section>
     </div>}
 
