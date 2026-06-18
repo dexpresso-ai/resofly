@@ -38,6 +38,8 @@ import type {
   AssetDepreciation,
   ProfitAndLossRow,
   BalanceSheetRow,
+  VatReturn,
+  VatReturnRubrieken,
   CalendarNoteLinkInput,
   NoteCalendarLink,
   CalendarEventLink,
@@ -61,7 +63,7 @@ import type {
   UUID,
 } from '../types';
 
-const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'attachments', 'company_settings'] as const;
+const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'attachments', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -83,6 +85,7 @@ const tableToEntity: Record<Table, EntityType | null> = {
   suppliers: 'supplier',
   purchase_invoices: 'purchase_invoice',
   fixed_assets: 'fixed_asset',
+  vat_returns: null,
   attachments: null,
   company_settings: null,
 };
@@ -322,6 +325,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     purchaseInvoices,
     fixedAssets,
     assetDepreciations,
+    vatReturns,
     attachments,
     folders,
     companySettings,
@@ -330,12 +334,12 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectCalendarEventLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId),
-    selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId), selectFixedAssets(organizationId), selectAssetDepreciations(organizationId),
+    selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId), selectFixedAssets(organizationId), selectAssetDepreciations(organizationId), selectVatReturns(organizationId),
     select<Attachment>('attachments', organizationId),
     selectFolders(organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, attachments, companySettings };
+  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, attachments, companySettings };
 }
 
 export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
@@ -800,6 +804,36 @@ export const selectFixedAssets = (organizationId: UUID) =>
   selectOptional<FixedAsset>('fixed_assets', organizationId, { orderBy: 'acquisition_date', ascending: false, hint: BOOKKEEPING_MIGRATION_HINT });
 export const selectAssetDepreciations = (organizationId: UUID) =>
   selectOptional<AssetDepreciation>('asset_depreciations', organizationId, { orderBy: 'date', ascending: true, hint: BOOKKEEPING_MIGRATION_HINT });
+export const selectVatReturns = (organizationId: UUID) =>
+  selectOptional<VatReturn>('vat_returns', organizationId, { orderBy: 'period_start', ascending: false, hint: BOOKKEEPING_MIGRATION_HINT });
+
+/** Berekent de BTW-rubrieken over een periode (alleen geboekte journaalposten). */
+export async function computeVatReturn(organizationId: UUID, from: string, to: string): Promise<VatReturnRubrieken> {
+  const { data, error } = await supabase.rpc('compute_vat_return', {
+    p_organization_id: organizationId,
+    p_from: from,
+    p_to: to,
+  });
+  if (error) throw bookkeepingError(error);
+  return (data ?? {}) as VatReturnRubrieken;
+}
+
+/** Maakt de aangifte definitief: boekt door naar 1530 en vergrendelt de periode. */
+export async function finalizeVatReturn(
+  organizationId: UUID,
+  input: { periodType: 'month' | 'quarter'; year: number; periodIndex: number; from: string; to: string },
+): Promise<VatReturn> {
+  const { data, error } = await supabase.rpc('finalize_vat_return', {
+    p_organization_id: organizationId,
+    p_period_type: input.periodType,
+    p_year: input.year,
+    p_period_index: input.periodIndex,
+    p_from: input.from,
+    p_to: input.to,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as VatReturn;
+}
 
 /** (Her)berekent het lineaire afschrijvingsschema van een activum. */
 export async function generateDepreciationSchedule(organizationId: UUID, assetId: UUID): Promise<AssetDepreciation[]> {

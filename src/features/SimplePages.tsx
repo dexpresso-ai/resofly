@@ -45,6 +45,7 @@ const emptySettings: CompanySettingsInput = {
   invoice_template_updated_at: null,
   bookkeeping_start_date: null,
   kor_enabled: false,
+  vat_return_period: 'quarterly',
 };
 
 const ROLE_LABELS: Record<OrganizationRole, string> = {
@@ -1174,6 +1175,12 @@ export function Settings({
         <label className="bk-setting-field"><span>Boekhouding leidend vanaf</span>
           <Input type="date" value={form.bookkeeping_start_date ?? ''} onChange={e=>set('bookkeeping_start_date', e.target.value || null)} disabled={!canAdminOrganization} />
         </label>
+        <label className="bk-setting-field"><span>BTW-aangifte indienen</span>
+          <select className="form-select" value={form.vat_return_period ?? 'quarterly'} onChange={e=>set('vat_return_period', e.target.value)} disabled={!canAdminOrganization}>
+            <option value="quarterly">Per kwartaal</option>
+            <option value="monthly">Maandelijks</option>
+          </select>
+        </label>
         <label className="bk-setting-check">
           <input type="checkbox" checked={Boolean(form.kor_enabled)} onChange={e=>set('kor_enabled', e.target.checked)} disabled={!canAdminOrganization} />
           <span>KOR (kleineondernemersregeling) actief</span>
@@ -1433,6 +1440,7 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     invoice_template_updated_at: settings.invoice_template_updated_at ?? null,
     bookkeeping_start_date: settings.bookkeeping_start_date ?? null,
     kor_enabled: settings.kor_enabled ?? false,
+    vat_return_period: settings.vat_return_period ?? 'quarterly',
   };
 }
 

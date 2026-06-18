@@ -414,6 +414,46 @@ export interface SendingDomain extends OrgScopedRow {
   updated_at: string;
 }
 
+// Vrije klant-mail: conversaties en berichten (uitgaand nu, inkomend in fase C).
+export type ClientEmailDirection = 'outbound' | 'inbound';
+export type ClientEmailStatus = 'queued' | 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'failed' | 'complained' | 'received';
+
+export interface ClientEmailThread extends OrgScopedRow {
+  client_id: UUID;
+  subject: string;
+  last_message_at: string;
+  last_direction: ClientEmailDirection;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ClientEmail extends OrgScopedRow {
+  thread_id: UUID;
+  client_id: UUID;
+  direction: ClientEmailDirection;
+  provider: string;
+  provider_email_id: string | null;
+  from_email: string;
+  from_name: string | null;
+  to_email: string;
+  subject: string;
+  body_html: string | null;
+  body_text: string | null;
+  status: ClientEmailStatus;
+  sent_at: string | null;
+  delivered_at: string | null;
+  opened_at: string | null;
+  clicked_at: string | null;
+  bounced_at: string | null;
+  failed_at: string | null;
+  complained_at: string | null;
+  received_at: string | null;
+  last_event_at: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface InvoiceWorkflowEvent {
   id: UUID;
   organization_id: UUID;
@@ -588,7 +628,7 @@ export type VatCodeKind =
   | 'icp_goods' | 'icp_services' | 'eu_acquisition' | 'kor';
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed';
 export type JournalSourceType =
-  | 'sales_invoice' | 'purchase_invoice' | 'asset_depreciation'
+  | 'sales_invoice' | 'purchase_invoice' | 'asset_depreciation' | 'asset_acquisition'
   | 'vat_return' | 'payment' | 'opening_balance' | 'manual';
 export type PurchaseInvoiceStatus = 'draft' | 'booked' | 'paid' | 'cancelled';
 export type PurchaseInvoicePaymentStatus = 'unpaid' | 'partially_paid' | 'paid';
@@ -780,6 +820,42 @@ export interface BalanceSheetRow {
   amount_cents: number;
 }
 
+export type VatReturnPeriodType = 'monthly' | 'quarterly';
+export type VatReturnStatus = 'draft' | 'finalized' | 'filed' | 'paid';
+
+/** Rubriektotalen uit compute_vat_return (bedragen in centen). */
+export interface VatReturnRubrieken {
+  omzet_hoog_base: number;
+  omzet_hoog_btw: number;
+  omzet_laag_base: number;
+  omzet_laag_btw: number;
+  omzet_nul_base: number;
+  verlegd_btw: number;
+  verschuldigd_total: number;
+  voorbelasting: number;
+  saldo: number;
+}
+
+export interface VatReturn {
+  id: UUID;
+  organization_id: UUID;
+  created_by: UUID | null;
+  /** In de database: 'month' | 'quarter' (de instelling gebruikt 'monthly'/'quarterly'). */
+  period_type: 'month' | 'quarter';
+  year: number;
+  period_index: number;
+  period_start: string;
+  period_end: string;
+  status: VatReturnStatus;
+  rubrieken: VatReturnRubrieken;
+  journal_entry_id: UUID | null;
+  supplements_return_id: UUID | null;
+  notes: string | null;
+  finalized_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Attachment extends OrgScopedRow {
   entity_type: EntityType; entity_id: UUID; parent_task_id: UUID | null; name: string; mime_type: string; size_bytes: number; storage_key: string; public_url: string | null; created_at: string;
 }
@@ -810,6 +886,7 @@ export interface CompanySettings extends OrgScopedRow {
   invoice_template_updated_at: string | null;
   bookkeeping_start_date: string | null;
   kor_enabled: boolean;
+  vat_return_period: VatReturnPeriodType;
   created_at: string;
   updated_at: string;
 }
@@ -852,7 +929,7 @@ export interface InvoiceMollieSettingsStatus {
   last_validated_at: string | null;
 }
 
-export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';

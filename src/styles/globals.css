@@ -1791,6 +1791,11 @@ body::before{
 .bk-balance-group:hover td{background:rgba(255,255,255,.04)}
 .bk-group-toggle{display:inline-flex;vertical-align:middle;margin-right:6px;opacity:.75}
 .bk-balance-sub td:first-child{padding-left:30px;color:var(--muted,rgba(245,245,245,.7));font-size:.82rem}
+.bk-vat-status{display:flex;align-items:center}
+.bk-vat-status .status-pill{display:inline-flex;align-items:center;gap:6px;margin-top:0}
+.bk-vat-finalized{border-color:rgba(255,189,89,.5);color:var(--accent)}
+.bk-vat-filed{border-color:rgba(96,165,250,.5);color:#60a5fa}
+.bk-vat-paid{border-color:rgba(52,211,153,.5);color:#34d399}
 .bk-report-controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
 .bk-seg{display:inline-flex;border:1px solid var(--border);border-radius:11px;overflow:hidden}
 .bk-seg button{background:none;border:none;padding:8px 14px;color:var(--muted,rgba(245,245,245,.6));cursor:pointer;font-size:.84rem;font-weight:600;display:inline-flex;align-items:center;gap:6px}
