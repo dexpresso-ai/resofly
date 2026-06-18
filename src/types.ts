@@ -707,6 +707,7 @@ export interface FixedAsset extends OrgScopedRow {
   depreciation_account_id: UUID;
   accumulated_depreciation_account_id: UUID;
   source_purchase_invoice_id: UUID | null;
+  acquisition_journal_entry_id: UUID | null;
   status: FixedAssetStatus;
   disposal_date: string | null;
   disposal_proceeds_cents: number | null;

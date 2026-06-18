@@ -821,6 +821,18 @@ export async function postAssetDepreciation(organizationId: UUID, assetId: UUID,
   return (Array.isArray(data) ? data[0] : data) as FixedAsset;
 }
 
+/** Boekt de aanschaf van een activum naar de balans (debet activa / credit tegenrekening). */
+export async function bookAssetAcquisition(organizationId: UUID, assetId: UUID, creditAccountId: UUID, date?: string): Promise<FixedAsset> {
+  const { data, error } = await supabase.rpc('book_asset_acquisition', {
+    p_organization_id: organizationId,
+    p_asset_id: assetId,
+    p_credit_account_id: creditAccountId,
+    p_date: date ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as FixedAsset;
+}
+
 /** Winst- en verliesrekening over een periode (alleen geboekte journaalposten). */
 export async function reportProfitAndLoss(organizationId: UUID, from: string, to: string): Promise<ProfitAndLossRow[]> {
   const { data, error } = await supabase.rpc('report_profit_and_loss', {

@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
-import { CalendarClock, Layers, Plus, Trash2 } from 'lucide-react';
+import { CalendarClock, Landmark, Layers, Plus, Trash2 } from 'lucide-react';
 import type { AppData, AssetDepreciation, FixedAsset } from '../types';
 import { Modal } from '../components/Modal';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { dateNL, euro, uid } from '../lib/format';
 import {
-  deleteRow, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, postAssetDepreciation, updateRow,
+  bookAssetAcquisition, deleteRow, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, postAssetDepreciation, updateRow,
 } from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
@@ -116,6 +116,8 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
   const assetAccounts = data.ledgerAccounts.filter(a => a.type === 'asset');
   const expenseAccounts = data.ledgerAccounts.filter(a => a.type === 'expense');
   const today = new Date().toISOString().slice(0, 10);
+  // Tegenrekeningen voor de aanschafboeking: meestal Crediteuren of Bank, soms Eigen vermogen.
+  const creditAccounts = data.ledgerAccounts.filter(a => a.is_active && (a.type === 'liability' || a.type === 'asset' || a.type === 'equity') && a.id !== (asset?.asset_account_id ?? ''));
 
   // currentAsset houdt het opgeslagen activum vast zodat we ná aanmaken direct het
   // schema kunnen genereren zonder de modal te sluiten.
@@ -136,6 +138,7 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [throughDate, setThroughDate] = useState<string>(endOfCurrentMonth());
+  const [creditAccountId, setCreditAccountId] = useState<string>(() => accountId('1600'));
   const set = (k: string, v: unknown) => setForm(f => ({ ...f, [k]: v }));
 
   const schedule = useMemo(
@@ -168,6 +171,14 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
       setCurrentAsset(saved);
       onChanged();
     } catch (e) { setError(e instanceof Error ? e.message : 'Opslaan mislukt'); }
+    finally { setBusy(false); }
+  }
+
+  async function bookAcquisition() {
+    if (!currentAsset || !creditAccountId) return;
+    setBusy(true); setError(null);
+    try { const updated = await bookAssetAcquisition(organizationId, currentAsset.id, creditAccountId); setCurrentAsset(updated); onChanged(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Aanschaf boeken mislukt'); }
     finally { setBusy(false); }
   }
 
@@ -243,6 +254,24 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
         </Field>
       </div>
       <Field label="Notities"><Textarea value={form.notes} onChange={e => set('notes', e.target.value)} disabled={!canWrite} rows={2} /></Field>
+
+      {currentAsset && (
+        currentAsset.acquisition_journal_entry_id
+          ? <div className="bk-note bk-acq-done"><Landmark size={14} /> De aanschaf staat op de balans (debet activarekening / credit tegenrekening). Boekwaarde = aanschaf − cumulatieve afschrijving.</div>
+          : <div className="bk-acq">
+              <div className="bk-acq-text">
+                <strong>Aanschaf nog niet op de balans.</strong>
+                <span className="bk-muted"> Boek de aanschafwaarde debet op de activarekening / credit een tegenrekening, zodat de boekwaarde op de balans verschijnt. Doe dit níét als de aanschaf al via een inkoopfactuur op de activarekening is geboekt (dan telt het dubbel).</span>
+              </div>
+              <div className="bk-acq-actions">
+                <Select value={creditAccountId} onChange={e => setCreditAccountId(e.target.value)} disabled={!canWrite}>
+                  <option value="">— tegenrekening —</option>
+                  {creditAccounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+                </Select>
+                {canWrite && <Button variant="primary" onClick={bookAcquisition} disabled={busy || !creditAccountId}><Landmark size={14} /> Boek aanschaf</Button>}
+              </div>
+            </div>
+      )}
 
       {currentAsset ? (
         <div className="bk-schedule">

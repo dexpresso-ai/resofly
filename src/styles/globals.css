@@ -1775,6 +1775,10 @@ body::before{
 .bk-post-inline{display:inline-flex;align-items:center;gap:8px}
 .bk-post-inline .form-input{min-height:36px}
 .bk-schedule-hint{margin-top:14px}
+.bk-acq{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-top:14px;padding:13px 15px;border:1px solid rgba(255,189,89,.35);border-radius:14px;background:linear-gradient(145deg,rgba(255,189,89,.09),rgba(255,255,255,.02))}
+.bk-acq-text{max-width:560px;font-size:.85rem}
+.bk-acq-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.bk-acq-done{display:flex;align-items:center;gap:8px;margin-top:14px}
 .bk-report-controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
 .bk-seg{display:inline-flex;border:1px solid var(--border);border-radius:11px;overflow:hidden}
 .bk-seg button{background:none;border:none;padding:8px 14px;color:var(--muted,rgba(245,245,245,.6));cursor:pointer;font-size:.84rem;font-weight:600;display:inline-flex;align-items:center;gap:6px}
