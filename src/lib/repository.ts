@@ -9,6 +9,9 @@ import type {
   Client,
   CompanySettings,
   CompanySettingsInput,
+  EmailTemplate,
+  EmailTemplateInput,
+  EmailTemplateKey,
   EntityType,
   Invoice,
   InvoiceEmailDelivery,
@@ -1239,6 +1242,66 @@ export async function saveInvoiceReminderSettings(
     .single();
   if (error) throw error;
   return data as InvoiceReminderSettings;
+}
+
+const EMAIL_TEMPLATE_COLUMNS = 'id,organization_id,created_by,template_key,enabled,subject,intro,closing,cta_label,created_at,updated_at';
+
+/**
+ * Laad alle aangepaste e-mailteksten van een organisatie. Sleutels zonder rij
+ * gebruiken in de mail de ingebouwde standaardtekst — de editor toont die default
+ * dan vanuit de frontend-catalogus. RLS: elk lid mag lezen.
+ */
+export async function loadEmailTemplates(organizationId: UUID): Promise<EmailTemplate[]> {
+  const { data, error } = await supabase
+    .from('email_templates')
+    .select(EMAIL_TEMPLATE_COLUMNS)
+    .eq('organization_id', organizationId);
+  if (error) throw error;
+  return (data ?? []) as EmailTemplate[];
+}
+
+/**
+ * Sla de aangepaste tekst voor één template-sleutel op (RLS: alleen owners/admins).
+ * Een directe upsert volstaat — er zit geen secret in deze teksten. Lege velden
+ * worden als null bewaard zodat de mail terugvalt op de standaardtekst.
+ */
+export async function upsertEmailTemplate(organizationId: UUID, templateKey: EmailTemplateKey, input: EmailTemplateInput): Promise<EmailTemplate> {
+  const createdBy = await currentUserId();
+  const trimOrNull = (value: string | null) => {
+    const trimmed = String(value ?? '').trim();
+    return trimmed ? trimmed : null;
+  };
+  const { data, error } = await supabase
+    .from('email_templates')
+    .upsert({
+      organization_id: organizationId,
+      created_by: createdBy,
+      template_key: templateKey,
+      enabled: input.enabled,
+      subject: trimOrNull(input.subject),
+      intro: trimOrNull(input.intro),
+      closing: trimOrNull(input.closing),
+      cta_label: trimOrNull(input.cta_label),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'organization_id,template_key' })
+    .select(EMAIL_TEMPLATE_COLUMNS)
+    .single();
+  if (error) throw error;
+  return data as EmailTemplate;
+}
+
+/**
+ * Zet één template terug naar de standaardtekst door de aangepaste rij te
+ * verwijderen (RLS: alleen owners/admins). De mail valt daarna terug op de
+ * ingebouwde standaardtekst van de Edge Function.
+ */
+export async function resetEmailTemplate(organizationId: UUID, templateKey: EmailTemplateKey): Promise<void> {
+  const { error } = await supabase
+    .from('email_templates')
+    .delete()
+    .eq('organization_id', organizationId)
+    .eq('template_key', templateKey);
+  if (error) throw error;
 }
 
 /**

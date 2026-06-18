@@ -1,7 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB } from 'https://esm.sh/pdf-lib@1.17.1';
-import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
+import { renderEmailTemplate, type EmailTemplateContent, type EmailTemplateContentKey } from '../_shared/emailTemplates/index.ts';
 import { decryptSecret, encryptSecret, mollieKeySuffix, validateMollieApiKey } from '../_shared/mollieSecrets.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
@@ -162,11 +162,12 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   if (['paid','cancelled','void','written_off'].includes(invoice.status)) throw new WorkflowHttpError('Betaalde, geannuleerde of afgeboekte facturen kunnen niet worden verstuurd.', 409);
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
 
-  const [client, project, quote, company] = await Promise.all([
+  const [client, project, quote, company, content] = await Promise.all([
     loadClient(organizationId, invoice.client_id),
     invoice.project_id ? loadProject(organizationId, invoice.project_id) : Promise.resolve(null),
     invoice.quote_id ? loadQuote(organizationId, invoice.quote_id) : Promise.resolve(null),
     loadCompanySettings(organizationId),
+    loadEmailTemplateContent(organizationId, 'invoice.sent'),
   ]);
 
   const recipientEmail = String(body.recipientEmail || client.email || '').trim().toLowerCase();
@@ -199,7 +200,7 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     }
   }
 
-  const renderedEmail = renderEmailTemplate('invoice.sent', { invoice, client, project, quote, company, publicUrl, paymentUrl, recipientName, expiresAt });
+  const renderedEmail = renderEmailTemplate('invoice.sent', { invoice, client, project, quote, company, publicUrl, paymentUrl, recipientName, expiresAt, content });
   const subject = String(body.subject || renderedEmail.subject || '').trim();
   if (!subject) throw new WorkflowHttpError('Er kon geen onderwerp voor de factuur-e-mail worden bepaald.', 500);
 
@@ -376,10 +377,11 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
   if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) throw new WorkflowHttpError('Voor deze factuur kan geen herinnering worden verstuurd.', 409);
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
 
-  const [client, project, company] = await Promise.all([
+  const [client, project, company, content] = await Promise.all([
     loadClient(organizationId, invoice.client_id),
     invoice.project_id ? loadProject(organizationId, invoice.project_id) : Promise.resolve(null),
     loadCompanySettings(organizationId),
+    loadEmailTemplateContent(organizationId, `invoice.reminder.${level}` as EmailTemplateContentKey),
   ]);
 
   const recipientEmail = String(input.recipientEmail || client.email || '').trim().toLowerCase();
@@ -406,7 +408,7 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
     }
   }
 
-  const rendered = renderEmailTemplate('invoice.reminder', { level, invoice, client, project, company, publicUrl, paymentUrl, recipientName, daysOverdue: input.daysOverdue ?? null });
+  const rendered = renderEmailTemplate('invoice.reminder', { level, invoice, client, project, company, publicUrl, paymentUrl, recipientName, daysOverdue: input.daysOverdue ?? null, content });
   const subject = rendered.subject;
 
   // PDF: hergebruik de opgeslagen snapshot (exact wat de klant eerder kreeg). Is er
@@ -1071,6 +1073,7 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
   const creditNoteNumber = String(input.creditNote.number || '');
   const fileName = String(input.creditNote.pdf_file_name || `creditfactuur-${creditNoteNumber}.pdf`);
   const recipientName = input.recipientName?.trim() || input.client.contact_name || input.client.name || null;
+  const content = await loadEmailTemplateContent(input.organizationId, 'creditNote.sent');
 
   const rendered = renderEmailTemplate('creditNote.sent', {
     creditNote: {
@@ -1084,6 +1087,7 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
     client: { name: input.client.name, contact_name: input.client.contact_name, email: input.client.email },
     company: input.company,
     recipientName,
+    content,
   });
 
   const resendPayload = {
@@ -1526,6 +1530,23 @@ async function loadQuote(organizationId: string, quoteId: string): Promise<Quote
 async function loadCompanySettings(organizationId: string): Promise<CompanySettingsRow | null> {
   const { data, error } = await supabaseAdmin.from('company_settings').select('company_name,trade_name,address_line1,address_line2,postal_code,city,country,email,phone,website,kvk_number,vat_number,iban,invoice_payment_terms,invoice_footer,invoice_accent_color').eq('organization_id', organizationId).maybeSingle();
   if (error) throwSupabaseError('company_settings lookup', error); return (data ?? null) as CompanySettingsRow | null;
+}
+
+// Per-organisatie aanpasbare e-mailtekst (onderwerp/aanhef/afsluiting/knoptekst).
+// Geeft null terug als er geen aangepaste regel is — de template valt dan terug op
+// de ingebouwde standaardtekst. Een lookup-fout is bewust niet fataal: de mail moet
+// altijd verstuurd kunnen worden, desnoods met de standaardtekst.
+async function loadEmailTemplateContent(organizationId: string, templateKey: EmailTemplateContentKey): Promise<EmailTemplateContent | null> {
+  const { data, error } = await supabaseAdmin
+    .from('email_templates')
+    .select('enabled,subject,intro,closing,cta_label')
+    .eq('organization_id', organizationId)
+    .eq('template_key', templateKey)
+    .maybeSingle();
+  if (error) { console.warn('email_templates lookup mislukte', error.message); return null; }
+  if (!data) return null;
+  const row = data as { enabled: boolean; subject: string | null; intro: string | null; closing: string | null; cta_label: string | null };
+  return { enabled: row.enabled, subject: row.subject, intro: row.intro, closing: row.closing, ctaLabel: row.cta_label };
 }
 async function loadLatestOpenPayment(organizationId: string, invoiceId: string): Promise<{ id: string; provider_checkout_url: string | null; provider_payment_id: string | null; status: string; checkout_expires_at?: string | null } | null> {
   const { data, error } = await supabaseAdmin

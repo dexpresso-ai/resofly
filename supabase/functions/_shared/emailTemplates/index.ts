@@ -5,7 +5,7 @@ import { renderQuoteSentEmail } from './quoteSent.ts';
 import { renderResendTestEmail } from './testResend.ts';
 import type { EmailTemplateInputMap, EmailTemplateKey, RenderedEmailTemplate } from './types.ts';
 
-export type { EmailTemplateInputMap, EmailTemplateKey, RenderedEmailTemplate } from './types.ts';
+export type { EmailTemplateContent, EmailTemplateContentKey, EmailTemplateInputMap, EmailTemplateKey, RenderedEmailTemplate } from './types.ts';
 
 export function renderEmailTemplate<K extends EmailTemplateKey>(templateKey: K, data: EmailTemplateInputMap[K]): RenderedEmailTemplate {
   switch (templateKey) {

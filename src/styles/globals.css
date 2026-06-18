@@ -196,6 +196,27 @@
 .field-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:-2px}
 .field-list span{font-size:11px;color:var(--muted2);background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:7px 9px;line-height:1.35}
 @media(max-width:900px){.field-list{grid-template-columns:1fr}}
+/* E-mailteksten-editor */
+.email-templates-card code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;background:var(--bg4);border:1px solid var(--border);border-radius:5px;padding:1px 5px;color:var(--text)}
+.email-template-editor{display:flex;flex-direction:column;gap:14px}
+.email-template-field{display:flex;flex-direction:column;gap:5px}
+.email-template-field>span{font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--muted2)}
+.email-template-field small{font-size:11px;color:var(--muted)}
+.email-template-field .form-textarea{min-height:80px;line-height:1.55;resize:vertical}
+.email-template-placeholders{display:flex;flex-direction:column;gap:8px;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px}
+.email-template-placeholders strong{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted2)}
+.email-placeholder-chips{display:flex;flex-wrap:wrap;gap:6px}
+.email-placeholder-chip{font-size:11px;color:var(--muted2);background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:4px 8px;line-height:1.4}
+.email-template-preview{display:flex;flex-direction:column;gap:8px}
+.email-template-preview strong{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted2)}
+.email-preview-box{background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.email-preview-subject{font-weight:800;font-size:14px;color:var(--text);border-bottom:1px solid var(--border);padding-bottom:8px}
+.email-preview-body{display:flex;flex-direction:column;gap:8px;font-size:13px;line-height:1.6;color:var(--muted2)}
+.email-preview-body p{margin:0}
+.email-preview-structural{font-size:11px;font-style:italic;color:var(--muted);background:var(--bg2);border:1px dashed var(--border2);border-radius:8px;padding:8px 10px}
+.email-preview-cta{display:inline-block;background:var(--accent);color:#1a1a1a;font-weight:700;border-radius:10px;padding:8px 14px;font-size:12px}
+.email-template-actions{display:flex;gap:8px;flex-wrap:wrap}
+@media(max-width:900px){.email-template-actions .btn{flex:1}}
 .template-upload-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .template-upload-row input[type=file]{font-size:12px;color:var(--muted2)}
 .template-meta{display:flex;flex-direction:column;gap:3px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--muted2)}

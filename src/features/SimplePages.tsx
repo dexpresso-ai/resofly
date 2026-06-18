@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { CreditCard, Mail, Receipt, ShieldCheck, Users } from 'lucide-react';
-import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationRole, Project } from '../types';
+import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationRole, Project } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startMollieConnect } from '../services/billingService';
 import { sendResendTestEmail } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings } from '../lib/repository';
+import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate } from '../lib/repository';
+import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -60,7 +61,7 @@ const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof Users;
   { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens, factuurtemplate en betaalteksten die op je facturen en offertes verschijnen.' },
   { id: 'betalen', label: 'Online betalen', Icon: CreditCard, description: 'Koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
   { id: 'abonnement', label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
-  { id: 'email', label: 'E-mail', Icon: Mail, description: 'Verstuur een testmail om je e-mailconfiguratie te controleren.' },
+  { id: 'email', label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails aan, en verstuur een testmail om je configuratie te controleren.' },
 ];
 
 export function CalendarPage() {
@@ -179,6 +180,169 @@ function InvoiceReminderSettingsCard({ organizationId, canAdmin }: { organizatio
         </div>
         <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Opslaan…' : 'Herinneringen opslaan'}</Button>
       </>}
+  </section>;
+}
+
+type EmailTemplateForm = { subject: string; intro: string; closing: string; cta_label: string };
+
+function formFromTemplate(meta: typeof EMAIL_TEMPLATES[number], row: EmailTemplate | undefined): EmailTemplateForm {
+  // Prefill met de opgeslagen tekst; een leeg veld valt terug op de standaardtekst,
+  // zodat de gebruiker altijd de huidige effectieve tekst ziet en kan bijwerken.
+  return {
+    subject: row?.subject ?? meta.defaults.subject,
+    intro: row?.intro ?? meta.defaults.intro,
+    closing: row?.closing ?? meta.defaults.closing,
+    cta_label: row?.cta_label ?? meta.defaults.cta_label,
+  };
+}
+
+function EmailTemplatesCard({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
+  const [rows, setRows] = useState<Record<string, EmailTemplate>>({});
+  const [loaded, setLoaded] = useState(false);
+  const [activeKey, setActiveKey] = useState<EmailTemplateKey>(EMAIL_TEMPLATES[0].key);
+  const [form, setForm] = useState<EmailTemplateForm>(() => formFromTemplate(EMAIL_TEMPLATES[0], undefined));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const meta = EMAIL_TEMPLATES.find(t => t.key === activeKey) ?? EMAIL_TEMPLATES[0];
+  const isCustomized = Boolean(rows[activeKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    setError(null);
+    loadEmailTemplates(organizationId)
+      .then(loadedRows => {
+        if (cancelled) return;
+        const map: Record<string, EmailTemplate> = {};
+        for (const row of loadedRows) map[row.template_key] = row;
+        setRows(map);
+        setLoaded(true);
+      })
+      .catch(err => { if (!cancelled) { setError(err instanceof Error ? err.message : 'E-mailteksten laden mislukt.'); setLoaded(true); } });
+    return () => { cancelled = true; };
+  }, [organizationId]);
+
+  // Herinitialiseer het formulier zodra de geselecteerde template of de geladen
+  // rijen wijzigen.
+  useEffect(() => {
+    setForm(formFromTemplate(meta, rows[activeKey]));
+    setMessage(null);
+    setError(null);
+  }, [activeKey, rows, meta]);
+
+  const setField = (field: EmailField, value: string) => {
+    setForm(prev => ({ ...prev, [field]: value }));
+    setMessage(null);
+  };
+
+  async function save() {
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      const input: EmailTemplateInput = {
+        enabled: true,
+        subject: meta.fields.includes('subject') ? form.subject : null,
+        intro: meta.fields.includes('intro') ? form.intro : null,
+        closing: meta.fields.includes('closing') ? form.closing : null,
+        cta_label: meta.fields.includes('cta_label') ? form.cta_label : null,
+      };
+      const saved = await upsertEmailTemplate(organizationId, activeKey, input);
+      setRows(prev => ({ ...prev, [activeKey]: saved }));
+      setMessage('E-mailtekst opgeslagen. Nieuwe e-mails gebruiken deze tekst direct.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'E-mailtekst opslaan mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reset() {
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      await resetEmailTemplate(organizationId, activeKey);
+      setRows(prev => { const next = { ...prev }; delete next[activeKey]; return next; });
+      setForm(formFromTemplate(meta, undefined));
+      setMessage('Teruggezet naar de standaardtekst.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Terugzetten mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <section className="settings-card organization-card email-templates-card">
+    <div className="settings-card-head">
+      <div>
+        <h3>E-mailteksten aanpassen</h3>
+        <p className="settings-help">Bepaal zelf het onderwerp, de aanhef, de afsluiting en de knoptekst van je uitgaande e-mails. De bedragen, datums, beveiligde link en PDF-bijlage worden automatisch ingevuld en blijven correct. Plaatshouders zoals <code>{'{{recipient_name}}'}</code> worden bij het versturen vervangen.</p>
+      </div>
+    </div>
+
+    {message && <div className="success">{message}</div>}
+    {error && <div className="error">{error}</div>}
+
+    {!loaded ? <p className="settings-help">E-mailteksten laden…</p> : <>
+      <div className="settings-grid compact">
+        <label>E-mail
+          <Select value={activeKey} onChange={e => setActiveKey(e.target.value as EmailTemplateKey)}>
+            {EMAIL_TEMPLATES.map(t => <option key={t.key} value={t.key}>{t.label}{rows[t.key] ? ' • aangepast' : ''}</option>)}
+          </Select>
+        </label>
+      </div>
+      <p className="settings-help">{meta.description}</p>
+
+      <div className="email-template-editor">
+        {meta.fields.includes('subject') && <label className="email-template-field">
+          <span>{EMAIL_FIELD_LABELS.subject}</span>
+          <Input value={form.subject} onChange={e => setField('subject', e.target.value)} disabled={!canAdmin} placeholder={meta.defaults.subject} />
+          <small>{EMAIL_FIELD_HINTS.subject}</small>
+        </label>}
+
+        {meta.fields.includes('intro') && <label className="email-template-field">
+          <span>{EMAIL_FIELD_LABELS.intro}</span>
+          <Textarea value={form.intro} onChange={e => setField('intro', e.target.value)} disabled={!canAdmin} rows={5} placeholder={meta.defaults.intro} />
+          <small>{EMAIL_FIELD_HINTS.intro}</small>
+        </label>}
+
+        {meta.fields.includes('closing') && <label className="email-template-field">
+          <span>{EMAIL_FIELD_LABELS.closing}</span>
+          <Textarea value={form.closing} onChange={e => setField('closing', e.target.value)} disabled={!canAdmin} rows={3} placeholder={meta.defaults.closing || 'Optioneel — laat leeg om weg te laten'} />
+          <small>{EMAIL_FIELD_HINTS.closing}</small>
+        </label>}
+
+        {meta.fields.includes('cta_label') && <label className="email-template-field">
+          <span>{EMAIL_FIELD_LABELS.cta_label}</span>
+          <Input value={form.cta_label} onChange={e => setField('cta_label', e.target.value)} disabled={!canAdmin} placeholder={meta.defaults.cta_label} />
+          <small>{EMAIL_FIELD_HINTS.cta_label}</small>
+        </label>}
+      </div>
+
+      <div className="email-template-placeholders">
+        <strong>Beschikbare plaatshouders</strong>
+        <div className="email-placeholder-chips">
+          {meta.placeholders.map(p => <span key={p.token} className="email-placeholder-chip" title={p.example}><code>{`{{${p.token}}}`}</code> {p.label}</span>)}
+        </div>
+      </div>
+
+      <div className="email-template-preview">
+        <strong>Voorbeeld</strong>
+        <div className="email-preview-box">
+          <div className="email-preview-subject">{fillPlaceholders(form.subject || meta.defaults.subject) || '(geen onderwerp)'}</div>
+          <div className="email-preview-body">
+            {fillPlaceholders(form.intro || meta.defaults.intro).split('\n').map((line, i) => <p key={i}>{line || ' '}</p>)}
+            <p className="email-preview-structural">— Hier vult ResoFly automatisch het overzicht in: bedrag, datums{meta.group === 'offerte' ? ' en geldigheid' : ''}.</p>
+            {form.closing.trim() && fillPlaceholders(form.closing).split('\n').map((line, i) => <p key={`c${i}`}>{line || ' '}</p>)}
+            {meta.fields.includes('cta_label') && <p><span className="email-preview-cta">{fillPlaceholders(form.cta_label || meta.defaults.cta_label)}</span></p>}
+          </div>
+        </div>
+      </div>
+
+      {canAdmin ? <div className="email-template-actions">
+        <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Opslaan…' : 'E-mailtekst opslaan'}</Button>
+        <Button onClick={reset} disabled={busy || !isCustomized}>Herstel standaardtekst</Button>
+      </div> : <p className="settings-help">Alleen owners en admins kunnen e-mailteksten aanpassen.</p>}
+    </>}
   </section>;
 }
 
@@ -1001,6 +1165,7 @@ export function Settings({
     </div>}
 
     {activeTab === 'email' && <div className="settings-tab-panel">
+    {activeOrganization && <EmailTemplatesCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     <section className="settings-card organization-card">
       <div className="settings-card-head">
         <div>

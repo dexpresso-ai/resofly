@@ -725,6 +725,34 @@ export interface CompanySettings extends OrgScopedRow {
 }
 export type CompanySettingsInput = Omit<CompanySettings, 'id' | 'organization_id' | 'created_by' | 'created_at' | 'updated_at'>;
 
+// Per-organisatie aanpasbare e-mailteksten. De sleutels komen exact overeen met de
+// template_key-waarden in de email_templates-tabel en de Edge Function-registry.
+// Herinneringen hebben een sleutel per niveau zodat de toon per niveau verschilt.
+export type EmailTemplateKey =
+  | 'quote.sent'
+  | 'invoice.sent'
+  | 'invoice.reminder.1'
+  | 'invoice.reminder.2'
+  | 'invoice.reminder.3'
+  | 'creditNote.sent';
+
+export interface EmailTemplate extends OrgScopedRow {
+  template_key: EmailTemplateKey;
+  enabled: boolean;
+  subject: string | null;
+  intro: string | null;
+  closing: string | null;
+  cta_label: string | null;
+}
+
+export type EmailTemplateInput = {
+  enabled: boolean;
+  subject: string | null;
+  intro: string | null;
+  closing: string | null;
+  cta_label: string | null;
+};
+
 export type InvoiceMollieConnectionStatus = 'not_connected' | 'connected' | 'revoked';
 export interface InvoiceMollieSettingsStatus {
   status: InvoiceMollieConnectionStatus;

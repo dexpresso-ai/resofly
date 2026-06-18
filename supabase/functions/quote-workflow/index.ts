@@ -9,7 +9,7 @@ import {
   type RGB,
 } from 'https://esm.sh/pdf-lib@1.17.1';
 
-import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
+import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 
@@ -301,12 +301,13 @@ async function sendQuoteEmail(
     );
   }
 
-  const [client, project, company] = await Promise.all([
+  const [client, project, company, content] = await Promise.all([
     loadClient(organizationId, quote.client_id),
     quote.project_id
       ? loadProject(organizationId, quote.project_id)
       : Promise.resolve(null),
     loadCompanySettings(organizationId),
+    loadQuoteEmailContent(organizationId),
   ]);
 
   const recipientEmail = String(body.recipientEmail || client.email || '')
@@ -343,6 +344,7 @@ async function sendQuoteEmail(
     publicUrl,
     recipientName,
     expiresAt,
+    content,
   }) as RenderedEmailTemplate;
 
   const subject = String(body.subject || renderedEmail.subject || '').trim();
@@ -561,6 +563,25 @@ async function loadCompanySettings(
   }
 
   return (data ?? null) as CompanySettingsRow | null;
+}
+
+// Per-organisatie aanpasbare offerte-mailtekst. Geeft null terug als er geen
+// aangepaste regel is — de template valt dan terug op de standaardtekst. Een
+// lookup-fout is niet fataal: de offerte moet altijd verstuurd kunnen worden.
+async function loadQuoteEmailContent(organizationId: string): Promise<EmailTemplateContent | null> {
+  const { data, error } = await supabaseAdmin
+    .from('email_templates')
+    .select('enabled,subject,intro,closing,cta_label')
+    .eq('organization_id', organizationId)
+    .eq('template_key', 'quote.sent')
+    .maybeSingle();
+  if (error) {
+    console.warn('email_templates lookup mislukte', error.message);
+    return null;
+  }
+  if (!data) return null;
+  const row = data as { enabled: boolean; subject: string | null; intro: string | null; closing: string | null; cta_label: string | null };
+  return { enabled: row.enabled, subject: row.subject, intro: row.intro, closing: row.closing, ctaLabel: row.cta_label };
 }
 
 async function beginQuoteEmailSend(input: {

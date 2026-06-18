@@ -1,4 +1,19 @@
+import type { EmailTemplateContent } from './content.ts';
+
+export type { EmailTemplateContent } from './content.ts';
+
 export type EmailTemplateKey = 'test.resend' | 'quote.sent' | 'invoice.sent' | 'invoice.reminder' | 'creditNote.sent';
+
+// De per-organisatie tekstsleutels in de email_templates-tabel. Herinneringen
+// hebben een sleutel per niveau; de overige sleutels komen overeen met de
+// render-key. Gebruikt door de workflows om de juiste aangepaste copy te laden.
+export type EmailTemplateContentKey =
+  | 'quote.sent'
+  | 'invoice.sent'
+  | 'invoice.reminder.1'
+  | 'invoice.reminder.2'
+  | 'invoice.reminder.3'
+  | 'creditNote.sent';
 
 export type RenderedEmailTemplate = {
   templateKey: EmailTemplateKey;
@@ -52,6 +67,7 @@ export type InvoiceSentEmailInput = {
   paymentUrl?: string | null;
   recipientName?: string | null;
   expiresAt: string;
+  content?: EmailTemplateContent | null;
 };
 
 export type InvoiceReminderEmailInput = {
@@ -82,6 +98,7 @@ export type InvoiceReminderEmailInput = {
   paymentUrl?: string | null;
   recipientName?: string | null;
   daysOverdue?: number | null;
+  content?: EmailTemplateContent | null;
 };
 
 export type QuoteSentEmailInput = {
@@ -110,6 +127,7 @@ export type QuoteSentEmailInput = {
   publicUrl: string;
   recipientName?: string | null;
   expiresAt: string;
+  content?: EmailTemplateContent | null;
 };
 
 export type CreditNoteSentEmailInput = {
@@ -137,6 +155,7 @@ export type CreditNoteSentEmailInput = {
     invoice_accent_color?: string | null;
   } | null;
   recipientName?: string | null;
+  content?: EmailTemplateContent | null;
 };
 
 export type EmailTemplateInputMap = {
