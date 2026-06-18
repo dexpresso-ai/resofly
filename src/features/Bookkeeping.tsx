@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { BookOpen, FileDown, Layers, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import type {
-  AppData, JournalEntry, JournalLine, LedgerAccount, PurchaseInvoice, PurchaseInvoiceLine, Supplier, VatCode,
+  AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PurchaseInvoice, PurchaseInvoiceLine, Supplier, VatCode,
 } from '../types';
 import { Modal } from '../components/Modal';
 import { Button, Input, Select, Textarea } from '../components/Ui';
@@ -368,7 +368,7 @@ export function LedgerPage({ data, organizationId, canWrite, onChanged }: PagePr
         <button className={tab === 'vat' ? 'is-active' : ''} onClick={() => setTab('vat')}><FileDown size={15} /> BTW-codes</button>
       </div>
       {tab === 'journal' && <JournalView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
-      {tab === 'accounts' && <AccountsView accounts={data.ledgerAccounts} />}
+      {tab === 'accounts' && <AccountsView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
       {tab === 'vat' && <VatCodesView vatCodes={data.vatCodes} />}
     </div>
   );
@@ -446,19 +446,124 @@ const accountTypeLabel: Record<LedgerAccount['type'], string> = {
   asset: 'Activa', liability: 'Passiva', equity: 'Eigen vermogen', revenue: 'Opbrengsten', expense: 'Kosten',
 };
 
-function AccountsView({ accounts }: { accounts: LedgerAccount[] }) {
+const ACCOUNT_TYPE_OPTIONS: { value: LedgerAccountType; label: string }[] = [
+  { value: 'asset', label: 'Activa (bezittingen)' },
+  { value: 'liability', label: 'Passiva (schulden)' },
+  { value: 'equity', label: 'Eigen vermogen' },
+  { value: 'revenue', label: 'Opbrengsten' },
+  { value: 'expense', label: 'Kosten' },
+];
+
+/** Vertaalt database-fouten naar begrijpelijke meldingen voor de rekening-editor. */
+function describeAccountError(e: unknown): string {
+  const err = e as { code?: string; message?: string; details?: string } | undefined;
+  const text = `${err?.message ?? ''} ${err?.details ?? ''}`;
+  if (err?.code === '23505' || /duplicate key|unique/i.test(text)) return 'Er bestaat al een rekening met deze code.';
+  if (err?.code === '23503' || /foreign key/i.test(text)) return 'Deze rekening is in gebruik in journaalposten en kan daarom niet worden verwijderd.';
+  if (err?.code === '23514' || /check constraint/i.test(text)) return 'Ongeldige waarde — controleer de code, naam en het type.';
+  return (e instanceof Error ? e.message : err?.message) || 'Opslaan mislukt.';
+}
+
+function AccountsView({ data, organizationId, canWrite, onChanged }: PageProps) {
+  const [edit, setEdit] = useState<LedgerAccount | 'new' | null>(null);
   return (
-    <div className="bk-table-wrap"><table className="bk-table">
-      <thead><tr><th>Code</th><th>Naam</th><th>Type</th><th>Standaard BTW</th></tr></thead>
-      <tbody>{accounts.map(a => (
-        <tr key={a.id}>
-          <td><strong>{a.code}</strong></td>
-          <td>{a.name}{a.is_system && <small className="bk-muted"> · systeem</small>}</td>
-          <td>{accountTypeLabel[a.type]}</td>
-          <td>{a.default_vat_code || '—'}</td>
-        </tr>
-      ))}</tbody>
-    </table></div>
+    <div className="bk-accounts">
+      <div className="bk-subhead">
+        <p className="bk-muted">Eigen rekeningen kun je vrij aanmaken en aanpassen. Systeemrekeningen zijn nodig voor het automatisch boeken en daarom beperkt bewerkbaar.</p>
+        <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Nieuwe rekening</Button>
+      </div>
+      <div className="bk-table-wrap"><table className="bk-table">
+        <thead><tr><th>Code</th><th>Naam</th><th>Type</th><th>Standaard BTW</th><th>Actief</th><th></th></tr></thead>
+        <tbody>{data.ledgerAccounts.map(a => (
+          <tr key={a.id} className={canWrite ? 'bk-row' : ''} onClick={() => canWrite && setEdit(a)}>
+            <td><strong>{a.code}</strong></td>
+            <td>{a.name}{a.is_system && <small className="bk-muted"> · systeem</small>}</td>
+            <td>{accountTypeLabel[a.type]}</td>
+            <td>{a.default_vat_code || '—'}</td>
+            <td>{a.is_active ? 'Ja' : <span className="bk-muted">Nee</span>}</td>
+            <td className="bk-cell-action">{canWrite ? 'Bewerk' : ''}</td>
+          </tr>
+        ))}</tbody>
+      </table></div>
+      {edit && <LedgerAccountForm data={data} organizationId={organizationId} canWrite={canWrite}
+        account={edit === 'new' ? null : edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); onChanged(); }} />}
+    </div>
+  );
+}
+
+function LedgerAccountForm({ data, organizationId, canWrite, account, onClose, onSaved }: {
+  data: AppData; organizationId: string; canWrite: boolean; account: LedgerAccount | null;
+  onClose: () => void; onSaved: () => void;
+}) {
+  const isSystem = Boolean(account?.is_system);
+  const [form, setForm] = useState<Record<string, any>>(() => account ? {
+    code: account.code, name: account.name, type: account.type,
+    subtype: account.subtype ?? '', default_vat_code: account.default_vat_code ?? '', is_active: account.is_active,
+  } : { code: '', name: '', type: 'expense', subtype: '', default_vat_code: '', is_active: true });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const set = (k: string, v: unknown) => setForm(f => ({ ...f, [k]: v }));
+
+  async function save() {
+    if (!isSystem && !String(form.code || '').trim()) { setError('Code is verplicht.'); return; }
+    if (!String(form.name || '').trim()) { setError('Naam is verplicht.'); return; }
+    setBusy(true); setError(null);
+    try {
+      if (account) {
+        // Systeemrekeningen: alleen naam, BTW-standaard en actief-status mogen wijzigen.
+        // Code en type worden door de boekings-RPC's op code opgezocht en moeten stabiel blijven.
+        const patch = isSystem
+          ? { name: form.name, default_vat_code: form.default_vat_code || null, is_active: Boolean(form.is_active) }
+          : { code: String(form.code).trim(), name: form.name, type: form.type, subtype: form.subtype || null, default_vat_code: form.default_vat_code || null, is_active: Boolean(form.is_active) };
+        await updateRow<LedgerAccount>('ledger_accounts', account.id, patch, organizationId);
+      } else {
+        await insertRow<LedgerAccount>('ledger_accounts', organizationId, {
+          code: String(form.code).trim(), name: form.name, type: form.type,
+          subtype: form.subtype || null, default_vat_code: form.default_vat_code || null, is_active: Boolean(form.is_active),
+        });
+      }
+      onSaved();
+    } catch (e) { setError(describeAccountError(e)); setBusy(false); }
+  }
+
+  async function remove() {
+    if (!account || isSystem) return;
+    if (!confirm(`Rekening ${account.code} · ${account.name} verwijderen?`)) return;
+    setBusy(true); setError(null);
+    try { await deleteRow('ledger_accounts', account.id, organizationId); onSaved(); }
+    catch (e) { setError(describeAccountError(e)); setBusy(false); }
+  }
+
+  return (
+    <Modal title={account ? `Rekening ${account.code}` : 'Nieuwe grootboekrekening'} onClose={onClose}
+      footer={<div className="bk-foot">
+        {account && !isSystem && canWrite && <Button variant="danger" onClick={remove} disabled={busy}><Trash2 size={14} /> Verwijderen</Button>}
+        <span className="bk-spacer" />
+        <Button onClick={onClose}>Annuleren</Button>
+        {canWrite && <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Bezig…' : 'Opslaan'}</Button>}
+      </div>}>
+      {error && <div className="error">{error}</div>}
+      {isSystem && <div className="bk-note">Dit is een systeemrekening. De code en het type liggen vast omdat het automatisch boeken die rekening op code opzoekt — je kunt wel de naam, standaard-BTW en de actief-status aanpassen.</div>}
+      <div className="bk-grid2">
+        <Field label="Code" hint="Bijv. 4600 of 8040"><Input value={form.code} onChange={e => set('code', e.target.value)} disabled={!canWrite || isSystem} /></Field>
+        <Field label="Naam"><Input value={form.name} onChange={e => set('name', e.target.value)} disabled={!canWrite} /></Field>
+        <Field label="Type" hint="Bepaalt of de rekening in de balans of de W&amp;V valt.">
+          <Select value={form.type} onChange={e => set('type', e.target.value)} disabled={!canWrite || isSystem}>
+            {ACCOUNT_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </Select>
+        </Field>
+        <Field label="Standaard BTW-code" hint="Optioneel.">
+          <Select value={form.default_vat_code || ''} onChange={e => set('default_vat_code', e.target.value)} disabled={!canWrite}>
+            <option value="">— geen —</option>
+            {data.vatCodes.map(v => <option key={v.id} value={v.code}>{v.label}</option>)}
+          </Select>
+        </Field>
+      </div>
+      <label className="bk-setting-check bk-account-active">
+        <input type="checkbox" checked={Boolean(form.is_active)} onChange={e => set('is_active', e.target.checked)} disabled={!canWrite} />
+        <span>Actief (verschijnt in keuzelijsten bij het boeken)</span>
+      </label>
+    </Modal>
   );
 }
 

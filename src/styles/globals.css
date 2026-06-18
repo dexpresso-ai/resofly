@@ -1760,3 +1760,7 @@ body::before{
 .bk-setting-field>span{font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted,rgba(245,245,245,.55))}
 .bk-setting-check{display:flex;align-items:center;gap:9px;font-size:.88rem}
 .bk-setting-check input{width:17px;height:17px;accent-color:var(--accent)}
+.bk-accounts{display:flex;flex-direction:column;gap:12px}
+.bk-subhead{display:flex;justify-content:space-between;align-items:center;gap:16px}
+.bk-subhead p{margin:0;max-width:640px;font-size:.84rem}
+.bk-account-active{margin-top:10px}
