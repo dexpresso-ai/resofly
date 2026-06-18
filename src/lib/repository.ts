@@ -33,6 +33,8 @@ import type {
   ClosedPeriod,
   Supplier,
   PurchaseInvoice,
+  FixedAsset,
+  AssetDepreciation,
   CalendarNoteLinkInput,
   NoteCalendarLink,
   CalendarEventLink,
@@ -56,7 +58,7 @@ import type {
   UUID,
 } from '../types';
 
-const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'attachments', 'company_settings'] as const;
+const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'attachments', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -77,6 +79,7 @@ const tableToEntity: Record<Table, EntityType | null> = {
   vat_codes: null,
   suppliers: 'supplier',
   purchase_invoices: 'purchase_invoice',
+  fixed_assets: 'fixed_asset',
   attachments: null,
   company_settings: null,
 };
@@ -314,6 +317,8 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     closedPeriods,
     suppliers,
     purchaseInvoices,
+    fixedAssets,
+    assetDepreciations,
     attachments,
     folders,
     companySettings,
@@ -322,12 +327,12 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectCalendarEventLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId),
-    selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId),
+    selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId), selectFixedAssets(organizationId), selectAssetDepreciations(organizationId),
     select<Attachment>('attachments', organizationId),
     selectFolders(organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, suppliers, purchaseInvoices, attachments, companySettings };
+  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, attachments, companySettings };
 }
 
 export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
@@ -788,6 +793,31 @@ export const selectSuppliers = (organizationId: UUID) =>
   selectOptional<Supplier>('suppliers', organizationId, { orderBy: 'name', ascending: true, hint: BOOKKEEPING_MIGRATION_HINT });
 export const selectPurchaseInvoices = (organizationId: UUID) =>
   selectOptional<PurchaseInvoice>('purchase_invoices', organizationId, { orderBy: 'date', ascending: false, hint: BOOKKEEPING_MIGRATION_HINT });
+export const selectFixedAssets = (organizationId: UUID) =>
+  selectOptional<FixedAsset>('fixed_assets', organizationId, { orderBy: 'acquisition_date', ascending: false, hint: BOOKKEEPING_MIGRATION_HINT });
+export const selectAssetDepreciations = (organizationId: UUID) =>
+  selectOptional<AssetDepreciation>('asset_depreciations', organizationId, { orderBy: 'date', ascending: true, hint: BOOKKEEPING_MIGRATION_HINT });
+
+/** (Her)berekent het lineaire afschrijvingsschema van een activum. */
+export async function generateDepreciationSchedule(organizationId: UUID, assetId: UUID): Promise<AssetDepreciation[]> {
+  const { data, error } = await supabase.rpc('generate_depreciation_schedule', {
+    p_organization_id: organizationId,
+    p_asset_id: assetId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as AssetDepreciation[];
+}
+
+/** Boekt alle openstaande afschrijvingsregels van een activum t/m een datum. */
+export async function postAssetDepreciation(organizationId: UUID, assetId: UUID, throughDate: string): Promise<FixedAsset> {
+  const { data, error } = await supabase.rpc('post_asset_depreciation', {
+    p_organization_id: organizationId,
+    p_asset_id: assetId,
+    p_through_date: throughDate,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as FixedAsset;
+}
 
 /** Boekt een inkoopfactuur naar het grootboek (server-side, security definer). */
 export async function bookPurchaseInvoice(organizationId: UUID, purchaseInvoiceId: UUID): Promise<JournalEntry> {

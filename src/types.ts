@@ -7,7 +7,7 @@ export type FinanceStatus = 'draft' | 'pending_internal_approval' | 'internally_
 export type InvoiceStatus = 'draft' | 'sent' | 'overdue' | 'paid' | 'cancelled' | 'void' | 'written_off' | 'refunded';
 export type NoteType = 'general' | 'meeting' | 'action' | 'decision' | 'idea' | 'support';
 export type DocumentType = 'contract' | 'general' | 'policy' | 'procedure' | 'other';
-export type EntityType = 'client' | 'project' | 'task' | 'subtask' | 'ticket' | 'note' | 'document' | 'quote' | 'invoice' | 'folder' | 'supplier' | 'purchase_invoice';
+export type EntityType = 'client' | 'project' | 'task' | 'subtask' | 'ticket' | 'note' | 'document' | 'quote' | 'invoice' | 'folder' | 'supplier' | 'purchase_invoice' | 'fixed_asset';
 export type QuoteApprovalStatus = 'draft' | 'pending' | 'approved' | 'rejected';
 export type QuoteWorkflowEventType = 'created' | 'updated' | 'submitted_for_internal_approval' | 'internal_approval_granted' | 'internal_approval_rejected' | 'public_token_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'client_accepted' | 'client_rejected' | 'quote_version_created' | 'quote_pdf_attached' | 'expired' | 'cancelled' | 'void' | 'written_off';
 export type QuoteEmailDeliveryStatus = 'queued' | 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'failed' | 'complained';
@@ -690,6 +690,48 @@ export interface PurchaseInvoice extends OrgScopedRow {
   updated_at: string;
 }
 
+export type FixedAssetStatus = 'active' | 'fully_depreciated' | 'disposed';
+export type DepreciationStatus = 'scheduled' | 'posted';
+
+export interface FixedAsset extends OrgScopedRow {
+  name: string;
+  asset_number: string | null;
+  category: string | null;
+  acquisition_date: string;
+  acquisition_cost_cents: number;
+  residual_value_cents: number;
+  useful_life_months: number;
+  method: string;
+  start_date: string;
+  asset_account_id: UUID;
+  depreciation_account_id: UUID;
+  accumulated_depreciation_account_id: UUID;
+  source_purchase_invoice_id: UUID | null;
+  status: FixedAssetStatus;
+  disposal_date: string | null;
+  disposal_proceeds_cents: number | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AssetDepreciation {
+  id: UUID;
+  organization_id: UUID;
+  asset_id: UUID;
+  period_index: number;
+  year: number;
+  month: number;
+  date: string;
+  amount_cents: number;
+  accumulated_after_cents: number;
+  book_value_after_cents: number;
+  journal_entry_id: UUID | null;
+  status: DepreciationStatus;
+  posted_at: string | null;
+  created_at: string;
+}
+
 export interface Attachment extends OrgScopedRow {
   entity_type: EntityType; entity_id: UUID; parent_task_id: UUID | null; name: string; mime_type: string; size_bytes: number; storage_key: string; public_url: string | null; created_at: string;
 }
@@ -762,7 +804,7 @@ export interface InvoiceMollieSettingsStatus {
   last_validated_at: string | null;
 }
 
-export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';
