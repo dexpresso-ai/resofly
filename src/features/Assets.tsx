@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CalendarClock, Landmark, Layers, Plus, Trash2 } from 'lucide-react';
 import type { AppData, AssetDepreciation, FixedAsset } from '../types';
 import { Modal } from '../components/Modal';
@@ -57,7 +57,7 @@ function assetBookValue(asset: FixedAsset, deps: AssetDepreciation[]): { posted:
   return { posted, bookValue: asset.acquisition_cost_cents - posted };
 }
 
-export function AssetsPage({ data, organizationId, canWrite, onChanged }: PageProps) {
+export function AssetsPage({ data, organizationId, canWrite, onChanged, openAssetId, onOpened }: PageProps & { openAssetId?: string | null; onOpened?: () => void }) {
   const [edit, setEdit] = useState<FixedAsset | 'new' | null>(null);
   const depsByAsset = useMemo(() => {
     const map = new Map<string, AssetDepreciation[]>();
@@ -67,6 +67,20 @@ export function AssetsPage({ data, organizationId, canWrite, onChanged }: PagePr
     }
     return map;
   }, [data.assetDepreciations]);
+
+  // Open een specifiek activum wanneer er vanuit de sidebar op doorgeklikt is.
+  useEffect(() => {
+    if (!openAssetId) return;
+    const asset = data.fixedAssets.find(a => a.id === openAssetId);
+    if (asset) setEdit(asset);
+    onOpened?.();
+  }, [openAssetId, data.fixedAssets, onOpened]);
+
+  const totals = useMemo(() => data.fixedAssets.reduce((acc, a) => {
+    const { posted, bookValue } = assetBookValue(a, depsByAsset.get(a.id) ?? []);
+    acc.acquisition += a.acquisition_cost_cents; acc.depreciated += posted; acc.bookValue += bookValue;
+    return acc;
+  }, { acquisition: 0, depreciated: 0, bookValue: 0 }), [data.fixedAssets, depsByAsset]);
 
   if (data.ledgerAccounts.length === 0) {
     return <div className="bk-page"><SetupBanner organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} /></div>;
@@ -78,6 +92,11 @@ export function AssetsPage({ data, organizationId, canWrite, onChanged }: PagePr
         <div><h2>Activa</h2><p>Vaste activa registreren en lineair afschrijven naar de winst- en verliesrekening.</p></div>
         <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Nieuw activum</Button>
       </div>
+      {data.fixedAssets.length > 0 && <div className="bk-asset-kpis">
+        <div><span>Aanschafwaarde</span><strong>{euroCents(totals.acquisition)}</strong></div>
+        <div><span>Afgeschreven</span><strong>{euroCents(totals.depreciated)}</strong></div>
+        <div className="bk-asset-kpi-main"><span>Huidige boekwaarde</span><strong>{euroCents(totals.bookValue)}</strong></div>
+      </div>}
       {data.fixedAssets.length === 0
         ? <div className="empty"><div className="e-big">Nog geen activa</div></div>
         : <div className="bk-table-wrap"><table className="bk-table">

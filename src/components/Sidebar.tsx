@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import { Archive, BarChart3, BookOpen, Boxes, Calendar, ChevronDown, ChevronRight, FileText, Files, FolderOpen, LayoutDashboard, Library, Receipt, Settings, StickyNote, Ticket, TrendingUp, Truck, Users } from 'lucide-react';
 import type { Organization, OrganizationRole } from '../types';
 import { Select } from './Ui';
+import { euro } from '../lib/format';
+
+type AssetNavItem = { id: string; label: string; bookValueCents: number };
 
 type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'assets'|'pnl'|'archive'|'settings'|'project';
 
@@ -28,6 +31,8 @@ export function Sidebar({
   organizations,
   activeOrganizationId,
   activeRole,
+  assets = [],
+  onOpenAsset,
   onOrganization,
   onNewOrganization,
   onPage,
@@ -36,16 +41,20 @@ export function Sidebar({
   organizations: Organization[];
   activeOrganizationId: string | null;
   activeRole: OrganizationRole | null;
+  assets?: AssetNavItem[];
+  onOpenAsset?: (id: string) => void;
   onOrganization: (id: string) => void;
   onNewOrganization: () => void;
   onPage: (p: Page) => void;
 }) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
   const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
+  const [assetsOpen, setAssetsOpen] = useState(() => page === 'assets');
 
   useEffect(() => {
     if (financePages.includes(page)) setFinanceOpen(true);
     if (projectPages.includes(page)) setProjectsOpen(true);
+    if (page === 'assets') setAssetsOpen(true);
   }, [page]);
 
   function openCalendarSubPage(target: 'agenda' | 'connections' | 'settings') {
@@ -140,7 +149,18 @@ export function Sidebar({
             <button type="button" className={page === 'suppliers' ? 'active' : ''} onClick={() => openFinancePage('suppliers')}><Truck size={13}/><span>Leveranciers</span></button>
             <button type="button" className={page === 'purchase-invoices' ? 'active' : ''} onClick={() => openFinancePage('purchase-invoices')}><FileText size={13}/><span>Inkoopfacturen</span></button>
             <button type="button" className={page === 'ledger' ? 'active' : ''} onClick={() => openFinancePage('ledger')}><BookOpen size={13}/><span>Grootboek</span></button>
-            <button type="button" className={page === 'assets' ? 'active' : ''} onClick={() => openFinancePage('assets')}><Boxes size={13}/><span>Activa</span></button>
+            <button type="button" className={`nav-asset-toggle ${page === 'assets' ? 'active' : ''}`} onClick={() => { setAssetsOpen(o => page === 'assets' ? !o : true); openFinancePage('assets'); }}>
+              <Boxes size={13}/><span>Activa</span>
+              {assets.length > 0 && <span className="nav-asset-chevron" aria-hidden="true">{assetsOpen ? <ChevronDown size={12}/> : <ChevronRight size={12}/>}</span>}
+            </button>
+            {assetsOpen && assets.length > 0 && <div className="nav-asset-list">
+              {assets.map(a => (
+                <button type="button" key={a.id} className="nav-asset" onClick={() => onOpenAsset?.(a.id)} title={`Open ${a.label}`}>
+                  <span className="nav-asset-name">{a.label}</span>
+                  <span className="nav-asset-value">{euro(a.bookValueCents / 100)}</span>
+                </button>
+              ))}
+            </div>}
             <button type="button" className={page === 'pnl' ? 'active' : ''} onClick={() => openFinancePage('pnl')}><TrendingUp size={13}/><span>Winst &amp; verlies</span></button>
           </div>}
 
