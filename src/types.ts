@@ -385,6 +385,35 @@ export interface InvoiceReminderSettings {
   updated_at?: string;
 }
 
+// Eigen-domein e-mail: per organisatie een bij Resend geverifieerd verzenddomein.
+export type SendingDomainStatus = 'pending' | 'verified' | 'failed' | 'temporary_failure';
+
+export interface SendingDomainDnsRecord {
+  record?: string;
+  type: string;
+  name: string;
+  value: string;
+  ttl?: string | number;
+  priority?: number | null;
+  status?: string;
+}
+
+export interface SendingDomain extends OrgScopedRow {
+  domain: string;
+  provider: string;
+  resend_domain_id: string | null;
+  region: string | null;
+  from_email: string | null;
+  from_name: string | null;
+  status: SendingDomainStatus;
+  dns_records: SendingDomainDnsRecord[];
+  is_default: boolean;
+  last_checked_at: string | null;
+  verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface InvoiceWorkflowEvent {
   id: UUID;
   organization_id: UUID;

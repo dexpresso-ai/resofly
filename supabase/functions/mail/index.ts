@@ -11,6 +11,10 @@ const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
 const RESEND_FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || '';
 const RESEND_REPLY_TO = Deno.env.get('RESEND_REPLY_TO') || '';
 
+// Regio waarin nieuwe verzenddomeinen bij Resend worden aangemaakt. eu-west-1
+// (Ierland) is de standaard voor een Nederlandse SaaS i.v.m. dataresidentie.
+const RESEND_DEFAULT_REGION = Deno.env.get('RESEND_DEFAULT_REGION') || 'eu-west-1';
+
 // Basis-URL van de frontend voor de portaallink in de welkomstmail. Valt terug op
 // de (al via assertAllowedOrigin gevalideerde) request-origin als er geen env staat.
 const CLIENT_PORTAL_BASE_URL = (
@@ -94,6 +98,30 @@ serve(async (req) => {
 
         const result = await sendClientPortalWelcome(req, organizationId, body);
         return json(req, { ok: true, ...result });
+      }
+
+      case 'addSendingDomain': {
+        requireDomainAdmin(role);
+        const domain = await addSendingDomain(organizationId, body);
+        return json(req, { ok: true, domain });
+      }
+
+      case 'verifySendingDomain': {
+        requireDomainAdmin(role);
+        const domain = await verifySendingDomain(organizationId, body);
+        return json(req, { ok: true, domain });
+      }
+
+      case 'updateSendingDomain': {
+        requireDomainAdmin(role);
+        const domain = await updateSendingDomain(organizationId, body);
+        return json(req, { ok: true, domain });
+      }
+
+      case 'removeSendingDomain': {
+        requireDomainAdmin(role);
+        await removeSendingDomain(organizationId, body);
+        return json(req, { ok: true });
       }
 
       default:
@@ -352,6 +380,300 @@ function buildClientWelcomeText(input: {
     '',
     `Je ontvangt deze e-mail omdat ${input.organizationName} een klantdossier voor je heeft aangemaakt.`,
   ].join('\n');
+}
+
+// ── Eigen-domein e-mail: verzenddomeinen ────────────────────────────────────
+
+type SendingDomainRow = {
+  id: string;
+  organization_id: string;
+  created_by: string | null;
+  domain: string;
+  provider: string;
+  resend_domain_id: string | null;
+  region: string | null;
+  from_email: string | null;
+  from_name: string | null;
+  status: string;
+  dns_records: unknown;
+  is_default: boolean;
+  last_checked_at: string | null;
+  verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+const SENDING_DOMAIN_COLUMNS =
+  'id,organization_id,created_by,domain,provider,resend_domain_id,region,from_email,from_name,status,dns_records,is_default,last_checked_at,verified_at,created_at,updated_at';
+
+function requireDomainAdmin(role: OrganizationRole): void {
+  if (!['owner', 'admin'].includes(role)) {
+    throw new MailHttpError('Alleen owners en admins kunnen verzenddomeinen beheren.', 403);
+  }
+}
+
+async function addSendingDomain(
+  organizationId: string,
+  body: Record<string, unknown>,
+): Promise<SendingDomainRow> {
+  if (!RESEND_API_KEY) {
+    throw new MailHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
+  }
+
+  const domain = normalizeDomain(String(body.domain || ''));
+  if (!isDomain(domain)) {
+    throw new MailHttpError('Vul een geldig domein in, bijvoorbeeld eigendomeinnaam.nl.', 422);
+  }
+
+  const fromName = String(body.fromName || '').trim() || null;
+  const fromEmail = normalizeFromEmail(body.fromEmail, domain);
+
+  // Voorkom dubbele Resend-aanmaak als dit domein al gekoppeld is.
+  const { data: existing, error: existingError } = await supabaseAdmin
+    .from('organization_email_domains')
+    .select('id')
+    .eq('organization_id', organizationId)
+    .eq('domain', domain)
+    .maybeSingle();
+  if (existingError) throw existingError;
+  if (existing) {
+    throw new MailHttpError('Dit domein is al gekoppeld aan deze organisatie.', 409);
+  }
+
+  const resendDomain = await createResendDomain(domain);
+  const status = mapResendDomainStatus(String(resendDomain.status || 'pending'));
+  const now = new Date().toISOString();
+
+  const { data, error } = await supabaseAdmin
+    .from('organization_email_domains')
+    .insert({
+      organization_id: organizationId,
+      domain,
+      provider: 'resend',
+      resend_domain_id: String(resendDomain.id || '') || null,
+      region: String(resendDomain.region || RESEND_DEFAULT_REGION) || null,
+      from_email: fromEmail,
+      from_name: fromName,
+      status,
+      dns_records: Array.isArray(resendDomain.records) ? resendDomain.records : [],
+      last_checked_at: now,
+      verified_at: status === 'verified' ? now : null,
+    })
+    .select(SENDING_DOMAIN_COLUMNS)
+    .single();
+  if (error) throw error;
+  return data as SendingDomainRow;
+}
+
+async function verifySendingDomain(
+  organizationId: string,
+  body: Record<string, unknown>,
+): Promise<SendingDomainRow> {
+  if (!RESEND_API_KEY) {
+    throw new MailHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
+  }
+  const row = await loadSendingDomainRow(organizationId, String(body.domainId || ''));
+  if (!row.resend_domain_id) {
+    throw new MailHttpError(
+      'Dit domein heeft geen Resend-koppeling meer; verwijder en voeg het opnieuw toe.',
+      422,
+    );
+  }
+
+  // Trigger de controle en lees daarna de bijgewerkte status + records.
+  await triggerResendDomainVerification(row.resend_domain_id);
+  const resendDomain = await getResendDomain(row.resend_domain_id);
+  const status = mapResendDomainStatus(String(resendDomain.status || row.status));
+  const now = new Date().toISOString();
+
+  const { data, error } = await supabaseAdmin
+    .from('organization_email_domains')
+    .update({
+      status,
+      dns_records: Array.isArray(resendDomain.records) ? resendDomain.records : row.dns_records,
+      last_checked_at: now,
+      verified_at: status === 'verified' ? (row.verified_at || now) : null,
+    })
+    .eq('id', row.id)
+    .eq('organization_id', organizationId)
+    .select(SENDING_DOMAIN_COLUMNS)
+    .single();
+  if (error) throw error;
+  return data as SendingDomainRow;
+}
+
+async function updateSendingDomain(
+  organizationId: string,
+  body: Record<string, unknown>,
+): Promise<SendingDomainRow> {
+  const row = await loadSendingDomainRow(organizationId, String(body.domainId || ''));
+  const patch: Record<string, unknown> = {};
+
+  if (body.fromName !== undefined) {
+    patch.from_name = String(body.fromName || '').trim() || null;
+  }
+  if (body.fromEmail !== undefined) {
+    patch.from_email = normalizeFromEmail(body.fromEmail, row.domain);
+  }
+
+  if (body.isDefault === true) {
+    if (row.status !== 'verified') {
+      throw new MailHttpError(
+        'Alleen een geverifieerd domein kan het standaard verzenddomein worden.',
+        422,
+      );
+    }
+    // Eerst andere domeinen op niet-standaard zetten (partial unique index per org).
+    const { error: clearError } = await supabaseAdmin
+      .from('organization_email_domains')
+      .update({ is_default: false })
+      .eq('organization_id', organizationId)
+      .neq('id', row.id)
+      .eq('is_default', true);
+    if (clearError) throw clearError;
+    patch.is_default = true;
+  } else if (body.isDefault === false) {
+    patch.is_default = false;
+  }
+
+  if (Object.keys(patch).length === 0) return row;
+
+  const { data, error } = await supabaseAdmin
+    .from('organization_email_domains')
+    .update(patch)
+    .eq('id', row.id)
+    .eq('organization_id', organizationId)
+    .select(SENDING_DOMAIN_COLUMNS)
+    .single();
+  if (error) throw error;
+  return data as SendingDomainRow;
+}
+
+async function removeSendingDomain(
+  organizationId: string,
+  body: Record<string, unknown>,
+): Promise<void> {
+  const row = await loadSendingDomainRow(organizationId, String(body.domainId || ''));
+  if (row.resend_domain_id) {
+    await deleteResendDomain(row.resend_domain_id);
+  }
+  const { error } = await supabaseAdmin
+    .from('organization_email_domains')
+    .delete()
+    .eq('id', row.id)
+    .eq('organization_id', organizationId);
+  if (error) throw error;
+}
+
+async function loadSendingDomainRow(
+  organizationId: string,
+  domainId: string,
+): Promise<SendingDomainRow> {
+  if (!isUuid(domainId)) {
+    throw new MailHttpError('Ongeldig domein-id.', 400);
+  }
+  const { data, error } = await supabaseAdmin
+    .from('organization_email_domains')
+    .select(SENDING_DOMAIN_COLUMNS)
+    .eq('id', domainId)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) {
+    throw new MailHttpError('Verzenddomein niet gevonden.', 404);
+  }
+  return data as SendingDomainRow;
+}
+
+async function createResendDomain(domain: string): Promise<Record<string, unknown>> {
+  return await resendDomainsRequest('POST', '', { name: domain, region: RESEND_DEFAULT_REGION });
+}
+
+async function getResendDomain(resendDomainId: string): Promise<Record<string, unknown>> {
+  return await resendDomainsRequest('GET', `/${resendDomainId}`);
+}
+
+async function triggerResendDomainVerification(resendDomainId: string): Promise<void> {
+  // De verify-trigger geeft minimale data terug; de status lezen we apart via GET.
+  // Een mislukte trigger mag die GET niet blokkeren, dus we loggen en gaan door.
+  try {
+    await resendDomainsRequest('POST', `/${resendDomainId}/verify`);
+  } catch (error) {
+    console.warn('Resend domain verify trigger failed', error instanceof Error ? error.message : error);
+  }
+}
+
+async function deleteResendDomain(resendDomainId: string): Promise<void> {
+  // Best-effort: lukt het verwijderen bij Resend niet, dan ruimen we lokaal toch op.
+  try {
+    await resendDomainsRequest('DELETE', `/${resendDomainId}`);
+  } catch (error) {
+    console.warn('Resend domain delete failed', error instanceof Error ? error.message : error);
+  }
+}
+
+async function resendDomainsRequest(
+  method: string,
+  path: string,
+  payload?: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const response = await fetch(`https://api.resend.com/domains${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: payload ? JSON.stringify(payload) : undefined,
+  });
+
+  const responsePayload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+
+  if (!response.ok) {
+    console.error('Resend domains API failed', method, path, responsePayload);
+    const providerMessage = String(
+      responsePayload.message ||
+        responsePayload.error ||
+        response.statusText ||
+        'Resend domains API failed',
+    );
+    throw new MailHttpError(`Resend kon de domeinactie niet uitvoeren: ${providerMessage}`, 502);
+  }
+
+  return responsePayload;
+}
+
+function mapResendDomainStatus(status: string): string {
+  const normalized = status.toLowerCase();
+  if (normalized === 'verified') return 'verified';
+  if (normalized === 'failed') return 'failed';
+  if (normalized === 'temporary_failure') return 'temporary_failure';
+  // not_started, pending en onbekende statussen tonen we als "pending".
+  return 'pending';
+}
+
+function normalizeDomain(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/^www\./, '');
+}
+
+function isDomain(value: string): boolean {
+  return /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(value);
+}
+
+function normalizeFromEmail(value: unknown, domain: string): string | null {
+  const email = String(value || '').trim().toLowerCase();
+  if (!email) return null;
+  if (!isEmail(email)) {
+    throw new MailHttpError('Het afzenderadres is geen geldig e-mailadres.', 422);
+  }
+  if (!email.endsWith(`@${domain}`)) {
+    throw new MailHttpError(`Het afzenderadres moet op @${domain} eindigen.`, 422);
+  }
+  return email;
 }
 
 async function sendViaResend(

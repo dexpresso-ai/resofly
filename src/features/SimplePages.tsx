@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { BookOpen, CreditCard, Mail, Receipt, ShieldCheck, Users } from 'lucide-react';
-import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationRole, Project } from '../types';
+import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startMollieConnect } from '../services/billingService';
-import { sendResendTestEmail } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate } from '../lib/repository';
+import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
+import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains } from '../lib/repository';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
@@ -182,6 +182,166 @@ function InvoiceReminderSettingsCard({ organizationId, canAdmin }: { organizatio
         <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Opslaan…' : 'Herinneringen opslaan'}</Button>
       </>}
   </section>;
+}
+
+const SENDING_DOMAIN_STATUS_LABELS: Record<SendingDomainStatus, string> = {
+  pending: 'Verificatie in afwachting',
+  verified: 'Geverifieerd',
+  failed: 'Verificatie mislukt',
+  temporary_failure: 'Tijdelijke fout — probeer later opnieuw',
+};
+
+function SendingDomainCard({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
+  const [domains, setDomains] = useState<SendingDomain[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [newDomain, setNewDomain] = useState('');
+  const [newFromName, setNewFromName] = useState('');
+  const [newFromEmail, setNewFromEmail] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    setError(null);
+    loadSendingDomains(organizationId)
+      .then(rows => { if (!cancelled) { setDomains(rows); setLoaded(true); } })
+      .catch(err => { if (!cancelled) { setError(err instanceof Error ? err.message : 'Verzenddomeinen laden mislukt.'); setLoaded(true); } });
+    return () => { cancelled = true; };
+  }, [organizationId]);
+
+  async function reload() {
+    setDomains(await loadSendingDomains(organizationId));
+  }
+
+  async function add() {
+    if (!newDomain.trim()) return;
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      await addSendingDomain(organizationId, {
+        domain: newDomain.trim(),
+        fromName: newFromName.trim() || undefined,
+        fromEmail: newFromEmail.trim() || undefined,
+      });
+      setNewDomain(''); setNewFromName(''); setNewFromEmail('');
+      await reload();
+      setMessage('Domein toegevoegd. Plaats de DNS-records hieronder bij je domeinprovider en klik daarna op “Verifieer”.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Domein toevoegen mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verify(domain: SendingDomain) {
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      const updated = await verifySendingDomain(organizationId, domain.id);
+      await reload();
+      setMessage(updated.status === 'verified'
+        ? `${updated.domain} is geverifieerd — je kunt nu vanaf dit domein mailen.`
+        : 'Nog niet geverifieerd. DNS-wijzigingen kunnen tot ~24 uur duren; probeer het daarna opnieuw.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Verifiëren mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function makeDefault(domain: SendingDomain) {
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      await updateSendingDomain(organizationId, domain.id, { isDefault: true });
+      await reload();
+      setMessage(`${domain.domain} is nu het standaard verzenddomein.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Standaard instellen mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(domain: SendingDomain) {
+    if (!window.confirm(`Domein ${domain.domain} ontkoppelen? E-mails vallen daarna terug op het standaard afzenderadres.`)) return;
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      await removeSendingDomain(organizationId, domain.id);
+      await reload();
+      setMessage('Domein ontkoppeld.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ontkoppelen mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <section className="settings-card organization-card sending-domain-card">
+    <div className="settings-card-head">
+      <div>
+        <h3>Eigen verzenddomein</h3>
+        <p className="settings-help">Koppel je eigen domein zodat e-mails vanaf jouw adres (bijvoorbeeld <code>info@eigendomeinnaam.nl</code>) worden verstuurd in plaats van het standaardadres. Voeg het domein toe, plaats de getoonde DNS-records bij je domeinprovider en klik op “Verifieer”.</p>
+      </div>
+    </div>
+
+    {message && <div className="success">{message}</div>}
+    {error && <div className="error">{error}</div>}
+
+    {!canAdmin ? <p className="settings-help">Alleen owners en admins kunnen verzenddomeinen beheren.</p>
+      : !loaded ? <p className="settings-help">Verzenddomeinen laden…</p>
+      : <>
+        <div className="settings-grid compact">
+          <label>Domein
+            <Input value={newDomain} onChange={e => { setNewDomain(e.target.value); setError(null); setMessage(null); }} placeholder="eigendomeinnaam.nl" />
+          </label>
+          <label>Afzendernaam (optioneel)
+            <Input value={newFromName} onChange={e => setNewFromName(e.target.value)} placeholder="Jouw bedrijf" />
+          </label>
+          <label>Afzenderadres (optioneel)
+            <Input type="email" value={newFromEmail} onChange={e => setNewFromEmail(e.target.value)} placeholder="info@eigendomeinnaam.nl" />
+          </label>
+        </div>
+        <Button variant="primary" onClick={add} disabled={busy || !newDomain.trim()}>{busy ? 'Bezig…' : '+ Domein toevoegen'}</Button>
+
+        <div className="sending-domain-list">
+          {domains.length === 0 && <p className="settings-help">Nog geen domein gekoppeld. Voeg er een toe om vanaf je eigen adres te mailen.</p>}
+          {domains.map(domain => (
+            <div className="sending-domain-row" key={domain.id}>
+              <div className="sending-domain-head-row">
+                <div className="sending-domain-title">
+                  <strong>{domain.domain}</strong>
+                  {domain.is_default && <span className="sending-domain-default">Standaard</span>}
+                  <span className={`sending-domain-status ${domain.status}`}>{SENDING_DOMAIN_STATUS_LABELS[domain.status]}</span>
+                </div>
+                <div className="sending-domain-actions">
+                  <Button onClick={() => verify(domain)} disabled={busy}>Verifieer</Button>
+                  {domain.status === 'verified' && !domain.is_default && <Button onClick={() => makeDefault(domain)} disabled={busy}>Maak standaard</Button>}
+                  <Button variant="danger" onClick={() => remove(domain)} disabled={busy}>Verwijderen</Button>
+                </div>
+              </div>
+              {domain.from_email && <p className="settings-help">Afzender: {domain.from_name ? `${domain.from_name} <${domain.from_email}>` : domain.from_email}</p>}
+              {domain.status !== 'verified' && domain.dns_records.length > 0 && <DnsRecordsTable records={domain.dns_records} />}
+            </div>
+          ))}
+        </div>
+      </>}
+  </section>;
+}
+
+function DnsRecordsTable({ records }: { records: SendingDomainDnsRecord[] }) {
+  return <div className="dns-records">
+    <p className="settings-help">Voeg deze records toe bij je DNS-provider. Na het plaatsen kan verificatie tot ~24 uur duren.</p>
+    <div className="dns-records-list">
+      {records.map((rec, i) => (
+        <div className="dns-record" key={`${rec.type}-${rec.name}-${i}`}>
+          <div className="dns-record-field"><span className="dns-record-label">Type</span><code>{rec.type}</code></div>
+          <div className="dns-record-field"><span className="dns-record-label">Naam</span><code>{rec.name}</code></div>
+          <div className="dns-record-field grow"><span className="dns-record-label">Waarde</span><code className="dns-record-value">{rec.value}</code></div>
+          {rec.priority != null && <div className="dns-record-field"><span className="dns-record-label">Prioriteit</span><code>{rec.priority}</code></div>}
+        </div>
+      ))}
+    </div>
+  </div>;
 }
 
 type EmailTemplateForm = { subject: string; intro: string; closing: string; cta_label: string };
@@ -1173,6 +1333,7 @@ export function Settings({
     </div>}
 
     {activeTab === 'email' && <div className="settings-tab-panel">
+    {activeOrganization && <SendingDomainCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <EmailTemplatesCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     <section className="settings-card organization-card">
       <div className="settings-card-head">

@@ -21,6 +21,7 @@ import type {
   InvoiceWorkflowEvent,
   InvoiceMollieSettingsStatus,
   InvoiceReminderSettings,
+  SendingDomain,
   CreditNote,
   InvoiceChargeback,
   Note,
@@ -1307,6 +1308,24 @@ export async function saveInvoiceReminderSettings(
     .single();
   if (error) throw error;
   return data as InvoiceReminderSettings;
+}
+
+const SENDING_DOMAIN_COLUMNS = 'id,organization_id,created_by,domain,provider,resend_domain_id,region,from_email,from_name,status,dns_records,is_default,last_checked_at,verified_at,created_at,updated_at';
+
+/**
+ * Laad de gekoppelde verzenddomeinen van een organisatie (eigen-domein e-mail).
+ * Alleen-lezen: aanmaken/verifiëren/verwijderen loopt via de `mail` Edge Function
+ * (Resend-API), maar elk lid mag de status en DNS-records inzien (RLS: can_read_org).
+ */
+export async function loadSendingDomains(organizationId: UUID): Promise<SendingDomain[]> {
+  const { data, error } = await supabase
+    .from('organization_email_domains')
+    .select(SENDING_DOMAIN_COLUMNS)
+    .eq('organization_id', organizationId)
+    .order('is_default', { ascending: false })
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as SendingDomain[];
 }
 
 const EMAIL_TEMPLATE_COLUMNS = 'id,organization_id,created_by,template_key,enabled,subject,intro,closing,cta_label,created_at,updated_at';

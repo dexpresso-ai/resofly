@@ -1816,3 +1816,26 @@ body::before{
 .bk-report-table tfoot .bk-report-result td{border-top:2px solid var(--border);font-size:1.02rem;font-weight:800;padding-top:11px;padding-bottom:11px}
 .bk-balance-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
 @media (max-width:880px){.bk-balance-cols{grid-template-columns:1fr}}
+
+/* ── Eigen verzenddomein (instellingen → e-mail) ─────────────────────── */
+.sending-domain-card .btn-primary{margin-top:4px}
+.sending-domain-list{display:flex;flex-direction:column;gap:12px;margin-top:16px}
+.sending-domain-row{background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+.sending-domain-head-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.sending-domain-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.sending-domain-title strong{font-size:.98rem;word-break:break-all}
+.sending-domain-default{font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--accent);background:rgba(255,217,102,.14);border:1px solid rgba(255,217,102,.3);border-radius:999px;padding:2px 9px}
+.sending-domain-status{font-size:11px;font-weight:700;border-radius:999px;padding:3px 10px;border:1px solid var(--border)}
+.sending-domain-status.verified{color:var(--accent-g);background:rgba(52,211,153,.12);border-color:rgba(52,211,153,.28)}
+.sending-domain-status.pending{color:var(--muted2);background:rgba(255,255,255,.05)}
+.sending-domain-status.failed{color:var(--accent-r);background:rgba(240,107,107,.12);border-color:rgba(240,107,107,.28)}
+.sending-domain-status.temporary_failure{color:var(--accent);background:rgba(255,217,102,.12);border-color:rgba(255,217,102,.28)}
+.sending-domain-actions{display:flex;gap:8px;flex-wrap:wrap}
+.dns-records{margin-top:12px;border-top:1px dashed var(--border);padding-top:12px}
+.dns-records-list{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.dns-record{display:flex;gap:14px;flex-wrap:wrap;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 12px}
+.dns-record-field{display:flex;flex-direction:column;gap:3px;min-width:0}
+.dns-record-field.grow{flex:1;min-width:180px}
+.dns-record-label{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.dns-record code{font-size:12px;color:var(--text);word-break:break-all}
+.dns-record-value{user-select:all}
