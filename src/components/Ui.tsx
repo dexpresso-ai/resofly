@@ -121,13 +121,20 @@ export function Select({ value, onChange, disabled = false, children, className,
     const el = triggerRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const spaceBelow = window.innerHeight - r.bottom;
-    const openUp = spaceBelow < 260 && r.top > spaceBelow;
+    const gap = 4;
+    const margin = 8;
+    const spaceBelow = window.innerHeight - r.bottom - gap;
+    const spaceAbove = r.top - gap;
+    const openUp = spaceBelow < 260 && spaceAbove > spaceBelow;
+    // Beperk de hoogte tot de beschikbare ruimte in de gekozen richting zodat
+    // het menu nooit buiten beeld valt (anders zijn onderste opties onbereikbaar).
+    const available = (openUp ? spaceAbove : spaceBelow) - margin;
     setMenuStyle({
       position: 'fixed',
       left: Math.round(r.left),
       width: Math.round(r.width),
-      ...(openUp ? { bottom: Math.round(window.innerHeight - r.top + 4) } : { top: Math.round(r.bottom + 4) }),
+      maxHeight: Math.min(264, Math.max(120, Math.round(available))),
+      ...(openUp ? { bottom: Math.round(window.innerHeight - r.top + gap) } : { top: Math.round(r.bottom + gap) }),
     });
   }, []);
 
@@ -139,7 +146,17 @@ export function Select({ value, onChange, disabled = false, children, className,
       if (menuRef.current?.contains(e.target as Node)) return;
       setOpen(false);
     };
-    const onScroll = () => setOpen(false);
+    const onScroll = (e: Event) => {
+      // Scrollen binnen het menu zelf (lange optielijsten) mag het niet sluiten.
+      if (menuRef.current?.contains(e.target as Node)) return;
+      const el = triggerRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      // Sluit alleen wanneer de trigger uit beeld scrolt; anders blijft het menu
+      // aan de trigger 'plakken' in plaats van te verdwijnen bij elke scroll.
+      if (r.bottom <= 0 || r.top >= window.innerHeight) setOpen(false);
+      else place();
+    };
     window.addEventListener('mousedown', onPointer);
     window.addEventListener('resize', place);
     window.addEventListener('scroll', onScroll, true);
