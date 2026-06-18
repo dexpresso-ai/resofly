@@ -1844,3 +1844,30 @@ body::before{
 .dns-record-label{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .dns-record code{font-size:12px;color:var(--text);word-break:break-all}
 .dns-record-value{user-select:all}
+
+/* ── Klant-communicatie (e-mail) ─────────────────────────────────────── */
+.client-comm{display:flex;flex-direction:column;gap:16px}
+.client-comm-compose .client-comm-to{margin:0 0 12px;font-size:13px;color:var(--muted2)}
+.client-comm-field{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:700;color:var(--muted2);margin-bottom:12px}
+.client-comm-actions{display:flex;justify-content:flex-end;gap:8px}
+.client-comm-threads{display:flex;flex-direction:column;gap:14px;margin-top:6px}
+.client-comm-thread{background:var(--bg3);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.client-comm-thread-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 14px;border-bottom:1px solid var(--border);background:var(--bg2)}
+.client-comm-thread-head strong{font-size:.92rem}
+.client-comm-thread-head span{font-size:11px;color:var(--muted)}
+.client-comm-messages{display:flex;flex-direction:column;gap:10px;padding:12px 14px}
+.client-comm-message{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--bg2)}
+.client-comm-message.inbound{background:rgba(52,211,153,.06);border-color:rgba(52,211,153,.22)}
+.client-comm-message-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.client-comm-dir{font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted2)}
+.client-comm-message-meta time{font-size:11px;color:var(--muted);margin-left:auto}
+.client-comm-status{font-size:10px;font-weight:700;border-radius:999px;padding:2px 9px;border:1px solid var(--border)}
+.client-comm-status.success{color:var(--accent-g);background:rgba(52,211,153,.12);border-color:rgba(52,211,153,.28)}
+.client-comm-status.danger{color:var(--accent-r);background:rgba(240,107,107,.12);border-color:rgba(240,107,107,.28)}
+.client-comm-status.inbound{color:var(--accent-g);background:rgba(52,211,153,.12);border-color:rgba(52,211,153,.28)}
+.client-comm-status.neutral{color:var(--muted2);background:rgba(255,255,255,.05)}
+.client-comm-message-from{font-size:11px;color:var(--muted);margin-bottom:8px;word-break:break-all}
+.client-comm-body{font-size:13px;line-height:1.6;color:var(--text)}
+.client-comm-body p{margin:0 0 8px}
+.client-comm-body-plain{white-space:pre-wrap}
+.client-comm-error{margin-top:8px;font-size:12px;color:var(--accent-r)}

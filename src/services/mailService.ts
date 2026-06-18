@@ -99,3 +99,41 @@ export async function removeSendingDomain(
   if (error) await throwFunctionError(error, 'Verzenddomein verwijderen mislukt.');
   if (!data?.ok) throw new Error(data?.error || 'Verzenddomein verwijderen mislukt.');
 }
+
+// ── Vrije klant-mail versturen ──────────────────────────────────────────────
+
+export interface SendClientEmailResult {
+  threadId: UUID;
+  clientEmailId: UUID;
+  providerEmailId: string;
+  recipientEmail: string;
+}
+
+/**
+ * Verstuur een vrije e-mail naar een klant vanaf het geverifieerde verzenddomein
+ * (valt terug op het globale afzenderadres). De mail wordt server-side verstuurd
+ * en gelogd; statusupdates komen via de Resend-webhook binnen.
+ */
+export async function sendClientEmail(
+  organizationId: UUID,
+  input: { clientId: UUID; subject: string; bodyHtml: string; bodyText?: string },
+): Promise<SendClientEmailResult> {
+  const { data, error } = await supabase.functions.invoke('mail', {
+    body: {
+      action: 'sendClientEmail',
+      organizationId,
+      clientId: input.clientId,
+      subject: input.subject,
+      bodyHtml: input.bodyHtml,
+      bodyText: input.bodyText,
+    },
+  });
+  if (error) await throwFunctionError(error, 'E-mail versturen mislukt.');
+  if (!data?.ok) throw new Error(data?.error || 'E-mail versturen mislukt.');
+  return {
+    threadId: String(data.threadId || ''),
+    clientEmailId: String(data.clientEmailId || ''),
+    providerEmailId: String(data.providerEmailId || ''),
+    recipientEmail: String(data.recipientEmail || ''),
+  };
+}

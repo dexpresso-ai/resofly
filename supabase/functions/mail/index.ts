@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 422 | 500 | 502;
@@ -14,6 +15,12 @@ const RESEND_REPLY_TO = Deno.env.get('RESEND_REPLY_TO') || '';
 // Regio waarin nieuwe verzenddomeinen bij Resend worden aangemaakt. eu-west-1
 // (Ierland) is de standaard voor een Nederlandse SaaS i.v.m. dataresidentie.
 const RESEND_DEFAULT_REGION = Deno.env.get('RESEND_DEFAULT_REGION') || 'eu-west-1';
+
+// Domein waarop antwoorden binnenkomen (fase C). Zolang dit leeg is, krijgen
+// klant-mails een gewone Reply-To (afzenderadres / RESEND_REPLY_TO). Zodra het
+// inbound-domein via Cloudflare Email Routing live staat, zetten we hier
+// bijv. "inbound.resofly.nl" zodat replies als reply+<id>@inbound... terugkomen.
+const MAIL_INBOUND_DOMAIN = (Deno.env.get('MAIL_INBOUND_DOMAIN') || '').trim().toLowerCase();
 
 // Basis-URL van de frontend voor de portaallink in de welkomstmail. Valt terug op
 // de (al via assertAllowedOrigin gevalideerde) request-origin als er geen env staat.
@@ -97,6 +104,18 @@ serve(async (req) => {
         }
 
         const result = await sendClientPortalWelcome(req, organizationId, body);
+        return json(req, { ok: true, ...result });
+      }
+
+      case 'sendClientEmail': {
+        if (!['owner', 'admin', 'member'].includes(role)) {
+          throw new MailHttpError(
+            'Je hebt geen rechten om klant-e-mails te versturen.',
+            403,
+          );
+        }
+
+        const result = await sendClientEmail(organizationId, user, body);
         return json(req, { ok: true, ...result });
       }
 
@@ -193,11 +212,13 @@ async function sendTestEmail(
   const html = buildTestEmailHtml({ organizationName, recipientName });
   const text = buildTestEmailText({ organizationName, recipientName });
 
+  const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+
   const resendPayload = await sendViaResend(
     {
-      from: RESEND_FROM_EMAIL,
+      from: sender.from,
       to: [recipientEmail],
-      reply_to: RESEND_REPLY_TO || undefined,
+      reply_to: sender.replyTo,
       subject,
       html,
       text,
@@ -260,11 +281,13 @@ async function sendClientPortalWelcome(
   const html = buildClientWelcomeHtml({ organizationName, recipientName, recipientEmail, portalUrl });
   const text = buildClientWelcomeText({ organizationName, recipientName, recipientEmail, portalUrl });
 
+  const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+
   const resendPayload = await sendViaResend(
     {
-      from: RESEND_FROM_EMAIL,
+      from: sender.from,
       to: [recipientEmail],
-      reply_to: RESEND_REPLY_TO || undefined,
+      reply_to: sender.replyTo,
       subject,
       html,
       text,
@@ -380,6 +403,198 @@ function buildClientWelcomeText(input: {
     '',
     `Je ontvangt deze e-mail omdat ${input.organizationName} een klantdossier voor je heeft aangemaakt.`,
   ].join('\n');
+}
+
+// ── Vrije klant-mail versturen + loggen ─────────────────────────────────────
+
+async function sendClientEmail(
+  organizationId: string,
+  user: { id: string; email?: string },
+  body: Record<string, unknown>,
+): Promise<{ threadId: string; clientEmailId: string; providerEmailId: string; recipientEmail: string }> {
+  if (!RESEND_API_KEY) {
+    throw new MailHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
+  }
+
+  const clientId = String(body.clientId || '').trim();
+  if (!isUuid(clientId)) {
+    throw new MailHttpError('Ongeldige klant.', 400);
+  }
+
+  const subject = String(body.subject || '').trim();
+  if (!subject) {
+    throw new MailHttpError('Vul een onderwerp in.', 422);
+  }
+
+  const bodyHtmlInput = String(body.bodyHtml || '').trim();
+  const bodyTextInput = String(body.bodyText || '').trim();
+  if (!bodyHtmlInput && !bodyTextInput) {
+    throw new MailHttpError('De e-mail heeft geen inhoud.', 422);
+  }
+
+  const client = await loadClient(organizationId, clientId);
+  const recipientEmail = String(client.email || '').trim().toLowerCase();
+  if (!isEmail(recipientEmail)) {
+    throw new MailHttpError('Deze klant heeft geen geldig e-mailadres.', 422);
+  }
+
+  const organization = await loadOrganization(organizationId);
+  const company = await loadCompanySettings(organizationId);
+  const organizationName =
+    company?.trade_name || company?.company_name || organization.name || 'ResoFly';
+
+  const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+  if (!sender.from) {
+    throw new MailHttpError(
+      'Er is nog geen afzenderadres geconfigureerd. Koppel eerst een verzenddomein of stel RESEND_FROM_EMAIL in.',
+      422,
+    );
+  }
+  const fromEmailForRow = sender.fromEmail || extractEmailAddress(sender.from);
+  const fromNameForRow = extractDisplayName(sender.from);
+
+  // 1. Thread aanmaken.
+  const { data: thread, error: threadError } = await supabaseAdmin
+    .from('client_email_threads')
+    .insert({
+      organization_id: organizationId,
+      client_id: clientId,
+      created_by: user.id,
+      subject,
+      last_direction: 'outbound',
+      last_message_at: new Date().toISOString(),
+    })
+    .select('id')
+    .single();
+  if (threadError) throw threadError;
+  const threadId = String(thread.id);
+
+  // 2. Outbound bericht-rij (queued) zodat we een id hebben voor de Reply-To.
+  const { data: emailRow, error: emailError } = await supabaseAdmin
+    .from('client_emails')
+    .insert({
+      organization_id: organizationId,
+      thread_id: threadId,
+      client_id: clientId,
+      created_by: user.id,
+      direction: 'outbound',
+      provider: 'resend',
+      from_email: fromEmailForRow,
+      from_name: fromNameForRow,
+      to_email: recipientEmail,
+      subject,
+      body_html: bodyHtmlInput || null,
+      body_text: bodyTextInput || htmlToText(bodyHtmlInput),
+      status: 'queued',
+    })
+    .select('id')
+    .single();
+  if (emailError) throw emailError;
+  const clientEmailId = String(emailRow.id);
+
+  // 3. Reply-To bepalen — fase C-klaar: als het inbound-domein staat, komen
+  // antwoorden terug als reply+<id>@inbound..., anders een gewone Reply-To.
+  const replyTo = MAIL_INBOUND_DOMAIN
+    ? `reply+${clientEmailId}@${MAIL_INBOUND_DOMAIN}`
+    : (sender.replyTo || fromEmailForRow || undefined);
+
+  const html = buildClientEmailHtml({
+    organizationName,
+    bodyHtml: bodyHtmlInput || escapeHtml(bodyTextInput).replace(/\n/g, '<br/>'),
+  });
+  const text = bodyTextInput || htmlToText(bodyHtmlInput);
+
+  // 4. Versturen via Resend; bij een providerfout de rij als 'failed' markeren.
+  let providerEmailId = '';
+  try {
+    const resendPayload = await sendViaResend(
+      {
+        from: sender.from,
+        to: [recipientEmail],
+        reply_to: replyTo,
+        subject,
+        html,
+        text,
+        tags: [
+          { name: 'organization_id', value: sanitizeTagValue(organizationId) },
+          { name: 'client_id', value: sanitizeTagValue(clientId) },
+          { name: 'client_email_id', value: sanitizeTagValue(clientEmailId) },
+        ],
+      },
+      `client-email-${sanitizeIdempotencyPart(clientEmailId)}`,
+    );
+    providerEmailId = String(resendPayload.id || resendPayload.email_id || '').trim();
+  } catch (error) {
+    const now = new Date().toISOString();
+    await supabaseAdmin
+      .from('client_emails')
+      .update({
+        status: 'failed',
+        failed_at: now,
+        last_event_at: now,
+        error_message: error instanceof Error ? error.message : 'Versturen mislukt.',
+      })
+      .eq('id', clientEmailId);
+    throw error;
+  }
+
+  // 5. Rij + thread bijwerken na succesvolle verzending.
+  const sentAt = new Date().toISOString();
+  await supabaseAdmin
+    .from('client_emails')
+    .update({ status: 'sent', sent_at: sentAt, last_event_at: sentAt, provider_email_id: providerEmailId || null })
+    .eq('id', clientEmailId);
+  await supabaseAdmin
+    .from('client_email_threads')
+    .update({ last_message_at: sentAt, last_direction: 'outbound' })
+    .eq('id', threadId);
+
+  return { threadId, clientEmailId, providerEmailId, recipientEmail };
+}
+
+function buildClientEmailHtml(input: { organizationName: string; bodyHtml: string }): string {
+  const org = escapeHtml(input.organizationName);
+  return `<!doctype html>
+<html>
+  <body style="margin:0;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;">
+    <div style="max-width:640px;margin:0 auto;padding:28px 20px;">
+      <div style="background:#ffffff;border:1px solid #e4e4e7;border-radius:14px;padding:28px;line-height:1.6;font-size:15px;">
+        ${input.bodyHtml}
+      </div>
+      <p style="margin:14px 4px 0;color:#8a8a92;font-size:12px;line-height:1.5;">${org}</p>
+    </div>
+  </body>
+</html>`;
+}
+
+function extractEmailAddress(value: string): string {
+  const match = value.match(/<([^>]+)>/);
+  return (match ? match[1] : value).trim();
+}
+
+function extractDisplayName(value: string): string | null {
+  const match = value.match(/^\s*"?([^"<]*?)"?\s*</);
+  const name = match ? match[1].trim() : '';
+  return name || null;
+}
+
+function htmlToText(html: string): string {
+  return html
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\/\s*(p|div|h[1-6]|li|blockquote)\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function sanitizeTagValue(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 256) || 'unknown';
 }
 
 // ── Eigen-domein e-mail: verzenddomeinen ────────────────────────────────────

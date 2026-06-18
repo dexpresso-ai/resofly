@@ -47,7 +47,12 @@ async function handleResendEvent(req: Request, payload: Record<string, unknown>)
       await handleInvoiceDeliveryEvent(invoiceDelivery, type, eventType, occurredAt, providerEventId, providerEmailId, payload, data);
       return;
     }
-    console.warn('No quote_email_delivery or invoice_email_delivery found for Resend email id', providerEmailId);
+    const clientEmail = await findClientEmailDelivery(providerEmailId);
+    if (clientEmail) {
+      await handleClientEmailEvent(clientEmail, type, eventType, occurredAt, providerEventId, providerEmailId, payload, data);
+      return;
+    }
+    console.warn('No quote/invoice/client email delivery found for Resend email id', providerEmailId);
     return;
   }
 
@@ -197,6 +202,64 @@ async function handleInvoiceDeliveryEvent(delivery: any, rawType: string, eventT
   }
 
   await insertInvoiceWorkflowEvent(delivery.organization_id, delivery.invoice_id, null, `email_${eventType}`, invoiceEventTitle(eventType), null, { providerEmailId, providerEventId });
+}
+
+async function findClientEmailDelivery(providerEmailId: string): Promise<any | null> {
+  const { data, error } = await supabaseAdmin
+    .from('client_emails')
+    .select('id,organization_id,thread_id,client_id,subject,status,sent_at,delivered_at,opened_at,clicked_at,bounced_at,failed_at,complained_at,last_event_at')
+    .eq('provider', 'resend')
+    .eq('provider_email_id', providerEmailId)
+    .eq('direction', 'outbound')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    if (/client_emails|schema cache|does not exist|relation/i.test(`${error.message ?? ''} ${error.details ?? ''}`)) return null;
+    throw error;
+  }
+  return data ?? null;
+}
+
+async function handleClientEmailEvent(delivery: any, rawType: string, eventType: string, occurredAt: string, providerEventId: string, providerEmailId: string, payload: Record<string, unknown>, data: Record<string, unknown>) {
+  const { error: eventError } = await supabaseAdmin
+    .from('client_email_events')
+    .insert({
+      organization_id: delivery.organization_id,
+      client_email_id: delivery.id,
+      thread_id: delivery.thread_id,
+      provider: 'resend',
+      provider_event_id: providerEventId,
+      provider_email_id: providerEmailId,
+      event_type: rawType,
+      payload,
+      occurred_at: occurredAt,
+    });
+  if (eventError && !/duplicate key/i.test(eventError.message)) throw eventError;
+  if (eventError && /duplicate key/i.test(eventError.message)) return;
+
+  const nextStatus = strongestEmailStatus(String(delivery.status || 'queued'), eventType);
+  const patch: Record<string, unknown> = {
+    status: nextStatus,
+    last_event_at: maxIso(delivery.last_event_at, occurredAt),
+    updated_at: new Date().toISOString(),
+  };
+  if (eventType === 'sent') patch.sent_at = maxIso(delivery.sent_at, occurredAt);
+  if (eventType === 'delivered') patch.delivered_at = maxIso(delivery.delivered_at, occurredAt);
+  if (eventType === 'opened') patch.opened_at = maxIso(delivery.opened_at, occurredAt);
+  if (eventType === 'clicked') patch.clicked_at = maxIso(delivery.clicked_at, occurredAt);
+  if (eventType === 'bounced') patch.bounced_at = maxIso(delivery.bounced_at, occurredAt);
+  if (eventType === 'failed') patch.failed_at = maxIso(delivery.failed_at, occurredAt);
+  if (eventType === 'complained') patch.complained_at = maxIso(delivery.complained_at, occurredAt);
+  if (eventType === 'failed' || eventType === 'bounced' || eventType === 'complained') {
+    patch.error_message = String(data.reason || data.error || data.message || rawType);
+  }
+
+  const { error: updateError } = await supabaseAdmin
+    .from('client_emails')
+    .update(patch)
+    .eq('id', delivery.id);
+  if (updateError) throw updateError;
 }
 
 async function loadQuoteEmailSummary(organizationId: string, quoteId: string): Promise<any | null> {

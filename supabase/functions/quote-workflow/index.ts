@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import {
   PDFDocument,
   StandardFonts,
@@ -394,10 +395,11 @@ async function sendQuoteEmail(
     attachmentStorageKey: storedPdf.key ?? undefined,
   });
 
+  const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
   const resendPayload = {
-    from: RESEND_FROM_EMAIL,
+    from: senderIdentity.from,
     to: [recipientEmail],
-    reply_to: RESEND_REPLY_TO || undefined,
+    reply_to: senderIdentity.replyTo,
     subject,
     html,
     text,

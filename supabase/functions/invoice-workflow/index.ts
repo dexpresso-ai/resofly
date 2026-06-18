@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB } from 'https://esm.sh/pdf-lib@1.17.1';
 import { renderEmailTemplate, type EmailTemplateContent, type EmailTemplateContentKey } from '../_shared/emailTemplates/index.ts';
 import { decryptSecret, encryptSecret, mollieKeySuffix, validateMollieApiKey } from '../_shared/mollieSecrets.ts';
@@ -227,10 +228,11 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     attachmentStorageKey: storedPdf.key ?? undefined,
   });
 
+  const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
   const resendPayload = {
-    from: RESEND_FROM_EMAIL,
+    from: senderIdentity.from,
     to: [recipientEmail],
-    reply_to: RESEND_REPLY_TO || undefined,
+    reply_to: senderIdentity.replyTo,
     subject,
     html: renderedEmail.html,
     text: renderedEmail.text,
@@ -434,10 +436,11 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
     attachmentFileName: pdfFileName, attachmentMimeType: pdfMime, attachmentSizeBytes: pdfSize ?? undefined, attachmentSha256: pdfSha ?? undefined,
   });
 
+  const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
   const resendPayload = {
-    from: RESEND_FROM_EMAIL,
+    from: senderIdentity.from,
     to: [recipientEmail],
-    reply_to: RESEND_REPLY_TO || undefined,
+    reply_to: senderIdentity.replyTo,
     subject,
     html: rendered.html,
     text: rendered.text,
@@ -1090,10 +1093,11 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
     content,
   });
 
+  const senderIdentity = await resolveSenderIdentity(supabaseAdmin, input.organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
   const resendPayload = {
-    from: RESEND_FROM_EMAIL,
+    from: senderIdentity.from,
     to: [recipientEmail],
-    reply_to: RESEND_REPLY_TO || undefined,
+    reply_to: senderIdentity.replyTo,
     subject: rendered.subject,
     html: rendered.html,
     text: rendered.text,

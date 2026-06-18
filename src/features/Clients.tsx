@@ -1,8 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Search, RotateCcw } from 'lucide-react';
-import type { AppData, Client, ClientStatus, InternalDocument, Invoice, Note, Project, Quote } from '../types';
+import type { AppData, Client, ClientEmail, ClientEmailStatus, ClientEmailThread, ClientStatus, InternalDocument, Invoice, Note, Project, Quote } from '../types';
 import { dateNL, euro, total } from '../lib/format';
-import { Button, Select } from '../components/Ui';
+import { Button, Input, Select } from '../components/Ui';
+import { RichTextEditor } from '../components/RichTextEditor';
+import { loadClientEmails, loadClientEmailThreads } from '../lib/repository';
+import { sendClientEmail } from '../services/mailService';
 import { RelatedNotes } from './Notes';
 import { RelatedDocuments } from './Documents';
 import { ClientFolders } from './ClientFolders';
@@ -295,6 +298,7 @@ export function ClientDetailPage({
     { id: 'invoices', label: 'Facturen', count: invoices.length },
     { id: 'notes', label: 'Notities', count: notes.length },
     { id: 'documents', label: 'Documenten', count: documents.length },
+    { id: 'communication', label: 'Communicatie', count: 0 },
     { id: 'folders', label: 'Mappen', count: data.folders.filter(folder => folder.client_id === client.id).length },
   ];
 
@@ -349,7 +353,7 @@ export function ClientDetailPage({
       ))}
     </div>
 
-    {activeTab !== 'overview' && activeTab !== 'folders' && <div className="client-tab-search">
+    {activeTab !== 'overview' && activeTab !== 'folders' && activeTab !== 'communication' && <div className="client-tab-search">
       <label className="client-tab-search-field">
         <Search size={14} />
         <input
@@ -492,6 +496,7 @@ export function ClientDetailPage({
 
     {activeTab === 'notes' && <RelatedNotes title="Klantnotities" notes={filteredNotes} data={data} canWrite={canWrite} onNew={onNewNote} onEdit={onEditNote} emptyText={notes.length === 0 ? 'Nog geen notities bij deze klant.' : 'Geen notities voor deze zoekopdracht.'} />}
     {activeTab === 'documents' && <RelatedDocuments title="Documenten" documents={filteredDocuments} data={data} canWrite={canWrite} onNew={onNewDocument} onEdit={onEditDocument} emptyText={documents.length === 0 ? 'Nog geen documenten gekoppeld aan deze klant.' : 'Geen documenten voor deze zoekopdracht.'} />}
+    {activeTab === 'communication' && <ClientCommunication client={client} organizationId={organizationId} canWrite={canWrite} />}
     {activeTab === 'folders' && <ClientFolders
       data={data}
       client={client}
@@ -549,6 +554,154 @@ function FinancePanel<T extends Quote | Invoice>({
   </article>;
 }
 
+const CLIENT_EMAIL_STATUS_LABELS: Record<ClientEmailStatus, string> = {
+  queued: 'In wachtrij',
+  sent: 'Verzonden',
+  delivered: 'Afgeleverd',
+  opened: 'Geopend',
+  clicked: 'Link geklikt',
+  bounced: 'Gebounced',
+  failed: 'Mislukt',
+  complained: 'Spam-klacht',
+  received: 'Ontvangen',
+};
+
+function clientEmailStatusTone(status: ClientEmailStatus): string {
+  if (status === 'delivered' || status === 'opened' || status === 'clicked') return 'success';
+  if (status === 'bounced' || status === 'failed' || status === 'complained') return 'danger';
+  if (status === 'received') return 'inbound';
+  return 'neutral';
+}
+
+function formatEmailDateTime(value: string | null | undefined): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(date);
+}
+
+function ClientCommunication({ client, organizationId, canWrite }: { client: Client; organizationId: string; canWrite: boolean }) {
+  const [threads, setThreads] = useState<ClientEmailThread[]>([]);
+  const [emails, setEmails] = useState<ClientEmail[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [subject, setSubject] = useState('');
+  const [body, setBody] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [sendMessage, setSendMessage] = useState<string | null>(null);
+
+  const recipient = (client.email ?? '').trim();
+  const hasRecipient = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient);
+  const bodyText = body.replace(/<[^>]*>/g, '').replace(/&nbsp;/gi, ' ').trim();
+  const canSend = canWrite && hasRecipient && subject.trim().length > 0 && bodyText.length > 0 && !sending;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    setLoadError(null);
+    Promise.all([
+      loadClientEmailThreads(organizationId, client.id),
+      loadClientEmails(organizationId, client.id),
+    ])
+      .then(([loadedThreads, loadedEmails]) => { if (!cancelled) { setThreads(loadedThreads); setEmails(loadedEmails); setLoaded(true); } })
+      .catch(err => { if (!cancelled) { setLoadError(err instanceof Error ? err.message : 'Communicatie laden mislukt.'); setLoaded(true); } });
+    return () => { cancelled = true; };
+  }, [organizationId, client.id]);
+
+  async function reload() {
+    const [loadedThreads, loadedEmails] = await Promise.all([
+      loadClientEmailThreads(organizationId, client.id),
+      loadClientEmails(organizationId, client.id),
+    ]);
+    setThreads(loadedThreads);
+    setEmails(loadedEmails);
+  }
+
+  async function send() {
+    if (!canSend) return;
+    setSending(true); setSendError(null); setSendMessage(null);
+    try {
+      const result = await sendClientEmail(organizationId, { clientId: client.id, subject: subject.trim(), bodyHtml: body });
+      setSubject(''); setBody('');
+      setSendMessage(`E-mail verzonden naar ${result.recipientEmail}.`);
+      await reload();
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : 'E-mail versturen mislukt.');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const emailsByThread = useMemo(() => {
+    const map = new Map<string, ClientEmail[]>();
+    for (const email of emails) {
+      const list = map.get(email.thread_id) ?? [];
+      list.push(email);
+      map.set(email.thread_id, list);
+    }
+    return map;
+  }, [emails]);
+
+  return <div className="client-comm">
+    <article className="client-panel client-comm-compose">
+      <div className="client-panel-head"><h3>Nieuwe e-mail</h3></div>
+      {!hasRecipient
+        ? <div className="client-empty-line">Deze klant heeft geen e-mailadres. Vul er een in bij de klantgegevens om te kunnen mailen.</div>
+        : <>
+          <p className="client-comm-to">Aan: <strong>{recipient}</strong></p>
+          <label className="client-comm-field">Onderwerp
+            <Input value={subject} onChange={e => { setSubject(e.target.value); setSendError(null); setSendMessage(null); }} placeholder="Onderwerp van je e-mail" disabled={!canWrite || sending} />
+          </label>
+          <div className="client-comm-field">Bericht
+            <RichTextEditor value={body} onChange={setBody} placeholder="Schrijf je bericht…" disabled={!canWrite || sending} />
+          </div>
+          {sendMessage && <div className="success">{sendMessage}</div>}
+          {sendError && <div className="error">{sendError}</div>}
+          <div className="client-comm-actions">
+            <Button variant="primary" onClick={send} disabled={!canSend}>{sending ? 'Versturen…' : 'Verstuur e-mail'}</Button>
+          </div>
+          {!canWrite && <p className="client-empty-line">Je hebt geen schrijfrechten om e-mails te versturen.</p>}
+        </>}
+    </article>
+
+    <article className="client-panel">
+      <div className="client-panel-head"><h3>Verzonden &amp; ontvangen</h3><span>{threads.length}</span></div>
+      {!loaded && <div className="client-empty-line">Communicatie laden…</div>}
+      {loaded && loadError && <div className="error">{loadError}</div>}
+      {loaded && !loadError && threads.length === 0 && <div className="client-empty-line">Nog geen e-mails met deze klant.</div>}
+      <div className="client-comm-threads">
+        {threads.map(thread => {
+          const msgs = emailsByThread.get(thread.id) ?? [];
+          return <div className="client-comm-thread" key={thread.id}>
+            <div className="client-comm-thread-head">
+              <strong>{thread.subject || '(geen onderwerp)'}</strong>
+              <span>{formatEmailDateTime(thread.last_message_at)}</span>
+            </div>
+            <div className="client-comm-messages">
+              {msgs.map(msg => (
+                <div className={`client-comm-message ${msg.direction}`} key={msg.id}>
+                  <div className="client-comm-message-meta">
+                    <span className="client-comm-dir">{msg.direction === 'outbound' ? 'Uitgaand' : 'Inkomend'}</span>
+                    <span className={`client-comm-status ${clientEmailStatusTone(msg.status)}`}>{CLIENT_EMAIL_STATUS_LABELS[msg.status] ?? msg.status}</span>
+                    <time>{formatEmailDateTime(msg.created_at)}</time>
+                  </div>
+                  <div className="client-comm-message-from">{msg.direction === 'outbound' ? `${msg.from_email} → ${msg.to_email}` : `Van ${msg.from_email}`}</div>
+                  {msg.body_html
+                    ? <div className="client-comm-body" dangerouslySetInnerHTML={{ __html: msg.body_html }} />
+                    : <div className="client-comm-body client-comm-body-plain">{msg.body_text}</div>}
+                  {msg.error_message && <div className="client-comm-error">{msg.error_message}</div>}
+                </div>
+              ))}
+            </div>
+          </div>;
+        })}
+      </div>
+    </article>
+  </div>;
+}
+
 function getClientProjectIds(data: AppData, clientId: string) {
   return new Set(data.projects.filter(project => project.client_id === clientId).map(project => project.id));
 }
@@ -589,7 +742,7 @@ function isInvoiceOverdue(invoice: Invoice) {
 }
 
 // ── Zoeken/filteren op de klantdetailpagina ────────────────────────────
-type ClientTab = 'overview' | 'projects' | 'quotes' | 'invoices' | 'notes' | 'documents' | 'folders';
+type ClientTab = 'overview' | 'projects' | 'quotes' | 'invoices' | 'notes' | 'documents' | 'communication' | 'folders';
 
 // Statussen die zowel op offertes als facturen slaan staan zonder suffix; de
 // finance- of offerte-specifieke statussen krijgen een suffix zodat duidelijk is

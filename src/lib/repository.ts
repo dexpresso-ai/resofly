@@ -22,6 +22,8 @@ import type {
   InvoiceMollieSettingsStatus,
   InvoiceReminderSettings,
   SendingDomain,
+  ClientEmail,
+  ClientEmailThread,
   CreditNote,
   InvoiceChargeback,
   Note,
@@ -1360,6 +1362,36 @@ export async function loadSendingDomains(organizationId: UUID): Promise<SendingD
     .order('created_at', { ascending: false });
   if (error) throw error;
   return (data ?? []) as SendingDomain[];
+}
+
+const CLIENT_EMAIL_THREAD_COLUMNS = 'id,organization_id,created_by,client_id,subject,last_message_at,last_direction,created_at,updated_at';
+const CLIENT_EMAIL_COLUMNS = 'id,organization_id,created_by,thread_id,client_id,direction,provider,provider_email_id,from_email,from_name,to_email,subject,body_html,body_text,status,sent_at,delivered_at,opened_at,clicked_at,bounced_at,failed_at,complained_at,received_at,last_event_at,error_message,created_at,updated_at';
+
+/**
+ * Laad de e-mail-conversaties (threads) van een klant, nieuwste eerst. Alleen-lezen;
+ * versturen loopt via de `mail` Edge Function en de webhook werkt de status bij.
+ */
+export async function loadClientEmailThreads(organizationId: UUID, clientId: UUID): Promise<ClientEmailThread[]> {
+  const { data, error } = await supabase
+    .from('client_email_threads')
+    .select(CLIENT_EMAIL_THREAD_COLUMNS)
+    .eq('organization_id', organizationId)
+    .eq('client_id', clientId)
+    .order('last_message_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as ClientEmailThread[];
+}
+
+/** Laad alle e-mailberichten van een klant (uitgaand + inkomend), oplopend op tijd. */
+export async function loadClientEmails(organizationId: UUID, clientId: UUID): Promise<ClientEmail[]> {
+  const { data, error } = await supabase
+    .from('client_emails')
+    .select(CLIENT_EMAIL_COLUMNS)
+    .eq('organization_id', organizationId)
+    .eq('client_id', clientId)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as ClientEmail[];
 }
 
 const EMAIL_TEMPLATE_COLUMNS = 'id,organization_id,created_by,template_key,enabled,subject,intro,closing,cta_label,created_at,updated_at';
