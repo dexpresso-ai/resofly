@@ -35,6 +35,8 @@ import type {
   PurchaseInvoice,
   FixedAsset,
   AssetDepreciation,
+  ProfitAndLossRow,
+  BalanceSheetRow,
   CalendarNoteLinkInput,
   NoteCalendarLink,
   CalendarEventLink,
@@ -817,6 +819,27 @@ export async function postAssetDepreciation(organizationId: UUID, assetId: UUID,
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as FixedAsset;
+}
+
+/** Winst- en verliesrekening over een periode (alleen geboekte journaalposten). */
+export async function reportProfitAndLoss(organizationId: UUID, from: string, to: string): Promise<ProfitAndLossRow[]> {
+  const { data, error } = await supabase.rpc('report_profit_and_loss', {
+    p_organization_id: organizationId,
+    p_from: from,
+    p_to: to,
+  });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as ProfitAndLossRow[];
+}
+
+/** Balans per peildatum (activa/passiva/eigen vermogen + cumulatief resultaat). */
+export async function reportBalanceSheet(organizationId: UUID, asOf: string): Promise<BalanceSheetRow[]> {
+  const { data, error } = await supabase.rpc('report_balance_sheet', {
+    p_organization_id: organizationId,
+    p_as_of: asOf,
+  });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as BalanceSheetRow[];
 }
 
 /** Boekt een inkoopfactuur naar het grootboek (server-side, security definer). */

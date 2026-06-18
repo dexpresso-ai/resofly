@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Archive, BarChart3, BookOpen, Boxes, Calendar, ChevronDown, ChevronRight, FileText, Files, FolderOpen, LayoutDashboard, Library, Receipt, Settings, StickyNote, Ticket, Truck, Users } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, Boxes, Calendar, ChevronDown, ChevronRight, FileText, Files, FolderOpen, LayoutDashboard, Library, Receipt, Settings, StickyNote, Ticket, TrendingUp, Truck, Users } from 'lucide-react';
 import type { Organization, OrganizationRole } from '../types';
 import { Select } from './Ui';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'assets'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'assets'|'pnl'|'archive'|'settings'|'project';
 
 const items = [
   ['dashboard', LayoutDashboard, 'Dashboard'],
@@ -18,7 +18,7 @@ const items = [
   ['settings', Settings, 'Instellingen'],
 ] as const;
 
-const financePages: Page[] = ['quotes', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'assets'];
+const financePages: Page[] = ['quotes', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'assets', 'pnl'];
 const calendarPages: Page[] = ['calendar', 'calendar-settings'];
 const projectPages: Page[] = ['projects', 'project', 'project-planning', 'archive'];
 const contentPages: Page[] = ['content', 'notes', 'documents'];
@@ -66,7 +66,7 @@ export function Sidebar({
     }, 80);
   }
 
-  function openFinancePage(target: 'quotes' | 'invoices' | 'suppliers' | 'purchase-invoices' | 'ledger' | 'assets') {
+  function openFinancePage(target: 'quotes' | 'invoices' | 'suppliers' | 'purchase-invoices' | 'ledger' | 'assets' | 'pnl') {
     setFinanceOpen(true);
     onPage(target);
   }
@@ -141,6 +141,7 @@ export function Sidebar({
             <button type="button" className={page === 'purchase-invoices' ? 'active' : ''} onClick={() => openFinancePage('purchase-invoices')}><FileText size={13}/><span>Inkoopfacturen</span></button>
             <button type="button" className={page === 'ledger' ? 'active' : ''} onClick={() => openFinancePage('ledger')}><BookOpen size={13}/><span>Grootboek</span></button>
             <button type="button" className={page === 'assets' ? 'active' : ''} onClick={() => openFinancePage('assets')}><Boxes size={13}/><span>Activa</span></button>
+            <button type="button" className={page === 'pnl' ? 'active' : ''} onClick={() => openFinancePage('pnl')}><TrendingUp size={13}/><span>Winst &amp; verlies</span></button>
           </div>}
 
           {key === 'content' && contentPages.includes(page) && <div className="nav-submenu nav-submenu-finance">

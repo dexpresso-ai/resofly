@@ -63,6 +63,7 @@ import { clientFolderOptions } from './lib/folders';
 import { Invoices, Quotes, type RefundInput } from './features/Finance';
 import { LedgerPage, PurchaseInvoicesPage, SuppliersPage } from './features/Bookkeeping';
 import { AssetsPage } from './features/Assets';
+import { ProfitLossPage } from './features/ProfitLoss';
 import { PublicQuotePage } from './features/PublicQuotePage';
 import { PublicInvoicePage } from './features/PublicInvoicePage';
 import { ClientPortal } from './features/portal/ClientPortal';
@@ -78,7 +79,7 @@ import type {
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'assets'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'assets'|'pnl'|'archive'|'settings'|'project';
 type EditMode =
   | { kind: 'client'; item?: Client }
   | { kind: 'project'; item?: Project }
@@ -840,7 +841,7 @@ function App() {
     }
   }
 
-  const title = page === 'project' ? project?.name ?? 'Project' : page === 'client' ? client?.name ?? 'Klant' : ({dashboard:'Dashboard',weekplanner:'Weekplanner',calendar:'Kalender','calendar-settings':'Agenda-instellingen',stats:'Statistieken',content:'Inhoud',notes:'Notities',documents:'Documenten',clients:'Klanten',projects:'Projecten','project-planning':'Projectplanning',tickets:'Tickets',quotes:'Offertes',invoices:'Facturen',suppliers:'Leveranciers','purchase-invoices':'Inkoopfacturen',ledger:'Grootboek',assets:'Activa',archive:'Archief',settings:'Instellingen',project:'Project',client:'Klant'} as Record<Page,string>)[page];
+  const title = page === 'project' ? project?.name ?? 'Project' : page === 'client' ? client?.name ?? 'Klant' : ({dashboard:'Dashboard',weekplanner:'Weekplanner',calendar:'Kalender','calendar-settings':'Agenda-instellingen',stats:'Statistieken',content:'Inhoud',notes:'Notities',documents:'Documenten',clients:'Klanten',projects:'Projecten','project-planning':'Projectplanning',tickets:'Tickets',quotes:'Offertes',invoices:'Facturen',suppliers:'Leveranciers','purchase-invoices':'Inkoopfacturen',ledger:'Grootboek',assets:'Activa',pnl:'Winst & verlies',archive:'Archief',settings:'Instellingen',project:'Project',client:'Klant'} as Record<Page,string>)[page];
 
   return <div className="app">
     <Sidebar page={page} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); }}/>
@@ -872,6 +873,7 @@ function App() {
     if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'ledger') return <LedgerPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'assets') return <AssetsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
+    if (page === 'pnl') return <ProfitLossPage data={data} organizationId={activeOrg.id} onChanged={refresh}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} onPlanTask={updateTaskPlanning} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'calendar-settings') return <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;

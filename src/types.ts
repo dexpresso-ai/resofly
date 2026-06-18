@@ -732,6 +732,24 @@ export interface AssetDepreciation {
   created_at: string;
 }
 
+/** Regel uit report_profit_and_loss. amount_cents is positief georiënteerd per soort. */
+export interface ProfitAndLossRow {
+  account_id: UUID | null;
+  code: string | null;
+  name: string;
+  account_type: 'revenue' | 'expense';
+  amount_cents: number;
+}
+
+/** Regel uit report_balance_sheet. 'result' is het cumulatieve onverdeelde resultaat. */
+export interface BalanceSheetRow {
+  account_id: UUID | null;
+  code: string | null;
+  name: string;
+  section: 'asset' | 'liability' | 'equity' | 'result';
+  amount_cents: number;
+}
+
 export interface Attachment extends OrgScopedRow {
   entity_type: EntityType; entity_id: UUID; parent_task_id: UUID | null; name: string; mime_type: string; size_bytes: number; storage_key: string; public_url: string | null; created_at: string;
 }
