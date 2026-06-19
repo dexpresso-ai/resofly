@@ -1,0 +1,29 @@
+name = "resofly-email-inbound"
+main = "src/index.ts"
+compatibility_date = "2026-04-30"
+
+# Email Routing bindt deze Worker aan binnenkomende mail op het inbound-domein
+# (zie de catch-all routeregel reply+*@inbound.resofly.nl in het CF-dashboard).
+# Het gedeelde secret MAIL_INBOUND_SECRET wordt NIET hier gezet maar via:
+#   wrangler secret put MAIL_INBOUND_SECRET --env staging
+# zodat het niet in git belandt.
+
+[vars]
+MAIL_INBOUND_ENDPOINT = "https://enzghpduqwaojcxgwarr.supabase.co/functions/v1/mail-inbound"
+INBOUND_DOMAIN = "inbound.resofly.nl"
+
+# ---- staging ----
+[env.staging]
+name = "resofly-email-inbound-staging"
+
+[env.staging.vars]
+MAIL_INBOUND_ENDPOINT = "https://enzghpduqwaojcxgwarr.supabase.co/functions/v1/mail-inbound"
+INBOUND_DOMAIN = "inbound.resofly.nl"
+
+# ---- production ----
+[env.production]
+name = "resofly-email-inbound"
+
+[env.production.vars]
+MAIL_INBOUND_ENDPOINT = "https://enzghpduqwaojcxgwarr.supabase.co/functions/v1/mail-inbound"
+INBOUND_DOMAIN = "inbound.resofly.nl"

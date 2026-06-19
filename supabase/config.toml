@@ -25,3 +25,9 @@ verify_jwt = true
 # an email that matches an existing clients.email (RPC portal_clients_for_email).
 [functions.portal-login]
 verify_jwt = false
+
+# mail-inbound wordt aangeroepen door de Cloudflare Email Worker (geen Supabase
+# JWT). Authenticatie gebeurt via het gedeelde MAIL_INBOUND_WEBHOOK_SECRET dat de
+# functie zelf controleert (x-inbound-secret header).
+[functions.mail-inbound]
+verify_jwt = false
