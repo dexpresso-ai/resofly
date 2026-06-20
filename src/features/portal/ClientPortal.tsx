@@ -5,12 +5,14 @@ import { supabasePortalAuth } from '../../lib/supabasePortal';
 import {
   addPortalTicketNote,
   createPortalTicket,
+  downloadPortalContractPdf,
   downloadPortalInvoicePdf,
   fetchPortalData,
   fetchPortalProjectDetail,
   fetchPortalTicketThread,
   requestPortalLogin,
   type PortalAccount,
+  type PortalContract,
   type PortalInvoice,
   type PortalProject,
   type PortalQuote,
@@ -22,7 +24,7 @@ import {
 import { dateNL, euro, lineGross, priorityLabel, total } from '../../lib/format';
 import type { Priority } from '../../types';
 
-type PortalTab = 'overview' | 'invoices' | 'quotes' | 'tickets' | 'projects';
+type PortalTab = 'overview' | 'invoices' | 'quotes' | 'contracts' | 'tickets' | 'projects';
 
 /**
  * Klantportaal-root. Aparte route (/portal) met een eigen, wachtwoordloze login
@@ -186,6 +188,7 @@ function PortalAccountView({ account, onTicketCreated }: { account: PortalAccoun
     { id: 'overview', label: 'Overzicht' },
     { id: 'invoices', label: 'Facturen', count: account.invoices.length },
     { id: 'quotes', label: 'Offertes', count: account.quotes.length },
+    { id: 'contracts', label: 'Contracten', count: account.contracts?.length ?? 0 },
     { id: 'tickets', label: 'Tickets', count: account.tickets.length },
     { id: 'projects', label: 'Projecten', count: ongoingProjects.length },
   ];
@@ -233,6 +236,8 @@ function PortalAccountView({ account, onTicketCreated }: { account: PortalAccoun
       {account.quotes.length === 0 && <p className="portal-muted">Er zijn nog geen offertes voor je.</p>}
       <div className="portal-rows">{account.quotes.map(q => <QuoteRow key={q.id} quote={q} />)}</div>
     </article>}
+
+    {tab === 'contracts' && <ContractsTab account={account} />}
 
     {tab === 'tickets' && <TicketsTab account={account} onTicketCreated={onTicketCreated} />}
 
@@ -289,6 +294,45 @@ function QuoteRow({ quote }: { quote: PortalQuote }) {
     </div>
     <span className="portal-row-amount">{euro(amount)}</span>
     <span className={`portal-status ${quote.status}`}>{quoteStatusLabels[quote.status] ?? quote.status}</span>
+  </div>;
+}
+
+function ContractsTab({ account }: { account: PortalAccount }) {
+  const contracts = account.contracts ?? [];
+  return <article className="portal-card">
+    <div className="portal-card-head"><h2>Contracten</h2><span>{contracts.length}</span></div>
+    {contracts.length === 0 && <p className="portal-muted">Er zijn nog geen contracten voor je.</p>}
+    <div className="portal-rows">{contracts.map(c => <ContractRow key={c.id} contract={c} />)}</div>
+  </article>;
+}
+
+function ContractRow({ contract }: { contract: PortalContract }) {
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function download() {
+    setDownloading(true); setError(null);
+    try {
+      const pdf = await downloadPortalContractPdf(contract.id);
+      downloadBase64File(pdf.base64, pdf.fileName, pdf.mimeType);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Downloaden mislukt');
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return <div className="portal-row">
+    <div className="portal-row-main">
+      <span className="portal-row-number">{contract.number}{contract.title ? ` · ${contract.title}` : ''}</span>
+      <span className="portal-muted">{dateNL(contract.date)}{contract.signed_at ? ` · getekend ${dateNL(contract.signed_at)}` : ''}</span>
+    </div>
+    <span className={`portal-status ${contract.status}`}>{contractStatusLabels[contract.status] ?? contract.status}</span>
+    {contract.status === 'signed' && <div className="portal-row-actions">
+      <Button onClick={download} disabled={downloading}>{downloading ? 'PDF…' : 'PDF'}</Button>
+      {error && <span className="portal-row-error">{error}</span>}
+    </div>}
+    {contract.status === 'sent' && <span className="portal-muted" style={{ fontSize: 12 }}>Check je e-mail voor de ondertekenlink</span>}
   </div>;
 }
 
@@ -571,6 +615,13 @@ const quoteStatusLabels: Record<string, string> = {
   rejected: 'Afgewezen',
   expired: 'Verlopen',
   cancelled: 'Geannuleerd',
+};
+
+const contractStatusLabels: Record<string, string> = {
+  sent: 'Wacht op ondertekening',
+  signed: 'Ondertekend',
+  declined: 'Geweigerd',
+  expired: 'Verlopen',
 };
 
 const ticketStatusLabels: Record<string, string> = {

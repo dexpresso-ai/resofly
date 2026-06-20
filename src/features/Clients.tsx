@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, RotateCcw } from 'lucide-react';
-import type { AppData, Client, ClientEmail, ClientEmailStatus, ClientEmailThread, ClientStatus, InternalDocument, Invoice, Note, Project, Quote } from '../types';
+import type { AppData, Client, ClientEmail, ClientEmailStatus, ClientEmailThread, ClientStatus, Contract, InternalDocument, Invoice, Note, Project, Quote } from '../types';
 import { dateNL, euro, total } from '../lib/format';
 import { Button, Input, Select } from '../components/Ui';
 import { RichTextEditor } from '../components/RichTextEditor';
 import { loadClientEmails, loadClientEmailThreads } from '../lib/repository';
 import { sendClientEmail } from '../services/mailService';
+import { supabase } from '../lib/supabase';
 import { ClientFolders } from './ClientFolders';
+import { ContractStatusBadge } from './Contracts';
 
 const invoiceStatusLabels: Record<string, string> = {
   draft: 'Concept',
@@ -259,6 +261,17 @@ export function ClientDetailPage({
   const [statusFilter, setStatusFilter] = useState('');
   const normalizedQuery = clientSearchNormalize(query.trim());
 
+  // Contracten staan niet in de centrale AppData; laad ze hier per klant.
+  const [contracts, setContracts] = useState<Contract[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void supabase.from('contracts').select('*')
+      .eq('organization_id', organizationId).eq('client_id', client.id)
+      .order('created_at', { ascending: false })
+      .then(({ data }) => { if (!cancelled) setContracts((data ?? []) as Contract[]); });
+    return () => { cancelled = true; };
+  }, [organizationId, client.id]);
+
   const filteredProjects = useMemo(
     () => projects.filter(project => projectMatchesQuery(project, normalizedQuery)),
     [projects, normalizedQuery],
@@ -284,6 +297,7 @@ export function ClientDetailPage({
     { id: 'overview', label: 'Overzicht', count: 0 },
     { id: 'projects', label: 'Projecten', count: projects.length },
     { id: 'quotes', label: 'Offertes', count: quotes.length },
+    { id: 'contracts', label: 'Contracten', count: contracts.length },
     { id: 'invoices', label: 'Facturen', count: invoices.length },
     { id: 'files', label: 'Bestanden', count: notes.length + documents.length },
     { id: 'communication', label: 'Communicatie', count: 0 },
@@ -480,6 +494,8 @@ export function ClientDetailPage({
       kind="invoice"
       onEdit={onEditInvoice}
     />}
+
+    {activeTab === 'contracts' && <ClientContractsCard contracts={contracts} organizationId={organizationId} />}
 
     {activeTab === 'communication' && <ClientCommunication client={client} organizationId={organizationId} canWrite={canWrite} />}
     {activeTab === 'files' && <ClientFolders
@@ -691,6 +707,58 @@ function getClientProjectIds(data: AppData, clientId: string) {
   return new Set(data.projects.filter(project => project.client_id === clientId).map(project => project.id));
 }
 
+function ClientContractsCard({ contracts, organizationId }: { contracts: Contract[]; organizationId: string }) {
+  return <article className="client-panel">
+    <div className="client-panel-head"><h3>Contracten</h3><span>{contracts.length}</span></div>
+    {contracts.length === 0
+      ? <div className="client-empty-line">Nog geen contracten voor deze klant. Maak ze aan onder Financiën → Contracten.</div>
+      : <div className="client-contract-list">
+          {contracts.map(c => <ClientContractRow key={c.id} contract={c} organizationId={organizationId} />)}
+        </div>}
+  </article>;
+}
+
+function ClientContractRow({ contract, organizationId }: { contract: Contract; organizationId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function download() {
+    setBusy(true); setError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke('contract-workflow', {
+        body: { action: 'downloadContractPdf', organizationId, contractId: contract.id },
+      });
+      if (error) {
+        const context = (error as { context?: unknown })?.context;
+        let detail = error instanceof Error ? error.message : 'Downloaden mislukt';
+        if (context instanceof Response) {
+          const payload = await context.clone().json().catch(() => null) as { error?: string } | null;
+          if (payload?.error) detail = payload.error;
+        }
+        throw new Error(detail);
+      }
+      if (!data?.ok) throw new Error(data?.error || 'Downloaden mislukt');
+      const bytes = Uint8Array.from(atob(data.pdf.base64), ch => ch.charCodeAt(0));
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = data.pdf.fileName || `contract-${contract.number}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Downloaden mislukt'); }
+    finally { setBusy(false); }
+  }
+
+  return <div className="client-contract-row" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid #2a2a31' }}>
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <strong>{contract.number}</strong>{contract.title ? ` · ${contract.title}` : ''}
+      <div className="bk-muted" style={{ fontSize: 13 }}>{dateNL(contract.date)}{contract.signed_at ? ` · getekend ${dateNL(contract.signed_at)}` : ''}</div>
+      {error && <div className="error">{error}</div>}
+    </div>
+    <ContractStatusBadge status={contract.status} />
+    {contract.status === 'signed' && <Button onClick={download} disabled={busy}>{busy ? 'PDF…' : 'PDF'}</Button>}
+  </div>;
+}
+
 function getClientQuotes(data: AppData, clientId: string) {
   const projectIds = getClientProjectIds(data, clientId);
   return data.quotes
@@ -727,7 +795,7 @@ function isInvoiceOverdue(invoice: Invoice) {
 }
 
 // ── Zoeken/filteren op de klantdetailpagina ────────────────────────────
-type ClientTab = 'overview' | 'projects' | 'quotes' | 'invoices' | 'files' | 'communication';
+type ClientTab = 'overview' | 'projects' | 'quotes' | 'contracts' | 'invoices' | 'files' | 'communication';
 
 // Statussen die zowel op offertes als facturen slaan staan zonder suffix; de
 // finance- of offerte-specifieke statussen krijgen een suffix zodat duidelijk is

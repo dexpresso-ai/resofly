@@ -87,6 +87,8 @@ serve(async (req) => {
         return json(req, { ok: true, ...(await getProjectDetail(user, body)) });
       case 'getInvoicePdf':
         return json(req, { ok: true, ...(await getInvoicePdf(user, body)) });
+      case 'getContractPdf':
+        return json(req, { ok: true, ...(await getContractPdf(user, body)) });
       default:
         throw new PortalError(`Onbekende actie: ${action}`, 400);
     }
@@ -316,6 +318,45 @@ async function getInvoicePdf(user: { id: string; email: string }, body: Record<s
   };
 }
 
+async function getContractPdf(user: { id: string; email: string }, body: Record<string, unknown>) {
+  const contractId = String(body.contractId || '').trim();
+  if (!isUuid(contractId)) throw new PortalError('Ongeldig contract.', 400);
+
+  const clients = await resolveAccountsForEmail(user.email);
+  if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
+
+  const { data: contract, error } = await supabaseAdmin
+    .from('contracts')
+    .select('id,organization_id,client_id,number,status,signed_pdf_data_base64,signed_storage_provider,signed_storage_key,signed_pdf_file_name')
+    .eq('id', contractId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!contract || contract.status !== 'signed') throw new PortalError('Getekend contract niet gevonden.', 404);
+
+  await assertEntityBelongsToClients({ client_id: contract.client_id, project_id: null, organization_id: contract.organization_id }, clients);
+
+  let base64 = String(contract.signed_pdf_data_base64 || '').trim();
+  if (!base64 && contract.signed_storage_provider === 'r2' && contract.signed_storage_key) {
+    if (!INVOICE_PDF_STORAGE_WORKER_URL || !INVOICE_PDF_STORAGE_SECRET) {
+      throw new PortalError('PDF is opgeslagen in private storage, maar de storage-koppeling ontbreekt.', 500);
+    }
+    const response = await fetch(`${INVOICE_PDF_STORAGE_WORKER_URL}/internal/contract-snapshot/${encodeURIComponent(String(contract.signed_storage_key))}`, {
+      headers: { Authorization: `Bearer ${INVOICE_PDF_STORAGE_SECRET}` },
+    });
+    if (!response.ok) throw new PortalError('PDF kon niet uit private storage worden opgehaald.', 502);
+    base64 = arrayBufferToBase64(await response.arrayBuffer());
+  }
+  if (!base64) throw new PortalError('PDF ontbreekt of is niet beschikbaar.', 404);
+
+  return {
+    pdf: {
+      fileName: contract.signed_pdf_file_name || `contract-${contract.number}.pdf`,
+      mimeType: 'application/pdf',
+      base64,
+    },
+  };
+}
+
 // ── Dataopbouw ────────────────────────────────────────────────────────
 
 async function resolveAccountsForEmail(email: string): Promise<ClientRow[]> {
@@ -335,10 +376,12 @@ async function buildAccount(client: ClientRow) {
 
   // Facturen: alleen uitgegeven (geen concepten). Offertes: alleen die echt naar de
   // klant zijn verstuurd (sent_at gezet). Beide ook gekoppeld via projecten van de klant.
-  const [invoices, quotes, tickets] = await Promise.all([
+  const [invoices, quotes, tickets, contracts] = await Promise.all([
     selectRows('invoices', (q) => scopeToClient(q.eq('organization_id', orgId).neq('status', 'draft'), client.id, projectIds).order('date', { ascending: false })),
     selectRows('quotes', (q) => scopeToClient(q.eq('organization_id', orgId).not('sent_at', 'is', null), client.id, projectIds).order('date', { ascending: false })),
     selectRows('tickets', (q) => q.eq('organization_id', orgId).eq('client_id', client.id).order('created_at', { ascending: false })),
+    // Contracten zijn alleen op client_id gekoppeld; toon enkel verstuurde/getekende/geweigerde.
+    selectRows('contracts', (q) => q.eq('organization_id', orgId).eq('client_id', client.id).in('status', ['sent', 'signed', 'declined']).order('created_at', { ascending: false })),
   ]);
 
   return {
@@ -350,6 +393,7 @@ async function buildAccount(client: ClientRow) {
     invoices: invoices.map(sanitizeInvoice),
     quotes: quotes.map(sanitizeQuote),
     tickets: tickets.map(sanitizeTicket),
+    contracts: contracts.map(sanitizeContract),
   };
 }
 
@@ -475,6 +519,18 @@ function sanitizeQuote(row: Record<string, unknown>) {
     sent_at: row.sent_at ?? null,
     accepted_at: row.accepted_at ?? null,
     project_id: row.project_id ?? null,
+  };
+}
+
+function sanitizeContract(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    number: row.number,
+    title: row.title ?? '',
+    status: row.status,
+    date: row.date,
+    valid_until: row.valid_until ?? null,
+    signed_at: row.signed_at ?? null,
   };
 }
 

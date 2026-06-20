@@ -2,7 +2,15 @@ import type { EmailTemplateContent } from './content.ts';
 
 export type { EmailTemplateContent } from './content.ts';
 
-export type EmailTemplateKey = 'test.resend' | 'quote.sent' | 'invoice.sent' | 'invoice.reminder' | 'creditNote.sent';
+export type EmailTemplateKey =
+  | 'test.resend'
+  | 'quote.sent'
+  | 'invoice.sent'
+  | 'invoice.reminder'
+  | 'creditNote.sent'
+  | 'contract.sent'
+  | 'contract.signed.client'
+  | 'contract.signed.internal';
 
 // De per-organisatie tekstsleutels in de email_templates-tabel. Herinneringen
 // hebben een sleutel per niveau; de overige sleutels komen overeen met de
@@ -13,7 +21,9 @@ export type EmailTemplateContentKey =
   | 'invoice.reminder.1'
   | 'invoice.reminder.2'
   | 'invoice.reminder.3'
-  | 'creditNote.sent';
+  | 'creditNote.sent'
+  | 'contract.sent'
+  | 'contract.signed.client';
 
 export type RenderedEmailTemplate = {
   templateKey: EmailTemplateKey;
@@ -158,10 +168,73 @@ export type CreditNoteSentEmailInput = {
   content?: EmailTemplateContent | null;
 };
 
+type ContractEmailCompany = {
+  company_name?: string | null;
+  trade_name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  website?: string | null;
+  invoice_accent_color?: string | null;
+} | null;
+
+export type ContractSentEmailInput = {
+  contract: {
+    number: string;
+    title?: string | null;
+    valid_until?: string | null;
+  };
+  client: {
+    name: string;
+    contact_name?: string | null;
+    email?: string | null;
+  };
+  company?: ContractEmailCompany;
+  publicUrl: string;
+  recipientName?: string | null;
+  personalMessage?: string | null;
+  expiresAt: string;
+  content?: EmailTemplateContent | null;
+};
+
+export type ContractSignedClientEmailInput = {
+  contract: {
+    number: string;
+    title?: string | null;
+  };
+  client: {
+    name: string;
+    contact_name?: string | null;
+    email?: string | null;
+  };
+  company?: ContractEmailCompany;
+  signedAt: string;
+  recipientName?: string | null;
+  portalUrl?: string | null;
+  content?: EmailTemplateContent | null;
+};
+
+export type ContractSignedInternalEmailInput = {
+  contract: {
+    number: string;
+    title?: string | null;
+  };
+  client: {
+    name: string;
+  };
+  company?: ContractEmailCompany;
+  signerName: string;
+  signerEmail?: string | null;
+  signedAt: string;
+  appUrl?: string | null;
+};
+
 export type EmailTemplateInputMap = {
   'test.resend': TestResendEmailInput;
   'quote.sent': QuoteSentEmailInput;
   'invoice.sent': InvoiceSentEmailInput;
   'invoice.reminder': InvoiceReminderEmailInput;
   'creditNote.sent': CreditNoteSentEmailInput;
+  'contract.sent': ContractSentEmailInput;
+  'contract.signed.client': ContractSignedClientEmailInput;
+  'contract.signed.internal': ContractSignedInternalEmailInput;
 };

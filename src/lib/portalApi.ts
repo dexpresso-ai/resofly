@@ -63,6 +63,16 @@ export interface PortalQuote {
   project_id: string | null;
 }
 
+export interface PortalContract {
+  id: string;
+  number: string;
+  title: string;
+  status: string;
+  date: string;
+  valid_until: string | null;
+  signed_at: string | null;
+}
+
 export interface PortalTicket {
   id: string;
   title: string;
@@ -109,6 +119,7 @@ export interface PortalAccount {
   projects: PortalProject[];
   invoices: PortalInvoice[];
   quotes: PortalQuote[];
+  contracts: PortalContract[];
   tickets: PortalTicket[];
 }
 
@@ -196,6 +207,15 @@ export async function downloadPortalInvoicePdf(invoiceId: string): Promise<{ fil
   if (error) throw new Error(await extractFunctionError(error, 'Factuur-PDF downloaden mislukt'));
   if (!data?.ok || !data.pdf?.base64) throw new Error(data?.error || 'Factuur-PDF downloaden mislukt');
   return { fileName: data.pdf.fileName || `factuur-${invoiceId}.pdf`, mimeType: data.pdf.mimeType || 'application/pdf', base64: data.pdf.base64 };
+}
+
+export async function downloadPortalContractPdf(contractId: string): Promise<{ fileName: string; mimeType: string; base64: string }> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'getContractPdf', contractId },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Contract-PDF downloaden mislukt'));
+  if (!data?.ok || !data.pdf?.base64) throw new Error(data?.error || 'Contract-PDF downloaden mislukt');
+  return { fileName: data.pdf.fileName || `contract-${contractId}.pdf`, mimeType: data.pdf.mimeType || 'application/pdf', base64: data.pdf.base64 };
 }
 
 // Supabase functions.invoke geeft een non-2xx terug als FunctionsHttpError, waarvan

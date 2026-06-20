@@ -16,7 +16,7 @@ export type EmailPlaceholder = { token: string; label: string; example: string }
 export type EmailTemplateMeta = {
   key: EmailTemplateKey;
   label: string;
-  group: 'offerte' | 'factuur' | 'herinnering' | 'creditfactuur';
+  group: 'offerte' | 'factuur' | 'herinnering' | 'creditfactuur' | 'contract';
   description: string;
   fields: EmailField[];
   defaults: Record<EmailField, string>;
@@ -32,6 +32,8 @@ const PLACEHOLDERS: Record<string, Omit<EmailPlaceholder, 'token'>> = {
   quote_number: { label: 'Offertenummer', example: '2026-014' },
   invoice_number: { label: 'Factuurnummer', example: '2026-021' },
   credit_note_number: { label: 'Creditfactuurnummer', example: 'C2026-003' },
+  contract_number: { label: 'Contractnummer', example: 'CON-2026-0007' },
+  contract_title: { label: 'Onderwerp contract', example: 'Onderhoudsovereenkomst 2026' },
   total_amount: { label: 'Totaalbedrag', example: '€ 1.210,00' },
   valid_until: { label: 'Geldig tot', example: '30-06-2026' },
   due_date: { label: 'Vervaldatum', example: '30-06-2026' },
@@ -129,6 +131,34 @@ export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
       cta_label: '',
     },
     placeholders: placeholders('recipient_name', 'company_name', 'credit_note_number', 'invoice_number', 'total_amount', 'date', 'reason'),
+  },
+  {
+    key: 'contract.sent',
+    label: 'Contract ter ondertekening',
+    group: 'contract',
+    description: 'De e-mail die de klant ontvangt om zijn contract digitaal te ondertekenen, met de beveiligde ondertekenlink. Het concept-PDF gaat als bijlage mee.',
+    fields: ['subject', 'intro', 'closing', 'cta_label'],
+    defaults: {
+      subject: 'Onderteken je contract {{contract_number}} van {{company_name}}',
+      intro: 'Beste {{recipient_name}},\nJe contract staat klaar om digitaal te ondertekenen. Bekijk het rustig door en zet je handtekening zodra je akkoord bent.',
+      closing: '',
+      cta_label: 'Bekijk en onderteken contract',
+    },
+    placeholders: placeholders('recipient_name', 'company_name', 'contract_number', 'contract_title', 'valid_until'),
+  },
+  {
+    key: 'contract.signed.client',
+    label: 'Contract ondertekend — bevestiging',
+    group: 'contract',
+    description: 'De bevestiging die de klant ontvangt nadat hij heeft getekend. Het ondertekende PDF gaat als bijlage mee.',
+    fields: ['subject', 'intro', 'closing', 'cta_label'],
+    defaults: {
+      subject: 'Bevestiging: contract {{contract_number}} is ondertekend',
+      intro: 'Beste {{recipient_name}},\nBedankt — je contract is ondertekend. Een ondertekend exemplaar vind je als bijlage bij deze e-mail.',
+      closing: '',
+      cta_label: 'Bekijk in je klantportaal',
+    },
+    placeholders: placeholders('recipient_name', 'company_name', 'contract_number', 'contract_title'),
   },
 ];
 

@@ -114,11 +114,79 @@ export interface OrgScopedRow {
   created_by: UUID | null;
 }
 
+export type ContractStatus =
+  | 'draft'
+  | 'pending_internal_approval'
+  | 'internally_approved'
+  | 'sent'
+  | 'signed'
+  | 'declined'
+  | 'expired'
+  | 'voided';
+
+export interface Contract extends OrgScopedRow {
+  client_id: UUID | null;
+  quote_id: UUID | null;
+  number: string;
+  title: string;
+  body: string;
+  date: string;
+  valid_until: string | null;
+  status: ContractStatus;
+  internal_approval_status: 'draft' | 'pending' | 'approved' | 'rejected';
+  public_token_expires_at: string | null;
+  sent_at: string | null;
+  signed_at: string | null;
+  signed_document_sha256: string | null;
+  signed_storage_provider: 'r2' | 'database' | null;
+  signed_pdf_file_name: string | null;
+  signed_pdf_size_bytes: number | null;
+  resend_last_email_id: string | null;
+  last_email_delivery_status: string | null;
+  last_email_delivery_at: string | null;
+  last_email_failed_at: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
+  supersedes_contract_id: UUID | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContractSigner extends OrgScopedRow {
+  contract_id: UUID;
+  name: string;
+  email: string;
+  role: 'client' | 'internal_countersignature';
+  signing_order: number;
+  status: 'pending' | 'signed' | 'declined';
+  signed_at: string | null;
+  decline_reason: string | null;
+  signature_method: 'typed' | 'drawn' | null;
+  signed_ip: string | null;
+  signed_user_agent: string | null;
+  consent_text: string | null;
+  email_verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContractEvent {
+  id: UUID;
+  organization_id: UUID;
+  contract_id: UUID;
+  actor_user_id: UUID | null;
+  event_type: string;
+  title: string;
+  description: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface Client extends OrgScopedRow {
   name: string; client_code: string | null; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; color: string; status: ClientStatus; tags: string[]; follow_up: string | null; value_eur: number; created_at: string; updated_at: string;
 }
 export interface Project extends OrgScopedRow {
-  client_id: UUID | null; name: string; description: string | null; color: string; archived: boolean; start_date: string | null; end_date: string | null; created_at: string; updated_at: string;
+  client_id: UUID | null; name: string; description: string | null; color: string; archived: boolean; start_date: string | null; end_date: string | null; contract_id: UUID | null; created_at: string; updated_at: string;
 }
 export interface Subtask { id: UUID; label: string; done: boolean; }
 export interface Comment { id: UUID; text: string; author?: string; created_at: string; }
@@ -901,7 +969,9 @@ export type EmailTemplateKey =
   | 'invoice.reminder.1'
   | 'invoice.reminder.2'
   | 'invoice.reminder.3'
-  | 'creditNote.sent';
+  | 'creditNote.sent'
+  | 'contract.sent'
+  | 'contract.signed.client';
 
 export interface EmailTemplate extends OrgScopedRow {
   template_key: EmailTemplateKey;

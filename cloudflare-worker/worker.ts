@@ -90,6 +90,42 @@ export default {
         return new Response(object.body, { headers });
       }
 
+      if (url.pathname === '/internal/contract-snapshot' && request.method === 'POST') {
+        if (!isInternalRequest(request, env)) return json({ error: 'Unauthorized' }, 401, cors);
+        if (!request.body) return json({ error: 'Missing body' }, 400, cors);
+        const key = request.headers.get('x-storage-key') || '';
+        const type = request.headers.get('content-type') || 'application/pdf';
+        // Fall back to the explicit size hint when Content-Length is absent (e.g. chunked uploads).
+        const declaredLength = Number(request.headers.get('content-length') || request.headers.get('x-size-bytes') || '0');
+        const sha256 = request.headers.get('x-sha256') || '';
+        if (!isPrivateContractSnapshotKey(key)) return json({ error: 'Invalid storage key' }, 400, cors);
+        if (type !== 'application/pdf') return json({ error: 'Only application/pdf is allowed' }, 400, cors);
+        if (declaredLength > MAX_UPLOAD_BYTES) return json({ error: 'Bestand is te groot' }, 413, cors);
+        // R2 .put() requires a known content length. Buffer the (bounded)
+        // snapshot fully so the byte length is known; a wrapped ReadableStream
+        // loses that info and R2 rejects it.
+        const contractBuffer = await request.arrayBuffer();
+        if (contractBuffer.byteLength > MAX_UPLOAD_BYTES) return json({ error: 'Bestand is te groot' }, 413, cors);
+        await env.MEDIA_BUCKET.put(key, contractBuffer, {
+          httpMetadata: { contentType: type },
+          customMetadata: { private: 'true', entity_type: 'contract_pdf_snapshot', sha256 },
+        });
+        return json({ ok: true, key }, 200, cors);
+      }
+
+      if (url.pathname.startsWith('/internal/contract-snapshot/') && request.method === 'GET') {
+        if (!isInternalRequest(request, env)) return json({ error: 'Unauthorized' }, 401, cors);
+        const key = decodeURIComponent(url.pathname.replace('/internal/contract-snapshot/', ''));
+        if (!isPrivateContractSnapshotKey(key)) return json({ error: 'Invalid storage key' }, 400, cors);
+        const object = await env.MEDIA_BUCKET.get(key);
+        if (!object) return json({ error: 'Not found' }, 404, cors);
+        const headers = new Headers(cors);
+        object.writeHttpMetadata(headers);
+        headers.set('cache-control', 'private, max-age=300');
+        headers.set('x-resofly-private-snapshot', 'true');
+        return new Response(object.body, { headers });
+      }
+
       if (request.method === 'POST' && url.pathname === '/upload') {
         const user = await verifySupabaseUser(request, env);
         if (!user?.id) return json({ error: 'Unauthorized' }, 401, cors);
@@ -238,6 +274,11 @@ function isPrivateInvoiceSnapshotKey(key: string): boolean {
 function isPrivateQuoteSnapshotKey(key: string): boolean {
   if (key.includes('..') || key.startsWith('/') || key.length > 900) return false;
   return /^[0-9a-f-]{36}\/quote-pdfs\/[0-9a-f-]{36}\/[0-9a-f-]{36}-[a-z0-9._-]+\.pdf$/i.test(key);
+}
+
+function isPrivateContractSnapshotKey(key: string): boolean {
+  if (key.includes('..') || key.startsWith('/') || key.length > 900) return false;
+  return /^[0-9a-f-]{36}\/contract-pdfs\/[0-9a-f-]{36}\/[0-9a-f-]{36}-[a-z0-9._-]+\.pdf$/i.test(key);
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
