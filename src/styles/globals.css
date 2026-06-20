@@ -569,6 +569,84 @@
 .folder-link-row em{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-style:normal}
 .folder-link-row svg{color:var(--accent);flex-shrink:0}
 @media(max-width:680px){.folder-item-main{flex-wrap:wrap}.folder-move-select{max-width:120px}}
+
+/* Klant-Bestanden — cloud drive (padbalk, +Nieuw-menu, grid/lijst, sleep-upload) */
+.drive{display:flex;flex-direction:column;gap:14px;position:relative}
+.drive-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.drive-crumbs{display:flex;align-items:center;flex-wrap:wrap;gap:1px;font-size:13px;min-width:0}
+.drive-crumbs button{display:inline-flex;align-items:center;gap:7px;background:none;border:none;color:var(--muted2);cursor:pointer;padding:6px 10px;border-radius:10px;font-family:inherit;font-size:13px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drive-crumbs button svg{color:var(--accent);flex-shrink:0}
+.drive-crumbs button:hover{background:var(--bg3);color:var(--text)}
+.drive-crumbs button.active{color:var(--text);font-weight:800}
+.drive-crumb{display:inline-flex;align-items:center;gap:1px;min-width:0}
+.drive-crumb>svg{color:var(--muted);flex-shrink:0;margin:0 1px}
+.drive-bar-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.drive-search{display:flex;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:8px 11px;color:var(--muted);min-width:190px;transition:border-color .15s,color .15s}
+.drive-search:focus-within{border-color:var(--border-strong);color:var(--accent)}
+.drive-search input{flex:1;min-width:0;background:none;border:none;outline:none;color:var(--text);font-family:inherit;font-size:13px}
+.drive-search input::placeholder{color:var(--muted)}
+.drive-search-clear{display:inline-flex;background:none;border:none;color:var(--muted);cursor:pointer;padding:0}
+.drive-search-clear:hover{color:var(--text)}
+.drive-view{display:flex;background:var(--bg3);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.drive-view button{display:inline-flex;align-items:center;justify-content:center;width:38px;height:36px;background:none;border:none;color:var(--muted);cursor:pointer;transition:color .15s,background .15s}
+.drive-view button:hover{color:var(--text)}
+.drive-view button.active{background:var(--bg4);color:var(--accent)}
+.drive-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.drive-new-wrap{position:relative}
+.drive-new{display:inline-flex;align-items:center;gap:7px;background:var(--accent);color:#111;border:1px solid var(--accent);border-radius:999px;padding:9px 15px;font-family:inherit;font-size:12.5px;font-weight:800;cursor:pointer;box-shadow:0 0 0 1px rgba(255,189,89,.18),0 14px 38px rgba(255,189,89,.16);transition:background .15s,box-shadow .15s,transform .15s}
+.drive-new:hover:not(:disabled){background:#ffd08a;transform:translateY(-1px)}
+.drive-new:disabled{opacity:.55;cursor:not-allowed}
+.drive-uploading{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--muted2)}
+.drive-uploading svg{color:var(--accent)}
+.drive-pop{position:absolute;z-index:60;top:calc(100% + 6px);left:0;min-width:212px;background:var(--panel-strong);border:1px solid var(--border2);border-radius:14px;padding:6px;box-shadow:var(--shadow);animation:select-pop .12s ease}
+.drive-pop.is-right{left:auto;right:0;top:calc(100% + 4px)}
+.drive-pop-item{display:flex;align-items:center;gap:11px;width:100%;background:none;border:none;text-align:left;color:var(--text);font-family:inherit;font-size:13px;font-weight:600;padding:9px 10px;border-radius:9px;cursor:pointer}
+.drive-pop-item:hover:not(:disabled){background:var(--bg3)}
+.drive-pop-item:disabled{opacity:.55;cursor:not-allowed}
+.drive-pop-item svg{flex-shrink:0;color:var(--muted2)}
+.drive-pop-item.danger{color:var(--accent-r)}
+.drive-pop-item.danger svg{color:var(--accent-r)}
+.drive-pop-item.danger:hover:not(:disabled){background:rgba(255,123,123,.12)}
+.drive-pop-sep{height:1px;background:var(--border);margin:4px 6px}
+.drive-pop-head{display:flex;align-items:center;gap:8px;padding:7px 8px 6px;font-size:10px;font-weight:900;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.drive-pop-back{display:inline-flex;background:var(--bg3);border:none;color:var(--muted2);border-radius:7px;padding:3px;cursor:pointer}
+.drive-pop-back:hover{color:var(--text)}
+.drive-pop-scroll{max-height:230px;overflow:auto;display:flex;flex-direction:column}
+.drive-group{display:flex;flex-direction:column;gap:10px}
+.drive-group-head{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:900;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.drive-group-count{background:var(--bg4);color:var(--muted2);border-radius:999px;padding:1px 8px;font-size:10px;letter-spacing:.04em}
+.drive-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px}
+.drive-card{position:relative;background:var(--bg2);border:1px solid var(--border);border-radius:16px;transition:border-color .15s,transform .15s,background .15s}
+.drive-card:hover{border-color:var(--border-strong);transform:translateY(-2px)}
+.drive-card-main{display:flex;flex-direction:column;gap:11px;width:100%;background:none;border:none;text-align:left;color:var(--text);cursor:pointer;padding:15px 14px;font-family:inherit;min-width:0}
+.drive-card.is-folder .drive-card-main{flex-direction:row;align-items:center;gap:12px;padding:14px}
+.drive-ic{flex-shrink:0;display:inline-flex}
+.drive-card-text{min-width:0;display:flex;flex-direction:column;gap:3px}
+.drive-card-name{font-weight:750;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.drive-card-meta{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.drive-kebab-wrap{position:absolute;top:8px;right:7px}
+.drive-kebab{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border:none;background:none;color:var(--muted);border-radius:9px;cursor:pointer;opacity:0;transition:opacity .12s,background .12s,color .12s}
+.drive-card:hover .drive-kebab,.drive-kebab.is-open{opacity:1}
+.drive-kebab:hover{background:var(--bg4);color:var(--text)}
+.drive-list{display:flex;flex-direction:column;gap:6px}
+.drive-row{position:relative;display:flex;align-items:center;gap:10px;background:var(--bg2);border:1px solid var(--border);border-radius:13px;padding:10px 8px 10px 13px;transition:border-color .15s,background .15s}
+.drive-row:hover{border-color:var(--border2);background:var(--bg3)}
+.drive-row-main{flex:1;min-width:0;display:flex;align-items:center;gap:12px;background:none;border:none;text-align:left;color:var(--text);cursor:pointer;font-family:inherit;padding:0}
+.drive-row-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.drive-row-name{font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.drive-row-sub{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.drive-row-sub .rich-text-viewer{font-size:11px;line-height:1.4}
+.drive-row-meta{font-size:11px;color:var(--muted);white-space:nowrap;flex-shrink:0}
+.drive-row .drive-kebab-wrap{position:static}
+.drive-row .drive-kebab{opacity:1;flex-shrink:0}
+.drive-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;text-align:center;padding:46px 22px;border:1px dashed var(--border2);border-radius:18px;color:var(--muted)}
+.drive-empty-ic{width:56px;height:56px;border-radius:18px;display:inline-flex;align-items:center;justify-content:center;background:var(--accent-soft);color:var(--accent)}
+.drive-empty strong{color:var(--text);font-size:14px;font-weight:800}
+.drive-empty span{font-size:12px;max-width:340px;line-height:1.5}
+.drive-dropzone{display:flex;align-items:center;justify-content:center;gap:10px;border:1px dashed var(--border2);border-radius:14px;padding:14px;color:var(--muted);font-size:12px;transition:border-color .15s,background .15s,color .15s}
+.drive-dropzone svg{color:var(--accent)}
+.drive.is-dragging .drive-dropzone,.drive-dropzone.is-dragging{border-color:var(--accent);background:var(--accent-soft);color:var(--text)}
+@media(max-width:640px){.drive-bar-right{flex:1;min-width:100%}.drive-search{flex:1}.drive-grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}}
 .document-export{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border);border-radius:10px;background:rgba(255,255,255,.025)}
 .document-export-actions{display:flex;gap:8px;flex-wrap:wrap}
 .document-export-hint{font-size:11px;color:var(--muted);line-height:1.4}
