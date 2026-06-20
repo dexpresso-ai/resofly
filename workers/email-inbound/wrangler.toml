@@ -10,7 +10,7 @@ compatibility_date = "2026-04-30"
 
 [vars]
 MAIL_INBOUND_ENDPOINT = "https://enzghpduqwaojcxgwarr.supabase.co/functions/v1/mail-inbound"
-INBOUND_DOMAIN = "inbound.resofly.nl"
+INBOUND_DOMAIN = "inbound.resofly.com"
 
 # ---- staging ----
 [env.staging]
@@ -18,7 +18,7 @@ name = "resofly-email-inbound-staging"
 
 [env.staging.vars]
 MAIL_INBOUND_ENDPOINT = "https://enzghpduqwaojcxgwarr.supabase.co/functions/v1/mail-inbound"
-INBOUND_DOMAIN = "inbound.resofly.nl"
+INBOUND_DOMAIN = "inbound.resofly.com"
 
 # ---- production ----
 [env.production]
@@ -26,4 +26,4 @@ name = "resofly-email-inbound"
 
 [env.production.vars]
 MAIL_INBOUND_ENDPOINT = "https://enzghpduqwaojcxgwarr.supabase.co/functions/v1/mail-inbound"
-INBOUND_DOMAIN = "inbound.resofly.nl"
+INBOUND_DOMAIN = "inbound.resofly.com"
