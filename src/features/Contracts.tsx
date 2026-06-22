@@ -157,9 +157,9 @@ function ContractTemplatesManager({ organizationId, canWrite, onClose }: { organ
           <Input value={name} onChange={e => setName(e.target.value)} disabled={!canWrite} placeholder="Bijv. Onderhoudsovereenkomst" />
         </label>
         {canWrite && <VariableChips />}
-        <label className="bk-field"><span>Inhoud</span>
+        <div className="bk-field"><span>Inhoud</span>
           <RichTextEditor value={body} onChange={setBody} disabled={!canWrite} placeholder="Schrijf het sjabloon… sleep variabelen erin of gebruik {{variabelen}}." />
-        </label>
+        </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
           <Button onClick={() => setEditing(null)} disabled={busy}>Terug</Button>
           {canWrite && <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Bezig…' : 'Sjabloon opslaan'}</Button>}
@@ -367,16 +367,18 @@ function VariableChips() {
   }
   return <div style={{ marginTop: 8 }}>
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-      {CONTRACT_TOKENS.map(t => <button
+      {CONTRACT_TOKENS.map(t => <span
         key={t.token}
-        type="button"
+        role="button"
+        tabIndex={0}
         draggable
         onDragStart={e => { e.dataTransfer.setData('text/plain', `{{${t.token}}}`); e.dataTransfer.effectAllowed = 'copy'; }}
         onClick={() => copy(t.token)}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); copy(t.token); } }}
         title={`Sleep naar de tekst of klik om te kopiëren — {{${t.token}}}`}
-        style={{ border: '1px solid #2a2a31', background: copied === t.token ? '#1f3a2a' : 'transparent', color: copied === t.token ? '#7ee2a8' : '#d8d8df', borderRadius: 999, padding: '3px 10px', fontSize: 12, cursor: 'grab' }}>
+        style={{ display: 'inline-block', userSelect: 'none', WebkitUserSelect: 'none', border: '1px solid #2a2a31', background: copied === t.token ? '#1f3a2a' : 'transparent', color: copied === t.token ? '#7ee2a8' : '#d8d8df', borderRadius: 999, padding: '3px 10px', fontSize: 12, cursor: 'grab' }}>
         {copied === t.token ? '✓ gekopieerd' : `{{${t.token}}}`}
-      </button>)}
+      </span>)}
     </div>
     <small>Sleep een variabele in de tekst (of klik om te kopiëren). Bij versturen worden ze automatisch ingevuld.</small>
   </div>;
