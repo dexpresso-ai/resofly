@@ -156,8 +156,9 @@ function ContractTemplatesManager({ organizationId, canWrite, onClose }: { organ
         <label className="bk-field"><span>Naam</span>
           <Input value={name} onChange={e => setName(e.target.value)} disabled={!canWrite} placeholder="Bijv. Onderhoudsovereenkomst" />
         </label>
+        {canWrite && <VariableChips />}
         <label className="bk-field"><span>Inhoud</span>
-          <RichTextEditor value={body} onChange={setBody} disabled={!canWrite} placeholder="Schrijf het sjabloon… gebruik {{variabelen}} waar je wilt." />
+          <RichTextEditor value={body} onChange={setBody} disabled={!canWrite} placeholder="Schrijf het sjabloon… sleep variabelen erin of gebruik {{variabelen}}." />
         </label>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
           <Button onClick={() => setEditing(null)} disabled={busy}>Terug</Button>
@@ -197,7 +198,6 @@ function ContractForm({ data, organizationId, canWrite, contract, onClose, onSav
   const [currency, setCurrency] = useState(contract?.currency ?? 'EUR');
   const [templates, setTemplates] = useState<ContractTemplate[]>([]);
   const [showPreview, setShowPreview] = useState(false);
-  const [copied, setCopied] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -226,12 +226,6 @@ function ContractForm({ data, organizationId, canWrite, contract, onClose, onSav
     companyName: data.companySettings?.trade_name || data.companySettings?.company_name,
     companyAddress: formatCompanyAddress(data.companySettings),
   });
-
-  function copyToken(token: string) {
-    try { void navigator.clipboard?.writeText(`{{${token}}}`); } catch { /* clipboard kan geweigerd zijn */ }
-    setCopied(token);
-    window.setTimeout(() => setCopied(c => (c === token ? null : c)), 1200);
-  }
 
   async function save() {
     if (!title.trim()) { setError('Geef het contract een titel.'); return; }
@@ -333,14 +327,7 @@ function ContractForm({ data, organizationId, canWrite, contract, onClose, onSav
           <option value="">{templates.length ? 'Start vanuit sjabloon…' : 'Nog geen sjablonen'}</option>
           {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
         </Select>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-          {CONTRACT_TOKENS.map(t => <button key={t.token} type="button" onClick={() => copyToken(t.token)}
-            title={`Kopieer {{${t.token}}}`}
-            style={{ border: '1px solid #2a2a31', background: copied === t.token ? '#1f3a2a' : 'transparent', color: copied === t.token ? '#7ee2a8' : '#d8d8df', borderRadius: 999, padding: '3px 10px', fontSize: 12, cursor: 'pointer' }}>
-            {copied === t.token ? '✓ gekopieerd' : `{{${t.token}}}`}
-          </button>)}
-        </div>
-        <small>Klik een variabele om ‘m te kopiëren en plak ‘m in de tekst. Bij versturen worden ze automatisch ingevuld.</small>
+        <VariableChips />
       </div>}
 
       <div className="bk-field">
@@ -367,6 +354,32 @@ function MiniTab({ active, onClick, children }: { active: boolean; onClick: () =
     padding: '4px 12px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
     border: `1px solid ${active ? '#ffd966' : '#2a2a31'}`, background: active ? '#ffd966' : 'transparent', color: active ? '#111' : '#d8d8df',
   }}>{children}</button>;
+}
+
+/** Sleepbare variabele-chips: sleep een chip in de editor (landt op de cursor),
+ *  of klik om te kopiëren. Gebruikt in zowel het contract- als het sjabloonformulier. */
+function VariableChips() {
+  const [copied, setCopied] = useState<string | null>(null);
+  function copy(token: string) {
+    try { void navigator.clipboard?.writeText(`{{${token}}}`); } catch { /* clipboard kan geweigerd zijn */ }
+    setCopied(token);
+    window.setTimeout(() => setCopied(c => (c === token ? null : c)), 1200);
+  }
+  return <div style={{ marginTop: 8 }}>
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+      {CONTRACT_TOKENS.map(t => <button
+        key={t.token}
+        type="button"
+        draggable
+        onDragStart={e => { e.dataTransfer.setData('text/plain', `{{${t.token}}}`); e.dataTransfer.effectAllowed = 'copy'; }}
+        onClick={() => copy(t.token)}
+        title={`Sleep naar de tekst of klik om te kopiëren — {{${t.token}}}`}
+        style={{ border: '1px solid #2a2a31', background: copied === t.token ? '#1f3a2a' : 'transparent', color: copied === t.token ? '#7ee2a8' : '#d8d8df', borderRadius: 999, padding: '3px 10px', fontSize: 12, cursor: 'grab' }}>
+        {copied === t.token ? '✓ gekopieerd' : `{{${t.token}}}`}
+      </button>)}
+    </div>
+    <small>Sleep een variabele in de tekst (of klik om te kopiëren). Bij versturen worden ze automatisch ingevuld.</small>
+  </div>;
 }
 
 // ───────────────────────────── Detail / acties ─────────────────────────────

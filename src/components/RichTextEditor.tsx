@@ -234,6 +234,33 @@ export function RichTextExcerpt({ content, emptyText = 'Geen inhoud' }: { conten
 }
 
 
+// Plaats de cursor op het punt waar wordt gedropt, zodat een gesleepte variabele
+// daar landt en niet aan het einde. Chrome/Safari: caretRangeFromPoint;
+// Firefox: caretPositionFromPoint.
+function placeCaretAtPoint(x: number, y: number, root: HTMLElement | null) {
+  const selection = window.getSelection();
+  if (!selection) return;
+  let range: Range | null = null;
+  const doc = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  };
+  if (typeof doc.caretRangeFromPoint === 'function') {
+    range = doc.caretRangeFromPoint(x, y);
+  } else if (typeof doc.caretPositionFromPoint === 'function') {
+    const pos = doc.caretPositionFromPoint(x, y);
+    if (pos) {
+      range = document.createRange();
+      range.setStart(pos.offsetNode, pos.offset);
+      range.collapse(true);
+    }
+  }
+  if (range && root && root.contains(range.startContainer)) {
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+}
+
 function eventTargetElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof HTMLElement) return target;
   if (target instanceof Node) return target.parentElement;
@@ -378,6 +405,23 @@ export function RichTextEditor({
         if (disabled) return;
         event.preventDefault();
         const text = event.clipboardData.getData('text/plain');
+        document.execCommand('insertText', false, text);
+        commit();
+      }}
+      onDragOver={(event) => {
+        if (disabled) return;
+        if (Array.from(event.dataTransfer.types).includes('text/plain')) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+        }
+      }}
+      onDrop={(event) => {
+        if (disabled) return;
+        const text = event.dataTransfer.getData('text/plain');
+        if (!text) return;
+        event.preventDefault();
+        focusEditor();
+        placeCaretAtPoint(event.clientX, event.clientY, editorRef.current);
         document.execCommand('insertText', false, text);
         commit();
       }}
