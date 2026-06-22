@@ -182,6 +182,14 @@ export interface ContractEvent {
   created_at: string;
 }
 
+export interface ContractInternalNote extends OrgScopedRow {
+  contract_id: UUID;
+  author_name: string | null;
+  body: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Client extends OrgScopedRow {
   name: string; client_code: string | null; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; color: string; status: ClientStatus; tags: string[]; follow_up: string | null; value_eur: number; created_at: string; updated_at: string;
 }

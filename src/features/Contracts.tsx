@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Download, FileSignature, Link2, Plus, Send, Trash2, X } from 'lucide-react';
-import type { AppData, Contract, ContractEvent, ContractSigner, ContractStatus, Project } from '../types';
+import type { AppData, Contract, ContractEvent, ContractInternalNote, ContractSigner, ContractStatus, Project } from '../types';
 import { Modal } from '../components/Modal';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { dateNL } from '../lib/format';
@@ -318,6 +318,9 @@ function ContractDetail({ data, organizationId, canWrite, contract, onClose, onE
         onChanged={onChanged} setError={setError}
       />
 
+      {/* Interne notities (alleen intern, nooit klantgericht) */}
+      <ContractNotesSection contractId={contract.id} organizationId={organizationId} canWrite={canWrite} />
+
       {/* Tijdlijn */}
       {events.length > 0 && <Section title="Tijdlijn">
         <div className="quote-timeline">
@@ -410,6 +413,99 @@ function ProjectLinkSection({ organizationId, canWrite, contract, linkedProject,
           </>}
     </Section>
   );
+}
+
+const noteLinkBtn: React.CSSProperties = { background: 'none', border: 'none', color: '#9b9ba7', cursor: 'pointer', textDecoration: 'underline', fontSize: 12, padding: 0 };
+
+/** Interne notities bij een contract — alleen voor het team, nooit klantgericht. */
+function ContractNotesSection({ contractId, organizationId, canWrite }: { contractId: string; organizationId: string; canWrite: boolean }) {
+  const [notes, setNotes] = useState<ContractInternalNote[]>([]);
+  const [me, setMe] = useState<{ id: string; email: string } | null>(null);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+
+  async function reload() {
+    const { data, error } = await supabase.from('contract_internal_notes').select('*')
+      .eq('organization_id', organizationId).eq('contract_id', contractId)
+      .order('created_at', { ascending: false });
+    if (error) setError(error.message); else setNotes((data ?? []) as ContractInternalNote[]);
+  }
+  useEffect(() => {
+    let cancelled = false;
+    void reload();
+    void supabase.auth.getUser().then(({ data }) => { if (!cancelled && data.user) setMe({ id: data.user.id, email: data.user.email ?? '' }); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [organizationId, contractId]);
+
+  async function add() {
+    if (!draft.trim()) return;
+    setBusy(true); setError(null);
+    try {
+      await supabase.from('contract_internal_notes')
+        .insert({ organization_id: organizationId, contract_id: contractId, body: draft.trim(), author_name: me?.email ?? null })
+        .throwOnError();
+      setDraft(''); await reload();
+    } catch (e) { setError(errMsg(e, 'Notitie opslaan mislukt')); }
+    finally { setBusy(false); }
+  }
+  async function saveEdit(id: string) {
+    if (!editText.trim()) return;
+    setBusy(true); setError(null);
+    try {
+      await supabase.from('contract_internal_notes').update({ body: editText.trim() })
+        .eq('id', id).eq('organization_id', organizationId).throwOnError();
+      setEditingId(null); await reload();
+    } catch (e) { setError(errMsg(e, 'Wijzigen mislukt')); }
+    finally { setBusy(false); }
+  }
+  async function remove(id: string) {
+    if (!confirm('Interne notitie verwijderen?')) return;
+    setBusy(true); setError(null);
+    try {
+      await supabase.from('contract_internal_notes').delete()
+        .eq('id', id).eq('organization_id', organizationId).throwOnError();
+      await reload();
+    } catch (e) { setError(errMsg(e, 'Verwijderen mislukt')); }
+    finally { setBusy(false); }
+  }
+
+  return <Section title="Interne notities">
+    <p className="bk-muted" style={{ marginTop: 0, fontSize: 13 }}>🔒 Alleen zichtbaar voor je team — nooit voor de klant, niet in het PDF of de e-mails.</p>
+    {error && <div className="error">{error}</div>}
+    {canWrite && <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'flex-start' }}>
+      <Textarea value={draft} onChange={e => setDraft(e.target.value)} rows={2} placeholder="Interne notitie toevoegen…" />
+      <Button variant="primary" onClick={add} disabled={busy || !draft.trim()}>Plaats</Button>
+    </div>}
+    {notes.length === 0
+      ? <p className="bk-muted" style={{ fontSize: 13 }}>Nog geen interne notities.</p>
+      : <div style={{ display: 'grid', gap: 8 }}>
+          {notes.map(n => <div key={n.id} style={{ border: '1px solid #2a2a31', borderRadius: 10, padding: '8px 10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+              <strong style={{ fontSize: 13 }}>{n.author_name || 'Onbekend'}</strong>
+              <span className="bk-muted" style={{ fontSize: 12 }}>{new Date(n.created_at).toLocaleString('nl-NL', { dateStyle: 'short', timeStyle: 'short' })}</span>
+            </div>
+            {editingId === n.id
+              ? <div>
+                  <Textarea value={editText} onChange={e => setEditText(e.target.value)} rows={2} />
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <Button variant="primary" onClick={() => saveEdit(n.id)} disabled={busy || !editText.trim()}>Opslaan</Button>
+                    <Button onClick={() => setEditingId(null)} disabled={busy}>Annuleren</Button>
+                  </div>
+                </div>
+              : <>
+                  <div style={{ whiteSpace: 'pre-wrap', fontSize: 14 }}>{n.body}</div>
+                  {canWrite && me?.id === n.created_by && <div style={{ display: 'flex', gap: 12, marginTop: 6 }}>
+                    <button type="button" onClick={() => { setEditingId(n.id); setEditText(n.body); }} style={noteLinkBtn}>Bewerken</button>
+                    <button type="button" onClick={() => remove(n.id)} style={noteLinkBtn}>Verwijderen</button>
+                  </div>}
+                </>}
+          </div>)}
+        </div>}
+  </Section>;
 }
 
 function Section({ icon, title, children }: { icon?: React.ReactNode; title: string; children: React.ReactNode }) {
