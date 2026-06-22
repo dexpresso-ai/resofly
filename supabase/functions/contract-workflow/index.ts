@@ -130,6 +130,11 @@ serve(async (req) => {
         const pdf = await loadSignedContractPdf(organizationId, contractId);
         return json(req, { ok: true, pdf });
       }
+      case 'previewContractPdf': {
+        if (!isUuid(contractId)) throw new HttpError('Ongeldig contract.', 400);
+        const pdf = await previewContractPdf(organizationId, contractId);
+        return json(req, { ok: true, pdf });
+      }
       default:
         return json(req, { ok: false, error: `Onbekende contract workflow action: ${action}` }, 400);
     }
@@ -317,6 +322,32 @@ function validatePdf(pdf: ContractAttachment): void {
     throw new HttpError(`De contract-PDF is te groot om als bijlage te versturen (${Math.ceil(pdf.sizeBytes / 1024 / 1024)} MB).`, 422);
   }
   if (!/^[a-f0-9]{64}$/i.test(pdf.sha256)) throw new HttpError('De contract-PDF kon niet betrouwbaar worden gehasht.', 500);
+}
+
+// Genereert een concept-PDF (met ingevulde variabelen) van een opgeslagen
+// concept, puur voor preview — niets wordt opgeslagen of verstuurd.
+async function previewContractPdf(
+  organizationId: string,
+  contractId: string,
+): Promise<{ fileName: string; mimeType: string; base64: string }> {
+  const contract = await loadContract(organizationId, contractId);
+  const [client, company, projectName] = await Promise.all([
+    contract.client_id ? loadClient(organizationId, contract.client_id).catch(() => null) : Promise.resolve(null),
+    loadCompanySettings(organizationId),
+    loadLinkedProjectName(organizationId, contractId),
+  ]);
+  const tokens = buildContractTokens({
+    contract: { number: contract.number, date: contract.date, amount_cents: contract.amount_cents, currency: contract.currency },
+    client, company, projectName,
+  });
+  const filledBody = sanitizeContractHtml(fillContractTokens(contract.body, tokens));
+  const bytes = await renderContractPdf({
+    contract: { id: contract.id, number: contract.number, title: contract.title, body: filledBody, date: contract.date, valid_until: contract.valid_until },
+    client: client ?? { name: '(klant)', contact_name: null, email: null },
+    company,
+    publicUrl: null,
+  });
+  return { fileName: `contract-${sanitizeFileName(contract.number || contract.id)}-preview.pdf`, mimeType: 'application/pdf', base64: bytesToBase64(bytes) };
 }
 
 // ------------------------------------------------------------ data access

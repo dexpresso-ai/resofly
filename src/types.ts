@@ -148,6 +148,9 @@ export interface Contract extends OrgScopedRow {
   voided_at: string | null;
   void_reason: string | null;
   supersedes_contract_id: UUID | null;
+  amount_cents: number | null;
+  currency: string;
+  template_id: UUID | null;
   created_at: string;
   updated_at: string;
 }
@@ -188,6 +191,28 @@ export interface ContractInternalNote extends OrgScopedRow {
   body: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface ContractTemplate extends OrgScopedRow {
+  name: string;
+  body: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContractVersion {
+  id: UUID;
+  organization_id: UUID;
+  contract_id: UUID;
+  version_number: number;
+  snapshot_reason: string;
+  title: string;
+  body: string;
+  amount_cents: number | null;
+  currency: string | null;
+  created_by: UUID | null;
+  created_at: string;
 }
 
 export interface Client extends OrgScopedRow {

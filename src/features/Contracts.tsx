@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, FileSignature, Link2, Plus, Send, Trash2, X } from 'lucide-react';
-import type { AppData, Contract, ContractEvent, ContractInternalNote, ContractSigner, ContractStatus, Project } from '../types';
+import { Download, FileSignature, FileText, Link2, Plus, Send, Trash2, X } from 'lucide-react';
+import type { AppData, Contract, ContractEvent, ContractInternalNote, ContractSigner, ContractStatus, ContractTemplate, ContractVersion, Project } from '../types';
 import { Modal } from '../components/Modal';
 import { Button, Input, Select, Textarea } from '../components/Ui';
-import { dateNL } from '../lib/format';
+import { dateNL, euro, total } from '../lib/format';
 import { supabase } from '../lib/supabase';
 import { insertRow, updateRow } from '../lib/repository';
+import { RichTextEditor, RichTextViewer, richTextToPlainText } from '../components/RichTextEditor';
+import { CONTRACT_TOKENS, buildContractTokens, fillContractTokens } from '../lib/contractTokens';
 
 type PageProps = {
   data: AppData;
@@ -36,6 +38,7 @@ export function Contracts({ data, organizationId, canWrite, onChanged }: PagePro
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<Contract | 'new' | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [showTemplates, setShowTemplates] = useState(false);
 
   async function reload() {
     setError(null);
@@ -53,7 +56,10 @@ export function Contracts({ data, organizationId, canWrite, onChanged }: PagePro
     <div className="bk-page">
       <div className="bk-head">
         <div><h2>Contracten</h2><p>Stel contracten op en laat ze digitaal ondertekenen.</p></div>
-        <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Nieuw contract</Button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button disabled={!canWrite} onClick={() => setShowTemplates(true)}><FileText size={15} /> Sjablonen</Button>
+          <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Nieuw contract</Button>
+        </div>
       </div>
 
       {error && <div className="error">{error}</div>}
@@ -89,7 +95,89 @@ export function Contracts({ data, organizationId, canWrite, onChanged }: PagePro
         onChanged={async () => { await reload(); onChanged(); }}
         onDeleted={async () => { setOpenId(null); await reload(); }}
       />}
+
+      {showTemplates && <ContractTemplatesManager organizationId={organizationId} canWrite={canWrite} onClose={() => setShowTemplates(false)} />}
     </div>
+  );
+}
+
+// ───────────────────────────── Sjabloonbeheer ─────────────────────────────
+
+function ContractTemplatesManager({ organizationId, canWrite, onClose }: { organizationId: string; canWrite: boolean; onClose: () => void }) {
+  const [templates, setTemplates] = useState<ContractTemplate[]>([]);
+  const [editing, setEditing] = useState<ContractTemplate | 'new' | null>(null);
+  const [name, setName] = useState('');
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function reload() {
+    const { data, error } = await supabase.from('contract_templates').select('*')
+      .eq('organization_id', organizationId).order('name');
+    if (error) setError(error.message); else setTemplates((data ?? []) as ContractTemplate[]);
+  }
+  useEffect(() => { void reload(); /* eslint-disable-next-line */ }, [organizationId]);
+
+  function startNew() { setEditing('new'); setName(''); setBody(''); setError(null); }
+  function startEdit(t: ContractTemplate) { setEditing(t); setName(t.name); setBody(t.body); setError(null); }
+
+  async function save() {
+    if (!name.trim()) { setError('Geef het sjabloon een naam.'); return; }
+    setBusy(true); setError(null);
+    try {
+      if (editing && editing !== 'new') {
+        await supabase.from('contract_templates').update({ name: name.trim(), body }).eq('id', editing.id).eq('organization_id', organizationId).throwOnError();
+      } else {
+        await supabase.from('contract_templates').insert({ organization_id: organizationId, name: name.trim(), body }).throwOnError();
+      }
+      setEditing(null); await reload();
+    } catch (e) { setError(errMsg(e, 'Opslaan mislukt')); }
+    finally { setBusy(false); }
+  }
+
+  async function remove(t: ContractTemplate) {
+    if (!confirm(`Sjabloon "${t.name}" verwijderen?`)) return;
+    setBusy(true); setError(null);
+    try {
+      await supabase.from('contract_templates').delete().eq('id', t.id).eq('organization_id', organizationId).throwOnError();
+      if (editing && editing !== 'new' && editing.id === t.id) setEditing(null);
+      await reload();
+    } catch (e) { setError(errMsg(e, 'Verwijderen mislukt')); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <Modal title="Contractsjablonen" onClose={onClose} className="contract-modal contract-editor-modal"
+      footer={<div className="bk-foot"><span className="bk-spacer" /><Button onClick={onClose}>Sluiten</Button></div>}>
+      {error && <div className="error">{error}</div>}
+      <p className="settings-help">Herbruikbare contractteksten met variabelen zoals {'{{klantnaam}}'} en {'{{bedrag}}'}. Kies er een bij "Nieuw contract" via "Start vanuit sjabloon".</p>
+
+      {editing ? <>
+        <label className="bk-field"><span>Naam</span>
+          <Input value={name} onChange={e => setName(e.target.value)} disabled={!canWrite} placeholder="Bijv. Onderhoudsovereenkomst" />
+        </label>
+        <label className="bk-field"><span>Inhoud</span>
+          <RichTextEditor value={body} onChange={setBody} disabled={!canWrite} placeholder="Schrijf het sjabloon… gebruik {{variabelen}} waar je wilt." />
+        </label>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
+          <Button onClick={() => setEditing(null)} disabled={busy}>Terug</Button>
+          {canWrite && <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Bezig…' : 'Sjabloon opslaan'}</Button>}
+        </div>
+      </> : <>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+          <Button variant="primary" disabled={!canWrite} onClick={startNew}><Plus size={14} /> Nieuw sjabloon</Button>
+        </div>
+        {templates.length === 0
+          ? <p className="bk-muted">Nog geen sjablonen.</p>
+          : <div style={{ display: 'grid', gap: 6 }}>
+              {templates.map(t => <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, border: '1px solid #2a2a31', borderRadius: 10, padding: '8px 12px' }}>
+                <strong style={{ flex: 1 }}>{t.name}</strong>
+                <Button onClick={() => startEdit(t)}>Bewerken</Button>
+                {canWrite && <Button variant="danger" onClick={() => remove(t)} disabled={busy}><Trash2 size={14} /></Button>}
+              </div>)}
+            </div>}
+      </>}
+    </Modal>
   );
 }
 
@@ -101,25 +189,65 @@ function ContractForm({ data, organizationId, canWrite, contract, onClose, onSav
 }) {
   const [clientId, setClientId] = useState(contract?.client_id ?? '');
   const [title, setTitle] = useState(contract?.title ?? '');
-  const [bodyText, setBodyText] = useState(contract ? htmlToText(contract.body) : '');
+  const [bodyHtml, setBodyHtml] = useState(contract?.body ?? '');
   const [date, setDate] = useState(contract?.date ?? new Date().toISOString().slice(0, 10));
   const [validUntil, setValidUntil] = useState(contract?.valid_until ?? '');
+  const [quoteId, setQuoteId] = useState(contract?.quote_id ?? '');
+  const [amount, setAmount] = useState(contract?.amount_cents != null ? (contract.amount_cents / 100).toFixed(2) : '');
+  const [currency, setCurrency] = useState(contract?.currency ?? 'EUR');
+  const [templates, setTemplates] = useState<ContractTemplate[]>([]);
+  const [showPreview, setShowPreview] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const readOnly = !canWrite || (contract != null && contract.status !== 'draft');
 
+  useEffect(() => {
+    void supabase.from('contract_templates').select('*')
+      .eq('organization_id', organizationId).eq('is_active', true).order('name')
+      .then(({ data }) => setTemplates((data ?? []) as ContractTemplate[]));
+  }, [organizationId]);
+
+  const selectedClient = data.clients.find(c => c.id === clientId) ?? null;
+  const clientQuotes = data.quotes.filter(q => q.client_id === clientId);
+  const selectedQuote = data.quotes.find(q => q.id === quoteId) ?? null;
+  const quoteTotal = selectedQuote ? total(selectedQuote.lines).total : null;
+  const amountCents = amount.trim() ? Math.round(Number(amount.replace(',', '.')) * 100) : null;
+
+  const previewTokens = buildContractTokens({
+    clientName: selectedClient?.name,
+    contactName: selectedClient?.contact_name,
+    contractNumber: contract?.number ?? '',
+    date,
+    amountCents,
+    currency,
+    projectName: data.projects.find(p => p.contract_id === contract?.id)?.name ?? null,
+    companyName: data.companySettings?.trade_name || data.companySettings?.company_name,
+    companyAddress: formatCompanyAddress(data.companySettings),
+  });
+
+  function copyToken(token: string) {
+    try { void navigator.clipboard?.writeText(`{{${token}}}`); } catch { /* clipboard kan geweigerd zijn */ }
+    setCopied(token);
+    window.setTimeout(() => setCopied(c => (c === token ? null : c)), 1200);
+  }
+
   async function save() {
     if (!title.trim()) { setError('Geef het contract een titel.'); return; }
-    if (!bodyText.trim()) { setError('Vul de inhoud van het contract in.'); return; }
+    if (!richTextToPlainText(bodyHtml).trim()) { setError('Vul de inhoud van het contract in.'); return; }
+    if (amount.trim() && (amountCents === null || !Number.isFinite(amountCents))) { setError('Vul een geldig bedrag in (bijv. 1500 of 1500,00).'); return; }
     setBusy(true); setError(null);
     try {
       const values = {
         client_id: clientId || null,
+        quote_id: quoteId || null,
         title: title.trim(),
-        body: textToHtml(bodyText),
+        body: bodyHtml,
         date,
         valid_until: validUntil || null,
+        amount_cents: amountCents,
+        currency: currency || 'EUR',
       };
       if (contract) {
         await supabase.from('contracts').update(values).eq('id', contract.id).eq('organization_id', organizationId).throwOnError();
@@ -134,18 +262,34 @@ function ContractForm({ data, organizationId, canWrite, contract, onClose, onSav
     finally { setBusy(false); }
   }
 
+  async function previewPdf() {
+    if (!contract) return;
+    setBusy(true); setError(null);
+    try {
+      const { data: res, error } = await supabase.functions.invoke('contract-workflow', {
+        body: { action: 'previewContractPdf', organizationId, contractId: contract.id },
+      });
+      if (error) throw new Error(await fnErr(error, 'PDF-preview mislukt'));
+      if (!res?.ok) throw new Error(res?.error || 'PDF-preview mislukt');
+      openBase64Pdf(res.pdf.base64);
+    } catch (e) { setError(errMsg(e, 'PDF-preview mislukt')); }
+    finally { setBusy(false); }
+  }
+
   return (
-    <Modal title={contract ? `Contract ${contract.number}` : 'Nieuw contract'} onClose={onClose} className="contract-modal"
+    <Modal title={contract ? `Contract ${contract.number}` : 'Nieuw contract'} onClose={onClose} className="contract-modal contract-editor-modal"
       footer={<div className="bk-foot">
+        {contract && <Button onClick={previewPdf} disabled={busy}><FileText size={14} /> PDF-preview</Button>}
         <span className="bk-spacer" />
         <Button onClick={onClose}>Annuleren</Button>
         {!readOnly && <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Bezig…' : 'Opslaan'}</Button>}
       </div>}>
       {error && <div className="error">{error}</div>}
       {readOnly && contract && <div className="settings-help">Dit contract is al {STATUS_META[contract.status].label.toLowerCase()} en kan niet meer worden bewerkt.</div>}
+
       <div className="bk-grid2">
         <label className="bk-field"><span>Klant</span>
-          <Select value={clientId} onChange={e => setClientId(e.target.value)} disabled={readOnly}>
+          <Select value={clientId} onChange={e => { setClientId(e.target.value); setQuoteId(''); }} disabled={readOnly}>
             <option value="">— kies klant —</option>
             {data.clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
@@ -160,13 +304,69 @@ function ContractForm({ data, organizationId, canWrite, contract, onClose, onSav
           <Input type="date" value={validUntil} onChange={e => setValidUntil(e.target.value)} disabled={readOnly} />
         </label>
       </div>
-      <label className="bk-field"><span>Inhoud van het contract</span>
-        <Textarea value={bodyText} onChange={e => setBodyText(e.target.value)} disabled={readOnly} rows={14}
-          placeholder={'Schrijf hier de contracttekst.\n\nGebruik lege regels om nieuwe alinea\'s te maken.'} />
-        <small>De klant ziet deze tekst op de ondertekenpagina en in het PDF. Een opmaak-editor met sjablonen volgt in een latere fase.</small>
-      </label>
+
+      <div className="bk-grid2">
+        <label className="bk-field"><span>Bedrag (voor {'{{bedrag}}'})</span>
+          <Input value={amount} onChange={e => setAmount(e.target.value)} disabled={readOnly} placeholder="1500,00" />
+        </label>
+        <label className="bk-field"><span>Valuta</span>
+          <Select value={currency} onChange={e => setCurrency(e.target.value)} disabled={readOnly}>
+            <option value="EUR">EUR (€)</option>
+            <option value="USD">USD ($)</option>
+            <option value="GBP">GBP (£)</option>
+          </Select>
+        </label>
+        <label className="bk-field"><span>Gekoppelde offerte (optioneel)</span>
+          <Select value={quoteId} onChange={e => setQuoteId(e.target.value)} disabled={readOnly || !clientId}>
+            <option value="">— geen —</option>
+            {clientQuotes.map(q => <option key={q.id} value={q.id}>{q.number} · {euro(total(q.lines).total)}</option>)}
+          </Select>
+        </label>
+        {selectedQuote && !readOnly && quoteTotal != null && <div className="bk-field" style={{ alignSelf: 'end' }}>
+          <Button onClick={() => setAmount(quoteTotal.toFixed(2))}>Neem bedrag over uit offerte ({euro(quoteTotal)})</Button>
+        </div>}
+      </div>
+
+      {!readOnly && <div className="bk-field">
+        <span>Sjabloon &amp; variabelen</span>
+        <Select value="" onChange={e => { const t = templates.find(x => x.id === e.target.value); if (t) setBodyHtml(t.body); }} disabled={templates.length === 0}>
+          <option value="">{templates.length ? 'Start vanuit sjabloon…' : 'Nog geen sjablonen'}</option>
+          {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </Select>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+          {CONTRACT_TOKENS.map(t => <button key={t.token} type="button" onClick={() => copyToken(t.token)}
+            title={`Kopieer {{${t.token}}}`}
+            style={{ border: '1px solid #2a2a31', background: copied === t.token ? '#1f3a2a' : 'transparent', color: copied === t.token ? '#7ee2a8' : '#d8d8df', borderRadius: 999, padding: '3px 10px', fontSize: 12, cursor: 'pointer' }}>
+            {copied === t.token ? '✓ gekopieerd' : `{{${t.token}}}`}
+          </button>)}
+        </div>
+        <small>Klik een variabele om ‘m te kopiëren en plak ‘m in de tekst. Bij versturen worden ze automatisch ingevuld.</small>
+      </div>}
+
+      <div className="bk-field">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Inhoud van het contract</span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <MiniTab active={!showPreview} onClick={() => setShowPreview(false)}>Bewerken</MiniTab>
+            <MiniTab active={showPreview} onClick={() => setShowPreview(true)}>Voorbeeld</MiniTab>
+          </div>
+        </div>
+        {showPreview
+          ? <div className="contract-preview" style={{ border: '1px solid #2a2a31', borderRadius: 12, padding: 16, background: '#0e0e11', minHeight: 200 }}>
+              <RichTextViewer content={fillContractTokens(bodyHtml, previewTokens)} emptyText="Nog geen inhoud." />
+            </div>
+          : <RichTextEditor value={bodyHtml} onChange={setBodyHtml} disabled={readOnly} placeholder="Schrijf de contracttekst… gebruik de werkbalk voor koppen, lijsten en opmaak." />}
+        <small>De klant ziet deze inhoud op de ondertekenpagina en in het PDF. Afbeeldingen en tabellen volgen in een latere fase.</small>
+      </div>
     </Modal>
   );
+}
+
+function MiniTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return <button type="button" onClick={onClick} style={{
+    padding: '4px 12px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+    border: `1px solid ${active ? '#ffd966' : '#2a2a31'}`, background: active ? '#ffd966' : 'transparent', color: active ? '#111' : '#d8d8df',
+  }}>{children}</button>;
 }
 
 // ───────────────────────────── Detail / acties ─────────────────────────────
@@ -320,6 +520,9 @@ function ContractDetail({ data, organizationId, canWrite, contract, onClose, onE
 
       {/* Interne notities (alleen intern, nooit klantgericht) */}
       <ContractNotesSection contractId={contract.id} organizationId={organizationId} canWrite={canWrite} />
+
+      {/* Onveranderlijke verstuurde versies */}
+      <ContractVersionsSection contractId={contract.id} organizationId={organizationId} />
 
       {/* Tijdlijn */}
       {events.length > 0 && <Section title="Tijdlijn">
@@ -508,6 +711,41 @@ function ContractNotesSection({ contractId, organizationId, canWrite }: { contra
   </Section>;
 }
 
+function ContractVersionsSection({ contractId, organizationId }: { contractId: string; organizationId: string }) {
+  const [versions, setVersions] = useState<ContractVersion[]>([]);
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void supabase.from('contract_versions').select('*')
+      .eq('organization_id', organizationId).eq('contract_id', contractId)
+      .order('version_number', { ascending: false })
+      .then(({ data }) => { if (!cancelled) setVersions((data ?? []) as ContractVersion[]); });
+    return () => { cancelled = true; };
+  }, [organizationId, contractId]);
+
+  if (versions.length === 0) return null;
+  const reasonLabel = (r: string) => r === 'sent_to_client' ? 'Verstuurd' : r === 'signed' ? 'Ondertekend' : r === 'superseded' ? 'Vervangen' : 'Handmatig';
+
+  return <Section title="Versies">
+    <p className="bk-muted" style={{ marginTop: 0, fontSize: 13 }}>Onveranderlijke momentopnames van wat er naar de klant is verstuurd.</p>
+    <div style={{ display: 'grid', gap: 6 }}>
+      {versions.map(v => <div key={v.id} style={{ border: '1px solid #2a2a31', borderRadius: 10, padding: '8px 12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <strong style={{ fontSize: 13 }}>v{v.version_number}</strong>
+          <span className="bk-muted" style={{ fontSize: 12 }}>{reasonLabel(v.snapshot_reason)} · {new Date(v.created_at).toLocaleString('nl-NL', { dateStyle: 'short', timeStyle: 'short' })}</span>
+          <span style={{ flex: 1 }} />
+          <button type="button" onClick={() => setOpenId(openId === v.id ? null : v.id)} style={noteLinkBtn}>{openId === v.id ? 'Verberg' : 'Bekijk inhoud'}</button>
+        </div>
+        {openId === v.id && <div style={{ marginTop: 8, borderTop: '1px solid #2a2a31', paddingTop: 8 }}>
+          {v.title && <div style={{ fontWeight: 600, marginBottom: 6 }}>{v.title}</div>}
+          <RichTextViewer content={v.body} emptyText="Geen inhoud." />
+        </div>}
+      </div>)}
+    </div>
+  </Section>;
+}
+
 function Section({ icon, title, children }: { icon?: React.ReactNode; title: string; children: React.ReactNode }) {
   return <div style={{ borderTop: '1px solid #2a2a31', paddingTop: 12, marginTop: 14 }}>
     <h4 style={{ margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 6, fontSize: 14 }}>{icon}{title}</h4>
@@ -517,18 +755,18 @@ function Section({ icon, title, children }: { icon?: React.ReactNode; title: str
 
 // ───────────────────────────── helpers ─────────────────────────────
 
-function textToHtml(text: string): string {
-  const esc = (s: string) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] || c));
-  return text.split(/\n{2,}/).map(p => `<p>${esc(p.trim()).replace(/\n/g, '<br/>')}</p>`).join('');
+function formatCompanyAddress(cs: AppData['companySettings']): string {
+  if (!cs) return '';
+  return [cs.address_line1, cs.address_line2, [cs.postal_code, cs.city].filter(Boolean).join(' '), cs.country]
+    .map(v => (v ?? '').trim()).filter(Boolean).join(', ');
 }
-function htmlToText(html: string): string {
-  return String(html || '')
-    .replace(/<\/p>\s*<p>/gi, '\n\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/?p>/gi, '')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&amp;/gi, '&')
-    .trim();
+function openBase64Pdf(base64: string): void {
+  try {
+    const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+    window.open(url, '_blank', 'noopener,noreferrer');
+    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch { /* preview kon niet worden geopend */ }
 }
 function triggerDownload(base64: string, fileName: string): void {
   const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
