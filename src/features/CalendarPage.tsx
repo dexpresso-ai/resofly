@@ -19,18 +19,20 @@ import { getNoteTypeLabel } from './Notes';
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
 
-// Zichtbaar dagvenster: nacht-uren tonen we niet, zodat de werkdag de volle
-// schermhoogte krijgt en zonder scrollen past (rijhoogte groeit dynamisch mee).
-const HOUR_START = 6;
-const HOUR_END = 23;
+const HOUR_START = 0;
+const HOUR_END = 24;
 const WORKDAY_START = 8;
 const WORKDAY_END = 18;
 const SLOT_MINUTES = 30;
 const TOTAL_SLOTS = (HOUR_END - HOUR_START) * (60 / SLOT_MINUTES);
 const MIN_EVENT_HEIGHT_SLOTS = 0.85;
-// Ondergrens voor de rijhoogte: op korte schermen valt de grid hierop terug en
-// mag hij weer scrollen i.p.v. onleesbaar dun te worden.
-const MIN_ROW_HEIGHT = 22;
+// De volledige dag (00:00-24:00) blijft scrollbaar zodat ook de vroege/late uren
+// bereikbaar zijn. De rijhoogte schaalt zo dat de WERKDAG de zichtbare hoogte
+// vult (ruime, schermvullende blokken); de grid scrollt voor de overige uren en
+// opent automatisch op de werkdag-start.
+const WORKDAY_SLOTS = (WORKDAY_END - WORKDAY_START) * (60 / SLOT_MINUTES);
+const MIN_ROW_HEIGHT = 24;
+const MAX_ROW_HEIGHT = 52;
 
 function toInputDateTime(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -397,9 +399,10 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
   const canSelect = canWrite && writeableSources.length > 0;
   const daysKey = days.map(formatISODate).join('|');
 
-  // Meet de beschikbare hoogte en verdeel die over de tijdslots, zodat de hele
-  // dag past zonder verticaal scrollen. Reageert op resize én op een groeiende
-  // "hele dag"-balk via een ResizeObserver. useLayoutEffect voorkomt een flits.
+  // Meet de zichtbare hoogte en kies een rijhoogte zó dat de werkdag die hoogte
+  // vult (ruime blokken die het scherm vullen); de volledige dag blijft scrollbaar
+  // voor de vroege/late uren. Reageert op resize én op een groeiende "hele dag"-
+  // balk via een ResizeObserver. useLayoutEffect voorkomt een flits.
   useLayoutEffect(() => {
     const scrollEl = scrollRef.current;
     if (!scrollEl) return;
@@ -407,9 +410,10 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
       const headers = scrollEl.querySelector<HTMLElement>('.tb-day-headers');
       const allday = scrollEl.querySelector<HTMLElement>('.tb-allday-row');
       const chrome = (headers?.offsetHeight ?? 0) + (allday?.offsetHeight ?? 0);
-      const available = scrollEl.clientHeight - chrome - 1; // 1px marge tegen een scrollbar
+      const available = scrollEl.clientHeight - chrome;
       if (available <= 0) return;
-      setRowHeight(Math.max(Math.floor(available / TOTAL_SLOTS), MIN_ROW_HEIGHT));
+      const fitted = Math.floor(available / WORKDAY_SLOTS);
+      setRowHeight(Math.min(Math.max(fitted, MIN_ROW_HEIGHT), MAX_ROW_HEIGHT));
     };
     measure();
     const ro = new ResizeObserver(measure);
