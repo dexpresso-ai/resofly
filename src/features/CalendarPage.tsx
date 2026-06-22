@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { CalendarDays, ChevronDown, ChevronRight, Clock, ExternalLink, LayoutList, MapPin, Plus, RefreshCcw, Unplug, X } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { RichTextExcerpt } from '../components/RichTextEditor';
@@ -19,13 +19,18 @@ import { getNoteTypeLabel } from './Notes';
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
 
-const HOUR_START = 0;
-const HOUR_END = 24;
+// Zichtbaar dagvenster: nacht-uren tonen we niet, zodat de werkdag de volle
+// schermhoogte krijgt en zonder scrollen past (rijhoogte groeit dynamisch mee).
+const HOUR_START = 6;
+const HOUR_END = 23;
 const WORKDAY_START = 8;
 const WORKDAY_END = 18;
 const SLOT_MINUTES = 30;
 const TOTAL_SLOTS = (HOUR_END - HOUR_START) * (60 / SLOT_MINUTES);
 const MIN_EVENT_HEIGHT_SLOTS = 0.85;
+// Ondergrens voor de rijhoogte: op korte schermen valt de grid hierop terug en
+// mag hij weer scrollen i.p.v. onleesbaar dun te worden.
+const MIN_ROW_HEIGHT = 22;
 
 function toInputDateTime(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -387,9 +392,32 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
 }) {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [rowHeight, setRowHeight] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const canSelect = canWrite && writeableSources.length > 0;
   const daysKey = days.map(formatISODate).join('|');
+
+  // Meet de beschikbare hoogte en verdeel die over de tijdslots, zodat de hele
+  // dag past zonder verticaal scrollen. Reageert op resize én op een groeiende
+  // "hele dag"-balk via een ResizeObserver. useLayoutEffect voorkomt een flits.
+  useLayoutEffect(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+    const measure = () => {
+      const headers = scrollEl.querySelector<HTMLElement>('.tb-day-headers');
+      const allday = scrollEl.querySelector<HTMLElement>('.tb-allday-row');
+      const chrome = (headers?.offsetHeight ?? 0) + (allday?.offsetHeight ?? 0);
+      const available = scrollEl.clientHeight - chrome - 1; // 1px marge tegen een scrollbar
+      if (available <= 0) return;
+      setRowHeight(Math.max(Math.floor(available / TOTAL_SLOTS), MIN_ROW_HEIGHT));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(scrollEl);
+    const alldayEl = scrollEl.querySelector('.tb-allday-row');
+    if (alldayEl) ro.observe(alldayEl);
+    return () => ro.disconnect();
+  }, [daysKey]);
 
   useEffect(() => {
     const scrollEl = scrollRef.current;
@@ -459,7 +487,11 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
 
   const today = (d: Date) => isSameDay(d, new Date());
   const now = new Date();
-  const gridStyle = { '--tb-days': days.length, '--tb-slots': TOTAL_SLOTS } as CSSProperties;
+  const gridStyle = {
+    '--tb-days': days.length,
+    '--tb-slots': TOTAL_SLOTS,
+    ...(rowHeight ? { '--tb-h': `${rowHeight}px` } : {}),
+  } as CSSProperties;
   const workdayOverlayStyle = {
     top: `${(((WORKDAY_START - HOUR_START) * 60) / ((HOUR_END - HOUR_START) * 60)) * 100}%`,
     height: `${(((WORKDAY_END - WORKDAY_START) * 60) / ((HOUR_END - HOUR_START) * 60)) * 100}%`,
@@ -1056,6 +1088,41 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     setAnchor(startOfDay(new Date()));
   }
 
+  // ↑/↓ zoomt in/uit langs dag → week → maand (lijst blijft via 'l').
+  function cycleView(direction: -1 | 1) {
+    const order: CalendarView[] = ['day', 'week', 'month'];
+    const current = order.indexOf(view);
+    const base = current === -1 ? order.indexOf('week') : current;
+    const next = order[Math.min(order.length - 1, Math.max(0, base + direction))];
+    if (next !== view) changeView(next);
+  }
+
+  // Sneltoetsen voor snelle navigatie. Genegeerd tijdens typen in formulieren of
+  // als er een paneel/modal openstaat (Escape sluit die i.p.v. hier te navigeren).
+  useEffect(() => {
+    if (mode !== 'agenda') return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (showCreatePanel || selectedEvent) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      switch (e.key) {
+        case 'ArrowLeft': e.preventDefault(); movePeriod(-1); break;
+        case 'ArrowRight': e.preventDefault(); movePeriod(1); break;
+        case 'ArrowUp': e.preventDefault(); cycleView(-1); break;
+        case 'ArrowDown': e.preventDefault(); cycleView(1); break;
+        case 'v': case 'V': e.preventDefault(); goToday(); break;
+        case 'd': case 'D': e.preventDefault(); changeView('day'); break;
+        case 'w': case 'W': e.preventDefault(); changeView('week'); break;
+        case 'm': case 'M': e.preventDefault(); changeView('month'); break;
+        case 'l': case 'L': e.preventDefault(); changeView('list'); break;
+        default: break;
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [mode, view, showCreatePanel, selectedEvent]); // eslint-disable-line
+
   const previousLabel = view === 'day' ? 'Vorige dag' : view === 'month' ? 'Vorige maand' : 'Vorige week';
   const nextLabel = view === 'day' ? 'Volgende dag' : view === 'month' ? 'Volgende maand' : 'Volgende week';
 
@@ -1154,9 +1221,9 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     <div className={`calendar-main-card calendar-main-card-${view}`} id="calendar-agenda">
       <div className="calendar-toolbar calendar-toolbar-premium">
         <div className="calendar-period-controls">
-          <Button onClick={() => movePeriod(-1)}>{previousLabel}</Button>
-          <Button onClick={goToday}>Vandaag</Button>
-          <Button onClick={() => movePeriod(1)}>{nextLabel}</Button>
+          <Button onClick={() => movePeriod(-1)} title={`${previousLabel} (←)`}>{previousLabel}</Button>
+          <Button onClick={goToday} title="Spring naar vandaag (V)">Vandaag</Button>
+          <Button onClick={() => movePeriod(1)} title={`${nextLabel} (→)`}>{nextLabel}</Button>
         </div>
         <div className="calendar-range-block">
           <span className="calendar-range-label">{view === 'day' ? 'Dag' : view === 'week' ? 'Week' : view === 'month' ? 'Maand' : 'Lijst'}</span>
@@ -1164,10 +1231,10 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         </div>
         <Button className="calendar-link-btn" onClick={refreshAll} disabled={loading || eventsLoading}><RefreshCcw size={14} /> Ververs</Button>
         <div className="tb-view-tog calendar-view-tabs" aria-label="Agendaweergave">
-          <button className={`tb-vbtn${view === 'day' ? ' active' : ''}`} onClick={() => changeView('day')} title="Dagweergave"><CalendarDays size={14} /><span>Dag</span></button>
-          <button className={`tb-vbtn${view === 'week' ? ' active' : ''}`} onClick={() => changeView('week')} title="Weekweergave"><Clock size={14} /><span>Week</span></button>
-          <button className={`tb-vbtn${view === 'month' ? ' active' : ''}`} onClick={() => changeView('month')} title="Maandweergave"><CalendarDays size={14} /><span>Maand</span></button>
-          <button className={`tb-vbtn${view === 'list' ? ' active' : ''}`} onClick={() => changeView('list')} title="Lijst"><LayoutList size={14} /><span>Lijst</span></button>
+          <button className={`tb-vbtn${view === 'day' ? ' active' : ''}`} onClick={() => changeView('day')} title="Dagweergave (D)"><CalendarDays size={14} /><span>Dag</span></button>
+          <button className={`tb-vbtn${view === 'week' ? ' active' : ''}`} onClick={() => changeView('week')} title="Weekweergave (W)"><Clock size={14} /><span>Week</span></button>
+          <button className={`tb-vbtn${view === 'month' ? ' active' : ''}`} onClick={() => changeView('month')} title="Maandweergave (M)"><CalendarDays size={14} /><span>Maand</span></button>
+          <button className={`tb-vbtn${view === 'list' ? ' active' : ''}`} onClick={() => changeView('list')} title="Lijstweergave (L)"><LayoutList size={14} /><span>Lijst</span></button>
         </div>
       </div>
 
