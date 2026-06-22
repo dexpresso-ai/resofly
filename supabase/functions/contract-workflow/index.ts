@@ -3,6 +3,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
 import { renderContractPdf, bytesToBase64, sha256HexBytes } from '../_shared/contractPdf.ts';
+import { sanitizeContractHtml } from '../_shared/htmlSanitize.ts';
+import { buildContractTokens, fillContractTokens } from '../_shared/contractTokens.ts';
 
 // ============================================================
 // contract-workflow (ingelogd): verstuurt een contract ter ondertekening en
@@ -28,6 +30,8 @@ type ContractRow = {
   signed_pdf_size_bytes: number | null;
   signed_pdf_data_base64: string | null;
   signed_document_sha256: string | null;
+  amount_cents: number | null;
+  currency: string | null;
 };
 
 type ClientRow = { id: string; name: string; contact_name: string | null; email: string | null };
@@ -199,7 +203,14 @@ async function sendContractForSignature(
   const subject = String(body.subject || rendered.subject || '').trim();
   if (!subject) throw new HttpError('Er kon geen onderwerp voor de contract-e-mail worden bepaald.', 500);
 
-  const pdf = await buildConceptAttachment(contract, client, company, publicUrl);
+  const projectName = await loadLinkedProjectName(organizationId, contractId);
+  const tokens = buildContractTokens({
+    contract: { number: contract.number, date: contract.date, amount_cents: contract.amount_cents, currency: contract.currency },
+    client, company, projectName,
+  });
+  const filledBody = sanitizeContractHtml(fillContractTokens(contract.body, tokens));
+
+  const pdf = await buildConceptAttachment(contract, client, company, publicUrl, filledBody);
   validatePdf(pdf);
 
   const deliveryId = await beginSignatureSend({
@@ -258,6 +269,19 @@ async function sendContractForSignature(
 
   const contractAfter = await completeSignatureSend(deliveryId, organizationId, userId, providerEmailId);
 
+  // Bevries de verstuurde versie (onveranderlijk). Niet-fataal als dit faalt.
+  const snapshotResult = await supabaseAdmin.rpc('snapshot_contract_version', {
+    p_contract_id: contractId,
+    p_organization_id: organizationId,
+    p_reason: 'sent_to_client',
+    p_title: contract.title,
+    p_body: filledBody,
+    p_amount_cents: contract.amount_cents,
+    p_currency: contract.currency,
+    p_created_by: userId,
+  });
+  if (snapshotResult.error) console.warn('contract version snapshot failed', snapshotResult.error.message);
+
   return {
     contract: contractAfter,
     publicUrl,
@@ -268,9 +292,9 @@ async function sendContractForSignature(
 
 type ContractAttachment = { fileName: string; mimeType: 'application/pdf'; base64: string; sizeBytes: number; sha256: string };
 
-async function buildConceptAttachment(contract: ContractRow, client: ClientRow, company: CompanyRow | null, publicUrl: string): Promise<ContractAttachment> {
+async function buildConceptAttachment(contract: ContractRow, client: ClientRow, company: CompanyRow | null, publicUrl: string, body: string): Promise<ContractAttachment> {
   const bytes = await renderContractPdf({
-    contract: { id: contract.id, number: contract.number, title: contract.title, body: contract.body, date: contract.date, valid_until: contract.valid_until },
+    contract: { id: contract.id, number: contract.number, title: contract.title, body, date: contract.date, valid_until: contract.valid_until },
     client,
     company,
     publicUrl,
@@ -300,13 +324,21 @@ async function loadContract(organizationId: string, contractId: string): Promise
   const { data, error } = await supabaseAdmin
     .from('contracts')
     .select(
-      'id,organization_id,client_id,number,title,body,date,valid_until,status,signed_storage_provider,signed_storage_key,signed_pdf_file_name,signed_pdf_size_bytes,signed_pdf_data_base64,signed_document_sha256',
+      'id,organization_id,client_id,number,title,body,date,valid_until,status,signed_storage_provider,signed_storage_key,signed_pdf_file_name,signed_pdf_size_bytes,signed_pdf_data_base64,signed_document_sha256,amount_cents,currency',
     )
     .eq('id', contractId)
     .eq('organization_id', organizationId)
     .single();
   if (error || !data) throw new HttpError('Contract niet gevonden.', 404);
   return data as ContractRow;
+}
+
+async function loadLinkedProjectName(organizationId: string, contractId: string): Promise<string | null> {
+  const { data } = await supabaseAdmin
+    .from('projects').select('name')
+    .eq('organization_id', organizationId).eq('contract_id', contractId)
+    .order('created_at', { ascending: true }).limit(1).maybeSingle();
+  return (data?.name as string | undefined) ?? null;
 }
 
 async function loadClient(organizationId: string, clientId: string): Promise<ClientRow> {

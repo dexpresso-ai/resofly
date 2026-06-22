@@ -112,14 +112,36 @@ export async function renderContractPdf(params: {
     ctx.y -= 10;
   }
 
-  for (const paragraph of htmlToParagraphs(contract.body)) {
-    if (!paragraph.trim()) {
-      ctx.y -= 8;
-      continue;
+  for (const block of htmlToBlocks(contract.body)) {
+    if (!block.text.trim()) continue;
+    ensureSpace(ctx, 18);
+    switch (block.type) {
+      case 'h2':
+        ctx.y -= 4;
+        ctx.y = drawWrapped(ctx, block.text, LEFT, ctx.y, CONTENT_W, ctx.bold, 15, 19);
+        ctx.y -= 6;
+        break;
+      case 'h3':
+        ctx.y -= 2;
+        ctx.y = drawWrapped(ctx, block.text, LEFT, ctx.y, CONTENT_W, ctx.bold, 12, 16);
+        ctx.y -= 5;
+        break;
+      case 'h4':
+        ctx.y = drawWrapped(ctx, block.text, LEFT, ctx.y, CONTENT_W, ctx.bold, 11, 15);
+        ctx.y -= 4;
+        break;
+      case 'li':
+        ctx.y = drawWrapped(ctx, block.text, LEFT + 14, ctx.y, CONTENT_W - 14, ctx.regular, 10, 14);
+        ctx.y -= 3;
+        break;
+      case 'quote':
+        ctx.y = drawWrapped(ctx, block.text, LEFT + 12, ctx.y, CONTENT_W - 12, ctx.italic, 10, 14, ctx.muted);
+        ctx.y -= 5;
+        break;
+      default:
+        ctx.y = drawWrapped(ctx, block.text, LEFT, ctx.y, CONTENT_W, ctx.regular, 10, 14);
+        ctx.y -= 6;
     }
-    ensureSpace(ctx, 16);
-    ctx.y = drawWrapped(ctx, paragraph, LEFT, ctx.y, CONTENT_W, ctx.regular, 10, 14);
-    ctx.y -= 6;
   }
 
   if (signature) {
@@ -322,11 +344,51 @@ async function tryEmbedImage(doc: PDFDocument, dataUrl: string): Promise<PDFImag
 }
 
 // ------------------------------------------------------------ text utils
-function htmlToParagraphs(value: string): string[] {
-  return String(value ?? '')
-    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
-    .replace(/<\/\s*(p|div|li|h[1-6]|tr)\s*>/gi, '\n')
-    .replace(/<\s*li[^>]*>/gi, '- ')
+type PdfBlock = { type: 'h2' | 'h3' | 'h4' | 'p' | 'li' | 'quote'; text: string };
+
+// Zet de (al gesanitizede) rich-text body om in blokken met behoud van structuur:
+// koppen, alinea's, lijst-items (genummerd/bullet) en citaten. Inline-opmaak
+// (vet/cursief) wordt platgeslagen — pdf-lib tekent per regel één lettertype.
+function htmlToBlocks(value: string): PdfBlock[] {
+  const src = String(value ?? '');
+  if (!src.trim()) return [];
+  if (!/<[a-z]/i.test(src)) {
+    return src.replace(/\r\n/g, '\n').split(/\n{2,}/).map((t) => ({ type: 'p' as const, text: t.trim() })).filter((b) => b.text);
+  }
+  const out: PdfBlock[] = [];
+  const re = /<(h2|h3|h4)\b[^>]*>([\s\S]*?)<\/\1>|<p\b[^>]*>([\s\S]*?)<\/p>|<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>|<(ul|ol)\b[^>]*>([\s\S]*?)<\/\5>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    if (m[1]) {
+      const t = inlineToText(m[2]);
+      if (t) out.push({ type: m[1].toLowerCase() as PdfBlock['type'], text: t });
+    } else if (m[3] !== undefined) {
+      const t = inlineToText(m[3]);
+      if (t) out.push({ type: 'p', text: t });
+    } else if (m[4] !== undefined) {
+      const t = inlineToText(m[4]);
+      if (t) out.push({ type: 'quote', text: t });
+    } else if (m[5]) {
+      const ordered = m[5].toLowerCase() === 'ol';
+      let i = 0;
+      for (const li of m[6].matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)) {
+        const t = inlineToText(li[1]);
+        if (!t) continue;
+        i += 1;
+        out.push({ type: 'li', text: (ordered ? `${i}. ` : '•  ') + t });
+      }
+    }
+  }
+  if (out.length === 0) {
+    const t = inlineToText(src);
+    if (t) out.push({ type: 'p', text: t });
+  }
+  return out;
+}
+
+function inlineToText(html: string): string {
+  return String(html ?? '')
+    .replace(/<br\s*\/?>/gi, ' ')
     .replace(/<[^>]+>/g, '')
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
@@ -334,10 +396,8 @@ function htmlToParagraphs(value: string): string[] {
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
-    .replace(/\r\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-    .split('\n');
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function wrapPdfText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {

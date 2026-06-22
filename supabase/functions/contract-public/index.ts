@@ -3,6 +3,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
 import { renderContractPdf, bytesToBase64, sha256HexBytes, type PdfSignature } from '../_shared/contractPdf.ts';
+import { sanitizeContractHtml } from '../_shared/htmlSanitize.ts';
+import { buildContractTokens, fillContractTokens } from '../_shared/contractTokens.ts';
 
 // ============================================================
 // contract-public (publiek, geen login): de API achter de ondertekenpagina
@@ -27,6 +29,8 @@ type ContractRow = {
   status: string;
   signed_at: string | null;
   public_token_expires_at: string | null;
+  amount_cents: number | null;
+  currency: string | null;
 };
 
 type PublicHttpErrorStatus = 400 | 401 | 403 | 404 | 405 | 409 | 410 | 422 | 500;
@@ -180,8 +184,14 @@ async function signPublicContract(tokenHash: string, body: Record<string, unknow
     userAgent,
     consentText,
   };
+  const projectName = await loadLinkedProjectName(contract.organization_id, contract.id);
+  const tokens = buildContractTokens({
+    contract: { number: contract.number, date: contract.date, amount_cents: contract.amount_cents, currency: contract.currency },
+    client, company, projectName,
+  });
+  const filledBody = sanitizeContractHtml(fillContractTokens(contract.body, tokens));
   const pdfBytes = await renderContractPdf({
-    contract: { id: contract.id, number: contract.number, title: contract.title, body: contract.body, date: contract.date, valid_until: contract.valid_until },
+    contract: { id: contract.id, number: contract.number, title: contract.title, body: filledBody, date: contract.date, valid_until: contract.valid_until },
     client: client || { name: client?.name || 'Klant', contact_name: null, email: signerEmail },
     company,
     signature,
@@ -385,7 +395,7 @@ async function storeSignedPdf(
 async function loadContractByTokenHash(tokenHash: string): Promise<ContractRow> {
   const { data, error } = await supabaseAdmin
     .from('contracts')
-    .select('id,organization_id,client_id,number,title,body,date,valid_until,status,signed_at,public_token_expires_at')
+    .select('id,organization_id,client_id,number,title,body,date,valid_until,status,signed_at,public_token_expires_at,amount_cents,currency')
     .eq('public_token_hash', tokenHash)
     .maybeSingle();
   if (error) throw error;
@@ -502,19 +512,35 @@ async function insertEvent(organizationId: string, contractId: string, eventType
   if (error) console.warn('contract event insert failed', error.message);
 }
 
+async function loadLinkedProjectName(organizationId: string, contractId: string): Promise<string | null> {
+  const { data } = await supabaseAdmin
+    .from('projects').select('name')
+    .eq('organization_id', organizationId).eq('contract_id', contractId)
+    .order('created_at', { ascending: true }).limit(1).maybeSingle();
+  return (data?.name as string | undefined) ?? null;
+}
+
 async function buildPayload(contract: ContractRow) {
-  const [client, company, signer, events] = await Promise.all([
+  const [client, company, signer, events, projectName] = await Promise.all([
     contract.client_id ? loadClient(contract.organization_id, contract.client_id) : Promise.resolve(null),
     loadCompanySettings(contract.organization_id),
     loadSigner(contract.organization_id, contract.id),
     loadEvents(contract.organization_id, contract.id),
+    loadLinkedProjectName(contract.organization_id, contract.id),
   ]);
+  // Vul variabelen in én sanitize server-side: de publieke pagina rendert deze
+  // body via innerHTML, dus dit is de beslissende XSS-grens.
+  const tokens = buildContractTokens({
+    contract: { number: contract.number, date: contract.date, amount_cents: contract.amount_cents, currency: contract.currency },
+    client, company, projectName,
+  });
+  const renderedBody = sanitizeContractHtml(fillContractTokens(contract.body, tokens));
   return {
     contract: {
       id: contract.id,
       number: contract.number,
       title: contract.title,
-      body: contract.body,
+      body: renderedBody,
       date: contract.date,
       valid_until: contract.valid_until,
       status: contract.status,
