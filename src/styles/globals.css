@@ -1968,3 +1968,33 @@ body::before{
 .client-comm-body p{margin:0 0 8px}
 .client-comm-body-plain{white-space:pre-wrap}
 .client-comm-error{margin-top:8px;font-size:12px;color:var(--accent-r)}
+
+/* ── Bank (afschriften inlezen + automatisch journaliseren) ──────────── */
+.bank-reconcile{display:flex;flex-direction:column;gap:14px}
+.bank-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.bank-tx-list{display:flex;flex-direction:column;gap:10px}
+.bank-tx{background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.bank-tx-suggested{border-color:rgba(255,217,102,.32)}
+.bank-tx-booked{opacity:.78}
+.bank-tx-ignored{opacity:.6}
+.bank-tx-main{display:flex;align-items:center;gap:14px}
+.bank-tx-date{font-size:12px;color:var(--muted);min-width:74px;font-variant-numeric:tabular-nums}
+.bank-tx-info{display:flex;flex-direction:column;min-width:0;flex:1}
+.bank-tx-info strong{font-size:.92rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bank-tx-info small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bank-tx-amount{font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
+.bank-tx-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px dashed var(--border);padding-top:10px}
+.bank-tx-actions .form-input,.bank-tx-actions select{min-height:34px;max-width:280px}
+.bank-tx-error{margin:0}
+.bank-mode{flex-shrink:0}
+.bank-accounts{display:flex;flex-direction:column;gap:12px;margin-top:6px}
+.bank-account-card{background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.bank-account-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.bank-account-head strong{display:block;font-size:.98rem}
+.bank-account-head small{display:block}
+.bank-account-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px}
+.bank-import{display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap}
+.bank-import-msg{font-size:12px;color:var(--muted2)}
+.bank-connect-card{margin-top:18px;background:var(--bg2);border:1px dashed var(--border);border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+.bank-connect-card p{margin:4px 0 0;font-size:.82rem;max-width:560px}
+.bank-connect-card strong{display:inline-flex;align-items:center;gap:8px}

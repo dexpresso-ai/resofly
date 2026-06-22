@@ -42,6 +42,11 @@ import type {
   BalanceSheetRow,
   VatReturn,
   VatReturnRubrieken,
+  BankAccount,
+  BankStatement,
+  BankTransaction,
+  BankRule,
+  ParsedBankStatement,
   CalendarNoteLinkInput,
   NoteCalendarLink,
   CalendarEventLink,
@@ -65,7 +70,7 @@ import type {
   UUID,
 } from '../types';
 
-const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'attachments', 'company_settings'] as const;
+const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -88,6 +93,8 @@ const tableToEntity: Record<Table, EntityType | null> = {
   purchase_invoices: 'purchase_invoice',
   fixed_assets: 'fixed_asset',
   vat_returns: null,
+  bank_accounts: null,
+  bank_rules: null,
   attachments: null,
   company_settings: null,
 };
@@ -328,6 +335,10 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     fixedAssets,
     assetDepreciations,
     vatReturns,
+    bankAccounts,
+    bankStatements,
+    bankTransactions,
+    bankRules,
     attachments,
     folders,
     companySettings,
@@ -337,11 +348,12 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId),
     selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId), selectFixedAssets(organizationId), selectAssetDepreciations(organizationId), selectVatReturns(organizationId),
+    selectBankAccounts(organizationId), selectBankStatements(organizationId), selectBankTransactions(organizationId), selectBankRules(organizationId),
     select<Attachment>('attachments', organizationId),
     selectFolders(organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, attachments, companySettings };
+  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, attachments, companySettings };
 }
 
 export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
@@ -808,6 +820,104 @@ export const selectAssetDepreciations = (organizationId: UUID) =>
   selectOptional<AssetDepreciation>('asset_depreciations', organizationId, { orderBy: 'date', ascending: true, hint: BOOKKEEPING_MIGRATION_HINT });
 export const selectVatReturns = (organizationId: UUID) =>
   selectOptional<VatReturn>('vat_returns', organizationId, { orderBy: 'period_start', ascending: false, hint: BOOKKEEPING_MIGRATION_HINT });
+
+const BANKFEED_MIGRATION_HINT =
+  'Voer de migratie 20260622000004_bankfeed_core.sql uit in Supabase om de bankkoppeling te activeren.';
+
+export const selectBankAccounts = (organizationId: UUID) =>
+  selectOptional<BankAccount>('bank_accounts', organizationId, { orderBy: 'name', ascending: true, hint: BANKFEED_MIGRATION_HINT });
+export const selectBankStatements = (organizationId: UUID) =>
+  selectOptional<BankStatement>('bank_statements', organizationId, { orderBy: 'imported_at', ascending: false, hint: BANKFEED_MIGRATION_HINT });
+export const selectBankTransactions = (organizationId: UUID) =>
+  selectOptional<BankTransaction>('bank_transactions', organizationId, { orderBy: 'booking_date', ascending: false, hint: BANKFEED_MIGRATION_HINT });
+export const selectBankRules = (organizationId: UUID) =>
+  selectOptional<BankRule>('bank_rules', organizationId, { orderBy: 'priority', ascending: true, hint: BANKFEED_MIGRATION_HINT });
+
+/**
+ * Leest een afschrift in: voegt nieuwe transacties idempotent toe (dedup op
+ * bank_account_id + dedup_key) en stelt direct matches/voorstellen voor. Geeft
+ * het aantal toegevoegde en overgeslagen (reeds bekende) regels terug.
+ */
+export async function importBankTransactions(
+  organizationId: UUID,
+  bankAccountId: UUID,
+  statement: ParsedBankStatement,
+): Promise<{ inserted: number; skipped: number; statement_id: UUID | null }> {
+  const { transactions, ...meta } = statement;
+  const { data, error } = await supabase.rpc('import_bank_transactions', {
+    p_organization_id: organizationId,
+    p_bank_account_id: bankAccountId,
+    p_statement: meta,
+    p_transactions: transactions,
+  });
+  if (error) throw bookkeepingError(error);
+  const row = (data ?? {}) as { inserted?: number; skipped?: number; statement_id?: UUID | null };
+  return { inserted: row.inserted ?? 0, skipped: row.skipped ?? 0, statement_id: row.statement_id ?? null };
+}
+
+/** Stelt opnieuw matches/voorstellen voor over de openstaande transacties. */
+export async function matchBankTransactions(
+  organizationId: UUID,
+  bankAccountId?: UUID | null,
+): Promise<{ suggested: number; auto_booked: number }> {
+  const { data, error } = await supabase.rpc('match_bank_transactions', {
+    p_organization_id: organizationId,
+    p_bank_account_id: bankAccountId ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  const row = (data ?? {}) as { suggested?: number; auto_booked?: number };
+  return { suggested: row.suggested ?? 0, auto_booked: row.auto_booked ?? 0 };
+}
+
+/**
+ * Boekt een banktransactie naar het grootboek. Geef óf een af te letteren factuur
+ * (matchedInvoiceId / matchedPurchaseInvoiceId) óf vrije regels (lines: bruto
+ * bedrag + BTW-code per grootboekrekening).
+ */
+export async function bookBankTransaction(
+  organizationId: UUID,
+  transactionId: UUID,
+  options: {
+    lines?: Array<Record<string, unknown>>;
+    matchedInvoiceId?: UUID | null;
+    matchedPurchaseInvoiceId?: UUID | null;
+  } = {},
+): Promise<JournalEntry> {
+  const { data, error } = await supabase.rpc('book_bank_transaction', {
+    p_organization_id: organizationId,
+    p_transaction_id: transactionId,
+    p_lines: options.lines ?? null,
+    p_matched_invoice_id: options.matchedInvoiceId ?? null,
+    p_matched_purchase_invoice_id: options.matchedPurchaseInvoiceId ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
+/** Draait een geboekte banktransactie terug (tegenboeking) en zet hem weer open. */
+export async function unbookBankTransaction(organizationId: UUID, transactionId: UUID): Promise<BankTransaction> {
+  const { data, error } = await supabase.rpc('unbook_bank_transaction', {
+    p_organization_id: organizationId,
+    p_transaction_id: transactionId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as BankTransaction;
+}
+
+/** Negeert een transactie ('ignored') of zet hem weer open ('unmatched'). */
+export async function setBankTransactionStatus(
+  organizationId: UUID,
+  transactionId: UUID,
+  status: 'unmatched' | 'ignored',
+): Promise<BankTransaction> {
+  const { data, error } = await supabase.rpc('set_bank_transaction_status', {
+    p_organization_id: organizationId,
+    p_transaction_id: transactionId,
+    p_status: status,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as BankTransaction;
+}
 
 /** Berekent de BTW-rubrieken over een periode (alleen geboekte journaalposten). */
 export async function computeVatReturn(organizationId: UUID, from: string, to: string): Promise<VatReturnRubrieken> {

@@ -20,7 +20,7 @@ type PageProps = {
 };
 
 /** Banner die verschijnt zolang het rekeningschema nog niet geseed is. */
-function SetupBanner({ organizationId, canWrite, onChanged }: { organizationId: string; canWrite: boolean; onChanged: () => void }) {
+export function SetupBanner({ organizationId, canWrite, onChanged }: { organizationId: string; canWrite: boolean; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function setup() {

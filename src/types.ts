@@ -957,6 +957,122 @@ export interface VatReturn {
   updated_at: string;
 }
 
+// ---------------------------------------------------------------------------
+// Bankfeed: bankrekeningen, transacties en regels (automatisch journaliseren).
+// ---------------------------------------------------------------------------
+export type BankAccountSource = 'import' | 'gocardless';
+export type BankStatementFormat = 'camt053' | 'mt940' | 'csv' | 'gocardless';
+export type BankTransactionStatus = 'unmatched' | 'suggested' | 'booked' | 'ignored';
+export type BankRuleDirection = 'in' | 'out' | 'both';
+
+export interface BankAccount extends OrgScopedRow {
+  name: string;
+  iban: string | null;
+  currency: string;
+  ledger_account_id: UUID;
+  source: BankAccountSource;
+  provider: string | null;
+  external_account_id: string | null;
+  last_synced_at: string | null;
+  last_imported_at: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BankStatement {
+  id: UUID;
+  organization_id: UUID;
+  created_by: UUID | null;
+  bank_account_id: UUID;
+  format: BankStatementFormat;
+  file_name: string | null;
+  file_hash: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  opening_balance_cents: number | null;
+  closing_balance_cents: number | null;
+  transaction_count: number;
+  imported_at: string;
+  created_at: string;
+}
+
+export interface BankTransaction {
+  id: UUID;
+  organization_id: UUID;
+  bank_account_id: UUID;
+  statement_id: UUID | null;
+  dedup_key: string;
+  booking_date: string;
+  value_date: string | null;
+  /** Signed: positief = ontvangen, negatief = betaald. In hele centen. */
+  amount_cents: number;
+  currency: string;
+  counterparty_name: string | null;
+  counterparty_iban: string | null;
+  description: string | null;
+  structured_reference: string | null;
+  end_to_end_id: string | null;
+  bank_tx_id: string | null;
+  status: BankTransactionStatus;
+  suggested_account_id: UUID | null;
+  suggested_vat_code: string | null;
+  matched_rule_id: UUID | null;
+  match_confidence: string | null;
+  matched_invoice_id: UUID | null;
+  matched_purchase_invoice_id: UUID | null;
+  journal_entry_id: UUID | null;
+  booked_at: string | null;
+  booked_by: UUID | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BankRule extends OrgScopedRow {
+  name: string;
+  priority: number;
+  match_direction: BankRuleDirection;
+  match_counterparty_iban: string | null;
+  match_counterparty_name_contains: string | null;
+  match_description_contains: string | null;
+  match_amount_cents: number | null;
+  target_account_id: UUID | null;
+  target_vat_code: string | null;
+  set_supplier_id: UUID | null;
+  set_client_id: UUID | null;
+  auto_book: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Genormaliseerde transactie zoals een parser die aanlevert aan import_bank_transactions. */
+export interface ParsedBankTransaction {
+  dedup_key: string;
+  booking_date: string;
+  value_date: string | null;
+  amount_cents: number;
+  currency: string;
+  counterparty_name: string | null;
+  counterparty_iban: string | null;
+  description: string | null;
+  structured_reference: string | null;
+  end_to_end_id: string | null;
+  bank_tx_id: string | null;
+}
+
+export interface ParsedBankStatement {
+  format: BankStatementFormat;
+  file_name: string | null;
+  file_hash: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  opening_balance_cents: number | null;
+  closing_balance_cents: number | null;
+  transactions: ParsedBankTransaction[];
+}
+
 export interface Attachment extends OrgScopedRow {
   entity_type: EntityType; entity_id: UUID; parent_task_id: UUID | null; name: string; mime_type: string; size_bytes: number; storage_key: string; public_url: string | null; created_at: string;
 }
@@ -1032,7 +1148,7 @@ export interface InvoiceMollieSettingsStatus {
   last_validated_at: string | null;
 }
 
-export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';
