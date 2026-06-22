@@ -75,9 +75,10 @@ import { CalendarPage } from './features/CalendarPage';
 import { WeekPlanner } from './features/WeekPlanner';
 import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat } from './components/GerrieChat';
-import { createFinancePDFBlob, exportFinancePDF } from './lib/pdf';
+import { exportFinancePDF } from './lib/pdf';
+import { FinanceDocPreview } from './components/FinanceDocPreview';
 import type {
-  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettings, CompanySettingsInput, CreditNote, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationRole, Project, Quote, Task, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
+  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettingsInput, CreditNote, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationRole, Project, Quote, Task, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
 } from './types';
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
@@ -1465,6 +1466,11 @@ function buildFinanceDocLike(kind: 'quote'|'invoice', form: Record<string, any>,
 function FinanceEditorLayout({ kind, data, organizationId, form, set, item, readOnly, onUploaded, attachmentBlock }: { kind: 'quote'|'invoice'; data: AppData; organizationId: string; form: Record<string, any>; set: (k:string,v:unknown)=>void; item?: { id: string }; readOnly: boolean; onUploaded: () => void; attachmentBlock: React.ReactNode }) {
   const [view, setView] = useState<'edit'|'preview'>('edit');
   const client = useMemo(() => data.clients.find(c => c.id === form.client_id) ?? null, [data.clients, form.client_id]);
+  // Alleen de velden die het document beïnvloeden; bij wijziging hiervan regenereert de preview.
+  const docLike = useMemo(
+    () => buildFinanceDocLike(kind, form, item),
+    [kind, item, form.number, form.date, form.valid_until, form.due_date, form.lines, form.notes, form.status, form.client_id, form.project_id],
+  );
 
   return <div className="finance-editor-layout" data-view={view}>
     <div className="finance-editor-tabs" role="tablist" aria-label="Editor en voorbeeld">
@@ -1475,60 +1481,7 @@ function FinanceEditorLayout({ kind, data, organizationId, form, set, item, read
       <FinanceForm kind={kind} data={data} organizationId={organizationId} form={form} set={set} item={item} readOnly={readOnly} onUploaded={onUploaded} attachmentBlock={attachmentBlock}/>
     </div>
     <div className="finance-preview-pane">
-      <FinancePdfPreview kind={kind} form={form} item={item} client={client} company={data.companySettings}/>
-    </div>
-  </div>;
-}
-
-// Live PDF-preview: genereert (gedebounced) de echte PDF via createFinancePDFBlob en toont
-// die in een ingebedde viewer, zodat de preview 1:1 gelijk is aan wat de klant ontvangt.
-function FinancePdfPreview({ kind, form, item, client, company }: { kind: 'quote'|'invoice'; form: Record<string, any>; item?: { id: string }; client: Client | null; company: CompanySettings | null }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [status, setStatus] = useState<'idle'|'rendering'|'ready'|'error'>('idle');
-  const [error, setError] = useState<string | null>(null);
-
-  // Alleen de velden die het document beïnvloeden; bij wijziging hiervan regenereren we.
-  const docLike = useMemo(
-    () => buildFinanceDocLike(kind, form, item),
-    [kind, item, form.number, form.date, form.valid_until, form.due_date, form.lines, form.notes, form.status, form.client_id, form.project_id],
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    setStatus('rendering');
-    const handle = setTimeout(() => {
-      createFinancePDFBlob(docLike, kind, client, { company })
-        .then(blob => {
-          if (cancelled) return;
-          setUrl(URL.createObjectURL(blob));
-          setError(null);
-          setStatus('ready');
-        })
-        .catch(err => {
-          if (cancelled) return;
-          setError(err instanceof Error ? err.message : 'Voorbeeld kon niet worden gegenereerd.');
-          setStatus('error');
-        });
-    }, 400);
-    return () => { cancelled = true; clearTimeout(handle); };
-  }, [docLike, kind, client, company]);
-
-  // Ruim de vorige object-URL op zodra een nieuwe is gezet en bij unmount (voorkomt lekken).
-  useEffect(() => {
-    if (!url) return;
-    return () => URL.revokeObjectURL(url);
-  }, [url]);
-
-  return <div className="finance-preview" aria-label="Live voorbeeld van het document">
-    <div className="finance-preview-head">
-      <span>{kind === 'quote' ? 'Live offerte-voorbeeld' : 'Live factuur-voorbeeld'}</span>
-      <small>{status === 'rendering' ? 'Voorbeeld bijwerken…' : status === 'error' ? 'Fout' : 'Bijgewerkt'}</small>
-    </div>
-    <div className="finance-preview-stage">
-      {url && <iframe key={url} className="finance-preview-frame" src={`${url}#toolbar=0&navpanes=0&view=FitH`} title="PDF-voorbeeld"/>}
-      {!url && status !== 'error' && <div className="finance-preview-placeholder">Voorbeeld wordt geladen…</div>}
-      {status === 'rendering' && url && <div className="finance-preview-overlay">Voorbeeld bijwerken…</div>}
-      {status === 'error' && <div className="finance-preview-error">{error ?? 'Voorbeeld kon niet worden gegenereerd.'}</div>}
+      <FinanceDocPreview doc={docLike} kind={kind} client={client} company={data.companySettings}/>
     </div>
   </div>;
 }

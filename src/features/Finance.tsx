@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Bell, BookOpen, CreditCard, Download, Eye, FileText, Mail, Pause, Play, RotateCcw, Search, ShieldCheck, SlidersHorizontal, Send, XCircle } from 'lucide-react';
 import type { AppData, CreditNote, FinanceLine, FinanceStatus, Invoice, InvoiceChargeback, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceRefund, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
 import { Modal } from '../components/Modal';
+import { FinanceDocPreview } from '../components/FinanceDocPreview';
 import { Button, Select } from '../components/Ui';
 import { dateNL, euro, total, lineGross } from '../lib/format';
 import { exportFinancePDF } from '../lib/pdf';
@@ -613,8 +614,9 @@ function QuoteDetailModal({
   const versions = data.quoteVersions.filter(version => version.quote_id === quote.id);
   const linkedInvoice = data.invoices.find(invoice => invoice.quote_id === quote.id) ?? null;
 
-  return <Modal title={`Offerte ${quote.number}`} onClose={onClose} className="quote-detail-modal">
-    <div className="quote-detail">
+  return <Modal title={`Offerte ${quote.number}`} onClose={onClose} className="quote-detail-modal has-preview">
+    <div className="quote-detail-layout">
+      <div className="quote-detail quote-detail-main">
       <section className="quote-detail-hero">
         <div>
           <span className="quote-detail-kicker">Offerteflow</span>
@@ -646,6 +648,10 @@ function QuoteDetailModal({
       </section>
 
       <section className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Tijdlijn</span><strong>Alle workflow-events</strong></div></div><QuoteTimeline events={events} emptyText="Nog geen workflow-events." /></section>
+      </div>
+      <div className="finance-preview-pane">
+        <FinanceDocPreview doc={quote} kind="quote" client={client} company={data.companySettings} title="Offerte-voorbeeld" />
+      </div>
     </div>
   </Modal>;
 }
@@ -711,8 +717,9 @@ function InvoiceDetailModal({
     && ((payment.amount_cents || 0) - (payment.amount_refunded_cents || 0)) > 0);
   const [showRefund, setShowRefund] = useState(false);
 
-  return <Modal title={`Factuur ${invoice.number}`} onClose={onClose} className="quote-detail-modal invoice-detail-modal">
-    <div className="quote-detail invoice-detail">
+  return <Modal title={`Factuur ${invoice.number}`} onClose={onClose} className="quote-detail-modal invoice-detail-modal has-preview">
+    <div className="quote-detail-layout">
+      <div className="quote-detail invoice-detail quote-detail-main">
       <section className="quote-detail-hero">
         <div>
           <span className="quote-detail-kicker">Facturatieflow</span>
@@ -770,6 +777,10 @@ function InvoiceDetailModal({
       </section>}
 
       <section className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Audit-timeline</span><strong>Alle factuur-events</strong></div></div><InvoiceTimeline events={events} emptyText="Nog geen factuur-events." /></section>
+      </div>
+      <div className="finance-preview-pane">
+        <FinanceDocPreview doc={invoice} kind="invoice" client={client} company={data.companySettings} title="Factuur-voorbeeld" />
+      </div>
     </div>
   </Modal>;
 }
