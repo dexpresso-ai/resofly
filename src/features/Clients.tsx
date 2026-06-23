@@ -1,14 +1,32 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Search, RotateCcw } from 'lucide-react';
+import { Search, RotateCcw, Upload } from 'lucide-react';
 import type { AppData, Client, ClientEmail, ClientEmailStatus, ClientEmailThread, ClientStatus, Contract, InternalDocument, Invoice, Note, Project, Quote } from '../types';
 import { dateNL, euro, total } from '../lib/format';
 import { Button, Input, Select } from '../components/Ui';
+import { CsvImportModal } from '../components/CsvImportModal';
+import type { ImportColumn } from '../lib/csvImport';
 import { RichTextEditor } from '../components/RichTextEditor';
-import { loadClientEmails, loadClientEmailThreads } from '../lib/repository';
+import { createClientWithServerCode, loadClientEmails, loadClientEmailThreads } from '../lib/repository';
 import { sendClientEmail } from '../services/mailService';
 import { supabase } from '../lib/supabase';
 import { ClientFolders } from './ClientFolders';
 import { ContractStatusBadge } from './Contracts';
+
+// Vaste kolommen voor de bulk CSV-import van klanten. Het klantnummer ontbreekt
+// bewust: dat wordt server-side atomair toegekend (createClientWithServerCode).
+const CLIENT_IMPORT_COLUMNS: ImportColumn[] = [
+  { key: 'name', header: 'Naam', required: true, example: 'Acme BV' },
+  { key: 'contact_name', header: 'Contactpersoon', example: 'Jan Jansen' },
+  { key: 'email', header: 'E-mail', kind: 'email', example: 'info@acme.nl' },
+  { key: 'phone', header: 'Telefoon', example: '010-1234567' },
+  {
+    key: 'status', header: 'Status', kind: 'enum', default: 'active', example: 'Actief',
+    enumValues: { actief: 'active', active: 'active', prospect: 'prospect', inactief: 'inactive', inactive: 'inactive' },
+  },
+  { key: 'value_eur', header: 'Waarde (EUR)', kind: 'number', default: 0, example: '2500' },
+  { key: 'tags', header: 'Tags', kind: 'tags', example: 'VIP, Retainer' },
+  { key: 'notes', header: 'Notities', example: 'Belangrijke klant' },
+];
 
 const invoiceStatusLabels: Record<string, string> = {
   draft: 'Concept',
@@ -52,14 +70,21 @@ const clientStatusLabels: Record<ClientStatus, string> = {
 
 export function Clients({
   data,
+  organizationId,
+  canWrite,
   onNew,
   onOpen,
+  onChanged,
 }: {
   data: AppData;
+  organizationId: string;
+  canWrite: boolean;
   onNew: () => void;
   onOpen: (c: Client) => void;
+  onChanged: () => void;
 }) {
   const [viewMode, setViewMode] = useState<ClientViewMode>(readClientViewMode);
+  const [importing, setImporting] = useState(false);
 
   const rows = useMemo<ClientOverviewRow[]>(() => data.clients.map(client => {
     const invoices = getClientInvoices(data, client.id);
@@ -98,9 +123,20 @@ export function Clients({
           <button type="button" className={viewMode === 'cards' ? 'active' : ''} onClick={() => changeViewMode('cards')} aria-pressed={viewMode === 'cards'}>Kaarten</button>
           <button type="button" className={viewMode === 'table' ? 'active' : ''} onClick={() => changeViewMode('table')} aria-pressed={viewMode === 'table'}>Tabel</button>
         </div>
+        <Button onClick={() => setImporting(true)} disabled={!canWrite}><Upload size={15} /> Importeren</Button>
         <Button variant="primary" onClick={onNew}>+ Nieuwe klant</Button>
       </div>
     </div>
+
+    {importing && <CsvImportModal
+      title="Klanten importeren"
+      entityLabel="klanten"
+      columns={CLIENT_IMPORT_COLUMNS}
+      templateFilename="klanten-import-voorbeeld.csv"
+      importRow={(record) => createClientWithServerCode(organizationId, { ...record, color: '#FFD966' }).then(() => undefined)}
+      onClose={() => setImporting(false)}
+      onDone={onChanged}
+    />}
 
     {rows.length === 0 && <div className="client-empty-state">
       <strong>Nog geen klanten</strong>

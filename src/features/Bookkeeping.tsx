@@ -1,14 +1,37 @@
 import { useMemo, useState } from 'react';
-import { BookOpen, FileDown, Layers, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { BookOpen, FileDown, Layers, Plus, RotateCcw, Trash2, Upload } from 'lucide-react';
 import type {
   AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PurchaseInvoice, PurchaseInvoiceLine, Supplier, VatCode,
 } from '../types';
 import { Modal } from '../components/Modal';
+import { CsvImportModal } from '../components/CsvImportModal';
+import type { ImportColumn } from '../lib/csvImport';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { dateNL, euro, uid } from '../lib/format';
 import {
   bookPurchaseInvoice, deleteRow, ensureDefaultLedgerAccounts, insertRow, reverseJournalEntry, updateRow,
 } from '../lib/repository';
+
+// Vaste kolommen voor de bulk CSV-import van leveranciers (crediteuren).
+const SUPPLIER_IMPORT_COLUMNS: ImportColumn[] = [
+  { key: 'name', header: 'Naam', required: true, example: 'Groothandel BV' },
+  { key: 'supplier_code', header: 'Leverancierscode', example: 'L-001' },
+  { key: 'contact_name', header: 'Contactpersoon', example: 'Piet Pietersen' },
+  { key: 'email', header: 'E-mail', kind: 'email', example: 'inkoop@groothandel.nl' },
+  { key: 'phone', header: 'Telefoon', example: '020-7654321' },
+  { key: 'address_line1', header: 'Adres', example: 'Industrieweg 1' },
+  { key: 'postal_code', header: 'Postcode', example: '1234 AB' },
+  { key: 'city', header: 'Plaats', example: 'Amsterdam' },
+  { key: 'country', header: 'Land', default: 'Nederland', example: 'Nederland' },
+  { key: 'vat_number', header: 'BTW-nummer', example: 'NL001234567B01' },
+  { key: 'kvk_number', header: 'KvK-nummer', example: '12345678' },
+  { key: 'iban', header: 'IBAN', example: 'NL00BANK0123456789' },
+  { key: 'notes', header: 'Notities', example: '' },
+  {
+    key: 'status', header: 'Status', kind: 'enum', default: 'active', example: 'Actief',
+    enumValues: { actief: 'active', active: 'active', inactief: 'inactive', inactive: 'inactive' },
+  },
+];
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 
@@ -55,6 +78,7 @@ const emptySupplier = () => ({
 
 export function SuppliersPage({ data, organizationId, canWrite, onChanged }: PageProps) {
   const [edit, setEdit] = useState<Supplier | 'new' | null>(null);
+  const [importing, setImporting] = useState(false);
   const expenseAccounts = data.ledgerAccounts.filter(a => a.type === 'expense' || a.type === 'asset');
 
   return (
@@ -62,8 +86,20 @@ export function SuppliersPage({ data, organizationId, canWrite, onChanged }: Pag
       {data.ledgerAccounts.length === 0 && <SetupBanner organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
       <div className="bk-head">
         <div><h2>Leveranciers</h2><p>Crediteuren voor je inkoopfacturen.</p></div>
-        <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Nieuwe leverancier</Button>
+        <div className="bk-head-actions">
+          <Button disabled={!canWrite} onClick={() => setImporting(true)}><Upload size={15} /> Importeren</Button>
+          <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Nieuwe leverancier</Button>
+        </div>
       </div>
+      {importing && <CsvImportModal
+        title="Leveranciers importeren"
+        entityLabel="leveranciers"
+        columns={SUPPLIER_IMPORT_COLUMNS}
+        templateFilename="leveranciers-import-voorbeeld.csv"
+        importRow={(record) => insertRow<Supplier>('suppliers', organizationId, record).then(() => undefined)}
+        onClose={() => setImporting(false)}
+        onDone={onChanged}
+      />}
       {data.suppliers.length === 0
         ? <div className="empty"><div className="e-big">Nog geen leveranciers</div></div>
         : <div className="bk-table-wrap"><table className="bk-table">

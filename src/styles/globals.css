@@ -2182,3 +2182,34 @@ body::before{
 .gs-hl{background:rgba(255,189,89,.3);color:var(--text);border-radius:3px;padding:0 1px}
 @media(max-width:900px){.gs-backdrop{left:62px}.gs-panel{left:62px;max-width:calc(100vw - 62px)}}
 @media(max-width:760px){.global-search{display:none}}
+
+/* ── Bulk CSV-import (klanten & leveranciers) ────────────────────────── */
+.bk-head-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.modal.csv-import-modal{width:min(880px,96vw)}
+.csv-import-intro{display:flex;flex-direction:column;gap:14px}
+.csv-import-intro p{color:var(--muted2);line-height:1.55;margin:0}
+.csv-import-template{display:flex;gap:12px;align-items:flex-start;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--bg3)}
+.csv-import-template svg{color:var(--accent);flex-shrink:0;margin-top:2px}
+.csv-import-template strong{display:block;font-size:13px;margin-bottom:4px}
+.csv-import-template span{display:block;font-size:12px;color:var(--muted2);line-height:1.5}
+.csv-import-template small{display:block;margin-top:6px;font-size:11px;color:var(--muted)}
+.csv-import-actions{display:flex;gap:10px;flex-wrap:wrap}
+.csv-import-missing ul{margin:8px 0;padding-left:20px;color:var(--accent-r)}
+.csv-import-missing p{color:var(--muted2);line-height:1.5}
+.csv-import-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.csv-import-summary>span:first-child{font-size:13px}
+.csv-import-counts{display:flex;gap:10px;flex-wrap:wrap}
+.csv-import-counts em{font-style:normal;font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px}
+.csv-import-counts em.ok{background:rgba(52,211,153,.15);color:var(--accent-g)}
+.csv-import-counts em.bad{background:rgba(240,107,107,.15);color:var(--accent-r)}
+.csv-import-table-wrap{overflow:auto;border:1px solid var(--border);border-radius:10px;max-height:46vh}
+.csv-import-table{width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap}
+.csv-import-table th{position:sticky;top:0;background:var(--bg3);text-align:left;padding:8px 10px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border)}
+.csv-import-table td{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.05);color:var(--muted2)}
+.csv-import-table tr.has-error td{background:rgba(240,107,107,.06)}
+.csv-cell-ok{color:var(--accent-g);font-weight:700}
+.csv-cell-bad{color:var(--accent-r);white-space:normal;font-size:11px}
+.csv-import-more{margin-top:10px;font-size:11px;color:var(--muted)}
+.csv-import-progress p{margin-bottom:10px;color:var(--muted2)}
+.csv-import-failed{margin-top:12px}
+.csv-import-failed ul{margin:8px 0 0;padding-left:20px;color:var(--muted2);font-size:12px;line-height:1.6}
