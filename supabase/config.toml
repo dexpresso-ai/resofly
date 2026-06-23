@@ -36,3 +36,9 @@ verify_jwt = false
 # als invoice-workflow: elke actie verifieert requireUser() + requireOrganizationAccess().
 [functions.bank-sync]
 verify_jwt = false
+
+# gerrie-agent (Claude AI-assistent) streamt het antwoord via Server-Sent Events en
+# handelt daarom CORS-preflight + auth zelf af. Elke aanvraag verifieert
+# requireUser() + requireOrganizationAccess(); lees-tools draaien strikt org-scoped.
+[functions.gerrie-agent]
+verify_jwt = false

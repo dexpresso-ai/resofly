@@ -1,19 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { streamGerrieReply, type GerrieStatus } from '../lib/gerrie-api';
+import type { UUID } from '../types';
 
 /**
- * Gerrie — drijvende AI-chatassistent (rechtsonder).
+ * Gerrie — drijvende AI-chatassistent (rechtsonder), gekoppeld aan Claude.
  *
- * Dit is voorlopig alléén de look & feel: er is nog geen backend gekoppeld.
- * De bedoeling is dat Gerrie straks een Claude-model achter zich heeft dat
- * échte acties in de workspace uitvoert, bijvoorbeeld:
- *   - "Maak een nieuwe klant aan met deze gegevens…"
- *   - "Verstuur een offerte naar…"
- *   - "Verstuur de factuur naar…"
- *   - "Maak een factuur voor…"
- *
- * De koppeling hoort op één plek thuis: `requestGerrieReply()` hieronder.
- * Vervang de gesimuleerde reactie door een echte call naar de agent-backend
- * en de rest van de UI werkt ongewijzigd verder.
+ * De koppeling loopt via de `gerrie-agent` Edge Function (zie src/lib/gerrie-api.ts).
+ * Gerrie kan in deze versie MEELEZEN in de workspace (klanten, facturen, offertes,
+ * projecten, tickets, financiële cijfers). Echte acties (aanmaken/versturen) komen
+ * later en vragen dan altijd eerst een bevestiging van de gebruiker.
  */
 
 type ChatRole = 'user' | 'assistant';
@@ -23,37 +18,25 @@ let idSeq = 0;
 const nextId = () => `gerrie-${Date.now()}-${++idSeq}`;
 
 const INTRO_TEXT =
-  'Hoi! Ik ben Gerrie, je AI-assistent. Straks kan ik dingen voor je regelen — ' +
-  'een nieuwe klant aanmaken, een offerte of factuur versturen, of een factuur opstellen. ' +
+  'Hoi! Ik ben Gerrie, je AI-assistent. Ik kan meekijken in je workspace — ' +
+  'vraag me bijvoorbeeld naar openstaande facturen, een klant of je omzet. ' +
   'Waar kan ik je mee helpen?';
 
-const PREVIEW_REPLY =
-  'Goed bezig! 🚧 Ik kan nog niet écht in je workspace meewerken — mijn koppeling met ' +
-  'de backend wordt nog gebouwd. Binnenkort voer ik dit soort acties direct voor je uit.';
-
-/** Voorbeeld-opdrachten die de toekomstige mogelijkheden laten zien. */
+/** Voorbeeldvragen die de huidige (lees-)mogelijkheden laten zien. */
 const SUGGESTIONS = [
-  'Maak een nieuwe klant aan',
-  'Verstuur een offerte',
-  'Verstuur een factuur',
-  'Maak een nieuwe factuur',
+  'Welke facturen staan open?',
+  'Wat is mijn omzet dit jaar?',
+  'Zoek klant op naam',
+  'Welke offertes lopen er nog?',
 ];
 
-/**
- * 🔌 Backend-koppelpunt. Nu gesimuleerd; vervang door een echte aanroep naar de
- * Claude-agent die het bericht + de historie krijgt en een antwoord (of een
- * uitgevoerde actie) teruggeeft.
- */
-async function requestGerrieReply(_message: string, _history: ChatMessage[]): Promise<string> {
-  await new Promise((resolve) => setTimeout(resolve, 850));
-  return PREVIEW_REPLY;
-}
-
-export function GerrieChat() {
+export function GerrieChat({ organizationId }: { organizationId: UUID }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: nextId(), role: 'assistant', text: INTRO_TEXT }]);
   const [draft, setDraft] = useState('');
   const [thinking, setThinking] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<UUID | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -61,10 +44,16 @@ export function GerrieChat() {
   // Houd de gespreksweergave onderaan zodra er iets bijkomt.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, thinking, open]);
+  }, [messages, thinking, status, open]);
 
   // Focus de invoer wanneer het paneel opent.
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
+
+  // Wissel je van organisatie, dan begint Gerrie met een schone lei.
+  useEffect(() => {
+    setConversationId(null);
+    setMessages([{ id: nextId(), role: 'assistant', text: INTRO_TEXT }]);
+  }, [organizationId]);
 
   async function send(text: string) {
     const trimmed = text.trim();
@@ -73,12 +62,22 @@ export function GerrieChat() {
     if (inputRef.current) inputRef.current.style.height = 'auto';
     setMessages((prev) => [...prev, { id: nextId(), role: 'user', text: trimmed }]);
     setThinking(true);
+    setStatus(null);
     try {
-      const history = messages;
-      const reply = await requestGerrieReply(trimmed, history);
-      setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', text: reply }]);
+      const result = await streamGerrieReply({
+        organizationId,
+        conversationId,
+        message: trimmed,
+        onStatus: (s: GerrieStatus) => setStatus(s.label),
+      });
+      setConversationId(result.conversationId);
+      setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', text: result.text }]);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Er ging iets mis.';
+      setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', text: `⚠️ ${reason}` }]);
     } finally {
       setThinking(false);
+      setStatus(null);
     }
   }
 
@@ -120,7 +119,9 @@ export function GerrieChat() {
             {thinking && (
               <div className="gerrie-msg assistant">
                 <span className="gerrie-msg-avatar" aria-hidden="true"><RobotIcon /></span>
-                <div className="gerrie-typing" aria-label="Gerrie typt"><span /><span /><span /></div>
+                {status
+                  ? <div className="gerrie-bubble gerrie-bubble-status">{status}</div>
+                  : <div className="gerrie-typing" aria-label="Gerrie typt"><span /><span /><span /></div>}
               </div>
             )}
           </div>
@@ -147,7 +148,7 @@ export function GerrieChat() {
               <SendIcon />
             </button>
           </div>
-          <p className="gerrie-foot-note">Gerrie is in ontwikkeling — acties worden nog niet uitgevoerd.</p>
+          <p className="gerrie-foot-note">Gerrie kan meelezen in je workspace. Acties vraagt hij straks altijd eerst ter bevestiging.</p>
         </section>
       )}
 
