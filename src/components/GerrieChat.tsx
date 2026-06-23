@@ -37,6 +37,8 @@ export function GerrieChat({ organizationId }: { organizationId: UUID }) {
   const [thinking, setThinking] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<UUID | null>(null);
+  // Resterend AI-tegoed als fractie 0..1 (null = geen limiet ingesteld / nog onbekend).
+  const [budget, setBudget] = useState<number | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -52,6 +54,7 @@ export function GerrieChat({ organizationId }: { organizationId: UUID }) {
   // Wissel je van organisatie, dan begint Gerrie met een schone lei.
   useEffect(() => {
     setConversationId(null);
+    setBudget(null);
     setMessages([{ id: nextId(), role: 'assistant', text: INTRO_TEXT }]);
   }, [organizationId]);
 
@@ -71,6 +74,7 @@ export function GerrieChat({ organizationId }: { organizationId: UUID }) {
         onStatus: (s: GerrieStatus) => setStatus(s.label),
       });
       setConversationId(result.conversationId);
+      if (result.budget) setBudget(result.budget.remainingFraction);
       setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', text: result.text }]);
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'Er ging iets mis.';
@@ -148,6 +152,15 @@ export function GerrieChat({ organizationId }: { organizationId: UUID }) {
               <SendIcon />
             </button>
           </div>
+          {budget !== null && (
+            <div className="gerrie-budget" role="status" aria-label="Resterend AI-tegoed deze maand">
+              <span className="gerrie-budget-label">AI-tegoed</span>
+              <span className="gerrie-budget-track">
+                <span className="gerrie-budget-fill" data-low={budget <= 0.2 ? 'true' : 'false'} style={{ width: `${Math.round(budget * 100)}%` }} />
+              </span>
+              <span className="gerrie-budget-pct">{Math.round(budget * 100)}%</span>
+            </div>
+          )}
           <p className="gerrie-foot-note">Gerrie kan meelezen in je workspace. Acties vraagt hij straks altijd eerst ter bevestiging.</p>
         </section>
       )}

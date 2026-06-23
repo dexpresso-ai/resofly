@@ -14,7 +14,7 @@ const FUNCTIONS_BASE = `${import.meta.env.VITE_SUPABASE_URL as string}/functions
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
 export interface GerrieStatus { kind: 'thinking' | 'tool'; label: string }
-export interface GerrieResult { conversationId: UUID; messageId: UUID; text: string }
+export interface GerrieResult { conversationId: UUID; messageId: UUID; text: string; budget?: { remainingFraction: number } }
 
 export interface GerrieRequest {
   organizationId: UUID;

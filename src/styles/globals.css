@@ -1624,6 +1624,13 @@ body::before{
 .gerrie-bubble-status{color:var(--muted);font-style:italic;display:flex;align-items:center;gap:7px}
 .gerrie-bubble-status::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent);animation:gerrie-pulse 1s infinite ease-in-out}
 @keyframes gerrie-pulse{0%,100%{opacity:.35;transform:scale(.8)}50%{opacity:1;transform:scale(1.1)}}
+/* Resterend AI-tegoed (neutrale balk, geen eurobedrag) */
+.gerrie-budget{display:flex;align-items:center;gap:8px;padding:8px 14px 0}
+.gerrie-budget-label{font-size:11px;color:var(--muted);white-space:nowrap}
+.gerrie-budget-track{flex:1;height:5px;border-radius:3px;background:var(--bg3);border:1px solid var(--border);overflow:hidden}
+.gerrie-budget-fill{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .4s ease}
+.gerrie-budget-fill[data-low="true"]{background:#e0683c}
+.gerrie-budget-pct{font-size:11px;color:var(--muted);min-width:30px;text-align:right;font-variant-numeric:tabular-nums}
 
 /* Typing indicator */
 .gerrie-typing{display:flex;gap:4px;align-items:center;padding:13px 14px;background:var(--bg3);border:1px solid var(--border);border-radius:14px;border-bottom-left-radius:4px;width:fit-content}

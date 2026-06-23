@@ -44,6 +44,11 @@ const PRICE_OUTPUT = 15.0;
 const PRICE_CACHE_READ = 0.3; // ~0,1x input
 const PRICE_CACHE_WRITE = 3.75; // ~1,25x input
 
+// Maandelijkse kostenlimiet per gebruiker (één vaste waarde). 0 of leeg = onbeperkt.
+// Verbruik wordt in USD gelogd; we rekenen om naar euro's voor de vergelijking.
+const MONTHLY_USER_COST_EUR = Number(Deno.env.get('GERRIE_MONTHLY_USER_COST_EUR') || '0');
+const USD_TO_EUR = Number(Deno.env.get('GERRIE_USD_TO_EUR') || '0.92');
+
 const GERRIE_ALLOWED_ORIGINS = parseAllowedOrigins([
   Deno.env.get('GERRIE_ALLOWED_ORIGINS'), Deno.env.get('APP_PUBLIC_URL'),
   Deno.env.get('INVOICE_ALLOWED_ORIGINS'), Deno.env.get('QUOTE_ALLOWED_ORIGINS'), Deno.env.get('BANK_ALLOWED_ORIGINS'),
@@ -83,12 +88,25 @@ serve(async (req) => {
 
       await insertMessage(convId, organizationId, user.id, 'user', message, []);
 
+      // Kostenlimiet per gebruiker: blokkeer vóór de (betaalde) Claude-call.
+      const budget = await checkUserBudget(user.id);
+      if (!budget.allowed) {
+        const text = 'Je hebt je AI-tegoed voor deze maand opgebruikt. Begin volgende maand kun je weer verder, of vraag een beheerder om meer ruimte.';
+        const blockedId = await insertMessage(convId, organizationId, user.id, 'assistant', text, []);
+        await emit('done', { conversationId: convId, messageId: blockedId, text, budget: { remainingFraction: 0 } });
+        return;
+      }
+
       const outcome = await runAgent(ctx, history, message, emit);
 
       const assistantId = await insertMessage(convId, organizationId, user.id, 'assistant', outcome.text, outcome.toolCalls);
-      await recordUsage(organizationId, convId, assistantId, outcome.usage);
+      await recordUsage(organizationId, convId, assistantId, user.id, outcome.usage);
 
-      await emit('done', { conversationId: convId, messageId: assistantId, text: outcome.text });
+      // Alleen een fractie (0..1) naar de browser — nooit het eurobedrag zelf.
+      const remaining = remainingFraction(budget, costUsd(outcome.usage) * USD_TO_EUR);
+      const donePayload: Record<string, unknown> = { conversationId: convId, messageId: assistantId, text: outcome.text };
+      if (remaining !== null) donePayload.budget = { remainingFraction: remaining };
+      await emit('done', donePayload);
     });
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
@@ -577,12 +595,38 @@ async function insertMessage(conversationId: string, organizationId: string, use
   return data.id as string;
 }
 
-async function recordUsage(organizationId: string, conversationId: string, messageId: string, usage: Usage): Promise<void> {
+async function recordUsage(organizationId: string, conversationId: string, messageId: string, userId: string, usage: Usage): Promise<void> {
   await supabaseAdmin.from('ai_usage').insert({
-    organization_id: organizationId, conversation_id: conversationId, message_id: messageId, model: ANTHROPIC_MODEL,
+    organization_id: organizationId, conversation_id: conversationId, message_id: messageId, user_id: userId, model: ANTHROPIC_MODEL,
     input_tokens: usage.input, output_tokens: usage.output, cache_read_tokens: usage.cacheRead, cache_creation_tokens: usage.cacheWrite,
     cost_usd: costUsd(usage),
   });
+}
+
+interface BudgetCheck { allowed: boolean; usedEur: number; limitEur: number }
+
+/**
+ * Telt het AI-verbruik van de gebruiker in de huidige kalendermaand (over al zijn
+ * organisaties) en vergelijkt dat met de vaste maandlimiet. Geen limiet ingesteld
+ * (0/leeg) => altijd toegestaan. Bij een leesfout: fail-open (toestaan) i.p.v. de
+ * gebruiker onterecht blokkeren.
+ */
+async function checkUserBudget(userId: string): Promise<BudgetCheck> {
+  if (!(MONTHLY_USER_COST_EUR > 0)) return { allowed: true, usedEur: 0, limitEur: 0 };
+  const monthStart = `${todayIso().slice(0, 7)}-01T00:00:00Z`;
+  const { data, error } = await supabaseAdmin.from('ai_usage').select('cost_usd').eq('user_id', userId).gte('created_at', monthStart);
+  if (error) { console.warn('gerrie-agent budgetcheck mislukt, sta toe:', error.message); return { allowed: true, usedEur: 0, limitEur: MONTHLY_USER_COST_EUR }; }
+  const usd = (data ?? []).reduce((sum: number, r: Record<string, unknown>) => sum + Number(r.cost_usd || 0), 0);
+  const usedEur = usd * USD_TO_EUR;
+  return { allowed: usedEur < MONTHLY_USER_COST_EUR, usedEur, limitEur: MONTHLY_USER_COST_EUR };
+}
+
+/** Resterend tegoed als fractie 0..1, of null als er geen limiet is ingesteld. */
+function remainingFraction(budget: BudgetCheck, additionalEur: number): number | null {
+  if (!(budget.limitEur > 0)) return null;
+  const used = budget.usedEur + Math.max(0, additionalEur);
+  const fraction = (budget.limitEur - used) / budget.limitEur;
+  return Math.max(0, Math.min(1, Math.round(fraction * 1000) / 1000));
 }
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
