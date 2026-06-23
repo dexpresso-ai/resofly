@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { CheckSquare, ChevronRight, FileText, FolderOpen, Receipt, Search, SearchX, StickyNote, Ticket, Truck, Users, X, type LucideIcon } from 'lucide-react';
 import type { AppData, Client, InternalDocument, Invoice, Note, Project, Quote, Supplier, Task, Ticket as TicketType } from '../types';
 import { euro, total } from '../lib/format';
@@ -219,7 +220,7 @@ export function GlobalSearch({ data, onNavigate }: { data: AppData; onNavigate: 
       {query && <button type="button" className="gs-clear" onClick={close} aria-label="Zoeken sluiten"><X size={14} /></button>}
     </div>
 
-    {showPanel && <>
+    {showPanel && createPortal(<>
       <div className="gs-backdrop" onClick={close} />
       <div className="gs-panel" role="dialog" aria-label="Zoekresultaten">
         <div className="gs-panel-head">
@@ -279,6 +280,6 @@ export function GlobalSearch({ data, onNavigate }: { data: AppData; onNavigate: 
                 </div>}
         </div>
       </div>
-    </>}
+    </>, document.body)}
   </div>;
 }
