@@ -192,6 +192,9 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, onChanged
             {txn.counterparty_iban ? ` · ${txn.counterparty_iban}` : ''}
             {txn.description && txn.counterparty_name ? ` · ${txn.description}` : ''}
           </small>
+          {isOpen && txn.match_confidence === 'tax_authority' && (
+            <small className="bank-tx-hint">Herkend als Belastingdienst — voorgesteld: omzetbelasting (1530). De aangifte met dit saldo wordt bij boeken automatisch op “Betaald” gezet.</small>
+          )}
         </div>
         <div className={`bank-tx-amount ${incoming ? 'bk-pos' : 'bk-neg'}`}>{incoming ? '+ ' : '− '}{euroCents(abs)}</div>
       </div>

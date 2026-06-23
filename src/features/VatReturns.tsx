@@ -164,6 +164,12 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
               ? <p className="bk-muted">Doorgeboekt op {dateNL(entry.date)} · boekstuk {entry.entry_number}{existing!.finalized_at ? ` · ${dateNL(existing!.finalized_at)}` : ''}.</p>
               : null;
           })()}
+          {finalized && existing!.status === 'paid' && existing!.paid_bank_transaction_id && (() => {
+            const txn = data.bankTransactions.find(t => t.id === existing!.paid_bank_transaction_id);
+            return txn
+              ? <p className="bk-muted">{saldo >= 0 ? 'Betaald' : 'Teruggave ontvangen'} via de bank op {dateNL(txn.booking_date)} — automatisch afgeletterd tegen “Te betalen omzetbelasting”.</p>
+              : null;
+          })()}
           {finalized && <p className="bk-muted">Deze periode is vergrendeld. Latere boekingen met een datum in deze periode worden geweigerd en vallen in de eerstvolgende open aangifte.</p>}
         </>}
     </div>

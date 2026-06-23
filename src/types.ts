@@ -953,6 +953,8 @@ export interface VatReturn {
   rubrieken: VatReturnRubrieken;
   journal_entry_id: UUID | null;
   supplements_return_id: UUID | null;
+  /** De banktransactie die de betaling/teruggave afletterde en de aangifte op 'paid' zette. */
+  paid_bank_transaction_id: UUID | null;
   notes: string | null;
   finalized_at: string | null;
   created_at: string;
