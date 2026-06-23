@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Sidebar } from './components/Sidebar';
+import type { SearchResult } from './components/GlobalSearch';
 import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
 import { RichTextEditor, sanitizeRichText } from './components/RichTextEditor';
 import { Modal } from './components/Modal';
@@ -861,10 +862,57 @@ function App() {
     }
   }
 
+  // Globale zoekfunctie: stuurt een resultaat door naar de juiste pagina/detail.
+  // Voor entiteiten met een bewerkmodal openen we die meteen; klant/project hebben
+  // een eigen detailpagina.
+  function handleSearchNavigate(result: SearchResult) {
+    setProjectId(null);
+    setClientId(null);
+    setStatsReportId(null);
+    switch (result.kind) {
+      case 'client':
+        setClientId(result.item.id);
+        setPage('client');
+        break;
+      case 'project':
+        setProjectId(result.item.id);
+        setPage(result.item.archived ? 'archive' : 'project');
+        break;
+      case 'task':
+        setProjectId(result.item.project_id);
+        setPage('project');
+        setEdit({ kind: 'task', item: result.item, projectId: result.item.project_id });
+        break;
+      case 'ticket':
+        setPage('tickets');
+        setEdit({ kind: 'ticket', item: result.item });
+        break;
+      case 'note':
+        setPage('notes');
+        setEdit({ kind: 'note', item: result.item });
+        break;
+      case 'document':
+        setPage('documents');
+        setEdit({ kind: 'document', item: result.item });
+        break;
+      case 'quote':
+        setPage('quotes');
+        setEdit({ kind: 'quote', item: result.item });
+        break;
+      case 'invoice':
+        setPage('invoices');
+        setEdit({ kind: 'invoice', item: result.item });
+        break;
+      case 'supplier':
+        setPage('suppliers');
+        break;
+    }
+  }
+
   const title = page === 'project' ? project?.name ?? 'Project' : page === 'client' ? client?.name ?? 'Klant' : ({dashboard:'Dashboard',weekplanner:'Weekplanner',calendar:'Kalender','calendar-settings':'Agenda-instellingen',stats:'Statistieken',content:'Inhoud',notes:'Notities',documents:'Documenten',clients:'Klanten',projects:'Projecten','project-planning':'Projectplanning',tickets:'Tickets',quotes:'Offertes',invoices:'Facturen',suppliers:'Leveranciers','purchase-invoices':'Inkoopfacturen',ledger:'Grootboek',bank:'Bank',assets:'Activa',pnl:'Winst & verlies','vat-returns':'Omzetbelasting',archive:'Archief',settings:'Instellingen',project:'Project',client:'Klant'} as Record<Page,string>)[page];
 
   return <div className="app">
-    <Sidebar page={page} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }}/>
+    <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} onSearchNavigate={handleSearchNavigate}/>
     <main className="main">{page !== 'calendar' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button><Button onClick={() => supabaseAuth.signOut()}>Uitloggen</Button></div></header>}
       <section className="content">{error && <div className="error">{error}</div>}{renderPage()}</section>
     </main>{edit && <EditModal edit={edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} />}

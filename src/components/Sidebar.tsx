@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Archive, BarChart3, BookOpen, Boxes, Calendar, ChevronDown, ChevronRight, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, Percent, Receipt, Settings, StickyNote, Ticket, TrendingUp, Truck, Users } from 'lucide-react';
-import type { Organization, OrganizationRole } from '../types';
+import type { AppData, Organization, OrganizationRole } from '../types';
+import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { Select } from './Ui';
 
 type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'archive'|'settings'|'project';
@@ -25,20 +26,24 @@ const contentPages: Page[] = ['content', 'notes', 'documents'];
 
 export function Sidebar({
   page,
+  data,
   organizations,
   activeOrganizationId,
   activeRole,
   onOrganization,
   onNewOrganization,
   onPage,
+  onSearchNavigate,
 }: {
   page: Page;
+  data: AppData;
   organizations: Organization[];
   activeOrganizationId: string | null;
   activeRole: OrganizationRole | null;
   onOrganization: (id: string) => void;
   onNewOrganization: () => void;
   onPage: (p: Page) => void;
+  onSearchNavigate: (result: SearchResult) => void;
 }) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
   const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
@@ -88,6 +93,7 @@ export function Sidebar({
       </div>
     </div>
     <nav className="sidebar-nav">
+      <GlobalSearch data={data} onNavigate={onSearchNavigate} />
       <div className="nav-section"><span>Menu</span></div>
       {items.map(([key, Icon, label]) => {
         const calendarHash = window.location.hash;
