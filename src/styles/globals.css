@@ -326,6 +326,46 @@
 .activity-list{display:flex;flex-direction:column;gap:8px}.activity-row{display:flex;justify-content:space-between;gap:10px;background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:9px 10px}.activity-row div{display:flex;flex-direction:column;gap:3px;min-width:0}.activity-row strong{font-size:12px;color:var(--text)}.activity-row span{font-size:11px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.activity-row time{font-size:10px;color:var(--muted);white-space:nowrap}.compact-activity .activity-row{padding:8px}.role-row{display:grid;grid-template-columns:minmax(0,1fr) 140px auto;align-items:center}.role-row select{width:100%}
 @media(max-width:1100px){.dashboard-layout{grid-template-columns:1fr}.dash-side{position:static}.workspace-hero{flex-direction:column}.workspace-meta-card{min-width:0}.role-row{grid-template-columns:1fr}.role-row select,.role-row button{width:100%}}
 
+/* ── Dashboard: actiegerichte statcards + aandachtspaneel + deze week ── */
+.dash-stats.dash-stats-rich{grid-template-columns:repeat(auto-fit,minmax(168px,1fr))}
+.stat-card-clickable{appearance:none;font:inherit;color:inherit;text-align:left;width:100%;cursor:pointer;transition:border-color .15s,transform .15s,box-shadow .15s}
+.stat-card-clickable:hover{border-color:var(--border2);transform:translateY(-2px);box-shadow:0 10px 30px rgba(0,0,0,.4)}
+.stat-card-danger{border-color:rgba(255,123,123,.32)}
+.stat-card-danger .sc-val{color:var(--accent-r)}
+.stat-card-accent .sc-val{color:var(--accent)}
+.sc-sub{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11px;color:var(--muted2)}
+.sc-trend{display:inline-flex;align-items:center;gap:2px;font-weight:800;padding:1px 6px;border-radius:999px}
+.sc-trend.up{color:var(--accent-g);background:rgba(110,231,168,.12)}
+.sc-trend.down{color:var(--accent-r);background:rgba(255,123,123,.12)}
+.attention-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:16px;display:flex;flex-direction:column;gap:12px}
+.attention-card>header{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.attention-card h2{font-size:15px;font-weight:900}
+.attention-card>header p{font-size:11px;color:var(--muted)}
+.attention-list{display:flex;flex-direction:column;gap:8px}
+.attention-row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;appearance:none;font:inherit;color:inherit;cursor:pointer;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:11px 12px;transition:border-color .15s,background .15s,transform .15s}
+.attention-row:hover{border-color:var(--border2);background:var(--bg4);transform:translateX(2px)}
+.attention-icon{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:var(--bg4);color:var(--muted2);flex-shrink:0}
+.attention-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.attention-text strong{font-size:13px;color:var(--text)}
+.attention-text span{font-size:11px;color:var(--muted2)}
+.attention-count{font-size:13px;font-weight:900;color:var(--text);background:var(--bg4);border-radius:999px;min-width:26px;height:24px;display:inline-flex;align-items:center;justify-content:center;padding:0 8px}
+.attention-chevron{color:var(--muted);flex-shrink:0}
+.attention-danger .attention-icon,.attention-danger .attention-count{color:var(--accent-r);background:rgba(255,123,123,.12)}
+.attention-empty{display:flex;align-items:center;gap:12px;padding:14px;border-radius:10px;background:rgba(110,231,168,.07);border:1px solid rgba(110,231,168,.22);color:var(--muted2);font-size:12px}
+.attention-empty strong{color:var(--text);font-size:13px;display:block;margin-bottom:2px}
+.attention-empty .attention-icon{color:var(--accent-g);background:rgba(110,231,168,.14)}
+.week-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px;display:flex;flex-direction:column;gap:10px}
+.week-card h3{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted2)}
+.week-list{display:flex;flex-direction:column;gap:7px}
+.week-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;appearance:none;font:inherit;color:inherit;cursor:pointer;background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:8px 10px;transition:border-color .15s,background .15s}
+.week-row:hover{border-color:var(--border2);background:var(--bg4)}
+.week-row-main{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.week-row-main strong{font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.week-row-main span{font-size:10px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.week-date{font-size:10px;color:var(--muted);white-space:nowrap}
+.week-row.is-overdue .week-date{color:var(--accent-r);font-weight:800}
+.week-empty{font-size:12px;color:var(--muted);line-height:1.5}
+
 /* Sprint 2 billing */
 .billing-card{gap:12px}.billing-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.billing-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.billing-summary>div{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:11px 12px;display:flex;flex-direction:column;gap:4px}.billing-summary span{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}.billing-summary strong{font-size:15px;color:var(--text)}.billing-summary small{font-size:10px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.billing-control-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:11px 12px}.billing-control-row strong{font-size:12px;color:var(--text)}.billing-control-row.mock-row{border-color:rgba(52,211,153,.25);background:rgba(52,211,153,.06)}.billing-control-row .form-select{min-width:170px}
 @media(max-width:1000px){.billing-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.billing-control-row{grid-template-columns:1fr}.billing-control-row .form-select,.billing-control-row button{width:100%}}
