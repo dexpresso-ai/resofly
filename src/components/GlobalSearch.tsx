@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CheckSquare, FileText, FolderOpen, Receipt, Search, StickyNote, Ticket, Truck, Users, X, type LucideIcon } from 'lucide-react';
+import { CheckSquare, ChevronRight, FileText, FolderOpen, Receipt, Search, SearchX, StickyNote, Ticket, Truck, Users, X, type LucideIcon } from 'lucide-react';
 import type { AppData, Client, InternalDocument, Invoice, Note, Project, Quote, Supplier, Task, Ticket as TicketType } from '../types';
 import { euro, total } from '../lib/format';
 
@@ -16,22 +16,22 @@ export type SearchResult =
   | { kind: 'invoice'; id: string; title: string; subtitle: string; item: Invoice }
   | { kind: 'supplier'; id: string; title: string; subtitle: string; item: Supplier };
 
-const kindMeta: Record<SearchResultKind, { label: string; icon: LucideIcon }> = {
-  client: { label: 'Klanten', icon: Users },
-  project: { label: 'Projecten', icon: FolderOpen },
-  task: { label: 'Taken', icon: CheckSquare },
-  ticket: { label: 'Tickets', icon: Ticket },
-  note: { label: 'Notities', icon: StickyNote },
-  document: { label: 'Documenten', icon: FileText },
-  quote: { label: 'Offertes', icon: FileText },
-  invoice: { label: 'Facturen', icon: Receipt },
-  supplier: { label: 'Leveranciers', icon: Truck },
+const kindMeta: Record<SearchResultKind, { label: string; badge: string; icon: LucideIcon }> = {
+  client: { label: 'Klanten', badge: 'Klant', icon: Users },
+  project: { label: 'Projecten', badge: 'Project', icon: FolderOpen },
+  task: { label: 'Taken', badge: 'Taak', icon: CheckSquare },
+  ticket: { label: 'Tickets', badge: 'Ticket', icon: Ticket },
+  note: { label: 'Notities', badge: 'Notitie', icon: StickyNote },
+  document: { label: 'Documenten', badge: 'Document', icon: FileText },
+  quote: { label: 'Offertes', badge: 'Offerte', icon: FileText },
+  invoice: { label: 'Facturen', badge: 'Factuur', icon: Receipt },
+  supplier: { label: 'Leveranciers', badge: 'Leverancier', icon: Truck },
 };
 
-// Volgorde waarin de groepen in het paneel verschijnen.
+// Volgorde waarin de groepen/filters in het paneel verschijnen.
 const kindOrder: SearchResultKind[] = ['client', 'project', 'task', 'ticket', 'note', 'document', 'quote', 'invoice', 'supplier'];
 
-const PER_GROUP_LIMIT = 6;
+type Filter = 'all' | SearchResultKind;
 
 /** Verwijdert simpele HTML-tags uit rich-text-velden zodat de zoek-preview leesbaar blijft. */
 function plain(text: string | null | undefined): string {
@@ -43,7 +43,7 @@ function matches(query: string, ...fields: (string | null | undefined)[]): boole
   return fields.some(field => field != null && field.toLowerCase().includes(query));
 }
 
-/** Markeert het overeenkomende deel van de titel. */
+/** Markeert het overeenkomende deel van de tekst. */
 function Highlight({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>;
   const index = text.toLowerCase().indexOf(query);
@@ -58,8 +58,10 @@ function Highlight({ text, query }: { text: string; query: string }) {
 export function GlobalSearch({ data, onNavigate }: { data: AppData; onNavigate: (result: SearchResult) => void }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState<Filter>('all');
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const clientById = useMemo(() => new Map(data.clients.map(c => [c.id, c])), [data.clients]);
   const projectById = useMemo(() => new Map(data.projects.map(p => [p.id, p])), [data.projects]);
@@ -126,20 +128,37 @@ export function GlobalSearch({ data, onNavigate }: { data: AppData; onNavigate: 
     return out;
   }, [term, data, clientById, projectById]);
 
-  // Per type beperken voor een overzichtelijk paneel, maar het totaal per groep onthouden.
-  const groups = useMemo(() => {
-    return kindOrder
-      .map(kind => {
-        const all = results.filter(r => r.kind === kind);
-        return { kind, total: all.length, items: all.slice(0, PER_GROUP_LIMIT) };
-      })
-      .filter(group => group.total > 0);
+  const countByKind = useMemo(() => {
+    const counts = {} as Record<SearchResultKind, number>;
+    for (const kind of kindOrder) counts[kind] = 0;
+    for (const r of results) counts[r.kind] += 1;
+    return counts;
   }, [results]);
 
-  // Platte lijst in weergavevolgorde voor toetsenbordnavigatie.
-  const flat = useMemo(() => groups.flatMap(group => group.items), [groups]);
+  // Filters waarvoor daadwerkelijk hits bestaan, in vaste volgorde.
+  const availableFilters = useMemo(() => kindOrder.filter(kind => countByKind[kind] > 0), [countByKind]);
 
-  useEffect(() => { setActiveIndex(0); }, [term]);
+  // Zichtbare resultaten respecteren het actieve filter; bij "alles" tonen we alles.
+  const visible = useMemo(
+    () => (filter === 'all' ? results : results.filter(r => r.kind === filter)),
+    [results, filter],
+  );
+
+  // Bij "alles" groeperen we per type; bij een gekozen filter tonen we één platte lijst.
+  const groups = useMemo(() => {
+    if (filter !== 'all') return [{ kind: filter as SearchResultKind, items: visible }];
+    return kindOrder
+      .map(kind => ({ kind, items: results.filter(r => r.kind === kind) }))
+      .filter(group => group.items.length > 0);
+  }, [filter, results, visible]);
+
+  // Reset de selectie/filter als de zoekterm verandert.
+  useEffect(() => { setActiveIndex(0); }, [term, filter]);
+
+  // Valt het actieve filter weg (geen hits meer voor dat type), terug naar "alles".
+  useEffect(() => {
+    if (filter !== 'all' && countByKind[filter] === 0) setFilter('all');
+  }, [filter, countByKind]);
 
   // Ctrl/Cmd+K focust het zoekveld vanuit de hele app.
   useEffect(() => {
@@ -154,9 +173,15 @@ export function GlobalSearch({ data, onNavigate }: { data: AppData; onNavigate: 
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Houd het actieve item in beeld bij toetsenbordnavigatie.
+  useEffect(() => {
+    listRef.current?.querySelector('.gs-result.active')?.scrollIntoView({ block: 'nearest' });
+  }, [activeIndex]);
+
   function close() {
     setOpen(false);
     setQuery('');
+    setFilter('all');
     inputRef.current?.blur();
   }
 
@@ -167,13 +192,15 @@ export function GlobalSearch({ data, onNavigate }: { data: AppData; onNavigate: 
 
   function onInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === 'Escape') { close(); return; }
-    if (flat.length === 0) return;
-    if (event.key === 'ArrowDown') { event.preventDefault(); setActiveIndex(i => (i + 1) % flat.length); }
-    else if (event.key === 'ArrowUp') { event.preventDefault(); setActiveIndex(i => (i - 1 + flat.length) % flat.length); }
-    else if (event.key === 'Enter') { event.preventDefault(); const pick = flat[activeIndex] ?? flat[0]; if (pick) choose(pick); }
+    if (visible.length === 0) return;
+    if (event.key === 'ArrowDown') { event.preventDefault(); setActiveIndex(i => (i + 1) % visible.length); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); setActiveIndex(i => (i - 1 + visible.length) % visible.length); }
+    else if (event.key === 'Enter') { event.preventDefault(); const pick = visible[activeIndex] ?? visible[0]; if (pick) choose(pick); }
   }
 
-  const showPanel = open && term.length >= 2;
+  const trimmed = query.trim();
+  const showPanel = open && trimmed.length >= 1;
+  const tooShort = trimmed.length > 0 && trimmed.length < 2;
 
   return <div className="global-search">
     <div className="gs-field">
@@ -194,40 +221,63 @@ export function GlobalSearch({ data, onNavigate }: { data: AppData; onNavigate: 
 
     {showPanel && <>
       <div className="gs-backdrop" onClick={close} />
-      <div className="gs-panel" role="listbox" aria-label="Zoekresultaten">
+      <div className="gs-panel" role="dialog" aria-label="Zoekresultaten">
         <div className="gs-panel-head">
-          <span>Resultaten voor “{query.trim()}”</span>
-          <span className="gs-count">{results.length}</span>
+          <div className="gs-panel-titles">
+            <div className="gs-panel-title">Zoekresultaten</div>
+            <div className="gs-panel-sub">
+              {tooShort
+                ? 'Typ minimaal 2 tekens…'
+                : `${results.length} ${results.length === 1 ? 'resultaat' : 'resultaten'} voor “${trimmed}”`}
+            </div>
+          </div>
+          <button type="button" className="gs-panel-close" onClick={close} aria-label="Sluiten"><X size={18} /></button>
         </div>
-        {flat.length === 0
-          ? <div className="gs-empty">Geen resultaten gevonden.</div>
-          : <div className="gs-groups">
-              {groups.map(group => {
-                const Meta = kindMeta[group.kind];
-                return <div className="gs-group" key={group.kind}>
-                  <div className="gs-group-head"><Meta.icon size={13} /><span>{Meta.label}</span><span className="gs-group-count">{group.total}</span></div>
-                  {group.items.map(result => {
-                    const flatIndex = flat.indexOf(result);
-                    return <button
-                      type="button"
-                      key={`${result.kind}-${result.id}`}
-                      className={`gs-result${flatIndex === activeIndex ? ' active' : ''}`}
-                      onClick={() => choose(result)}
-                      onMouseEnter={() => setActiveIndex(flatIndex)}
-                      role="option"
-                      aria-selected={flatIndex === activeIndex}
-                    >
-                      <Meta.icon size={15} className="gs-result-icon" aria-hidden="true" />
-                      <span className="gs-result-text">
-                        <span className="gs-result-title"><Highlight text={result.title} query={term} /></span>
-                        {result.subtitle && <span className="gs-result-sub">{result.subtitle}</span>}
-                      </span>
-                    </button>;
+
+        {!tooShort && results.length > 0 && <div className="gs-filters">
+          <button type="button" className={`gs-chip${filter === 'all' ? ' active' : ''}`} onClick={() => setFilter('all')}>
+            Alles<span className="gs-chip-count">{results.length}</span>
+          </button>
+          {availableFilters.map(kind => {
+            const Meta = kindMeta[kind];
+            return <button type="button" key={kind} className={`gs-chip${filter === kind ? ' active' : ''}`} onClick={() => setFilter(kind)}>
+              <Meta.icon size={13} />{Meta.label}<span className="gs-chip-count">{countByKind[kind]}</span>
+            </button>;
+          })}
+        </div>}
+
+        <div className="gs-body" ref={listRef}>
+          {tooShort
+            ? <div className="gs-state"><Search size={30} /><div className="gs-state-title">Blijf typen</div><div className="gs-state-text">Voer minimaal 2 tekens in om te zoeken in je werkruimte.</div></div>
+            : results.length === 0
+              ? <div className="gs-state"><SearchX size={30} /><div className="gs-state-title">Geen resultaten</div><div className="gs-state-text">Niets gevonden voor “{trimmed}”. Probeer een andere zoekterm of controleer de spelling.</div></div>
+              : <div className="gs-groups">
+                  {groups.map(group => {
+                    const Meta = kindMeta[group.kind];
+                    return <div className="gs-group" key={group.kind}>
+                      {filter === 'all' && <div className="gs-group-head"><Meta.icon size={13} /><span>{Meta.label}</span><span className="gs-group-count">{group.items.length}</span></div>}
+                      {group.items.map(result => {
+                        const flatIndex = visible.indexOf(result);
+                        return <button
+                          type="button"
+                          key={`${result.kind}-${result.id}`}
+                          className={`gs-result${flatIndex === activeIndex ? ' active' : ''}`}
+                          onClick={() => choose(result)}
+                          onMouseEnter={() => setActiveIndex(flatIndex)}
+                        >
+                          <span className="gs-result-icon"><Meta.icon size={16} aria-hidden="true" /></span>
+                          <span className="gs-result-text">
+                            <span className="gs-result-title"><Highlight text={result.title} query={term} /></span>
+                            {result.subtitle && <span className="gs-result-sub"><Highlight text={result.subtitle} query={term} /></span>}
+                          </span>
+                          <span className="gs-result-badge">{Meta.badge}</span>
+                          <ChevronRight size={15} className="gs-result-chevron" aria-hidden="true" />
+                        </button>;
+                      })}
+                    </div>;
                   })}
-                  {group.total > group.items.length && <div className="gs-more">+{group.total - group.items.length} meer</div>}
-                </div>;
-              })}
-            </div>}
+                </div>}
+        </div>
       </div>
     </>}
   </div>;
