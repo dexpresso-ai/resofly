@@ -2,6 +2,7 @@ import { supabase, supabaseAuth } from './supabase';
 import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
 import { throwFunctionError } from './functionErrors';
+import type { ReportDefinition } from './reporting';
 import type {
   AppData,
   AuditLog,
@@ -46,6 +47,8 @@ import type {
   BankStatement,
   BankTransaction,
   BankRule,
+  BankRequisition,
+  BankInstitution,
   ParsedBankStatement,
   CalendarNoteLinkInput,
   NoteCalendarLink,
@@ -64,13 +67,14 @@ import type {
   QuoteApprovalEvent,
   QuoteEmailDelivery,
   QuoteVersion,
+  SavedReport,
   Task,
   Ticket,
   TicketNote,
   UUID,
 } from '../types';
 
-const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'company_settings'] as const;
+const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'saved_reports', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -96,6 +100,7 @@ const tableToEntity: Record<Table, EntityType | null> = {
   bank_accounts: null,
   bank_rules: null,
   attachments: null,
+  saved_reports: null,
   company_settings: null,
 };
 
@@ -339,8 +344,10 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     bankStatements,
     bankTransactions,
     bankRules,
+    bankRequisitions,
     attachments,
     folders,
+    savedReports,
     companySettings,
   ] = await Promise.all([
     select<Client>('clients', organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
@@ -348,12 +355,34 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId),
     selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId), selectFixedAssets(organizationId), selectAssetDepreciations(organizationId), selectVatReturns(organizationId),
-    selectBankAccounts(organizationId), selectBankStatements(organizationId), selectBankTransactions(organizationId), selectBankRules(organizationId),
+    selectBankAccounts(organizationId), selectBankStatements(organizationId), selectBankTransactions(organizationId), selectBankRules(organizationId), selectBankRequisitions(organizationId),
     select<Attachment>('attachments', organizationId),
     selectFolders(organizationId),
+    selectSavedReports(organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, attachments, companySettings };
+  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, savedReports, companySettings };
+}
+
+const SAVED_REPORTS_MIGRATION_HINT =
+  'Voer de migratie 20260623000000_saved_reports.sql uit in Supabase om opgeslagen rapportages te activeren.';
+
+export async function selectSavedReports(organizationId: UUID): Promise<SavedReport[]> {
+  return selectOptional<SavedReport>('saved_reports', organizationId, {
+    orderBy: 'created_at', ascending: false, hint: SAVED_REPORTS_MIGRATION_HINT,
+  });
+}
+
+export async function createSavedReport(organizationId: UUID, values: { name: string; definition: ReportDefinition; is_pinned?: boolean; position?: number }): Promise<SavedReport> {
+  return insertRow<SavedReport>('saved_reports', organizationId, values as unknown as Record<string, unknown>);
+}
+
+export async function updateSavedReport(organizationId: UUID, id: UUID, patch: Partial<{ name: string; definition: ReportDefinition; is_pinned: boolean; position: number }>): Promise<SavedReport> {
+  return updateRow<SavedReport>('saved_reports', id, patch as Record<string, unknown>, organizationId);
+}
+
+export async function deleteSavedReport(organizationId: UUID, id: UUID): Promise<void> {
+  return deleteRow('saved_reports', id, organizationId);
 }
 
 export async function selectQuoteApprovalEvents(organizationId: UUID): Promise<QuoteApprovalEvent[]> {
@@ -832,6 +861,50 @@ export const selectBankTransactions = (organizationId: UUID) =>
   selectOptional<BankTransaction>('bank_transactions', organizationId, { orderBy: 'booking_date', ascending: false, hint: BANKFEED_MIGRATION_HINT });
 export const selectBankRules = (organizationId: UUID) =>
   selectOptional<BankRule>('bank_rules', organizationId, { orderBy: 'priority', ascending: true, hint: BANKFEED_MIGRATION_HINT });
+export const selectBankRequisitions = (organizationId: UUID) =>
+  selectOptional<BankRequisition>('bank_requisitions', organizationId, { orderBy: 'created_at', ascending: false, hint: BANKFEED_MIGRATION_HINT });
+
+/**
+ * GoCardless-koppeling (PSD2) — alles loopt via de `bank-sync` Edge Function zodat de
+ * secret_id/secret_key nooit in de browser staan. De functie haalt zelf een access
+ * token op, praat met GoCardless en schrijft via de service-role naar de database.
+ */
+async function invokeBankSync<T>(action: string, organizationId: UUID, payload: Record<string, unknown> = {}): Promise<T> {
+  const { data, error } = await supabase.functions.invoke('bank-sync', {
+    body: { action, organizationId, ...payload },
+  });
+  if (error) await throwFunctionError(error, 'Bankkoppeling mislukt.');
+  if (!data?.ok) throw new Error(data?.error || 'Bankkoppeling mislukt.');
+  return data as T;
+}
+
+/** Lijst van banken (instituten) voor de bankkiezer. */
+export async function listBankInstitutions(organizationId: UUID, country?: string): Promise<BankInstitution[]> {
+  const data = await invokeBankSync<{ institutions: BankInstitution[] }>('listInstitutions', organizationId, { country });
+  return data.institutions ?? [];
+}
+
+/** Start een koppeling: maakt een requisition en geeft de consent-link terug. */
+export async function createBankRequisition(
+  organizationId: UUID,
+  input: { institutionId: string; institutionName?: string; redirectUrl: string },
+): Promise<{ link: string; reference: string }> {
+  return invokeBankSync('createRequisition', organizationId, {
+    institutionId: input.institutionId,
+    institutionName: input.institutionName ?? null,
+    redirectUrl: input.redirectUrl,
+  });
+}
+
+/** Rondt de koppeling af na de redirect: koppelt de rekeningen en synchroniseert. */
+export async function finalizeBankRequisition(organizationId: UUID, reference: string): Promise<{ status: string; linked: number; imported: number }> {
+  return invokeBankSync('finalizeRequisition', organizationId, { reference });
+}
+
+/** Haalt nieuwe transacties op voor één of alle gekoppelde rekeningen. */
+export async function syncBankAccount(organizationId: UUID, bankAccountId?: UUID): Promise<{ results: Array<{ bankAccountId: string; inserted: number; skipped: number; error?: string }>; needsReconsent: boolean }> {
+  return invokeBankSync('sync', organizationId, { bankAccountId: bankAccountId ?? null });
+}
 
 /**
  * Leest een afschrift in: voegt nieuwe transacties idempotent toe (dedup op

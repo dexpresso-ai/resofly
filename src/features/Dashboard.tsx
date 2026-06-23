@@ -1,12 +1,14 @@
-import type { ReactNode } from 'react';
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, ChevronRight, Clock, FileText, Landmark, ListChecks, Percent, Ticket as TicketIcon, Users } from 'lucide-react';
-import type { AppData, Invoice, OrganizationContext, Task } from '../types';
+import { useMemo, type ReactNode } from 'react';
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, CheckCircle2, ChevronRight, Clock, FileText, Landmark, ListChecks, Percent, Pin, Ticket as TicketIcon, Users } from 'lucide-react';
+import type { AppData, Invoice, OrganizationContext, SavedReport, Task } from '../types';
 import { euro, total } from '../lib/format';
 import { Button } from '../components/Ui';
+import { BarChart, LineChart, PieChart } from '../components/Charts';
+import { REPORT_SOURCES, formatMeasure, runReport } from '../lib/reporting';
 import { ProjectTimeline } from './ProjectTimeline';
 
 export type DashboardNavPage =
-  | 'clients' | 'projects' | 'tickets' | 'quotes' | 'invoices' | 'bank' | 'vat-returns' | 'weekplanner' | 'settings';
+  | 'clients' | 'projects' | 'tickets' | 'quotes' | 'invoices' | 'bank' | 'vat-returns' | 'weekplanner' | 'settings' | 'stats';
 
 type StatTone = 'default' | 'accent' | 'danger';
 type AttentionItem = { key: string; tone: 'default' | 'danger'; icon: ReactNode; label: string; meta?: string; count: number; onClick: () => void };
@@ -19,12 +21,14 @@ export function Dashboard({
   openProject,
   openSettings,
   openPage,
+  openReport,
 }: {
   data: AppData;
   organizationContext: OrganizationContext;
   openProject: (id: string) => void;
   openSettings: () => void;
   openPage: (page: DashboardNavPage) => void;
+  openReport: (id: string) => void;
 }) {
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -52,6 +56,11 @@ export function Dashboard({
   const overdueTasks = data.tasks.filter(t => t.status !== 'done' && t.end_date && new Date(`${t.end_date}T23:59:59`) < now).length;
 
   const activeClients = data.clients.filter(c => c.status === 'active').length;
+
+  // ── Gepinde rapportages ─────────────────────────────────────────────────
+  const pinnedReports = data.savedReports
+    .filter(r => r.is_pinned && Boolean(REPORT_SOURCES[r.definition?.source]))
+    .sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at));
 
   // ── Deze week (taken met planning/deadline binnen 7 dagen of te laat) ────
   const horizon = new Date(startOfToday);
@@ -133,6 +142,16 @@ export function Dashboard({
         </div>
 
         <ProjectTimeline data={data} openProject={openProject} />
+
+        {pinnedReports.length > 0 && <div className="dash-reports">
+          <header className="dash-reports-head">
+            <h2><BarChart3 size={16} /> Mijn rapportages</h2>
+            <button type="button" onClick={() => openPage('stats')}>Rapportbouwer <ChevronRight size={14} /></button>
+          </header>
+          <div className="dash-reports-grid">
+            {pinnedReports.map(report => <PinnedReportCard key={report.id} report={report} data={data} onOpen={() => openReport(report.id)} />)}
+          </div>
+        </div>}
       </div>
 
       <aside className="dash-side">
@@ -178,6 +197,28 @@ export function Dashboard({
       </aside>
     </section>
   </>;
+}
+
+function PinnedReportCard({ report, data, onOpen }: { report: SavedReport; data: AppData; onOpen: () => void }) {
+  const def = report.definition;
+  const result = useMemo(() => runReport(def, data), [def, data]);
+  const format = (n: number) => formatMeasure(n, result.measureType);
+  return (
+    <button type="button" className="dash-report-card" onClick={onOpen}>
+      <div className="drc-head">
+        <span className="drc-name">{report.is_pinned && <Pin size={11} />}{report.name}</span>
+        <span className="drc-total">{format(result.total)}</span>
+      </div>
+      <div className="drc-sub">{result.measureLabel}{result.dimensionLabel ? ` · per ${result.dimensionLabel.toLowerCase()}` : ''}</div>
+      <div className="drc-chart">
+        {result.rowCount === 0 ? <span className="drc-empty">Geen gegevens</span>
+          : def.chart === 'line' ? <LineChart rows={result.rows} format={format} />
+          : def.chart === 'pie' ? <PieChart rows={result.rows.slice(0, 6)} format={format} />
+          : def.chart === 'kpi' ? <span className="drc-kpi">{format(result.total)}</span>
+          : <BarChart rows={result.rows.slice(0, 5)} format={format} />}
+      </div>
+    </button>
+  );
 }
 
 function Stat({ label, value, sub, tone = 'default', trend, onClick }: {

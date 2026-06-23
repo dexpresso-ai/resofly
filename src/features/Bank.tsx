@@ -1,7 +1,7 @@
-import { useMemo, useRef, useState } from 'react';
-import { Banknote, Check, Landmark, Link2, Plus, RotateCcw, Sparkles, Trash2, Upload, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, Banknote, Check, Landmark, Link2, Plus, RefreshCw, RotateCcw, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
 import type {
-  AppData, BankAccount, BankRule, BankTransaction, Invoice, LedgerAccount, PurchaseInvoice,
+  AppData, BankAccount, BankInstitution, BankRequisition, BankRule, BankTransaction, Invoice, LedgerAccount, PurchaseInvoice,
 } from '../types';
 import { Modal } from '../components/Modal';
 import { Button, Input, Select, Textarea } from '../components/Ui';
@@ -9,8 +9,9 @@ import { dateNL, euro } from '../lib/format';
 import { SetupBanner } from './Bookkeeping';
 import { parseBankFile } from '../lib/bankImport';
 import {
-  bookBankTransaction, deleteRow, importBankTransactions, insertRow, matchBankTransactions,
-  setBankTransactionStatus, unbookBankTransaction, updateRow,
+  bookBankTransaction, createBankRequisition, deleteRow, finalizeBankRequisition, importBankTransactions,
+  insertRow, listBankInstitutions, matchBankTransactions, setBankTransactionStatus, syncBankAccount,
+  unbookBankTransaction, updateRow,
 } from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
@@ -22,7 +23,10 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 }
 
 export function BankPage({ data, organizationId, canWrite, onChanged }: PageProps) {
-  const [tab, setTab] = useState<'reconcile' | 'accounts' | 'rules'>('reconcile');
+  // Na de GoCardless-redirect komen we terug met ?ref=… → meteen het tabblad
+  // "Rekeningen & koppeling" tonen zodat de afronding zichtbaar is.
+  const hasReturnRef = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('ref');
+  const [tab, setTab] = useState<'reconcile' | 'accounts' | 'rules'>(hasReturnRef ? 'accounts' : 'reconcile');
 
   if (data.ledgerAccounts.length === 0) {
     return <div className="bk-page"><SetupBanner organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} /></div>;
@@ -260,15 +264,64 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, onChanged
 
 function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
   const [edit, setEdit] = useState<BankAccount | 'new' | null>(null);
+  const [connect, setConnect] = useState(false);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [finalizing, setFinalizing] = useState(false);
   const lastImport = (a: BankAccount) =>
     a.last_imported_at ? `Laatste import ${dateNL(a.last_imported_at.slice(0, 10))}` : 'Nog niets ingelezen';
+  const lastSync = (a: BankAccount) =>
+    a.last_synced_at ? `Laatst gesynct ${dateNL(a.last_synced_at.slice(0, 10))}` : 'Nog niet gesynct';
+  const reqFor = (a: BankAccount): BankRequisition | undefined =>
+    data.bankRequisitions.find(r => r.id === a.bank_requisition_id);
+
+  // Afronden van de GoCardless-koppeling na de redirect (?ref=…). Eénmalig.
+  const finalizedRef = useRef(false);
+  useEffect(() => {
+    const ref = new URLSearchParams(window.location.search).get('ref');
+    if (!ref || finalizedRef.current) return;
+    finalizedRef.current = true;
+    // Verwijder ?ref uit de URL zodat een refresh niet opnieuw afrondt.
+    const clean = window.location.origin + window.location.pathname + window.location.hash;
+    window.history.replaceState(null, '', clean);
+    setFinalizing(true); setBanner(null);
+    finalizeBankRequisition(organizationId, ref)
+      .then(res => {
+        if (res.status === 'linked') setBanner({ kind: 'ok', text: `Bank gekoppeld: ${res.linked} rekening(en), ${res.imported} transacties opgehaald.` });
+        else if (res.status === 'expired') setBanner({ kind: 'err', text: 'De toestemming is verlopen of geweigerd. Probeer de koppeling opnieuw.' });
+        else setBanner({ kind: 'err', text: 'De koppeling is nog niet voltooid. Rond de toestemming bij je bank af en probeer opnieuw.' });
+        onChanged();
+      })
+      .catch(e => setBanner({ kind: 'err', text: e instanceof Error ? e.message : 'Afronden van de koppeling mislukt.' }))
+      .finally(() => setFinalizing(false));
+  }, [organizationId, onChanged]);
+
+  async function sync(a: BankAccount) {
+    if (!canWrite) return;
+    setSyncingId(a.id); setBanner(null);
+    try {
+      const res = await syncBankAccount(organizationId, a.id);
+      const r = res.results[0];
+      if (res.needsReconsent) setBanner({ kind: 'err', text: 'De banktoestemming is verlopen. Koppel de bank opnieuw via "Koppel bank".' });
+      else if (r?.error) setBanner({ kind: 'err', text: `Synchroniseren mislukt: ${r.error}` });
+      else setBanner({ kind: 'ok', text: `${r?.inserted ?? 0} nieuwe, ${r?.skipped ?? 0} al bekende transacties.` });
+      onChanged();
+    } catch (e) { setBanner({ kind: 'err', text: e instanceof Error ? e.message : 'Synchroniseren mislukt' }); }
+    finally { setSyncingId(null); }
+  }
 
   return (
     <div className="bk-page">
       <div className="bk-subhead">
-        <p className="bk-muted">Koppel elke bankrekening aan een grootboekrekening (meestal 1100 Bank). Lees afschriften in (CAMT.053, MT940 of CSV) of koppel binnenkort direct via GoCardless.</p>
-        <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Nieuwe bankrekening</Button>
+        <p className="bk-muted">Koppel elke bankrekening aan een grootboekrekening (meestal 1100 Bank). Lees afschriften in (CAMT.053, MT940 of CSV) of koppel direct via GoCardless.</p>
+        <div className="bank-subhead-actions">
+          <Button disabled={!canWrite || finalizing} onClick={() => setConnect(true)}><Link2 size={15} /> Koppel bank</Button>
+          <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Handmatige rekening</Button>
+        </div>
       </div>
+
+      {finalizing && <div className="bk-note">Koppeling afronden…</div>}
+      {banner && <div className={banner.kind === 'ok' ? 'bk-note' : 'error'}>{banner.text}</div>}
 
       {data.bankAccounts.length === 0
         ? <div className="empty"><div className="e-big">Nog geen bankrekeningen</div></div>
@@ -276,35 +329,86 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
             {data.bankAccounts.map(a => {
               const ledger = data.ledgerAccounts.find(l => l.id === a.ledger_account_id);
               const count = data.bankTransactions.filter(t => t.bank_account_id === a.id).length;
+              const linked = a.source === 'gocardless';
+              const req = reqFor(a);
+              const expired = req?.status === 'expired';
               return (
                 <div key={a.id} className="bank-account-card">
                   <div className="bank-account-head">
                     <div>
-                      <strong>{a.name}</strong>
+                      <strong>{a.name}{linked && <span className="bank-tag">gekoppeld</span>}</strong>
                       <small className="bk-muted">{a.iban || 'geen IBAN'}{ledger ? ` · ${ledger.code} ${ledger.name}` : ''}</small>
                     </div>
                     <button className="bk-cell-action" onClick={() => setEdit(a)} disabled={!canWrite}>Bewerk</button>
                   </div>
+                  {expired && <div className="bank-reconsent"><AlertTriangle size={14} /> Toestemming verlopen — koppel de bank opnieuw via "Koppel bank".</div>}
                   <div className="bank-account-meta">
-                    <span className="bk-muted">{count} transacties · {lastImport(a)}</span>
+                    <span className="bk-muted">{count} transacties · {linked ? lastSync(a) : lastImport(a)}</span>
                     <span className="bk-spacer" />
-                    <ImportButton account={a} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />
+                    {linked
+                      ? <Button disabled={!canWrite || syncingId === a.id} onClick={() => sync(a)}><RefreshCw size={14} /> {syncingId === a.id ? 'Synchroniseren…' : 'Synchroniseer'}</Button>
+                      : <ImportButton account={a} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
                   </div>
                 </div>
               );
             })}
           </div>}
 
-      <div className="bank-connect-card">
-        <div><Link2 size={16} /> <strong>Directe bankkoppeling (PSD2)</strong>
-          <p className="bk-muted">Automatisch transacties ophalen via GoCardless Bank Account Data. Wordt geactiveerd in fase 2 zodra de koppeling is ingesteld.</p>
-        </div>
-        <Button disabled>Binnenkort</Button>
-      </div>
-
       {edit && <BankAccountForm data={data} organizationId={organizationId} canWrite={canWrite}
         account={edit === 'new' ? null : edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); onChanged(); }} />}
+      {connect && <GoCardlessConnectModal organizationId={organizationId} onClose={() => setConnect(false)} />}
     </div>
+  );
+}
+
+function GoCardlessConnectModal({ organizationId, onClose }: { organizationId: string; onClose: () => void }) {
+  const [institutions, setInstitutions] = useState<BankInstitution[] | null>(null);
+  const [query, setQuery] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    listBankInstitutions(organizationId)
+      .then(list => { if (active) setInstitutions(list); })
+      .catch(e => { if (active) setError(e instanceof Error ? e.message : 'Banken ophalen mislukt'); });
+    return () => { active = false; };
+  }, [organizationId]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return (institutions ?? []).filter(i => !q || i.name.toLowerCase().includes(q));
+  }, [institutions, query]);
+
+  async function pick(inst: BankInstitution) {
+    setBusy(inst.id); setError(null);
+    try {
+      // GoCardless stuurt na toestemming terug naar deze URL met ?ref=… erachter.
+      const redirectUrl = window.location.origin + window.location.pathname;
+      const { link } = await createBankRequisition(organizationId, { institutionId: inst.id, institutionName: inst.name, redirectUrl });
+      window.location.assign(link);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Koppeling starten mislukt'); setBusy(null); }
+  }
+
+  return (
+    <Modal title="Koppel een bank" onClose={onClose}
+      footer={<div className="bk-foot"><span className="bk-spacer" /><Button onClick={onClose}>Sluiten</Button></div>}>
+      {error && <div className="error">{error}</div>}
+      <p className="bk-muted">Kies je bank. Je wordt doorgestuurd naar de bank om toestemming te geven (PSD2); daarna komen je transacties automatisch binnen.</p>
+      <div className="bank-inst-search"><Search size={15} /><Input value={query} placeholder="Zoek je bank…" onChange={e => setQuery(e.target.value)} /></div>
+      {institutions === null && !error
+        ? <div className="bk-report-loading bk-muted">Banken laden…</div>
+        : <div className="bank-inst-list">
+            {filtered.map(inst => (
+              <button key={inst.id} className="bank-inst" disabled={busy !== null} onClick={() => pick(inst)}>
+                {inst.logo ? <img src={inst.logo} alt="" className="bank-inst-logo" /> : <span className="bank-inst-logo bank-inst-logo-fallback"><Landmark size={16} /></span>}
+                <span className="bank-inst-name">{inst.name}</span>
+                {busy === inst.id && <span className="bk-muted">Doorsturen…</span>}
+              </button>
+            ))}
+            {filtered.length === 0 && <div className="bk-muted">Geen banken gevonden.</div>}
+          </div>}
+    </Modal>
   );
 }
 

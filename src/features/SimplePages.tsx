@@ -70,10 +70,6 @@ export function CalendarPage() {
   return <div className="empty"><div className="e-big">Kalender</div><p>V1 toont deadlines in projecten. Koppeling met Google/Microsoft Calendar kan hierop worden gebouwd.</p></div>;
 }
 
-export function Stats({ data }: { data: AppData }) {
-  return <div className="stats-grid"><div className="stats-card"><h3>Verdeling taken</h3>{['todo','doing','review','done'].map(st => <div className="bar-row" key={st}><span className="bar-label">{st}</span><div className="bar-track"><div className="bar-fill" style={{width:`${data.tasks.length ? data.tasks.filter(t=>t.status===st).length/data.tasks.length*100 : 0}%`}}/></div><span className="bar-val">{data.tasks.filter(t=>t.status===st).length}</span></div>)}</div></div>;
-}
-
 export function Archive({ data, onOpen, onRestore }: { data: AppData; onOpen: (id: string) => void; onRestore: (project: Project) => void }) {
   const archived = data.projects.filter(p=>p.archived);
   if (!archived.length) return <div className="empty"><div className="e-big">Geen gearchiveerde projecten</div><p>Archiveer een project via “Project bewerken”.</p></div>;

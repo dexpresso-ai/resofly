@@ -2038,3 +2038,99 @@ body::before{
 .bank-connect-card{margin-top:18px;background:var(--bg2);border:1px dashed var(--border);border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px}
 .bank-connect-card p{margin:4px 0 0;font-size:.82rem;max-width:560px}
 .bank-connect-card strong{display:inline-flex;align-items:center;gap:8px}
+.bank-subhead-actions{display:flex;gap:8px;flex-wrap:wrap}
+.bank-tag{margin-left:8px;font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--accent-g);background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.28);border-radius:999px;padding:2px 8px;vertical-align:middle}
+.bank-reconsent{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--accent);background:rgba(255,217,102,.1);border:1px solid rgba(255,217,102,.28);border-radius:8px;padding:7px 10px}
+.bank-inst-search{display:flex;align-items:center;gap:8px;margin:10px 0;color:var(--muted)}
+.bank-inst-search .form-input{flex:1}
+.bank-inst-list{display:flex;flex-direction:column;gap:6px;max-height:46vh;overflow:auto}
+.bank-inst{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;color:var(--text);cursor:pointer;font-size:.9rem}
+.bank-inst:hover:not(:disabled){border-color:var(--accent);background:var(--bg3)}
+.bank-inst:disabled{opacity:.6;cursor:default}
+.bank-inst-logo{width:28px;height:28px;border-radius:6px;object-fit:contain;background:#fff;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}
+.bank-inst-logo-fallback{color:var(--muted)}
+.bank-inst-name{flex:1;font-weight:600}
+
+/* ── Rapportbouwer (Statistieken) ─────────────────────────────────────── */
+.rb-page{display:flex;flex-direction:column;gap:16px}
+.rb-toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.rb-toolbar h2{font-size:18px;font-weight:800;letter-spacing:-.01em}
+.rb-toolbar p{color:var(--muted2);font-size:12.5px;margin-top:3px;max-width:560px}
+.rb-layout{display:grid;grid-template-columns:236px minmax(0,1fr);gap:16px;align-items:start}
+@media(max-width:840px){.rb-layout{grid-template-columns:1fr}}
+.rb-config{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:16px;display:flex;flex-direction:column;gap:15px;position:sticky;top:0}
+.rb-field{display:flex;flex-direction:column;gap:6px}
+.rb-field-label{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.rb-filters{display:flex;flex-direction:column;gap:8px}
+.rb-chart-seg{flex-wrap:wrap;gap:4px}
+.rb-chart-seg button{display:inline-flex;align-items:center;gap:5px}
+.rb-preview{display:flex;flex-direction:column;gap:14px;min-width:0}
+.rb-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.rb-kpi{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:13px 15px}
+.rb-kpi-label{font-size:11.5px;color:var(--muted2);margin-bottom:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rb-kpi-val{font-size:23px;font-weight:800;letter-spacing:-.02em}
+.rb-kpi-accent .rb-kpi-val{color:var(--accent)}
+.rb-chart-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:18px;min-height:280px;display:flex;flex-direction:column;justify-content:center}
+.rb-chart-empty{color:var(--muted);font-size:13px;text-align:center;padding:40px 10px}
+.rb-bars{display:flex;flex-direction:column;gap:11px}
+.rb-bar-row{display:flex;align-items:center;gap:12px}
+.rb-bar-label{width:140px;flex-shrink:0;font-size:12px;color:var(--muted2);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rb-bar-track{flex:1;height:20px;background:var(--bg3);border-radius:5px;overflow:hidden}
+.rb-bar-fill{display:block;height:100%;background:var(--accent);border-radius:5px;min-width:2px;transition:width .25s ease}
+.rb-bar-val{width:96px;flex-shrink:0;font-size:12.5px;font-weight:700;text-align:right}
+.rb-svg{width:100%;height:auto;display:block}
+.rb-svg-axis{fill:var(--muted);font-size:11px}
+.rb-pie-wrap{display:flex;align-items:center;gap:22px;flex-wrap:wrap;justify-content:center}
+.rb-pie-svg{width:200px;height:200px;flex-shrink:0}
+.rb-pie-legend{display:flex;flex-direction:column;gap:7px;min-width:200px;flex:1}
+.rb-pie-legend-row{display:flex;align-items:center;gap:9px;font-size:12.5px}
+.rb-pie-dot{width:11px;height:11px;border-radius:3px;flex-shrink:0}
+.rb-pie-legend-label{flex:1;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rb-pie-legend-val{font-weight:700}
+.rb-pie-legend-pct{width:42px;text-align:right;color:var(--muted)}
+.rb-table-wrap{width:100%;overflow:auto}
+.rb-table{width:100%;border-collapse:collapse;font-size:13px}
+.rb-table th,.rb-table td{padding:9px 12px;border-bottom:1px solid var(--border);text-align:left}
+.rb-table th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:800}
+.rb-table td.num,.rb-table th.num{text-align:right;font-variant-numeric:tabular-nums}
+.rb-table tfoot td{font-weight:800;border-bottom:none;border-top:2px solid var(--border2)}
+.rb-bigkpi{text-align:center;padding:24px 10px}
+.rb-bigkpi-label{font-size:13px;color:var(--muted2);margin-bottom:10px}
+.rb-bigkpi-val{font-size:46px;font-weight:900;letter-spacing:-.03em;color:var(--accent)}
+/* ── Rapportbouwer fase 2: bibliotheek, opslaan, dashboard-widgets ─────── */
+.rb-title-area{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+.rb-name-input{max-width:340px;font-weight:700;font-size:14px}
+.rb-pin-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:var(--accent);background:rgba(255,217,102,.1);border:1px solid rgba(255,217,102,.24);border-radius:999px;padding:3px 9px;white-space:nowrap}
+.rb-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.rb-library{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:11px 14px}
+.rb-lib-group{display:flex;align-items:center;gap:10px;flex:1;min-width:0;flex-wrap:wrap}
+.rb-lib-label{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);flex-shrink:0}
+.rb-lib-empty{font-size:12.5px;color:var(--muted)}
+.rb-chips{display:flex;gap:7px;flex-wrap:wrap}
+.rb-chip{display:inline-flex;align-items:center;background:var(--bg3);border:1px solid var(--border2);border-radius:999px;overflow:hidden}
+.rb-chip.is-active{border-color:var(--accent);background:rgba(255,217,102,.1)}
+.rb-chip-open{display:inline-flex;align-items:center;gap:5px;background:transparent;border:0;color:var(--text);font:inherit;font-size:12.5px;font-weight:600;padding:5px 10px;cursor:pointer}
+.rb-chip.is-active .rb-chip-open{color:var(--accent)}
+.rb-chip-del{background:transparent;border:0;border-left:1px solid var(--border2);color:var(--muted);cursor:pointer;padding:5px 8px;display:inline-flex;align-items:center}
+.rb-chip-del:hover{color:var(--accent-r)}
+.rb-lib-actions{display:flex;gap:8px;align-items:center;flex-shrink:0}
+.rb-lib-actions .select-control{min-width:190px}
+.dash-reports{margin-top:18px}
+.dash-reports-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.dash-reports-head h2{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:800}
+.dash-reports-head button{display:inline-flex;align-items:center;gap:3px;background:transparent;border:0;color:var(--muted2);font:inherit;font-size:12px;font-weight:700;cursor:pointer}
+.dash-reports-head button:hover{color:var(--accent)}
+.dash-reports-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.dash-report-card{text-align:left;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px;cursor:pointer;transition:border-color .15s;display:flex;flex-direction:column;gap:4px}
+.dash-report-card:hover{border-color:var(--accent)}
+.drc-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.drc-name{display:inline-flex;align-items:center;gap:5px;font-weight:700;font-size:13.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drc-total{font-weight:800;font-size:15px;color:var(--accent);flex-shrink:0}
+.drc-sub{font-size:11px;color:var(--muted);margin-bottom:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drc-chart{min-height:96px;display:flex;flex-direction:column;justify-content:center}
+.drc-chart .rb-bar-label{width:90px;font-size:11px}
+.drc-chart .rb-bar-val{width:74px;font-size:11px}
+.drc-chart .rb-pie-svg{width:120px;height:120px}
+.drc-chart .rb-pie-legend{min-width:120px;gap:4px}
+.drc-empty{font-size:12px;color:var(--muted);text-align:center;padding:24px 0}
+.drc-kpi{font-size:30px;font-weight:900;color:var(--accent);text-align:center;padding:14px 0}

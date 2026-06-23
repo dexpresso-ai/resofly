@@ -31,3 +31,8 @@ verify_jwt = false
 # functie zelf controleert (x-inbound-secret header).
 [functions.mail-inbound]
 verify_jwt = false
+
+# bank-sync (GoCardless PSD2-koppeling) handelt CORS-preflight + auth zelf af, net
+# als invoice-workflow: elke actie verifieert requireUser() + requireOrganizationAccess().
+[functions.bank-sync]
+verify_jwt = false

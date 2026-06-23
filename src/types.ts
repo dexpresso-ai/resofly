@@ -1,3 +1,5 @@
+import type { ReportDefinition } from './lib/reporting';
+
 export type UUID = string;
 export type ClientStatus = 'active' | 'prospect' | 'inactive';
 export type TaskStatus = 'todo' | 'doing' | 'review' | 'done';
@@ -965,6 +967,8 @@ export type BankStatementFormat = 'camt053' | 'mt940' | 'csv' | 'gocardless';
 export type BankTransactionStatus = 'unmatched' | 'suggested' | 'booked' | 'ignored';
 export type BankRuleDirection = 'in' | 'out' | 'both';
 
+export type BankRequisitionStatus = 'created' | 'linked' | 'expired' | 'error';
+
 export interface BankAccount extends OrgScopedRow {
   name: string;
   iban: string | null;
@@ -973,11 +977,37 @@ export interface BankAccount extends OrgScopedRow {
   source: BankAccountSource;
   provider: string | null;
   external_account_id: string | null;
+  bank_requisition_id: UUID | null;
   last_synced_at: string | null;
   last_imported_at: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface BankRequisition extends OrgScopedRow {
+  provider: 'gocardless';
+  institution_id: string;
+  institution_name: string | null;
+  reference: string;
+  requisition_id: string | null;
+  link: string | null;
+  status: BankRequisitionStatus;
+  accounts: string[];
+  error: string | null;
+  linked_at: string | null;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Bank zoals GoCardless die teruggeeft bij de bankkiezer. */
+export interface BankInstitution {
+  id: string;
+  name: string;
+  bic: string | null;
+  logo: string | null;
+  transaction_total_days: number | null;
 }
 
 export interface BankStatement {
@@ -1148,7 +1178,18 @@ export interface InvoiceMollieSettingsStatus {
   last_validated_at: string | null;
 }
 
-export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; attachments: Attachment[]; companySettings: CompanySettings | null; }
+// Zelfbouw-rapportbouwer (fase 2): een opgeslagen rapport bewaart de pure
+// JSON-`ReportDefinition`; de aggregatie-engine draait volledig client-side.
+export interface SavedReport extends OrgScopedRow {
+  name: string;
+  definition: ReportDefinition;
+  is_pinned: boolean;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; savedReports: SavedReport[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';
