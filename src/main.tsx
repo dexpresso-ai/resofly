@@ -956,6 +956,13 @@ function App() {
         await sendQuoteEmailViaResend(activeOrg.id, p.id, { recipientEmail: p.recipient_email, recipientName: p.recipient_name ?? undefined });
         await refresh();
       }}
+      onConvertQuote={async (p) => {
+        if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+        const invoice = await convertAcceptedQuoteToInvoice(activeOrg.id, p.id);
+        await refresh();
+        setPage('invoices'); setProjectId(null); setClientId(null);
+        setEdit({ kind: 'invoice', item: invoice });
+      }}
     />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
       <div className="send-overlay-card">

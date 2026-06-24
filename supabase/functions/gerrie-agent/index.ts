@@ -163,7 +163,8 @@ interface QuoteProposal { type: 'quote'; client_id: string; client_name: string;
 interface ClientProposal { type: 'client'; name: string; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; status: string }
 interface SendInvoiceProposal { type: 'send_invoice'; id: string; number: string; client_name: string; recipient_email: string; recipient_name: string | null }
 interface SendQuoteProposal { type: 'send_quote'; id: string; number: string; client_name: string; recipient_email: string; recipient_name: string | null }
-type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal;
+interface ConvertQuoteProposal { type: 'convert_quote'; id: string; number: string; client_name: string; total_eur: number }
+type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | ConvertQuoteProposal;
 interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: unknown }>; usage: Usage; proposal?: Proposal }
 
 async function runAgent(ctx: GerrieContext, history: Array<{ role: string; content: string }>, message: string, emit: Emit): Promise<AgentOutcome> {
@@ -225,6 +226,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
         : proposal.type === 'client' ? 'Ik heb de nieuwe klant voor je klaargezet. Controleer de gegevens en sla op:'
         : proposal.type === 'send_invoice' ? `Wil je dat ik factuur ${proposal.number} naar ${proposal.recipient_email} verstuur? Bevestig hieronder.`
         : proposal.type === 'send_quote' ? `Wil je dat ik offerte ${proposal.number} naar ${proposal.recipient_email} verstuur? Bevestig hieronder.`
+        : proposal.type === 'convert_quote' ? `Wil je dat ik offerte ${proposal.number} omzet naar een factuur? Bevestig hieronder.`
         : 'Ik heb een conceptfactuur voor je klaargezet. Controleer hem en sla op:';
       return { text: extractText(response.content) || fallback, toolCalls, usage, proposal };
     }
@@ -329,6 +331,7 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_quote` — conceptofferte klaarzetten. Net als de factuur, met een optionele geldig-tot-datum.',
           '- `propose_client` — nieuwe klant klaarzetten. Controleer eerst met `search_clients` of de klant al bestaat (voorkom dubbelen). Naam is verplicht; contactpersoon/e-mail/telefoon optioneel.',
           '- `propose_send_invoice` / `propose_send_quote` — een BESTAANDE factuur/offerte per e-mail naar de klant versturen. Zoek het document eerst met `list_invoices`/`list_quotes` en gebruik het exacte id. Het gaat naar het e-mailadres van de gekoppelde klant; benoem dat adres in je antwoord zodat de gebruiker het kan controleren vóór hij bevestigt.',
+          '- `propose_convert_quote` — een GEACCEPTEERDE offerte omzetten naar een factuur. Zoek de offerte met `list_quotes`; alleen status "accepted" kan omgezet worden.',
           '- Ontbreekt er informatie, vraag het kort na in plaats van te gissen. Wijzigen en verwijderen kunnen nog niet — leg dat kort uit als erom gevraagd wordt.',
         ].join('\n')
       : '- De gebruiker heeft alleen leesrechten (rol viewer) en mag niets aanmaken of wijzigen; help met opzoeken en uitleggen.',
@@ -511,6 +514,15 @@ const TOOL_DEFINITIONS = [
       required: ['id'],
     },
   },
+  {
+    name: 'propose_convert_quote',
+    description: 'Stel voor om een GEACCEPTEERDE offerte om te zetten naar een factuur. Je voert NIETS uit: de gebruiker bevestigt in de chat. Zoek de offerte eerst met list_quotes en gebruik het exacte id. Alleen offertes met status "accepted" kunnen worden omgezet.',
+    input_schema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Het exacte id van de offerte (uit list_quotes).' } },
+      required: ['id'],
+    },
+  },
 ];
 
 function toolLabel(name: string): string {
@@ -554,6 +566,7 @@ function proposeLabel(toolName: string): string {
     case 'propose_client': return 'Klantgegevens klaarzetten…';
     case 'propose_send_invoice':
     case 'propose_send_quote': return 'Verzending voorbereiden…';
+    case 'propose_convert_quote': return 'Omzetting voorbereiden…';
     default: return 'Voorstel klaarzetten…';
   }
 }
@@ -568,8 +581,32 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
     case 'propose_client': return buildClientProposal(input);
     case 'propose_send_invoice': return buildSendProposal(ctx, 'invoice', input);
     case 'propose_send_quote': return buildSendProposal(ctx, 'quote', input);
+    case 'propose_convert_quote': return buildConvertQuoteProposal(ctx, input);
     default: return { ok: false, error: `Onbekende actie: ${toolName}` };
   }
+}
+
+/** Bereidt het omzetten van een geaccepteerde offerte naar een factuur voor. */
+async function buildConvertQuoteProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const id = String(input.id || '').trim();
+  if (!isUuid(id)) return { ok: false, error: 'Ongeldig id. Zoek de offerte eerst met list_quotes en gebruik het exacte id.' };
+
+  const { data: quote, error } = await supabaseAdmin.from('quotes')
+    .select('id, number, client_id, status, lines').eq('organization_id', ctx.organizationId).eq('id', id).maybeSingle();
+  if (error) return { ok: false, error: `Offerte ophalen mislukt: ${error.message}` };
+  if (!quote) return { ok: false, error: 'Offerte niet gevonden in deze organisatie.' };
+  if (String(quote.status) !== 'accepted') return { ok: false, error: `Alleen geaccepteerde offertes kunnen worden omgezet; deze heeft status "${String(quote.status)}".` };
+
+  const { data: client } = await supabaseAdmin.from('clients')
+    .select('name').eq('organization_id', ctx.organizationId).eq('id', quote.client_id).maybeSingle();
+
+  return {
+    ok: true,
+    proposal: {
+      type: 'convert_quote', id: String(quote.id), number: String(quote.number),
+      client_name: String(client?.name ?? ''), total_eur: round2(lineTotal(quote.lines)),
+    },
+  };
 }
 
 /** Bereidt het versturen van een bestaande factuur/offerte voor (alleen vóórstellen). */
@@ -870,7 +907,7 @@ function proposalHistoryNote(toolCalls: unknown): string {
   const prop = toolCalls.find((t) => t && typeof (t as { name?: unknown }).name === 'string' && (t as { name: string }).name.startsWith('propose_')) as { name: string; input?: Record<string, unknown> } | undefined;
   if (!prop) return '';
   const input = (prop.input ?? {}) as Record<string, unknown>;
-  if (prop.name === 'propose_send_invoice' || prop.name === 'propose_send_quote') return '';
+  if (prop.name === 'propose_send_invoice' || prop.name === 'propose_send_quote' || prop.name === 'propose_convert_quote') return '';
   if (prop.name === 'propose_client') return `[Eerder voorgesteld: nieuwe klant "${String(input.name ?? '')}".]`;
   const kind = prop.name === 'propose_quote' ? 'conceptofferte' : 'conceptfactuur';
   const lines = Array.isArray(input.lines)

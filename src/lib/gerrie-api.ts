@@ -60,7 +60,14 @@ export interface GerrieSendQuoteProposal {
   recipient_email: string;
   recipient_name: string | null;
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal;
+export interface GerrieConvertQuoteProposal {
+  type: 'convert_quote';
+  id: UUID;
+  number: string;
+  client_name: string;
+  total_eur: number;
+}
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal;
 
 export interface GerrieResult {
   conversationId: UUID;

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { streamGerrieReply, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal } from '../lib/gerrie-api';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { streamGerrieReply, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal } from '../lib/gerrie-api';
 import { euro } from '../lib/format';
 import type { UUID } from '../types';
 
@@ -31,13 +31,14 @@ const SUGGESTIONS = [
   'Welke offertes lopen er nog?',
 ];
 
-export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote }: {
+export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote }: {
   organizationId: UUID;
   onCreateInvoiceDraft?: (proposal: GerrieInvoiceProposal) => void;
   onCreateQuoteDraft?: (proposal: GerrieQuoteProposal) => void;
   onCreateClientDraft?: (proposal: GerrieClientProposal) => void;
   onSendInvoice?: (proposal: GerrieSendInvoiceProposal) => Promise<void>;
   onSendQuote?: (proposal: GerrieSendQuoteProposal) => Promise<void>;
+  onConvertQuote?: (proposal: GerrieConvertQuoteProposal) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: nextId(), role: 'assistant', text: INTRO_TEXT }]);
@@ -110,8 +111,9 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
   function proposalCard(p: GerrieProposal) {
     if (p.type === 'invoice') return <ProposalCard title="Conceptfactuur openen & controleren" sub={`${p.client_name} · ${euro(p.total_eur)} · ${lineLabel(p.lines.length)}`} onClick={() => onCreateInvoiceDraft?.(p)} />;
     if (p.type === 'quote') return <ProposalCard title="Conceptofferte openen & controleren" sub={`${p.client_name} · ${euro(p.total_eur)} · ${lineLabel(p.lines.length)}`} onClick={() => onCreateQuoteDraft?.(p)} />;
-    if (p.type === 'send_invoice') return <SendProposalCard noun={`Factuur ${p.number}`} recipient={p.recipient_email} clientName={p.client_name} onSend={() => onSendInvoice ? onSendInvoice(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.'))} />;
-    if (p.type === 'send_quote') return <SendProposalCard noun={`Offerte ${p.number}`} recipient={p.recipient_email} clientName={p.client_name} onSend={() => onSendQuote ? onSendQuote(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.'))} />;
+    if (p.type === 'send_invoice') return <ConfirmActionCard icon={<MailIcon />} title={`Factuur ${p.number} versturen?`} sub={`Naar ${p.recipient_email}${p.client_name ? ` · ${p.client_name}` : ''}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`Factuur ${p.number} verstuurd naar ${p.recipient_email}`} onConfirm={() => onSendInvoice ? onSendInvoice(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.'))} />;
+    if (p.type === 'send_quote') return <ConfirmActionCard icon={<MailIcon />} title={`Offerte ${p.number} versturen?`} sub={`Naar ${p.recipient_email}${p.client_name ? ` · ${p.client_name}` : ''}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`Offerte ${p.number} verstuurd naar ${p.recipient_email}`} onConfirm={() => onSendQuote ? onSendQuote(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.'))} />;
+    if (p.type === 'convert_quote') return <ConfirmActionCard icon={<DocIcon />} title={`Offerte ${p.number} omzetten naar factuur?`} sub={`${p.client_name} · ${euro(p.total_eur)}`} confirmLabel="Omzetten" pendingLabel="Omzetten…" doneLabel={`Factuur gemaakt van offerte ${p.number}`} onConfirm={() => onConvertQuote ? onConvertQuote(p) : Promise.reject(new Error('Omzetten is hier niet beschikbaar.'))} />;
     return <ProposalCard title="Nieuwe klant openen & controleren" sub={[p.name, p.email].filter(Boolean).join(' · ')} onClick={() => onCreateClientDraft?.(p)} />;
   }
 
@@ -266,33 +268,37 @@ function ProposalCard({ title, sub, onClick }: { title: string; sub: string; onC
   );
 }
 
-/** Verzendkaart met expliciete bevestiging — beheert eigen status (versturen → verstuurd/fout). */
-function SendProposalCard({ noun, recipient, clientName, onSend }: { noun: string; recipient: string; clientName: string; onSend: () => Promise<void> }) {
-  const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'error' | 'cancelled'>('idle');
+/** Bevestigkaart voor een actie (versturen, omzetten, …) — beheert eigen status. */
+function ConfirmActionCard({ icon, title, sub, confirmLabel, pendingLabel, doneLabel, onConfirm }: {
+  icon: ReactNode; title: string; sub: string;
+  confirmLabel: string; pendingLabel: string; doneLabel: string;
+  onConfirm: () => Promise<void>;
+}) {
+  const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error' | 'cancelled'>('idle');
   const [error, setError] = useState<string | null>(null);
 
   async function go() {
-    setState('sending'); setError(null);
-    try { await onSend(); setState('sent'); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Versturen mislukt.'); setState('error'); }
+    setState('busy'); setError(null);
+    try { await onConfirm(); setState('done'); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Actie mislukt.'); setState('error'); }
   }
 
-  if (state === 'sent') return <div className="gerrie-send-result ok">✓ {noun} verstuurd naar {recipient}</div>;
-  if (state === 'cancelled') return <div className="gerrie-send-result cancelled">Verzending geannuleerd.</div>;
+  if (state === 'done') return <div className="gerrie-send-result ok">✓ {doneLabel}</div>;
+  if (state === 'cancelled') return <div className="gerrie-send-result cancelled">Geannuleerd.</div>;
 
   return (
     <div className="gerrie-send-card">
       <div className="gerrie-send-head">
-        <span className="gerrie-proposal-icon" aria-hidden="true"><MailIcon /></span>
+        <span className="gerrie-proposal-icon" aria-hidden="true">{icon}</span>
         <span className="gerrie-proposal-body">
-          <span className="gerrie-proposal-title">{noun} versturen?</span>
-          <span className="gerrie-proposal-sub">Naar {recipient}{clientName ? ` · ${clientName}` : ''}</span>
+          <span className="gerrie-proposal-title">{title}</span>
+          <span className="gerrie-proposal-sub">{sub}</span>
         </span>
       </div>
       {state === 'error' && error && <div className="gerrie-send-error">{error}</div>}
       <div className="gerrie-send-actions">
-        <button className="gerrie-cancel" onClick={() => setState('cancelled')} disabled={state === 'sending'}>Annuleren</button>
-        <button className="gerrie-confirm" onClick={go} disabled={state === 'sending'}>{state === 'sending' ? 'Versturen…' : state === 'error' ? 'Opnieuw proberen' : 'Versturen'}</button>
+        <button className="gerrie-cancel" onClick={() => setState('cancelled')} disabled={state === 'busy'}>Annuleren</button>
+        <button className="gerrie-confirm" onClick={go} disabled={state === 'busy'}>{state === 'busy' ? pendingLabel : state === 'error' ? 'Opnieuw proberen' : confirmLabel}</button>
       </div>
     </div>
   );
