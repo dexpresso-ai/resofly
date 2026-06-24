@@ -14,7 +14,25 @@ const FUNCTIONS_BASE = `${import.meta.env.VITE_SUPABASE_URL as string}/functions
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
 export interface GerrieStatus { kind: 'thinking' | 'tool'; label: string }
-export interface GerrieResult { conversationId: UUID; messageId: UUID; text: string; budget?: { remainingFraction: number } }
+
+/** Door Gerrie voorgestelde conceptfactuur — opent vooringevuld in het factuurformulier. */
+export interface GerrieInvoiceProposal {
+  type: 'invoice';
+  client_id: UUID;
+  client_name: string;
+  lines: Array<{ description: string; quantity: number; unit_price: number; vat: number }>;
+  notes: string | null;
+  due_date: string | null;
+  total_eur: number;
+}
+
+export interface GerrieResult {
+  conversationId: UUID;
+  messageId: UUID;
+  text: string;
+  budget?: { remainingFraction: number };
+  proposal?: GerrieInvoiceProposal;
+}
 
 export interface GerrieRequest {
   organizationId: UUID;

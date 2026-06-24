@@ -102,10 +102,19 @@ serve(async (req) => {
       const assistantId = await insertMessage(convId, organizationId, user.id, 'assistant', outcome.text, outcome.toolCalls);
       await recordUsage(organizationId, convId, assistantId, user.id, outcome.usage);
 
+      // Stelt Gerrie een actie voor, leg dat dan vast (status 'proposed') voor de audit.
+      if (outcome.proposal) {
+        await supabaseAdmin.from('ai_action_audit').insert({
+          organization_id: organizationId, conversation_id: convId, message_id: assistantId, user_id: user.id,
+          action: 'propose_invoice', params: outcome.proposal, status: 'proposed',
+        });
+      }
+
       // Alleen een fractie (0..1) naar de browser — nooit het eurobedrag zelf.
       const remaining = remainingFraction(budget, costUsd(outcome.usage) * USD_TO_EUR);
       const donePayload: Record<string, unknown> = { conversationId: convId, messageId: assistantId, text: outcome.text };
       if (remaining !== null) donePayload.budget = { remainingFraction: remaining };
+      if (outcome.proposal) donePayload.proposal = outcome.proposal;
       await emit('done', donePayload);
     });
   } catch (error) {
@@ -148,7 +157,9 @@ function streamResponse(req: Request, work: (emit: Emit) => Promise<void>): Resp
 
 interface GerrieContext { organizationId: string; role: OrganizationRole; userLabel: string; orgName: string; today: string }
 interface Usage { input: number; output: number; cacheRead: number; cacheWrite: number }
-interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: unknown }>; usage: Usage }
+interface ProposalLine { description: string; quantity: number; unit_price: number; vat: number }
+interface InvoiceProposal { type: 'invoice'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; due_date: string | null; total_eur: number }
+interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: unknown }>; usage: Usage; proposal?: InvoiceProposal }
 
 async function runAgent(ctx: GerrieContext, history: Array<{ role: string; content: string }>, message: string, emit: Emit): Promise<AgentOutcome> {
   const system = buildSystemPrompt(ctx);
@@ -175,13 +186,26 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
       return { text: extractText(response.content), toolCalls, usage };
     }
 
-    // Voer elke gevraagde tool uit (strikt org-scoped) en verzamel de resultaten.
+    // Voer elke gevraagde tool uit (strikt org-scoped). Een schrijf-tool (propose_*)
+    // wordt NIET uitgevoerd: bij geldige invoer stoppen we en sturen we een voorstel
+    // dat de gebruiker zelf in de app controleert en opslaat.
     const toolResults: AnthropicBlock[] = [];
+    let proposal: InvoiceProposal | null = null;
     for (const use of toolUses) {
       const toolName = String(use.name);
       const toolUseId = String(use.id);
       const toolInput = (use.input ?? {}) as Record<string, unknown>;
       toolCalls.push({ name: toolName, input: toolInput });
+
+      if (toolName === 'propose_invoice') {
+        await emit('status', { kind: 'tool', label: 'Conceptfactuur klaarzetten…' });
+        const built = await buildInvoiceProposal(ctx, toolInput);
+        if (built.ok) { proposal = built.proposal; break; }
+        // Ongeldig voorstel -> stuur de fout terug zodat het model het kan corrigeren.
+        toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: `Kan de conceptfactuur nog niet klaarzetten: ${built.error}`, is_error: true });
+        continue;
+      }
+
       await emit('status', { kind: 'tool', label: toolLabel(toolName) });
       try {
         const result = await runTool(ctx, toolName, toolInput);
@@ -189,6 +213,11 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
       } catch (error) {
         toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: `Fout: ${describeError(error)}`, is_error: true });
       }
+    }
+
+    if (proposal) {
+      const text = extractText(response.content) || 'Ik heb een conceptfactuur voor je klaargezet. Controleer hem en sla op:';
+      return { text, toolCalls, usage, proposal };
     }
     messages.push({ role: 'user', content: toolResults });
   }
@@ -284,10 +313,14 @@ function buildSystemPrompt(ctx: GerrieContext): string {
     '- Gebruik altijd een tool om echte gegevens op te halen; verzin nooit cijfers, namen of bedragen.',
     '- Bedragen zijn in euro\'s. Toon ze netjes (bijv. € 1.250,00). Rapporteer beknopt en zakelijk.',
     '',
-    'Acties (aanmaken, versturen, wijzigen, verwijderen):',
+    'Acties:',
     canWrite
-      ? '- Dit kun je binnenkort uitvoeren, maar nog niet in deze versie. Als de gebruiker hierom vraagt: leg kort uit dat dit eraan komt en dat elke actie straks altijd eerst door de gebruiker bevestigd moet worden. Voer nu nog niets uit.'
-      : '- De gebruiker heeft alleen leesrechten (rol viewer). Acties zijn sowieso niet beschikbaar; help met opzoeken en uitleggen.',
+      ? [
+          '- Je kunt een CONCEPTFACTUUR klaarzetten met de tool `propose_invoice`. Je voert zelf niets uit: het voorstel opent als vooringevuld factuurformulier dat de gebruiker controleert en zélf opslaat.',
+          '- Verzamel eerst genoeg gegevens: zoek de klant met `search_clients` en gebruik diens exacte id; bepaal de regels (omschrijving, aantal, prijs per stuk EXCL. btw, btw-percentage — meestal 21). Ontbreekt er iets, vraag het kort na in plaats van te gissen.',
+          '- Andere acties (offerte opstellen, versturen, wijzigen, verwijderen) kunnen nog niet — leg dat kort uit als erom gevraagd wordt.',
+        ].join('\n')
+      : '- De gebruiker heeft alleen leesrechten (rol viewer) en mag niets aanmaken of wijzigen; help met opzoeken en uitleggen.',
     '',
     'Stijl:',
     '- Antwoord altijd in het Nederlands, vriendelijk en professioneel, zonder overbodige uitweidingen.',
@@ -373,6 +406,33 @@ const TOOL_DEFINITIONS = [
       },
     },
   },
+  {
+    name: 'propose_invoice',
+    description: 'Zet een CONCEPTFACTUUR klaar voor de gebruiker. Je voert NIETS uit: het voorstel opent als vooringevuld factuurformulier dat de gebruiker zelf controleert en opslaat. Gebruik dit pas als je de juiste klant (via search_clients) én alle factuurregels weet. Vraag ontbrekende gegevens kort na in plaats van te gissen.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'string', description: 'Het exacte id van de klant (uit search_clients), niet de naam.' },
+        lines: {
+          type: 'array',
+          description: 'De factuurregels.',
+          items: {
+            type: 'object',
+            properties: {
+              description: { type: 'string', description: 'Omschrijving van de regel.' },
+              quantity: { type: 'number', description: 'Aantal (bijv. uren of stuks).' },
+              unit_price: { type: 'number', description: "Prijs per stuk in euro's, EXCLUSIEF btw." },
+              vat: { type: 'number', description: 'Btw-percentage (meestal 21, soms 9 of 0).' },
+            },
+            required: ['description', 'quantity', 'unit_price', 'vat'],
+          },
+        },
+        due_date: { type: 'string', description: 'Optioneel: vervaldatum YYYY-MM-DD.' },
+        notes: { type: 'string', description: 'Optionele opmerking op de factuur.' },
+      },
+      required: ['client_id', 'lines'],
+    },
+  },
 ];
 
 function toolLabel(name: string): string {
@@ -401,6 +461,55 @@ async function runTool(ctx: GerrieContext, name: string, input: Record<string, u
     case 'list_tickets': return listTickets(orgId, input, limit);
     default: throw new HttpError(`Onbekende tool: ${name}`, 400);
   }
+}
+
+// ── Schrijf-voorstel: conceptfactuur (fase 3, alleen vóórstellen) ────────────
+
+type ProposalResult = { ok: true; proposal: InvoiceProposal } | { ok: false; error: string };
+
+/**
+ * Valideert de door het model voorgestelde conceptfactuur tegen de echte data.
+ * Voert NIETS uit — geeft alleen een gecontroleerd voorstel terug dat de gebruiker
+ * in de app opent en zelf opslaat. Schrijfrol vereist (viewer mag niet).
+ */
+async function buildInvoiceProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  if (!['owner', 'admin', 'member'].includes(ctx.role)) {
+    return { ok: false, error: 'Deze gebruiker heeft alleen leesrechten en mag geen factuur aanmaken.' };
+  }
+  const clientId = String(input.client_id || '').trim();
+  if (!isUuid(clientId)) return { ok: false, error: 'Ongeldig client_id. Zoek de klant eerst met search_clients en gebruik het exacte id.' };
+
+  const { data: client, error: clientErr } = await supabaseAdmin.from('clients')
+    .select('id, name').eq('organization_id', ctx.organizationId).eq('id', clientId).maybeSingle();
+  if (clientErr) return { ok: false, error: `Klant ophalen mislukt: ${clientErr.message}` };
+  if (!client) return { ok: false, error: 'Klant niet gevonden in deze organisatie.' };
+
+  const rawLines = Array.isArray(input.lines) ? (input.lines as Record<string, unknown>[]) : [];
+  if (rawLines.length === 0) return { ok: false, error: 'Geef minstens één factuurregel (omschrijving, aantal, prijs excl. btw, btw%).' };
+
+  const lines: ProposalLine[] = [];
+  for (const raw of rawLines) {
+    const description = String(raw.description || '').trim();
+    if (!description) return { ok: false, error: 'Elke factuurregel heeft een omschrijving nodig.' };
+    const quantity = num(raw.quantity);
+    if (!(quantity > 0)) return { ok: false, error: `Ongeldig aantal voor "${description}".` };
+    const unit_price = num(raw.unit_price);
+    const vat = raw.vat == null ? 21 : num(raw.vat);
+    lines.push({ description: description.slice(0, 500), quantity, unit_price, vat });
+  }
+
+  return {
+    ok: true,
+    proposal: {
+      type: 'invoice',
+      client_id: clientId,
+      client_name: String(client.name),
+      lines,
+      notes: input.notes ? String(input.notes).slice(0, 2000) : null,
+      due_date: isoDate(input.due_date),
+      total_eur: round2(lineTotal(lines)),
+    },
+  };
 }
 
 /** Elke query begint hier: altijd vastgepind op de geverifieerde organisatie. */

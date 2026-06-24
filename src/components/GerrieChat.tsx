@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { streamGerrieReply, type GerrieStatus } from '../lib/gerrie-api';
+import { streamGerrieReply, type GerrieStatus, type GerrieInvoiceProposal } from '../lib/gerrie-api';
+import { euro } from '../lib/format';
 import type { UUID } from '../types';
 
 /**
@@ -12,7 +13,7 @@ import type { UUID } from '../types';
  */
 
 type ChatRole = 'user' | 'assistant';
-interface ChatMessage { id: string; role: ChatRole; text: string }
+interface ChatMessage { id: string; role: ChatRole; text: string; proposal?: GerrieInvoiceProposal }
 
 let idSeq = 0;
 const nextId = () => `gerrie-${Date.now()}-${++idSeq}`;
@@ -30,7 +31,10 @@ const SUGGESTIONS = [
   'Welke offertes lopen er nog?',
 ];
 
-export function GerrieChat({ organizationId }: { organizationId: UUID }) {
+export function GerrieChat({ organizationId, onCreateInvoiceDraft }: {
+  organizationId: UUID;
+  onCreateInvoiceDraft?: (proposal: GerrieInvoiceProposal) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: nextId(), role: 'assistant', text: INTRO_TEXT }]);
   const [draft, setDraft] = useState('');
@@ -75,7 +79,7 @@ export function GerrieChat({ organizationId }: { organizationId: UUID }) {
       });
       setConversationId(result.conversationId);
       if (result.budget) setBudget(result.budget.remainingFraction);
-      setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', text: result.text }]);
+      setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', text: result.text, proposal: result.proposal }]);
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'Er ging iets mis.';
       setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', text: `⚠️ ${reason}` }]);
@@ -117,7 +121,20 @@ export function GerrieChat({ organizationId }: { organizationId: UUID }) {
             {messages.map((m) => (
               <div key={m.id} className={`gerrie-msg ${m.role}`}>
                 <span className="gerrie-msg-avatar" aria-hidden="true">{m.role === 'assistant' ? <RobotIcon /> : <UserIcon />}</span>
-                <div className="gerrie-bubble">{m.text}</div>
+                {m.proposal ? (
+                  <div className="gerrie-stack">
+                    <div className="gerrie-bubble">{m.text}</div>
+                    <button className="gerrie-proposal" onClick={() => onCreateInvoiceDraft?.(m.proposal!)}>
+                      <span className="gerrie-proposal-icon" aria-hidden="true"><DocIcon /></span>
+                      <span className="gerrie-proposal-body">
+                        <span className="gerrie-proposal-title">Conceptfactuur openen &amp; controleren</span>
+                        <span className="gerrie-proposal-sub">{m.proposal.client_name} · {euro(m.proposal.total_eur)} · {m.proposal.lines.length} regel{m.proposal.lines.length === 1 ? '' : 's'}</span>
+                      </span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="gerrie-bubble">{m.text}</div>
+                )}
               </div>
             ))}
             {thinking && (
@@ -214,6 +231,16 @@ function ChevronDownIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
       <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+function DocIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+      <path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z" />
+      <path d="M9 12h6M9 16h6" />
     </svg>
   );
 }
