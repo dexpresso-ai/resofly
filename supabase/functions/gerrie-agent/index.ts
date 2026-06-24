@@ -67,18 +67,24 @@ serve(async (req) => {
   try {
     if (req.method !== 'POST') return json(req, { error: 'Method not allowed.' }, 405 as HttpStatus);
     assertAllowedOrigin(req);
-    if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
 
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-    const message = String(body.message || '').trim();
     const organizationId = String(body.organizationId || '');
-    const conversationId = body.conversationId ? String(body.conversationId) : null;
-    if (!message) throw new HttpError('Leeg bericht.', 400);
-    if (message.length > 4000) throw new HttpError('Bericht is te lang.', 400);
 
     // Auth + org-toegang. Lezen mag elk actief lid (ook viewer).
     const user = await requireUser(req);
     const role = await requireOrganizationAccess(user.id, organizationId);
+
+    // Een uitgevoerde/mislukte actie loggen — gewone JSON, geen AI-call nodig.
+    if (String(body.action || '') === 'confirm') {
+      return json(req, await confirmAction(user.id, organizationId, role, body));
+    }
+
+    if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
+    const message = String(body.message || '').trim();
+    const conversationId = body.conversationId ? String(body.conversationId) : null;
+    if (!message) throw new HttpError('Leeg bericht.', 400);
+    if (message.length > 4000) throw new HttpError('Bericht is te lang.', 400);
 
     // Alles is gevalideerd -> open de SSE-stream en doe het werk asynchroon.
     return streamResponse(req, async (emit) => {
@@ -103,11 +109,13 @@ serve(async (req) => {
       await recordUsage(organizationId, convId, assistantId, user.id, outcome.usage);
 
       // Stelt Gerrie een actie voor, leg dat dan vast (status 'proposed') voor de audit.
+      let auditId: string | null = null;
       if (outcome.proposal) {
-        await supabaseAdmin.from('ai_action_audit').insert({
+        const { data: auditRow } = await supabaseAdmin.from('ai_action_audit').insert({
           organization_id: organizationId, conversation_id: convId, message_id: assistantId, user_id: user.id,
           action: `propose_${outcome.proposal.type}`, params: outcome.proposal, status: 'proposed',
-        });
+        }).select('id').single();
+        auditId = (auditRow?.id as string) ?? null;
       }
 
       // Alleen een fractie (0..1) naar de browser — nooit het eurobedrag zelf.
@@ -115,6 +123,7 @@ serve(async (req) => {
       const donePayload: Record<string, unknown> = { conversationId: convId, messageId: assistantId, text: outcome.text };
       if (remaining !== null) donePayload.budget = { remainingFraction: remaining };
       if (outcome.proposal) donePayload.proposal = outcome.proposal;
+      if (auditId) donePayload.auditId = auditId;
       await emit('done', donePayload);
     });
   } catch (error) {
@@ -180,11 +189,14 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
 
   const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const toolCalls: Array<{ name: string; input: unknown }> = [];
+  const answerChunks: string[] = []; // tekst over alle iteraties — matcht exact de gestreamde deltas
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i += 1) {
     await emit('status', { kind: 'thinking', label: 'Gerrie denkt na…' });
-    const response = await callAnthropic(system, messages);
+    const response = await callAnthropicStream(system, messages, emit);
     accumulateUsage(usage, response.usage);
+    const chunkText = extractText(response.content);
+    if (chunkText) answerChunks.push(chunkText);
 
     // Bewaar het volledige assistant-bericht (incl. thinking/tool_use-blokken)
     // ongewijzigd in de geschiedenis — vereist voor de tool-loop op hetzelfde model.
@@ -192,7 +204,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
 
     const toolUses = response.content.filter((b: AnthropicBlock) => b.type === 'tool_use');
     if (response.stop_reason !== 'tool_use' || toolUses.length === 0) {
-      return { text: extractText(response.content) || 'Sorry, dat begrijp ik niet helemaal. Kun je het anders verwoorden of iets specifieker maken?', toolCalls, usage };
+      return { text: answerChunks.join('') || 'Sorry, dat begrijp ik niet helemaal. Kun je het anders verwoorden of iets specifieker maken?', toolCalls, usage };
     }
 
     // Voer elke gevraagde tool uit (strikt org-scoped). Een schrijf-tool (propose_*)
@@ -234,16 +246,18 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
         : proposal.type === 'edit_quote' ? `Ik heb de wijziging van concept-offerte ${proposal.number} klaargezet. Controleer hem en sla op:`
         : proposal.type === 'edit_client' ? `Ik heb de wijziging van klant ${proposal.name} klaargezet. Controleer de gegevens en sla op:`
         : 'Ik heb een conceptfactuur voor je klaargezet. Controleer hem en sla op:';
-      return { text: extractText(response.content) || fallback, toolCalls, usage, proposal };
+      return { text: answerChunks.join('') || fallback, toolCalls, usage, proposal };
     }
     messages.push({ role: 'user', content: toolResults });
   }
 
   // Loop-plafond bereikt: vraag nog één samenvattend antwoord zonder verdere tools.
   await emit('status', { kind: 'thinking', label: 'Gerrie rondt af…' });
-  const final = await callAnthropic(system, messages, true);
+  const final = await callAnthropicStream(system, messages, emit, true);
   accumulateUsage(usage, final.usage);
-  return { text: extractText(final.content) || 'Ik kon dit niet helemaal afronden — kun je je vraag iets specifieker stellen?', toolCalls, usage };
+  const finalText = extractText(final.content);
+  if (finalText) answerChunks.push(finalText);
+  return { text: answerChunks.join('') || 'Ik kon dit niet helemaal afronden — kun je je vraag iets specifieker stellen?', toolCalls, usage };
 }
 
 // ── Claude Messages API (raw HTTP) ───────────────────────────────────────────
@@ -252,13 +266,14 @@ interface AnthropicBlock { type: string; [key: string]: unknown }
 interface AnthropicMessage { role: 'user' | 'assistant'; content: string | AnthropicBlock[] }
 interface AnthropicResponse { content: AnthropicBlock[]; stop_reason: string; usage: Record<string, number> }
 
-async function callAnthropic(system: string, messages: AnthropicMessage[], noTools = false): Promise<AnthropicResponse> {
+async function callAnthropicStream(system: string, messages: AnthropicMessage[], emit: Emit, noTools = false): Promise<AnthropicResponse> {
   const requestBody: Record<string, unknown> = {
     model: ANTHROPIC_MODEL,
     max_tokens: MAX_OUTPUT_TOKENS,
     // Adaptive thinking: Claude bepaalt zelf hoe diep het nadenkt (aanrader voor agentisch werk).
     thinking: { type: 'adaptive' },
     output_config: { effort: 'medium' },
+    stream: true,
     // Prompt-caching: tools + systeemprompt zijn stabiel -> cache ze samen (~90% goedkoper input).
     system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
     messages,
@@ -267,29 +282,73 @@ async function callAnthropic(system: string, messages: AnthropicMessage[], noToo
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: {
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': ANTHROPIC_VERSION,
-      'content-type': 'application/json',
-    },
+    headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
     body: JSON.stringify(requestBody),
   });
-
-  const text = await res.text();
-  let data: Record<string, unknown> = {};
-  try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
-
-  if (!res.ok) {
-    const detail = (data?.error as { message?: string } | undefined)?.message || text.slice(0, 300);
-    const status: HttpStatus = res.status === 429 ? 429 : res.status === 401 ? 502 : 502;
-    throw new HttpError(`Claude-fout (${res.status}): ${detail || 'onbekend'}`, status);
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '');
+    let detail = text.slice(0, 300);
+    try { detail = (JSON.parse(text)?.error?.message as string) || detail; } catch { /* niet-JSON */ }
+    throw new HttpError(`Claude-fout (${res.status}): ${detail || 'onbekend'}`, res.status === 429 ? 429 : 502);
   }
 
-  return {
-    content: (data.content as AnthropicBlock[]) ?? [],
-    stop_reason: String(data.stop_reason ?? 'end_turn'),
-    usage: (data.usage as Record<string, number>) ?? {},
-  };
+  // Reconstrueer de content-blokken uit de SSE-stream en forward tekst-deltas live.
+  const blocks: AnthropicBlock[] = [];
+  const partialJson: Record<number, string> = {};
+  let stopReason = 'end_turn';
+  const usage: Record<string, number> = {};
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep: number;
+    while ((sep = buffer.indexOf('\n\n')) !== -1) {
+      const dataLine = buffer.slice(0, sep).split('\n').find((l) => l.startsWith('data:'));
+      buffer = buffer.slice(sep + 2);
+      if (!dataLine) continue;
+      let ev: Record<string, unknown>;
+      try { ev = JSON.parse(dataLine.slice(5).trim()); } catch { continue; }
+      const type = String(ev.type);
+
+      if (type === 'message_start') {
+        Object.assign(usage, (ev.message as { usage?: Record<string, number> })?.usage ?? {});
+      } else if (type === 'content_block_start') {
+        const index = Number(ev.index);
+        const cb = (ev.content_block ?? {}) as AnthropicBlock;
+        blocks[index] = { ...cb };
+        if (cb.type === 'text') blocks[index].text = '';
+        if (cb.type === 'thinking') { blocks[index].thinking = ''; blocks[index].signature = ''; await emit('status', { kind: 'thinking', label: 'Gerrie denkt na…' }); }
+        if (cb.type === 'tool_use') { partialJson[index] = ''; blocks[index].input = {}; }
+      } else if (type === 'content_block_delta') {
+        const index = Number(ev.index);
+        const d = (ev.delta ?? {}) as Record<string, unknown>;
+        const b = blocks[index];
+        if (!b) continue;
+        const dtype = String(d.type);
+        if (dtype === 'text_delta') { const t = String(d.text ?? ''); b.text = String(b.text ?? '') + t; if (t) await emit('delta', { text: t }); }
+        else if (dtype === 'thinking_delta') { b.thinking = String(b.thinking ?? '') + String(d.thinking ?? ''); }
+        else if (dtype === 'signature_delta') { b.signature = String(b.signature ?? '') + String(d.signature ?? ''); }
+        else if (dtype === 'input_json_delta') { partialJson[index] = (partialJson[index] ?? '') + String(d.partial_json ?? ''); }
+      } else if (type === 'content_block_stop') {
+        const index = Number(ev.index);
+        const b = blocks[index];
+        if (b && b.type === 'tool_use') { try { b.input = partialJson[index] ? JSON.parse(partialJson[index]) : {}; } catch { b.input = {}; } }
+      } else if (type === 'message_delta') {
+        const delta = (ev.delta ?? {}) as { stop_reason?: string };
+        if (delta.stop_reason) stopReason = delta.stop_reason;
+        Object.assign(usage, (ev.usage as Record<string, number>) ?? {});
+      } else if (type === 'error') {
+        throw new HttpError(`Claude-streamfout: ${(ev.error as { message?: string })?.message ?? 'onbekend'}`, 502);
+      }
+    }
+  }
+
+  return { content: blocks.filter(Boolean), stop_reason: stopReason, usage };
 }
 
 function extractText(content: AnthropicBlock[]): string {
@@ -1054,6 +1113,20 @@ async function recordUsage(organizationId: string, conversationId: string, messa
     input_tokens: usage.input, output_tokens: usage.output, cache_read_tokens: usage.cacheRead, cache_creation_tokens: usage.cacheWrite,
     cost_usd: costUsd(usage),
   });
+}
+
+/** Logt een door de gebruiker bevestigde actie als uitgevoerd/mislukt in de audit. */
+async function confirmAction(_userId: string, organizationId: string, role: OrganizationRole, body: Record<string, unknown>): Promise<{ ok: boolean }> {
+  if (!['owner', 'admin', 'member'].includes(role)) throw new HttpError('Geen schrijfrechten.', 403);
+  const auditId = String(body.auditId || '');
+  if (!isUuid(auditId)) throw new HttpError('Ongeldig auditId.', 400);
+  const status = String(body.outcome || '') === 'failed' ? 'failed' : 'executed';
+  const detail = body.detail ? String(body.detail).slice(0, 500) : null;
+  const { error } = await supabaseAdmin.from('ai_action_audit')
+    .update({ status, result: detail ? { detail } : { ok: status === 'executed' } })
+    .eq('id', auditId).eq('organization_id', organizationId);
+  if (error) throw new HttpError(`Audit bijwerken mislukt: ${error.message}`, 500);
+  return { ok: true };
 }
 
 interface BudgetCheck { allowed: boolean; usedEur: number; limitEur: number }

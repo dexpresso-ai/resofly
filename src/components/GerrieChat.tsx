@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { streamGerrieReply, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal, type GerrieEditInvoiceProposal, type GerrieEditQuoteProposal, type GerrieEditClientProposal } from '../lib/gerrie-api';
+import { streamGerrieReply, confirmGerrieAction, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal, type GerrieEditInvoiceProposal, type GerrieEditQuoteProposal, type GerrieEditClientProposal } from '../lib/gerrie-api';
 import { euro } from '../lib/format';
 import type { UUID } from '../types';
 
@@ -13,7 +13,7 @@ import type { UUID } from '../types';
  */
 
 type ChatRole = 'user' | 'assistant';
-interface ChatMessage { id: string; role: ChatRole; text: string; proposal?: GerrieProposal }
+interface ChatMessage { id: string; role: ChatRole; text: string; proposal?: GerrieProposal; auditId?: string }
 
 let idSeq = 0;
 const nextId = () => `gerrie-${Date.now()}-${++idSeq}`;
@@ -78,19 +78,45 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
     setMessages((prev) => [...prev, { id: nextId(), role: 'user', text: trimmed }]);
     setThinking(true);
     setStatus(null);
+
+    const assistantId = nextId();
+    let streamed = '';
+    let placed = false;
     try {
       const result = await streamGerrieReply({
         organizationId,
         conversationId,
         message: trimmed,
         onStatus: (s: GerrieStatus) => setStatus(s.label),
+        onDelta: (delta: string) => {
+          streamed += delta;
+          if (!placed) {
+            placed = true;
+            setThinking(false);
+            setStatus(null);
+            setMessages((prev) => [...prev, { id: assistantId, role: 'assistant', text: streamed }]);
+          } else {
+            setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, text: streamed } : m)));
+          }
+        },
       });
       setConversationId(result.conversationId);
       if (result.budget) setBudget(result.budget.remainingFraction);
-      setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', text: result.text, proposal: result.proposal }]);
+      // Finaliseer: definitieve tekst + eventueel een voorstel op het bericht zetten.
+      setMessages((prev) => {
+        const finalMsg: ChatMessage = { id: assistantId, role: 'assistant', text: result.text, proposal: result.proposal, auditId: result.auditId };
+        return prev.some((m) => m.id === assistantId)
+          ? prev.map((m) => (m.id === assistantId ? finalMsg : m))
+          : [...prev, finalMsg];
+      });
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'Er ging iets mis.';
-      setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', text: `⚠️ ${reason}` }]);
+      setMessages((prev) => {
+        const errMsg: ChatMessage = { id: assistantId, role: 'assistant', text: `⚠️ ${reason}` };
+        return prev.some((m) => m.id === assistantId)
+          ? prev.map((m) => (m.id === assistantId ? errMsg : m))
+          : [...prev, errMsg];
+      });
     } finally {
       setThinking(false);
       setStatus(null);
@@ -110,13 +136,24 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
     setDraft(el.value);
   }
 
+  // Meld een uitgevoerde/mislukte actie terug voor de audit (best-effort).
+  async function runConfirmed(auditId: string | undefined, action: () => Promise<void>) {
+    try {
+      await action();
+      if (auditId) void confirmGerrieAction(organizationId, auditId, 'executed');
+    } catch (e) {
+      if (auditId) void confirmGerrieAction(organizationId, auditId, 'failed', e instanceof Error ? e.message : undefined);
+      throw e;
+    }
+  }
+
   // Kies de juiste voorstel-kaart + actie op basis van het type voorstel.
-  function proposalCard(p: GerrieProposal) {
+  function proposalCard(p: GerrieProposal, auditId?: string) {
     if (p.type === 'invoice') return <ProposalCard title="Conceptfactuur openen & controleren" sub={`${p.client_name} · ${euro(p.total_eur)} · ${lineLabel(p.lines.length)}`} onClick={() => onCreateInvoiceDraft?.(p)} />;
     if (p.type === 'quote') return <ProposalCard title="Conceptofferte openen & controleren" sub={`${p.client_name} · ${euro(p.total_eur)} · ${lineLabel(p.lines.length)}`} onClick={() => onCreateQuoteDraft?.(p)} />;
-    if (p.type === 'send_invoice') return <ConfirmActionCard icon={<MailIcon />} title={`Factuur ${p.number} versturen?`} sub={`Naar ${p.recipient_email}${p.client_name ? ` · ${p.client_name}` : ''}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`Factuur ${p.number} verstuurd naar ${p.recipient_email}`} onConfirm={() => onSendInvoice ? onSendInvoice(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.'))} />;
-    if (p.type === 'send_quote') return <ConfirmActionCard icon={<MailIcon />} title={`Offerte ${p.number} versturen?`} sub={`Naar ${p.recipient_email}${p.client_name ? ` · ${p.client_name}` : ''}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`Offerte ${p.number} verstuurd naar ${p.recipient_email}`} onConfirm={() => onSendQuote ? onSendQuote(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.'))} />;
-    if (p.type === 'convert_quote') return <ConfirmActionCard icon={<DocIcon />} title={`Offerte ${p.number} omzetten naar factuur?`} sub={`${p.client_name} · ${euro(p.total_eur)}`} confirmLabel="Omzetten" pendingLabel="Omzetten…" doneLabel={`Factuur gemaakt van offerte ${p.number}`} onConfirm={() => onConvertQuote ? onConvertQuote(p) : Promise.reject(new Error('Omzetten is hier niet beschikbaar.'))} />;
+    if (p.type === 'send_invoice') return <ConfirmActionCard icon={<MailIcon />} title={`Factuur ${p.number} versturen?`} sub={`Naar ${p.recipient_email}${p.client_name ? ` · ${p.client_name}` : ''}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`Factuur ${p.number} verstuurd naar ${p.recipient_email}`} onConfirm={() => runConfirmed(auditId, () => onSendInvoice ? onSendInvoice(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.')))} />;
+    if (p.type === 'send_quote') return <ConfirmActionCard icon={<MailIcon />} title={`Offerte ${p.number} versturen?`} sub={`Naar ${p.recipient_email}${p.client_name ? ` · ${p.client_name}` : ''}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`Offerte ${p.number} verstuurd naar ${p.recipient_email}`} onConfirm={() => runConfirmed(auditId, () => onSendQuote ? onSendQuote(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.')))} />;
+    if (p.type === 'convert_quote') return <ConfirmActionCard icon={<DocIcon />} title={`Offerte ${p.number} omzetten naar factuur?`} sub={`${p.client_name} · ${euro(p.total_eur)}`} confirmLabel="Omzetten" pendingLabel="Omzetten…" doneLabel={`Factuur gemaakt van offerte ${p.number}`} onConfirm={() => runConfirmed(auditId, () => onConvertQuote ? onConvertQuote(p) : Promise.reject(new Error('Omzetten is hier niet beschikbaar.')))} />;
     if (p.type === 'edit_invoice') return <ProposalCard title="Wijziging factuur openen & controleren" sub={`Factuur ${p.number} · ${p.client_name}`} onClick={() => onEditInvoice?.(p)} />;
     if (p.type === 'edit_quote') return <ProposalCard title="Wijziging offerte openen & controleren" sub={`Offerte ${p.number} · ${p.client_name}`} onClick={() => onEditQuote?.(p)} />;
     if (p.type === 'edit_client') return <ProposalCard title="Wijziging klant openen & controleren" sub={p.name} onClick={() => onEditClient?.(p)} />;
@@ -145,7 +182,7 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
                 {m.proposal ? (
                   <div className="gerrie-stack">
                     <div className="gerrie-bubble">{m.text}</div>
-                    {proposalCard(m.proposal)}
+                    {proposalCard(m.proposal, m.auditId)}
                   </div>
                 ) : (
                   <div className="gerrie-bubble">{m.text}</div>

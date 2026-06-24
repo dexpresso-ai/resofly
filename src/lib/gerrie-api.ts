@@ -95,6 +95,8 @@ export interface GerrieResult {
   text: string;
   budget?: { remainingFraction: number };
   proposal?: GerrieProposal;
+  /** Audit-id van een voorgestelde actie; gebruik om uitvoering terug te melden. */
+  auditId?: string;
 }
 
 export interface GerrieRequest {
@@ -102,6 +104,7 @@ export interface GerrieRequest {
   conversationId: UUID | null;
   message: string;
   onStatus?: (status: GerrieStatus) => void;
+  onDelta?: (text: string) => void;
   signal?: AbortSignal;
 }
 
@@ -141,6 +144,7 @@ export async function streamGerrieReply(req: GerrieRequest): Promise<GerrieResul
       const parsed = parseSseBlock(block);
       if (!parsed) continue;
       if (parsed.event === 'status') req.onStatus?.(parsed.data as GerrieStatus);
+      else if (parsed.event === 'delta') req.onDelta?.(String((parsed.data as { text?: string }).text ?? ''));
       else if (parsed.event === 'done') result = parsed.data as GerrieResult;
       else if (parsed.event === 'error') errorMessage = String((parsed.data as { message?: string }).message ?? 'Onbekende fout.');
     }
@@ -149,6 +153,24 @@ export async function streamGerrieReply(req: GerrieRequest): Promise<GerrieResul
   if (errorMessage) throw new Error(errorMessage);
   if (!result) throw new Error('Gerrie gaf geen antwoord terug. Probeer het opnieuw.');
   return result;
+}
+
+/**
+ * Meldt aan de backend dat een voorgestelde actie daadwerkelijk is uitgevoerd of
+ * mislukt, zodat de audit (ai_action_audit) de status bijwerkt. Best-effort:
+ * fouten worden genegeerd — het mag de UX nooit blokkeren.
+ */
+export async function confirmGerrieAction(organizationId: UUID, auditId: string, outcome: 'executed' | 'failed', detail?: string): Promise<void> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) return;
+    await fetch(`${FUNCTIONS_BASE}/gerrie-agent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: ANON_KEY },
+      body: JSON.stringify({ action: 'confirm', organizationId, auditId, outcome, detail }),
+    });
+  } catch { /* best-effort logging */ }
 }
 
 function parseSseBlock(block: string): { event: string; data: unknown } | null {
