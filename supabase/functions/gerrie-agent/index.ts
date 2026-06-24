@@ -106,7 +106,7 @@ serve(async (req) => {
       if (outcome.proposal) {
         await supabaseAdmin.from('ai_action_audit').insert({
           organization_id: organizationId, conversation_id: convId, message_id: assistantId, user_id: user.id,
-          action: 'propose_invoice', params: outcome.proposal, status: 'proposed',
+          action: `propose_${outcome.proposal.type}`, params: outcome.proposal, status: 'proposed',
         });
       }
 
@@ -159,7 +159,10 @@ interface GerrieContext { organizationId: string; role: OrganizationRole; userLa
 interface Usage { input: number; output: number; cacheRead: number; cacheWrite: number }
 interface ProposalLine { description: string; quantity: number; unit_price: number; vat: number }
 interface InvoiceProposal { type: 'invoice'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; due_date: string | null; total_eur: number }
-interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: unknown }>; usage: Usage; proposal?: InvoiceProposal }
+interface QuoteProposal { type: 'quote'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; valid_until: string | null; total_eur: number }
+interface ClientProposal { type: 'client'; name: string; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; status: string }
+type Proposal = InvoiceProposal | QuoteProposal | ClientProposal;
+interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: unknown }>; usage: Usage; proposal?: Proposal }
 
 async function runAgent(ctx: GerrieContext, history: Array<{ role: string; content: string }>, message: string, emit: Emit): Promise<AgentOutcome> {
   const system = buildSystemPrompt(ctx);
@@ -190,19 +193,19 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
     // wordt NIET uitgevoerd: bij geldige invoer stoppen we en sturen we een voorstel
     // dat de gebruiker zelf in de app controleert en opslaat.
     const toolResults: AnthropicBlock[] = [];
-    let proposal: InvoiceProposal | null = null;
+    let proposal: Proposal | null = null;
     for (const use of toolUses) {
       const toolName = String(use.name);
       const toolUseId = String(use.id);
       const toolInput = (use.input ?? {}) as Record<string, unknown>;
       toolCalls.push({ name: toolName, input: toolInput });
 
-      if (toolName === 'propose_invoice') {
-        await emit('status', { kind: 'tool', label: 'Conceptfactuur klaarzetten…' });
-        const built = await buildInvoiceProposal(ctx, toolInput);
+      if (toolName.startsWith('propose_')) {
+        await emit('status', { kind: 'tool', label: proposeLabel(toolName) });
+        const built = await buildProposal(ctx, toolName, toolInput);
         if (built.ok) { proposal = built.proposal; break; }
         // Ongeldig voorstel -> stuur de fout terug zodat het model het kan corrigeren.
-        toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: `Kan de conceptfactuur nog niet klaarzetten: ${built.error}`, is_error: true });
+        toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: `Kan dit nog niet klaarzetten: ${built.error}`, is_error: true });
         continue;
       }
 
@@ -313,12 +316,13 @@ function buildSystemPrompt(ctx: GerrieContext): string {
     '- Gebruik altijd een tool om echte gegevens op te halen; verzin nooit cijfers, namen of bedragen.',
     '- Bedragen zijn in euro\'s. Toon ze netjes (bijv. € 1.250,00). Rapporteer beknopt en zakelijk.',
     '',
-    'Acties:',
+    'Acties (je VOERT zelf niets uit — je stelt voor; de gebruiker controleert het in een vooringevuld formulier en slaat zélf op):',
     canWrite
       ? [
-          '- Je kunt een CONCEPTFACTUUR klaarzetten met de tool `propose_invoice`. Je voert zelf niets uit: het voorstel opent als vooringevuld factuurformulier dat de gebruiker controleert en zélf opslaat.',
-          '- Verzamel eerst genoeg gegevens: zoek de klant met `search_clients` en gebruik diens exacte id; bepaal de regels (omschrijving, aantal, prijs per stuk EXCL. btw, btw-percentage — meestal 21). Ontbreekt er iets, vraag het kort na in plaats van te gissen.',
-          '- Andere acties (offerte opstellen, versturen, wijzigen, verwijderen) kunnen nog niet — leg dat kort uit als erom gevraagd wordt.',
+          '- `propose_invoice` — conceptfactuur klaarzetten. Zoek eerst de klant met `search_clients` (gebruik diens exacte id) en bepaal de regels (omschrijving, aantal, prijs per stuk EXCL. btw, btw% — meestal 21).',
+          '- `propose_quote` — conceptofferte klaarzetten. Net als de factuur, met een optionele geldig-tot-datum.',
+          '- `propose_client` — nieuwe klant klaarzetten. Controleer eerst met `search_clients` of de klant al bestaat (voorkom dubbelen). Naam is verplicht; contactpersoon/e-mail/telefoon optioneel.',
+          '- Ontbreekt er informatie, vraag het kort na in plaats van te gissen. Versturen (mail), wijzigen en verwijderen kunnen nog niet — leg dat kort uit als erom gevraagd wordt.',
         ].join('\n')
       : '- De gebruiker heeft alleen leesrechten (rol viewer) en mag niets aanmaken of wijzigen; help met opzoeken en uitleggen.',
     '',
@@ -433,6 +437,49 @@ const TOOL_DEFINITIONS = [
       required: ['client_id', 'lines'],
     },
   },
+  {
+    name: 'propose_quote',
+    description: 'Zet een CONCEPTOFFERTE klaar voor de gebruiker. Je voert NIETS uit: het voorstel opent als vooringevuld offerteformulier dat de gebruiker zelf controleert en opslaat. Gebruik dit pas als je de juiste klant (via search_clients) én de offerteregels weet.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'string', description: 'Het exacte id van de klant (uit search_clients), niet de naam.' },
+        lines: {
+          type: 'array',
+          description: 'De offerteregels.',
+          items: {
+            type: 'object',
+            properties: {
+              description: { type: 'string', description: 'Omschrijving van de regel.' },
+              quantity: { type: 'number', description: 'Aantal (bijv. uren of stuks).' },
+              unit_price: { type: 'number', description: "Prijs per stuk in euro's, EXCLUSIEF btw." },
+              vat: { type: 'number', description: 'Btw-percentage (meestal 21, soms 9 of 0).' },
+            },
+            required: ['description', 'quantity', 'unit_price', 'vat'],
+          },
+        },
+        valid_until: { type: 'string', description: 'Optioneel: geldig tot YYYY-MM-DD.' },
+        notes: { type: 'string', description: 'Optionele opmerking op de offerte.' },
+      },
+      required: ['client_id', 'lines'],
+    },
+  },
+  {
+    name: 'propose_client',
+    description: 'Zet een NIEUWE klant klaar voor de gebruiker. Je voert NIETS uit: het voorstel opent als vooringevuld klantformulier dat de gebruiker controleert en opslaat. Controleer eerst met search_clients of de klant al bestaat, om dubbelen te voorkomen.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Bedrijfs-/klantnaam (verplicht).' },
+        contact_name: { type: 'string', description: 'Naam van de contactpersoon (optioneel).' },
+        email: { type: 'string', description: 'E-mailadres (optioneel).' },
+        phone: { type: 'string', description: 'Telefoonnummer (optioneel).' },
+        status: { type: 'string', enum: ['active', 'prospect', 'inactive'], description: "Status (standaard 'active'; 'prospect' voor een nieuwe lead)." },
+        notes: { type: 'string', description: 'Optionele notitie bij de klant.' },
+      },
+      required: ['name'],
+    },
+  },
 ];
 
 function toolLabel(name: string): string {
@@ -463,51 +510,100 @@ async function runTool(ctx: GerrieContext, name: string, input: Record<string, u
   }
 }
 
-// ── Schrijf-voorstel: conceptfactuur (fase 3, alleen vóórstellen) ────────────
+// ── Schrijf-voorstellen (fase 3): alleen VÓÓRSTELLEN, nooit uitvoeren ─────────
+// De gebruiker controleert en slaat het voorstel zelf op via het bestaande
+// formulier (met de eigen rechten/RLS). Schrijfrol vereist (viewer mag niet).
 
-type ProposalResult = { ok: true; proposal: InvoiceProposal } | { ok: false; error: string };
+type ProposalResult = { ok: true; proposal: Proposal } | { ok: false; error: string };
 
-/**
- * Valideert de door het model voorgestelde conceptfactuur tegen de echte data.
- * Voert NIETS uit — geeft alleen een gecontroleerd voorstel terug dat de gebruiker
- * in de app opent en zelf opslaat. Schrijfrol vereist (viewer mag niet).
- */
-async function buildInvoiceProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
-  if (!['owner', 'admin', 'member'].includes(ctx.role)) {
-    return { ok: false, error: 'Deze gebruiker heeft alleen leesrechten en mag geen factuur aanmaken.' };
+function proposeLabel(toolName: string): string {
+  switch (toolName) {
+    case 'propose_invoice': return 'Conceptfactuur klaarzetten…';
+    case 'propose_quote': return 'Conceptofferte klaarzetten…';
+    case 'propose_client': return 'Klantgegevens klaarzetten…';
+    default: return 'Voorstel klaarzetten…';
   }
-  const clientId = String(input.client_id || '').trim();
+}
+
+async function buildProposal(ctx: GerrieContext, toolName: string, input: Record<string, unknown>): Promise<ProposalResult> {
+  if (!['owner', 'admin', 'member'].includes(ctx.role)) {
+    return { ok: false, error: 'Deze gebruiker heeft alleen leesrechten en mag niets aanmaken.' };
+  }
+  switch (toolName) {
+    case 'propose_invoice': return buildInvoiceProposal(ctx, input);
+    case 'propose_quote': return buildQuoteProposal(ctx, input);
+    case 'propose_client': return buildClientProposal(input);
+    default: return { ok: false, error: `Onbekende actie: ${toolName}` };
+  }
+}
+
+/** Zoekt de klant op id binnen de organisatie (voor factuur/offerte). */
+async function resolveClient(ctx: GerrieContext, rawId: unknown): Promise<{ ok: true; id: string; name: string } | { ok: false; error: string }> {
+  const clientId = String(rawId || '').trim();
   if (!isUuid(clientId)) return { ok: false, error: 'Ongeldig client_id. Zoek de klant eerst met search_clients en gebruik het exacte id.' };
-
-  const { data: client, error: clientErr } = await supabaseAdmin.from('clients')
+  const { data: client, error } = await supabaseAdmin.from('clients')
     .select('id, name').eq('organization_id', ctx.organizationId).eq('id', clientId).maybeSingle();
-  if (clientErr) return { ok: false, error: `Klant ophalen mislukt: ${clientErr.message}` };
+  if (error) return { ok: false, error: `Klant ophalen mislukt: ${error.message}` };
   if (!client) return { ok: false, error: 'Klant niet gevonden in deze organisatie.' };
+  return { ok: true, id: clientId, name: String(client.name) };
+}
 
+/** Valideert en normaliseert factuur-/offerteregels. */
+function parseProposalLines(input: Record<string, unknown>): { ok: true; lines: ProposalLine[] } | { ok: false; error: string } {
   const rawLines = Array.isArray(input.lines) ? (input.lines as Record<string, unknown>[]) : [];
-  if (rawLines.length === 0) return { ok: false, error: 'Geef minstens één factuurregel (omschrijving, aantal, prijs excl. btw, btw%).' };
-
+  if (rawLines.length === 0) return { ok: false, error: 'Geef minstens één regel (omschrijving, aantal, prijs excl. btw, btw%).' };
   const lines: ProposalLine[] = [];
   for (const raw of rawLines) {
     const description = String(raw.description || '').trim();
-    if (!description) return { ok: false, error: 'Elke factuurregel heeft een omschrijving nodig.' };
+    if (!description) return { ok: false, error: 'Elke regel heeft een omschrijving nodig.' };
     const quantity = num(raw.quantity);
     if (!(quantity > 0)) return { ok: false, error: `Ongeldig aantal voor "${description}".` };
-    const unit_price = num(raw.unit_price);
-    const vat = raw.vat == null ? 21 : num(raw.vat);
-    lines.push({ description: description.slice(0, 500), quantity, unit_price, vat });
+    lines.push({ description: description.slice(0, 500), quantity, unit_price: num(raw.unit_price), vat: raw.vat == null ? 21 : num(raw.vat) });
   }
+  return { ok: true, lines };
+}
 
+async function buildInvoiceProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const client = await resolveClient(ctx, input.client_id);
+  if (!client.ok) return client;
+  const parsed = parseProposalLines(input);
+  if (!parsed.ok) return parsed;
   return {
     ok: true,
     proposal: {
-      type: 'invoice',
-      client_id: clientId,
-      client_name: String(client.name),
-      lines,
+      type: 'invoice', client_id: client.id, client_name: client.name, lines: parsed.lines,
       notes: input.notes ? String(input.notes).slice(0, 2000) : null,
-      due_date: isoDate(input.due_date),
-      total_eur: round2(lineTotal(lines)),
+      due_date: isoDate(input.due_date), total_eur: round2(lineTotal(parsed.lines)),
+    },
+  };
+}
+
+async function buildQuoteProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const client = await resolveClient(ctx, input.client_id);
+  if (!client.ok) return client;
+  const parsed = parseProposalLines(input);
+  if (!parsed.ok) return parsed;
+  return {
+    ok: true,
+    proposal: {
+      type: 'quote', client_id: client.id, client_name: client.name, lines: parsed.lines,
+      notes: input.notes ? String(input.notes).slice(0, 2000) : null,
+      valid_until: isoDate(input.valid_until), total_eur: round2(lineTotal(parsed.lines)),
+    },
+  };
+}
+
+function buildClientProposal(input: Record<string, unknown>): ProposalResult {
+  const name = String(input.name || '').trim();
+  if (!name) return { ok: false, error: 'Geef minimaal de naam van de klant.' };
+  const status = ['active', 'prospect', 'inactive'].includes(String(input.status)) ? String(input.status) : 'active';
+  const opt = (v: unknown) => { const s = String(v ?? '').trim(); return s ? s.slice(0, 300) : null; };
+  return {
+    ok: true,
+    proposal: {
+      type: 'client', name: name.slice(0, 300), contact_name: opt(input.contact_name),
+      email: opt(input.email), phone: opt(input.phone),
+      notes: input.notes ? String(input.notes).slice(0, 2000) : null, status,
     },
   };
 }

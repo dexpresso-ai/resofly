@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { streamGerrieReply, type GerrieStatus, type GerrieInvoiceProposal } from '../lib/gerrie-api';
+import { streamGerrieReply, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal } from '../lib/gerrie-api';
 import { euro } from '../lib/format';
 import type { UUID } from '../types';
 
@@ -13,7 +13,7 @@ import type { UUID } from '../types';
  */
 
 type ChatRole = 'user' | 'assistant';
-interface ChatMessage { id: string; role: ChatRole; text: string; proposal?: GerrieInvoiceProposal }
+interface ChatMessage { id: string; role: ChatRole; text: string; proposal?: GerrieProposal }
 
 let idSeq = 0;
 const nextId = () => `gerrie-${Date.now()}-${++idSeq}`;
@@ -31,9 +31,11 @@ const SUGGESTIONS = [
   'Welke offertes lopen er nog?',
 ];
 
-export function GerrieChat({ organizationId, onCreateInvoiceDraft }: {
+export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft }: {
   organizationId: UUID;
   onCreateInvoiceDraft?: (proposal: GerrieInvoiceProposal) => void;
+  onCreateQuoteDraft?: (proposal: GerrieQuoteProposal) => void;
+  onCreateClientDraft?: (proposal: GerrieClientProposal) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: nextId(), role: 'assistant', text: INTRO_TEXT }]);
@@ -102,6 +104,13 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft }: {
     setDraft(el.value);
   }
 
+  // Kies de juiste voorstel-kaart + actie op basis van het type voorstel.
+  function proposalCard(p: GerrieProposal) {
+    if (p.type === 'invoice') return <ProposalCard title="Conceptfactuur openen & controleren" sub={`${p.client_name} · ${euro(p.total_eur)} · ${lineLabel(p.lines.length)}`} onClick={() => onCreateInvoiceDraft?.(p)} />;
+    if (p.type === 'quote') return <ProposalCard title="Conceptofferte openen & controleren" sub={`${p.client_name} · ${euro(p.total_eur)} · ${lineLabel(p.lines.length)}`} onClick={() => onCreateQuoteDraft?.(p)} />;
+    return <ProposalCard title="Nieuwe klant openen & controleren" sub={[p.name, p.email].filter(Boolean).join(' · ')} onClick={() => onCreateClientDraft?.(p)} />;
+  }
+
   return (
     <div className="gerrie-root">
       {open && (
@@ -124,13 +133,7 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft }: {
                 {m.proposal ? (
                   <div className="gerrie-stack">
                     <div className="gerrie-bubble">{m.text}</div>
-                    <button className="gerrie-proposal" onClick={() => onCreateInvoiceDraft?.(m.proposal!)}>
-                      <span className="gerrie-proposal-icon" aria-hidden="true"><DocIcon /></span>
-                      <span className="gerrie-proposal-body">
-                        <span className="gerrie-proposal-title">Conceptfactuur openen &amp; controleren</span>
-                        <span className="gerrie-proposal-sub">{m.proposal.client_name} · {euro(m.proposal.total_eur)} · {m.proposal.lines.length} regel{m.proposal.lines.length === 1 ? '' : 's'}</span>
-                      </span>
-                    </button>
+                    {proposalCard(m.proposal)}
                   </div>
                 ) : (
                   <div className="gerrie-bubble">{m.text}</div>
@@ -242,5 +245,19 @@ function DocIcon() {
       <path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z" />
       <path d="M9 12h6M9 16h6" />
     </svg>
+  );
+}
+
+function lineLabel(n: number): string { return `${n} regel${n === 1 ? '' : 's'}`; }
+
+function ProposalCard({ title, sub, onClick }: { title: string; sub: string; onClick: () => void }) {
+  return (
+    <button className="gerrie-proposal" onClick={onClick}>
+      <span className="gerrie-proposal-icon" aria-hidden="true"><DocIcon /></span>
+      <span className="gerrie-proposal-body">
+        <span className="gerrie-proposal-title">{title}</span>
+        <span className="gerrie-proposal-sub">{sub}</span>
+      </span>
+    </button>
   );
 }

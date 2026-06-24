@@ -15,23 +15,43 @@ const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
 export interface GerrieStatus { kind: 'thinking' | 'tool'; label: string }
 
-/** Door Gerrie voorgestelde conceptfactuur — opent vooringevuld in het factuurformulier. */
+/** Door Gerrie voorgestelde acties — openen vooringevuld in het bestaande formulier. */
+export interface GerrieProposalLine { description: string; quantity: number; unit_price: number; vat: number }
 export interface GerrieInvoiceProposal {
   type: 'invoice';
   client_id: UUID;
   client_name: string;
-  lines: Array<{ description: string; quantity: number; unit_price: number; vat: number }>;
+  lines: GerrieProposalLine[];
   notes: string | null;
   due_date: string | null;
   total_eur: number;
 }
+export interface GerrieQuoteProposal {
+  type: 'quote';
+  client_id: UUID;
+  client_name: string;
+  lines: GerrieProposalLine[];
+  notes: string | null;
+  valid_until: string | null;
+  total_eur: number;
+}
+export interface GerrieClientProposal {
+  type: 'client';
+  name: string;
+  contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  notes: string | null;
+  status: string;
+}
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal;
 
 export interface GerrieResult {
   conversationId: UUID;
   messageId: UUID;
   text: string;
   budget?: { remainingFraction: number };
-  proposal?: GerrieInvoiceProposal;
+  proposal?: GerrieProposal;
 }
 
 export interface GerrieRequest {
