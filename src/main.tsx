@@ -999,6 +999,17 @@ function App() {
         setPage('clients'); setProjectId(null); setClientId(null);
         setEdit({ kind: 'client', item: merged });
       }}
+      onSendReminders={async (p) => {
+        if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+        let sent = 0;
+        const failed: string[] = [];
+        for (const inv of p.invoices) {
+          try { await sendInvoiceReminderEmail(activeOrg.id, inv.id); sent += 1; }
+          catch { failed.push(inv.number); }
+        }
+        await refresh();
+        if (failed.length) throw new Error(`${sent} verstuurd, ${failed.length} mislukt (${failed.join(', ')}).`);
+      }}
     />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
       <div className="send-overlay-card">

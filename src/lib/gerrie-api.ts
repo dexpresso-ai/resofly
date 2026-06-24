@@ -87,7 +87,12 @@ export interface GerrieEditClientProposal {
   name: string;
   changes: { name?: string; contact_name?: string | null; email?: string | null; phone?: string | null; notes?: string | null; status?: string };
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal;
+export interface GerrieSendRemindersProposal {
+  type: 'send_reminders';
+  invoices: Array<{ id: UUID; number: string; client_name: string; level: number }>;
+  total: number;
+}
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal;
 
 export interface GerrieResult {
   conversationId: UUID;

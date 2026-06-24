@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { streamGerrieReply, confirmGerrieAction, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal, type GerrieEditInvoiceProposal, type GerrieEditQuoteProposal, type GerrieEditClientProposal } from '../lib/gerrie-api';
+import { streamGerrieReply, confirmGerrieAction, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal, type GerrieEditInvoiceProposal, type GerrieEditQuoteProposal, type GerrieEditClientProposal, type GerrieSendRemindersProposal } from '../lib/gerrie-api';
 import { euro } from '../lib/format';
 import type { UUID } from '../types';
 
@@ -31,7 +31,7 @@ const SUGGESTIONS = [
   'Welke offertes lopen er nog?',
 ];
 
-export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient }: {
+export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders }: {
   organizationId: UUID;
   onCreateInvoiceDraft?: (proposal: GerrieInvoiceProposal) => void;
   onCreateQuoteDraft?: (proposal: GerrieQuoteProposal) => void;
@@ -42,6 +42,7 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
   onEditInvoice?: (proposal: GerrieEditInvoiceProposal) => void;
   onEditQuote?: (proposal: GerrieEditQuoteProposal) => void;
   onEditClient?: (proposal: GerrieEditClientProposal) => void;
+  onSendReminders?: (proposal: GerrieSendRemindersProposal) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: nextId(), role: 'assistant', text: INTRO_TEXT }]);
@@ -157,6 +158,10 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
     if (p.type === 'edit_invoice') return <ProposalCard title="Wijziging factuur openen & controleren" sub={`Factuur ${p.number} · ${p.client_name}`} onClick={() => onEditInvoice?.(p)} />;
     if (p.type === 'edit_quote') return <ProposalCard title="Wijziging offerte openen & controleren" sub={`Offerte ${p.number} · ${p.client_name}`} onClick={() => onEditQuote?.(p)} />;
     if (p.type === 'edit_client') return <ProposalCard title="Wijziging klant openen & controleren" sub={p.name} onClick={() => onEditClient?.(p)} />;
+    if (p.type === 'send_reminders') {
+      const byLevel = [1, 2, 3].map((l) => p.invoices.filter((i) => i.level === l).length);
+      return <ConfirmActionCard icon={<MailIcon />} title={`${p.total} herinnering${p.total === 1 ? '' : 'en'} versturen?`} sub={`1e: ${byLevel[0]} · 2e: ${byLevel[1]} · 3e: ${byLevel[2]}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`${p.total} herinnering${p.total === 1 ? '' : 'en'} verstuurd`} onConfirm={() => runConfirmed(auditId, () => onSendReminders ? onSendReminders(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.')))} />;
+    }
     return <ProposalCard title="Nieuwe klant openen & controleren" sub={[p.name, p.email].filter(Boolean).join(' · ')} onClick={() => onCreateClientDraft?.(p)} />;
   }
 
