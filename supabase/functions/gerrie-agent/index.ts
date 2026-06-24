@@ -164,7 +164,10 @@ interface ClientProposal { type: 'client'; name: string; contact_name: string | 
 interface SendInvoiceProposal { type: 'send_invoice'; id: string; number: string; client_name: string; recipient_email: string; recipient_name: string | null }
 interface SendQuoteProposal { type: 'send_quote'; id: string; number: string; client_name: string; recipient_email: string; recipient_name: string | null }
 interface ConvertQuoteProposal { type: 'convert_quote'; id: string; number: string; client_name: string; total_eur: number }
-type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | ConvertQuoteProposal;
+interface EditInvoiceProposal { type: 'edit_invoice'; id: string; number: string; client_name: string; changes: { lines?: ProposalLine[]; notes?: string | null; due_date?: string | null } }
+interface EditQuoteProposal { type: 'edit_quote'; id: string; number: string; client_name: string; changes: { lines?: ProposalLine[]; notes?: string | null; valid_until?: string | null } }
+interface EditClientProposal { type: 'edit_client'; id: string; name: string; changes: { name?: string; contact_name?: string | null; email?: string | null; phone?: string | null; notes?: string | null; status?: string } }
+type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal;
 interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: unknown }>; usage: Usage; proposal?: Proposal }
 
 async function runAgent(ctx: GerrieContext, history: Array<{ role: string; content: string }>, message: string, emit: Emit): Promise<AgentOutcome> {
@@ -227,6 +230,9 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
         : proposal.type === 'send_invoice' ? `Wil je dat ik factuur ${proposal.number} naar ${proposal.recipient_email} verstuur? Bevestig hieronder.`
         : proposal.type === 'send_quote' ? `Wil je dat ik offerte ${proposal.number} naar ${proposal.recipient_email} verstuur? Bevestig hieronder.`
         : proposal.type === 'convert_quote' ? `Wil je dat ik offerte ${proposal.number} omzet naar een factuur? Bevestig hieronder.`
+        : proposal.type === 'edit_invoice' ? `Ik heb de wijziging van concept-factuur ${proposal.number} klaargezet. Controleer hem en sla op:`
+        : proposal.type === 'edit_quote' ? `Ik heb de wijziging van concept-offerte ${proposal.number} klaargezet. Controleer hem en sla op:`
+        : proposal.type === 'edit_client' ? `Ik heb de wijziging van klant ${proposal.name} klaargezet. Controleer de gegevens en sla op:`
         : 'Ik heb een conceptfactuur voor je klaargezet. Controleer hem en sla op:';
       return { text: extractText(response.content) || fallback, toolCalls, usage, proposal };
     }
@@ -332,7 +338,10 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_client` — nieuwe klant klaarzetten. Controleer eerst met `search_clients` of de klant al bestaat (voorkom dubbelen). Naam is verplicht; contactpersoon/e-mail/telefoon optioneel.',
           '- `propose_send_invoice` / `propose_send_quote` — een BESTAANDE factuur/offerte per e-mail naar de klant versturen. Zoek het document eerst met `list_invoices`/`list_quotes` en gebruik het exacte id. Het gaat naar het e-mailadres van de gekoppelde klant; benoem dat adres in je antwoord zodat de gebruiker het kan controleren vóór hij bevestigt.',
           '- `propose_convert_quote` — een GEACCEPTEERDE offerte omzetten naar een factuur. Zoek de offerte met `list_quotes`; alleen status "accepted" kan omgezet worden.',
-          '- Ontbreekt er informatie, vraag het kort na in plaats van te gissen. Wijzigen en verwijderen kunnen nog niet — leg dat kort uit als erom gevraagd wordt.',
+          '- `propose_edit_invoice` / `propose_edit_quote` — een bestaande CONCEPT-factuur/offerte wijzigen. Alleen status "draft" mag; een verstuurde of verwerkte factuur mag wettelijk niet meer aangepast worden — zeg dat dan. Geef alleen de velden die veranderen; voor losse regelaanpassingen heb je de volledige set regels nodig, laat `lines` anders weg zodat de gebruiker ze zelf aanpast.',
+          '- `propose_edit_client` — klantgegevens wijzigen. Geef alleen de velden die veranderen.',
+          '- VERWIJDEREN kan en mag NIET, zeker niet van facturen of offertes (dat is wettelijk niet toegestaan). Vraagt iemand om iets te verwijderen, leg dat uit en stel zo nodig voor om een concept te wijzigen of een document te annuleren (annuleren komt later).',
+          '- Ontbreekt er informatie, vraag het kort na in plaats van te gissen.',
         ].join('\n')
       : '- De gebruiker heeft alleen leesrechten (rol viewer) en mag niets aanmaken of wijzigen; help met opzoeken en uitleggen.',
     '',
@@ -523,6 +532,54 @@ const TOOL_DEFINITIONS = [
       required: ['id'],
     },
   },
+  {
+    name: 'propose_edit_invoice',
+    description: 'Wijzig een bestaande CONCEPT-factuur (alleen status "draft" — een verstuurde of verwerkte factuur mag wettelijk niet meer aangepast worden). Je voert niets uit: de wijziging opent vooringevuld in het factuurformulier dat de gebruiker controleert en opslaat. Geef alleen de velden die veranderen. Voor het aanpassen van losse regels heb je de VOLLEDIGE set regels nodig; weet je die niet zeker, laat `lines` dan weg zodat de gebruiker de regels zelf in het formulier aanpast.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Het exacte id van de factuur (uit list_invoices).' },
+        lines: {
+          type: 'array', description: 'Optioneel: de VOLLEDIGE nieuwe set factuurregels (vervangt de bestaande).',
+          items: { type: 'object', properties: { description: { type: 'string' }, quantity: { type: 'number' }, unit_price: { type: 'number', description: 'Excl. btw.' }, vat: { type: 'number' } }, required: ['description', 'quantity', 'unit_price', 'vat'] },
+        },
+        due_date: { type: 'string', description: 'Optioneel: nieuwe vervaldatum YYYY-MM-DD.' },
+        notes: { type: 'string', description: 'Optioneel: nieuwe opmerking.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'propose_edit_quote',
+    description: 'Wijzig een bestaande CONCEPT-offerte (alleen status "draft"). Je voert niets uit: de wijziging opent vooringevuld in het offerteformulier. Geef alleen de velden die veranderen; voor losse regels heb je de VOLLEDIGE set nodig, laat `lines` anders weg.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Het exacte id van de offerte (uit list_quotes).' },
+        lines: {
+          type: 'array', description: 'Optioneel: de VOLLEDIGE nieuwe set offerteregels (vervangt de bestaande).',
+          items: { type: 'object', properties: { description: { type: 'string' }, quantity: { type: 'number' }, unit_price: { type: 'number', description: 'Excl. btw.' }, vat: { type: 'number' } }, required: ['description', 'quantity', 'unit_price', 'vat'] },
+        },
+        valid_until: { type: 'string', description: 'Optioneel: nieuwe geldig-tot-datum YYYY-MM-DD.' },
+        notes: { type: 'string', description: 'Optioneel: nieuwe opmerking.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'propose_edit_client',
+    description: 'Wijzig de gegevens van een bestaande klant. Je voert niets uit: de wijziging opent vooringevuld in het klantformulier dat de gebruiker controleert en opslaat. Geef alleen de velden die veranderen.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Het exacte id van de klant (uit search_clients).' },
+        name: { type: 'string' }, contact_name: { type: 'string' }, email: { type: 'string' }, phone: { type: 'string' },
+        status: { type: 'string', enum: ['active', 'prospect', 'inactive'] },
+        notes: { type: 'string' },
+      },
+      required: ['id'],
+    },
+  },
 ];
 
 function toolLabel(name: string): string {
@@ -567,6 +624,9 @@ function proposeLabel(toolName: string): string {
     case 'propose_send_invoice':
     case 'propose_send_quote': return 'Verzending voorbereiden…';
     case 'propose_convert_quote': return 'Omzetting voorbereiden…';
+    case 'propose_edit_invoice':
+    case 'propose_edit_quote':
+    case 'propose_edit_client': return 'Wijziging klaarzetten…';
     default: return 'Voorstel klaarzetten…';
   }
 }
@@ -582,8 +642,70 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
     case 'propose_send_invoice': return buildSendProposal(ctx, 'invoice', input);
     case 'propose_send_quote': return buildSendProposal(ctx, 'quote', input);
     case 'propose_convert_quote': return buildConvertQuoteProposal(ctx, input);
+    case 'propose_edit_invoice': return buildEditFinanceProposal(ctx, 'invoice', input);
+    case 'propose_edit_quote': return buildEditFinanceProposal(ctx, 'quote', input);
+    case 'propose_edit_client': return buildEditClientProposal(ctx, input);
     default: return { ok: false, error: `Onbekende actie: ${toolName}` };
   }
+}
+
+/** Wijziging van een CONCEPT-factuur/offerte (alleen status 'draft' — wettelijk). */
+async function buildEditFinanceProposal(ctx: GerrieContext, kind: 'invoice' | 'quote', input: Record<string, unknown>): Promise<ProposalResult> {
+  const table = kind === 'invoice' ? 'invoices' : 'quotes';
+  const label = kind === 'invoice' ? 'factuur' : 'offerte';
+  const listTool = kind === 'invoice' ? 'list_invoices' : 'list_quotes';
+  const id = String(input.id || '').trim();
+  if (!isUuid(id)) return { ok: false, error: `Ongeldig id. Zoek de ${label} eerst met ${listTool} en gebruik het exacte id.` };
+
+  const { data: doc, error } = await supabaseAdmin.from(table)
+    .select('id, number, client_id, status').eq('organization_id', ctx.organizationId).eq('id', id).maybeSingle();
+  if (error) return { ok: false, error: `${label} ophalen mislukt: ${error.message}` };
+  if (!doc) return { ok: false, error: `${label.charAt(0).toUpperCase() + label.slice(1)} niet gevonden in deze organisatie.` };
+  if (String(doc.status) !== 'draft') {
+    return { ok: false, error: `Alleen een concept-${label} kan gewijzigd worden; deze heeft status "${String(doc.status)}" en mag (ook wettelijk) niet meer aangepast worden.` };
+  }
+
+  const changes: Record<string, unknown> = {};
+  if (input.lines !== undefined) {
+    const parsed = parseProposalLines(input);
+    if (!parsed.ok) return parsed;
+    changes.lines = parsed.lines;
+  }
+  if (input.notes !== undefined) changes.notes = input.notes ? String(input.notes).slice(0, 2000) : null;
+  if (kind === 'invoice' && input.due_date !== undefined) changes.due_date = isoDate(input.due_date);
+  if (kind === 'quote' && input.valid_until !== undefined) changes.valid_until = isoDate(input.valid_until);
+
+  const { data: client } = await supabaseAdmin.from('clients')
+    .select('name').eq('organization_id', ctx.organizationId).eq('id', doc.client_id).maybeSingle();
+
+  return {
+    ok: true,
+    proposal: {
+      type: kind === 'invoice' ? 'edit_invoice' : 'edit_quote',
+      id: String(doc.id), number: String(doc.number), client_name: String(client?.name ?? ''), changes,
+    },
+  };
+}
+
+/** Wijziging van klantgegevens. */
+async function buildEditClientProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const id = String(input.id || '').trim();
+  if (!isUuid(id)) return { ok: false, error: 'Ongeldig id. Zoek de klant eerst met search_clients en gebruik het exacte id.' };
+  const { data: client, error } = await supabaseAdmin.from('clients')
+    .select('id, name').eq('organization_id', ctx.organizationId).eq('id', id).maybeSingle();
+  if (error) return { ok: false, error: `Klant ophalen mislukt: ${error.message}` };
+  if (!client) return { ok: false, error: 'Klant niet gevonden in deze organisatie.' };
+
+  const opt = (v: unknown) => { const s = String(v ?? '').trim(); return s ? s.slice(0, 300) : null; };
+  const changes: Record<string, unknown> = {};
+  if (input.name !== undefined) { const n = String(input.name).trim(); if (!n) return { ok: false, error: 'De naam mag niet leeg zijn.' }; changes.name = n.slice(0, 300); }
+  if (input.contact_name !== undefined) changes.contact_name = opt(input.contact_name);
+  if (input.email !== undefined) changes.email = opt(input.email);
+  if (input.phone !== undefined) changes.phone = opt(input.phone);
+  if (input.notes !== undefined) changes.notes = input.notes ? String(input.notes).slice(0, 2000) : null;
+  if (input.status !== undefined && ['active', 'prospect', 'inactive'].includes(String(input.status))) changes.status = String(input.status);
+
+  return { ok: true, proposal: { type: 'edit_client', id: String(client.id), name: String(client.name), changes } };
 }
 
 /** Bereidt het omzetten van een geaccepteerde offerte naar een factuur voor. */
@@ -907,7 +1029,7 @@ function proposalHistoryNote(toolCalls: unknown): string {
   const prop = toolCalls.find((t) => t && typeof (t as { name?: unknown }).name === 'string' && (t as { name: string }).name.startsWith('propose_')) as { name: string; input?: Record<string, unknown> } | undefined;
   if (!prop) return '';
   const input = (prop.input ?? {}) as Record<string, unknown>;
-  if (prop.name === 'propose_send_invoice' || prop.name === 'propose_send_quote' || prop.name === 'propose_convert_quote') return '';
+  if (prop.name.startsWith('propose_send_') || prop.name === 'propose_convert_quote' || prop.name.startsWith('propose_edit_')) return '';
   if (prop.name === 'propose_client') return `[Eerder voorgesteld: nieuwe klant "${String(input.name ?? '')}".]`;
   const kind = prop.name === 'propose_quote' ? 'conceptofferte' : 'conceptfactuur';
   const lines = Array.isArray(input.lines)

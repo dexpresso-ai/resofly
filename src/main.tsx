@@ -963,6 +963,42 @@ function App() {
         setPage('invoices'); setProjectId(null); setClientId(null);
         setEdit({ kind: 'invoice', item: invoice });
       }}
+      onEditInvoice={(p) => {
+        if (!ensureCanWrite()) return;
+        const existing = data.invoices.find((i) => i.id === p.id);
+        if (!existing) { setError('Factuur niet gevonden.'); return; }
+        const merged: Invoice = { ...existing };
+        if (p.changes.lines) merged.lines = p.changes.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat }));
+        if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
+        if (p.changes.due_date !== undefined) merged.due_date = p.changes.due_date;
+        setPage('invoices'); setProjectId(null); setClientId(null);
+        setEdit({ kind: 'invoice', item: merged });
+      }}
+      onEditQuote={(p) => {
+        if (!ensureCanWrite()) return;
+        const existing = data.quotes.find((q) => q.id === p.id);
+        if (!existing) { setError('Offerte niet gevonden.'); return; }
+        const merged: Quote = { ...existing };
+        if (p.changes.lines) merged.lines = p.changes.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat }));
+        if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
+        if (p.changes.valid_until !== undefined) merged.valid_until = p.changes.valid_until;
+        setPage('quotes'); setProjectId(null); setClientId(null);
+        setEdit({ kind: 'quote', item: merged });
+      }}
+      onEditClient={(p) => {
+        if (!ensureCanWrite()) return;
+        const existing = data.clients.find((c) => c.id === p.id);
+        if (!existing) { setError('Klant niet gevonden.'); return; }
+        const merged: Client = { ...existing };
+        if (p.changes.name !== undefined) merged.name = p.changes.name;
+        if (p.changes.contact_name !== undefined) merged.contact_name = p.changes.contact_name;
+        if (p.changes.email !== undefined) merged.email = p.changes.email;
+        if (p.changes.phone !== undefined) merged.phone = p.changes.phone;
+        if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
+        if (p.changes.status !== undefined) merged.status = p.changes.status as Client['status'];
+        setPage('clients'); setProjectId(null); setClientId(null);
+        setEdit({ kind: 'client', item: merged });
+      }}
     />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
       <div className="send-overlay-card">

@@ -67,7 +67,27 @@ export interface GerrieConvertQuoteProposal {
   client_name: string;
   total_eur: number;
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal;
+export interface GerrieEditInvoiceProposal {
+  type: 'edit_invoice';
+  id: UUID;
+  number: string;
+  client_name: string;
+  changes: { lines?: GerrieProposalLine[]; notes?: string | null; due_date?: string | null };
+}
+export interface GerrieEditQuoteProposal {
+  type: 'edit_quote';
+  id: UUID;
+  number: string;
+  client_name: string;
+  changes: { lines?: GerrieProposalLine[]; notes?: string | null; valid_until?: string | null };
+}
+export interface GerrieEditClientProposal {
+  type: 'edit_client';
+  id: UUID;
+  name: string;
+  changes: { name?: string; contact_name?: string | null; email?: string | null; phone?: string | null; notes?: string | null; status?: string };
+}
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal;
 
 export interface GerrieResult {
   conversationId: UUID;

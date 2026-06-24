@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { streamGerrieReply, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal } from '../lib/gerrie-api';
+import { streamGerrieReply, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal, type GerrieEditInvoiceProposal, type GerrieEditQuoteProposal, type GerrieEditClientProposal } from '../lib/gerrie-api';
 import { euro } from '../lib/format';
 import type { UUID } from '../types';
 
@@ -31,7 +31,7 @@ const SUGGESTIONS = [
   'Welke offertes lopen er nog?',
 ];
 
-export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote }: {
+export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient }: {
   organizationId: UUID;
   onCreateInvoiceDraft?: (proposal: GerrieInvoiceProposal) => void;
   onCreateQuoteDraft?: (proposal: GerrieQuoteProposal) => void;
@@ -39,6 +39,9 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
   onSendInvoice?: (proposal: GerrieSendInvoiceProposal) => Promise<void>;
   onSendQuote?: (proposal: GerrieSendQuoteProposal) => Promise<void>;
   onConvertQuote?: (proposal: GerrieConvertQuoteProposal) => Promise<void>;
+  onEditInvoice?: (proposal: GerrieEditInvoiceProposal) => void;
+  onEditQuote?: (proposal: GerrieEditQuoteProposal) => void;
+  onEditClient?: (proposal: GerrieEditClientProposal) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: nextId(), role: 'assistant', text: INTRO_TEXT }]);
@@ -114,6 +117,9 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
     if (p.type === 'send_invoice') return <ConfirmActionCard icon={<MailIcon />} title={`Factuur ${p.number} versturen?`} sub={`Naar ${p.recipient_email}${p.client_name ? ` · ${p.client_name}` : ''}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`Factuur ${p.number} verstuurd naar ${p.recipient_email}`} onConfirm={() => onSendInvoice ? onSendInvoice(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.'))} />;
     if (p.type === 'send_quote') return <ConfirmActionCard icon={<MailIcon />} title={`Offerte ${p.number} versturen?`} sub={`Naar ${p.recipient_email}${p.client_name ? ` · ${p.client_name}` : ''}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`Offerte ${p.number} verstuurd naar ${p.recipient_email}`} onConfirm={() => onSendQuote ? onSendQuote(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.'))} />;
     if (p.type === 'convert_quote') return <ConfirmActionCard icon={<DocIcon />} title={`Offerte ${p.number} omzetten naar factuur?`} sub={`${p.client_name} · ${euro(p.total_eur)}`} confirmLabel="Omzetten" pendingLabel="Omzetten…" doneLabel={`Factuur gemaakt van offerte ${p.number}`} onConfirm={() => onConvertQuote ? onConvertQuote(p) : Promise.reject(new Error('Omzetten is hier niet beschikbaar.'))} />;
+    if (p.type === 'edit_invoice') return <ProposalCard title="Wijziging factuur openen & controleren" sub={`Factuur ${p.number} · ${p.client_name}`} onClick={() => onEditInvoice?.(p)} />;
+    if (p.type === 'edit_quote') return <ProposalCard title="Wijziging offerte openen & controleren" sub={`Offerte ${p.number} · ${p.client_name}`} onClick={() => onEditQuote?.(p)} />;
+    if (p.type === 'edit_client') return <ProposalCard title="Wijziging klant openen & controleren" sub={p.name} onClick={() => onEditClient?.(p)} />;
     return <ProposalCard title="Nieuwe klant openen & controleren" sub={[p.name, p.email].filter(Boolean).join(' · ')} onClick={() => onCreateClientDraft?.(p)} />;
   }
 
