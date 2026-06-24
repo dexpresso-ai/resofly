@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, CreditCard, Mail, Receipt, ShieldCheck, Users } from 'lucide-react';
-import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus } from '../types';
+import { BookOpen, CreditCard, Mail, Receipt, ShieldCheck, Sparkles, Users } from 'lucide-react';
+import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startMollieConnect } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains } from '../lib/repository';
+import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadAiUsageThisMonth, type AiUsageRow } from '../lib/repository';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
@@ -55,7 +55,7 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   viewer: 'Viewer',
 };
 
-type SettingsTab = 'organisatie' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'email';
+type SettingsTab = 'organisatie' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'email';
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof Users; description: string }> = [
   { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen, en bekijk de recente activiteit.' },
@@ -63,6 +63,7 @@ const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof Users;
   { id: 'boekhouding', label: 'Boekhouding', Icon: BookOpen, description: 'De boekhoud-startdatum (knipdatum) en de KOR-regeling voor je grootboek en BTW-aangifte.' },
   { id: 'betalen', label: 'Online betalen', Icon: CreditCard, description: 'Koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
   { id: 'abonnement', label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
+  { id: 'ai', label: 'AI-gebruik', Icon: Sparkles, description: 'Het verbruik en de kosten van Gerrie (AI-assistent) per gebruiker, deze maand.' },
   { id: 'email', label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails aan, en verstuur een testmail om je configuratie te controleren.' },
 ];
 
@@ -504,6 +505,73 @@ function EmailTemplatesCard({ organizationId, canAdmin }: { organizationId: stri
   </section>;
 }
 
+function AiUsagePanel({ organizationId, members }: { organizationId: string; members: OrganizationMember[] }) {
+  const [rows, setRows] = useState<AiUsageRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRows(null); setError(null);
+    loadAiUsageThisMonth(organizationId)
+      .then(r => { if (!cancelled) setRows(r); })
+      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'AI-gebruik laden mislukt.'); });
+    return () => { cancelled = true; };
+  }, [organizationId]);
+
+  const USD_TO_EUR = 0.92;
+  const emailByUser = new Map(members.map(m => [m.user_id, m.email || m.user_id]));
+  const byUser = new Map<string, { messages: number; tokens: number; costUsd: number }>();
+  for (const r of rows ?? []) {
+    const key = r.user_id ?? 'onbekend';
+    const cur = byUser.get(key) ?? { messages: 0, tokens: 0, costUsd: 0 };
+    cur.messages += 1;
+    cur.tokens += (r.input_tokens || 0) + (r.output_tokens || 0) + (r.cache_read_tokens || 0) + (r.cache_creation_tokens || 0);
+    cur.costUsd += r.cost_usd || 0;
+    byUser.set(key, cur);
+  }
+  const list = [...byUser.entries()]
+    .map(([uid, agg]) => ({ uid, label: emailByUser.get(uid) ?? 'Onbekende gebruiker', messages: agg.messages, tokens: agg.tokens, costEur: agg.costUsd * USD_TO_EUR }))
+    .sort((a, b) => b.costEur - a.costEur);
+  const fmtEur = (n: number) => `€ ${n.toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const totalEur = list.reduce((s, x) => s + x.costEur, 0);
+  const totalMsg = list.reduce((s, x) => s + x.messages, 0);
+  const totalTok = list.reduce((s, x) => s + x.tokens, 0);
+
+  return (
+    <section className="settings-card organization-card">
+      <div className="settings-card-head">
+        <div>
+          <h3>AI-gebruik deze maand</h3>
+          <p className="settings-help">Verbruik van Gerrie per gebruiker in de huidige kalendermaand. Bedragen zijn schattingen op basis van het Claude-tarief, omgerekend naar euro's.</p>
+        </div>
+      </div>
+      {error && <div className="error">{error}</div>}
+      {rows === null && !error && <p className="settings-help">Laden…</p>}
+      {rows !== null && list.length === 0 && <p className="settings-help">Nog geen AI-gebruik deze maand.</p>}
+      {list.length > 0 && (
+        <table className="ai-usage-table">
+          <thead>
+            <tr><th>Gebruiker</th><th>Berichten</th><th>Tokens</th><th>Kosten</th></tr>
+          </thead>
+          <tbody>
+            {list.map(row => (
+              <tr key={row.uid}>
+                <td>{row.label}</td>
+                <td>{row.messages.toLocaleString('nl-NL')}</td>
+                <td>{row.tokens.toLocaleString('nl-NL')}</td>
+                <td>{fmtEur(row.costEur)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr><td>Totaal</td><td>{totalMsg.toLocaleString('nl-NL')}</td><td>{totalTok.toLocaleString('nl-NL')}</td><td>{fmtEur(totalEur)}</td></tr>
+          </tfoot>
+        </table>
+      )}
+    </section>
+  );
+}
+
 export function Settings({
   settings,
   organizationContext,
@@ -902,7 +970,7 @@ export function Settings({
     </div>
 
     <div className="client-tabs-bar settings-tabs-bar" role="tablist">
-      {SETTINGS_TABS.map(tab => (
+      {SETTINGS_TABS.filter(tab => tab.id !== 'ai' || canAdminOrganization).map(tab => (
         <button
           key={tab.id}
           type="button"
@@ -1333,6 +1401,12 @@ export function Settings({
       {!canAdminOrganization && <p className="settings-help">Alleen owners en admins kunnen billing-acties uitvoeren.</p>}
       {seatOverview && seatOverview.available_seats <= 0 && <div className="error">Geen vrije gebruikerslicentie beschikbaar. Koop eerst een extra gebruikerslicentie voordat je iemand uitnodigt.</div>}
     </section>
+    </div>}
+
+    {activeTab === 'ai' && <div className="settings-tab-panel">
+      {canAdminOrganization
+        ? (activeOrganization ? <AiUsagePanel organizationId={activeOrganization.id} members={organizationContext.teamMembers} /> : <p className="settings-help">Geen actieve organisatie geselecteerd.</p>)
+        : <p className="settings-help">Alleen owners en admins kunnen het AI-gebruik inzien.</p>}
     </div>}
 
     {activeTab === 'email' && <div className="settings-tab-panel">

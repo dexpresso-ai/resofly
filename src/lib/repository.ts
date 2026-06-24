@@ -790,6 +790,34 @@ export async function upsertCompanySettings(organizationId: UUID, values: Compan
   return data as CompanySettings;
 }
 
+export interface AiUsageRow {
+  user_id: UUID | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  cost_usd: number;
+}
+
+/**
+ * AI-verbruik (Gerrie) van de huidige kalendermaand voor het admin-dashboard.
+ * Alleen owners/admins mogen dit lezen (RLS); voor anderen of een ontbrekende
+ * tabel komt er gracieus een lege lijst terug.
+ */
+export async function loadAiUsageThisMonth(organizationId: UUID): Promise<AiUsageRow[]> {
+  const ym = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Amsterdam' }).slice(0, 7);
+  const { data, error } = await supabase.from('ai_usage')
+    .select('user_id, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd')
+    .eq('organization_id', organizationId)
+    .gte('created_at', `${ym}-01T00:00:00Z`);
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/ai_usage|schema cache|does not exist|relation|permission/i.test(message)) return [];
+    throw error;
+  }
+  return (data ?? []) as AiUsageRow[];
+}
+
 export async function select<T>(table: Table, organizationId: UUID): Promise<T[]> {
   const { data, error } = await supabase
     .from(table)
