@@ -186,7 +186,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
 
     const toolUses = response.content.filter((b: AnthropicBlock) => b.type === 'tool_use');
     if (response.stop_reason !== 'tool_use' || toolUses.length === 0) {
-      return { text: extractText(response.content), toolCalls, usage };
+      return { text: extractText(response.content) || 'Sorry, dat begrijp ik niet helemaal. Kun je het anders verwoorden of iets specifieker maken?', toolCalls, usage };
     }
 
     // Voer elke gevraagde tool uit (strikt org-scoped). Een schrijf-tool (propose_*)
@@ -219,8 +219,10 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
     }
 
     if (proposal) {
-      const text = extractText(response.content) || 'Ik heb een conceptfactuur voor je klaargezet. Controleer hem en sla op:';
-      return { text, toolCalls, usage, proposal };
+      const fallback = proposal.type === 'quote' ? 'Ik heb een conceptofferte voor je klaargezet. Controleer hem en sla op:'
+        : proposal.type === 'client' ? 'Ik heb de nieuwe klant voor je klaargezet. Controleer de gegevens en sla op:'
+        : 'Ik heb een conceptfactuur voor je klaargezet. Controleer hem en sla op:';
+      return { text: extractText(response.content) || fallback, toolCalls, usage, proposal };
     }
     messages.push({ role: 'user', content: toolResults });
   }
@@ -325,6 +327,12 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- Ontbreekt er informatie, vraag het kort na in plaats van te gissen. Versturen (mail), wijzigen en verwijderen kunnen nog niet — leg dat kort uit als erom gevraagd wordt.',
         ].join('\n')
       : '- De gebruiker heeft alleen leesrechten (rol viewer) en mag niets aanmaken of wijzigen; help met opzoeken en uitleggen.',
+    '',
+    'Als iets onduidelijk is of niet kan — heel belangrijk:',
+    '- Snap je de vraag niet of is hij dubbelzinnig? Zeg dat eerlijk en stel één gerichte vervolgvraag. Gis niet en doe nóóit zomaar iets anders dan gevraagd.',
+    '- Kun je een gevraagde actie (nog) niet uitvoeren? Zeg dat duidelijk en leg kort uit wat wél kan.',
+    '- Gebruik altijd de actie die bij de vraag past: een FACTUUR maak je met `propose_invoice`, een OFFERTE met `propose_quote`. Verwissel ze nooit en presenteer het ene nooit als het andere. Vraagt de gebruiker een offerte na een factuur (of andersom), gebruik dan dezelfde klant/regels maar wél het juiste type.',
+    '- Geef ALTIJD een kort tekstantwoord, ook bij een voorstel, en benoem daarin wat je hebt klaargezet (factuur, offerte of klant). Laat de gebruiker nooit zonder reactie zitten.',
     '',
     'Stijl:',
     '- Antwoord altijd in het Nederlands, vriendelijk en professioneel, zonder overbodige uitweidingen.',
@@ -783,11 +791,29 @@ async function createConversation(organizationId: string, userId: string, firstM
 
 async function loadHistory(conversationId: string, organizationId: string): Promise<Array<{ role: string; content: string }>> {
   const { data, error } = await supabaseAdmin.from('ai_messages')
-    .select('role, content').eq('conversation_id', conversationId).eq('organization_id', organizationId)
+    .select('role, content, tool_calls').eq('conversation_id', conversationId).eq('organization_id', organizationId)
     .order('created_at', { ascending: false }).limit(MAX_HISTORY_MESSAGES);
   if (error) return [];
-  return (data ?? []).map((m: Record<string, unknown>) => ({ role: String(m.role), content: String(m.content) }))
-    .filter((m) => m.content.trim().length > 0).reverse();
+  return (data ?? []).map((m: Record<string, unknown>) => {
+    let content = String(m.content);
+    const note = proposalHistoryNote(m.tool_calls);
+    if (note) content = content ? `${content}\n${note}` : note;
+    return { role: String(m.role), content };
+  }).filter((m) => m.content.trim().length > 0).reverse();
+}
+
+/** Beknopte notitie over een eerder voorstel, zodat het model context houdt bij vervolgvragen. */
+function proposalHistoryNote(toolCalls: unknown): string {
+  if (!Array.isArray(toolCalls)) return '';
+  const prop = toolCalls.find((t) => t && typeof (t as { name?: unknown }).name === 'string' && (t as { name: string }).name.startsWith('propose_')) as { name: string; input?: Record<string, unknown> } | undefined;
+  if (!prop) return '';
+  const input = (prop.input ?? {}) as Record<string, unknown>;
+  if (prop.name === 'propose_client') return `[Eerder voorgesteld: nieuwe klant "${String(input.name ?? '')}".]`;
+  const kind = prop.name === 'propose_quote' ? 'conceptofferte' : 'conceptfactuur';
+  const lines = Array.isArray(input.lines)
+    ? (input.lines as Record<string, unknown>[]).map((l) => `${num(l.quantity)}× ${String(l.description ?? '')} à €${num(l.unit_price)} (${num(l.vat)}% btw)`).join('; ')
+    : '';
+  return `[Eerder voorgesteld: ${kind} voor client_id ${String(input.client_id ?? '?')}; regels: ${lines}. Wil de gebruiker hierop voortborduren (bijv. "maak er een offerte van"), gebruik dan dezelfde klant en regels met het juiste type.]`;
 }
 
 async function insertMessage(conversationId: string, organizationId: string, userId: string, role: 'user' | 'assistant', content: string, toolCalls: Array<{ name: string; input: unknown }>): Promise<string> {
