@@ -44,7 +44,23 @@ export interface GerrieClientProposal {
   notes: string | null;
   status: string;
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal;
+export interface GerrieSendInvoiceProposal {
+  type: 'send_invoice';
+  id: UUID;
+  number: string;
+  client_name: string;
+  recipient_email: string;
+  recipient_name: string | null;
+}
+export interface GerrieSendQuoteProposal {
+  type: 'send_quote';
+  id: UUID;
+  number: string;
+  client_name: string;
+  recipient_email: string;
+  recipient_name: string | null;
+}
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal;
 
 export interface GerrieResult {
   conversationId: UUID;

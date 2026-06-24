@@ -161,7 +161,9 @@ interface ProposalLine { description: string; quantity: number; unit_price: numb
 interface InvoiceProposal { type: 'invoice'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; due_date: string | null; total_eur: number }
 interface QuoteProposal { type: 'quote'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; valid_until: string | null; total_eur: number }
 interface ClientProposal { type: 'client'; name: string; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; status: string }
-type Proposal = InvoiceProposal | QuoteProposal | ClientProposal;
+interface SendInvoiceProposal { type: 'send_invoice'; id: string; number: string; client_name: string; recipient_email: string; recipient_name: string | null }
+interface SendQuoteProposal { type: 'send_quote'; id: string; number: string; client_name: string; recipient_email: string; recipient_name: string | null }
+type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal;
 interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: unknown }>; usage: Usage; proposal?: Proposal }
 
 async function runAgent(ctx: GerrieContext, history: Array<{ role: string; content: string }>, message: string, emit: Emit): Promise<AgentOutcome> {
@@ -221,6 +223,8 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
     if (proposal) {
       const fallback = proposal.type === 'quote' ? 'Ik heb een conceptofferte voor je klaargezet. Controleer hem en sla op:'
         : proposal.type === 'client' ? 'Ik heb de nieuwe klant voor je klaargezet. Controleer de gegevens en sla op:'
+        : proposal.type === 'send_invoice' ? `Wil je dat ik factuur ${proposal.number} naar ${proposal.recipient_email} verstuur? Bevestig hieronder.`
+        : proposal.type === 'send_quote' ? `Wil je dat ik offerte ${proposal.number} naar ${proposal.recipient_email} verstuur? Bevestig hieronder.`
         : 'Ik heb een conceptfactuur voor je klaargezet. Controleer hem en sla op:';
       return { text: extractText(response.content) || fallback, toolCalls, usage, proposal };
     }
@@ -324,7 +328,8 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_invoice` — conceptfactuur klaarzetten. Zoek eerst de klant met `search_clients` (gebruik diens exacte id) en bepaal de regels (omschrijving, aantal, prijs per stuk EXCL. btw, btw% — meestal 21).',
           '- `propose_quote` — conceptofferte klaarzetten. Net als de factuur, met een optionele geldig-tot-datum.',
           '- `propose_client` — nieuwe klant klaarzetten. Controleer eerst met `search_clients` of de klant al bestaat (voorkom dubbelen). Naam is verplicht; contactpersoon/e-mail/telefoon optioneel.',
-          '- Ontbreekt er informatie, vraag het kort na in plaats van te gissen. Versturen (mail), wijzigen en verwijderen kunnen nog niet — leg dat kort uit als erom gevraagd wordt.',
+          '- `propose_send_invoice` / `propose_send_quote` — een BESTAANDE factuur/offerte per e-mail naar de klant versturen. Zoek het document eerst met `list_invoices`/`list_quotes` en gebruik het exacte id. Het gaat naar het e-mailadres van de gekoppelde klant; benoem dat adres in je antwoord zodat de gebruiker het kan controleren vóór hij bevestigt.',
+          '- Ontbreekt er informatie, vraag het kort na in plaats van te gissen. Wijzigen en verwijderen kunnen nog niet — leg dat kort uit als erom gevraagd wordt.',
         ].join('\n')
       : '- De gebruiker heeft alleen leesrechten (rol viewer) en mag niets aanmaken of wijzigen; help met opzoeken en uitleggen.',
     '',
@@ -488,6 +493,24 @@ const TOOL_DEFINITIONS = [
       required: ['name'],
     },
   },
+  {
+    name: 'propose_send_invoice',
+    description: 'Stel voor om een BESTAANDE factuur per e-mail naar de klant te versturen. Je verstuurt NIETS zelf: de gebruiker bevestigt de verzending met een knop in de chat. Zoek de factuur eerst met list_invoices en gebruik het exacte id. De factuur gaat naar het e-mailadres van de gekoppelde klant.',
+    input_schema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Het exacte id van de factuur (uit list_invoices).' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'propose_send_quote',
+    description: 'Stel voor om een BESTAANDE offerte per e-mail naar de klant te versturen. Je verstuurt NIETS zelf: de gebruiker bevestigt de verzending met een knop in de chat. Zoek de offerte eerst met list_quotes en gebruik het exacte id. De offerte gaat naar het e-mailadres van de gekoppelde klant.',
+    input_schema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Het exacte id van de offerte (uit list_quotes).' } },
+      required: ['id'],
+    },
+  },
 ];
 
 function toolLabel(name: string): string {
@@ -529,20 +552,59 @@ function proposeLabel(toolName: string): string {
     case 'propose_invoice': return 'Conceptfactuur klaarzetten…';
     case 'propose_quote': return 'Conceptofferte klaarzetten…';
     case 'propose_client': return 'Klantgegevens klaarzetten…';
+    case 'propose_send_invoice':
+    case 'propose_send_quote': return 'Verzending voorbereiden…';
     default: return 'Voorstel klaarzetten…';
   }
 }
 
 async function buildProposal(ctx: GerrieContext, toolName: string, input: Record<string, unknown>): Promise<ProposalResult> {
   if (!['owner', 'admin', 'member'].includes(ctx.role)) {
-    return { ok: false, error: 'Deze gebruiker heeft alleen leesrechten en mag niets aanmaken.' };
+    return { ok: false, error: 'Deze gebruiker heeft alleen leesrechten en mag geen acties uitvoeren.' };
   }
   switch (toolName) {
     case 'propose_invoice': return buildInvoiceProposal(ctx, input);
     case 'propose_quote': return buildQuoteProposal(ctx, input);
     case 'propose_client': return buildClientProposal(input);
+    case 'propose_send_invoice': return buildSendProposal(ctx, 'invoice', input);
+    case 'propose_send_quote': return buildSendProposal(ctx, 'quote', input);
     default: return { ok: false, error: `Onbekende actie: ${toolName}` };
   }
+}
+
+/** Bereidt het versturen van een bestaande factuur/offerte voor (alleen vóórstellen). */
+async function buildSendProposal(ctx: GerrieContext, kind: 'invoice' | 'quote', input: Record<string, unknown>): Promise<ProposalResult> {
+  const table = kind === 'invoice' ? 'invoices' : 'quotes';
+  const docLabel = kind === 'invoice' ? 'factuur' : 'offerte';
+  const listTool = kind === 'invoice' ? 'list_invoices' : 'list_quotes';
+  const id = String(input.id || '').trim();
+  if (!isUuid(id)) return { ok: false, error: `Ongeldig id. Zoek de ${docLabel} eerst met ${listTool} en gebruik het exacte id.` };
+
+  const { data: doc, error } = await supabaseAdmin.from(table)
+    .select('id, number, client_id, status').eq('organization_id', ctx.organizationId).eq('id', id).maybeSingle();
+  if (error) return { ok: false, error: `${docLabel} ophalen mislukt: ${error.message}` };
+  if (!doc) return { ok: false, error: `${docLabel.charAt(0).toUpperCase() + docLabel.slice(1)} niet gevonden in deze organisatie.` };
+
+  const status = String(doc.status);
+  const blocked = kind === 'invoice' ? ['cancelled', 'void', 'written_off'] : ['cancelled'];
+  if (blocked.includes(status)) return { ok: false, error: `Deze ${docLabel} heeft status "${status}" en kan niet verstuurd worden.` };
+  if (!doc.client_id) return { ok: false, error: `Aan deze ${docLabel} is geen klant gekoppeld; er is geen e-mailadres om naar te versturen.` };
+
+  const { data: client } = await supabaseAdmin.from('clients')
+    .select('name, contact_name, email').eq('organization_id', ctx.organizationId).eq('id', doc.client_id).maybeSingle();
+  const email = client?.email ? String(client.email).trim() : '';
+  if (!email) return { ok: false, error: `De klant heeft geen e-mailadres; vul dat eerst in voordat je de ${docLabel} verstuurt.` };
+
+  return {
+    ok: true,
+    proposal: {
+      type: kind === 'invoice' ? 'send_invoice' : 'send_quote',
+      id: String(doc.id), number: String(doc.number),
+      client_name: String(client?.name ?? ''),
+      recipient_email: email,
+      recipient_name: client?.contact_name ? String(client.contact_name) : (client?.name ? String(client.name) : null),
+    },
+  };
 }
 
 /** Zoekt de klant op id binnen de organisatie (voor factuur/offerte). */
@@ -808,6 +870,7 @@ function proposalHistoryNote(toolCalls: unknown): string {
   const prop = toolCalls.find((t) => t && typeof (t as { name?: unknown }).name === 'string' && (t as { name: string }).name.startsWith('propose_')) as { name: string; input?: Record<string, unknown> } | undefined;
   if (!prop) return '';
   const input = (prop.input ?? {}) as Record<string, unknown>;
+  if (prop.name === 'propose_send_invoice' || prop.name === 'propose_send_quote') return '';
   if (prop.name === 'propose_client') return `[Eerder voorgesteld: nieuwe klant "${String(input.name ?? '')}".]`;
   const kind = prop.name === 'propose_quote' ? 'conceptofferte' : 'conceptfactuur';
   const lines = Array.isArray(input.lines)

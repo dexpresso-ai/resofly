@@ -941,6 +941,21 @@ function App() {
           phone: p.phone ?? undefined, notes: p.notes ?? undefined, status: (p.status as Client['status']),
         } });
       }}
+      onSendInvoice={async (p) => {
+        if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+        const invoice = data.invoices.find((i) => i.id === p.id);
+        let includePaymentLink = false;
+        if (invoice && !['paid', 'cancelled', 'void', 'written_off'].includes(invoice.status)) {
+          try { const mollie = await loadInvoiceMollieStatus(activeOrg.id); includePaymentLink = mollie.status === 'connected'; } catch { /* PDF-only als de status niet op te halen is */ }
+        }
+        await sendInvoiceEmailViaResend(activeOrg.id, p.id, { recipientEmail: p.recipient_email, recipientName: p.recipient_name ?? undefined, includePaymentLink });
+        await refresh();
+      }}
+      onSendQuote={async (p) => {
+        if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+        await sendQuoteEmailViaResend(activeOrg.id, p.id, { recipientEmail: p.recipient_email, recipientName: p.recipient_name ?? undefined });
+        await refresh();
+      }}
     />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
       <div className="send-overlay-card">
