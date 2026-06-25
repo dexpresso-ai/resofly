@@ -989,6 +989,9 @@ async function updateNativeEvent(organizationId: string, requesterUserId: string
     rrule,
     recurs: rrule !== null,
     exdate: null,
+    // Wis de canonieke iCalendar-tekst: een wijziging vanuit de app moet door de
+    // CalDAV-Worker opnieuw gegenereerd worden uit de bijgewerkte velden.
+    icalendar_raw: null,
     sequence: (current.sequence ?? 0) + 1,
   }).eq('id', current.id).select('*').single();
   if (updateError || !updated) throw new Error('Agenda-item kon niet worden bijgewerkt.');
