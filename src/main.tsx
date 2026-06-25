@@ -51,7 +51,7 @@ import {
   type Table,
 } from './lib/repository';
 import { uploadToR2 } from './lib/r2';
-import { listExternalCalendarEvents } from './lib/calendar-api';
+import { listExternalCalendarEvents, createExternalCalendarEvent } from './lib/calendar-api';
 import { buildDocumentPdfBlob, buildDocumentDocxBlob, downloadBlob, documentFileBaseName, type DocumentExportMeta } from './lib/documentExport';
 import { Dashboard } from './features/Dashboard';
 import { ClientDetailPage, Clients } from './features/Clients';
@@ -1056,6 +1056,13 @@ function App() {
         if (c.subtasks !== undefined) merged.subtasks = c.subtasks.map((s) => ({ id: uid(), label: s.label, done: s.done }));
         setProjectId(existing.project_id); setClientId(null); setPage('project');
         setEdit({ kind: 'task', item: merged, projectId: existing.project_id });
+      }}
+      onCreateCalendarEvent={async (p) => {
+        if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+        // Lokale tijd (browser = Europe/Amsterdam) -> UTC ISO voor de agenda-API.
+        const startsAt = new Date(`${p.date}T${p.start_time}:00`).toISOString();
+        const endsAt = new Date(`${p.date}T${p.end_time}:00`).toISOString();
+        await createExternalCalendarEvent(activeOrg.id, { sourceId: p.source_id, title: p.title, startsAt, endsAt, description: p.description ?? undefined, location: p.location ?? undefined });
       }}
     />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
