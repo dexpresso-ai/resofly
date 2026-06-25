@@ -1,19 +1,29 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { CalendarDays, ChevronDown, ChevronRight, Clock, ExternalLink, LayoutList, MapPin, Plus, RefreshCcw, Unplug, X } from 'lucide-react';
+import { CalendarDays, CalendarPlus, ChevronDown, ChevronRight, Clock, ExternalLink, LayoutList, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, X } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { RichTextExcerpt } from '../components/RichTextEditor';
 import { addDays, DAY_NAMES_NL, formatISODate, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
 import { dateNL } from '../lib/format';
 import {
+  createCalendarAppPassword,
   createExternalCalendarEvent,
+  createNativeCalendar,
+  deleteCalendarEvent,
+  deleteNativeCalendar,
   disconnectCalendarConnection,
   getCalendarOAuthUrl,
+  listCalendarAppPasswords,
   listExternalCalendarEvents,
   loadCalendarIntegrations,
   refreshCalendarSources,
+  revokeCalendarAppPassword,
+  updateCalendarEvent,
   updateCalendarSource,
+  updateNativeCalendar,
   type CalendarIntegrationsPayload,
 } from '../lib/calendar-api';
+import { supabase } from '../lib/supabase';
+import type { CalendarAppPassword, EventRecurrence, RecurrenceFrequency } from '../types';
 import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, Client, Note, NoteCalendarLink, Project, Task, UUID } from '../types';
 import { getNoteTypeLabel } from './Notes';
 
@@ -42,6 +52,35 @@ function toInputDateTime(date: Date): string {
 function inputDateTimeToIso(value: string): string {
   if (!value) return new Date().toISOString();
   return new Date(value).toISOString();
+}
+
+/** Parseert een eenvoudige RRULE-string naar de formuliervelden (freq + einddatum). */
+function parseRruleToForm(rrule: string | null): { freq: '' | RecurrenceFrequency; until: string } {
+  if (!rrule) return { freq: '', until: '' };
+  const map: Record<string, RecurrenceFrequency> = { DAILY: 'daily', WEEKLY: 'weekly', MONTHLY: 'monthly' };
+  const parts = new Map<string, string>();
+  for (const seg of rrule.split(';')) { const [k, v] = seg.split('='); if (k && v) parts.set(k.toUpperCase(), v); }
+  const freq = map[(parts.get('FREQ') || '').toUpperCase()] ?? '';
+  let until = '';
+  const u = parts.get('UNTIL');
+  if (u) { const m = u.match(/^(\d{4})(\d{2})(\d{2})/); if (m) until = `${m[1]}-${m[2]}-${m[3]}`; }
+  return { freq, until };
+}
+
+const RECURRENCE_LABELS: Record<RecurrenceFrequency, string> = { daily: 'Elke dag', weekly: 'Elke week', monthly: 'Elke maand' };
+
+type NewEventState = {
+  sourceId: string; title: string; description: string; location: string;
+  startsAt: string; endsAt: string; allDay: boolean; clientId: string; projectId: string;
+  recurrenceFreq: '' | RecurrenceFrequency; recurrenceUntil: string; editingEventId: string;
+};
+
+/** Korte, leesbare omschrijving van een herhaling voor in het detailpaneel. */
+function recurrenceLabel(rrule: string | null | undefined): string | null {
+  const { freq, until } = parseRruleToForm(rrule ?? null);
+  if (!freq) return null;
+  const base = RECURRENCE_LABELS[freq];
+  return until ? `${base}, t/m ${dateNL(until)}` : base;
 }
 
 function formatTime(value: string, allDay?: boolean): string {
@@ -695,22 +734,24 @@ function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, on
 
 /* ── Floating creation panel ─────────────────────────────────────────── */
 
-function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, projects, loading, canWrite, onSubmit, onClose }: {
-  newEvent: { sourceId: string; title: string; description: string; location: string; startsAt: string; endsAt: string; allDay: boolean; clientId: string; projectId: string };
-  setNewEvent: (fn: (prev: typeof newEvent) => typeof newEvent) => void;
+function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, projects, loading, canWrite, selectedSourceIsNative, onSubmit, onClose }: {
+  newEvent: NewEventState;
+  setNewEvent: (fn: (prev: NewEventState) => NewEventState) => void;
   writeableSources: CalendarSource[];
   clients: Client[];
   projects: Project[];
   loading: boolean;
   canWrite: boolean;
+  selectedSourceIsNative: boolean;
   onSubmit: (e: FormEvent) => void;
   onClose: () => void;
 }) {
+  const editing = Boolean(newEvent.editingEventId);
   return (
     <div className="tb-overlay" onClick={onClose}>
       <form className="tb-panel" onClick={e => e.stopPropagation()} onSubmit={onSubmit}>
         <div className="tb-panel-head">
-          <div className="tb-panel-title"><CalendarDays size={16} /><h3>Nieuw event</h3></div>
+          <div className="tb-panel-title"><CalendarDays size={16} /><h3>{editing ? 'Afspraak bewerken' : 'Nieuwe afspraak'}</h3></div>
           <button type="button" className="tb-panel-close" onClick={onClose}><X size={16} /></button>
         </div>
         <label>Agenda<Select value={newEvent.sourceId} onChange={e => setNewEvent(p => ({ ...p, sourceId: e.target.value }))}>
@@ -725,17 +766,28 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
         </div>
         <label>Omschrijving<Textarea value={newEvent.description} onChange={e => setNewEvent(p => ({ ...p, description: e.target.value }))} placeholder="Optioneel" /></label>
         <label className="check-row"><input type="checkbox" checked={newEvent.allDay} onChange={e => setNewEvent(p => ({ ...p, allDay: e.target.checked }))} /> Hele dag</label>
+        {selectedSourceIsNative ? (
+          <div className="settings-grid compact">
+            <label>Herhaling<Select value={newEvent.recurrenceFreq} onChange={e => setNewEvent(p => ({ ...p, recurrenceFreq: e.target.value as '' | RecurrenceFrequency }))}>
+              <option value="">Niet herhalen</option>
+              <option value="daily">Elke dag</option>
+              <option value="weekly">Elke week</option>
+              <option value="monthly">Elke maand</option>
+            </Select></label>
+            {newEvent.recurrenceFreq && <label>Tot en met<Input type="date" value={newEvent.recurrenceUntil} onChange={e => setNewEvent(p => ({ ...p, recurrenceUntil: e.target.value }))} /></label>}
+          </div>
+        ) : null}
         <div className="tb-panel-section-label">Koppelen aan</div>
         <ClientProjectPicker clients={clients} projects={projects} clientId={newEvent.clientId} projectId={newEvent.projectId}
           onChange={next => setNewEvent(p => ({ ...p, clientId: next.clientId, projectId: next.projectId }))} />
-        <Button variant="primary" disabled={loading || !canWrite || !writeableSources.length}>Event aanmaken</Button>
+        <Button variant="primary" disabled={loading || !canWrite || !writeableSources.length}>{editing ? 'Wijzigingen opslaan' : 'Afspraak opslaan'}</Button>
       </form>
     </div>
   );
 }
 
 
-function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNote, onNewDocument, onSetEventLink, onEditNote, onLinkExistingNote, onUnlinkNote, onClose }: {
+function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNote, onNewDocument, onSetEventLink, onEditNote, onLinkExistingNote, onUnlinkNote, onEditEvent, onDeleteEvent, onClose }: {
   event: CalendarExternalEvent | null;
   data: AppData;
   sourceColors: Map<string, string>;
@@ -746,6 +798,8 @@ function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNo
   onEditNote: (note: Note) => void;
   onLinkExistingNote: (noteId: UUID, event: CalendarExternalEvent) => void | Promise<void>;
   onUnlinkNote: (linkId: UUID) => void | Promise<void>;
+  onEditEvent: (event: CalendarExternalEvent) => void;
+  onDeleteEvent: (event: CalendarExternalEvent) => void | Promise<void>;
   onClose: () => void;
 }) {
   const [selectedNoteId, setSelectedNoteId] = useState('');
@@ -798,6 +852,12 @@ function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNo
             <CalendarDays size={15} />
             <span>{event.visibility === 'private' ? 'Privé-agenda' : 'Gedeeld met organisatie'}{event.is_private_masked ? ' · details afgeschermd' : ''}</span>
           </div>
+          {recurrenceLabel(event.rrule) && (
+            <div className="event-detail-meta-card">
+              <Repeat size={15} />
+              <span>{recurrenceLabel(event.rrule)}</span>
+            </div>
+          )}
           {event.location && (
             <div className="event-detail-meta-card">
               <MapPin size={15} />
@@ -892,10 +952,106 @@ function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNo
 
         <div className="event-detail-actions">
           {event.html_link && <a className="btn btn-primary" href={event.html_link} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open in agenda</a>}
+          {event.provider === 'native' && event.native_event_id && canWrite && (<>
+            <button type="button" className="btn btn-primary" onClick={() => onEditEvent(event)}><Pencil size={14} /> Bewerken</button>
+            <button type="button" className="btn btn-danger" onClick={() => onDeleteEvent(event)}><Trash2 size={14} /> Verwijderen</button>
+          </>)}
           <button type="button" className="btn btn-ghost" onClick={onClose}>Sluiten</button>
         </div>
       </aside>
     </div>
+  );
+}
+
+const CALDAV_SERVER_HOST = 'caldav.resofly.com';
+
+/** Beheer van app-wachtwoorden + uitleg om de ResoFly-agenda op de telefoon te zetten (CalDAV). */
+function PhoneCalendarCard({ organizationId }: { organizationId: UUID }) {
+  const [appPasswords, setAppPasswords] = useState<CalendarAppPassword[]>([]);
+  const [label, setLabel] = useState('');
+  const [secret, setSecret] = useState<string | null>(null);
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    listCalendarAppPasswords(organizationId).then(rows => { if (active) setAppPasswords(rows); }).catch(() => {});
+    supabase.auth.getUser().then(({ data }) => { if (active) setEmail(data.user?.email ?? ''); }).catch(() => {});
+    return () => { active = false; };
+  }, [organizationId]);
+
+  async function generate(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true); setErr(null); setSecret(null);
+    try {
+      const result = await createCalendarAppPassword(organizationId, label.trim() || 'Apparaat');
+      setSecret(result.secret);
+      setLabel('');
+      setAppPasswords(prev => [result.appPassword, ...prev]);
+    } catch (e2) { setErr(e2 instanceof Error ? e2.message : 'App-wachtwoord aanmaken mislukt.'); }
+    finally { setBusy(false); }
+  }
+
+  async function revoke(id: UUID) {
+    if (!confirm('Dit app-wachtwoord intrekken? Apparaten die het gebruiken verliezen de toegang.')) return;
+    setErr(null);
+    try {
+      await revokeCalendarAppPassword(organizationId, id);
+      setAppPasswords(prev => prev.map(p => p.id === id ? { ...p, revoked_at: new Date().toISOString() } : p));
+    } catch (e2) { setErr(e2 instanceof Error ? e2.message : 'Intrekken mislukt.'); }
+  }
+
+  const active = appPasswords.filter(p => !p.revoked_at);
+
+  return (
+    <section className="calendar-section connections-panel" id="calendar-phone">
+      <div className="calendar-section-head">
+        <div>
+          <h3>Agenda op je telefoon</h3>
+          <p>Zet je ResoFly-agenda’s op je telefoon via CalDAV (Apple Agenda, of Android met DAVx⁵). Maak per apparaat een app-wachtwoord aan.</p>
+        </div>
+      </div>
+
+      {err && <div className="error">{err}</div>}
+
+      <form onSubmit={generate} style={{ display: 'flex', gap: 8, margin: '8px 0 12px', flexWrap: 'wrap' }}>
+        <Input value={label} onChange={e => setLabel(e.target.value)} placeholder="Naam van het apparaat, bijv. iPhone van Jan" />
+        <Button variant="primary" disabled={busy}>App-wachtwoord aanmaken</Button>
+      </form>
+
+      {secret && (
+        <div className="success" style={{ display: 'grid', gap: 6 }}>
+          <strong>Nieuw app-wachtwoord — kopieer het nu, je ziet het maar één keer:</strong>
+          <code style={{ fontSize: 16, letterSpacing: 1 }}>{secret}</code>
+        </div>
+      )}
+
+      <div className="settings-help" style={{ marginTop: 8 }}>
+        <strong>Instellen op de telefoon</strong>
+        <ol style={{ margin: '6px 0 0 18px' }}>
+          <li>Voeg een <em>CalDAV-account</em> toe (iPhone: Instellingen → Agenda → Account → Anders → CalDAV-account).</li>
+          <li>Server: <code>{CALDAV_SERVER_HOST}</code></li>
+          <li>Gebruikersnaam: <code>{email || 'je inlogmailadres'}</code></li>
+          <li>Wachtwoord: het app-wachtwoord hierboven</li>
+        </ol>
+        <p style={{ marginTop: 6, opacity: 0.8 }}>De CalDAV-server wordt in een volgende stap geactiveerd; app-wachtwoorden kun je nu al klaarzetten.</p>
+      </div>
+
+      {active.length > 0 && (
+        <div className="source-list" style={{ marginTop: 10 }}>
+          {active.map(p => (
+            <div className="source-row privacy" key={p.id}>
+              <div className="source-info">
+                <strong>{p.label}</strong>
+                <span>Aangemaakt {dateNL(p.created_at)}{p.last_used_at ? ` · laatst gebruikt ${dateNL(p.last_used_at)}` : ' · nog niet gebruikt'}</span>
+              </div>
+              <Button variant="danger" onClick={() => revoke(p.id)}><Trash2 size={13} /> Intrekken</Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -925,8 +1081,9 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   const [newEvent, setNewEvent] = useState(() => {
     const s = new Date(); s.setMinutes(0, 0, 0); s.setHours(s.getHours() + 1);
     const e = new Date(s); e.setHours(e.getHours() + 1);
-    return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false, clientId: '', projectId: '' };
+    return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false, clientId: '', projectId: '', recurrenceFreq: '' as '' | RecurrenceFrequency, recurrenceUntil: '', editingEventId: '' };
   });
+  const [newCalendarName, setNewCalendarName] = useState('');
 
   const days = useMemo(() => calendarDaysForView(view, anchor), [view, anchor]);
   const rangeStart = useMemo(() => days[0].toISOString(), [days]);
@@ -1041,25 +1198,104 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     const eIso = newEvent.allDay ? `${newEvent.endsAt.slice(0, 10)}T00:00:00.000Z` : inputDateTimeToIso(newEvent.endsAt);
     if (!newEvent.allDay && new Date(eIso).getTime() <= new Date(sIso).getTime()) { setError('Eindtijd moet na starttijd liggen.'); return; }
     if (newEvent.allDay && dateKeyFromValue(eIso) < dateKeyFromValue(sIso)) { setError('Einddatum mag niet voor startdatum liggen.'); return; }
+    const source = integrations.sources.find(s => s.id === newEvent.sourceId);
+    const isNative = source?.provider === 'native';
+    const recurrence: EventRecurrence | null = isNative && newEvent.recurrenceFreq
+      ? { freq: newEvent.recurrenceFreq, until: newEvent.recurrenceUntil ? `${newEvent.recurrenceUntil}T23:59:59.000Z` : null }
+      : null;
+    const input = {
+      sourceId: newEvent.sourceId, title: newEvent.title.trim(),
+      description: newEvent.description.trim() || null, location: newEvent.location.trim() || null,
+      startsAt: sIso, endsAt: eIso, allDay: newEvent.allDay, recurrence,
+    };
     setLoading(true); setError(null); setMessage(null);
     try {
-      const created = await createExternalCalendarEvent(organizationId, {
-        sourceId: newEvent.sourceId, title: newEvent.title.trim(),
-        description: newEvent.description.trim() || null, location: newEvent.location.trim() || null,
-        startsAt: sIso, endsAt: eIso, allDay: newEvent.allDay,
-      });
-      setEvents(prev => [...prev, created].sort((a, b) => a.starts_at.localeCompare(b.starts_at)));
-      if (newEvent.clientId || newEvent.projectId) {
-        await onSetEventLink(created, newEvent.clientId || null, newEvent.projectId || null);
+      if (newEvent.editingEventId) {
+        const updated = await updateCalendarEvent(organizationId, newEvent.editingEventId, input);
+        if (newEvent.clientId || newEvent.projectId) await onSetEventLink(updated, newEvent.clientId || null, newEvent.projectId || null);
+        setMessage('Afspraak bijgewerkt.');
+      } else {
+        const created = await createExternalCalendarEvent(organizationId, input);
+        if (newEvent.clientId || newEvent.projectId) await onSetEventLink(created, newEvent.clientId || null, newEvent.projectId || null);
+        setMessage(isNative ? 'Afspraak aangemaakt in je ResoFly-agenda.' : 'Event aangemaakt en zichtbaar in je externe agenda.');
       }
       const d = makeDefaultTimes();
-      setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '' }));
-      setMessage(newEvent.clientId || newEvent.projectId
-        ? 'Event aangemaakt, gekoppeld aan klant/project en zichtbaar in je externe agenda.'
-        : 'Event aangemaakt en zichtbaar in je externe agenda.');
+      setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', recurrenceFreq: '', recurrenceUntil: '', editingEventId: '' }));
       setShowCreatePanel(false);
       refreshEventsOnly().catch(() => {});
-    } catch (err) { setError(err instanceof Error ? err.message : 'Event aanmaken mislukt.'); }
+    } catch (err) { setError(err instanceof Error ? err.message : 'Opslaan mislukt.'); }
+    finally { setLoading(false); }
+  }
+
+  function startEditEvent(event: CalendarExternalEvent) {
+    if (event.provider !== 'native' || !event.native_event_id) return;
+    const rec = parseRruleToForm(event.rrule ?? null);
+    setSelectedEvent(null);
+    setNewEvent(p => ({
+      ...p,
+      sourceId: event.source_id,
+      title: event.title === '(Geen titel)' ? '' : event.title,
+      description: event.description ?? '',
+      location: event.location ?? '',
+      allDay: event.all_day,
+      startsAt: toInputDateTime(new Date(event.starts_at)),
+      endsAt: toInputDateTime(new Date(event.ends_at)),
+      clientId: '', projectId: '',
+      recurrenceFreq: rec.freq, recurrenceUntil: rec.until,
+      editingEventId: event.native_event_id as string,
+    }));
+    setShowCreatePanel(true);
+  }
+
+  async function removeEvent(event: CalendarExternalEvent) {
+    if (event.provider !== 'native' || !event.native_event_id) return;
+    if (!confirm('Deze afspraak verwijderen?')) return;
+    setLoading(true); setError(null); setMessage(null);
+    try {
+      await deleteCalendarEvent(organizationId, event.native_event_id);
+      setSelectedEvent(null);
+      setMessage('Afspraak verwijderd.');
+      await refreshEventsOnly();
+    } catch (err) { setError(err instanceof Error ? err.message : 'Verwijderen mislukt.'); }
+    finally { setLoading(false); }
+  }
+
+  async function addNativeCalendar(e: FormEvent) {
+    e.preventDefault();
+    if (!canWrite) { setError('Je hebt alleen-lezen toegang.'); return; }
+    const name = newCalendarName.trim();
+    if (!name) { setError('Geef de agenda een naam.'); return; }
+    setLoading(true); setError(null); setMessage(null);
+    try {
+      await createNativeCalendar(organizationId, { name });
+      setNewCalendarName('');
+      setIntegrations(await loadCalendarIntegrations(organizationId));
+      setMessage('ResoFly-agenda aangemaakt.');
+      if (mode === 'agenda') await refreshEventsOnly();
+    } catch (err) { setError(err instanceof Error ? err.message : 'Agenda aanmaken mislukt.'); }
+    finally { setLoading(false); }
+  }
+
+  async function renameNative(source: CalendarSource) {
+    const name = prompt('Nieuwe naam voor deze agenda:', source.name);
+    if (name === null) return;
+    if (!name.trim()) { setError('Naam mag niet leeg zijn.'); return; }
+    setError(null); setMessage(null);
+    try {
+      const upd = await updateNativeCalendar(organizationId, source.id, { name: name.trim() });
+      setIntegrations(prev => ({ ...prev, sources: prev.sources.map(s => s.id === upd.id ? upd : s) }));
+    } catch (err) { setError(err instanceof Error ? err.message : 'Hernoemen mislukt.'); }
+  }
+
+  async function removeNative(source: CalendarSource) {
+    if (!confirm(`Agenda "${source.name}" en alle bijbehorende afspraken verwijderen?`)) return;
+    setLoading(true); setError(null); setMessage(null);
+    try {
+      await deleteNativeCalendar(organizationId, source.id);
+      setIntegrations(await loadCalendarIntegrations(organizationId));
+      if (mode === 'agenda') await refreshEventsOnly();
+      setMessage('Agenda verwijderd.');
+    } catch (err) { setError(err instanceof Error ? err.message : 'Verwijderen mislukt.'); }
     finally { setLoading(false); }
   }
 
@@ -1177,12 +1413,55 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     </>)}
   </section>;
 
+  const nativeSources = integrations.sources.filter(s => s.provider === 'native');
+  const nativeCalendarsSection = (
+    <section className="calendar-section connections-panel" id="calendar-native">
+      <div className="calendar-section-head">
+        <div>
+          <h3>ResoFly-agenda's</h3>
+          <p>Eigen agenda's, zonder Google of Microsoft. Je kunt ze op je telefoon zetten via "Agenda op je telefoon".</p>
+        </div>
+      </div>
+      {canWrite && (
+        <form className="native-calendar-create" onSubmit={addNativeCalendar} style={{ display: 'flex', gap: 8, margin: '8px 0 12px', flexWrap: 'wrap' }}>
+          <Input value={newCalendarName} onChange={e => setNewCalendarName(e.target.value)} placeholder="Naam, bijv. Kantoor of Monteurs" />
+          <Button variant="primary" disabled={loading || !newCalendarName.trim()}><CalendarPlus size={14} /> Agenda toevoegen</Button>
+        </form>
+      )}
+      {nativeSources.length === 0 ? (
+        <div className="calendar-empty">Nog geen eigen agenda. Maak er een aan om afspraken in ResoFly bij te houden.</div>
+      ) : (
+        <div className="source-list">
+          {nativeSources.map(src => {
+            const owns = canManageSource(src);
+            return (
+              <div className="source-row privacy" key={src.id}>
+                <span className="source-dot" style={{ background: src.color || '#2563eb' }} />
+                <div className="source-info">
+                  <strong>{src.name}</strong>
+                  <span>{src.visibility === 'organization' ? 'Gedeeld met de organisatie' : 'Privé'}{owns ? '' : ' · van een teamlid'}</span>
+                </div>
+                {owns && (
+                  <>
+                    <label className="toggle-row"><input type="checkbox" checked={src.visibility === 'organization'} onChange={() => toggleSource(src, 'visibility')} /> Delen met team</label>
+                    <Button onClick={() => renameNative(src)}><Pencil size={13} /> Hernoem</Button>
+                    <Button variant="danger" onClick={() => removeNative(src)}><Trash2 size={13} /> Verwijder</Button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+
   if (mode === 'settings') {
     return <div className="calendar-page calendar-settings-page">
       <section className="calendar-hero calendar-settings-hero" id="calendar-settings">
         <div>
           <h2>Agenda-instellingen</h2>
-          <p>Koppel Google Calendar en Microsoft Outlook hier, los van de agendaweergave. Agenda's blijven standaard privé en worden alleen gedeeld als je dat expliciet aanzet.</p>
+          <p>Maak eigen ResoFly-agenda's, of koppel Google Calendar en Microsoft Outlook. Agenda's blijven standaard privé en worden alleen gedeeld als je dat expliciet aanzet.</p>
           {!canWrite && <p className="calendar-help">Je hebt alleen-lezen toegang.</p>}
         </div>
         <div className="calendar-actions">
@@ -1213,6 +1492,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         </div>
       </section>
 
+      {nativeCalendarsSection}
+      <PhoneCalendarCard organizationId={organizationId} />
       {connectionsSection}
     </div>;
   }
@@ -1300,7 +1581,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
 
     {/* FAB for time-grid views */}
     {(view === 'day' || view === 'week') && canWrite && writeableSources.length > 0 && !showCreatePanel && (
-      <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '' })); setShowCreatePanel(true); }} title="Nieuw event aanmaken">
+      <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', recurrenceFreq: '', recurrenceUntil: '', editingEventId: '' })); setShowCreatePanel(true); }} title="Nieuwe afspraak aanmaken">
         <Plus size={22} />
       </button>
     )}
@@ -1308,8 +1589,9 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     {/* Floating panel */}
     {showCreatePanel && <EventCreationPanel newEvent={newEvent} setNewEvent={setNewEvent} writeableSources={writeableSources}
       clients={data.clients} projects={data.projects}
+      selectedSourceIsNative={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider === 'native'}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => setShowCreatePanel(false)} />}
 
-    <CalendarEventDetailPanel event={selectedEvent} data={data} sourceColors={sourceColors} canWrite={canWrite} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onClose={() => setSelectedEvent(null)} />
+    <CalendarEventDetailPanel event={selectedEvent} data={data} sourceColors={sourceColors} canWrite={canWrite} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onEditEvent={startEditEvent} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
   </div>;
 }

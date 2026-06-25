@@ -1193,9 +1193,27 @@ export interface SavedReport extends OrgScopedRow {
 
 export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; savedReports: SavedReport[]; companySettings: CompanySettings | null; }
 
-export type CalendarProvider = 'google' | 'microsoft';
+export type CalendarProvider = 'google' | 'microsoft' | 'native';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';
 export type CalendarVisibility = 'private' | 'organization';
+
+/** Eenvoudige herhaling voor native ResoFly-agenda-items (fase 0). */
+export type RecurrenceFrequency = 'daily' | 'weekly' | 'monthly';
+export interface EventRecurrence {
+  freq: RecurrenceFrequency;
+  interval?: number;
+  /** ISO-datum/tijd waarop de herhaling stopt (inclusief). */
+  until?: string | null;
+  count?: number | null;
+}
+
+export interface CalendarAppPassword {
+  id: UUID;
+  label: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
 
 export interface CalendarConnection {
   id: UUID;
@@ -1216,7 +1234,7 @@ export interface CalendarSource {
   id: UUID;
   organization_id: UUID;
   user_id: UUID;
-  connection_id: UUID;
+  connection_id: UUID | null;
   provider: CalendarProvider;
   provider_calendar_id: string;
   name: string;
@@ -1247,6 +1265,11 @@ export interface CalendarExternalEvent {
   html_link: string | null;
   visibility: CalendarVisibility;
   is_private_masked?: boolean;
+  /** Alleen voor native ResoFly-agenda-items: de database-id van het item (voor bewerken/verwijderen). */
+  native_event_id?: UUID;
+  /** RRULE-string van een herhalend native item, indien van toepassing. */
+  rrule?: string | null;
+  recurs?: boolean;
 }
 
 export type BillingPlanKey = 'starter' | 'team' | 'pro' | 'custom';

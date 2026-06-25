@@ -1,14 +1,15 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { generateAppPasswordToken, generateSalt, hashAppPassword } from '../_shared/appPassword.ts';
 
-type Provider = 'google' | 'microsoft';
+type Provider = 'google' | 'microsoft' | 'native';
 type CalendarVisibility = 'private' | 'organization';
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 type CalendarSourceRow = {
   id: string;
   organization_id: string;
   user_id: string;
-  connection_id: string;
+  connection_id: string | null;
   provider: Provider;
   provider_calendar_id: string;
   name: string;
@@ -113,6 +114,14 @@ serve(async (req) => {
       case 'disconnectConnection': requireWrite(); await disconnectConnection(organizationId, user.id, String(body.connectionId || '')); return json({ ok: true });
       case 'listEvents': return json({ ok: true, events: await listEvents(organizationId, user.id, String(body.start || ''), String(body.end || '')) });
       case 'createEvent': requireWrite(); return json({ ok: true, event: await createEvent(organizationId, user.id, body.event || {}) });
+      case 'updateEvent': requireWrite(); return json({ ok: true, event: await updateNativeEvent(organizationId, user.id, body.event || {}) });
+      case 'deleteEvent': requireWrite(); await deleteNativeEvent(organizationId, user.id, String(body.eventId || '')); return json({ ok: true });
+      case 'createNativeCalendar': requireWrite(); return json({ ok: true, source: await createNativeCalendar(organizationId, user.id, body) });
+      case 'updateNativeCalendar': requireWrite(); return json({ ok: true, source: await updateNativeCalendar(organizationId, user.id, body) });
+      case 'deleteNativeCalendar': requireWrite(); await deleteNativeCalendar(organizationId, user.id, String(body.sourceId || '')); return json({ ok: true });
+      case 'createAppPassword': return json({ ok: true, ...(await createAppPassword(organizationId, user.id, body)) });
+      case 'listAppPasswords': return json({ ok: true, appPasswords: await listAppPasswords(organizationId, user.id) });
+      case 'revokeAppPassword': await revokeAppPassword(organizationId, user.id, String(body.appPasswordId || '')); return json({ ok: true });
       default: return json({ ok: false, error: `Onbekende calendar action: ${action}` }, 400);
     }
   } catch (error) {
@@ -556,6 +565,12 @@ async function listEvents(organizationId: string, requesterUserId: string, start
   const visibleSources = ((sources ?? []) as CalendarSourceRow[]).filter(source => source.user_id === requesterUserId || source.visibility === 'organization');
   for (const source of visibleSources) {
     try {
+      if (source.provider === 'native') {
+        const nativeEvents = await fetchNativeEvents(organizationId, source, startIso, endIso);
+        events.push(...nativeEvents.map(event => maskPrivateEventForRequester(event, source, requesterUserId)));
+        continue;
+      }
+      if (!source.connection_id) continue;
       const connection = await getConnection(organizationId, source.connection_id);
       const token = await getToken(organizationId, connection.id);
       const accessToken = await refreshAccessToken(token);
@@ -658,15 +673,22 @@ async function fetchMicrosoftEvents(accessToken: string, source: CalendarSourceR
 
 async function createEvent(organizationId: string, requesterUserId: string, input: Record<string, unknown>) {
   const sourceId = String(input.sourceId || '');
-  const { data: source, error } = await supabaseAdmin.from('calendar_sources').select('*').eq('organization_id', organizationId).eq('id', sourceId).eq('write_enabled', true).single();
-  if (error || !source) throw new Error('Schrijfbare agenda-bron niet gevonden.');
+  const { data: source, error } = await supabaseAdmin.from('calendar_sources').select('*').eq('organization_id', organizationId).eq('id', sourceId).single();
+  if (error || !source) throw new Error('Agenda-bron niet gevonden.');
   const calendarSource = source as CalendarSourceRow;
   if (calendarSource.user_id !== requesterUserId && calendarSource.visibility !== 'organization') {
     throw new Error('Deze privé-agenda is niet met de organisatie gedeeld.');
   }
+  if (calendarSource.provider === 'native') {
+    return await createNativeEvent(organizationId, requesterUserId, calendarSource, input);
+  }
+  if (!calendarSource.write_enabled) {
+    throw new Error('Schrijfbare agenda-bron niet gevonden.');
+  }
   if (!sourceCanWrite(calendarSource)) {
     throw new Error('Deze externe agenda is niet schrijfbaar volgens de provider.');
   }
+  if (!calendarSource.connection_id) throw new Error('Externe agenda-bron mist een koppeling.');
   const connection = await getConnection(organizationId, calendarSource.connection_id);
   if (connection.status !== 'active') {
     throw new Error(`Agenda-koppeling is niet actief (status: ${connection.status}). Koppel het account opnieuw.`);
@@ -837,6 +859,335 @@ function assertIso(value: string, field: string): string {
   const date = new Date(value);
   if (!value || Number.isNaN(date.getTime())) throw new Error(`Ongeldige datum voor ${field}.`);
   return date.toISOString();
+}
+
+// ============================================================
+// Native (eigen ResoFly) agenda's + agenda-items
+// ============================================================
+
+type NativeEventRow = {
+  id: string;
+  organization_id: string;
+  source_id: string;
+  uid: string;
+  title: string;
+  description: string | null;
+  location: string | null;
+  starts_at: string;
+  ends_at: string;
+  all_day: boolean;
+  timezone: string | null;
+  rrule: string | null;
+  exdate: string[] | null;
+  recurs: boolean;
+  sequence: number;
+};
+
+const NATIVE_DEFAULT_TZ = 'Europe/Amsterdam';
+const NATIVE_DEFAULT_COLOR = '#2563eb';
+
+async function createNativeCalendar(organizationId: string, userId: string, body: Record<string, unknown>): Promise<CalendarSourceRow> {
+  const name = (String(body.name || '').trim() || 'Mijn agenda').slice(0, 120);
+  const color = body.color ? String(body.color) : NATIVE_DEFAULT_COLOR;
+  const visibility: CalendarVisibility = body.visibility === 'organization' ? 'organization' : 'private';
+  const { data, error } = await supabaseAdmin.from('calendar_sources').insert({
+    organization_id: organizationId,
+    user_id: userId,
+    connection_id: null,
+    provider: 'native',
+    provider_calendar_id: crypto.randomUUID(),
+    name,
+    color,
+    timezone: NATIVE_DEFAULT_TZ,
+    is_primary: false,
+    access_role: 'owner',
+    sync_enabled: true,
+    write_enabled: true,
+    visibility,
+  }).select('*').single();
+  if (error) throw error;
+  return data as CalendarSourceRow;
+}
+
+async function updateNativeCalendar(organizationId: string, userId: string, body: Record<string, unknown>): Promise<CalendarSourceRow> {
+  const source = await getOwnedNativeSource(organizationId, userId, String(body.sourceId || ''));
+  const patch: Record<string, unknown> = {};
+  if (typeof body.name === 'string' && body.name.trim()) patch.name = body.name.trim().slice(0, 120);
+  if (body.color !== undefined) patch.color = body.color ? String(body.color) : null;
+  if (body.visibility === 'private' || body.visibility === 'organization') patch.visibility = body.visibility;
+  if (typeof body.sync_enabled === 'boolean') patch.sync_enabled = body.sync_enabled;
+  if (Object.keys(patch).length === 0) throw new Error('Geen geldige agenda-wijziging aangeleverd.');
+  const { data, error } = await supabaseAdmin.from('calendar_sources').update(patch).eq('id', source.id).select('*').single();
+  if (error || !data) throw new Error('Agenda kon niet worden bijgewerkt.');
+  return data as CalendarSourceRow;
+}
+
+async function deleteNativeCalendar(organizationId: string, userId: string, sourceId: string): Promise<void> {
+  const source = await getOwnedNativeSource(organizationId, userId, sourceId);
+  const { error } = await supabaseAdmin.from('calendar_sources').delete().eq('id', source.id).eq('provider', 'native');
+  if (error) throw error;
+}
+
+async function getOwnedNativeSource(organizationId: string, requesterUserId: string, sourceId: string): Promise<CalendarSourceRow> {
+  if (!UUID_RE.test(sourceId)) throw new Error('Ongeldige agenda.');
+  const { data, error } = await supabaseAdmin.from('calendar_sources').select('*').eq('organization_id', organizationId).eq('id', sourceId).eq('provider', 'native').single();
+  if (error || !data) throw new Error('ResoFly-agenda niet gevonden.');
+  const source = data as CalendarSourceRow;
+  if (source.user_id !== requesterUserId) throw new Error('Alleen de eigenaar kan deze agenda aanpassen.');
+  return source;
+}
+
+async function getWritableNativeSource(organizationId: string, requesterUserId: string, sourceId: string): Promise<CalendarSourceRow> {
+  const { data, error } = await supabaseAdmin.from('calendar_sources').select('*').eq('organization_id', organizationId).eq('id', sourceId).single();
+  if (error || !data) throw new Error('Agenda-bron niet gevonden.');
+  const source = data as CalendarSourceRow;
+  if (source.provider !== 'native') throw new Error('Alleen items in een ResoFly-agenda kunnen hier bewerkt worden.');
+  if (source.user_id !== requesterUserId && source.visibility !== 'organization') {
+    throw new Error('Deze privé-agenda is niet met de organisatie gedeeld.');
+  }
+  return source;
+}
+
+async function createNativeEvent(organizationId: string, userId: string, source: CalendarSourceRow, input: Record<string, unknown>) {
+  const event = normalizeNewEventInput(input);
+  const rrule = normalizeRrule(input);
+  const { data, error } = await supabaseAdmin.from('calendar_events').insert({
+    organization_id: organizationId,
+    source_id: source.id,
+    created_by: userId,
+    uid: `resofly-${crypto.randomUUID()}`,
+    title: event.title,
+    description: event.description,
+    location: event.location,
+    starts_at: event.startsAt,
+    ends_at: event.endsAt,
+    all_day: event.allDay,
+    timezone: source.timezone,
+    rrule,
+    recurs: rrule !== null,
+  }).select('*').single();
+  if (error) throw error;
+  return nativeRowToBaseEvent(data as NativeEventRow, source);
+}
+
+async function updateNativeEvent(organizationId: string, requesterUserId: string, input: Record<string, unknown>) {
+  const eventId = String(input.eventId || input.id || '');
+  if (!UUID_RE.test(eventId)) throw new Error('Ongeldig agenda-item.');
+  const { data: row, error } = await supabaseAdmin.from('calendar_events').select('*').eq('organization_id', organizationId).eq('id', eventId).is('deleted_at', null).single();
+  if (error || !row) throw new Error('Agenda-item niet gevonden.');
+  const current = row as NativeEventRow;
+  const source = await getWritableNativeSource(organizationId, requesterUserId, current.source_id);
+  const event = normalizeNewEventInput(input);
+  const rrule = normalizeRrule(input);
+  const { data: updated, error: updateError } = await supabaseAdmin.from('calendar_events').update({
+    title: event.title,
+    description: event.description,
+    location: event.location,
+    starts_at: event.startsAt,
+    ends_at: event.endsAt,
+    all_day: event.allDay,
+    rrule,
+    recurs: rrule !== null,
+    exdate: null,
+    sequence: (current.sequence ?? 0) + 1,
+  }).eq('id', current.id).select('*').single();
+  if (updateError || !updated) throw new Error('Agenda-item kon niet worden bijgewerkt.');
+  return nativeRowToBaseEvent(updated as NativeEventRow, source);
+}
+
+async function deleteNativeEvent(organizationId: string, requesterUserId: string, eventId: string): Promise<void> {
+  if (!UUID_RE.test(eventId)) throw new Error('Ongeldig agenda-item.');
+  const { data: row, error } = await supabaseAdmin.from('calendar_events').select('*').eq('organization_id', organizationId).eq('id', eventId).single();
+  if (error || !row) throw new Error('Agenda-item niet gevonden.');
+  const current = row as NativeEventRow;
+  await getWritableNativeSource(organizationId, requesterUserId, current.source_id);
+  // Soft-delete: blijft als tombstone staan voor de latere CalDAV sync-collection.
+  const { error: deleteError } = await supabaseAdmin.from('calendar_events')
+    .update({ deleted_at: new Date().toISOString(), sequence: (current.sequence ?? 0) + 1 })
+    .eq('id', current.id);
+  if (deleteError) throw deleteError;
+}
+
+async function fetchNativeEvents(organizationId: string, source: CalendarSourceRow, startIso: string, endIso: string) {
+  const [{ data: singles, error: singleError }, { data: recurringRows, error: recurringError }] = await Promise.all([
+    supabaseAdmin.from('calendar_events').select('*')
+      .eq('organization_id', organizationId).eq('source_id', source.id).is('deleted_at', null).eq('recurs', false)
+      .lt('starts_at', endIso).gte('ends_at', startIso),
+    supabaseAdmin.from('calendar_events').select('*')
+      .eq('organization_id', organizationId).eq('source_id', source.id).is('deleted_at', null).eq('recurs', true),
+  ]);
+  if (singleError) throw singleError;
+  if (recurringError) throw recurringError;
+  const out: Record<string, unknown>[] = [];
+  for (const row of (singles ?? []) as NativeEventRow[]) out.push(nativeRowToBaseEvent(row, source));
+  for (const row of (recurringRows ?? []) as NativeEventRow[]) out.push(...expandRecurringNativeRow(row, source, startIso, endIso));
+  return out;
+}
+
+function nativeRowToBaseEvent(row: NativeEventRow, source: CalendarSourceRow): Record<string, unknown> {
+  return {
+    id: `${source.id}:${row.uid}`,
+    provider: 'native' as Provider,
+    source_id: source.id,
+    source_name: source.name,
+    provider_event_id: row.uid,
+    native_event_id: row.id,
+    title: row.title || '(Geen titel)',
+    description: row.description ?? null,
+    location: row.location ?? null,
+    starts_at: row.starts_at,
+    ends_at: row.ends_at,
+    all_day: row.all_day,
+    rrule: row.rrule ?? null,
+    recurs: row.recurs,
+    html_link: null,
+    visibility: source.visibility,
+    is_private_masked: false,
+  };
+}
+
+// Eenvoudige herhaling-uitvouwing voor fase 0 (FREQ DAILY/WEEKLY/MONTHLY +
+// INTERVAL/UNTIL/COUNT + EXDATE). Volledige RRULE-afhandeling (BYDAY etc.) volgt
+// met ical.js in de CalDAV-Worker.
+function expandRecurringNativeRow(row: NativeEventRow, source: CalendarSourceRow, startIso: string, endIso: string): Record<string, unknown>[] {
+  const base = nativeRowToBaseEvent(row, source);
+  const rule = parseSimpleRrule(row.rrule);
+  if (!rule) return [base];
+  const durationMs = new Date(row.ends_at).getTime() - new Date(row.starts_at).getTime();
+  const winStart = new Date(startIso).getTime();
+  const winEnd = new Date(endIso).getTime();
+  const until = rule.until ? new Date(rule.until).getTime() : null;
+  const exdates = new Set((row.exdate ?? []).map(value => new Date(value).getTime()));
+  const out: Record<string, unknown>[] = [];
+  let cursor = new Date(row.starts_at);
+  let count = 0;
+  for (let i = 0; i < 800; i++) {
+    const startMs = cursor.getTime();
+    if (until !== null && startMs > until) break;
+    if (rule.count && count >= rule.count) break;
+    if (startMs > winEnd) break;
+    const endMs = startMs + durationMs;
+    if (endMs >= winStart && !exdates.has(startMs)) {
+      out.push({
+        ...base,
+        id: `${source.id}:${row.uid}:${startMs}`,
+        starts_at: new Date(startMs).toISOString(),
+        ends_at: new Date(endMs).toISOString(),
+      });
+    }
+    count += 1;
+    cursor = advanceRecurrence(cursor, rule.freq, rule.interval);
+  }
+  return out;
+}
+
+type SimpleRrule = { freq: 'DAILY' | 'WEEKLY' | 'MONTHLY'; interval: number; until: string | null; count: number | null };
+
+function parseSimpleRrule(rrule: string | null): SimpleRrule | null {
+  if (!rrule) return null;
+  const parts = new Map<string, string>();
+  for (const segment of rrule.split(';')) {
+    const [key, value] = segment.split('=');
+    if (key && value) parts.set(key.trim().toUpperCase(), value.trim());
+  }
+  const freqRaw = parts.get('FREQ');
+  if (freqRaw !== 'DAILY' && freqRaw !== 'WEEKLY' && freqRaw !== 'MONTHLY') return null;
+  const interval = Math.max(1, parseInt(parts.get('INTERVAL') || '1', 10) || 1);
+  const untilRaw = parts.get('UNTIL');
+  const countRaw = parts.get('COUNT');
+  return {
+    freq: freqRaw,
+    interval,
+    until: untilRaw ? rruleUntilToIso(untilRaw) : null,
+    count: countRaw ? (parseInt(countRaw, 10) || null) : null,
+  };
+}
+
+function advanceRecurrence(date: Date, freq: 'DAILY' | 'WEEKLY' | 'MONTHLY', interval: number): Date {
+  const next = new Date(date.getTime());
+  if (freq === 'DAILY') next.setUTCDate(next.getUTCDate() + interval);
+  else if (freq === 'WEEKLY') next.setUTCDate(next.getUTCDate() + 7 * interval);
+  else next.setUTCMonth(next.getUTCMonth() + interval);
+  return next;
+}
+
+// RRULE UNTIL "YYYYMMDDTHHMMSSZ" (of "YYYYMMDD") → ISO.
+function rruleUntilToIso(value: string): string | null {
+  const m = value.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})Z?)?$/);
+  if (!m) {
+    const fallback = new Date(value);
+    return Number.isNaN(fallback.getTime()) ? null : fallback.toISOString();
+  }
+  const [, y, mo, d, hh, mm, ss] = m;
+  return new Date(Date.UTC(+y, +mo - 1, +d, +(hh ?? 0), +(mm ?? 0), +(ss ?? 0))).toISOString();
+}
+
+function isoToRruleUntil(date: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}T${p(date.getUTCHours())}${p(date.getUTCMinutes())}${p(date.getUTCSeconds())}Z`;
+}
+
+// Bouwt een RRULE-string uit een vrij RRULE-veld óf een eenvoudig
+// {freq, interval, until, count}-object dat de frontend stuurt.
+function normalizeRrule(input: Record<string, unknown>): string | null {
+  const raw = input.rrule;
+  if (typeof raw === 'string' && raw.trim()) {
+    return parseSimpleRrule(raw.trim()) ? raw.trim().toUpperCase() : null;
+  }
+  const rec = input.recurrence;
+  if (!rec || typeof rec !== 'object') return null;
+  const r = rec as Record<string, unknown>;
+  const freqMap: Record<string, string> = { daily: 'DAILY', weekly: 'WEEKLY', monthly: 'MONTHLY' };
+  const freq = freqMap[String(r.freq || '').toLowerCase()];
+  if (!freq) return null;
+  const parts = [`FREQ=${freq}`];
+  const interval = Number(r.interval);
+  if (Number.isInteger(interval) && interval > 1) parts.push(`INTERVAL=${interval}`);
+  if (r.until) {
+    const until = new Date(String(r.until));
+    if (!Number.isNaN(until.getTime())) parts.push(`UNTIL=${isoToRruleUntil(until)}`);
+  }
+  const count = Number(r.count);
+  if (Number.isInteger(count) && count > 0) parts.push(`COUNT=${count}`);
+  return parts.join(';');
+}
+
+// ============================================================
+// App-wachtwoorden (CalDAV) — beheer vanuit de app
+// ============================================================
+
+async function createAppPassword(organizationId: string, userId: string, body: Record<string, unknown>) {
+  const label = (String(body.label || '').trim() || 'Apparaat').slice(0, 80);
+  const secret = generateAppPasswordToken();
+  const salt = generateSalt();
+  const password_hash = await hashAppPassword(secret, salt);
+  const { data, error } = await supabaseAdmin.from('calendar_app_passwords').insert({
+    organization_id: organizationId,
+    user_id: userId,
+    label,
+    password_hash,
+    salt,
+  }).select('id,label,created_at,last_used_at,revoked_at').single();
+  if (error) throw error;
+  // secret wordt EENMALIG teruggegeven en nergens bewaard.
+  return { appPassword: data, secret };
+}
+
+async function listAppPasswords(organizationId: string, userId: string) {
+  const { data, error } = await supabaseAdmin.from('calendar_app_passwords')
+    .select('id,label,created_at,last_used_at,revoked_at')
+    .eq('organization_id', organizationId).eq('user_id', userId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+async function revokeAppPassword(organizationId: string, userId: string, appPasswordId: string): Promise<void> {
+  if (!UUID_RE.test(appPasswordId)) throw new Error('Ongeldig app-wachtwoord.');
+  const { error } = await supabaseAdmin.from('calendar_app_passwords')
+    .update({ revoked_at: new Date().toISOString() })
+    .eq('organization_id', organizationId).eq('user_id', userId).eq('id', appPasswordId).is('revoked_at', null);
+  if (error) throw error;
 }
 
 function normalizeMicrosoftDateTime(value: string): string {

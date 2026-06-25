@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { CalendarConnection, CalendarExternalEvent, CalendarProvider, CalendarSource, UUID } from '../types';
+import type { CalendarAppPassword, CalendarConnection, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, EventRecurrence, UUID } from '../types';
 
 export interface CalendarIntegrationsPayload {
   connections: CalendarConnection[];
@@ -14,6 +14,14 @@ export interface CalendarEventInput {
   startsAt: string;
   endsAt: string;
   allDay?: boolean;
+  /** Alleen voor native ResoFly-agenda's: optionele herhaling. */
+  recurrence?: EventRecurrence | null;
+}
+
+export interface NativeCalendarInput {
+  name: string;
+  color?: string | null;
+  visibility?: CalendarVisibility;
 }
 
 type CalendarActionResponse<T> = { ok: true } & T;
@@ -57,4 +65,44 @@ export async function listExternalCalendarEvents(organizationId: UUID, start: st
 export async function createExternalCalendarEvent(organizationId: UUID, input: CalendarEventInput): Promise<CalendarExternalEvent> {
   const data = await invokeCalendar<{ event: CalendarExternalEvent }>(organizationId, { action: 'createEvent', event: input });
   return data.event;
+}
+
+/** Bewerkt een native ResoFly-agenda-item (eventId = native_event_id). */
+export async function updateCalendarEvent(organizationId: UUID, eventId: UUID, input: CalendarEventInput): Promise<CalendarExternalEvent> {
+  const data = await invokeCalendar<{ event: CalendarExternalEvent }>(organizationId, { action: 'updateEvent', event: { ...input, eventId } });
+  return data.event;
+}
+
+/** Verwijdert (soft-delete) een native ResoFly-agenda-item. */
+export async function deleteCalendarEvent(organizationId: UUID, eventId: UUID): Promise<void> {
+  await invokeCalendar<Record<string, never>>(organizationId, { action: 'deleteEvent', eventId });
+}
+
+export async function createNativeCalendar(organizationId: UUID, input: NativeCalendarInput): Promise<CalendarSource> {
+  const data = await invokeCalendar<{ source: CalendarSource }>(organizationId, { action: 'createNativeCalendar', ...input });
+  return data.source;
+}
+
+export async function updateNativeCalendar(organizationId: UUID, sourceId: UUID, patch: Partial<NativeCalendarInput> & { sync_enabled?: boolean }): Promise<CalendarSource> {
+  const data = await invokeCalendar<{ source: CalendarSource }>(organizationId, { action: 'updateNativeCalendar', sourceId, ...patch });
+  return data.source;
+}
+
+export async function deleteNativeCalendar(organizationId: UUID, sourceId: UUID): Promise<void> {
+  await invokeCalendar<Record<string, never>>(organizationId, { action: 'deleteNativeCalendar', sourceId });
+}
+
+/** Genereert een nieuw app-wachtwoord; `secret` wordt eenmalig teruggegeven. */
+export async function createCalendarAppPassword(organizationId: UUID, label: string): Promise<{ appPassword: CalendarAppPassword; secret: string }> {
+  const data = await invokeCalendar<{ appPassword: CalendarAppPassword; secret: string }>(organizationId, { action: 'createAppPassword', label });
+  return { appPassword: data.appPassword, secret: data.secret };
+}
+
+export async function listCalendarAppPasswords(organizationId: UUID): Promise<CalendarAppPassword[]> {
+  const data = await invokeCalendar<{ appPasswords: CalendarAppPassword[] }>(organizationId, { action: 'listAppPasswords' });
+  return data.appPasswords;
+}
+
+export async function revokeCalendarAppPassword(organizationId: UUID, appPasswordId: UUID): Promise<void> {
+  await invokeCalendar<Record<string, never>>(organizationId, { action: 'revokeAppPassword', appPasswordId });
 }

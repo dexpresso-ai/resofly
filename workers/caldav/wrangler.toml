@@ -1,0 +1,38 @@
+name = "resofly-caldav"
+main = "src/index.ts"
+compatibility_date = "2026-06-25"
+
+# De CalDAV-Worker bedient telefoons (Apple Agenda, Android/DAVx5) via CalDAV.
+# Hij praat met Supabase via de service-role key:
+#   wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env staging
+# (NIET hier in git zetten.)
+#
+# Custom hostname (later): bind caldav.resofly.com via een [[routes]]-blok of het
+# Cloudflare-dashboard. Voor de eerste tests volstaat de *.workers.dev-URL, want
+# iOS accepteert elke geldige HTTPS-host.
+
+[vars]
+SUPABASE_URL = "https://enzghpduqwaojcxgwarr.supabase.co"
+
+# ---- staging ----
+[env.staging]
+name = "resofly-caldav-staging"
+
+[env.staging.vars]
+SUPABASE_URL = "https://enzghpduqwaojcxgwarr.supabase.co"
+
+# Later, na DNS:
+# [[env.staging.routes]]
+# pattern = "caldav.staging.resofly.com"
+# custom_domain = true
+
+# ---- production ----
+[env.production]
+name = "resofly-caldav"
+
+[env.production.vars]
+SUPABASE_URL = "https://YOUR_PRODUCTION_PROJECT.supabase.co"
+
+# [[env.production.routes]]
+# pattern = "caldav.resofly.com"
+# custom_domain = true
