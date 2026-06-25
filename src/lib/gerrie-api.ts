@@ -92,7 +92,45 @@ export interface GerrieSendRemindersProposal {
   invoices: Array<{ id: UUID; number: string; client_name: string; level: number }>;
   total: number;
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal;
+export interface GerrieProposalSubtask { label: string; done: boolean }
+export interface GerrieProjectProposal {
+  type: 'project';
+  name: string;
+  client_id: UUID | null;
+  client_name: string;
+  description: string | null;
+  start_date: string | null;
+  end_date: string | null;
+}
+export interface GerrieEditProjectProposal {
+  type: 'edit_project';
+  id: UUID;
+  name: string;
+  changes: { name?: string; client_id?: UUID | null; description?: string | null; start_date?: string | null; end_date?: string | null; archived?: boolean };
+}
+export interface GerrieTaskProposal {
+  type: 'task';
+  project_id: UUID;
+  project_name: string;
+  title: string;
+  description: string | null;
+  status: string;
+  priority: string;
+  planned_date: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  estimated_minutes: number;
+  tags: string[];
+  subtasks: GerrieProposalSubtask[];
+}
+export interface GerrieEditTaskProposal {
+  type: 'edit_task';
+  id: UUID;
+  title: string;
+  project_id: UUID;
+  changes: { title?: string; description?: string | null; status?: string; priority?: string; planned_date?: string | null; start_date?: string | null; end_date?: string | null; estimated_minutes?: number; tags?: string[]; subtasks?: GerrieProposalSubtask[] };
+}
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal;
 
 export interface GerrieResult {
   conversationId: UUID;

@@ -89,8 +89,8 @@ import './styles/globals.css';
 type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'archive'|'settings'|'project';
 type EditMode =
   | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status'>> }
-  | { kind: 'project'; item?: Project }
-  | { kind: 'task'; item?: Task; projectId: string }
+  | { kind: 'project'; item?: Project; defaults?: Partial<Pick<Project, 'name' | 'client_id' | 'description' | 'start_date' | 'end_date'>> }
+  | { kind: 'task'; item?: Task; projectId: string; defaults?: Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'tags' | 'start_date' | 'end_date' | 'planned_date' | 'estimated_minutes' | 'subtasks'>> }
   | { kind: 'ticket'; item?: Ticket }
   | { kind: 'note'; item?: Note; defaults?: Partial<Pick<Note, 'client_id' | 'project_id' | 'folder_id' | 'title' | 'content' | 'note_type' | 'tags'>>; calendarLink?: CalendarNoteLinkInput }
   | { kind: 'document'; item?: InternalDocument; defaults?: Partial<Pick<InternalDocument, 'client_id' | 'project_id' | 'folder_id' | 'title' | 'content' | 'document_type'>> }
@@ -1009,6 +1009,53 @@ function App() {
         }
         await refresh();
         if (failed.length) throw new Error(`${sent} verstuurd, ${failed.length} mislukt (${failed.join(', ')}).`);
+      }}
+      onCreateProject={(p) => {
+        if (!ensureCanWrite()) return;
+        setPage('projects'); setProjectId(null); setClientId(null);
+        setEdit({ kind: 'project', item: undefined, defaults: { name: p.name, client_id: p.client_id ?? undefined, description: p.description ?? undefined, start_date: p.start_date ?? undefined, end_date: p.end_date ?? undefined } });
+      }}
+      onEditProject={(p) => {
+        if (!ensureCanWrite()) return;
+        const existing = data.projects.find((pr) => pr.id === p.id);
+        if (!existing) { setError('Project niet gevonden.'); return; }
+        const merged: Project = { ...existing };
+        if (p.changes.name !== undefined) merged.name = p.changes.name;
+        if (p.changes.client_id !== undefined) merged.client_id = p.changes.client_id;
+        if (p.changes.description !== undefined) merged.description = p.changes.description;
+        if (p.changes.start_date !== undefined) merged.start_date = p.changes.start_date;
+        if (p.changes.end_date !== undefined) merged.end_date = p.changes.end_date;
+        if (p.changes.archived !== undefined) merged.archived = p.changes.archived;
+        setPage('projects'); setProjectId(null); setClientId(null);
+        setEdit({ kind: 'project', item: merged });
+      }}
+      onCreateTask={(p) => {
+        if (!ensureCanWrite()) return;
+        setProjectId(p.project_id); setClientId(null); setPage('project');
+        setEdit({ kind: 'task', item: undefined, projectId: p.project_id, defaults: {
+          title: p.title, description: p.description ?? undefined, status: p.status as Task['status'], priority: p.priority as Task['priority'],
+          tags: p.tags, start_date: p.start_date ?? undefined, end_date: p.end_date ?? undefined, planned_date: p.planned_date ?? undefined,
+          estimated_minutes: p.estimated_minutes, subtasks: p.subtasks.map((s) => ({ id: uid(), label: s.label, done: s.done })),
+        } });
+      }}
+      onEditTask={(p) => {
+        if (!ensureCanWrite()) return;
+        const existing = data.tasks.find((t) => t.id === p.id);
+        if (!existing) { setError('Taak niet gevonden.'); return; }
+        const merged: Task = { ...existing };
+        const c = p.changes;
+        if (c.title !== undefined) merged.title = c.title;
+        if (c.description !== undefined) merged.description = c.description;
+        if (c.status !== undefined) merged.status = c.status as Task['status'];
+        if (c.priority !== undefined) merged.priority = c.priority as Task['priority'];
+        if (c.planned_date !== undefined) merged.planned_date = c.planned_date;
+        if (c.start_date !== undefined) merged.start_date = c.start_date;
+        if (c.end_date !== undefined) merged.end_date = c.end_date;
+        if (c.estimated_minutes !== undefined) merged.estimated_minutes = c.estimated_minutes;
+        if (c.tags !== undefined) merged.tags = c.tags;
+        if (c.subtasks !== undefined) merged.subtasks = c.subtasks.map((s) => ({ id: uid(), label: s.label, done: s.done }));
+        setProjectId(existing.project_id); setClientId(null); setPage('project');
+        setEdit({ kind: 'task', item: merged, projectId: existing.project_id });
       }}
     />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
@@ -1946,11 +1993,11 @@ function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string,
   }
   if (edit.kind === "project") {
     const item = edit.item;
-    return { name: item?.name ?? "", client_id: item?.client_id ?? "", description: item?.description ?? "", color: normalizeColor(item?.color, DEFAULT_PROJECT_COLOR), archived: item?.archived ?? false, start_date: item?.start_date ?? "", end_date: item?.end_date ?? "" };
+    return { name: item?.name ?? edit.defaults?.name ?? "", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", description: item?.description ?? edit.defaults?.description ?? "", color: normalizeColor(item?.color, DEFAULT_PROJECT_COLOR), archived: item?.archived ?? false, start_date: item?.start_date ?? edit.defaults?.start_date ?? "", end_date: item?.end_date ?? edit.defaults?.end_date ?? "" };
   }
   if (edit.kind === "task") {
     const item = edit.item;
-    return { title: item?.title ?? "", description: item?.description ?? "", status: item?.status ?? "todo", priority: item?.priority ?? "med", tags: item?.tags?.join(", ") ?? "", start_date: item?.start_date ?? "", end_date: item?.end_date ?? "", planned_date: item?.planned_date ?? "", estimated_minutes: item?.estimated_minutes ?? 60, subtasks: normalizeSubtasks(item?.subtasks), comments: normalizeComments(item?.comments) };
+    return { title: item?.title ?? edit.defaults?.title ?? "", description: item?.description ?? edit.defaults?.description ?? "", status: item?.status ?? edit.defaults?.status ?? "todo", priority: item?.priority ?? edit.defaults?.priority ?? "med", tags: item?.tags?.join(", ") ?? edit.defaults?.tags?.join(", ") ?? "", start_date: item?.start_date ?? edit.defaults?.start_date ?? "", end_date: item?.end_date ?? edit.defaults?.end_date ?? "", planned_date: item?.planned_date ?? edit.defaults?.planned_date ?? "", estimated_minutes: item?.estimated_minutes ?? edit.defaults?.estimated_minutes ?? 60, subtasks: normalizeSubtasks(item?.subtasks ?? edit.defaults?.subtasks), comments: normalizeComments(item?.comments) };
   }
   if (edit.kind === "ticket") {
     const item = edit.item;
