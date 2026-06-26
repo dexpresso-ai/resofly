@@ -4,7 +4,8 @@ import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsIn
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadAiUsageThisMonth, type AiUsageRow } from '../lib/repository';
+import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains } from '../lib/repository';
+import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
@@ -506,13 +507,13 @@ function EmailTemplatesCard({ organizationId, canAdmin }: { organizationId: stri
 }
 
 function AiUsagePanel({ organizationId, members }: { organizationId: string; members: OrganizationMember[] }) {
-  const [rows, setRows] = useState<AiUsageRow[] | null>(null);
+  const [rows, setRows] = useState<GerrieUsageRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setRows(null); setError(null);
-    loadAiUsageThisMonth(organizationId)
+    loadGerrieUsage(organizationId)
       .then(r => { if (!cancelled) setRows(r); })
       .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'AI-gebruik laden mislukt.'); });
     return () => { cancelled = true; };
@@ -520,17 +521,9 @@ function AiUsagePanel({ organizationId, members }: { organizationId: string; mem
 
   const USD_TO_EUR = 0.92;
   const emailByUser = new Map(members.map(m => [m.user_id, m.email || m.user_id]));
-  const byUser = new Map<string, { messages: number; tokens: number; costUsd: number }>();
-  for (const r of rows ?? []) {
-    const key = r.user_id ?? 'onbekend';
-    const cur = byUser.get(key) ?? { messages: 0, tokens: 0, costUsd: 0 };
-    cur.messages += 1;
-    cur.tokens += (r.input_tokens || 0) + (r.output_tokens || 0) + (r.cache_read_tokens || 0) + (r.cache_creation_tokens || 0);
-    cur.costUsd += r.cost_usd || 0;
-    byUser.set(key, cur);
-  }
-  const list = [...byUser.entries()]
-    .map(([uid, agg]) => ({ uid, label: emailByUser.get(uid) ?? 'Onbekende gebruiker', messages: agg.messages, tokens: agg.tokens, costEur: agg.costUsd * USD_TO_EUR }))
+  // De rijen komen al per gebruiker geaggregeerd binnen (over alle organisaties heen).
+  const list = (rows ?? [])
+    .map(r => ({ uid: r.user_id, label: emailByUser.get(r.user_id) ?? 'Onbekende gebruiker', messages: r.messages, tokens: r.tokens, costEur: r.cost_usd * USD_TO_EUR }))
     .sort((a, b) => b.costEur - a.costEur);
   const fmtEur = (n: number) => `€ ${n.toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const totalEur = list.reduce((s, x) => s + x.costEur, 0);
@@ -542,7 +535,7 @@ function AiUsagePanel({ organizationId, members }: { organizationId: string; mem
       <div className="settings-card-head">
         <div>
           <h3>AI-gebruik deze maand</h3>
-          <p className="settings-help">Verbruik van Gerrie per gebruiker in de huidige kalendermaand. Bedragen zijn schattingen op basis van het Claude-tarief, omgerekend naar euro's.</p>
+          <p className="settings-help">Verbruik van Gerrie per gebruiker in de huidige kalendermaand, geteld over al hun organisaties heen (zelfde telling als het tegoed/de limiet). Bedragen zijn schattingen op basis van het Claude-tarief, omgerekend naar euro's.</p>
         </div>
       </div>
       {error && <div className="error">{error}</div>}

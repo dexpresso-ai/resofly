@@ -79,6 +79,10 @@ serve(async (req) => {
     if (String(body.action || '') === 'confirm') {
       return json(req, await confirmAction(user.id, organizationId, role, body));
     }
+    // AI-gebruik-dashboard: verbruik PER GEBRUIKER over alle organisaties (zoals de limiet).
+    if (String(body.action || '') === 'usage') {
+      return json(req, await getUsageSummary(organizationId, role));
+    }
 
     if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
     const message = String(body.message || '').trim();
@@ -1743,6 +1747,38 @@ async function confirmAction(_userId: string, organizationId: string, role: Orga
     .eq('id', auditId).eq('organization_id', organizationId);
   if (error) throw new HttpError(`Audit bijwerken mislukt: ${error.message}`, 500);
   return { ok: true };
+}
+
+/**
+ * Verbruik per gebruiker voor het admin-dashboard — PER GEBRUIKER over al hun
+ * organisaties heen (zelfde telling als de kostenlimiet), zodat het cijfer niet
+ * verspringt bij het wisselen van organisatie. Alleen owners/admins.
+ */
+async function getUsageSummary(organizationId: string, role: OrganizationRole): Promise<{ rows: Array<{ user_id: string; messages: number; tokens: number; cost_usd: number }> }> {
+  if (!['owner', 'admin'].includes(role)) throw new HttpError('Alleen owners en admins kunnen het AI-gebruik inzien.', 403);
+  const { data: members, error: mErr } = await supabaseAdmin.from('organization_members')
+    .select('user_id').eq('organization_id', organizationId).eq('status', 'active');
+  if (mErr) throw new HttpError(`Leden ophalen mislukt: ${mErr.message}`, 500);
+  const userIds = [...new Set((members ?? []).map((m: Record<string, unknown>) => String(m.user_id)).filter(Boolean))];
+  if (userIds.length === 0) return { rows: [] };
+
+  const monthStart = `${todayIso().slice(0, 7)}-01T00:00:00Z`;
+  const { data, error } = await supabaseAdmin.from('ai_usage')
+    .select('user_id, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd')
+    .in('user_id', userIds).gte('created_at', monthStart);
+  if (error) throw new HttpError(`AI-gebruik ophalen mislukt: ${error.message}`, 500);
+
+  const byUser = new Map<string, { messages: number; tokens: number; cost_usd: number }>();
+  for (const r of (data ?? []) as Record<string, unknown>[]) {
+    const uid = String(r.user_id ?? '');
+    if (!uid) continue;
+    const cur = byUser.get(uid) ?? { messages: 0, tokens: 0, cost_usd: 0 };
+    cur.messages += 1;
+    cur.tokens += Number(r.input_tokens || 0) + Number(r.output_tokens || 0) + Number(r.cache_read_tokens || 0) + Number(r.cache_creation_tokens || 0);
+    cur.cost_usd += Number(r.cost_usd || 0);
+    byUser.set(uid, cur);
+  }
+  return { rows: [...byUser.entries()].map(([user_id, v]) => ({ user_id, ...v })) };
 }
 
 interface BudgetCheck { allowed: boolean; usedEur: number; limitEur: number }

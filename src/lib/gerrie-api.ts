@@ -239,6 +239,31 @@ export async function confirmGerrieAction(organizationId: UUID, auditId: string,
   } catch { /* best-effort logging */ }
 }
 
+export interface GerrieUsageRow { user_id: UUID; messages: number; tokens: number; cost_usd: number }
+
+/**
+ * Haalt het AI-gebruik op voor het admin-dashboard: PER GEBRUIKER over alle
+ * organisaties (zelfde telling als de kostenlimiet). Loopt via de Edge Function
+ * (service-role), zodat het niet door de per-org RLS wordt beperkt.
+ */
+export async function loadGerrieUsage(organizationId: UUID): Promise<GerrieUsageRow[]> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) return [];
+  const res = await fetch(`${FUNCTIONS_BASE}/gerrie-agent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: ANON_KEY },
+    body: JSON.stringify({ action: 'usage', organizationId }),
+  });
+  if (!res.ok) {
+    let message = 'AI-gebruik laden mislukt.';
+    try { const payload = await res.json(); if (payload?.error) message = String(payload.error); } catch { /* geen JSON */ }
+    throw new Error(message);
+  }
+  const payload = await res.json();
+  return (payload?.rows ?? []) as GerrieUsageRow[];
+}
+
 function parseSseBlock(block: string): { event: string; data: unknown } | null {
   let event = 'message';
   let dataStr = '';
