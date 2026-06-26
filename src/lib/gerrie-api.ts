@@ -143,8 +143,8 @@ export interface GerrieCalendarEventProposal {
 }
 export interface GerrieWeekActionProposal {
   type: 'week_action';
-  title: string;
-  planned_date: string;
+  items: Array<{ title: string; planned_date: string }>;
+  total: number;
 }
 export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieWeekActionProposal;
 

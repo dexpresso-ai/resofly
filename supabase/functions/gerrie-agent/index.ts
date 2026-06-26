@@ -183,7 +183,7 @@ interface EditProjectProposal { type: 'edit_project'; id: string; name: string; 
 interface TaskProposal { type: 'task'; project_id: string; project_name: string; title: string; description: string | null; status: string; priority: string; planned_date: string | null; start_date: string | null; end_date: string | null; estimated_minutes: number; tags: string[]; subtasks: ProposalSubtask[] }
 interface EditTaskProposal { type: 'edit_task'; id: string; title: string; project_id: string; changes: { title?: string; description?: string | null; status?: string; priority?: string; planned_date?: string | null; start_date?: string | null; end_date?: string | null; estimated_minutes?: number; tags?: string[]; subtasks?: ProposalSubtask[] } }
 interface CalendarEventProposal { type: 'calendar_event'; source_id: string; source_name: string; title: string; date: string; start_time: string; end_time: string; description: string | null; location: string | null }
-interface WeekActionProposal { type: 'week_action'; title: string; planned_date: string }
+interface WeekActionProposal { type: 'week_action'; items: Array<{ title: string; planned_date: string }>; total: number }
 type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | WeekActionProposal;
 interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: unknown }>; usage: Usage; proposal?: Proposal }
 
@@ -259,7 +259,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
         : proposal.type === 'task' ? `Ik heb de taak "${proposal.title}" voor je klaargezet. Controleer en sla op:`
         : proposal.type === 'edit_task' ? `Ik heb de wijziging van taak "${proposal.title}" klaargezet. Controleer en sla op:`
         : proposal.type === 'calendar_event' ? `Wil je dat ik dit agenda-item aanmaak in "${proposal.source_name}"? Bevestig hieronder.`
-        : proposal.type === 'week_action' ? `Wil je dat ik "${proposal.title}" als actiepunt voor die week toevoeg? Bevestig hieronder.`
+        : proposal.type === 'week_action' ? `Wil je dat ik deze ${proposal.total} actiepunt${proposal.total === 1 ? '' : 'en'} toevoeg? Bevestig hieronder.`
         : 'Ik heb een conceptfactuur voor je klaargezet. Controleer hem en sla op:';
       return { text: answerChunks.join('') || fallback, toolCalls, usage, proposal };
     }
@@ -414,7 +414,7 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_send_reminders` — alle betalingsherinneringen versturen die vandaag aan de beurt zijn (per factuur het volgende niveau: 1e/2e/3e), of beperkt tot één niveau. Met `list_due_reminders` kun je eerst tonen wat er klaarstaat (groepeer in je antwoord per niveau).',
           '- `propose_project` / `propose_edit_project` — een project aanmaken of wijzigen (open het projectformulier vooringevuld).',
           '- `propose_task` / `propose_edit_task` — een taak binnen een project aanmaken of wijzigen, inclusief subtaken, status/prioriteit en een geplande datum (`planned_date`) om de taak als actiepunt in de WEEKPLANNER te zetten. Zoek het project met `list_projects`, bestaande taken met `list_tasks`.',
-          '- `propose_week_action` — een kort ACTIEPUNT op de "Actiepunten deze week"-checklist van de weekplanner (los van projecten en taken). Geef een datum binnen de gewenste week. Voor een echte taak binnen een project gebruik je `propose_task`.',
+          '- `propose_week_action` — ÉÉN OF MEER ACTIEPUNTEN op de "Actiepunten deze week"-checklist van de weekplanner (los van projecten en taken). Vraagt de gebruiker meerdere punten, geef ze dan ALLEMAAL in één keer mee via `items` (niet één voor één). Geef per item een datum binnen de gewenste week. Voor een echte taak binnen een project gebruik je `propose_task`.',
           '- `propose_calendar_event` — een agenda-item aanmaken in een gekoppelde agenda (Google/Microsoft). Tijden zijn lokaal (Europe/Amsterdam); reken relatieve datums om op basis van vandaag. Bij meerdere schrijfbare agenda\'s: vraag welke (`list_calendars`).',
           '- `propose_convert_quote` — een GEACCEPTEERDE offerte omzetten naar een factuur. Zoek de offerte met `list_quotes`; alleen status "accepted" kan omgezet worden.',
           '- `propose_edit_invoice` / `propose_edit_quote` — een bestaande CONCEPT-factuur/offerte wijzigen. Alleen status "draft" mag; een verstuurde of verwerkte factuur mag wettelijk niet meer aangepast worden — zeg dat dan. Geef alleen de velden die veranderen; voor losse regelaanpassingen heb je de volledige set regels nodig, laat `lines` anders weg zodat de gebruiker ze zelf aanpast.',
@@ -772,14 +772,25 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'propose_week_action',
-    description: "Zet een kort ACTIEPUNT op de checklist 'Actiepunten deze week' van de weekplanner — een los to-do-puntje voor een bepaalde week, GEEN taak en NIET aan een project gekoppeld. Geef een datum (YYYY-MM-DD) binnen de gewenste week; reken 'deze week'/'volgende week' om op basis van de datum van vandaag. Gebruik propose_task als de gebruiker juist een echte taak binnen een project wil.",
+    description: "Zet ÉÉN OF MEER ACTIEPUNTEN op de checklist 'Actiepunten deze week' van de weekplanner — losse to-do-puntjes voor een bepaalde week, GEEN taken en NIET aan een project gekoppeld. Geef alle gevraagde actiepunten in één keer mee via `items`. Per item een datum (YYYY-MM-DD) binnen de gewenste week; staan ze allemaal in dezelfde week, dan mag je één keer een `date` op het hoofdniveau geven en die bij de items weglaten. Reken 'deze week'/'volgende week' om op basis van de datum van vandaag. Gebruik propose_task als de gebruiker juist een echte taak binnen een project wil.",
     input_schema: {
       type: 'object',
       properties: {
-        title: { type: 'string', description: 'De tekst van het actiepunt.' },
-        date: { type: 'string', description: 'YYYY-MM-DD — een datum binnen de gewenste week.' },
+        items: {
+          type: 'array',
+          description: 'De actiepunten. Geef ze ALLEMAAL in één keer mee.',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string', description: 'De tekst van het actiepunt.' },
+              date: { type: 'string', description: 'YYYY-MM-DD binnen de gewenste week (mag weg als de date op hoofdniveau geldt).' },
+            },
+            required: ['title'],
+          },
+        },
+        date: { type: 'string', description: 'YYYY-MM-DD — standaardweek voor items zonder eigen datum.' },
+        title: { type: 'string', description: 'Korte weg voor één enkel actiepunt (gebruik anders `items`).' },
       },
-      required: ['title', 'date'],
     },
   },
 ];
@@ -912,13 +923,23 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
   }
 }
 
-/** Actiepunt op de "Actiepunten deze week"-checklist van de weekplanner (los van projecten/taken). */
+/** Eén of meer actiepunten op de "Actiepunten deze week"-checklist (los van projecten/taken). */
 function buildWeekActionProposal(input: Record<string, unknown>): ProposalResult {
-  const title = String(input.title || '').trim();
-  if (!title) return { ok: false, error: 'Geef een korte omschrijving voor het actiepunt.' };
-  const plannedDate = isoDate(input.date) || isoDate(input.planned_date);
-  if (!plannedDate) return { ok: false, error: 'Geef een datum (YYYY-MM-DD) binnen de gewenste week.' };
-  return { ok: true, proposal: { type: 'week_action', title: title.slice(0, 300), planned_date: plannedDate } };
+  // Accepteer meerdere items, of de korte weg met één title + date.
+  const raw = Array.isArray(input.items)
+    ? (input.items as Record<string, unknown>[])
+    : (input.title ? [{ title: input.title, date: input.date }] : []);
+  const fallbackDate = isoDate(input.date);
+  const items: Array<{ title: string; planned_date: string }> = [];
+  for (const r of raw) {
+    const title = String(r?.title || '').trim();
+    if (!title) continue;
+    const date = isoDate(r?.date) || fallbackDate;
+    if (!date) return { ok: false, error: `Geef voor "${title}" een datum (YYYY-MM-DD) binnen de gewenste week.` };
+    items.push({ title: title.slice(0, 300), planned_date: date });
+  }
+  if (items.length === 0) return { ok: false, error: 'Geef minstens één actiepunt (een titel en een datum binnen de week).' };
+  return { ok: true, proposal: { type: 'week_action', items, total: items.length } };
 }
 
 // ── Agenda-item in een gekoppelde agenda (alleen vóórstellen) ────────────────

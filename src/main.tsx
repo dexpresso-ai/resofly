@@ -1067,8 +1067,8 @@ function App() {
       }}
       onCreateWeekAction={async (p) => {
         if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
-        // Actiepunt op de "Actiepunten deze week"-checklist (browser/localStorage) van de juiste week.
-        addWeekChecklistItem(p.planned_date, p.title);
+        // Actiepunten op de "Actiepunten deze week"-checklist (browser/localStorage) van de juiste week.
+        for (const item of p.items) addWeekChecklistItem(item.planned_date, item.title);
       }}
     />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
