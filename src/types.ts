@@ -1286,6 +1286,8 @@ export interface BillingPlan {
   included_seats: number | null;
   monthly_price_cents: number;
   extra_seat_price_cents: number;
+  yearly_price_cents: number;
+  extra_seat_yearly_price_cents: number;
   currency: string;
   is_custom: boolean;
   is_active: boolean;
@@ -1345,6 +1347,9 @@ export interface OrganizationBillingOverview {
   extra_seat_price_cents: number;
   currency: string;
   billing_exempt: boolean;
+  billing_interval: 'month' | 'year';
+  yearly_price_cents: number;
+  extra_seat_yearly_price_cents: number;
 }
 
 export interface BillingCheckoutResult {

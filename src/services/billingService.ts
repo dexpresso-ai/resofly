@@ -27,10 +27,11 @@ export async function loadBillingOverview(organizationId: UUID): Promise<Organiz
 // Start (of herstart) een doorlopend abonnement op ResoFly's eigen Mollie-account.
 // Geeft een checkout-URL terug voor de eerste betaling (mandaat). De webhook maakt
 // daarna het maandelijkse Mollie-abonnement aan en zet het profiel op 'active'.
-export async function startSubscriptionCheckout(organizationId: UUID, planKey?: string): Promise<BillingCheckoutResult> {
+export async function startSubscriptionCheckout(organizationId: UUID, planKey?: string, interval: 'month' | 'year' = 'month'): Promise<BillingCheckoutResult> {
   return await invokeBillingFunction<BillingCheckoutResult>('startSubscriptionCheckout', {
     organizationId,
     planKey,
+    interval,
     returnUrl: window.location.href,
   });
 }

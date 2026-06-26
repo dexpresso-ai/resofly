@@ -607,6 +607,7 @@ export function Settings({
   const [billingError, setBillingError] = useState<string | null>(null);
   const [billingMessage, setBillingMessage] = useState<string | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<string>(organizationContext.billingOverview?.plan_key ?? 'starter');
+  const [selectedInterval, setSelectedInterval] = useState<'month' | 'year'>('month');
   const [lastMockPaymentId, setLastMockPaymentId] = useState<string | null>(null);
   const [resendTestEmail, setResendTestEmail] = useState(settings?.email ?? '');
   const [resendTestName, setResendTestName] = useState(settings?.trade_name || settings?.company_name || '');
@@ -637,6 +638,8 @@ export function Settings({
   const hasMollieSubscription = !!billingOverview?.mollie_subscription_id;
   const hasAvailableLicense = isBillingExempt || (seatOverview ? seatOverview.available_seats > 0 : true);
   const inviteDisabled = !canAdminOrganization || !activeOrganization || !inviteEmail.trim() || !hasAvailableLicense;
+  const selectedPlanObj = billingPlans.find(plan => plan.plan_key === selectedPlan);
+  const selectedPlanHasYearly = (selectedPlanObj?.yearly_price_cents ?? 0) > 0;
 
   useEffect(() => {
     setForm(settingsToForm(settings));
@@ -654,6 +657,10 @@ export function Settings({
     });
     return () => { cancelled = true; };
   }, []);
+  useEffect(() => {
+    // Val terug op maandelijks zodra het gekozen plan geen jaarprijs (meer) heeft.
+    if (!selectedPlanHasYearly && selectedInterval === 'year') setSelectedInterval('month');
+  }, [selectedPlanHasYearly, selectedInterval]);
   useEffect(() => {
     let cancelled = false;
     if (!activeOrganization || !canAdminOrganization) { setInvoiceMollie(null); setInvoiceMollieError(null); return; }
@@ -783,7 +790,7 @@ export function Settings({
     setBillingMessage(null);
     setLastMockPaymentId(null);
     try {
-      const result = await startSubscriptionCheckout(activeOrganization.id, selectedPlan);
+      const result = await startSubscriptionCheckout(activeOrganization.id, selectedPlan, selectedInterval);
       if (result.mock && result.providerPaymentId) {
         setLastMockPaymentId(result.providerPaymentId);
         setBillingMessage('Mock-checkout aangemaakt. Rond de mockbetaling af om het abonnement te activeren.');
@@ -1345,7 +1352,7 @@ export function Settings({
           <div>
             <span>Huidig plan</span>
             <strong>{billingOverview.plan_name}</strong>
-            <small>{billingOverview.subscription_status}</small>
+            <small>{billingOverview.subscription_status}{hasMollieSubscription ? ` · ${billingOverview.billing_interval === 'year' ? 'jaarlijks' : 'maandelijks'}` : ''}</small>
           </div>
           <div>
             <span>Betaalstatus</span>
@@ -1401,16 +1408,25 @@ export function Settings({
 
 {canAdminOrganization && !isBillingExempt && <div className="billing-control-row">
           <div>
-            <strong>Plan wijzigen</strong>
+            <strong>{hasMollieSubscription ? 'Plan wijzigen' : 'Abonnement starten'}</strong>
             <p className="settings-help">{hasMollieSubscription
-              ? 'Past het maandbedrag van je lopende abonnement direct aan. Custom-plannen blijven handmatig.'
-              : 'Kies een plan en start het abonnement via een Mollie-checkout. Custom-plannen blijven handmatig.'}</p>
+              ? `Past het bedrag van je lopende abonnement direct aan (interval blijft ${billingOverview.billing_interval === 'year' ? 'jaarlijks' : 'maandelijks'}). Custom-plannen blijven handmatig.`
+              : 'Kies een plan en facturatie-interval; je start het abonnement via een Mollie-checkout. Custom-plannen blijven handmatig.'}</p>
+            {!hasMollieSubscription && selectedPlanObj && !selectedPlanObj.is_custom && <p className="settings-help">
+              {selectedInterval === 'year' && selectedPlanHasYearly
+                ? <>Prijs: <strong>{formatEur(selectedPlanObj.yearly_price_cents, selectedPlanObj.currency)}</strong> per jaar{selectedPlanObj.monthly_price_cents * 12 > selectedPlanObj.yearly_price_cents ? ` · je bespaart ${formatEur(selectedPlanObj.monthly_price_cents * 12 - selectedPlanObj.yearly_price_cents, selectedPlanObj.currency)} t.o.v. maandelijks` : ''}</>
+                : <>Prijs: <strong>{formatEur(selectedPlanObj.monthly_price_cents, selectedPlanObj.currency)}</strong> per maand{selectedPlanHasYearly ? ' · jaarlijks beschikbaar' : ''}</>}
+            </p>}
           </div>
           <Select value={selectedPlan} onChange={event => setSelectedPlan(event.target.value)} disabled={billingBusy === 'plan'}>
             {!selectedPlanIsSelfService && <option value={selectedPlan} disabled>{billingOverview.plan_name} · handmatig beheerd</option>}
             {selfServiceBillingPlans.map(plan => <option key={plan.plan_key} value={plan.plan_key}>{plan.name} · {plan.included_seats ?? 'custom'} seats</option>)}
           </Select>
-          <Button onClick={changePlan} disabled={billingBusy === 'plan' || selectedPlan === billingOverview.plan_key || !selectedPlanIsSelfService}>{billingBusy === 'plan' ? 'Bezig…' : (hasMollieSubscription ? 'Plan wijzigen' : 'Abonnement starten')}</Button>
+          {!hasMollieSubscription && <Select value={selectedInterval} onChange={event => setSelectedInterval(event.target.value as 'month' | 'year')} disabled={billingBusy === 'plan'}>
+            <option value="month">Maandelijks</option>
+            {selectedPlanHasYearly && <option value="year">Jaarlijks</option>}
+          </Select>}
+          <Button onClick={changePlan} disabled={billingBusy === 'plan' || (hasMollieSubscription && selectedPlan === billingOverview.plan_key) || !selectedPlanIsSelfService}>{billingBusy === 'plan' ? 'Bezig…' : (hasMollieSubscription ? 'Plan wijzigen' : 'Abonnement starten')}</Button>
         </div>}
 
         {customBillingPlans.length > 0 && !isBillingExempt && <div className="billing-control-row">
@@ -1480,6 +1496,10 @@ function auditActionLabel(action: string) {
 function entityLabel(entity: string) {
   const labels: Record<string, string> = { organization: 'Organisatie', member: 'Teamlid', invitation: 'Uitnodiging', license_event: 'Licentie', client: 'Klant', project: 'Project', task: 'Taak', ticket: 'Ticket', note: 'Notitie', quote: 'Offerte', invoice: 'Factuur', attachment: 'Bijlage', company_settings: 'Bedrijfsinstellingen', calendar_connection: 'Agenda-koppeling', calendar_source: 'Agenda', billing_profile: 'Billingprofiel', subscription: 'Subscription', payment: 'Betaling', billing_event: 'Billing-event', license_change: 'Licentiewijziging' };
   return labels[entity] ?? entity;
+}
+
+function formatEur(cents: number, currency = 'EUR') {
+  return new Intl.NumberFormat('nl-NL', { style: 'currency', currency }).format((cents ?? 0) / 100);
 }
 
 function paymentStatusLabel(status: string) {

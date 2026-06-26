@@ -28,6 +28,7 @@ type BillingProfile = {
   mollie_mandate_id: string | null;
   mollie_subscription_id: string | null;
   billing_exempt: boolean;
+  billing_interval: string;
   current_period_ends_at: string | null;
   next_invoice_date: string | null;
   trial_ends_at: string | null;
@@ -40,11 +41,15 @@ type BillingPlan = {
   included_seats: number | null;
   monthly_price_cents: number;
   extra_seat_price_cents: number;
+  yearly_price_cents: number;
+  extra_seat_yearly_price_cents: number;
   currency: string;
   trial_days: number;
   is_custom?: boolean;
   is_active: boolean;
 };
+
+type BillingInterval = 'month' | 'year';
 
 type CheckoutResult = {
   checkoutUrl?: string;
@@ -104,11 +109,11 @@ serve(async (req) => {
 
     switch (action) {
       case 'startSubscriptionCheckout':
-        return json(req, { ok: true, ...(await startSubscriptionCheckout(user.id, organizationId, String(body.planKey || ''), String(body.returnUrl || ''))) });
+        return json(req, { ok: true, ...(await startSubscriptionCheckout(user.id, organizationId, String(body.planKey || ''), String(body.returnUrl || ''), String(body.interval || 'month'))) });
       case 'createExtraSeatCheckout':
         return json(req, { ok: true, ...(await createExtraSeatCheckout(user.id, organizationId, Number(body.quantity || 1), String(body.returnUrl || ''))) });
       case 'createPlanChangeCheckout':
-        return json(req, { ok: true, ...(await createPlanChangeCheckout(user.id, organizationId, String(body.planKey || ''), String(body.returnUrl || ''))) });
+        return json(req, { ok: true, ...(await createPlanChangeCheckout(user.id, organizationId, String(body.planKey || ''), String(body.returnUrl || ''), String(body.interval || 'month'))) });
       case 'cancelSubscription':
         return json(req, { ok: true, ...(await cancelSubscription(organizationId)) });
       case 'markMockPaymentPaid':
@@ -250,8 +255,16 @@ async function getPlan(planKey: string): Promise<BillingPlan> {
   return data as BillingPlan;
 }
 
-function monthlyCents(plan: BillingPlan, purchasedSeats: number): number {
-  return plan.monthly_price_cents + Math.max(0, purchasedSeats) * plan.extra_seat_price_cents;
+function normalizeInterval(value: unknown): BillingInterval {
+  return String(value) === 'year' ? 'year' : 'month';
+}
+
+// Totaalbedrag per factuurperiode = basisprijs + extra seats × seatprijs, in het
+// gekozen interval (maand of jaar). Extra seats volgen dus het interval van het plan.
+function intervalAmountCents(plan: BillingPlan, purchasedSeats: number, interval: BillingInterval): number {
+  const base = interval === 'year' ? plan.yearly_price_cents : plan.monthly_price_cents;
+  const seat = interval === 'year' ? plan.extra_seat_yearly_price_cents : plan.extra_seat_price_cents;
+  return base + Math.max(0, purchasedSeats) * seat;
 }
 
 // Service-role-veilige overview (de RPC vereist auth.uid()/can_admin_org en werkt niet
@@ -303,6 +316,9 @@ async function loadBillingOverview(organizationId: string): Promise<unknown> {
     extra_seat_price_cents: plan.extra_seat_price_cents,
     currency: plan.currency,
     billing_exempt: profile.billing_exempt,
+    billing_interval: profile.billing_interval,
+    yearly_price_cents: plan.yearly_price_cents,
+    extra_seat_yearly_price_cents: plan.extra_seat_yearly_price_cents,
   };
 }
 
@@ -380,17 +396,22 @@ function webhookUrlWithSecret(): string {
 // Actions
 // ---------------------------------------------------------------------------
 
-async function startSubscriptionCheckout(userId: string, organizationId: string, planKeyRaw: string, returnUrlRaw: string): Promise<CheckoutResult> {
+async function startSubscriptionCheckout(userId: string, organizationId: string, planKeyRaw: string, returnUrlRaw: string, intervalRaw: string): Promise<CheckoutResult> {
   const profile = await ensureBillingProfile(organizationId);
   await assertNotExempt(profile);
   const planKey = planKeyRaw || profile.plan_key || 'starter';
+  const interval = normalizeInterval(intervalRaw);
   const plan = await getPlan(planKey);
   if (plan.is_custom) throw new BillingHttpError('Custom-plannen lopen handmatig, niet via self-service checkout.', 400);
+  if (interval === 'year' && plan.yearly_price_cents <= 0) {
+    throw new BillingHttpError('Voor dit plan is geen jaarprijs ingesteld. Kies maandelijks of stel eerst een jaarprijs in.', 400);
+  }
 
-  const amountCents = monthlyCents(plan, profile.purchased_seats);
-  if (amountCents <= 0) throw new BillingHttpError('Voor dit plan is geen maandbedrag ingesteld.', 400);
+  const amountCents = intervalAmountCents(plan, profile.purchased_seats, interval);
+  if (amountCents <= 0) throw new BillingHttpError(`Voor dit plan is geen ${interval === 'year' ? 'jaar' : 'maand'}bedrag ingesteld.`, 400);
 
   const returnUrl = sanitizeReturnTo(returnUrlRaw);
+  const intervalLabel = interval === 'year' ? 'jaarlijks' : 'maandelijks';
 
   if (MOLLIE_ALLOW_MOCK && !MOLLIE_API_KEY) {
     const providerPaymentId = `mock_payment_${crypto.randomUUID()}`;
@@ -405,13 +426,13 @@ async function startSubscriptionCheckout(userId: string, organizationId: string,
   const hourBucket = Math.floor(Date.now() / (60 * 60 * 1000));
   const payment = await mollieFetch('POST', '/payments', {
     amount: { currency: plan.currency, value: formatAmount(amountCents) },
-    description: `ResoFly ${plan.name} — abonnement`,
+    description: `ResoFly ${plan.name} — abonnement (${intervalLabel})`,
     redirectUrl: returnUrl,
     webhookUrl: webhookUrlWithSecret(),
     customerId,
     sequenceType: 'first',
-    metadata: { organizationId, planKey, type: 'subscription_first' },
-  }, `sub-first:${organizationId}:${planKey}:${hourBucket}`);
+    metadata: { organizationId, planKey, interval, type: 'subscription_first' },
+  }, `sub-first:${organizationId}:${planKey}:${interval}:${hourBucket}`);
 
   const providerPaymentId = String(payment.id || '');
   const checkoutUrl = String((payment._links as Record<string, { href?: string }> | undefined)?.checkout?.href || '');
@@ -421,29 +442,32 @@ async function startSubscriptionCheckout(userId: string, organizationId: string,
   return { checkoutUrl, providerPaymentId, status: String(payment.status || 'open') };
 }
 
-async function createPlanChangeCheckout(userId: string, organizationId: string, planKey: string, returnUrlRaw: string): Promise<CheckoutResult> {
+async function createPlanChangeCheckout(userId: string, organizationId: string, planKey: string, returnUrlRaw: string, intervalRaw: string): Promise<CheckoutResult> {
   if (!planKey) throw new BillingHttpError('Kies een geldig plan.', 400);
   const profile = await ensureBillingProfile(organizationId);
   await assertNotExempt(profile);
   const targetPlan = await getPlan(planKey);
   if (!targetPlan.is_active) throw new BillingHttpError('Dit plan is niet actief.', 400);
   if (targetPlan.is_custom) throw new BillingHttpError('Custom-plannen lopen handmatig.', 400);
-  if (profile.plan_key === planKey) throw new BillingHttpError('Deze organisatie gebruikt dit plan al.', 400);
 
-  // Geen actief abonnement → start een nieuw abonnement op het gekozen plan.
+  // Geen actief abonnement → start een nieuw abonnement op het gekozen plan + interval
+  // (zelfs als het al het huidige plan is — er is immers nog geen lopend abonnement).
   if (!hasActiveSubscription(profile)) {
-    return await startSubscriptionCheckout(userId, organizationId, planKey, returnUrlRaw);
+    return await startSubscriptionCheckout(userId, organizationId, planKey, returnUrlRaw, intervalRaw);
   }
 
-  // Actief abonnement → bedrag aanpassen en planwijziging direct toepassen.
+  if (profile.plan_key === planKey) throw new BillingHttpError('Deze organisatie gebruikt dit plan al.', 400);
+
+  // Actief abonnement → bedrag aanpassen in het bestaande interval en planwijziging direct toepassen.
+  const interval = normalizeInterval(profile.billing_interval);
   const newPurchased = profile.purchased_seats;
-  const amountCents = monthlyCents(targetPlan, newPurchased);
+  const amountCents = intervalAmountCents(targetPlan, newPurchased, interval);
   await updateMollieSubscriptionAmount(profile, amountCents, targetPlan, `ResoFly ${targetPlan.name} — abonnement`);
   const { error } = await supabaseAdmin.rpc('apply_organization_seat_change', {
     p_organization_id: organizationId,
     p_plan_key: planKey,
     p_purchased_seats: newPurchased,
-    p_metadata: { source: 'plan_change', monthly_cents: amountCents },
+    p_metadata: { source: 'plan_change', amount_cents: amountCents, interval },
   });
   if (error) throw error;
   return { applied: true };
@@ -458,18 +482,20 @@ async function createExtraSeatCheckout(_userId: string, organizationId: string, 
     throw new BillingHttpError('Start eerst een abonnement voordat je extra gebruikers toevoegt.', 400);
   }
 
+  const interval = normalizeInterval(profile.billing_interval);
   const plan = await getPlan(profile.plan_key);
-  if (plan.extra_seat_price_cents <= 0) {
+  const seatPrice = interval === 'year' ? plan.extra_seat_yearly_price_cents : plan.extra_seat_price_cents;
+  if (seatPrice <= 0) {
     throw new BillingHttpError('Voor dit plan is geen extra-seat prijs ingesteld. Gebruik handmatige billing voor Custom-plannen.', 400);
   }
 
   const newPurchased = profile.purchased_seats + quantity;
-  const amountCents = monthlyCents(plan, newPurchased);
+  const amountCents = intervalAmountCents(plan, newPurchased, interval);
   await updateMollieSubscriptionAmount(profile, amountCents, plan, `ResoFly ${plan.name} — abonnement`);
   const { error } = await supabaseAdmin.rpc('apply_organization_seat_change', {
     p_organization_id: organizationId,
     p_purchased_seats: newPurchased,
-    p_metadata: { source: 'extra_seat', quantity, monthly_cents: amountCents },
+    p_metadata: { source: 'extra_seat', quantity, amount_cents: amountCents, interval },
   });
   if (error) throw error;
   return { applied: true };
@@ -570,7 +596,7 @@ async function handleMollieWebhook(req: Request, url: URL, body: Record<string, 
 
   if (metaType === 'subscription_first') {
     if (status === 'paid') {
-      await activateSubscriptionFromFirstPayment(organizationId, String(metadata.planKey || ''), customerId, String(payment.mandateId || ''));
+      await activateSubscriptionFromFirstPayment(organizationId, String(metadata.planKey || ''), customerId, String(payment.mandateId || ''), normalizeInterval(metadata.interval));
     }
   } else if (subscriptionId) {
     await supabaseAdmin.rpc('record_organization_subscription_payment', {
@@ -608,35 +634,36 @@ async function resolveWebhookOrganization(metaOrgId: string, subscriptionId: str
   return null;
 }
 
-async function activateSubscriptionFromFirstPayment(organizationId: string, planKey: string, customerId: string, mandateId: string): Promise<void> {
+async function activateSubscriptionFromFirstPayment(organizationId: string, planKey: string, customerId: string, mandateId: string, interval: BillingInterval): Promise<void> {
   const profile = await getProfile(organizationId);
   const effectivePlanKey = planKey || profile.plan_key || 'starter';
   const plan = await getPlan(effectivePlanKey);
-  const amountCents = monthlyCents(plan, profile.purchased_seats);
+  const amountCents = intervalAmountCents(plan, profile.purchased_seats, interval);
   const effectiveCustomerId = customerId || profile.mollie_customer_id || '';
+  const mollieInterval = interval === 'year' ? '12 months' : '1 month';
+  const intervalLabel = interval === 'year' ? 'jaarabonnement' : 'maandabonnement';
 
   let subscriptionId = profile.mollie_subscription_id || '';
   if (!subscriptionId && !(MOLLIE_ALLOW_MOCK && !MOLLIE_API_KEY)) {
     const subscription = await mollieFetch('POST', `/customers/${encodeURIComponent(effectiveCustomerId)}/subscriptions`, {
       amount: { currency: plan.currency, value: formatAmount(amountCents) },
-      interval: '1 month',
-      description: `ResoFly ${plan.name} — maandabonnement`,
+      interval: mollieInterval,
+      description: `ResoFly ${plan.name} — ${intervalLabel}`,
       webhookUrl: webhookUrlWithSecret(),
       mandateId: mandateId || undefined,
-      metadata: { organizationId, planKey: effectivePlanKey },
-    }, `sub-create:${organizationId}:${effectivePlanKey}`);
+      metadata: { organizationId, planKey: effectivePlanKey, interval },
+    }, `sub-create:${organizationId}:${effectivePlanKey}:${interval}`);
     subscriptionId = String(subscription.id || '');
   }
   if (MOLLIE_ALLOW_MOCK && !subscriptionId) subscriptionId = `mock_sub_${organizationId.slice(0, 8)}`;
 
-  const periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const { error } = await supabaseAdmin.rpc('activate_organization_subscription', {
     p_organization_id: organizationId,
     p_plan_key: effectivePlanKey,
     p_mollie_customer_id: effectiveCustomerId || null,
     p_mollie_mandate_id: mandateId || null,
     p_mollie_subscription_id: subscriptionId || null,
-    p_current_period_ends_at: periodEnd,
+    p_billing_interval: interval,
     p_metadata: { source: 'subscription_first_paid' },
   });
   if (error) throw error;
@@ -688,7 +715,7 @@ async function markMockPaymentPaid(organizationId: string, providerPaymentId: st
       .update({ status: 'paid', updated_at: new Date().toISOString() })
       .eq('provider', 'mollie')
       .eq('provider_payment_id', providerPaymentId);
-    await activateSubscriptionFromFirstPayment(organizationId, String(record?.plan_key || ''), `mock_cst_${organizationId.slice(0, 8)}`, `mock_mdt_${organizationId.slice(0, 8)}`);
+    await activateSubscriptionFromFirstPayment(organizationId, String(record?.plan_key || ''), `mock_cst_${organizationId.slice(0, 8)}`, `mock_mdt_${organizationId.slice(0, 8)}`, 'month');
     await supabaseAdmin
       .from('organization_billing_events')
       .update({ status: 'processed', processed_at: new Date().toISOString() })
