@@ -42,3 +42,9 @@ verify_jwt = false
 # requireUser() + requireOrganizationAccess(); lees-tools draaien strikt org-scoped.
 [functions.gerrie-agent]
 verify_jwt = false
+
+# billing wordt aangeroepen door de Mollie payment-/subscription-webhook (geen Supabase
+# JWT). De webhook-route is geverifieerd via het Mollie webhook-secret (?secret=...), en
+# elke authenticated app-actie verifieert zelf requireUser() + requireOrganizationAccess().
+[functions.billing]
+verify_jwt = false

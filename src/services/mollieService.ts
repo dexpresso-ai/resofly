@@ -1,1 +1,1 @@
-export { startMollieConnect, createExtraSeatCheckout, createPlanChangeCheckout, markMockPaymentPaid } from './billingService';
+export { startSubscriptionCheckout, createExtraSeatCheckout, createPlanChangeCheckout, cancelSubscription, markMockPaymentPaid } from './billingService';

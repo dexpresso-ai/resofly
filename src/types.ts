@@ -95,6 +95,7 @@ export interface OrganizationLicenseUsage {
   used_seats: number;
   available_seats: number;
   license_status: LicenseStatus;
+  billing_exempt: boolean;
 }
 
 export interface OrganizationContext {
@@ -1343,13 +1344,17 @@ export interface OrganizationBillingOverview {
   monthly_price_cents: number;
   extra_seat_price_cents: number;
   currency: string;
+  billing_exempt: boolean;
 }
 
 export interface BillingCheckoutResult {
-  paymentId: string;
-  providerPaymentId: string;
-  checkoutUrl: string;
-  mock: boolean;
-  paymentType?: 'extra_seat' | 'plan_change';
-  reused?: boolean;
+  // Checkout-URL voor een eerste betaling (abonnement starten). Afwezig wanneer de
+  // wijziging direct op een lopend mandaat is toegepast.
+  checkoutUrl?: string;
+  // True wanneer de seat-/planwijziging direct is toegepast (geen checkout nodig).
+  applied?: boolean;
+  mock?: boolean;
+  providerPaymentId?: string;
+  status?: string;
+  paymentType?: 'extra_seat' | 'plan_change' | 'subscription';
 }

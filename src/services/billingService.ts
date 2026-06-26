@@ -24,44 +24,46 @@ export async function loadBillingOverview(organizationId: UUID): Promise<Organiz
   return (row ?? null) as OrganizationBillingOverview | null;
 }
 
-export async function startMollieConnect(organizationId: UUID): Promise<{ authUrl?: string; mockConnected?: boolean }> {
-  return invokeBillingFunction<{ authUrl?: string; mockConnected?: boolean }>('connectStart', {
+// Start (of herstart) een doorlopend abonnement op ResoFly's eigen Mollie-account.
+// Geeft een checkout-URL terug voor de eerste betaling (mandaat). De webhook maakt
+// daarna het maandelijkse Mollie-abonnement aan en zet het profiel op 'active'.
+export async function startSubscriptionCheckout(organizationId: UUID, planKey?: string): Promise<BillingCheckoutResult> {
+  return await invokeBillingFunction<BillingCheckoutResult>('startSubscriptionCheckout', {
     organizationId,
-    returnTo: window.location.href,
+    planKey,
+    returnUrl: window.location.href,
   });
 }
 
+// Extra gebruiker(s): past het abonnementsbedrag direct aan op een lopend mandaat.
 export async function createExtraSeatCheckout(organizationId: UUID, quantity = 1): Promise<BillingCheckoutResult> {
   return await invokeBillingFunction<BillingCheckoutResult>('createExtraSeatCheckout', {
     organizationId,
     quantity,
     returnUrl: window.location.href,
-    idempotencyKey: createCheckoutIdempotencyKey('extra-seat', organizationId, String(quantity)),
   });
 }
 
+// Planwijziging: past het bedrag aan (actief abonnement) of start een nieuw
+// abonnement op het gekozen plan (nog geen abonnement).
 export async function createPlanChangeCheckout(organizationId: UUID, planKey: string): Promise<BillingCheckoutResult> {
   return await invokeBillingFunction<BillingCheckoutResult>('createPlanChangeCheckout', {
     organizationId,
     planKey,
     returnUrl: window.location.href,
-    idempotencyKey: createCheckoutIdempotencyKey('plan-change', organizationId, planKey),
   });
 }
 
+export async function cancelSubscription(organizationId: UUID): Promise<BillingCheckoutResult> {
+  return await invokeBillingFunction<BillingCheckoutResult>('cancelSubscription', { organizationId });
+}
+
 export async function markMockPaymentPaid(organizationId: UUID, providerPaymentId: string): Promise<void> {
-  await invokeBillingFunction<{ payment: unknown }>('markMockPaymentPaid', { organizationId, providerPaymentId });
+  await invokeBillingFunction<BillingCheckoutResult>('markMockPaymentPaid', { organizationId, providerPaymentId });
 }
 
 export async function changeOrganizationPlan(organizationId: UUID, planKey: string): Promise<BillingCheckoutResult> {
   return await createPlanChangeCheckout(organizationId, planKey);
-}
-
-function createCheckoutIdempotencyKey(kind: string, organizationId: UUID, variant: string): string {
-  const safeVariant = variant.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || 'default';
-  const bucket = Math.floor(Date.now() / (30 * 60 * 1000));
-  const random = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
-  return `${kind}:${organizationId}:${safeVariant}:${bucket}:${random}`;
 }
 
 async function invokeBillingFunction<T>(action: string, payload: Record<string, unknown>): Promise<T> {

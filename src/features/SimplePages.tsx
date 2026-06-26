@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { BookOpen, CreditCard, Mail, Receipt, ShieldCheck, Sparkles, Users } from 'lucide-react';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
-import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startMollieConnect } from '../services/billingService';
+import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
 import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadAiUsageThisMonth, type AiUsageRow } from '../lib/repository';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
@@ -637,7 +637,8 @@ export function Settings({
   const customBillingPlans = billingPlans.filter(plan => plan.is_custom);
   const selectedPlanIsSelfService = selfServiceBillingPlans.some(plan => plan.plan_key === selectedPlan);
   const hasPendingCheckout = billingOverview ? ['open', 'pending', 'authorized'].includes(billingOverview.payment_status) : false;
-  const hasAvailableLicense = seatOverview ? seatOverview.available_seats > 0 : true;
+  const isBillingExempt = !!seatOverview?.billing_exempt;
+  const hasAvailableLicense = isBillingExempt || (seatOverview ? seatOverview.available_seats > 0 : true);
   const inviteDisabled = !canAdminOrganization || !activeOrganization || !inviteEmail.trim() || !hasAvailableLicense;
 
   useEffect(() => {
@@ -699,7 +700,9 @@ export function Settings({
     try {
       await onInviteMember(inviteEmail, inviteRole);
       setInviteEmail('');
-      setOrgMessage('Uitnodiging opgeslagen. Er is één gebruikerslicentie gereserveerd totdat de uitnodiging wordt geaccepteerd of ingetrokken.');
+      setOrgMessage(isBillingExempt
+        ? 'Uitnodiging opgeslagen. Deze organisatie is intern/onbeperkt, dus er gelden geen seat-limieten.'
+        : 'Uitnodiging opgeslagen. Er is één gebruikerslicentie gereserveerd totdat de uitnodiging wordt geaccepteerd of ingetrokken.');
     } catch (error) {
       setOrgError(error instanceof Error ? error.message : 'Uitnodiging aanmaken mislukt.');
     }
@@ -776,21 +779,27 @@ export function Settings({
     }
   }
 
-  async function connectMollie() {
+  async function startSubscription() {
     if (!activeOrganization || !canAdminOrganization) return;
     setBillingBusy('connect');
     setBillingError(null);
     setBillingMessage(null);
+    setLastMockPaymentId(null);
     try {
-      const result = await startMollieConnect(activeOrganization.id);
-      if (result.authUrl) {
-        window.location.href = result.authUrl;
+      const result = await startSubscriptionCheckout(activeOrganization.id, selectedPlan);
+      if (result.mock && result.providerPaymentId) {
+        setLastMockPaymentId(result.providerPaymentId);
+        setBillingMessage('Mock-checkout aangemaakt. Rond de mockbetaling af om het abonnement te activeren.');
+        return;
+      }
+      if (result.checkoutUrl) {
+        window.location.href = result.checkoutUrl;
         return;
       }
       await refreshBilling();
-      setBillingMessage(result.mockConnected ? 'Mollie mock-koppeling actief voor lokale tests.' : 'Mollie-koppeling gestart.');
+      setBillingMessage('Abonnement bijgewerkt.');
     } catch (error) {
-      setBillingError(error instanceof Error ? error.message : 'Mollie koppelen mislukt.');
+      setBillingError(error instanceof Error ? error.message : 'Abonnement starten mislukt.');
     } finally {
       setBillingBusy(null);
     }
@@ -843,14 +852,14 @@ export function Settings({
     setLastMockPaymentId(null);
     try {
       const checkout = await createExtraSeatCheckout(activeOrganization.id, 1);
-      if (checkout.mock) {
-        setLastMockPaymentId(checkout.providerPaymentId);
-        setBillingMessage(checkout.reused ? 'Bestaande open mock-checkout hergebruikt. Rond de mockbetaling af om de idempotente flow lokaal te testen.' : 'Mock-checkout aangemaakt. Rond de mockbetaling af om de webhook/RPC-flow lokaal te testen.');
+      if (checkout.checkoutUrl) {
+        window.location.href = checkout.checkoutUrl;
         return;
       }
-      window.location.href = checkout.checkoutUrl;
+      await refreshBilling();
+      setBillingMessage('Extra gebruiker toegevoegd. Het maandbedrag van je abonnement is aangepast.');
     } catch (error) {
-      setBillingError(error instanceof Error ? error.message : 'Extra licentie kopen mislukt.');
+      setBillingError(error instanceof Error ? error.message : 'Extra gebruiker toevoegen mislukt.');
     } finally {
       setBillingBusy(null);
     }
@@ -902,12 +911,17 @@ export function Settings({
     setBillingMessage(null);
     try {
       const checkout = await changeOrganizationPlan(activeOrganization.id, selectedPlan);
-      if (checkout.mock) {
+      if (checkout.mock && checkout.providerPaymentId) {
         setLastMockPaymentId(checkout.providerPaymentId);
-        setBillingMessage(checkout.reused ? 'Bestaande open mock-checkout voor planwijziging hergebruikt.' : 'Planwijziging-checkout aangemaakt. Rond de mockbetaling af om de wijziging toe te passen.');
+        setBillingMessage('Mock-checkout aangemaakt. Rond de mockbetaling af om de planwijziging te activeren.');
         return;
       }
-      window.location.href = checkout.checkoutUrl;
+      if (checkout.checkoutUrl) {
+        window.location.href = checkout.checkoutUrl;
+        return;
+      }
+      await refreshBilling();
+      setBillingMessage('Plan gewijzigd. Het maandbedrag van je abonnement is aangepast.');
     } catch (error) {
       setBillingError(error instanceof Error ? error.message : 'Plan wijzigen mislukt.');
     } finally {
@@ -1056,7 +1070,8 @@ export function Settings({
         <Button variant="primary" onClick={inviteMember} disabled={inviteDisabled}>Uitnodigen</Button>
       </div> : <p className="settings-help">Alleen owners en admins kunnen teamleden uitnodigen.</p>}
 
-      {!hasAvailableLicense && <p className="settings-help">Er zijn geen vrije licenties meer. Trek een openstaande uitnodiging in, schakel een teamlid uit of laat billing eerst extra seats synchroniseren.</p>}
+      {isBillingExempt && canAdminOrganization && <p className="settings-help">Deze organisatie is <strong>intern/onbeperkt</strong> — je kunt zonder seat-limiet teamleden uitnodigen.</p>}
+      {!isBillingExempt && !hasAvailableLicense && <p className="settings-help">Er zijn geen vrije licenties meer. Trek een openstaande uitnodiging in, schakel een teamlid uit of laat billing eerst extra seats synchroniseren.</p>}
 
       {organizationContext.organizationInvitations.length > 0 && <div className="team-list">
         <strong>Openstaande teamuitnodigingen</strong>
@@ -1320,7 +1335,7 @@ export function Settings({
         </div>
         {canAdminOrganization && <div className="billing-actions">
           <Button onClick={refreshBilling} disabled={billingBusy === 'refresh'}>{billingBusy === 'refresh' ? 'Verversen…' : 'Billing verversen'}</Button>
-          <Button variant="primary" onClick={connectMollie} disabled={billingBusy === 'connect'}>{billingBusy === 'connect' ? 'Koppelen…' : 'Mollie koppelen'}</Button>
+          {!isBillingExempt && billingOverview?.subscription_status !== 'active' && <Button variant="primary" onClick={startSubscription} disabled={billingBusy === 'connect'}>{billingBusy === 'connect' ? 'Bezig…' : 'Abonnement starten'}</Button>}
         </div>}
       </div>
 
@@ -1358,15 +1373,25 @@ export function Settings({
           <div className="license-metric"><span>Actief</span><strong>{billingOverview.active_members}</strong></div>
           <div className="license-metric"><span>Pending</span><strong>{billingOverview.pending_invitations}</strong></div>
           <div className="license-metric"><span>Totaal seats</span><strong>{billingOverview.licensed_seats}</strong></div>
-          <div className="license-metric"><span>Vrij</span><strong>{billingOverview.available_seats}</strong></div>
+          <div className="license-metric"><span>Vrij</span><strong>{isBillingExempt ? '∞' : billingOverview.available_seats}</strong></div>
         </div>
 
-{canAdminOrganization && <div className="billing-control-row">
+        {isBillingExempt && <div className="billing-control-row">
+          <div>
+            <strong>Interne organisatie — onbeperkte gebruikers</strong>
+            <p className="settings-help">Deze organisatie is vrijgesteld van facturatie. Je kunt zonder seat-limiet teamleden uitnodigen; er lopen geen abonnementskosten en er is geen Mollie-koppeling nodig.</p>
+          </div>
+          <span className="badge">Intern · gratis</span>
+        </div>}
+
+{canAdminOrganization && !isBillingExempt && <div className="billing-control-row">
           <div>
             <strong>Extra gebruiker toevoegen</strong>
-            <p className="settings-help">Maak een Mollie-checkout aan. Pas na een succesvolle webhook/RPC-verwerking wordt de extra seat definitief toegevoegd.</p>
+            <p className="settings-help">{billingOverview.subscription_status === 'active'
+              ? 'Voegt direct een extra seat toe en past het maandbedrag van je abonnement aan.'
+              : 'Start eerst een abonnement; daarna kun je extra gebruikers toevoegen.'}</p>
           </div>
-          <Button variant="primary" onClick={buyExtraSeat} disabled={billingBusy === 'seat' || !['connected','mock_connected'].includes(billingOverview.mollie_connect_status)}>{billingBusy === 'seat' ? 'Checkout…' : 'Extra licentie kopen'}</Button>
+          <Button variant="primary" onClick={buyExtraSeat} disabled={billingBusy === 'seat' || billingOverview.subscription_status !== 'active'}>{billingBusy === 'seat' ? 'Bezig…' : 'Extra gebruiker toevoegen'}</Button>
         </div>}
 
         {canAdminOrganization && lastMockPaymentId && <div className="billing-control-row mock-row">
@@ -1377,19 +1402,21 @@ export function Settings({
           <Button variant="primary" onClick={completeMockPayment} disabled={billingBusy === 'mock-paid'}>{billingBusy === 'mock-paid' ? 'Verwerken…' : 'Mockbetaling afronden'}</Button>
         </div>}
 
-{canAdminOrganization && <div className="billing-control-row">
+{canAdminOrganization && !isBillingExempt && <div className="billing-control-row">
           <div>
             <strong>Plan wijzigen</strong>
-            <p className="settings-help">Betaalde upgrades lopen via Mollie-checkout. Downgrades en Custom-plannen blijven handmatig, zodat proratie en contractafspraken kloppen.</p>
+            <p className="settings-help">{billingOverview.subscription_status === 'active'
+              ? 'Past het maandbedrag van je lopende abonnement direct aan. Custom-plannen blijven handmatig.'
+              : 'Kies een plan en start het abonnement via een Mollie-checkout. Custom-plannen blijven handmatig.'}</p>
           </div>
           <Select value={selectedPlan} onChange={event => setSelectedPlan(event.target.value)} disabled={billingBusy === 'plan'}>
             {!selectedPlanIsSelfService && <option value={selectedPlan} disabled>{billingOverview.plan_name} · handmatig beheerd</option>}
             {selfServiceBillingPlans.map(plan => <option key={plan.plan_key} value={plan.plan_key}>{plan.name} · {plan.included_seats ?? 'custom'} seats</option>)}
           </Select>
-          <Button onClick={changePlan} disabled={billingBusy === 'plan' || selectedPlan === billingOverview.plan_key || !selectedPlanIsSelfService}>{billingBusy === 'plan' ? 'Checkout…' : 'Plan checkout starten'}</Button>
+          <Button onClick={changePlan} disabled={billingBusy === 'plan' || selectedPlan === billingOverview.plan_key || !selectedPlanIsSelfService}>{billingBusy === 'plan' ? 'Bezig…' : (billingOverview.subscription_status === 'active' ? 'Plan wijzigen' : 'Abonnement starten')}</Button>
         </div>}
 
-        {customBillingPlans.length > 0 && <div className="billing-control-row">
+        {customBillingPlans.length > 0 && !isBillingExempt && <div className="billing-control-row">
           <div>
             <strong>Custom-plan</strong>
             <p className="settings-help">Custom-plannen worden niet als self-service checkout aangeboden. Neem contact op voor contractafspraken, seats en facturatie.</p>
@@ -1399,7 +1426,7 @@ export function Settings({
       </> : <p className="settings-help">Billinggegevens konden nog niet worden geladen. Controleer of de Sprint 2 migratie is uitgevoerd.</p>}
 
       {!canAdminOrganization && <p className="settings-help">Alleen owners en admins kunnen billing-acties uitvoeren.</p>}
-      {seatOverview && seatOverview.available_seats <= 0 && <div className="error">Geen vrije gebruikerslicentie beschikbaar. Koop eerst een extra gebruikerslicentie voordat je iemand uitnodigt.</div>}
+      {!isBillingExempt && seatOverview && seatOverview.available_seats <= 0 && <div className="error">Geen vrije gebruikerslicentie beschikbaar. Koop eerst een extra gebruikerslicentie voordat je iemand uitnodigt.</div>}
     </section>
     </div>}
 
