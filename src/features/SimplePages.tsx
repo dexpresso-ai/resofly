@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { BookOpen, CreditCard, Mail, Receipt, ShieldCheck, Sparkles, Users } from 'lucide-react';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
+import { Modal } from '../components/Modal';
 import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
 import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains } from '../lib/repository';
@@ -608,6 +609,8 @@ export function Settings({
   const [billingMessage, setBillingMessage] = useState<string | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<string>(organizationContext.billingOverview?.plan_key ?? 'starter');
   const [selectedInterval, setSelectedInterval] = useState<'month' | 'year'>('month');
+  const [pendingChange, setPendingChange] = useState<PendingBillingChange | null>(null);
+  const [confirmingChange, setConfirmingChange] = useState(false);
   const [lastMockPaymentId, setLastMockPaymentId] = useState<string | null>(null);
   const [resendTestEmail, setResendTestEmail] = useState(settings?.email ?? '');
   const [resendTestName, setResendTestName] = useState(settings?.trade_name || settings?.company_name || '');
@@ -640,6 +643,11 @@ export function Settings({
   const inviteDisabled = !canAdminOrganization || !activeOrganization || !inviteEmail.trim() || !hasAvailableLicense;
   const selectedPlanObj = billingPlans.find(plan => plan.plan_key === selectedPlan);
   const selectedPlanHasYearly = (selectedPlanObj?.yearly_price_cents ?? 0) > 0;
+  const billingIntervalUnit = billingOverview?.billing_interval === 'year' ? 'jaar' : 'maand';
+  const currentSeatCents = billingOverview ? (billingOverview.billing_interval === 'year' ? billingOverview.extra_seat_yearly_price_cents : billingOverview.extra_seat_price_cents) : 0;
+  const currentCostCents = billingOverview
+    ? (billingOverview.billing_interval === 'year' ? billingOverview.yearly_price_cents : billingOverview.monthly_price_cents) + billingOverview.purchased_seats * currentSeatCents
+    : 0;
 
   useEffect(() => {
     setForm(settingsToForm(settings));
@@ -925,11 +933,60 @@ export function Settings({
         return;
       }
       await refreshBilling();
-      setBillingMessage('Plan gewijzigd. Het maandbedrag van je abonnement is aangepast.');
+      setBillingMessage('Plan gewijzigd. Het bedrag van je abonnement is aangepast.');
     } catch (error) {
       setBillingError(error instanceof Error ? error.message : 'Plan wijzigen mislukt.');
     } finally {
       setBillingBusy(null);
+    }
+  }
+
+  // Opent de bevestigings-popup voor een directe wijziging op een lopend abonnement.
+  function requestBuyExtraSeat() {
+    if (!activeOrganization || !canAdminOrganization || !billingOverview) return;
+    setBillingError(null);
+    setBillingMessage(null);
+    setPendingChange({
+      title: 'Extra gebruiker toevoegen',
+      description: `Je voegt 1 extra gebruiker toe aan het ${billingOverview.plan_name}-abonnement. De seat wordt direct beschikbaar en het abonnementsbedrag wordt aangepast.`,
+      currentCostCents,
+      newCostCents: currentCostCents + currentSeatCents,
+      intervalUnit: billingIntervalUnit,
+      currency: billingOverview.currency,
+      execute: buyExtraSeat,
+    });
+  }
+
+  function requestChangePlan() {
+    if (!activeOrganization || !canAdminOrganization || !selectedPlan) return;
+    if (!selectedPlanIsSelfService) {
+      setBillingError('Dit plan kan niet via self-service worden gewijzigd. Kies Starter, Team of Pro.');
+      return;
+    }
+    // Nog geen lopend abonnement → meteen naar de Mollie-checkout; dat is zelf de bevestiging.
+    if (!hasMollieSubscription) { void startSubscription(); return; }
+    if (!billingOverview || !selectedPlanObj) return;
+    setBillingError(null);
+    setBillingMessage(null);
+    setPendingChange({
+      title: 'Plan wijzigen',
+      description: `Je wijzigt je abonnement van ${billingOverview.plan_name} naar ${selectedPlanObj.name}. De wijziging gaat direct in; je blijft ${billingOverview.billing_interval === 'year' ? 'jaarlijks' : 'maandelijks'} betalen.`,
+      currentCostCents,
+      newCostCents: planCostCents(selectedPlanObj, billingOverview.purchased_seats, billingOverview.billing_interval),
+      intervalUnit: billingIntervalUnit,
+      currency: billingOverview.currency,
+      execute: changePlan,
+    });
+  }
+
+  async function confirmPendingChange() {
+    if (!pendingChange) return;
+    setConfirmingChange(true);
+    try {
+      await pendingChange.execute();
+    } finally {
+      setConfirmingChange(false);
+      setPendingChange(null);
     }
   }
 
@@ -1371,6 +1428,13 @@ export function Settings({
           </div>
         </div>
 
+        {hasMollieSubscription && <p className="settings-help billing-current-cost">
+          Je betaalt momenteel <strong>{formatEur(currentCostCents, billingOverview.currency)}</strong> per {billingIntervalUnit}
+          {billingOverview.purchased_seats > 0
+            ? ` — ${billingOverview.plan_name} + ${billingOverview.purchased_seats} extra ${billingOverview.purchased_seats === 1 ? 'gebruiker' : 'gebruikers'}.`
+            : ` — ${billingOverview.plan_name}.`}
+        </p>}
+
         <div className="license-grid">
           <div className="license-metric"><span>Inbegrepen</span><strong>{billingOverview.included_seats}</strong></div>
           <div className="license-metric"><span>Aangekocht extra</span><strong>{billingOverview.purchased_seats}</strong></div>
@@ -1395,7 +1459,7 @@ export function Settings({
               ? 'Voegt direct een extra seat toe en past het maandbedrag van je abonnement aan.'
               : 'Start eerst een abonnement; daarna kun je extra gebruikers toevoegen.'}</p>
           </div>
-          <Button variant="primary" onClick={buyExtraSeat} disabled={billingBusy === 'seat' || !hasMollieSubscription}>{billingBusy === 'seat' ? 'Bezig…' : 'Extra gebruiker toevoegen'}</Button>
+          <Button variant="primary" onClick={requestBuyExtraSeat} disabled={billingBusy === 'seat' || !hasMollieSubscription}>{billingBusy === 'seat' ? 'Bezig…' : 'Extra gebruiker toevoegen'}</Button>
         </div>}
 
         {canAdminOrganization && lastMockPaymentId && <div className="billing-control-row mock-row">
@@ -1426,7 +1490,7 @@ export function Settings({
             <option value="month">Maandelijks</option>
             {selectedPlanHasYearly && <option value="year">Jaarlijks</option>}
           </Select>}
-          <Button onClick={changePlan} disabled={billingBusy === 'plan' || (hasMollieSubscription && selectedPlan === billingOverview.plan_key) || !selectedPlanIsSelfService}>{billingBusy === 'plan' ? 'Bezig…' : (hasMollieSubscription ? 'Plan wijzigen' : 'Abonnement starten')}</Button>
+          <Button onClick={requestChangePlan} disabled={billingBusy === 'plan' || (hasMollieSubscription && selectedPlan === billingOverview.plan_key) || !selectedPlanIsSelfService}>{billingBusy === 'plan' ? 'Bezig…' : (hasMollieSubscription ? 'Plan wijzigen' : 'Abonnement starten')}</Button>
         </div>}
 
         {customBillingPlans.length > 0 && !isBillingExempt && <div className="billing-control-row">
@@ -1441,6 +1505,19 @@ export function Settings({
       {!canAdminOrganization && <p className="settings-help">Alleen owners en admins kunnen billing-acties uitvoeren.</p>}
       {!isBillingExempt && seatOverview && seatOverview.available_seats <= 0 && <div className="error">Geen vrije gebruikerslicentie beschikbaar. Koop eerst een extra gebruikerslicentie voordat je iemand uitnodigt.</div>}
     </section>
+
+    {pendingChange && <Modal title={pendingChange.title} onClose={() => { if (!confirmingChange) setPendingChange(null); }} footer={<>
+      <Button onClick={() => setPendingChange(null)} disabled={confirmingChange}>Annuleren</Button>
+      <Button variant="primary" onClick={confirmPendingChange} disabled={confirmingChange}>{confirmingChange ? 'Bezig…' : 'Bevestigen'}</Button>
+    </>}>
+      <p>{pendingChange.description}</p>
+      <div className="license-grid">
+        <div className="license-metric"><span>Huidig</span><strong>{formatEur(pendingChange.currentCostCents, pendingChange.currency)}<small> /{pendingChange.intervalUnit}</small></strong></div>
+        <div className="license-metric"><span>Nieuw</span><strong>{formatEur(pendingChange.newCostCents, pendingChange.currency)}<small> /{pendingChange.intervalUnit}</small></strong></div>
+        <div className="license-metric"><span>Verschil</span><strong>{pendingChange.newCostCents >= pendingChange.currentCostCents ? '+' : ''}{formatEur(pendingChange.newCostCents - pendingChange.currentCostCents, pendingChange.currency)}<small> /{pendingChange.intervalUnit}</small></strong></div>
+      </div>
+      <p className="settings-help">Bij bevestigen wordt het bedrag van je abonnement bij Mollie direct aangepast.</p>
+    </Modal>}
     </div>}
 
     {activeTab === 'ai' && <div className="settings-tab-panel">
@@ -1501,6 +1578,23 @@ function entityLabel(entity: string) {
 function formatEur(cents: number, currency = 'EUR') {
   return new Intl.NumberFormat('nl-NL', { style: 'currency', currency }).format((cents ?? 0) / 100);
 }
+
+// Totale periodekosten van een plan = basisprijs + extra seats × seatprijs, in het interval.
+function planCostCents(plan: BillingPlan, purchasedSeats: number, interval: 'month' | 'year'): number {
+  const base = interval === 'year' ? plan.yearly_price_cents : plan.monthly_price_cents;
+  const seat = interval === 'year' ? plan.extra_seat_yearly_price_cents : plan.extra_seat_price_cents;
+  return base + Math.max(0, purchasedSeats) * seat;
+}
+
+type PendingBillingChange = {
+  title: string;
+  description: string;
+  currentCostCents: number;
+  newCostCents: number;
+  intervalUnit: string;
+  currency: string;
+  execute: () => Promise<void>;
+};
 
 function paymentStatusLabel(status: string) {
   const labels: Record<string, string> = { none: 'Nog geen betaling', open: 'Open', pending: 'In behandeling', paid: 'Betaald', failed: 'Mislukt', expired: 'Verlopen', canceled: 'Geannuleerd', authorized: 'Geautoriseerd', refunded: 'Teruggestort', charged_back: 'Gestorneerd' };
