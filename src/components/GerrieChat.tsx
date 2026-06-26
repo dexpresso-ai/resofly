@@ -74,6 +74,32 @@ const SUGGESTIONS = [
   'Welke offertes lopen er nog?',
 ];
 
+// ── Spraakherkenning (Web Speech API, browser-native) ────────────────────────
+// De browser transcribeert live; geen backend en geen kosten. Niet elke browser
+// ondersteunt dit (Chrome/Edge wel, Firefox niet, iOS wisselend) — de mic-knop
+// verschijnt daarom alleen als de API bestaat. De uitgesproken tekst belandt in
+// het invoerveld zodat de gebruiker hem nakijkt vóór verzenden (Gerrie kan
+// acties uitvoeren, dus niet automatisch versturen).
+interface SpeechAlternativeLike { transcript: string }
+interface SpeechResultLike { isFinal: boolean; 0: SpeechAlternativeLike }
+interface SpeechResultListLike { length: number; [index: number]: SpeechResultLike }
+interface SpeechResultEventLike { resultIndex: number; results: SpeechResultListLike }
+interface SpeechRecognitionLike {
+  lang: string; interimResults: boolean; continuous: boolean; maxAlternatives: number;
+  start(): void; stop(): void; abort(): void;
+  onresult: ((event: SpeechResultEventLike) => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+  onend: (() => void) | null;
+}
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+
+const SpeechRecognitionImpl: SpeechRecognitionCtor | undefined =
+  typeof window === 'undefined'
+    ? undefined
+    : (window as unknown as { SpeechRecognition?: SpeechRecognitionCtor; webkitSpeechRecognition?: SpeechRecognitionCtor }).SpeechRecognition
+      ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionCtor }).webkitSpeechRecognition;
+const speechSupported = Boolean(SpeechRecognitionImpl);
+
 export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onCreateReport }: {
   organizationId: UUID;
   onCreateInvoiceDraft?: (proposal: GerrieInvoiceProposal) => void;
@@ -105,6 +131,13 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
   // Resterend AI-tegoed als fractie 0..1 (null = geen limiet ingesteld / nog onbekend).
   const [budget, setBudget] = useState<number | null>(null);
 
+  // Spraakherkenning: actief-luisteren + een korte melding bij microfoonproblemen.
+  const [listening, setListening] = useState(false);
+  const [micNote, setMicNote] = useState<string | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const speechBaseRef = useRef('');   // tekst in het veld bij start (inspreken vult aan)
+  const speechFinalRef = useRef('');  // opgebouwde definitieve transcriptie deze sessie
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -115,6 +148,18 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
 
   // Focus de invoer wanneer het paneel opent.
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
+
+  // Houd de hoogte van het tekstveld kloppend, ook bij programmatische wijziging (spraak).
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+  }, [draft]);
+
+  // Stop met luisteren als het paneel sluit; breek de herkenner af bij unmount.
+  useEffect(() => { if (!open) recognitionRef.current?.stop(); }, [open]);
+  useEffect(() => () => recognitionRef.current?.abort(), []);
 
   // Haal eenmalig de voornaam van de ingelogde gebruiker op voor een persoonlijke
   // begroeting. Lukt het niet, dan blijft het startbericht zonder naam.
@@ -209,6 +254,50 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
     setDraft(el.value);
   }
 
+  // ── Inspreken (Web Speech API) ─────────────────────────────────────────────
+  function stopDictation() { recognitionRef.current?.stop(); }
+
+  function startDictation() {
+    if (!SpeechRecognitionImpl || thinking || listening) return;
+    setMicNote(null);
+    // Vanaf de huidige tekst beginnen zodat inspreken aanvult i.p.v. overschrijft.
+    speechBaseRef.current = draft ? `${draft.replace(/\s+$/, '')} ` : '';
+    speechFinalRef.current = '';
+    const recognition = new SpeechRecognitionImpl();
+    recognition.lang = 'nl-NL';
+    recognition.interimResults = true;
+    recognition.continuous = true;
+    recognition.maxAlternatives = 1;
+    recognition.onresult = (event) => {
+      let interim = '';
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const result = event.results[i];
+        const text = result[0]?.transcript ?? '';
+        if (result.isFinal) speechFinalRef.current += text;
+        else interim += text;
+      }
+      setDraft(`${speechBaseRef.current}${speechFinalRef.current}${interim}`.slice(0, 4000));
+    };
+    recognition.onerror = (event) => {
+      setListening(false);
+      recognitionRef.current = null;
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') setMicNote('Geef de browser toegang tot je microfoon om in te spreken.');
+      else if (event.error === 'no-speech') setMicNote('Ik hoorde niets — probeer het nog eens.');
+      else if (event.error !== 'aborted') setMicNote('Spraakherkenning lukte even niet. Probeer het opnieuw.');
+    };
+    recognition.onend = () => {
+      setListening(false);
+      recognitionRef.current = null;
+      setDraft((d) => d.replace(/\s+$/, ''));
+      inputRef.current?.focus();
+    };
+    recognitionRef.current = recognition;
+    try { recognition.start(); setListening(true); }
+    catch { setListening(false); recognitionRef.current = null; }
+  }
+
+  function toggleDictation() { if (listening) stopDictation(); else startDictation(); }
+
   // Meld een uitgevoerde/mislukte actie terug voor de audit (best-effort).
   async function runConfirmed(auditId: string | undefined, action: () => Promise<void>) {
     try {
@@ -291,16 +380,31 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
             </div>
           )}
 
+          {micNote && <p className="gerrie-mic-note" role="status">{micNote}</p>}
+
           <div className="gerrie-composer">
             <textarea
               ref={inputRef}
               className="gerrie-input"
               rows={1}
-              placeholder="Typ een bericht aan Gerrie…"
+              placeholder={listening ? 'Luisteren… spreek je bericht in' : 'Typ een bericht aan Gerrie…'}
               value={draft}
               onInput={onInput}
               onKeyDown={onKeyDown}
             />
+            {speechSupported && (
+              <button
+                type="button"
+                className={`gerrie-mic${listening ? ' is-listening' : ''}`}
+                onClick={toggleDictation}
+                disabled={thinking}
+                aria-label={listening ? 'Stoppen met inspreken' : 'Inspreken'}
+                aria-pressed={listening}
+                title={listening ? 'Stoppen met inspreken' : 'Spreek je bericht in'}
+              >
+                <MicIcon />
+              </button>
+            )}
             <button className="gerrie-send" onClick={() => void send(draft)} disabled={!draft.trim() || thinking} aria-label="Versturen">
               <SendIcon />
             </button>
@@ -359,6 +463,16 @@ function SendIcon() {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M22 2 11 13" />
       <path d="M22 2 15 22l-4-9-9-4 20-7z" />
+    </svg>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="2.5" width="6" height="11" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0" />
+      <path d="M12 18v3M8.5 21h7" />
     </svg>
   );
 }
