@@ -239,6 +239,28 @@ export async function confirmGerrieAction(organizationId: UUID, auditId: string,
   } catch { /* best-effort logging */ }
 }
 
+/**
+ * Haalt het resterende AI-tegoed op (fractie 0..1, of null als er geen limiet is),
+ * zodat de tegoed-balk al bij het openen van de chat kan verschijnen. Best-effort.
+ */
+export async function loadGerrieBudget(organizationId: UUID): Promise<number | null> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) return null;
+    const res = await fetch(`${FUNCTIONS_BASE}/gerrie-agent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: ANON_KEY },
+      body: JSON.stringify({ action: 'budget', organizationId }),
+    });
+    if (!res.ok) return null;
+    const payload = await res.json();
+    return typeof payload?.remainingFraction === 'number' ? payload.remainingFraction : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface GerrieUsageRow { user_id: UUID; messages: number; tokens: number; cost_usd: number }
 
 /**

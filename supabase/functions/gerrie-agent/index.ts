@@ -83,6 +83,12 @@ serve(async (req) => {
     if (String(body.action || '') === 'usage') {
       return json(req, await getUsageSummary(organizationId, role));
     }
+    // Resterend tegoed (fractie 0..1, of null als er geen limiet is) — voor de tegoed-balk
+    // bij het openen van de chat, nog vóór het eerste bericht.
+    if (String(body.action || '') === 'budget') {
+      const budget = await checkUserBudget(user.id);
+      return json(req, { remainingFraction: remainingFraction(budget, 0) });
+    }
 
     if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
     const message = String(body.message || '').trim();

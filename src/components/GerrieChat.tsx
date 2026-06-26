@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { streamGerrieReply, confirmGerrieAction, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal, type GerrieEditInvoiceProposal, type GerrieEditQuoteProposal, type GerrieEditClientProposal, type GerrieSendRemindersProposal, type GerrieProjectProposal, type GerrieEditProjectProposal, type GerrieTaskProposal, type GerrieEditTaskProposal, type GerrieCalendarEventProposal, type GerrieWeekActionProposal, type GerrieReportProposal } from '../lib/gerrie-api';
+import { streamGerrieReply, confirmGerrieAction, loadGerrieBudget, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal, type GerrieEditInvoiceProposal, type GerrieEditQuoteProposal, type GerrieEditClientProposal, type GerrieSendRemindersProposal, type GerrieProjectProposal, type GerrieEditProjectProposal, type GerrieTaskProposal, type GerrieEditTaskProposal, type GerrieCalendarEventProposal, type GerrieWeekActionProposal, type GerrieReportProposal } from '../lib/gerrie-api';
 import { euro } from '../lib/format';
 import { describeReportDefinition } from '../lib/reporting';
 import { supabase } from '../lib/supabase';
@@ -148,6 +148,15 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
 
   // Focus de invoer wanneer het paneel opent.
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
+
+  // Haal het resterende tegoed op zodra de chat opent, zodat de balk meteen verschijnt
+  // (nog vóór het eerste bericht). null = geen limiet ingesteld → geen balk.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    loadGerrieBudget(organizationId).then((f) => { if (!cancelled && f !== null) setBudget(f); });
+    return () => { cancelled = true; };
+  }, [open, organizationId]);
 
   // Houd de hoogte van het tekstveld kloppend, ook bij programmatische wijziging (spraak).
   useEffect(() => {
