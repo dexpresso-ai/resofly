@@ -463,3 +463,26 @@ export const REPORT_TEMPLATES: ReportTemplate[] = [
 export function cloneDefinition(def: ReportDefinition): ReportDefinition {
   return { ...def, measure: { ...def.measure }, filters: def.filters.map(f => ({ ...f })) };
 }
+
+/**
+ * Korte, leesbare omschrijving van een rapportdefinitie — bijv.
+ * "Facturen · Som · Bedrag (incl. btw) · per Klant · Dit jaar · Status: Betaald".
+ * Gebruikt voor de subtitel van Gerrie's rapport-voorstelkaart.
+ */
+export function describeReportDefinition(def: ReportDefinition): string {
+  const source = REPORT_SOURCES[def.source];
+  if (!source) return 'Rapportage';
+  const parts: string[] = [source.label, measureLabelOf(def.measure, source)];
+  if (def.dimension) {
+    const field = source.fields.find(f => f.key === def.dimension);
+    parts.push(`per ${field?.label ?? def.dimension}`);
+  }
+  parts.push(DATE_PRESET_LABELS[def.datePreset] ?? '');
+  for (const filter of def.filters ?? []) {
+    const field = source.fields.find(f => f.key === filter.field);
+    if (!field) continue;
+    const value = field.enumValues?.find(e => e.value === filter.value)?.label ?? filter.value;
+    parts.push(`${field.label}: ${value}`);
+  }
+  return parts.filter(Boolean).join(' · ');
+}

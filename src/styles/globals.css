@@ -1713,6 +1713,19 @@ body::before{
   .gerrie-root{right:12px;bottom:12px}
 }
 
+/* ── Telefoon: chat als schermvullend paneel ──────────────────────────
+ * Op de telefoon vult de chat het hele scherm zodat het startbericht direct
+ * in beeld staat zonder te scrollen. `dvh` volgt de zichtbare viewport
+ * (rekening houdend met de adresbalk); `100vh` blijft als fallback. De
+ * open-knop verbergen we — sluiten gaat via het kruisje in de koptekst. */
+@media(max-width:600px){
+  .gerrie-panel{position:fixed;inset:0;width:100%;max-width:100%;height:100vh;height:100dvh;max-height:none;border-radius:0;border:none}
+  .gerrie-fab.is-open{display:none}
+  .gerrie-msgs{padding:14px}
+  .gerrie-composer{padding-bottom:calc(12px + env(safe-area-inset-bottom))}
+  .gerrie-foot-note{padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+}
+
 /* ── Verzend-laadoverlay ──────────────────────────────────────────────
  * Schermvullende overlay met draaiend icoon tijdens trage Resend-acties
  * (offerte/factuur/creditfactuur versturen). Maakt zichtbaar dat de app

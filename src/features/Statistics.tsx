@@ -41,12 +41,14 @@ function coerceDefinition(raw: unknown): ReportDefinition {
   };
 }
 
-export function Statistics({ data, organizationId, canWrite, onChanged, openReportId }: {
+export function Statistics({ data, organizationId, canWrite, onChanged, openReportId, pendingReport }: {
   data: AppData;
   organizationId: string;
   canWrite: boolean;
   onChanged: () => void | Promise<void>;
   openReportId?: string | null;
+  /** Door Gerrie voorgestelde, nog niet opgeslagen rapportage; opent vooringevuld. */
+  pendingReport?: { key: string; name: string; definition: ReportDefinition } | null;
 }) {
   const [def, setDef] = useState<ReportDefinition>(() => defaultReportFor('invoices'));
   const [loadedId, setLoadedId] = useState<string | null>(null);
@@ -74,6 +76,14 @@ export function Statistics({ data, organizationId, canWrite, onChanged, openRepo
     if (target) loadDefinition(target.definition, target.name, target.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openReportId, data.savedReports]);
+
+  // Laad een door Gerrie voorgestelde, nog niet opgeslagen rapportage in de bouwer.
+  // De `key` is vers per voorstel, zodat ook een identiek voorstel opnieuw inlaadt.
+  useEffect(() => {
+    if (!pendingReport) return;
+    loadDefinition(pendingReport.definition, pendingReport.name, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingReport?.key]);
 
   const dimensionFields = source.fields.filter(f => f.role === 'dimension');
   const enumFields = source.fields.filter(f => f.type === 'enum');

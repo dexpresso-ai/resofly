@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import type { ReportDefinition } from './reporting';
 import type { UUID } from '../types';
 
 /**
@@ -146,7 +147,13 @@ export interface GerrieWeekActionProposal {
   items: Array<{ title: string; planned_date: string }>;
   total: number;
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieWeekActionProposal;
+export interface GerrieReportProposal {
+  type: 'report';
+  name: string;
+  /** Pure JSON-rapportdefinitie; opent vooringevuld in de rapportbouwer. */
+  definition: ReportDefinition;
+}
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieWeekActionProposal | GerrieReportProposal;
 
 export interface GerrieResult {
   conversationId: UUID;

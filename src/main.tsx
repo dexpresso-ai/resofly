@@ -74,6 +74,7 @@ import { Contracts } from './features/Contracts';
 import { ClientPortal } from './features/portal/ClientPortal';
 import { Archive, Settings } from './features/SimplePages';
 import { Statistics } from './features/Statistics';
+import type { ReportDefinition } from './lib/reporting';
 import { CalendarPage } from './features/CalendarPage';
 import { WeekPlanner, addWeekChecklistItem } from './features/WeekPlanner';
 import { AttachmentList } from './components/AttachmentList';
@@ -178,6 +179,10 @@ function App() {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [clientId, setClientId] = useState<string | null>(null);
   const [statsReportId, setStatsReportId] = useState<string | null>(null);
+  // Door Gerrie voorgestelde, nog NIET opgeslagen rapportage. De `key` (vers per
+  // voorstel) zorgt dat de Statistieken-bouwer hem opnieuw inlaadt, ook bij een
+  // identiek voorstel. De gebruiker controleert de grafiek en slaat zelf op.
+  const [pendingReport, setPendingReport] = useState<{ key: string; name: string; definition: ReportDefinition } | null>(null);
   const [edit, setEdit] = useState<EditMode>(null);
   const [loading, setLoading] = useState(false);
   // Wanneer dit een tekst bevat, draait er een schermvullende laad-overlay. Wordt
@@ -1070,6 +1075,14 @@ function App() {
         // Actiepunten op de "Actiepunten deze week"-checklist (browser/localStorage) van de juiste week.
         for (const item of p.items) addWeekChecklistItem(item.planned_date, item.title);
       }}
+      onCreateReport={(p) => {
+        if (!ensureCanWrite()) return;
+        // Open de rapportbouwer vooringevuld (nog niet opgeslagen); de gebruiker
+        // controleert de live grafiek en slaat zelf op via "Rapport opslaan".
+        setProjectId(null); setClientId(null); setStatsReportId(null);
+        setPendingReport({ key: uid(), name: p.name, definition: p.definition });
+        setPage('stats');
+      }}
     />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
       <div className="send-overlay-card">
@@ -1102,7 +1115,7 @@ function App() {
     if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} onPlanTask={updateTaskPlanning} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'calendar-settings') return <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
-    if (page === 'stats') return <Statistics data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} openReportId={statsReportId}/>;
+    if (page === 'stats') return <Statistics data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} openReportId={statsReportId} pendingReport={pendingReport}/>;
     if (page === 'archive') return <Archive data={data} onOpen={(id) => { setProjectId(id); setPage('project'); }} onRestore={async (project) => { if (!ensureCanWrite()) return; setError(null); try { await updateRow<Project>('projects', project.id, { archived: false }, activeOrg.id); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Herstellen mislukt'); } }}/>;
     if (page === 'settings') return <Settings settings={data.companySettings} organizationContext={organizationContext} currentUserId={currentUserId} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
     return <div className="empty"><div className="e-big">Geen project geselecteerd</div></div>;

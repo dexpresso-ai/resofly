@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { streamGerrieReply, confirmGerrieAction, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal, type GerrieEditInvoiceProposal, type GerrieEditQuoteProposal, type GerrieEditClientProposal, type GerrieSendRemindersProposal, type GerrieProjectProposal, type GerrieEditProjectProposal, type GerrieTaskProposal, type GerrieEditTaskProposal, type GerrieCalendarEventProposal, type GerrieWeekActionProposal } from '../lib/gerrie-api';
+import { streamGerrieReply, confirmGerrieAction, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal, type GerrieEditInvoiceProposal, type GerrieEditQuoteProposal, type GerrieEditClientProposal, type GerrieSendRemindersProposal, type GerrieProjectProposal, type GerrieEditProjectProposal, type GerrieTaskProposal, type GerrieEditTaskProposal, type GerrieCalendarEventProposal, type GerrieWeekActionProposal, type GerrieReportProposal } from '../lib/gerrie-api';
 import { euro } from '../lib/format';
+import { describeReportDefinition } from '../lib/reporting';
+import { supabase } from '../lib/supabase';
 import type { UUID } from '../types';
 
 /**
@@ -18,10 +20,51 @@ interface ChatMessage { id: string; role: ChatRole; text: string; proposal?: Ger
 let idSeq = 0;
 const nextId = () => `gerrie-${Date.now()}-${++idSeq}`;
 
-const INTRO_TEXT =
-  'Hoi! Ik ben Gerrie, je AI-assistent. Ik kan meekijken in je workspace — ' +
-  'vraag me bijvoorbeeld naar openstaande facturen, een klant of je omzet. ' +
-  'Waar kan ik je mee helpen?';
+/**
+ * Startbericht van Gerrie: een tijdgebonden begroeting (goedemorgen/-middag/
+ * -avond) met — indien beschikbaar — de voornaam van de gebruiker, gevolgd door
+ * een vlot hulpzinnetje. De begroeting wordt berekend op het moment dat het
+ * bericht wordt gemaakt (chat openen / organisatie wisselen).
+ */
+function buildIntro(firstName: string | null): string {
+  const hour = new Date().getHours();
+  const greeting =
+    hour < 6 ? 'Goedenavond' : hour < 12 ? 'Goedemorgen' : hour < 18 ? 'Goedemiddag' : 'Goedenavond';
+  const hello = firstName ? `${greeting}, ${firstName}! 👋` : `${greeting}! 👋`;
+  return (
+    `${hello}\n` +
+    'Klaar voor een productieve dag? ✨ Vraag me gerust naar je facturen, offertes, ' +
+    'klanten of planning — of laat me snel je cijfers checken. Waar kan ik je mee helpen?'
+  );
+}
+
+/** Eerste letter hoofdletter, rest klein — voor nette weergave van een voornaam. */
+function capitalizeName(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+}
+
+/**
+ * Bepaalt een voornaam voor de begroeting uit de auth-gebruiker. Voorkeur voor
+ * een echte naam uit de account-metadata (bv. via Google-login); valt anders
+ * terug op het deel vóór de @ van het e-mailadres, maar alléén als dat eruitziet
+ * als een losse voornaam. Lukt niets, dan null → begroeting zonder naam.
+ */
+function deriveFirstName(user: { email?: string | null; user_metadata?: Record<string, unknown> } | null): string | null {
+  if (!user) return null;
+  const meta = user.user_metadata ?? {};
+  for (const key of ['first_name', 'given_name', 'voornaam', 'full_name', 'name']) {
+    const raw = meta[key];
+    if (typeof raw === 'string' && raw.trim()) {
+      return capitalizeName(raw.trim().split(/\s+/)[0]);
+    }
+  }
+  const local = (user.email ?? '').split('@')[0] ?? '';
+  const candidate = local.split(/[._\-+]/)[0] ?? '';
+  // Alleen overnemen bij een geloofwaardige losse voornaam (geen samengeplakte
+  // volledige naam zoals "gerjanvanlopik"), anders liever geen naam tonen.
+  if (/^[a-z]{2,12}$/i.test(candidate)) return capitalizeName(candidate);
+  return null;
+}
 
 /** Voorbeeldvragen die de huidige (lees-)mogelijkheden laten zien. */
 const SUGGESTIONS = [
@@ -31,7 +74,7 @@ const SUGGESTIONS = [
   'Welke offertes lopen er nog?',
 ];
 
-export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction }: {
+export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onCreateReport }: {
   organizationId: UUID;
   onCreateInvoiceDraft?: (proposal: GerrieInvoiceProposal) => void;
   onCreateQuoteDraft?: (proposal: GerrieQuoteProposal) => void;
@@ -49,9 +92,12 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
   onEditTask?: (proposal: GerrieEditTaskProposal) => void;
   onCreateCalendarEvent?: (proposal: GerrieCalendarEventProposal) => Promise<void>;
   onCreateWeekAction?: (proposal: GerrieWeekActionProposal) => Promise<void>;
+  onCreateReport?: (proposal: GerrieReportProposal) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([{ id: nextId(), role: 'assistant', text: INTRO_TEXT }]);
+  const [firstName, setFirstName] = useState<string | null>(null);
+  const firstNameRef = useRef<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => [{ id: nextId(), role: 'assistant', text: buildIntro(null) }]);
   const [draft, setDraft] = useState('');
   const [thinking, setThinking] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -70,11 +116,31 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
   // Focus de invoer wanneer het paneel opent.
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
 
+  // Haal eenmalig de voornaam van de ingelogde gebruiker op voor een persoonlijke
+  // begroeting. Lukt het niet, dan blijft het startbericht zonder naam.
+  useEffect(() => {
+    let active = true;
+    void supabase.auth.getUser().then(({ data }) => {
+      if (active) setFirstName(deriveFirstName(data.user));
+    });
+    return () => { active = false; };
+  }, []);
+
+  // Personaliseer het startbericht zodra de voornaam binnen is — maar alleen
+  // zolang het gesprek nog niet is begonnen (enkel het introbericht in beeld).
+  useEffect(() => {
+    firstNameRef.current = firstName;
+    setMessages((prev) =>
+      prev.length === 1 && prev[0].role === 'assistant' && !conversationId
+        ? [{ ...prev[0], text: buildIntro(firstName) }]
+        : prev);
+  }, [firstName, conversationId]);
+
   // Wissel je van organisatie, dan begint Gerrie met een schone lei.
   useEffect(() => {
     setConversationId(null);
     setBudget(null);
-    setMessages([{ id: nextId(), role: 'assistant', text: INTRO_TEXT }]);
+    setMessages([{ id: nextId(), role: 'assistant', text: buildIntro(firstNameRef.current) }]);
   }, [organizationId]);
 
   async function send(text: string) {
@@ -170,6 +236,7 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
     if (p.type === 'edit_task') return <ProposalCard title="Wijziging taak openen & controleren" sub={p.title} onClick={() => onEditTask?.(p)} />;
     if (p.type === 'week_action') return <ConfirmActionCard icon={<CalendarIcon />} title={`${p.total} actiepunt${p.total === 1 ? '' : 'en'} toevoegen?`} sub={p.items.map((i) => i.title).join(' · ')} confirmLabel="Toevoegen" pendingLabel="Toevoegen…" doneLabel={`${p.total} actiepunt${p.total === 1 ? '' : 'en'} toegevoegd`} onConfirm={() => runConfirmed(auditId, () => onCreateWeekAction ? onCreateWeekAction(p) : Promise.reject(new Error('Toevoegen is hier niet beschikbaar.')))} />;
     if (p.type === 'calendar_event') return <ConfirmActionCard icon={<CalendarIcon />} title="Agenda-item aanmaken?" sub={`${p.title} · ${p.date} ${p.start_time}–${p.end_time} · ${p.source_name}`} confirmLabel="Aanmaken" pendingLabel="Aanmaken…" doneLabel={`Agenda-item aangemaakt: ${p.title}`} onConfirm={() => runConfirmed(auditId, () => onCreateCalendarEvent ? onCreateCalendarEvent(p) : Promise.reject(new Error('Aanmaken is hier niet beschikbaar.')))} />;
+    if (p.type === 'report') return <ProposalCard icon={<ChartIcon />} title={`Rapportage openen & controleren: ${p.name}`} sub={describeReportDefinition(p.definition)} onClick={() => onCreateReport?.(p)} />;
     if (p.type === 'send_reminders') {
       const byLevel = [1, 2, 3].map((l) => p.invoices.filter((i) => i.level === l).length);
       return <ConfirmActionCard icon={<MailIcon />} title={`${p.total} herinnering${p.total === 1 ? '' : 'en'} versturen?`} sub={`1e: ${byLevel[0]} · 2e: ${byLevel[1]} · 3e: ${byLevel[2]}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`${p.total} herinnering${p.total === 1 ? '' : 'en'} verstuurd`} onConfirm={() => runConfirmed(auditId, () => onSendReminders ? onSendReminders(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.')))} />;
@@ -316,10 +383,10 @@ function DocIcon() {
 
 function lineLabel(n: number): string { return `${n} regel${n === 1 ? '' : 's'}`; }
 
-function ProposalCard({ title, sub, onClick }: { title: string; sub: string; onClick: () => void }) {
+function ProposalCard({ title, sub, onClick, icon }: { title: string; sub: string; onClick: () => void; icon?: ReactNode }) {
   return (
     <button className="gerrie-proposal" onClick={onClick}>
-      <span className="gerrie-proposal-icon" aria-hidden="true"><DocIcon /></span>
+      <span className="gerrie-proposal-icon" aria-hidden="true">{icon ?? <DocIcon />}</span>
       <span className="gerrie-proposal-body">
         <span className="gerrie-proposal-title">{title}</span>
         <span className="gerrie-proposal-sub">{sub}</span>
@@ -378,6 +445,16 @@ function CalendarIcon() {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="4" width="18" height="17" rx="2" />
       <path d="M3 9h18M8 2v4M16 2v4" />
+    </svg>
+  );
+}
+
+function ChartIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 3v18h18" />
+      <rect x="7" y="11" width="3" height="6" rx="0.5" />
+      <rect x="13" y="7" width="3" height="10" rx="0.5" />
     </svg>
   );
 }

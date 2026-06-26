@@ -184,7 +184,19 @@ interface TaskProposal { type: 'task'; project_id: string; project_name: string;
 interface EditTaskProposal { type: 'edit_task'; id: string; title: string; project_id: string; changes: { title?: string; description?: string | null; status?: string; priority?: string; planned_date?: string | null; start_date?: string | null; end_date?: string | null; estimated_minutes?: number; tags?: string[]; subtasks?: ProposalSubtask[] } }
 interface CalendarEventProposal { type: 'calendar_event'; source_id: string; source_name: string; title: string; date: string; start_time: string; end_time: string; description: string | null; location: string | null }
 interface WeekActionProposal { type: 'week_action'; items: Array<{ title: string; planned_date: string }>; total: number }
-type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | WeekActionProposal;
+// Rapportage: een pure JSON-definitie (matcht de client-side ReportDefinition). Gerrie
+// stelt hem voor; de gebruiker controleert + slaat hem zelf op op de Statistieken-pagina.
+interface ReportDefinitionLite {
+  source: string;
+  measure: { field: string; agg: string };
+  dimension: string | null;
+  granularity: string;
+  filters: Array<{ field: string; value: string }>;
+  datePreset: string;
+  chart: string;
+}
+interface ReportProposal { type: 'report'; name: string; definition: ReportDefinitionLite }
+type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | WeekActionProposal | ReportProposal;
 interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: unknown }>; usage: Usage; proposal?: Proposal }
 
 async function runAgent(ctx: GerrieContext, history: Array<{ role: string; content: string }>, message: string, emit: Emit): Promise<AgentOutcome> {
@@ -260,6 +272,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
         : proposal.type === 'edit_task' ? `Ik heb de wijziging van taak "${proposal.title}" klaargezet. Controleer en sla op:`
         : proposal.type === 'calendar_event' ? `Wil je dat ik dit agenda-item aanmaak in "${proposal.source_name}"? Bevestig hieronder.`
         : proposal.type === 'week_action' ? `Wil je dat ik deze ${proposal.total} actiepunt${proposal.total === 1 ? '' : 'en'} toevoeg? Bevestig hieronder.`
+        : proposal.type === 'report' ? `Ik heb de rapportage "${proposal.name}" voor je klaargezet op de Statistieken-pagina. Controleer de grafiek en sla hem op:`
         : 'Ik heb een conceptfactuur voor je klaargezet. Controleer hem en sla op:';
       return { text: answerChunks.join('') || fallback, toolCalls, usage, proposal };
     }
@@ -416,6 +429,7 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_task` / `propose_edit_task` — een taak binnen een project aanmaken of wijzigen, inclusief subtaken, status/prioriteit en een geplande datum (`planned_date`) om de taak als actiepunt in de WEEKPLANNER te zetten. Zoek het project met `list_projects`, bestaande taken met `list_tasks`.',
           '- `propose_week_action` — ÉÉN OF MEER ACTIEPUNTEN op de "Actiepunten deze week"-checklist van de weekplanner (los van projecten en taken). Vraagt de gebruiker meerdere punten, geef ze dan ALLEMAAL in één keer mee via `items` (niet één voor één). Geef per item een datum binnen de gewenste week. Voor een echte taak binnen een project gebruik je `propose_task`.',
           '- `propose_calendar_event` — een agenda-item aanmaken in een gekoppelde agenda (Google/Microsoft). Tijden zijn lokaal (Europe/Amsterdam); reken relatieve datums om op basis van vandaag. Bij meerdere schrijfbare agenda\'s: vraag welke (`list_calendars`).',
+          '- `propose_report` — een RAPPORTAGE klaarzetten op de Statistieken-pagina (telt/berekent over één bron, optioneel gegroepeerd en gefilterd). De bouwer opent vooringevuld met een live grafiek die de gebruiker zelf controleert en opslaat. Gebruik exact de bron-/veldsleutels uit de tooluitleg; gis geen veldnamen. Geef de rapportage altijd een korte, duidelijke naam.',
           '- `propose_convert_quote` — een GEACCEPTEERDE offerte omzetten naar een factuur. Zoek de offerte met `list_quotes`; alleen status "accepted" kan omgezet worden.',
           '- `propose_edit_invoice` / `propose_edit_quote` — een bestaande CONCEPT-factuur/offerte wijzigen. Alleen status "draft" mag; een verstuurde of verwerkte factuur mag wettelijk niet meer aangepast worden — zeg dat dan. Geef alleen de velden die veranderen; voor losse regelaanpassingen heb je de volledige set regels nodig, laat `lines` anders weg zodat de gebruiker ze zelf aanpast.',
           '- `propose_edit_client` — klantgegevens wijzigen. Geef alleen de velden die veranderen.',
@@ -793,6 +807,41 @@ const TOOL_DEFINITIONS = [
       },
     },
   },
+  {
+    name: 'propose_report',
+    description: [
+      'Zet een RAPPORTAGE klaar op de Statistieken-pagina. Je slaat NIETS op: het voorstel opent de rapportbouwer vooringevuld met een live grafiek, die de gebruiker zelf controleert en opslaat.',
+      'Een rapport telt of rekent over één gegevensbron, optioneel gegroepeerd op een veld en gefilterd op een periode/status.',
+      'Gebruik EXACT deze bron- en veldsleutels:',
+      '- invoices (Facturen): groeperen op client|status|date · meten: count, of sum/avg van amount · filter status∈[draft,sent,overdue,paid,cancelled,void,written_off,refunded]',
+      '- quotes (Offertes): groeperen op status|client|date · meten: count, of sum/avg van amount · filter status∈[draft,pending_internal_approval,internally_approved,sent,accepted,rejected,expired,paid,overdue,cancelled]',
+      '- purchase_invoices (Inkoopfacturen): groeperen op supplier|status|date · meten: count, of sum/avg van amount · filter status∈[draft,booked,paid,cancelled]',
+      '- clients (Klanten): groeperen op status|created · meten: count, of sum/avg van value · filter status∈[active,prospect,inactive]',
+      '- projects (Projecten): groeperen op client|state|created · meten: alleen count · filter state∈[active,archived]',
+      '- tasks (Taken): groeperen op status|priority|project|created|deadline · meten: count, of sum/avg van minutes · filter status∈[todo,doing,review,done], priority∈[low,med,high]',
+      '- tickets (Tickets): groeperen op status|priority|client|created · meten: alleen count · filter status∈[new,review,approved,rejected,converted], priority∈[low,med,high]',
+      'Periode (date_preset): all|this_month|last_month|this_quarter|this_year|last_12m. Granulariteit (granularity) telt alleen bij een datum-dimensie (date/created/deadline). Laat dimension leeg voor één totaal (kerncijfer).',
+      'Voorbeeld "omzet per klant dit jaar": source=invoices, measure_agg=sum, measure_field=amount, dimension=client, date_preset=this_year, filters=[{field:status,value:paid}], chart=bar.',
+    ].join('\n'),
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Korte, duidelijke naam voor de rapportage (bijv. "Omzet per klant").' },
+        source: { type: 'string', enum: ['invoices', 'quotes', 'purchase_invoices', 'clients', 'projects', 'tasks', 'tickets'], description: 'De gegevensbron.' },
+        measure_agg: { type: 'string', enum: ['count', 'sum', 'avg', 'min', 'max'], description: 'Wat je meet: count (aantal) of een berekening over een getalveld.' },
+        measure_field: { type: 'string', description: "Het getalveld bij sum/avg/min/max (bijv. 'amount', 'value', 'minutes'). Laat weg bij count." },
+        dimension: { type: 'string', description: 'Veld om op te groeperen. Laat leeg voor één totaal (kerncijfer).' },
+        granularity: { type: 'string', enum: ['day', 'week', 'month', 'quarter', 'year'], description: 'Alleen bij een datum-dimensie: tijdsbucket.' },
+        date_preset: { type: 'string', enum: ['all', 'this_month', 'last_month', 'this_quarter', 'this_year', 'last_12m'], description: 'Periodefilter (standaard this_year).' },
+        filters: {
+          type: 'array', description: 'Optionele status-/categoriefilters.',
+          items: { type: 'object', properties: { field: { type: 'string' }, value: { type: 'string' } }, required: ['field', 'value'] },
+        },
+        chart: { type: 'string', enum: ['bar', 'line', 'pie', 'table', 'kpi'], description: 'Weergave. Standaard: lijn bij een datum-dimensie, staaf bij een categorie, kerncijfer zonder dimensie.' },
+      },
+      required: ['source'],
+    },
+  },
 ];
 
 function toolLabel(name: string): string {
@@ -894,6 +943,7 @@ function proposeLabel(toolName: string): string {
     case 'propose_edit_task': return 'Taak klaarzetten…';
     case 'propose_calendar_event': return 'Agenda-item klaarzetten…';
     case 'propose_week_action': return 'Weekactiepunt klaarzetten…';
+    case 'propose_report': return 'Rapportage klaarzetten…';
     default: return 'Voorstel klaarzetten…';
   }
 }
@@ -919,6 +969,7 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
     case 'propose_edit_task': return buildEditTaskProposal(ctx, input);
     case 'propose_calendar_event': return buildCalendarEventProposal(ctx, input);
     case 'propose_week_action': return buildWeekActionProposal(input);
+    case 'propose_report': return buildReportProposal(input);
     default: return { ok: false, error: `Onbekende actie: ${toolName}` };
   }
 }
@@ -998,6 +1049,115 @@ async function buildCalendarEventProposal(ctx: GerrieContext, input: Record<stri
       description: input.description ? String(input.description).slice(0, 2000) : null,
       location: input.location ? String(input.location).slice(0, 300) : null,
     },
+  };
+}
+
+// ── Rapportages (zelfbouw-rapportbouwer, alleen vóórstellen) ─────────────────
+// Compacte spiegel van het veldregister in src/lib/reporting.ts. Hiermee
+// valideren we Gerrie's voorgestelde rapportdefinitie server-side: alleen
+// bestaande bronnen, velden, meetwaarden en filterwaarden komen erdoor. De engine
+// zelf draait in de browser; wij bewaken puur dat de definitie klopt.
+
+interface ReportSourceSchema {
+  dimensions: string[];                 // toegestane groepeer-velden
+  measures: string[];                   // velden waarop sum/avg/min/max mag
+  enums: Record<string, string[]>;      // filterbaar veld -> toegestane waarden
+  dateFields: string[];                 // dimensies van het type datum
+}
+
+const REPORT_SCHEMA: Record<string, ReportSourceSchema> = {
+  invoices: {
+    dimensions: ['client', 'status', 'date'], measures: ['amount'],
+    enums: { status: ['draft', 'sent', 'overdue', 'paid', 'cancelled', 'void', 'written_off', 'refunded'] }, dateFields: ['date'],
+  },
+  quotes: {
+    dimensions: ['status', 'client', 'date'], measures: ['amount'],
+    enums: { status: ['draft', 'pending_internal_approval', 'internally_approved', 'sent', 'accepted', 'rejected', 'expired', 'paid', 'overdue', 'cancelled'] }, dateFields: ['date'],
+  },
+  purchase_invoices: {
+    dimensions: ['supplier', 'status', 'date'], measures: ['amount'],
+    enums: { status: ['draft', 'booked', 'paid', 'cancelled'] }, dateFields: ['date'],
+  },
+  clients: {
+    dimensions: ['status', 'created'], measures: ['value'],
+    enums: { status: ['active', 'prospect', 'inactive'] }, dateFields: ['created'],
+  },
+  projects: {
+    dimensions: ['client', 'state', 'created'], measures: [],
+    enums: { state: ['active', 'archived'] }, dateFields: ['created'],
+  },
+  tasks: {
+    dimensions: ['status', 'priority', 'project', 'created', 'deadline'], measures: ['minutes'],
+    enums: { status: ['todo', 'doing', 'review', 'done'], priority: ['low', 'med', 'high'] }, dateFields: ['created', 'deadline'],
+  },
+  tickets: {
+    dimensions: ['status', 'priority', 'client', 'created'], measures: [],
+    enums: { status: ['new', 'review', 'approved', 'rejected', 'converted'], priority: ['low', 'med', 'high'] }, dateFields: ['created'],
+  },
+};
+
+const REPORT_AGGS = ['count', 'sum', 'avg', 'min', 'max'];
+const REPORT_GRANS = ['day', 'week', 'month', 'quarter', 'year'];
+const REPORT_PRESETS = ['all', 'this_month', 'last_month', 'this_quarter', 'this_year', 'last_12m'];
+
+/** Valideer Gerrie's rapportvoorstel tegen het veldregister en lever een nette definitie. */
+function buildReportProposal(input: Record<string, unknown>): ProposalResult {
+  const sourceKey = String(input.source || '').trim();
+  const schema = REPORT_SCHEMA[sourceKey];
+  if (!schema) return { ok: false, error: `Onbekende bron "${sourceKey}". Kies uit: ${Object.keys(REPORT_SCHEMA).join(', ')}.` };
+
+  // Meetwaarde: count, of een berekening over een geldig getalveld.
+  const agg = String(input.measure_agg || 'count');
+  if (!REPORT_AGGS.includes(agg)) return { ok: false, error: `Onbekende meetwaarde "${agg}". Kies uit: ${REPORT_AGGS.join(', ')}.` };
+  let field = '*';
+  if (agg !== 'count') {
+    field = String(input.measure_field || '').trim();
+    if (!schema.measures.includes(field)) {
+      return {
+        ok: false,
+        error: schema.measures.length
+          ? `Voor deze bron kun je met ${agg} alleen meten op: ${schema.measures.join(', ')}. Of gebruik measure_agg=count (Aantal).`
+          : 'Voor deze bron is alleen measure_agg=count (Aantal) beschikbaar.',
+      };
+    }
+  }
+
+  // Dimensie: leeg (één totaal) of een bestaand groepeerveld.
+  let dimension: string | null = null;
+  const dimRaw = String(input.dimension || '').trim();
+  if (dimRaw) {
+    if (!schema.dimensions.includes(dimRaw)) return { ok: false, error: `Voor deze bron kun je groeperen op: ${schema.dimensions.join(', ')} (of laat dimension leeg voor één totaal).` };
+    dimension = dimRaw;
+  }
+
+  // Granulariteit + periode: ongeldig -> nette standaard (de engine is verder defensief).
+  const granularity = REPORT_GRANS.includes(String(input.granularity)) ? String(input.granularity) : 'month';
+  const datePreset = REPORT_PRESETS.includes(String(input.date_preset)) ? String(input.date_preset) : 'this_year';
+
+  // Filters: alleen op enum-velden, met een toegestane waarde.
+  const filters: Array<{ field: string; value: string }> = [];
+  if (Array.isArray(input.filters)) {
+    for (const f of input.filters as Record<string, unknown>[]) {
+      const ff = String(f?.field || '').trim();
+      const fv = String(f?.value || '').trim();
+      if (!ff || !fv) continue;
+      const allowed = schema.enums[ff];
+      if (!allowed) return { ok: false, error: `Op deze bron kun je niet filteren op "${ff}". Filterbare velden: ${Object.keys(schema.enums).join(', ') || 'geen'}.` };
+      if (!allowed.includes(fv)) return { ok: false, error: `Ongeldige waarde "${fv}" voor filter ${ff}. Kies uit: ${allowed.join(', ')}.` };
+      filters.push({ field: ff, value: fv });
+    }
+  }
+
+  // Weergave: passend bij de dimensie; ongeldige keuze -> verstandige standaard.
+  const dimIsDate = dimension ? schema.dateFields.includes(dimension) : false;
+  const allowedCharts = !dimension ? ['kpi', 'table'] : dimIsDate ? ['line', 'bar', 'table'] : ['bar', 'pie', 'table'];
+  const chart = allowedCharts.includes(String(input.chart)) ? String(input.chart) : allowedCharts[0];
+
+  const name = (String(input.name || '').trim() || 'Nieuwe rapportage').slice(0, 120);
+
+  return {
+    ok: true,
+    proposal: { type: 'report', name, definition: { source: sourceKey, measure: { field, agg }, dimension, granularity, filters, datePreset, chart } },
   };
 }
 
