@@ -141,7 +141,16 @@ export interface GerrieCalendarEventProposal {
   description: string | null;
   location: string | null;
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal;
+export interface GerrieWeekActionProposal {
+  type: 'week_action';
+  title: string;
+  planned_date: string;
+  status: string;
+  priority: string;
+  description: string | null;
+  estimated_minutes: number;
+}
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieWeekActionProposal;
 
 export interface GerrieResult {
   conversationId: UUID;

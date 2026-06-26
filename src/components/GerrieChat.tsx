@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { streamGerrieReply, confirmGerrieAction, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal, type GerrieEditInvoiceProposal, type GerrieEditQuoteProposal, type GerrieEditClientProposal, type GerrieSendRemindersProposal, type GerrieProjectProposal, type GerrieEditProjectProposal, type GerrieTaskProposal, type GerrieEditTaskProposal, type GerrieCalendarEventProposal } from '../lib/gerrie-api';
+import { streamGerrieReply, confirmGerrieAction, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal, type GerrieEditInvoiceProposal, type GerrieEditQuoteProposal, type GerrieEditClientProposal, type GerrieSendRemindersProposal, type GerrieProjectProposal, type GerrieEditProjectProposal, type GerrieTaskProposal, type GerrieEditTaskProposal, type GerrieCalendarEventProposal, type GerrieWeekActionProposal } from '../lib/gerrie-api';
 import { euro } from '../lib/format';
 import type { UUID } from '../types';
 
@@ -31,7 +31,7 @@ const SUGGESTIONS = [
   'Welke offertes lopen er nog?',
 ];
 
-export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent }: {
+export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction }: {
   organizationId: UUID;
   onCreateInvoiceDraft?: (proposal: GerrieInvoiceProposal) => void;
   onCreateQuoteDraft?: (proposal: GerrieQuoteProposal) => void;
@@ -48,6 +48,7 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
   onCreateTask?: (proposal: GerrieTaskProposal) => void;
   onEditTask?: (proposal: GerrieEditTaskProposal) => void;
   onCreateCalendarEvent?: (proposal: GerrieCalendarEventProposal) => Promise<void>;
+  onCreateWeekAction?: (proposal: GerrieWeekActionProposal) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: nextId(), role: 'assistant', text: INTRO_TEXT }]);
@@ -167,6 +168,7 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
     if (p.type === 'edit_project') return <ProposalCard title="Wijziging project openen & controleren" sub={p.name} onClick={() => onEditProject?.(p)} />;
     if (p.type === 'task') return <ProposalCard title="Taak openen & controleren" sub={`${p.title} · ${p.project_name}`} onClick={() => onCreateTask?.(p)} />;
     if (p.type === 'edit_task') return <ProposalCard title="Wijziging taak openen & controleren" sub={p.title} onClick={() => onEditTask?.(p)} />;
+    if (p.type === 'week_action') return <ProposalCard title="Weekactiepunt openen & controleren" sub={`${p.title} · ${p.planned_date}`} onClick={() => onCreateWeekAction?.(p)} />;
     if (p.type === 'calendar_event') return <ConfirmActionCard icon={<CalendarIcon />} title="Agenda-item aanmaken?" sub={`${p.title} · ${p.date} ${p.start_time}–${p.end_time} · ${p.source_name}`} confirmLabel="Aanmaken" pendingLabel="Aanmaken…" doneLabel={`Agenda-item aangemaakt: ${p.title}`} onConfirm={() => runConfirmed(auditId, () => onCreateCalendarEvent ? onCreateCalendarEvent(p) : Promise.reject(new Error('Aanmaken is hier niet beschikbaar.')))} />;
     if (p.type === 'send_reminders') {
       const byLevel = [1, 2, 3].map((l) => p.invoices.filter((i) => i.level === l).length);

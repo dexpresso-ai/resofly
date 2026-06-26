@@ -170,10 +170,11 @@ function App() {
   const [data, setData] = useState<AppData>(emptyData);
   const [organizationContext, setOrganizationContext] = useState<OrganizationContext>(emptyOrganizationContext);
   const [activeOrganizationId, setActiveOrganizationId] = useState<string | null>(() => localStorage.getItem(activeOrgStorageKey));
-  // Terugkomst van de GoCardless-bankkoppeling (?ref=…) opent direct de Bankpagina,
-  // die de koppeling vervolgens afrondt.
+  // Terugkomst van de directe bankkoppeling (PSD2, ?code=&state=…) opent direct de
+  // Bankpagina, die de koppeling vervolgens afrondt.
   const [page, setPage] = useState<Page>(() =>
-    typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('ref') ? 'bank' : 'dashboard');
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('code')
+      && new URLSearchParams(window.location.search).has('state') ? 'bank' : 'dashboard');
   const [projectId, setProjectId] = useState<string | null>(null);
   const [clientId, setClientId] = useState<string | null>(null);
   const [statsReportId, setStatsReportId] = useState<string | null>(null);
@@ -1063,6 +1064,24 @@ function App() {
         const startsAt = new Date(`${p.date}T${p.start_time}:00`).toISOString();
         const endsAt = new Date(`${p.date}T${p.end_time}:00`).toISOString();
         await createExternalCalendarEvent(activeOrg.id, { sourceId: p.source_id, title: p.title, startsAt, endsAt, description: p.description ?? undefined, location: p.location ?? undefined });
+      }}
+      onCreateWeekAction={async (p) => {
+        if (!ensureCanWrite()) return;
+        try {
+          // Losse weekactiepunten landen in een standaard "Losse taken"-project (geen klant).
+          let project = data.projects.find((pr) => pr.name.trim().toLowerCase() === 'losse taken' && !pr.archived);
+          if (!project) {
+            project = await insertRow<Project>('projects', activeOrg.id, { name: 'Losse taken', client_id: null, description: 'Losse weekplanner-actiepunten (zonder project).', color: DEFAULT_PROJECT_COLOR, archived: false, start_date: null, end_date: null });
+            await refresh();
+          }
+          setProjectId(project.id); setClientId(null); setPage('project');
+          setEdit({ kind: 'task', item: undefined, projectId: project.id, defaults: {
+            title: p.title, description: p.description ?? undefined, status: p.status as Task['status'], priority: p.priority as Task['priority'],
+            planned_date: p.planned_date, estimated_minutes: p.estimated_minutes,
+          } });
+        } catch (e) {
+          setError(e instanceof Error ? e.message : 'Losse taak voorbereiden mislukt.');
+        }
       }}
     />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
