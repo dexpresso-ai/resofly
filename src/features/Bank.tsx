@@ -23,10 +23,10 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 }
 
 export function BankPage({ data, organizationId, canWrite, onChanged }: PageProps) {
-  // Na de GoCardless-redirect komen we terug met ?ref=… → meteen het tabblad
+  // Na de bank-redirect komen we terug met ?code=&state=… → meteen het tabblad
   // "Rekeningen & koppeling" tonen zodat de afronding zichtbaar is.
-  const hasReturnRef = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('ref');
-  const [tab, setTab] = useState<'reconcile' | 'accounts' | 'rules'>(hasReturnRef ? 'accounts' : 'reconcile');
+  const hasReturnCode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('code');
+  const [tab, setTab] = useState<'reconcile' | 'accounts' | 'rules'>(hasReturnCode ? 'accounts' : 'reconcile');
 
   if (data.ledgerAccounts.length === 0) {
     return <div className="bk-page"><SetupBanner organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} /></div>;
@@ -278,17 +278,19 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
   const reqFor = (a: BankAccount): BankRequisition | undefined =>
     data.bankRequisitions.find(r => r.id === a.bank_requisition_id);
 
-  // Afronden van de GoCardless-koppeling na de redirect (?ref=…). Eénmalig.
+  // Afronden van de bankkoppeling na de redirect (?code=&state=…). Eénmalig.
   const finalizedRef = useRef(false);
   useEffect(() => {
-    const ref = new URLSearchParams(window.location.search).get('ref');
-    if (!ref || finalizedRef.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const state = params.get('state');
+    if (!code || !state || finalizedRef.current) return;
     finalizedRef.current = true;
-    // Verwijder ?ref uit de URL zodat een refresh niet opnieuw afrondt.
+    // Verwijder de querystring uit de URL zodat een refresh niet opnieuw afrondt.
     const clean = window.location.origin + window.location.pathname + window.location.hash;
     window.history.replaceState(null, '', clean);
     setFinalizing(true); setBanner(null);
-    finalizeBankRequisition(organizationId, ref)
+    finalizeBankRequisition(organizationId, { code, state })
       .then(res => {
         if (res.status === 'linked') setBanner({ kind: 'ok', text: `Bank gekoppeld: ${res.linked} rekening(en), ${res.imported} transacties opgehaald.` });
         else if (res.status === 'expired') setBanner({ kind: 'err', text: 'De toestemming is verlopen of geweigerd. Probeer de koppeling opnieuw.' });
@@ -316,7 +318,7 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
   return (
     <div className="bk-page">
       <div className="bk-subhead">
-        <p className="bk-muted">Koppel elke bankrekening aan een grootboekrekening (meestal 1100 Bank). Lees afschriften in (CAMT.053, MT940 of CSV) of koppel direct via GoCardless.</p>
+        <p className="bk-muted">Koppel elke bankrekening aan een grootboekrekening (meestal 1100 Bank). Lees afschriften in (CAMT.053, MT940 of CSV) of koppel je bank direct (PSD2) voor automatisch ophalen.</p>
         <div className="bank-subhead-actions">
           <Button disabled={!canWrite || finalizing} onClick={() => setConnect(true)}><Link2 size={15} /> Koppel bank</Button>
           <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Handmatige rekening</Button>
@@ -332,7 +334,7 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
             {data.bankAccounts.map(a => {
               const ledger = data.ledgerAccounts.find(l => l.id === a.ledger_account_id);
               const count = data.bankTransactions.filter(t => t.bank_account_id === a.id).length;
-              const linked = a.source === 'gocardless';
+              const linked = a.source !== 'import';
               const req = reqFor(a);
               const expired = req?.status === 'expired';
               return (
@@ -359,12 +361,12 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
 
       {edit && <BankAccountForm data={data} organizationId={organizationId} canWrite={canWrite}
         account={edit === 'new' ? null : edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); onChanged(); }} />}
-      {connect && <GoCardlessConnectModal organizationId={organizationId} onClose={() => setConnect(false)} />}
+      {connect && <BankConnectModal organizationId={organizationId} onClose={() => setConnect(false)} />}
     </div>
   );
 }
 
-function GoCardlessConnectModal({ organizationId, onClose }: { organizationId: string; onClose: () => void }) {
+function BankConnectModal({ organizationId, onClose }: { organizationId: string; onClose: () => void }) {
   const [institutions, setInstitutions] = useState<BankInstitution[] | null>(null);
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
@@ -386,7 +388,7 @@ function GoCardlessConnectModal({ organizationId, onClose }: { organizationId: s
   async function pick(inst: BankInstitution) {
     setBusy(inst.id); setError(null);
     try {
-      // GoCardless stuurt na toestemming terug naar deze URL met ?ref=… erachter.
+      // De bank stuurt na toestemming terug naar deze URL met ?code=&state=… erachter.
       const redirectUrl = window.location.origin + window.location.pathname;
       const { link } = await createBankRequisition(organizationId, { institutionId: inst.id, institutionName: inst.name, redirectUrl });
       window.location.assign(link);

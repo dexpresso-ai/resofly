@@ -2,18 +2,19 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 
 // ============================================================
-// bank-sync — directe PSD2-bankkoppeling via GoCardless Bank Account Data.
+// bank-sync — directe PSD2-bankkoppeling via Enable Banking (EU/Fins AISP).
 //
 // Acties (POST, met Supabase bearer token van een organisatielid):
-//  - listInstitutions  : banken voor de bankkiezer (lezen, elk lid)
-//  - createRequisition : start consent; geeft de redirect-link terug (schrijfrol)
-//  - finalizeRequisition: na de redirect; koppelt rekeningen + 1e sync (schrijfrol)
-//  - sync              : nieuwe transacties ophalen voor 1/alle rekeningen (schrijfrol)
+//  - listInstitutions   : banken (ASPSP's) voor de bankkiezer (lezen, elk lid)
+//  - createRequisition  : start consent; geeft de redirect-link terug (schrijfrol)
+//  - finalizeRequisition: na de redirect (?code=&state=); koppelt rekeningen + 1e sync
+//  - sync               : nieuwe transacties ophalen voor 1/alle rekeningen (schrijfrol)
 //
-// De GoCardless-credentials (GOCARDLESS_SECRET_ID/KEY) zijn app-breed (de app is de
-// TPP) en staan als Edge-Function-secrets. Per organisatie bewaren we alleen de
-// requisitions + de gekoppelde rekeningen. Schrijven gebeurt met de service-role,
-// dus de import-RPC ziet auth.role()='service_role' en slaat de can_write_org-check over.
+// Auth richting Enable Banking: een JWT (RS256), gesigneerd met de private sleutel
+// (ENABLEBANKING_PRIVATE_KEY, PKCS#8 PEM) en kid = ENABLEBANKING_APP_ID. App-breed
+// (de app is de TPP). Per organisatie bewaren we alleen requisitions + gekoppelde
+// rekeningen. Schrijven met de service-role, dus de import-RPC ziet
+// auth.role()='service_role' en slaat de can_write_org-check over.
 // ============================================================
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
@@ -21,18 +22,18 @@ type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
-const GOCARDLESS_SECRET_ID = Deno.env.get('GOCARDLESS_SECRET_ID') || '';
-const GOCARDLESS_SECRET_KEY = Deno.env.get('GOCARDLESS_SECRET_KEY') || '';
-const GOCARDLESS_BASE_URL = (Deno.env.get('GOCARDLESS_BASE_URL') || 'https://bankaccountdata.gocardless.com/api/v2').replace(/\/$/, '');
-const GOCARDLESS_COUNTRY = (Deno.env.get('GOCARDLESS_COUNTRY') || 'nl').toLowerCase();
+const EB_APP_ID = Deno.env.get('ENABLEBANKING_APP_ID') || '';
+const EB_PRIVATE_KEY = (Deno.env.get('ENABLEBANKING_PRIVATE_KEY') || '').replace(/\\n/g, '\n');
+const EB_BASE_URL = (Deno.env.get('ENABLEBANKING_BASE_URL') || 'https://api.enablebanking.com').replace(/\/$/, '');
+const EB_COUNTRY = (Deno.env.get('ENABLEBANKING_COUNTRY') || 'NL').toUpperCase();
+const EB_PSU_TYPE = (Deno.env.get('ENABLEBANKING_PSU_TYPE') || 'business').toLowerCase();
+const EB_CONSENT_DAYS = parsePositiveInt(Deno.env.get('ENABLEBANKING_CONSENT_DAYS'), 90);
 const BANK_ALLOWED_ORIGINS = parseAllowedOrigins([
   Deno.env.get('BANK_ALLOWED_ORIGINS'), Deno.env.get('APP_PUBLIC_URL'),
   Deno.env.get('INVOICE_ALLOWED_ORIGINS'), Deno.env.get('QUOTE_ALLOWED_ORIGINS'), Deno.env.get('BILLING_ALLOWED_RETURN_ORIGINS'),
 ]);
 const BANK_ALLOW_LOCAL_DEV = (Deno.env.get('BANK_ALLOW_LOCAL_DEV') || Deno.env.get('INVOICE_ALLOW_LOCAL_DEV') || 'false').toLowerCase() === 'true';
 const BANK_DEBUG_ERRORS = (Deno.env.get('BANK_DEBUG_ERRORS') || 'false').toLowerCase() === 'true';
-// GoCardless-sandbox waarmee je de volledige consent-flow kunt testen zonder echte bank.
-const SANDBOX_INSTITUTION = { id: 'SANDBOXFINANCE_SFIN0000', name: 'Sandbox Finance (test)', bic: null, logo: null, transaction_total_days: 90 };
 
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
 
@@ -50,17 +51,16 @@ serve(async (req) => {
     const action = String(body.action || '');
     const user = await requireUser(req);
 
-    // finalize leidt de organisatie af uit de requisition (de gebruiker kan tussen
-    // koppelen en terugkeren van actieve org gewisseld zijn), niet uit de body.
+    // finalize leidt de organisatie af uit de requisition (state), niet uit de body.
     if (action === 'finalizeRequisition') {
-      return json(req, { ok: true, ...(await finalizeRequisition(user.id, String(body.reference || ''))) });
+      return json(req, { ok: true, ...(await finalizeRequisition(user.id, String(body.code || ''), String(body.state || ''))) });
     }
 
     const organizationId = String(body.organizationId || '');
     const role = await requireOrganizationAccess(user.id, organizationId);
 
     if (action === 'listInstitutions') {
-      return json(req, { ok: true, institutions: await listInstitutions(String(body.country || '') || GOCARDLESS_COUNTRY) });
+      return json(req, { ok: true, institutions: await listInstitutions(String(body.country || '') || EB_COUNTRY) });
     }
 
     if (!['owner', 'admin', 'member'].includes(role)) throw new HttpError('Geen schrijfrechten voor deze organisatie.', 403);
@@ -83,26 +83,34 @@ serve(async (req) => {
   }
 });
 
-// ── GoCardless client ──────────────────────────────────────────────────────
+// ── Enable Banking client (JWT RS256 + REST) ────────────────────────────────
 
-async function gcToken(): Promise<string> {
-  if (!GOCARDLESS_SECRET_ID || !GOCARDLESS_SECRET_KEY) {
-    throw new HttpError('GOCARDLESS_SECRET_ID/GOCARDLESS_SECRET_KEY ontbreken in de Edge Function secrets.', 500);
+let cachedJwt: { token: string; exp: number } | null = null;
+async function ebJwt(): Promise<string> {
+  if (!EB_APP_ID || !EB_PRIVATE_KEY) {
+    throw new HttpError('ENABLEBANKING_APP_ID/ENABLEBANKING_PRIVATE_KEY ontbreken in de Edge Function secrets.', 500);
   }
-  const res = await fetch(`${GOCARDLESS_BASE_URL}/token/new/`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ secret_id: GOCARDLESS_SECRET_ID, secret_key: GOCARDLESS_SECRET_KEY }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.access) {
-    throw new HttpError(`GoCardless-authenticatie mislukt (${res.status}). Controleer de credentials.`, 502);
+  const now = Math.floor(Date.now() / 1000);
+  if (cachedJwt && cachedJwt.exp - 60 > now) return cachedJwt.token;
+  const exp = now + 3600;
+  const header = { typ: 'JWT', alg: 'RS256', kid: EB_APP_ID };
+  const payload = { iss: 'enablebanking.com', aud: 'api.enablebanking.com', iat: now, exp };
+  const signingInput = `${b64urlStr(JSON.stringify(header))}.${b64urlStr(JSON.stringify(payload))}`;
+  let key: CryptoKey;
+  try {
+    key = await crypto.subtle.importKey('pkcs8', pemToDer(EB_PRIVATE_KEY), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
+  } catch {
+    throw new HttpError('ENABLEBANKING_PRIVATE_KEY kon niet worden gelezen (verwacht een PKCS#8 PEM-sleutel).', 500);
   }
-  return data.access as string;
+  const sig = new Uint8Array(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(signingInput)));
+  const token = `${signingInput}.${b64url(sig)}`;
+  cachedJwt = { token, exp };
+  return token;
 }
 
-async function gc(path: string, token: string, init?: RequestInit): Promise<any> {
-  const res = await fetch(`${GOCARDLESS_BASE_URL}${path}`, {
+async function eb(path: string, init?: RequestInit): Promise<any> {
+  const token = await ebJwt();
+  const res = await fetch(`${EB_BASE_URL}${path}`, {
     ...init,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json', ...(init?.headers || {}) },
   });
@@ -110,9 +118,9 @@ async function gc(path: string, token: string, init?: RequestInit): Promise<any>
   let data: any = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
   if (!res.ok) {
-    const detail = data?.detail || data?.summary || (Array.isArray(data?.institution_id) ? data.institution_id.join(' ') : '') || text.slice(0, 200);
-    const err = new HttpError(`GoCardless-fout (${res.status}): ${detail || 'onbekend'}`, res.status === 401 ? 401 : 502);
-    (err as any).gcStatus = res.status;
+    const detail = data?.message || data?.detail || data?.error || text.slice(0, 200);
+    const err = new HttpError(`Enable Banking-fout (${res.status}): ${detail || 'onbekend'}`, res.status === 401 ? 401 : 502);
+    (err as any).ebStatus = res.status;
     throw err;
   }
   return data;
@@ -121,44 +129,49 @@ async function gc(path: string, token: string, init?: RequestInit): Promise<any>
 // ── Acties ───────────────────────────────────────────────────────────────
 
 async function listInstitutions(country: string): Promise<unknown[]> {
-  const token = await gcToken();
-  const list = await gc(`/institutions/?country=${encodeURIComponent(country)}`, token);
-  const institutions = (Array.isArray(list) ? list : []).map((i: any) => ({
-    id: i.id, name: i.name, bic: i.bic ?? null, logo: i.logo ?? null, transaction_total_days: Number(i.transaction_total_days) || null,
+  const data = await eb(`/aspsps?country=${encodeURIComponent(country)}`);
+  const aspsps = Array.isArray(data?.aspsps) ? data.aspsps : [];
+  return aspsps.map((a: any) => ({
+    id: a.name, name: a.name, bic: a.bic ?? null, logo: a.logo ?? null,
+    transaction_total_days: Number(a.maximum_consent_validity) || null,
   }));
-  return [...institutions, SANDBOX_INSTITUTION];
 }
 
 async function createRequisition(req: Request, userId: string, organizationId: string, body: Record<string, unknown>) {
-  const institutionId = String(body.institutionId || '').trim();
-  const institutionName = body.institutionName ? String(body.institutionName) : null;
+  const aspspName = String(body.institutionId || '').trim(); // Enable Banking gebruikt de naam als id
+  const institutionName = body.institutionName ? String(body.institutionName) : aspspName;
   const redirectUrl = String(body.redirectUrl || '').trim();
-  if (!institutionId) throw new HttpError('Kies een bank.', 400);
+  if (!aspspName) throw new HttpError('Kies een bank.', 400);
   assertRedirectAllowed(req, redirectUrl);
 
-  const token = await gcToken();
-  const reference = crypto.randomUUID();
-  const requisition = await gc('/requisitions/', token, {
+  const state = crypto.randomUUID();
+  const validUntil = new Date(Date.now() + EB_CONSENT_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const auth = await eb('/auth', {
     method: 'POST',
-    body: JSON.stringify({ redirect: redirectUrl, institution_id: institutionId, reference, user_language: 'NL' }),
+    body: JSON.stringify({
+      access: { valid_until: validUntil },
+      aspsp: { name: aspspName, country: EB_COUNTRY },
+      redirect_url: redirectUrl,
+      state,
+      psu_type: EB_PSU_TYPE,
+    }),
   });
-  if (!requisition?.id || !requisition?.link) throw new HttpError('GoCardless gaf geen geldige koppel-link terug.', 502);
+  if (!auth?.url) throw new HttpError('Enable Banking gaf geen koppel-link terug.', 502);
 
-  const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
   const { error } = await supabaseAdmin.from('bank_requisitions').insert({
-    organization_id: organizationId, created_by: userId, provider: 'gocardless',
-    institution_id: institutionId, institution_name: institutionName, reference,
-    requisition_id: requisition.id, link: requisition.link, status: 'created', expires_at: expiresAt,
+    organization_id: organizationId, created_by: userId, provider: 'enablebanking',
+    institution_id: aspspName, institution_name: institutionName, institution_country: EB_COUNTRY,
+    reference: state, link: auth.url, status: 'created', expires_at: validUntil,
   });
   if (error) throw new HttpError(`Kon de koppeling niet vastleggen: ${error.message}`, 500);
 
-  return { link: requisition.link as string, reference };
+  return { link: auth.url as string, reference: state };
 }
 
-async function finalizeRequisition(userId: string, reference: string) {
-  if (!reference) throw new HttpError('Ontbrekende referentie.', 400);
+async function finalizeRequisition(userId: string, code: string, state: string) {
+  if (!code || !state) throw new HttpError('Ontbrekende autorisatiecode of state.', 400);
   const { data: reqRow, error: reqErr } = await supabaseAdmin
-    .from('bank_requisitions').select('*').eq('reference', reference).limit(1).maybeSingle();
+    .from('bank_requisitions').select('*').eq('reference', state).limit(1).maybeSingle();
   if (reqErr) throw new HttpError(`Requisition-lookup mislukt: ${reqErr.message}`, 500);
   if (!reqRow) throw new HttpError('Koppeling niet gevonden.', 404);
 
@@ -166,55 +179,57 @@ async function finalizeRequisition(userId: string, reference: string) {
   const role = await requireOrganizationAccess(userId, organizationId);
   if (!['owner', 'admin', 'member'].includes(role)) throw new HttpError('Geen schrijfrechten voor deze organisatie.', 403);
 
-  const token = await gcToken();
-  const requisition = await gc(`/requisitions/${reqRow.requisition_id}/`, token);
-  const status = String(requisition?.status || '');
-  const accountIds: string[] = Array.isArray(requisition?.accounts) ? requisition.accounts : [];
-
-  if (status !== 'LN' || accountIds.length === 0) {
-    // CR/GC/UA/RJ/EX etc.: nog niet gekoppeld of geweigerd.
-    const mapped = status === 'EX' ? 'expired' : status === 'RJ' ? 'error' : 'created';
-    await supabaseAdmin.from('bank_requisitions').update({ status: mapped, error: status }).eq('id', reqRow.id);
-    return { status: mapped, linked: 0, imported: 0 };
+  let session: any;
+  try {
+    session = await eb('/sessions', { method: 'POST', body: JSON.stringify({ code }) });
+  } catch (e) {
+    await supabaseAdmin.from('bank_requisitions').update({ status: 'error', error: describeError(e) }).eq('id', reqRow.id);
+    throw e;
   }
 
-  // Bepaal de grootboek-bankrekening (1100) waar nieuwe rekeningen op boeken.
-  const ledgerAccountId = await defaultBankLedgerAccount(organizationId);
+  const rawAccounts: any[] = Array.isArray(session?.accounts) ? session.accounts : [];
+  const sessionId = session?.session_id || null;
+  if (rawAccounts.length === 0) {
+    await supabaseAdmin.from('bank_requisitions').update({ status: 'error', error: 'Geen rekeningen ontvangen.' }).eq('id', reqRow.id);
+    return { status: 'error', linked: 0, imported: 0 };
+  }
 
+  const ledgerAccountId = await defaultBankLedgerAccount(organizationId);
+  const accountUids: string[] = [];
   let linked = 0;
-  for (const accountId of accountIds) {
-    let iban: string | null = null;
+
+  for (const acc of rawAccounts) {
+    const uid = typeof acc === 'string' ? acc : acc?.uid;
+    if (!uid) continue;
+    accountUids.push(uid);
+
+    let iban: string | null = (typeof acc === 'object' ? (acc?.account_id?.iban || acc?.iban) : null) || null;
     let name = reqRow.institution_name || 'Bankrekening';
     try {
-      const meta = await gc(`/accounts/${accountId}/`, token);
-      iban = meta?.iban ?? null;
-      try {
-        const details = await gc(`/accounts/${accountId}/details/`, token);
-        name = details?.account?.name || details?.account?.ownerName || (iban ? `${reqRow.institution_name || 'Bank'} ${iban.slice(-4)}` : name);
-      } catch { /* details optioneel */ }
-    } catch { /* metadata optioneel */ }
+      const details = await eb(`/accounts/${uid}/details`);
+      iban = iban || details?.account_id?.iban || details?.iban || null;
+      name = details?.name || details?.product || (iban ? `${reqRow.institution_name || 'Bank'} ${iban.slice(-4)}` : name);
+    } catch { /* details optioneel */ }
 
-    // Bestaat de rekening al (her-koppeling), werk dan alleen de metadata + consent bij —
-    // NIET de grootboekrekening, zodat een eerder door de gebruiker gekozen mapping blijft.
     const { data: existing } = await supabaseAdmin.from('bank_accounts').select('id')
-      .eq('organization_id', organizationId).eq('external_account_id', accountId).limit(1).maybeSingle();
+      .eq('organization_id', organizationId).eq('external_account_id', uid).limit(1).maybeSingle();
     if (existing) {
       const { error: updErr } = await supabaseAdmin.from('bank_accounts').update({
-        name, iban, provider: 'gocardless', source: 'gocardless', bank_requisition_id: reqRow.id, is_active: true,
+        name, iban, provider: 'enablebanking', source: 'enablebanking', bank_requisition_id: reqRow.id, is_active: true,
       }).eq('id', existing.id);
       if (!updErr) linked += 1;
     } else {
       const { error: insErr } = await supabaseAdmin.from('bank_accounts').insert({
         organization_id: organizationId, created_by: userId, name, iban, currency: 'EUR',
-        ledger_account_id: ledgerAccountId, source: 'gocardless', provider: 'gocardless',
-        external_account_id: accountId, bank_requisition_id: reqRow.id, is_active: true,
+        ledger_account_id: ledgerAccountId, source: 'enablebanking', provider: 'enablebanking',
+        external_account_id: uid, bank_requisition_id: reqRow.id, is_active: true,
       });
       if (!insErr) linked += 1;
     }
   }
 
   await supabaseAdmin.from('bank_requisitions').update({
-    status: 'linked', accounts: accountIds, linked_at: new Date().toISOString(), error: null,
+    status: 'linked', requisition_id: sessionId, accounts: accountUids, linked_at: new Date().toISOString(), error: null,
   }).eq('id', reqRow.id);
 
   const synced = await syncAccounts(organizationId, null);
@@ -224,27 +239,38 @@ async function finalizeRequisition(userId: string, reference: string) {
 
 async function syncAccounts(organizationId: string, bankAccountId: string | null) {
   let query = supabaseAdmin.from('bank_accounts').select('*')
-    .eq('organization_id', organizationId).eq('source', 'gocardless').eq('is_active', true);
+    .eq('organization_id', organizationId).eq('source', 'enablebanking').eq('is_active', true);
   if (bankAccountId) query = query.eq('id', bankAccountId);
   const { data: accounts, error } = await query;
   if (error) throw new HttpError(`Bankrekeningen ophalen mislukt: ${error.message}`, 500);
   if (!accounts || accounts.length === 0) return { results: [], needsReconsent: false };
 
-  const token = await gcToken();
   const results: Array<{ bankAccountId: string; inserted: number; skipped: number; error?: string }> = [];
   let needsReconsent = false;
 
   for (const acc of accounts) {
     if (!acc.external_account_id) { results.push({ bankAccountId: acc.id, inserted: 0, skipped: 0, error: 'geen extern account-id' }); continue; }
-    const since = acc.last_synced_at ? new Date(new Date(acc.last_synced_at).getTime() - 7 * 24 * 60 * 60 * 1000) : new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const since = acc.last_synced_at
+      ? new Date(new Date(acc.last_synced_at).getTime() - 7 * 24 * 60 * 60 * 1000)
+      : new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
     const dateFrom = since.toISOString().slice(0, 10);
     try {
-      const resp = await gc(`/accounts/${acc.external_account_id}/transactions/?date_from=${dateFrom}`, token);
-      const booked: any[] = resp?.transactions?.booked ?? [];
-      const txns = booked.map(mapGoCardlessTransaction).filter((t) => t.booking_date && t.amount_cents !== 0);
+      const raw: any[] = [];
+      let continuationKey: string | null = null;
+      let guard = 0;
+      do {
+        const qs = `?date_from=${dateFrom}` + (continuationKey ? `&continuation_key=${encodeURIComponent(continuationKey)}` : '');
+        const resp = await eb(`/accounts/${acc.external_account_id}/transactions${qs}`);
+        const batch = Array.isArray(resp?.transactions) ? resp.transactions : [];
+        raw.push(...batch);
+        continuationKey = resp?.continuation_key || null;
+        guard += 1;
+      } while (continuationKey && guard < 25);
+
+      const txns = raw.map(mapEbTransaction).filter((t) => t.booking_date && t.amount_cents !== 0);
       const dates = txns.map((t) => t.booking_date).sort();
       const statement = {
-        format: 'gocardless', file_name: null, file_hash: null,
+        format: 'enablebanking', file_name: null, file_hash: null,
         period_start: dates[0] ?? null, period_end: dates[dates.length - 1] ?? null,
         opening_balance_cents: null, closing_balance_cents: null,
       };
@@ -259,8 +285,8 @@ async function syncAccounts(organizationId: string, bankAccountId: string | null
       await supabaseAdmin.from('bank_accounts').update({ last_synced_at: new Date().toISOString() }).eq('id', acc.id);
       results.push({ bankAccountId: acc.id, inserted, skipped });
     } catch (e) {
-      const gcStatus = (e as any)?.gcStatus;
-      if (gcStatus === 401 || gcStatus === 403) {
+      const ebStatus = (e as any)?.ebStatus;
+      if (ebStatus === 401 || ebStatus === 403) {
         needsReconsent = true;
         if (acc.bank_requisition_id) await supabaseAdmin.from('bank_requisitions').update({ status: 'expired' }).eq('id', acc.bank_requisition_id);
       }
@@ -272,37 +298,50 @@ async function syncAccounts(organizationId: string, bankAccountId: string | null
 
 // ── Mapping + helpers ──────────────────────────────────────────────────────
 
-function mapGoCardlessTransaction(tx: any) {
-  const amountStr = tx?.transactionAmount?.amount ?? '0';
-  const cents = Math.round((parseFloat(amountStr) || 0) * 100);
-  const id = tx?.transactionId || tx?.internalTransactionId || null;
-  const bookingDate = (tx?.bookingDate || tx?.bookingDateTime || tx?.valueDate || '').slice(0, 10) || null;
-  const valueDate = (tx?.valueDate || tx?.valueDateTime || '').slice(0, 10) || null;
+function mapEbTransaction(tx: any) {
+  const magnitude = Math.abs(Math.round((parseFloat(tx?.transaction_amount?.amount ?? '0') || 0) * 100));
+  const indicator = String(tx?.credit_debit_indicator || '').toUpperCase();
+  const cents = indicator === 'DBIT' ? -magnitude : magnitude;
+  const id = tx?.entry_reference || tx?.transaction_id || null;
+  const bookingDate = (tx?.booking_date || tx?.value_date || '').slice(0, 10) || null;
+  const valueDate = (tx?.value_date || '').slice(0, 10) || null;
   const incoming = cents > 0;
-  const counterpartyName = (incoming ? tx?.debtorName : tx?.creditorName) || null;
-  const counterpartyIban = (incoming ? tx?.debtorAccount?.iban : tx?.creditorAccount?.iban) || null;
-  const remittance = tx?.remittanceInformationUnstructured
-    || (Array.isArray(tx?.remittanceInformationUnstructuredArray) ? tx.remittanceInformationUnstructuredArray.join(' ') : '')
-    || tx?.additionalInformation || '';
-  const endToEnd = tx?.endToEndId && tx.endToEndId !== 'NOTPROVIDED' ? tx.endToEndId : null;
-  const dedupKey = id ? `tx:${id}` : `gc:${cyrb53(`${bookingDate}|${cents}|${counterpartyIban || ''}|${remittance}`)}`;
+  const counterpartyName = (incoming ? tx?.debtor?.name : tx?.creditor?.name) || null;
+  const counterpartyIban = (incoming ? tx?.debtor_account?.iban : tx?.creditor_account?.iban) || null;
+  const remittance = Array.isArray(tx?.remittance_information)
+    ? tx.remittance_information.filter(Boolean).join(' ').trim()
+    : (tx?.remittance_information || '');
+  const dedupKey = id ? `eb:${id}` : `eb:${cyrb53(`${bookingDate}|${cents}|${counterpartyIban || ''}|${remittance}`)}`;
   return {
     dedup_key: dedupKey, booking_date: bookingDate, value_date: valueDate, amount_cents: cents,
-    currency: tx?.transactionAmount?.currency || 'EUR', counterparty_name: counterpartyName,
+    currency: tx?.transaction_amount?.currency || 'EUR', counterparty_name: counterpartyName,
     counterparty_iban: counterpartyIban, description: remittance || null, structured_reference: null,
-    end_to_end_id: endToEnd, bank_tx_id: id,
+    end_to_end_id: null, bank_tx_id: id,
   };
 }
 
 async function defaultBankLedgerAccount(organizationId: string): Promise<string> {
-  // Eerst de systeem-bankrekening (subtype 'bank'), anders code 1100.
-  const { data } = await supabaseAdmin.from('ledger_accounts').select('id,code,subtype')
-    .eq('organization_id', organizationId).in('code', ['1100']).limit(1);
   const { data: bySubtype } = await supabaseAdmin.from('ledger_accounts').select('id')
     .eq('organization_id', organizationId).eq('subtype', 'bank').limit(1);
-  const id = bySubtype?.[0]?.id || data?.[0]?.id;
+  const { data: byCode } = await supabaseAdmin.from('ledger_accounts').select('id')
+    .eq('organization_id', organizationId).eq('code', '1100').limit(1);
+  const id = bySubtype?.[0]?.id || byCode?.[0]?.id;
   if (!id) throw new HttpError('Geen bank-grootboekrekening (1100) gevonden. Richt eerst je rekeningschema in.', 422);
   return id as string;
+}
+
+function b64url(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlStr(str: string): string { return b64url(new TextEncoder().encode(str)); }
+function pemToDer(pem: string): Uint8Array {
+  const body = pem.replace(/-----BEGIN [^-]+-----/, '').replace(/-----END [^-]+-----/, '').replace(/\s+/g, '');
+  const bin = atob(body);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 function cyrb53(str: string, seed = 0): string {
@@ -378,4 +417,5 @@ function parseAllowedOrigins(values: Array<string | null | undefined>): string[]
 }
 function isUuid(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
 function describeError(error: unknown): string { if (error instanceof Error) return error.message; try { return JSON.stringify(error); } catch { return String(error); } }
+function parsePositiveInt(value: string | null | undefined, fallback: number): number { const n = Number.parseInt(String(value ?? ''), 10); return Number.isFinite(n) && n > 0 ? n : fallback; }
 function requiredEnv(name: string): string { const value = Deno.env.get(name); if (!value) throw new Error(`Missing required env var: ${name}`); return value; }

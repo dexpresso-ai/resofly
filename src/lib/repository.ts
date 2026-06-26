@@ -893,9 +893,9 @@ export const selectBankRequisitions = (organizationId: UUID) =>
   selectOptional<BankRequisition>('bank_requisitions', organizationId, { orderBy: 'created_at', ascending: false, hint: BANKFEED_MIGRATION_HINT });
 
 /**
- * GoCardless-koppeling (PSD2) — alles loopt via de `bank-sync` Edge Function zodat de
- * secret_id/secret_key nooit in de browser staan. De functie haalt zelf een access
- * token op, praat met GoCardless en schrijft via de service-role naar de database.
+ * Directe PSD2-koppeling (Enable Banking) — alles loopt via de `bank-sync` Edge
+ * Function zodat de private sleutel nooit in de browser staat. De functie signeert
+ * zelf een JWT, praat met de provider en schrijft via de service-role naar de database.
  */
 async function invokeBankSync<T>(action: string, organizationId: UUID, payload: Record<string, unknown> = {}): Promise<T> {
   const { data, error } = await supabase.functions.invoke('bank-sync', {
@@ -924,9 +924,13 @@ export async function createBankRequisition(
   });
 }
 
-/** Rondt de koppeling af na de redirect: koppelt de rekeningen en synchroniseert. */
-export async function finalizeBankRequisition(organizationId: UUID, reference: string): Promise<{ status: string; linked: number; imported: number }> {
-  return invokeBankSync('finalizeRequisition', organizationId, { reference });
+/**
+ * Rondt de koppeling af na de redirect: wisselt de autorisatiecode in, koppelt de
+ * rekeningen en synchroniseert. `state` is onze referentie (de bank geeft hem samen
+ * met `code` terug op de redirect); daaruit leidt de server de organisatie af.
+ */
+export async function finalizeBankRequisition(organizationId: UUID, input: { code: string; state: string }): Promise<{ status: string; linked: number; imported: number }> {
+  return invokeBankSync('finalizeRequisition', organizationId, { code: input.code, state: input.state });
 }
 
 /** Haalt nieuwe transacties op voor één of alle gekoppelde rekeningen. */

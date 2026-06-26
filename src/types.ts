@@ -964,7 +964,7 @@ export interface VatReturn {
 // ---------------------------------------------------------------------------
 // Bankfeed: bankrekeningen, transacties en regels (automatisch journaliseren).
 // ---------------------------------------------------------------------------
-export type BankAccountSource = 'import' | 'gocardless';
+export type BankAccountSource = 'import' | 'gocardless' | 'enablebanking';
 export type BankStatementFormat = 'camt053' | 'mt940' | 'csv' | 'gocardless';
 export type BankTransactionStatus = 'unmatched' | 'suggested' | 'booked' | 'ignored';
 export type BankRuleDirection = 'in' | 'out' | 'both';
@@ -988,9 +988,10 @@ export interface BankAccount extends OrgScopedRow {
 }
 
 export interface BankRequisition extends OrgScopedRow {
-  provider: 'gocardless';
+  provider: 'gocardless' | 'enablebanking';
   institution_id: string;
   institution_name: string | null;
+  institution_country: string | null;
   reference: string;
   requisition_id: string | null;
   link: string | null;
@@ -1003,7 +1004,7 @@ export interface BankRequisition extends OrgScopedRow {
   updated_at: string;
 }
 
-/** Bank zoals GoCardless die teruggeeft bij de bankkiezer. */
+/** Bank (ASPSP) zoals de provider die teruggeeft bij de bankkiezer. */
 export interface BankInstitution {
   id: string;
   name: string;
