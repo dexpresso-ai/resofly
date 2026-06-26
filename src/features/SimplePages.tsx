@@ -638,6 +638,10 @@ export function Settings({
   const selectedPlanIsSelfService = selfServiceBillingPlans.some(plan => plan.plan_key === selectedPlan);
   const hasPendingCheckout = billingOverview ? ['open', 'pending', 'authorized'].includes(billingOverview.payment_status) : false;
   const isBillingExempt = !!seatOverview?.billing_exempt;
+  // Een écht lopend Mollie-abonnement vereist een subscription-id. subscription_status
+  // staat bij een nieuwe org standaard al op 'active' (licentiemodel), dus daar kunnen
+  // we niet op gaten — anders denkt de UI dat er al een abonnement is.
+  const hasMollieSubscription = !!billingOverview?.mollie_subscription_id;
   const hasAvailableLicense = isBillingExempt || (seatOverview ? seatOverview.available_seats > 0 : true);
   const inviteDisabled = !canAdminOrganization || !activeOrganization || !inviteEmail.trim() || !hasAvailableLicense;
 
@@ -1335,7 +1339,7 @@ export function Settings({
         </div>
         {canAdminOrganization && <div className="billing-actions">
           <Button onClick={refreshBilling} disabled={billingBusy === 'refresh'}>{billingBusy === 'refresh' ? 'Verversen…' : 'Billing verversen'}</Button>
-          {!isBillingExempt && billingOverview?.subscription_status !== 'active' && <Button variant="primary" onClick={startSubscription} disabled={billingBusy === 'connect'}>{billingBusy === 'connect' ? 'Bezig…' : 'Abonnement starten'}</Button>}
+          {!isBillingExempt && !hasMollieSubscription && <Button variant="primary" onClick={startSubscription} disabled={billingBusy === 'connect'}>{billingBusy === 'connect' ? 'Bezig…' : 'Abonnement starten'}</Button>}
         </div>}
       </div>
 
@@ -1387,11 +1391,11 @@ export function Settings({
 {canAdminOrganization && !isBillingExempt && <div className="billing-control-row">
           <div>
             <strong>Extra gebruiker toevoegen</strong>
-            <p className="settings-help">{billingOverview.subscription_status === 'active'
+            <p className="settings-help">{hasMollieSubscription
               ? 'Voegt direct een extra seat toe en past het maandbedrag van je abonnement aan.'
               : 'Start eerst een abonnement; daarna kun je extra gebruikers toevoegen.'}</p>
           </div>
-          <Button variant="primary" onClick={buyExtraSeat} disabled={billingBusy === 'seat' || billingOverview.subscription_status !== 'active'}>{billingBusy === 'seat' ? 'Bezig…' : 'Extra gebruiker toevoegen'}</Button>
+          <Button variant="primary" onClick={buyExtraSeat} disabled={billingBusy === 'seat' || !hasMollieSubscription}>{billingBusy === 'seat' ? 'Bezig…' : 'Extra gebruiker toevoegen'}</Button>
         </div>}
 
         {canAdminOrganization && lastMockPaymentId && <div className="billing-control-row mock-row">
@@ -1405,7 +1409,7 @@ export function Settings({
 {canAdminOrganization && !isBillingExempt && <div className="billing-control-row">
           <div>
             <strong>Plan wijzigen</strong>
-            <p className="settings-help">{billingOverview.subscription_status === 'active'
+            <p className="settings-help">{hasMollieSubscription
               ? 'Past het maandbedrag van je lopende abonnement direct aan. Custom-plannen blijven handmatig.'
               : 'Kies een plan en start het abonnement via een Mollie-checkout. Custom-plannen blijven handmatig.'}</p>
           </div>
@@ -1413,7 +1417,7 @@ export function Settings({
             {!selectedPlanIsSelfService && <option value={selectedPlan} disabled>{billingOverview.plan_name} · handmatig beheerd</option>}
             {selfServiceBillingPlans.map(plan => <option key={plan.plan_key} value={plan.plan_key}>{plan.name} · {plan.included_seats ?? 'custom'} seats</option>)}
           </Select>
-          <Button onClick={changePlan} disabled={billingBusy === 'plan' || selectedPlan === billingOverview.plan_key || !selectedPlanIsSelfService}>{billingBusy === 'plan' ? 'Bezig…' : (billingOverview.subscription_status === 'active' ? 'Plan wijzigen' : 'Abonnement starten')}</Button>
+          <Button onClick={changePlan} disabled={billingBusy === 'plan' || selectedPlan === billingOverview.plan_key || !selectedPlanIsSelfService}>{billingBusy === 'plan' ? 'Bezig…' : (hasMollieSubscription ? 'Plan wijzigen' : 'Abonnement starten')}</Button>
         </div>}
 
         {customBillingPlans.length > 0 && !isBillingExempt && <div className="billing-control-row">

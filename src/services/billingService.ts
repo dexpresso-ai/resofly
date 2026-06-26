@@ -75,8 +75,24 @@ async function invokeBillingFunction<T>(action: string, payload: Record<string, 
     body: { action, ...payload },
     headers: { Authorization: `Bearer ${sessionData.session.access_token}` },
   });
-  if (error) throw error;
+  if (error) {
+    // supabase-js geeft bij een non-2xx een generieke FunctionsHttpError; de echte
+    // (Nederlandstalige) servermelding zit in de response-body.
+    const serverMessage = await extractFunctionErrorMessage(error);
+    throw new Error(serverMessage || (error instanceof Error ? error.message : 'Billing-actie mislukt.'));
+  }
   if (!data) throw new Error('Geen response van billing-functie ontvangen.');
   if (data.error) throw new Error(data.error);
   return data as T;
+}
+
+async function extractFunctionErrorMessage(error: unknown): Promise<string | null> {
+  const context = (error as { context?: unknown })?.context;
+  if (context && typeof (context as Response).clone === 'function') {
+    try {
+      const body = await (context as Response).clone().json();
+      if (body && typeof body.error === 'string') return body.error;
+    } catch { /* body niet als JSON leesbaar */ }
+  }
+  return null;
 }
