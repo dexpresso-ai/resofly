@@ -215,7 +215,9 @@ function requireRole(role: OrganizationRole, allowed: OrganizationRole[], messag
 }
 
 function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(value);
+  // Standaard UUID-vorm 8-4-4-4-12. (De vorige regex miste een groep en wees daardoor
+  // elke echte UUID af → "Ongeldige organisatie".)
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
 // ---------------------------------------------------------------------------
