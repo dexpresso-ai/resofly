@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import type { DragEvent } from 'react';
 import { ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
@@ -396,6 +396,20 @@ function PlannerSection({ title, mutedText, className, children, onDragOver, onD
   </section>;
 }
 
+/** Voegt (van buitenaf, bijv. door Gerrie) een actiepunt toe aan de checklist van de
+ *  week waar `dateIso` in valt, en seint het paneel om te verversen. */
+export function addWeekChecklistItem(dateIso: string, text: string): void {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  const weekKey = formatISODate(startOfWeek(parseISODate(dateIso)));
+  const storageKey = `resofly-checklist-${weekKey}`;
+  let items: ChecklistItem[] = [];
+  try { items = JSON.parse(localStorage.getItem(storageKey) ?? '[]'); } catch { items = []; }
+  items.push({ id: crypto.randomUUID(), text: trimmed, done: false });
+  localStorage.setItem(storageKey, JSON.stringify(items));
+  window.dispatchEvent(new CustomEvent('resofly-checklist-changed', { detail: { weekKey } }));
+}
+
 function WeekChecklist({ weekKey }: { weekKey: string }) {
   const storageKey = `resofly-checklist-${weekKey}`;
 
@@ -412,6 +426,17 @@ function WeekChecklist({ weekKey }: { weekKey: string }) {
     setItems(load());
     setInput('');
   }
+
+  // Ververs als een actiepunt van buitenaf (bijv. via Gerrie) aan deze week is toegevoegd.
+  useEffect(() => {
+    const onChange = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { weekKey?: string } | undefined;
+      if (!detail || detail.weekKey === weekKey) setItems(load());
+    };
+    window.addEventListener('resofly-checklist-changed', onChange);
+    return () => window.removeEventListener('resofly-checklist-changed', onChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekKey]);
 
   function save(next: ChecklistItem[]) {
     setItems(next);

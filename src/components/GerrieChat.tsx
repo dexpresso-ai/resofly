@@ -48,7 +48,7 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
   onCreateTask?: (proposal: GerrieTaskProposal) => void;
   onEditTask?: (proposal: GerrieEditTaskProposal) => void;
   onCreateCalendarEvent?: (proposal: GerrieCalendarEventProposal) => Promise<void>;
-  onCreateWeekAction?: (proposal: GerrieWeekActionProposal) => void;
+  onCreateWeekAction?: (proposal: GerrieWeekActionProposal) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: nextId(), role: 'assistant', text: INTRO_TEXT }]);
@@ -168,7 +168,7 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
     if (p.type === 'edit_project') return <ProposalCard title="Wijziging project openen & controleren" sub={p.name} onClick={() => onEditProject?.(p)} />;
     if (p.type === 'task') return <ProposalCard title="Taak openen & controleren" sub={`${p.title} · ${p.project_name}`} onClick={() => onCreateTask?.(p)} />;
     if (p.type === 'edit_task') return <ProposalCard title="Wijziging taak openen & controleren" sub={p.title} onClick={() => onEditTask?.(p)} />;
-    if (p.type === 'week_action') return <ProposalCard title="Weekactiepunt openen & controleren" sub={`${p.title} · ${p.planned_date}`} onClick={() => onCreateWeekAction?.(p)} />;
+    if (p.type === 'week_action') return <ConfirmActionCard icon={<CalendarIcon />} title="Actiepunt toevoegen?" sub={`${p.title} · week van ${p.planned_date}`} confirmLabel="Toevoegen" pendingLabel="Toevoegen…" doneLabel={`Actiepunt toegevoegd: ${p.title}`} onConfirm={() => runConfirmed(auditId, () => onCreateWeekAction ? onCreateWeekAction(p) : Promise.reject(new Error('Toevoegen is hier niet beschikbaar.')))} />;
     if (p.type === 'calendar_event') return <ConfirmActionCard icon={<CalendarIcon />} title="Agenda-item aanmaken?" sub={`${p.title} · ${p.date} ${p.start_time}–${p.end_time} · ${p.source_name}`} confirmLabel="Aanmaken" pendingLabel="Aanmaken…" doneLabel={`Agenda-item aangemaakt: ${p.title}`} onConfirm={() => runConfirmed(auditId, () => onCreateCalendarEvent ? onCreateCalendarEvent(p) : Promise.reject(new Error('Aanmaken is hier niet beschikbaar.')))} />;
     if (p.type === 'send_reminders') {
       const byLevel = [1, 2, 3].map((l) => p.invoices.filter((i) => i.level === l).length);

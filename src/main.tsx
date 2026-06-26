@@ -75,7 +75,7 @@ import { ClientPortal } from './features/portal/ClientPortal';
 import { Archive, Settings } from './features/SimplePages';
 import { Statistics } from './features/Statistics';
 import { CalendarPage } from './features/CalendarPage';
-import { WeekPlanner } from './features/WeekPlanner';
+import { WeekPlanner, addWeekChecklistItem } from './features/WeekPlanner';
 import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat } from './components/GerrieChat';
 import { exportFinancePDF } from './lib/pdf';
@@ -1066,22 +1066,9 @@ function App() {
         await createExternalCalendarEvent(activeOrg.id, { sourceId: p.source_id, title: p.title, startsAt, endsAt, description: p.description ?? undefined, location: p.location ?? undefined });
       }}
       onCreateWeekAction={async (p) => {
-        if (!ensureCanWrite()) return;
-        try {
-          // Losse weekactiepunten landen in een standaard "Losse taken"-project (geen klant).
-          let project = data.projects.find((pr) => pr.name.trim().toLowerCase() === 'losse taken' && !pr.archived);
-          if (!project) {
-            project = await insertRow<Project>('projects', activeOrg.id, { name: 'Losse taken', client_id: null, description: 'Losse weekplanner-actiepunten (zonder project).', color: DEFAULT_PROJECT_COLOR, archived: false, start_date: null, end_date: null });
-            await refresh();
-          }
-          setProjectId(project.id); setClientId(null); setPage('project');
-          setEdit({ kind: 'task', item: undefined, projectId: project.id, defaults: {
-            title: p.title, description: p.description ?? undefined, status: p.status as Task['status'], priority: p.priority as Task['priority'],
-            planned_date: p.planned_date, estimated_minutes: p.estimated_minutes,
-          } });
-        } catch (e) {
-          setError(e instanceof Error ? e.message : 'Losse taak voorbereiden mislukt.');
-        }
+        if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+        // Actiepunt op de "Actiepunten deze week"-checklist (browser/localStorage) van de juiste week.
+        addWeekChecklistItem(p.planned_date, p.title);
       }}
     />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
