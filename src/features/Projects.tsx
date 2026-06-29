@@ -566,6 +566,7 @@ export function ProjectPage({
   onRejectQuote,
   onSendQuote,
   onConvertQuoteToInvoice,
+  onDownloadQuotePdf,
   onEditInvoice,
   onNewNote,
   onEditNote,
@@ -590,6 +591,7 @@ export function ProjectPage({
   onRejectQuote: (quote: Quote) => void;
   onSendQuote: (quote: Quote) => void;
   onConvertQuoteToInvoice?: (quote: Quote) => void;
+  onDownloadQuotePdf?: (quote: Quote) => void;
   onEditInvoice: (invoice: Invoice) => void;
   onNewNote: () => void;
   onEditNote: (note: Note) => void;
@@ -873,18 +875,21 @@ export function ProjectPage({
             {canWrite && !project.archived && <Button variant="primary" onClick={onNewQuote}>+ Offerte</Button>}
           </div>
         </div>
-        <div className="client-finance-list">
-          {projectQuotes.length === 0 && <div className="client-empty-line">Nog geen offertes bij dit project. Maak een nieuwe offerte aan.</div>}
-          {projectQuotes.map(quote => {
-            const qt = quote.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0;
-            return <button key={quote.id} type="button" className="client-finance-row" onClick={() => onEditQuote(quote)}>
-              <span className="client-finance-number">{quote.number}</span>
-              <span className="client-finance-meta">{dateNL(quote.date)} · Geldig tot {dateNL(quote.valid_until)}</span>
-              <span className="client-finance-amount">{euro(qt)}</span>
-              <span className={`client-finance-status ${quote.status}`}>{projectQuoteStatusLabels[quote.status] ?? quote.status}</span>
-            </button>;
-          })}
-        </div>
+        <ProjectQuotesPanel
+          data={data}
+          projectId={project.id}
+          canWrite={canWrite}
+          canAdmin={canAdmin}
+          onNewQuote={onNewQuote}
+          onEditQuote={onEditQuote}
+          onSubmitApproval={onSubmitQuoteApproval}
+          onApprove={onApproveQuote}
+          onReject={onRejectQuote}
+          onSend={onSendQuote}
+          onConvertToInvoice={onConvertQuoteToInvoice}
+          onDownloadPdf={onDownloadQuotePdf}
+          hideHeader
+        />
       </article>}
 
       {/* ── Tab: Facturen ── */}

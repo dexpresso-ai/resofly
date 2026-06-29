@@ -813,6 +813,7 @@ export function ProjectQuotesPanel({
   onReject,
   onSend,
   onConvertToInvoice,
+  onDownloadPdf,
   hideHeader = false,
 }: {
   data: AppData;
@@ -826,6 +827,7 @@ export function ProjectQuotesPanel({
   onReject: (quote: Quote) => void;
   onSend: (quote: Quote) => void;
   onConvertToInvoice?: (quote: Quote) => void;
+  onDownloadPdf?: (quote: Quote) => void;
   hideHeader?: boolean;
 }) {
   const quotes = data.quotes.filter(quote => quote.project_id === projectId);
@@ -842,7 +844,7 @@ export function ProjectQuotesPanel({
           <div className="project-quote-head" onClick={() => onEditQuote(quote)}><div><strong>{quote.number}</strong><span>{client?.name ?? 'Geen klant'} · {dateNL(quote.date)}</span></div><div><strong>{euro(total(quote.lines).total)}</strong><span>{quoteStatusLabel(quote)}</span></div></div>
           <QuoteProgress quote={quote} compact />
           <QuoteEmailStatus delivery={latestDelivery} quote={quote} />
-          <QuoteActions quote={quote} canWrite={canWrite} canAdmin={canAdmin} linkedInvoice={linkedInvoice} onSubmitApproval={onSubmitApproval} onApprove={onApprove} onReject={onReject} onSend={onSend} onConvertToInvoice={onConvertToInvoice} onEdit={() => onEditQuote(quote)} compact />
+          <QuoteActions quote={quote} canWrite={canWrite} canAdmin={canAdmin} linkedInvoice={linkedInvoice} onSubmitApproval={onSubmitApproval} onApprove={onApprove} onReject={onReject} onSend={onSend} onConvertToInvoice={onConvertToInvoice} onDownloadPdf={onDownloadPdf} onEdit={() => onEditQuote(quote)} compact />
           <QuoteVersions versions={versions} compact />
           <QuoteTimeline events={events} emptyText="Nog geen events." compact />
         </article>;
