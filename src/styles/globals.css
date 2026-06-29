@@ -1371,6 +1371,14 @@ body::before{
   .proj-time-row{grid-template-columns:1fr auto;row-gap:4px}
   .proj-time-desc{grid-column:1 / -1}
 }
+
+/* Uren-indicatie op agenda-items (week/dag-blok, maand-chip, lijst) */
+.tb-ev-track{position:absolute;top:2px;right:3px;display:inline-flex;align-items:center;gap:2px;font-size:9px;font-weight:900;line-height:1.25;padding:1px 4px;border-radius:6px;background:rgba(0,0,0,.34);color:#fff;pointer-events:none}
+.tb-ev-track svg{flex:0 0 auto}
+.tb-ev-tight .tb-ev-track{font-size:0;padding:2px;gap:0}
+.tb-ev-tight .tb-ev-track svg{width:9px;height:9px}
+.month-chip-track{display:inline-flex;align-items:center;gap:2px;font-style:normal;font-size:9px;font-weight:900;opacity:.85;margin-left:4px}
+.event-log-time-btn{margin-top:10px}
 .finance-editor-layout{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,.92fr);gap:18px;align-items:start;padding:18px}.finance-editor-layout>.finance-form-pane{min-width:0}.finance-editor-layout .finance-editor{padding:0}
 /* De formulierkolom is in de tweekoloms-layout ~halve breedte; gebruik daarom altijd de compacte
    veld- en regel-indeling zodat niets horizontaal uit de kolom puilt en onder de preview belandt. */

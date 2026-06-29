@@ -26,6 +26,7 @@ import { supabase } from '../lib/supabase';
 import type { CalendarAppPassword, EventRecurrence, RecurrenceFrequency } from '../types';
 import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, Client, Note, NoteCalendarLink, Project, Task, UUID } from '../types';
 import { getNoteTypeLabel } from './Notes';
+import { TimeEntryModal } from './TimeTracking';
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
 
@@ -421,11 +422,12 @@ function layoutTimedEventsForDay(
   return { segments: raw.filter(s => s.column < MAX_OVERLAP_COLS), overflows };
 }
 
-function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent }: {
+function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent }: {
   days: Date[];
   events: CalendarExternalEvent[];
   tasks: Task[];
   sourceColors: Map<string, string>;
+  trackedMinutesFor: (event: CalendarExternalEvent) => number | null;
   canWrite: boolean;
   writeableSources: CalendarSource[];
   onSelectSlot: (day: Date, startSlot: number, endSlot: number) => void;
@@ -625,8 +627,9 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
                     const visibleDuration = segment.endMinute - segment.startMinute;
                     const densityClass = visibleDuration < 30 ? ' tb-ev-tight' : visibleDuration < 60 ? ' tb-ev-compact' : ' tb-ev-roomy';
                     const eventMeta = [providerLabel(ev.provider), ev.source_name, ev.location].filter(Boolean).join(' · ');
+                    const trackedMin = trackedMinutesFor(ev);
                     return (
-                      <button type="button" className={`tb-ev${densityClass}${ev.visibility === 'private' ? ' tb-ev-priv' : ''}`} key={`${ev.provider}-${ev.provider_event_id}-${di}`}
+                      <button type="button" className={`tb-ev${densityClass}${ev.visibility === 'private' ? ' tb-ev-priv' : ''}${trackedMin != null ? ' tb-ev-tracked' : ''}`} key={`${ev.provider}-${ev.provider_event_id}-${di}`}
                         onClick={() => onOpenEvent(ev)}
                         style={{
                           ...eventColorStyle(eventColor(ev)),
@@ -635,7 +638,8 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
                           left: `calc(${left}% + 2px)`,
                           right: `calc(${right}% + 2px)`,
                         }}
-                        title={`${visualTime}\n${ev.title}\n${eventMeta}`}>
+                        title={`${visualTime}\n${ev.title}\n${eventMeta}${trackedMin != null ? `\n${formatMinutes(trackedMin)} geregistreerd` : ''}`}>
+                        {trackedMin != null && <span className="tb-ev-track" title={`${formatMinutes(trackedMin)} geregistreerd`}><Clock size={10} />{formatMinutes(trackedMin)}</span>}
                         <span className="tb-ev-time">{visualTime}</span>
                         <span className="tb-ev-title">{ev.title}</span>
                         <span className="tb-ev-src">{eventMeta}</span>
@@ -666,13 +670,14 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, canWrite, writeableS
 
 /* ── Month view ───────────────────────────────────────────────────────── */
 
-function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, onEditTask, onOpenDay, onOpenEvent }: {
+function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, trackedMinutesFor, onEditTask, onOpenDay, onOpenEvent }: {
   days: Date[];
   anchor: Date;
   events: CalendarExternalEvent[];
   tasks: Task[];
   data: AppData;
   sourceColors: Map<string, string>;
+  trackedMinutesFor: (event: CalendarExternalEvent) => number | null;
   onEditTask: (task: Task) => void;
   onOpenDay: (day: Date) => void;
   onOpenEvent: (event: CalendarExternalEvent) => void;
@@ -714,6 +719,7 @@ function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, on
                   >
                     <span>{formatTime(item.ev.starts_at, item.ev.all_day)}</span>
                     <strong>{item.ev.title}</strong>
+                    {trackedMinutesFor(item.ev) != null && <em className="month-chip-track"><Clock size={9} />{formatMinutes(trackedMinutesFor(item.ev)!)}</em>}
                   </button>
                 ) : (
                   <button className="month-chip task" key={item.task.id} onClick={() => onEditTask(item.task)} title={item.task.title}>
@@ -794,7 +800,7 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
 }
 
 
-function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNote, onNewDocument, onSetEventLink, onEditNote, onLinkExistingNote, onUnlinkNote, onEditEvent, onDeleteEvent, onClose }: {
+function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNote, onNewDocument, onSetEventLink, onLogTime, onEditNote, onLinkExistingNote, onUnlinkNote, onEditEvent, onDeleteEvent, onClose }: {
   event: CalendarExternalEvent | null;
   data: AppData;
   sourceColors: Map<string, string>;
@@ -802,6 +808,7 @@ function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNo
   onNewNote: (event: CalendarExternalEvent) => void;
   onNewDocument: (event: CalendarExternalEvent) => void;
   onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null, trackTime?: boolean) => void | Promise<void>;
+  onLogTime: (event: CalendarExternalEvent) => void;
   onEditNote: (note: Note) => void;
   onLinkExistingNote: (noteId: UUID, event: CalendarExternalEvent) => void | Promise<void>;
   onUnlinkNote: (linkId: UUID) => void | Promise<void>;
@@ -916,6 +923,11 @@ function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNo
               </div>
             );
           })()}
+          {canWrite && !event.all_day && (
+            <button type="button" className="btn btn-ghost event-log-time-btn" onClick={() => { onClose(); onLogTime(event); }}>
+              <Clock size={13} /> Uren loggen
+            </button>
+          )}
         </section>
 
         <section className="event-notes-panel">
@@ -1077,9 +1089,10 @@ function PhoneCalendarCard({ organizationId }: { organizationId: UUID }) {
 
 /* ── Main CalendarPage ───────────────────────────────────────────────── */
 
-export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, data, canWrite, onEditTask, onNewNoteForEvent, onNewDocumentForEvent, onSetEventLink, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
+export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, data, canWrite, onChanged, onEditTask, onNewNoteForEvent, onNewDocumentForEvent, onSetEventLink, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
   mode?: 'agenda' | 'settings';
   organizationId: UUID; currentUserId: UUID | null; data: AppData; canWrite: boolean; onEditTask: (task: Task) => void;
+  onChanged: () => void | Promise<void>;
   onNewNoteForEvent: (event: CalendarExternalEvent) => void;
   onNewDocumentForEvent: (event: CalendarExternalEvent) => void;
   onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null, trackTime?: boolean) => void | Promise<void>;
@@ -1126,6 +1139,35 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     () => new Map(integrations.sources.map(s => [s.id, normalizeHexColor(s.color)])),
     [integrations.sources],
   );
+
+  // Agenda-item dat snel gelogd wordt (handmatige urenpost vanuit de afspraak).
+  const [logTimeEvent, setLogTimeEvent] = useState<CalendarExternalEvent | null>(null);
+
+  // Geregistreerde minuten per agenda-item: koppel time_entries via hun
+  // calendar_event_link_id aan de eventidentiteit, zodat de blokken de uren tonen.
+  const trackedMinutesByEvent = useMemo(() => {
+    const minutesByLink = new Map<string, number>();
+    for (const te of data.timeEntries) if (te.calendar_event_link_id) minutesByLink.set(te.calendar_event_link_id, te.minutes);
+    const map = new Map<string, number>();
+    for (const link of data.calendarEventLinks) {
+      if (!link.track_time) continue;
+      const mins = minutesByLink.get(link.id);
+      if (mins == null) continue;
+      map.set(`${link.provider}|${link.calendar_source_id}|${link.provider_event_id}|${new Date(link.event_starts_at).getTime()}`, mins);
+    }
+    return map;
+  }, [data.timeEntries, data.calendarEventLinks]);
+  const trackedMinutesFor = useCallback(
+    (event: CalendarExternalEvent): number | null =>
+      trackedMinutesByEvent.get(`${event.provider}|${event.source_id}|${event.provider_event_id}|${new Date(event.starts_at).getTime()}`) ?? null,
+    [trackedMinutesByEvent],
+  );
+
+  // Opent de uren-modal voorgevuld met de klant/het project en de duur van de afspraak.
+  const openLogTimeForEvent = useCallback((event: CalendarExternalEvent) => {
+    setSelectedEvent(null);
+    setLogTimeEvent(event);
+  }, []);
 
   useEffect(() => { void refreshAll(); }, [organizationId, mode]); // eslint-disable-line
   useEffect(() => { if (mode === 'agenda') void refreshEventsOnly(); }, [rangeStart, rangeEnd, mode]); // eslint-disable-line
@@ -1559,10 +1601,10 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
 
       {view === 'day' || view === 'week' ? (
         <TimeBlockGrid days={days} events={events} tasks={data.tasks.filter(t => t.status !== 'done')}
-          sourceColors={sourceColors} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} />
+          sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} />
       ) : view === 'month' ? (
         <CalendarMonthView days={days} anchor={anchor} events={events} tasks={data.tasks.filter(t => t.status !== 'done')} data={data}
-          sourceColors={sourceColors} onEditTask={onEditTask} onOpenDay={openDay} onOpenEvent={setSelectedEvent} />
+          sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} onEditTask={onEditTask} onOpenDay={openDay} onOpenEvent={setSelectedEvent} />
       ) : (
         <div className="calendar-week-grid calendar-list-grid">
           {days.map(day => {
@@ -1578,7 +1620,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
                   key={`${ev.provider}-${ev.provider_event_id}-${ev.starts_at}`} onClick={() => setSelectedEvent(ev)}
                   style={eventColorStyle(sourceColors.get(ev.source_id))}>
                   <span className="calendar-item-time">{formatTime(ev.starts_at, ev.all_day)}{!ev.all_day ? ` – ${formatTime(ev.ends_at)}` : ''}</span><strong>{ev.title}</strong>
-                  <small>{providerLabel(ev.provider)} · {ev.source_name}{ev.visibility === 'private' ? ' · privé' : ' · team'}</small>
+                  <small>{providerLabel(ev.provider)} · {ev.source_name}{ev.visibility === 'private' ? ' · privé' : ' · team'}{trackedMinutesFor(ev) != null ? ` · ⏱ ${formatMinutes(trackedMinutesFor(ev)!)}` : ''}</small>
                 </button>)}
                 {dt.length === 0 && de.length === 0 && <div className="calendar-no-items">Geen items</div>}
               </div>
@@ -1632,6 +1674,28 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       selectedSourceIsNative={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider === 'native'}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => { setShowCreatePanel(false); setEditingOriginal(null); }} />}
 
-    <CalendarEventDetailPanel event={selectedEvent} data={data} sourceColors={sourceColors} canWrite={canWrite} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onEditEvent={startEditEvent} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
+    <CalendarEventDetailPanel event={selectedEvent} data={data} sourceColors={sourceColors} canWrite={canWrite} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onLogTime={openLogTimeForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onEditEvent={startEditEvent} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
+
+    {logTimeEvent && (() => {
+      const link = data.calendarEventLinks.find(l => calendarEventLinkMatchesEvent(l, logTimeEvent)) ?? null;
+      const minutes = logTimeEvent.all_day ? 60 : Math.max(0, Math.round((new Date(logTimeEvent.ends_at).getTime() - new Date(logTimeEvent.starts_at).getTime()) / 60000));
+      const orgVisible = logTimeEvent.visibility === 'organization' && !logTimeEvent.is_private_masked;
+      return (
+        <TimeEntryModal
+          organizationId={organizationId}
+          data={data}
+          entry={null}
+          defaults={{
+            projectId: link?.project_id ?? null,
+            clientId: link?.client_id ?? null,
+            date: dateKeyFromValue(logTimeEvent.starts_at),
+            minutes: minutes > 0 ? minutes : 60,
+            description: orgVisible ? logTimeEvent.title : '',
+          }}
+          onClose={() => setLogTimeEvent(null)}
+          onSaved={onChanged}
+        />
+      );
+    })()}
   </div>;
 }

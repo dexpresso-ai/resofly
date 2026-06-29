@@ -75,7 +75,7 @@ export function TimeEntryModal({ organizationId, data, entry, defaults, onClose,
   organizationId: UUID;
   data: AppData;
   entry: TimeEntry | null;
-  defaults?: { projectId?: string | null; clientId?: string | null; date?: string };
+  defaults?: { projectId?: string | null; clientId?: string | null; date?: string; minutes?: number; description?: string };
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
@@ -83,9 +83,9 @@ export function TimeEntryModal({ organizationId, data, entry, defaults, onClose,
   const [clientId, setClientId] = useState(entry?.client_id ?? defaults?.clientId ?? '');
   const [projectId, setProjectId] = useState(entry?.project_id ?? defaults?.projectId ?? '');
   const [date, setDate] = useState(entry?.entry_date ?? defaults?.date ?? formatISODate(new Date()));
-  const [hours, setHours] = useState(() => (entry ? Math.floor(entry.minutes / 60) : 1));
-  const [minutes, setMinutes] = useState(() => (entry ? entry.minutes % 60 : 0));
-  const [description, setDescription] = useState(entry?.description ?? '');
+  const [hours, setHours] = useState(() => (entry ? Math.floor(entry.minutes / 60) : Math.floor((defaults?.minutes ?? 60) / 60)));
+  const [minutes, setMinutes] = useState(() => (entry ? entry.minutes % 60 : (defaults?.minutes ?? 60) % 60));
+  const [description, setDescription] = useState(entry?.description ?? defaults?.description ?? '');
   const [billable, setBillable] = useState(entry?.billable ?? true);
   // Tarief in euro's voor de invoer; leeg = projecttarief/bedrijfsdefault gebruiken.
   const initialRateCents = entry?.hourly_rate_cents ?? resolveRateCents(data, entry?.project_id ?? defaults?.projectId ?? null);
