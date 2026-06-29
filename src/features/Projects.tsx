@@ -7,7 +7,7 @@ import { RelatedDocuments } from './Documents';
 import { ProjectQuotesPanel } from './Finance';
 import { ProjectTimeline } from './ProjectTimeline';
 import { TimeEntryModal, timeEntryValueCents } from './TimeTracking';
-import { deleteTimeEntry } from '../lib/repository';
+import { deleteTimeEntry, updateTimeEntry } from '../lib/repository';
 import { ChevronDown, ChevronRight, Clock, Pencil, Trash2 } from 'lucide-react';
 
 /** Uitklapbare dashboard-sectie */
@@ -622,6 +622,12 @@ export function ProjectPage({
     await onChanged();
   }
 
+  async function toggleTimeEntryBillable(entry: TimeEntry) {
+    if (!canWrite) return;
+    await updateTimeEntry(organizationId, entry.id, { billable: !entry.billable });
+    await onChanged();
+  }
+
   const doneTasks = tasks.filter(t => t.status === 'done').length;
   const progress = tasks.length > 0 ? Math.round((doneTasks / tasks.length) * 100) : 0;
   const openTasks = tasks.filter(t => t.status !== 'done').length;
@@ -718,6 +724,7 @@ export function ProjectPage({
             <div className="client-panel-head"><h3>Projectgegevens</h3></div>
             <dl className="client-info-list">
               <div><dt>Klant</dt><dd>{client?.name ?? '—'}</dd></div>
+              <div><dt>Facturatie</dt><dd>{project.billing_type === 'fixed_price' ? 'Aangenomen prijs' : 'Urenbasis'}{project.billing_type === 'hourly' && project.hourly_rate_cents != null ? ` · ${euro(project.hourly_rate_cents / 100)}/u` : ''}</dd></div>
               <div><dt>Startdatum</dt><dd>{dateNL(project.start_date) || '—'}</dd></div>
               <div><dt>Einddatum</dt><dd>{dateNL(project.end_date) || '—'}</dd></div>
               <div><dt>Aangemaakt</dt><dd>{dateNL(project.created_at)}</dd></div>
@@ -913,6 +920,9 @@ export function ProjectPage({
             {canWrite && !project.archived && <Button variant="primary" onClick={() => setTimeModal({ entry: null })}><Clock size={14} /> Uren loggen</Button>}
           </div>
         </div>
+        {project.billing_type === 'fixed_price'
+          ? <p className="settings-help" style={{ margin: '0 0 10px' }}>Aangenomen-prijs-project: uren worden geregistreerd voor inzicht, maar staan standaard niet-declarabel — factureren loopt via offerte/factuur.</p>
+          : <p className="settings-help" style={{ margin: '0 0 10px' }}>Urenbasis-project: geregistreerde uren zijn declarabel en vormen de factuurbasis.</p>}
         <div className="proj-time-list">
           {projectTimeEntries.length === 0 && <div className="client-empty-line">Nog geen uren op dit project. Koppel een afspraak in de agenda of log handmatig uren.</div>}
           {projectTimeEntries.map(entry => {
@@ -924,7 +934,7 @@ export function ProjectPage({
                 <span className="proj-time-dur">{formatMinutes(entry.minutes)}</span>
                 <span className="proj-time-desc">{entry.description || (entry.source === 'calendar' ? 'Agenda-afspraak' : 'Registratie')}</span>
                 <span className={`tt-source-badge tt-source-${entry.source}`}>{entry.source === 'calendar' ? 'Agenda' : entry.source === 'timer' ? 'Timer' : 'Handmatig'}</span>
-                <span className={`proj-time-billable${entry.billable ? ' is-billable' : ''}`}>{entry.billable ? 'Declarabel' : 'Niet decl.'}</span>
+                <button type="button" className={`tt-billable-pill${entry.billable ? ' is-billable' : ''}`} disabled={!canWrite} onClick={() => toggleTimeEntryBillable(entry)} title="Declarabel aan/uit">{entry.billable ? 'Declarabel' : 'Niet decl.'}</button>
                 <span className="proj-time-value">{value > 0 ? euro(value / 100) : '—'}</span>
                 <span className="proj-time-actions">
                   {editable && <button type="button" className="icon-btn" onClick={() => setTimeModal({ entry })} title="Bewerken"><Pencil size={14} /></button>}

@@ -221,8 +221,9 @@ export interface ContractVersion {
 export interface Client extends OrgScopedRow {
   name: string; client_code: string | null; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; color: string; status: ClientStatus; tags: string[]; follow_up: string | null; value_eur: number; created_at: string; updated_at: string;
 }
+export type ProjectBillingType = 'hourly' | 'fixed_price';
 export interface Project extends OrgScopedRow {
-  client_id: UUID | null; name: string; description: string | null; color: string; archived: boolean; start_date: string | null; end_date: string | null; contract_id: UUID | null; hourly_rate_cents: number | null; created_at: string; updated_at: string;
+  client_id: UUID | null; name: string; description: string | null; color: string; archived: boolean; start_date: string | null; end_date: string | null; contract_id: UUID | null; hourly_rate_cents: number | null; billing_type: ProjectBillingType; created_at: string; updated_at: string;
 }
 export interface Subtask { id: UUID; label: string; done: boolean; }
 export interface Comment { id: UUID; text: string; author?: string; created_at: string; }

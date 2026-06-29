@@ -30,6 +30,16 @@ export function resolveRateCents(data: AppData, projectId: string | null): numbe
   return project?.hourly_rate_cents ?? data.companySettings?.default_hourly_rate_cents ?? null;
 }
 
+/**
+ * Standaard declarabel-stand voor een project: urenbasis-projecten zijn declarabel,
+ * aangenomen-prijs-projecten ('fixed_price') worden via offerte/factuur afgerekend
+ * en komen dus standaard niet-declarabel binnen. Zonder project: declarabel.
+ */
+export function defaultBillableForProject(data: AppData, projectId: string | null): boolean {
+  const project = projectId ? data.projects.find(p => p.id === projectId) : null;
+  return project ? project.billing_type !== 'fixed_price' : true;
+}
+
 const SOURCE_LABEL: Record<TimeEntrySource, string> = { calendar: 'Agenda', manual: 'Handmatig', timer: 'Timer' };
 
 /* ── Gedeelde klant/project-keuze ─────────────────────────────────────── */
@@ -86,7 +96,8 @@ export function TimeEntryModal({ organizationId, data, entry, defaults, onClose,
   const [hours, setHours] = useState(() => (entry ? Math.floor(entry.minutes / 60) : Math.floor((defaults?.minutes ?? 60) / 60)));
   const [minutes, setMinutes] = useState(() => (entry ? entry.minutes % 60 : (defaults?.minutes ?? 60) % 60));
   const [description, setDescription] = useState(entry?.description ?? defaults?.description ?? '');
-  const [billable, setBillable] = useState(entry?.billable ?? true);
+  const [billable, setBillable] = useState(entry ? entry.billable : defaultBillableForProject(data, defaults?.projectId ?? null));
+  const [billableTouched, setBillableTouched] = useState(false);
   // Tarief in euro's voor de invoer; leeg = projecttarief/bedrijfsdefault gebruiken.
   const initialRateCents = entry?.hourly_rate_cents ?? resolveRateCents(data, entry?.project_id ?? defaults?.projectId ?? null);
   const [rateEuro, setRateEuro] = useState(initialRateCents != null ? String(initialRateCents / 100) : '');
@@ -101,6 +112,12 @@ export function TimeEntryModal({ organizationId, data, entry, defaults, onClose,
     const r = resolveRateCents(data, projectId || null);
     setRateEuro(r != null ? String(r / 100) : '');
   }, [projectId, editing, rateTouched, data]);
+
+  // Declarabel-default meeschuiven met het projecttype, zolang niet handmatig gewijzigd.
+  useEffect(() => {
+    if (editing || billableTouched) return;
+    setBillable(defaultBillableForProject(data, projectId || null));
+  }, [projectId, editing, billableTouched, data]);
 
   async function submit(e?: FormEvent) {
     e?.preventDefault();
@@ -151,7 +168,7 @@ export function TimeEntryModal({ organizationId, data, entry, defaults, onClose,
           <label>Uurtarief (€)<Input type="number" min={0} step="0.01" value={rateEuro} placeholder="Geen tarief"
             onChange={e => { setRateEuro(e.target.value); setRateTouched(true); }} /></label>
           <label className="check-row" style={{ alignSelf: 'end' }}>
-            <input type="checkbox" checked={billable} onChange={e => setBillable(e.target.checked)} /> Declarabel
+            <input type="checkbox" checked={billable} onChange={e => { setBillable(e.target.checked); setBillableTouched(true); }} /> Declarabel
           </label>
         </div>
       </form>
@@ -202,6 +219,7 @@ function TimerCard({ organizationId, data, storageKey, onSaved }: {
         project_id: running.projectId || null, client_id: running.clientId || null, source: 'timer',
         description: running.description.trim() || null, entry_date: formatISODate(started),
         started_at: running.startedAt, ended_at: ended.toISOString(), minutes,
+        billable: defaultBillableForProject(data, running.projectId || null),
         hourly_rate_cents: resolveRateCents(data, running.projectId || null),
       });
       persist(null);
