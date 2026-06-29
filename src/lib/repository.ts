@@ -54,6 +54,7 @@ import type {
   NoteCalendarLink,
   CalendarEventLink,
   CalendarEventLinkInput,
+  TimeEntry,
   Organization,
   OrganizationContext,
   OrganizationInvitation,
@@ -318,6 +319,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     documents,
     noteCalendarLinks,
     calendarEventLinks,
+    timeEntries,
     quotes,
     quoteApprovalEvents,
     quoteEmailDeliveries,
@@ -351,7 +353,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     companySettings,
   ] = await Promise.all([
     select<Client>('clients', organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
-    selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectCalendarEventLinks(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
+    selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectCalendarEventLinks(organizationId), selectTimeEntries(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId),
     selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId), selectFixedAssets(organizationId), selectAssetDepreciations(organizationId), selectVatReturns(organizationId),
@@ -361,7 +363,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectSavedReports(organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, savedReports, companySettings };
+  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, savedReports, companySettings };
 }
 
 const SAVED_REPORTS_MIGRATION_HINT =
@@ -750,9 +752,12 @@ export async function upsertCalendarEventLink(organizationId: UUID, input: Calen
       provider_calendar_id: input.provider_calendar_id ?? null,
       provider_event_id: input.provider_event_id,
       event_starts_at: input.event_starts_at,
+      event_ends_at: input.event_ends_at ?? null,
+      event_all_day: input.event_all_day ?? false,
       event_title_snapshot: input.event_title_snapshot ?? null,
       client_id: input.client_id,
       project_id: input.project_id,
+      track_time: input.track_time ?? true,
     }, { onConflict: 'organization_id,provider,calendar_source_id,provider_event_id,event_starts_at' })
     .select('*')
     .single();
@@ -765,6 +770,79 @@ export async function deleteCalendarEventLink(linkId: UUID, organizationId: UUID
     .from('calendar_event_links')
     .delete()
     .eq('id', linkId)
+    .eq('organization_id', organizationId);
+  if (error) throw error;
+}
+
+const TIME_TRACKING_MIGRATION_HINT =
+  'Voer de migratie 20260629000000_time_tracking.sql uit in Supabase om de urenregistratie te activeren.';
+
+export async function selectTimeEntries(organizationId: UUID): Promise<TimeEntry[]> {
+  return selectOptional<TimeEntry>('time_entries', organizationId, {
+    orderBy: 'entry_date', ascending: false, hint: TIME_TRACKING_MIGRATION_HINT,
+  });
+}
+
+export interface TimeEntryInput {
+  project_id: UUID | null;
+  client_id: UUID | null;
+  source?: 'manual' | 'timer';
+  description?: string | null;
+  entry_date: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  minutes: number;
+  billable?: boolean;
+  hourly_rate_cents?: number | null;
+}
+
+/** Maakt een handmatige/timer-urenpost aan, toegerekend aan de ingelogde gebruiker. */
+export async function createTimeEntry(organizationId: UUID, input: TimeEntryInput): Promise<TimeEntry> {
+  const userId = await currentUserId();
+  const { data, error } = await supabase
+    .from('time_entries')
+    .insert({
+      organization_id: organizationId,
+      created_by: userId,
+      user_id: userId,
+      project_id: input.project_id,
+      client_id: input.client_id,
+      source: input.source ?? 'manual',
+      description: input.description ?? null,
+      entry_date: input.entry_date,
+      started_at: input.started_at ?? null,
+      ended_at: input.ended_at ?? null,
+      minutes: input.minutes,
+      billable: input.billable ?? true,
+      hourly_rate_cents: input.hourly_rate_cents ?? null,
+    })
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as TimeEntry;
+}
+
+export async function updateTimeEntry(
+  organizationId: UUID,
+  id: UUID,
+  patch: Partial<Pick<TimeEntry, 'project_id' | 'client_id' | 'description' | 'entry_date' | 'started_at' | 'ended_at' | 'minutes' | 'billable' | 'hourly_rate_cents'>>,
+): Promise<TimeEntry> {
+  const { data, error } = await supabase
+    .from('time_entries')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('organization_id', organizationId)
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as TimeEntry;
+}
+
+export async function deleteTimeEntry(organizationId: UUID, id: UUID): Promise<void> {
+  const { error } = await supabase
+    .from('time_entries')
+    .delete()
+    .eq('id', id)
     .eq('organization_id', organizationId);
   if (error) throw error;
 }

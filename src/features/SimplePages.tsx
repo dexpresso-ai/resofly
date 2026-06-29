@@ -48,6 +48,7 @@ const emptySettings: CompanySettingsInput = {
   bookkeeping_start_date: null,
   kor_enabled: false,
   vat_return_period: 'quarterly',
+  default_hourly_rate_cents: null,
 };
 
 const ROLE_LABELS: Record<OrganizationRole, string> = {
@@ -1321,11 +1322,21 @@ export function Settings({
             <option value="monthly">Maandelijks</option>
           </select>
         </label>
+        <label className="bk-setting-field"><span>Standaard uurtarief (€)</span>
+          <Input type="number" min="0" step="0.01"
+            value={form.default_hourly_rate_cents != null ? String(form.default_hourly_rate_cents / 100) : ''}
+            onChange={e => {
+              const v = e.target.value.replace(',', '.').trim();
+              set('default_hourly_rate_cents', v === '' ? null : Math.max(0, Math.round(Number(v) * 100)));
+            }}
+            placeholder="Geen tarief" disabled={!canAdminOrganization} />
+        </label>
         <label className="bk-setting-check">
           <input type="checkbox" checked={Boolean(form.kor_enabled)} onChange={e=>set('kor_enabled', e.target.checked)} disabled={!canAdminOrganization} />
           <span>KOR (kleineondernemersregeling) actief</span>
         </label>
       </div>
+      <p className="settings-help">Het standaard uurtarief wordt gebruikt om de declarabele waarde van geregistreerde uren te berekenen wanneer een project geen eigen tarief heeft.</p>
     </section>
     </div>}
 
@@ -1649,6 +1660,7 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     bookkeeping_start_date: settings.bookkeeping_start_date ?? null,
     kor_enabled: settings.kor_enabled ?? false,
     vat_return_period: settings.vat_return_period ?? 'quarterly',
+    default_hourly_rate_cents: settings.default_hourly_rate_cents ?? null,
   };
 }
 

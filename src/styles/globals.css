@@ -1277,6 +1277,100 @@ body::before{
 /* Finance editor refinement: brede offerte-popup, duidelijke datums en offerteregels */
 .modal.modal-finance-editor{width:min(1480px,calc(100vw - 48px));max-width:calc(100vw - 48px);max-height:92vh;overflow:hidden;display:flex;flex-direction:column;border-radius:28px;background:linear-gradient(145deg,rgba(255,255,255,.078),rgba(255,255,255,.018)),rgba(15,15,15,.96);box-shadow:0 28px 96px rgba(0,0,0,.62)}
 .modal.modal-finance-editor .modal-head{padding:20px 24px;background:rgba(14,14,14,.92);backdrop-filter:blur(18px);flex:0 0 auto}.modal.modal-finance-editor .modal-head h3{font-size:19px;font-weight:950;letter-spacing:-.045em}.modal.modal-finance-editor .modal-body{padding:0;overflow:auto;flex:1}.modal.modal-finance-editor .modal-foot{padding:16px 24px;background:rgba(14,14,14,.92);backdrop-filter:blur(18px);flex:0 0 auto}
+
+/* ── Urenregistratie ───────────────────────────────────────────────────── */
+/* Generieke ronde icoonknop (bewerken/verwijderen) */
+.icon-btn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:9px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+.icon-btn:hover{color:var(--text);background:var(--bg3)}
+.icon-btn.danger:hover{color:var(--accent-r);border-color:rgba(255,123,123,.4)}
+
+/* Tel-mee-toggle in de agenda */
+.track-time-row span{display:inline-flex;align-items:center;gap:6px}
+.event-track-time{margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.event-track-time-amount{font-size:12px;font-weight:800;color:var(--accent)}
+
+/* Bron-badge + declarabel-pil (gedeeld door uren-dashboard en projecttab) */
+.tt-source-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.06em;padding:3px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted);white-space:nowrap}
+.tt-source-calendar{color:var(--accent);border-color:rgba(255,189,89,.32);background:rgba(255,189,89,.1)}
+.tt-source-timer{color:var(--accent-v);border-color:rgba(187,162,255,.32);background:rgba(187,162,255,.1)}
+.tt-billable-pill{border:1px solid var(--border);background:transparent;color:var(--muted);border-radius:999px;padding:3px 10px;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap}
+.tt-billable-pill.is-billable{color:var(--accent-g);border-color:rgba(110,231,168,.3);background:rgba(110,231,168,.1)}
+.tt-billable-pill:disabled{cursor:default}
+
+.time-tracking-page{display:flex;flex-direction:column;gap:16px}
+.tt-hero{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.tt-hero-text h2{margin:0 0 4px;font-size:clamp(24px,3vw,34px);letter-spacing:-.045em}
+.tt-hero-text p{margin:0;color:var(--muted2);max-width:560px;line-height:1.55}
+.tt-hero-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.tt-period-tabs{display:inline-flex;background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:3px}
+.tt-period-tab{border:0;background:transparent;color:var(--muted);padding:7px 13px;border-radius:9px;font-weight:800;font-size:13px;cursor:pointer;transition:background .15s,color .15s}
+.tt-period-tab.active{background:var(--accent);color:#1a1200}
+.tt-scope-tog{display:inline-flex;border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.tt-scope-tog button{border:0;background:transparent;color:var(--muted);padding:7px 13px;font-weight:800;font-size:13px;cursor:pointer}
+.tt-scope-tog button.active{background:var(--bg3);color:var(--text)}
+.tt-custom-range{display:flex;gap:12px;flex-wrap:wrap}
+.tt-custom-range label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);font-weight:700}
+
+.tt-timer-card{border:1px solid var(--border);border-radius:16px;background:var(--bg2);padding:14px}
+.tt-timer-idle{display:flex;flex-direction:column;gap:10px}
+.tt-timer-head{display:flex;align-items:center;gap:8px}
+.tt-timer-head h3{margin:0;font-size:15px;letter-spacing:-.02em}
+.tt-timer-running{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.tt-timer-clock{font-size:30px;font-weight:900;font-variant-numeric:tabular-nums;letter-spacing:-.02em;color:var(--accent)}
+.tt-timer-meta{display:flex;flex-direction:column;gap:2px;flex:1;min-width:140px}
+.tt-timer-meta strong{font-size:15px}
+.tt-timer-meta span{color:var(--muted);font-size:13px}
+
+.tt-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+.tt-kpi{border:1px solid var(--border);border-radius:14px;background:var(--bg2);padding:14px;display:flex;flex-direction:column;gap:4px}
+.tt-kpi-val{font-size:22px;font-weight:900;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.tt-kpi-lbl{font-size:12px;color:var(--muted);font-weight:700}
+
+.tt-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.tt-list-panel{display:flex;flex-direction:column;gap:12px}
+.tt-filters{display:flex;gap:10px;flex-wrap:wrap}
+.tt-filters .select-control{min-width:150px}
+.tt-empty{color:var(--muted);padding:22px;text-align:center}
+.tt-day-group{display:flex;flex-direction:column}
+.tt-day-head{display:flex;align-items:center;justify-content:space-between;padding:10px 2px 6px;margin-top:6px;border-bottom:1px solid var(--border)}
+.tt-day-head strong{font-size:14px;letter-spacing:-.02em}
+.tt-day-head span{color:var(--accent);font-weight:800;font-variant-numeric:tabular-nums}
+.tt-entry-list{display:flex;flex-direction:column}
+.tt-entry-row{display:grid;grid-template-columns:62px minmax(0,1fr) auto auto 76px auto;gap:12px;align-items:center;padding:10px 4px;border-bottom:1px solid rgba(255,255,255,.06)}
+.tt-entry-dur{font-weight:900;font-variant-numeric:tabular-nums}
+.tt-entry-main{display:flex;flex-direction:column;min-width:0}
+.tt-entry-main strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tt-entry-sub{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tt-entry-value{font-weight:800;font-variant-numeric:tabular-nums;text-align:right}
+.tt-entry-actions{display:flex;gap:4px}
+
+.time-entry-form{display:flex;flex-direction:column;gap:12px}
+.time-entry-form>label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted);font-weight:700}
+.time-duration-fields{display:flex;gap:8px}
+.time-duration-fields label{flex:1;display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted);font-weight:700}
+
+/* Uren-tab op het projectdashboard */
+.proj-time-list{display:flex;flex-direction:column}
+.proj-time-row{display:grid;grid-template-columns:92px 60px minmax(0,1fr) auto auto 72px auto;gap:12px;align-items:center;padding:10px 2px;border-bottom:1px solid rgba(255,255,255,.06)}
+.proj-time-date{color:var(--muted);font-size:13px;white-space:nowrap}
+.proj-time-dur{font-weight:900;font-variant-numeric:tabular-nums}
+.proj-time-desc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.proj-time-billable{font-size:11px;font-weight:800;color:var(--muted);white-space:nowrap}
+.proj-time-billable.is-billable{color:var(--accent-g)}
+.proj-time-value{font-weight:800;text-align:right;font-variant-numeric:tabular-nums}
+.proj-time-actions{display:flex;gap:4px}
+
+@media(max-width:900px){
+  .tt-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .tt-charts{grid-template-columns:1fr}
+}
+@media(max-width:760px){
+  .tt-entry-row{grid-template-columns:56px minmax(0,1fr) auto;grid-row-gap:6px}
+  .tt-entry-row .tt-source-badge,.tt-entry-row .tt-billable-pill{grid-column:2}
+  .tt-entry-value{grid-column:3}
+  .proj-time-row{grid-template-columns:1fr auto;row-gap:4px}
+  .proj-time-desc{grid-column:1 / -1}
+}
 .finance-editor-layout{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,.92fr);gap:18px;align-items:start;padding:18px}.finance-editor-layout>.finance-form-pane{min-width:0}.finance-editor-layout .finance-editor{padding:0}
 /* De formulierkolom is in de tweekoloms-layout ~halve breedte; gebruik daarom altijd de compacte
    veld- en regel-indeling zodat niets horizontaal uit de kolom puilt en onder de preview belandt. */

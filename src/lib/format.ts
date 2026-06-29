@@ -21,6 +21,20 @@ export const dateNL = (date?: string | null) => {
 
 export const uid = () => crypto.randomUUID();
 
+/** Minuten → korte leesbare duur, bijv. "1u 30m", "45m", "2u". */
+export const formatMinutes = (minutes: number | null | undefined): string => {
+  const m = Math.max(0, Math.round(Number(minutes ?? 0)));
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  if (h === 0) return `${rem}m`;
+  if (rem === 0) return `${h}u`;
+  return `${h}u ${rem}m`;
+};
+
+/** Minuten → decimale uren afgerond op 2 decimalen (bijv. 90 → 1.5). */
+export const minutesToHours = (minutes: number | null | undefined): number =>
+  Math.round((Number(minutes ?? 0) / 60) * 100) / 100;
+
 // `total` blijft de publieke API voor de hele app, maar rekent nu cent-exact en
 // per btw-tarief via de centrale geldmodule. Subtotaal + btw sluit gegarandeerd
 // aan op het totaal, en `total.total` is identiek aan wat naar Mollie gaat.

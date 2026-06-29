@@ -222,7 +222,7 @@ export interface Client extends OrgScopedRow {
   name: string; client_code: string | null; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; color: string; status: ClientStatus; tags: string[]; follow_up: string | null; value_eur: number; created_at: string; updated_at: string;
 }
 export interface Project extends OrgScopedRow {
-  client_id: UUID | null; name: string; description: string | null; color: string; archived: boolean; start_date: string | null; end_date: string | null; contract_id: UUID | null; created_at: string; updated_at: string;
+  client_id: UUID | null; name: string; description: string | null; color: string; archived: boolean; start_date: string | null; end_date: string | null; contract_id: UUID | null; hourly_rate_cents: number | null; created_at: string; updated_at: string;
 }
 export interface Subtask { id: UUID; label: string; done: boolean; }
 export interface Comment { id: UUID; text: string; author?: string; created_at: string; }
@@ -251,9 +251,13 @@ export interface CalendarEventLink extends OrgScopedRow {
   provider_calendar_id: string | null;
   provider_event_id: string;
   event_starts_at: string;
+  event_ends_at: string | null;
+  event_all_day: boolean;
   event_title_snapshot: string | null;
   client_id: UUID | null;
   project_id: UUID | null;
+  /** Telt dit gekoppelde agenda-item mee voor de urenregistratie? Standaard aan. */
+  track_time: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -263,9 +267,37 @@ export interface CalendarEventLinkInput {
   provider_calendar_id?: string | null;
   provider_event_id: string;
   event_starts_at: string;
+  event_ends_at?: string | null;
+  event_all_day?: boolean;
   event_title_snapshot?: string | null;
   client_id: UUID | null;
   project_id: UUID | null;
+  track_time?: boolean;
+}
+
+export type TimeEntrySource = 'manual' | 'calendar' | 'timer';
+
+/**
+ * Geregistreerde uren. Enige bron van waarheid voor het uren-dashboard en de
+ * uren-stat op het project. Posten met source='calendar' worden server-side
+ * afgeleid/gesynchroniseerd uit een calendar_event_link (DB-trigger) en zijn in
+ * de UI alleen-lezen; 'manual' en 'timer' maakt de gebruiker zelf aan.
+ */
+export interface TimeEntry extends OrgScopedRow {
+  user_id: UUID;
+  project_id: UUID | null;
+  client_id: UUID | null;
+  source: TimeEntrySource;
+  calendar_event_link_id: UUID | null;
+  description: string | null;
+  entry_date: string;
+  started_at: string | null;
+  ended_at: string | null;
+  minutes: number;
+  billable: boolean;
+  hourly_rate_cents: number | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface NoteCalendarLink extends OrgScopedRow {
@@ -1138,6 +1170,8 @@ export interface CompanySettings extends OrgScopedRow {
   bookkeeping_start_date: string | null;
   kor_enabled: boolean;
   vat_return_period: VatReturnPeriodType;
+  /** Bedrijfsbreed standaard uurtarief (centen) — fallback als een project geen eigen tarief heeft. */
+  default_hourly_rate_cents: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -1193,7 +1227,7 @@ export interface SavedReport extends OrgScopedRow {
   updated_at: string;
 }
 
-export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; savedReports: SavedReport[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; savedReports: SavedReport[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft' | 'native';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';

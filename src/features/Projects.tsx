@@ -1,12 +1,14 @@
 import { useMemo, useRef, useState } from 'react';
-import type { AppData, InternalDocument, Invoice, Note, Project, Quote, Task, TaskStatus } from '../types';
+import type { AppData, InternalDocument, Invoice, Note, Project, Quote, Task, TaskStatus, TimeEntry, UUID } from '../types';
 import { Button, Select } from '../components/Ui';
-import { dateNL, euro, priorityLabel } from '../lib/format';
+import { dateNL, euro, formatMinutes, priorityLabel } from '../lib/format';
 import { RelatedNotes } from './Notes';
 import { RelatedDocuments } from './Documents';
 import { ProjectQuotesPanel } from './Finance';
 import { ProjectTimeline } from './ProjectTimeline';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { TimeEntryModal, timeEntryValueCents } from './TimeTracking';
+import { deleteTimeEntry } from '../lib/repository';
+import { ChevronDown, ChevronRight, Clock, Pencil, Trash2 } from 'lucide-react';
 
 /** Uitklapbare dashboard-sectie */
 function DashboardSection({
@@ -63,7 +65,7 @@ function DashboardSection({
 
 const columns: {key: TaskStatus; label: string}[] = [{key:'todo',label:'Te doen'}, {key:'doing',label:'Bezig'}, {key:'review',label:'Review'}, {key:'done',label:'Klaar'}];
 
-type ProjectTab = 'overview' | 'kanban' | 'quotes' | 'invoices' | 'notes' | 'documents';
+type ProjectTab = 'overview' | 'kanban' | 'quotes' | 'invoices' | 'time' | 'notes' | 'documents';
 
 const projectQuoteStatusLabels: Record<string, string> = {
   draft: 'Concept',
@@ -549,6 +551,8 @@ function ProjectListCard({ project, data, canWrite, onOpen, onEdit }: { project:
 export function ProjectPage({
   data,
   project,
+  organizationId,
+  onChanged,
   canWrite,
   canAdmin,
   onNewTask,
@@ -571,6 +575,8 @@ export function ProjectPage({
 }: {
   data: AppData;
   project: Project;
+  organizationId: UUID;
+  onChanged: () => void | Promise<void>;
   canWrite: boolean;
   canAdmin: boolean;
   onNewTask: () => void;
@@ -594,6 +600,7 @@ export function ProjectPage({
   const dragTaskId = useRef<string | null>(null);
   const [dragOverCol, setDragOverCol] = useState<TaskStatus | null>(null);
   const [activeTab, setActiveTab] = useState<ProjectTab>('overview');
+  const [timeModal, setTimeModal] = useState<{ entry: TimeEntry | null } | null>(null);
 
   const tasks = data.tasks.filter(t => t.project_id === project.id);
   const client = data.clients.find(c => c.id === project.client_id);
@@ -601,6 +608,19 @@ export function ProjectPage({
   const projectDocuments = data.documents.filter(doc => doc.project_id === project.id);
   const projectQuotes = data.quotes.filter(q => q.project_id === project.id);
   const projectInvoices = data.invoices.filter(i => i.project_id === project.id);
+  const projectTimeEntries = useMemo(
+    () => data.timeEntries.filter(t => t.project_id === project.id).sort((a, b) => b.entry_date.localeCompare(a.entry_date)),
+    [data.timeEntries, project.id],
+  );
+  const trackedMinutes = projectTimeEntries.reduce((s, t) => s + t.minutes, 0);
+  const trackedValueCents = projectTimeEntries.reduce((s, t) => s + timeEntryValueCents(t), 0);
+
+  async function removeTimeEntry(entry: TimeEntry) {
+    if (!canWrite) return;
+    if (!confirm('Deze urenregistratie verwijderen?')) return;
+    await deleteTimeEntry(organizationId, entry.id);
+    await onChanged();
+  }
 
   const doneTasks = tasks.filter(t => t.status === 'done').length;
   const progress = tasks.length > 0 ? Math.round((doneTasks / tasks.length) * 100) : 0;
@@ -615,6 +635,7 @@ export function ProjectPage({
     { id: 'kanban', label: 'Kanban', count: openTasks },
     { id: 'quotes', label: 'Offertes', count: projectQuotes.length },
     { id: 'invoices', label: 'Facturen', count: projectInvoices.length },
+    { id: 'time', label: 'Uren', count: projectTimeEntries.length },
     { id: 'notes', label: 'Notities', count: projectNotes.length },
     { id: 'documents', label: 'Documenten', count: projectDocuments.length },
   ];
@@ -659,6 +680,10 @@ export function ProjectPage({
           <button type="button" className="proj-dash-stat proj-dash-stat-btn" onClick={() => switchTab('invoices')}>
             <span className="proj-dash-stat-val">{projectInvoices.length > 0 ? euro(invoiceTotal) : '—'}</span>
             <span className="proj-dash-stat-lbl">Gefactureerd</span>
+          </button>
+          <button type="button" className="proj-dash-stat proj-dash-stat-btn" onClick={() => switchTab('time')}>
+            <span className="proj-dash-stat-val">{trackedMinutes > 0 ? formatMinutes(trackedMinutes) : '—'}</span>
+            <span className="proj-dash-stat-lbl">Uren</span>
           </button>
           <div className="proj-dash-stat proj-dash-stat-progress">
             <div className="proj-dash-progress-bar">
@@ -879,6 +904,38 @@ export function ProjectPage({
         </div>
       </article>}
 
+      {/* ── Tab: Uren ── */}
+      {activeTab === 'time' && <article className="client-panel">
+        <div className="client-panel-head">
+          <h3>Urenregistratie</h3>
+          <div className="client-panel-head-right">
+            <span>{formatMinutes(trackedMinutes)}{trackedValueCents > 0 ? ` · ${euro(trackedValueCents / 100)}` : ''}</span>
+            {canWrite && !project.archived && <Button variant="primary" onClick={() => setTimeModal({ entry: null })}><Clock size={14} /> Uren loggen</Button>}
+          </div>
+        </div>
+        <div className="proj-time-list">
+          {projectTimeEntries.length === 0 && <div className="client-empty-line">Nog geen uren op dit project. Koppel een afspraak in de agenda of log handmatig uren.</div>}
+          {projectTimeEntries.map(entry => {
+            const value = timeEntryValueCents(entry);
+            const editable = canWrite && entry.source !== 'calendar';
+            return (
+              <div className="proj-time-row" key={entry.id}>
+                <span className="proj-time-date">{dateNL(entry.entry_date)}</span>
+                <span className="proj-time-dur">{formatMinutes(entry.minutes)}</span>
+                <span className="proj-time-desc">{entry.description || (entry.source === 'calendar' ? 'Agenda-afspraak' : 'Registratie')}</span>
+                <span className={`tt-source-badge tt-source-${entry.source}`}>{entry.source === 'calendar' ? 'Agenda' : entry.source === 'timer' ? 'Timer' : 'Handmatig'}</span>
+                <span className={`proj-time-billable${entry.billable ? ' is-billable' : ''}`}>{entry.billable ? 'Declarabel' : 'Niet decl.'}</span>
+                <span className="proj-time-value">{value > 0 ? euro(value / 100) : '—'}</span>
+                <span className="proj-time-actions">
+                  {editable && <button type="button" className="icon-btn" onClick={() => setTimeModal({ entry })} title="Bewerken"><Pencil size={14} /></button>}
+                  {editable && <button type="button" className="icon-btn danger" onClick={() => removeTimeEntry(entry)} title="Verwijderen"><Trash2 size={14} /></button>}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </article>}
+
       {/* ── Tab: Notities ── */}
       {activeTab === 'notes' && <RelatedNotes
         title="Projectnotities"
@@ -900,6 +957,17 @@ export function ProjectPage({
         onEdit={onEditDocument}
         emptyText="Nog geen documenten bij dit project."
       />}
+
+      {timeModal && (
+        <TimeEntryModal
+          organizationId={organizationId}
+          data={data}
+          entry={timeModal.entry}
+          defaults={{ projectId: project.id, clientId: project.client_id }}
+          onClose={() => setTimeModal(null)}
+          onSaved={onChanged}
+        />
+      )}
 
     </div>
   );

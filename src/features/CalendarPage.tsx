@@ -3,7 +3,7 @@ import { CalendarDays, CalendarPlus, ChevronDown, ChevronRight, Clock, ExternalL
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { RichTextExcerpt } from '../components/RichTextEditor';
 import { addDays, DAY_NAMES_NL, formatISODate, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
-import { dateNL } from '../lib/format';
+import { dateNL, formatMinutes } from '../lib/format';
 import {
   createCalendarAppPassword,
   createExternalCalendarEvent,
@@ -72,6 +72,7 @@ const RECURRENCE_LABELS: Record<RecurrenceFrequency, string> = { daily: 'Elke da
 type NewEventState = {
   sourceId: string; title: string; description: string; location: string;
   startsAt: string; endsAt: string; allDay: boolean; clientId: string; projectId: string;
+  trackTime: boolean;
   recurrenceFreq: '' | RecurrenceFrequency; recurrenceUntil: string; editingEventId: string;
 };
 
@@ -780,6 +781,12 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
         <div className="tb-panel-section-label">Koppelen aan</div>
         <ClientProjectPicker clients={clients} projects={projects} clientId={newEvent.clientId} projectId={newEvent.projectId}
           onChange={next => setNewEvent(p => ({ ...p, clientId: next.clientId, projectId: next.projectId }))} />
+        {(newEvent.clientId || newEvent.projectId) && !newEvent.allDay && (
+          <label className="check-row track-time-row">
+            <input type="checkbox" checked={newEvent.trackTime} onChange={e => setNewEvent(p => ({ ...p, trackTime: e.target.checked }))} />
+            <span><Clock size={13} /> Telt mee voor urenregistratie</span>
+          </label>
+        )}
         <Button variant="primary" disabled={loading || !canWrite || !writeableSources.length}>{editing ? 'Wijzigingen opslaan' : 'Afspraak opslaan'}</Button>
       </form>
     </div>
@@ -794,7 +801,7 @@ function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNo
   canWrite: boolean;
   onNewNote: (event: CalendarExternalEvent) => void;
   onNewDocument: (event: CalendarExternalEvent) => void;
-  onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null) => void | Promise<void>;
+  onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null, trackTime?: boolean) => void | Promise<void>;
   onEditNote: (note: Note) => void;
   onLinkExistingNote: (noteId: UUID, event: CalendarExternalEvent) => void | Promise<void>;
   onUnlinkNote: (linkId: UUID) => void | Promise<void>;
@@ -887,7 +894,7 @@ function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNo
               projects={data.projects}
               clientId={eventLink?.client_id ?? ''}
               projectId={eventLink?.project_id ?? ''}
-              onChange={next => onSetEventLink(event, next.clientId || null, next.projectId || null)}
+              onChange={next => onSetEventLink(event, next.clientId || null, next.projectId || null, eventLink?.track_time ?? true)}
             />
           ) : (
             <div className="event-link-readonly">
@@ -896,6 +903,19 @@ function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNo
                 : 'Nog niet gekoppeld aan een klant of project.'}
             </div>
           )}
+          {canAttachNotes && eventLink && (eventLink.client_id || eventLink.project_id) && !event.all_day && (() => {
+            const tracked = data.timeEntries.find(t => t.calendar_event_link_id === eventLink.id) ?? null;
+            return (
+              <div className="event-track-time">
+                <label className="check-row track-time-row">
+                  <input type="checkbox" checked={eventLink.track_time}
+                    onChange={e => onSetEventLink(event, eventLink.client_id, eventLink.project_id, e.target.checked)} />
+                  <span><Clock size={13} /> Telt mee voor urenregistratie</span>
+                </label>
+                {eventLink.track_time && tracked && <span className="event-track-time-amount">{formatMinutes(tracked.minutes)} geregistreerd</span>}
+              </div>
+            );
+          })()}
         </section>
 
         <section className="event-notes-panel">
@@ -1062,7 +1082,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   organizationId: UUID; currentUserId: UUID | null; data: AppData; canWrite: boolean; onEditTask: (task: Task) => void;
   onNewNoteForEvent: (event: CalendarExternalEvent) => void;
   onNewDocumentForEvent: (event: CalendarExternalEvent) => void;
-  onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null) => void | Promise<void>;
+  onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null, trackTime?: boolean) => void | Promise<void>;
   onEditNote: (note: Note) => void;
   onLinkExistingNoteToEvent: (noteId: UUID, event: CalendarExternalEvent) => void | Promise<void>;
   onUnlinkNoteFromEvent: (linkId: UUID) => void | Promise<void>;
@@ -1081,8 +1101,11 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   const [newEvent, setNewEvent] = useState(() => {
     const s = new Date(); s.setMinutes(0, 0, 0); s.setHours(s.getHours() + 1);
     const e = new Date(s); e.setHours(e.getHours() + 1);
-    return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false, clientId: '', projectId: '', recurrenceFreq: '' as '' | RecurrenceFrequency, recurrenceUntil: '', editingEventId: '' };
+    return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '' as '' | RecurrenceFrequency, recurrenceUntil: '', editingEventId: '' };
   });
+  // Bij het bewerken van een native afspraak bewaren we het originele event, zodat
+  // we bij een gewijzigde starttijd de oude koppeling (en afgeleide urenpost) kunnen opruimen.
+  const [editingOriginal, setEditingOriginal] = useState<CalendarExternalEvent | null>(null);
   const [newCalendarName, setNewCalendarName] = useState('');
 
   const days = useMemo(() => calendarDaysForView(view, anchor), [view, anchor]);
@@ -1185,7 +1208,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     const et = slotToTime(endSlot + 1);
     const sd = new Date(day); sd.setHours(st.hour, st.minutes, 0, 0);
     const ed = new Date(day); ed.setHours(et.hour, et.minutes, 0, 0);
-    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '' }));
+    setEditingOriginal(null);
+    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '', trackTime: true, editingEventId: '' }));
     setShowCreatePanel(true);
   }, []);
 
@@ -1212,15 +1236,22 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     try {
       if (newEvent.editingEventId) {
         const updated = await updateCalendarEvent(organizationId, newEvent.editingEventId, input);
-        if (newEvent.clientId || newEvent.projectId) await onSetEventLink(updated, newEvent.clientId || null, newEvent.projectId || null);
+        // Is de afspraak naar een ander tijdstip verplaatst? Dan staat de oude
+        // koppeling nog op de vorige starttijd (die zit in de unieke sleutel).
+        // Ontkoppel die eerst, zodat de afgeleide urenpost niet verweesd achterblijft.
+        const moved = editingOriginal && new Date(editingOriginal.starts_at).getTime() !== new Date(updated.starts_at).getTime();
+        if (moved && editingOriginal) await onSetEventLink(editingOriginal, null, null);
+        // (Her)koppel op de huidige identiteit — leeg = ontkoppelen.
+        await onSetEventLink(updated, newEvent.clientId || null, newEvent.projectId || null, newEvent.trackTime);
         setMessage('Afspraak bijgewerkt.');
       } else {
         const created = await createExternalCalendarEvent(organizationId, input);
-        if (newEvent.clientId || newEvent.projectId) await onSetEventLink(created, newEvent.clientId || null, newEvent.projectId || null);
+        if (newEvent.clientId || newEvent.projectId) await onSetEventLink(created, newEvent.clientId || null, newEvent.projectId || null, newEvent.trackTime);
         setMessage(isNative ? 'Afspraak aangemaakt in je ResoFly-agenda.' : 'Event aangemaakt en zichtbaar in je externe agenda.');
       }
+      setEditingOriginal(null);
       const d = makeDefaultTimes();
-      setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', recurrenceFreq: '', recurrenceUntil: '', editingEventId: '' }));
+      setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '' }));
       setShowCreatePanel(false);
       refreshEventsOnly().catch(() => {});
     } catch (err) { setError(err instanceof Error ? err.message : 'Opslaan mislukt.'); }
@@ -1230,7 +1261,9 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   function startEditEvent(event: CalendarExternalEvent) {
     if (event.provider !== 'native' || !event.native_event_id) return;
     const rec = parseRruleToForm(event.rrule ?? null);
+    const link = data.calendarEventLinks.find(l => calendarEventLinkMatchesEvent(l, event)) ?? null;
     setSelectedEvent(null);
+    setEditingOriginal(event);
     setNewEvent(p => ({
       ...p,
       sourceId: event.source_id,
@@ -1240,7 +1273,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       allDay: event.all_day,
       startsAt: toInputDateTime(new Date(event.starts_at)),
       endsAt: toInputDateTime(new Date(event.ends_at)),
-      clientId: '', projectId: '',
+      clientId: link?.client_id ?? '', projectId: link?.project_id ?? '',
+      trackTime: link?.track_time ?? true,
       recurrenceFreq: rec.freq, recurrenceUntil: rec.until,
       editingEventId: event.native_event_id as string,
     }));
@@ -1574,6 +1608,12 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         <div className="tb-panel-section-label">Koppelen aan</div>
         <ClientProjectPicker clients={data.clients} projects={data.projects} clientId={newEvent.clientId} projectId={newEvent.projectId}
           onChange={next => setNewEvent(p => ({ ...p, clientId: next.clientId, projectId: next.projectId }))} />
+        {(newEvent.clientId || newEvent.projectId) && !newEvent.allDay && (
+          <label className="check-row track-time-row">
+            <input type="checkbox" checked={newEvent.trackTime} onChange={e => setNewEvent(p => ({ ...p, trackTime: e.target.checked }))} />
+            <span><Clock size={13} /> Telt mee voor urenregistratie</span>
+          </label>
+        )}
         <Button variant="primary" disabled={loading || !canWrite || !writeableSources.length}>Event aanmaken</Button>
         {!writeableSources.length && <p className="calendar-help">Zet bij je eigen agenda eerst "Schrijven" aan.</p>}
       </form>
@@ -1581,7 +1621,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
 
     {/* FAB for time-grid views */}
     {(view === 'day' || view === 'week') && canWrite && writeableSources.length > 0 && !showCreatePanel && (
-      <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', recurrenceFreq: '', recurrenceUntil: '', editingEventId: '' })); setShowCreatePanel(true); }} title="Nieuwe afspraak aanmaken">
+      <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setEditingOriginal(null); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '' })); setShowCreatePanel(true); }} title="Nieuwe afspraak aanmaken">
         <Plus size={22} />
       </button>
     )}
@@ -1590,7 +1630,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     {showCreatePanel && <EventCreationPanel newEvent={newEvent} setNewEvent={setNewEvent} writeableSources={writeableSources}
       clients={data.clients} projects={data.projects}
       selectedSourceIsNative={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider === 'native'}
-      loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => setShowCreatePanel(false)} />}
+      loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => { setShowCreatePanel(false); setEditingOriginal(null); }} />}
 
     <CalendarEventDetailPanel event={selectedEvent} data={data} sourceColors={sourceColors} canWrite={canWrite} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onEditEvent={startEditEvent} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
   </div>;
