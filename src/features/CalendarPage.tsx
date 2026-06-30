@@ -45,6 +45,16 @@ const MIN_EVENT_HEIGHT_SLOTS = 0.85;
 const WORKDAY_SLOTS = (WORKDAY_END - WORKDAY_START) * (60 / SLOT_MINUTES);
 const MIN_ROW_HEIGHT = 24;
 const MAX_ROW_HEIGHT = 52;
+// Slepen & herschalen van agenda-items: de zichtbare dag beslaat DAY_MINUTES
+// minuten; tijden worden op SNAP_MIN-rasters afgerond zodat slepen netjes "klikt".
+const DAY_MINUTES = (HOUR_END - HOUR_START) * 60;
+const SNAP_MIN = 15;
+const MIN_EVENT_MINUTES = 15;
+
+/** Bouwt een Google Maps-zoek-URL voor een vrije locatietekst. */
+function googleMapsSearchUrl(query: string): string {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
 
 function toInputDateTime(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -431,7 +441,29 @@ function layoutTimedEventsForDay(
   return { segments: raw.filter(s => s.column < MAX_OVERLAP_COLS), overflows };
 }
 
-function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent }: {
+type EventInteractionMode = 'move' | 'resize-start' | 'resize-end';
+interface EventInteraction {
+  mode: EventInteractionMode;
+  event: CalendarExternalEvent;
+  originDayIndex: number;
+  originStartMin: number;
+  originEndMin: number;
+  grabOffsetMin: number;
+  pointerStartX: number;
+  pointerStartY: number;
+  preview: { dayIndex: number; startMin: number; endMin: number };
+  moved: boolean;
+}
+
+// Pas slepen pas toe nadat de cursor merkbaar bewogen is; zo opent een gewone
+// klik (met minieme trilling) gewoon het item i.p.v. het ongewild te verzetten.
+const DRAG_THRESHOLD_PX = 4;
+
+function eventIdentityKey(ev: CalendarExternalEvent): string {
+  return `${ev.provider}|${ev.source_id}|${ev.provider_event_id}|${ev.starts_at}`;
+}
+
+function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent }: {
   days: Date[];
   events: CalendarExternalEvent[];
   tasks: Task[];
@@ -442,13 +474,120 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, c
   onSelectSlot: (day: Date, startSlot: number, endSlot: number) => void;
   onEditTask: (task: Task) => void;
   onOpenEvent: (event: CalendarExternalEvent) => void;
+  onMoveEvent: (event: CalendarExternalEvent, startIso: string, endIso: string) => void | Promise<void>;
 }) {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const colRefs = useRef<(HTMLDivElement | null)[]>([]);
   const canSelect = canWrite && writeableSources.length > 0;
   const daysKey = days.map(formatISODate).join('|');
+
+  // Slepen/herschalen van bestaande native afspraken.
+  const [interaction, setInteraction] = useState<EventInteraction | null>(null);
+  const interactionRef = useRef<EventInteraction | null>(null);
+  const draggedRef = useRef(false);
+
+  const canDragEvent = useCallback(
+    (ev: CalendarExternalEvent) => canWrite && ev.provider === 'native' && Boolean(ev.native_event_id) && !ev.is_private_masked && !ev.all_day,
+    [canWrite],
+  );
+
+  // Bepaalt boven welke dagkolom de cursor staat en hoeveel minuten vanaf
+  // middernacht dat is (op basis van de werkelijk gerenderde kolomhoogte).
+  const pointerToCol = useCallback((clientX: number, clientY: number): { dayIndex: number; minutes: number } | null => {
+    const cols = colRefs.current;
+    let dayIndex = -1;
+    for (let i = 0; i < cols.length; i++) {
+      const el = cols[i];
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (clientX >= r.left && clientX <= r.right) { dayIndex = i; break; }
+    }
+    const refEl = (dayIndex >= 0 ? cols[dayIndex] : cols.find(Boolean)) ?? null;
+    if (!refEl) return null;
+    const rr = refEl.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (clientY - rr.top) / rr.height));
+    return { dayIndex, minutes: frac * DAY_MINUTES };
+  }, []);
+
+  const beginEventInteraction = useCallback((e: React.PointerEvent, ev: CalendarExternalEvent, dayIndex: number, mode: EventInteractionMode) => {
+    if (e.pointerType === 'touch') return; // op touch: tikken opent, vegen blijft scrollen
+    if (e.button !== 0) return;
+    if (!canDragEvent(ev)) return;
+    const dayStart = startOfDay(days[dayIndex]).getTime();
+    const startMin = (new Date(ev.starts_at).getTime() - dayStart) / 60000;
+    const endMin = (new Date(ev.ends_at).getTime() - dayStart) / 60000;
+    if (startMin < 0 || endMin > DAY_MINUTES) return; // meerdaagse blokken: niet slepen
+    e.preventDefault();
+    e.stopPropagation();
+    const hit = pointerToCol(e.clientX, e.clientY);
+    const grabOffsetMin = hit ? hit.minutes - startMin : 0;
+    const next: EventInteraction = {
+      mode, event: ev, originDayIndex: dayIndex,
+      originStartMin: startMin, originEndMin: endMin, grabOffsetMin,
+      pointerStartX: e.clientX, pointerStartY: e.clientY,
+      preview: { dayIndex, startMin, endMin }, moved: false,
+    };
+    interactionRef.current = next;
+    setInteraction(next);
+  }, [canDragEvent, days, pointerToCol]);
+
+  // Pointermove/-up wereldwijd volgen zolang er een interactie loopt.
+  useEffect(() => {
+    if (!interaction) return;
+    const snap = (m: number) => Math.round(m / SNAP_MIN) * SNAP_MIN;
+    function onMove(e: PointerEvent) {
+      const it = interactionRef.current;
+      if (!it) return;
+      // Pas reageren zodra de drempel gepasseerd is (anders blijft het een klik).
+      if (!it.moved && Math.hypot(e.clientX - it.pointerStartX, e.clientY - it.pointerStartY) <= DRAG_THRESHOLD_PX) return;
+      const hit = pointerToCol(e.clientX, e.clientY);
+      if (!hit) return;
+      let preview: EventInteraction['preview'];
+      if (it.mode === 'move') {
+        const di = hit.dayIndex >= 0 ? hit.dayIndex : it.preview.dayIndex;
+        const duration = it.originEndMin - it.originStartMin;
+        let s = snap(hit.minutes - it.grabOffsetMin);
+        s = Math.max(0, Math.min(s, DAY_MINUTES - duration));
+        preview = { dayIndex: di, startMin: s, endMin: s + duration };
+      } else if (it.mode === 'resize-end') {
+        let en = snap(hit.minutes);
+        en = Math.max(it.originStartMin + MIN_EVENT_MINUTES, Math.min(en, DAY_MINUTES));
+        preview = { dayIndex: it.originDayIndex, startMin: it.originStartMin, endMin: en };
+      } else {
+        let s = snap(hit.minutes);
+        s = Math.min(it.originEndMin - MIN_EVENT_MINUTES, Math.max(0, s));
+        preview = { dayIndex: it.originDayIndex, startMin: s, endMin: it.originEndMin };
+      }
+      const updated: EventInteraction = { ...it, preview, moved: true };
+      interactionRef.current = updated;
+      setInteraction(updated);
+    }
+    function onUp() {
+      const it = interactionRef.current;
+      interactionRef.current = null;
+      setInteraction(null);
+      if (!it || !it.moved) return; // gewone klik → laat onClick het item openen
+      draggedRef.current = true; // onderdruk de klik die direct na het slepen volgt
+      window.setTimeout(() => { draggedRef.current = false; }, 0);
+      const pv = it.preview;
+      const changed = pv.dayIndex !== it.originDayIndex || pv.startMin !== it.originStartMin || pv.endMin !== it.originEndMin;
+      if (!changed) return; // teruggesleept naar de oorspronkelijke plek: niets opslaan
+      const day = days[pv.dayIndex] ?? days[it.originDayIndex];
+      const base = startOfDay(day).getTime();
+      const startIso = new Date(base + pv.startMin * 60000).toISOString();
+      const endIso = new Date(base + pv.endMin * 60000).toISOString();
+      void onMoveEvent(it.event, startIso, endIso);
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [interaction !== null, days, onMoveEvent, pointerToCol]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Meet de zichtbare hoogte en kies een rijhoogte zó dat de werkdag die hoogte
   // vult (ruime blokken die het scherm vullen); de volledige dag blijft scrollbaar
@@ -488,6 +627,7 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, c
 
   const handleMouseDown = useCallback((dayIndex: number, slot: number) => {
     if (!canSelect) return;
+    if (interactionRef.current) return; // niet selecteren terwijl een item gesleept wordt
     setDrag({ dayIndex, startSlot: slot, endSlot: slot });
     setIsDragging(true);
   }, [canSelect]);
@@ -602,7 +742,7 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, c
               const isToday = today(day);
               const nowFrac = isToday ? dateToVisibleDayFraction(day, now) : 0;
               return (
-                <div className={`tb-col${isToday ? ' tb-today-col' : ''}`} key={di} style={{ gridColumn: di + 2, gridRow: `1 / span ${TOTAL_SLOTS}` }}>
+                <div className={`tb-col${isToday ? ' tb-today-col' : ''}`} key={di} ref={el => { colRefs.current[di] = el; }} style={{ gridColumn: di + 2, gridRow: `1 / span ${TOTAL_SLOTS}` }}>
                   {hourLabels.map((h, si) => {
                     const selected = isInSelection(di, si);
                     return (
@@ -637,9 +777,12 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, c
                     const densityClass = visibleDuration < 30 ? ' tb-ev-tight' : visibleDuration < 60 ? ' tb-ev-compact' : ' tb-ev-roomy';
                     const eventMeta = [providerLabel(ev.provider), ev.source_name, ev.location].filter(Boolean).join(' · ');
                     const trackedMin = trackedMinutesFor(ev);
+                    const draggable = canDragEvent(ev) && !segment.startsBeforeDay && !segment.endsAfterDay;
+                    const isGhosted = Boolean(interaction) && eventIdentityKey(interaction!.event) === eventIdentityKey(ev);
                     return (
-                      <button type="button" className={`tb-ev${densityClass}${ev.visibility === 'private' ? ' tb-ev-priv' : ''}${trackedMin != null ? ' tb-ev-tracked' : ''}`} key={`${ev.provider}-${ev.provider_event_id}-${di}`}
-                        onClick={() => onOpenEvent(ev)}
+                      <button type="button" className={`tb-ev${densityClass}${ev.visibility === 'private' ? ' tb-ev-priv' : ''}${trackedMin != null ? ' tb-ev-tracked' : ''}${draggable ? ' tb-ev-draggable' : ''}${isGhosted ? ' tb-ev-ghosted' : ''}`} key={`${ev.provider}-${ev.provider_event_id}-${di}`}
+                        onClick={() => { if (draggedRef.current) return; onOpenEvent(ev); }}
+                        onPointerDown={draggable ? e => beginEventInteraction(e, ev, di, 'move') : undefined}
                         style={{
                           ...eventColorStyle(eventColor(ev)),
                           top: `${segment.top}%`,
@@ -647,14 +790,29 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, c
                           left: `calc(${left}% + 2px)`,
                           right: `calc(${right}% + 2px)`,
                         }}
-                        title={`${visualTime}\n${ev.title}\n${eventMeta}${trackedMin != null ? `\n${formatMinutes(trackedMin)} geregistreerd` : ''}`}>
+                        title={`${visualTime}\n${ev.title}\n${eventMeta}${trackedMin != null ? `\n${formatMinutes(trackedMin)} geregistreerd` : ''}${draggable ? '\nSleep om te verplaatsen · sleep de randen om de duur te wijzigen' : ''}`}>
                         {trackedMin != null && <span className="tb-ev-track" title={`${formatMinutes(trackedMin)} geregistreerd`}><Clock size={10} />{formatMinutes(trackedMin)}</span>}
+                        {draggable && <span className="tb-ev-handle tb-ev-handle-top" onPointerDown={e => beginEventInteraction(e, ev, di, 'resize-start')} title="Sleep om de starttijd te wijzigen" />}
                         <span className="tb-ev-time">{visualTime}</span>
                         <span className="tb-ev-title">{ev.title}</span>
                         <span className="tb-ev-src">{eventMeta}</span>
+                        {draggable && <span className="tb-ev-handle tb-ev-handle-bottom" onPointerDown={e => beginEventInteraction(e, ev, di, 'resize-end')} title="Sleep om de eindtijd te wijzigen" />}
                       </button>
                     );
                   })}
+
+                  {interaction && interaction.preview.dayIndex === di && (() => {
+                    const pv = interaction.preview;
+                    const top = (pv.startMin / DAY_MINUTES) * 100;
+                    const height = Math.max(((pv.endMin - pv.startMin) / DAY_MINUTES) * 100, (100 / TOTAL_SLOTS) * MIN_EVENT_HEIGHT_SLOTS);
+                    const fmt = (m: number) => formatHour(Math.floor(m / 60) % 24, Math.round(m % 60));
+                    return (
+                      <div className="tb-ev tb-ev-preview" style={{ ...eventColorStyle(eventColor(interaction.event)), top: `${top}%`, height: `${height}%`, left: '2px', right: '2px' }}>
+                        <span className="tb-ev-time">{fmt(pv.startMin)} – {fmt(pv.endMin)}</span>
+                        <span className="tb-ev-title">{interaction.event.title}</span>
+                      </div>
+                    );
+                  })()}
 
                   {dayOverflows.map((ov, i) => (
                     <div key={`ov-${di}-${i}`} className="tb-overflow-chip" style={{ top: `${ov.top}%` }}>
@@ -672,7 +830,7 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, c
         </div>
       </div>
 
-      {canSelect && <p className="tb-hint">Sleep over lege tijdslots om snel een event aan te maken</p>}
+      {canSelect && <p className="tb-hint">Sleep over lege tijdslots om snel een event aan te maken · sleep een afspraak om te verplaatsen · sleep de boven-/onderrand om de duur te wijzigen</p>}
     </div>
   );
 }
@@ -748,6 +906,110 @@ function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, tr
   );
 }
 
+/* ── Locatieveld met kaart-suggesties ───────────────────────────────── */
+
+type GeoSuggestion = { place_id: number | string; display_name: string };
+
+/**
+ * Locatie-invoer met adres-suggesties terwijl je typt (gratis via OpenStreetMap
+ * Nominatim, geen API-sleutel nodig) plus een knop om de locatie in Google Maps
+ * te openen. Suggesties worden ge-debounced; kiezen vult het volledige adres in.
+ */
+function LocationField({ value, onChange, placeholder }: {
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+}) {
+  const [suggestions, setSuggestions] = useState<GeoSuggestion[]>([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [highlight, setHighlight] = useState(-1);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const debounceRef = useRef<number | null>(null);
+  const skipFetchRef = useRef(false);
+
+  useEffect(() => {
+    // Na het kiezen van een suggestie niet meteen opnieuw zoeken op de ingevulde tekst.
+    if (skipFetchRef.current) { skipFetchRef.current = false; return; }
+    const q = value.trim();
+    if (q.length < 3) { setSuggestions([]); setOpen(false); return; }
+    if (debounceRef.current) window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(async () => {
+      setLoading(true);
+      try {
+        const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&accept-language=nl&q=${encodeURIComponent(q)}`;
+        const res = await fetch(url, { headers: { Accept: 'application/json' } });
+        if (!res.ok) throw new Error('geocode-fout');
+        const rows = (await res.json()) as GeoSuggestion[];
+        setSuggestions(Array.isArray(rows) ? rows : []);
+        setOpen(true);
+        setHighlight(-1);
+      } catch {
+        setSuggestions([]);
+        setOpen(false);
+      } finally {
+        setLoading(false);
+      }
+    }, 350);
+    return () => { if (debounceRef.current) window.clearTimeout(debounceRef.current); };
+  }, [value]);
+
+  useEffect(() => {
+    function onDocDown(e: MouseEvent) {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocDown);
+    return () => document.removeEventListener('mousedown', onDocDown);
+  }, []);
+
+  function pick(s: GeoSuggestion) {
+    skipFetchRef.current = true;
+    onChange(s.display_name);
+    setSuggestions([]);
+    setOpen(false);
+    setHighlight(-1);
+  }
+
+  return (
+    <div className="location-field" ref={boxRef}>
+      <div className="location-field-row">
+        <Input
+          value={value}
+          placeholder={placeholder}
+          onChange={e => onChange(e.target.value)}
+          onFocus={() => { if (suggestions.length) setOpen(true); }}
+          onKeyDown={e => {
+            if (!open || suggestions.length === 0) return;
+            if (e.key === 'ArrowDown') { e.preventDefault(); setHighlight(h => Math.min(h + 1, suggestions.length - 1)); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlight(h => Math.max(h - 1, 0)); }
+            else if (e.key === 'Enter' && highlight >= 0) { e.preventDefault(); pick(suggestions[highlight]); }
+            else if (e.key === 'Escape') { setOpen(false); }
+          }}
+        />
+        {value.trim() && (
+          <a className="location-field-maps" href={googleMapsSearchUrl(value)} target="_blank" rel="noreferrer"
+            title="Open in Google Maps" onMouseDown={e => e.stopPropagation()}>
+            <MapPin size={15} />
+          </a>
+        )}
+      </div>
+      {open && (loading || suggestions.length > 0) && (
+        <ul className="location-suggestions">
+          {loading && <li className="location-suggestion-empty">Zoeken…</li>}
+          {!loading && suggestions.map((s, i) => (
+            <li key={s.place_id}>
+              <button type="button" className={`location-suggestion${i === highlight ? ' active' : ''}`}
+                onMouseDown={e => { e.preventDefault(); pick(s); }}>
+                <MapPin size={13} /><span>{s.display_name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /* ── Floating creation panel ─────────────────────────────────────────── */
 
 function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, projects, loading, canWrite, selectedSourceIsNative, onSubmit, onClose }: {
@@ -783,7 +1045,7 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
           {writeableSources.map(s => <option value={s.id} key={s.id}>{providerLabel(s.provider)} · {s.name}{s.visibility === 'private' ? ' · privé' : ' · team'}</option>)}
         </Select></label>
         <label>Titel<Input autoFocus value={newEvent.title} onChange={e => setNewEvent(p => ({ ...p, title: e.target.value }))} placeholder="Bijv. Intake klant" /></label>
-        <label>Locatie<Input value={newEvent.location} onChange={e => setNewEvent(p => ({ ...p, location: e.target.value }))} placeholder="Optioneel" /></label>
+        <label>Locatie<LocationField value={newEvent.location} onChange={next => setNewEvent(p => ({ ...p, location: next }))} placeholder="Zoek een adres of plaats…" /></label>
         <div className="settings-grid compact">
           <label>Start<Input type="datetime-local" value={newEvent.startsAt} onChange={e => setNewEvent(p => ({ ...p, startsAt: e.target.value }))} /></label>
           <label>Einde<Input type="datetime-local" value={newEvent.endsAt} onChange={e => setNewEvent(p => ({ ...p, endsAt: e.target.value }))} /></label>
@@ -839,7 +1101,7 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
 }
 
 
-function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, canWrite, onNewNote, onNewDocument, onSetEventLink, onLogTime, onEditNote, onLinkExistingNote, onUnlinkNote, onEditEvent, onDeleteEvent, onClose }: {
+function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, canWrite, onNewNote, onNewDocument, onSetEventLink, onLogTime, onReschedule, onEditNote, onLinkExistingNote, onUnlinkNote, onEditEvent, onDeleteEvent, onClose }: {
   event: CalendarExternalEvent | null;
   organizationId: UUID;
   data: AppData;
@@ -849,6 +1111,7 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
   onNewDocument: (event: CalendarExternalEvent) => void;
   onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null, trackTime?: boolean) => void | Promise<void>;
   onLogTime: (event: CalendarExternalEvent) => void;
+  onReschedule: (event: CalendarExternalEvent, startIso: string, endIso: string) => void | Promise<void>;
   onEditNote: (note: Note) => void;
   onLinkExistingNote: (noteId: UUID, event: CalendarExternalEvent) => void | Promise<void>;
   onUnlinkNote: (linkId: UUID) => void | Promise<void>;
@@ -858,10 +1121,23 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
 }) {
   const [selectedNoteId, setSelectedNoteId] = useState('');
   const [attendees, setAttendees] = useState<CalendarEventAttendee[]>([]);
+  // Snel de tijd aanpassen direct in het detailpaneel (zonder het volledige
+  // bewerk-formulier te openen).
+  const [startLocal, setStartLocal] = useState('');
+  const [endLocal, setEndLocal] = useState('');
+  const [savingTime, setSavingTime] = useState(false);
+  const [timeError, setTimeError] = useState<string | null>(null);
 
   useEffect(() => {
     setSelectedNoteId('');
   }, [event?.id, event?.provider_event_id, event?.starts_at]);
+
+  useEffect(() => {
+    setTimeError(null);
+    if (!event) return;
+    setStartLocal(toInputDateTime(new Date(event.starts_at)));
+    setEndLocal(toInputDateTime(new Date(event.ends_at)));
+  }, [event?.id, event?.provider_event_id, event?.starts_at, event?.ends_at]);
 
   const nativeEventId = event?.provider === 'native' ? event.native_event_id : undefined;
   useEffect(() => {
@@ -895,6 +1171,20 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
         ? 'Je hebt alleen-lezen toegang tot deze organisatie.'
         : null;
 
+  const isTimeEditable = event.provider === 'native' && Boolean(event.native_event_id) && canWrite && !event.is_private_masked && !event.all_day;
+  const timeChanged = isTimeEditable && (
+    startLocal !== toInputDateTime(new Date(event.starts_at)) || endLocal !== toInputDateTime(new Date(event.ends_at))
+  );
+  async function saveTime() {
+    const sIso = inputDateTimeToIso(startLocal);
+    const eIso = inputDateTimeToIso(endLocal);
+    if (new Date(eIso).getTime() <= new Date(sIso).getTime()) { setTimeError('Eindtijd moet na starttijd liggen.'); return; }
+    setSavingTime(true); setTimeError(null);
+    try { await onReschedule(event!, sIso, eIso); }
+    catch (err) { setTimeError(err instanceof Error ? err.message : 'Tijd opslaan mislukt.'); }
+    finally { setSavingTime(false); }
+  }
+
   return (
     <div className="event-detail-overlay" onClick={onClose}>
       <aside className="event-detail-panel" onClick={e => e.stopPropagation()} style={eventColorStyle(color)}>
@@ -908,10 +1198,30 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
         </div>
 
         <div className="event-detail-meta-grid">
-          <div className="event-detail-meta-card">
-            <Clock size={15} />
-            <span>{formatEventRange(event)}</span>
-          </div>
+          {isTimeEditable ? (
+            <div className="event-detail-meta-card event-detail-time-edit">
+              <Clock size={15} />
+              <div className="event-time-edit">
+                <div className="event-time-edit-fields">
+                  <Input type="datetime-local" value={startLocal} onChange={e => setStartLocal(e.target.value)} aria-label="Starttijd" />
+                  <span className="event-time-edit-sep">tot</span>
+                  <Input type="datetime-local" value={endLocal} onChange={e => setEndLocal(e.target.value)} aria-label="Eindtijd" />
+                </div>
+                {timeChanged && (
+                  <div className="event-time-edit-actions">
+                    <Button type="button" variant="primary" disabled={savingTime} onClick={saveTime}>{savingTime ? 'Opslaan…' : 'Tijd opslaan'}</Button>
+                    <Button type="button" variant="ghost" disabled={savingTime} onClick={() => { setStartLocal(toInputDateTime(new Date(event.starts_at))); setEndLocal(toInputDateTime(new Date(event.ends_at))); setTimeError(null); }}>Herstel</Button>
+                  </div>
+                )}
+                {timeError && <span className="event-time-edit-error">{timeError}</span>}
+              </div>
+            </div>
+          ) : (
+            <div className="event-detail-meta-card">
+              <Clock size={15} />
+              <span>{formatEventRange(event)}</span>
+            </div>
+          )}
           <div className="event-detail-meta-card">
             <CalendarDays size={15} />
             <span>{event.visibility === 'private' ? 'Privé-agenda' : 'Gedeeld met organisatie'}{event.is_private_masked ? ' · details afgeschermd' : ''}</span>
@@ -923,10 +1233,11 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
             </div>
           )}
           {event.location && (
-            <div className="event-detail-meta-card">
+            <a className="event-detail-meta-card event-detail-map-link" href={googleMapsSearchUrl(event.location)} target="_blank" rel="noreferrer" title="Open locatie in Google Maps">
               <MapPin size={15} />
               <span>{event.location}</span>
-            </div>
+              <ExternalLink size={12} className="event-detail-map-ext" />
+            </a>
           )}
         </div>
 
@@ -1411,6 +1722,52 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     finally { setLoading(false); }
   }
 
+  // Verplaatst/herschaalt een native afspraak (drag & drop, randen slepen, of de
+  // tijd aanpassen in het detailpaneel). Behoudt titel/omschrijving/locatie,
+  // herhaling én genodigden, en verhuist de klant/project-koppeling mee wanneer
+  // de starttijd wijzigt (die zit in de unieke sleutel van de koppeling).
+  const rescheduleEvent = useCallback(async (event: CalendarExternalEvent, startIso: string, endIso: string) => {
+    if (event.provider !== 'native' || !event.native_event_id) return;
+    if (!canWrite) { setError('Je hebt alleen-lezen toegang.'); return; }
+    if (new Date(endIso).getTime() <= new Date(startIso).getTime()) { setError('Eindtijd moet na starttijd liggen.'); return; }
+    // Optimistisch verschuiven zodat het blok meteen op de nieuwe plek staat.
+    setEvents(prev => prev.map(e => e === event ? { ...e, starts_at: startIso, ends_at: endIso } : e));
+    setError(null);
+    const rec = parseRruleToForm(event.rrule ?? null);
+    const recurrence: EventRecurrence | null = rec.freq
+      ? { freq: rec.freq, until: rec.until ? `${rec.until}T23:59:59.000Z` : null }
+      : null;
+    let attendees: { email: string; name: string | null }[] | undefined;
+    try {
+      const rows = await getCalendarEventAttendees(organizationId, event.native_event_id);
+      attendees = rows.map(r => ({ email: r.email, name: r.display_name ?? null }));
+    } catch { /* genodigden zijn optioneel; nooit het verschuiven laten falen */ }
+    const input = {
+      sourceId: event.source_id,
+      title: event.title?.trim() || 'Afspraak',
+      description: event.description ?? null,
+      location: event.location ?? null,
+      startsAt: startIso, endsAt: endIso, allDay: event.all_day,
+      recurrence, attendees,
+    };
+    try {
+      const updated = await updateCalendarEvent(organizationId, event.native_event_id, input);
+      const startChanged = new Date(event.starts_at).getTime() !== new Date(updated.starts_at).getTime();
+      if (startChanged) {
+        const link = data.calendarEventLinks.find(l => calendarEventLinkMatchesEvent(l, event)) ?? null;
+        if (link && (link.client_id || link.project_id)) {
+          await onSetEventLink(event, null, null);
+          await onSetEventLink(updated, link.client_id, link.project_id, link.track_time);
+        }
+      }
+      setSelectedEvent(prev => (prev && prev === event) ? updated : prev);
+      await refreshEventsOnly();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Verplaatsen mislukt.');
+      await refreshEventsOnly();
+    }
+  }, [canWrite, organizationId, data.calendarEventLinks, onSetEventLink]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function addNativeCalendar(e: FormEvent) {
     e.preventDefault();
     if (!canWrite) { setError('Je hebt alleen-lezen toegang.'); return; }
@@ -1676,7 +2033,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
 
       {view === 'day' || view === 'week' ? (
         <TimeBlockGrid days={days} events={events} tasks={data.tasks.filter(t => t.status !== 'done')}
-          sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} />
+          sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} onMoveEvent={rescheduleEvent} />
       ) : view === 'month' ? (
         <CalendarMonthView days={days} anchor={anchor} events={events} tasks={data.tasks.filter(t => t.status !== 'done')} data={data}
           sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} onEditTask={onEditTask} onOpenDay={openDay} onOpenEvent={setSelectedEvent} />
@@ -1715,7 +2072,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
           {writeableSources.map(s => <option value={s.id} key={s.id}>{providerLabel(s.provider)} · {s.name}{s.visibility === 'private' ? ' · privé' : ' · team'}</option>)}
         </Select></label>
         <label>Titel<Input value={newEvent.title} onChange={e => setNewEvent(p => ({ ...p, title: e.target.value }))} placeholder="Bijv. Intake klant" /></label>
-        <label>Locatie<Input value={newEvent.location} onChange={e => setNewEvent(p => ({ ...p, location: e.target.value }))} placeholder="Optioneel" /></label>
+        <label>Locatie<LocationField value={newEvent.location} onChange={next => setNewEvent(p => ({ ...p, location: next }))} placeholder="Zoek een adres of plaats…" /></label>
         <div className="settings-grid compact">
           <label>Start<Input type="datetime-local" value={newEvent.startsAt} onChange={e => setNewEvent(p => ({ ...p, startsAt: e.target.value }))} /></label>
           <label>Einde<Input type="datetime-local" value={newEvent.endsAt} onChange={e => setNewEvent(p => ({ ...p, endsAt: e.target.value }))} /></label>
@@ -1749,7 +2106,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       selectedSourceIsNative={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider === 'native'}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => { setShowCreatePanel(false); setEditingOriginal(null); }} />}
 
-    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sourceColors={sourceColors} canWrite={canWrite} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onLogTime={openLogTimeForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onEditEvent={startEditEvent} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
+    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sourceColors={sourceColors} canWrite={canWrite} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onLogTime={openLogTimeForEvent} onReschedule={rescheduleEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onEditEvent={startEditEvent} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
 
     {logTimeEvent && (() => {
       const link = data.calendarEventLinks.find(l => calendarEventLinkMatchesEvent(l, logTimeEvent)) ?? null;
