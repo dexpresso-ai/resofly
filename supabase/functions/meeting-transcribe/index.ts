@@ -165,11 +165,16 @@ async function loadRecording(organizationId: string, recordingId: string) {
   return data;
 }
 
-/** Haalt de audiobytes server-side uit R2 via het interne worker-pad. */
+/**
+ * Haalt de audiobytes server-side uit R2 via het interne worker-pad.
+ * URL en secret vallen terug op de al-geconfigureerde PDF-storage-namen, zodat
+ * deze functie dezelfde worker + hetzelfde gedeelde secret hergebruikt zonder
+ * dat er een aparte INTERNAL_UPLOAD_SECRET op de edge-kant gezet hoeft te worden.
+ */
 async function fetchAudioBytes(storageKey: string): Promise<Uint8Array> {
-  const base = (Deno.env.get('MEDIA_WORKER_URL') || '').replace(/\/$/, '');
-  const secret = Deno.env.get('INTERNAL_UPLOAD_SECRET') || '';
-  if (!base || !secret) throw new HttpError('Media-worker niet geconfigureerd (MEDIA_WORKER_URL / INTERNAL_UPLOAD_SECRET).', 500);
+  const base = (Deno.env.get('MEDIA_WORKER_URL') || Deno.env.get('INVOICE_PDF_STORAGE_WORKER_URL') || Deno.env.get('QUOTE_PDF_STORAGE_WORKER_URL') || '').replace(/\/$/, '');
+  const secret = Deno.env.get('INTERNAL_UPLOAD_SECRET') || Deno.env.get('INVOICE_PDF_STORAGE_SECRET') || Deno.env.get('QUOTE_PDF_STORAGE_SECRET') || '';
+  if (!base || !secret) throw new HttpError('Media-worker niet geconfigureerd (zet MEDIA_WORKER_URL + INTERNAL_UPLOAD_SECRET, of hergebruik de PDF-storage-secrets).', 500);
   const res = await fetch(`${base}/internal/media/${encodeURIComponent(storageKey)}`, {
     headers: { authorization: `Bearer ${secret}` },
   });
