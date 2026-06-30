@@ -120,8 +120,8 @@ serve(async (req) => {
       case 'disconnectConnection': requireWrite(); await disconnectConnection(organizationId, user.id, String(body.connectionId || '')); return json({ ok: true });
       case 'listEvents': return json({ ok: true, events: await listEvents(organizationId, user.id, String(body.start || ''), String(body.end || '')) });
       case 'createEvent': requireWrite(); return json({ ok: true, event: await createEvent(organizationId, user.id, body.event || {}) });
-      case 'updateEvent': requireWrite(); return json({ ok: true, event: await updateNativeEvent(organizationId, user.id, body.event || {}) });
-      case 'deleteEvent': requireWrite(); await deleteNativeEvent(organizationId, user.id, String(body.eventId || '')); return json({ ok: true });
+      case 'updateEvent': requireWrite(); return json({ ok: true, event: await updateEvent(organizationId, user.id, body.event || {}) });
+      case 'deleteEvent': requireWrite(); await deleteEvent(organizationId, user.id, body); return json({ ok: true });
       case 'createNativeCalendar': requireWrite(); return json({ ok: true, source: await createNativeCalendar(organizationId, user.id, body) });
       case 'updateNativeCalendar': requireWrite(); return json({ ok: true, source: await updateNativeCalendar(organizationId, user.id, body) });
       case 'deleteNativeCalendar': requireWrite(); await deleteNativeCalendar(organizationId, user.id, String(body.sourceId || '')); return json({ ok: true });
@@ -862,6 +862,135 @@ async function createMicrosoftEvent(accessToken: string, source: CalendarSourceR
   };
 }
 
+/* ── Bewerken/verwijderen van externe (Google/Microsoft) agenda-items ──── */
+
+/** Schrijfrechten + geldig access-token voor een externe agenda-bron. */
+async function getExternalWriteAccessToken(organizationId: string, requesterUserId: string, source: CalendarSourceRow): Promise<string> {
+  if (source.user_id !== requesterUserId && source.visibility !== 'organization') {
+    throw new Error('Deze privé-agenda is niet met de organisatie gedeeld.');
+  }
+  if (!source.write_enabled) throw new Error('Zet eerst "Schrijven" aan voor deze agenda.');
+  if (!sourceCanWrite(source)) throw new Error('Deze externe agenda is niet schrijfbaar volgens de provider.');
+  if (!source.connection_id) throw new Error('Externe agenda-bron mist een koppeling.');
+  const connection = await getConnection(organizationId, source.connection_id);
+  if (connection.status !== 'active') {
+    throw new Error(`Agenda-koppeling is niet actief (status: ${connection.status}). Koppel het account opnieuw.`);
+  }
+  const token = await getToken(organizationId, connection.id);
+  return await refreshAccessToken(token);
+}
+
+async function updateExternalEvent(organizationId: string, requesterUserId: string, source: CalendarSourceRow, input: Record<string, unknown>) {
+  const providerEventId = String(input.providerEventId || input.eventId || '');
+  if (!providerEventId) throw new Error('Onbekend agenda-item.');
+  const accessToken = await getExternalWriteAccessToken(organizationId, requesterUserId, source);
+  const event = normalizeNewEventInput(input);
+  return source.provider === 'google'
+    ? await updateGoogleEvent(accessToken, source, providerEventId, event)
+    : await updateMicrosoftEvent(accessToken, source, providerEventId, event);
+}
+
+async function deleteExternalEvent(organizationId: string, requesterUserId: string, source: CalendarSourceRow, providerEventId: string): Promise<void> {
+  if (!providerEventId) throw new Error('Onbekend agenda-item.');
+  const accessToken = await getExternalWriteAccessToken(organizationId, requesterUserId, source);
+  const url = source.provider === 'google'
+    ? `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events/${encodeURIComponent(providerEventId)}`
+    : `https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(providerEventId)}`;
+  const res = await fetch(url, { method: 'DELETE', headers: { Authorization: `Bearer ${accessToken}` } });
+  // 200/204 = verwijderd; 404/410 = al weg → idempotent toelaten.
+  if (!res.ok && res.status !== 404 && res.status !== 410) {
+    const payload = await res.json().catch(() => ({}));
+    throw new Error(payload.error?.message || 'Agenda-item verwijderen mislukt.');
+  }
+}
+
+async function updateGoogleEvent(accessToken: string, source: CalendarSourceRow, eventId: string, event: ReturnType<typeof normalizeNewEventInput>) {
+  let body: Record<string, unknown>;
+  if (event.allDay) {
+    const startDate = event.startsAt.slice(0, 10);
+    const endDateRaw = event.endsAt.slice(0, 10);
+    const endExclusive = endDateRaw <= startDate ? nextDay(startDate) : nextDay(endDateRaw);
+    body = { summary: event.title, description: event.description, location: event.location, start: { date: startDate }, end: { date: endExclusive } };
+  } else {
+    const tz = source.timezone || undefined;
+    body = { summary: event.title, description: event.description, location: event.location, start: { dateTime: event.startsAt, timeZone: tz }, end: { dateTime: event.endsAt, timeZone: tz } };
+  }
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events/${encodeURIComponent(eventId)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error?.message || 'Google event bijwerken mislukt.');
+  const allDay = Boolean(payload.start?.date && !payload.start?.dateTime);
+  const allDayRange = allDay ? normalizeAllDayEventRange(payload.start?.date, payload.end?.date) : null;
+  return {
+    id: `${source.id}:${String(payload.id)}`,
+    provider: 'google' as Provider,
+    source_id: source.id,
+    source_name: source.name,
+    provider_event_id: String(payload.id),
+    title: String(payload.summary || event.title),
+    description: payload.description ? String(payload.description) : event.description,
+    location: payload.location ? String(payload.location) : event.location,
+    starts_at: allDayRange ? allDayRange.starts_at : String(payload.start.dateTime),
+    ends_at: allDayRange ? allDayRange.ends_at : String(payload.end.dateTime),
+    all_day: allDay,
+    html_link: payload.htmlLink ? String(payload.htmlLink) : null,
+    visibility: source.visibility,
+    is_private_masked: false,
+  };
+}
+
+async function updateMicrosoftEvent(accessToken: string, source: CalendarSourceRow, eventId: string, event: ReturnType<typeof normalizeNewEventInput>) {
+  let start: { dateTime: string; timeZone: string };
+  let end: { dateTime: string; timeZone: string };
+  if (event.allDay) {
+    const startDate = event.startsAt.slice(0, 10);
+    const endDateRaw = event.endsAt.slice(0, 10);
+    const endExclusive = endDateRaw <= startDate ? nextDay(startDate) : nextDay(endDateRaw);
+    start = { dateTime: `${startDate}T00:00:00`, timeZone: 'UTC' };
+    end = { dateTime: `${endExclusive}T00:00:00`, timeZone: 'UTC' };
+  } else {
+    start = { dateTime: toMicrosoftDateTime(event.startsAt), timeZone: 'UTC' };
+    end = { dateTime: toMicrosoftDateTime(event.endsAt), timeZone: 'UTC' };
+  }
+  const body = {
+    subject: event.title,
+    body: { contentType: 'HTML', content: event.description || '' },
+    location: { displayName: event.location || '' },
+    isAllDay: event.allDay,
+    start,
+    end,
+  };
+  const res = await fetch(`https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(eventId)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error?.message || 'Microsoft event bijwerken mislukt.');
+  const location = (payload.location ?? {}) as Record<string, string>;
+  const allDay = Boolean(payload.isAllDay);
+  const allDayRange = allDay ? normalizeAllDayEventRange(payload.start?.dateTime || event.startsAt, payload.end?.dateTime || event.endsAt) : null;
+  return {
+    id: `${source.id}:${String(payload.id)}`,
+    provider: 'microsoft' as Provider,
+    source_id: source.id,
+    source_name: source.name,
+    provider_event_id: String(payload.id),
+    title: String(payload.subject || event.title),
+    description: payload.bodyPreview ? String(payload.bodyPreview) : event.description,
+    location: location.displayName ? String(location.displayName) : event.location,
+    starts_at: allDayRange ? allDayRange.starts_at : normalizeMicrosoftDateTime(payload.start?.dateTime || event.startsAt),
+    ends_at: allDayRange ? allDayRange.ends_at : normalizeMicrosoftDateTime(payload.end?.dateTime || event.endsAt),
+    all_day: allDay,
+    html_link: payload.webLink ? String(payload.webLink) : null,
+    visibility: source.visibility,
+    is_private_masked: false,
+  };
+}
+
 function assertIso(value: string, field: string): string {
   const date = new Date(value);
   if (!value || Number.isNaN(date.getTime())) throw new Error(`Ongeldige datum voor ${field}.`);
@@ -993,6 +1122,31 @@ async function createNativeEvent(organizationId: string, userId: string, source:
   // Genodigden + uitnodigingen mogen het aanmaken nooit laten falen.
   await applyAttendees(organizationId, source, row, input).catch(err => console.error('invite (create) failed', err));
   return nativeRowToBaseEvent(row, source);
+}
+
+/** Routeert een bewerk-actie naar de juiste provider op basis van de agenda-bron. */
+async function updateEvent(organizationId: string, requesterUserId: string, input: Record<string, unknown>) {
+  const sourceId = String(input.sourceId || '');
+  if (sourceId) {
+    const { data: source } = await supabaseAdmin.from('calendar_sources').select('*').eq('organization_id', organizationId).eq('id', sourceId).single();
+    if (source && (source as CalendarSourceRow).provider !== 'native') {
+      return await updateExternalEvent(organizationId, requesterUserId, source as CalendarSourceRow, input);
+    }
+  }
+  return await updateNativeEvent(organizationId, requesterUserId, input);
+}
+
+/** Routeert een verwijder-actie naar de juiste provider op basis van de agenda-bron. */
+async function deleteEvent(organizationId: string, requesterUserId: string, body: Record<string, unknown>): Promise<void> {
+  const sourceId = String(body.sourceId || '');
+  if (sourceId) {
+    const { data: source } = await supabaseAdmin.from('calendar_sources').select('*').eq('organization_id', organizationId).eq('id', sourceId).single();
+    if (source && (source as CalendarSourceRow).provider !== 'native') {
+      await deleteExternalEvent(organizationId, requesterUserId, source as CalendarSourceRow, String(body.providerEventId || ''));
+      return;
+    }
+  }
+  await deleteNativeEvent(organizationId, requesterUserId, String(body.eventId || ''));
 }
 
 async function updateNativeEvent(organizationId: string, requesterUserId: string, input: Record<string, unknown>) {

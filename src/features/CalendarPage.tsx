@@ -21,6 +21,7 @@ import {
   updateCalendarEvent,
   updateCalendarSource,
   updateNativeCalendar,
+  type CalendarEventRef,
   type CalendarIntegrationsPayload,
 } from '../lib/calendar-api';
 import { supabase } from '../lib/supabase';
@@ -54,6 +55,13 @@ const MIN_EVENT_MINUTES = 15;
 /** Bouwt een Google Maps-zoek-URL voor een vrije locatietekst. */
 function googleMapsSearchUrl(query: string): string {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
+/** Identiteit van een agenda-item voor bewerk/verwijder-acties (native vs extern). */
+function eventRef(event: CalendarExternalEvent): CalendarEventRef {
+  return event.provider === 'native'
+    ? { eventId: event.native_event_id, sourceId: event.source_id }
+    : { sourceId: event.source_id, providerEventId: event.provider_event_id };
 }
 
 function toInputDateTime(date: Date): string {
@@ -489,9 +497,15 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, c
   const interactionRef = useRef<EventInteraction | null>(null);
   const draggedRef = useRef(false);
 
+  const writeableSourceIds = useMemo(() => new Set(writeableSources.map(s => s.id)), [writeableSources]);
   const canDragEvent = useCallback(
-    (ev: CalendarExternalEvent) => canWrite && ev.provider === 'native' && Boolean(ev.native_event_id) && !ev.is_private_masked && !ev.all_day,
-    [canWrite],
+    (ev: CalendarExternalEvent) => {
+      if (!canWrite || ev.is_private_masked || ev.all_day) return false;
+      return ev.provider === 'native'
+        ? Boolean(ev.native_event_id)
+        : Boolean(ev.provider_event_id) && writeableSourceIds.has(ev.source_id);
+    },
+    [canWrite, writeableSourceIds],
   );
 
   // Bepaalt boven welke dagkolom de cursor staat en hoeveel minuten vanaf
@@ -1040,10 +1054,11 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
           <div className="tb-panel-title"><CalendarDays size={16} /><h3>{editing ? 'Afspraak bewerken' : 'Nieuwe afspraak'}</h3></div>
           <button type="button" className="tb-panel-close" onClick={onClose}><X size={16} /></button>
         </div>
-        <label>Agenda<Select value={newEvent.sourceId} onChange={e => setNewEvent(p => ({ ...p, sourceId: e.target.value }))}>
+        <label>Agenda<Select value={newEvent.sourceId} disabled={editing} onChange={e => setNewEvent(p => ({ ...p, sourceId: e.target.value }))}>
           <option value="">Kies agenda</option>
           {writeableSources.map(s => <option value={s.id} key={s.id}>{providerLabel(s.provider)} · {s.name}{s.visibility === 'private' ? ' · privé' : ' · team'}</option>)}
         </Select></label>
+        {editing && <p className="calendar-help">De agenda van een bestaande afspraak kan niet worden gewijzigd.</p>}
         <label>Titel<Input autoFocus value={newEvent.title} onChange={e => setNewEvent(p => ({ ...p, title: e.target.value }))} placeholder="Bijv. Intake klant" /></label>
         <label>Locatie<LocationField value={newEvent.location} onChange={next => setNewEvent(p => ({ ...p, location: next }))} placeholder="Zoek een adres of plaats…" /></label>
         <div className="settings-grid compact">
@@ -1101,12 +1116,13 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
 }
 
 
-function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, canWrite, onNewNote, onNewDocument, onSetEventLink, onLogTime, onReschedule, onEditNote, onLinkExistingNote, onUnlinkNote, onEditEvent, onDeleteEvent, onClose }: {
+function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, canWrite, editable, onNewNote, onNewDocument, onSetEventLink, onLogTime, onReschedule, onEditNote, onLinkExistingNote, onUnlinkNote, onEditEvent, onDeleteEvent, onClose }: {
   event: CalendarExternalEvent | null;
   organizationId: UUID;
   data: AppData;
   sourceColors: Map<string, string>;
   canWrite: boolean;
+  editable: boolean;
   onNewNote: (event: CalendarExternalEvent) => void;
   onNewDocument: (event: CalendarExternalEvent) => void;
   onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null, trackTime?: boolean) => void | Promise<void>;
@@ -1171,7 +1187,7 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
         ? 'Je hebt alleen-lezen toegang tot deze organisatie.'
         : null;
 
-  const isTimeEditable = event.provider === 'native' && Boolean(event.native_event_id) && canWrite && !event.is_private_masked && !event.all_day;
+  const isTimeEditable = editable && !event.all_day;
   const timeChanged = isTimeEditable && (
     startLocal !== toInputDateTime(new Date(event.starts_at)) || endLocal !== toInputDateTime(new Date(event.ends_at))
   );
@@ -1363,7 +1379,7 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
 
         <div className="event-detail-actions">
           {event.html_link && <a className="btn btn-primary" href={event.html_link} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open in agenda</a>}
-          {event.provider === 'native' && event.native_event_id && canWrite && (<>
+          {editable && (<>
             <button type="button" className="btn btn-primary" onClick={() => onEditEvent(event)}><Pencil size={14} /> Bewerken</button>
             <button type="button" className="btn btn-danger" onClick={() => onDeleteEvent(event)}><Trash2 size={14} /> Verwijderen</button>
           </>)}
@@ -1519,6 +1535,15 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     [integrations.sources],
   );
 
+  // Mag dit item bewerkt/verplaatst/verwijderd worden? Native: heeft een db-id;
+  // extern (Google/Microsoft): de bron staat op schrijfbaar. Afgeschermde
+  // privé-items blijven uitgesloten.
+  const eventIsEditable = useCallback((event: CalendarExternalEvent): boolean => {
+    if (!canWrite || event.is_private_masked) return false;
+    if (event.provider === 'native') return Boolean(event.native_event_id);
+    return Boolean(event.provider_event_id) && writeableSources.some(s => s.id === event.source_id);
+  }, [canWrite, writeableSources]);
+
   // Agenda-item dat snel gelogd wordt (handmatige urenpost vanuit de afspraak).
   const [logTimeEvent, setLogTimeEvent] = useState<CalendarExternalEvent | null>(null);
 
@@ -1657,7 +1682,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     setLoading(true); setError(null); setMessage(null);
     try {
       if (newEvent.editingEventId) {
-        const updated = await updateCalendarEvent(organizationId, newEvent.editingEventId, input);
+        const ref = editingOriginal ? eventRef(editingOriginal) : { eventId: newEvent.editingEventId, sourceId: newEvent.sourceId };
+        const updated = await updateCalendarEvent(organizationId, ref, input);
         // Is de afspraak naar een ander tijdstip verplaatst? Dan staat de oude
         // koppeling nog op de vorige starttijd (die zit in de unieke sleutel).
         // Ontkoppel die eerst, zodat de afgeleide urenpost niet verweesd achterblijft.
@@ -1681,14 +1707,17 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   }
 
   async function startEditEvent(event: CalendarExternalEvent) {
-    if (event.provider !== 'native' || !event.native_event_id) return;
+    if (!eventIsEditable(event)) return;
+    const isNative = event.provider === 'native';
     const rec = parseRruleToForm(event.rrule ?? null);
     const link = data.calendarEventLinks.find(l => calendarEventLinkMatchesEvent(l, event)) ?? null;
     let attendees: { email: string; name: string }[] = [];
-    try {
-      const rows = await getCalendarEventAttendees(organizationId, event.native_event_id);
-      attendees = rows.map(r => ({ email: r.email, name: r.display_name ?? '' }));
-    } catch { /* genodigden zijn optioneel */ }
+    if (isNative && event.native_event_id) {
+      try {
+        const rows = await getCalendarEventAttendees(organizationId, event.native_event_id);
+        attendees = rows.map(r => ({ email: r.email, name: r.display_name ?? '' }));
+      } catch { /* genodigden zijn optioneel */ }
+    }
     setSelectedEvent(null);
     setEditingOriginal(event);
     setNewEvent(p => ({
@@ -1703,18 +1732,18 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       clientId: link?.client_id ?? '', projectId: link?.project_id ?? '',
       trackTime: link?.track_time ?? true,
       recurrenceFreq: rec.freq, recurrenceUntil: rec.until,
-      editingEventId: event.native_event_id as string,
+      editingEventId: isNative ? (event.native_event_id as string) : event.provider_event_id,
       attendees,
     }));
     setShowCreatePanel(true);
   }
 
   async function removeEvent(event: CalendarExternalEvent) {
-    if (event.provider !== 'native' || !event.native_event_id) return;
+    if (!eventIsEditable(event)) return;
     if (!confirm('Deze afspraak verwijderen?')) return;
     setLoading(true); setError(null); setMessage(null);
     try {
-      await deleteCalendarEvent(organizationId, event.native_event_id);
+      await deleteCalendarEvent(organizationId, eventRef(event));
       setSelectedEvent(null);
       setMessage('Afspraak verwijderd.');
       await refreshEventsOnly();
@@ -1722,26 +1751,28 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     finally { setLoading(false); }
   }
 
-  // Verplaatst/herschaalt een native afspraak (drag & drop, randen slepen, of de
-  // tijd aanpassen in het detailpaneel). Behoudt titel/omschrijving/locatie,
-  // herhaling én genodigden, en verhuist de klant/project-koppeling mee wanneer
-  // de starttijd wijzigt (die zit in de unieke sleutel van de koppeling).
+  // Verplaatst/herschaalt een afspraak (drag & drop, randen slepen, of de tijd
+  // aanpassen in het detailpaneel) — native én extern (Google/Microsoft).
+  // Behoudt titel/omschrijving/locatie; voor native ook herhaling + genodigden.
+  // Verhuist de klant/project-koppeling mee wanneer de starttijd wijzigt (die
+  // zit in de unieke sleutel van de koppeling).
   const rescheduleEvent = useCallback(async (event: CalendarExternalEvent, startIso: string, endIso: string) => {
-    if (event.provider !== 'native' || !event.native_event_id) return;
-    if (!canWrite) { setError('Je hebt alleen-lezen toegang.'); return; }
+    if (!eventIsEditable(event)) return;
     if (new Date(endIso).getTime() <= new Date(startIso).getTime()) { setError('Eindtijd moet na starttijd liggen.'); return; }
+    const isNative = event.provider === 'native';
     // Optimistisch verschuiven zodat het blok meteen op de nieuwe plek staat.
     setEvents(prev => prev.map(e => e === event ? { ...e, starts_at: startIso, ends_at: endIso } : e));
     setError(null);
-    const rec = parseRruleToForm(event.rrule ?? null);
-    const recurrence: EventRecurrence | null = rec.freq
-      ? { freq: rec.freq, until: rec.until ? `${rec.until}T23:59:59.000Z` : null }
-      : null;
+    let recurrence: EventRecurrence | null = null;
     let attendees: { email: string; name: string | null }[] | undefined;
-    try {
-      const rows = await getCalendarEventAttendees(organizationId, event.native_event_id);
-      attendees = rows.map(r => ({ email: r.email, name: r.display_name ?? null }));
-    } catch { /* genodigden zijn optioneel; nooit het verschuiven laten falen */ }
+    if (isNative && event.native_event_id) {
+      const rec = parseRruleToForm(event.rrule ?? null);
+      recurrence = rec.freq ? { freq: rec.freq, until: rec.until ? `${rec.until}T23:59:59.000Z` : null } : null;
+      try {
+        const rows = await getCalendarEventAttendees(organizationId, event.native_event_id);
+        attendees = rows.map(r => ({ email: r.email, name: r.display_name ?? null }));
+      } catch { /* genodigden zijn optioneel; nooit het verschuiven laten falen */ }
+    }
     const input = {
       sourceId: event.source_id,
       title: event.title?.trim() || 'Afspraak',
@@ -1751,7 +1782,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       recurrence, attendees,
     };
     try {
-      const updated = await updateCalendarEvent(organizationId, event.native_event_id, input);
+      const updated = await updateCalendarEvent(organizationId, eventRef(event), input);
       const startChanged = new Date(event.starts_at).getTime() !== new Date(updated.starts_at).getTime();
       if (startChanged) {
         const link = data.calendarEventLinks.find(l => calendarEventLinkMatchesEvent(l, event)) ?? null;
@@ -1766,7 +1797,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       setError(err instanceof Error ? err.message : 'Verplaatsen mislukt.');
       await refreshEventsOnly();
     }
-  }, [canWrite, organizationId, data.calendarEventLinks, onSetEventLink]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [eventIsEditable, organizationId, data.calendarEventLinks, onSetEventLink]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function addNativeCalendar(e: FormEvent) {
     e.preventDefault();
@@ -2106,7 +2137,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       selectedSourceIsNative={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider === 'native'}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => { setShowCreatePanel(false); setEditingOriginal(null); }} />}
 
-    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sourceColors={sourceColors} canWrite={canWrite} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onLogTime={openLogTimeForEvent} onReschedule={rescheduleEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onEditEvent={startEditEvent} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
+    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sourceColors={sourceColors} canWrite={canWrite} editable={selectedEvent ? eventIsEditable(selectedEvent) : false} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onLogTime={openLogTimeForEvent} onReschedule={rescheduleEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onEditEvent={startEditEvent} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
 
     {logTimeEvent && (() => {
       const link = data.calendarEventLinks.find(l => calendarEventLinkMatchesEvent(l, logTimeEvent)) ?? null;

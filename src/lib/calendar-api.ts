@@ -69,15 +69,25 @@ export async function createExternalCalendarEvent(organizationId: UUID, input: C
   return data.event;
 }
 
-/** Bewerkt een native ResoFly-agenda-item (eventId = native_event_id). */
-export async function updateCalendarEvent(organizationId: UUID, eventId: UUID, input: CalendarEventInput): Promise<CalendarExternalEvent> {
-  const data = await invokeCalendar<{ event: CalendarExternalEvent }>(organizationId, { action: 'updateEvent', event: { ...input, eventId } });
+/**
+ * Verwijst naar een agenda-item. Native items via `eventId` (= native_event_id);
+ * externe (Google/Microsoft) items via `sourceId` + `providerEventId`.
+ */
+export interface CalendarEventRef {
+  eventId?: UUID;
+  sourceId?: UUID;
+  providerEventId?: string;
+}
+
+/** Bewerkt een agenda-item (native ResoFly óf extern Google/Microsoft). */
+export async function updateCalendarEvent(organizationId: UUID, ref: CalendarEventRef, input: CalendarEventInput): Promise<CalendarExternalEvent> {
+  const data = await invokeCalendar<{ event: CalendarExternalEvent }>(organizationId, { action: 'updateEvent', event: { ...input, ...ref } });
   return data.event;
 }
 
-/** Verwijdert (soft-delete) een native ResoFly-agenda-item. */
-export async function deleteCalendarEvent(organizationId: UUID, eventId: UUID): Promise<void> {
-  await invokeCalendar<Record<string, never>>(organizationId, { action: 'deleteEvent', eventId });
+/** Verwijdert een agenda-item (native = soft-delete; extern = via de provider-API). */
+export async function deleteCalendarEvent(organizationId: UUID, ref: CalendarEventRef): Promise<void> {
+  await invokeCalendar<Record<string, never>>(organizationId, { action: 'deleteEvent', ...ref });
 }
 
 /** Haalt de genodigden (incl. RSVP-status) van een native agenda-item op. */
