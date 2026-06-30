@@ -1252,6 +1252,25 @@ export interface CalendarAppPassword {
   revoked_at: string | null;
 }
 
+export type AttendeeStatus = 'needs-action' | 'accepted' | 'declined' | 'tentative';
+
+export interface CalendarEventAttendee {
+  id: UUID;
+  email: string;
+  display_name: string | null;
+  role: 'req' | 'opt';
+  status: AttendeeStatus;
+  invited_at: string | null;
+  responded_at: string | null;
+}
+
+/** Invoer voor een genodigde bij het aanmaken/bewerken van een afspraak. */
+export interface AttendeeInput {
+  email: string;
+  name?: string | null;
+  role?: 'req' | 'opt';
+}
+
 export interface CalendarConnection {
   id: UUID;
   organization_id: UUID;

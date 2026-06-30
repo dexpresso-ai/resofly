@@ -11,6 +11,7 @@ import {
   deleteCalendarEvent,
   deleteNativeCalendar,
   disconnectCalendarConnection,
+  getCalendarEventAttendees,
   getCalendarOAuthUrl,
   listCalendarAppPasswords,
   listExternalCalendarEvents,
@@ -23,7 +24,7 @@ import {
   type CalendarIntegrationsPayload,
 } from '../lib/calendar-api';
 import { supabase } from '../lib/supabase';
-import type { CalendarAppPassword, EventRecurrence, RecurrenceFrequency } from '../types';
+import type { AttendeeStatus, CalendarAppPassword, CalendarEventAttendee, EventRecurrence, RecurrenceFrequency } from '../types';
 import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, Client, Note, NoteCalendarLink, Project, Task, UUID } from '../types';
 import { getNoteTypeLabel } from './Notes';
 import { TimeEntryModal } from './TimeTracking';
@@ -75,6 +76,14 @@ type NewEventState = {
   startsAt: string; endsAt: string; allDay: boolean; clientId: string; projectId: string;
   trackTime: boolean;
   recurrenceFreq: '' | RecurrenceFrequency; recurrenceUntil: string; editingEventId: string;
+  attendees: { email: string; name: string }[];
+};
+
+const ATTENDEE_STATUS_LABELS: Record<AttendeeStatus, string> = {
+  'needs-action': 'Nog niet beantwoord',
+  accepted: 'Geaccepteerd',
+  declined: 'Afgewezen',
+  tentative: 'Misschien',
 };
 
 /** Korte, leesbare omschrijving van een herhaling voor in het detailpaneel. */
@@ -754,6 +763,14 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
   onClose: () => void;
 }) {
   const editing = Boolean(newEvent.editingEventId);
+  const [attendeeEmail, setAttendeeEmail] = useState('');
+  function addAttendee() {
+    const email = attendeeEmail.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return;
+    setAttendeeEmail('');
+    if (newEvent.attendees.some(a => a.email === email)) return;
+    setNewEvent(p => ({ ...p, attendees: [...p.attendees, { email, name: '' }] }));
+  }
   return (
     <div className="tb-overlay" onClick={onClose}>
       <form className="tb-panel" onClick={e => e.stopPropagation()} onSubmit={onSubmit}>
@@ -784,6 +801,28 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
             {newEvent.recurrenceFreq && <label>Tot en met<Input type="date" value={newEvent.recurrenceUntil} onChange={e => setNewEvent(p => ({ ...p, recurrenceUntil: e.target.value }))} /></label>}
           </div>
         ) : null}
+        {selectedSourceIsNative ? (
+          <div className="event-attendees">
+            <div className="tb-panel-section-label">Genodigden</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <Input value={attendeeEmail} type="email" placeholder="naam@voorbeeld.nl"
+                onChange={e => setAttendeeEmail(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addAttendee(); } }} />
+              <Button type="button" onClick={addAttendee}>Toevoegen</Button>
+            </div>
+            {newEvent.attendees.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                {newEvent.attendees.map(a => (
+                  <span key={a.email} className="attendee-chip" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(0,0,0,0.06)', borderRadius: 12, padding: '2px 6px 2px 10px' }}>
+                    {a.email}
+                    <button type="button" aria-label={`Verwijder ${a.email}`} onClick={() => setNewEvent(p => ({ ...p, attendees: p.attendees.filter(x => x.email !== a.email) }))} style={{ border: 'none', background: 'none', cursor: 'pointer', lineHeight: 1 }}><X size={13} /></button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <p className="calendar-help">Genodigden krijgen een uitnodiging per e-mail en kunnen accepteren of afwijzen.</p>
+          </div>
+        ) : null}
         <div className="tb-panel-section-label">Koppelen aan</div>
         <ClientProjectPicker clients={clients} projects={projects} clientId={newEvent.clientId} projectId={newEvent.projectId}
           onChange={next => setNewEvent(p => ({ ...p, clientId: next.clientId, projectId: next.projectId }))} />
@@ -800,8 +839,9 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
 }
 
 
-function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNote, onNewDocument, onSetEventLink, onLogTime, onEditNote, onLinkExistingNote, onUnlinkNote, onEditEvent, onDeleteEvent, onClose }: {
+function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, canWrite, onNewNote, onNewDocument, onSetEventLink, onLogTime, onEditNote, onLinkExistingNote, onUnlinkNote, onEditEvent, onDeleteEvent, onClose }: {
   event: CalendarExternalEvent | null;
+  organizationId: UUID;
   data: AppData;
   sourceColors: Map<string, string>;
   canWrite: boolean;
@@ -817,10 +857,20 @@ function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNo
   onClose: () => void;
 }) {
   const [selectedNoteId, setSelectedNoteId] = useState('');
+  const [attendees, setAttendees] = useState<CalendarEventAttendee[]>([]);
 
   useEffect(() => {
     setSelectedNoteId('');
   }, [event?.id, event?.provider_event_id, event?.starts_at]);
+
+  const nativeEventId = event?.provider === 'native' ? event.native_event_id : undefined;
+  useEffect(() => {
+    setAttendees([]);
+    if (!nativeEventId) return;
+    let active = true;
+    getCalendarEventAttendees(organizationId, nativeEventId).then(rows => { if (active) setAttendees(rows); }).catch(() => {});
+    return () => { active = false; };
+  }, [nativeEventId, organizationId]);
 
   if (!event) return null;
 
@@ -982,6 +1032,24 @@ function CalendarEventDetailPanel({ event, data, sourceColors, canWrite, onNewNo
           )}
         </section>
 
+        {attendees.length > 0 && (
+          <section className="event-link-panel">
+            <div className="event-link-head">
+              <span className="event-notes-kicker">Genodigden</span>
+              <h4>Uitnodigingen</h4>
+              <p>{attendees.filter(a => a.status === 'accepted').length} van {attendees.length} geaccepteerd</p>
+            </div>
+            <div className="attendee-status-list">
+              {attendees.map(a => (
+                <div key={a.id} className="attendee-status-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', gap: 8 }}>
+                  <span>{a.display_name || a.email}</span>
+                  <span className={`attendee-status attendee-status-${a.status}`}>{ATTENDEE_STATUS_LABELS[a.status]}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         <div className="event-detail-actions">
           {event.html_link && <a className="btn btn-primary" href={event.html_link} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open in agenda</a>}
           {event.provider === 'native' && event.native_event_id && canWrite && (<>
@@ -1114,7 +1182,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   const [newEvent, setNewEvent] = useState(() => {
     const s = new Date(); s.setMinutes(0, 0, 0); s.setHours(s.getHours() + 1);
     const e = new Date(s); e.setHours(e.getHours() + 1);
-    return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '' as '' | RecurrenceFrequency, recurrenceUntil: '', editingEventId: '' };
+    return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '' as '' | RecurrenceFrequency, recurrenceUntil: '', editingEventId: '', attendees: [] as { email: string; name: string }[] };
   });
   // Bij het bewerken van een native afspraak bewaren we het originele event, zodat
   // we bij een gewijzigde starttijd de oude koppeling (en afgeleide urenpost) kunnen opruimen.
@@ -1273,6 +1341,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       sourceId: newEvent.sourceId, title: newEvent.title.trim(),
       description: newEvent.description.trim() || null, location: newEvent.location.trim() || null,
       startsAt: sIso, endsAt: eIso, allDay: newEvent.allDay, recurrence,
+      attendees: isNative ? newEvent.attendees.map(a => ({ email: a.email, name: a.name || null })) : undefined,
     };
     setLoading(true); setError(null); setMessage(null);
     try {
@@ -1293,17 +1362,22 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       }
       setEditingOriginal(null);
       const d = makeDefaultTimes();
-      setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '' }));
+      setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [] }));
       setShowCreatePanel(false);
       refreshEventsOnly().catch(() => {});
     } catch (err) { setError(err instanceof Error ? err.message : 'Opslaan mislukt.'); }
     finally { setLoading(false); }
   }
 
-  function startEditEvent(event: CalendarExternalEvent) {
+  async function startEditEvent(event: CalendarExternalEvent) {
     if (event.provider !== 'native' || !event.native_event_id) return;
     const rec = parseRruleToForm(event.rrule ?? null);
     const link = data.calendarEventLinks.find(l => calendarEventLinkMatchesEvent(l, event)) ?? null;
+    let attendees: { email: string; name: string }[] = [];
+    try {
+      const rows = await getCalendarEventAttendees(organizationId, event.native_event_id);
+      attendees = rows.map(r => ({ email: r.email, name: r.display_name ?? '' }));
+    } catch { /* genodigden zijn optioneel */ }
     setSelectedEvent(null);
     setEditingOriginal(event);
     setNewEvent(p => ({
@@ -1319,6 +1393,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       trackTime: link?.track_time ?? true,
       recurrenceFreq: rec.freq, recurrenceUntil: rec.until,
       editingEventId: event.native_event_id as string,
+      attendees,
     }));
     setShowCreatePanel(true);
   }
@@ -1663,7 +1738,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
 
     {/* FAB for time-grid views */}
     {(view === 'day' || view === 'week') && canWrite && writeableSources.length > 0 && !showCreatePanel && (
-      <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setEditingOriginal(null); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '' })); setShowCreatePanel(true); }} title="Nieuwe afspraak aanmaken">
+      <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setEditingOriginal(null); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [] })); setShowCreatePanel(true); }} title="Nieuwe afspraak aanmaken">
         <Plus size={22} />
       </button>
     )}
@@ -1674,7 +1749,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       selectedSourceIsNative={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider === 'native'}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => { setShowCreatePanel(false); setEditingOriginal(null); }} />}
 
-    <CalendarEventDetailPanel event={selectedEvent} data={data} sourceColors={sourceColors} canWrite={canWrite} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onLogTime={openLogTimeForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onEditEvent={startEditEvent} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
+    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sourceColors={sourceColors} canWrite={canWrite} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onLogTime={openLogTimeForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onEditEvent={startEditEvent} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
 
     {logTimeEvent && (() => {
       const link = data.calendarEventLinks.find(l => calendarEventLinkMatchesEvent(l, logTimeEvent)) ?? null;

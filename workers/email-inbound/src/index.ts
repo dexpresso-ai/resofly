@@ -34,6 +34,8 @@ export default {
       subject: parsed.subject || message.headers.get('subject') || '',
       text: parsed.text || '',
       html: typeof parsed.html === 'string' ? parsed.html : '',
+      // iMIP-antwoord (RSVP): de text/calendar-bijlage met METHOD:REPLY, indien aanwezig.
+      calendar: extractCalendar(parsed),
       messageId: parsed.messageId || message.headers.get('message-id') || '',
       inReplyTo: parsed.inReplyTo || message.headers.get('in-reply-to') || '',
       autoSubmitted: message.headers.get('auto-submitted') || '',
@@ -78,4 +80,33 @@ async function streamToUint8Array(stream: ReadableStream<Uint8Array>, size: numb
 
 function errMsg(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// Haalt de text/calendar-bijlage (iMIP, bijv. METHOD:REPLY) uit de geparste MIME.
+function extractCalendar(parsed: Awaited<ReturnType<PostalMime['parse']>>): string {
+  const attachments = parsed.attachments ?? [];
+  for (const att of attachments) {
+    const mime = String(att.mimeType ?? '').toLowerCase();
+    const name = String(att.filename ?? '').toLowerCase();
+    if (mime.includes('text/calendar') || mime.includes('application/ics') || name.endsWith('.ics')) {
+      return attachmentToString(att.content);
+    }
+  }
+  return '';
+}
+
+function attachmentToString(content: unknown): string {
+  if (typeof content === 'string') {
+    if (content.includes('BEGIN:VCALENDAR')) return content;
+    try {
+      const decoded = atob(content);
+      if (decoded.includes('BEGIN:VCALENDAR')) return decoded;
+    } catch {
+      // niet base64 — val terug op de ruwe string
+    }
+    return content;
+  }
+  if (content instanceof ArrayBuffer) return new TextDecoder().decode(content);
+  if (content instanceof Uint8Array) return new TextDecoder().decode(content);
+  return '';
 }

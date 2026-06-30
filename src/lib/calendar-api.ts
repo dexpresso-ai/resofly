@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { CalendarAppPassword, CalendarConnection, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, EventRecurrence, UUID } from '../types';
+import type { AttendeeInput, CalendarAppPassword, CalendarConnection, CalendarEventAttendee, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, EventRecurrence, UUID } from '../types';
 
 export interface CalendarIntegrationsPayload {
   connections: CalendarConnection[];
@@ -16,6 +16,8 @@ export interface CalendarEventInput {
   allDay?: boolean;
   /** Alleen voor native ResoFly-agenda's: optionele herhaling. */
   recurrence?: EventRecurrence | null;
+  /** Alleen voor native ResoFly-agenda's: genodigden (krijgen een uitnodiging per e-mail). */
+  attendees?: AttendeeInput[];
 }
 
 export interface NativeCalendarInput {
@@ -76,6 +78,12 @@ export async function updateCalendarEvent(organizationId: UUID, eventId: UUID, i
 /** Verwijdert (soft-delete) een native ResoFly-agenda-item. */
 export async function deleteCalendarEvent(organizationId: UUID, eventId: UUID): Promise<void> {
   await invokeCalendar<Record<string, never>>(organizationId, { action: 'deleteEvent', eventId });
+}
+
+/** Haalt de genodigden (incl. RSVP-status) van een native agenda-item op. */
+export async function getCalendarEventAttendees(organizationId: UUID, eventId: UUID): Promise<CalendarEventAttendee[]> {
+  const data = await invokeCalendar<{ attendees: CalendarEventAttendee[] }>(organizationId, { action: 'getEventAttendees', eventId });
+  return data.attendees;
 }
 
 export async function createNativeCalendar(organizationId: UUID, input: NativeCalendarInput): Promise<CalendarSource> {

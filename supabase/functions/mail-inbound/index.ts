@@ -54,6 +54,15 @@ async function handleInbound(body: Record<string, unknown>): Promise<Record<stri
     throw new InboundError('Inbound mist een geldig afzenderadres.', 400);
   }
 
+  // RSVP op een agenda-uitnodiging: het antwoord komt op organizer+<token>@... en
+  // bevat een text/calendar METHOD:REPLY. Dit moet vóór de automated-check, want
+  // sommige clients markeren RSVP-mail als auto-submitted.
+  const organizerToken = extractOrganizerToken(body.to);
+  if (organizerToken) {
+    const rsvp = await handleRsvp(organizerToken, body);
+    if (rsvp) return rsvp;
+  }
+
   // Negeer automatische mail (out-of-office, mailer-daemon, no-reply) om lussen te voorkomen.
   if (looksAutomated(body, fromEmail)) {
     return { skipped: 'automated' };
@@ -216,6 +225,75 @@ function extractToken(tokenField: unknown, toField: unknown): string | null {
   const match = String(toField || '').match(/reply\+([^@]+)@/i);
   if (match && isUuid(match[1])) return match[1];
   return null;
+}
+
+// ── RSVP op agenda-uitnodigingen (iMIP REPLY) ──────────────────────────────
+
+function extractOrganizerToken(toField: unknown): string | null {
+  const match = String(toField || '').match(/organizer\+([a-z0-9]+)@/i);
+  return match ? match[1] : null;
+}
+
+async function handleRsvp(organizerToken: string, body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  const calendar = String(body.calendar || '');
+  if (!calendar || !/METHOD:REPLY/i.test(calendar)) return null;
+
+  const { data: event, error: eventError } = await supabaseAdmin
+    .from('calendar_events')
+    .select('id,organization_id')
+    .eq('organizer_token', organizerToken)
+    .maybeSingle();
+  if (eventError) throw eventError;
+  if (!event) return { skipped: 'rsvp_no_event' };
+
+  const reply = parseIcsReply(calendar);
+  if (!reply) return { skipped: 'rsvp_unparsable' };
+
+  // Genodigde matchen: bij voorkeur op het ATTENDEE-adres uit de REPLY, anders op
+  // de afzender van de mail.
+  const candidateEmail = reply.email || normalizeEmail(body.from);
+  if (!isEmail(candidateEmail)) return { skipped: 'rsvp_no_attendee' };
+
+  const { data: attendee, error: attendeeError } = await supabaseAdmin
+    .from('calendar_event_attendees')
+    .select('id')
+    .eq('event_id', event.id)
+    .ilike('email', candidateEmail)
+    .maybeSingle();
+  if (attendeeError) throw attendeeError;
+  if (!attendee) return { skipped: 'rsvp_unknown_attendee' };
+
+  const status = partstatToStatus(reply.partstat);
+  await supabaseAdmin
+    .from('calendar_event_attendees')
+    .update({ status, responded_at: new Date().toISOString() })
+    .eq('id', attendee.id);
+
+  return { rsvp: status, eventId: event.id, attendeeId: attendee.id };
+}
+
+function parseIcsReply(ics: string): { email: string; partstat: string } | null {
+  // Line-unfolding (RFC 5545: vervolgregel begint met spatie of tab).
+  const unfolded = ics.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '');
+  for (const line of unfolded.split(/\r?\n/)) {
+    if (/^ATTENDEE/i.test(line)) {
+      const emailMatch = line.match(/mailto:([^;:>\s]+)/i);
+      const partstatMatch = line.match(/PARTSTAT=([A-Za-z-]+)/i);
+      if (emailMatch) {
+        return { email: emailMatch[1].trim().toLowerCase(), partstat: (partstatMatch?.[1] || 'NEEDS-ACTION').toUpperCase() };
+      }
+    }
+  }
+  return null;
+}
+
+function partstatToStatus(partstat: string): 'accepted' | 'declined' | 'tentative' | 'needs-action' {
+  switch (partstat.toUpperCase()) {
+    case 'ACCEPTED': return 'accepted';
+    case 'DECLINED': return 'declined';
+    case 'TENTATIVE': return 'tentative';
+    default: return 'needs-action';
+  }
 }
 
 function looksAutomated(body: Record<string, unknown>, fromEmail: string): boolean {
