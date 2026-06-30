@@ -23,6 +23,7 @@ import {
   deleteNoteCalendarLink,
   upsertCalendarEventLink,
   deleteCalendarEventLink,
+  createTimeEntry,
   disableOrganizationMember,
   insertRow,
   inviteOrganizationMember,
@@ -1078,6 +1079,15 @@ function App() {
         if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
         // Actiepunten op de "Actiepunten deze week"-checklist (browser/localStorage) van de juiste week.
         for (const item of p.items) addWeekChecklistItem(item.planned_date, item.title);
+      }}
+      onLogTimeEntry={async (p) => {
+        if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+        await createTimeEntry(activeOrg.id, {
+          project_id: p.project_id, client_id: p.client_id, source: 'manual',
+          description: p.description, entry_date: p.date, minutes: p.minutes,
+          billable: p.billable, hourly_rate_cents: p.hourly_rate_cents,
+        });
+        await refresh();
       }}
       onCreateReport={(p) => {
         if (!ensureCanWrite()) return;

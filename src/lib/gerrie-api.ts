@@ -153,7 +153,20 @@ export interface GerrieReportProposal {
   /** Pure JSON-rapportdefinitie; opent vooringevuld in de rapportbouwer. */
   definition: ReportDefinition;
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieWeekActionProposal | GerrieReportProposal;
+/** Door Gerrie voorgestelde urenregistratie — bevestigen in de chat voert hem uit. */
+export interface GerrieTimeEntryProposal {
+  type: 'time_entry';
+  project_id: UUID | null;
+  project_name: string | null;
+  client_id: UUID | null;
+  client_name: string | null;
+  date: string;
+  minutes: number;
+  description: string | null;
+  billable: boolean;
+  hourly_rate_cents: number | null;
+}
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieReportProposal;
 
 export interface GerrieResult {
   conversationId: UUID;

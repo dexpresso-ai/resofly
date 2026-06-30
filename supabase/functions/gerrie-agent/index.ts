@@ -194,6 +194,7 @@ interface TaskProposal { type: 'task'; project_id: string; project_name: string;
 interface EditTaskProposal { type: 'edit_task'; id: string; title: string; project_id: string; changes: { title?: string; description?: string | null; status?: string; priority?: string; planned_date?: string | null; start_date?: string | null; end_date?: string | null; estimated_minutes?: number; tags?: string[]; subtasks?: ProposalSubtask[] } }
 interface CalendarEventProposal { type: 'calendar_event'; source_id: string; source_name: string; title: string; date: string; start_time: string; end_time: string; description: string | null; location: string | null }
 interface WeekActionProposal { type: 'week_action'; items: Array<{ title: string; planned_date: string }>; total: number }
+interface TimeEntryProposal { type: 'time_entry'; project_id: string | null; project_name: string | null; client_id: string | null; client_name: string | null; date: string; minutes: number; description: string | null; billable: boolean; hourly_rate_cents: number | null }
 // Rapportage: een pure JSON-definitie (matcht de client-side ReportDefinition). Gerrie
 // stelt hem voor; de gebruiker controleert + slaat hem zelf op op de Statistieken-pagina.
 interface ReportDefinitionLite {
@@ -206,7 +207,7 @@ interface ReportDefinitionLite {
   chart: string;
 }
 interface ReportProposal { type: 'report'; name: string; definition: ReportDefinitionLite }
-type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | WeekActionProposal | ReportProposal;
+type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | WeekActionProposal | TimeEntryProposal | ReportProposal;
 interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: unknown }>; usage: Usage; proposal?: Proposal }
 
 async function runAgent(ctx: GerrieContext, history: Array<{ role: string; content: string }>, message: string, emit: Emit): Promise<AgentOutcome> {
@@ -439,6 +440,7 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_task` / `propose_edit_task` — een taak binnen een project aanmaken of wijzigen, inclusief subtaken, status/prioriteit en een geplande datum (`planned_date`) om de taak als actiepunt in de WEEKPLANNER te zetten. Zoek het project met `list_projects`, bestaande taken met `list_tasks`.',
           '- `propose_week_action` — ÉÉN OF MEER ACTIEPUNTEN op de "Actiepunten deze week"-checklist van de weekplanner (los van projecten en taken). Vraagt de gebruiker meerdere punten, geef ze dan ALLEMAAL in één keer mee via `items` (niet één voor één). Geef per item een datum binnen de gewenste week. Voor een echte taak binnen een project gebruik je `propose_task`.',
           '- `propose_calendar_event` — een agenda-item aanmaken in een gekoppelde agenda (Google/Microsoft). Tijden zijn lokaal (Europe/Amsterdam); reken relatieve datums om op basis van vandaag. Bij meerdere schrijfbare agenda\'s: vraag welke (`list_calendars`).',
+          '- `propose_time_entry` — GEWERKTE UREN registreren op een project of klant (urenregistratie). Zoek het project met `list_projects` (project_id) of de klant met `search_clients` (client_id); minstens één is verplicht. Duur in uren/minuten, datum standaard vandaag (reken relatieve datums om). Declarabel volgt automatisch het projecttype (urenbasis = wél declarabel, aangenomen prijs = niet), tenzij de gebruiker iets anders zegt.',
           '- `propose_report` — een RAPPORTAGE klaarzetten op de Statistieken-pagina (telt/berekent over één bron, optioneel gegroepeerd en gefilterd). De bouwer opent vooringevuld met een live grafiek die de gebruiker zelf controleert en opslaat. Gebruik exact de bron-/veldsleutels uit de tooluitleg; gis geen veldnamen. Geef de rapportage altijd een korte, duidelijke naam.',
           '- `propose_convert_quote` — een GEACCEPTEERDE offerte omzetten naar een factuur. Zoek de offerte met `list_quotes`; alleen status "accepted" kan omgezet worden.',
           '- `propose_edit_invoice` / `propose_edit_quote` — een bestaande CONCEPT-factuur/offerte wijzigen. Alleen status "draft" mag; een verstuurde of verwerkte factuur mag wettelijk niet meer aangepast worden — zeg dat dan. Geef alleen de velden die veranderen; voor losse regelaanpassingen heb je de volledige set regels nodig, laat `lines` anders weg zodat de gebruiker ze zelf aanpast.',
@@ -818,6 +820,22 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'propose_time_entry',
+    description: "Registreer GEWERKTE UREN op een project of klant (urenregistratie). Je voert niets uit: de gebruiker bevestigt met een knop in de chat. Zoek het project met list_projects (project_id) of de klant met search_clients (client_id) — minstens één is verplicht; bij alleen een project wordt de klant daaruit afgeleid. Geef de duur in `minutes` of `hours` (mag decimaal: 1.5 = 90 min); samen moeten ze > 0 zijn. Datum standaard vandaag; reken relatieve datums ('gisteren', 'maandag') om naar YYYY-MM-DD. Laat `billable` weg om het projecttype te volgen (urenbasis = declarabel, aangenomen prijs = niet).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'Id van het project (uit list_projects).' },
+        client_id: { type: 'string', description: 'Id van de klant (uit search_clients). Niet nodig als je een project geeft.' },
+        hours: { type: 'number', description: 'Aantal uren (mag decimaal, bijv. 1.5). Opgeteld bij minutes.' },
+        minutes: { type: 'integer', description: 'Aantal minuten. Geef hours en/of minutes; samen > 0.' },
+        date: { type: 'string', description: 'YYYY-MM-DD (lokale datum). Standaard vandaag.' },
+        description: { type: 'string', description: 'Korte omschrijving van het gewerkte.' },
+        billable: { type: 'boolean', description: 'Declarabel? Laat weg om het projecttype te volgen.' },
+      },
+    },
+  },
+  {
     name: 'propose_report',
     description: [
       'Zet een RAPPORTAGE klaar op de Statistieken-pagina. Je slaat NIETS op: het voorstel opent de rapportbouwer vooringevuld met een live grafiek, die de gebruiker zelf controleert en opslaat.',
@@ -953,6 +971,7 @@ function proposeLabel(toolName: string): string {
     case 'propose_edit_task': return 'Taak klaarzetten…';
     case 'propose_calendar_event': return 'Agenda-item klaarzetten…';
     case 'propose_week_action': return 'Weekactiepunt klaarzetten…';
+    case 'propose_time_entry': return 'Urenregistratie klaarzetten…';
     case 'propose_report': return 'Rapportage klaarzetten…';
     default: return 'Voorstel klaarzetten…';
   }
@@ -979,6 +998,7 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
     case 'propose_edit_task': return buildEditTaskProposal(ctx, input);
     case 'propose_calendar_event': return buildCalendarEventProposal(ctx, input);
     case 'propose_week_action': return buildWeekActionProposal(input);
+    case 'propose_time_entry': return buildTimeEntryProposal(ctx, input);
     case 'propose_report': return buildReportProposal(input);
     default: return { ok: false, error: `Onbekende actie: ${toolName}` };
   }
@@ -1058,6 +1078,68 @@ async function buildCalendarEventProposal(ctx: GerrieContext, input: Record<stri
       date, start_time: startTime, end_time: endTime,
       description: input.description ? String(input.description).slice(0, 2000) : null,
       location: input.location ? String(input.location).slice(0, 300) : null,
+    },
+  };
+}
+
+// ── Urenregistratie (gewerkte uren op project/klant, alleen vóórstellen) ─────
+
+async function buildTimeEntryProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  let projectId: string | null = null;
+  let projectName: string | null = null;
+  let clientId: string | null = null;
+  let clientName: string | null = null;
+  let billingType = 'hourly';
+  let projectRate: number | null = null;
+
+  if (input.project_id) {
+    const id = String(input.project_id).trim();
+    if (!isUuid(id)) return { ok: false, error: 'Ongeldig project_id. Zoek het project eerst met list_projects en gebruik het exacte id.' };
+    const { data, error } = await supabaseAdmin.from('projects')
+      .select('id, name, client_id, billing_type, hourly_rate_cents')
+      .eq('organization_id', ctx.organizationId).eq('id', id).maybeSingle();
+    if (error) return { ok: false, error: `Project ophalen mislukt: ${error.message}` };
+    if (!data) return { ok: false, error: 'Project niet gevonden in deze organisatie.' };
+    projectId = String(data.id); projectName = String(data.name);
+    billingType = data.billing_type ? String(data.billing_type) : 'hourly';
+    projectRate = data.hourly_rate_cents != null ? Number(data.hourly_rate_cents) : null;
+    if (data.client_id) clientId = String(data.client_id);
+  }
+
+  if (input.client_id) {
+    const c = await resolveClient(ctx, input.client_id);
+    if (!c.ok) return c;
+    clientId = c.id; clientName = c.name;
+  } else if (clientId) {
+    const { data: cl } = await supabaseAdmin.from('clients').select('name')
+      .eq('organization_id', ctx.organizationId).eq('id', clientId).maybeSingle();
+    clientName = cl?.name ? String(cl.name) : null;
+  }
+
+  if (!projectId && !clientId) return { ok: false, error: 'Geef een project (project_id) of een klant (client_id) om de uren op te boeken.' };
+
+  const minutes = Math.round(num(input.hours) * 60 + num(input.minutes));
+  if (!Number.isFinite(minutes) || minutes <= 0) return { ok: false, error: 'Geef een geldige duur — bijvoorbeeld 90 minuten of 1,5 uur.' };
+
+  const date = isoDate(input.date) || ctx.today;
+  const billable = typeof input.billable === 'boolean' ? input.billable : billingType !== 'fixed_price';
+
+  let rate: number | null = projectRate;
+  if (rate == null) {
+    const { data: cs } = await supabaseAdmin.from('company_settings').select('default_hourly_rate_cents')
+      .eq('organization_id', ctx.organizationId).maybeSingle();
+    rate = cs?.default_hourly_rate_cents != null ? Number(cs.default_hourly_rate_cents) : null;
+  }
+
+  return {
+    ok: true,
+    proposal: {
+      type: 'time_entry',
+      project_id: projectId, project_name: projectName,
+      client_id: clientId, client_name: clientName,
+      date, minutes,
+      description: input.description ? String(input.description).slice(0, 2000) : null,
+      billable, hourly_rate_cents: rate,
     },
   };
 }

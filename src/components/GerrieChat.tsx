@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { streamGerrieReply, confirmGerrieAction, loadGerrieBudget, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal, type GerrieEditInvoiceProposal, type GerrieEditQuoteProposal, type GerrieEditClientProposal, type GerrieSendRemindersProposal, type GerrieProjectProposal, type GerrieEditProjectProposal, type GerrieTaskProposal, type GerrieEditTaskProposal, type GerrieCalendarEventProposal, type GerrieWeekActionProposal, type GerrieReportProposal } from '../lib/gerrie-api';
-import { euro } from '../lib/format';
+import { streamGerrieReply, confirmGerrieAction, loadGerrieBudget, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal, type GerrieEditInvoiceProposal, type GerrieEditQuoteProposal, type GerrieEditClientProposal, type GerrieSendRemindersProposal, type GerrieProjectProposal, type GerrieEditProjectProposal, type GerrieTaskProposal, type GerrieEditTaskProposal, type GerrieCalendarEventProposal, type GerrieWeekActionProposal, type GerrieTimeEntryProposal, type GerrieReportProposal } from '../lib/gerrie-api';
+import { euro, formatMinutes } from '../lib/format';
 import { describeReportDefinition } from '../lib/reporting';
 import { supabase } from '../lib/supabase';
 import type { UUID } from '../types';
@@ -100,7 +100,7 @@ const SpeechRecognitionImpl: SpeechRecognitionCtor | undefined =
       ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionCtor }).webkitSpeechRecognition;
 const speechSupported = Boolean(SpeechRecognitionImpl);
 
-export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onCreateReport }: {
+export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onCreateReport }: {
   organizationId: UUID;
   onCreateInvoiceDraft?: (proposal: GerrieInvoiceProposal) => void;
   onCreateQuoteDraft?: (proposal: GerrieQuoteProposal) => void;
@@ -118,6 +118,7 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
   onEditTask?: (proposal: GerrieEditTaskProposal) => void;
   onCreateCalendarEvent?: (proposal: GerrieCalendarEventProposal) => Promise<void>;
   onCreateWeekAction?: (proposal: GerrieWeekActionProposal) => Promise<void>;
+  onLogTimeEntry?: (proposal: GerrieTimeEntryProposal) => Promise<void>;
   onCreateReport?: (proposal: GerrieReportProposal) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -334,6 +335,10 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
     if (p.type === 'edit_task') return <ProposalCard title="Wijziging taak openen & controleren" sub={p.title} onClick={() => onEditTask?.(p)} />;
     if (p.type === 'week_action') return <ConfirmActionCard icon={<CalendarIcon />} title={`${p.total} actiepunt${p.total === 1 ? '' : 'en'} toevoegen?`} sub={p.items.map((i) => i.title).join(' · ')} confirmLabel="Toevoegen" pendingLabel="Toevoegen…" doneLabel={`${p.total} actiepunt${p.total === 1 ? '' : 'en'} toegevoegd`} onConfirm={() => runConfirmed(auditId, () => onCreateWeekAction ? onCreateWeekAction(p) : Promise.reject(new Error('Toevoegen is hier niet beschikbaar.')))} />;
     if (p.type === 'calendar_event') return <ConfirmActionCard icon={<CalendarIcon />} title="Agenda-item aanmaken?" sub={`${p.title} · ${p.date} ${p.start_time}–${p.end_time} · ${p.source_name}`} confirmLabel="Aanmaken" pendingLabel="Aanmaken…" doneLabel={`Agenda-item aangemaakt: ${p.title}`} onConfirm={() => runConfirmed(auditId, () => onCreateCalendarEvent ? onCreateCalendarEvent(p) : Promise.reject(new Error('Aanmaken is hier niet beschikbaar.')))} />;
+    if (p.type === 'time_entry') {
+      const target = [p.client_name, p.project_name].filter(Boolean).join(' · ') || 'geen koppeling';
+      return <ConfirmActionCard icon={<ClockIcon />} title={`${formatMinutes(p.minutes)} registreren?`} sub={`${target} · ${p.date} · ${p.billable ? 'declarabel' : 'niet-declarabel'}`} confirmLabel="Registreren" pendingLabel="Registreren…" doneLabel={`${formatMinutes(p.minutes)} geregistreerd${p.project_name ? ` op ${p.project_name}` : ''}`} onConfirm={() => runConfirmed(auditId, () => onLogTimeEntry ? onLogTimeEntry(p) : Promise.reject(new Error('Registreren is hier niet beschikbaar.')))} />;
+    }
     if (p.type === 'report') return <ProposalCard icon={<ChartIcon />} title={`Rapportage openen & controleren: ${p.name}`} sub={describeReportDefinition(p.definition)} onClick={() => onCreateReport?.(p)} />;
     if (p.type === 'send_reminders') {
       const byLevel = [1, 2, 3].map((l) => p.invoices.filter((i) => i.level === l).length);
@@ -578,6 +583,15 @@ function ChartIcon() {
       <path d="M3 3v18h18" />
       <rect x="7" y="11" width="3" height="6" rx="0.5" />
       <rect x="13" y="7" width="3" height="10" rx="0.5" />
+    </svg>
+  );
+}
+
+function ClockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
     </svg>
   );
 }
