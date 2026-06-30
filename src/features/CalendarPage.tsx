@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { CalendarDays, CalendarPlus, ChevronDown, ChevronRight, Clock, ExternalLink, LayoutList, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, X } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
+import { MeetingRecorder } from '../components/MeetingRecorder';
 import { RichTextExcerpt } from '../components/RichTextEditor';
+import { createNoteWithCalendarLink } from '../lib/repository';
 import { addDays, DAY_NAMES_NL, formatISODate, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
 import { dateNL, formatMinutes } from '../lib/format';
 import {
@@ -1179,6 +1181,30 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
   const eventLink = data.calendarEventLinks.find(link => calendarEventLinkMatchesEvent(link, event)) ?? null;
   const linkedClient = eventLink?.client_id ? data.clients.find(c => c.id === eventLink.client_id) ?? null : null;
   const linkedProject = eventLink?.project_id ? data.projects.find(p => p.id === eventLink.project_id) ?? null : null;
+
+  // Notulen van een opname als gekoppelde notitie op de afspraak (klant/project) opslaan.
+  async function saveSummaryAsNote(text: string) {
+    if (!event) return;
+    await createNoteWithCalendarLink(organizationId, {
+      title: `Notulen — ${event.title || 'afspraak'}`.slice(0, 200),
+      content: text,
+      note_type: 'meeting',
+      client_id: eventLink?.client_id ?? null,
+      project_id: eventLink?.project_id ?? null,
+      tags: [],
+    }, {
+      provider: event.provider,
+      calendar_source_id: event.source_id,
+      provider_event_id: event.provider_event_id,
+      event_starts_at: event.starts_at,
+      event_ends_at: event.ends_at,
+      event_title_snapshot: event.title,
+      event_location_snapshot: event.location,
+      event_html_link: event.html_link,
+      visibility_snapshot: event.visibility,
+      is_private_masked_snapshot: event.is_private_masked ?? false,
+    });
+  }
   const lockedReason = event.visibility !== 'organization'
     ? 'Notities koppelen is uitgeschakeld voor privé-agenda-items, zodat persoonlijke agenda-informatie niet per ongeluk organisatiebreed zichtbaar wordt.'
     : event.is_private_masked
@@ -1376,6 +1402,20 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
             </div>
           </section>
         )}
+
+        <MeetingRecorder
+          organizationId={organizationId}
+          canWrite={canWrite}
+          event={{
+            provider: event.provider,
+            sourceId: event.source_id,
+            eventRef: event.provider_event_id,
+            eventTitle: event.title,
+            clientId: eventLink?.client_id ?? null,
+            projectId: eventLink?.project_id ?? null,
+          }}
+          onSaveAsNote={canAttachNotes ? saveSummaryAsNote : undefined}
+        />
 
         <div className="event-detail-actions">
           {event.html_link && <a className="btn btn-primary" href={event.html_link} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open in agenda</a>}

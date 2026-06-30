@@ -35,7 +35,17 @@ const ENTITY_TYPES = new Set([
   'document',
   'quote',
   'invoice',
+  'meeting_recording',
 ]);
+
+/**
+ * Meeting-opnames zijn audio en mogen groter zijn dan een gewone bijlage. Mono
+ * Opus op lage bitrate is ~11–14 MB/uur, dus 150 MB ≈ 10 uur — ruim genoeg.
+ */
+const MAX_AUDIO_UPLOAD_BYTES = 150 * 1024 * 1024;
+function maxUploadBytesFor(entityType: string): number {
+  return entityType === 'meeting_recording' ? MAX_AUDIO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+}
 
 /** Small, in-memory token→userId cache to avoid hitting /auth/v1/user on every request. */
 const tokenCache = new Map<string, { userId: string; expires: number }>();
@@ -107,6 +117,14 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
     return errorResponse('Method not allowed', 405, context);
   }
 
+  // ── Internal media fetch (shared secret) — laat de edge-functie audiobytes
+  //    server-side ophalen voor transcriptie zonder ze via de browser te sturen.
+  const mediaKey = matchInternalMediaRoute(pathname);
+  if (mediaKey) {
+    if (method === 'GET') return handleInternalDownload(request, env, context, mediaKey);
+    return errorResponse('Method not allowed', 405, context);
+  }
+
   return errorResponse('Route not found', 404, context);
 }
 
@@ -125,9 +143,10 @@ async function handleUserUpload(request: Request, env: Env, context: RouteContex
   if (!ENTITY_TYPES.has(entityType)) throw new HttpError(400, 'Ongeldig entity type.');
   if (!isUuid(entityId)) throw new HttpError(400, 'Ongeldige of ontbrekende entity id.');
 
+  const maxBytes = maxUploadBytesFor(entityType);
   const declaredSize = Number(request.headers.get('content-length') || '0');
-  if (declaredSize > MAX_UPLOAD_BYTES) {
-    throw new HttpError(413, `Bestand is te groot. Maximum is ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB.`);
+  if (declaredSize > maxBytes) {
+    throw new HttpError(413, `Bestand is te groot. Maximum is ${Math.round(maxBytes / 1024 / 1024)} MB.`);
   }
   if (!request.body) throw new HttpError(400, 'Lege upload.');
 
@@ -148,9 +167,9 @@ async function handleUserUpload(request: Request, env: Env, context: RouteContex
   });
 
   // Defensive: enforce the size limit even when Content-Length was absent/spoofed.
-  if (object.size > MAX_UPLOAD_BYTES) {
+  if (object.size > maxBytes) {
     await env.MEDIA_BUCKET.delete(key).catch(() => undefined);
-    throw new HttpError(413, `Bestand is te groot. Maximum is ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB.`);
+    throw new HttpError(413, `Bestand is te groot. Maximum is ${Math.round(maxBytes / 1024 / 1024)} MB.`);
   }
 
   return jsonResponse({ ok: true, key }, 200, context);
@@ -416,6 +435,14 @@ function matchFileRoute(pathname: string): string | null {
 /** `/internal/invoice-snapshot/{key}` */
 function matchInternalSnapshotRoute(pathname: string): string | null {
   const match = pathname.match(/^\/internal\/invoice-snapshot\/(.+)$/);
+  if (!match?.[1]) return null;
+  const key = decodeURIComponent(match[1]);
+  return isSafeStorageKey(key) ? key : null;
+}
+
+/** `/internal/media/{key}` — generieke, met intern secret beveiligde objectophaal. */
+function matchInternalMediaRoute(pathname: string): string | null {
+  const match = pathname.match(/^\/internal\/media\/(.+)$/);
   if (!match?.[1]) return null;
   const key = decodeURIComponent(match[1]);
   return isSafeStorageKey(key) ? key : null;

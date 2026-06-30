@@ -24,8 +24,9 @@ Dit is nadrukkelijk nog geen Sprint 3-klantportaalfunctionaliteit. De Worker bev
 | `DELETE` | `/file/:key` | Supabase JWT | Verwijder R2-object |
 | `POST` | `/internal/invoice-snapshot` | `INTERNAL_UPLOAD_SECRET` | Server-side PDF-opslag. Header `X-Storage-Key`, body = bytes |
 | `GET` | `/internal/invoice-snapshot/:key` | `INTERNAL_UPLOAD_SECRET` | Server-side PDF-ophaal |
+| `GET` | `/internal/media/:key` | `INTERNAL_UPLOAD_SECRET` | Generieke server-side objectophaal (o.a. meeting-audio voor de `meeting-transcribe` edge-functie) |
 
-Toegangscontrole: de `:key` begint met `{organization_id}/…`; de Worker controleert dat de ingelogde gebruiker lid is van die organisatie voordat hij leest/verwijdert. Maximale uploadgrootte is 25 MB (in sync met `MAX_UPLOAD_BYTES` in `src/lib/r2.ts`).
+Toegangscontrole: de `:key` begint met `{organization_id}/…`; de Worker controleert dat de ingelogde gebruiker lid is van die organisatie voordat hij leest/verwijdert. Maximale uploadgrootte is 25 MB voor gewone bijlagen; voor `meeting_recording`-audio geldt 150 MB (≈10 uur mono opus). Zie `MAX_UPLOAD_BYTES` / `MAX_AUDIO_UPLOAD_BYTES` in `src/index.ts`.
 
 ## Lokaal draaien
 

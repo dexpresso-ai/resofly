@@ -48,3 +48,14 @@ verify_jwt = false
 # elke authenticated app-actie verifieert zelf requireUser() + requireOrganizationAccess().
 [functions.billing]
 verify_jwt = false
+
+# meeting-transcribe (opname -> ElevenLabs Scribe -> Claude-notulen) handelt CORS-preflight
+# + auth zelf af: elke actie verifieert requireUser() + requireOrganizationAccess().
+[functions.meeting-transcribe]
+verify_jwt = false
+
+# meeting-transcribe-webhook wordt door ElevenLabs aangeroepen wanneer een async transcriptie
+# klaar is (geen Supabase JWT). Authenticatie gebeurt via de HMAC-signatuur die de functie
+# zelf controleert (ElevenLabs-Signature header + ELEVENLABS_WEBHOOK_SECRET).
+[functions.meeting-transcribe-webhook]
+verify_jwt = false

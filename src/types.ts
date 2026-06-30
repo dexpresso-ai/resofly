@@ -9,7 +9,7 @@ export type FinanceStatus = 'draft' | 'pending_internal_approval' | 'internally_
 export type InvoiceStatus = 'draft' | 'sent' | 'overdue' | 'paid' | 'cancelled' | 'void' | 'written_off' | 'refunded';
 export type NoteType = 'general' | 'meeting' | 'action' | 'decision' | 'idea' | 'support';
 export type DocumentType = 'contract' | 'general' | 'policy' | 'procedure' | 'other';
-export type EntityType = 'client' | 'project' | 'task' | 'subtask' | 'ticket' | 'note' | 'document' | 'quote' | 'invoice' | 'folder' | 'supplier' | 'purchase_invoice' | 'fixed_asset';
+export type EntityType = 'client' | 'project' | 'task' | 'subtask' | 'ticket' | 'note' | 'document' | 'quote' | 'invoice' | 'folder' | 'supplier' | 'purchase_invoice' | 'fixed_asset' | 'meeting_recording';
 export type QuoteApprovalStatus = 'draft' | 'pending' | 'approved' | 'rejected';
 export type QuoteWorkflowEventType = 'created' | 'updated' | 'submitted_for_internal_approval' | 'internal_approval_granted' | 'internal_approval_rejected' | 'public_token_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'client_accepted' | 'client_rejected' | 'quote_version_created' | 'quote_pdf_attached' | 'expired' | 'cancelled' | 'void' | 'written_off';
 export type QuoteEmailDeliveryStatus = 'queued' | 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'failed' | 'complained';
@@ -1142,6 +1142,48 @@ export interface ParsedBankStatement {
 
 export interface Attachment extends OrgScopedRow {
   entity_type: EntityType; entity_id: UUID; parent_task_id: UUID | null; name: string; mime_type: string; size_bytes: number; storage_key: string; public_url: string | null; created_at: string;
+}
+
+// ── Meeting-opnames + AI-notulen ─────────────────────────────────────────────
+export type MeetingRecordingStatus = 'uploaded' | 'transcribing' | 'transcribed' | 'summarizing' | 'done' | 'error';
+
+/** Eén spreker-gelabeld segment uit het ElevenLabs-transcript. */
+export interface MeetingTranscriptSegment { speaker: string | null; text: string; start: number | null; end: number | null }
+
+/** Gestructureerde notulen die Claude teruggeeft. */
+export interface MeetingSummary {
+  samenvatting: string;
+  besproken: string[];
+  besluiten: string[];
+  actiepunten: string[];
+  vervolgafspraken: string[];
+}
+
+export interface MeetingRecording extends OrgScopedRow {
+  created_by: UUID | null;
+  provider: CalendarProvider | 'native' | null;
+  source_id: UUID | null;
+  event_ref: string | null;
+  event_title_snapshot: string | null;
+  client_id: UUID | null;
+  project_id: UUID | null;
+  storage_key: string | null;
+  mime_type: string | null;
+  size_bytes: number | null;
+  duration_seconds: number | null;
+  consent_given: boolean;
+  consent_at: string | null;
+  status: MeetingRecordingStatus;
+  error_message: string | null;
+  elevenlabs_request_id: string | null;
+  language: string | null;
+  transcript_text: string | null;
+  transcript_json: MeetingTranscriptSegment[] | null;
+  transcription_cost_usd: number;
+  summary_text: string | null;
+  summary_json: MeetingSummary | null;
+  created_at: string;
+  updated_at: string;
 }
 export interface CompanySettings extends OrgScopedRow {
   company_name: string;
