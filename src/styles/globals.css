@@ -2465,3 +2465,13 @@ body::before{
 .event-detail-map-link{text-decoration:none;color:var(--muted2);transition:border-color .15s,background .15s}
 .event-detail-map-link:hover{border-color:var(--accent);background:rgba(255,255,255,.05)}
 .event-detail-map-ext{margin-left:auto;color:var(--muted);flex:0 0 auto;align-self:center}
+/* ── Videovergadering ─────────────────────────────────────────────────── */
+.event-detail-join-link{text-decoration:none;color:#fff;font-weight:800;transition:border-color .15s,background .15s;border-color:rgba(59,130,246,.55);background:rgba(59,130,246,.16)}
+.event-detail-join-link:hover{border-color:#3b82f6;background:rgba(59,130,246,.28)}
+.event-detail-join-link svg:first-child{color:#60a5fa}
+.event-meeting-field{display:flex;flex-direction:column;gap:6px}
+.event-meeting-field .tb-panel-section-label{display:flex;align-items:center;gap:6px}
+.calendar-help-warn{color:var(--accent-r)}
+.tb-ev-video{position:absolute;top:2px;left:3px;display:inline-flex;align-items:center;justify-content:center;padding:2px;border-radius:6px;background:rgba(59,130,246,.85);color:#fff;pointer-events:none}
+.tb-ev-video svg{flex:0 0 auto}
+.calendar-item-video{vertical-align:-2px;margin-left:5px;color:#60a5fa}

@@ -1361,6 +1361,8 @@ export interface CalendarExternalEvent {
   ends_at: string;
   all_day: boolean;
   html_link: string | null;
+  /** Videocall-link (Google Meet / Teams / Zoom / overig), indien aan dit item gekoppeld. */
+  meeting_url?: string | null;
   visibility: CalendarVisibility;
   is_private_masked?: boolean;
   /** Alleen voor native ResoFly-agenda-items: de database-id van het item (voor bewerken/verwijderen). */

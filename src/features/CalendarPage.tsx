@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { CalendarDays, CalendarPlus, ChevronDown, ChevronRight, Clock, ExternalLink, LayoutList, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, X } from 'lucide-react';
+import { CalendarDays, CalendarPlus, ChevronDown, ChevronRight, Clock, ExternalLink, LayoutList, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, Video, X } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { MeetingRecorder } from '../components/MeetingRecorder';
 import { RichTextExcerpt } from '../components/RichTextEditor';
 import { createNoteWithCalendarLink } from '../lib/repository';
 import { addDays, DAY_NAMES_NL, formatISODate, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
 import { dateNL, formatMinutes } from '../lib/format';
+import { detectMeetingKind, isValidMeetingUrl } from '../lib/meeting';
 import {
   createCalendarAppPassword,
   createExternalCalendarEvent,
@@ -97,6 +98,7 @@ type NewEventState = {
   trackTime: boolean;
   recurrenceFreq: '' | RecurrenceFrequency; recurrenceUntil: string; editingEventId: string;
   attendees: { email: string; name: string }[];
+  meetingUrl: string; addConference: boolean;
 };
 
 const ATTENDEE_STATUS_LABELS: Record<AttendeeStatus, string> = {
@@ -808,6 +810,7 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, c
                         }}
                         title={`${visualTime}\n${ev.title}\n${eventMeta}${trackedMin != null ? `\n${formatMinutes(trackedMin)} geregistreerd` : ''}${draggable ? '\nSleep om te verplaatsen · sleep de randen om de duur te wijzigen' : ''}`}>
                         {trackedMin != null && <span className="tb-ev-track" title={`${formatMinutes(trackedMin)} geregistreerd`}><Clock size={10} />{formatMinutes(trackedMin)}</span>}
+                        {ev.meeting_url && <span className="tb-ev-video" title="Videocall gekoppeld"><Video size={10} /></span>}
                         {draggable && <span className="tb-ev-handle tb-ev-handle-top" onPointerDown={e => beginEventInteraction(e, ev, di, 'resize-start')} title="Sleep om de starttijd te wijzigen" />}
                         <span className="tb-ev-time">{visualTime}</span>
                         <span className="tb-ev-title">{ev.title}</span>
@@ -1028,7 +1031,51 @@ function LocationField({ value, onChange, placeholder }: {
 
 /* ── Floating creation panel ─────────────────────────────────────────── */
 
-function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, projects, loading, canWrite, selectedSourceIsNative, onSubmit, onClose }: {
+// Videovergadering-veld: automatisch genereren (Google Meet op Google, Teams op
+// Microsoft) óf zelf een Meet/Teams/Zoom-link plakken. Op de eigen ResoFly-agenda
+// (native) kan alleen een link geplakt worden — die hosten we immers niet zelf.
+function MeetingFields({ provider, meetingUrl, addConference, onChange }: {
+  provider: CalendarProvider | null;
+  meetingUrl: string;
+  addConference: boolean;
+  onChange: (patch: Partial<Pick<NewEventState, 'meetingUrl' | 'addConference'>>) => void;
+}) {
+  const canAuto = provider === 'google' || provider === 'microsoft';
+  const autoLabel = provider === 'microsoft' ? 'Teams-vergadering' : 'Google Meet-link';
+  // Auto-genereren kan alleen bij Google/Microsoft; op een native agenda vervalt het
+  // altijd naar het plakveld (ook als addConference nog van een eerdere bron aanstond).
+  const autoActive = canAuto && addConference;
+  const trimmed = meetingUrl.trim();
+  const invalid = trimmed.length > 0 && !isValidMeetingUrl(trimmed);
+  const detected = trimmed && !invalid ? detectMeetingKind(trimmed) : null;
+  return (
+    <div className="event-meeting-field">
+      <div className="tb-panel-section-label"><Video size={13} /> Videovergadering</div>
+      {canAuto && (
+        <label className="check-row">
+          <input type="checkbox" checked={addConference}
+            onChange={e => onChange(e.target.checked ? { addConference: true, meetingUrl: '' } : { addConference: false })} />
+          <span>Voeg automatisch een {autoLabel} toe</span>
+        </label>
+      )}
+      {autoActive ? (
+        <p className="calendar-help">Er wordt automatisch een {autoLabel} aangemaakt en meegestuurd met de uitnodiging.</p>
+      ) : (
+        <>
+          <label>{canAuto ? 'Of plak een eigen videocall-link' : 'Videocall-link'}
+            <Input type="url" value={meetingUrl} placeholder="Google Meet-, Teams- of Zoom-link…"
+              onChange={e => onChange({ meetingUrl: e.target.value })} />
+          </label>
+          {invalid
+            ? <p className="calendar-help calendar-help-warn">Voer een geldige http(s)-link in.</p>
+            : detected && <p className="calendar-help"><Video size={12} /> {detected.label}-link herkend</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, projects, loading, canWrite, selectedSourceIsNative, selectedSourceProvider, onSubmit, onClose }: {
   newEvent: NewEventState;
   setNewEvent: (fn: (prev: NewEventState) => NewEventState) => void;
   writeableSources: CalendarSource[];
@@ -1037,6 +1084,7 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
   loading: boolean;
   canWrite: boolean;
   selectedSourceIsNative: boolean;
+  selectedSourceProvider: CalendarProvider | null;
   onSubmit: (e: FormEvent) => void;
   onClose: () => void;
 }) {
@@ -1069,6 +1117,8 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
         </div>
         <label>Omschrijving<Textarea value={newEvent.description} onChange={e => setNewEvent(p => ({ ...p, description: e.target.value }))} placeholder="Optioneel" /></label>
         <label className="check-row"><input type="checkbox" checked={newEvent.allDay} onChange={e => setNewEvent(p => ({ ...p, allDay: e.target.checked }))} /> Hele dag</label>
+        <MeetingFields provider={selectedSourceProvider} meetingUrl={newEvent.meetingUrl} addConference={newEvent.addConference}
+          onChange={patch => setNewEvent(p => ({ ...p, ...patch }))} />
         {selectedSourceIsNative ? (
           <div className="settings-grid compact">
             <label>Herhaling<Select value={newEvent.recurrenceFreq} onChange={e => setNewEvent(p => ({ ...p, recurrenceFreq: e.target.value as '' | RecurrenceFrequency }))}>
@@ -1278,6 +1328,13 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
             <a className="event-detail-meta-card event-detail-map-link" href={googleMapsSearchUrl(event.location)} target="_blank" rel="noreferrer" title="Open locatie in Google Maps">
               <MapPin size={15} />
               <span>{event.location}</span>
+              <ExternalLink size={12} className="event-detail-map-ext" />
+            </a>
+          )}
+          {event.meeting_url && (
+            <a className="event-detail-meta-card event-detail-join-link" href={event.meeting_url} target="_blank" rel="noreferrer" title="Deelnemen aan de videocall">
+              <Video size={15} />
+              <span>Deelnemen · {detectMeetingKind(event.meeting_url).label}</span>
               <ExternalLink size={12} className="event-detail-map-ext" />
             </a>
           )}
@@ -1549,7 +1606,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   const [newEvent, setNewEvent] = useState(() => {
     const s = new Date(); s.setMinutes(0, 0, 0); s.setHours(s.getHours() + 1);
     const e = new Date(s); e.setHours(e.getHours() + 1);
-    return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '' as '' | RecurrenceFrequency, recurrenceUntil: '', editingEventId: '', attendees: [] as { email: string; name: string }[] };
+    return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '' as '' | RecurrenceFrequency, recurrenceUntil: '', editingEventId: '', attendees: [] as { email: string; name: string }[], meetingUrl: '', addConference: false };
   });
   // Bij het bewerken van een native afspraak bewaren we het originele event, zodat
   // we bij een gewijzigde starttijd de oude koppeling (en afgeleide urenpost) kunnen opruimen.
@@ -1695,7 +1752,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     const sd = new Date(day); sd.setHours(st.hour, st.minutes, 0, 0);
     const ed = new Date(day); ed.setHours(et.hour, et.minutes, 0, 0);
     setEditingOriginal(null);
-    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '', trackTime: true, editingEventId: '' }));
+    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '', trackTime: true, editingEventId: '', meetingUrl: '', addConference: false }));
     setShowCreatePanel(true);
   }, []);
 
@@ -1718,6 +1775,9 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       description: newEvent.description.trim() || null, location: newEvent.location.trim() || null,
       startsAt: sIso, endsAt: eIso, allDay: newEvent.allDay, recurrence,
       attendees: isNative ? newEvent.attendees.map(a => ({ email: a.email, name: a.name || null })) : undefined,
+      // Automatisch genereren kan alleen bij Google/Microsoft; native accepteert alleen een geplakte link.
+      meetingUrl: newEvent.addConference && !isNative ? null : (newEvent.meetingUrl.trim() || null),
+      addConference: !isNative && newEvent.addConference,
     };
     setLoading(true); setError(null); setMessage(null);
     try {
@@ -1739,7 +1799,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       }
       setEditingOriginal(null);
       const d = makeDefaultTimes();
-      setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [] }));
+      setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false }));
       setShowCreatePanel(false);
       refreshEventsOnly().catch(() => {});
     } catch (err) { setError(err instanceof Error ? err.message : 'Opslaan mislukt.'); }
@@ -1774,6 +1834,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       recurrenceFreq: rec.freq, recurrenceUntil: rec.until,
       editingEventId: isNative ? (event.native_event_id as string) : event.provider_event_id,
       attendees,
+      meetingUrl: event.meeting_url ?? '',
+      addConference: false,
     }));
     setShowCreatePanel(true);
   }
@@ -1820,6 +1882,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       location: event.location ?? null,
       startsAt: startIso, endsAt: endIso, allDay: event.all_day,
       recurrence, attendees,
+      // Videocall-link behouden bij verplaatsen/herschalen.
+      meetingUrl: event.meeting_url ?? null,
     };
     try {
       const updated = await updateCalendarEvent(organizationId, eventRef(event), input);
@@ -2122,8 +2186,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
                 {de.map(ev => <button type="button" className={`calendar-item external${ev.visibility === 'private' ? ' private-event' : ''}`}
                   key={`${ev.provider}-${ev.provider_event_id}-${ev.starts_at}`} onClick={() => setSelectedEvent(ev)}
                   style={eventColorStyle(sourceColors.get(ev.source_id))}>
-                  <span className="calendar-item-time">{formatTime(ev.starts_at, ev.all_day)}{!ev.all_day ? ` – ${formatTime(ev.ends_at)}` : ''}</span><strong>{ev.title}</strong>
-                  <small>{providerLabel(ev.provider)} · {ev.source_name}{ev.visibility === 'private' ? ' · privé' : ' · team'}{trackedMinutesFor(ev) != null ? ` · ⏱ ${formatMinutes(trackedMinutesFor(ev)!)}` : ''}</small>
+                  <span className="calendar-item-time">{formatTime(ev.starts_at, ev.all_day)}{!ev.all_day ? ` – ${formatTime(ev.ends_at)}` : ''}{ev.meeting_url ? <Video size={11} className="calendar-item-video" /> : null}</span><strong>{ev.title}</strong>
+                  <small>{providerLabel(ev.provider)} · {ev.source_name}{ev.visibility === 'private' ? ' · privé' : ' · team'}{trackedMinutesFor(ev) != null ? ` · ⏱ ${formatMinutes(trackedMinutesFor(ev)!)}` : ''}{ev.meeting_url ? ' · videocall' : ''}</small>
                 </button>)}
                 {dt.length === 0 && de.length === 0 && <div className="calendar-no-items">Geen items</div>}
               </div>
@@ -2150,6 +2214,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         </div>
         <label>Omschrijving<Textarea value={newEvent.description} onChange={e => setNewEvent(p => ({ ...p, description: e.target.value }))} placeholder="Optioneel" /></label>
         <label className="check-row"><input type="checkbox" checked={newEvent.allDay} onChange={e => setNewEvent(p => ({ ...p, allDay: e.target.checked }))} /> Hele dag</label>
+        <MeetingFields provider={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider ?? null} meetingUrl={newEvent.meetingUrl} addConference={newEvent.addConference}
+          onChange={patch => setNewEvent(p => ({ ...p, ...patch }))} />
         <div className="tb-panel-section-label">Koppelen aan</div>
         <ClientProjectPicker clients={data.clients} projects={data.projects} clientId={newEvent.clientId} projectId={newEvent.projectId}
           onChange={next => setNewEvent(p => ({ ...p, clientId: next.clientId, projectId: next.projectId }))} />
@@ -2166,7 +2232,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
 
     {/* FAB for time-grid views */}
     {(view === 'day' || view === 'week') && canWrite && writeableSources.length > 0 && !showCreatePanel && (
-      <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setEditingOriginal(null); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [] })); setShowCreatePanel(true); }} title="Nieuwe afspraak aanmaken">
+      <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setEditingOriginal(null); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false })); setShowCreatePanel(true); }} title="Nieuwe afspraak aanmaken">
         <Plus size={22} />
       </button>
     )}
@@ -2175,6 +2241,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     {showCreatePanel && <EventCreationPanel newEvent={newEvent} setNewEvent={setNewEvent} writeableSources={writeableSources}
       clients={data.clients} projects={data.projects}
       selectedSourceIsNative={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider === 'native'}
+      selectedSourceProvider={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider ?? null}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => { setShowCreatePanel(false); setEditingOriginal(null); }} />}
 
     <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sourceColors={sourceColors} canWrite={canWrite} editable={selectedEvent ? eventIsEditable(selectedEvent) : false} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onLogTime={openLogTimeForEvent} onReschedule={rescheduleEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onEditEvent={startEditEvent} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />

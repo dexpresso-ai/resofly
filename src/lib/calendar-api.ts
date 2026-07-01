@@ -18,6 +18,10 @@ export interface CalendarEventInput {
   recurrence?: EventRecurrence | null;
   /** Alleen voor native ResoFly-agenda's: genodigden (krijgen een uitnodiging per e-mail). */
   attendees?: AttendeeInput[];
+  /** Videocall-link die de gebruiker zelf plakt (Google Meet / Teams / Zoom / overig). */
+  meetingUrl?: string | null;
+  /** Genereer automatisch een videovergadering bij de provider (Google Meet op Google, Teams op Microsoft). */
+  addConference?: boolean;
 }
 
 export interface NativeCalendarInput {

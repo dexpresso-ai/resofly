@@ -612,6 +612,7 @@ function maskPrivateEventForRequester(event: Record<string, unknown>, source: Ca
     title: 'Bezet',
     description: null,
     location: null,
+    meeting_url: null,
     html_link: null,
     is_private_masked: true,
   };
@@ -627,6 +628,8 @@ async function fetchGoogleEvents(accessToken: string, source: CalendarSourceRow,
     const endObj = (item.end ?? {}) as Record<string, string>;
     const allDay = Boolean(startObj.date && !startObj.dateTime);
     const allDayRange = allDay ? normalizeAllDayEventRange(startObj.date, endObj.date) : null;
+    const rawDescription = item.description ? String(item.description) : null;
+    const location = item.location ? String(item.location) : null;
     return {
       id: `${source.id}:${String(item.id)}`,
       provider: 'google' as Provider,
@@ -634,8 +637,9 @@ async function fetchGoogleEvents(accessToken: string, source: CalendarSourceRow,
       source_name: source.name,
       provider_event_id: String(item.id),
       title: String(item.summary || '(Geen titel)'),
-      description: item.description ? String(item.description) : null,
-      location: item.location ? String(item.location) : null,
+      description: stripMeetingLine(rawDescription),
+      location,
+      meeting_url: readMeetingUrl(googleConferenceUrl(item), rawDescription, location),
       starts_at: allDayRange ? allDayRange.starts_at : String(startObj.dateTime),
       ends_at: allDayRange ? allDayRange.ends_at : String(endObj.dateTime),
       all_day: allDay,
@@ -647,7 +651,7 @@ async function fetchGoogleEvents(accessToken: string, source: CalendarSourceRow,
 }
 
 async function fetchMicrosoftEvents(accessToken: string, source: CalendarSourceRow, start: string, end: string) {
-  const params = new URLSearchParams({ startDateTime: start, endDateTime: end, '$top': '250', '$orderby': 'start/dateTime', '$select': 'id,subject,bodyPreview,location,start,end,isAllDay,webLink' });
+  const params = new URLSearchParams({ startDateTime: start, endDateTime: end, '$top': '250', '$orderby': 'start/dateTime', '$select': 'id,subject,bodyPreview,location,start,end,isAllDay,webLink,isOnlineMeeting,onlineMeeting' });
   const res = await fetch(`https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(source.provider_calendar_id)}/calendarView?${params}`, {
     headers: { Authorization: `Bearer ${accessToken}`, Prefer: 'outlook.timezone="UTC"' },
   });
@@ -657,8 +661,11 @@ async function fetchMicrosoftEvents(accessToken: string, source: CalendarSourceR
     const startObj = (item.start ?? {}) as Record<string, string>;
     const endObj = (item.end ?? {}) as Record<string, string>;
     const location = (item.location ?? {}) as Record<string, string>;
+    const onlineMeeting = (item.onlineMeeting ?? {}) as Record<string, string>;
     const allDay = Boolean(item.isAllDay);
     const allDayRange = allDay ? normalizeAllDayEventRange(startObj.dateTime, endObj.dateTime) : null;
+    const rawDescription = item.bodyPreview ? String(item.bodyPreview) : null;
+    const locationName = location.displayName ? String(location.displayName) : null;
     return {
       id: `${source.id}:${String(item.id)}`,
       provider: 'microsoft' as Provider,
@@ -666,8 +673,9 @@ async function fetchMicrosoftEvents(accessToken: string, source: CalendarSourceR
       source_name: source.name,
       provider_event_id: String(item.id),
       title: String(item.subject || '(Geen titel)'),
-      description: item.bodyPreview ? String(item.bodyPreview) : null,
-      location: location.displayName ? String(location.displayName) : null,
+      description: stripMeetingLine(rawDescription),
+      location: locationName,
+      meeting_url: readMeetingUrl(onlineMeeting.joinUrl ? String(onlineMeeting.joinUrl) : null, rawDescription, locationName),
       starts_at: allDayRange ? allDayRange.starts_at : normalizeMicrosoftDateTime(startObj.dateTime),
       ends_at: allDayRange ? allDayRange.ends_at : normalizeMicrosoftDateTime(endObj.dateTime),
       all_day: allDay,
@@ -729,7 +737,61 @@ function normalizeNewEventInput(input: Record<string, unknown>) {
     startsAt,
     endsAt,
     allDay,
+    meetingUrl: sanitizeMeetingUrl(input.meetingUrl),
+    addConference: Boolean(input.addConference),
   };
+}
+
+// ── Videovergadering-link (Google Meet / Teams / Zoom / overig) ──────────────
+
+/** Alleen http(s)-links toestaan; onzin of te lange waarden vervallen naar null. */
+function sanitizeMeetingUrl(value: unknown): string | null {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw || raw.length > 2048) return null;
+  try {
+    const u = new URL(raw);
+    return (u.protocol === 'http:' || u.protocol === 'https:') ? raw : null;
+  } catch { return null; }
+}
+
+// Externe agenda's (Google/Microsoft) hebben geen eigen veld voor een geplakte
+// (bv. Zoom-)link. Die zetten we als herkenbare regel onderaan de omschrijving,
+// zodat hij ook in Google Calendar / Outlook zichtbaar blijft, en lezen hem er
+// bij het ophalen weer uit. Automatisch gegenereerde Meet/Teams-links komen uit
+// het native conferentie-veld van de provider en gaan hier langs.
+const MEETING_LINE_RE = /\n*[ \t]*(?:🎥[ \t]*)?Videocall:[ \t]*(https?:\/\/\S+)[ \t]*$/i;
+const MEETING_HOST_RE = /https?:\/\/[^\s]*(?:meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|zoom\.us|zoom\.com)[^\s]*/i;
+
+/** Voegt de geplakte link als aparte regel onderaan de omschrijving toe. */
+function withMeetingLine(description: string | null, url: string | null): string | null {
+  const base = stripMeetingLine(description);
+  if (!url) return base;
+  return `${base ? `${base}\n\n` : ''}🎥 Videocall: ${url}`;
+}
+
+/** Verwijdert een eerder toegevoegde "Videocall:"-regel uit de omschrijving. */
+function stripMeetingLine(description: string | null): string | null {
+  if (!description) return null;
+  const cleaned = description.replace(MEETING_LINE_RE, '').replace(/\s+$/, '');
+  return cleaned || null;
+}
+
+/** Leidt de videocall-link af: eerst de native conferentie, dan een geplakte regel of losse link. */
+function readMeetingUrl(nativeConference: string | null, description: string | null, location: string | null): string | null {
+  if (nativeConference) return nativeConference;
+  const marked = (description ?? '').match(MEETING_LINE_RE);
+  if (marked) return marked[1];
+  return (description ?? '').match(MEETING_HOST_RE)?.[0] ?? (location ?? '').match(MEETING_HOST_RE)?.[0] ?? null;
+}
+
+/** Videocall-link uit de eerste video-entrypoint van Google conferenceData. */
+function googleConferenceUrl(item: Record<string, unknown>): string | null {
+  if (item.hangoutLink) return String(item.hangoutLink);
+  const conf = (item.conferenceData ?? {}) as Record<string, unknown>;
+  const entries = (conf.entryPoints ?? []) as Record<string, string>[];
+  const video = entries.find(e => e.entryPointType === 'video') ?? entries[0];
+  return video?.uri ? String(video.uri) : null;
 }
 
 /** Given a date string "YYYY-MM-DD", return the next day as "YYYY-MM-DD". */
@@ -755,44 +817,34 @@ function normalizeAllDayEventRange(startValue?: string | null, endExclusiveValue
   };
 }
 
-async function createGoogleEvent(accessToken: string, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
+/** Bouwt de Google event-body (start/end + omschrijving/videovergadering). */
+function buildGoogleEventBody(source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>): Record<string, unknown> {
+  // Geplakte link onderaan de omschrijving; automatisch gegenereerde Meet gaat via conferenceData.
+  const description = event.addConference ? event.description : withMeetingLine(event.description, event.meetingUrl);
   let body: Record<string, unknown>;
   if (event.allDay) {
+    // Google Calendar API: end.date is EXCLUSIVE. Voor een eendaags event op 2026-05-08
+    // is start.date = "2026-05-08" en end.date = "2026-05-09".
     const startDate = event.startsAt.slice(0, 10);
-    // Google Calendar API: end.date is EXCLUSIVE. For a single-day event on 2026-05-08,
-    // start.date = "2026-05-08", end.date = "2026-05-09".
     const endDateRaw = event.endsAt.slice(0, 10);
-    const endExclusive = endDateRaw <= startDate
-      ? nextDay(startDate)
-      : nextDay(endDateRaw);
-    body = {
-      summary: event.title,
-      description: event.description,
-      location: event.location,
-      start: { date: startDate },
-      end: { date: endExclusive },
-    };
+    const endExclusive = endDateRaw <= startDate ? nextDay(startDate) : nextDay(endDateRaw);
+    body = { summary: event.title, description, location: event.location, start: { date: startDate }, end: { date: endExclusive } };
   } else {
-    // Timed events: startsAt/endsAt are already UTC ISO strings (ending in Z).
-    // Optionally set the source timezone so Google can display correctly in the calendar's zone.
+    // Getimede events: startsAt/endsAt zijn al UTC ISO-strings (eindigen op Z).
     const tz = source.timezone || undefined;
-    body = {
-      summary: event.title,
-      description: event.description,
-      location: event.location,
-      start: { dateTime: event.startsAt, timeZone: tz },
-      end: { dateTime: event.endsAt, timeZone: tz },
-    };
+    body = { summary: event.title, description, location: event.location, start: { dateTime: event.startsAt, timeZone: tz }, end: { dateTime: event.endsAt, timeZone: tz } };
   }
-  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error?.message || 'Google event aanmaken mislukt.');
-  const allDay = Boolean(payload.start?.date && !payload.start?.dateTime);
-  const allDayRange = allDay ? normalizeAllDayEventRange(payload.start?.date, payload.end?.date) : null;
+  if (event.addConference) {
+    body.conferenceData = { createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } };
+  }
+  return body;
+}
+
+function googleEventToBaseEvent(payload: Record<string, unknown>, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
+  const allDay = Boolean((payload.start as Record<string, string>)?.date && !(payload.start as Record<string, string>)?.dateTime);
+  const allDayRange = allDay ? normalizeAllDayEventRange((payload.start as Record<string, string>)?.date, (payload.end as Record<string, string>)?.date) : null;
+  const rawDescription = payload.description ? String(payload.description) : event.description;
+  const location = payload.location ? String(payload.location) : event.location;
   return {
     id: `${source.id}:${String(payload.id)}`,
     provider: 'google' as Provider,
@@ -800,10 +852,11 @@ async function createGoogleEvent(accessToken: string, source: CalendarSourceRow,
     source_name: source.name,
     provider_event_id: String(payload.id),
     title: String(payload.summary || event.title),
-    description: payload.description ? String(payload.description) : event.description,
-    location: payload.location ? String(payload.location) : event.location,
-    starts_at: allDayRange ? allDayRange.starts_at : String(payload.start.dateTime),
-    ends_at: allDayRange ? allDayRange.ends_at : String(payload.end.dateTime),
+    description: stripMeetingLine(rawDescription),
+    location,
+    meeting_url: readMeetingUrl(googleConferenceUrl(payload), rawDescription, location),
+    starts_at: allDayRange ? allDayRange.starts_at : String((payload.start as Record<string, string>).dateTime),
+    ends_at: allDayRange ? allDayRange.ends_at : String((payload.end as Record<string, string>).dateTime),
     all_day: allDay,
     html_link: payload.htmlLink ? String(payload.htmlLink) : null,
     visibility: source.visibility,
@@ -811,12 +864,25 @@ async function createGoogleEvent(accessToken: string, source: CalendarSourceRow,
   };
 }
 
-async function createMicrosoftEvent(accessToken: string, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
+async function createGoogleEvent(accessToken: string, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
+  const body = buildGoogleEventBody(source, event);
+  const query = event.addConference ? '?conferenceDataVersion=1' : '';
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events${query}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error?.message || 'Google event aanmaken mislukt.');
+  return googleEventToBaseEvent(payload, source, event);
+}
+
+function buildMicrosoftEventBody(event: ReturnType<typeof normalizeNewEventInput>): Record<string, unknown> {
   let start: { dateTime: string; timeZone: string };
   let end: { dateTime: string; timeZone: string };
   if (event.allDay) {
-    // Microsoft Graph: all-day events also use exclusive end dates.
-    // dateTime should be midnight UTC, timeZone: 'UTC'.
+    // Microsoft Graph: all-day events gebruiken ook exclusieve einddatums.
+    // dateTime = middernacht UTC, timeZone: 'UTC'.
     const startDate = event.startsAt.slice(0, 10);
     const endDateRaw = event.endsAt.slice(0, 10);
     const endExclusive = endDateRaw <= startDate ? nextDay(startDate) : nextDay(endDateRaw);
@@ -826,24 +892,33 @@ async function createMicrosoftEvent(accessToken: string, source: CalendarSourceR
     start = { dateTime: toMicrosoftDateTime(event.startsAt), timeZone: 'UTC' };
     end = { dateTime: toMicrosoftDateTime(event.endsAt), timeZone: 'UTC' };
   }
-  const body = {
+  // Geplakte link onderaan de omschrijving; automatische Teams-vergadering via isOnlineMeeting.
+  const content = event.addConference ? (event.description || '') : (withMeetingLine(event.description, event.meetingUrl) || '');
+  const body: Record<string, unknown> = {
     subject: event.title,
-    body: { contentType: 'HTML', content: event.description || '' },
-    location: event.location ? { displayName: event.location } : undefined,
+    body: { contentType: 'HTML', content },
+    // Altijd meesturen (ook leeg) zodat een gewiste locatie bij bewerken ook echt verdwijnt.
+    location: { displayName: event.location || '' },
     isAllDay: event.allDay,
     start,
     end,
   };
-  const res = await fetch(`https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(source.provider_calendar_id)}/events`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error?.message || 'Microsoft event aanmaken mislukt.');
+  if (event.addConference) {
+    body.isOnlineMeeting = true;
+    body.onlineMeetingProvider = 'teamsForBusiness';
+  }
+  return body;
+}
+
+function microsoftEventToBaseEvent(payload: Record<string, unknown>, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
   const location = (payload.location ?? {}) as Record<string, string>;
+  const start = (payload.start ?? {}) as Record<string, string>;
+  const end = (payload.end ?? {}) as Record<string, string>;
+  const onlineMeeting = (payload.onlineMeeting ?? {}) as Record<string, string>;
   const allDay = Boolean(payload.isAllDay);
-  const allDayRange = allDay ? normalizeAllDayEventRange(payload.start?.dateTime || event.startsAt, payload.end?.dateTime || event.endsAt) : null;
+  const allDayRange = allDay ? normalizeAllDayEventRange(start.dateTime || event.startsAt, end.dateTime || event.endsAt) : null;
+  const rawDescription = payload.bodyPreview ? String(payload.bodyPreview) : event.description;
+  const locationName = location.displayName ? String(location.displayName) : event.location;
   return {
     id: `${source.id}:${String(payload.id)}`,
     provider: 'microsoft' as Provider,
@@ -851,15 +926,28 @@ async function createMicrosoftEvent(accessToken: string, source: CalendarSourceR
     source_name: source.name,
     provider_event_id: String(payload.id),
     title: String(payload.subject || event.title),
-    description: payload.bodyPreview ? String(payload.bodyPreview) : event.description,
-    location: location.displayName ? String(location.displayName) : event.location,
-    starts_at: allDayRange ? allDayRange.starts_at : normalizeMicrosoftDateTime(payload.start?.dateTime || event.startsAt),
-    ends_at: allDayRange ? allDayRange.ends_at : normalizeMicrosoftDateTime(payload.end?.dateTime || event.endsAt),
+    description: stripMeetingLine(rawDescription),
+    location: locationName,
+    meeting_url: readMeetingUrl(onlineMeeting.joinUrl ? String(onlineMeeting.joinUrl) : null, rawDescription, locationName),
+    starts_at: allDayRange ? allDayRange.starts_at : normalizeMicrosoftDateTime(start.dateTime || event.startsAt),
+    ends_at: allDayRange ? allDayRange.ends_at : normalizeMicrosoftDateTime(end.dateTime || event.endsAt),
     all_day: allDay,
     html_link: payload.webLink ? String(payload.webLink) : null,
     visibility: source.visibility,
     is_private_masked: false,
   };
+}
+
+async function createMicrosoftEvent(accessToken: string, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
+  const body = buildMicrosoftEventBody(event);
+  const res = await fetch(`https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(source.provider_calendar_id)}/events`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error?.message || 'Microsoft event aanmaken mislukt.');
+  return microsoftEventToBaseEvent(payload, source, event);
 }
 
 /* ── Bewerken/verwijderen van externe (Google/Microsoft) agenda-items ──── */
@@ -905,64 +993,20 @@ async function deleteExternalEvent(organizationId: string, requesterUserId: stri
 }
 
 async function updateGoogleEvent(accessToken: string, source: CalendarSourceRow, eventId: string, event: ReturnType<typeof normalizeNewEventInput>) {
-  let body: Record<string, unknown>;
-  if (event.allDay) {
-    const startDate = event.startsAt.slice(0, 10);
-    const endDateRaw = event.endsAt.slice(0, 10);
-    const endExclusive = endDateRaw <= startDate ? nextDay(startDate) : nextDay(endDateRaw);
-    body = { summary: event.title, description: event.description, location: event.location, start: { date: startDate }, end: { date: endExclusive } };
-  } else {
-    const tz = source.timezone || undefined;
-    body = { summary: event.title, description: event.description, location: event.location, start: { dateTime: event.startsAt, timeZone: tz }, end: { dateTime: event.endsAt, timeZone: tz } };
-  }
-  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events/${encodeURIComponent(eventId)}`, {
+  const body = buildGoogleEventBody(source, event);
+  const query = event.addConference ? '?conferenceDataVersion=1' : '';
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events/${encodeURIComponent(eventId)}${query}`, {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(payload.error?.message || 'Google event bijwerken mislukt.');
-  const allDay = Boolean(payload.start?.date && !payload.start?.dateTime);
-  const allDayRange = allDay ? normalizeAllDayEventRange(payload.start?.date, payload.end?.date) : null;
-  return {
-    id: `${source.id}:${String(payload.id)}`,
-    provider: 'google' as Provider,
-    source_id: source.id,
-    source_name: source.name,
-    provider_event_id: String(payload.id),
-    title: String(payload.summary || event.title),
-    description: payload.description ? String(payload.description) : event.description,
-    location: payload.location ? String(payload.location) : event.location,
-    starts_at: allDayRange ? allDayRange.starts_at : String(payload.start.dateTime),
-    ends_at: allDayRange ? allDayRange.ends_at : String(payload.end.dateTime),
-    all_day: allDay,
-    html_link: payload.htmlLink ? String(payload.htmlLink) : null,
-    visibility: source.visibility,
-    is_private_masked: false,
-  };
+  return googleEventToBaseEvent(payload, source, event);
 }
 
 async function updateMicrosoftEvent(accessToken: string, source: CalendarSourceRow, eventId: string, event: ReturnType<typeof normalizeNewEventInput>) {
-  let start: { dateTime: string; timeZone: string };
-  let end: { dateTime: string; timeZone: string };
-  if (event.allDay) {
-    const startDate = event.startsAt.slice(0, 10);
-    const endDateRaw = event.endsAt.slice(0, 10);
-    const endExclusive = endDateRaw <= startDate ? nextDay(startDate) : nextDay(endDateRaw);
-    start = { dateTime: `${startDate}T00:00:00`, timeZone: 'UTC' };
-    end = { dateTime: `${endExclusive}T00:00:00`, timeZone: 'UTC' };
-  } else {
-    start = { dateTime: toMicrosoftDateTime(event.startsAt), timeZone: 'UTC' };
-    end = { dateTime: toMicrosoftDateTime(event.endsAt), timeZone: 'UTC' };
-  }
-  const body = {
-    subject: event.title,
-    body: { contentType: 'HTML', content: event.description || '' },
-    location: { displayName: event.location || '' },
-    isAllDay: event.allDay,
-    start,
-    end,
-  };
+  const body = buildMicrosoftEventBody(event);
   const res = await fetch(`https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(eventId)}`, {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
@@ -970,25 +1014,7 @@ async function updateMicrosoftEvent(accessToken: string, source: CalendarSourceR
   });
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(payload.error?.message || 'Microsoft event bijwerken mislukt.');
-  const location = (payload.location ?? {}) as Record<string, string>;
-  const allDay = Boolean(payload.isAllDay);
-  const allDayRange = allDay ? normalizeAllDayEventRange(payload.start?.dateTime || event.startsAt, payload.end?.dateTime || event.endsAt) : null;
-  return {
-    id: `${source.id}:${String(payload.id)}`,
-    provider: 'microsoft' as Provider,
-    source_id: source.id,
-    source_name: source.name,
-    provider_event_id: String(payload.id),
-    title: String(payload.subject || event.title),
-    description: payload.bodyPreview ? String(payload.bodyPreview) : event.description,
-    location: location.displayName ? String(location.displayName) : event.location,
-    starts_at: allDayRange ? allDayRange.starts_at : normalizeMicrosoftDateTime(payload.start?.dateTime || event.startsAt),
-    ends_at: allDayRange ? allDayRange.ends_at : normalizeMicrosoftDateTime(payload.end?.dateTime || event.endsAt),
-    all_day: allDay,
-    html_link: payload.webLink ? String(payload.webLink) : null,
-    visibility: source.visibility,
-    is_private_masked: false,
-  };
+  return microsoftEventToBaseEvent(payload, source, event);
 }
 
 function assertIso(value: string, field: string): string {
@@ -1009,6 +1035,7 @@ type NativeEventRow = {
   title: string;
   description: string | null;
   location: string | null;
+  meeting_url: string | null;
   starts_at: string;
   ends_at: string;
   all_day: boolean;
@@ -1110,6 +1137,7 @@ async function createNativeEvent(organizationId: string, userId: string, source:
     title: event.title,
     description: event.description,
     location: event.location,
+    meeting_url: event.meetingUrl,
     starts_at: event.startsAt,
     ends_at: event.endsAt,
     all_day: event.allDay,
@@ -1162,6 +1190,7 @@ async function updateNativeEvent(organizationId: string, requesterUserId: string
     title: event.title,
     description: event.description,
     location: event.location,
+    meeting_url: event.meetingUrl,
     starts_at: event.startsAt,
     ends_at: event.endsAt,
     all_day: event.allDay,
@@ -1220,6 +1249,7 @@ function nativeRowToBaseEvent(row: NativeEventRow, source: CalendarSourceRow): R
     title: row.title || '(Geen titel)',
     description: row.description ?? null,
     location: row.location ?? null,
+    meeting_url: row.meeting_url ?? null,
     starts_at: row.starts_at,
     ends_at: row.ends_at,
     all_day: row.all_day,
@@ -1522,8 +1552,12 @@ function buildEventIcs(ev: NativeEventRow, attendees: AttendeeRow[], ctx: Organi
     lines.push(`DTEND:${icsStamp(new Date(ev.ends_at))}`);
   }
   lines.push(`SUMMARY:${icsEscape(ev.title || '(Geen titel)')}`);
-  if (ev.description) lines.push(`DESCRIPTION:${icsEscape(ev.description)}`);
+  // Videocall-link ook in de omschrijving zetten zodat elke agenda-app hem toont,
+  // plus de RFC 7986 CONFERENCE-property voor apps die een "deelnemen"-knop kennen.
+  const description = ev.meeting_url ? `${ev.description ? `${ev.description}\n\n` : ''}Videocall: ${ev.meeting_url}` : ev.description;
+  if (description) lines.push(`DESCRIPTION:${icsEscape(description)}`);
   if (ev.location) lines.push(`LOCATION:${icsEscape(ev.location)}`);
+  if (ev.meeting_url) lines.push(`CONFERENCE;VALUE=URI;FEATURE=VIDEO;LABEL=Videocall:${icsEscape(ev.meeting_url)}`);
   if (ev.rrule) lines.push(`RRULE:${ev.rrule}`);
   lines.push(`SEQUENCE:${ev.sequence ?? 0}`);
   lines.push(`ORGANIZER;CN=${icsParam(ctx.organizerName)}:mailto:${ctx.organizerEmail}`);
@@ -1544,8 +1578,8 @@ async function sendInviteEmail(from: string, to: string, subject: string, ev: Na
   const intro = method === 'CANCEL'
     ? `De afspraak "${ev.title || 'Afspraak'}" is geannuleerd.`
     : `Je bent uitgenodigd voor "${ev.title || 'Afspraak'}".`;
-  const text = `${intro}\n\nWanneer: ${when}${ev.location ? `\nLocatie: ${ev.location}` : ''}`;
-  const html = `<p>${escapeHtmlBasic(intro)}</p><p><strong>Wanneer:</strong> ${escapeHtmlBasic(when)}</p>${ev.location ? `<p><strong>Locatie:</strong> ${escapeHtmlBasic(ev.location)}</p>` : ''}`;
+  const text = `${intro}\n\nWanneer: ${when}${ev.location ? `\nLocatie: ${ev.location}` : ''}${ev.meeting_url && method !== 'CANCEL' ? `\nVideocall: ${ev.meeting_url}` : ''}`;
+  const html = `<p>${escapeHtmlBasic(intro)}</p><p><strong>Wanneer:</strong> ${escapeHtmlBasic(when)}</p>${ev.location ? `<p><strong>Locatie:</strong> ${escapeHtmlBasic(ev.location)}</p>` : ''}${ev.meeting_url && method !== 'CANCEL' ? `<p><strong>Videocall:</strong> <a href="${escapeHtmlBasic(ev.meeting_url)}">${escapeHtmlBasic(ev.meeting_url)}</a></p>` : ''}`;
   const payload = {
     from, to: [to], subject, text, html,
     attachments: [{ filename: 'invite.ics', content: base64Utf8(ics), content_type: `text/calendar; method=${method}; charset=utf-8` }],
