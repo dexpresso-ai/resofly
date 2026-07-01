@@ -1201,6 +1201,10 @@ export interface MeetingRecording extends OrgScopedRow {
   transcription_cost_usd: number;
   summary_text: string | null;
   summary_json: MeetingSummary | null;
+  /** Wanneer de notulen voor het laatst naar de genodigden zijn gemaild. */
+  summary_sent_at: string | null;
+  /** Ontvangers van de laatste notulen-mail. */
+  summary_recipients: { email: string; name: string | null }[] | null;
   created_at: string;
   updated_at: string;
 }

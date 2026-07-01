@@ -64,6 +64,31 @@ export async function summarizeRecording(organizationId: UUID, recordingId: UUID
   await invoke(organizationId, { action: 'summarize', recordingId });
 }
 
+/** Bewerkt de (door de gebruiker gecorrigeerde) transcriptie en/of notulen-tekst. */
+export async function updateRecordingText(
+  organizationId: UUID,
+  recordingId: UUID,
+  patch: { transcriptText?: string; summaryText?: string },
+): Promise<void> {
+  await invoke(organizationId, { action: 'update', recordingId, ...patch });
+}
+
+/** Mailt de (bewerkte) notulen naar de opgegeven genodigden. */
+export async function sendSummaryToAttendees(
+  organizationId: UUID,
+  params: {
+    recordingId: UUID;
+    recipients: { email: string; name?: string | null }[];
+    subject: string;
+    bodyText: string;
+    includeTranscript?: boolean;
+  },
+): Promise<{ sent: number; failed: { email: string; error: string }[] }> {
+  return invoke<{ sent: number; failed: { email: string; error: string }[] }>(organizationId, {
+    action: 'sendSummary', ...params,
+  });
+}
+
 /** Verwijdert opname + transcript + notulen (audio uit R2 én de databaserij). */
 export async function deleteRecording(organizationId: UUID, recording: Pick<MeetingRecording, 'id' | 'storage_key'>): Promise<void> {
   if (recording.storage_key) await deleteR2Object(recording.storage_key).catch(() => undefined);

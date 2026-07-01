@@ -22,8 +22,16 @@ import {
 } from '../_shared/edgeAuth.ts';
 import { elevenlabsConfigured, requestTranscription } from '../_shared/elevenlabs.ts';
 import { runSummaryForRecording } from '../_shared/meetingPipeline.ts';
+import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 
 const admin = createAdminClient();
+
+// Resend-secrets zijn projectbreed al gezet (klant-mail/offerte/factuur). Deze
+// functie hergebruikt ze om de notulen naar de genodigden te mailen.
+const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
+const RESEND_FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || '';
+const RESEND_REPLY_TO = Deno.env.get('RESEND_REPLY_TO') || '';
+const MAX_SUMMARY_RECIPIENTS = 50;
 
 const ALLOWED_ORIGINS = parseAllowedOrigins([
   Deno.env.get('MEETING_ALLOWED_ORIGINS'), Deno.env.get('GERRIE_ALLOWED_ORIGINS'), Deno.env.get('APP_PUBLIC_URL'),
@@ -52,6 +60,8 @@ serve(async (req) => {
       case 'create': return cors.json(req, await createRecording(organizationId, user.id, role, body));
       case 'start': return cors.json(req, await startTranscription(organizationId, role, body));
       case 'summarize': return cors.json(req, await summarize(organizationId, role, body));
+      case 'update': return cors.json(req, await updateRecording(organizationId, role, body));
+      case 'sendSummary': return cors.json(req, await sendSummary(organizationId, role, body));
       case 'delete': return cors.json(req, await deleteRecording(organizationId, role, body));
       default: throw new HttpError(`Onbekende actie: ${action}`, 400);
     }
@@ -147,6 +157,100 @@ async function summarize(organizationId: string, role: Awaited<ReturnType<typeof
   return { ok: true, summary: outcome };
 }
 
+/**
+ * Werkt de (door de gebruiker gecorrigeerde) transcriptie bij. Zo kan de
+ * app-gebruiker de tekst nog aanpassen voordat er notulen van gemaakt/verstuurd
+ * worden. Notulen zelf worden bij het versturen ter plekke bewerkt (sendSummary).
+ */
+async function updateRecording(organizationId: string, role: Awaited<ReturnType<typeof requireOrganizationAccess>>, body: Record<string, unknown>) {
+  assertWriteRole(role);
+  const recordingId = String(body.recordingId || '');
+  if (!isUuid(recordingId)) throw new HttpError('Ongeldige recordingId.', 400);
+  await loadRecording(organizationId, recordingId); // org-check
+
+  const patch: Record<string, unknown> = {};
+  if (typeof body.transcriptText === 'string') patch.transcript_text = body.transcriptText.slice(0, 200_000);
+  if (typeof body.summaryText === 'string') patch.summary_text = body.summaryText.slice(0, 100_000);
+  if (Object.keys(patch).length === 0) throw new HttpError('Niets om bij te werken.', 400);
+
+  const { error } = await admin.from('meeting_recordings').update(patch)
+    .eq('id', recordingId).eq('organization_id', organizationId);
+  if (error) throw new HttpError(`Bijwerken mislukt: ${error.message}`, 500);
+  return { ok: true };
+}
+
+/**
+ * Mailt de notulen naar de genodigden. De frontend geeft de (bewerkbare)
+ * ontvangerslijst + het (bewerkbare) onderwerp en de tekst mee — zo kan de
+ * gebruiker de inhoud nog aanpassen alvorens door te sturen. Elke genodigde
+ * krijgt een eigen mail (privacy: ontvangers zien elkaar niet).
+ */
+async function sendSummary(organizationId: string, role: Awaited<ReturnType<typeof requireOrganizationAccess>>, body: Record<string, unknown>) {
+  assertWriteRole(role);
+  if (!RESEND_API_KEY) throw new HttpError('E-mailversturen is niet geconfigureerd (RESEND_API_KEY ontbreekt).', 500);
+
+  const recordingId = String(body.recordingId || '');
+  if (!isUuid(recordingId)) throw new HttpError('Ongeldige recordingId.', 400);
+
+  const rec = await loadRecordingForMail(organizationId, recordingId);
+
+  const subject = String(body.subject || '').trim().slice(0, 250)
+    || `Samenvatting — ${rec.event_title_snapshot || 'afspraak'}`.slice(0, 250);
+  const bodyText = String(body.bodyText || '').trim();
+  if (!bodyText) throw new HttpError('De samenvatting heeft geen inhoud om te versturen.', 422);
+
+  const includeTranscript = body.includeTranscript === true;
+  const transcript = includeTranscript ? String(rec.transcript_text || '').trim() : '';
+
+  // Ontvangers valideren + ontdubbelen (op lowercase e-mail) + begrenzen.
+  const seen = new Set<string>();
+  const recipients: { email: string; name: string | null }[] = [];
+  for (const raw of Array.isArray(body.recipients) ? body.recipients : []) {
+    const email = String((raw as Record<string, unknown>)?.email || '').trim().toLowerCase();
+    if (!isEmail(email) || seen.has(email)) continue;
+    seen.add(email);
+    const name = String((raw as Record<string, unknown>)?.name || '').trim();
+    recipients.push({ email, name: name || null });
+    if (recipients.length >= MAX_SUMMARY_RECIPIENTS) break;
+  }
+  if (recipients.length === 0) throw new HttpError('Geen geldige genodigden om naar te versturen.', 422);
+
+  const company = await loadCompanyName(organizationId);
+  const sender = await resolveSenderIdentity(admin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+  if (!sender.from) throw new HttpError('Er is geen afzenderadres geconfigureerd (koppel een verzenddomein of zet RESEND_FROM_EMAIL).', 422);
+
+  const html = buildSummaryEmailHtml({ organizationName: company, title: rec.event_title_snapshot, bodyText, transcript });
+  const text = buildSummaryEmailText({ organizationName: company, title: rec.event_title_snapshot, bodyText, transcript });
+
+  const nonce = crypto.randomUUID();
+  const sent: { email: string; name: string | null }[] = [];
+  const failed: { email: string; error: string }[] = [];
+  for (const r of recipients) {
+    try {
+      await sendViaResend({
+        from: sender.from,
+        to: [r.email],
+        reply_to: sender.replyTo || sender.fromEmail || undefined,
+        subject,
+        html,
+        text,
+      }, `meeting-summary-${recordingId}-${sanitizeKey(r.email)}-${nonce}`);
+      sent.push(r);
+    } catch (e) {
+      failed.push({ email: r.email, error: e instanceof Error ? e.message : 'Versturen mislukt.' });
+    }
+  }
+
+  if (sent.length === 0) throw new HttpError(`De notulen konden niet verstuurd worden: ${failed[0]?.error ?? 'onbekende fout'}`, 502);
+
+  await admin.from('meeting_recordings').update({
+    summary_sent_at: new Date().toISOString(),
+    summary_recipients: sent,
+  }).eq('id', recordingId).eq('organization_id', organizationId);
+
+  return { ok: true, sent: sent.length, failed };
+}
+
 async function deleteRecording(organizationId: string, role: Awaited<ReturnType<typeof requireOrganizationAccess>>, body: Record<string, unknown>) {
   assertWriteRole(role);
   const recordingId = String(body.recordingId || '');
@@ -163,6 +267,88 @@ async function loadRecording(organizationId: string, recordingId: string) {
     .select('id, organization_id, status').eq('id', recordingId).eq('organization_id', organizationId).single();
   if (error || !data) throw new HttpError('Opname niet gevonden in deze organisatie.', 404);
   return data;
+}
+
+async function loadRecordingForMail(organizationId: string, recordingId: string) {
+  const { data, error } = await admin.from('meeting_recordings')
+    .select('id, event_title_snapshot, transcript_text')
+    .eq('id', recordingId).eq('organization_id', organizationId).single();
+  if (error || !data) throw new HttpError('Opname niet gevonden in deze organisatie.', 404);
+  return data as { id: string; event_title_snapshot: string | null; transcript_text: string | null };
+}
+
+async function loadCompanyName(organizationId: string): Promise<string> {
+  const [{ data: company }, { data: org }] = await Promise.all([
+    admin.from('company_settings').select('company_name, trade_name').eq('organization_id', organizationId).maybeSingle(),
+    admin.from('organizations').select('name').eq('id', organizationId).maybeSingle(),
+  ]);
+  return String(company?.trade_name || company?.company_name || org?.name || 'ResoFly');
+}
+
+// ── E-mail (Resend) ────────────────────────────────────────────────────────────
+
+async function sendViaResend(payload: Record<string, unknown>, idempotencyKey: string): Promise<void> {
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': idempotencyKey.slice(0, 256),
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    throw new Error(String(detail.message || detail.error || res.statusText || 'Resend send failed'));
+  }
+}
+
+function buildSummaryEmailHtml(input: { organizationName: string; title: string | null; bodyText: string; transcript: string }): string {
+  const org = escapeHtml(input.organizationName);
+  const heading = escapeHtml(input.title ? `Samenvatting — ${input.title}` : 'Samenvatting van de afspraak');
+  const bodyHtml = escapeHtml(input.bodyText).replace(/\n/g, '<br/>');
+  const transcriptBlock = input.transcript
+    ? `<div style="margin-top:22px;border-top:1px solid #e4e4e7;padding-top:16px;">
+         <p style="margin:0 0 8px;font-size:13px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;">Transcript</p>
+         <div style="white-space:pre-wrap;font-size:13px;line-height:1.6;color:#3f3f46;">${escapeHtml(input.transcript)}</div>
+       </div>`
+    : '';
+  return `<!doctype html>
+<html>
+  <body style="margin:0;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;">
+    <div style="max-width:640px;margin:0 auto;padding:28px 20px;">
+      <div style="background:#ffffff;border:1px solid #e4e4e7;border-radius:14px;padding:28px;line-height:1.6;font-size:15px;">
+        <h1 style="margin:0 0 16px;font-size:20px;line-height:1.3;color:#111827;">${heading}</h1>
+        <div>${bodyHtml}</div>
+        ${transcriptBlock}
+      </div>
+      <p style="margin:14px 4px 0;color:#8a8a92;font-size:12px;line-height:1.5;">Verstuurd door ${org} via ResoFly.</p>
+    </div>
+  </body>
+</html>`;
+}
+
+function buildSummaryEmailText(input: { organizationName: string; title: string | null; bodyText: string; transcript: string }): string {
+  const lines = [
+    input.title ? `Samenvatting — ${input.title}` : 'Samenvatting van de afspraak',
+    '',
+    input.bodyText,
+  ];
+  if (input.transcript) lines.push('', '— Transcript —', '', input.transcript);
+  lines.push('', `Verstuurd door ${input.organizationName} via ResoFly.`);
+  return lines.join('\n');
+}
+
+function isEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function sanitizeKey(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128) || 'x';
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>'"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c] || c));
 }
 
 /**

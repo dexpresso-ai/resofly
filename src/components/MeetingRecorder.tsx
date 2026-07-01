@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Check, FileText, Loader2, Mic, Pause, Play, Square, Trash2, Users } from 'lucide-react';
-import { Button } from './Ui';
+import { AlertTriangle, Check, FileText, Loader2, Mail, Mic, Pause, Pencil, Play, Send, Square, Trash2, Users, X } from 'lucide-react';
+import { Button, Input, Textarea } from './Ui';
 import { getAccessToken, getWorkerBase } from '../lib/r2-api';
 import {
   createRecording, deleteRecording as apiDeleteRecording, getRecording,
-  isTerminalStatus, listRecordingsForEvent, startTranscription, summarizeRecording, uploadMeetingAudio,
+  isTerminalStatus, listRecordingsForEvent, sendSummaryToAttendees, startTranscription,
+  summarizeRecording, updateRecordingText, uploadMeetingAudio,
 } from '../lib/meeting-api';
 import type { CalendarProvider, MeetingRecording, UUID } from '../types';
 
@@ -15,6 +16,8 @@ export interface MeetingRecorderEvent {
   eventTitle: string | null;
   clientId: UUID | null;
   projectId: UUID | null;
+  /** Genodigden bij deze afspraak (voor "verstuur notulen naar genodigden"). */
+  attendees: { email: string; name: string }[];
 }
 
 interface Props {
@@ -222,6 +225,8 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote 
       <div className="mr-list-wrap">
         {recordings.map((rec) => (
           <RecordingCard key={rec.id} rec={rec} busy={busyId === rec.id} canWrite={canWrite}
+            organizationId={organizationId} attendees={event.attendees}
+            onPatch={(patch) => setRecordings((prev) => prev.map((p) => (p.id === rec.id ? { ...p, ...patch } : p)))}
             onDelete={() => void onDelete(rec)} onRetrySummary={() => void onRetrySummary(rec)} onSaveAsNote={onSaveAsNote} />
         ))}
       </div>
@@ -240,13 +245,21 @@ function statusLabel(status: MeetingRecording['status']): { text: string; spinni
   }
 }
 
-function RecordingCard({ rec, busy, canWrite, onDelete, onRetrySummary, onSaveAsNote }: {
+function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch, onDelete, onRetrySummary, onSaveAsNote }: {
   rec: MeetingRecording; busy: boolean; canWrite: boolean;
+  organizationId: UUID; attendees: { email: string; name: string }[];
+  onPatch: (patch: Partial<MeetingRecording>) => void;
   onDelete: () => void; onRetrySummary: () => void; onSaveAsNote?: (text: string) => Promise<void>;
 }) {
   const [showTranscript, setShowTranscript] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [savedNote, setSavedNote] = useState(false);
+  // Transcriptie bewerken.
+  const [editingTranscript, setEditingTranscript] = useState(false);
+  const [transcriptDraft, setTranscriptDraft] = useState('');
+  const [savingTranscript, setSavingTranscript] = useState(false);
+  // Notulen naar genodigden mailen.
+  const [composing, setComposing] = useState(false);
   const label = statusLabel(rec.status);
   const summary = rec.summary_json;
 
@@ -275,7 +288,20 @@ function RecordingCard({ rec, busy, canWrite, onDelete, onRetrySummary, onSaveAs
     return lines.join('\n').trim();
   }
 
+  async function saveTranscript() {
+    setSavingTranscript(true);
+    try {
+      await updateRecordingText(organizationId, rec.id, { transcriptText: transcriptDraft });
+      onPatch({ transcript_text: transcriptDraft });
+      setEditingTranscript(false);
+    } catch { /* laat de bewerkmodus open zodat de gebruiker het opnieuw kan proberen */ }
+    finally { setSavingTranscript(false); }
+  }
+
   const created = new Date(rec.created_at).toLocaleString('nl-NL', { dateStyle: 'short', timeStyle: 'short' });
+  const sentAt = rec.summary_sent_at
+    ? new Date(rec.summary_sent_at).toLocaleString('nl-NL', { dateStyle: 'short', timeStyle: 'short' })
+    : null;
 
   return (
     <div className="mr-card">
@@ -308,7 +334,31 @@ function RecordingCard({ rec, busy, canWrite, onDelete, onRetrySummary, onSaveAs
                 <FileText size={14} /> {savedNote ? 'Opgeslagen als notitie' : 'Opslaan als notitie'}
               </Button>
             )}
+            {canWrite && (
+              <Button variant="primary" onClick={() => setComposing((v) => !v)}>
+                <Mail size={14} /> Verstuur naar genodigden
+              </Button>
+            )}
           </div>
+
+          {sentAt && !composing && (
+            <p className="mr-sent-note">
+              <Check size={13} /> Notulen gemaild naar {rec.summary_recipients?.length ?? 0} genodigde{(rec.summary_recipients?.length ?? 0) === 1 ? '' : 'n'} · {sentAt}
+            </p>
+          )}
+
+          {composing && (
+            <SummaryComposer
+              organizationId={organizationId}
+              recordingId={rec.id}
+              defaultSubject={`Samenvatting — ${rec.event_title_snapshot || 'afspraak'}`}
+              defaultBody={summaryAsText()}
+              attendees={attendees}
+              hasTranscript={!!rec.transcript_text}
+              onSent={(recipients) => { onPatch({ summary_sent_at: new Date().toISOString(), summary_recipients: recipients }); setComposing(false); }}
+              onCancel={() => setComposing(false)}
+            />
+          )}
         </div>
       )}
 
@@ -321,7 +371,37 @@ function RecordingCard({ rec, busy, canWrite, onDelete, onRetrySummary, onSaveAs
           <button type="button" className="mr-transcript-toggle" onClick={() => setShowTranscript((v) => !v)}>
             <Users size={13} /> {showTranscript ? 'Verberg transcript' : 'Toon transcript'}
           </button>
-          {showTranscript && <pre className="mr-transcript">{rec.transcript_text}</pre>}
+          {showTranscript && !editingTranscript && (
+            <>
+              <pre className="mr-transcript">{rec.transcript_text}</pre>
+              {canWrite && (
+                <div className="mr-actions">
+                  <Button className="mr-transcript-edit" onClick={() => { setTranscriptDraft(rec.transcript_text ?? ''); setEditingTranscript(true); }}>
+                    <Pencil size={13} /> Transcript bijwerken
+                  </Button>
+                  {summary && (
+                    <Button disabled={busy} onClick={onRetrySummary} title="Genereer de notulen opnieuw op basis van het (bijgewerkte) transcript">
+                      {busy ? <><Loader2 size={13} className="spin" /> Bezig…</> : 'Notulen opnieuw maken'}
+                    </Button>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+          {showTranscript && editingTranscript && (
+            <div className="mr-transcript-editor">
+              <Textarea rows={10} value={transcriptDraft} onChange={(e) => setTranscriptDraft(e.target.value)} />
+              <div className="mr-actions">
+                <Button variant="primary" disabled={savingTranscript} onClick={() => void saveTranscript()}>
+                  {savingTranscript ? <><Loader2 size={13} className="spin" /> Opslaan…</> : <><Check size={13} /> Opslaan</>}
+                </Button>
+                <Button variant="ghost" disabled={savingTranscript} onClick={() => setEditingTranscript(false)}>Annuleren</Button>
+                {rec.status === 'transcribed' || rec.summary_json ? (
+                  <span className="mr-editor-hint">Tip: laat hierna de notulen opnieuw maken.</span>
+                ) : null}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -344,6 +424,101 @@ function SummaryList({ title, items, icon }: { title: string; items: string[]; i
       <ul className={icon ? 'mr-list-checks' : undefined}>
         {items.map((it, i) => <li key={i}>{icon && <span className="mr-li-icon">{icon}</span>}{it}</li>)}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * Composer om de (bewerkbare) notulen naar de genodigden te mailen. Onderwerp,
+ * tekst én ontvangers zijn aanpasbaar, zodat de gebruiker de inhoud nog kan
+ * bijwerken voordat er verstuurd wordt.
+ */
+function SummaryComposer({ organizationId, recordingId, defaultSubject, defaultBody, attendees, hasTranscript, onSent, onCancel }: {
+  organizationId: UUID; recordingId: UUID;
+  defaultSubject: string; defaultBody: string;
+  attendees: { email: string; name: string }[];
+  hasTranscript: boolean;
+  onSent: (recipients: { email: string; name: string | null }[]) => void;
+  onCancel: () => void;
+}) {
+  const [subject, setSubject] = useState(defaultSubject);
+  const [bodyText, setBodyText] = useState(defaultBody);
+  const [includeTranscript, setIncludeTranscript] = useState(false);
+  // Voorgevulde ontvangers uit de genodigden (ontdubbeld), allemaal aangevinkt.
+  const [rows, setRows] = useState<{ email: string; name: string; on: boolean }[]>(() => {
+    const seen = new Set<string>();
+    return attendees
+      .map((a) => ({ email: a.email.trim().toLowerCase(), name: a.name?.trim() || '', on: true }))
+      .filter((a) => a.email && !seen.has(a.email) && (seen.add(a.email), true));
+  });
+  const [extra, setExtra] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function toggle(email: string) { setRows((prev) => prev.map((r) => (r.email === email ? { ...r, on: !r.on } : r))); }
+  function addExtra() {
+    const email = extra.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return;
+    if (!rows.some((r) => r.email === email)) setRows((prev) => [...prev, { email, name: '', on: true }]);
+    setExtra('');
+  }
+
+  async function send() {
+    const recipients = rows.filter((r) => r.on).map((r) => ({ email: r.email, name: r.name || null }));
+    if (recipients.length === 0) { setError('Kies minstens één ontvanger.'); return; }
+    if (!bodyText.trim()) { setError('De tekst is leeg.'); return; }
+    setSending(true); setError(null);
+    try {
+      const res = await sendSummaryToAttendees(organizationId, { recordingId, recipients, subject, bodyText, includeTranscript });
+      if (res.failed?.length) setError(`${res.sent} verstuurd, ${res.failed.length} mislukt (${res.failed[0].email}).`);
+      onSent(recipients);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Versturen mislukt.');
+    } finally { setSending(false); }
+  }
+
+  return (
+    <div className="mr-composer">
+      <div className="mr-composer-head"><Mail size={14} /><strong>Notulen mailen naar genodigden</strong></div>
+
+      <label className="mr-composer-label">Ontvangers</label>
+      {rows.length === 0 && <p className="mr-editor-hint">Geen genodigden gevonden — voeg hieronder handmatig een e-mailadres toe.</p>}
+      <div className="mr-recipients">
+        {rows.map((r) => (
+          <label key={r.email} className="mr-recipient">
+            <input type="checkbox" checked={r.on} onChange={() => toggle(r.email)} />
+            <span>{r.name ? `${r.name} · ${r.email}` : r.email}</span>
+          </label>
+        ))}
+      </div>
+      <div className="mr-recipient-add">
+        <Input type="email" placeholder="Extra e-mailadres toevoegen…" value={extra}
+          onChange={(e) => setExtra(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addExtra(); } }} />
+        <Button variant="ghost" onClick={addExtra}>Toevoegen</Button>
+      </div>
+
+      <label className="mr-composer-label">Onderwerp</label>
+      <Input value={subject} onChange={(e) => setSubject(e.target.value)} />
+
+      <label className="mr-composer-label">Bericht</label>
+      <Textarea rows={10} value={bodyText} onChange={(e) => setBodyText(e.target.value)} />
+
+      {hasTranscript && (
+        <label className="mr-recipient mr-include-transcript">
+          <input type="checkbox" checked={includeTranscript} onChange={(e) => setIncludeTranscript(e.target.checked)} />
+          <span>Volledig transcript meesturen</span>
+        </label>
+      )}
+
+      {error && <p className="mr-error">{error}</p>}
+
+      <div className="mr-actions">
+        <Button variant="primary" disabled={sending} onClick={() => void send()}>
+          {sending ? <><Loader2 size={14} className="spin" /> Versturen…</> : <><Send size={14} /> Verstuur</>}
+        </Button>
+        <Button variant="ghost" disabled={sending} onClick={onCancel}><X size={14} /> Annuleren</Button>
+      </div>
     </div>
   );
 }

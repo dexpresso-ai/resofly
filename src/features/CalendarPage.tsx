@@ -1596,6 +1596,9 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
             eventTitle: event.title,
             clientId: eventLink?.client_id ?? null,
             projectId: eventLink?.project_id ?? null,
+            attendees: event.provider === 'native'
+              ? attendees.map(a => ({ email: a.email, name: a.display_name ?? '' }))
+              : (event.attendees ?? []).map(a => ({ email: a.email, name: a.name ?? '' })),
           }}
           onSaveAsNote={canAttachNotes ? saveSummaryAsNote : undefined}
         />
