@@ -2510,7 +2510,12 @@ body::before{
 .client-alert.unread{display:inline-flex;align-items:center;gap:4px;background:rgba(255,217,102,.15);color:var(--accent);border-color:rgba(255,217,102,.35)}
 .client-table-alert.unread{display:inline-flex;align-items:center;gap:3px;color:var(--accent)}
 
-.email-toast-stack{position:fixed;right:20px;bottom:20px;z-index:1200;display:flex;flex-direction:column;gap:10px;max-width:380px}
+/* Vast hoekgebied rechtsonder; mail- en ticket-toaststapels stromen hierin
+   onder elkaar (geen overlap). De .email-toast* styling is gedeeld. */
+.toast-region{position:fixed;right:20px;bottom:20px;z-index:1200;display:flex;flex-direction:column;gap:10px;max-width:380px}
+.email-toast-stack{display:flex;flex-direction:column;gap:10px}
+.tk-new-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:800;padding:2px 8px;border-radius:999px;background:rgba(255,217,102,.17);color:var(--accent);border:1px solid rgba(255,217,102,.35);text-transform:uppercase;letter-spacing:.04em}
+.ticket-item.is-unread{border-color:rgba(255,217,102,.45)}
 .email-toast{display:flex;align-items:stretch;gap:6px;background:var(--bg3);border:1px solid rgba(255,217,102,.35);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);overflow:hidden;animation:email-toast-in .22s ease}
 .email-toast-main{display:flex;align-items:center;gap:10px;flex:1;min-width:0;padding:12px 8px 12px 14px;border:none;background:transparent;color:var(--text);font-family:inherit;text-align:left;cursor:pointer}
 .email-toast-main:hover{background:var(--bg4)}

@@ -643,6 +643,27 @@ export async function deleteTicketNote(noteId: UUID, organizationId: UUID): Prom
   if (error) throw error;
 }
 
+/** Ids van tickets met ongelezen klant-activiteit voor de huidige gebruiker. */
+export async function loadTicketUnreadIds(organizationId: UUID): Promise<Set<UUID>> {
+  const { data, error } = await supabase
+    .from('ticket_unread')
+    .select('id')
+    .eq('organization_id', organizationId);
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    // Nog niet gemigreerd: geef leeg terug i.p.v. de hele app te breken.
+    if (/ticket_unread|schema cache|does not exist|relation/i.test(message)) return new Set();
+    throw error;
+  }
+  return new Set((data ?? []).map(row => (row as { id: UUID }).id));
+}
+
+/** Markeer een ticket als gelezen voor de huidige gebruiker (server-side now()). */
+export async function markTicketRead(ticketId: UUID): Promise<void> {
+  const { error } = await supabase.rpc('mark_ticket_read', { p_ticket_id: ticketId });
+  if (error) throw error;
+}
+
 export async function selectDocuments(organizationId: UUID): Promise<InternalDocument[]> {
   const { data, error } = await supabase
     .from('documents')

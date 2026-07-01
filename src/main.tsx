@@ -49,6 +49,7 @@ import {
   updateOrganizationMemberRole,
   updateRow,
   upsertCompanySettings,
+  markTicketRead,
   type Table,
 } from './lib/repository';
 import { uploadToR2 } from './lib/r2';
@@ -57,6 +58,7 @@ import { buildDocumentPdfBlob, buildDocumentDocxBlob, downloadBlob, documentFile
 import { Dashboard } from './features/Dashboard';
 import { ClientDetailPage, Clients } from './features/Clients';
 import { useClientEmailUnread, ClientEmailToasts } from './components/ClientEmailNotifications';
+import { useTicketUnread, TicketToasts } from './components/TicketNotifications';
 import { ProjectPage, ProjectsListPage, ProjectsPlanningPage } from './features/Projects';
 import { TimeTracking } from './features/TimeTracking';
 import { Tickets } from './features/Tickets';
@@ -217,6 +219,25 @@ function App() {
     organizationId: activeOrganization?.id ?? null,
     currentUserId,
     resolveClientName: (clientId) => data.clients.find(c => c.id === clientId)?.name ?? '',
+  });
+
+  // Ongelezen tickets (per gebruiker) + live meldingen bij nieuwe klant-activiteit.
+  const {
+    unreadIds: ticketUnreadIds,
+    refreshUnread: refreshTicketUnread,
+    toasts: ticketToasts,
+    dismissToast: dismissTicketToast,
+  } = useTicketUnread({
+    organizationId: activeOrganization?.id ?? null,
+    currentUserId,
+    teamMemberIds: new Set((organizationContext.teamMembers ?? []).map(m => m.user_id).filter((id): id is string => !!id)),
+    resolveClientName: (clientId) => (clientId ? data.clients.find(c => c.id === clientId)?.name ?? 'Onbekende klant' : 'Geen klant'),
+    resolveTicket: (ticketId) => {
+      const ticket = data.tickets.find(t => t.id === ticketId);
+      if (!ticket) return null;
+      return { title: ticket.title, clientName: ticket.client_id ? data.clients.find(c => c.id === ticket.client_id)?.name ?? 'Onbekende klant' : 'Geen klant' };
+    },
+    onActivity: () => { void refresh(); },
   });
 
   async function loadWorkspace(preferredOrganizationId = activeOrganizationId) {
@@ -936,7 +957,7 @@ function App() {
   const title = page === 'project' ? project?.name ?? 'Project' : page === 'client' ? client?.name ?? 'Klant' : ({dashboard:'Dashboard',weekplanner:'Weekplanner',calendar:'Kalender','calendar-settings':'Agenda-instellingen',time:'Uren',stats:'Statistieken',content:'Inhoud',notes:'Notities',documents:'Documenten',clients:'Klanten',projects:'Projecten','project-planning':'Projectplanning',tickets:'Tickets',quotes:'Offertes',invoices:'Facturen',suppliers:'Leveranciers','purchase-invoices':'Inkoopfacturen',ledger:'Grootboek',bank:'Bank',assets:'Activa',pnl:'Winst & verlies','vat-returns':'Omzetbelasting',archive:'Archief',settings:'Instellingen',project:'Project',client:'Klant'} as Record<Page,string>)[page];
 
   return <div className="app">
-    <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} onSearchNavigate={handleSearchNavigate} clientEmailUnread={clientEmailUnread.total}/>
+    <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} onSearchNavigate={handleSearchNavigate} clientEmailUnread={clientEmailUnread.total} ticketUnread={ticketUnreadIds.size}/>
     <main className="main">{page !== 'calendar' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button><Button onClick={() => supabaseAuth.signOut()}>Uitloggen</Button></div></header>}
       <section className="content">{error && <div className="error">{error}</div>}{renderPage()}</section>
     </main>{edit && <EditModal edit={edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} />}
@@ -1118,11 +1139,18 @@ function App() {
         <small>Sluit dit venster niet — dit kan enkele seconden duren.</small>
       </div>
     </div>}
-    <ClientEmailToasts
-      toasts={clientEmailToasts}
-      onOpen={(clientId) => { setClientId(clientId); setProjectId(null); setPage('client'); }}
-      onDismiss={dismissClientEmailToast}
-    />
+    <div className="toast-region">
+      <ClientEmailToasts
+        toasts={clientEmailToasts}
+        onOpen={(clientId) => { setClientId(clientId); setProjectId(null); setPage('client'); }}
+        onDismiss={dismissClientEmailToast}
+      />
+      <TicketToasts
+        toasts={ticketToasts}
+        onOpen={(ticketId) => { const t = data.tickets.find(x => x.id === ticketId); if (t) { setEdit({ kind: 'ticket', item: t }); markTicketRead(t.id).then(refreshTicketUnread).catch(() => {}); } }}
+        onDismiss={dismissTicketToast}
+      />
+    </div>
   </div>;
 
   function renderPage() {
@@ -1132,7 +1160,7 @@ function App() {
     if (page === 'project-planning') return <ProjectsPlanningPage data={data} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} />;
     if (page === 'client' && client) return <ClientDetailPage data={data} client={client} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewNote={(folderId) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(folderId) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditDocument={(doc) => setEdit({kind:'document', item: doc})} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread}/>;
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient}/>;
-    if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>setEdit({kind:'ticket', item})} onConvert={convert}/>;
+    if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} unreadTicketIds={ticketUnreadIds}/>;
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null }})} onEditDocument={(item)=>setEdit({kind:'document', item})}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
