@@ -25,6 +25,7 @@ import type {
   SendingDomain,
   ClientEmail,
   ClientEmailThread,
+  ClientEmailUnreadCounts,
   CreditNote,
   InvoiceChargeback,
   Note,
@@ -1657,6 +1658,43 @@ export async function loadClientEmails(organizationId: UUID, clientId: UUID): Pr
     .order('created_at', { ascending: true });
   if (error) throw error;
   return (data ?? []) as ClientEmail[];
+}
+
+/** Ids van klant-e-mails die de huidige gebruiker als gelezen heeft gemarkeerd. */
+export async function loadClientEmailReadIds(organizationId: UUID, clientId: UUID): Promise<Set<UUID>> {
+  const { data, error } = await supabase
+    .from('client_email_reads')
+    .select('client_email_id')
+    .eq('organization_id', organizationId)
+    .eq('client_id', clientId);
+  if (error) throw error;
+  return new Set((data ?? []).map(row => (row as { client_email_id: UUID }).client_email_id));
+}
+
+/**
+ * Markeer inkomende berichten als gelezen voor de huidige gebruiker (idempotent).
+ * user_id wordt server-side ingevuld via de kolom-default auth.uid().
+ */
+export async function markClientEmailsRead(organizationId: UUID, clientId: UUID, clientEmailIds: UUID[]): Promise<void> {
+  if (clientEmailIds.length === 0) return;
+  const rows = clientEmailIds.map(id => ({ organization_id: organizationId, client_id: clientId, client_email_id: id }));
+  const { error } = await supabase
+    .from('client_email_reads')
+    .upsert(rows, { onConflict: 'client_email_id,user_id', ignoreDuplicates: true });
+  if (error) throw error;
+}
+
+/** Tel ongelezen inkomende berichten voor de huidige gebruiker: totaal + per klant. */
+export async function loadClientEmailUnreadCounts(organizationId: UUID): Promise<ClientEmailUnreadCounts> {
+  const { data, error } = await supabase
+    .from('client_email_unread')
+    .select('client_id')
+    .eq('organization_id', organizationId);
+  if (error) throw error;
+  const rows = (data ?? []) as { client_id: UUID }[];
+  const byClient: Record<UUID, number> = {};
+  for (const row of rows) byClient[row.client_id] = (byClient[row.client_id] ?? 0) + 1;
+  return { total: rows.length, byClient };
 }
 
 const EMAIL_TEMPLATE_COLUMNS = 'id,organization_id,created_by,template_key,enabled,subject,intro,closing,cta_label,created_at,updated_at';

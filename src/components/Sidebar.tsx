@@ -35,6 +35,7 @@ export function Sidebar({
   onNewOrganization,
   onPage,
   onSearchNavigate,
+  clientEmailUnread = 0,
 }: {
   page: Page;
   data: AppData;
@@ -45,6 +46,7 @@ export function Sidebar({
   onNewOrganization: () => void;
   onPage: (p: Page) => void;
   onSearchNavigate: (result: SearchResult) => void;
+  clientEmailUnread?: number;
 }) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
   const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
@@ -127,7 +129,7 @@ export function Sidebar({
                   <span className="ni-label">{label}</span>
                   <span className="nav-chevron" aria-hidden="true">{projectsOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}</span>
                 </button>
-              : <button className={`nav-item ${isActive ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span></button>}
+              : <button className={`nav-item ${isActive ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span>{key === 'clients' && clientEmailUnread > 0 && <span className="nav-badge" title={`${clientEmailUnread} ongelezen bericht${clientEmailUnread === 1 ? '' : 'en'}`}>{clientEmailUnread > 99 ? '99+' : clientEmailUnread}</span>}</button>}
 
           {key === 'calendar' && calendarPages.includes(page) && <div className="nav-submenu">
             <button type="button" className={page === 'calendar' ? 'active' : ''} onClick={() => openCalendarSubPage('agenda')}>Agendaweergave</button>

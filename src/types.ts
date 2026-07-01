@@ -591,6 +591,25 @@ export interface ClientEmail extends OrgScopedRow {
   updated_at: string;
 }
 
+// Ongelezen inkomend bericht voor de huidige gebruiker (view client_email_unread).
+export interface ClientEmailUnread {
+  id: UUID;
+  organization_id: UUID;
+  client_id: UUID;
+  thread_id: UUID;
+  subject: string;
+  from_email: string;
+  from_name: string | null;
+  received_at: string | null;
+  created_at: string;
+}
+
+// Ongelezen-tellers: totaal (globale badge) + per klant (klantenlijst/tab).
+export interface ClientEmailUnreadCounts {
+  total: number;
+  byClient: Record<UUID, number>;
+}
+
 export interface InvoiceWorkflowEvent {
   id: UUID;
   organization_id: UUID;

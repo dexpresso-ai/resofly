@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Search, RotateCcw, Upload } from 'lucide-react';
+import { Search, RotateCcw, Upload, ChevronDown, ChevronRight, Mail } from 'lucide-react';
 import type { AppData, Client, ClientEmail, ClientEmailStatus, ClientEmailThread, ClientStatus, Contract, InternalDocument, Invoice, Note, Project, Quote } from '../types';
 import { dateNL, euro, total } from '../lib/format';
 import { Button, Input, Select } from '../components/Ui';
 import { CsvImportModal } from '../components/CsvImportModal';
 import type { ImportColumn } from '../lib/csvImport';
 import { RichTextEditor } from '../components/RichTextEditor';
-import { createClientWithServerCode, loadClientEmails, loadClientEmailThreads } from '../lib/repository';
+import { createClientWithServerCode, loadClientEmails, loadClientEmailThreads, loadClientEmailReadIds, markClientEmailsRead } from '../lib/repository';
 import { sendClientEmail } from '../services/mailService';
 import { supabase } from '../lib/supabase';
 import { ClientFolders } from './ClientFolders';
@@ -75,6 +75,7 @@ export function Clients({
   onNew,
   onOpen,
   onChanged,
+  unreadByClient,
 }: {
   data: AppData;
   organizationId: string;
@@ -82,6 +83,7 @@ export function Clients({
   onNew: () => void;
   onOpen: (c: Client) => void;
   onChanged: () => void;
+  unreadByClient: Record<string, number>;
 }) {
   const [viewMode, setViewMode] = useState<ClientViewMode>(readClientViewMode);
   const [importing, setImporting] = useState(false);
@@ -144,19 +146,21 @@ export function Clients({
       <Button variant="primary" onClick={onNew}>+ Nieuwe klant</Button>
     </div>}
 
-    {rows.length > 0 && viewMode === 'cards' && <ClientCardGrid rows={rows} onOpen={onOpen} />}
-    {rows.length > 0 && viewMode === 'table' && <ClientTable rows={rows} onOpen={onOpen} />}
+    {rows.length > 0 && viewMode === 'cards' && <ClientCardGrid rows={rows} onOpen={onOpen} unreadByClient={unreadByClient} />}
+    {rows.length > 0 && viewMode === 'table' && <ClientTable rows={rows} onOpen={onOpen} unreadByClient={unreadByClient} />}
   </div>;
 }
 
-function ClientCardGrid({ rows, onOpen }: { rows: ClientOverviewRow[]; onOpen: (client: Client) => void }) {
+function ClientCardGrid({ rows, onOpen, unreadByClient }: { rows: ClientOverviewRow[]; onOpen: (client: Client) => void; unreadByClient: Record<string, number> }) {
   return <div className="clients-grid">
     {rows.map(row => {
       const { client } = row;
+      const unread = unreadByClient[client.id] ?? 0;
 
       return <article className="client-card" key={client.id} onClick={() => onOpen(client)}>
         <div className="client-card-head">
           <div className="cc-avatar" style={{ background: client.color }}>{client.name.slice(0, 2).toUpperCase()}</div>
+          {unread > 0 && <span className="client-alert unread"><Mail size={12} /> {unread} nieuw</span>}
           {row.overdueInvoiceCount > 0 && <span className="client-alert danger">{row.overdueInvoiceCount} vervallen</span>}
           {row.overdueInvoiceCount === 0 && row.openInvoiceCount > 0 && <span className="client-alert warning">{row.openInvoiceCount} open</span>}
         </div>
@@ -174,7 +178,7 @@ function ClientCardGrid({ rows, onOpen }: { rows: ClientOverviewRow[]; onOpen: (
   </div>;
 }
 
-function ClientTable({ rows, onOpen }: { rows: ClientOverviewRow[]; onOpen: (client: Client) => void }) {
+function ClientTable({ rows, onOpen, unreadByClient }: { rows: ClientOverviewRow[]; onOpen: (client: Client) => void; unreadByClient: Record<string, number> }) {
   return <section className="clients-table-card" aria-label="Klanten tabelweergave">
     <div className="clients-table-scroll">
       <table className="clients-table">
@@ -211,6 +215,7 @@ function ClientTable({ rows, onOpen }: { rows: ClientOverviewRow[]; onOpen: (cli
                 <div className="clients-table-name">
                   <span className="clients-table-avatar" style={{ background: client.color }}>{client.name.slice(0, 2).toUpperCase()}</span>
                   <span>{client.name}</span>
+                  {(unreadByClient[client.id] ?? 0) > 0 && <span className="client-table-alert unread"><Mail size={11} /> {unreadByClient[client.id]} nieuw</span>}
                 </div>
               </td>
               <td><span>{client.contact_name || client.email || '—'}</span></td>
@@ -258,6 +263,8 @@ export function ClientDetailPage({
   onEditNote,
   onNewDocument,
   onEditDocument,
+  unreadCount,
+  onUnreadChanged,
 }: {
   data: AppData;
   client: Client;
@@ -275,6 +282,8 @@ export function ClientDetailPage({
   onEditNote: (note: Note) => void;
   onNewDocument: (folderId?: string | null) => void;
   onEditDocument: (doc: InternalDocument) => void;
+  unreadCount: number;
+  onUnreadChanged: () => void;
 }) {
   const projects = data.projects.filter(project => project.client_id === client.id);
   const notes = getClientNotes(data, client.id);
@@ -329,14 +338,14 @@ export function ClientDetailPage({
   const activeFilterCount = (normalizedQuery ? 1 : 0) + (statusFilter ? 1 : 0);
   const resetFilters = () => { setQuery(''); setStatusFilter(''); };
 
-  const tabs: Array<{ id: ClientTab; label: string; count: number }> = [
+  const tabs: Array<{ id: ClientTab; label: string; count: number; unread?: boolean }> = [
     { id: 'overview', label: 'Overzicht', count: 0 },
     { id: 'projects', label: 'Projecten', count: projects.length },
     { id: 'quotes', label: 'Offertes', count: quotes.length },
     { id: 'contracts', label: 'Contracten', count: contracts.length },
     { id: 'invoices', label: 'Facturen', count: invoices.length },
     { id: 'files', label: 'Bestanden', count: notes.length + documents.length },
-    { id: 'communication', label: 'Communicatie', count: 0 },
+    { id: 'communication', label: 'Communicatie', count: unreadCount, unread: true },
   ];
 
   return <div className="client-detail-page">
@@ -385,7 +394,7 @@ export function ClientDetailPage({
           onClick={() => switchTab(tab.id)}
         >
           {tab.label}
-          {tab.count > 0 && <span className="client-tab-badge">{tab.count}</span>}
+          {tab.count > 0 && <span className={`client-tab-badge${tab.unread ? ' unread' : ''}`}>{tab.count}</span>}
         </button>
       ))}
     </div>
@@ -533,7 +542,7 @@ export function ClientDetailPage({
 
     {activeTab === 'contracts' && <ClientContractsCard contracts={contracts} organizationId={organizationId} />}
 
-    {activeTab === 'communication' && <ClientCommunication client={client} organizationId={organizationId} canWrite={canWrite} />}
+    {activeTab === 'communication' && <ClientCommunication client={client} organizationId={organizationId} canWrite={canWrite} onUnreadChanged={onUnreadChanged} />}
     {activeTab === 'files' && <ClientFolders
       data={data}
       client={client}
@@ -617,11 +626,13 @@ function formatEmailDateTime(value: string | null | undefined): string {
   return new Intl.DateTimeFormat('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 
-function ClientCommunication({ client, organizationId, canWrite }: { client: Client; organizationId: string; canWrite: boolean }) {
+function ClientCommunication({ client, organizationId, canWrite, onUnreadChanged }: { client: Client; organizationId: string; canWrite: boolean; onUnreadChanged?: () => void }) {
   const [threads, setThreads] = useState<ClientEmailThread[]>([]);
   const [emails, setEmails] = useState<ClientEmail[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [readIds, setReadIds] = useState<Set<string>>(new Set());
+  const [expandedThreads, setExpandedThreads] = useState<Set<string>>(new Set());
 
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
@@ -641,19 +652,22 @@ function ClientCommunication({ client, organizationId, canWrite }: { client: Cli
     Promise.all([
       loadClientEmailThreads(organizationId, client.id),
       loadClientEmails(organizationId, client.id),
+      loadClientEmailReadIds(organizationId, client.id),
     ])
-      .then(([loadedThreads, loadedEmails]) => { if (!cancelled) { setThreads(loadedThreads); setEmails(loadedEmails); setLoaded(true); } })
+      .then(([loadedThreads, loadedEmails, loadedReadIds]) => { if (!cancelled) { setThreads(loadedThreads); setEmails(loadedEmails); setReadIds(loadedReadIds); setLoaded(true); } })
       .catch(err => { if (!cancelled) { setLoadError(err instanceof Error ? err.message : 'Communicatie laden mislukt.'); setLoaded(true); } });
     return () => { cancelled = true; };
   }, [organizationId, client.id]);
 
   async function reload() {
-    const [loadedThreads, loadedEmails] = await Promise.all([
+    const [loadedThreads, loadedEmails, loadedReadIds] = await Promise.all([
       loadClientEmailThreads(organizationId, client.id),
       loadClientEmails(organizationId, client.id),
+      loadClientEmailReadIds(organizationId, client.id),
     ]);
     setThreads(loadedThreads);
     setEmails(loadedEmails);
+    setReadIds(loadedReadIds);
   }
 
   async function send() {
@@ -680,6 +694,31 @@ function ClientCommunication({ client, organizationId, canWrite }: { client: Cli
     }
     return map;
   }, [emails]);
+
+  async function toggleThread(threadId: string) {
+    const willExpand = !expandedThreads.has(threadId);
+    setExpandedThreads(prev => {
+      const next = new Set(prev);
+      if (willExpand) next.add(threadId); else next.delete(threadId);
+      return next;
+    });
+    if (!willExpand) return;
+    // Openen = lezen: markeer de ongelezen inkomende berichten van deze thread als
+    // gelezen voor de huidige gebruiker. Optimistisch lokaal, dan server + badge.
+    const unreadIds = (emailsByThread.get(threadId) ?? [])
+      .filter(msg => msg.direction === 'inbound' && !readIds.has(msg.id))
+      .map(msg => msg.id);
+    if (unreadIds.length === 0) return;
+    setReadIds(prev => { const next = new Set(prev); unreadIds.forEach(id => next.add(id)); return next; });
+    try {
+      await markClientEmailsRead(organizationId, client.id, unreadIds);
+      onUnreadChanged?.();
+    } catch {
+      // Bij een fout de lokale markering terugdraaien zodat de UI de serverwaarheid
+      // blijft volgen (de 'nieuw'-badge komt dan gewoon terug).
+      setReadIds(prev => { const next = new Set(prev); unreadIds.forEach(id => next.delete(id)); return next; });
+    }
+  }
 
   return <div className="client-comm">
     <article className="client-panel client-comm-compose">
@@ -711,14 +750,22 @@ function ClientCommunication({ client, organizationId, canWrite }: { client: Cli
       <div className="client-comm-threads">
         {threads.map(thread => {
           const msgs = emailsByThread.get(thread.id) ?? [];
-          return <div className="client-comm-thread" key={thread.id}>
-            <div className="client-comm-thread-head">
-              <strong>{thread.subject || '(geen onderwerp)'}</strong>
-              <span>{formatEmailDateTime(thread.last_message_at)}</span>
-            </div>
-            <div className="client-comm-messages">
-              {msgs.map(msg => (
-                <div className={`client-comm-message ${msg.direction}`} key={msg.id}>
+          const unreadCount = msgs.filter(msg => msg.direction === 'inbound' && !readIds.has(msg.id)).length;
+          const isOpen = expandedThreads.has(thread.id);
+          return <div className={`client-comm-thread${unreadCount > 0 ? ' has-unread' : ''}${isOpen ? ' open' : ''}`} key={thread.id}>
+            <button type="button" className="client-comm-thread-head" onClick={() => toggleThread(thread.id)} aria-expanded={isOpen}>
+              <span className="client-comm-thread-caret" aria-hidden="true">{isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
+              <span className="client-comm-thread-title">
+                <strong>{thread.subject || '(geen onderwerp)'}</strong>
+                <span className="client-comm-thread-preview">{msgs.length} bericht{msgs.length === 1 ? '' : 'en'}</span>
+              </span>
+              {unreadCount > 0 && <span className="client-comm-unread-badge">{unreadCount} nieuw</span>}
+              <time className="client-comm-thread-time">{formatEmailDateTime(thread.last_message_at)}</time>
+            </button>
+            {isOpen && <div className="client-comm-messages">
+              {msgs.map(msg => {
+                const isUnread = msg.direction === 'inbound' && !readIds.has(msg.id);
+                return <div className={`client-comm-message ${msg.direction}${isUnread ? ' unread' : ''}`} key={msg.id}>
                   <div className="client-comm-message-meta">
                     <span className="client-comm-dir">{msg.direction === 'outbound' ? 'Uitgaand' : 'Inkomend'}</span>
                     <span className={`client-comm-status ${clientEmailStatusTone(msg.status)}`}>{CLIENT_EMAIL_STATUS_LABELS[msg.status] ?? msg.status}</span>
@@ -729,9 +776,9 @@ function ClientCommunication({ client, organizationId, canWrite }: { client: Cli
                     ? <div className="client-comm-body" dangerouslySetInnerHTML={{ __html: msg.body_html }} />
                     : <div className="client-comm-body client-comm-body-plain">{msg.body_text}</div>}
                   {msg.error_message && <div className="client-comm-error">{msg.error_message}</div>}
-                </div>
-              ))}
-            </div>
+                </div>;
+              })}
+            </div>}
           </div>;
         })}
       </div>
