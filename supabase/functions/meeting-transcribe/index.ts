@@ -14,7 +14,6 @@
 // de service-role (RLS staat alleen lezen toe).
 // ============================================================
 
-import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import {
   HttpError, assertWriteRole, createAdminClient, isUuid, makeCors,
   parseAllowedOrigins, requireOrganizationAccess, requireUser,
@@ -43,7 +42,9 @@ const cors = makeCors(ALLOWED_ORIGINS, ALLOW_LOCAL_DEV);
 // ElevenLabs ~$0.40/uur audio — aparte meter, los van het AI-tokenbudget.
 const ELEVENLABS_USD_PER_HOUR = Number(Deno.env.get('ELEVENLABS_USD_PER_HOUR') || '0.40');
 
-serve(async (req) => {
+// Supabase Edge Runtime heeft een ingebouwde `Deno.serve` — geen deno.land/std
+// nodig, wat het bundelen niet meer laat afhangen van een externe fetch.
+Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors.headers(req) });
   try {
     if (req.method !== 'POST') throw new HttpError('Method not allowed.', 405 as HttpStatus);
