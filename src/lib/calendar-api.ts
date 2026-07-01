@@ -100,6 +100,21 @@ export async function getCalendarEventAttendees(organizationId: UUID, eventId: U
   return data.attendees;
 }
 
+export interface ProviderContact {
+  name: string | null;
+  email: string;
+}
+
+/**
+ * Zoekt contacten in het adresboek van de agenda-provider (Google People /
+ * Microsoft Graph) van de opgegeven bron. App-eigen contacten worden client-side
+ * doorzocht. `needsReconnect` = de koppeling mist de contacten-scope (opnieuw koppelen).
+ */
+export async function searchCalendarContacts(organizationId: UUID, sourceId: UUID, query: string): Promise<{ contacts: ProviderContact[]; needsReconnect: boolean }> {
+  const data = await invokeCalendar<{ contacts: ProviderContact[]; needsReconnect?: boolean }>(organizationId, { action: 'searchContacts', sourceId, query });
+  return { contacts: data.contacts ?? [], needsReconnect: Boolean(data.needsReconnect) };
+}
+
 export async function createNativeCalendar(organizationId: UUID, input: NativeCalendarInput): Promise<CalendarSource> {
   const data = await invokeCalendar<{ source: CalendarSource }>(organizationId, { action: 'createNativeCalendar', ...input });
   return data.source;

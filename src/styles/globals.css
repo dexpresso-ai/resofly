@@ -2440,6 +2440,25 @@ body::before{
 .location-suggestion svg{flex:0 0 auto;margin-top:1px;color:var(--accent)}
 .location-suggestion:hover,.location-suggestion.active{background:var(--bg4);color:var(--text)}
 .location-suggestion-empty{padding:8px 10px;color:var(--muted);font-size:12px}
+/* ── Genodigden: contact-zoeker + chips + RSVP-status ─────────────────── */
+.attendee-picker{position:relative}
+.attendee-picker-row{display:flex;align-items:stretch;gap:6px}
+.attendee-picker-row .form-input{flex:1;min-width:0}
+.attendee-suggestion{align-items:center}
+.attendee-suggestion-main{display:flex;flex-direction:column;min-width:0;flex:1}
+.attendee-suggestion-main strong{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attendee-suggestion-main small{color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attendee-suggestion-src{flex:0 0 auto;margin-left:auto;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);background:var(--bg4);border-radius:6px;padding:2px 6px}
+.attendee-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.attendee-chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg4);color:var(--text);border-radius:12px;padding:3px 6px 3px 10px;font-size:12px}
+.attendee-chip button{border:none;background:none;cursor:pointer;line-height:1;color:var(--muted2);display:inline-flex;padding:0}
+.attendee-chip button:hover{color:var(--accent-r)}
+.attendee-status-list{display:flex;flex-direction:column;gap:2px}
+.attendee-status{font-size:11px;font-weight:800;padding:2px 8px;border-radius:20px;flex:0 0 auto}
+.attendee-status-accepted{color:#16a34a;background:rgba(22,163,74,.14)}
+.attendee-status-declined{color:#dc2626;background:rgba(220,38,38,.14)}
+.attendee-status-tentative{color:#d97706;background:rgba(217,119,6,.16)}
+.attendee-status-needs-action{color:var(--muted2);background:var(--bg4)}
 
 /* ── Agenda: slepen, verplaatsen & herschalen van afspraken ───────────── */
 .tb-ev-draggable{cursor:grab}

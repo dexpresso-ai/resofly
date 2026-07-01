@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { CalendarDays, CalendarPlus, ChevronDown, ChevronRight, Clock, ExternalLink, LayoutList, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, Video, X } from 'lucide-react';
+import { CalendarDays, CalendarPlus, ChevronDown, ChevronRight, Clock, ExternalLink, LayoutList, Mail, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { MeetingRecorder } from '../components/MeetingRecorder';
 import { RichTextExcerpt } from '../components/RichTextEditor';
@@ -21,6 +21,7 @@ import {
   loadCalendarIntegrations,
   refreshCalendarSources,
   revokeCalendarAppPassword,
+  searchCalendarContacts,
   updateCalendarEvent,
   updateCalendarSource,
   updateNativeCalendar,
@@ -29,7 +30,7 @@ import {
 } from '../lib/calendar-api';
 import { supabase } from '../lib/supabase';
 import type { AttendeeStatus, CalendarAppPassword, CalendarEventAttendee, EventRecurrence, RecurrenceFrequency } from '../types';
-import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, Client, Note, NoteCalendarLink, Project, Task, UUID } from '../types';
+import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, Client, Note, NoteCalendarLink, Project, Supplier, Task, UUID } from '../types';
 import { getNoteTypeLabel } from './Notes';
 import { TimeEntryModal } from './TimeTracking';
 
@@ -1075,28 +1076,168 @@ function MeetingFields({ provider, meetingUrl, addConference, onChange }: {
   );
 }
 
-function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, projects, loading, canWrite, selectedSourceIsNative, selectedSourceProvider, onSubmit, onClose }: {
+/* ── Genodigden: contact-zoeker (app-eigen + Google/Outlook) + handmatig ─── */
+
+type AttendeeSuggestion = { name: string | null; email: string; source: 'client' | 'supplier' | 'google' | 'microsoft' };
+const ATTENDEE_SOURCE_LABEL: Record<AttendeeSuggestion['source'], string> = { client: 'Klant', supplier: 'Leverancier', google: 'Google', microsoft: 'Outlook' };
+const EMAIL_RE_FE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Zoekt in de app-eigen contacten (klanten + leveranciers, met contactpersoon).
+function searchAppContacts(query: string, clients: Client[], suppliers: Supplier[]): AttendeeSuggestion[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const out: AttendeeSuggestion[] = [];
+  for (const c of clients) {
+    if (!c.email) continue;
+    const hay = `${c.name} ${c.contact_name ?? ''} ${c.email}`.toLowerCase();
+    if (hay.includes(q)) out.push({ name: c.contact_name ? `${c.contact_name} · ${c.name}` : c.name, email: c.email, source: 'client' });
+  }
+  for (const s of suppliers) {
+    if (!s.email) continue;
+    const hay = `${s.name} ${s.contact_name ?? ''} ${s.email}`.toLowerCase();
+    if (hay.includes(q)) out.push({ name: s.contact_name ? `${s.contact_name} · ${s.name}` : s.name, email: s.email, source: 'supplier' });
+  }
+  return out.slice(0, 6);
+}
+
+function AttendeePicker({ organizationId, sourceId, sourceProvider, clients, suppliers, attendees, onChange }: {
+  organizationId: UUID;
+  sourceId: string;
+  sourceProvider: CalendarProvider | null;
+  clients: Client[];
+  suppliers: Supplier[];
+  attendees: { email: string; name: string }[];
+  onChange: (next: { email: string; name: string }[]) => void;
+}) {
+  const [input, setInput] = useState('');
+  const [providerHits, setProviderHits] = useState<AttendeeSuggestion[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [needsReconnect, setNeedsReconnect] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(-1);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const debounceRef = useRef<number | null>(null);
+  const canSearchProvider = sourceProvider === 'google' || sourceProvider === 'microsoft';
+
+  useEffect(() => {
+    function onDocDown(e: MouseEvent) { if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false); }
+    document.addEventListener('mousedown', onDocDown);
+    return () => document.removeEventListener('mousedown', onDocDown);
+  }, []);
+
+  // Provider-contacten (Google/Outlook) debounced ophalen; app-contacten gaan lokaal.
+  useEffect(() => {
+    setNeedsReconnect(false);
+    const q = input.trim();
+    if (!canSearchProvider || !sourceId || q.length < 2) { setProviderHits([]); setLoading(false); return; }
+    if (debounceRef.current) window.clearTimeout(debounceRef.current);
+    setLoading(true);
+    debounceRef.current = window.setTimeout(async () => {
+      try {
+        const { contacts, needsReconnect } = await searchCalendarContacts(organizationId, sourceId, q);
+        setNeedsReconnect(needsReconnect);
+        setProviderHits(contacts.map(c => ({ name: c.name, email: c.email, source: sourceProvider === 'google' ? 'google' : 'microsoft' })));
+      } catch { setProviderHits([]); }
+      finally { setLoading(false); }
+    }, 300);
+    return () => { if (debounceRef.current) window.clearTimeout(debounceRef.current); };
+  }, [input, canSearchProvider, sourceId, sourceProvider, organizationId]);
+
+  const added = new Set(attendees.map(a => a.email.toLowerCase()));
+  const suggestions = useMemo(() => {
+    const merged = [...searchAppContacts(input, clients, suppliers), ...providerHits];
+    const seen = new Set<string>();
+    const out: AttendeeSuggestion[] = [];
+    for (const s of merged) {
+      const key = s.email.toLowerCase();
+      if (seen.has(key) || added.has(key)) continue;
+      seen.add(key);
+      out.push(s);
+    }
+    return out.slice(0, 8);
+  }, [input, clients, suppliers, providerHits, added]);
+
+  function addAttendee(email: string, name: string) {
+    const clean = email.trim().toLowerCase();
+    if (!EMAIL_RE_FE.test(clean) || added.has(clean)) return;
+    onChange([...attendees, { email: clean, name: name.trim() }]);
+    setInput(''); setProviderHits([]); setOpen(false); setHighlight(-1);
+  }
+  function commitTyped() {
+    if (highlight >= 0 && suggestions[highlight]) { const s = suggestions[highlight]; addAttendee(s.email, s.name ?? ''); return; }
+    if (EMAIL_RE_FE.test(input.trim())) addAttendee(input, '');
+  }
+
+  return (
+    <div className="event-attendees">
+      <div className="tb-panel-section-label"><Users size={13} /> Genodigden</div>
+      <div className="attendee-picker" ref={boxRef}>
+        <div className="attendee-picker-row">
+          <Input value={input} type="text" placeholder="Zoek een contact of typ een e-mailadres…"
+            onChange={e => { setInput(e.target.value); setOpen(true); setHighlight(-1); }}
+            onFocus={() => setOpen(true)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.preventDefault(); commitTyped(); return; }
+              if (!open || suggestions.length === 0) return;
+              if (e.key === 'ArrowDown') { e.preventDefault(); setHighlight(h => Math.min(h + 1, suggestions.length - 1)); }
+              else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlight(h => Math.max(h - 1, 0)); }
+              else if (e.key === 'Escape') { setOpen(false); }
+            }} />
+          <Button type="button" onClick={commitTyped} disabled={!EMAIL_RE_FE.test(input.trim()) && highlight < 0}><UserPlus size={14} /> Toevoegen</Button>
+        </div>
+        {open && (loading || suggestions.length > 0) && (
+          <ul className="location-suggestions attendee-suggestions">
+            {loading && suggestions.length === 0 && <li className="location-suggestion-empty">Contacten zoeken…</li>}
+            {suggestions.map((s, i) => (
+              <li key={`${s.source}-${s.email}`}>
+                <button type="button" className={`location-suggestion attendee-suggestion${i === highlight ? ' active' : ''}`}
+                  onMouseDown={e => { e.preventDefault(); addAttendee(s.email, s.name ?? ''); }}>
+                  <Mail size={13} />
+                  <span className="attendee-suggestion-main">
+                    <strong>{s.name || s.email}</strong>
+                    {s.name && <small>{s.email}</small>}
+                  </span>
+                  <span className="attendee-suggestion-src">{ATTENDEE_SOURCE_LABEL[s.source]}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {needsReconnect && (
+        <p className="calendar-help calendar-help-warn">Koppel je {sourceProvider === 'google' ? 'Google' : 'Microsoft'}-agenda opnieuw om ook je {sourceProvider === 'google' ? 'Google' : 'Outlook'}-contacten te kunnen doorzoeken.</p>
+      )}
+      {attendees.length > 0 && (
+        <div className="attendee-chips">
+          {attendees.map(a => (
+            <span key={a.email} className="attendee-chip">
+              {a.name ? `${a.name} · ${a.email}` : a.email}
+              <button type="button" aria-label={`Verwijder ${a.email}`} onClick={() => onChange(attendees.filter(x => x.email !== a.email))}><X size={13} /></button>
+            </span>
+          ))}
+        </div>
+      )}
+      <p className="calendar-help">Genodigden krijgen een uitnodiging per e-mail en kunnen accepteren of afwijzen.</p>
+    </div>
+  );
+}
+
+function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, suppliers, projects, loading, canWrite, selectedSourceIsNative, selectedSourceProvider, organizationId, onSubmit, onClose }: {
   newEvent: NewEventState;
   setNewEvent: (fn: (prev: NewEventState) => NewEventState) => void;
   writeableSources: CalendarSource[];
   clients: Client[];
+  suppliers: Supplier[];
   projects: Project[];
   loading: boolean;
   canWrite: boolean;
   selectedSourceIsNative: boolean;
   selectedSourceProvider: CalendarProvider | null;
+  organizationId: UUID;
   onSubmit: (e: FormEvent) => void;
   onClose: () => void;
 }) {
   const editing = Boolean(newEvent.editingEventId);
-  const [attendeeEmail, setAttendeeEmail] = useState('');
-  function addAttendee() {
-    const email = attendeeEmail.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return;
-    setAttendeeEmail('');
-    if (newEvent.attendees.some(a => a.email === email)) return;
-    setNewEvent(p => ({ ...p, attendees: [...p.attendees, { email, name: '' }] }));
-  }
   return (
     <div className="tb-overlay" onClick={onClose}>
       <form className="tb-panel" onClick={e => e.stopPropagation()} onSubmit={onSubmit}>
@@ -1130,28 +1271,9 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
             {newEvent.recurrenceFreq && <label>Tot en met<Input type="date" value={newEvent.recurrenceUntil} onChange={e => setNewEvent(p => ({ ...p, recurrenceUntil: e.target.value }))} /></label>}
           </div>
         ) : null}
-        {selectedSourceIsNative ? (
-          <div className="event-attendees">
-            <div className="tb-panel-section-label">Genodigden</div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <Input value={attendeeEmail} type="email" placeholder="naam@voorbeeld.nl"
-                onChange={e => setAttendeeEmail(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addAttendee(); } }} />
-              <Button type="button" onClick={addAttendee}>Toevoegen</Button>
-            </div>
-            {newEvent.attendees.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
-                {newEvent.attendees.map(a => (
-                  <span key={a.email} className="attendee-chip" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(0,0,0,0.06)', borderRadius: 12, padding: '2px 6px 2px 10px' }}>
-                    {a.email}
-                    <button type="button" aria-label={`Verwijder ${a.email}`} onClick={() => setNewEvent(p => ({ ...p, attendees: p.attendees.filter(x => x.email !== a.email) }))} style={{ border: 'none', background: 'none', cursor: 'pointer', lineHeight: 1 }}><X size={13} /></button>
-                  </span>
-                ))}
-              </div>
-            )}
-            <p className="calendar-help">Genodigden krijgen een uitnodiging per e-mail en kunnen accepteren of afwijzen.</p>
-          </div>
-        ) : null}
+        <AttendeePicker organizationId={organizationId} sourceId={newEvent.sourceId} sourceProvider={selectedSourceProvider}
+          clients={clients} suppliers={suppliers} attendees={newEvent.attendees}
+          onChange={next => setNewEvent(p => ({ ...p, attendees: next }))} />
         <div className="tb-panel-section-label">Koppelen aan</div>
         <ClientProjectPicker clients={clients} projects={projects} clientId={newEvent.clientId} projectId={newEvent.projectId}
           onChange={next => setNewEvent(p => ({ ...p, clientId: next.clientId, projectId: next.projectId }))} />
@@ -1231,6 +1353,10 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
   const eventLink = data.calendarEventLinks.find(link => calendarEventLinkMatchesEvent(link, event)) ?? null;
   const linkedClient = eventLink?.client_id ? data.clients.find(c => c.id === eventLink.client_id) ?? null : null;
   const linkedProject = eventLink?.project_id ? data.projects.find(p => p.id === eventLink.project_id) ?? null : null;
+  // Genodigden: native uit de opgehaalde rijen, extern (Google/Microsoft) uit het event zelf.
+  const displayAttendees: { key: string; label: string; status: AttendeeStatus }[] = event.provider === 'native'
+    ? attendees.map(a => ({ key: a.id, label: a.display_name || a.email, status: a.status }))
+    : (event.attendees ?? []).map((a, i) => ({ key: `${a.email}-${i}`, label: a.name || a.email, status: a.status }));
 
   // Notulen van een opname als gekoppelde notitie op de afspraak (klant/project) opslaan.
   async function saveSummaryAsNote(text: string) {
@@ -1442,17 +1568,17 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
           )}
         </section>
 
-        {attendees.length > 0 && (
+        {displayAttendees.length > 0 && (
           <section className="event-link-panel">
             <div className="event-link-head">
               <span className="event-notes-kicker">Genodigden</span>
               <h4>Uitnodigingen</h4>
-              <p>{attendees.filter(a => a.status === 'accepted').length} van {attendees.length} geaccepteerd</p>
+              <p>{displayAttendees.filter(a => a.status === 'accepted').length} van {displayAttendees.length} geaccepteerd</p>
             </div>
             <div className="attendee-status-list">
-              {attendees.map(a => (
-                <div key={a.id} className="attendee-status-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', gap: 8 }}>
-                  <span>{a.display_name || a.email}</span>
+              {displayAttendees.map(a => (
+                <div key={a.key} className="attendee-status-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', gap: 8 }}>
+                  <span>{a.label}</span>
                   <span className={`attendee-status attendee-status-${a.status}`}>{ATTENDEE_STATUS_LABELS[a.status]}</span>
                 </div>
               ))}
@@ -1774,7 +1900,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       sourceId: newEvent.sourceId, title: newEvent.title.trim(),
       description: newEvent.description.trim() || null, location: newEvent.location.trim() || null,
       startsAt: sIso, endsAt: eIso, allDay: newEvent.allDay, recurrence,
-      attendees: isNative ? newEvent.attendees.map(a => ({ email: a.email, name: a.name || null })) : undefined,
+      // Genodigden op elke agenda: native via iMIP-mail, Google/Microsoft via de provider.
+      attendees: newEvent.attendees.map(a => ({ email: a.email, name: a.name || null })),
       // Automatisch genereren kan alleen bij Google/Microsoft; native accepteert alleen een geplakte link.
       meetingUrl: newEvent.addConference && !isNative ? null : (newEvent.meetingUrl.trim() || null),
       addConference: !isNative && newEvent.addConference,
@@ -1817,6 +1944,9 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         const rows = await getCalendarEventAttendees(organizationId, event.native_event_id);
         attendees = rows.map(r => ({ email: r.email, name: r.display_name ?? '' }));
       } catch { /* genodigden zijn optioneel */ }
+    } else if (!isNative && event.attendees) {
+      // Externe (Google/Microsoft) genodigden komen mee met het event zelf.
+      attendees = event.attendees.map(a => ({ email: a.email, name: a.name ?? '' }));
     }
     setSelectedEvent(null);
     setEditingOriginal(event);
@@ -1874,6 +2004,9 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         const rows = await getCalendarEventAttendees(organizationId, event.native_event_id);
         attendees = rows.map(r => ({ email: r.email, name: r.display_name ?? null }));
       } catch { /* genodigden zijn optioneel; nooit het verschuiven laten falen */ }
+    } else if (!isNative && event.attendees) {
+      // Externe genodigden meesturen zodat ze niet gewist worden bij verplaatsen.
+      attendees = event.attendees.map(a => ({ email: a.email, name: a.name }));
     }
     const input = {
       sourceId: event.source_id,
@@ -2216,6 +2349,10 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         <label className="check-row"><input type="checkbox" checked={newEvent.allDay} onChange={e => setNewEvent(p => ({ ...p, allDay: e.target.checked }))} /> Hele dag</label>
         <MeetingFields provider={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider ?? null} meetingUrl={newEvent.meetingUrl} addConference={newEvent.addConference}
           onChange={patch => setNewEvent(p => ({ ...p, ...patch }))} />
+        <AttendeePicker organizationId={organizationId} sourceId={newEvent.sourceId}
+          sourceProvider={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider ?? null}
+          clients={data.clients} suppliers={data.suppliers} attendees={newEvent.attendees}
+          onChange={next => setNewEvent(p => ({ ...p, attendees: next }))} />
         <div className="tb-panel-section-label">Koppelen aan</div>
         <ClientProjectPicker clients={data.clients} projects={data.projects} clientId={newEvent.clientId} projectId={newEvent.projectId}
           onChange={next => setNewEvent(p => ({ ...p, clientId: next.clientId, projectId: next.projectId }))} />
@@ -2239,7 +2376,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
 
     {/* Floating panel */}
     {showCreatePanel && <EventCreationPanel newEvent={newEvent} setNewEvent={setNewEvent} writeableSources={writeableSources}
-      clients={data.clients} projects={data.projects}
+      clients={data.clients} suppliers={data.suppliers} projects={data.projects} organizationId={organizationId}
       selectedSourceIsNative={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider === 'native'}
       selectedSourceProvider={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider ?? null}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => { setShowCreatePanel(false); setEditingOriginal(null); }} />}

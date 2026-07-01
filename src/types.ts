@@ -1313,6 +1313,13 @@ export interface AttendeeInput {
   role?: 'req' | 'opt';
 }
 
+/** Compacte genodigde-weergave op een agenda-item (o.a. van Google/Microsoft). */
+export interface EventAttendeeLite {
+  email: string;
+  name: string | null;
+  status: AttendeeStatus;
+}
+
 export interface CalendarConnection {
   id: UUID;
   organization_id: UUID;
@@ -1363,6 +1370,8 @@ export interface CalendarExternalEvent {
   html_link: string | null;
   /** Videocall-link (Google Meet / Teams / Zoom / overig), indien aan dit item gekoppeld. */
   meeting_url?: string | null;
+  /** Genodigden zoals bekend bij de provider (alleen extern Google/Microsoft; native via getCalendarEventAttendees). */
+  attendees?: EventAttendeeLite[] | null;
   visibility: CalendarVisibility;
   is_private_masked?: boolean;
   /** Alleen voor native ResoFly-agenda-items: de database-id van het item (voor bewerken/verwijderen). */

@@ -129,6 +129,7 @@ serve(async (req) => {
       case 'listAppPasswords': return json({ ok: true, appPasswords: await listAppPasswords(organizationId, user.id) });
       case 'revokeAppPassword': await revokeAppPassword(organizationId, user.id, String(body.appPasswordId || '')); return json({ ok: true });
       case 'getEventAttendees': return json({ ok: true, attendees: await getEventAttendees(organizationId, user.id, String(body.eventId || '')) });
+      case 'searchContacts': return json({ ok: true, ...(await searchContacts(organizationId, user.id, String(body.sourceId || ''), String(body.query || ''))) });
       default: return json({ ok: false, error: `Onbekende calendar action: ${action}` }, 400);
     }
   } catch (error) {
@@ -273,11 +274,19 @@ function assertProviderConfigured(provider: Provider) {
 }
 
 function googleScopes(): string[] {
-  return ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/calendar.calendarlist.readonly', 'https://www.googleapis.com/auth/calendar.events'];
+  return [
+    'openid', 'email', 'profile',
+    'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+    'https://www.googleapis.com/auth/calendar.events',
+    // Contacten opzoeken bij het uitnodigen van genodigden.
+    'https://www.googleapis.com/auth/contacts.readonly',
+    'https://www.googleapis.com/auth/contacts.other.readonly',
+  ];
 }
 
 function microsoftScopes(): string[] {
-  return ['openid', 'profile', 'email', 'offline_access', 'User.Read', 'Calendars.ReadWrite'];
+  // People.Read = relevantie-gerangschikt adresboek (contacten + directory), Contacts.Read = opgeslagen contacten.
+  return ['openid', 'profile', 'email', 'offline_access', 'User.Read', 'Calendars.ReadWrite', 'Contacts.Read', 'People.Read'];
 }
 
 function sanitizeReturnTo(raw: string): string {
@@ -613,6 +622,7 @@ function maskPrivateEventForRequester(event: Record<string, unknown>, source: Ca
     description: null,
     location: null,
     meeting_url: null,
+    attendees: [],
     html_link: null,
     is_private_masked: true,
   };
@@ -640,6 +650,7 @@ async function fetchGoogleEvents(accessToken: string, source: CalendarSourceRow,
       description: stripMeetingLine(rawDescription),
       location,
       meeting_url: readMeetingUrl(googleConferenceUrl(item), rawDescription, location),
+      attendees: mapGoogleAttendees(item),
       starts_at: allDayRange ? allDayRange.starts_at : String(startObj.dateTime),
       ends_at: allDayRange ? allDayRange.ends_at : String(endObj.dateTime),
       all_day: allDay,
@@ -651,7 +662,7 @@ async function fetchGoogleEvents(accessToken: string, source: CalendarSourceRow,
 }
 
 async function fetchMicrosoftEvents(accessToken: string, source: CalendarSourceRow, start: string, end: string) {
-  const params = new URLSearchParams({ startDateTime: start, endDateTime: end, '$top': '250', '$orderby': 'start/dateTime', '$select': 'id,subject,bodyPreview,location,start,end,isAllDay,webLink,isOnlineMeeting,onlineMeeting' });
+  const params = new URLSearchParams({ startDateTime: start, endDateTime: end, '$top': '250', '$orderby': 'start/dateTime', '$select': 'id,subject,bodyPreview,location,start,end,isAllDay,webLink,isOnlineMeeting,onlineMeeting,attendees' });
   const res = await fetch(`https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(source.provider_calendar_id)}/calendarView?${params}`, {
     headers: { Authorization: `Bearer ${accessToken}`, Prefer: 'outlook.timezone="UTC"' },
   });
@@ -676,6 +687,7 @@ async function fetchMicrosoftEvents(accessToken: string, source: CalendarSourceR
       description: stripMeetingLine(rawDescription),
       location: locationName,
       meeting_url: readMeetingUrl(onlineMeeting.joinUrl ? String(onlineMeeting.joinUrl) : null, rawDescription, locationName),
+      attendees: mapMicrosoftAttendees(item),
       starts_at: allDayRange ? allDayRange.starts_at : normalizeMicrosoftDateTime(startObj.dateTime),
       ends_at: allDayRange ? allDayRange.ends_at : normalizeMicrosoftDateTime(endObj.dateTime),
       all_day: allDay,
@@ -739,7 +751,19 @@ function normalizeNewEventInput(input: Record<string, unknown>) {
     allDay,
     meetingUrl: sanitizeMeetingUrl(input.meetingUrl),
     addConference: Boolean(input.addConference),
+    attendees: parseAttendeesInput(input),
   };
+}
+
+/** Vertaalt de RSVP-status van Google/Microsoft naar onze eigen statussen. */
+function mapAttendeeStatus(raw: unknown): 'needs-action' | 'accepted' | 'declined' | 'tentative' {
+  switch (String(raw || '').toLowerCase()) {
+    case 'accepted': return 'accepted';
+    case 'declined': return 'declined';
+    case 'tentative':
+    case 'tentativelyaccepted': return 'tentative';
+    default: return 'needs-action';
+  }
 }
 
 // ── Videovergadering-link (Google Meet / Teams / Zoom / overig) ──────────────
@@ -837,7 +861,26 @@ function buildGoogleEventBody(source: CalendarSourceRow, event: ReturnType<typeo
   if (event.addConference) {
     body.conferenceData = { createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } };
   }
+  if (event.attendees.length) {
+    body.attendees = event.attendees.map(a => ({ email: a.email, ...(a.name ? { displayName: a.name } : {}), optional: a.role === 'opt' }));
+  }
   return body;
+}
+
+/** Query-parameters voor een Google create/update: conferentie + uitnodigingen mailen. */
+function googleWriteQuery(event: ReturnType<typeof normalizeNewEventInput>): string {
+  const params = new URLSearchParams();
+  if (event.addConference) params.set('conferenceDataVersion', '1');
+  if (event.attendees.length) params.set('sendUpdates', 'all');
+  const s = params.toString();
+  return s ? `?${s}` : '';
+}
+
+function mapGoogleAttendees(payload: Record<string, unknown>): Array<{ email: string; name: string | null; status: string }> {
+  const raw = (payload.attendees ?? []) as Record<string, unknown>[];
+  return raw
+    .filter(a => !a.organizer && !a.resource && a.email)
+    .map(a => ({ email: String(a.email), name: a.displayName ? String(a.displayName) : null, status: mapAttendeeStatus(a.responseStatus) }));
 }
 
 function googleEventToBaseEvent(payload: Record<string, unknown>, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
@@ -855,6 +898,7 @@ function googleEventToBaseEvent(payload: Record<string, unknown>, source: Calend
     description: stripMeetingLine(rawDescription),
     location,
     meeting_url: readMeetingUrl(googleConferenceUrl(payload), rawDescription, location),
+    attendees: mapGoogleAttendees(payload),
     starts_at: allDayRange ? allDayRange.starts_at : String((payload.start as Record<string, string>).dateTime),
     ends_at: allDayRange ? allDayRange.ends_at : String((payload.end as Record<string, string>).dateTime),
     all_day: allDay,
@@ -866,7 +910,7 @@ function googleEventToBaseEvent(payload: Record<string, unknown>, source: Calend
 
 async function createGoogleEvent(accessToken: string, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
   const body = buildGoogleEventBody(source, event);
-  const query = event.addConference ? '?conferenceDataVersion=1' : '';
+  const query = googleWriteQuery(event);
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events${query}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
@@ -907,7 +951,25 @@ function buildMicrosoftEventBody(event: ReturnType<typeof normalizeNewEventInput
     body.isOnlineMeeting = true;
     body.onlineMeetingProvider = 'teamsForBusiness';
   }
+  if (event.attendees.length) {
+    body.attendees = event.attendees.map(a => ({
+      emailAddress: { address: a.email, ...(a.name ? { name: a.name } : {}) },
+      type: a.role === 'opt' ? 'optional' : 'required',
+    }));
+  }
   return body;
+}
+
+function mapMicrosoftAttendees(payload: Record<string, unknown>): Array<{ email: string; name: string | null; status: string }> {
+  const raw = (payload.attendees ?? []) as Record<string, unknown>[];
+  return raw
+    .filter(a => a.type !== 'resource')
+    .map(a => {
+      const em = (a.emailAddress ?? {}) as Record<string, string>;
+      const st = (a.status ?? {}) as Record<string, string>;
+      return { email: String(em.address || ''), name: em.name ? String(em.name) : null, status: mapAttendeeStatus(st.response) };
+    })
+    .filter(a => a.email);
 }
 
 function microsoftEventToBaseEvent(payload: Record<string, unknown>, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
@@ -929,6 +991,7 @@ function microsoftEventToBaseEvent(payload: Record<string, unknown>, source: Cal
     description: stripMeetingLine(rawDescription),
     location: locationName,
     meeting_url: readMeetingUrl(onlineMeeting.joinUrl ? String(onlineMeeting.joinUrl) : null, rawDescription, locationName),
+    attendees: mapMicrosoftAttendees(payload),
     starts_at: allDayRange ? allDayRange.starts_at : normalizeMicrosoftDateTime(start.dateTime || event.startsAt),
     ends_at: allDayRange ? allDayRange.ends_at : normalizeMicrosoftDateTime(end.dateTime || event.endsAt),
     all_day: allDay,
@@ -968,6 +1031,93 @@ async function getExternalWriteAccessToken(organizationId: string, requesterUser
   return await refreshAccessToken(token);
 }
 
+/* ── Contacten opzoeken (Google People / Microsoft Graph) ──────────────── */
+
+/**
+ * Zoekt contacten in het adresboek van de agenda-provider. App-eigen contacten
+ * (klanten/leveranciers) worden client-side uit de al geladen data gefilterd;
+ * deze functie levert alleen de provider-contacten. Ontbreekt de contacten-scope
+ * (gebruiker heeft nog met de oude rechten gekoppeld), dan komt needsReconnect terug.
+ */
+async function searchContacts(organizationId: string, requesterUserId: string, sourceId: string, query: string): Promise<{ contacts: Array<{ name: string | null; email: string }>; needsReconnect: boolean }> {
+  const q = query.trim();
+  if (q.length < 2 || !sourceId) return { contacts: [], needsReconnect: false };
+  const { data: source } = await supabaseAdmin.from('calendar_sources').select('*').eq('organization_id', organizationId).eq('id', sourceId).single();
+  if (!source) return { contacts: [], needsReconnect: false };
+  const calendarSource = source as CalendarSourceRow;
+  if (calendarSource.provider === 'native' || !calendarSource.connection_id) return { contacts: [], needsReconnect: false };
+  if (calendarSource.user_id !== requesterUserId && calendarSource.visibility !== 'organization') return { contacts: [], needsReconnect: false };
+  const connection = await getConnection(organizationId, calendarSource.connection_id);
+  if (connection.status !== 'active') return { contacts: [], needsReconnect: true };
+  try {
+    const token = await getToken(organizationId, connection.id);
+    const accessToken = await refreshAccessToken(token);
+    const contacts = calendarSource.provider === 'google'
+      ? await googleSearchContacts(accessToken, q)
+      : await microsoftSearchContacts(accessToken, q);
+    return { contacts, needsReconnect: false };
+  } catch (err) {
+    // 401/403 = onvoldoende rechten → opnieuw koppelen; overige fouten: leeg teruggeven.
+    const msg = err instanceof Error ? err.message : '';
+    if (/\b(401|403)\b|insufficient|scope|permission/i.test(msg)) return { contacts: [], needsReconnect: true };
+    console.error('searchContacts', err);
+    return { contacts: [], needsReconnect: false };
+  }
+}
+
+function dedupeContacts(rows: Array<{ name: string | null; email: string }>): Array<{ name: string | null; email: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ name: string | null; email: string }> = [];
+  for (const r of rows) {
+    const email = r.email.trim().toLowerCase();
+    if (!EMAIL_RE.test(email) || seen.has(email)) continue;
+    seen.add(email);
+    out.push({ name: r.name?.trim() || null, email });
+  }
+  return out.slice(0, 20);
+}
+
+async function googleSearchContacts(accessToken: string, query: string): Promise<Array<{ name: string | null; email: string }>> {
+  const readMask = 'names,emailAddresses';
+  const headers = { Authorization: `Bearer ${accessToken}` };
+  // Zowel opgeslagen contacten als "other contacts" (mensen die je gemaild hebt) doorzoeken.
+  const [main, other] = await Promise.all([
+    fetch(`https://people.googleapis.com/v1/people:searchContacts?query=${encodeURIComponent(query)}&pageSize=15&readMask=${readMask}`, { headers }),
+    fetch(`https://people.googleapis.com/v1/otherContacts:search?query=${encodeURIComponent(query)}&pageSize=15&readMask=${readMask}`, { headers }),
+  ]);
+  if (main.status === 401 || main.status === 403) throw new Error(`Google contacts ${main.status}`);
+  const rows: Array<{ name: string | null; email: string }> = [];
+  for (const res of [main, other]) {
+    if (!res.ok) continue;
+    const payload = await res.json().catch(() => ({}));
+    for (const r of (payload.results ?? []) as Record<string, unknown>[]) {
+      const person = (r.person ?? {}) as Record<string, unknown>;
+      const name = ((person.names ?? []) as Record<string, string>[])[0]?.displayName ?? null;
+      for (const e of (person.emailAddresses ?? []) as Record<string, string>[]) {
+        if (e.value) rows.push({ name, email: e.value });
+      }
+    }
+  }
+  return dedupeContacts(rows);
+}
+
+async function microsoftSearchContacts(accessToken: string, query: string): Promise<Array<{ name: string | null; email: string }>> {
+  // /me/people = relevantie-gerangschikt (contacten + directory + recente mail).
+  const url = `https://graph.microsoft.com/v1.0/me/people?$search=${encodeURIComponent(`"${query}"`)}&$top=15&$select=displayName,scoredEmailAddresses,personType`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (res.status === 401 || res.status === 403) throw new Error(`Microsoft people ${res.status}`);
+  if (!res.ok) return [];
+  const payload = await res.json().catch(() => ({}));
+  const rows: Array<{ name: string | null; email: string }> = [];
+  for (const p of (payload.value ?? []) as Record<string, unknown>[]) {
+    const name = p.displayName ? String(p.displayName) : null;
+    for (const e of (p.scoredEmailAddresses ?? []) as Record<string, string>[]) {
+      if (e.address) rows.push({ name, email: e.address });
+    }
+  }
+  return dedupeContacts(rows);
+}
+
 async function updateExternalEvent(organizationId: string, requesterUserId: string, source: CalendarSourceRow, input: Record<string, unknown>) {
   const providerEventId = String(input.providerEventId || input.eventId || '');
   if (!providerEventId) throw new Error('Onbekend agenda-item.');
@@ -982,7 +1132,8 @@ async function deleteExternalEvent(organizationId: string, requesterUserId: stri
   if (!providerEventId) throw new Error('Onbekend agenda-item.');
   const accessToken = await getExternalWriteAccessToken(organizationId, requesterUserId, source);
   const url = source.provider === 'google'
-    ? `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events/${encodeURIComponent(providerEventId)}`
+    // sendUpdates=all zodat Google een afzegging naar de genodigden mailt.
+    ? `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events/${encodeURIComponent(providerEventId)}?sendUpdates=all`
     : `https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(providerEventId)}`;
   const res = await fetch(url, { method: 'DELETE', headers: { Authorization: `Bearer ${accessToken}` } });
   // 200/204 = verwijderd; 404/410 = al weg → idempotent toelaten.
@@ -994,7 +1145,7 @@ async function deleteExternalEvent(organizationId: string, requesterUserId: stri
 
 async function updateGoogleEvent(accessToken: string, source: CalendarSourceRow, eventId: string, event: ReturnType<typeof normalizeNewEventInput>) {
   const body = buildGoogleEventBody(source, event);
-  const query = event.addConference ? '?conferenceDataVersion=1' : '';
+  const query = googleWriteQuery(event);
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events/${encodeURIComponent(eventId)}${query}`, {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
