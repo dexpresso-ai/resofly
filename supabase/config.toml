@@ -59,3 +59,13 @@ verify_jwt = false
 # zelf controleert (ElevenLabs-Signature header + ELEVENLABS_WEBHOOK_SECRET).
 [functions.meeting-transcribe-webhook]
 verify_jwt = false
+
+# meeting-booking (interne beheer-API voor de boekingstool) handelt CORS + auth zelf af:
+# elke actie verifieert requireUser() + requireOrganizationAccess() + schrijfrol.
+[functions.meeting-booking]
+verify_jwt = false
+
+# meeting-booking-public is de klant-facing boekingspagina-API (geen login): toegang
+# loopt via een onraadbaar token in de request-body, gehasht vergeleken (zoals contract-public).
+[functions.meeting-booking-public]
+verify_jwt = false

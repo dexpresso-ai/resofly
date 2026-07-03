@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { listEvents } from '../_shared/calendarAvailability.ts';
 
 // ============================================================
 // gerrie-agent — Gerrie, de AI-assistent, gekoppeld aan Claude (Anthropic).
@@ -425,6 +426,7 @@ function buildSystemPrompt(ctx: GerrieContext): string {
     '',
     'Wat je nu kunt:',
     '- Je kunt MEELEZEN in de workspace via de beschikbare tools (klanten, facturen, offertes, projecten, taken incl. weekplanner, tickets, financiële cijfers, gekoppelde agenda\'s, en welke betalingsherinneringen vandaag aan de beurt zijn).',
+    '- `suggest_meeting_slots` — stelt zelf een paar vrije tijdstippen voor voor een afspraak, op basis van de agenda van de gebruiker (native + Google + Microsoft). Voor een FYSIEKE afspraak (met locatie) houd je standaard 60 minuten reistijd vrij rond bestaande afspraken die een locatie hebben; vermeld die aanname kort. Presenteer de voorstellen als een kort genummerd lijstje. Kiest de gebruiker er één, dan zet je die met `propose_calendar_event` klaar (jij plant niets zelf in).',
     '- Gebruik altijd een tool om echte gegevens op te halen; verzin nooit cijfers, namen of bedragen.',
     '- Bedragen zijn in euro\'s. Toon ze netjes (bijv. € 1.250,00). Rapporteer beknopt en zakelijk.',
     '',
@@ -565,6 +567,23 @@ const TOOL_DEFINITIONS = [
     name: 'list_calendars',
     description: "Toon de gekoppelde agenda's van de gebruiker en of erin geschreven mag worden. Gebruik dit om de juiste agenda te kiezen voordat je een agenda-item voorstelt, of als er meerdere schrijfbare agenda's zijn.",
     input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'suggest_meeting_slots',
+    description: "Zoek zelf een paar vrije tijdstippen voor een afspraak op basis van de agenda van de gebruiker (native + Google + Microsoft). Voor een fysieke afspraak (physical=true) wordt standaard 60 minuten reistijd vrijgehouden rond bestaande afspraken die een locatie hebben. Geeft 3–5 voorstellen terug binnen werktijden (standaard 09:00–17:00, werkdagen). Je plant NIETS in: presenteer de opties en gebruik bij een keuze `propose_calendar_event`.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        duration_minutes: { type: 'integer', description: 'Gewenste duur in minuten (standaard 60).' },
+        physical: { type: 'boolean', description: 'True als het een fysieke afspraak met reistijd is (dan wordt reistijd rond bestaande afspraken met locatie vrijgehouden). Standaard false (bijv. videocall).' },
+        from_date: { type: 'string', description: 'Vanaf welke datum zoeken (YYYY-MM-DD). Standaard vandaag.' },
+        days: { type: 'integer', description: 'Hoeveel dagen vooruit zoeken (standaard 7, max 21).' },
+        earliest_hour: { type: 'integer', description: 'Vroegste starttijd (uur, standaard 9).' },
+        latest_hour: { type: 'integer', description: 'Laatste eindtijd (uur, standaard 17).' },
+        travel_buffer_minutes: { type: 'integer', description: 'Reistijdbuffer in minuten voor fysieke afspraken (standaard 60).' },
+        include_weekend: { type: 'boolean', description: 'Ook zaterdag/zondag meenemen (standaard false).' },
+      },
+    },
   },
   {
     name: 'propose_invoice',
@@ -883,6 +902,7 @@ function toolLabel(name: string): string {
     case 'list_due_reminders': return 'Openstaande herinneringen ophalen…';
     case 'list_tasks': return 'Taken ophalen…';
     case 'list_calendars': return "Agenda's ophalen…";
+    case 'suggest_meeting_slots': return 'Vrije momenten zoeken…';
     default: return 'Gegevens ophalen…';
   }
 }
@@ -902,6 +922,7 @@ async function runTool(ctx: GerrieContext, name: string, input: Record<string, u
     case 'list_due_reminders': return listDueReminders(ctx, input);
     case 'list_tasks': return listTasks(orgId, input, limit);
     case 'list_calendars': return listCalendars(ctx);
+    case 'suggest_meeting_slots': return suggestMeetingSlots(ctx, input);
     default: throw new HttpError(`Onbekende tool: ${name}`, 400);
   }
 }
@@ -915,6 +936,112 @@ async function listCalendars(ctx: GerrieContext) {
   return {
     writable_count: all.filter((s) => s.write_enabled).length,
     calendars: all.map((s) => ({ source_id: s.id, name: s.name, provider: s.provider, is_primary: s.is_primary, can_write: s.write_enabled, timezone: s.timezone })),
+  };
+}
+
+// ── Reistijd-bewuste tijdsvoorstellen (staat los van de klant-boekingslinks) ──
+// Leest de bezette tijden van de gebruiker over native + Google + Microsoft heen
+// en zoekt vrije gaten binnen werktijden. Voor fysieke afspraken wordt een
+// reistijdbuffer rond bestaande afspraken MET locatie vrijgehouden.
+
+const AMS_TZ = 'Europe/Amsterdam';
+
+/** Milliseconden die `tz` vóórloopt op UTC op het moment `at` (DST-bewust). */
+function tzOffsetMs(tz: string, at: Date): number {
+  const dtf = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const p: Record<string, string> = {};
+  for (const part of dtf.formatToParts(at)) p[part.type] = part.value;
+  const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +(p.hour === '24' ? '0' : p.hour), +p.minute, +p.second);
+  return asUTC - at.getTime();
+}
+
+/** Wandkloktijd (Amsterdam) op datum `y-m-d` om hh:mm → echte UTC-Date. */
+function amsWallToUtc(y: number, m: number, d: number, hh: number, mm: number): Date {
+  const guess = Date.UTC(y, m - 1, d, hh, mm);
+  const offset = tzOffsetMs(AMS_TZ, new Date(guess));
+  return new Date(guess - offset);
+}
+
+/** Weekdag (0=zo..6=za) van een UTC-instant, gezien in Amsterdam. */
+function amsWeekday(at: Date): number {
+  const wd = new Intl.DateTimeFormat('en-US', { timeZone: AMS_TZ, weekday: 'short' }).format(at);
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(wd);
+}
+
+function clampInt(v: unknown, def: number, min: number, max: number): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+async function suggestMeetingSlots(ctx: GerrieContext, input: Record<string, unknown>) {
+  const duration = clampInt(input.duration_minutes, 60, 15, 8 * 60);
+  const physical = Boolean(input.physical);
+  const days = clampInt(input.days, 7, 1, 21);
+  const earliest = clampInt(input.earliest_hour, 9, 0, 22);
+  const latest = clampInt(input.latest_hour, 17, earliest + 1, 23);
+  const buffer = physical ? clampInt(input.travel_buffer_minutes, 60, 0, 240) : 0;
+  const includeWeekend = Boolean(input.include_weekend);
+
+  const fromStr = typeof input.from_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(input.from_date) ? input.from_date : ctx.today;
+  const [fy, fm, fd] = fromStr.split('-').map(Number);
+  const windowStart = amsWallToUtc(fy, fm, fd, 0, 0);
+  const windowEnd = new Date(windowStart.getTime() + days * 24 * 60 * 60 * 1000);
+  const nowMs = Date.now();
+
+  // Bezette tijden ophalen over alle zichtbare agenda's; buffer rond items met locatie.
+  let busy: Array<{ start: number; end: number }> = [];
+  try {
+    const events = await listEvents(ctx.organizationId, ctx.userId, windowStart.toISOString(), windowEnd.toISOString());
+    busy = events.map((e) => {
+      const hasLocation = Boolean(String(e.location ?? '').trim());
+      const pad = (physical && hasLocation) ? buffer * 60 * 1000 : 0;
+      return { start: new Date(String(e.starts_at)).getTime() - pad, end: new Date(String(e.ends_at)).getTime() + pad };
+    }).sort((a, b) => a.start - b.start);
+  } catch (err) {
+    return { ok: false, error: 'Kon de agenda niet lezen. Is er een agenda gekoppeld?', detail: err instanceof Error ? err.message : String(err) };
+  }
+
+  const durMs = duration * 60 * 1000;
+  const suggestions: Array<{ starts_at: string; ends_at: string; label: string }> = [];
+
+  for (let day = 0; day < days && suggestions.length < 5; day++) {
+    const dayStart = new Date(windowStart.getTime() + day * 24 * 60 * 60 * 1000);
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: AMS_TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(dayStart).split('-').map(Number);
+    const [yy, mo, dd] = parts;
+    const weekday = amsWeekday(amsWallToUtc(yy, mo, dd, 12, 0));
+    if (!includeWeekend && (weekday === 0 || weekday === 6)) continue;
+
+    let cursor = amsWallToUtc(yy, mo, dd, earliest, 0).getTime();
+    const dayEnd = amsWallToUtc(yy, mo, dd, latest, 0).getTime();
+    cursor = Math.max(cursor, nowMs);
+
+    // Loop door de dag; spring over bezette blokken heen.
+    while (cursor + durMs <= dayEnd && suggestions.length < 5) {
+      const slotEnd = cursor + durMs;
+      const clash = busy.find((b) => b.start < slotEnd && b.end > cursor);
+      if (clash) { cursor = clash.end; continue; }
+      suggestions.push({
+        starts_at: new Date(cursor).toISOString(),
+        ends_at: new Date(slotEnd).toISOString(),
+        label: `${new Intl.DateTimeFormat('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', timeZone: AMS_TZ }).format(new Date(cursor))} ${new Intl.DateTimeFormat('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: AMS_TZ }).format(new Date(cursor))}–${new Intl.DateTimeFormat('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: AMS_TZ }).format(new Date(slotEnd))}`,
+      });
+      // Volgende suggestie ná deze afspraak + eventuele reistijd, om variatie te geven.
+      cursor = slotEnd + Math.max(buffer, 15) * 60 * 1000;
+    }
+  }
+
+  return {
+    ok: true,
+    duration_minutes: duration,
+    physical,
+    travel_buffer_minutes: buffer,
+    working_hours: `${String(earliest).padStart(2, '0')}:00–${String(latest).padStart(2, '0')}:00`,
+    timezone: AMS_TZ,
+    note: physical
+      ? `Reistijd van ${buffer} min vrijgehouden rond bestaande afspraken met een locatie.`
+      : 'Geen reistijd meegerekend (geen fysieke afspraak).',
+    suggestions,
   };
 }
 

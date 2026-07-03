@@ -1493,3 +1493,65 @@ export interface BillingCheckoutResult {
   status?: string;
   paymentType?: 'extra_seat' | 'plan_change' | 'subscription';
 }
+
+// ── Meeting Booking Tool (Calendly-achtig) ──────────────────────────────────
+
+export type MeetingBookingLinkStatus = 'active' | 'closed';
+export type MeetingBookingSlotStatus = 'open' | 'pending' | 'booked' | 'cancelled';
+export type MeetingBookingStatus = 'pending' | 'confirmed' | 'cancelled' | 'failed';
+
+export interface MeetingBookingLink {
+  id: UUID;
+  organization_id: UUID;
+  user_id: UUID | null;
+  client_id: UUID | null;
+  source_id: UUID | null;
+  title: string;
+  intro_text: string | null;
+  invite_message: string | null;
+  meeting_url: string | null;
+  max_total_bookings: number;
+  max_per_week: number;
+  status: MeetingBookingLinkStatus;
+  public_token_hash: string | null;
+  public_token_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Boekingslink verrijkt met afgeleide velden voor de lijstweergave. */
+export interface MeetingBookingLinkListItem extends MeetingBookingLink {
+  client_name: string | null;
+  source_name: string | null;
+  source_provider: CalendarProvider | null;
+  booking_count: number;
+  needs_reconnect: boolean;
+}
+
+export interface MeetingBookingSlot {
+  id: UUID;
+  booking_link_id: UUID;
+  organization_id: UUID;
+  starts_at: string;
+  ends_at: string;
+  status: MeetingBookingSlotStatus;
+  pending_at: string | null;
+  created_at: string;
+}
+
+export interface MeetingBooking {
+  id: UUID;
+  booking_link_id: UUID;
+  slot_id: UUID;
+  organization_id: UUID;
+  client_id: UUID | null;
+  booked_name: string | null;
+  booked_email: string;
+  native_event_id: UUID | null;
+  external_event_id: string | null;
+  external_provider: 'google' | 'microsoft' | null;
+  status: MeetingBookingStatus;
+  created_at: string;
+  confirmed_at: string | null;
+  cancelled_at: string | null;
+}

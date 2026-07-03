@@ -4,7 +4,7 @@ import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { Select } from './Ui';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'archive'|'settings'|'project';
 
 const items = [
   ['dashboard', LayoutDashboard, 'Dashboard'],
@@ -21,7 +21,7 @@ const items = [
 ] as const;
 
 const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'pnl', 'vat-returns'];
-const calendarPages: Page[] = ['calendar', 'calendar-settings'];
+const calendarPages: Page[] = ['calendar', 'calendar-settings', 'meeting-booking'];
 const projectPages: Page[] = ['projects', 'project', 'project-planning', 'archive'];
 const contentPages: Page[] = ['content', 'notes', 'documents'];
 
@@ -137,6 +137,7 @@ export function Sidebar({
             <button type="button" className={page === 'calendar' ? 'active' : ''} onClick={() => openCalendarSubPage('agenda')}>Agendaweergave</button>
             <button type="button" className={page === 'calendar-settings' && calendarHash === '#calendar-connections' ? 'active' : ''} onClick={() => openCalendarSubPage('connections')}>Gekoppelde accounts</button>
             <button type="button" className={page === 'calendar-settings' && calendarHash !== '#calendar-connections' ? 'active' : ''} onClick={() => openCalendarSubPage('settings')}>Agenda-instellingen</button>
+            <button type="button" className={page === 'meeting-booking' ? 'active' : ''} onClick={() => onPage('meeting-booking')}>Boekingslinks</button>
           </div>}
 
           {key === 'projects' && projectsOpen && <div className="nav-submenu nav-submenu-projects">
