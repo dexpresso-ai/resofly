@@ -28,8 +28,9 @@ import {
   type CalendarEventRef,
   type CalendarIntegrationsPayload,
 } from '../lib/calendar-api';
+import { addBookingSlots, getBookingLink, listBookingLinks, removeBookingSlot } from '../lib/meetingBookingApi';
 import { supabase } from '../lib/supabase';
-import type { AttendeeStatus, CalendarAppPassword, CalendarEventAttendee, EventRecurrence, RecurrenceFrequency } from '../types';
+import type { AttendeeStatus, CalendarAppPassword, CalendarEventAttendee, EventRecurrence, MeetingBookingLinkListItem, MeetingBookingSlot, RecurrenceFrequency } from '../types';
 import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, Client, Note, NoteCalendarLink, Project, Supplier, Task, UUID } from '../types';
 import { getNoteTypeLabel } from './Notes';
 import { TimeEntryModal } from './TimeTracking';
@@ -476,7 +477,7 @@ function eventIdentityKey(ev: CalendarExternalEvent): string {
   return `${ev.provider}|${ev.source_id}|${ev.provider_event_id}|${ev.starts_at}`;
 }
 
-function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent }: {
+function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent, bookingMode = false, bookingSlots = [], onRemoveBookingSlot }: {
   days: Date[];
   events: CalendarExternalEvent[];
   tasks: Task[];
@@ -488,6 +489,10 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, c
   onEditTask: (task: Task) => void;
   onOpenEvent: (event: CalendarExternalEvent) => void;
   onMoveEvent: (event: CalendarExternalEvent, startIso: string, endIso: string) => void | Promise<void>;
+  /** Beschikbaarheid-modus voor de boekingstool: sleep-selectie maakt blokken, en de bestaande blokken worden als aparte laag getoond. */
+  bookingMode?: boolean;
+  bookingSlots?: MeetingBookingSlot[];
+  onRemoveBookingSlot?: (slotId: string) => void;
 }) {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -821,6 +826,28 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, c
                     );
                   })}
 
+                  {bookingMode && bookingSlots.filter(s => s.status !== 'cancelled' && isSameDay(new Date(s.starts_at), day)).map(s => {
+                    const top = dateToVisibleDayFraction(day, new Date(s.starts_at)) * 100;
+                    const bottom = dateToVisibleDayFraction(day, new Date(s.ends_at)) * 100;
+                    const height = Math.max(bottom - top, 1.6);
+                    const taken = s.status === 'booked' || s.status === 'pending';
+                    return (
+                      <button type="button" key={`bk-${s.id}`}
+                        className="tb-booking-slot"
+                        onClick={() => { if (!taken && onRemoveBookingSlot) onRemoveBookingSlot(s.id); }}
+                        title={taken ? 'Dit blok is geboekt' : 'Beschikbaar blok — klik om te verwijderen'}
+                        style={{
+                          position: 'absolute', top: `${top}%`, height: `${height}%`, left: '2px', right: '2px', zIndex: 6,
+                          borderRadius: 6, border: '2px dashed', borderColor: taken ? '#5865f2' : '#3ba55d',
+                          background: taken ? 'rgba(88,101,242,.20)' : 'rgba(59,165,93,.16)',
+                          color: '#eafff0', fontWeight: 600, fontSize: 11, lineHeight: 1.2, cursor: taken ? 'default' : 'pointer',
+                          display: 'flex', alignItems: 'flex-start', padding: '2px 5px', overflow: 'hidden',
+                        }}>
+                        {taken ? '🔒 ' : '＋ '}{formatTime(s.starts_at)}–{formatTime(s.ends_at)}
+                      </button>
+                    );
+                  })}
+
                   {interaction && interaction.preview.dayIndex === di && (() => {
                     const pv = interaction.preview;
                     const top = (pv.startMin / DAY_MINUTES) * 100;
@@ -850,7 +877,8 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, c
         </div>
       </div>
 
-      {canSelect && <p className="tb-hint">Sleep over lege tijdslots om snel een event aan te maken · sleep een afspraak om te verplaatsen · sleep de boven-/onderrand om de duur te wijzigen</p>}
+      {canSelect && !bookingMode && <p className="tb-hint">Sleep over lege tijdslots om snel een event aan te maken · sleep een afspraak om te verplaatsen · sleep de boven-/onderrand om de duur te wijzigen</p>}
+      {bookingMode && <p className="tb-hint">Beschikbaarheid-modus: sleep over het rooster om beschikbare blokken voor de klant te maken · klik op een groen blok om het te verwijderen (🔒 = al geboekt).</p>}
     </div>
   );
 }
@@ -1741,6 +1769,11 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   // we bij een gewijzigde starttijd de oude koppeling (en afgeleide urenpost) kunnen opruimen.
   const [editingOriginal, setEditingOriginal] = useState<CalendarExternalEvent | null>(null);
   const [newCalendarName, setNewCalendarName] = useState('');
+  // Boekingstool: "beschikbaarheid instellen"-modus in de agenda. Kies een
+  // boekingslink; slepen op het rooster maakt beschikbare blokken voor die link.
+  const [bookingLinks, setBookingLinks] = useState<MeetingBookingLinkListItem[]>([]);
+  const [bookingLinkId, setBookingLinkId] = useState<string>('');
+  const [bookingSlots, setBookingSlots] = useState<MeetingBookingSlot[]>([]);
 
   const days = useMemo(() => calendarDaysForView(view, anchor), [view, anchor]);
   const rangeStart = useMemo(() => days[0].toISOString(), [days]);
@@ -1875,15 +1908,45 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     return { startsAt: toInputDateTime(s), endsAt: toInputDateTime(e) };
   }
 
+  const reloadBookingSlots = useCallback(async (linkId: string) => {
+    if (!linkId) { setBookingSlots([]); return; }
+    try { const d = await getBookingLink(organizationId, linkId); setBookingSlots(d.slots); }
+    catch { setBookingSlots([]); }
+  }, [organizationId]);
+
+  useEffect(() => {
+    if (mode !== 'agenda' || !canWrite) return;
+    let alive = true;
+    listBookingLinks(organizationId).then(rows => { if (alive) setBookingLinks(rows); }).catch(() => {});
+    return () => { alive = false; };
+  }, [organizationId, mode, canWrite]);
+
+  useEffect(() => { void reloadBookingSlots(bookingLinkId); }, [bookingLinkId, reloadBookingSlots]);
+
+  const handleRemoveBookingSlot = useCallback(async (slotId: string) => {
+    if (!bookingLinkId) return;
+    try { await removeBookingSlot(organizationId, bookingLinkId, slotId); await reloadBookingSlots(bookingLinkId); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Blok verwijderen mislukt.'); }
+  }, [organizationId, bookingLinkId, reloadBookingSlots]);
+
   const handleSlotSelect = useCallback((day: Date, startSlot: number, endSlot: number) => {
     const st = slotToTime(startSlot);
     const et = slotToTime(endSlot + 1);
     const sd = new Date(day); sd.setHours(st.hour, st.minutes, 0, 0);
     const ed = new Date(day); ed.setHours(et.hour, et.minutes, 0, 0);
+    if (bookingLinkId) {
+      // Beschikbaarheid-modus: sleep-selectie maakt een boekingsblok voor de
+      // gekozen link, i.p.v. het nieuw-afspraak-formulier te openen.
+      setError(null);
+      addBookingSlots(organizationId, bookingLinkId, [{ startsAt: sd.toISOString(), endsAt: ed.toISOString() }])
+        .then(res => { setMessage(res.warnings.length ? `Blok toegevoegd — let op: overlapt met ${res.warnings.length} bestaande afspraak(en).` : 'Beschikbaar blok toegevoegd.'); return reloadBookingSlots(bookingLinkId); })
+        .catch(e => setError(e instanceof Error ? e.message : 'Blok toevoegen mislukt.'));
+      return;
+    }
     setEditingOriginal(null);
     setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '', trackTime: true, editingEventId: '', meetingUrl: '', addConference: false }));
     setShowCreatePanel(true);
-  }, []);
+  }, [bookingLinkId, organizationId, reloadBookingSlots]);
 
   async function submitNewEvent(e: FormEvent) {
     e.preventDefault();
@@ -2302,9 +2365,23 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         </div>
       </div>
 
+      {(view === 'day' || view === 'week') && canWrite && bookingLinks.length > 0 && (
+        <div className="calendar-toolbar" style={{ marginTop: 8, gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span className="calendar-range-label">Beschikbaarheid instellen</span>
+          <Select value={bookingLinkId} onChange={e => setBookingLinkId(e.target.value)} placeholder="Uit">
+            <option value="">Uit (normaal plannen)</option>
+            {bookingLinks.filter(l => l.status === 'active').map(l => <option key={l.id} value={l.id}>{l.title}{l.client_name ? ` — ${l.client_name}` : ''}</option>)}
+          </Select>
+          {bookingLinkId
+            ? <span className="muted" style={{ fontSize: 13 }}>Sleep op het rooster om beschikbare blokken te maken · klik een groen blok om te verwijderen.</span>
+            : <span className="muted" style={{ fontSize: 13 }}>Kies een boekingslink om blokken visueel in te tekenen.</span>}
+        </div>
+      )}
+
       {view === 'day' || view === 'week' ? (
         <TimeBlockGrid days={days} events={events} tasks={data.tasks.filter(t => t.status !== 'done')}
-          sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} onMoveEvent={rescheduleEvent} />
+          sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} onMoveEvent={rescheduleEvent}
+          bookingMode={Boolean(bookingLinkId)} bookingSlots={bookingLinkId ? bookingSlots : []} onRemoveBookingSlot={handleRemoveBookingSlot} />
       ) : view === 'month' ? (
         <CalendarMonthView days={days} anchor={anchor} events={events} tasks={data.tasks.filter(t => t.status !== 'done')} data={data}
           sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} onEditTask={onEditTask} onOpenDay={openDay} onOpenEvent={setSelectedEvent} />
