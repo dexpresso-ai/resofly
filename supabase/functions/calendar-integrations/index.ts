@@ -1,56 +1,48 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { generateAppPasswordToken, generateSalt, hashAppPassword } from '../_shared/appPassword.ts';
-
-type Provider = 'google' | 'microsoft' | 'native';
-type CalendarVisibility = 'private' | 'organization';
-type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
-type CalendarSourceRow = {
-  id: string;
-  organization_id: string;
-  user_id: string;
-  connection_id: string | null;
-  provider: Provider;
-  provider_calendar_id: string;
-  name: string;
-  description: string | null;
-  color: string | null;
-  timezone: string | null;
-  is_primary: boolean;
-  access_role: string | null;
-  sync_enabled: boolean;
-  write_enabled: boolean;
-  visibility: CalendarVisibility;
-  created_at: string;
-  updated_at: string;
-};
-
-type ConnectionRow = {
-  id: string;
-  organization_id: string;
-  user_id: string;
-  provider: Provider;
-  provider_account_id: string;
-  provider_account_email: string | null;
-  display_name: string | null;
-  status: 'active' | 'expired' | 'revoked' | 'error';
-  scopes: string[];
-  last_error: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-type TokenRow = {
-  connection_id: string;
-  organization_id: string;
-  user_id: string;
-  provider: Provider;
-  access_token_encrypted: string;
-  refresh_token_encrypted: string | null;
-  token_type: string | null;
-  scopes: string[];
-  expires_at: string | null;
-};
+import {
+  type Provider,
+  type CalendarVisibility,
+  type OrganizationRole,
+  type CalendarSourceRow,
+  type ConnectionRow,
+  type TokenRow,
+  type NativeEventRow,
+  requiredEnv,
+  supabaseAdmin,
+  UUID_RE,
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  MICROSOFT_CLIENT_ID,
+  MICROSOFT_CLIENT_SECRET,
+  MICROSOFT_TENANT_ID,
+  googleScopes,
+  microsoftScopes,
+  parseScope,
+  getConnection,
+  getToken,
+  refreshAccessToken,
+  encrypt,
+  decrypt,
+  base64UrlEncode,
+  base64UrlDecode,
+  sourceCanWrite,
+  normalizeRrule,
+} from '../_shared/calendarCore.ts';
+import { listEvents, nativeRowToBaseEvent } from '../_shared/calendarAvailability.ts';
+import {
+  createEvent,
+  getEventAttendees,
+  normalizeNewEventInput,
+  getExternalWriteAccessToken,
+  buildGoogleEventBody,
+  googleWriteQuery,
+  googleEventToBaseEvent,
+  buildMicrosoftEventBody,
+  microsoftEventToBaseEvent,
+  applyAttendees,
+  sendEventCancellations,
+} from '../_shared/calendarEventWrite.ts';
 
 type OAuthState = {
   provider: Provider;
@@ -68,35 +60,16 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 };
 
-const SUPABASE_URL = requiredEnv('SUPABASE_URL');
-const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
 const CALENDAR_REDIRECT_URL = requiredEnv('CALENDAR_REDIRECT_URL');
 const STATE_SECRET = requiredEnv('CALENDAR_OAUTH_STATE_SECRET');
-const TOKEN_ENCRYPTION_KEY = requiredEnv('CALENDAR_TOKEN_ENCRYPTION_KEY');
 const ALLOWED_RETURN_ORIGINS = (Deno.env.get('CALENDAR_ALLOWED_RETURN_ORIGINS') || '')
   .split(',')
   .map(v => v.trim())
   .filter(Boolean);
 
-const GOOGLE_CLIENT_ID = Deno.env.get('GOOGLE_CALENDAR_CLIENT_ID') || '';
-const GOOGLE_CLIENT_SECRET = Deno.env.get('GOOGLE_CALENDAR_CLIENT_SECRET') || '';
-const MICROSOFT_CLIENT_ID = Deno.env.get('MICROSOFT_CALENDAR_CLIENT_ID') || '';
-const MICROSOFT_CLIENT_SECRET = Deno.env.get('MICROSOFT_CALENDAR_CLIENT_SECRET') || '';
-const MICROSOFT_TENANT_ID = Deno.env.get('MICROSOFT_CALENDAR_TENANT_ID') || 'common';
 const OAUTH_STATE_TTL_SECONDS = 10 * 60;
 const OAUTH_STATE_MAX_LENGTH = 4096;
 const OAUTH_STATE_CLOCK_SKEW_SECONDS = 60;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-// Uitnodigingen (iMIP) hergebruiken de bestaande mail-infrastructuur.
-const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
-const RESEND_FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || '';
-const MAIL_INBOUND_DOMAIN = Deno.env.get('MAIL_INBOUND_DOMAIN') || '';
-
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { autoRefreshToken: false, persistSession: false },
-});
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return json({ ok: true });
@@ -137,12 +110,6 @@ serve(async (req) => {
     return json({ ok: false, error: error instanceof Error ? error.message : 'Onbekende calendar-integrations fout.' }, 500);
   }
 });
-
-function requiredEnv(name: string): string {
-  const value = Deno.env.get(name);
-  if (!value) throw new Error(`Missing required env var: ${name}`);
-  return value;
-}
 
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -273,22 +240,6 @@ function assertProviderConfigured(provider: Provider) {
   if (provider === 'microsoft' && (!MICROSOFT_CLIENT_ID || !MICROSOFT_CLIENT_SECRET)) throw new Error('Microsoft Calendar OAuth secrets ontbreken.');
 }
 
-function googleScopes(): string[] {
-  return [
-    'openid', 'email', 'profile',
-    'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
-    'https://www.googleapis.com/auth/calendar.events',
-    // Contacten opzoeken bij het uitnodigen van genodigden.
-    'https://www.googleapis.com/auth/contacts.readonly',
-    'https://www.googleapis.com/auth/contacts.other.readonly',
-  ];
-}
-
-function microsoftScopes(): string[] {
-  // People.Read = relevantie-gerangschikt adresboek (contacten + directory), Contacts.Read = opgeslagen contacten.
-  return ['openid', 'profile', 'email', 'offline_access', 'User.Read', 'Calendars.ReadWrite', 'Contacts.Read', 'People.Read'];
-}
-
 function sanitizeReturnTo(raw: string): string {
   const fallback = ALLOWED_RETURN_ORIGINS[0] || 'http://localhost:5173';
   const candidate = raw || fallback;
@@ -321,44 +272,6 @@ async function exchangeCode(provider: Provider, code: string): Promise<Record<st
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(payload.error_description || payload.error || `${provider} token exchange mislukt.`);
   return payload;
-}
-
-async function refreshAccessToken(token: TokenRow): Promise<string> {
-  const expires = token.expires_at ? new Date(token.expires_at).getTime() : 0;
-  if (expires && expires - Date.now() > 120_000) return await decrypt(token.access_token_encrypted);
-  if (!token.refresh_token_encrypted) return await decrypt(token.access_token_encrypted);
-
-  const refreshToken = await decrypt(token.refresh_token_encrypted);
-  const endpoint = token.provider === 'google'
-    ? 'https://oauth2.googleapis.com/token'
-    : `https://login.microsoftonline.com/${MICROSOFT_TENANT_ID}/oauth2/v2.0/token`;
-  const params = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: refreshToken,
-    client_id: token.provider === 'google' ? GOOGLE_CLIENT_ID : MICROSOFT_CLIENT_ID,
-    client_secret: token.provider === 'google' ? GOOGLE_CLIENT_SECRET : MICROSOFT_CLIENT_SECRET,
-  });
-  if (token.provider === 'microsoft') params.set('scope', microsoftScopes().join(' '));
-
-  const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    await supabaseAdmin.from('calendar_connections').update({ status: 'expired', last_error: payload.error_description || payload.error || 'Refresh token verlopen' }).eq('id', token.connection_id);
-    throw new Error(payload.error_description || payload.error || 'Agenda-token vernieuwen mislukt.');
-  }
-
-  const accessToken = String(payload.access_token || '');
-  if (!accessToken) throw new Error('Provider gaf geen access token terug.');
-  const nextRefreshToken = payload.refresh_token ? String(payload.refresh_token) : refreshToken;
-  await supabaseAdmin.from('calendar_connection_tokens').update({
-    access_token_encrypted: await encrypt(accessToken),
-    refresh_token_encrypted: await encrypt(nextRefreshToken),
-    token_type: payload.token_type ? String(payload.token_type) : token.token_type,
-    scopes: parseScope(payload.scope, token.scopes),
-    expires_at: payload.expires_in ? new Date(Date.now() + Number(payload.expires_in) * 1000).toISOString() : token.expires_at,
-  }).eq('connection_id', token.connection_id);
-  await supabaseAdmin.from('calendar_connections').update({ status: 'active', last_error: null }).eq('id', token.connection_id);
-  return accessToken;
 }
 
 async function fetchAccountProfile(provider: Provider, accessToken: string): Promise<{ id: string; email: string | null; name: string | null }> {
@@ -411,11 +324,6 @@ async function upsertTokens(connection: ConnectionRow, token: Record<string, str
   if (error) throw error;
 }
 
-function parseScope(scope: unknown, fallback: string[]): string[] {
-  if (typeof scope !== 'string' || !scope.trim()) return fallback;
-  return scope.split(/\s+/).filter(Boolean);
-}
-
 async function listIntegrations(organizationId: string, requesterUserId: string): Promise<{ connections: ConnectionRow[]; sources: CalendarSourceRow[] }> {
   const [{ data: connections, error: cError }, { data: sources, error: sError }] = await Promise.all([
     supabaseAdmin.from('calendar_connections').select('*').eq('organization_id', organizationId).order('created_at', { ascending: false }),
@@ -443,18 +351,6 @@ function sanitizeConnectionForRequester(connection: ConnectionRow, requesterUser
     scopes: [],
     last_error: null,
   };
-}
-
-async function getConnection(organizationId: string, connectionId: string): Promise<ConnectionRow> {
-  const { data, error } = await supabaseAdmin.from('calendar_connections').select('*').eq('organization_id', organizationId).eq('id', connectionId).single();
-  if (error || !data) throw new Error('Agenda-koppeling niet gevonden.');
-  return data as ConnectionRow;
-}
-
-async function getToken(organizationId: string, connectionId: string): Promise<TokenRow> {
-  const { data, error } = await supabaseAdmin.from('calendar_connection_tokens').select('*').eq('organization_id', organizationId).eq('connection_id', connectionId).single();
-  if (error || !data) throw new Error('Agenda-token niet gevonden. Koppel het account opnieuw.');
-  return data as TokenRow;
 }
 
 async function refreshSources(organizationId: string, requesterUserId: string, connectionId: string) {
@@ -544,13 +440,6 @@ async function updateSource(organizationId: string, requesterUserId: string, sou
   return data as CalendarSourceRow;
 }
 
-function sourceCanWrite(source: CalendarSourceRow): boolean {
-  const role = String(source.access_role || '').toLowerCase();
-  if (source.provider === 'google') return ['owner', 'writer'].includes(role);
-  if (source.provider === 'microsoft') return role === 'writer' || role === 'owner';
-  return false;
-}
-
 async function disconnectConnection(organizationId: string, requesterUserId: string, connectionId: string) {
   const connection = await getConnection(organizationId, connectionId);
   if (connection.user_id !== requesterUserId) throw new Error('Alleen de eigenaar kan deze agenda-koppeling loskoppelen.');
@@ -570,465 +459,6 @@ async function revokeBestEffort(provider: Provider, token: TokenRow) {
   } catch (err) {
     console.warn('Token revoke best-effort failed', err);
   }
-}
-
-async function listEvents(organizationId: string, requesterUserId: string, start: string, end: string) {
-  const startIso = assertIso(start, 'start');
-  const endIso = assertIso(end, 'end');
-  const { data: sources, error } = await supabaseAdmin.from('calendar_sources').select('*').eq('organization_id', organizationId).eq('sync_enabled', true);
-  if (error) throw error;
-  const events: Record<string, unknown>[] = [];
-  const visibleSources = ((sources ?? []) as CalendarSourceRow[]).filter(source => source.user_id === requesterUserId || source.visibility === 'organization');
-  for (const source of visibleSources) {
-    try {
-      if (source.provider === 'native') {
-        const nativeEvents = await fetchNativeEvents(organizationId, source, startIso, endIso);
-        events.push(...nativeEvents.map(event => maskPrivateEventForRequester(event, source, requesterUserId)));
-        continue;
-      }
-      if (!source.connection_id) continue;
-      const connection = await getConnection(organizationId, source.connection_id);
-      const token = await getToken(organizationId, connection.id);
-      const accessToken = await refreshAccessToken(token);
-      const sourceEvents = source.provider === 'google'
-        ? await fetchGoogleEvents(accessToken, source, startIso, endIso)
-        : await fetchMicrosoftEvents(accessToken, source, startIso, endIso);
-      events.push(...sourceEvents.map(event => maskPrivateEventForRequester(event, source, requesterUserId)));
-    } catch (err) {
-      console.warn('Event sync failed for source', source.id, err);
-      await supabaseAdmin.from('calendar_connections').update({ status: 'error', last_error: err instanceof Error ? err.message : 'Event sync mislukt' }).eq('id', source.connection_id);
-    }
-  }
-  return dedupeCalendarEvents(events).sort((a, b) => String(a.starts_at).localeCompare(String(b.starts_at)));
-}
-
-function dedupeCalendarEvents(events: Record<string, unknown>[]): Record<string, unknown>[] {
-  const seen = new Set<string>();
-  const deduped: Record<string, unknown>[] = [];
-  for (const event of events) {
-    const key = [event.provider, event.source_id, event.provider_event_id, event.starts_at].map(value => String(value || '')).join('|');
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push(event);
-  }
-  return deduped;
-}
-
-function maskPrivateEventForRequester(event: Record<string, unknown>, source: CalendarSourceRow, requesterUserId: string) {
-  if (source.visibility !== 'private' || source.user_id === requesterUserId) return event;
-  return {
-    ...event,
-    title: 'Bezet',
-    description: null,
-    location: null,
-    meeting_url: null,
-    attendees: [],
-    html_link: null,
-    is_private_masked: true,
-  };
-}
-
-async function fetchGoogleEvents(accessToken: string, source: CalendarSourceRow, start: string, end: string) {
-  const params = new URLSearchParams({ timeMin: start, timeMax: end, singleEvents: 'true', orderBy: 'startTime', maxResults: '250' });
-  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events?${params}`, { headers: { Authorization: `Bearer ${accessToken}` } });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error?.message || 'Google events ophalen mislukt.');
-  return (payload.items ?? []).filter((item: Record<string, unknown>) => item.status !== 'cancelled').map((item: Record<string, unknown>) => {
-    const startObj = (item.start ?? {}) as Record<string, string>;
-    const endObj = (item.end ?? {}) as Record<string, string>;
-    const allDay = Boolean(startObj.date && !startObj.dateTime);
-    const allDayRange = allDay ? normalizeAllDayEventRange(startObj.date, endObj.date) : null;
-    const rawDescription = item.description ? String(item.description) : null;
-    const location = item.location ? String(item.location) : null;
-    return {
-      id: `${source.id}:${String(item.id)}`,
-      provider: 'google' as Provider,
-      source_id: source.id,
-      source_name: source.name,
-      provider_event_id: String(item.id),
-      title: String(item.summary || '(Geen titel)'),
-      description: stripMeetingLine(rawDescription),
-      location,
-      meeting_url: readMeetingUrl(googleConferenceUrl(item), rawDescription, location),
-      attendees: mapGoogleAttendees(item),
-      starts_at: allDayRange ? allDayRange.starts_at : String(startObj.dateTime),
-      ends_at: allDayRange ? allDayRange.ends_at : String(endObj.dateTime),
-      all_day: allDay,
-      html_link: item.htmlLink ? String(item.htmlLink) : null,
-      visibility: source.visibility,
-      is_private_masked: false,
-    };
-  });
-}
-
-async function fetchMicrosoftEvents(accessToken: string, source: CalendarSourceRow, start: string, end: string) {
-  const params = new URLSearchParams({ startDateTime: start, endDateTime: end, '$top': '250', '$orderby': 'start/dateTime', '$select': 'id,subject,bodyPreview,location,start,end,isAllDay,webLink,isOnlineMeeting,onlineMeeting,attendees' });
-  const res = await fetch(`https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(source.provider_calendar_id)}/calendarView?${params}`, {
-    headers: { Authorization: `Bearer ${accessToken}`, Prefer: 'outlook.timezone="UTC"' },
-  });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error?.message || 'Microsoft events ophalen mislukt.');
-  return (payload.value ?? []).map((item: Record<string, unknown>) => {
-    const startObj = (item.start ?? {}) as Record<string, string>;
-    const endObj = (item.end ?? {}) as Record<string, string>;
-    const location = (item.location ?? {}) as Record<string, string>;
-    const onlineMeeting = (item.onlineMeeting ?? {}) as Record<string, string>;
-    const allDay = Boolean(item.isAllDay);
-    const allDayRange = allDay ? normalizeAllDayEventRange(startObj.dateTime, endObj.dateTime) : null;
-    const rawDescription = item.bodyPreview ? String(item.bodyPreview) : null;
-    const locationName = location.displayName ? String(location.displayName) : null;
-    return {
-      id: `${source.id}:${String(item.id)}`,
-      provider: 'microsoft' as Provider,
-      source_id: source.id,
-      source_name: source.name,
-      provider_event_id: String(item.id),
-      title: String(item.subject || '(Geen titel)'),
-      description: stripMeetingLine(rawDescription),
-      location: locationName,
-      meeting_url: readMeetingUrl(onlineMeeting.joinUrl ? String(onlineMeeting.joinUrl) : null, rawDescription, locationName),
-      attendees: mapMicrosoftAttendees(item),
-      starts_at: allDayRange ? allDayRange.starts_at : normalizeMicrosoftDateTime(startObj.dateTime),
-      ends_at: allDayRange ? allDayRange.ends_at : normalizeMicrosoftDateTime(endObj.dateTime),
-      all_day: allDay,
-      html_link: item.webLink ? String(item.webLink) : null,
-      visibility: source.visibility,
-      is_private_masked: false,
-    };
-  });
-}
-
-async function createEvent(organizationId: string, requesterUserId: string, input: Record<string, unknown>) {
-  const sourceId = String(input.sourceId || '');
-  const { data: source, error } = await supabaseAdmin.from('calendar_sources').select('*').eq('organization_id', organizationId).eq('id', sourceId).single();
-  if (error || !source) throw new Error('Agenda-bron niet gevonden.');
-  const calendarSource = source as CalendarSourceRow;
-  if (calendarSource.user_id !== requesterUserId && calendarSource.visibility !== 'organization') {
-    throw new Error('Deze privé-agenda is niet met de organisatie gedeeld.');
-  }
-  if (calendarSource.provider === 'native') {
-    return await createNativeEvent(organizationId, requesterUserId, calendarSource, input);
-  }
-  if (!calendarSource.write_enabled) {
-    throw new Error('Schrijfbare agenda-bron niet gevonden.');
-  }
-  if (!sourceCanWrite(calendarSource)) {
-    throw new Error('Deze externe agenda is niet schrijfbaar volgens de provider.');
-  }
-  if (!calendarSource.connection_id) throw new Error('Externe agenda-bron mist een koppeling.');
-  const connection = await getConnection(organizationId, calendarSource.connection_id);
-  if (connection.status !== 'active') {
-    throw new Error(`Agenda-koppeling is niet actief (status: ${connection.status}). Koppel het account opnieuw.`);
-  }
-  const token = await getToken(organizationId, connection.id);
-  const accessToken = await refreshAccessToken(token);
-  const event = normalizeNewEventInput(input);
-  return calendarSource.provider === 'google'
-    ? await createGoogleEvent(accessToken, calendarSource, event)
-    : await createMicrosoftEvent(accessToken, calendarSource, event);
-}
-
-function normalizeNewEventInput(input: Record<string, unknown>) {
-  const title = String(input.title || '').trim();
-  if (!title) throw new Error('Eventtitel ontbreekt.');
-  const startsAt = assertIso(String(input.startsAt || ''), 'startsAt');
-  const endsAt = assertIso(String(input.endsAt || ''), 'endsAt');
-  const allDay = Boolean(input.allDay);
-  // For timed events, end must be strictly after start.
-  // For all-day events, start == end is valid (single day).
-  if (!allDay && new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
-    throw new Error('Eindtijd moet na starttijd liggen.');
-  }
-  if (allDay && new Date(endsAt).getTime() < new Date(startsAt).getTime()) {
-    throw new Error('Einddatum mag niet voor startdatum liggen.');
-  }
-  return {
-    title,
-    description: input.description ? String(input.description) : null,
-    location: input.location ? String(input.location) : null,
-    startsAt,
-    endsAt,
-    allDay,
-    meetingUrl: sanitizeMeetingUrl(input.meetingUrl),
-    addConference: Boolean(input.addConference),
-    attendees: parseAttendeesInput(input),
-  };
-}
-
-/** Vertaalt de RSVP-status van Google/Microsoft naar onze eigen statussen. */
-function mapAttendeeStatus(raw: unknown): 'needs-action' | 'accepted' | 'declined' | 'tentative' {
-  switch (String(raw || '').toLowerCase()) {
-    case 'accepted': return 'accepted';
-    case 'declined': return 'declined';
-    case 'tentative':
-    case 'tentativelyaccepted': return 'tentative';
-    default: return 'needs-action';
-  }
-}
-
-// ── Videovergadering-link (Google Meet / Teams / Zoom / overig) ──────────────
-
-/** Alleen http(s)-links toestaan; onzin of te lange waarden vervallen naar null. */
-function sanitizeMeetingUrl(value: unknown): string | null {
-  if (!value) return null;
-  const raw = String(value).trim();
-  if (!raw || raw.length > 2048) return null;
-  try {
-    const u = new URL(raw);
-    return (u.protocol === 'http:' || u.protocol === 'https:') ? raw : null;
-  } catch { return null; }
-}
-
-// Externe agenda's (Google/Microsoft) hebben geen eigen veld voor een geplakte
-// (bv. Zoom-)link. Die zetten we als herkenbare regel onderaan de omschrijving,
-// zodat hij ook in Google Calendar / Outlook zichtbaar blijft, en lezen hem er
-// bij het ophalen weer uit. Automatisch gegenereerde Meet/Teams-links komen uit
-// het native conferentie-veld van de provider en gaan hier langs.
-const MEETING_LINE_RE = /\n*[ \t]*(?:🎥[ \t]*)?Videocall:[ \t]*(https?:\/\/\S+)[ \t]*$/i;
-const MEETING_HOST_RE = /https?:\/\/[^\s]*(?:meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|zoom\.us|zoom\.com)[^\s]*/i;
-
-/** Voegt de geplakte link als aparte regel onderaan de omschrijving toe. */
-function withMeetingLine(description: string | null, url: string | null): string | null {
-  const base = stripMeetingLine(description);
-  if (!url) return base;
-  return `${base ? `${base}\n\n` : ''}🎥 Videocall: ${url}`;
-}
-
-/** Verwijdert een eerder toegevoegde "Videocall:"-regel uit de omschrijving. */
-function stripMeetingLine(description: string | null): string | null {
-  if (!description) return null;
-  const cleaned = description.replace(MEETING_LINE_RE, '').replace(/\s+$/, '');
-  return cleaned || null;
-}
-
-/** Leidt de videocall-link af: eerst de native conferentie, dan een geplakte regel of losse link. */
-function readMeetingUrl(nativeConference: string | null, description: string | null, location: string | null): string | null {
-  if (nativeConference) return nativeConference;
-  const marked = (description ?? '').match(MEETING_LINE_RE);
-  if (marked) return marked[1];
-  return (description ?? '').match(MEETING_HOST_RE)?.[0] ?? (location ?? '').match(MEETING_HOST_RE)?.[0] ?? null;
-}
-
-/** Videocall-link uit de eerste video-entrypoint van Google conferenceData. */
-function googleConferenceUrl(item: Record<string, unknown>): string | null {
-  if (item.hangoutLink) return String(item.hangoutLink);
-  const conf = (item.conferenceData ?? {}) as Record<string, unknown>;
-  const entries = (conf.entryPoints ?? []) as Record<string, string>[];
-  const video = entries.find(e => e.entryPointType === 'video') ?? entries[0];
-  return video?.uri ? String(video.uri) : null;
-}
-
-/** Given a date string "YYYY-MM-DD", return the next day as "YYYY-MM-DD". */
-function nextDay(dateStr: string): string {
-  const d = new Date(dateStr + 'T12:00:00Z'); // noon UTC avoids DST edge cases
-  d.setUTCDate(d.getUTCDate() + 1);
-  return d.toISOString().slice(0, 10);
-}
-
-function providerDateKey(value?: string | null): string | null {
-  if (!value) return null;
-  const match = String(value).match(/^(\d{4}-\d{2}-\d{2})/);
-  return match ? match[1] : null;
-}
-
-function normalizeAllDayEventRange(startValue?: string | null, endExclusiveValue?: string | null): { starts_at: string; ends_at: string } {
-  const startDate = providerDateKey(startValue) || new Date().toISOString().slice(0, 10);
-  const rawEndExclusive = providerDateKey(endExclusiveValue) || nextDay(startDate);
-  const endExclusive = rawEndExclusive <= startDate ? nextDay(startDate) : rawEndExclusive;
-  return {
-    starts_at: `${startDate}T00:00:00.000Z`,
-    ends_at: `${endExclusive}T00:00:00.000Z`,
-  };
-}
-
-/** Bouwt de Google event-body (start/end + omschrijving/videovergadering). */
-function buildGoogleEventBody(source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>): Record<string, unknown> {
-  // Geplakte link onderaan de omschrijving; automatisch gegenereerde Meet gaat via conferenceData.
-  const description = event.addConference ? event.description : withMeetingLine(event.description, event.meetingUrl);
-  let body: Record<string, unknown>;
-  if (event.allDay) {
-    // Google Calendar API: end.date is EXCLUSIVE. Voor een eendaags event op 2026-05-08
-    // is start.date = "2026-05-08" en end.date = "2026-05-09".
-    const startDate = event.startsAt.slice(0, 10);
-    const endDateRaw = event.endsAt.slice(0, 10);
-    const endExclusive = endDateRaw <= startDate ? nextDay(startDate) : nextDay(endDateRaw);
-    body = { summary: event.title, description, location: event.location, start: { date: startDate }, end: { date: endExclusive } };
-  } else {
-    // Getimede events: startsAt/endsAt zijn al UTC ISO-strings (eindigen op Z).
-    const tz = source.timezone || undefined;
-    body = { summary: event.title, description, location: event.location, start: { dateTime: event.startsAt, timeZone: tz }, end: { dateTime: event.endsAt, timeZone: tz } };
-  }
-  if (event.addConference) {
-    body.conferenceData = { createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } };
-  }
-  if (event.attendees.length) {
-    body.attendees = event.attendees.map(a => ({ email: a.email, ...(a.name ? { displayName: a.name } : {}), optional: a.role === 'opt' }));
-  }
-  return body;
-}
-
-/** Query-parameters voor een Google create/update: conferentie + uitnodigingen mailen. */
-function googleWriteQuery(event: ReturnType<typeof normalizeNewEventInput>): string {
-  const params = new URLSearchParams();
-  if (event.addConference) params.set('conferenceDataVersion', '1');
-  if (event.attendees.length) params.set('sendUpdates', 'all');
-  const s = params.toString();
-  return s ? `?${s}` : '';
-}
-
-function mapGoogleAttendees(payload: Record<string, unknown>): Array<{ email: string; name: string | null; status: string }> {
-  const raw = (payload.attendees ?? []) as Record<string, unknown>[];
-  return raw
-    .filter(a => !a.organizer && !a.resource && a.email)
-    .map(a => ({ email: String(a.email), name: a.displayName ? String(a.displayName) : null, status: mapAttendeeStatus(a.responseStatus) }));
-}
-
-function googleEventToBaseEvent(payload: Record<string, unknown>, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
-  const allDay = Boolean((payload.start as Record<string, string>)?.date && !(payload.start as Record<string, string>)?.dateTime);
-  const allDayRange = allDay ? normalizeAllDayEventRange((payload.start as Record<string, string>)?.date, (payload.end as Record<string, string>)?.date) : null;
-  const rawDescription = payload.description ? String(payload.description) : event.description;
-  const location = payload.location ? String(payload.location) : event.location;
-  return {
-    id: `${source.id}:${String(payload.id)}`,
-    provider: 'google' as Provider,
-    source_id: source.id,
-    source_name: source.name,
-    provider_event_id: String(payload.id),
-    title: String(payload.summary || event.title),
-    description: stripMeetingLine(rawDescription),
-    location,
-    meeting_url: readMeetingUrl(googleConferenceUrl(payload), rawDescription, location),
-    attendees: mapGoogleAttendees(payload),
-    starts_at: allDayRange ? allDayRange.starts_at : String((payload.start as Record<string, string>).dateTime),
-    ends_at: allDayRange ? allDayRange.ends_at : String((payload.end as Record<string, string>).dateTime),
-    all_day: allDay,
-    html_link: payload.htmlLink ? String(payload.htmlLink) : null,
-    visibility: source.visibility,
-    is_private_masked: false,
-  };
-}
-
-async function createGoogleEvent(accessToken: string, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
-  const body = buildGoogleEventBody(source, event);
-  const query = googleWriteQuery(event);
-  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(source.provider_calendar_id)}/events${query}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error?.message || 'Google event aanmaken mislukt.');
-  return googleEventToBaseEvent(payload, source, event);
-}
-
-function buildMicrosoftEventBody(event: ReturnType<typeof normalizeNewEventInput>): Record<string, unknown> {
-  let start: { dateTime: string; timeZone: string };
-  let end: { dateTime: string; timeZone: string };
-  if (event.allDay) {
-    // Microsoft Graph: all-day events gebruiken ook exclusieve einddatums.
-    // dateTime = middernacht UTC, timeZone: 'UTC'.
-    const startDate = event.startsAt.slice(0, 10);
-    const endDateRaw = event.endsAt.slice(0, 10);
-    const endExclusive = endDateRaw <= startDate ? nextDay(startDate) : nextDay(endDateRaw);
-    start = { dateTime: `${startDate}T00:00:00`, timeZone: 'UTC' };
-    end = { dateTime: `${endExclusive}T00:00:00`, timeZone: 'UTC' };
-  } else {
-    start = { dateTime: toMicrosoftDateTime(event.startsAt), timeZone: 'UTC' };
-    end = { dateTime: toMicrosoftDateTime(event.endsAt), timeZone: 'UTC' };
-  }
-  // Geplakte link onderaan de omschrijving; automatische Teams-vergadering via isOnlineMeeting.
-  const content = event.addConference ? (event.description || '') : (withMeetingLine(event.description, event.meetingUrl) || '');
-  const body: Record<string, unknown> = {
-    subject: event.title,
-    body: { contentType: 'HTML', content },
-    // Altijd meesturen (ook leeg) zodat een gewiste locatie bij bewerken ook echt verdwijnt.
-    location: { displayName: event.location || '' },
-    isAllDay: event.allDay,
-    start,
-    end,
-  };
-  if (event.addConference) {
-    body.isOnlineMeeting = true;
-    body.onlineMeetingProvider = 'teamsForBusiness';
-  }
-  if (event.attendees.length) {
-    body.attendees = event.attendees.map(a => ({
-      emailAddress: { address: a.email, ...(a.name ? { name: a.name } : {}) },
-      type: a.role === 'opt' ? 'optional' : 'required',
-    }));
-  }
-  return body;
-}
-
-function mapMicrosoftAttendees(payload: Record<string, unknown>): Array<{ email: string; name: string | null; status: string }> {
-  const raw = (payload.attendees ?? []) as Record<string, unknown>[];
-  return raw
-    .filter(a => a.type !== 'resource')
-    .map(a => {
-      const em = (a.emailAddress ?? {}) as Record<string, string>;
-      const st = (a.status ?? {}) as Record<string, string>;
-      return { email: String(em.address || ''), name: em.name ? String(em.name) : null, status: mapAttendeeStatus(st.response) };
-    })
-    .filter(a => a.email);
-}
-
-function microsoftEventToBaseEvent(payload: Record<string, unknown>, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
-  const location = (payload.location ?? {}) as Record<string, string>;
-  const start = (payload.start ?? {}) as Record<string, string>;
-  const end = (payload.end ?? {}) as Record<string, string>;
-  const onlineMeeting = (payload.onlineMeeting ?? {}) as Record<string, string>;
-  const allDay = Boolean(payload.isAllDay);
-  const allDayRange = allDay ? normalizeAllDayEventRange(start.dateTime || event.startsAt, end.dateTime || event.endsAt) : null;
-  const rawDescription = payload.bodyPreview ? String(payload.bodyPreview) : event.description;
-  const locationName = location.displayName ? String(location.displayName) : event.location;
-  return {
-    id: `${source.id}:${String(payload.id)}`,
-    provider: 'microsoft' as Provider,
-    source_id: source.id,
-    source_name: source.name,
-    provider_event_id: String(payload.id),
-    title: String(payload.subject || event.title),
-    description: stripMeetingLine(rawDescription),
-    location: locationName,
-    meeting_url: readMeetingUrl(onlineMeeting.joinUrl ? String(onlineMeeting.joinUrl) : null, rawDescription, locationName),
-    attendees: mapMicrosoftAttendees(payload),
-    starts_at: allDayRange ? allDayRange.starts_at : normalizeMicrosoftDateTime(start.dateTime || event.startsAt),
-    ends_at: allDayRange ? allDayRange.ends_at : normalizeMicrosoftDateTime(end.dateTime || event.endsAt),
-    all_day: allDay,
-    html_link: payload.webLink ? String(payload.webLink) : null,
-    visibility: source.visibility,
-    is_private_masked: false,
-  };
-}
-
-async function createMicrosoftEvent(accessToken: string, source: CalendarSourceRow, event: ReturnType<typeof normalizeNewEventInput>) {
-  const body = buildMicrosoftEventBody(event);
-  const res = await fetch(`https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(source.provider_calendar_id)}/events`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error?.message || 'Microsoft event aanmaken mislukt.');
-  return microsoftEventToBaseEvent(payload, source, event);
-}
-
-/* ── Bewerken/verwijderen van externe (Google/Microsoft) agenda-items ──── */
-
-/** Schrijfrechten + geldig access-token voor een externe agenda-bron. */
-async function getExternalWriteAccessToken(organizationId: string, requesterUserId: string, source: CalendarSourceRow): Promise<string> {
-  if (source.user_id !== requesterUserId && source.visibility !== 'organization') {
-    throw new Error('Deze privé-agenda is niet met de organisatie gedeeld.');
-  }
-  if (!source.write_enabled) throw new Error('Zet eerst "Schrijven" aan voor deze agenda.');
-  if (!sourceCanWrite(source)) throw new Error('Deze externe agenda is niet schrijfbaar volgens de provider.');
-  if (!source.connection_id) throw new Error('Externe agenda-bron mist een koppeling.');
-  const connection = await getConnection(organizationId, source.connection_id);
-  if (connection.status !== 'active') {
-    throw new Error(`Agenda-koppeling is niet actief (status: ${connection.status}). Koppel het account opnieuw.`);
-  }
-  const token = await getToken(organizationId, connection.id);
-  return await refreshAccessToken(token);
 }
 
 /* ── Contacten opzoeken (Google People / Microsoft Graph) ──────────────── */
@@ -1070,7 +500,7 @@ function dedupeContacts(rows: Array<{ name: string | null; email: string }>): Ar
   const out: Array<{ name: string | null; email: string }> = [];
   for (const r of rows) {
     const email = r.email.trim().toLowerCase();
-    if (!EMAIL_RE.test(email) || seen.has(email)) continue;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || seen.has(email)) continue;
     seen.add(email);
     out.push({ name: r.name?.trim() || null, email });
   }
@@ -1117,6 +547,8 @@ async function microsoftSearchContacts(accessToken: string, query: string): Prom
   }
   return dedupeContacts(rows);
 }
+
+/* ── Bewerken/verwijderen van externe (Google/Microsoft) agenda-items ──── */
 
 async function updateExternalEvent(organizationId: string, requesterUserId: string, source: CalendarSourceRow, input: Record<string, unknown>) {
   const providerEventId = String(input.providerEventId || input.eventId || '');
@@ -1168,49 +600,9 @@ async function updateMicrosoftEvent(accessToken: string, source: CalendarSourceR
   return microsoftEventToBaseEvent(payload, source, event);
 }
 
-function assertIso(value: string, field: string): string {
-  const date = new Date(value);
-  if (!value || Number.isNaN(date.getTime())) throw new Error(`Ongeldige datum voor ${field}.`);
-  return date.toISOString();
-}
-
 // ============================================================
 // Native (eigen ResoFly) agenda's + agenda-items
 // ============================================================
-
-type NativeEventRow = {
-  id: string;
-  organization_id: string;
-  source_id: string;
-  uid: string;
-  title: string;
-  description: string | null;
-  location: string | null;
-  meeting_url: string | null;
-  starts_at: string;
-  ends_at: string;
-  all_day: boolean;
-  timezone: string | null;
-  rrule: string | null;
-  exdate: string[] | null;
-  recurs: boolean;
-  sequence: number;
-  organizer_token: string | null;
-};
-
-type AttendeeRow = {
-  id: string;
-  organization_id: string;
-  event_id: string;
-  email: string;
-  display_name: string | null;
-  role: 'req' | 'opt';
-  is_organizer: boolean;
-  status: 'needs-action' | 'accepted' | 'declined' | 'tentative';
-  invited_at: string | null;
-  responded_at: string | null;
-  last_sequence_sent: number;
-};
 
 const NATIVE_DEFAULT_TZ = 'Europe/Amsterdam';
 const NATIVE_DEFAULT_COLOR = '#2563eb';
@@ -1275,32 +667,6 @@ async function getWritableNativeSource(organizationId: string, requesterUserId: 
     throw new Error('Deze privé-agenda is niet met de organisatie gedeeld.');
   }
   return source;
-}
-
-async function createNativeEvent(organizationId: string, userId: string, source: CalendarSourceRow, input: Record<string, unknown>) {
-  const event = normalizeNewEventInput(input);
-  const rrule = normalizeRrule(input);
-  const { data, error } = await supabaseAdmin.from('calendar_events').insert({
-    organization_id: organizationId,
-    source_id: source.id,
-    created_by: userId,
-    uid: `resofly-${crypto.randomUUID()}`,
-    title: event.title,
-    description: event.description,
-    location: event.location,
-    meeting_url: event.meetingUrl,
-    starts_at: event.startsAt,
-    ends_at: event.endsAt,
-    all_day: event.allDay,
-    timezone: source.timezone,
-    rrule,
-    recurs: rrule !== null,
-  }).select('*').single();
-  if (error) throw error;
-  const row = data as NativeEventRow;
-  // Genodigden + uitnodigingen mogen het aanmaken nooit laten falen.
-  await applyAttendees(organizationId, source, row, input).catch(err => console.error('invite (create) failed', err));
-  return nativeRowToBaseEvent(row, source);
 }
 
 /** Routeert een bewerk-actie naar de juiste provider op basis van de agenda-bron. */
@@ -1373,151 +739,6 @@ async function deleteNativeEvent(organizationId: string, requesterUserId: string
   await sendEventCancellations(organizationId, source, current).catch(err => console.error('invite (cancel) failed', err));
 }
 
-async function fetchNativeEvents(organizationId: string, source: CalendarSourceRow, startIso: string, endIso: string) {
-  const [{ data: singles, error: singleError }, { data: recurringRows, error: recurringError }] = await Promise.all([
-    supabaseAdmin.from('calendar_events').select('*')
-      .eq('organization_id', organizationId).eq('source_id', source.id).is('deleted_at', null).eq('recurs', false)
-      .lt('starts_at', endIso).gte('ends_at', startIso),
-    supabaseAdmin.from('calendar_events').select('*')
-      .eq('organization_id', organizationId).eq('source_id', source.id).is('deleted_at', null).eq('recurs', true),
-  ]);
-  if (singleError) throw singleError;
-  if (recurringError) throw recurringError;
-  const out: Record<string, unknown>[] = [];
-  for (const row of (singles ?? []) as NativeEventRow[]) out.push(nativeRowToBaseEvent(row, source));
-  for (const row of (recurringRows ?? []) as NativeEventRow[]) out.push(...expandRecurringNativeRow(row, source, startIso, endIso));
-  return out;
-}
-
-function nativeRowToBaseEvent(row: NativeEventRow, source: CalendarSourceRow): Record<string, unknown> {
-  return {
-    id: `${source.id}:${row.uid}`,
-    provider: 'native' as Provider,
-    source_id: source.id,
-    source_name: source.name,
-    provider_event_id: row.uid,
-    native_event_id: row.id,
-    title: row.title || '(Geen titel)',
-    description: row.description ?? null,
-    location: row.location ?? null,
-    meeting_url: row.meeting_url ?? null,
-    starts_at: row.starts_at,
-    ends_at: row.ends_at,
-    all_day: row.all_day,
-    rrule: row.rrule ?? null,
-    recurs: row.recurs,
-    html_link: null,
-    visibility: source.visibility,
-    is_private_masked: false,
-  };
-}
-
-// Eenvoudige herhaling-uitvouwing voor fase 0 (FREQ DAILY/WEEKLY/MONTHLY +
-// INTERVAL/UNTIL/COUNT + EXDATE). Volledige RRULE-afhandeling (BYDAY etc.) volgt
-// met ical.js in de CalDAV-Worker.
-function expandRecurringNativeRow(row: NativeEventRow, source: CalendarSourceRow, startIso: string, endIso: string): Record<string, unknown>[] {
-  const base = nativeRowToBaseEvent(row, source);
-  const rule = parseSimpleRrule(row.rrule);
-  if (!rule) return [base];
-  const durationMs = new Date(row.ends_at).getTime() - new Date(row.starts_at).getTime();
-  const winStart = new Date(startIso).getTime();
-  const winEnd = new Date(endIso).getTime();
-  const until = rule.until ? new Date(rule.until).getTime() : null;
-  const exdates = new Set((row.exdate ?? []).map(value => new Date(value).getTime()));
-  const out: Record<string, unknown>[] = [];
-  let cursor = new Date(row.starts_at);
-  let count = 0;
-  for (let i = 0; i < 800; i++) {
-    const startMs = cursor.getTime();
-    if (until !== null && startMs > until) break;
-    if (rule.count && count >= rule.count) break;
-    if (startMs > winEnd) break;
-    const endMs = startMs + durationMs;
-    if (endMs >= winStart && !exdates.has(startMs)) {
-      out.push({
-        ...base,
-        id: `${source.id}:${row.uid}:${startMs}`,
-        starts_at: new Date(startMs).toISOString(),
-        ends_at: new Date(endMs).toISOString(),
-      });
-    }
-    count += 1;
-    cursor = advanceRecurrence(cursor, rule.freq, rule.interval);
-  }
-  return out;
-}
-
-type SimpleRrule = { freq: 'DAILY' | 'WEEKLY' | 'MONTHLY'; interval: number; until: string | null; count: number | null };
-
-function parseSimpleRrule(rrule: string | null): SimpleRrule | null {
-  if (!rrule) return null;
-  const parts = new Map<string, string>();
-  for (const segment of rrule.split(';')) {
-    const [key, value] = segment.split('=');
-    if (key && value) parts.set(key.trim().toUpperCase(), value.trim());
-  }
-  const freqRaw = parts.get('FREQ');
-  if (freqRaw !== 'DAILY' && freqRaw !== 'WEEKLY' && freqRaw !== 'MONTHLY') return null;
-  const interval = Math.max(1, parseInt(parts.get('INTERVAL') || '1', 10) || 1);
-  const untilRaw = parts.get('UNTIL');
-  const countRaw = parts.get('COUNT');
-  return {
-    freq: freqRaw,
-    interval,
-    until: untilRaw ? rruleUntilToIso(untilRaw) : null,
-    count: countRaw ? (parseInt(countRaw, 10) || null) : null,
-  };
-}
-
-function advanceRecurrence(date: Date, freq: 'DAILY' | 'WEEKLY' | 'MONTHLY', interval: number): Date {
-  const next = new Date(date.getTime());
-  if (freq === 'DAILY') next.setUTCDate(next.getUTCDate() + interval);
-  else if (freq === 'WEEKLY') next.setUTCDate(next.getUTCDate() + 7 * interval);
-  else next.setUTCMonth(next.getUTCMonth() + interval);
-  return next;
-}
-
-// RRULE UNTIL "YYYYMMDDTHHMMSSZ" (of "YYYYMMDD") → ISO.
-function rruleUntilToIso(value: string): string | null {
-  const m = value.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})Z?)?$/);
-  if (!m) {
-    const fallback = new Date(value);
-    return Number.isNaN(fallback.getTime()) ? null : fallback.toISOString();
-  }
-  const [, y, mo, d, hh, mm, ss] = m;
-  return new Date(Date.UTC(+y, +mo - 1, +d, +(hh ?? 0), +(mm ?? 0), +(ss ?? 0))).toISOString();
-}
-
-function isoToRruleUntil(date: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}T${p(date.getUTCHours())}${p(date.getUTCMinutes())}${p(date.getUTCSeconds())}Z`;
-}
-
-// Bouwt een RRULE-string uit een vrij RRULE-veld óf een eenvoudig
-// {freq, interval, until, count}-object dat de frontend stuurt.
-function normalizeRrule(input: Record<string, unknown>): string | null {
-  const raw = input.rrule;
-  if (typeof raw === 'string' && raw.trim()) {
-    return parseSimpleRrule(raw.trim()) ? raw.trim().toUpperCase() : null;
-  }
-  const rec = input.recurrence;
-  if (!rec || typeof rec !== 'object') return null;
-  const r = rec as Record<string, unknown>;
-  const freqMap: Record<string, string> = { daily: 'DAILY', weekly: 'WEEKLY', monthly: 'MONTHLY' };
-  const freq = freqMap[String(r.freq || '').toLowerCase()];
-  if (!freq) return null;
-  const parts = [`FREQ=${freq}`];
-  const interval = Number(r.interval);
-  if (Number.isInteger(interval) && interval > 1) parts.push(`INTERVAL=${interval}`);
-  if (r.until) {
-    const until = new Date(String(r.until));
-    if (!Number.isNaN(until.getTime())) parts.push(`UNTIL=${isoToRruleUntil(until)}`);
-  }
-  const count = Number(r.count);
-  if (Number.isInteger(count) && count > 0) parts.push(`COUNT=${count}`);
-  return parts.join(';');
-}
-
 // ============================================================
 // App-wachtwoorden (CalDAV) — beheer vanuit de app
 // ============================================================
@@ -1557,249 +778,8 @@ async function revokeAppPassword(organizationId: string, userId: string, appPass
 }
 
 // ============================================================
-// Genodigden + uitnodigingen (iMIP) — hergebruikt de mail-infrastructuur
+// OAuth-state (HMAC-ondertekend, korte TTL)
 // ============================================================
-
-function parseAttendeesInput(input: Record<string, unknown>): Array<{ email: string; name: string | null; role: 'req' | 'opt' }> {
-  const raw = input.attendees;
-  if (!Array.isArray(raw)) return [];
-  const out: Array<{ email: string; name: string | null; role: 'req' | 'opt' }> = [];
-  const seen = new Set<string>();
-  for (const a of raw) {
-    const rec: Record<string, unknown> = (a && typeof a === 'object') ? a as Record<string, unknown> : { email: a };
-    const email = String(rec.email || '').trim().toLowerCase();
-    if (!EMAIL_RE.test(email) || seen.has(email)) continue;
-    seen.add(email);
-    out.push({ email, name: rec.name ? String(rec.name).trim() : null, role: rec.role === 'opt' ? 'opt' : 'req' });
-  }
-  return out;
-}
-
-async function getEventAttendees(organizationId: string, requesterUserId: string, eventId: string): Promise<AttendeeRow[]> {
-  if (!UUID_RE.test(eventId)) throw new Error('Ongeldig agenda-item.');
-  const { data: ev } = await supabaseAdmin.from('calendar_events').select('source_id').eq('organization_id', organizationId).eq('id', eventId).single();
-  if (!ev) return [];
-  const { data: src } = await supabaseAdmin.from('calendar_sources').select('user_id,visibility').eq('id', ev.source_id).single();
-  if (!src) return [];
-  if (src.user_id !== requesterUserId && src.visibility !== 'organization') throw new Error('Geen toegang tot deze afspraak.');
-  const { data } = await supabaseAdmin.from('calendar_event_attendees')
-    .select('*').eq('event_id', eventId).order('created_at', { ascending: true });
-  return (data ?? []) as AttendeeRow[];
-}
-
-// Slaat de genodigden op (toevoegen/wijzigen/verwijderen) en verstuurt iMIP-mail:
-// REQUEST naar de huidige genodigden, CANCEL naar wie eraf is.
-async function applyAttendees(organizationId: string, source: CalendarSourceRow, eventRow: NativeEventRow, input: Record<string, unknown>): Promise<void> {
-  const desired = parseAttendeesInput(input);
-  const { data: existingRows } = await supabaseAdmin.from('calendar_event_attendees').select('*').eq('event_id', eventRow.id);
-  const existing = (existingRows ?? []) as AttendeeRow[];
-  if (desired.length === 0 && existing.length === 0) return;
-
-  let organizerToken = eventRow.organizer_token;
-  if (!organizerToken) {
-    organizerToken = crypto.randomUUID().replace(/-/g, '');
-    await supabaseAdmin.from('calendar_events').update({ organizer_token: organizerToken }).eq('id', eventRow.id);
-  }
-
-  const desiredEmails = new Set(desired.map(d => d.email));
-  const existingByEmail = new Map(existing.map(e => [String(e.email).toLowerCase(), e]));
-  const removed = existing.filter(e => !desiredEmails.has(String(e.email).toLowerCase()));
-
-  for (const d of desired) {
-    const ex = existingByEmail.get(d.email);
-    if (ex) {
-      await supabaseAdmin.from('calendar_event_attendees').update({ display_name: d.name, role: d.role }).eq('id', ex.id);
-    } else {
-      await supabaseAdmin.from('calendar_event_attendees').insert({
-        organization_id: organizationId, event_id: eventRow.id, email: d.email, display_name: d.name, role: d.role, status: 'needs-action',
-      });
-    }
-  }
-  if (removed.length) await supabaseAdmin.from('calendar_event_attendees').delete().in('id', removed.map(r => r.id));
-
-  const { data: currentRows } = await supabaseAdmin.from('calendar_event_attendees').select('*').eq('event_id', eventRow.id);
-  const current = (currentRows ?? []) as AttendeeRow[];
-
-  if (!RESEND_API_KEY) return; // geen verzendconfiguratie: alleen opslaan
-  const ctx = await buildOrganizerContext(organizationId, organizerToken);
-  if (!ctx) return;
-
-  if (current.length) {
-    const ics = buildEventIcs(eventRow, current, ctx, 'REQUEST');
-    for (const att of current) {
-      await sendInviteEmail(ctx.from, att.email, `Uitnodiging: ${eventRow.title || 'Afspraak'}`, eventRow, ics, 'REQUEST').catch(err => console.error('invite send', att.email, err));
-      await supabaseAdmin.from('calendar_event_attendees').update({ invited_at: new Date().toISOString(), last_sequence_sent: eventRow.sequence ?? 0 }).eq('id', att.id);
-    }
-  }
-  if (removed.length) {
-    const ics = buildEventIcs(eventRow, removed, ctx, 'CANCEL');
-    for (const att of removed) {
-      await sendInviteEmail(ctx.from, att.email, `Geannuleerd: ${eventRow.title || 'Afspraak'}`, eventRow, ics, 'CANCEL').catch(err => console.error('cancel send', att.email, err));
-    }
-  }
-}
-
-async function sendEventCancellations(organizationId: string, _source: CalendarSourceRow, eventRow: NativeEventRow): Promise<void> {
-  if (!eventRow.organizer_token || !RESEND_API_KEY) return;
-  const { data: rows } = await supabaseAdmin.from('calendar_event_attendees').select('*').eq('event_id', eventRow.id);
-  const attendees = (rows ?? []) as AttendeeRow[];
-  if (!attendees.length) return;
-  const ctx = await buildOrganizerContext(organizationId, eventRow.organizer_token);
-  if (!ctx) return;
-  const ics = buildEventIcs(eventRow, attendees, ctx, 'CANCEL');
-  for (const att of attendees) {
-    await sendInviteEmail(ctx.from, att.email, `Geannuleerd: ${eventRow.title || 'Afspraak'}`, eventRow, ics, 'CANCEL').catch(err => console.error('cancel send', att.email, err));
-  }
-}
-
-interface OrganizerContext { from: string; organizerName: string; organizerEmail: string }
-
-async function buildOrganizerContext(organizationId: string, organizerToken: string): Promise<OrganizerContext | null> {
-  const sender = await resolveOrgSender(organizationId);
-  if (!sender.from) return null;
-  const organizerName = extractDisplayNameFromAddr(sender.from) || 'ResoFly';
-  const organizerEmail = MAIL_INBOUND_DOMAIN
-    ? `organizer+${organizerToken}@${MAIL_INBOUND_DOMAIN}`
-    : (sender.fromEmail || extractEmailFromAddr(sender.from));
-  return { from: sender.from, organizerName, organizerEmail };
-}
-
-// Inline afzender-resolutie (kopie van _shared/sendingDomain.ts) om een tweede
-// _shared-import in deze functie te vermijden — die brak de boot van de functie.
-async function resolveOrgSender(organizationId: string): Promise<{ from: string; fromEmail: string | null }> {
-  const fallbackEmail = RESEND_FROM_EMAIL || '';
-  const fallback = { from: fallbackEmail, fromEmail: fallbackEmail || null };
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('organization_email_domains')
-      .select('from_email,from_name,status,is_default,created_at')
-      .eq('organization_id', organizationId)
-      .eq('status', 'verified')
-      .order('is_default', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error || !data || !data.from_email) return fallback;
-    const fromEmail = String(data.from_email);
-    const fromName = String(data.from_name || '').trim();
-    return { from: fromName ? `${fromName} <${fromEmail}>` : fromEmail, fromEmail };
-  } catch {
-    return fallback;
-  }
-}
-
-function buildEventIcs(ev: NativeEventRow, attendees: AttendeeRow[], ctx: OrganizerContext, method: 'REQUEST' | 'CANCEL'): string {
-  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//ResoFly//CalDAV//NL', `METHOD:${method}`, 'CALSCALE:GREGORIAN', 'BEGIN:VEVENT'];
-  lines.push(`UID:${icsEscape(ev.uid)}`);
-  lines.push(`DTSTAMP:${icsStamp(new Date())}`);
-  if (ev.all_day) {
-    const start = new Date(ev.starts_at);
-    let endEx = new Date(ev.ends_at);
-    if (endEx.getTime() <= start.getTime()) { endEx = new Date(start.getTime()); endEx.setUTCDate(endEx.getUTCDate() + 1); }
-    lines.push(`DTSTART;VALUE=DATE:${icsDateOnly(start)}`);
-    lines.push(`DTEND;VALUE=DATE:${icsDateOnly(endEx)}`);
-  } else {
-    lines.push(`DTSTART:${icsStamp(new Date(ev.starts_at))}`);
-    lines.push(`DTEND:${icsStamp(new Date(ev.ends_at))}`);
-  }
-  lines.push(`SUMMARY:${icsEscape(ev.title || '(Geen titel)')}`);
-  // Videocall-link ook in de omschrijving zetten zodat elke agenda-app hem toont,
-  // plus de RFC 7986 CONFERENCE-property voor apps die een "deelnemen"-knop kennen.
-  const description = ev.meeting_url ? `${ev.description ? `${ev.description}\n\n` : ''}Videocall: ${ev.meeting_url}` : ev.description;
-  if (description) lines.push(`DESCRIPTION:${icsEscape(description)}`);
-  if (ev.location) lines.push(`LOCATION:${icsEscape(ev.location)}`);
-  if (ev.meeting_url) lines.push(`CONFERENCE;VALUE=URI;FEATURE=VIDEO;LABEL=Videocall:${icsEscape(ev.meeting_url)}`);
-  if (ev.rrule) lines.push(`RRULE:${ev.rrule}`);
-  lines.push(`SEQUENCE:${ev.sequence ?? 0}`);
-  lines.push(`ORGANIZER;CN=${icsParam(ctx.organizerName)}:mailto:${ctx.organizerEmail}`);
-  for (const att of attendees) {
-    const cn = att.display_name ? `;CN=${icsParam(att.display_name)}` : '';
-    const partstat = method === 'CANCEL' ? 'DECLINED' : partstatToIcs(att.status);
-    lines.push(`ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=${att.role === 'opt' ? 'OPT-PARTICIPANT' : 'REQ-PARTICIPANT'};PARTSTAT=${partstat};RSVP=TRUE${cn}:mailto:${att.email}`);
-  }
-  lines.push(`STATUS:${method === 'CANCEL' ? 'CANCELLED' : 'CONFIRMED'}`);
-  lines.push('END:VEVENT', 'END:VCALENDAR');
-  return lines.map(foldIcsLine).join('\r\n') + '\r\n';
-}
-
-async function sendInviteEmail(from: string, to: string, subject: string, ev: NativeEventRow, ics: string, method: 'REQUEST' | 'CANCEL'): Promise<void> {
-  const when = ev.all_day
-    ? new Intl.DateTimeFormat('nl-NL', { dateStyle: 'full', timeZone: 'Europe/Amsterdam' }).format(new Date(ev.starts_at))
-    : new Intl.DateTimeFormat('nl-NL', { dateStyle: 'full', timeStyle: 'short', timeZone: 'Europe/Amsterdam' }).format(new Date(ev.starts_at));
-  const intro = method === 'CANCEL'
-    ? `De afspraak "${ev.title || 'Afspraak'}" is geannuleerd.`
-    : `Je bent uitgenodigd voor "${ev.title || 'Afspraak'}".`;
-  const text = `${intro}\n\nWanneer: ${when}${ev.location ? `\nLocatie: ${ev.location}` : ''}${ev.meeting_url && method !== 'CANCEL' ? `\nVideocall: ${ev.meeting_url}` : ''}`;
-  const html = `<p>${escapeHtmlBasic(intro)}</p><p><strong>Wanneer:</strong> ${escapeHtmlBasic(when)}</p>${ev.location ? `<p><strong>Locatie:</strong> ${escapeHtmlBasic(ev.location)}</p>` : ''}${ev.meeting_url && method !== 'CANCEL' ? `<p><strong>Videocall:</strong> <a href="${escapeHtmlBasic(ev.meeting_url)}">${escapeHtmlBasic(ev.meeting_url)}</a></p>` : ''}`;
-  const payload = {
-    from, to: [to], subject, text, html,
-    attachments: [{ filename: 'invite.ics', content: base64Utf8(ics), content_type: `text/calendar; method=${method}; charset=utf-8` }],
-  };
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(`Resend ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
-}
-
-function partstatToIcs(status: string): string {
-  switch (status) {
-    case 'accepted': return 'ACCEPTED';
-    case 'declined': return 'DECLINED';
-    case 'tentative': return 'TENTATIVE';
-    default: return 'NEEDS-ACTION';
-  }
-}
-
-function icsStamp(date: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}T${p(date.getUTCHours())}${p(date.getUTCMinutes())}${p(date.getUTCSeconds())}Z`;
-}
-function icsDateOnly(date: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}`;
-}
-function icsEscape(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
-}
-function icsParam(value: string): string {
-  return `"${value.replace(/["\r\n]/g, '')}"`;
-}
-function foldIcsLine(line: string): string {
-  if (line.length <= 75) return line;
-  const parts: string[] = [line.slice(0, 75)];
-  let rest = line.slice(75);
-  while (rest.length > 74) { parts.push(' ' + rest.slice(0, 74)); rest = rest.slice(74); }
-  if (rest.length) parts.push(' ' + rest);
-  return parts.join('\r\n');
-}
-function base64Utf8(s: string): string {
-  const bytes = new TextEncoder().encode(s);
-  let bin = '';
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin);
-}
-function extractDisplayNameFromAddr(from: string): string {
-  const m = from.match(/^\s*"?([^"<]*?)"?\s*</);
-  return m ? m[1].trim() : '';
-}
-function extractEmailFromAddr(from: string): string {
-  const m = from.match(/<([^>]+)>/);
-  return (m ? m[1] : from).trim();
-}
-function escapeHtmlBasic(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function normalizeMicrosoftDateTime(value: string): string {
-  if (!value) return new Date().toISOString();
-  return value.endsWith('Z') ? value : `${value}Z`;
-}
-
-function toMicrosoftDateTime(value: string): string {
-  return new Date(value).toISOString().replace(/\.\d{3}Z$/, '');
-}
 
 async function signState(state: OAuthState): Promise<string> {
   const payload = base64UrlEncode(new TextEncoder().encode(JSON.stringify(state)));
@@ -1874,36 +854,4 @@ function timingSafeEqual(a: string, b: string): boolean {
   let out = 0;
   for (let i = 0; i < a.length; i++) out |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return out === 0;
-}
-
-async function encryptionKey(): Promise<CryptoKey> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(TOKEN_ENCRYPTION_KEY));
-  return crypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['encrypt', 'decrypt']);
-}
-
-async function encrypt(value: string): Promise<string> {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await encryptionKey();
-  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(value));
-  return `${base64UrlEncode(iv)}.${base64UrlEncode(new Uint8Array(encrypted))}`;
-}
-
-async function decrypt(value: string): Promise<string> {
-  const [ivRaw, dataRaw] = value.split('.');
-  if (!ivRaw || !dataRaw) throw new Error('Token decryptieformaat is ongeldig.');
-  const key = await encryptionKey();
-  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: base64UrlDecode(ivRaw) }, key, base64UrlDecode(dataRaw));
-  return new TextDecoder().decode(decrypted);
-}
-
-function base64UrlEncode(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
-function base64UrlDecode(value: string): Uint8Array {
-  const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
-  const binary = atob(padded);
-  return Uint8Array.from(binary, c => c.charCodeAt(0));
 }
