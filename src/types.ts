@@ -1512,6 +1512,7 @@ export interface MeetingBookingLink {
   meeting_url: string | null;
   max_total_bookings: number;
   max_per_week: number;
+  auto_conference: boolean;
   status: MeetingBookingLinkStatus;
   public_token_hash: string | null;
   public_token_expires_at: string | null;

@@ -39,6 +39,7 @@ type LinkRow = {
   meeting_url: string | null;
   max_total_bookings: number;
   max_per_week: number;
+  auto_conference: boolean;
   status: 'active' | 'closed';
   public_token_hash: string | null;
   public_token_expires_at: string | null;
@@ -150,7 +151,14 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
   if (!link.source_id) throw new HttpErr('Deze boekingslink is niet meer gekoppeld aan een agenda. Neem contact op.', 409);
   if (!link.user_id) throw new HttpErr('Deze boekingslink is niet meer beschikbaar. Neem contact op.', 409);
 
-  const confirmed: Array<{ slot_id: string; starts_at: string; ends_at: string }> = [];
+  // Provider van de agenda bepalen: bij Google/Microsoft kan er automatisch een
+  // videovergadering (Google Meet / Teams) worden aangemaakt. Een zelf geplakte
+  // vaste videolink heeft voorrang; native heeft geen provider.
+  const { data: srcRow } = await supabaseAdmin.from('calendar_sources').select('provider').eq('id', link.source_id).maybeSingle();
+  const provider = srcRow ? String(srcRow.provider) : 'native';
+  const addConference = link.auto_conference && provider !== 'native' && !link.meeting_url;
+
+  const confirmed: Array<{ slot_id: string; starts_at: string; ends_at: string; meeting_url: string | null }> = [];
   const failed: Array<{ slot_id: string; reason: string }> = [];
 
   for (const slotId of slotIds) {
@@ -178,6 +186,7 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
         startsAt: starts,
         endsAt: ends,
         meetingUrl: link.meeting_url,
+        addConference,
         attendees: [{ email, name: name || undefined }],
       }) as Record<string, unknown>;
 
@@ -194,7 +203,8 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
       });
       if (finalizeError) throw new Error(finalizeError.message);
 
-      confirmed.push({ slot_id: slotId, starts_at: starts, ends_at: ends });
+      const evMeetingUrl = ev.meeting_url ? String(ev.meeting_url) : null;
+      confirmed.push({ slot_id: slotId, starts_at: starts, ends_at: ends, meeting_url: evMeetingUrl });
     } catch (err) {
       if (bookingId) {
         try { await supabaseAdmin.rpc('release_meeting_booking', { p_booking_id: bookingId, p_reason: err instanceof Error ? err.message : 'error' }); } catch { /* best-effort */ }
@@ -203,14 +213,19 @@ async function bookSlots(tokenHash: string, body: Record<string, unknown>) {
     }
   }
 
+  // Toon één deelnamelink als die eenduidig is: de vaste link, of bij precies één
+  // geboekt blok de zojuist gegenereerde Meet/Teams-link. Bij meerdere auto-links
+  // verschilt de link per afspraak en staat hij in de losse agenda-uitnodigingen.
+  const displayMeetingUrl = link.meeting_url || (confirmed.length === 1 ? confirmed[0].meeting_url : null);
+
   if (confirmed.length > 0) {
-    await sendConfirmationEmails(link, name, email, confirmed).catch(err => console.error('confirmation mail failed', err));
+    await sendConfirmationEmails(link, name, email, confirmed, displayMeetingUrl).catch(err => console.error('confirmation mail failed', err));
   }
 
   return {
     confirmed,
     failed,
-    meeting_url: link.meeting_url,
+    meeting_url: displayMeetingUrl,
     invite_message: link.invite_message,
     title: link.title,
   };
@@ -240,7 +255,7 @@ function whenLine(starts: string, ends: string): string {
   return `${d} – ${t}`;
 }
 
-async function sendConfirmationEmails(link: LinkRow, name: string, email: string, confirmed: Array<{ starts_at: string; ends_at: string }>): Promise<void> {
+async function sendConfirmationEmails(link: LinkRow, name: string, email: string, confirmed: Array<{ starts_at: string; ends_at: string }>, meetingUrl: string | null): Promise<void> {
   if (!RESEND_API_KEY) return;
   const sender = await resolveSenderIdentity(supabaseAdmin, link.organization_id, RESEND_FROM_EMAIL);
   if (!sender.from) return;
@@ -253,7 +268,7 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
     recipientName: name || null,
     title: link.title,
     whenLines,
-    meetingUrl: link.meeting_url,
+    meetingUrl,
     inviteMessage: link.invite_message,
   });
   await sendResend(sender.from, [email], sender.replyTo, rendered.subject, rendered.html, rendered.text).catch(err => console.error('client confirm mail', err));

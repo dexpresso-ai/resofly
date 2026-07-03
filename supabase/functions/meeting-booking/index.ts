@@ -52,6 +52,7 @@ type LinkRow = {
   meeting_url: string | null;
   max_total_bookings: number;
   max_per_week: number;
+  auto_conference: boolean;
   status: 'active' | 'closed';
   public_token_hash: string | null;
   public_token_expires_at: string | null;
@@ -206,6 +207,7 @@ function normalizeLinkInput(body: Record<string, unknown>): Record<string, unkno
     patch.max_per_week = n;
   }
   if (body.status === 'active' || body.status === 'closed') patch.status = body.status;
+  if (typeof body.autoConference === 'boolean') patch.auto_conference = body.autoConference;
   return patch;
 }
 

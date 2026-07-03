@@ -145,6 +145,7 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
                 meetingUrl: payload.meetingUrl,
                 maxTotalBookings: payload.maxTotalBookings,
                 maxPerWeek: payload.maxPerWeek,
+                autoConference: payload.autoConference,
               });
               setTokenByLink(prev => ({ ...prev, [res.link.id]: { token: res.token, url: res.booking_url } }));
               await reloadLinks();
@@ -213,6 +214,7 @@ interface LinkFormPayload {
   meetingUrl: string | null;
   maxTotalBookings: number;
   maxPerWeek: number;
+  autoConference: boolean;
 }
 
 function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }: {
@@ -232,6 +234,11 @@ function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }:
   const [meetingUrl, setMeetingUrl] = useState(initial?.meetingUrl ?? '');
   const [maxTotal, setMaxTotal] = useState(String(initial?.maxTotalBookings ?? 1));
   const [maxWeek, setMaxWeek] = useState(String(initial?.maxPerWeek ?? 1));
+  const [autoConference, setAutoConference] = useState(initial?.autoConference ?? true);
+
+  const selectedProvider = sources.find(s => s.id === sourceId)?.provider ?? null;
+  const isExternal = selectedProvider === 'google' || selectedProvider === 'microsoft';
+  const conferenceLabel = selectedProvider === 'microsoft' ? 'Teams-vergadering' : 'Google Meet';
 
   const submit = () => {
     if (!sourceId) return;
@@ -244,6 +251,7 @@ function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }:
       meetingUrl: meetingUrl.trim() || null,
       maxTotalBookings: Math.max(1, parseInt(maxTotal, 10) || 1),
       maxPerWeek: Math.max(1, parseInt(maxWeek, 10) || 1),
+      autoConference,
     });
   };
 
@@ -270,6 +278,14 @@ function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }:
       </div>
       <label>Intro-tekst op de boekingspagina<Textarea value={introText} onChange={e => setIntroText(e.target.value)} rows={2} placeholder="Kies hieronder een moment dat jou uitkomt." /></label>
       <label>Begeleidende tekst bij de uitnodiging<Textarea value={inviteMessage} onChange={e => setInviteMessage(e.target.value)} rows={2} placeholder="Fijn dat we een moment inplannen. Tot dan!" /></label>
+      {isExternal && (
+        <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <input type="checkbox" checked={autoConference} onChange={e => setAutoConference(e.target.checked)} style={{ marginTop: 3 }} />
+          <span>Automatisch een {conferenceLabel} aanmaken bij het boeken.<br />
+            <span className="muted" style={{ fontSize: 12 }}>De klant krijgt de deelnamelink in de agenda-uitnodiging. Vul je hieronder een eigen vaste link in, dan wordt die gebruikt in plaats hiervan.</span>
+          </span>
+        </label>
+      )}
       <label>Vaste videocall-link (optioneel)<Input value={meetingUrl} onChange={e => setMeetingUrl(e.target.value)} placeholder="https://meet.google.com/… of Teams/Zoom" /></label>
       {sources.length === 0 && <p className="muted">Er is nog geen schrijfbare agenda beschikbaar. Koppel of maak eerst een agenda.</p>}
       <div style={{ display: 'flex', gap: 8 }}>
@@ -325,10 +341,10 @@ function LinkDetail({ detail, sources, clients, clientEmail, token, busy, canWri
         initial={{
           title: link.title, sourceId: link.source_id ?? '', clientId: link.client_id ?? '',
           introText: link.intro_text, inviteMessage: link.invite_message, meetingUrl: link.meeting_url,
-          maxTotalBookings: link.max_total_bookings, maxPerWeek: link.max_per_week,
+          maxTotalBookings: link.max_total_bookings, maxPerWeek: link.max_per_week, autoConference: link.auto_conference,
         }}
         onCancel={() => setEditing(false)}
-        onSubmit={(p) => { onSavedPatch({ title: p.title, sourceId: p.sourceId, clientId: p.clientId, introText: p.introText, inviteMessage: p.inviteMessage, meetingUrl: p.meetingUrl, maxTotalBookings: p.maxTotalBookings, maxPerWeek: p.maxPerWeek }); setEditing(false); }}
+        onSubmit={(p) => { onSavedPatch({ title: p.title, sourceId: p.sourceId, clientId: p.clientId, introText: p.introText, inviteMessage: p.inviteMessage, meetingUrl: p.meetingUrl, maxTotalBookings: p.maxTotalBookings, maxPerWeek: p.maxPerWeek, autoConference: p.autoConference }); setEditing(false); }}
       />
     );
   }

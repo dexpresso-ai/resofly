@@ -34,6 +34,7 @@ export interface CreateBookingLinkInput {
   meetingUrl?: string | null;
   maxTotalBookings: number;
   maxPerWeek: number;
+  autoConference?: boolean;
 }
 
 export interface BookingLinkPatch {
@@ -43,6 +44,7 @@ export interface BookingLinkPatch {
   meetingUrl?: string | null;
   maxTotalBookings?: number;
   maxPerWeek?: number;
+  autoConference?: boolean;
   status?: 'active' | 'closed';
   sourceId?: UUID;
   clientId?: UUID | null;
