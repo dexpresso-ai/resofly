@@ -2669,3 +2669,43 @@ body::before{
   }
   .sidebar-close:hover{background:rgba(255,255,255,.1);color:var(--text)}
 }
+
+/* ── Tickets: weergaveschakelaar, klikbare statuskaarten + tabelweergave ── */
+.ticket-toolbar{max-width:1180px}
+.ticket-view-switch{display:inline-flex;gap:2px;padding:3px;border:1px solid var(--border);border-radius:12px;background:var(--bg2)}
+.ticket-view-switch button{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;color:var(--muted2);font:inherit;font-size:12px;font-weight:800;padding:7px 12px;border-radius:9px;cursor:pointer;transition:background .15s,color .15s}
+.ticket-view-switch button:hover{color:var(--text)}
+.ticket-view-switch button[aria-pressed="true"]{background:var(--bg4);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.3)}
+/* Statuskaarten fungeren als één-klik statusfilter (schakelt naar tabelweergave). */
+.ticket-stat.as-filter{width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;transition:border-color .15s,transform .15s,background .15s}
+.ticket-stat.as-filter:hover{border-color:var(--border2);transform:translateY(-1px)}
+.ticket-stat.as-filter.is-active{border-color:rgba(255,189,89,.5);background:rgba(255,189,89,.08)}
+.ticket-stat.as-filter .ts-label{color:var(--muted)}
+.ticket-stat.as-filter.is-active .ts-label{color:var(--accent)}
+.ticket-search-card{max-width:1180px}
+.ticket-table-card{max-width:1180px}
+/* Op ruime schermen 3 filterkolommen; onder 1180px pakken we de finance-defaults
+   (3 → 2 → 1 kolom) zodat de dropdowns op tablet/telefoon niet in elkaar drukken. */
+@media(min-width:1181px){.ticket-search-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.th-sort{display:inline-flex;align-items:center;gap:5px;background:none;border:0;color:inherit;font:inherit;letter-spacing:inherit;text-transform:inherit;cursor:pointer;padding:0}
+.th-sort:hover{color:var(--muted2)}
+.th-sort.is-active{color:var(--accent)}
+.ticket-table-row.is-unread{box-shadow:inset 3px 0 0 var(--accent)}
+.ticket-table-row.is-unread td{background:rgba(255,217,102,.055)}
+.tk-pri-label{display:inline-block;font-size:10px;font-weight:800;padding:3px 9px;border-radius:999px;text-transform:uppercase;letter-spacing:.05em}
+.tk-pri-label.high{background:rgba(240,107,107,.15);color:#ff9b9b}
+.tk-pri-label.med{background:rgba(245,158,11,.15);color:var(--accent-o)}
+.tk-pri-label.low{background:rgba(52,211,153,.15);color:#7fe3b8}
+.tk-status.new{background:rgba(96,165,250,.16);color:#9cc3f7}
+.tk-status.review{background:rgba(255,217,102,.16);color:var(--accent)}
+.tk-status.approved{background:rgba(52,211,153,.16);color:#7fe3b8}
+.tk-status.rejected{background:rgba(240,107,107,.16);color:#ff9b9b}
+.tk-status.converted{background:rgba(148,163,184,.2);color:#cbd5e1}
+.ticket-table td .tk-new-badge{margin-left:8px}
+.tk-converted-pill{margin-left:8px;font-size:9px;font-weight:800;padding:2px 7px;border-radius:999px;background:var(--bg4);color:var(--muted2);text-transform:uppercase;letter-spacing:.06em}
+.ticket-row-actions .btn{white-space:nowrap}
+/* Smallere min-breedte dan de offerte/factuur-tabel (minder kolommen); alleen op desktop,
+   zodat de mobiele kaart-stapelweergave (≤760px) van .quote-table intact blijft. */
+@media(min-width:761px){.ticket-table{min-width:820px}}
+@media(max-width:1180px){.ticket-search-card{max-width:100%}.ticket-table-card{max-width:100%}}
+@media(max-width:760px){.ticket-toolbar{display:flex}.ticket-view-switch{width:100%}.ticket-view-switch button{flex:1;justify-content:center}}
