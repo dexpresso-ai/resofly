@@ -184,7 +184,10 @@ async function listSlotsInRange(organizationId: string, start: string, end: stri
     .select('id,booking_link_id,starts_at,ends_at,status')
     .eq('organization_id', organizationId)
     .in('booking_link_id', rows.map(l => l.id))
-    .neq('status', 'cancelled')
+    // Alleen nog-openstaande opties tonen in de agenda-laag. Zodra een blok geboekt
+    // is, verschijnt het al als echte agenda-afspraak; een aparte optie-overlay is
+    // dan overbodig.
+    .eq('status', 'open')
     .lt('starts_at', endIso).gte('ends_at', startIso)
     .order('starts_at', { ascending: true });
   return (slots ?? []).map((s: Record<string, unknown>) => ({
