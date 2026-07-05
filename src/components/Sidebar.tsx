@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Archive, BarChart3, BookOpen, Boxes, Calendar, ChevronDown, ChevronRight, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, Percent, Receipt, Settings, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, Boxes, Calendar, ChevronDown, ChevronRight, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, Percent, Pin, PinOff, Receipt, Settings, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { Select } from './Ui';
@@ -39,6 +39,8 @@ export function Sidebar({
   ticketUnread = 0,
   mobileOpen = false,
   onCloseMobile,
+  pinned = false,
+  onTogglePin,
 }: {
   page: Page;
   data: AppData;
@@ -53,6 +55,8 @@ export function Sidebar({
   ticketUnread?: number;
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
+  pinned?: boolean;
+  onTogglePin?: () => void;
 }) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
   const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
@@ -93,6 +97,7 @@ export function Sidebar({
   return <aside className={`sidebar${mobileOpen ? ' is-open' : ''}`}>
     <div className="sidebar-head">
       <button type="button" className="sidebar-close" onClick={onCloseMobile} aria-label="Menu sluiten"><X size={20}/></button>
+      <button type="button" className="sidebar-pin" onClick={onTogglePin} aria-pressed={pinned} aria-label={pinned ? 'Menu losmaken' : 'Menu vastzetten'} title={pinned ? 'Menu losmaken' : 'Menu vastzetten'}>{pinned ? <PinOff size={15}/> : <Pin size={15}/>}</button>
       <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div>
       <div className="org-switcher">
         <label>Organisatie</label>

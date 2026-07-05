@@ -2557,56 +2557,72 @@ body::before{
 .mobile-nav-toggle{display:none}
 .sidebar-backdrop{display:none}
 .sidebar-close{display:none}
+.sidebar-pin{display:none}
 
-/* ---------- Laptop / desktop: iconenbalk met hover-onthulling ---------- */
+/* ---------- Laptop / desktop: iconenbalk met hover-onthulling + vastzet-optie ---------- */
 @media (min-width:761px){
-  /* Zijbalk uit de flow halen: de content wint de ruimte terug en de
-     opengeschoven balk legt zichzelf als overlay óver de content heen. */
-  .app{padding-left:var(--rail)}
+  /* Zijbalk uit de flow; de content compenseert met padding zodat er niets
+     onder de balk verdwijnt. Overgang zodat vastzetten/losmaken soepel schuift. */
+  .app{transition:padding-left .22s cubic-bezier(.4,0,.2,1)}
   .sidebar{
     position:fixed;top:0;left:0;bottom:0;
-    width:var(--rail);min-width:var(--rail);
     z-index:60;
     transition:width .22s cubic-bezier(.4,0,.2,1),box-shadow .22s ease;
     will-change:width;
   }
-  .sidebar-head{padding:20px 15px 14px}
-  .app-brand{gap:0}
 
-  /* Ingeklapt: alléén iconen zichtbaar. */
-  .sidebar .ni-label,
-  .sidebar .app-brand span,
-  .sidebar .nav-chevron{opacity:0;transition:opacity .12s ease}
-  .sidebar .org-switcher,
-  .sidebar .global-search,
-  .sidebar .nav-section,
-  .sidebar .nav-submenu{display:none}
+  /* Vastzet-knop rechtsboven in de kop. */
+  .sidebar-head{position:relative}
+  .sidebar-pin{
+    display:inline-flex;align-items:center;justify-content:center;
+    position:absolute;top:16px;right:14px;z-index:3;
+    width:30px;height:30px;border-radius:9px;
+    border:1px solid var(--border);background:rgba(255,255,255,.04);
+    color:var(--muted);cursor:pointer;
+    opacity:0;pointer-events:none;
+    transition:opacity .15s ease,color .15s ease,background .15s ease;
+  }
+  .sidebar-pin:hover{color:var(--text);background:rgba(255,255,255,.09)}
 
-  /* Ongelezen-teller wordt een klein stipje op het icoon zolang ingeklapt. */
-  .sidebar:not(:hover):not(:focus-within) .nav-item .nav-badge{
+  /* ===== Vastgezet: klassieke vaste zijbalk, content schuift mee ===== */
+  .app.sidebar-pinned{padding-left:var(--sidebar)}
+  .app.sidebar-pinned .sidebar{width:var(--sidebar);min-width:var(--sidebar)}
+  .app.sidebar-pinned .sidebar-pin{opacity:1;pointer-events:auto;color:var(--accent);border-color:var(--border-strong);background:var(--accent-soft)}
+
+  /* ===== Niet vastgezet: smalle iconenbalk, opent bij hover als overlay ===== */
+  .app:not(.sidebar-pinned){padding-left:var(--rail)}
+  .app:not(.sidebar-pinned) .sidebar{width:var(--rail);min-width:var(--rail)}
+  /* De org-switcher is táller dan een menu-regel; die terugtonen bij hover zou de
+     hele lijst omlaag duwen. Daarom blijft hij in de smalle balk verborgen (ook
+     bij hover) — het zoekveld en "Menu"-kopje behouden hun hoogte, dus de items
+     blijven exact staan. De org-switcher verschijnt zodra je het menu vastzet. */
+  .app:not(.sidebar-pinned) .sidebar .org-switcher{display:none}
+  /* Labels/chevron alleen weg-faden (geen hoogteverandering → geen sprong). */
+  .app:not(.sidebar-pinned) .sidebar .ni-label,
+  .app:not(.sidebar-pinned) .sidebar .app-brand span,
+  .app:not(.sidebar-pinned) .sidebar .nav-chevron{opacity:0;transition:opacity .12s ease}
+  .app:not(.sidebar-pinned) .sidebar .nav-submenu{display:none}
+
+  /* Ongelezen-teller wordt een klein stipje op het icoon zolang de balk smal is. */
+  .app:not(.sidebar-pinned) .sidebar:not(:hover):not(:focus-within) .nav-item .nav-badge{
     position:absolute;top:6px;right:8px;
     min-width:10px;width:10px;height:10px;padding:0;
     font-size:0;color:transparent;
     border:2px solid var(--panel-strong);
   }
 
-  /* Hover of toetsenbord-focus → volledig menu, over de content heen. */
-  .sidebar:hover,
-  .sidebar:focus-within{
+  /* Hover of toetsenbord-focus → volledige breedte + labels, als overlay. */
+  .app:not(.sidebar-pinned) .sidebar:hover,
+  .app:not(.sidebar-pinned) .sidebar:focus-within{
     width:var(--sidebar);
     box-shadow:28px 0 90px rgba(0,0,0,.55);
   }
-  .sidebar:hover .sidebar-head,
-  .sidebar:focus-within .sidebar-head{padding:22px 18px 16px}
-  .sidebar:hover .app-brand,
-  .sidebar:focus-within .app-brand{gap:11px}
-  .sidebar:hover .ni-label,.sidebar:focus-within .ni-label,
-  .sidebar:hover .app-brand span,.sidebar:focus-within .app-brand span,
-  .sidebar:hover .nav-chevron,.sidebar:focus-within .nav-chevron{opacity:1}
-  .sidebar:hover .org-switcher,.sidebar:focus-within .org-switcher,
-  .sidebar:hover .global-search,.sidebar:focus-within .global-search,
-  .sidebar:hover .nav-section,.sidebar:focus-within .nav-section{display:block}
-  .sidebar:hover .nav-submenu,.sidebar:focus-within .nav-submenu{display:flex}
+  .app:not(.sidebar-pinned) .sidebar:hover .ni-label,.app:not(.sidebar-pinned) .sidebar:focus-within .ni-label,
+  .app:not(.sidebar-pinned) .sidebar:hover .app-brand span,.app:not(.sidebar-pinned) .sidebar:focus-within .app-brand span,
+  .app:not(.sidebar-pinned) .sidebar:hover .nav-chevron,.app:not(.sidebar-pinned) .sidebar:focus-within .nav-chevron{opacity:1}
+  .app:not(.sidebar-pinned) .sidebar:hover .nav-submenu,.app:not(.sidebar-pinned) .sidebar:focus-within .nav-submenu{display:flex}
+  .app:not(.sidebar-pinned) .sidebar:hover .sidebar-pin,
+  .app:not(.sidebar-pinned) .sidebar:focus-within .sidebar-pin{opacity:1;pointer-events:auto}
 }
 
 /* ---------- Mobiel: uitschuif-drawer ---------- */
