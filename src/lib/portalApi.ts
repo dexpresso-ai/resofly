@@ -61,6 +61,22 @@ export interface PortalQuote {
   sent_at: string | null;
   accepted_at: string | null;
   project_id: string | null;
+  client_decision_at?: string | null;
+  client_decision_by_name?: string | null;
+  client_decision_note?: string | null;
+}
+
+export interface PortalInvoicePaymentInfo {
+  invoiceId: string;
+  number: string;
+  status: string;
+  isPaid: boolean;
+  payable: boolean;
+  amountCents: number;
+  currency: string;
+  mollieAvailable: boolean;
+  iban: string | null;
+  companyName: string | null;
 }
 
 export interface PortalContract {
@@ -198,6 +214,39 @@ export async function fetchPortalProjectDetail(projectId: string): Promise<Porta
   if (error) throw new Error(await extractFunctionError(error, 'Project laden mislukt'));
   if (!data?.ok) throw new Error(data?.error || 'Project laden mislukt');
   return { project: data.project as PortalProject, tasks: Array.isArray(data.tasks) ? data.tasks : [] };
+}
+
+/**
+ * Laat de ingelogde klant een naar hem verstuurde offerte accepteren of weigeren,
+ * rechtstreeks vanuit het portaal. Geeft de bijgewerkte offerte terug.
+ */
+export async function decidePortalQuote(quoteId: string, kind: 'accept' | 'reject', note?: string): Promise<PortalQuote> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'decideQuote', quoteId, kind, note: note ?? '' },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Offertebeslissing verwerken mislukt'));
+  if (!data?.ok) throw new Error(data?.error || 'Offertebeslissing verwerken mislukt');
+  return data.quote as PortalQuote;
+}
+
+/** Betaalinfo van één factuur (bedrag, betaalbaarheid, Mollie-beschikbaarheid, IBAN). */
+export async function fetchPortalInvoicePaymentInfo(invoiceId: string): Promise<PortalInvoicePaymentInfo> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'getInvoicePaymentInfo', invoiceId },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Betaalinfo laden mislukt'));
+  if (!data?.ok) throw new Error(data?.error || 'Betaalinfo laden mislukt');
+  return data.payment as PortalInvoicePaymentInfo;
+}
+
+/** Maakt (of hergebruikt) een Mollie-betaallink voor een factuur en geeft de checkout-URL terug. */
+export async function createPortalInvoicePayment(invoiceId: string): Promise<{ checkoutUrl: string; mock: boolean; reused: boolean }> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'createInvoicePayment', invoiceId },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Betaallink aanmaken mislukt'));
+  if (!data?.ok || !data.checkoutUrl) throw new Error(data?.error || 'Betaallink aanmaken mislukt');
+  return { checkoutUrl: data.checkoutUrl as string, mock: Boolean(data.mock), reused: Boolean(data.reused) };
 }
 
 export async function downloadPortalInvoicePdf(invoiceId: string): Promise<{ fileName: string; mimeType: string; base64: string }> {

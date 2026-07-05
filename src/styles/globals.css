@@ -2043,6 +2043,37 @@ body::before{
 .client-welcome-toggle{grid-column:1/-1}
 .client-welcome-hint{color:var(--muted);font-style:normal}
 
+/* ── Klantportaal: offerte-/factuurdetail met acties ──────────────────── */
+.portal-status.accepted,.portal-status.paid{background:rgba(52,211,153,.16);color:var(--accent-g)}
+.portal-status.rejected,.portal-status.cancelled,.portal-status.expired{background:rgba(240,107,107,.16);color:var(--accent-r)}
+.portal-status.sent{background:rgba(255,217,102,.16);color:var(--accent)}
+.portal-doc-lines{display:flex;flex-direction:column;gap:2px;margin:14px 0 4px}
+.portal-doc-line{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 0;border-bottom:1px solid var(--border)}
+.portal-doc-line>div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.portal-doc-line>div strong{font-size:13px;font-weight:700}
+.portal-doc-line>div span{font-size:11px;color:var(--muted)}
+.portal-doc-line>strong{white-space:nowrap;font-weight:800}
+.portal-doc-total{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:4px 0;font-size:13px;color:var(--muted2)}
+.portal-doc-total.grand{margin-top:6px;padding-top:10px;border-top:1px solid var(--border2);font-size:15px;color:var(--text)}
+.portal-doc-total.grand strong{font-weight:900}
+.portal-doc-action{margin-top:18px;display:flex;flex-direction:column;gap:12px}
+.portal-doc-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+.portal-doc-actions-pdf{margin-top:16px;border-top:1px solid var(--border);padding-top:14px}
+.portal-decision-done{padding:14px 16px;border-radius:10px;background:var(--bg3);border:1px solid var(--border)}
+.portal-decision-done.accepted{background:rgba(52,211,153,.1);border-color:rgba(52,211,153,.32)}
+.portal-decision-done.rejected{background:rgba(240,107,107,.1);border-color:rgba(240,107,107,.32)}
+.portal-decision-done strong{font-size:14px;font-weight:800}
+.portal-decision-done p{font-size:12px;color:var(--muted2);margin-top:6px;white-space:pre-wrap}
+.portal-pay{margin-top:18px;display:flex;flex-direction:column;gap:14px}
+.portal-pay-online{display:flex;flex-direction:column;gap:6px}
+.portal-pay-online .btn{align-self:flex-start}
+.portal-pay-online span{font-size:11px;color:var(--muted)}
+.portal-bank{padding:14px 16px;border-radius:10px;background:var(--bg3);border:1px solid var(--border)}
+.portal-bank>strong{font-size:13px;font-weight:800;display:block;margin-bottom:8px}
+.portal-bank-facts{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:13px}
+.portal-bank-facts span{color:var(--muted)}
+.portal-bank-facts strong{font-weight:700}
+
 /* ── Compacte projecttimeline (volledige + dashboard variant) ─────────
  * Dunnere projectbalken en dichtere rijen, zodat bij veel projecten meer
  * tegelijk op het scherm passen. De projectnaam staat al in de vaste
@@ -2709,3 +2740,50 @@ body::before{
 @media(min-width:761px){.ticket-table{min-width:820px}}
 @media(max-width:1180px){.ticket-search-card{max-width:100%}.ticket-table-card{max-width:100%}}
 @media(max-width:760px){.ticket-toolbar{display:flex}.ticket-view-switch{width:100%}.ticket-view-switch button{flex:1;justify-content:center}}
+
+/* ── Account-menu onderin de zijbalk: avatar + alle instellingen + uitloggen ── */
+.sidebar-user{position:relative;z-index:2;flex-shrink:0;padding:10px;border-top:1px solid var(--border);background:rgba(255,255,255,.018)}
+.user-trigger{width:100%;display:flex;align-items:center;gap:11px;padding:8px 9px;border-radius:14px;cursor:pointer;background:rgba(255,255,255,.03);border:1px solid var(--border);color:var(--text);text-align:left;font-family:inherit;transition:background .15s ease,border-color .15s ease}
+.user-trigger:hover{background:rgba(255,255,255,.06);border-color:var(--border-strong)}
+.user-trigger.open,.user-trigger.active{background:var(--accent-soft);border-color:var(--border-strong)}
+.user-trigger:focus-visible{outline:2px solid var(--border-strong);outline-offset:2px}
+.user-avatar{width:34px;height:34px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:11px;background:linear-gradient(135deg,rgba(255,189,89,.28),rgba(255,189,89,.06)),#111;color:var(--accent);border:1px solid var(--border-strong);font-weight:800;font-size:13px;letter-spacing:.02em}
+.user-meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;transition:opacity .12s ease}
+.user-name{font-size:13px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.user-role{font-size:11px;color:var(--muted);text-transform:capitalize}
+.user-caret{flex-shrink:0;color:var(--muted);transition:transform .18s ease,color .18s ease,opacity .12s ease}
+.user-trigger.open .user-caret{transform:rotate(180deg);color:var(--accent)}
+
+.user-menu{position:absolute;left:8px;right:8px;bottom:calc(100% - 2px);z-index:10;background:var(--panel-strong);border:1px solid var(--border2);border-radius:16px;padding:7px;box-shadow:0 26px 64px rgba(0,0,0,.62);max-height:min(70vh,460px);overflow-y:auto;transform-origin:bottom center;animation:user-menu-pop .14s cubic-bezier(.2,.7,.3,1)}
+@keyframes user-menu-pop{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
+.user-menu-head{padding:9px 11px 10px;border-bottom:1px solid var(--border);margin-bottom:5px;display:flex;flex-direction:column;gap:3px}
+.umh-label{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);font-weight:800}
+.umh-email{font-size:12.5px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.user-menu-section{padding:7px 11px 4px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:700}
+.user-menu-item{width:100%;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;background:transparent;border:none;color:var(--muted2);font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;text-align:left;transition:background .12s ease,color .12s ease}
+.user-menu-item svg{flex-shrink:0;color:var(--muted);transition:color .12s ease}
+.user-menu-item:hover{background:var(--bg3);color:var(--text)}
+.user-menu-item:hover svg{color:var(--accent)}
+.user-menu-item:focus-visible{outline:2px solid var(--border-strong);outline-offset:-2px}
+.user-menu-sep{height:1px;background:var(--border);margin:6px 6px}
+.user-menu-item.danger{color:var(--accent-r)}
+.user-menu-item.danger svg{color:var(--accent-r)}
+.user-menu-item.danger:hover{background:rgba(240,107,107,.12);color:#ff9b9b}
+.user-menu-item.danger:hover svg{color:#ff9b9b}
+
+/* Laptop/desktop: in de smalle iconenbalk faden naam/rol/caret weg (net als de
+   menu-labels); de avatar blijft op één lijn met de menu-iconen erboven. */
+@media (min-width:761px){
+  .app:not(.sidebar-pinned) .sidebar .user-meta,
+  .app:not(.sidebar-pinned) .sidebar .user-caret{opacity:0}
+  .app:not(.sidebar-pinned) .sidebar:hover .user-meta,.app:not(.sidebar-pinned) .sidebar:focus-within .user-meta,
+  .app:not(.sidebar-pinned) .sidebar:hover .user-caret,.app:not(.sidebar-pinned) .sidebar:focus-within .user-caret{opacity:1}
+  /* Account-menu open → balk uitgeklapt zodat het menu en de naam volledig passen. */
+  .app:not(.sidebar-pinned) .sidebar.user-open{width:var(--sidebar);box-shadow:28px 0 90px rgba(0,0,0,.55)}
+  .app:not(.sidebar-pinned) .sidebar.user-open .user-meta,
+  .app:not(.sidebar-pinned) .sidebar.user-open .user-caret{opacity:1}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .user-menu{animation:none}
+}

@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { createPortalInvoiceCheckout, calculateTotalCents, orgHasInvoiceMollie } from '../_shared/invoiceCheckout.ts';
 
 // ============================================================
 // ResoFly — Klantportaal (client portal) edge function
@@ -85,6 +86,12 @@ serve(async (req) => {
         return json(req, { ok: true, ...(await addTicketNote(user, body)) });
       case 'getProjectDetail':
         return json(req, { ok: true, ...(await getProjectDetail(user, body)) });
+      case 'decideQuote':
+        return json(req, { ok: true, ...(await decideQuote(user, body)) });
+      case 'getInvoicePaymentInfo':
+        return json(req, { ok: true, ...(await getInvoicePaymentInfo(user, body)) });
+      case 'createInvoicePayment':
+        return json(req, { ok: true, ...(await createInvoicePayment(user, body, req)) });
       case 'getInvoicePdf':
         return json(req, { ok: true, ...(await getInvoicePdf(user, body)) });
       case 'getContractPdf':
@@ -257,6 +264,141 @@ async function getProjectDetail(user: { id: string; email: string }, body: Recor
   if (tasksError) throw tasksError;
 
   return { project: sanitizeProject(project), tasks: (tasks || []).map(sanitizeTask) };
+}
+
+/**
+ * Laat de ingelogde klant een naar hem verstuurde offerte in het portaal zelf
+ * accepteren of weigeren. De identiteit komt uit de geverifieerde sessie (naam uit
+ * het klantdossier, e-mail uit de login) — de klant hoeft niets opnieuw in te
+ * vullen. De state-overgang + events/audit lopen via decide_quote_portal, dat exact
+ * de publieke accept/reject-RPC's spiegelt.
+ */
+async function decideQuote(user: { id: string; email: string }, body: Record<string, unknown>) {
+  const quoteId = String(body.quoteId || '').trim();
+  const kind = String(body.kind || '').trim().toLowerCase();
+  const note = String(body.note || '').trim();
+  if (!isUuid(quoteId)) throw new PortalError('Ongeldige offerte.', 400);
+  if (kind !== 'accept' && kind !== 'reject') throw new PortalError('Ongeldige beslissing.', 400);
+  if (note.length > 2000) throw new PortalError('De opmerking mag maximaal 2000 tekens zijn.', 400);
+
+  const clients = await resolveAccountsForEmail(user.email);
+  if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
+
+  const { data: quote, error } = await supabaseAdmin
+    .from('quotes')
+    .select('id,organization_id,client_id,project_id,status,sent_at')
+    .eq('id', quoteId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!quote || !quote.sent_at) throw new PortalError('Offerte niet gevonden.', 404);
+  await assertEntityBelongsToClients(quote, clients);
+  if (quote.status !== 'sent') throw new PortalError('Deze offerte is al beoordeeld en kan niet meer worden gewijzigd.', 409);
+
+  const client = clients.find((row) => row.id === quote.client_id) || clients[0];
+  const name = client?.contact_name || client?.name || user.email;
+
+  const { data, error: rpcError } = await supabaseAdmin.rpc('decide_quote_portal', {
+    p_quote_id: quote.id,
+    p_organization_id: quote.organization_id,
+    p_kind: kind,
+    p_name: name,
+    p_email: user.email,
+    p_note: note || null,
+  });
+  if (rpcError) {
+    if (/kan niet meer|niet gevonden|verlopen|beslist/i.test(rpcError.message)) throw new PortalError(rpcError.message, 409);
+    throw rpcError;
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  return { quote: sanitizeQuote(row as Record<string, unknown>) };
+}
+
+/**
+ * Betaalinfo voor één factuur: bedrag (server-side berekend), of hij betaalbaar is,
+ * of online betalen via Mollie beschikbaar is, en de overschrijvingsgegevens (IBAN).
+ * Voedt de betaalknop/-fallback in het portaal.
+ */
+async function getInvoicePaymentInfo(user: { id: string; email: string }, body: Record<string, unknown>) {
+  const invoiceId = String(body.invoiceId || '').trim();
+  if (!isUuid(invoiceId)) throw new PortalError('Ongeldige factuur.', 400);
+
+  const clients = await resolveAccountsForEmail(user.email);
+  if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
+
+  const { data: invoice, error } = await supabaseAdmin
+    .from('invoices')
+    .select('id,organization_id,client_id,project_id,number,status,lines,paid_at')
+    .eq('id', invoiceId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!invoice || invoice.status === 'draft') throw new PortalError('Factuur niet gevonden.', 404);
+  await assertEntityBelongsToClients(invoice, clients);
+
+  const amountCents = calculateTotalCents(Array.isArray(invoice.lines) ? invoice.lines : []);
+  const isPaid = invoice.status === 'paid' || Boolean(invoice.paid_at);
+  const payable = !isPaid && !['cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status);
+
+  const [company, mollieAvailable] = await Promise.all([
+    optionalCompany(invoice.organization_id),
+    orgHasInvoiceMollie(supabaseAdmin, invoice.organization_id),
+  ]);
+
+  return {
+    payment: {
+      invoiceId: invoice.id,
+      number: invoice.number,
+      status: invoice.status,
+      isPaid,
+      payable,
+      amountCents,
+      currency: 'EUR',
+      mollieAvailable: payable ? mollieAvailable : false,
+      iban: (company?.iban as string | null) ?? null,
+      companyName: (company?.trade_name as string | null) || (company?.company_name as string | null) || null,
+    },
+  };
+}
+
+/**
+ * Maakt (of hergebruikt) een Mollie-betaallink voor een factuur die de klant
+ * geverifieerd bezit en opent die daarna in het portaal. Eigendom wordt hier
+ * opnieuw afgeleid uit het geverifieerde e-mailadres; daarna doet de gedeelde
+ * checkout-helper de rest via dezelfde service-role betaal-RPC's.
+ */
+async function createInvoicePayment(user: { id: string; email: string }, body: Record<string, unknown>, req: Request) {
+  const invoiceId = String(body.invoiceId || '').trim();
+  if (!isUuid(invoiceId)) throw new PortalError('Ongeldige factuur.', 400);
+
+  const clients = await resolveAccountsForEmail(user.email);
+  if (clients.length === 0) throw new PortalError('Geen klantdossier gevonden voor dit account.', 404);
+
+  const { data: invoice, error } = await supabaseAdmin
+    .from('invoices')
+    .select('id,organization_id,client_id,project_id,status')
+    .eq('id', invoiceId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!invoice || invoice.status === 'draft') throw new PortalError('Factuur niet gevonden.', 404);
+  await assertEntityBelongsToClients(invoice, clients);
+
+  const result = await createPortalInvoiceCheckout(supabaseAdmin, {
+    organizationId: invoice.organization_id,
+    invoiceId: invoice.id,
+    actorUserId: user.id,
+    redirectUrl: `${resolvePortalBaseUrl(req)}/portal`,
+  });
+  if (!result.ok) throw new PortalError(result.error, result.status as number);
+  return { checkoutUrl: result.checkoutUrl, mock: result.mock, reused: result.reused };
+}
+
+/**
+ * Basis-URL waar Mollie de klant na betalen naar terugstuurt. Bij voorkeur de
+ * geconfigureerde publieke app-URL; anders de (al gevalideerde) request-origin.
+ */
+function resolvePortalBaseUrl(req: Request): string {
+  const envBase = (Deno.env.get('APP_PUBLIC_URL') || Deno.env.get('INVOICE_PUBLIC_BASE_URL') || '').replace(/\/$/, '');
+  if (envBase) return envBase;
+  return (req.headers.get('origin') || '').replace(/\/$/, '');
 }
 
 async function getInvoicePdf(user: { id: string; email: string }, body: Record<string, unknown>) {
@@ -519,6 +661,9 @@ function sanitizeQuote(row: Record<string, unknown>) {
     sent_at: row.sent_at ?? null,
     accepted_at: row.accepted_at ?? null,
     project_id: row.project_id ?? null,
+    client_decision_at: row.client_decision_at ?? null,
+    client_decision_by_name: row.client_decision_by_name ?? null,
+    client_decision_note: row.client_decision_note ?? null,
   };
 }
 

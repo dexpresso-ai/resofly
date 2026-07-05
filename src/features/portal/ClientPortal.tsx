@@ -5,15 +5,19 @@ import { supabasePortalAuth } from '../../lib/supabasePortal';
 import {
   addPortalTicketNote,
   createPortalTicket,
+  createPortalInvoicePayment,
+  decidePortalQuote,
   downloadPortalContractPdf,
   downloadPortalInvoicePdf,
   fetchPortalData,
+  fetchPortalInvoicePaymentInfo,
   fetchPortalProjectDetail,
   fetchPortalTicketThread,
   requestPortalLogin,
   type PortalAccount,
   type PortalContract,
   type PortalInvoice,
+  type PortalInvoicePaymentInfo,
   type PortalProject,
   type PortalQuote,
   type PortalTask,
@@ -22,7 +26,7 @@ import {
   type PortalTicketThread,
 } from '../../lib/portalApi';
 import { dateNL, euro, lineGross, priorityLabel, total } from '../../lib/format';
-import type { Priority } from '../../types';
+import type { FinanceLine, Priority } from '../../types';
 
 type PortalTab = 'overview' | 'invoices' | 'quotes' | 'contracts' | 'tickets' | 'projects';
 
@@ -176,6 +180,16 @@ function PortalEmpty({ email }: { email: string }) {
 
 function PortalAccountView({ account, onTicketCreated }: { account: PortalAccount; onTicketCreated: () => void }) {
   const [tab, setTab] = useState<PortalTab>('overview');
+  const [openDoc, setOpenDoc] = useState<{ type: 'quote' | 'invoice'; id: string } | null>(null);
+
+  if (openDoc?.type === 'quote') {
+    const quote = account.quotes.find(q => q.id === openDoc.id);
+    if (quote) return <div className="portal-account"><PortalQuoteDetail quote={quote} onBack={() => setOpenDoc(null)} onChanged={onTicketCreated} /></div>;
+  }
+  if (openDoc?.type === 'invoice') {
+    const invoice = account.invoices.find(i => i.id === openDoc.id);
+    if (invoice) return <div className="portal-account"><PortalInvoiceDetail invoice={invoice} account={account} onBack={() => setOpenDoc(null)} /></div>;
+  }
 
   const openInvoices = account.invoices.filter(isInvoiceOpen);
   const overdueInvoices = account.invoices.filter(isInvoiceOverdue);
@@ -213,13 +227,13 @@ function PortalAccountView({ account, onTicketCreated }: { account: PortalAccoun
       <article className="portal-card">
         <div className="portal-card-head"><h2>Recente facturen</h2>{account.invoices.length > 0 && <button type="button" className="portal-more" onClick={() => setTab('invoices')}>Alle facturen →</button>}</div>
         {account.invoices.length === 0 && <p className="portal-muted">Nog geen facturen.</p>}
-        <div className="portal-rows">{account.invoices.slice(0, 4).map(inv => <InvoiceRow key={inv.id} invoice={inv} />)}</div>
+        <div className="portal-rows">{account.invoices.slice(0, 4).map(inv => <InvoiceRow key={inv.id} invoice={inv} onOpen={() => setOpenDoc({ type: 'invoice', id: inv.id })} />)}</div>
       </article>
 
       <article className="portal-card">
         <div className="portal-card-head"><h2>Recente offertes</h2>{account.quotes.length > 0 && <button type="button" className="portal-more" onClick={() => setTab('quotes')}>Alle offertes →</button>}</div>
         {account.quotes.length === 0 && <p className="portal-muted">Nog geen offertes.</p>}
-        <div className="portal-rows">{account.quotes.slice(0, 4).map(q => <QuoteRow key={q.id} quote={q} />)}</div>
+        <div className="portal-rows">{account.quotes.slice(0, 4).map(q => <QuoteRow key={q.id} quote={q} onOpen={() => setOpenDoc({ type: 'quote', id: q.id })} />)}</div>
       </article>
 
       {account.company && <PortalContactCard account={account} />}
@@ -228,13 +242,13 @@ function PortalAccountView({ account, onTicketCreated }: { account: PortalAccoun
     {tab === 'invoices' && <article className="portal-card">
       <div className="portal-card-head"><h2>Facturen</h2><span>{account.invoices.length}</span></div>
       {account.invoices.length === 0 && <p className="portal-muted">Er zijn nog geen facturen voor je.</p>}
-      <div className="portal-rows">{account.invoices.map(inv => <InvoiceRow key={inv.id} invoice={inv} downloadable />)}</div>
+      <div className="portal-rows">{account.invoices.map(inv => <InvoiceRow key={inv.id} invoice={inv} onOpen={() => setOpenDoc({ type: 'invoice', id: inv.id })} />)}</div>
     </article>}
 
     {tab === 'quotes' && <article className="portal-card">
       <div className="portal-card-head"><h2>Offertes</h2><span>{account.quotes.length}</span></div>
       {account.quotes.length === 0 && <p className="portal-muted">Er zijn nog geen offertes voor je.</p>}
-      <div className="portal-rows">{account.quotes.map(q => <QuoteRow key={q.id} quote={q} />)}</div>
+      <div className="portal-rows">{account.quotes.map(q => <QuoteRow key={q.id} quote={q} onOpen={() => setOpenDoc({ type: 'quote', id: q.id })} />)}</div>
     </article>}
 
     {tab === 'contracts' && <ContractsTab account={account} />}
@@ -253,48 +267,191 @@ function PortalKpi({ label, value, sub, tone }: { label: string; value: string; 
   </div>;
 }
 
-function InvoiceRow({ invoice, downloadable }: { invoice: PortalInvoice; downloadable?: boolean }) {
-  const [downloading, setDownloading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+function InvoiceRow({ invoice, onOpen }: { invoice: PortalInvoice; onOpen: () => void }) {
   const overdue = isInvoiceOverdue(invoice);
   const amount = total(invoice.lines).total;
 
-  async function download() {
-    setDownloading(true); setError(null);
-    try {
-      const pdf = await downloadPortalInvoicePdf(invoice.id);
-      downloadBase64File(pdf.base64, pdf.fileName, pdf.mimeType);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Downloaden mislukt');
-    } finally {
-      setDownloading(false);
-    }
-  }
-
-  return <div className={`portal-row${overdue ? ' is-overdue' : ''}`}>
+  return <button type="button" className={`portal-row portal-row-clickable${overdue ? ' is-overdue' : ''}`} onClick={onOpen}>
     <div className="portal-row-main">
       <span className="portal-row-number">{invoice.number}</span>
       <span className="portal-muted">{dateNL(invoice.date)} · Vervalt {dateNL(invoice.due_date)}</span>
     </div>
     <span className="portal-row-amount">{euro(amount)}</span>
     <span className={`portal-status ${overdue ? 'overdue' : invoice.status}`}>{overdue ? 'Vervallen' : (invoiceStatusLabels[invoice.status] ?? invoice.status)}</span>
-    {downloadable && <div className="portal-row-actions">
-      <Button onClick={download} disabled={downloading}>{downloading ? 'PDF…' : 'PDF'}</Button>
-      {error && <span className="portal-row-error">{error}</span>}
-    </div>}
-  </div>;
+    <span className="portal-row-chevron" aria-hidden="true">›</span>
+  </button>;
 }
 
-function QuoteRow({ quote }: { quote: PortalQuote }) {
+function QuoteRow({ quote, onOpen }: { quote: PortalQuote; onOpen: () => void }) {
   const amount = total(quote.lines).total;
-  return <div className="portal-row">
+  return <button type="button" className="portal-row portal-row-clickable" onClick={onOpen}>
     <div className="portal-row-main">
       <span className="portal-row-number">{quote.number}</span>
       <span className="portal-muted">{dateNL(quote.date)} · Geldig tot {dateNL(quote.valid_until)}</span>
     </div>
     <span className="portal-row-amount">{euro(amount)}</span>
     <span className={`portal-status ${quote.status}`}>{quoteStatusLabels[quote.status] ?? quote.status}</span>
-  </div>;
+    <span className="portal-row-chevron" aria-hidden="true">›</span>
+  </button>;
+}
+
+// ── Offerte- & factuurdetail met acties (goedkeuren / betalen) ────────
+
+function PortalDocLines({ lines }: { lines: FinanceLine[] }) {
+  const totals = total(lines);
+  return <>
+    <div className="portal-doc-lines">
+      {lines.map(line => <div className="portal-doc-line" key={line.id || line.description}>
+        <div><strong>{line.description}</strong><span>{line.quantity} × {euro(line.unit_price)} · btw {line.vat ?? 0}%</span></div>
+        <strong>{euro(lineGross(line))}</strong>
+      </div>)}
+    </div>
+    <div className="portal-doc-total"><span>Totaal excl. btw</span><strong>{euro(totals.subtotal)}</strong></div>
+    <div className="portal-doc-total"><span>Btw</span><strong>{euro(totals.vat)}</strong></div>
+    <div className="portal-doc-total grand"><span>Totaal incl. btw</span><strong>{euro(totals.total)}</strong></div>
+  </>;
+}
+
+function PortalQuoteDetail({ quote: initialQuote, onBack, onChanged }: { quote: PortalQuote; onBack: () => void; onChanged: () => void }) {
+  const [quote, setQuote] = useState(initialQuote);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState<null | 'accept' | 'reject'>(null);
+  const [error, setError] = useState<string | null>(null);
+  const decided = quote.status === 'accepted' || quote.status === 'rejected';
+
+  async function decide(kind: 'accept' | 'reject') {
+    setBusy(kind); setError(null);
+    try {
+      const updated = await decidePortalQuote(quote.id, kind, note.trim() || undefined);
+      setQuote(updated);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Beslissing verwerken mislukt');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return <article className="portal-card portal-detail">
+    <div className="portal-detail-head"><button type="button" className="portal-back" onClick={onBack}>← Terug</button></div>
+    <div className="portal-detail-title">
+      <h2>Offerte {quote.number}</h2>
+      <span className={`portal-status ${quote.status}`}>{quoteStatusLabels[quote.status] ?? quote.status}</span>
+    </div>
+    <p className="portal-muted">{dateNL(quote.date)} · Geldig tot {dateNL(quote.valid_until)}</p>
+    {quote.notes && <p className="portal-detail-desc">{quote.notes}</p>}
+
+    <PortalDocLines lines={quote.lines} />
+
+    <div className="portal-doc-action">
+      {decided ? (
+        <div className={`portal-decision-done ${quote.status}`}>
+          <strong>{quote.status === 'accepted' ? 'Je hebt deze offerte goedgekeurd' : 'Je hebt deze offerte geweigerd'}</strong>
+          {quote.client_decision_at && <span className="portal-muted"> · {dateNL(quote.client_decision_at)}</span>}
+          {quote.client_decision_note && <p>{quote.client_decision_note}</p>}
+        </div>
+      ) : quote.status === 'sent' ? (
+        <>
+          <label className="portal-field"><span>Opmerking (optioneel)</span>
+            <Textarea value={note} onChange={e => setNote(e.target.value)} rows={2} maxLength={2000} placeholder="Eventuele opmerking bij je beslissing…" disabled={busy !== null} />
+          </label>
+          {error && <p className="error">{error}</p>}
+          <div className="portal-doc-actions">
+            <Button variant="danger" onClick={() => decide('reject')} disabled={busy !== null}>{busy === 'reject' ? 'Bezig…' : 'Weigeren'}</Button>
+            <Button variant="primary" onClick={() => decide('accept')} disabled={busy !== null}>{busy === 'accept' ? 'Bezig…' : 'Akkoord geven'}</Button>
+          </div>
+        </>
+      ) : (
+        <p className="portal-muted">Deze offerte kan niet (meer) in het portaal worden beoordeeld.</p>
+      )}
+    </div>
+  </article>;
+}
+
+function PortalInvoiceDetail({ invoice, account, onBack }: { invoice: PortalInvoice; account: PortalAccount; onBack: () => void }) {
+  const [info, setInfo] = useState<PortalInvoicePaymentInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [paying, setPaying] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true); setError(null);
+    fetchPortalInvoicePaymentInfo(invoice.id)
+      .then(r => { if (active) setInfo(r); })
+      .catch(e => { if (active) setError(e instanceof Error ? e.message : 'Betaalinfo laden mislukt'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [invoice.id]);
+
+  async function pay() {
+    setPaying(true); setError(null);
+    try {
+      const { checkoutUrl } = await createPortalInvoicePayment(invoice.id);
+      window.location.href = checkoutUrl;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Betaling starten mislukt');
+      setPaying(false);
+    }
+  }
+
+  async function downloadPdf() {
+    setDownloading(true); setError(null);
+    try {
+      const pdf = await downloadPortalInvoicePdf(invoice.id);
+      downloadBase64File(pdf.base64, pdf.fileName, pdf.mimeType);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'PDF downloaden mislukt');
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  const overdue = isInvoiceOverdue(invoice);
+  const amountEuro = info ? info.amountCents / 100 : total(invoice.lines).total;
+  const iban = info?.iban ?? account.company?.iban ?? null;
+  const companyName = info?.companyName || account.company?.trade_name || account.company?.company_name || '';
+
+  return <article className="portal-card portal-detail">
+    <div className="portal-detail-head"><button type="button" className="portal-back" onClick={onBack}>← Terug</button></div>
+    <div className="portal-detail-title">
+      <h2>Factuur {invoice.number}</h2>
+      <span className={`portal-status ${overdue ? 'overdue' : invoice.status}`}>{overdue ? 'Vervallen' : (invoiceStatusLabels[invoice.status] ?? invoice.status)}</span>
+    </div>
+    <p className="portal-muted">{dateNL(invoice.date)} · Vervalt {dateNL(invoice.due_date)}</p>
+    {invoice.notes && <p className="portal-detail-desc">{invoice.notes}</p>}
+
+    <PortalDocLines lines={invoice.lines} />
+
+    {error && <p className="error">{error}</p>}
+
+    <div className="portal-pay">
+      {loading && <div className="portal-boot"><span className="boot-spinner" aria-hidden="true" /><span>Betaalinfo laden…</span></div>}
+      {info?.isPaid && <div className="portal-decision-done accepted"><strong>Deze factuur is betaald</strong></div>}
+      {info && !info.isPaid && info.payable && <>
+        {info.mollieAvailable && <div className="portal-pay-online">
+          <Button variant="primary" onClick={pay} disabled={paying}>{paying ? 'Bezig…' : `Betaal nu ${euro(amountEuro)}`}</Button>
+          <span className="portal-muted">Veilig online betalen via iDEAL, creditcard e.a.</span>
+        </div>}
+        {iban && <div className="portal-bank">
+          <strong>{info.mollieAvailable ? 'Of via overschrijving' : 'Betalen via overschrijving'}</strong>
+          <div className="portal-bank-facts">
+            <span>Bedrag</span><strong>{euro(amountEuro)}</strong>
+            <span>IBAN</span><strong>{iban}</strong>
+            <span>Kenmerk</span><strong>{invoice.number}</strong>
+            {companyName && <><span>T.n.v.</span><strong>{companyName}</strong></>}
+          </div>
+        </div>}
+        {!info.mollieAvailable && !iban && <p className="portal-muted">Neem contact op met {companyName || 'je leverancier'} voor de betaalgegevens.</p>}
+      </>}
+      {info && !info.isPaid && !info.payable && <p className="portal-muted">Deze factuur staat niet open voor betaling.</p>}
+    </div>
+
+    <div className="portal-doc-actions portal-doc-actions-pdf">
+      <Button onClick={downloadPdf} disabled={downloading}>{downloading ? 'PDF…' : 'PDF downloaden'}</Button>
+    </div>
+  </article>;
 }
 
 function ContractsTab({ account }: { account: PortalAccount }) {
