@@ -75,6 +75,21 @@ export async function listBookingLinks(organizationId: UUID): Promise<MeetingBoo
   return data.links;
 }
 
+export interface BookingSlotInRange {
+  id: UUID;
+  booking_link_id: UUID;
+  link_title: string;
+  starts_at: string;
+  ends_at: string;
+  status: 'open' | 'pending' | 'booked' | 'cancelled';
+}
+
+/** Alle slots van actieve boekingslinks binnen een datumbereik (voor de agenda-laag). */
+export async function listBookingSlotsInRange(organizationId: UUID, start: string, end: string): Promise<BookingSlotInRange[]> {
+  const data = await invoke<{ slots: BookingSlotInRange[] }>(organizationId, { action: 'listSlotsInRange', start, end });
+  return data.slots;
+}
+
 export async function getBookingLink(organizationId: UUID, linkId: UUID): Promise<BookingLinkDetail> {
   return await invoke<BookingLinkDetail>(organizationId, { action: 'getLink', linkId });
 }

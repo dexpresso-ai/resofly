@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { AppData, CalendarSource, MeetingBooking, MeetingBookingLinkListItem, MeetingBookingSlot, UUID } from '../types';
-import { Button, Input, Textarea, Select } from '../components/Ui';
-import { loadCalendarIntegrations } from '../lib/calendar-api';
+import type { AppData, CalendarExternalEvent, CalendarSource, MeetingBooking, MeetingBookingLinkListItem, MeetingBookingSlot, UUID } from '../types';
+import { Button, Input, Textarea, Select, normalizeColor } from '../components/Ui';
+import { listExternalCalendarEvents, loadCalendarIntegrations } from '../lib/calendar-api';
+import { addDays, startOfWeek } from '../lib/dates';
+import { TimeBlockGrid, slotSelectionToIso, type BookingOverlaySlot } from './CalendarPage';
 import {
   addBookingSlots,
   cancelBooking,
@@ -159,6 +161,7 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
           <LinkDetail
             key={detail.link.id}
             detail={detail}
+            organizationId={organizationId}
             sources={writableSources}
             clients={data.clients.map(c => ({ id: c.id, label: c.name }))}
             clientEmail={detail.link.client_id ? (clientsById.get(detail.link.client_id)?.email ?? null) : null}
@@ -296,8 +299,9 @@ function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }:
   );
 }
 
-function LinkDetail({ detail, sources, clients, clientEmail, token, busy, canWrite, onSavedPatch, onRegenerate, onSendMail, onAddSlots, onRemoveSlot, onCancelBooking }: {
+function LinkDetail({ detail, organizationId, sources, clients, clientEmail, token, busy, canWrite, onSavedPatch, onRegenerate, onSendMail, onAddSlots, onRemoveSlot, onCancelBooking }: {
   detail: BookingLinkDetail;
+  organizationId: UUID;
   sources: CalendarSource[];
   clients: Array<{ id: UUID; label: string }>;
   clientEmail: string | null;
@@ -319,6 +323,29 @@ function LinkDetail({ detail, sources, clients, clientEmail, token, busy, canWri
   const slots = detail.slots as MeetingBookingSlot[];
   const bookings = detail.bookings as MeetingBooking[];
   const openCount = slots.filter(s => s.status === 'open').length;
+
+  // ── Visueel week-rooster (hergebruik TimeBlockGrid) ──────────────────────────
+  const [weekAnchor, setWeekAnchor] = useState<Date>(() => startOfWeek(new Date()));
+  const [weekEvents, setWeekEvents] = useState<CalendarExternalEvent[]>([]);
+  const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekAnchor, i)), [weekAnchor]);
+  const sourceColors = useMemo(() => new Map(sources.map(s => [s.id, normalizeColor(s.color)])), [sources]);
+  const gridOverlay = useMemo<BookingOverlaySlot[]>(
+    () => slots.filter(s => s.status !== 'cancelled').map(s => ({ id: s.id, starts_at: s.starts_at, ends_at: s.ends_at, status: s.status, removable: s.status === 'open' })),
+    [slots],
+  );
+  // Echte afspraken van de bron als context tonen (zodat je niet dubbel plant).
+  useEffect(() => {
+    if (!link.source_id) { setWeekEvents([]); return; }
+    let alive = true;
+    const startIso = weekDays[0].toISOString();
+    const endIso = addDays(weekDays[6], 1).toISOString();
+    listExternalCalendarEvents(organizationId, startIso, endIso)
+      .then(evs => { if (alive) setWeekEvents(evs.filter(e => e.source_id === link.source_id)); })
+      .catch(() => { if (alive) setWeekEvents([]); });
+    return () => { alive = false; };
+  }, [organizationId, link.source_id, weekDays]);
+
+  const weekLabel = `${new Intl.DateTimeFormat('nl-NL', { day: 'numeric', month: 'short' }).format(weekDays[0])} – ${new Intl.DateTimeFormat('nl-NL', { day: 'numeric', month: 'short' }).format(weekDays[6])}`;
 
   const expired = link.public_token_expires_at ? new Date(link.public_token_expires_at).getTime() < Date.now() : true;
 
@@ -403,7 +430,42 @@ function LinkDetail({ detail, sources, clients, clientEmail, token, busy, canWri
         )}
       </div>
 
-      {/* Beschikbare blokken */}
+      {/* Visueel week-rooster: sleep om blokken te maken */}
+      {canWrite && link.source_id && (
+        <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <strong>Blokken tekenen</strong>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Button onClick={() => setWeekAnchor(addDays(weekAnchor, -7))} disabled={busy}>← Vorige</Button>
+              <span className="muted" style={{ fontSize: 13 }}>{weekLabel}</span>
+              <Button onClick={() => setWeekAnchor(addDays(weekAnchor, 7))} disabled={busy}>Volgende →</Button>
+            </div>
+          </div>
+          <p className="muted" style={{ margin: 0, fontSize: 13 }}>Sleep over het rooster om een blok toe te voegen · klik een groen blok om het te verwijderen (🔒 = al geboekt). Je eigen afspraken staan als context in beeld.</p>
+          {/* .calendar-agenda-page-scope zodat de gedeelde .tb-scroll-hoogte netjes binnen dit vak scrollt. */}
+          <div className="calendar-agenda-page" style={{ height: 460, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <TimeBlockGrid
+              days={weekDays}
+              events={weekEvents}
+              tasks={[]}
+              sourceColors={sourceColors}
+              trackedMinutesFor={() => null}
+              canWrite={canWrite}
+              writeableSources={sources}
+              onSelectSlot={(day, s, e) => { const iso = slotSelectionToIso(day, s, e); onAddSlots([{ startsAt: iso.startsAt, endsAt: iso.endsAt }]); }}
+              onEditTask={() => {}}
+              onOpenEvent={() => {}}
+              onMoveEvent={() => {}}
+              bookingMode
+              bookingSlots={gridOverlay}
+              onRemoveBookingSlot={(id) => onRemoveSlot(id)}
+              readOnlyEvents
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Beschikbare blokken (lijst + handmatige invoer als alternatief) */}
       <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <strong>Beschikbare blokken ({openCount} open)</strong>
         {canWrite && (
@@ -413,7 +475,7 @@ function LinkDetail({ detail, sources, clients, clientEmail, token, busy, canWri
             <Button variant="primary" onClick={addSlot} disabled={busy || !start || !end}>Blok toevoegen</Button>
           </div>
         )}
-        {slots.length === 0 && <p className="muted">Nog geen blokken. Voeg tijden toe waaruit de klant kan kiezen.</p>}
+        {slots.length === 0 && <p className="muted">Nog geen blokken. Teken hierboven op het rooster of voeg handmatig tijden toe waaruit de klant kan kiezen.</p>}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {slots.map(s => (
             <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,.06)' }}>

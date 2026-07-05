@@ -73,6 +73,7 @@ Deno.serve(async (req) => {
 
     switch (action) {
       case 'listLinks': return json({ ok: true, links: await listLinks(organizationId) });
+      case 'listSlotsInRange': return json({ ok: true, slots: await listSlotsInRange(organizationId, String(body.start || ''), String(body.end || '')) });
       case 'getLink': return json({ ok: true, ...(await getLink(organizationId, String(body.linkId || ''))) });
       case 'createLink': return json({ ok: true, ...(await createLink(organizationId, user.id, body)) });
       case 'updateLink': return json({ ok: true, link: await updateLink(organizationId, String(body.linkId || ''), body.patch || {}) });
@@ -167,6 +168,28 @@ async function listLinks(organizationId: string) {
       booking_count: bookingCount.get(r.id) || 0,
       needs_reconnect: await connectionNeedsReconnect(source),
     };
+  }));
+}
+
+/** Alle slots van ACTIEVE links in [start, end) — voor de persistente opties-laag in de agenda. */
+async function listSlotsInRange(organizationId: string, start: string, end: string) {
+  const startIso = assertIso(start, 'start');
+  const endIso = assertIso(end, 'end');
+  const { data: links } = await supabaseAdmin.from('meeting_booking_links')
+    .select('id,title').eq('organization_id', organizationId).eq('status', 'active');
+  const rows = (links ?? []) as Array<{ id: string; title: string }>;
+  if (rows.length === 0) return [];
+  const titleById = new Map(rows.map(l => [l.id, l.title]));
+  const { data: slots } = await supabaseAdmin.from('meeting_booking_slots')
+    .select('id,booking_link_id,starts_at,ends_at,status')
+    .eq('organization_id', organizationId)
+    .in('booking_link_id', rows.map(l => l.id))
+    .neq('status', 'cancelled')
+    .lt('starts_at', endIso).gte('ends_at', startIso)
+    .order('starts_at', { ascending: true });
+  return (slots ?? []).map((s: Record<string, unknown>) => ({
+    id: s.id, booking_link_id: s.booking_link_id, link_title: titleById.get(String(s.booking_link_id)) ?? '',
+    starts_at: s.starts_at, ends_at: s.ends_at, status: s.status,
   }));
 }
 

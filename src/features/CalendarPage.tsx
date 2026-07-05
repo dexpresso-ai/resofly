@@ -28,10 +28,10 @@ import {
   type CalendarEventRef,
   type CalendarIntegrationsPayload,
 } from '../lib/calendar-api';
-import { addBookingSlots, createBookingLink, getBookingLink, listBookingLinks, removeBookingSlot, sendBookingLinkMail } from '../lib/meetingBookingApi';
+import { addBookingSlots, createBookingLink, listBookingLinks, listBookingSlotsInRange, sendBookingLinkMail } from '../lib/meetingBookingApi';
 import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabase';
-import type { AttendeeStatus, CalendarAppPassword, CalendarEventAttendee, EventRecurrence, MeetingBookingLinkListItem, MeetingBookingSlot, RecurrenceFrequency } from '../types';
+import type { AttendeeStatus, CalendarAppPassword, CalendarEventAttendee, EventRecurrence, MeetingBookingLinkListItem, RecurrenceFrequency } from '../types';
 import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, Client, Note, NoteCalendarLink, Project, Supplier, Task, UUID } from '../types';
 import { getNoteTypeLabel } from './Notes';
 import { TimeEntryModal } from './TimeTracking';
@@ -347,9 +347,18 @@ function ClientProjectPicker({ clients, projects, clientId, projectId, onChange,
   );
 }
 
-function slotToTime(slot: number): { hour: number; minutes: number } {
+export function slotToTime(slot: number): { hour: number; minutes: number } {
   const totalMin = HOUR_START * 60 + slot * SLOT_MINUTES;
   return { hour: Math.floor(totalMin / 60), minutes: totalMin % 60 };
+}
+
+/** Grid-selectie (dag + slot-indices) → ISO-tijdstippen. Voor hergebruik van TimeBlockGrid buiten CalendarPage. */
+export function slotSelectionToIso(day: Date, startSlot: number, endSlot: number): { startsAt: string; endsAt: string } {
+  const st = slotToTime(startSlot);
+  const et = slotToTime(endSlot + 1);
+  const sd = new Date(day); sd.setHours(st.hour, st.minutes, 0, 0);
+  const ed = new Date(day); ed.setHours(et.hour, et.minutes, 0, 0);
+  return { startsAt: sd.toISOString(), endsAt: ed.toISOString() };
 }
 
 function dateToDayFraction(day: Date, d: Date): number {
@@ -478,10 +487,11 @@ function eventIdentityKey(ev: CalendarExternalEvent): string {
   return `${ev.provider}|${ev.source_id}|${ev.provider_event_id}|${ev.starts_at}`;
 }
 
-/** Lichte vorm voor de beschikbaarheid-overlay; concept-blokken (nog niet opgeslagen) hebben hun starttijd als id. */
-type BookingOverlaySlot = { id: string; starts_at: string; ends_at: string; status: string };
+/** Lichte vorm voor de beschikbaarheid-overlay; concept-blokken (nog niet opgeslagen) hebben hun starttijd als id.
+ *  `removable` = een verwijderbaar blok (concept/eigen link); anders alleen-lezen (aangeboden optie). */
+export type BookingOverlaySlot = { id: string; starts_at: string; ends_at: string; status: string; removable?: boolean };
 
-function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent, bookingMode = false, bookingSlots = [], onRemoveBookingSlot }: {
+export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false }: {
   days: Date[];
   events: CalendarExternalEvent[];
   tasks: Task[];
@@ -497,6 +507,8 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, c
   bookingMode?: boolean;
   bookingSlots?: BookingOverlaySlot[];
   onRemoveBookingSlot?: (slotId: string) => void;
+  /** Toon agenda-items alleen als context (niet versleepbaar) — voor hergebruik in de Boekingslinks-pagina. */
+  readOnlyEvents?: boolean;
 }) {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -805,7 +817,7 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, c
                     const densityClass = visibleDuration < 30 ? ' tb-ev-tight' : visibleDuration < 60 ? ' tb-ev-compact' : ' tb-ev-roomy';
                     const eventMeta = [providerLabel(ev.provider), ev.source_name, ev.location].filter(Boolean).join(' · ');
                     const trackedMin = trackedMinutesFor(ev);
-                    const draggable = canDragEvent(ev) && !segment.startsBeforeDay && !segment.endsAfterDay;
+                    const draggable = !readOnlyEvents && canDragEvent(ev) && !segment.startsBeforeDay && !segment.endsAfterDay;
                     const isGhosted = Boolean(interaction) && eventIdentityKey(interaction!.event) === eventIdentityKey(ev);
                     return (
                       <button type="button" className={`tb-ev${densityClass}${ev.visibility === 'private' ? ' tb-ev-priv' : ''}${trackedMin != null ? ' tb-ev-tracked' : ''}${draggable ? ' tb-ev-draggable' : ''}${isGhosted ? ' tb-ev-ghosted' : ''}`} key={`${ev.provider}-${ev.provider_event_id}-${di}`}
@@ -830,24 +842,27 @@ function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, c
                     );
                   })}
 
-                  {bookingMode && bookingSlots.filter(s => s.status !== 'cancelled' && isSameDay(new Date(s.starts_at), day)).map(s => {
+                  {bookingSlots.filter(s => s.status !== 'cancelled' && isSameDay(new Date(s.starts_at), day)).map(s => {
                     const top = dateToVisibleDayFraction(day, new Date(s.starts_at)) * 100;
                     const bottom = dateToVisibleDayFraction(day, new Date(s.ends_at)) * 100;
                     const height = Math.max(bottom - top, 1.6);
                     const taken = s.status === 'booked' || s.status === 'pending';
+                    const removable = !taken && s.removable === true;
                     return (
                       <button type="button" key={`bk-${s.id}`}
                         className="tb-booking-slot"
-                        onClick={() => { if (!taken && onRemoveBookingSlot) onRemoveBookingSlot(s.id); }}
-                        title={taken ? 'Dit blok is geboekt' : 'Beschikbaar blok — klik om te verwijderen'}
+                        onClick={() => { if (removable && onRemoveBookingSlot) onRemoveBookingSlot(s.id); }}
+                        title={taken ? 'Dit blok is geboekt' : removable ? 'Concept-optie — klik om te verwijderen' : 'Aangeboden optie aan de klant'}
                         style={{
                           position: 'absolute', top: `${top}%`, height: `${height}%`, left: '2px', right: '2px', zIndex: 6,
-                          borderRadius: 6, border: '2px dashed', borderColor: taken ? '#5865f2' : '#3ba55d',
-                          background: taken ? 'rgba(88,101,242,.20)' : 'rgba(59,165,93,.16)',
-                          color: '#eafff0', fontWeight: 600, fontSize: 11, lineHeight: 1.2, cursor: taken ? 'default' : 'pointer',
+                          borderRadius: 6, border: `2px ${removable ? 'solid' : 'dashed'}`, borderColor: taken ? '#5865f2' : '#3ba55d',
+                          background: taken ? 'rgba(88,101,242,.20)' : removable ? 'rgba(59,165,93,.24)' : 'rgba(59,165,93,.12)',
+                          color: '#eafff0', fontWeight: 600, fontSize: 11, lineHeight: 1.2, cursor: removable ? 'pointer' : 'default',
+                          // Alleen-lezen opties mogen het slepen/aanmaken van gewone afspraken eronder niet blokkeren.
+                          pointerEvents: removable ? 'auto' : 'none',
                           display: 'flex', alignItems: 'flex-start', padding: '2px 5px', overflow: 'hidden',
                         }}>
-                        {taken ? '🔒 ' : '＋ '}{formatTime(s.starts_at)}–{formatTime(s.ends_at)}
+                        {taken ? '🔒 ' : removable ? '✕ ' : '○ '}{formatTime(s.starts_at)}–{formatTime(s.ends_at)}
                       </button>
                     );
                   })}
@@ -1785,8 +1800,8 @@ function BookingSendDialog({ sources, clients, draftCount, onCancel, onSubmit }:
           <label>Klant<Select value={clientId} onChange={e => setClientId(e.target.value)}><option value="">Geen klant</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></label>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <label>Max. boekingen totaal<Input type="number" min={1} value={maxTotal} onChange={e => setMaxTotal(e.target.value)} /></label>
-          <label>Max. per week<Input type="number" min={1} value={maxWeek} onChange={e => setMaxWeek(e.target.value)} /></label>
+          <label>Hoeveel opties mag de klant boeken?<Input type="number" min={1} value={maxTotal} onChange={e => setMaxTotal(e.target.value)} /><span className="muted" style={{ fontSize: 12 }}>1 = de klant kiest precies één moment.</span></label>
+          <label>Waarvan max. per week<Input type="number" min={1} value={maxWeek} onChange={e => setMaxWeek(e.target.value)} /></label>
         </div>
         <label>Intro-tekst op de boekingspagina (optioneel)<Textarea rows={2} value={introText} onChange={e => setIntroText(e.target.value)} /></label>
         <label>Begeleidende tekst bij de uitnodiging (optioneel)<Textarea rows={2} value={inviteMessage} onChange={e => setInviteMessage(e.target.value)} /></label>
@@ -1834,14 +1849,14 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   const [editingOriginal, setEditingOriginal] = useState<CalendarExternalEvent | null>(null);
   const [newCalendarName, setNewCalendarName] = useState('');
   // Boekingstool: "beschikbaarheid voor klant"-modus in de agenda. Je zet de modus
-  // aan en tekent blokken op het rooster (concept), en kiest PAS bij het doorsturen
-  // de klant/agenda. Je kunt ook een bestaande link als doel kiezen (blokken worden
-  // dan direct toegevoegd).
+  // aan, tekent opties (concept-blokken) op het rooster en kiest PAS bij "Doorsturen"
+  // de klant/agenda. De opties van al je actieve boekingslinks blijven als aparte
+  // laag zichtbaar in de agenda (persistent, ook ná versturen).
   const [bookingMode, setBookingMode] = useState(false);
-  const [bookingTarget, setBookingTarget] = useState<string>(''); // '' = nieuwe concept-link
   const [bookingLinks, setBookingLinks] = useState<MeetingBookingLinkListItem[]>([]);
-  const [bookingSlots, setBookingSlots] = useState<MeetingBookingSlot[]>([]); // blokken van een bestaand doel
-  const [draftSlots, setDraftSlots] = useState<{ startsAt: string; endsAt: string }[]>([]); // concept-blokken
+  const [showBookingOptions, setShowBookingOptions] = useState(true);
+  const [agendaOptions, setAgendaOptions] = useState<{ id: string; starts_at: string; ends_at: string; status: string }[]>([]);
+  const [draftSlots, setDraftSlots] = useState<{ startsAt: string; endsAt: string }[]>([]);
   const [showBookingSend, setShowBookingSend] = useState(false);
   const [bookingCreated, setBookingCreated] = useState<{ url: string; token: string; linkId: string } | null>(null);
 
@@ -1978,12 +1993,6 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     return { startsAt: toInputDateTime(s), endsAt: toInputDateTime(e) };
   }
 
-  const reloadBookingSlots = useCallback(async (linkId: string) => {
-    if (!linkId) { setBookingSlots([]); return; }
-    try { const d = await getBookingLink(organizationId, linkId); setBookingSlots(d.slots); }
-    catch { setBookingSlots([]); }
-  }, [organizationId]);
-
   useEffect(() => {
     if (mode !== 'agenda' || !canWrite) return;
     let alive = true;
@@ -1991,20 +2000,28 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     return () => { alive = false; };
   }, [organizationId, mode, canWrite]);
 
-  useEffect(() => { void reloadBookingSlots(bookingTarget); }, [bookingTarget, reloadBookingSlots]);
+  // Persistente boekingsopties-laag: alle slots van actieve links in het zichtbare bereik.
+  const reloadAgendaOptions = useCallback(async () => {
+    if (mode !== 'agenda' || !canWrite) { setAgendaOptions([]); return; }
+    try {
+      const slots = await listBookingSlotsInRange(organizationId, rangeStart, rangeEnd);
+      setAgendaOptions(slots.map(s => ({ id: s.id, starts_at: s.starts_at, ends_at: s.ends_at, status: s.status })));
+    } catch { /* laat de laag leeg bij een fout */ }
+  }, [organizationId, mode, canWrite, rangeStart, rangeEnd]);
 
-  // Overlay-blokken: concept-blokken (draft) of de blokken van het gekozen bestaande doel.
-  const bookingOverlay = useMemo(() => (
-    bookingTarget
-      ? bookingSlots.map(s => ({ id: s.id, starts_at: s.starts_at, ends_at: s.ends_at, status: s.status }))
-      : draftSlots.map(d => ({ id: d.startsAt, starts_at: d.startsAt, ends_at: d.endsAt, status: 'open' }))
-  ), [bookingTarget, bookingSlots, draftSlots]);
+  useEffect(() => { void reloadAgendaOptions(); }, [reloadAgendaOptions]);
 
-  const handleRemoveBookingSlot = useCallback(async (slotId: string) => {
-    if (!bookingTarget) { setDraftSlots(prev => prev.filter(d => d.startsAt !== slotId)); return; }
-    try { await removeBookingSlot(organizationId, bookingTarget, slotId); await reloadBookingSlots(bookingTarget); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Blok verwijderen mislukt.'); }
-  }, [organizationId, bookingTarget, reloadBookingSlots]);
+  // Overlay = aangeboden opties (alleen-lezen, alle actieve links) + concept-blokken (verwijderbaar) tijdens tekenen.
+  const bookingOverlay = useMemo<BookingOverlaySlot[]>(() => {
+    const options: BookingOverlaySlot[] = showBookingOptions ? agendaOptions.map(s => ({ id: s.id, starts_at: s.starts_at, ends_at: s.ends_at, status: s.status, removable: false })) : [];
+    const drafts: BookingOverlaySlot[] = bookingMode ? draftSlots.map(d => ({ id: d.startsAt, starts_at: d.startsAt, ends_at: d.endsAt, status: 'open', removable: true })) : [];
+    return [...options, ...drafts];
+  }, [showBookingOptions, agendaOptions, bookingMode, draftSlots]);
+
+  const handleRemoveBookingSlot = useCallback((slotId: string) => {
+    // In de agenda zijn alleen concept-blokken verwijderbaar (id = starttijd); aangeboden opties beheer je in de Boekingslinks-pagina.
+    setDraftSlots(prev => prev.filter(d => d.startsAt !== slotId));
+  }, []);
 
   const handleSlotSelect = useCallback((day: Date, startSlot: number, endSlot: number) => {
     const st = slotToTime(startSlot);
@@ -2012,25 +2029,16 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     const sd = new Date(day); sd.setHours(st.hour, st.minutes, 0, 0);
     const ed = new Date(day); ed.setHours(et.hour, et.minutes, 0, 0);
     if (bookingMode) {
-      const startsAt = sd.toISOString(); const endsAt = ed.toISOString();
-      if (bookingTarget) {
-        // Blokken direct toevoegen aan het gekozen bestaande doel.
-        setError(null);
-        addBookingSlots(organizationId, bookingTarget, [{ startsAt, endsAt }])
-          .then(res => { setMessage(res.warnings.length ? `Blok toegevoegd — let op: overlapt met ${res.warnings.length} bestaande afspraak(en).` : 'Beschikbaar blok toegevoegd.'); return reloadBookingSlots(bookingTarget); })
-          .catch(e => setError(e instanceof Error ? e.message : 'Blok toevoegen mislukt.'));
-      } else {
-        // Concept: bewaar het blok tot je het doorstuurt naar de klant.
-        setDraftSlots(prev => [...prev, { startsAt, endsAt }].sort((a, b) => a.startsAt.localeCompare(b.startsAt)));
-      }
+      // Concept-optie: bewaren tot je 'm doorstuurt naar de klant.
+      setDraftSlots(prev => [...prev, { startsAt: sd.toISOString(), endsAt: ed.toISOString() }].sort((a, b) => a.startsAt.localeCompare(b.startsAt)));
       return;
     }
     setEditingOriginal(null);
     setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '', trackTime: true, editingEventId: '', meetingUrl: '', addConference: false }));
     setShowCreatePanel(true);
-  }, [bookingMode, bookingTarget, organizationId, reloadBookingSlots]);
+  }, [bookingMode]);
 
-  // Concept-blokken doorsturen: link aanmaken + blokken koppelen, daarna deel-URL tonen.
+  // Concept-opties doorsturen: link aanmaken + blokken koppelen, daarna deel-URL tonen.
   const submitBookingSend = useCallback(async (p: { sourceId: string; clientId: string; title: string; maxTotalBookings: number; maxPerWeek: number; introText: string; inviteMessage: string; meetingUrl: string; autoConference: boolean }) => {
     setError(null);
     try {
@@ -2044,10 +2052,11 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       setShowBookingSend(false);
       setDraftSlots([]);
       setBookingMode(false);
-      setBookingTarget('');
+      setShowBookingOptions(true);
       listBookingLinks(organizationId).then(setBookingLinks).catch(() => {});
+      await reloadAgendaOptions(); // opties blijven zichtbaar in de agenda
     } catch (e) { setError(e instanceof Error ? e.message : 'Boekingslink aanmaken mislukt.'); }
-  }, [organizationId, draftSlots]);
+  }, [organizationId, draftSlots, reloadAgendaOptions]);
 
   async function submitNewEvent(e: FormEvent) {
     e.preventDefault();
@@ -2469,28 +2478,23 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       {(view === 'day' || view === 'week') && canWrite && writeableSources.length > 0 && (
         <div className="calendar-toolbar" style={{ marginTop: 8, gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {!bookingMode ? (
-            <Button onClick={() => { setBookingMode(true); setBookingTarget(''); setDraftSlots([]); }} title="Blokkeer tijden om als beschikbaarheid naar een klant te sturen">
-              <CalendarPlus size={14} /> Beschikbaarheid voor klant
-            </Button>
+            <>
+              <Button onClick={() => { setBookingMode(true); setDraftSlots([]); }} title="Blokkeer tijden om als opties naar een klant te sturen">
+                <CalendarPlus size={14} /> Beschikbaarheid voor klant
+              </Button>
+              {bookingLinks.some(l => l.status === 'active') && (
+                <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                  <input type="checkbox" checked={showBookingOptions} onChange={e => setShowBookingOptions(e.target.checked)} /> Toon boekingsopties in de agenda
+                </label>
+              )}
+            </>
           ) : (
             <>
-              <span className="calendar-range-label">Beschikbaarheid tekenen</span>
-              {bookingLinks.filter(l => l.status === 'active').length > 0 && (
-                <Select value={bookingTarget} onChange={e => setBookingTarget(e.target.value)}>
-                  <option value="">Nieuwe boekingslink (concept)</option>
-                  {bookingLinks.filter(l => l.status === 'active').map(l => <option key={l.id} value={l.id}>Bestaand: {l.title}{l.client_name ? ` — ${l.client_name}` : ''}</option>)}
-                </Select>
-              )}
-              {bookingTarget ? (
-                <span className="muted" style={{ fontSize: 13 }}>Blokken worden direct aan deze link toegevoegd. Sleep op het rooster · klik een blok om te verwijderen.</span>
-              ) : (
-                <>
-                  <span className="muted" style={{ fontSize: 13 }}>Sleep op het rooster om vrije blokken te maken ({draftSlots.length} gekozen).</span>
-                  <Button variant="primary" disabled={draftSlots.length === 0} onClick={() => setShowBookingSend(true)}>Doorsturen naar klant…</Button>
-                  {draftSlots.length > 0 && <Button onClick={() => setDraftSlots([])}>Wissen</Button>}
-                </>
-              )}
-              <Button onClick={() => { setBookingMode(false); setBookingTarget(''); setDraftSlots([]); }}>Sluiten</Button>
+              <span className="calendar-range-label">Opties tekenen</span>
+              <span className="muted" style={{ fontSize: 13 }}>Sleep op het rooster om opties te maken ({draftSlots.length} gekozen) · klik een concept-blok om het te verwijderen.</span>
+              <Button variant="primary" disabled={draftSlots.length === 0} onClick={() => setShowBookingSend(true)}>Doorsturen naar klant…</Button>
+              {draftSlots.length > 0 && <Button onClick={() => setDraftSlots([])}>Wissen</Button>}
+              <Button onClick={() => { setBookingMode(false); setDraftSlots([]); }}>Sluiten</Button>
             </>
           )}
         </div>
