@@ -58,9 +58,9 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   viewer: 'Viewer',
 };
 
-type SettingsTab = 'organisatie' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'email';
+export type SettingsTab = 'organisatie' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'email';
 
-const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof Users; description: string }> = [
+export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof Users; description: string }> = [
   { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen, en bekijk de recente activiteit.' },
   { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens, factuurtemplate en betaalteksten die op je facturen en offertes verschijnen.' },
   { id: 'boekhouding', label: 'Boekhouding', Icon: BookOpen, description: 'De boekhoud-startdatum (knipdatum) en de KOR-regeling voor je grootboek en BTW-aangifte.' },
@@ -571,6 +571,7 @@ export function Settings({
   settings,
   organizationContext,
   currentUserId,
+  settingsNav = null,
   onCreateOrganization,
   onSwitchOrganization,
   onInviteMember,
@@ -583,6 +584,7 @@ export function Settings({
   settings: CompanySettings | null;
   organizationContext: OrganizationContext;
   currentUserId: string | null;
+  settingsNav?: { tab: SettingsTab; key: number } | null;
   onCreateOrganization: () => void;
   onSwitchOrganization: (organizationId: string) => void;
   onInviteMember: (email: string, role: OrganizationRole) => Promise<void>;
@@ -592,7 +594,10 @@ export function Settings({
   onRevokeInvitation: (invitationId: string) => Promise<void>;
   onSave: (settings: CompanySettingsInput) => Promise<void>;
 }) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('organisatie');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(settingsNav?.tab ?? 'organisatie');
+  // Elke keer dat het account-menu naar een instellingen-sectie navigeert (nieuwe
+  // `key`, ook bij dezelfde tab) springt de instellingenpagina naar die tab.
+  useEffect(() => { if (settingsNav) setActiveTab(settingsNav.tab); }, [settingsNav]);
   const [form, setForm] = useState<CompanySettingsInput>(() => settingsToForm(settings));
   const [message, setMessage] = useState<string | null>(null);
   const [templateError, setTemplateError] = useState<string | null>(null);

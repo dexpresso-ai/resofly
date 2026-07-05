@@ -79,7 +79,7 @@ import { PublicContractPage } from './features/PublicContractPage';
 import { PublicBookingPage } from './features/PublicBookingPage';
 import { Contracts } from './features/Contracts';
 import { ClientPortal } from './features/portal/ClientPortal';
-import { Archive, Settings } from './features/SimplePages';
+import { Archive, Settings, type SettingsTab } from './features/SimplePages';
 import { Statistics } from './features/Statistics';
 import type { ReportDefinition } from './lib/reporting';
 import { CalendarPage } from './features/CalendarPage';
@@ -184,6 +184,7 @@ function App() {
   const [sessionReady, setSessionReady] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
   const [data, setData] = useState<AppData>(emptyData);
   const [organizationContext, setOrganizationContext] = useState<OrganizationContext>(emptyOrganizationContext);
   const [activeOrganizationId, setActiveOrganizationId] = useState<string | null>(() => localStorage.getItem(activeOrgStorageKey));
@@ -195,6 +196,10 @@ function App() {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [clientId, setClientId] = useState<string | null>(null);
   const [statsReportId, setStatsReportId] = useState<string | null>(null);
+  // Doelsectie voor de instellingenpagina wanneer die vanuit het account-menu
+  // wordt geopend. De oplopende `key` zorgt dat óók herhaald op dezelfde sectie
+  // klikken de juiste tab opent.
+  const [settingsNav, setSettingsNav] = useState<{ tab: SettingsTab; key: number } | null>(null);
   // Door Gerrie voorgestelde, nog NIET opgeslagen rapportage. De `key` (vers per
   // voorstel) zorgt dat de Statistieken-bouwer hem opnieuw inlaadt, ook bij een
   // identiek voorstel. De gebruiker controleert de grafiek en slaat zelf op.
@@ -291,6 +296,19 @@ function App() {
     await loadWorkspace(organizationId);
   }
 
+  // Opent de instellingenpagina op een specifieke sectie (standaard 'organisatie').
+  // De oplopende `key` zorgt dat óók herhaald op dezelfde sectie klikken de tab opent.
+  // Gebruikt door zowel het account-menu (zijbalk) als de dashboard-onboarding.
+  function openSettings(tab: SettingsTab = 'organisatie') {
+    setSettingsNav(prev => ({ tab, key: (prev?.key ?? 0) + 1 }));
+    setPage('settings');
+    setProjectId(null);
+    setClientId(null);
+    setStatsReportId(null);
+    setMobileNavOpen(false);
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  }
+
   async function createNewOrganization() {
     const name = prompt('Naam van de nieuwe organisatie');
     if (!name?.trim()) return;
@@ -362,6 +380,8 @@ function App() {
       const userId = session?.user.id ?? null;
       setLoggedIn(Boolean(session));
       setCurrentUserId(userId);
+      // De runtime-sessie draagt het e-mailadres, ook al is het type smaller.
+      setCurrentUserEmail((session?.user as { email?: string | null } | undefined)?.email ?? null);
       setSessionReady(true);
       if (userId && userId !== loadedForRef.current) {
         loadedForRef.current = userId;
@@ -992,8 +1012,8 @@ function App() {
       onClick={() => setMobileNavOpen(open => !open)}
     >{mobileNavOpen ? <X size={22}/> : <Menu size={22}/>}</button>
     <div className={`sidebar-backdrop${mobileNavOpen ? ' is-open' : ''}`} onClick={() => setMobileNavOpen(false)} aria-hidden="true" />
-    <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} clientEmailUnread={clientEmailUnread.total} ticketUnread={ticketUnreadIds.size} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })}/>
-    <main className="main">{page !== 'calendar' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button><Button onClick={() => supabaseAuth.signOut()}>Uitloggen</Button></div></header>}
+    <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => supabaseAuth.signOut()} clientEmailUnread={clientEmailUnread.total} ticketUnread={ticketUnreadIds.size} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })}/>
+    <main className="main">{page !== 'calendar' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
       <section className="content">{error && <div className="error">{error}</div>}{renderPage()}</section>
     </main>{edit && <EditModal edit={edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} />}
     <GerrieChat organizationId={activeOrg.id}
@@ -1189,7 +1209,7 @@ function App() {
   </div>;
 
   function renderPage() {
-    if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => setPage('settings')} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} />;
+    if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} />;
     if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={(doc) => setEdit({kind:'document', item: doc})} setTaskStatus={setTaskStatus}/>;
     if (page === 'projects') return <ProjectsListPage data={data} canWrite={canWrite} onNewProject={() => ensureCanWrite() && setEdit({kind:'project'})} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} onEditProject={(item) => setEdit({kind:'project', item})}/>;
     if (page === 'project-planning') return <ProjectsPlanningPage data={data} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} />;
@@ -1214,7 +1234,7 @@ function App() {
     if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;
     if (page === 'stats') return <Statistics data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} openReportId={statsReportId} pendingReport={pendingReport}/>;
     if (page === 'archive') return <Archive data={data} onOpen={(id) => { setProjectId(id); setPage('project'); }} onRestore={async (project) => { if (!ensureCanWrite()) return; setError(null); try { await updateRow<Project>('projects', project.id, { archived: false }, activeOrg.id); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Herstellen mislukt'); } }}/>;
-    if (page === 'settings') return <Settings settings={data.companySettings} organizationContext={organizationContext} currentUserId={currentUserId} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
+    if (page === 'settings') return <Settings settings={data.companySettings} organizationContext={organizationContext} currentUserId={currentUserId} settingsNav={settingsNav} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
     return <div className="empty"><div className="e-big">Geen project geselecteerd</div></div>;
   }
 }

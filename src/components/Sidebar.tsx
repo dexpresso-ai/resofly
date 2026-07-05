@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
-import { Archive, BarChart3, BookOpen, Boxes, Calendar, ChevronDown, ChevronRight, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, Percent, Pin, PinOff, Receipt, Settings, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Archive, BarChart3, BookOpen, Boxes, Calendar, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, LogOut, Percent, Pin, PinOff, Receipt, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
+import { SETTINGS_TABS, type SettingsTab } from '../features/SimplePages';
 import { Select } from './Ui';
 
 type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'archive'|'settings'|'project';
@@ -17,7 +18,6 @@ const items = [
   ['projects', FolderOpen, 'Projecten'],
   ['tickets', Ticket, 'Tickets'],
   ['finance', Receipt, 'Financiën'],
-  ['settings', Settings, 'Instellingen'],
 ] as const;
 
 const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'pnl', 'vat-returns'];
@@ -35,6 +35,9 @@ export function Sidebar({
   onNewOrganization,
   onPage,
   onSearchNavigate,
+  userEmail = null,
+  onOpenSettings,
+  onSignOut,
   clientEmailUnread = 0,
   ticketUnread = 0,
   mobileOpen = false,
@@ -51,6 +54,9 @@ export function Sidebar({
   onNewOrganization: () => void;
   onPage: (p: Page) => void;
   onSearchNavigate: (result: SearchResult) => void;
+  userEmail?: string | null;
+  onOpenSettings: (tab?: SettingsTab) => void;
+  onSignOut: () => void;
   clientEmailUnread?: number;
   ticketUnread?: number;
   mobileOpen?: boolean;
@@ -60,11 +66,42 @@ export function Sidebar({
 }) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
   const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
+  // Account-menu onderin: opent alle instellingen + uitloggen boven de avatar.
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userRef = useRef<HTMLDivElement>(null);
+  const userTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (financePages.includes(page)) setFinanceOpen(true);
     if (projectPages.includes(page)) setProjectsOpen(true);
   }, [page]);
+
+  // Sluit het account-menu bij een klik erbuiten of met Escape.
+  useEffect(() => {
+    if (!userMenuOpen) return;
+    const onPointer = (event: MouseEvent) => {
+      if (userRef.current && !userRef.current.contains(event.target as Node)) setUserMenuOpen(false);
+    };
+    // Escape sluit het menu én zet de focus terug op de avatar-knop (menu-button-patroon),
+    // zodat toetsenbordgebruikers hun plek in de zijbalk houden.
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { setUserMenuOpen(false); userTriggerRef.current?.focus(); } };
+    document.addEventListener('mousedown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onPointer); document.removeEventListener('keydown', onKey); };
+  }, [userMenuOpen]);
+
+  // AI-gebruik is alleen zichtbaar voor owners/admins — zelfde regel als op de instellingenpagina.
+  const canAdmin = activeRole === 'owner' || activeRole === 'admin';
+  const settingsTabs = SETTINGS_TABS.filter(tab => tab.id !== 'ai' || canAdmin);
+  const emailLocalPart = (userEmail ?? '').split('@')[0] ?? '';
+  const accountName = emailLocalPart || 'Account';
+  const accountInitials = (() => {
+    const source = emailLocalPart || (userEmail ?? '');
+    if (!source) return '?';
+    const parts = source.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+    const letters = parts.length >= 2 ? `${parts[0][0]}${parts[1][0]}` : source.slice(0, 2);
+    return letters.toUpperCase();
+  })();
 
   function openCalendarSubPage(target: 'agenda' | 'connections' | 'settings') {
     if (target === 'agenda') {
@@ -94,7 +131,7 @@ export function Sidebar({
     onPage(target);
   }
 
-  return <aside className={`sidebar${mobileOpen ? ' is-open' : ''}`}>
+  return <aside className={`sidebar${mobileOpen ? ' is-open' : ''}${userMenuOpen ? ' user-open' : ''}`}>
     <div className="sidebar-head">
       <button type="button" className="sidebar-close" onClick={onCloseMobile} aria-label="Menu sluiten"><X size={20}/></button>
       <button type="button" className="sidebar-pin" onClick={onTogglePin} aria-pressed={pinned} aria-label={pinned ? 'Menu losmaken' : 'Menu vastzetten'} title={pinned ? 'Menu losmaken' : 'Menu vastzetten'}>{pinned ? <PinOff size={15}/> : <Pin size={15}/>}</button>
@@ -177,5 +214,51 @@ export function Sidebar({
         </div>;
       })}
     </nav>
+
+    <div className={`sidebar-user${userMenuOpen ? ' is-open' : ''}`} ref={userRef}>
+      {userMenuOpen && <div className="user-menu" role="menu" aria-label="Account en instellingen">
+        <div className="user-menu-head">
+          <span className="umh-label">Ingelogd als</span>
+          <span className="umh-email" title={userEmail ?? undefined}>{userEmail ?? 'Onbekend account'}</span>
+        </div>
+        <div className="user-menu-section">Instellingen</div>
+        {settingsTabs.map(tab => (
+          <button
+            key={tab.id}
+            type="button"
+            role="menuitem"
+            className="user-menu-item"
+            onClick={() => { onOpenSettings(tab.id); setUserMenuOpen(false); }}
+          >
+            <tab.Icon size={15}/><span>{tab.label}</span>
+          </button>
+        ))}
+        <div className="user-menu-sep" aria-hidden="true" />
+        <button
+          type="button"
+          role="menuitem"
+          className="user-menu-item danger"
+          onClick={() => { setUserMenuOpen(false); onSignOut(); }}
+        >
+          <LogOut size={15}/><span>Uitloggen</span>
+        </button>
+      </div>}
+
+      <button
+        ref={userTriggerRef}
+        type="button"
+        className={`user-trigger${userMenuOpen ? ' open' : ''}${page === 'settings' ? ' active' : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={userMenuOpen}
+        onClick={() => setUserMenuOpen(open => !open)}
+      >
+        <span className="user-avatar" aria-hidden="true">{accountInitials}</span>
+        <span className="user-meta">
+          <span className="user-name">{accountName}</span>
+          <span className="user-role">{activeRole ?? 'geen rol'}</span>
+        </span>
+        <ChevronUp size={16} className="user-caret" aria-hidden="true"/>
+      </button>
+    </div>
   </aside>;
 }
