@@ -1254,7 +1254,9 @@ export type EmailTemplateKey =
   | 'invoice.reminder.3'
   | 'creditNote.sent'
   | 'contract.sent'
-  | 'contract.signed.client';
+  | 'contract.signed.client'
+  | 'meetingBooking.linkSent'
+  | 'meetingBooking.confirmed';
 
 export interface EmailTemplate extends OrgScopedRow {
   template_key: EmailTemplateKey;

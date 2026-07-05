@@ -17,6 +17,7 @@ import { listEvents } from '../_shared/calendarAvailability.ts';
 import { createEvent } from '../_shared/calendarEventWrite.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderMeetingBookingConfirmedEmail } from '../_shared/emailTemplates/meetingBookingConfirmed.ts';
+import type { EmailTemplateContent } from '../_shared/emailTemplates/content.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
 const RESEND_FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || '';
@@ -261,6 +262,7 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
   if (!sender.from) return;
   const brandName = await orgBrandName(link.organization_id);
   const whenLines = confirmed.map(c => whenLine(c.starts_at, c.ends_at));
+  const content = await loadBookingEmailContent(link.organization_id, 'meetingBooking.confirmed');
 
   // Bevestiging naar de klant.
   const rendered = renderMeetingBookingConfirmedEmail({
@@ -270,6 +272,7 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
     whenLines,
     meetingUrl,
     inviteMessage: link.invite_message,
+    content,
   });
   await sendResend(sender.from, [email], sender.replyTo, rendered.subject, rendered.html, rendered.text).catch(err => console.error('client confirm mail', err));
 
@@ -286,6 +289,16 @@ async function sendConfirmationEmails(link: LinkRow, name: string, email: string
 async function orgBrandName(organizationId: string): Promise<string> {
   const { data } = await supabaseAdmin.from('organizations').select('name').eq('id', organizationId).maybeSingle();
   return (data?.name as string) || 'ResoFly';
+}
+
+/** Aangepaste e-mailtekst (email_templates) voor een booking-template; null = defaults. */
+async function loadBookingEmailContent(organizationId: string, templateKey: string): Promise<EmailTemplateContent | null> {
+  const { data, error } = await supabaseAdmin.from('email_templates')
+    .select('enabled,subject,intro,closing,cta_label')
+    .eq('organization_id', organizationId).eq('template_key', templateKey).maybeSingle();
+  if (error || !data) return null;
+  const row = data as { enabled: boolean; subject: string | null; intro: string | null; closing: string | null; cta_label: string | null };
+  return { enabled: row.enabled, subject: row.subject, intro: row.intro, closing: row.closing, ctaLabel: row.cta_label };
 }
 
 async function ownerEmailFor(userId: string): Promise<string | null> {

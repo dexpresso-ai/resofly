@@ -28,6 +28,7 @@ import { listEvents } from '../_shared/calendarAvailability.ts';
 import { getExternalWriteAccessToken, sendEventCancellations } from '../_shared/calendarEventWrite.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderMeetingBookingLinkEmail } from '../_shared/emailTemplates/meetingBookingLinkSent.ts';
+import type { EmailTemplateContent } from '../_shared/emailTemplates/content.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') || '';
 const RESEND_FROM_EMAIL = Deno.env.get('RESEND_FROM_EMAIL') || '';
@@ -361,6 +362,16 @@ async function orgBrandName(organizationId: string): Promise<string> {
   return (data?.name as string) || 'ResoFly';
 }
 
+/** Aangepaste e-mailtekst (email_templates) voor een booking-template; null = defaults. */
+async function loadBookingEmailContent(organizationId: string, templateKey: string): Promise<EmailTemplateContent | null> {
+  const { data, error } = await supabaseAdmin.from('email_templates')
+    .select('enabled,subject,intro,closing,cta_label')
+    .eq('organization_id', organizationId).eq('template_key', templateKey).maybeSingle();
+  if (error || !data) return null;
+  const row = data as { enabled: boolean; subject: string | null; intro: string | null; closing: string | null; cta_label: string | null };
+  return { enabled: row.enabled, subject: row.subject, intro: row.intro, closing: row.closing, ctaLabel: row.cta_label };
+}
+
 async function sendLinkMail(organizationId: string, linkId: string, body: Record<string, unknown>) {
   if (!RESEND_API_KEY) throw new HttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
   const link = await loadLink(organizationId, linkId);
@@ -389,12 +400,14 @@ async function sendLinkMail(organizationId: string, linkId: string, body: Record
   const bookingUrl = buildBookingUrl(token);
 
   const brandName = await orgBrandName(organizationId);
+  const content = await loadBookingEmailContent(organizationId, 'meetingBooking.linkSent');
   const rendered = renderMeetingBookingLinkEmail({
     brandName,
     recipientName: recipientName || null,
     title: link.title,
     introText: link.intro_text,
     bookingUrl,
+    content,
   });
 
   const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL);

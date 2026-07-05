@@ -16,7 +16,7 @@ export type EmailPlaceholder = { token: string; label: string; example: string }
 export type EmailTemplateMeta = {
   key: EmailTemplateKey;
   label: string;
-  group: 'offerte' | 'factuur' | 'herinnering' | 'creditfactuur' | 'contract';
+  group: 'offerte' | 'factuur' | 'herinnering' | 'creditfactuur' | 'contract' | 'booking';
   description: string;
   fields: EmailField[];
   defaults: Record<EmailField, string>;
@@ -41,6 +41,8 @@ const PLACEHOLDERS: Record<string, Omit<EmailPlaceholder, 'token'>> = {
   days_overdue: { label: 'Aantal dagen te laat', example: '5' },
   days_sentence: { label: 'Dagen-zinsdeel', example: '5 dagen over de vervaldatum' },
   reason: { label: 'Reden creditfactuur', example: 'Correctie aantal uren' },
+  meeting_title: { label: 'Titel van de afspraak', example: 'Kennismakingsgesprek' },
+  booking_when: { label: 'Gekozen moment', example: 'maandag 6 juli 2026 10:00–10:30' },
 };
 
 function placeholders(...tokens: string[]): EmailPlaceholder[] {
@@ -159,6 +161,34 @@ export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
       cta_label: 'Bekijk in je klantportaal',
     },
     placeholders: placeholders('recipient_name', 'company_name', 'contract_number', 'contract_title'),
+  },
+  {
+    key: 'meetingBooking.linkSent',
+    label: 'Boekingslink versturen',
+    group: 'booking',
+    description: 'De e-mail waarmee de klant een boekingslink krijgt om zelf een moment te kiezen. De per-link intro-tekst komt hier onder.',
+    fields: ['subject', 'intro', 'cta_label'],
+    defaults: {
+      subject: '{{meeting_title}} — kies een moment',
+      intro: 'Beste {{recipient_name}},\nJe kunt zelf een moment kiezen dat jou uitkomt. Klik op de knop hieronder voor de beschikbare tijden.',
+      closing: '',
+      cta_label: 'Kies een moment',
+    },
+    placeholders: placeholders('recipient_name', 'company_name', 'meeting_title'),
+  },
+  {
+    key: 'meetingBooking.confirmed',
+    label: 'Boeking bevestigd',
+    group: 'booking',
+    description: 'De bevestiging die de klant ontvangt na het boeken. De gekozen tijden, videocall-link en per-link begeleidende tekst komen hier automatisch onder.',
+    fields: ['subject', 'intro', 'closing'],
+    defaults: {
+      subject: 'Bevestigd: {{meeting_title}}',
+      intro: 'Beste {{recipient_name}},\nJe afspraak is bevestigd. Je ontvangt hierbij ook een agenda-uitnodiging.',
+      closing: '',
+      cta_label: '',
+    },
+    placeholders: placeholders('recipient_name', 'company_name', 'meeting_title', 'booking_when'),
   },
 ];
 
