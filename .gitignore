@@ -31,3 +31,6 @@ desktop.ini
 
 # TypeScript cache
 *.tsbuildinfo
+
+# Claude Code local settings (persoonlijk, niet delen)
+.claude/settings.local.json

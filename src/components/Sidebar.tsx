@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Archive, BarChart3, BookOpen, Boxes, Calendar, ChevronDown, ChevronRight, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, Percent, Receipt, Settings, StickyNote, Ticket, TrendingUp, Truck, Users } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, Boxes, Calendar, ChevronDown, ChevronRight, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, Percent, Receipt, Settings, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { Select } from './Ui';
@@ -37,6 +37,8 @@ export function Sidebar({
   onSearchNavigate,
   clientEmailUnread = 0,
   ticketUnread = 0,
+  mobileOpen = false,
+  onCloseMobile,
 }: {
   page: Page;
   data: AppData;
@@ -49,6 +51,8 @@ export function Sidebar({
   onSearchNavigate: (result: SearchResult) => void;
   clientEmailUnread?: number;
   ticketUnread?: number;
+  mobileOpen?: boolean;
+  onCloseMobile?: () => void;
 }) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
   const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
@@ -86,8 +90,9 @@ export function Sidebar({
     onPage(target);
   }
 
-  return <aside className="sidebar">
+  return <aside className={`sidebar${mobileOpen ? ' is-open' : ''}`}>
     <div className="sidebar-head">
+      <button type="button" className="sidebar-close" onClick={onCloseMobile} aria-label="Menu sluiten"><X size={20}/></button>
       <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div>
       <div className="org-switcher">
         <label>Organisatie</label>
