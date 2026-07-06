@@ -2376,6 +2376,25 @@ button.chat-member:hover{background:var(--bg3)}
 .bk-balance-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
 @media (max-width:880px){.bk-balance-cols{grid-template-columns:1fr}}
 
+/* ── Boekjaren (afsluiten / openen / heropenen) ──────────────────────── */
+.bk-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;border:1px solid var(--border);font-size:.74rem;font-weight:700}
+.bk-badge-open{border-color:rgba(96,165,250,.5);color:#60a5fa}
+.bk-badge-closed{border-color:rgba(52,211,153,.5);color:#34d399}
+.bk-fy-actions{text-align:right;white-space:nowrap}
+.bk-fy-hint{font-size:.76rem;font-weight:500}
+.bk-fy-result{margin:.5rem 0}
+.bk-fy-new{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;padding:14px 16px;border:1px solid var(--border);border-radius:16px;background:rgba(255,255,255,.022)}
+.bk-fy-new-fields{display:flex;gap:14px;flex-wrap:wrap}
+.bk-fy-new-fields label{display:grid;gap:6px}
+.bk-fy-new-fields label>span{font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted,rgba(245,245,245,.55))}
+.bk-fy-new-actions{display:flex;gap:10px}
+.bk-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px;z-index:60}
+.bk-modal{background:var(--panel,#161616);border:1px solid var(--border);border-radius:18px;padding:22px;max-width:440px;width:100%;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+.bk-modal h3{margin:0 0 12px;font-size:1.08rem}
+.bk-modal-body{display:flex;flex-direction:column;gap:8px;font-size:.9rem;color:var(--text)}
+.bk-modal-body .bk-muted{font-size:.82rem}
+.bk-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+
 /* ── Eigen verzenddomein (instellingen → e-mail) ─────────────────────── */
 .sending-domain-card .btn-primary{margin-top:4px}
 .sending-domain-list{display:flex;flex-direction:column;gap:12px;margin-top:16px}

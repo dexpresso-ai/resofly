@@ -36,6 +36,8 @@ import type {
   JournalEntry,
   JournalLine,
   ClosedPeriod,
+  FiscalYear,
+  FiscalYearListRow,
   Supplier,
   PurchaseInvoice,
   FixedAsset,
@@ -338,6 +340,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     journalEntries,
     journalLines,
     closedPeriods,
+    fiscalYears,
     suppliers,
     purchaseInvoices,
     fixedAssets,
@@ -357,14 +360,14 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectCalendarEventLinks(organizationId), selectTimeEntries(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId),
-    selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId), selectFixedAssets(organizationId), selectAssetDepreciations(organizationId), selectVatReturns(organizationId),
+    selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectFiscalYears(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId), selectFixedAssets(organizationId), selectAssetDepreciations(organizationId), selectVatReturns(organizationId),
     selectBankAccounts(organizationId), selectBankStatements(organizationId), selectBankTransactions(organizationId), selectBankRules(organizationId), selectBankRequisitions(organizationId),
     select<Attachment>('attachments', organizationId),
     selectFolders(organizationId),
     selectSavedReports(organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, savedReports, companySettings };
+  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, savedReports, companySettings };
 }
 
 const SAVED_REPORTS_MIGRATION_HINT =
@@ -903,6 +906,9 @@ export async function select<T>(table: Table, organizationId: UUID): Promise<T[]
 const BOOKKEEPING_MIGRATION_HINT =
   'Voer de migratie 20260618000000_bookkeeping_ledger_core.sql uit in Supabase om de boekhoudmodule te activeren.';
 
+const FISCAL_YEAR_MIGRATION_HINT =
+  'Voer de migratie 20260706120000_bookkeeping_fiscal_year_close.sql uit in Supabase om boekjaren (afsluiten/openen) te activeren.';
+
 /**
  * Leest een nog-jonge tabel en degradeert gracieus: ontbreekt de tabel (migratie
  * nog niet uitgevoerd), dan een waarschuwing + lege lijst i.p.v. een harde fout.
@@ -949,6 +955,8 @@ export const selectAssetDepreciations = (organizationId: UUID) =>
   selectOptional<AssetDepreciation>('asset_depreciations', organizationId, { orderBy: 'date', ascending: true, hint: BOOKKEEPING_MIGRATION_HINT });
 export const selectVatReturns = (organizationId: UUID) =>
   selectOptional<VatReturn>('vat_returns', organizationId, { orderBy: 'period_start', ascending: false, hint: BOOKKEEPING_MIGRATION_HINT });
+export const selectFiscalYears = (organizationId: UUID) =>
+  selectOptional<FiscalYear>('fiscal_years', organizationId, { orderBy: 'period_start', ascending: false, hint: FISCAL_YEAR_MIGRATION_HINT });
 
 const BANKFEED_MIGRATION_HINT =
   'Voer de migratie 20260622000004_bankfeed_core.sql uit in Supabase om de bankkoppeling te activeren.';
@@ -1122,6 +1130,50 @@ export async function finalizeVatReturn(
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as VatReturn;
+}
+
+/** Lijst met boekjaren + server-side (her)berekend resultaat per boekjaar. */
+export async function listFiscalYears(organizationId: UUID): Promise<FiscalYearListRow[]> {
+  const { data, error } = await supabase.rpc('list_fiscal_years', {
+    p_organization_id: organizationId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as FiscalYearListRow[];
+}
+
+/** Opent een nieuw boekjaar (mag ook vóór het oude is afgesloten). */
+export async function openFiscalYear(
+  organizationId: UUID,
+  input: { periodStart: string; periodEnd: string; label?: string | null },
+): Promise<FiscalYear> {
+  const { data, error } = await supabase.rpc('open_fiscal_year', {
+    p_organization_id: organizationId,
+    p_period_start: input.periodStart,
+    p_period_end: input.periodEnd,
+    p_label: input.label ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as FiscalYear;
+}
+
+/** Sluit een boekjaar af: boekt het resultaat naar eigen vermogen en vergrendelt het jaar. */
+export async function closeFiscalYear(organizationId: UUID, fiscalYearId: UUID): Promise<FiscalYear> {
+  const { data, error } = await supabase.rpc('close_fiscal_year', {
+    p_organization_id: organizationId,
+    p_fiscal_year_id: fiscalYearId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as FiscalYear;
+}
+
+/** Heropent een afgesloten boekjaar (alleen eigenaar/admin). */
+export async function reopenFiscalYear(organizationId: UUID, fiscalYearId: UUID): Promise<FiscalYear> {
+  const { data, error } = await supabase.rpc('reopen_fiscal_year', {
+    p_organization_id: organizationId,
+    p_fiscal_year_id: fiscalYearId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as FiscalYear;
 }
 
 /** (Her)berekent het lineaire afschrijvingsschema van een activum. */

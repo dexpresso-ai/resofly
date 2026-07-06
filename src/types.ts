@@ -856,10 +856,48 @@ export interface ClosedPeriod {
   id: UUID;
   organization_id: UUID;
   year: number;
-  quarter: number;
+  /** 'month' | 'quarter' | 'year' — sinds fase 4 een datumbereik i.p.v. enkel kwartaal. */
+  period_type: 'month' | 'quarter' | 'year';
+  quarter: number | null;
+  month: number | null;
+  period_start: string | null;
+  period_end: string | null;
   closed_at: string;
   closed_by: UUID | null;
   created_at: string;
+}
+
+/** Een boekjaar (open of afgesloten). Mutatie loopt via de fiscal-year-RPC's. */
+export interface FiscalYear {
+  id: UUID;
+  organization_id: UUID;
+  created_by: UUID | null;
+  label: string;
+  period_start: string;
+  period_end: string;
+  status: 'open' | 'closed';
+  close_journal_entry_id: UUID | null;
+  result_account_code: string | null;
+  result_cents: number | null;
+  closed_at: string | null;
+  closed_by: UUID | null;
+  reopened_at: string | null;
+  reopened_by: UUID | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Rij uit list_fiscal_years: boekjaar + server-side (her)berekend resultaat. */
+export interface FiscalYearListRow {
+  id: UUID;
+  label: string;
+  period_start: string;
+  period_end: string;
+  status: 'open' | 'closed';
+  result_cents: number | null;
+  close_journal_entry_id: UUID | null;
+  computed_result_cents: number;
+  has_entries: boolean;
 }
 
 export interface Supplier extends OrgScopedRow {
@@ -1293,6 +1331,10 @@ export interface CompanySettings extends OrgScopedRow {
   bookkeeping_start_date: string | null;
   kor_enabled: boolean;
   vat_return_period: VatReturnPeriodType;
+  /** Startmaand van het boekjaar (1 = januari). Ondersteunt gebroken boekjaren. */
+  fiscal_year_start_month: number;
+  /** Grootboekcode waar het jaarresultaat bij afsluiting heen wordt geboekt (default 0510). */
+  year_result_account_code: string;
   /** Bedrijfsbreed standaard uurtarief (centen) — fallback als een project geen eigen tarief heeft. */
   default_hourly_rate_cents: number | null;
   created_at: string;
@@ -1352,7 +1394,7 @@ export interface SavedReport extends OrgScopedRow {
   updated_at: string;
 }
 
-export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; savedReports: SavedReport[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; projects: Project[]; tasks: Task[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; savedReports: SavedReport[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft' | 'native';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';

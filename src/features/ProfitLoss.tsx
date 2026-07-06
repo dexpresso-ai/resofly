@@ -13,11 +13,20 @@ const MONTHS = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 
 type PeriodType = 'month' | 'quarter' | 'year';
 type PeriodBounds = { from: string; to: string; label: string };
 
-function getPeriod(type: PeriodType, year: number, month: number, quarter: number): { current: PeriodBounds; previous: PeriodBounds } {
+function fiscalYearBounds(startMonth: number, year: number): PeriodBounds {
+  const from = `${year}-${pad2(startMonth)}-01`;
+  const endYear = startMonth === 1 ? year : year + 1;
+  const endMonth = startMonth === 1 ? 12 : startMonth - 1;
+  const to = `${endYear}-${pad2(endMonth)}-${pad2(lastDay(endYear, endMonth))}`;
+  const label = startMonth === 1 ? `${year}` : `${year}/${year + 1}`;
+  return { from, to, label };
+}
+
+function getPeriod(type: PeriodType, year: number, month: number, quarter: number, startMonth: number): { current: PeriodBounds; previous: PeriodBounds } {
   if (type === 'year') {
     return {
-      current: { from: `${year}-01-01`, to: `${year}-12-31`, label: `${year}` },
-      previous: { from: `${year - 1}-01-01`, to: `${year - 1}-12-31`, label: `${year - 1}` },
+      current: fiscalYearBounds(startMonth, year),
+      previous: fiscalYearBounds(startMonth, year - 1),
     };
   }
   if (type === 'quarter') {
@@ -76,7 +85,8 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const period = useMemo(() => getPeriod(periodType, year, month, quarter), [periodType, year, month, quarter]);
+  const fiscalStartMonth = data.companySettings?.fiscal_year_start_month ?? 1;
+  const period = useMemo(() => getPeriod(periodType, year, month, quarter, fiscalStartMonth), [periodType, year, month, quarter, fiscalStartMonth]);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);

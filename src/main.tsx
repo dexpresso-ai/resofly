@@ -74,6 +74,7 @@ import { BankPage } from './features/Bank';
 import { AssetsPage } from './features/Assets';
 import { ProfitLossPage } from './features/ProfitLoss';
 import { VatReturnsPage } from './features/VatReturns';
+import { FiscalYearsPage } from './features/FiscalYears';
 import { PublicQuotePage } from './features/PublicQuotePage';
 import { PublicInvoicePage } from './features/PublicInvoicePage';
 import { PublicContractPage } from './features/PublicContractPage';
@@ -96,7 +97,7 @@ import type {
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'fiscal-years'|'archive'|'settings'|'project';
 type EditMode =
   | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status'>> }
   | { kind: 'project'; item?: Project; defaults?: Partial<Pick<Project, 'name' | 'client_id' | 'description' | 'start_date' | 'end_date'>> }
@@ -108,7 +109,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id' | 'notes' | 'due_date' | 'lines'>> }
   | null;
 
-const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], savedReports: [], companySettings: null };
+const emptyData: AppData = { clients: [], projects: [], tasks: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], savedReports: [], companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
@@ -1010,7 +1011,7 @@ function App() {
     }
   }
 
-  const title = page === 'project' ? project?.name ?? 'Project' : page === 'client' ? client?.name ?? 'Klant' : ({dashboard:'Dashboard',weekplanner:'Weekplanner',calendar:'Kalender','calendar-settings':'Agenda-instellingen','meeting-booking':'Boekingslinks',time:'Uren',stats:'Statistieken',content:'Inhoud',notes:'Notities',documents:'Documenten',clients:'Klanten',projects:'Projecten','project-planning':'Projectplanning',tickets:'Tickets',chat:'Teamchat',quotes:'Offertes',invoices:'Facturen',suppliers:'Leveranciers','purchase-invoices':'Inkoopfacturen',ledger:'Grootboek',bank:'Bank',assets:'Activa',pnl:'Winst & verlies','vat-returns':'Omzetbelasting',archive:'Archief',settings:'Instellingen',project:'Project',client:'Klant'} as Record<Page,string>)[page];
+  const title = page === 'project' ? project?.name ?? 'Project' : page === 'client' ? client?.name ?? 'Klant' : ({dashboard:'Dashboard',weekplanner:'Weekplanner',calendar:'Kalender','calendar-settings':'Agenda-instellingen','meeting-booking':'Boekingslinks',time:'Uren',stats:'Statistieken',content:'Inhoud',notes:'Notities',documents:'Documenten',clients:'Klanten',projects:'Projecten','project-planning':'Projectplanning',tickets:'Tickets',chat:'Teamchat',quotes:'Offertes',invoices:'Facturen',suppliers:'Leveranciers','purchase-invoices':'Inkoopfacturen',ledger:'Grootboek',bank:'Bank',assets:'Activa',pnl:'Winst & verlies','vat-returns':'Omzetbelasting','fiscal-years':'Boekjaren',archive:'Archief',settings:'Instellingen',project:'Project',client:'Klant'} as Record<Page,string>)[page];
 
   return <div className={`app${sidebarPinned ? ' sidebar-pinned' : ''}`}>
     <button
@@ -1239,6 +1240,7 @@ function App() {
     if (page === 'assets') return <AssetsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'pnl') return <ProfitLossPage data={data} organizationId={activeOrg.id} onChanged={refresh}/>;
     if (page === 'vat-returns') return <VatReturnsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
+    if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} onPlanTask={updateTaskPlanning} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'calendar-settings') return <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;

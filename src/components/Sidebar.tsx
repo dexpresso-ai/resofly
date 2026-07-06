@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, Boxes, Calendar, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, LogOut, MessageSquare, Percent, Pin, PinOff, Receipt, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, Boxes, Calendar, CalendarClock, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, LogOut, MessageSquare, Percent, Pin, PinOff, Receipt, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, type SettingsTab } from '../features/SimplePages';
 import { Select } from './Ui';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'fiscal-years'|'archive'|'settings'|'project';
 
 const items = [
   ['dashboard', LayoutDashboard, 'Dashboard'],
@@ -21,7 +21,7 @@ const items = [
   ['finance', Receipt, 'Financiën'],
 ] as const;
 
-const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'pnl', 'vat-returns'];
+const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'pnl', 'vat-returns', 'fiscal-years'];
 const calendarPages: Page[] = ['calendar', 'calendar-settings', 'meeting-booking'];
 const projectPages: Page[] = ['projects', 'project', 'project-planning', 'archive'];
 const contentPages: Page[] = ['content', 'notes', 'documents'];
@@ -124,7 +124,7 @@ export function Sidebar({
     }, 80);
   }
 
-  function openFinancePage(target: 'quotes' | 'contracts' | 'invoices' | 'suppliers' | 'purchase-invoices' | 'ledger' | 'bank' | 'assets' | 'pnl' | 'vat-returns') {
+  function openFinancePage(target: 'quotes' | 'contracts' | 'invoices' | 'suppliers' | 'purchase-invoices' | 'ledger' | 'bank' | 'assets' | 'pnl' | 'vat-returns' | 'fiscal-years') {
     setFinanceOpen(true);
     onPage(target);
   }
@@ -207,6 +207,7 @@ export function Sidebar({
             <button type="button" className={page === 'assets' ? 'active' : ''} onClick={() => openFinancePage('assets')}><Boxes size={13}/><span>Activa</span></button>
             <button type="button" className={page === 'pnl' ? 'active' : ''} onClick={() => openFinancePage('pnl')}><TrendingUp size={13}/><span>Winst &amp; verlies</span></button>
             <button type="button" className={page === 'vat-returns' ? 'active' : ''} onClick={() => openFinancePage('vat-returns')}><Percent size={13}/><span>Omzetbelasting</span></button>
+            <button type="button" className={page === 'fiscal-years' ? 'active' : ''} onClick={() => openFinancePage('fiscal-years')}><CalendarClock size={13}/><span>Boekjaren</span></button>
           </div>}
 
           {key === 'content' && contentPages.includes(page) && <div className="nav-submenu nav-submenu-finance">

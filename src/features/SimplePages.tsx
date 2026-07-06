@@ -48,6 +48,8 @@ const emptySettings: CompanySettingsInput = {
   bookkeeping_start_date: null,
   kor_enabled: false,
   vat_return_period: 'quarterly',
+  fiscal_year_start_month: 1,
+  year_result_account_code: '0510',
   default_hourly_rate_cents: null,
 };
 
@@ -1316,7 +1318,7 @@ export function Settings({
     {message && <div className="success">{message}</div>}
     <section className="settings-card">
       <h3>Boekhouding</h3>
-      <p className="settings-help">De boekhoud-startdatum is de knipdatum vanaf wanneer het grootboek leidend is: verkoopfacturen van vóór deze datum worden niet meer naar het grootboek geboekt (die stand zit in je beginbalans). Kies bij voorkeur een kwartaal- of jaargrens. Met de KOR-regeling wordt geen BTW in rekening gebracht en is voorbelasting niet aftrekbaar.</p>
+      <p className="settings-help">De boekhoud-startdatum is de knipdatum vanaf wanneer het grootboek leidend is: verkoopfacturen van vóór deze datum worden niet meer naar het grootboek geboekt (die stand zit in je beginbalans). Kies bij voorkeur een kwartaal- of jaargrens. Met de KOR-regeling wordt geen BTW in rekening gebracht en is voorbelasting niet aftrekbaar. De boekjaar-startmaand bepaalt de jaargrens (gebruik januari voor een gewoon kalenderjaar, een andere maand voor een gebroken boekjaar). Bij een jaarafsluiting wordt het resultaat op de gekozen resultaatrekening geboekt.</p>
       <div className="settings-grid">
         <label className="bk-setting-field"><span>Boekhouding leidend vanaf</span>
           <Input type="date" value={form.bookkeeping_start_date ?? ''} onChange={e=>set('bookkeeping_start_date', e.target.value || null)} disabled={!canAdminOrganization} />
@@ -1325,6 +1327,17 @@ export function Settings({
           <select className="form-select" value={form.vat_return_period ?? 'quarterly'} onChange={e=>set('vat_return_period', e.target.value)} disabled={!canAdminOrganization}>
             <option value="quarterly">Per kwartaal</option>
             <option value="monthly">Maandelijks</option>
+          </select>
+        </label>
+        <label className="bk-setting-field"><span>Boekjaar begint in</span>
+          <select className="form-select" value={form.fiscal_year_start_month ?? 1} onChange={e=>set('fiscal_year_start_month', Number(e.target.value))} disabled={!canAdminOrganization}>
+            {['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'].map((m, i) => <option key={m} value={i + 1}>{m[0].toUpperCase() + m.slice(1)}</option>)}
+          </select>
+        </label>
+        <label className="bk-setting-field"><span>Jaarresultaat boeken op</span>
+          <select className="form-select" value={form.year_result_account_code ?? '0510'} onChange={e=>set('year_result_account_code', e.target.value)} disabled={!canAdminOrganization}>
+            <option value="0510">0510 · Onverdeeld resultaat</option>
+            <option value="0500">0500 · Eigen vermogen</option>
           </select>
         </label>
         <label className="bk-setting-field"><span>Standaard uurtarief (€)</span>
@@ -1665,6 +1678,8 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     bookkeeping_start_date: settings.bookkeeping_start_date ?? null,
     kor_enabled: settings.kor_enabled ?? false,
     vat_return_period: settings.vat_return_period ?? 'quarterly',
+    fiscal_year_start_month: settings.fiscal_year_start_month ?? 1,
+    year_result_account_code: settings.year_result_account_code ?? '0510',
     default_hourly_rate_cents: settings.default_hourly_rate_cents ?? null,
   };
 }
