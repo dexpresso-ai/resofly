@@ -37,6 +37,7 @@ import {
   MAIL_INBOUND_DOMAIN,
 } from './calendarCore.ts';
 import { nativeRowToBaseEvent } from './calendarAvailability.ts';
+import { cancelConflictingBookingSlots, cancelConflictingBookingSlotsForNativeEvent } from './meetingBookingSync.ts';
 
 // ── Nieuwe-event-invoer normaliseren ────────────────────────────────────────
 
@@ -95,6 +96,7 @@ export async function createEvent(organizationId: string, requesterUserId: strin
     throw new Error('Deze privé-agenda is niet met de organisatie gedeeld.');
   }
   if (calendarSource.provider === 'native') {
+    // createNativeEvent regelt zelf de boekingsoptie-reconciliatie (incl. herhalingen).
     return await createNativeEvent(organizationId, requesterUserId, calendarSource, input);
   }
   if (!calendarSource.write_enabled) {
@@ -111,9 +113,14 @@ export async function createEvent(organizationId: string, requesterUserId: strin
   const token = await getToken(organizationId, connection.id);
   const accessToken = await refreshAccessToken(token);
   const event = normalizeNewEventInput(input);
-  return calendarSource.provider === 'google'
+  const result = calendarSource.provider === 'google'
     ? await createGoogleEvent(accessToken, calendarSource, event)
     : await createMicrosoftEvent(accessToken, calendarSource, event);
+  // Deze nieuwe afspraak kan een tot nu toe openstaande boekingsoptie op dezelfde
+  // agenda overlappen — die is dan niet meer daadwerkelijk beschikbaar voor de
+  // klant. Google/Microsoft ondersteunen hier geen herhaling, dus één voorkomst volstaat.
+  await cancelConflictingBookingSlots(organizationId, calendarSource.id, String(result.starts_at ?? ''), String(result.ends_at ?? ''));
+  return result;
 }
 
 // ── Google ──────────────────────────────────────────────────────────────────
@@ -314,6 +321,9 @@ export async function createNativeEvent(organizationId: string, userId: string, 
   const row = data as NativeEventRow;
   // Genodigden + uitnodigingen mogen het aanmaken nooit laten falen.
   await applyAttendees(organizationId, source, row, input).catch(err => console.error('invite (create) failed', err));
+  // Boekingsopties die nu overlappen met deze (mogelijk herhalende) afspraak zijn
+  // niet meer daadwerkelijk beschikbaar; best-effort, mag het aanmaken nooit blokkeren.
+  await cancelConflictingBookingSlotsForNativeEvent(organizationId, source, row);
   return nativeRowToBaseEvent(row, source);
 }
 

@@ -43,6 +43,7 @@ import {
   applyAttendees,
   sendEventCancellations,
 } from '../_shared/calendarEventWrite.ts';
+import { cancelConflictingBookingSlots, cancelConflictingBookingSlotsForNativeEvent } from '../_shared/meetingBookingSync.ts';
 
 type OAuthState = {
   provider: Provider;
@@ -675,9 +676,14 @@ async function updateEvent(organizationId: string, requesterUserId: string, inpu
   if (sourceId) {
     const { data: source } = await supabaseAdmin.from('calendar_sources').select('*').eq('organization_id', organizationId).eq('id', sourceId).single();
     if (source && (source as CalendarSourceRow).provider !== 'native') {
-      return await updateExternalEvent(organizationId, requesterUserId, source as CalendarSourceRow, input);
+      const result = await updateExternalEvent(organizationId, requesterUserId, source as CalendarSourceRow, input);
+      // Verplaatsen/herschalen kan een afspraak alsnog over een openstaande
+      // boekingsoptie leggen. Google/Microsoft ondersteunen hier geen herhaling.
+      await cancelConflictingBookingSlots(organizationId, String(result.source_id ?? ''), String(result.starts_at ?? ''), String(result.ends_at ?? ''));
+      return result;
     }
   }
+  // updateNativeEvent regelt zelf de boekingsoptie-reconciliatie (incl. herhalingen).
   return await updateNativeEvent(organizationId, requesterUserId, input);
 }
 
@@ -722,6 +728,9 @@ async function updateNativeEvent(organizationId: string, requesterUserId: string
   if (updateError || !updated) throw new Error('Agenda-item kon niet worden bijgewerkt.');
   const updatedRow = updated as NativeEventRow;
   await applyAttendees(organizationId, source, updatedRow, input).catch(err => console.error('invite (update) failed', err));
+  // Verplaatsen/herschalen (slepen, tijd bewerken) kan een (mogelijk herhalende)
+  // afspraak alsnog over een openstaande boekingsoptie leggen.
+  await cancelConflictingBookingSlotsForNativeEvent(organizationId, source, updatedRow);
   return nativeRowToBaseEvent(updatedRow, source);
 }
 
