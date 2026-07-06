@@ -9,7 +9,7 @@ export type FinanceStatus = 'draft' | 'pending_internal_approval' | 'internally_
 export type InvoiceStatus = 'draft' | 'sent' | 'overdue' | 'paid' | 'cancelled' | 'void' | 'written_off' | 'refunded';
 export type NoteType = 'general' | 'meeting' | 'action' | 'decision' | 'idea' | 'support';
 export type DocumentType = 'contract' | 'general' | 'policy' | 'procedure' | 'other';
-export type EntityType = 'client' | 'project' | 'task' | 'subtask' | 'ticket' | 'note' | 'document' | 'quote' | 'invoice' | 'folder' | 'supplier' | 'purchase_invoice' | 'fixed_asset' | 'meeting_recording';
+export type EntityType = 'client' | 'project' | 'task' | 'subtask' | 'ticket' | 'note' | 'document' | 'quote' | 'invoice' | 'folder' | 'supplier' | 'purchase_invoice' | 'fixed_asset' | 'meeting_recording' | 'chat_message';
 export type QuoteApprovalStatus = 'draft' | 'pending' | 'approved' | 'rejected';
 export type QuoteWorkflowEventType = 'created' | 'updated' | 'submitted_for_internal_approval' | 'internal_approval_granted' | 'internal_approval_rejected' | 'public_token_created' | 'sent_to_client' | 'email_sent' | 'email_delivered' | 'email_opened' | 'email_clicked' | 'email_bounced' | 'email_failed' | 'email_complained' | 'client_viewed' | 'client_accepted' | 'client_rejected' | 'quote_version_created' | 'quote_pdf_attached' | 'expired' | 'cancelled' | 'void' | 'written_off';
 export type QuoteEmailDeliveryStatus = 'queued' | 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'failed' | 'complained';
@@ -1161,6 +1161,63 @@ export interface ParsedBankStatement {
 
 export interface Attachment extends OrgScopedRow {
   entity_type: EntityType; entity_id: UUID; parent_task_id: UUID | null; name: string; mime_type: string; size_bytes: number; storage_key: string; public_url: string | null; created_at: string;
+}
+
+// ── Teamchat (interne chat tussen organisatieleden) ──────────────────────────
+export type ChatConversationKind = 'dm' | 'channel';
+export type ChatParticipantRole = 'member' | 'admin';
+
+export interface ChatConversation {
+  id: UUID;
+  organization_id: UUID;
+  kind: ChatConversationKind;
+  title: string | null;
+  description: string | null;
+  /** DM-only: de twee user-id's gesorteerd ("a:b"); uniek per organisatie. */
+  dm_key: string | null;
+  is_archived: boolean;
+  last_message_at: string | null;
+  created_by: UUID | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatParticipant {
+  conversation_id: UUID;
+  organization_id: UUID;
+  user_id: UUID;
+  role: ChatParticipantRole;
+  /** Laatste keer dat dit lid het gesprek opende — drijft ongelezen + leesbevestiging. */
+  last_read_at: string;
+  joined_at: string;
+}
+
+export interface ChatMessage {
+  id: UUID;
+  organization_id: UUID;
+  conversation_id: UUID;
+  sender_id: UUID | null;
+  body: string;
+  mentions: UUID[];
+  attachment_count: number;
+  edited_at: string | null;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatMessageReaction {
+  message_id: UUID;
+  conversation_id: UUID;
+  organization_id: UUID;
+  user_id: UUID;
+  emoji: string;
+  created_at: string;
+}
+
+export interface ChatUnreadCount {
+  conversation_id: UUID;
+  unread_count: number;
 }
 
 // ── Meeting-opnames + AI-notulen ─────────────────────────────────────────────

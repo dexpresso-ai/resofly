@@ -60,6 +60,7 @@ import { Dashboard } from './features/Dashboard';
 import { ClientDetailPage, Clients } from './features/Clients';
 import { useClientEmailUnread, ClientEmailToasts } from './components/ClientEmailNotifications';
 import { useTicketUnread, TicketToasts } from './components/TicketNotifications';
+import { useTeamChat, TeamChatPage, TeamChatDock } from './components/TeamChat';
 import { ProjectPage, ProjectsListPage, ProjectsPlanningPage } from './features/Projects';
 import { TimeTracking } from './features/TimeTracking';
 import { Tickets } from './features/Tickets';
@@ -95,7 +96,7 @@ import type {
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'archive'|'settings'|'project';
 type EditMode =
   | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status'>> }
   | { kind: 'project'; item?: Project; defaults?: Partial<Pick<Project, 'name' | 'client_id' | 'description' | 'start_date' | 'end_date'>> }
@@ -261,6 +262,14 @@ function App() {
       return { title: ticket.title, clientName: ticket.client_id ? data.clients.find(c => c.id === ticket.client_id)?.name ?? 'Onbekende klant' : 'Geen klant' };
     },
     onActivity: () => { void refresh(); },
+  });
+
+  // Teamchat — één realtime-/presence-abonnement op App-niveau, gedeeld door de
+  // sidebar-badge, de volledige chatpagina en het zwevende paneel.
+  const teamChat = useTeamChat({
+    organizationId: activeOrganization?.id ?? null,
+    currentUserId,
+    teamMembers: organizationContext.teamMembers ?? [],
   });
 
   async function loadWorkspace(preferredOrganizationId = activeOrganizationId) {
@@ -1001,7 +1010,7 @@ function App() {
     }
   }
 
-  const title = page === 'project' ? project?.name ?? 'Project' : page === 'client' ? client?.name ?? 'Klant' : ({dashboard:'Dashboard',weekplanner:'Weekplanner',calendar:'Kalender','calendar-settings':'Agenda-instellingen','meeting-booking':'Boekingslinks',time:'Uren',stats:'Statistieken',content:'Inhoud',notes:'Notities',documents:'Documenten',clients:'Klanten',projects:'Projecten','project-planning':'Projectplanning',tickets:'Tickets',quotes:'Offertes',invoices:'Facturen',suppliers:'Leveranciers','purchase-invoices':'Inkoopfacturen',ledger:'Grootboek',bank:'Bank',assets:'Activa',pnl:'Winst & verlies','vat-returns':'Omzetbelasting',archive:'Archief',settings:'Instellingen',project:'Project',client:'Klant'} as Record<Page,string>)[page];
+  const title = page === 'project' ? project?.name ?? 'Project' : page === 'client' ? client?.name ?? 'Klant' : ({dashboard:'Dashboard',weekplanner:'Weekplanner',calendar:'Kalender','calendar-settings':'Agenda-instellingen','meeting-booking':'Boekingslinks',time:'Uren',stats:'Statistieken',content:'Inhoud',notes:'Notities',documents:'Documenten',clients:'Klanten',projects:'Projecten','project-planning':'Projectplanning',tickets:'Tickets',chat:'Teamchat',quotes:'Offertes',invoices:'Facturen',suppliers:'Leveranciers','purchase-invoices':'Inkoopfacturen',ledger:'Grootboek',bank:'Bank',assets:'Activa',pnl:'Winst & verlies','vat-returns':'Omzetbelasting',archive:'Archief',settings:'Instellingen',project:'Project',client:'Klant'} as Record<Page,string>)[page];
 
   return <div className={`app${sidebarPinned ? ' sidebar-pinned' : ''}`}>
     <button
@@ -1012,7 +1021,7 @@ function App() {
       onClick={() => setMobileNavOpen(open => !open)}
     >{mobileNavOpen ? <X size={22}/> : <Menu size={22}/>}</button>
     <div className={`sidebar-backdrop${mobileNavOpen ? ' is-open' : ''}`} onClick={() => setMobileNavOpen(false)} aria-hidden="true" />
-    <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => supabaseAuth.signOut()} clientEmailUnread={clientEmailUnread.total} ticketUnread={ticketUnreadIds.size} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })}/>
+    <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => supabaseAuth.signOut()} clientEmailUnread={clientEmailUnread.total} ticketUnread={ticketUnreadIds.size} chatUnread={teamChat.unreadTotal} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })}/>
     <main className="main">{page !== 'calendar' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
       <section className="content">{error && <div className="error">{error}</div>}{renderPage()}</section>
     </main>{edit && <EditModal edit={edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} />}
@@ -1187,6 +1196,8 @@ function App() {
         setPage('stats');
       }}
     />
+    {/* Zwevend teamchat-paneel — overal beschikbaar, behalve op de volledige chatpagina. */}
+    <TeamChatDock api={teamChat} hidden={page === 'chat'} />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
       <div className="send-overlay-card">
         <span className="send-spinner" aria-hidden="true" />
@@ -1216,6 +1227,7 @@ function App() {
     if (page === 'client' && client) return <ClientDetailPage data={data} client={client} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewNote={(folderId) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(folderId) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditDocument={(doc) => setEdit({kind:'document', item: doc})} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread}/>;
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} unreadTicketIds={ticketUnreadIds}/>;
+    if (page === 'chat') return <TeamChatPage api={teamChat} />;
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null }})} onEditDocument={(item)=>setEdit({kind:'document', item})}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;

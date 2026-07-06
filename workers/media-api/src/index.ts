@@ -36,6 +36,7 @@ const ENTITY_TYPES = new Set([
   'quote',
   'invoice',
   'meeting_recording',
+  'chat_message',
 ]);
 
 /**

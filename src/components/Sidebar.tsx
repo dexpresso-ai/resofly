@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, Boxes, Calendar, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, LogOut, Percent, Pin, PinOff, Receipt, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, Boxes, Calendar, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, LogOut, MessageSquare, Percent, Pin, PinOff, Receipt, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, type SettingsTab } from '../features/SimplePages';
 import { Select } from './Ui';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'archive'|'settings'|'project';
 
 const items = [
   ['dashboard', LayoutDashboard, 'Dashboard'],
+  ['chat', MessageSquare, 'Chat'],
   ['weekplanner', Calendar, 'Weekplanner'],
   ['calendar', Calendar, 'Kalender'],
   ['time', Clock, 'Uren'],
@@ -40,6 +41,7 @@ export function Sidebar({
   onSignOut,
   clientEmailUnread = 0,
   ticketUnread = 0,
+  chatUnread = 0,
   mobileOpen = false,
   onCloseMobile,
   pinned = false,
@@ -59,6 +61,7 @@ export function Sidebar({
   onSignOut: () => void;
   clientEmailUnread?: number;
   ticketUnread?: number;
+  chatUnread?: number;
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
   pinned?: boolean;
@@ -178,7 +181,7 @@ export function Sidebar({
                   <span className="ni-label">{label}</span>
                   <span className="nav-chevron" aria-hidden="true">{projectsOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}</span>
                 </button>
-              : <button className={`nav-item ${isActive ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span>{key === 'clients' && clientEmailUnread > 0 && <span className="nav-badge" title={`${clientEmailUnread} ongelezen bericht${clientEmailUnread === 1 ? '' : 'en'}`}>{clientEmailUnread > 99 ? '99+' : clientEmailUnread}</span>}{key === 'tickets' && ticketUnread > 0 && <span className="nav-badge" title={`${ticketUnread} ticket${ticketUnread === 1 ? '' : 's'} met nieuwe klant-activiteit`}>{ticketUnread > 99 ? '99+' : ticketUnread}</span>}</button>}
+              : <button className={`nav-item ${isActive ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span>{key === 'clients' && clientEmailUnread > 0 && <span className="nav-badge" title={`${clientEmailUnread} ongelezen bericht${clientEmailUnread === 1 ? '' : 'en'}`}>{clientEmailUnread > 99 ? '99+' : clientEmailUnread}</span>}{key === 'tickets' && ticketUnread > 0 && <span className="nav-badge" title={`${ticketUnread} ticket${ticketUnread === 1 ? '' : 's'} met nieuwe klant-activiteit`}>{ticketUnread > 99 ? '99+' : ticketUnread}</span>}{key === 'chat' && chatUnread > 0 && <span className="nav-badge" title={`${chatUnread} ongelezen chatbericht${chatUnread === 1 ? '' : 'en'}`}>{chatUnread > 99 ? '99+' : chatUnread}</span>}</button>}
 
           {key === 'calendar' && calendarPages.includes(page) && <div className="nav-submenu">
             <button type="button" className={page === 'calendar' ? 'active' : ''} onClick={() => openCalendarSubPage('agenda')}>Agendaweergave</button>

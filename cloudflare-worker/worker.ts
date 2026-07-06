@@ -6,8 +6,8 @@ export interface Env {
   INTERNAL_UPLOAD_SECRET?: string; // server-to-server only, used by Supabase Edge Functions for immutable finance PDFs
 }
 
-const allowedEntityTypes = new Set(['client','project','task','subtask','ticket','note','quote','invoice']);
-const entityTable: Record<string, string> = { client: 'clients', project: 'projects', task: 'tasks', ticket: 'tickets', note: 'notes', quote: 'quotes', invoice: 'invoices' };
+const allowedEntityTypes = new Set(['client','project','task','subtask','ticket','note','quote','invoice','chat_message']);
+const entityTable: Record<string, string> = { client: 'clients', project: 'projects', task: 'tasks', ticket: 'tickets', note: 'notes', quote: 'quotes', invoice: 'invoices', chat_message: 'chat_messages' };
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB
 
 export default {
