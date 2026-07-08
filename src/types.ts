@@ -252,6 +252,30 @@ export interface EmailSuppression {
 export interface CampaignAudiencePreview {
   total: number; sendable: number; suppressed: number; withoutEmail: number; matchedClients: number; sample: { email: string; name: string | null }[];
 }
+
+// ── Follow-up-stromen ───────────────────────────────────────────────────────
+export type FlowStatus = 'draft' | 'active' | 'paused' | 'archived';
+export type FlowStopCondition = 'reply' | 'open_click_reply' | 'click_reply';
+export interface EmailFlow extends OrgScopedRow {
+  name: string; status: FlowStatus; audience: CampaignAudience; stop_condition: FlowStopCondition; created_at: string; updated_at: string;
+}
+export interface EmailFlowStep {
+  id: UUID; organization_id: UUID; flow_id: UUID; step_index: number; delay_days: number; subject: string; preheader: string | null; body_html: string; body_text: string | null; accent_color: string | null; created_at: string; updated_at: string;
+}
+export type FlowEnrollmentStatus = 'active' | 'completed' | 'stopped_reacted' | 'stopped_unsubscribed' | 'cancelled';
+export interface EmailFlowEnrollment {
+  id: UUID; organization_id: UUID; flow_id: UUID; client_id: UUID | null; contact_id: UUID | null; to_email: string; to_name: string | null; thread_id: UUID | null; status: FlowEnrollmentStatus; current_step_index: number; next_step_due_at: string | null; last_reply_at: string | null; enrolled_at: string; completed_at: string | null; created_at: string; updated_at: string;
+}
+export interface EmailFlowStats {
+  organization_id: UUID; flow_id: UUID; enrollments: number; active: number; completed: number; stopped_reacted: number; stopped_unsubscribed: number; cancelled: number;
+}
+export interface EmailFlowStepStats {
+  organization_id: UUID; flow_id: UUID; step_index: number; sent: number; opened: number; clicked: number; replied: number; bounced: number;
+}
+/** Bewerkbare stap-invoer voor de editor (nog zonder db-id/timestamps). */
+export interface FlowStepInput {
+  step_index: number; delay_days: number; subject: string; preheader?: string | null; body_html: string; body_text?: string | null; accent_color?: string | null;
+}
 export type ProjectBillingType = 'hourly' | 'fixed_price';
 export interface Project extends OrgScopedRow {
   client_id: UUID | null; name: string; description: string | null; color: string; archived: boolean; start_date: string | null; end_date: string | null; contract_id: UUID | null; hourly_rate_cents: number | null; billing_type: ProjectBillingType; created_at: string; updated_at: string;

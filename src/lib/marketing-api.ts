@@ -98,3 +98,28 @@ export async function resumeCampaign(organizationId: UUID, campaignId: UUID): Pr
 export async function cancelCampaign(organizationId: UUID, campaignId: UUID): Promise<void> {
   await invokeCampaigns(organizationId, 'cancelCampaign', { campaignId }, 'Campagne annuleren mislukt.');
 }
+
+// ── Follow-up-stromen ───────────────────────────────────────────────────────
+
+/** Activeer een concept-stroom: schrijf de doelgroep in en start (stap 0 direct). */
+export async function activateFlow(organizationId: UUID, flowId: UUID): Promise<{ enrolled: number; sent: number }> {
+  const data = await invokeCampaigns<{ enrolled?: number; sent?: number }>(
+    organizationId,
+    'activateFlow',
+    { flowId },
+    'Stroom activeren mislukt.',
+  );
+  return { enrolled: Number(data.enrolled || 0), sent: Number(data.sent || 0) };
+}
+
+export async function pauseFlow(organizationId: UUID, flowId: UUID): Promise<void> {
+  await invokeCampaigns(organizationId, 'pauseFlow', { flowId }, 'Stroom pauzeren mislukt.');
+}
+
+export async function resumeFlow(organizationId: UUID, flowId: UUID): Promise<void> {
+  await invokeCampaigns(organizationId, 'resumeFlow', { flowId }, 'Stroom hervatten mislukt.');
+}
+
+export async function cancelFlow(organizationId: UUID, flowId: UUID): Promise<void> {
+  await invokeCampaigns(organizationId, 'cancelFlow', { flowId }, 'Stroom stoppen mislukt.');
+}

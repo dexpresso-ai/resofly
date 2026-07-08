@@ -77,8 +77,32 @@ select * from cron.job_run_details where jobid = (select jobid from cron.job whe
 -- verwijderen: select cron.unschedule('campaigns-dispatch');
 ```
 
-> **Fase 2 (stromen/follow-ups):** komt er een tweede job `email-flows-tick`
-> (`*/15 * * * *` → `campaigns?cron=flows`). Nog niet nodig voor fase 1.
+### Tweede job: follow-up-stromen (fase 2)
+
+Plan de stromen-tick elk kwartier (verwerkt due inschrijvingen: volgende stap sturen
+tenzij de klant volgens de stopconditie heeft gereageerd). Zelfde secret + URL, andere `?cron`:
+
+```sql
+select cron.schedule(
+  'email-flows-tick',
+  '*/15 * * * *',                    -- elk kwartier
+  $$
+  select net.http_post(
+    url     := 'https://<REF>.functions.supabase.co/campaigns?cron=flows',
+    headers := jsonb_build_object('Content-Type','application/json','x-cron-secret','<CAMPAIGN_CRON_SECRET>'),
+    body    := '{}'::jsonb
+  );
+  $$
+);
+```
+
+De flows-tick:
+- claimt due inschrijvingen van ACTIEVE stromen (lease `next_step_due_at` +15 min, `for update skip locked`);
+- evalueert per inschrijving de per-stroom stopconditie (alleen antwoord / openen-klik-antwoord / klik-antwoord) tegen de laatste verstuurde stap;
+- verstuurt de volgende stap of stopt de reeks (`stopped_reacted` / `stopped_unsubscribed` / `completed`).
+
+Migratie `20260709000000_email_flows.sql` + de `campaigns`-functie (met `?cron=flows`) moeten
+gedeployed zijn (zie stap 2; de functie is dezelfde, alleen opnieuw deployen).
 
 ## 4. Afmeldlink-domein
 

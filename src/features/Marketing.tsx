@@ -1,23 +1,34 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Ban, CheckCircle2, Copy, Mail, MailWarning, Megaphone, Pause, Play, Plus, Send, Trash2, Users, X } from 'lucide-react';
+import { Ban, CheckCircle2, Clock, Copy, Mail, MailWarning, Megaphone, Pause, Play, Plus, Send, Trash2, Users, Workflow, X } from 'lucide-react';
 import type {
   AppData, CampaignAudience, CampaignAudiencePreview, EmailCampaign, EmailCampaignRecipient, EmailCampaignStats, EmailSuppression, UUID,
+  EmailFlow, EmailFlowStep, EmailFlowStats, EmailFlowStepStats, FlowStopCondition, FlowStepInput,
 } from '../types';
-import { Button, Input, Textarea, Select, ColorPicker } from '../components/Ui';
+import { Button, Input, Select, ColorPicker } from '../components/Ui';
 import { RichTextEditor } from '../components/RichTextEditor';
 import {
   loadCampaigns, loadCampaignStats, loadCampaignRecipients, loadSuppressions,
   createCampaign, updateCampaign, deleteCampaign, addSuppression, removeSuppression,
+  loadFlows, loadFlowSteps, loadFlowStats, loadFlowStepStats,
+  createFlow, updateFlow, deleteFlow, replaceFlowSteps,
 } from '../lib/repository';
 import {
   previewCampaignAudience, sendTestCampaign, sendCampaign, scheduleCampaign, pauseCampaign, resumeCampaign, cancelCampaign,
+  activateFlow, pauseFlow, resumeFlow, cancelFlow,
 } from '../lib/marketing-api';
 
-type Tab = 'campaigns' | 'suppressions';
+type Tab = 'campaigns' | 'flows' | 'suppressions';
 type View = { mode: 'list' } | { mode: 'edit'; id: UUID } | { mode: 'detail'; id: UUID };
 
 const STATUS_LABEL: Record<string, string> = {
   draft: 'Concept', scheduled: 'Ingepland', sending: 'Wordt verzonden', sent: 'Verzonden', paused: 'Gepauzeerd', cancelled: 'Geannuleerd',
+  active: 'Actief', archived: 'Gestopt',
+};
+
+const STOP_CONDITION_LABEL: Record<FlowStopCondition, string> = {
+  reply: 'Alleen een antwoord',
+  open_click_reply: 'Openen, klikken of antwoorden',
+  click_reply: 'Klikken of antwoorden',
 };
 
 function emptyAudience(): CampaignAudience {
@@ -40,7 +51,11 @@ export function Marketing({ data, organizationId, canWrite, onChanged }: {
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([]);
   const [stats, setStats] = useState<Record<UUID, EmailCampaignStats>>({});
   const [suppressions, setSuppressions] = useState<EmailSuppression[]>([]);
+  const [flows, setFlows] = useState<EmailFlow[]>([]);
+  const [flowStats, setFlowStats] = useState<Record<UUID, EmailFlowStats>>({});
+  const [flowStepStats, setFlowStepStats] = useState<Record<UUID, EmailFlowStepStats[]>>({});
   const [view, setView] = useState<View>({ mode: 'list' });
+  const [flowView, setFlowView] = useState<View>({ mode: 'list' });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -49,14 +64,22 @@ export function Marketing({ data, organizationId, canWrite, onChanged }: {
     setLoading(true);
     setError(null);
     try {
-      const [c, s, sup] = await Promise.all([
+      const [c, s, sup, fl, fs, fss] = await Promise.all([
         loadCampaigns(organizationId),
         loadCampaignStats(organizationId),
         loadSuppressions(organizationId),
+        loadFlows(organizationId),
+        loadFlowStats(organizationId),
+        loadFlowStepStats(organizationId),
       ]);
       setCampaigns(c);
       setStats(Object.fromEntries(s.map(row => [row.campaign_id, row])));
       setSuppressions(sup);
+      setFlows(fl);
+      setFlowStats(Object.fromEntries(fs.map(row => [row.flow_id, row])));
+      const byFlow: Record<UUID, EmailFlowStepStats[]> = {};
+      for (const row of fss) (byFlow[row.flow_id] ||= []).push(row);
+      setFlowStepStats(byFlow);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Laden mislukt.');
     } finally {
@@ -117,6 +140,38 @@ export function Marketing({ data, organizationId, canWrite, onChanged }: {
     }
   }
 
+  const selectedFlow = flowView.mode !== 'list' ? flows.find(f => f.id === flowView.id) ?? null : null;
+
+  async function handleNewFlow() {
+    if (!canWrite || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await createFlow(organizationId, { name: 'Nieuwe stroom', audience: emptyAudience(), stop_condition: 'reply' });
+      setFlows(prev => [created, ...prev]);
+      setFlowView({ mode: 'edit', id: created.id });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Stroom aanmaken mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteFlow(id: UUID) {
+    if (!canWrite || busy) return;
+    if (!window.confirm('Deze stroom definitief verwijderen?')) return;
+    setBusy(true);
+    try {
+      await deleteFlow(organizationId, id);
+      setFlows(prev => prev.filter(f => f.id !== id));
+      setFlowView({ mode: 'list' });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Verwijderen mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="mk">
       <div className="mk-head">
@@ -128,11 +183,17 @@ export function Marketing({ data, organizationId, canWrite, onChanged }: {
         {tab === 'campaigns' && view.mode === 'list' && canWrite && (
           <Button variant="primary" onClick={handleNew} disabled={busy}><Plus size={16} /> Nieuwe campagne</Button>
         )}
+        {tab === 'flows' && flowView.mode === 'list' && canWrite && (
+          <Button variant="primary" onClick={handleNewFlow} disabled={busy}><Plus size={16} /> Nieuwe stroom</Button>
+        )}
       </div>
 
       <div className="client-tabs-bar mk-tabs">
         <button className={`client-tab-btn${tab === 'campaigns' ? ' active' : ''}`} onClick={() => { setTab('campaigns'); setView({ mode: 'list' }); }}>
           <Megaphone size={15} /> Campagnes
+        </button>
+        <button className={`client-tab-btn${tab === 'flows' ? ' active' : ''}`} onClick={() => { setTab('flows'); setFlowView({ mode: 'list' }); }}>
+          <Workflow size={15} /> Stromen
         </button>
         <button className={`client-tab-btn${tab === 'suppressions' ? ' active' : ''}`} onClick={() => setTab('suppressions')}>
           <Ban size={15} /> Afmeldingen{suppressions.length > 0 && <span className="client-tab-badge">{suppressions.length}</span>}
@@ -148,6 +209,31 @@ export function Marketing({ data, organizationId, canWrite, onChanged }: {
         />
       ) : loading ? (
         <div className="mk-empty">Laden…</div>
+      ) : tab === 'flows' ? (
+        flowView.mode === 'list' ? (
+          <FlowList
+            flows={flows} stats={flowStats} canWrite={canWrite}
+            onOpen={(f) => setFlowView(f.status === 'draft' ? { mode: 'edit', id: f.id } : { mode: 'detail', id: f.id })}
+            onDelete={handleDeleteFlow}
+          />
+        ) : selectedFlow && flowView.mode === 'edit' ? (
+          <FlowEditor
+            key={selectedFlow.id} data={data} organizationId={organizationId} canWrite={canWrite} flow={selectedFlow}
+            onBack={() => setFlowView({ mode: 'list' })}
+            onSaved={(f) => setFlows(prev => prev.map(x => x.id === f.id ? f : x))}
+            onActivated={async () => { await reload(); onChanged(); setFlowView({ mode: 'detail', id: selectedFlow.id }); }}
+            onDelete={() => handleDeleteFlow(selectedFlow.id)}
+            onError={setError}
+          />
+        ) : selectedFlow ? (
+          <FlowDetail
+            key={selectedFlow.id} organizationId={organizationId} flow={selectedFlow}
+            stats={flowStats[selectedFlow.id]} stepStats={flowStepStats[selectedFlow.id] ?? []}
+            canWrite={canWrite} onBack={() => setFlowView({ mode: 'list' })} onChanged={reload} onError={setError}
+          />
+        ) : (
+          <div className="mk-empty">Stroom niet gevonden.</div>
+        )
       ) : view.mode === 'list' ? (
         <CampaignList
           campaigns={campaigns} stats={stats} canWrite={canWrite}
@@ -722,6 +808,276 @@ function SuppressionsTab({ organizationId, canWrite, suppressions, onChanged, on
                   <td data-label="" className="mk-actions">
                     {canWrite && <button className="mk-icon" title="Weer toestaan" onClick={() => remove(s.email)} disabled={busy}><Trash2 size={15} /></button>}
                   </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Stromen (follow-ups) ────────────────────────────────────────────────────
+
+function emptyStep(index: number): FlowStepInput {
+  return { step_index: index, delay_days: index === 0 ? 0 : 3, subject: '', preheader: null, body_html: '', body_text: null, accent_color: '#FFD966' };
+}
+
+function FlowList({ flows, stats, canWrite, onOpen, onDelete }: {
+  flows: EmailFlow[];
+  stats: Record<UUID, EmailFlowStats>;
+  canWrite: boolean;
+  onOpen: (f: EmailFlow) => void;
+  onDelete: (id: UUID) => void;
+}) {
+  if (flows.length === 0) {
+    return <div className="mk-empty"><Workflow size={30} /><p>Nog geen stromen. Maak een reeks die automatisch opvolgt wanneer een klant niet reageert.</p></div>;
+  }
+  return (
+    <div className="quote-table-card">
+      <div className="quote-table-scroll">
+        <table className="quote-table mk-table">
+          <thead><tr><th>Stroom</th><th>Status</th><th>Ingeschreven</th><th>Voortgang</th><th></th></tr></thead>
+          <tbody>
+            {flows.map(f => {
+              const s = stats[f.id];
+              return (
+                <tr key={f.id} className="mk-row" onClick={() => onOpen(f)}>
+                  <td data-label="Stroom">
+                    <div className="mk-name">{f.name || '(naamloos)'}</div>
+                    <div className="mk-subject">Stopt zodra de klant: {STOP_CONDITION_LABEL[f.stop_condition].toLowerCase()}</div>
+                  </td>
+                  <td data-label="Status"><span className={`mk-status ${f.status}`}>{STATUS_LABEL[f.status] ?? f.status}</span></td>
+                  <td data-label="Ingeschreven">{s ? s.enrollments : '—'}</td>
+                  <td data-label="Voortgang">
+                    {s ? (
+                      <div className="mk-stat-row">
+                        <span className="mk-chip">{s.active} lopend</span>
+                        <span className="mk-chip good">{s.stopped_reacted} gereageerd</span>
+                        <span className="mk-chip">{s.completed} klaar</span>
+                      </div>
+                    ) : '—'}
+                  </td>
+                  <td className="mk-actions" onClick={e => e.stopPropagation()}>
+                    {canWrite && (f.status === 'draft' || f.status === 'archived') && (
+                      <button className="mk-icon danger" title="Verwijderen" onClick={() => onDelete(f.id)}><Trash2 size={15} /></button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function FlowEditor({ data, organizationId, canWrite, flow, onBack, onSaved, onActivated, onDelete, onError }: {
+  data: AppData;
+  organizationId: UUID;
+  canWrite: boolean;
+  flow: EmailFlow;
+  onBack: () => void;
+  onSaved: (f: EmailFlow) => void;
+  onActivated: () => void | Promise<void>;
+  onDelete: () => void;
+  onError: (msg: string | null) => void;
+}) {
+  const [name, setName] = useState(flow.name);
+  const [stopCondition, setStopCondition] = useState<FlowStopCondition>(flow.stop_condition);
+  const [audience, setAudience] = useState<CampaignAudience>(flow.audience ?? emptyAudience());
+  const [steps, setSteps] = useState<FlowStepInput[]>([]);
+  const [stepsLoaded, setStepsLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const readOnly = !canWrite;
+
+  useEffect(() => {
+    let cancelled = false;
+    loadFlowSteps(organizationId, flow.id)
+      .then((rows: EmailFlowStep[]) => {
+        if (cancelled) return;
+        const mapped = rows.map(r => ({ step_index: r.step_index, delay_days: r.delay_days, subject: r.subject, preheader: r.preheader, body_html: r.body_html, body_text: r.body_text, accent_color: r.accent_color }));
+        setSteps(mapped.length ? mapped : [emptyStep(0)]);
+        setStepsLoaded(true);
+      })
+      .catch(() => { if (!cancelled) { setSteps([emptyStep(0)]); setStepsLoaded(true); } });
+    return () => { cancelled = true; };
+  }, [organizationId, flow.id]);
+
+  const updateStep = (i: number, patch: Partial<FlowStepInput>) => setSteps(prev => prev.map((s, idx) => idx === i ? { ...s, ...patch } : s));
+  const addStep = () => setSteps(prev => [...prev, emptyStep(prev.length)]);
+  const removeStep = (i: number) => setSteps(prev => prev.filter((_, idx) => idx !== i));
+
+  async function persist(): Promise<boolean> {
+    if (!stepsLoaded) return false; // nooit opslaan met een nog-lege stappenlijst (zou alles wissen)
+    onError(null);
+    try {
+      const updated = await updateFlow(organizationId, flow.id, { name: name.trim() || 'Naamloze stroom', audience, stop_condition: stopCondition });
+      onSaved(updated);
+      const clean = steps.map((s, i) => ({ ...s, step_index: i, delay_days: i === 0 ? 0 : Math.max(0, Math.round(s.delay_days || 0)) }));
+      await replaceFlowSteps(organizationId, flow.id, clean);
+      return true;
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Opslaan mislukt.');
+      return false;
+    }
+  }
+
+  async function handleSaveButton() {
+    setBusy(true);
+    try { if (await persist()) setNotice('Opgeslagen.'); } finally { setBusy(false); }
+  }
+
+  async function handleActivate() {
+    if (steps.some(s => !s.subject.trim())) { onError('Elke stap heeft een onderwerp nodig.'); return; }
+    if (!window.confirm('Stroom activeren? De doelgroep wordt ingeschreven en de eerste mail gaat direct uit.')) return;
+    setBusy(true);
+    try {
+      if (!(await persist())) return;
+      const res = await activateFlow(organizationId, flow.id);
+      setNotice(`Geactiveerd: ${res.enrolled} ingeschreven, ${res.sent} eerste mails verstuurd.`);
+      await onActivated();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Activeren mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mk-editor">
+      <div className="mk-editor-bar">
+        <button className="mk-back" onClick={onBack}><X size={16} /> Terug</button>
+        <span className={`mk-status ${flow.status}`}>{STATUS_LABEL[flow.status] ?? flow.status}</span>
+        {notice && <span className="mk-notice">{notice}</span>}
+      </div>
+
+      <div className="mk-editor-grid">
+        <div className="settings-card mk-card">
+          <label className="mk-field"><span>Naam van de stroom</span>
+            <Input value={name} onChange={e => setName(e.target.value)} disabled={readOnly} placeholder="Bijv. Opvolging na offerte" />
+          </label>
+          <label className="mk-field"><span>Stop de reeks zodra de klant heeft…</span>
+            <Select value={stopCondition} onChange={e => setStopCondition(e.target.value as FlowStopCondition)} disabled={readOnly}>
+              <option value="reply">Alleen een antwoord</option>
+              <option value="open_click_reply">Openen, klikken of antwoorden</option>
+              <option value="click_reply">Klikken of antwoorden</option>
+            </Select>
+          </label>
+
+          {!stepsLoaded ? <div className="mk-muted">Stappen laden…</div> : (
+            <div className="mk-steps">
+              {steps.map((step, i) => (
+                <div className="mk-step" key={i}>
+                  <div className="mk-step-head">
+                    <span className="mk-step-num">Stap {i + 1}</span>
+                    <span className="mk-step-delay"><Clock size={13} />
+                      {i === 0 ? 'Direct bij inschrijven' : (
+                        <>Wacht <Input type="number" min="0" className="mk-days" value={String(step.delay_days)} onChange={e => updateStep(i, { delay_days: Number(e.target.value) })} disabled={readOnly} /> dagen</>
+                      )}
+                    </span>
+                    {!readOnly && steps.length > 1 && <button className="mk-icon danger" title="Stap verwijderen" onClick={() => removeStep(i)}><Trash2 size={14} /></button>}
+                  </div>
+                  <Input value={step.subject} onChange={e => updateStep(i, { subject: e.target.value })} disabled={readOnly} placeholder="Onderwerp van deze mail" />
+                  <RichTextEditor value={step.body_html} onChange={html => updateStep(i, { body_html: html })} disabled={readOnly} placeholder="Bericht van deze stap…" />
+                </div>
+              ))}
+              {!readOnly && <Button onClick={addStep}><Plus size={15} /> Stap toevoegen</Button>}
+            </div>
+          )}
+        </div>
+
+        <div className="mk-side">
+          <AudienceSelector data={data} organizationId={organizationId} value={audience} onChange={setAudience} disabled={readOnly} />
+          {!readOnly && (
+            <div className="settings-card mk-card">
+              <div className="mk-card-title">Publiceren</div>
+              <Button variant="primary" className="mk-full" onClick={handleActivate} disabled={busy || !stepsLoaded}><Play size={16} /> Activeren</Button>
+              <p className="mk-muted">Bij activeren wordt de doelgroep ingeschreven en gaat de eerste mail direct uit. Volgende stappen volgen automatisch als er niet is gereageerd.</p>
+              <div className="mk-editor-foot">
+                <Button onClick={handleSaveButton} disabled={busy || !stepsLoaded}>Opslaan</Button>
+                <button className="mk-icon danger" title="Verwijderen" onClick={onDelete} disabled={busy}><Trash2 size={15} /></button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FlowDetail({ organizationId, flow, stats, stepStats, canWrite, onBack, onChanged, onError }: {
+  organizationId: UUID;
+  flow: EmailFlow;
+  stats: EmailFlowStats | undefined;
+  stepStats: EmailFlowStepStats[];
+  canWrite: boolean;
+  onBack: () => void;
+  onChanged: () => void | Promise<void>;
+  onError: (msg: string | null) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function act(fn: () => Promise<void>) {
+    setBusy(true);
+    onError(null);
+    try { await fn(); await onChanged(); }
+    catch (e) { onError(e instanceof Error ? e.message : 'Actie mislukt.'); }
+    finally { setBusy(false); }
+  }
+
+  const chips: { label: string; value: number; cls?: string }[] = stats ? [
+    { label: 'Ingeschreven', value: stats.enrollments },
+    { label: 'Lopend', value: stats.active },
+    { label: 'Gereageerd', value: stats.stopped_reacted, cls: 'good' },
+    { label: 'Afgerond', value: stats.completed },
+    { label: 'Afgemeld', value: stats.stopped_unsubscribed, cls: 'warn' },
+  ] : [];
+
+  const orderedSteps = [...stepStats].sort((a, b) => a.step_index - b.step_index);
+
+  return (
+    <div className="mk-detail">
+      <div className="mk-editor-bar">
+        <button className="mk-back" onClick={onBack}><X size={16} /> Terug</button>
+        <span className={`mk-status ${flow.status}`}>{STATUS_LABEL[flow.status] ?? flow.status}</span>
+        <div className="mk-detail-actions">
+          {canWrite && flow.status === 'active' && <Button onClick={() => act(() => pauseFlow(organizationId, flow.id))} disabled={busy}><Pause size={15} /> Pauzeer</Button>}
+          {canWrite && flow.status === 'paused' && <Button variant="primary" onClick={() => act(() => resumeFlow(organizationId, flow.id))} disabled={busy}><Play size={15} /> Hervat</Button>}
+          {canWrite && (flow.status === 'active' || flow.status === 'paused') && <Button variant="danger" onClick={() => act(() => cancelFlow(organizationId, flow.id))} disabled={busy}><Ban size={15} /> Stoppen</Button>}
+        </div>
+      </div>
+
+      <div className="mk-detail-head">
+        <h2>{flow.name || '(naamloos)'}</h2>
+        <p className="mk-muted">Stopt zodra de klant heeft: {STOP_CONDITION_LABEL[flow.stop_condition].toLowerCase()}</p>
+      </div>
+
+      <div className="mk-stat-grid">
+        {chips.map(c => (
+          <div key={c.label} className={`stat-card mk-stat-card${c.cls ? ' ' + c.cls : ''}`}>
+            <div className="sc-val">{c.value}</div><div className="sc-label">{c.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="quote-table-card">
+        <div className="quote-table-scroll">
+          <table className="quote-table mk-table">
+            <thead><tr><th>Stap</th><th>Verzonden</th><th>Geopend</th><th>Geklikt</th><th>Geantwoord</th></tr></thead>
+            <tbody>
+              {orderedSteps.length === 0 ? (
+                <tr><td colSpan={5} className="mk-muted">Nog niets verstuurd.</td></tr>
+              ) : orderedSteps.map(s => (
+                <tr key={s.step_index}>
+                  <td data-label="Stap">Stap {s.step_index + 1}</td>
+                  <td data-label="Verzonden">{s.sent}</td>
+                  <td data-label="Geopend">{s.opened}</td>
+                  <td data-label="Geklikt">{s.clicked}</td>
+                  <td data-label="Geantwoord">{s.replied}</td>
                 </tr>
               ))}
             </tbody>

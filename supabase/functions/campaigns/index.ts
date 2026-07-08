@@ -93,6 +93,10 @@ serve(async (req) => {
         const result = await handleCampaignDispatch();
         return json(req, { ok: true, ...result });
       }
+      if (cron === 'flows') {
+        const result = await handleFlowTick();
+        return json(req, { ok: true, ...result });
+      }
       return json(req, { ok: false, error: `Onbekende cron: ${cron}` }, 400);
     } catch (error) {
       const status = error instanceof CampaignHttpError ? error.status : 500;
@@ -151,6 +155,26 @@ serve(async (req) => {
       case 'cancelCampaign': {
         requireWrite(role);
         const result = await setCampaignStatus(organizationId, String(body.campaignId || ''), 'cancelled', ['draft', 'scheduled', 'sending', 'paused']);
+        return json(req, { ok: true, ...result });
+      }
+      case 'activateFlow': {
+        requireWrite(role);
+        const result = await activateFlow(organizationId, String(body.flowId || ''));
+        return json(req, { ok: true, ...result });
+      }
+      case 'pauseFlow': {
+        requireWrite(role);
+        const result = await setFlowStatus(organizationId, String(body.flowId || ''), 'paused', ['active']);
+        return json(req, { ok: true, ...result });
+      }
+      case 'resumeFlow': {
+        requireWrite(role);
+        const result = await setFlowStatus(organizationId, String(body.flowId || ''), 'active', ['paused']);
+        return json(req, { ok: true, ...result });
+      }
+      case 'cancelFlow': {
+        requireWrite(role);
+        const result = await cancelFlow(organizationId, String(body.flowId || ''));
         return json(req, { ok: true, ...result });
       }
       default:
@@ -703,17 +727,23 @@ async function sendToRecipient(
     .eq('id', recipient.id);
 }
 
+type EmailContent = { subject: string; preheader: string | null; body_html: string; accent_color: string | null };
+
 function buildCampaignHtml(campaign: CampaignRow, brandName: string, unsubToken: string): string {
+  return buildEmailHtml(campaign, brandName, unsubToken);
+}
+
+function buildEmailHtml(content: EmailContent, brandName: string, unsubToken: string): string {
   const unsubscribeUrl = `${UNSUBSCRIBE_BASE_URL}?token=${encodeURIComponent(unsubToken)}`;
   const footerHtml = `Je ontvangt deze e-mail omdat je klant bent bij ${escapeHtml(brandName)}. <a href="${escapeHtml(unsubscribeUrl)}" style="color:#9b9ba7;text-decoration:underline;">Afmelden voor deze mails</a>.`;
   return renderEmailLayout({
     brandName,
     eyebrow: brandName,
-    title: campaign.subject || brandName,
-    preheader: campaign.preheader || undefined,
-    introHtml: campaign.body_html || '',
+    title: content.subject || brandName,
+    preheader: content.preheader || undefined,
+    introHtml: content.body_html || '',
     footerHtml,
-    accentColor: campaign.accent_color,
+    accentColor: content.accent_color,
   });
 }
 
@@ -777,6 +807,429 @@ async function handleCampaignDispatch(): Promise<{ promoted: number; campaigns: 
   }
 
   return { promoted, campaigns: campaignsProcessed, sent, failed };
+}
+
+// ── Follow-up-stromen ───────────────────────────────────────────────────────
+
+type FlowRow = { id: string; organization_id: string; name: string; status: string; audience: Record<string, unknown> | null; stop_condition: string };
+type FlowStepRow = { id: string; flow_id: string; step_index: number; delay_days: number; subject: string; preheader: string | null; body_html: string; body_text: string | null; accent_color: string | null };
+type EnrollmentRow = {
+  id: string; organization_id: string; flow_id: string; client_id: string | null; contact_id: string | null;
+  to_email: string; to_name: string | null; thread_id: string | null; status: string;
+  current_step_index: number; next_step_due_at: string | null; last_reply_at: string | null;
+};
+
+const FLOW_COLUMNS = 'id,organization_id,name,status,audience,stop_condition';
+const FLOW_STEP_COLUMNS = 'id,flow_id,step_index,delay_days,subject,preheader,body_html,body_text,accent_color';
+const FLOW_BATCH = Number(Deno.env.get('CAMPAIGN_FLOW_BATCH') || '100') || 100;
+
+async function loadFlow(organizationId: string, flowId: string): Promise<FlowRow> {
+  if (!isUuid(flowId)) throw new CampaignHttpError('Ongeldige stroom.', 400);
+  const { data, error } = await supabaseAdmin
+    .from('email_flows')
+    .select(FLOW_COLUMNS)
+    .eq('id', flowId)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new CampaignHttpError('Stroom niet gevonden.', 404);
+  return data as FlowRow;
+}
+
+async function loadFlowSteps(organizationId: string, flowId: string): Promise<FlowStepRow[]> {
+  const { data, error } = await supabaseAdmin
+    .from('email_flow_steps')
+    .select(FLOW_STEP_COLUMNS)
+    .eq('organization_id', organizationId)
+    .eq('flow_id', flowId)
+    .order('step_index', { ascending: true });
+  if (error) throw error;
+  return (data || []) as FlowStepRow[];
+}
+
+async function setFlowStatus(
+  organizationId: string,
+  flowId: string,
+  status: string,
+  allowedFrom: string[],
+): Promise<{ flowId: string; status: string }> {
+  const flow = await loadFlow(organizationId, flowId);
+  if (!allowedFrom.includes(flow.status)) {
+    throw new CampaignHttpError(`Deze stroom kan niet van '${flow.status}' naar '${status}'.`, 409);
+  }
+  const { data, error } = await supabaseAdmin
+    .from('email_flows')
+    .update({ status })
+    .eq('id', flowId)
+    .eq('organization_id', organizationId)
+    .in('status', allowedFrom)
+    .select('id');
+  if (error) throw error;
+  if (!data || data.length === 0) throw new CampaignHttpError('De stroom is inmiddels gewijzigd; herlaad en probeer opnieuw.', 409);
+  return { flowId, status };
+}
+
+async function cancelFlow(organizationId: string, flowId: string): Promise<{ flowId: string; status: string }> {
+  const result = await setFlowStatus(organizationId, flowId, 'archived', ['draft', 'active', 'paused']);
+  await supabaseAdmin
+    .from('email_flow_enrollments')
+    .update({ status: 'cancelled', next_step_due_at: null, completed_at: new Date().toISOString() })
+    .eq('organization_id', organizationId)
+    .eq('flow_id', flowId)
+    .eq('status', 'active');
+  return result;
+}
+
+async function activateFlow(organizationId: string, flowId: string): Promise<{ flowId: string; enrolled: number; sent: number }> {
+  requireResendConfigured();
+  requireUnsubscribeConfigured();
+  const flow = await loadFlow(organizationId, flowId);
+  if (flow.status !== 'draft') {
+    throw new CampaignHttpError('Alleen een concept-stroom kan geactiveerd worden (gebruik hervatten om te pauzeren/hervatten).', 409);
+  }
+  const steps = await loadFlowSteps(organizationId, flowId);
+  if (steps.length === 0) throw new CampaignHttpError('Deze stroom heeft nog geen stappen.', 422);
+
+  const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+  if (!sender.from) {
+    throw new CampaignHttpError('Er is nog geen afzenderadres geconfigureerd (verzenddomein of RESEND_FROM_EMAIL).', 422);
+  }
+
+  // Inschrijvingen materialiseren uit de doelgroep (suppressie eraf).
+  const { candidates, suppressed } = await resolveAudience(organizationId, flow.audience || {});
+  const step0Due = new Date(Date.now() + Math.max(0, steps[0].delay_days) * 86400000).toISOString();
+  const rows = candidates
+    .filter((c) => !suppressed.has(c.email))
+    .map((c) => ({
+      organization_id: organizationId,
+      flow_id: flowId,
+      client_id: c.clientId,
+      contact_id: c.contactId,
+      to_email: c.email,
+      to_name: c.name,
+      status: 'active',
+      current_step_index: -1,
+      next_step_due_at: step0Due,
+    }));
+
+  let enrolled = 0;
+  for (const rowChunk of chunk(rows, 500)) {
+    const { data, error } = await supabaseAdmin
+      .from('email_flow_enrollments')
+      .upsert(rowChunk, { onConflict: 'flow_id,to_email', ignoreDuplicates: true })
+      .select('id');
+    if (error) throw error;
+    enrolled += (data || []).length;
+  }
+
+  // Atomair activeren.
+  const { data: flipped, error: flipError } = await supabaseAdmin
+    .from('email_flows')
+    .update({ status: 'active' })
+    .eq('id', flowId)
+    .eq('organization_id', organizationId)
+    .eq('status', 'draft')
+    .select('id');
+  if (flipError) throw flipError;
+  if (!flipped || flipped.length === 0) throw new CampaignHttpError('De stroom is inmiddels gewijzigd; herlaad en probeer opnieuw.', 409);
+
+  // Directe eerste ronde voor stappen met wachttijd 0 (rest volgt via de flows-cron).
+  // NB: handleFlowTick claimt globaal; tel daarom deze stroom's eigen stap-0-sends.
+  await handleFlowTick();
+  const { count } = await supabaseAdmin
+    .from('email_flow_sends')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', organizationId)
+    .eq('flow_id', flowId)
+    .eq('step_index', 0)
+    .not('sent_at', 'is', null);
+  return { flowId, enrolled, sent: count || 0 };
+}
+
+/** Cron: verwerk due stroom-inschrijvingen (stopconditie evalueren + volgende stap sturen). */
+async function handleFlowTick(): Promise<{ claimed: number; sent: number; stopped: number; completed: number }> {
+  const { data: claimed, error } = await supabaseAdmin.rpc('claim_due_flow_enrollments', { p_limit: FLOW_BATCH });
+  if (error) throw error;
+  const enrollments = (claimed || []) as EnrollmentRow[];
+  if (enrollments.length === 0) return { claimed: 0, sent: 0, stopped: 0, completed: 0 };
+
+  // Batch-context: stromen, stappen, suppressie en afzender per organisatie.
+  const flowIds = [...new Set(enrollments.map((e) => e.flow_id))];
+  const orgIds = [...new Set(enrollments.map((e) => e.organization_id))];
+
+  const flows = new Map<string, FlowRow>();
+  const stepsByFlow = new Map<string, FlowStepRow[]>();
+  for (const flowIdChunk of chunk(flowIds, 200)) {
+    const { data: fl } = await supabaseAdmin.from('email_flows').select(FLOW_COLUMNS).in('id', flowIdChunk);
+    for (const f of (fl || []) as FlowRow[]) flows.set(f.id, f);
+    const { data: st } = await supabaseAdmin.from('email_flow_steps').select(FLOW_STEP_COLUMNS).in('flow_id', flowIdChunk).order('step_index', { ascending: true });
+    for (const s of (st || []) as FlowStepRow[]) {
+      const list = stepsByFlow.get(s.flow_id) || [];
+      list.push(s);
+      stepsByFlow.set(s.flow_id, list);
+    }
+  }
+
+  const suppressedByOrg = new Map<string, Set<string>>();
+  const brandByOrg = new Map<string, string>();
+  const senderByOrg = new Map<string, { from: string; replyTo?: string; fromEmail: string | null }>();
+  for (const orgId of orgIds) {
+    const emails = enrollments.filter((e) => e.organization_id === orgId).map((e) => e.to_email);
+    suppressedByOrg.set(orgId, await loadSuppressedFor(orgId, emails));
+    brandByOrg.set(orgId, await loadOrgBrand(orgId));
+    senderByOrg.set(orgId, await resolveSenderIdentity(supabaseAdmin, orgId, RESEND_FROM_EMAIL, RESEND_REPLY_TO));
+  }
+
+  let sent = 0;
+  let stopped = 0;
+  let completed = 0;
+
+  for (const enrollment of enrollments) {
+    try {
+      const flow = flows.get(enrollment.flow_id);
+      if (!flow || flow.status !== 'active') continue; // stroom is tussentijds gepauzeerd/gearchiveerd
+      const steps = stepsByFlow.get(enrollment.flow_id) || [];
+      const nextIndex = enrollment.current_step_index + 1;
+
+      // Adres inmiddels afgemeld/geblokkeerd/gebounced → reeks stoppen.
+      if ((suppressedByOrg.get(enrollment.organization_id) || new Set()).has(normalizeEmail(enrollment.to_email))) {
+        await finishEnrollment(enrollment.id, 'stopped_unsubscribed');
+        stopped += 1;
+        continue;
+      }
+
+      if (nextIndex >= steps.length) {
+        await finishEnrollment(enrollment.id, 'completed');
+        completed += 1;
+        continue;
+      }
+
+      // Stopconditie geldt voor de follow-ups (stap 1+): heeft de klant al gereageerd?
+      if (nextIndex >= 1) {
+        const { data: prev } = await supabaseAdmin
+          .from('email_flow_sends')
+          .select('step_index,sent_at,opened_at,clicked_at,replied_at')
+          .eq('enrollment_id', enrollment.id)
+          .eq('step_index', enrollment.current_step_index)
+          .maybeSingle();
+        if (hasReacted(flow.stop_condition, prev as FlowSendRow | null, enrollment.last_reply_at)) {
+          await finishEnrollment(enrollment.id, 'stopped_reacted');
+          stopped += 1;
+          continue;
+        }
+      }
+
+      const step = steps[nextIndex];
+      const brandName = brandByOrg.get(enrollment.organization_id) || 'ResoFly';
+      const sender = senderByOrg.get(enrollment.organization_id);
+      if (!sender || !sender.from) continue; // geen afzender geconfigureerd → overslaan (lease retryt later)
+      const threadId = await sendFlowStep(enrollment, flow, step, sender, brandName);
+
+      const following = steps[nextIndex + 1];
+      const advance = following
+        ? await supabaseAdmin
+            .from('email_flow_enrollments')
+            .update({
+              current_step_index: nextIndex,
+              next_step_due_at: new Date(Date.now() + Math.max(0, following.delay_days) * 86400000).toISOString(),
+              thread_id: threadId,
+            })
+            .eq('id', enrollment.id)
+        : await supabaseAdmin
+            .from('email_flow_enrollments')
+            .update({ current_step_index: nextIndex, status: 'completed', completed_at: new Date().toISOString(), next_step_due_at: null, thread_id: threadId })
+            .eq('id', enrollment.id);
+      // Bij een mislukte voortgangs-update loggen we (buitenste catch): de lease
+      // pikt de inschrijving over 15 min opnieuw op; sendFlowStep is idempotent
+      // (bestaande 'sent' flow_send wordt niet opnieuw verstuurd), dus veilig.
+      if (advance.error) throw advance.error;
+      if (!following) completed += 1;
+      sent += 1;
+    } catch (err) {
+      console.error('flow enrollment failed', enrollment.id, err instanceof Error ? err.message : err);
+    }
+  }
+
+  return { claimed: enrollments.length, sent, stopped, completed };
+}
+
+type FlowSendRow = { step_index: number; sent_at: string | null; opened_at: string | null; clicked_at: string | null; replied_at: string | null };
+
+function hasReacted(stopCondition: string, prev: FlowSendRow | null, lastReplyAt: string | null): boolean {
+  const repliedOnSend = !!prev?.replied_at;
+  const repliedSince = !!(lastReplyAt && prev?.sent_at && new Date(lastReplyAt).getTime() > new Date(prev.sent_at).getTime());
+  const replied = repliedOnSend || repliedSince;
+  const opened = !!prev?.opened_at;
+  const clicked = !!prev?.clicked_at;
+  if (stopCondition === 'reply') return replied;
+  if (stopCondition === 'click_reply') return clicked || replied;
+  if (stopCondition === 'open_click_reply') return opened || clicked || replied;
+  return replied;
+}
+
+async function finishEnrollment(enrollmentId: string, status: string): Promise<void> {
+  await supabaseAdmin
+    .from('email_flow_enrollments')
+    .update({ status, completed_at: new Date().toISOString(), next_step_due_at: null })
+    .eq('id', enrollmentId);
+}
+
+/** Verstuur één stap van een stroom (idempotent per (inschrijving, stap)). Gooit niet:
+ *  een mislukte send wordt gemarkeerd zodat de reeks niet vastloopt. */
+async function sendFlowStep(
+  enrollment: EnrollmentRow,
+  flow: FlowRow,
+  step: FlowStepRow,
+  sender: { from: string; replyTo?: string; fromEmail: string | null },
+  brandName: string,
+): Promise<string | null> {
+  // Create-or-get de send-rij (uniek per enrollment+step) voor idempotentie.
+  await supabaseAdmin
+    .from('email_flow_sends')
+    .upsert(
+      {
+        organization_id: enrollment.organization_id,
+        flow_id: flow.id,
+        enrollment_id: enrollment.id,
+        step_id: step.id,
+        step_index: step.step_index,
+        client_id: enrollment.client_id,
+        status: 'pending',
+      },
+      { onConflict: 'enrollment_id,step_index', ignoreDuplicates: true },
+    );
+  const { data: sendRow, error: sendRowError } = await supabaseAdmin
+    .from('email_flow_sends')
+    .select('id,status,thread_id,client_email_id')
+    .eq('enrollment_id', enrollment.id)
+    .eq('step_index', step.step_index)
+    .single();
+  if (sendRowError) throw sendRowError;
+  const flowSendId = String(sendRow.id);
+  // Al eerder verstuurd (retry na een crash ná de send): niet opnieuw versturen,
+  // enkel de reeks laten doorlopen op de BESTAANDE thread.
+  if (sendRow.status === 'sent') return (sendRow.thread_id as string | null) ?? enrollment.thread_id;
+
+  const fromEmailForRow = sender.fromEmail || extractEmailAddress(sender.from);
+  const fromNameForRow = extractDisplayName(sender.from);
+
+  // Hergebruik de thread/mail-rij van een eerdere (mislukte) poging i.p.v. nieuwe te
+  // maken — anders wijkt de afgeleverde Reply-To af van waar de inschrijving naar wijst
+  // en komt een antwoord nooit binnen (antwoord-detectie stuk).
+  let threadId = enrollment.thread_id || (sendRow.thread_id as string | null) || null;
+  let clientEmailId: string | null = (sendRow.client_email_id as string | null) || null;
+
+  if (enrollment.client_id) {
+    if (!threadId) {
+      const { data: thread, error: threadError } = await supabaseAdmin
+        .from('client_email_threads')
+        .insert({
+          organization_id: enrollment.organization_id,
+          client_id: enrollment.client_id,
+          subject: step.subject,
+          last_direction: 'outbound',
+          last_message_at: new Date().toISOString(),
+        })
+        .select('id')
+        .single();
+      if (threadError) throw threadError;
+      threadId = String(thread.id);
+      // Persisteer de thread meteen op de inschrijving + send-rij, zodat een crash
+      // in het verzendvenster een herstelbare verwijzing achterlaat.
+      await supabaseAdmin.from('email_flow_enrollments').update({ thread_id: threadId }).eq('id', enrollment.id);
+      await supabaseAdmin.from('email_flow_sends').update({ thread_id: threadId }).eq('id', flowSendId);
+    }
+    if (!clientEmailId) {
+      const { data: emailRow, error: emailError } = await supabaseAdmin
+        .from('client_emails')
+        .insert({
+          organization_id: enrollment.organization_id,
+          thread_id: threadId,
+          client_id: enrollment.client_id,
+          created_by: null,
+          direction: 'outbound',
+          provider: 'resend',
+          from_email: fromEmailForRow,
+          from_name: fromNameForRow,
+          to_email: enrollment.to_email,
+          subject: step.subject,
+          body_html: step.body_html || null,
+          body_text: step.body_text || htmlToText(step.body_html),
+          status: 'queued',
+          metadata: { source: 'flow', flow_id: flow.id, flow_send_id: flowSendId, enrollment_id: enrollment.id },
+        })
+        .select('id')
+        .single();
+      if (emailError) throw emailError;
+      clientEmailId = String(emailRow.id);
+      await supabaseAdmin.from('email_flow_sends').update({ client_email_id: clientEmailId }).eq('id', flowSendId);
+    }
+  }
+
+  const unsubToken = await makeUnsubscribeToken(UNSUBSCRIBE_SECRET, enrollment.organization_id, enrollment.to_email);
+  const unsubscribeUrl = `${UNSUBSCRIBE_BASE_URL}?token=${encodeURIComponent(unsubToken)}`;
+  const html = buildEmailHtml(step, brandName, unsubToken);
+  const text = `${step.body_text || htmlToText(step.body_html)}\n\nAfmelden: ${unsubscribeUrl}`;
+  const replyTo = MAIL_INBOUND_DOMAIN && clientEmailId
+    ? `reply+${clientEmailId}@${MAIL_INBOUND_DOMAIN}`
+    : (sender.replyTo || fromEmailForRow || undefined);
+
+  try {
+    const payload = await sendViaResend(
+      RESEND_API_KEY,
+      {
+        from: sender.from,
+        to: [enrollment.to_email],
+        reply_to: replyTo,
+        subject: step.subject,
+        html,
+        text,
+        headers: {
+          'List-Unsubscribe': `<${unsubscribeUrl}>`,
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+        },
+        tags: [
+          { name: 'organization_id', value: sanitizeTagValue(enrollment.organization_id) },
+          { name: 'flow_id', value: sanitizeTagValue(flow.id) },
+          { name: 'flow_send_id', value: sanitizeTagValue(flowSendId) },
+        ],
+      },
+      `flow-${sanitizeIdempotencyPart(flowSendId)}`,
+    );
+    const providerEmailId = resendEmailId(payload);
+    const sentAt = new Date().toISOString();
+    if (clientEmailId) {
+      await supabaseAdmin
+        .from('client_emails')
+        .update({ status: 'sent', sent_at: sentAt, last_event_at: sentAt, provider_email_id: providerEmailId || null })
+        .eq('id', clientEmailId);
+      if (threadId) {
+        await supabaseAdmin
+          .from('client_email_threads')
+          .update({ last_message_at: sentAt, last_direction: 'outbound' })
+          .eq('id', threadId);
+      }
+    }
+    await supabaseAdmin
+      .from('email_flow_sends')
+      .update({ status: 'sent', sent_at: sentAt, thread_id: threadId, client_email_id: clientEmailId })
+      .eq('id', flowSendId);
+  } catch (sendError) {
+    const now = new Date().toISOString();
+    if (clientEmailId) {
+      await supabaseAdmin
+        .from('client_emails')
+        .update({ status: 'failed', failed_at: now, last_event_at: now, error_message: sendError instanceof Error ? sendError.message : 'Versturen mislukt.' })
+        .eq('id', clientEmailId);
+    }
+    await supabaseAdmin
+      .from('email_flow_sends')
+      .update({ status: 'failed', failed_at: now, thread_id: threadId, client_email_id: clientEmailId, error_message: sendError instanceof Error ? sendError.message.slice(0, 1000) : 'Versturen mislukt.' })
+      .eq('id', flowSendId);
+    // Niet doorgooien: de reeks gaat verder met de volgende stap.
+  }
+
+  return threadId;
 }
 
 // ── Kleine helpers ──────────────────────────────────────────────────────────

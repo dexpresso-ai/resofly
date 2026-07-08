@@ -33,6 +33,13 @@ import type {
   EmailSuppression,
   EmailSuppressionReason,
   CampaignAudience,
+  EmailFlow,
+  EmailFlowStep,
+  EmailFlowEnrollment,
+  EmailFlowStats,
+  EmailFlowStepStats,
+  FlowStopCondition,
+  FlowStepInput,
   CreditNote,
   InvoiceChargeback,
   Note,
@@ -1934,6 +1941,113 @@ export async function removeSuppression(organizationId: UUID, email: string): Pr
     .delete()
     .eq('organization_id', organizationId)
     .eq('email', email.trim().toLowerCase());
+  if (error) throw error;
+}
+
+// ── Follow-up-stromen ───────────────────────────────────────────────────────
+const FLOW_COLUMNS = 'id,organization_id,created_by,name,status,audience,stop_condition,created_at,updated_at';
+const FLOW_STEP_COLUMNS = 'id,organization_id,flow_id,step_index,delay_days,subject,preheader,body_html,body_text,accent_color,created_at,updated_at';
+const FLOW_ENROLLMENT_COLUMNS = 'id,organization_id,flow_id,client_id,contact_id,to_email,to_name,thread_id,status,current_step_index,next_step_due_at,last_reply_at,enrolled_at,completed_at,created_at,updated_at';
+
+export async function loadFlows(organizationId: UUID): Promise<EmailFlow[]> {
+  const { data, error } = await supabase
+    .from('email_flows')
+    .select(FLOW_COLUMNS)
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as EmailFlow[];
+}
+
+export async function loadFlowSteps(organizationId: UUID, flowId: UUID): Promise<EmailFlowStep[]> {
+  const { data, error } = await supabase
+    .from('email_flow_steps')
+    .select(FLOW_STEP_COLUMNS)
+    .eq('organization_id', organizationId)
+    .eq('flow_id', flowId)
+    .order('step_index', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as EmailFlowStep[];
+}
+
+export async function loadFlowStats(organizationId: UUID): Promise<EmailFlowStats[]> {
+  const { data, error } = await supabase
+    .from('email_flow_stats')
+    .select('organization_id,flow_id,enrollments,active,completed,stopped_reacted,stopped_unsubscribed,cancelled')
+    .eq('organization_id', organizationId);
+  if (error) throw error;
+  return (data ?? []) as EmailFlowStats[];
+}
+
+export async function loadFlowStepStats(organizationId: UUID): Promise<EmailFlowStepStats[]> {
+  const { data, error } = await supabase
+    .from('email_flow_step_stats')
+    .select('organization_id,flow_id,step_index,sent,opened,clicked,replied,bounced')
+    .eq('organization_id', organizationId);
+  if (error) throw error;
+  return (data ?? []) as EmailFlowStepStats[];
+}
+
+export async function loadFlowEnrollments(organizationId: UUID, flowId: UUID): Promise<EmailFlowEnrollment[]> {
+  const { data, error } = await supabase
+    .from('email_flow_enrollments')
+    .select(FLOW_ENROLLMENT_COLUMNS)
+    .eq('organization_id', organizationId)
+    .eq('flow_id', flowId)
+    .order('enrolled_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as EmailFlowEnrollment[];
+}
+
+export async function createFlow(organizationId: UUID, input: { name: string; audience: CampaignAudience; stop_condition: FlowStopCondition }): Promise<EmailFlow> {
+  const createdBy = await currentUserId();
+  const { data, error } = await supabase
+    .from('email_flows')
+    .insert({ organization_id: organizationId, created_by: createdBy, name: input.name, audience: input.audience, stop_condition: input.stop_condition, status: 'draft' })
+    .select(FLOW_COLUMNS)
+    .single();
+  if (error) throw error;
+  return data as EmailFlow;
+}
+
+export async function updateFlow(organizationId: UUID, flowId: UUID, patch: Partial<{ name: string; audience: CampaignAudience; stop_condition: FlowStopCondition }>): Promise<EmailFlow> {
+  const values: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (patch.name !== undefined) values.name = patch.name;
+  if (patch.audience !== undefined) values.audience = patch.audience;
+  if (patch.stop_condition !== undefined) values.stop_condition = patch.stop_condition;
+  const { data, error } = await supabase
+    .from('email_flows')
+    .update(values)
+    .eq('id', flowId)
+    .eq('organization_id', organizationId)
+    .select(FLOW_COLUMNS)
+    .single();
+  if (error) throw error;
+  return data as EmailFlow;
+}
+
+export async function deleteFlow(organizationId: UUID, flowId: UUID): Promise<void> {
+  const { error } = await supabase.from('email_flows').delete().eq('id', flowId).eq('organization_id', organizationId);
+  if (error) throw error;
+}
+
+/**
+ * Vervang alle stappen van een concept-stroom. Loopt via de atomaire RPC
+ * replace_flow_steps (delete + insert in één transactie + draft-check), zodat een
+ * mislukte insert de stappen niet permanent wist en een gestarte stroom niet
+ * gewijzigd kan worden.
+ */
+export async function replaceFlowSteps(organizationId: UUID, flowId: UUID, steps: FlowStepInput[]): Promise<void> {
+  const payload = steps.map((s, i) => ({
+    step_index: i,
+    delay_days: Math.min(3650, Math.max(0, Math.round(s.delay_days || 0))),
+    subject: s.subject,
+    preheader: s.preheader ?? null,
+    body_html: s.body_html,
+    body_text: s.body_text ?? null,
+    accent_color: s.accent_color ?? null,
+  }));
+  const { error } = await supabase.rpc('replace_flow_steps', { p_organization_id: organizationId, p_flow_id: flowId, p_steps: payload });
   if (error) throw error;
 }
 

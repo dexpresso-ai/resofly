@@ -3077,3 +3077,13 @@ button.chat-member:hover{background:var(--bg3)}
 @media (max-width:900px){
   .mk-editor-grid{grid-template-columns:1fr}
 }
+
+/* Stromen — stap-editor */
+.mk-steps{display:flex;flex-direction:column;gap:12px}
+.mk-step{border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-deep);padding:14px;display:flex;flex-direction:column;gap:10px}
+.mk-step-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.mk-step-num{font-weight:700;color:var(--accent);font-size:13px;text-transform:uppercase;letter-spacing:.04em}
+.mk-step-delay{display:inline-flex;align-items:center;gap:6px;color:var(--muted2);font-size:12.5px;margin-left:auto}
+.mk-step-delay svg{color:var(--muted)}
+.mk-days{width:64px;padding:5px 8px;text-align:center}
+.mk-step-head .mk-icon{margin-left:6px}
