@@ -64,6 +64,7 @@ import { useTeamChat, TeamChatPage, TeamChatDock } from './components/TeamChat';
 import { ProjectPage, ProjectsListPage, ProjectsPlanningPage } from './features/Projects';
 import { TimeTracking } from './features/TimeTracking';
 import { Tickets } from './features/Tickets';
+import { Marketing } from './features/Marketing';
 import { RelatedNotes, noteTypeLabels } from './features/Notes';
 import { documentTypeLabels } from './features/Documents';
 import { ContentLibrary } from './features/ContentLibrary';
@@ -97,7 +98,7 @@ import type {
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'fiscal-years'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'fiscal-years'|'archive'|'settings'|'project';
 type EditMode =
   | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status'>> }
   | { kind: 'project'; item?: Project; defaults?: Partial<Pick<Project, 'name' | 'client_id' | 'description' | 'start_date' | 'end_date'>> }
@@ -1011,7 +1012,7 @@ function App() {
     }
   }
 
-  const title = page === 'project' ? project?.name ?? 'Project' : page === 'client' ? client?.name ?? 'Klant' : ({dashboard:'Dashboard',weekplanner:'Weekplanner',calendar:'Kalender','calendar-settings':'Agenda-instellingen','meeting-booking':'Boekingslinks',time:'Uren',stats:'Statistieken',content:'Inhoud',notes:'Notities',documents:'Documenten',clients:'Klanten',projects:'Projecten','project-planning':'Projectplanning',tickets:'Tickets',chat:'Teamchat',quotes:'Offertes',invoices:'Facturen',suppliers:'Leveranciers','purchase-invoices':'Inkoopfacturen',ledger:'Grootboek',bank:'Bank',assets:'Activa',pnl:'Winst & verlies','vat-returns':'Omzetbelasting','fiscal-years':'Boekjaren',archive:'Archief',settings:'Instellingen',project:'Project',client:'Klant'} as Record<Page,string>)[page];
+  const title = page === 'project' ? project?.name ?? 'Project' : page === 'client' ? client?.name ?? 'Klant' : ({dashboard:'Dashboard',weekplanner:'Weekplanner',calendar:'Kalender','calendar-settings':'Agenda-instellingen','meeting-booking':'Boekingslinks',time:'Uren',stats:'Statistieken',content:'Inhoud',notes:'Notities',documents:'Documenten',clients:'Klanten',projects:'Projecten','project-planning':'Projectplanning',tickets:'Tickets',chat:'Teamchat',marketing:'Marketing',quotes:'Offertes',invoices:'Facturen',suppliers:'Leveranciers','purchase-invoices':'Inkoopfacturen',ledger:'Grootboek',bank:'Bank',assets:'Activa',pnl:'Winst & verlies','vat-returns':'Omzetbelasting','fiscal-years':'Boekjaren',archive:'Archief',settings:'Instellingen',project:'Project',client:'Klant'} as Record<Page,string>)[page];
 
   return <div className={`app${sidebarPinned ? ' sidebar-pinned' : ''}`}>
     <button
@@ -1229,6 +1230,7 @@ function App() {
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} unreadTicketIds={ticketUnreadIds}/>;
     if (page === 'chat') return <TeamChatPage api={teamChat} />;
+    if (page === 'marketing') return <Marketing data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null }})} onEditDocument={(item)=>setEdit({kind:'document', item})}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;

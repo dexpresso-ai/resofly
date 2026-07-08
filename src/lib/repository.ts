@@ -27,6 +27,12 @@ import type {
   ClientEmail,
   ClientEmailThread,
   ClientEmailUnreadCounts,
+  EmailCampaign,
+  EmailCampaignRecipient,
+  EmailCampaignStats,
+  EmailSuppression,
+  EmailSuppressionReason,
+  CampaignAudience,
   CreditNote,
   InvoiceChargeback,
   Note,
@@ -1795,6 +1801,140 @@ export async function loadClientEmailUnreadCounts(organizationId: UUID): Promise
   const byClient: Record<UUID, number> = {};
   for (const row of rows) byClient[row.client_id] = (byClient[row.client_id] ?? 0) + 1;
   return { total: rows.length, byClient };
+}
+
+// ── E-mailmarketing / campagnes ─────────────────────────────────────────────
+const CAMPAIGN_COLUMNS = 'id,organization_id,created_by,name,subject,preheader,body_html,body_text,accent_color,audience,status,scheduled_at,started_at,sent_at,created_at,updated_at';
+const CAMPAIGN_RECIPIENT_COLUMNS = 'id,organization_id,created_by,campaign_id,client_id,contact_id,to_email,to_name,thread_id,client_email_id,status,sent_at,delivered_at,opened_at,clicked_at,bounced_at,failed_at,replied_at,unsubscribed_at,error_message,created_at,updated_at';
+
+export interface CampaignInput {
+  name: string;
+  subject: string;
+  preheader?: string | null;
+  body_html: string;
+  body_text?: string | null;
+  accent_color?: string | null;
+  audience: CampaignAudience;
+}
+
+/** Laad alle campagnes van een organisatie (nieuwste eerst). RLS: elk lid leest. */
+export async function loadCampaigns(organizationId: UUID): Promise<EmailCampaign[]> {
+  const { data, error } = await supabase
+    .from('email_campaigns')
+    .select(CAMPAIGN_COLUMNS)
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as EmailCampaign[];
+}
+
+/** Geaggregeerde verzend-/tracking-statistieken per campagne (view, security_invoker). */
+export async function loadCampaignStats(organizationId: UUID): Promise<EmailCampaignStats[]> {
+  const { data, error } = await supabase
+    .from('email_campaign_stats')
+    .select('organization_id,campaign_id,total,sent,delivered,opened,clicked,replied,bounced,failed,unsubscribed,pending')
+    .eq('organization_id', organizationId);
+  if (error) throw error;
+  return (data ?? []) as EmailCampaignStats[];
+}
+
+/** Laad de ontvangers (+ per-ontvanger tracking) van één campagne. */
+export async function loadCampaignRecipients(organizationId: UUID, campaignId: UUID): Promise<EmailCampaignRecipient[]> {
+  const { data, error } = await supabase
+    .from('email_campaign_recipients')
+    .select(CAMPAIGN_RECIPIENT_COLUMNS)
+    .eq('organization_id', organizationId)
+    .eq('campaign_id', campaignId)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as EmailCampaignRecipient[];
+}
+
+/** De suppressielijst (afgemelde/gebouncede adressen) van een organisatie. */
+export async function loadSuppressions(organizationId: UUID): Promise<EmailSuppression[]> {
+  const { data, error } = await supabase
+    .from('email_suppressions')
+    .select('organization_id,email,reason,source,created_by,created_at')
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as EmailSuppression[];
+}
+
+/** Maak een nieuwe (concept)campagne. RLS: schrijvers (can_write_org). */
+export async function createCampaign(organizationId: UUID, input: CampaignInput): Promise<EmailCampaign> {
+  const createdBy = await currentUserId();
+  const { data, error } = await supabase
+    .from('email_campaigns')
+    .insert({
+      organization_id: organizationId,
+      created_by: createdBy,
+      name: input.name,
+      subject: input.subject,
+      preheader: input.preheader ?? null,
+      body_html: input.body_html,
+      body_text: input.body_text ?? null,
+      accent_color: input.accent_color ?? null,
+      audience: input.audience,
+      status: 'draft',
+    })
+    .select(CAMPAIGN_COLUMNS)
+    .single();
+  if (error) throw error;
+  return data as EmailCampaign;
+}
+
+/** Werk een concept-/gepauzeerde campagne bij. */
+export async function updateCampaign(organizationId: UUID, campaignId: UUID, patch: Partial<CampaignInput>): Promise<EmailCampaign> {
+  const values: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (patch.name !== undefined) values.name = patch.name;
+  if (patch.subject !== undefined) values.subject = patch.subject;
+  if (patch.preheader !== undefined) values.preheader = patch.preheader;
+  if (patch.body_html !== undefined) values.body_html = patch.body_html;
+  if (patch.body_text !== undefined) values.body_text = patch.body_text;
+  if (patch.accent_color !== undefined) values.accent_color = patch.accent_color;
+  if (patch.audience !== undefined) values.audience = patch.audience;
+  const { data, error } = await supabase
+    .from('email_campaigns')
+    .update(values)
+    .eq('id', campaignId)
+    .eq('organization_id', organizationId)
+    .select(CAMPAIGN_COLUMNS)
+    .single();
+  if (error) throw error;
+  return data as EmailCampaign;
+}
+
+/** Verwijder een campagne (ontvangers cascaden via FK). */
+export async function deleteCampaign(organizationId: UUID, campaignId: UUID): Promise<void> {
+  const { error } = await supabase
+    .from('email_campaigns')
+    .delete()
+    .eq('id', campaignId)
+    .eq('organization_id', organizationId);
+  if (error) throw error;
+}
+
+/** Voeg een adres handmatig toe aan de suppressielijst (idempotent). */
+export async function addSuppression(organizationId: UUID, email: string, reason: EmailSuppressionReason = 'manual'): Promise<void> {
+  const createdBy = await currentUserId();
+  const { error } = await supabase
+    .from('email_suppressions')
+    .upsert(
+      { organization_id: organizationId, email: email.trim().toLowerCase(), reason, source: 'handmatig', created_by: createdBy },
+      { onConflict: 'organization_id,email', ignoreDuplicates: true },
+    );
+  if (error) throw error;
+}
+
+/** Verwijder een adres van de suppressielijst (weer aanschrijfbaar maken). */
+export async function removeSuppression(organizationId: UUID, email: string): Promise<void> {
+  const { error } = await supabase
+    .from('email_suppressions')
+    .delete()
+    .eq('organization_id', organizationId)
+    .eq('email', email.trim().toLowerCase());
+  if (error) throw error;
 }
 
 const EMAIL_TEMPLATE_COLUMNS = 'id,organization_id,created_by,template_key,enabled,subject,intro,closing,cta_label,created_at,updated_at';

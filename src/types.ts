@@ -224,6 +224,34 @@ export interface Client extends OrgScopedRow {
 export interface ClientContact extends OrgScopedRow {
   client_id: UUID; name: string; email: string; phone: string | null; role: string | null; gives_portal_access: boolean; is_active: boolean; created_at: string; updated_at: string;
 }
+
+// ── E-mailmarketing / campagnes ─────────────────────────────────────────────
+export type CampaignStatus = 'draft' | 'scheduled' | 'sending' | 'sent' | 'paused' | 'cancelled';
+export interface CampaignAudience {
+  /** 'filter' = op status/tags (leeg = alle klanten); 'manual' = handmatig gekozen klanten. */
+  mode: 'filter' | 'manual';
+  statuses: ClientStatus[];
+  tags: string[];
+  includeContacts: boolean;
+  manualClientIds: UUID[];
+}
+export interface EmailCampaign extends OrgScopedRow {
+  name: string; subject: string; preheader: string | null; body_html: string; body_text: string | null; accent_color: string | null; audience: CampaignAudience; status: CampaignStatus; scheduled_at: string | null; started_at: string | null; sent_at: string | null; created_at: string; updated_at: string;
+}
+export type CampaignRecipientStatus = 'pending' | 'sending' | 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'failed' | 'complained' | 'skipped' | 'unsubscribed';
+export interface EmailCampaignRecipient extends OrgScopedRow {
+  campaign_id: UUID; client_id: UUID | null; contact_id: UUID | null; to_email: string; to_name: string | null; thread_id: UUID | null; client_email_id: UUID | null; status: CampaignRecipientStatus; sent_at: string | null; delivered_at: string | null; opened_at: string | null; clicked_at: string | null; bounced_at: string | null; failed_at: string | null; replied_at: string | null; unsubscribed_at: string | null; error_message: string | null; created_at: string; updated_at: string;
+}
+export interface EmailCampaignStats {
+  organization_id: UUID; campaign_id: UUID; total: number; sent: number; delivered: number; opened: number; clicked: number; replied: number; bounced: number; failed: number; unsubscribed: number; pending: number;
+}
+export type EmailSuppressionReason = 'unsubscribed' | 'bounced' | 'complained' | 'manual';
+export interface EmailSuppression {
+  organization_id: UUID; email: string; reason: EmailSuppressionReason; source: string | null; created_by: UUID | null; created_at: string;
+}
+export interface CampaignAudiencePreview {
+  total: number; sendable: number; suppressed: number; withoutEmail: number; matchedClients: number; sample: { email: string; name: string | null }[];
+}
 export type ProjectBillingType = 'hourly' | 'fixed_price';
 export interface Project extends OrgScopedRow {
   client_id: UUID | null; name: string; description: string | null; color: string; archived: boolean; start_date: string | null; end_date: string | null; contract_id: UUID | null; hourly_rate_cents: number | null; billing_type: ProjectBillingType; created_at: string; updated_at: string;

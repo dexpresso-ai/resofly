@@ -69,3 +69,14 @@ verify_jwt = false
 # loopt via een onraadbaar token in de request-body, gehasht vergeleken (zoals contract-public).
 [functions.meeting-booking-public]
 verify_jwt = false
+
+# campaigns bedient zowel ingelogde app-acties (requireUser + requireOrganizationAccess in
+# code) als de dispatch-cron (?cron=dispatch, geauthenticeerd via het gedeelde
+# CAMPAIGN_CRON_SECRET). De cron draagt geen Supabase JWT, dus verify_jwt uit.
+[functions.campaigns]
+verify_jwt = false
+
+# email-unsubscribe is de publieke afmeldpagina voor marketingmail (geen login). Toegang
+# loopt via een HMAC-getekend token in de URL; ondersteunt one-click POST (RFC 8058).
+[functions.email-unsubscribe]
+verify_jwt = false
