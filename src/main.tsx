@@ -61,6 +61,7 @@ import { ClientDetailPage, Clients } from './features/Clients';
 import { useClientEmailUnread, ClientEmailToasts } from './components/ClientEmailNotifications';
 import { useTicketUnread, TicketToasts } from './components/TicketNotifications';
 import { useTeamChat, TeamChatPage, TeamChatDock } from './components/TeamChat';
+import { usePushNotifications } from './components/usePushNotifications';
 import { ProjectPage, ProjectsListPage, ProjectsPlanningPage } from './features/Projects';
 import { TimeTracking } from './features/TimeTracking';
 import { Tickets } from './features/Tickets';
@@ -272,6 +273,14 @@ function App() {
     organizationId: activeOrganization?.id ?? null,
     currentUserId,
     teamMembers: organizationContext.teamMembers ?? [],
+  });
+
+  // OS-/device-pushmeldingen (service worker + Web Push). Registreert de worker,
+  // houdt het abonnement bij en biedt aan/uit + per-gebeurtenis voorkeuren aan.
+  // De UI hiervoor leeft in Instellingen → Meldingen.
+  const push = usePushNotifications({
+    organizationId: activeOrganization?.id ?? null,
+    currentUserId,
   });
 
   async function loadWorkspace(preferredOrganizationId = activeOrganizationId) {
@@ -1250,7 +1259,7 @@ function App() {
     if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;
     if (page === 'stats') return <Statistics data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} openReportId={statsReportId} pendingReport={pendingReport}/>;
     if (page === 'archive') return <Archive data={data} onOpen={(id) => { setProjectId(id); setPage('project'); }} onRestore={async (project) => { if (!ensureCanWrite()) return; setError(null); try { await updateRow<Project>('projects', project.id, { archived: false }, activeOrg.id); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Herstellen mislukt'); } }}/>;
-    if (page === 'settings') return <Settings settings={data.companySettings} organizationContext={organizationContext} currentUserId={currentUserId} settingsNav={settingsNav} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
+    if (page === 'settings') return <Settings settings={data.companySettings} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
     return <div className="empty"><div className="e-big">Geen project geselecteerd</div></div>;
   }
 }

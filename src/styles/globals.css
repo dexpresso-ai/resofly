@@ -1043,6 +1043,9 @@
 .invoice-reminder-summary { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; }
 .settings-toggle { display:inline-flex; align-items:center; gap:8px; font-size:13px; font-weight:750; color:rgba(255,255,255,.86); cursor:pointer; white-space:nowrap; }
 .settings-toggle input { width:16px; height:16px; accent-color:var(--accent); cursor:pointer; }
+.notif-prefs { display:grid; grid-template-columns:1fr 1fr; gap:10px 20px; }
+.notif-prefs .notif-pref-row { white-space:normal; }
+@media(max-width:640px){ .notif-prefs { grid-template-columns:1fr; } }
 
 .public-quote-page { min-height: 100vh; padding: 42px 18px 70px; background: radial-gradient(circle at top left, rgba(255,217,102,.18), transparent 34%), #0f0f13; color: #f5f5f5; font-family: Poppins, Inter, system-ui, sans-serif; }
 .public-quote-card { max-width: 1040px; margin: 0 auto 18px; border: 1px solid rgba(255,255,255,.1); border-radius: 28px; padding: 24px; background: rgba(24,24,30,.86); box-shadow: 0 24px 80px rgba(0,0,0,.35); backdrop-filter: blur(14px); }

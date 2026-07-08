@@ -80,3 +80,8 @@ verify_jwt = false
 # loopt via een HMAC-getekend token in de URL; ondersteunt one-click POST (RFC 8058).
 [functions.email-unsubscribe]
 verify_jwt = false
+
+# web-push bedient de dispatch-cron (?cron=drain, geauthenticeerd via PUSH_CRON_SECRET,
+# geen Supabase JWT) én ingelogde app-acties (getVapidKey/test via requireUser in code).
+[functions.web-push]
+verify_jwt = false
