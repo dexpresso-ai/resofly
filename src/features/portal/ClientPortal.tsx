@@ -148,7 +148,7 @@ function PortalDashboard() {
         <div className="brand-icon">{(companyName || 'R').slice(0, 1).toUpperCase()}</div>
         <div>
           <div className="portal-brand-name">{companyName}</div>
-          <div className="portal-brand-sub">{email || 'Klantportaal'}</div>
+          <div className="portal-brand-sub">{activeAccount?.actingContact ? `${activeAccount.actingContact.name} · ${email}` : (email || 'Klantportaal')}</div>
         </div>
       </div>
       <div className="portal-topbar-actions">

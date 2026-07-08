@@ -127,11 +127,20 @@ export interface PortalTicketThread {
   notes: PortalTicketNote[];
 }
 
+export interface PortalActingContact {
+  name: string;
+  email: string;
+}
+
 export interface PortalAccount {
   id: string;
   organizationId: string;
   company: PortalCompany | null;
   client: PortalClient | null;
+  /** Gezet als de ingelogde gebruiker een geregistreerde contactpersoon is
+   *  (i.p.v. het hoofd-e-mailadres van de klant zelf) — voor een persoonlijke
+   *  begroeting in het portaal. */
+  actingContact: PortalActingContact | null;
   projects: PortalProject[];
   invoices: PortalInvoice[];
   quotes: PortalQuote[];

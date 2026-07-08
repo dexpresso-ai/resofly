@@ -42,9 +42,18 @@ const UNPAYABLE_STATUSES = ['paid', 'cancelled', 'void', 'written_off', 'refunde
  */
 export async function createPortalInvoiceCheckout(
   supabaseAdmin: SupabaseAdmin,
-  input: { organizationId: string; invoiceId: string; actorUserId: string; redirectUrl: string },
+  input: {
+    organizationId: string;
+    invoiceId: string;
+    actorUserId: string;
+    redirectUrl: string;
+    /** Specifieke geregistreerde contactpersoon die de betaling start (indien van
+     *  toepassing) — puur voor traceerbaarheid in de payment-metadata, geen
+     *  invloed op autorisatie (die is al gebeurd bij de aanroeper). */
+    actorContact?: { id: string; name: string; email: string } | null;
+  },
 ): Promise<PortalCheckoutResult> {
-  const { organizationId, invoiceId, actorUserId, redirectUrl } = input;
+  const { organizationId, invoiceId, actorUserId, redirectUrl, actorContact } = input;
 
   const { data: invoice, error: invoiceError } = await supabaseAdmin
     .from('invoices')
@@ -65,6 +74,12 @@ export async function createPortalInvoiceCheckout(
   // aanmaken (zelfde gedrag als de medewerkers-app).
   const existing = await loadLatestOpenPayment(supabaseAdmin, organizationId, invoiceId);
   if (existing?.provider_checkout_url && isReusableCheckoutUrl(existing.provider_checkout_url)) {
+    // De metadata van de OORSPRONKELIJKE aanmaker blijft staan (wie de betaling
+    // startte), maar als een ANDERE geautoriseerde contactpersoon dezelfde link
+    // hergebruikt, leggen we dat apart vast i.p.v. dat stilzwijgend te negeren —
+    // anders suggereert de metadata ten onrechte dat alleen de eerste aanmaker
+    // ooit met deze betaling te maken heeft gehad.
+    await recordPaymentReuseAccess(supabaseAdmin, existing.id, actorContact);
     return {
       ok: true,
       checkoutUrl: existing.provider_checkout_url,
@@ -86,11 +101,18 @@ export async function createPortalInvoiceCheckout(
 
   const beginResult = await beginPayment(supabaseAdmin, {
     invoiceId, organizationId, actorUserId, amountCents, idempotencyKey, checkoutExpiresAt,
-    metadata: { source: 'client_portal', redirectUrl },
+    metadata: {
+      source: 'client_portal',
+      redirectUrl,
+      ...(actorContact ? { contactId: actorContact.id, contactName: actorContact.name, contactEmail: actorContact.email } : {}),
+    },
   });
   if (!beginResult.ok) return beginResult;
   const payment = beginResult.payment;
   if (payment.provider_checkout_url) {
+    // Zelfde race-conditiepad als hierboven: begin_invoice_payment_checkout kan
+    // hier server-side ook al een bestaande betaling hebben teruggegeven.
+    await recordPaymentReuseAccess(supabaseAdmin, payment.id, actorContact);
     return {
       ok: true,
       checkoutUrl: payment.provider_checkout_url,
@@ -110,7 +132,7 @@ export async function createPortalInvoiceCheckout(
     if (ALLOW_MOCK) {
       providerPaymentId = `mock_invoice_payment_${crypto.randomUUID()}`;
       checkoutUrl = redirectUrl;
-      metadata = { mock: true, source: 'client_portal' };
+      metadata = { mock: true, source: 'client_portal', ...contactMetadata(actorContact) };
     } else {
       const orgKey = await resolveOrganizationMollieKey(supabaseAdmin, organizationId);
       if (!orgKey) return await failAndReturn(supabaseAdmin, payment.id, organizationId, actorUserId, 409, 'Online betalen is voor deze factuur (nog) niet beschikbaar. Neem contact op met je leverancier of gebruik de overschrijvingsgegevens.');
@@ -138,7 +160,7 @@ export async function createPortalInvoiceCheckout(
       providerPaymentId = String(molliePayload.id || '').trim();
       checkoutUrl = String(((molliePayload._links as Record<string, { href?: string }> | undefined)?.checkout?.href) || '').trim();
       providerStatus = String(molliePayload.status || 'open');
-      metadata = { mollie: molliePayload, source: 'client_portal' };
+      metadata = { mollie: molliePayload, source: 'client_portal', ...contactMetadata(actorContact) };
       if (!providerPaymentId || !checkoutUrl) {
         return await failAndReturn(supabaseAdmin, payment.id, organizationId, actorUserId, 502, 'Mollie gaf geen payment-id of checkout-url terug.');
       }
@@ -286,6 +308,53 @@ function toCents(euros: number): number {
 }
 
 // ── Kleine utils (verbatim uit invoice-workflow) ────────────────────────────
+
+function contactMetadata(actorContact: { id: string; name: string; email: string } | null | undefined): Record<string, unknown> {
+  if (!actorContact) return {};
+  return { contactId: actorContact.id, contactName: actorContact.name, contactEmail: actorContact.email };
+}
+
+/**
+ * Legt vast dat een ANDERE geautoriseerde contactpersoon een al bestaande,
+ * openstaande betaallink hergebruikt — zonder de oorspronkelijke
+ * contactId/contactName/contactEmail (wie de betaling startte) te overschrijven.
+ * Best-effort: dit is puur traceerbaarheid, dus een fout hierin mag de
+ * betaalflow zelf nooit blokkeren.
+ */
+async function recordPaymentReuseAccess(
+  supabaseAdmin: SupabaseAdmin,
+  paymentRecordId: string,
+  actorContact: { id: string; name: string; email: string } | null | undefined,
+): Promise<void> {
+  if (!actorContact) return;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('invoice_payment_records')
+      .select('metadata')
+      .eq('id', paymentRecordId)
+      .maybeSingle();
+    if (error || !data) return;
+    const existingMetadata = (data.metadata && typeof data.metadata === 'object') ? data.metadata as Record<string, unknown> : {};
+    // Als dezelfde contactpersoon zelf de link opnieuw opent, is er niets nieuws
+    // vast te leggen.
+    if (existingMetadata.contactId === actorContact.id && !existingMetadata.lastAccessedContactId) return;
+    if (existingMetadata.lastAccessedContactId === actorContact.id) return;
+    await supabaseAdmin
+      .from('invoice_payment_records')
+      .update({
+        metadata: {
+          ...existingMetadata,
+          lastAccessedContactId: actorContact.id,
+          lastAccessedContactName: actorContact.name,
+          lastAccessedContactEmail: actorContact.email,
+          lastAccessedAt: new Date().toISOString(),
+        },
+      })
+      .eq('id', paymentRecordId);
+  } catch (error) {
+    console.warn('recordPaymentReuseAccess failed (non-fatal)', describeError(error));
+  }
+}
 
 function isReusableCheckoutUrl(value: string | null | undefined): boolean {
   if (!value) return false;

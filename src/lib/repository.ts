@@ -8,6 +8,7 @@ import type {
   AuditLog,
   Attachment,
   Client,
+  ClientContact,
   CompanySettings,
   CompanySettingsInput,
   EmailTemplate,
@@ -78,7 +79,7 @@ import type {
   UUID,
 } from '../types';
 
-const tables = ['clients', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'saved_reports', 'company_settings'] as const;
+const tables = ['clients', 'client_contacts', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'saved_reports', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -87,6 +88,7 @@ type MembershipRow = OrganizationMember & { organization: Organization | Organiz
 
 const tableToEntity: Record<Table, EntityType | null> = {
   clients: 'client',
+  client_contacts: null,
   projects: 'project',
   tasks: 'task',
   tickets: 'ticket',
@@ -314,6 +316,7 @@ export async function loadOrganizationInvitations(organizationId: UUID): Promise
 export async function loadAppData(organizationId: UUID): Promise<AppData> {
   const [
     clients,
+    clientContacts,
     projects,
     tasks,
     tickets,
@@ -356,7 +359,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     savedReports,
     companySettings,
   ] = await Promise.all([
-    select<Client>('clients', organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
+    select<Client>('clients', organizationId), selectClientContacts(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
     selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectCalendarEventLinks(organizationId), selectTimeEntries(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId),
@@ -367,7 +370,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectSavedReports(organizationId),
     loadCompanySettings(organizationId),
   ]);
-  return { clients, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, savedReports, companySettings };
+  return { clients, clientContacts, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, savedReports, companySettings };
 }
 
 const SAVED_REPORTS_MIGRATION_HINT =
@@ -909,6 +912,9 @@ const BOOKKEEPING_MIGRATION_HINT =
 const FISCAL_YEAR_MIGRATION_HINT =
   'Voer de migratie 20260706120000_bookkeeping_fiscal_year_close.sql uit in Supabase om boekjaren (afsluiten/openen) te activeren.';
 
+const CLIENT_CONTACTS_MIGRATION_HINT =
+  'Voer de migratie 20260707000000_client_contacts.sql uit in Supabase om contactpersonen per klant te activeren.';
+
 /**
  * Leest een nog-jonge tabel en degradeert gracieus: ontbreekt de tabel (migratie
  * nog niet uitgevoerd), dan een waarschuwing + lege lijst i.p.v. een harde fout.
@@ -935,6 +941,8 @@ async function selectOptional<T>(
   return (data ?? []) as T[];
 }
 
+export const selectClientContacts = (organizationId: UUID) =>
+  selectOptional<ClientContact>('client_contacts', organizationId, { orderBy: 'name', ascending: true, hint: CLIENT_CONTACTS_MIGRATION_HINT });
 export const selectLedgerAccounts = (organizationId: UUID) =>
   selectOptional<LedgerAccount>('ledger_accounts', organizationId, { orderBy: 'code', ascending: true, hint: BOOKKEEPING_MIGRATION_HINT });
 export const selectVatCodes = (organizationId: UUID) =>
@@ -1359,6 +1367,25 @@ export async function sendClientPortalWelcomeEmail(organizationId: UUID, clientI
   if (error) await throwFunctionError(error, 'Welkomstmail verzenden mislukt.');
   if (!data?.ok) throw new Error(data?.error || 'Welkomstmail verzenden mislukt.');
   return data as { providerEmailId?: string; recipientEmail?: string };
+}
+
+/**
+ * Contactpersonen bij een klant. Elke rij kan onafhankelijk portaaltoegang
+ * krijgen (gives_portal_access) waarmee die persoon met zijn/haar eigen
+ * e-mailadres kan inloggen op /portal en daar offertes goedkeurt/weigert,
+ * facturen betaalt en tickets indient — los van het hoofd-e-mailadres van de
+ * klant, dat ongewijzigd blijft werken.
+ */
+export async function createClientContact(organizationId: UUID, values: Record<string, unknown>): Promise<ClientContact> {
+  return insertRow<ClientContact>('client_contacts', organizationId, values);
+}
+
+export async function updateClientContact(id: UUID, values: Record<string, unknown>, organizationId: UUID): Promise<ClientContact> {
+  return updateRow<ClientContact>('client_contacts', id, values, organizationId);
+}
+
+export async function deleteClientContact(id: UUID, organizationId: UUID): Promise<void> {
+  return deleteRow('client_contacts', id, organizationId);
 }
 
 export async function updateRow<T>(table: Table, id: UUID, values: Record<string, unknown>, organizationId?: UUID): Promise<T> {

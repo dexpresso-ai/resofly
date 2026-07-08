@@ -10,6 +10,7 @@ import { createClientWithServerCode, loadClientEmails, loadClientEmailThreads, l
 import { sendClientEmail } from '../services/mailService';
 import { supabase } from '../lib/supabase';
 import { ClientFolders } from './ClientFolders';
+import { ClientContacts } from './ClientContacts';
 import { ContractStatusBadge } from './Contracts';
 
 // Vaste kolommen voor de bulk CSV-import van klanten. Het klantnummer ontbreekt
@@ -441,6 +442,8 @@ export function ClientDetailPage({
           {client.notes && <p className="client-inline-notes">{client.notes}</p>}
           <div className="cd-tags">{client.tags?.map(tag => <span className="cd-tag" key={tag}>{tag}</span>)}</div>
         </article>
+
+        <ClientContacts data={data} client={client} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />
 
         <article className="client-panel">
           <div className="client-panel-head">

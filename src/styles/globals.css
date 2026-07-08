@@ -753,6 +753,29 @@
 .client-project-row{display:flex;align-items:center;gap:8px}.client-project-row span:nth-child(2){font-weight:800;flex:1}.client-project-row em{font-style:normal;font-size:10px;color:var(--muted);background:var(--bg2);border-radius:999px;padding:2px 7px}.client-project-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .client-finance-row{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:10px}.client-finance-row.is-overdue{border-color:rgba(240,107,107,.4);background:rgba(240,107,107,.08)}.client-finance-number{font-weight:900;font-size:12px}.client-finance-meta{font-size:11px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.client-finance-amount{font-weight:900;white-space:nowrap}.client-finance-status{font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:800;padding:4px 8px;border-radius:999px;background:var(--bg4);color:var(--muted2);white-space:nowrap}.client-finance-status.paid{background:rgba(52,211,153,.13);color:var(--accent-g)}.client-finance-status.overdue{background:rgba(240,107,107,.14);color:var(--accent-r)}.client-finance-status.sent,.client-finance-status.accepted{background:rgba(255,159,67,.13);color:var(--accent-o)}
 .client-empty-line{font-size:12px;color:var(--muted);border:1px dashed var(--border);border-radius:8px;padding:12px;text-align:center}
+
+/* Client detail — contactpersonen */
+.client-contact-list{display:flex;flex-direction:column;gap:7px}
+.client-contact-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:10px 11px}
+.client-contact-main{display:flex;flex-direction:column;gap:2px;flex:1;min-width:160px}
+.client-contact-name-line{display:flex;align-items:center;gap:7px}
+.client-contact-role{font-size:10px;color:var(--muted);background:var(--bg2);border-radius:999px;padding:2px 7px}
+.client-contact-meta{font-size:11px;color:var(--muted2)}
+.client-contact-badges{display:flex;flex-wrap:wrap;gap:6px}
+.client-contact-badge{font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:800;padding:3px 8px;border-radius:999px;background:var(--bg4);color:var(--muted2);white-space:nowrap}
+.client-contact-badge.on{background:rgba(52,211,153,.13);color:var(--accent-g)}
+.client-contact-badge.off{background:rgba(153,153,153,.12);color:var(--muted2)}
+.client-contact-actions{display:flex;flex-wrap:wrap;gap:6px;width:100%}
+.client-contact-actions button{background:none;border:1px solid var(--border);border-radius:7px;color:var(--muted2);font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;padding:4px 9px;transition:all .15s}
+.client-contact-actions button:hover{background:var(--bg4);color:var(--text);border-color:var(--border2)}
+.client-contact-form{margin-top:10px;padding:12px;background:var(--bg3);border:1px solid var(--border);border-radius:9px;display:flex;flex-direction:column;gap:10px}
+.client-contact-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px 12px}
+.client-contact-field{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted2);font-weight:700}
+.client-contact-form-toggle{display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--muted2);line-height:1.5}
+.client-contact-form-toggle input{margin-top:2px}
+.client-contact-form-actions{display:flex;justify-content:flex-end;gap:8px}
+@media(max-width:700px){.client-contact-form-grid{grid-template-columns:1fr}}
+
 @media(max-width:1100px){.client-kpi-grid{grid-template-columns:repeat(3,1fr)}.client-detail-grid,.client-finance-grid{grid-template-columns:1fr}.client-finance-row{grid-template-columns:1fr auto}.client-finance-meta{grid-column:1/-1}.client-finance-status{justify-self:start}.client-overview-layout{grid-template-columns:1fr}}
 @media(max-width:700px){.client-kpi-grid{grid-template-columns:1fr 1fr}.client-detail-hero{align-items:flex-start}.client-info-list{grid-template-columns:1fr}.client-billing-alert{flex-direction:column;align-items:flex-start}.client-title-row h2{font-size:23px}.client-tabs-bar{flex-wrap:wrap;gap:2px}.client-tab-btn{padding:6px 9px;font-size:11px}.client-tab-search{flex-direction:column;align-items:stretch}.client-tab-status-select{width:100% !important}}
 

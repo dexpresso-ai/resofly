@@ -64,6 +64,8 @@ type ClientRow = {
   phone: string | null;
 };
 
+type ActingContact = { id: string; name: string; email: string };
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return json(req, { ok: true });
 
@@ -117,7 +119,7 @@ async function getPortalData(user: { id: string; email: string }) {
   const clients = await resolveAccountsForEmail(user.email);
   const accounts = [];
   for (const client of clients) {
-    accounts.push(await buildAccount(client));
+    accounts.push(await buildAccount(client, user.email));
   }
   return { email: user.email, accounts };
 }
@@ -139,6 +141,8 @@ async function createTicket(user: { id: string; email: string }, body: Record<st
   const client = clients.find((row) => row.id === clientId);
   if (!client) throw new PortalError('Geen toegang tot deze klant.', 403);
 
+  const contact = await resolveActingContact(client, user.email);
+
   const { data, error } = await supabaseAdmin
     .from('tickets')
     .insert({
@@ -149,6 +153,9 @@ async function createTicket(user: { id: string; email: string }, body: Record<st
       priority,
       status: 'new',
       created_by: user.id,
+      created_by_contact_id: contact?.id ?? null,
+      created_by_name: contact?.name || client.contact_name || client.name || user.email,
+      created_by_email: contact?.email || user.email,
     })
     .select('*')
     .single();
@@ -210,8 +217,12 @@ async function addTicketNote(user: { id: string; email: string }, body: Record<s
   if (!ticket) throw new PortalError('Ticket niet gevonden.', 404);
   await assertEntityBelongsToClients({ client_id: ticket.client_id, project_id: null, organization_id: ticket.organization_id }, clients);
 
-  const client = clients.find((row) => row.id === ticket.client_id) || clients[0];
-  const authorName = client?.contact_name || client?.name || user.email;
+  // NOOIT terugvallen op clients[0]: dat kan een ander, ongerelateerd klantdossier
+  // zijn (bv. als dezelfde contactpersoon ook actief is bij een andere klant) en
+  // zou diens naam ten onrechte aan déze klant se ticket koppelen.
+  const client = clients.find((row) => row.id === ticket.client_id) || null;
+  const contact = client ? await resolveActingContact(client, user.email) : null;
+  const authorName = contact?.name || client?.contact_name || client?.name || user.email;
 
   const { data, error: insertError } = await supabaseAdmin
     .from('ticket_notes')
@@ -221,6 +232,7 @@ async function addTicketNote(user: { id: string; email: string }, body: Record<s
       created_by: user.id,
       author_type: 'client',
       author_user_id: null,
+      author_client_contact_id: contact?.id ?? null,
       author_name: authorName,
       body: noteBody,
       is_internal: false,
@@ -294,8 +306,15 @@ async function decideQuote(user: { id: string; email: string }, body: Record<str
   await assertEntityBelongsToClients(quote, clients);
   if (quote.status !== 'sent') throw new PortalError('Deze offerte is al beoordeeld en kan niet meer worden gewijzigd.', 409);
 
-  const client = clients.find((row) => row.id === quote.client_id) || clients[0];
-  const name = client?.contact_name || client?.name || user.email;
+  // NOOIT terugvallen op clients[0]: assertEntityBelongsToClients hierboven kan
+  // deze offerte ook via het GEKOPPELDE PROJECT autoriseren (quote.client_id zelf
+  // hoeft dan niet in `clients` te zitten). Zonder deze || null-guard zou de
+  // contactnaam van een ander, ongerelateerd klantdossier (bv. dezelfde persoon
+  // is ook actief contact bij een andere klant) permanent in de beslissingshistorie
+  // van déze offerte terechtkomen.
+  const client = clients.find((row) => row.id === quote.client_id) || null;
+  const contact = client ? await resolveActingContact(client, user.email) : null;
+  const name = contact?.name || client?.contact_name || client?.name || user.email;
 
   const { data, error: rpcError } = await supabaseAdmin.rpc('decide_quote_portal', {
     p_quote_id: quote.id,
@@ -304,6 +323,7 @@ async function decideQuote(user: { id: string; email: string }, body: Record<str
     p_name: name,
     p_email: user.email,
     p_note: note || null,
+    p_contact_id: contact?.id ?? null,
   });
   if (rpcError) {
     if (/kan niet meer|niet gevonden|verlopen|beslist/i.test(rpcError.message)) throw new PortalError(rpcError.message, 409);
@@ -381,11 +401,15 @@ async function createInvoicePayment(user: { id: string; email: string }, body: R
   if (!invoice || invoice.status === 'draft') throw new PortalError('Factuur niet gevonden.', 404);
   await assertEntityBelongsToClients(invoice, clients);
 
+  const invoiceClient = clients.find((row) => row.id === invoice.client_id) || null;
+  const contact = invoiceClient ? await resolveActingContact(invoiceClient, user.email) : null;
+
   const result = await createPortalInvoiceCheckout(supabaseAdmin, {
     organizationId: invoice.organization_id,
     invoiceId: invoice.id,
     actorUserId: user.id,
     redirectUrl: `${resolvePortalBaseUrl(req)}/portal`,
+    actorContact: contact ? { id: contact.id, name: contact.name, email: contact.email } : null,
   });
   if (!result.ok) throw new PortalError(result.error, result.status as number);
   return { checkoutUrl: result.checkoutUrl, mock: result.mock, reused: result.reused };
@@ -507,8 +531,9 @@ async function resolveAccountsForEmail(email: string): Promise<ClientRow[]> {
   return (Array.isArray(data) ? data : []) as ClientRow[];
 }
 
-async function buildAccount(client: ClientRow) {
+async function buildAccount(client: ClientRow, email: string) {
   const orgId = client.organization_id;
+  const actingContact = await resolveActingContact(client, email);
 
   const [company, projects] = await Promise.all([
     optionalCompany(orgId),
@@ -531,12 +556,44 @@ async function buildAccount(client: ClientRow) {
     organizationId: orgId,
     company: sanitizeCompany(company),
     client: sanitizeClient(client),
+    actingContact: actingContact ? { name: actingContact.name, email: actingContact.email } : null,
     projects: projects.map(sanitizeProject),
     invoices: invoices.map(sanitizeInvoice),
     quotes: quotes.map(sanitizeQuote),
     tickets: tickets.map(sanitizeTicket),
     contracts: contracts.map(sanitizeContract),
   };
+}
+
+/**
+ * Zoekt de specifieke, portaal-gemachtigde contactpersoon die bij dit
+ * geverifieerde e-mailadres hoort (indien dit e-mailadres niet het
+ * hoofd-e-mailadres van de klant zelf is). Vergelijkt in JS met dezelfde
+ * normalisatie als normalize_client_lookup_value (lower + trim + witruimte
+ * samenvouwen) i.p.v. een SQL ilike-filter: e-mailadressen mogen een
+ * underscore bevatten, wat in LIKE/ILIKE een jokerteken is en dus tot een
+ * verkeerde match zou kunnen leiden.
+ */
+async function resolveActingContact(client: ClientRow, email: string): Promise<ActingContact | null> {
+  const target = normalizeLookup(email);
+  if (!target) return null;
+
+  const { data, error } = await supabaseAdmin
+    .from('client_contacts')
+    .select('id,name,email')
+    .eq('client_id', client.id)
+    .eq('gives_portal_access', true)
+    .eq('is_active', true);
+  if (error) throw error;
+
+  const rows = (data || []) as Array<{ id: string; name: string; email: string }>;
+  const match = rows.find((row) => normalizeLookup(row.email) === target);
+  return match ? { id: match.id, name: match.name, email: match.email } : null;
+}
+
+function normalizeLookup(value: string | null | undefined): string | null {
+  const normalized = String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return normalized || null;
 }
 
 async function assertEntityBelongsToClients(entity: { client_id: string | null; project_id: string | null; organization_id: string }, clients: ClientRow[]) {
