@@ -6,6 +6,8 @@ import { dateNL, euro } from '../lib/format';
 import { computeVatReturn, ensureDefaultLedgerAccounts, finalizeVatReturn, updateRow } from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
+/** Rekenkundig afronden mét .50 weg van nul (zoals Postgres' numeric round()); JS Math.round rondt negatieve .50 juist naar +Infinity, dus -0,50 zou anders fout worden afgerond. */
+const roundHalfAwayFromZero = (n: number) => (n < 0 ? -Math.round(-n) : Math.round(n));
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const lastDay = (year: number, month: number) => new Date(year, month, 0).getDate();
 const MONTHS = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
@@ -83,11 +85,16 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
 
   const r = live;
   const saldo = r?.saldo ?? 0;
+  // saldo_afgerond ontbreekt bij aangiftes van vóór deze afronding werd toegevoegd; dan
+  // hier zelf afronden als indicatie (er is voor die periode niets op 4900 geboekt).
+  const saldoAfgerond = r ? (r.saldo_afgerond ?? roundHalfAwayFromZero(r.saldo / 100) * 100) : 0;
+  const afronding = r ? (r.afronding_cents ?? r.saldo - saldoAfgerond) : 0;
   const finalized = existing != null;
+  const afrondingGeboekt = finalized && existing!.rubrieken.saldo_afgerond != null;
 
   async function finalize() {
     if (!canWrite) return;
-    if (!confirm(`Aangifte ${period.label} definitief maken en doorboeken naar "Te betalen omzetbelasting"? Daarna wordt de periode vergrendeld.`)) return;
+    if (!confirm(`Aangifte ${period.label} definitief maken en doorboeken naar "Te betalen omzetbelasting" (${saldoAfgerond >= 0 ? 'af te dragen' : 'terug te ontvangen'} ${euroCents(Math.abs(saldoAfgerond))}, afgerond op hele euro's)? Daarna wordt de periode vergrendeld.`)) return;
     setBusy(true); setError(null);
     try { await finalizeVatReturn(organizationId, { periodType: period.dbType, year, periodIndex: period.index, from: period.from, to: period.to }); onChanged(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Doorboeken mislukt'); }
@@ -155,8 +162,18 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
               <tr className="bk-report-section"><td colSpan={4}>Voorbelasting</td></tr>
               <tr className="bk-report-total"><td>5b</td><td>Voorbelasting</td><td className="bk-num" /><td className="bk-num">{euroCents(r.voorbelasting)}</td></tr>
             </tbody>
-            <tfoot><tr className="bk-report-result"><td>5c</td><td>{saldo >= 0 ? 'Te betalen' : 'Terug te ontvangen'}</td><td className="bk-num" /><td className={`bk-num ${saldo > 0 ? 'bk-neg' : 'bk-pos'}`}>{euroCents(Math.abs(saldo))}</td></tr></tfoot>
+            <tfoot>
+              <tr className="bk-report-result"><td>5c</td><td>Berekend saldo</td><td className="bk-num" /><td className={`bk-num ${saldo > 0 ? 'bk-neg' : 'bk-pos'}`}>{euroCents(Math.abs(saldo))}</td></tr>
+              <tr className="bk-report-result"><td /><td>{saldoAfgerond >= 0 ? 'Af te dragen' : 'Terug te ontvangen'} (afgerond op hele euro's)</td><td className="bk-num" /><td className={`bk-num ${saldoAfgerond > 0 ? 'bk-neg' : 'bk-pos'}`}>{euroCents(Math.abs(saldoAfgerond))}</td></tr>
+            </tfoot>
           </table></div>
+
+          {afronding !== 0 && !finalized && (
+            <p className="bk-muted">Afrondingsverschil van {euroCents(Math.abs(afronding))} gaat bij het doorboeken naar grootboekrekening 4900 (Afrondingsverschillen).</p>
+          )}
+          {afronding !== 0 && afrondingGeboekt && (
+            <p className="bk-muted">Afrondingsverschil van {euroCents(Math.abs(afronding))} is bij het doorboeken geboekt op grootboekrekening 4900 (Afrondingsverschillen).</p>
+          )}
 
           {finalized && existing!.journal_entry_id && (() => {
             const entry = data.journalEntries.find(j => j.id === existing!.journal_entry_id);

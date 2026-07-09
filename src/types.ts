@@ -1083,6 +1083,10 @@ export interface VatReturnRubrieken {
   verschuldigd_total: number;
   voorbelasting: number;
   saldo: number;
+  /** Saldo afgerond op hele euro's (het bedrag dat werkelijk wordt afgedragen/teruggevraagd). Ontbreekt bij aangiftes van vóór deze afronding werd toegevoegd. */
+  saldo_afgerond?: number;
+  /** saldo - saldo_afgerond; geboekt op 4900 Afrondingsverschillen bij het doorboeken. */
+  afronding_cents?: number;
 }
 
 export interface VatReturn {
