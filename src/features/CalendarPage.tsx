@@ -418,6 +418,11 @@ interface DragState { dayIndex: number; startSlot: number; endSlot: number }
 /* ── TimeBlockGrid ───────────────────────────────────────────────────── */
 
 const MAX_OVERLAP_COLS = 2;
+// Afspraken die (bijna) een hele dag vullen (bv. "op locatie", langdurige blokkade)
+// tellen niet mee in de kolomverdeling: ze krijgen altijd de volle breedte als
+// achtergrondlaag, zodat kortere afspraken die ermee overlappen nooit worden
+// weggedrukt of verborgen — die renderen er altijd bovenop.
+const BACKGROUND_EVENT_MIN_MINUTES = 6 * 60;
 
 type TimedEventSegment = {
   event: CalendarExternalEvent;
@@ -429,6 +434,7 @@ type TimedEventSegment = {
   columns: number;
   startsBeforeDay: boolean;
   endsAfterDay: boolean;
+  isBackground: boolean;
 };
 
 type OverflowChip = { top: number; count: number };
@@ -450,15 +456,21 @@ function layoutTimedEventsForDay(
       const endMinute = Math.max(startMinute + 15, Math.min(minutesInWindow, Math.round((visibleEnd.getTime() - visibleStartBound.getTime()) / 60000)));
       const top = dateToVisibleDayFraction(day, visibleStart) * 100;
       const height = Math.max(dateToVisibleDayFraction(day, visibleEnd) * 100 - top, (100 / TOTAL_SLOTS) * MIN_EVENT_HEIGHT_SLOTS);
-      return { event: ev, startMinute, endMinute, top, height, column: 0, columns: 1, startsBeforeDay: eventStart < visibleStartBound, endsAfterDay: eventEnd > visibleEndBound };
+      const isBackground = endMinute - startMinute >= BACKGROUND_EVENT_MIN_MINUTES;
+      return { event: ev, startMinute, endMinute, top, height, column: 0, columns: 1, startsBeforeDay: eventStart < visibleStartBound, endsAfterDay: eventEnd > visibleEndBound, isBackground };
     })
     .sort((a, b) => a.startMinute - b.startMinute || a.endMinute - b.endMinute);
+
+  // Dagvullende afspraken vormen hun eigen achtergrondlaag: volle breedte, geen
+  // kolom, en dus geen concurrentie met kortere afspraken om zichtbare ruimte.
+  const backgroundSegments = raw.filter(s => s.isBackground);
+  const foreground = raw.filter(s => !s.isBackground);
 
   const clusters: TimedEventSegment[][] = [];
   let current: TimedEventSegment[] = [];
   let currentEnd = -1;
 
-  raw.forEach(segment => {
+  foreground.forEach(segment => {
     if (!current.length || segment.startMinute < currentEnd) {
       current.push(segment);
       currentEnd = Math.max(currentEnd, segment.endMinute);
@@ -488,7 +500,7 @@ function layoutTimedEventsForDay(
     cluster.forEach(segment => { segment.columns = visibleCols; });
   });
 
-  return { segments: raw.filter(s => s.column < MAX_OVERLAP_COLS), overflows };
+  return { segments: [...backgroundSegments, ...foreground.filter(s => s.column < MAX_OVERLAP_COLS)], overflows };
 }
 
 type EventInteractionMode = 'move' | 'resize-start' | 'resize-end';
@@ -846,7 +858,7 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                     const draggable = !readOnlyEvents && canDragEvent(ev) && !segment.startsBeforeDay && !segment.endsAfterDay;
                     const isGhosted = Boolean(interaction) && eventIdentityKey(interaction!.event) === eventIdentityKey(ev);
                     return (
-                      <button type="button" className={`tb-ev${densityClass}${ev.visibility === 'private' ? ' tb-ev-priv' : ''}${trackedMin != null ? ' tb-ev-tracked' : ''}${draggable ? ' tb-ev-draggable' : ''}${isGhosted ? ' tb-ev-ghosted' : ''}`} key={`${ev.provider}-${ev.provider_event_id}-${di}`}
+                      <button type="button" className={`tb-ev${densityClass}${segment.isBackground ? ' tb-ev-bg' : ''}${ev.visibility === 'private' ? ' tb-ev-priv' : ''}${trackedMin != null ? ' tb-ev-tracked' : ''}${draggable ? ' tb-ev-draggable' : ''}${isGhosted ? ' tb-ev-ghosted' : ''}`} key={`${ev.provider}-${ev.provider_event_id}-${di}`}
                         onClick={() => { if (draggedRef.current) return; onOpenEvent(ev); }}
                         onPointerDown={draggable ? e => beginEventInteraction(e, ev, di, 'move') : undefined}
                         style={{
