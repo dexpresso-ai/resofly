@@ -85,3 +85,9 @@ verify_jwt = false
 # geen Supabase JWT) én ingelogde app-acties (getVapidKey/test via requireUser in code).
 [functions.web-push]
 verify_jwt = false
+
+# invoice-extract (AI-inkoopfactuurscan) handelt CORS-preflight + auth zelf af, net als
+# gerrie-agent: elke aanvraag verifieert requireUser() + requireOrganizationAccess() +
+# schrijfrol, plus een AI-budgetcheck vóór de betaalde Claude-call.
+[functions.invoice-extract]
+verify_jwt = false

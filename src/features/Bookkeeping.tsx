@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
-import { BookOpen, FileDown, Layers, Plus, RotateCcw, Trash2, Upload } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
+import { BookOpen, FileDown, FileText, Layers, Plus, RotateCcw, Sparkles, Trash2, Upload } from 'lucide-react';
 import type {
-  AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PurchaseInvoice, PurchaseInvoiceLine, Supplier, VatCode,
+  AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PurchaseInvoice, PurchaseInvoiceLine, Supplier, UUID, VatCode,
 } from '../types';
 import { Modal } from '../components/Modal';
 import { CsvImportModal } from '../components/CsvImportModal';
@@ -11,6 +11,8 @@ import { dateNL, euro, uid } from '../lib/format';
 import {
   bookPurchaseInvoice, deleteRow, ensureDefaultLedgerAccounts, insertRow, reverseJournalEntry, updateRow,
 } from '../lib/repository';
+import { uploadToR2 } from '../lib/r2';
+import { scanInvoice, SCAN_ACCEPT, SCAN_MAX_BYTES, type ScanResult } from '../lib/invoice-scan-api';
 
 // Vaste kolommen voor de bulk CSV-import van leveranciers (crediteuren).
 const SUPPLIER_IMPORT_COLUMNS: ImportColumn[] = [
@@ -224,6 +226,8 @@ const purchaseStatusLabel: Record<PurchaseInvoice['status'], string> = {
 
 export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged }: PageProps) {
   const [edit, setEdit] = useState<PurchaseInvoice | 'new' | null>(null);
+  const [seed, setSeed] = useState<InvoiceFormSeed | null>(null);
+  const [scan, setScan] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const supplierName = (id: string | null) => data.suppliers.find(s => s.id === id)?.name ?? '—';
@@ -242,7 +246,10 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
       {notReady && <SetupBanner organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
       <div className="bk-head">
         <div><h2>Inkoopfacturen</h2><p>Boek leveranciersfacturen in en verwerk de voorbelasting.</p></div>
-        <Button variant="primary" disabled={!canWrite || notReady} onClick={() => setEdit('new')}><Plus size={15} /> Nieuwe inkoopfactuur</Button>
+        <div className="bk-head-actions">
+          <Button disabled={!canWrite || notReady} onClick={() => setScan(true)} title="Lees een factuur (PDF/foto) automatisch uit met AI"><Sparkles size={15} /> Factuur scannen (AI)</Button>
+          <Button variant="primary" disabled={!canWrite || notReady} onClick={() => { setSeed(null); setEdit('new'); }}><Plus size={15} /> Nieuwe inkoopfactuur</Button>
+        </div>
       </div>
       {error && <div className="error">{error}</div>}
       {data.purchaseInvoices.length === 0
@@ -266,14 +273,187 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
               </tr>
             ))}</tbody>
           </table></div>}
+      {scan && <InvoiceScanModal data={data} organizationId={organizationId}
+        onClose={() => setScan(false)}
+        onSeed={s => { setScan(false); setSeed(s); setEdit('new'); }} />}
       {edit && <PurchaseInvoiceForm data={data} organizationId={organizationId} canWrite={canWrite}
-        invoice={edit === 'new' ? null : edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); onChanged(); }} />}
+        invoice={edit === 'new' ? null : edit} seed={edit === 'new' ? seed : null}
+        onClose={() => { setEdit(null); setSeed(null); }}
+        onSaved={() => { setEdit(null); setSeed(null); onChanged(); }} />}
     </div>
   );
 }
 
-function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, onClose, onSaved }: {
-  data: AppData; organizationId: string; canWrite: boolean; invoice: PurchaseInvoice | null;
+// ── AI-factuurscan: uitlezen → voorstel → vooringevuld concept ────────────────
+
+const CONFIDENCE_LABEL: Record<'high' | 'medium' | 'low', string> = { high: 'hoog', medium: 'gemiddeld', low: 'laag' };
+
+interface NewSupplierPayload {
+  name: string; vat_number: string | null; kvk_number: string | null; iban: string | null;
+  email: string | null; phone: string | null; address_line1: string | null; postal_code: string | null;
+  city: string | null; country: string | null; default_expense_account_id: UUID | null; default_vat_code: string | null;
+}
+
+/** Vooringevuld voorstel dat de AI-scan doorgeeft aan het inkoopfactuurformulier. */
+interface InvoiceFormSeed {
+  supplierId: UUID | null;
+  newSupplier: NewSupplierPayload | null;
+  form: { supplier_invoice_number: string; date: string; due_date: string; notes: string };
+  lines: PurchaseInvoiceLine[];
+  pendingFile: File | null;
+  extractionMeta: Record<string, unknown>;
+  ai: { confidence: 'high' | 'medium' | 'low'; warnings: string[] };
+}
+
+/** Upload een factuur → laat de AI hem uitlezen → toon het voorstel → neem over in een concept. */
+function InvoiceScanModal({ data, organizationId, onClose, onSeed }: {
+  data: AppData; organizationId: string; onClose: () => void; onSeed: (seed: InvoiceFormSeed) => void;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ScanResult | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const accountLabel = (id: string | null) => {
+    const a = id ? data.ledgerAccounts.find(x => x.id === id) : null;
+    return a ? `${a.code} · ${a.name}` : '— (vangnet bij boeken)';
+  };
+  const vatLabel = (code: string) => data.vatCodes.find(v => v.code === code)?.label ?? code;
+
+  function pick(f: File | null) {
+    setError(null); setResult(null);
+    if (!f) { setFile(null); return; }
+    if (f.size > SCAN_MAX_BYTES) { setError(`Bestand is te groot (max ${Math.round(SCAN_MAX_BYTES / 1024 / 1024)} MB).`); return; }
+    setFile(f);
+  }
+
+  async function run() {
+    if (!file) return;
+    setBusy(true); setError(null);
+    try { setResult(await scanInvoice(organizationId, file)); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Uitlezen mislukt.'); }
+    finally { setBusy(false); }
+  }
+
+  function apply() {
+    if (!result || !file) return;
+    const p = result.proposal;
+    const lines: PurchaseInvoiceLine[] = p.lines.length
+      ? p.lines.map(l => ({ id: uid(), description: l.description, amount_cents: l.amount_cents, vat_code: l.vat_code, vat_rate: l.vat_rate, account_id: l.account_id }))
+      : [{ id: uid(), description: '', amount_cents: 0, vat_code: 'HOOG', vat_rate: 21, account_id: null }];
+    onSeed({
+      supplierId: p.supplier.matchedId,
+      newSupplier: p.supplier.matchedId ? null : {
+        name: p.supplier.name || 'Onbekende leverancier',
+        vat_number: p.supplier.vat_number, kvk_number: p.supplier.kvk_number, iban: p.supplier.iban,
+        email: p.supplier.email, phone: p.supplier.phone, address_line1: p.supplier.address_line1,
+        postal_code: p.supplier.postal_code, city: p.supplier.city, country: p.supplier.country,
+        default_expense_account_id: p.supplier.default_expense_account_id, default_vat_code: p.supplier.default_vat_code,
+      },
+      form: {
+        supplier_invoice_number: p.supplier_invoice_number ?? '',
+        date: p.date ?? new Date().toISOString().slice(0, 10),
+        due_date: p.due_date ?? '',
+        notes: p.notes ?? '',
+      },
+      lines,
+      pendingFile: file,
+      extractionMeta: result.extraction_meta,
+      ai: { confidence: p.confidence, warnings: p.warnings },
+    });
+  }
+
+  const p = result?.proposal ?? null;
+  const matchedSupplierName = p?.supplier.matchedId ? data.suppliers.find(s => s.id === p.supplier.matchedId)?.name : null;
+
+  return (
+    <Modal className="bk-modal-wide" title="Factuur scannen (AI)" onClose={onClose}
+      footer={<div className="bk-foot">
+        <span className="bk-spacer" />
+        <Button onClick={onClose}>Annuleren</Button>
+        {!result
+          ? <Button variant="primary" onClick={run} disabled={!file || busy}>{busy ? 'Uitlezen…' : 'Uitlezen'}</Button>
+          : <Button variant="primary" onClick={apply}>Overnemen in concept →</Button>}
+      </div>}>
+      {error && <div className="error">{error}</div>}
+
+      {!p ? (
+        <>
+          <p className="bk-muted">Upload een inkoopfactuur als PDF of foto. De AI leest leverancier, regels, bedragen en BTW uit en stelt per regel een grootboekrekening voor. Je controleert alles daarna in het concept — er wordt niets automatisch geboekt.</p>
+          <div
+            className={`bk-dropzone${dragOver ? ' is-over' : ''}`}
+            onClick={() => inputRef.current?.click()}
+            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={e => { e.preventDefault(); setDragOver(false); pick(e.dataTransfer.files?.[0] ?? null); }}
+          >
+            <Upload size={22} />
+            {file
+              ? <div><strong>{file.name}</strong><div className="bk-muted">{(file.size / 1024).toFixed(0)} kB — klik om te wijzigen</div></div>
+              : <div>Sleep een factuur hierheen of <span className="bk-link">kies een bestand</span><div className="bk-muted">PDF, JPG, PNG, WEBP of GIF · max {Math.round(SCAN_MAX_BYTES / 1024 / 1024)} MB</div></div>}
+          </div>
+          <input ref={inputRef} type="file" accept={SCAN_ACCEPT} style={{ display: 'none' }}
+            onChange={e => pick(e.target.files?.[0] ?? null)} />
+          {busy && <div className="bk-note">De factuur wordt uitgelezen — dit kan ongeveer 10 seconden duren.</div>}
+        </>
+      ) : (
+        <div className="bk-scan-review">
+          <div className="bk-note bk-ai-note">
+            <strong><Sparkles size={13} /> Uitgelezen voorstel</strong> — controleer alles voordat je het overneemt. Betrouwbaarheid: {CONFIDENCE_LABEL[p.confidence]}.
+            {p.warnings.length > 0 && <ul className="bk-ai-warnings">{p.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>}
+          </div>
+          <div className="bk-grid2">
+            <Field label="Leverancier">
+              <div className="bk-scan-val">
+                <strong>{p.supplier.name || '—'}</strong>{' '}
+                {p.supplier.matchedId
+                  ? <span className="status-pill">bestaand{matchedSupplierName && matchedSupplierName !== p.supplier.name ? `: ${matchedSupplierName}` : ''}</span>
+                  : <span className="status-pill">nieuw — wordt aangemaakt</span>}
+                {p.supplier.vat_number && <div className="bk-muted">BTW: {p.supplier.vat_number}</div>}
+                {p.supplier.iban && <div className="bk-muted">IBAN: {p.supplier.iban}</div>}
+              </div>
+            </Field>
+            <Field label="Factuurgegevens">
+              <div className="bk-scan-val">
+                <div>Factuurnr.: <strong>{p.supplier_invoice_number || '—'}</strong></div>
+                <div>Datum: <strong>{p.date ? dateNL(p.date) : '—'}</strong></div>
+                {p.due_date && <div>Vervalt: {dateNL(p.due_date)}</div>}
+              </div>
+            </Field>
+          </div>
+
+          <div className="bk-scan-lines">
+            <table className="bk-table">
+              <thead><tr><th>Omschrijving</th><th>Grootboek</th><th>BTW</th><th className="bk-num">Excl.</th></tr></thead>
+              <tbody>{p.lines.map((l, i) => (
+                <tr key={i}>
+                  <td>{l.description || '—'}</td>
+                  <td className={l.account_id ? '' : 'bk-muted'}>{accountLabel(l.account_id)}</td>
+                  <td>{vatLabel(l.vat_code)}</td>
+                  <td className="bk-num">{euroCents(l.amount_cents)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+
+          <div className="bk-totals">
+            <div><span>Subtotaal</span><strong>{euroCents(p.totals.subtotal_cents)}</strong></div>
+            <div><span>BTW</span><strong>{euroCents(p.totals.vat_cents)}</strong></div>
+            <div className="bk-total-grand"><span>Totaal</span><strong>{euroCents(p.totals.total_cents)}</strong></div>
+            {p.extracted_totals?.total_cents != null && p.extracted_totals.total_cents !== p.totals.total_cents && (
+              <div className="bk-muted">Op de factuur vermeld totaal: {euroCents(p.extracted_totals.total_cents)}</div>
+            )}
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, onClose, onSaved }: {
+  data: AppData; organizationId: string; canWrite: boolean; invoice: PurchaseInvoice | null; seed?: InvoiceFormSeed | null;
   onClose: () => void; onSaved: () => void;
 }) {
   const expenseAccounts = useMemo(() => data.ledgerAccounts.filter(a => a.type === 'expense' || a.type === 'asset'), [data.ledgerAccounts]);
@@ -285,11 +465,18 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, onClose,
     supplier_id: invoice.supplier_id ?? '', supplier_invoice_number: invoice.supplier_invoice_number ?? '',
     internal_number: invoice.internal_number ?? '', date: invoice.date, due_date: invoice.due_date ?? '',
     project_id: invoice.project_id ?? '', notes: invoice.notes ?? '',
+  } : seed ? {
+    supplier_id: seed.supplierId ?? (seed.newSupplier ? '__new__' : ''),
+    supplier_invoice_number: seed.form.supplier_invoice_number,
+    internal_number: nextPurchaseNumber(data), date: seed.form.date || today, due_date: seed.form.due_date,
+    project_id: '', notes: seed.form.notes,
   } : {
     supplier_id: '', supplier_invoice_number: '', internal_number: nextPurchaseNumber(data), date: today, due_date: '', project_id: '', notes: '',
   });
   const [lines, setLines] = useState<PurchaseInvoiceLine[]>(() => invoice?.lines?.length
     ? invoice.lines
+    : seed?.lines?.length
+    ? seed.lines
     : [{ id: uid(), description: '', amount_cents: 0, vat_code: defaultVat?.code ?? 'HOOG', vat_rate: defaultVat?.rate ?? 21, account_id: null }]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -304,19 +491,38 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, onClose,
 
   async function save() {
     if (!form.supplier_id) { setError('Kies een leverancier.'); return; }
+    if (form.supplier_id === '__new__' && !seed?.newSupplier) { setError('Kies een leverancier.'); return; }
     const cleaned = lines.filter(l => String(l.description || '').trim() || Number(l.amount_cents));
     if (cleaned.length === 0) { setError('Voeg minimaal één regel toe.'); return; }
     setBusy(true); setError(null);
     try {
+      // Nieuwe leverancier uit de AI-scan? Maak hem aan en gebruik zijn id.
+      let supplierId = form.supplier_id as string;
+      if (form.supplier_id === '__new__' && seed?.newSupplier) {
+        const createdSupplier = await insertRow<Supplier>('suppliers', organizationId, { ...seed.newSupplier, status: 'active' });
+        supplierId = createdSupplier.id;
+      }
       const t = purchaseTotals(cleaned);
       const values = {
-        supplier_id: form.supplier_id, supplier_invoice_number: form.supplier_invoice_number || null,
+        supplier_id: supplierId, supplier_invoice_number: form.supplier_invoice_number || null,
         internal_number: form.internal_number || nextPurchaseNumber(data), date: form.date, due_date: form.due_date || null,
         project_id: form.project_id || null, notes: form.notes || null, lines: cleaned,
         subtotal_cents: t.subtotal_cents, vat_cents: t.vat_cents, total_cents: t.total_cents,
       };
-      invoice ? await updateRow<PurchaseInvoice>('purchase_invoices', invoice.id, values, organizationId)
-              : await insertRow<PurchaseInvoice>('purchase_invoices', organizationId, { ...values, status: 'draft', payment_status: 'unpaid' });
+      if (invoice) {
+        await updateRow<PurchaseInvoice>('purchase_invoices', invoice.id, values, organizationId);
+      } else {
+        const saved = await insertRow<PurchaseInvoice>('purchase_invoices', organizationId, {
+          ...values, status: 'draft', payment_status: 'unpaid',
+          ...(seed ? { source: 'ai_scan', extraction_meta: seed.extractionMeta } : {}),
+        });
+        // Originele factuur als bewijsstuk koppelen (best-effort: een R2-hapering
+        // mag de al opgeslagen boeking niet blokkeren).
+        if (seed?.pendingFile && saved?.id) {
+          try { await uploadToR2(seed.pendingFile, organizationId, { entity_type: 'purchase_invoice', entity_id: saved.id }); }
+          catch (uploadErr) { console.warn('Bijlage koppelen aan inkoopfactuur mislukt:', uploadErr); }
+        }
+      }
       onSaved();
     } catch (e) { setError(e instanceof Error ? e.message : 'Opslaan mislukt'); setBusy(false); }
   }
@@ -329,6 +535,12 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, onClose,
         {!readOnly && <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Bezig…' : 'Opslaan als concept'}</Button>}
       </div>}>
       {error && <div className="error">{error}</div>}
+      {seed && (
+        <div className="bk-note bk-ai-note">
+          <strong><Sparkles size={13} /> AI-voorstel</strong> — controleer leverancier, grootboekrekeningen, BTW en bedragen voordat je opslaat. Betrouwbaarheid: {CONFIDENCE_LABEL[seed.ai.confidence]}.
+          {seed.ai.warnings.length > 0 && <ul className="bk-ai-warnings">{seed.ai.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>}
+        </div>
+      )}
       {readOnly && invoice && invoice.status !== 'draft' && <div className="bk-note">Deze factuur is geboekt en kan niet meer worden gewijzigd. Corrigeren kan via een tegenboeking in het grootboek.</div>}
       <div className="bk-grid2">
         <Field label="Leverancier">
@@ -338,6 +550,7 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, onClose,
             if (sup?.default_expense_account_id) setLines(ls => ls.map(l => l.account_id ? l : { ...l, account_id: sup.default_expense_account_id }));
           }} disabled={readOnly}>
             <option value="">— kies —</option>
+            {seed?.newSupplier && <option value="__new__">➕ Nieuwe leverancier: {seed.newSupplier.name}</option>}
             {data.suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </Select>
         </Field>

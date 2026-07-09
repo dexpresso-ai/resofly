@@ -37,6 +37,12 @@ const ENTITY_TYPES = new Set([
   'invoice',
   'meeting_recording',
   'chat_message',
+  // Boekhouding: originele inkoopfactuur als bewijsstuk, plus leverancier-/activabijlagen
+  // en cloud-drive-mappen (de DB-constraint op attachments.entity_type staat deze al toe).
+  'purchase_invoice',
+  'supplier',
+  'folder',
+  'fixed_asset',
 ]);
 
 /**

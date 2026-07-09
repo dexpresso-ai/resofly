@@ -843,6 +843,8 @@ export type JournalSourceType =
   | 'vat_return' | 'payment' | 'opening_balance' | 'manual';
 export type PurchaseInvoiceStatus = 'draft' | 'booked' | 'paid' | 'cancelled';
 export type PurchaseInvoicePaymentStatus = 'unpaid' | 'partially_paid' | 'paid';
+/** Herkomst van de inkoopfactuur: handmatig, door AI uitgelezen, bank of import. */
+export type PurchaseInvoiceSource = 'manual' | 'ai_scan' | 'bank' | 'import';
 export type SupplierStatus = 'active' | 'inactive';
 
 export interface LedgerAccount extends OrgScopedRow {
@@ -1004,6 +1006,10 @@ export interface PurchaseInvoice extends OrgScopedRow {
   project_id: UUID | null;
   journal_entry_id: UUID | null;
   notes: string | null;
+  /** Herkomst; 'ai_scan' als de factuur door de AI-scan is uitgelezen. */
+  source: PurchaseInvoiceSource;
+  /** AI-extractie-metadata (model, confidence, ruwe uitlezing) — alleen bij source='ai_scan'. */
+  extraction_meta: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }

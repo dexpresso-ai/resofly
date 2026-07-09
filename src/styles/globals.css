@@ -2321,6 +2321,20 @@ button.chat-member:hover{background:var(--bg3)}
 .bk-setup{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 18px;border:1px solid var(--border);border-radius:18px;background:linear-gradient(145deg,rgba(255,189,89,.10),rgba(255,255,255,.02))}
 .bk-setup p{margin:.25rem 0 0;color:var(--muted,rgba(245,245,245,.6));font-size:.85rem}
 .bk-note{padding:10px 13px;border:1px solid var(--border);border-radius:12px;background:rgba(255,255,255,.03);font-size:.83rem;margin-bottom:12px}
+/* ── AI-inkoopfactuurscan ─────────────────────────────────────────────── */
+.bk-ai-note{border-color:rgba(255,217,102,.35);background:linear-gradient(145deg,rgba(255,217,102,.10),rgba(255,255,255,.02))}
+.bk-ai-note strong{display:inline-flex;align-items:center;gap:6px}
+.bk-ai-warnings{margin:8px 0 0;padding-left:18px;color:#f0b24b}
+.bk-ai-warnings li{margin:2px 0}
+.bk-dropzone{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center;padding:26px 18px;border:1.5px dashed var(--border);border-radius:16px;background:rgba(255,255,255,.02);color:var(--muted,rgba(245,245,245,.6));cursor:pointer;transition:border-color .15s,background .15s}
+.bk-dropzone:hover,.bk-dropzone.is-over{border-color:var(--accent);background:rgba(255,217,102,.06);color:var(--text)}
+.bk-dropzone strong{color:var(--text)}
+.bk-link{color:var(--accent);text-decoration:underline}
+.bk-scan-review{display:flex;flex-direction:column;gap:10px}
+.bk-scan-val{font-size:.9rem;display:flex;flex-direction:column;gap:2px}
+.bk-scan-val .status-pill{align-self:flex-start}
+.bk-scan-lines{border:1px solid var(--border);border-radius:14px;overflow:hidden;margin-top:4px}
+.bk-scan-lines th.bk-num,.bk-scan-lines td.bk-num{text-align:right}
 .bk-table-wrap{border:1px solid var(--border);border-radius:18px;overflow:hidden;background:rgba(255,255,255,.022)}
 .bk-table{width:100%;border-collapse:collapse;font-size:.86rem}
 .bk-table th{text-align:left;padding:11px 14px;font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted,rgba(245,245,245,.5));border-bottom:1px solid var(--border)}

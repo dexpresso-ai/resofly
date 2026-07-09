@@ -12,7 +12,7 @@
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 
 export type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
-export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502;
+export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 413 | 422 | 429 | 500 | 502;
 
 export class HttpError extends Error {
   status: HttpStatus;
