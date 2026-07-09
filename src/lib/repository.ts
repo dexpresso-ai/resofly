@@ -81,18 +81,20 @@ import type {
   OrganizationMembershipView,
   OrganizationRole,
   Project,
+  ProjectMember,
   Quote,
   QuoteApprovalEvent,
   QuoteEmailDelivery,
   QuoteVersion,
   SavedReport,
   Task,
+  TaskAssignee,
   Ticket,
   TicketNote,
   UUID,
 } from '../types';
 
-const tables = ['clients', 'client_contacts', 'projects', 'tasks', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'saved_reports', 'company_settings'] as const;
+const tables = ['clients', 'client_contacts', 'projects', 'tasks', 'project_members', 'task_assignees', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'saved_reports', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -104,6 +106,8 @@ const tableToEntity: Record<Table, EntityType | null> = {
   client_contacts: null,
   projects: 'project',
   tasks: 'task',
+  project_members: null,
+  task_assignees: null,
   tickets: 'ticket',
   notes: 'note',
   documents: 'document',
@@ -371,6 +375,8 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     folders,
     savedReports,
     companySettings,
+    projectMembers,
+    taskAssignees,
   ] = await Promise.all([
     select<Client>('clients', organizationId), selectClientContacts(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
     selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectCalendarEventLinks(organizationId), selectTimeEntries(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
@@ -382,8 +388,77 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectFolders(organizationId),
     selectSavedReports(organizationId),
     loadCompanySettings(organizationId),
+    selectProjectMembers(organizationId),
+    selectTaskAssignees(organizationId),
   ]);
-  return { clients, clientContacts, projects, tasks, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, savedReports, companySettings };
+  return { clients, clientContacts, projects, tasks, projectMembers, taskAssignees, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, savedReports, companySettings };
+}
+
+const PROJECT_TEAM_MIGRATION_HINT =
+  'Voer de migratie 20260710040000_project_members_task_assignees.sql uit in Supabase om projectteams en taak-toewijzingen te activeren.';
+
+/** Projectteam-koppelingen (org-breed; filter client-side op project_id). */
+export async function selectProjectMembers(organizationId: UUID): Promise<ProjectMember[]> {
+  return selectOptional<ProjectMember>('project_members', organizationId, {
+    orderBy: 'created_at', ascending: true, hint: PROJECT_TEAM_MIGRATION_HINT,
+  });
+}
+
+/** Taak-toewijzingen (org-breed; filter client-side op task_id). */
+export async function selectTaskAssignees(organizationId: UUID): Promise<TaskAssignee[]> {
+  return selectOptional<TaskAssignee>('task_assignees', organizationId, {
+    orderBy: 'created_at', ascending: true, hint: PROJECT_TEAM_MIGRATION_HINT,
+  });
+}
+
+/** Voeg een organisatielid toe aan het projectteam. */
+export async function addProjectMember(organizationId: UUID, projectId: UUID, userId: UUID): Promise<ProjectMember> {
+  return insertRow<ProjectMember>('project_members', organizationId, { project_id: projectId, user_id: userId });
+}
+
+/** Haal een lid van het projectteam af (de DB ruimt diens taak-toewijzingen op dit project op). */
+export async function removeProjectMember(organizationId: UUID, id: UUID): Promise<void> {
+  return deleteRow('project_members', id, organizationId);
+}
+
+/**
+ * Zet de volledige toewijzingslijst van één taak gelijk aan `userIds`
+ * (diff-based: voegt alleen ontbrekende toe en verwijdert alleen weggevallen
+ * rijen, zodat bestaande rijen — en hun audit/aanmaakdatum — behouden blijven).
+ */
+export async function setTaskAssignees(organizationId: UUID, taskId: UUID, userIds: UUID[]): Promise<void> {
+  const desired = new Set(userIds);
+  const { data, error } = await supabase
+    .from('task_assignees')
+    .select('id,user_id')
+    .eq('organization_id', organizationId)
+    .eq('task_id', taskId);
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    // Ontbreekt de tabel nog (migratie niet uitgevoerd), degradeer stil.
+    if (/task_assignees|schema cache|does not exist|relation/i.test(message)) {
+      console.warn(`task_assignees is nog niet beschikbaar. ${PROJECT_TEAM_MIGRATION_HINT}`, error);
+      return;
+    }
+    throw error;
+  }
+  const existing = (data ?? []) as { id: UUID; user_id: UUID }[];
+  const existingIds = new Set(existing.map(row => row.user_id));
+
+  const toAdd = userIds.filter(userId => !existingIds.has(userId));
+  const toRemoveIds = existing.filter(row => !desired.has(row.user_id)).map(row => row.id);
+
+  if (toRemoveIds.length > 0) {
+    const { error: deleteError } = await supabase
+      .from('task_assignees')
+      .delete()
+      .eq('organization_id', organizationId)
+      .in('id', toRemoveIds);
+    if (deleteError) throw deleteError;
+  }
+  for (const userId of toAdd) {
+    await insertRow<TaskAssignee>('task_assignees', organizationId, { task_id: taskId, user_id: userId });
+  }
 }
 
 const SAVED_REPORTS_MIGRATION_HINT =

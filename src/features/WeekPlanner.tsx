@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import type { DragEvent } from 'react';
 import { ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
-import type { AppData, Priority, Task, TaskStatus, UUID } from '../types';
+import type { AppData, OrganizationMember, Priority, Task, TaskStatus, UUID } from '../types';
 import { Button, Input, Select } from '../components/Ui';
+import { AssigneeAvatars } from '../components/AssigneeAvatars';
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
 import { priorityLabel } from '../lib/format';
 
@@ -40,11 +41,15 @@ const WEEKEND_CAPACITY_MINUTES = 0;
 export function WeekPlanner({
   data,
   canWrite,
+  teamMembers,
+  currentUserId,
   onPlanTask,
   onEditTask,
 }: {
   data: AppData;
   canWrite: boolean;
+  teamMembers: OrganizationMember[];
+  currentUserId: string | null;
   onPlanTask: (taskId: UUID, plannedDate: string | null, beforeTaskId?: UUID | null) => Promise<void>;
   onEditTask: (task: Task) => void;
 }) {
@@ -61,6 +66,14 @@ export function WeekPlanner({
 
   const projectsById = useMemo(() => new Map(data.projects.map(project => [project.id, project])), [data.projects]);
   const clientsById = useMemo(() => new Map(data.clients.map(client => [client.id, client])), [data.clients]);
+  const assigneesByTask = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const a of data.taskAssignees) {
+      const list = map.get(a.task_id);
+      if (list) list.push(a.user_id); else map.set(a.task_id, [a.user_id]);
+    }
+    return map;
+  }, [data.taskAssignees]);
 
   const projectOptions = useMemo(() => {
     if (!filters.clientId) return data.projects;
@@ -210,6 +223,9 @@ export function WeekPlanner({
       projectName={projectName(task.project_id)}
       clientName={clientName(task.project_id)}
       projectColor={projectColor(task.project_id)}
+      assigneeIds={assigneesByTask.get(task.id) ?? []}
+      teamMembers={teamMembers}
+      currentUserId={currentUserId}
       isDragging={dragId === task.id}
       isInsertTarget={dragOverTaskId === task.id}
       canWrite={canWrite}
@@ -329,6 +345,9 @@ function TaskCard({
   projectName,
   clientName,
   projectColor,
+  assigneeIds,
+  teamMembers,
+  currentUserId,
   isDragging,
   isInsertTarget,
   canWrite,
@@ -343,6 +362,9 @@ function TaskCard({
   projectName: string;
   clientName: string | null;
   projectColor: string;
+  assigneeIds: string[];
+  teamMembers: OrganizationMember[];
+  currentUserId: string | null;
   isDragging: boolean;
   isInsertTarget: boolean;
   canWrite: boolean;
@@ -376,6 +398,7 @@ function TaskCard({
         <span>{formatDuration(taskEstimateMinutes(task))}</span>
         {task.end_date && <span>Deadline {formatDateShort(task.end_date)}</span>}
         {showPlannedDate && task.planned_date && <span>Gepland {formatDateShort(task.planned_date)}</span>}
+        <AssigneeAvatars userIds={assigneeIds} teamMembers={teamMembers} currentUserId={currentUserId} max={4} />
       </div>
     </div>
   </article>;

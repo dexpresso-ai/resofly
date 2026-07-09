@@ -3131,3 +3131,35 @@ button.chat-member:hover{background:var(--bg3)}
 .mk-step-delay svg{color:var(--muted)}
 .mk-days{width:64px;padding:5px 8px;text-align:center}
 .mk-step-head .mk-icon{margin-left:6px}
+
+/* ===== Teamleden op projecten + taak-toewijzing ===== */
+
+/* Overlappende avatarstapel (kanban-taakkaarten + weekplanner). */
+.assignee-avatars{display:inline-flex;align-items:center}
+.assignee-avatar{width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:#fff;border:1.5px solid var(--bg3);margin-left:-6px;flex-shrink:0;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,.3)}
+.assignee-avatar:first-child{margin-left:0}
+.assignee-avatar-more{background:var(--bg5);color:var(--muted2)}
+.tc-footer .assignee-avatars{margin-left:6px}
+.wp-task-planning-meta .assignee-avatars{margin-left:auto}
+
+/* "Toegewezen aan"-kiezer in het taakvenster. */
+.assignee-picker{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:7px}
+.assignee-chip{display:inline-flex;align-items:center;gap:7px;padding:5px 11px 5px 5px;border-radius:99px;border:1px solid var(--border);background:var(--bg3);color:var(--muted2);cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;transition:background .15s,color .15s,border-color .15s}
+.assignee-chip:hover:not(:disabled){border-color:var(--border2);background:var(--bg4);color:var(--text)}
+.assignee-chip.active{border-color:var(--accent);background:rgba(255,217,102,.12);color:var(--text)}
+.assignee-chip:disabled{opacity:.55;cursor:not-allowed}
+.assignee-chip-avatar{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:#fff;flex-shrink:0;text-transform:uppercase}
+.assignee-chip-name{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.assignee-chip-check{color:var(--accent);font-weight:900;font-size:12px}
+.assignee-empty-hint{grid-column:1/-1;font-size:12px;color:var(--muted);line-height:1.55;border:1px dashed var(--border);border-radius:8px;padding:10px 12px}
+.assignee-empty-hint strong{color:var(--muted2)}
+
+/* Projectteam-paneel in het projectdashboard. */
+.project-team-list{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.project-team-row{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:8px;background:var(--bg3);border:1px solid var(--border)}
+.project-team-row .assignee-avatar{margin-left:0;border:none;width:26px;height:26px;font-size:10px;box-shadow:none}
+.project-team-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600;color:var(--text)}
+.project-team-remove{width:26px;height:26px}
+.project-team-add{display:flex;align-items:center;gap:8px}
+.project-team-add-icon{color:var(--muted);flex-shrink:0}
+.project-team-allset{font-size:11px;color:var(--muted);margin-top:2px}

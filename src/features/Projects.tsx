@@ -1,14 +1,16 @@
 import { useMemo, useRef, useState } from 'react';
-import type { AppData, InternalDocument, Invoice, Note, Project, Quote, Task, TaskStatus, TimeEntry, UUID } from '../types';
+import type { AppData, InternalDocument, Invoice, Note, OrganizationMember, Project, ProjectMember, Quote, Task, TaskStatus, TimeEntry, UUID } from '../types';
 import { Button, Select } from '../components/Ui';
+import { AssigneeAvatars } from '../components/AssigneeAvatars';
 import { dateNL, euro, formatMinutes, priorityLabel } from '../lib/format';
+import { memberColor, memberInitials, memberName } from '../lib/members';
 import { RelatedNotes } from './Notes';
 import { RelatedDocuments } from './Documents';
 import { ProjectQuotesPanel } from './Finance';
 import { ProjectTimeline } from './ProjectTimeline';
 import { TimeEntryModal, timeEntryValueCents } from './TimeTracking';
-import { deleteTimeEntry, updateTimeEntry } from '../lib/repository';
-import { ChevronDown, ChevronRight, Clock, Pencil, Trash2 } from 'lucide-react';
+import { addProjectMember, deleteTimeEntry, removeProjectMember, updateTimeEntry } from '../lib/repository';
+import { ChevronDown, ChevronRight, Clock, Pencil, Trash2, UserPlus } from 'lucide-react';
 
 /** Uitklapbare dashboard-sectie */
 function DashboardSection({
@@ -548,10 +550,68 @@ function ProjectListCard({ project, data, canWrite, onOpen, onEdit }: { project:
   </article>;
 }
 
+/** Beheerpaneel voor het projectteam: organisatieleden koppelen/loskoppelen. */
+function ProjectTeamPanel({ project, data, teamMembers, currentUserId, organizationId, canWrite, onChanged }: {
+  project: Project;
+  data: AppData;
+  teamMembers: OrganizationMember[];
+  currentUserId: string | null;
+  organizationId: UUID;
+  canWrite: boolean;
+  onChanged: () => void | Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const members = useMemo(
+    () => data.projectMembers.filter(pm => pm.project_id === project.id),
+    [data.projectMembers, project.id],
+  );
+  const memberUserIds = new Set(members.map(m => m.user_id));
+  const available = teamMembers.filter(m => !memberUserIds.has(m.user_id));
+
+  async function add(userId: string) {
+    if (!userId || busy) return;
+    setBusy(true);
+    try { await addProjectMember(organizationId, project.id, userId); await onChanged(); }
+    finally { setBusy(false); }
+  }
+  async function remove(member: ProjectMember) {
+    if (busy) return;
+    if (!confirm(`${memberName(member.user_id, teamMembers, currentUserId)} van dit projectteam halen? Hun toewijzingen op taken in dit project vervallen dan.`)) return;
+    setBusy(true);
+    try { await removeProjectMember(organizationId, member.id); await onChanged(); }
+    finally { setBusy(false); }
+  }
+
+  return <article className="client-panel">
+    <div className="client-panel-head"><h3>Projectteam</h3><span>{members.length}</span></div>
+    {members.length === 0
+      ? <div className="client-empty-line">Nog geen teamleden gekoppeld. Koppel teamleden om taken aan hen te kunnen toewijzen.</div>
+      : <div className="project-team-list">
+          {members.map(member => (
+            <div className="project-team-row" key={member.id}>
+              <span className="assignee-avatar" style={{ background: memberColor(member.user_id) }}>{memberInitials(member.user_id, teamMembers)}</span>
+              <span className="project-team-name">{memberName(member.user_id, teamMembers, currentUserId)}</span>
+              {canWrite && <button type="button" className="icon-btn danger project-team-remove" onClick={() => remove(member)} disabled={busy} title="Van projectteam halen"><Trash2 size={14} /></button>}
+            </div>
+          ))}
+        </div>}
+    {canWrite && available.length > 0 && <label className="project-team-add">
+      <UserPlus size={15} className="project-team-add-icon" aria-hidden="true" />
+      <Select inline value="" disabled={busy} onChange={e => add(e.target.value)} aria-label="Teamlid toevoegen aan projectteam">
+        <option value="">Teamlid koppelen…</option>
+        {available.map(m => <option key={m.user_id} value={m.user_id}>{m.email ?? 'Teamlid'}</option>)}
+      </Select>
+    </label>}
+    {canWrite && available.length === 0 && members.length > 0 && <p className="project-team-allset">Alle teamleden zijn gekoppeld.</p>}
+  </article>;
+}
+
 export function ProjectPage({
   data,
   project,
   organizationId,
+  teamMembers,
+  currentUserId,
   onChanged,
   canWrite,
   canAdmin,
@@ -577,6 +637,8 @@ export function ProjectPage({
   data: AppData;
   project: Project;
   organizationId: UUID;
+  teamMembers: OrganizationMember[];
+  currentUserId: string | null;
   onChanged: () => void | Promise<void>;
   canWrite: boolean;
   canAdmin: boolean;
@@ -614,6 +676,14 @@ export function ProjectPage({
     () => data.timeEntries.filter(t => t.project_id === project.id).sort((a, b) => b.entry_date.localeCompare(a.entry_date)),
     [data.timeEntries, project.id],
   );
+  const assigneesByTask = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const a of data.taskAssignees) {
+      const list = map.get(a.task_id);
+      if (list) list.push(a.user_id); else map.set(a.task_id, [a.user_id]);
+    }
+    return map;
+  }, [data.taskAssignees]);
   const trackedMinutes = projectTimeEntries.reduce((s, t) => s + t.minutes, 0);
   const trackedValueCents = projectTimeEntries.reduce((s, t) => s + timeEntryValueCents(t), 0);
 
@@ -753,6 +823,8 @@ export function ProjectPage({
               ))}
             </div>
           </article>
+
+          <ProjectTeamPanel project={project} data={data} teamMembers={teamMembers} currentUserId={currentUserId} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />
         </aside>
 
         <div className="client-overview-main">
@@ -854,6 +926,7 @@ export function ProjectPage({
                       <span>☑ {task.subtasks?.filter(s => s.done).length ?? 0}/{task.subtasks?.length ?? 0}</span>
                       <span>💬 {task.comments?.length ?? 0}</span>
                       <span className="tc-deadline">{dateNL(task.end_date)}</span>
+                      <AssigneeAvatars userIds={assigneesByTask.get(task.id) ?? []} teamMembers={teamMembers} currentUserId={currentUserId} />
                     </div>
                   </article>
                 ))}
