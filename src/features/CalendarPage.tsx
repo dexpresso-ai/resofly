@@ -270,13 +270,39 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+// Relatieve helderheid (WCAG) van een hex-kleur. Gebruikt om op een vol gevuld
+// blok automatisch een leesbare tekstkleur te kiezen: donkere tekst op een
+// lichte vulling (bijv. merk-goud), witte tekst op een donkere vulling. Zo
+// blijven de Google-stijl solide agenda-blokken altijd leesbaar.
+function relativeLuminance(hex: string): number {
+  const normalized = normalizeHexColor(hex).slice(1);
+  const toLinear = (v: number) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const r = toLinear(parseInt(normalized.slice(0, 2), 16));
+  const g = toLinear(parseInt(normalized.slice(2, 4), 16));
+  const b = toLinear(parseInt(normalized.slice(4, 6), 16));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
 function eventColorStyle(color?: string | null): CSSProperties {
   const c = normalizeHexColor(color);
+  const lightFill = relativeLuminance(c) > 0.42;
   return {
     '--event-color': c,
-    '--event-bg': hexToRgba(c, 0.62),
+    // Vol gevuld blok (Google-stijl): bijna dekkend i.p.v. doorschijnend.
+    '--event-solid': hexToRgba(c, 0.96),
+    // Subtiele tint voor weergaven die géén vol blok zijn (lijst, detailpaneel).
+    '--event-bg': hexToRgba(c, 0.26),
     '--event-border': hexToRgba(c, 0.88),
-    '--event-border-soft': hexToRgba(c, 0.72),
+    '--event-border-soft': hexToRgba(c, 0.55),
+    // Randje voor definitie tussen aangrenzende blokken van dezelfde kleur.
+    '--event-edge': lightFill ? 'rgba(0, 0, 0, 0.24)' : 'rgba(0, 0, 0, 0.16)',
+    // Leesbare tekst op de vulling (donker op licht, wit op donker).
+    '--event-text': lightFill ? '#1a1a1a' : '#ffffff',
+    '--event-text-soft': lightFill ? 'rgba(26, 26, 26, 0.74)' : 'rgba(255, 255, 255, 0.86)',
+    '--event-text-faint': lightFill ? 'rgba(26, 26, 26, 0.6)' : 'rgba(255, 255, 255, 0.72)',
   } as CSSProperties;
 }
 
