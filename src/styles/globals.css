@@ -3178,4 +3178,10 @@ button.chat-member:hover{background:var(--bg3)}
 .tab-new:hover{background:var(--bg2);color:var(--text);border-color:var(--muted)}
 /* Elk tabblad is een eigen .content-scrollcontainer; alleen het actieve is zichtbaar. */
 .content[hidden]{display:none}
+/* Houd de tabbalk zichtbaar/klikbaar wanneer er een popup openstaat: elke
+   content-overlay (dim + inhoud) begint pas ónder de 42px-hoge tabbalk. Geen
+   z-index nodig, dus de mobiele navigatie-drawer (z-index 90) blijft de tabbalk
+   gewoon afdekken wanneer die opengeschoven is. De .send-overlay (verzendblokker)
+   valt hier bewust buiten en blijft alles afdekken. */
+.app .modal-bg,.app .tb-overlay,.app .chat-modal-bg,.app .bk-modal-backdrop,.app .event-detail-overlay,.app .gs-backdrop{top:42px}
 @media(max-width:760px){.tabbar{padding-left:66px}}
