@@ -3163,3 +3163,19 @@ button.chat-member:hover{background:var(--bg3)}
 .project-team-add{display:flex;align-items:center;gap:8px}
 .project-team-add-icon{color:var(--muted);flex-shrink:0}
 .project-team-allset{font-size:11px;color:var(--muted);margin-top:2px}
+
+/* === Actieve tabbladen — browser-achtige tabbalk boven de werkruimte ===== */
+.tabbar{flex:0 0 auto;display:flex;align-items:center;gap:4px;height:42px;padding:0 10px;border-bottom:1px solid var(--border);background:rgba(11,11,11,.72);backdrop-filter:blur(18px);overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+.tabbar::-webkit-scrollbar{height:0;width:0}
+.tab{display:inline-flex;align-items:center;gap:8px;flex:0 1 auto;min-width:118px;max-width:220px;height:30px;padding:0 6px 0 13px;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--muted2);font-size:13px;line-height:1;cursor:pointer;user-select:none;white-space:nowrap;transition:background .13s,color .13s,border-color .13s}
+.tab:hover{background:var(--bg3);color:var(--text)}
+.tab.active{background:var(--bg2);border-color:var(--border);color:var(--text);box-shadow:0 6px 18px rgba(0,0,0,.22)}
+.tab-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tab-close{display:flex;align-items:center;justify-content:center;width:19px;height:19px;flex-shrink:0;border:none;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;opacity:.55;transition:opacity .12s,background .12s,color .12s}
+.tab:hover .tab-close{opacity:.85}
+.tab-close:hover{opacity:1;background:rgba(255,255,255,.09);color:var(--text)}
+.tab-new{display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;margin-left:2px;border:1px solid var(--border);border-radius:9px;background:var(--bg3);color:var(--muted2);cursor:pointer;transition:background .12s,color .12s,border-color .12s}
+.tab-new:hover{background:var(--bg2);color:var(--text);border-color:var(--muted)}
+/* Elk tabblad is een eigen .content-scrollcontainer; alleen het actieve is zichtbaar. */
+.content[hidden]{display:none}
+@media(max-width:760px){.tabbar{padding-left:66px}}

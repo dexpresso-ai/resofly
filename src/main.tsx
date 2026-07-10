@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Sidebar } from './components/Sidebar';
+import { TabBar } from './components/TabBar';
+import { loadPersistedTabs, savePersistedTabs, viewTitle, PAGE_TITLES, type PersistedTab } from './lib/workspaceTabs';
 import type { SearchResult } from './components/GlobalSearch';
 import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
 import { RichTextEditor, sanitizeRichText } from './components/RichTextEditor';
@@ -118,6 +120,52 @@ const emptyData: AppData = { clients: [], clientContacts: [], projects: [], task
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
+// === Actieve tabbladen =====================================================
+// De view-state (welke pagina, welk project/klant, welke editor open staat) leeft
+// per tabblad. Zo blijft half afgemaakt werk staan als je naar een ander tabblad
+// wisselt. De werkruimte-state (data, organisatie, notificaties) blijft gedeeld.
+type ViewState = {
+  page: Page;
+  projectId: string | null;
+  clientId: string | null;
+  statsReportId: string | null;
+  settingsNav: { tab: SettingsTab; key: number } | null;
+  pendingReport: { key: string; name: string; definition: ReportDefinition } | null;
+  edit: EditMode;
+};
+type WorkspaceTab = ViewState & { id: string };
+
+/** Nieuw, leeg tabblad op een gegeven pagina (standaard het dashboard). */
+function freshTab(page: Page = 'dashboard'): WorkspaceTab {
+  return { id: uid(), page, projectId: null, clientId: null, statsReportId: null, settingsNav: null, pendingReport: null, edit: null };
+}
+
+/** Terugkomst van de directe bankkoppeling (PSD2, ?code=&state=…): dan opent het
+ *  eerste tabblad meteen de Bankpagina, die de koppeling afrondt. */
+function hasBankReturn(): boolean {
+  return typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).has('code')
+    && new URLSearchParams(window.location.search).has('state');
+}
+
+/** Past een React-setterwaarde (directe waarde óf updater-functie) toe op de vorige waarde. */
+function applyUpdater<T>(value: React.SetStateAction<T>, prev: T): T {
+  return typeof value === 'function' ? (value as (p: T) => T)(prev) : value;
+}
+
+/** Herbouwt volledige tabbladen uit de (route-only) opgeslagen versie. Verwijzingen
+ *  naar niet langer bestaande projecten/klanten vallen terug op de lijstpagina. */
+function rebuildTabs(persisted: PersistedTab[], data: AppData): WorkspaceTab[] {
+  return persisted.map(p => {
+    let page = (PAGE_TITLES[p.page] ? p.page : 'dashboard') as Page;
+    let projectId = p.projectId;
+    let clientId = p.clientId;
+    if (page === 'project' && !data.projects.some(x => x.id === projectId)) { page = 'projects'; projectId = null; }
+    if (page === 'client' && !data.clients.some(x => x.id === clientId)) { page = 'clients'; clientId = null; }
+    return { id: uid(), page, projectId, clientId, statsReportId: p.statsReportId, settingsNav: null, pendingReport: null, edit: null };
+  });
+}
+
 const editKindToTable: Record<NonNullable<EditMode>['kind'], Table> = {
   client: 'clients',
   project: 'projects',
@@ -195,23 +243,34 @@ function App() {
   const [data, setData] = useState<AppData>(emptyData);
   const [organizationContext, setOrganizationContext] = useState<OrganizationContext>(emptyOrganizationContext);
   const [activeOrganizationId, setActiveOrganizationId] = useState<string | null>(() => localStorage.getItem(activeOrgStorageKey));
-  // Terugkomst van de directe bankkoppeling (PSD2, ?code=&state=…) opent direct de
-  // Bankpagina, die de koppeling vervolgens afrondt.
-  const [page, setPage] = useState<Page>(() =>
-    typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('code')
-      && new URLSearchParams(window.location.search).has('state') ? 'bank' : 'dashboard');
-  const [projectId, setProjectId] = useState<string | null>(null);
-  const [clientId, setClientId] = useState<string | null>(null);
-  const [statsReportId, setStatsReportId] = useState<string | null>(null);
-  // Doelsectie voor de instellingenpagina wanneer die vanuit het account-menu
-  // wordt geopend. De oplopende `key` zorgt dat óók herhaald op dezelfde sectie
-  // klikken de juiste tab opent.
-  const [settingsNav, setSettingsNav] = useState<{ tab: SettingsTab; key: number } | null>(null);
-  // Door Gerrie voorgestelde, nog NIET opgeslagen rapportage. De `key` (vers per
-  // voorstel) zorgt dat de Statistieken-bouwer hem opnieuw inlaadt, ook bij een
-  // identiek voorstel. De gebruiker controleert de grafiek en slaat zelf op.
-  const [pendingReport, setPendingReport] = useState<{ key: string; name: string; definition: ReportDefinition } | null>(null);
-  const [edit, setEdit] = useState<EditMode>(null);
+  // Open tabbladen blijven allemaal gemount (keep-alive); alleen het actieve is
+  // zichtbaar. Het opstart-tabblad opent de Bankpagina bij een PSD2-terugkomst
+  // (?code=&state=…), anders het dashboard. De opgeslagen tabbladen per organisatie
+  // worden na het laden van de werkruimte hersteld (zie restoreTabsForOrganization).
+  const [tabs, setTabs] = useState<WorkspaceTab[]>(() => [freshTab(hasBankReturn() ? 'bank' : 'dashboard')]);
+  const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0].id);
+  const activeTab = tabs.find(t => t.id === activeTabId) ?? tabs[0];
+
+  // Muteer uitsluitend het actieve tabblad. Door de setters onder hun vertrouwde
+  // namen te herdefiniëren blijven alle bestaande handlers, Gerrie-acties en toasts
+  // hieronder ongewijzigd werken en richten ze zich vanzelf op het zichtbare tabblad.
+  function patchActiveTab(patch: (t: WorkspaceTab) => Partial<ViewState>) {
+    setTabs(ts => ts.map(t => (t.id === activeTab.id ? { ...t, ...patch(t) } : t)));
+  }
+  const page = activeTab.page;
+  const projectId = activeTab.projectId;
+  const clientId = activeTab.clientId;
+  const statsReportId = activeTab.statsReportId;
+  const settingsNav = activeTab.settingsNav;
+  const pendingReport = activeTab.pendingReport;
+  const edit = activeTab.edit;
+  const setPage = (v: React.SetStateAction<Page>) => patchActiveTab(t => ({ page: applyUpdater(v, t.page) }));
+  const setProjectId = (v: React.SetStateAction<string | null>) => patchActiveTab(t => ({ projectId: applyUpdater(v, t.projectId) }));
+  const setClientId = (v: React.SetStateAction<string | null>) => patchActiveTab(t => ({ clientId: applyUpdater(v, t.clientId) }));
+  const setStatsReportId = (v: React.SetStateAction<string | null>) => patchActiveTab(t => ({ statsReportId: applyUpdater(v, t.statsReportId) }));
+  const setSettingsNav = (v: React.SetStateAction<{ tab: SettingsTab; key: number } | null>) => patchActiveTab(t => ({ settingsNav: applyUpdater(v, t.settingsNav) }));
+  const setPendingReport = (v: React.SetStateAction<{ key: string; name: string; definition: ReportDefinition } | null>) => patchActiveTab(t => ({ pendingReport: applyUpdater(v, t.pendingReport) }));
+  const setEdit = (v: React.SetStateAction<EditMode>) => patchActiveTab(t => ({ edit: applyUpdater(v, t.edit) }));
   // Mobiel uitschuifmenu (drawer). Op laptop/desktop is de zijbalk een iconenbalk
   // die bij hover openschuift; dit stuurt alleen het mobiele gedrag (≤760px) aan.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -233,6 +292,10 @@ function App() {
   // Track which user + organization we have loaded data for, so auth events do not
   // trigger duplicate refreshes for the same workspace.
   const loadedForRef = useRef<string | null>(null);
+  // Voor welke organisatie de opgeslagen tabbladen al zijn hersteld, zodat een
+  // gewone ververs de open tabbladen niet opnieuw laadt (alleen bij eerste
+  // load / organisatiewissel).
+  const tabsLoadedForRef = useRef<string | null>(null);
 
   const activeOrganization = organizationContext.activeOrganization;
   const activeMembership = organizationContext.activeMembership;
@@ -286,6 +349,26 @@ function App() {
     currentUserId,
   });
 
+  // Herstel de open tabbladen voor een organisatie: de opgeslagen set (route-only),
+  // of anders één vers dashboard-tabblad. Bij een PSD2-bankterugkomst altijd één
+  // Bank-tabblad zodat de koppeling wordt afgerond.
+  function restoreTabsForOrganization(organizationId: string, loaded: AppData) {
+    if (hasBankReturn()) {
+      const bank = freshTab('bank');
+      setTabs([bank]); setActiveTabId(bank.id);
+      return;
+    }
+    const persisted = loadPersistedTabs(organizationId);
+    const rebuilt = persisted ? rebuildTabs(persisted.tabs, loaded) : [];
+    if (rebuilt.length) {
+      const index = Math.min(Math.max(0, persisted!.activeIndex), rebuilt.length - 1);
+      setTabs(rebuilt); setActiveTabId(rebuilt[index].id);
+    } else {
+      const fresh = freshTab('dashboard');
+      setTabs([fresh]); setActiveTabId(fresh.id);
+    }
+  }
+
   async function loadWorkspace(preferredOrganizationId = activeOrganizationId) {
     setLoading(true); setError(null);
     try {
@@ -295,7 +378,14 @@ function App() {
       setActiveOrganizationId(orgId);
       if (orgId) {
         localStorage.setItem(activeOrgStorageKey, orgId);
-        setData(await loadAppData(orgId));
+        const loaded = await loadAppData(orgId);
+        setData(loaded);
+        // Herstel de open tabbladen éénmalig per organisatie (eerste load of wissel);
+        // een gewone ververs laat de tabbladen ongemoeid.
+        if (orgId !== tabsLoadedForRef.current) {
+          tabsLoadedForRef.current = orgId;
+          restoreTabsForOrganization(orgId, loaded);
+        }
       } else {
         localStorage.removeItem(activeOrgStorageKey);
         setData(emptyData);
@@ -312,9 +402,8 @@ function App() {
   }
 
   async function switchOrganization(organizationId: string) {
-    setProjectId(null);
-    setClientId(null);
-    setPage('dashboard');
+    // De open tabbladen worden door loadWorkspace hersteld voor de nieuwe organisatie
+    // (org verschilt van tabsLoadedForRef → herstel volgt automatisch).
     loadedForRef.current = null;
     await loadWorkspace(organizationId);
   }
@@ -422,10 +511,13 @@ function App() {
         await loadWorkspace(localStorage.getItem(activeOrgStorageKey));
       } else if (!userId) {
         loadedForRef.current = null;
+        tabsLoadedForRef.current = null;
         localStorage.removeItem(activeOrgStorageKey);
         setActiveOrganizationId(null);
         setOrganizationContext(emptyOrganizationContext);
         setData(emptyData);
+        const fresh = freshTab('dashboard');
+        setTabs([fresh]); setActiveTabId(fresh.id);
       }
     }
 
@@ -446,6 +538,48 @@ function App() {
 
   const project = useMemo(() => data.projects.find(p => p.id === projectId) ?? null, [data.projects, projectId]);
   const client = useMemo(() => data.clients.find(c => c.id === clientId) ?? null, [data.clients, clientId]);
+
+  // Onthoud de open tabbladen (alleen routes) per organisatie zodat ze na een
+  // herlaad terugkomen. Pas opslaan nadat we voor deze organisatie hersteld hebben,
+  // anders zou het opstart-tabblad de opgeslagen set overschrijven.
+  useEffect(() => {
+    if (!activeOrganizationId || tabsLoadedForRef.current !== activeOrganizationId) return;
+    const persisted: PersistedTab[] = tabs.map(t => ({ page: t.page, projectId: t.projectId, clientId: t.clientId, statsReportId: t.statsReportId }));
+    const activeIndex = Math.max(0, tabs.findIndex(t => t.id === activeTabId));
+    savePersistedTabs(activeOrganizationId, persisted, activeIndex);
+  }, [tabs, activeTabId, activeOrganizationId]);
+
+  // "+" opent een nieuw (dashboard)tabblad; het menu navigeert vervolgens het
+  // actieve tabblad.
+  function openTab() {
+    const tab = freshTab('dashboard');
+    setTabs([...tabs, tab]);
+    setActiveTabId(tab.id);
+    setMobileNavOpen(false);
+  }
+  function switchTab(id: string) {
+    setActiveTabId(id);
+    setMobileNavOpen(false);
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  }
+  function closeTab(id: string) {
+    const target = tabs.find(t => t.id === id);
+    if (!target) return;
+    if (target.edit && !confirm('Dit tabblad heeft een niet-opgeslagen bewerking open. Toch sluiten?')) return;
+    // Nooit 0 tabbladen: het laatste sluiten vervangt door een vers dashboard-tabblad.
+    if (tabs.length <= 1) {
+      const fresh = freshTab('dashboard');
+      setTabs([fresh]); setActiveTabId(fresh.id);
+      return;
+    }
+    const idx = tabs.findIndex(t => t.id === id);
+    const next = tabs.filter(t => t.id !== id);
+    setTabs(next);
+    if (activeTab.id === id) {
+      const neighbor = next[Math.min(idx, next.length - 1)];
+      setActiveTabId(neighbor.id);
+    }
+  }
 
   if (portalRoute) return <ClientPortal />;
   if (!isSupabaseConfigured) return <div className="boot"><div className="login-card"><h1>Configuratie ontbreekt</h1><p>Vul eerst VITE_SUPABASE_URL en VITE_SUPABASE_ANON_KEY in .env.local in.</p></div></div>;
@@ -1041,7 +1175,7 @@ function App() {
     }
   }
 
-  const title = page === 'project' ? project?.name ?? 'Project' : page === 'client' ? client?.name ?? 'Klant' : ({dashboard:'Dashboard',weekplanner:'Weekplanner',calendar:'Kalender','calendar-settings':'Agenda-instellingen','meeting-booking':'Boekingslinks',time:'Uren',stats:'Statistieken',content:'Inhoud',notes:'Notities',documents:'Documenten',clients:'Klanten',projects:'Projecten','project-planning':'Projectplanning',tickets:'Tickets',chat:'Teamchat',marketing:'Marketing',quotes:'Offertes',invoices:'Facturen',suppliers:'Leveranciers','purchase-invoices':'Inkoopfacturen',ledger:'Grootboek',bank:'Bank',assets:'Activa',pnl:'Winst & verlies','vat-returns':'Omzetbelasting','fiscal-years':'Boekjaren',archive:'Archief',settings:'Instellingen',project:'Project',client:'Klant'} as Record<Page,string>)[page];
+  const title = viewTitle(activeTab, data);
 
   return <div className={`app${sidebarPinned ? ' sidebar-pinned' : ''}`}>
     <button
@@ -1053,9 +1187,20 @@ function App() {
     >{mobileNavOpen ? <X size={22}/> : <Menu size={22}/>}</button>
     <div className={`sidebar-backdrop${mobileNavOpen ? ' is-open' : ''}`} onClick={() => setMobileNavOpen(false)} aria-hidden="true" />
     <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => supabaseAuth.signOut()} clientEmailUnread={clientEmailUnread.total} ticketUnread={ticketUnreadIds.size} chatUnread={teamChat.unreadTotal} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })}/>
-    <main className="main">{page !== 'calendar' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
-      <section className="content">{error && <div className="error">{error}</div>}{renderPage()}</section>
-    </main>{edit && <EditModal edit={edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} />}
+    <main className="main">
+      <TabBar tabs={tabs} activeTabId={activeTab.id} data={data} onSelect={switchTab} onClose={closeTab} onNew={openTab} />
+      {page !== 'calendar' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
+      {/* Alle open tabbladen blijven gemount (keep-alive); alleen het actieve is
+          zichtbaar. Elk pane is z'n eigen scrollcontainer én bevat z'n eigen
+          EditModal, zodat een openstaande bewerking bij het wisselen bewaard blijft. */}
+      {tabs.map(tab => (
+        <section key={tab.id} className="content" hidden={tab.id !== activeTab.id}>
+          {tab.id === activeTab.id && error && <div className="error">{error}</div>}
+          {renderPage(tab)}
+          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} />}
+        </section>
+      ))}
+    </main>
     <GerrieChat organizationId={activeOrg.id}
       onCreateInvoiceDraft={(p) => {
         if (!ensureCanWrite()) return;
@@ -1250,7 +1395,17 @@ function App() {
     </div>
   </div>;
 
-  function renderPage() {
+  // Rendert de inhoud van één tabblad. Leest de view-state uit `view` (het eigen
+  // tabblad), zodat elk gemount pane z'n eigen pagina/project/klant toont. De
+  // handlers (setEdit/setPage/…) muteren het actieve tabblad — alleen het zichtbare
+  // pane is interactief, dus dat klopt.
+  function renderPage(view: WorkspaceTab) {
+    const page = view.page;
+    const project = data.projects.find(p => p.id === view.projectId) ?? null;
+    const client = data.clients.find(c => c.id === view.clientId) ?? null;
+    const statsReportId = view.statsReportId;
+    const settingsNav = view.settingsNav;
+    const pendingReport = view.pendingReport;
     if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} />;
     if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={(doc) => setEdit({kind:'document', item: doc})} setTaskStatus={setTaskStatus}/>;
     if (page === 'projects') return <ProjectsListPage data={data} canWrite={canWrite} onNewProject={() => ensureCanWrite() && setEdit({kind:'project'})} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} onEditProject={(item) => setEdit({kind:'project', item})}/>;
