@@ -593,7 +593,7 @@ export function Settings({
   settingsNav?: { tab: SettingsTab; key: number } | null;
   onCreateOrganization: () => void;
   onSwitchOrganization: (organizationId: string) => void;
-  onInviteMember: (email: string, role: OrganizationRole) => Promise<void>;
+  onInviteMember: (email: string, role: OrganizationRole) => Promise<{ emailSent: boolean; emailError?: string }>;
   onAcceptInvitation: (invitationId: string) => Promise<void>;
   onUpdateMemberRole: (memberId: string, role: OrganizationRole) => Promise<void>;
   onDisableMember: (memberId: string) => Promise<void>;
@@ -722,11 +722,19 @@ export function Settings({
       return;
     }
     try {
-      await onInviteMember(inviteEmail, inviteRole);
+      const invitedEmail = inviteEmail.trim();
+      const result = await onInviteMember(inviteEmail, inviteRole);
       setInviteEmail('');
-      setOrgMessage(isBillingExempt
-        ? 'Uitnodiging opgeslagen. Deze organisatie is intern/onbeperkt, dus er gelden geen seat-limieten.'
-        : 'Uitnodiging opgeslagen. Er is één gebruikerslicentie gereserveerd totdat de uitnodiging wordt geaccepteerd of ingetrokken.');
+      const seatNote = isBillingExempt
+        ? 'Deze organisatie is intern/onbeperkt, dus er gelden geen seat-limieten.'
+        : 'Er is één gebruikerslicentie gereserveerd totdat de uitnodiging wordt geaccepteerd of ingetrokken.';
+      if (result.emailSent) {
+        setOrgMessage(`Uitnodiging verstuurd naar ${invitedEmail}. ${seatNote}`);
+      } else {
+        // Uitnodiging staat wél in de database, alleen de e-mail mislukte. Dat
+        // eerlijk melden i.p.v. valse "verstuurd", met een werkbaar alternatief.
+        setOrgError(`Uitnodiging aangemaakt, maar de e-mail naar ${invitedEmail} kon niet worden verzonden${result.emailError ? ` (${result.emailError})` : ''}. Controleer de mailinstellingen bij Instellingen → E-mail. Het teamlid kan ondertussen ook zelf inloggen met dit e-mailadres om de uitnodiging te accepteren. ${seatNote}`);
+      }
     } catch (error) {
       setOrgError(error instanceof Error ? error.message : 'Uitnodiging aanmaken mislukt.');
     }

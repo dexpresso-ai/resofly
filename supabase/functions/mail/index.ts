@@ -32,6 +32,17 @@ const CLIENT_PORTAL_BASE_URL = (
   ''
 ).replace(/\/$/, '');
 
+// Basis-URL van de app (login/werkruimte) voor de teamuitnodigingsmail. Zelfde
+// bronnen als de portaal-URL maar zonder /portal-suffix: de uitgenodigde logt
+// hier in met zijn e-mailadres en accepteert daarna de uitnodiging in de app.
+const APP_BASE_URL = (
+  Deno.env.get('APP_PUBLIC_URL') ||
+  Deno.env.get('CLIENT_PORTAL_BASE_URL') ||
+  Deno.env.get('QUOTE_PUBLIC_BASE_URL') ||
+  Deno.env.get('INVOICE_PUBLIC_BASE_URL') ||
+  ''
+).replace(/\/$/, '');
+
 const MAIL_ALLOWED_ORIGINS = (
   Deno.env.get('MAIL_ALLOWED_ORIGINS') ||
   Deno.env.get('QUOTE_ALLOWED_ORIGINS') ||
@@ -51,6 +62,14 @@ const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     persistSession: false,
   },
 });
+
+// Nette Nederlandse rolnamen voor in de uitnodigingsmail.
+const ROLE_LABELS: Record<OrganizationRole, string> = {
+  owner: 'Eigenaar',
+  admin: 'Beheerder',
+  member: 'Teamlid',
+  viewer: 'Alleen-lezen',
+};
 
 class MailHttpError extends Error {
   status: MailHttpErrorStatus;
@@ -104,6 +123,18 @@ serve(async (req) => {
         }
 
         const result = await sendClientPortalWelcome(req, organizationId, body);
+        return json(req, { ok: true, ...result });
+      }
+
+      case 'sendTeamInvitation': {
+        if (!['owner', 'admin'].includes(role)) {
+          throw new MailHttpError(
+            'Alleen owners en admins kunnen teamuitnodigingen versturen.',
+            403,
+          );
+        }
+
+        const result = await sendTeamInvitation(req, organizationId, user, body);
         return json(req, { ok: true, ...result });
       }
 
@@ -403,6 +434,191 @@ function buildClientWelcomeText(input: {
     '',
     `Je ontvangt deze e-mail omdat ${input.organizationName} een klantdossier voor je heeft aangemaakt.`,
   ].join('\n');
+}
+
+// ── Teamuitnodiging versturen ───────────────────────────────────────────────
+
+async function sendTeamInvitation(
+  req: Request,
+  organizationId: string,
+  user: { id: string; email?: string },
+  body: Record<string, unknown>,
+): Promise<{ providerEmailId: string; recipientEmail: string }> {
+  if (!RESEND_API_KEY) {
+    throw new MailHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
+  }
+  if (!RESEND_FROM_EMAIL) {
+    throw new MailHttpError('RESEND_FROM_EMAIL ontbreekt in de Edge Function secrets.', 500);
+  }
+
+  const invitationId = String(body.invitationId || '').trim();
+  if (!isUuid(invitationId)) {
+    throw new MailHttpError('Ongeldige uitnodiging.', 400);
+  }
+
+  const invitation = await loadInvitation(organizationId, invitationId);
+  const recipientEmail = String(invitation.email || '').trim().toLowerCase();
+  if (!isEmail(recipientEmail)) {
+    throw new MailHttpError('Deze uitnodiging heeft geen geldig e-mailadres.', 422);
+  }
+
+  const organization = await loadOrganization(organizationId);
+  const company = await loadCompanySettings(organizationId);
+  const organizationName =
+    company?.trade_name || company?.company_name || organization.name || 'ResoFly';
+
+  const roleLabel = ROLE_LABELS[invitation.role as OrganizationRole] || 'Teamlid';
+  const inviterEmail = String(user.email || '').trim();
+  const appUrl = resolveAppBaseUrl(req);
+
+  const subject = `Je bent uitgenodigd voor ${organizationName}`;
+  const html = buildTeamInvitationHtml({ organizationName, recipientEmail, roleLabel, inviterEmail, appUrl });
+  const text = buildTeamInvitationText({ organizationName, recipientEmail, roleLabel, inviterEmail, appUrl });
+
+  const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+
+  // Idempotency op invitation-id + updated_at: een nieuwe/herhaalde uitnodiging
+  // (RPC zet updated_at = now() bij re-invite) levert een verse verzending op,
+  // terwijl een dubbele klik binnen dezelfde staat door Resend wordt ontdubbeld.
+  const resendPayload = await sendViaResend(
+    {
+      from: sender.from,
+      to: [recipientEmail],
+      reply_to: sender.replyTo,
+      subject,
+      html,
+      text,
+    },
+    `team-invite-${sanitizeIdempotencyPart(invitationId)}-${sanitizeIdempotencyPart(invitation.updated_at)}`,
+  );
+
+  const providerEmailId = String(resendPayload.id || resendPayload.email_id || '').trim();
+  if (!providerEmailId) {
+    throw new MailHttpError(
+      'Resend heeft de uitnodiging aangenomen, maar gaf geen e-mail-ID terug.',
+      502,
+    );
+  }
+
+  return { providerEmailId, recipientEmail };
+}
+
+async function loadInvitation(
+  organizationId: string,
+  invitationId: string,
+): Promise<{ id: string; email: string; role: string; status: string; expires_at: string | null; updated_at: string }> {
+  const { data, error } = await supabaseAdmin
+    .from('organization_invitations')
+    .select('id,email,role,status,expires_at,updated_at')
+    .eq('id', invitationId)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) {
+    throw new MailHttpError('Uitnodiging niet gevonden.', 404);
+  }
+  if (data.status !== 'pending') {
+    throw new MailHttpError('Deze uitnodiging staat niet meer open.', 409);
+  }
+  if (data.expires_at && new Date(data.expires_at).getTime() <= Date.now()) {
+    throw new MailHttpError('Deze uitnodiging is verlopen.', 409);
+  }
+
+  return data as { id: string; email: string; role: string; status: string; expires_at: string | null; updated_at: string };
+}
+
+function resolveAppBaseUrl(req: Request): string {
+  if (APP_BASE_URL) return APP_BASE_URL;
+  // De origin is via assertAllowedOrigin al gevalideerd, dus veilig als fallback.
+  return (req.headers.get('origin') || '').replace(/\/$/, '');
+}
+
+function buildTeamInvitationHtml(input: {
+  organizationName: string;
+  recipientEmail: string;
+  roleLabel: string;
+  inviterEmail: string;
+  appUrl: string;
+}): string {
+  const org = escapeHtml(input.organizationName);
+  const email = escapeHtml(input.recipientEmail);
+  const role = escapeHtml(input.roleLabel);
+  const url = escapeHtml(input.appUrl);
+  const inviter = input.inviterEmail ? escapeHtml(input.inviterEmail) : '';
+  const invitedByLine = inviter
+    ? `${inviter} heeft je uitgenodigd om samen te werken in ${org}.`
+    : `Je bent uitgenodigd om samen te werken in ${org}.`;
+  const button = url
+    ? `<a href="${url}" style="display:inline-block;background:#FFD966;color:#1a1a1a;text-decoration:none;font-weight:bold;font-size:15px;padding:13px 22px;border-radius:10px;">
+          Open ${org}
+        </a>`
+    : '';
+  const buttonFallback = url
+    ? `<p style="margin:24px 0 0;color:#9b9ba7;font-size:13px;line-height:1.5;">
+          Werkt de knop niet? Kopieer deze link naar je browser:<br/>${url}
+        </p>`
+    : '';
+
+  return `<!doctype html>
+<html>
+  <body style="margin:0;background:#111111;font-family:Arial,sans-serif;color:#f5f5f5;">
+    <div style="max-width:640px;margin:0 auto;padding:32px 20px;">
+      <div style="background:#1b1b1f;border:1px solid #303038;border-radius:24px;padding:28px;">
+        <p style="margin:0 0 8px;color:#FFD966;font-size:13px;text-transform:uppercase;letter-spacing:.08em;">
+          ${org}
+        </p>
+
+        <h1 style="margin:0 0 16px;font-size:26px;line-height:1.2;color:#ffffff;">
+          Je bent uitgenodigd als teamlid
+        </h1>
+
+        <p style="margin:0 0 16px;color:#d8d8df;font-size:16px;line-height:1.6;">
+          ${invitedByLine}<br/>
+          Je rol wordt <strong>${role}</strong>.
+        </p>
+
+        <p style="margin:0 0 24px;color:#d8d8df;font-size:16px;line-height:1.6;">
+          Inloggen kan zonder wachtwoord: ga naar de app en vul je e-mailadres
+          (<strong>${email}</strong>) in. Je ontvangt dan een veilige inloglink. Na het
+          inloggen zie je de uitnodiging staan en kun je die met één klik accepteren.
+        </p>
+
+        ${button}
+        ${buttonFallback}
+      </div>
+      <p style="margin:16px 4px 0;color:#6f6f78;font-size:12px;line-height:1.5;">
+        Je ontvangt deze e-mail omdat iemand je heeft uitgenodigd voor ${org}.
+        Gebruik je dit e-mailadres niet, dan kun je deze e-mail negeren.
+      </p>
+    </div>
+  </body>
+</html>`;
+}
+
+function buildTeamInvitationText(input: {
+  organizationName: string;
+  recipientEmail: string;
+  roleLabel: string;
+  inviterEmail: string;
+  appUrl: string;
+}): string {
+  const invitedByLine = input.inviterEmail
+    ? `${input.inviterEmail} heeft je uitgenodigd om samen te werken in ${input.organizationName}.`
+    : `Je bent uitgenodigd om samen te werken in ${input.organizationName}.`;
+  return [
+    input.organizationName,
+    'Je bent uitgenodigd als teamlid',
+    '',
+    invitedByLine,
+    `Je rol wordt ${input.roleLabel}.`,
+    '',
+    `Inloggen kan zonder wachtwoord: ga naar ${input.appUrl || 'de app'} en vul je e-mailadres (${input.recipientEmail}) in. Je ontvangt dan een veilige inloglink. Na het inloggen zie je de uitnodiging staan en kun je die accepteren.`,
+    '',
+    input.appUrl ? `Open de app: ${input.appUrl}` : '',
+    '',
+    `Je ontvangt deze e-mail omdat iemand je heeft uitgenodigd voor ${input.organizationName}.`,
+  ].filter(Boolean).join('\n');
 }
 
 // ── Vrije klant-mail versturen + loggen ─────────────────────────────────────

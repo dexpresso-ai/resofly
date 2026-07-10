@@ -28,6 +28,7 @@ import {
   disableOrganizationMember,
   insertRow,
   inviteOrganizationMember,
+  sendTeamInvitationEmail,
   loadAppData,
   loadOrganizationContext,
   previewNextClientCode,
@@ -345,11 +346,22 @@ function App() {
     }
   }
 
-  async function inviteMember(email: string, role: OrganizationRole) {
+  async function inviteMember(email: string, role: OrganizationRole): Promise<{ emailSent: boolean; emailError?: string }> {
     if (!ensureCanAdmin()) throw new Error('Alleen owners en admins kunnen teamleden uitnodigen.');
     if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
-    await inviteOrganizationMember(activeOrganizationId, email, role);
+    const invitation = await inviteOrganizationMember(activeOrganizationId, email, role);
+    // De uitnodiging staat nu in de database. De e-mail is een aparte stap: faalt
+    // die, dan blijft de uitnodiging bestaan en melden we dat apart terug.
+    let emailSent = false;
+    let emailError: string | undefined;
+    try {
+      await sendTeamInvitationEmail(activeOrganizationId, invitation.id);
+      emailSent = true;
+    } catch (error) {
+      emailError = error instanceof Error ? error.message : 'Uitnodigingsmail verzenden mislukt.';
+    }
     await loadWorkspace(activeOrganizationId);
+    return { emailSent, emailError };
   }
 
   async function acceptInvitation(invitationId: string) {

@@ -274,6 +274,26 @@ export async function inviteOrganizationMember(organizationId: UUID, email: stri
   return row as OrganizationInvitation;
 }
 
+/**
+ * Stuurt de uitgenodigde persoon een e-mail met uitleg + inloglink, server-side
+ * via de `mail`-edge function (Resend). Bewust losgekoppeld van
+ * inviteOrganizationMember, zodat een mislukte mail de (al aangemaakte)
+ * uitnodiging niet terugdraait — de aanroeper beslist hoe hij dat aan de
+ * gebruiker toont.
+ */
+export async function sendTeamInvitationEmail(organizationId: UUID, invitationId: UUID): Promise<{ providerEmailId?: string; recipientEmail?: string }> {
+  const { data, error } = await supabase.functions.invoke('mail', {
+    body: {
+      action: 'sendTeamInvitation',
+      organizationId,
+      invitationId,
+    },
+  });
+  if (error) await throwFunctionError(error, 'Uitnodigingsmail verzenden mislukt.');
+  if (!data?.ok) throw new Error(data?.error || 'Uitnodigingsmail verzenden mislukt.');
+  return data as { providerEmailId?: string; recipientEmail?: string };
+}
+
 export async function acceptOrganizationInvitation(invitationId: UUID): Promise<OrganizationMember> {
   const { data, error } = await supabase.rpc('accept_organization_invitation', { p_invitation_id: invitationId });
   if (error) throw error;
