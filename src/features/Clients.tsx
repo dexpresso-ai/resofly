@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Search, RotateCcw, Upload, ChevronDown, ChevronRight, Mail } from 'lucide-react';
 import type { AppData, Client, ClientEmail, ClientEmailStatus, ClientEmailThread, ClientStatus, Contract, InternalDocument, Invoice, Note, Project, Quote } from '../types';
 import { dateNL, euro, total } from '../lib/format';
+import { sanitizeEmailHtml } from '../lib/sanitizeHtml';
 import { Button, Input, Select } from '../components/Ui';
 import { CsvImportModal } from '../components/CsvImportModal';
 import type { ImportColumn } from '../lib/csvImport';
@@ -776,7 +777,7 @@ function ClientCommunication({ client, organizationId, canWrite, onUnreadChanged
                   </div>
                   <div className="client-comm-message-from">{msg.direction === 'outbound' ? `${msg.from_email} → ${msg.to_email}` : `Van ${msg.from_email}`}</div>
                   {msg.body_html
-                    ? <div className="client-comm-body" dangerouslySetInnerHTML={{ __html: msg.body_html }} />
+                    ? <div className="client-comm-body" dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(msg.body_html) }} />
                     : <div className="client-comm-body client-comm-body-plain">{msg.body_text}</div>}
                   {msg.error_message && <div className="client-comm-error">{msg.error_message}</div>}
                 </div>;

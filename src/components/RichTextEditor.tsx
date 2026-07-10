@@ -123,7 +123,11 @@ export function sanitizeRichText(value: string | null | undefined): string {
   if (!normalized) return '';
 
   if (!canUseDom()) {
-    return normalized.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '');
+    // Zonder DOM kunnen we niet per-tag saneren; strip dan ALLE tags (plain
+    // tekst) i.p.v. enkel <script>/<style>, zodat vectoren als <img onerror=…>
+    // of <svg onload=…> niet overleven. Dit pad geldt alleen bij SSR/prerender;
+    // in de browser draait de volledige DOM-sanitizer hieronder.
+    return normalized.replace(/<[^>]*>/g, '');
   }
 
   const parser = new DOMParser();

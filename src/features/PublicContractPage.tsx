@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Input, Textarea } from '../components/Ui';
+import { sanitizeRichText } from '../components/RichTextEditor';
 import { supabase } from '../lib/supabase';
 import { dateNL } from '../lib/format';
 
@@ -164,7 +165,7 @@ export function PublicContractPage({ token }: { token: string }) {
 
     <section className="public-quote-card">
       <h2>Het contract</h2>
-      <div className="contract-body" style={{ lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: contract.body || '<p>(geen inhoud)</p>' }} />
+      <div className="contract-body" style={{ lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: sanitizeRichText(contract.body) || '<p>(geen inhoud)</p>' }} />
     </section>
 
     <section className="public-quote-card">

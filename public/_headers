@@ -1,0 +1,22 @@
+# Beveiligingsheaders voor de ResoFly-frontend (Cloudflare Pages).
+#
+# LET OP:
+# - Dit bestand werkt ALLEEN op Cloudflare Pages, niet in de Vite dev-server.
+# - CSP is een defense-in-depth-laag: zij vangt toekomstige HTML-injectie op als
+#   tweede slot achter de sanitisatie in de app (zie src/lib/sanitizeHtml.ts).
+# - De connect-src-hosts zijn afgeleid uit de daadwerkelijke browser-calls:
+#     *.supabase.co (REST/auth/edge functions), wss (realtime),
+#     *.workers.dev (R2-media-worker) en nominatim (agenda-geocoding).
+#   Gebruik je een EIGEN domein voor Supabase of R2, voeg dat hier toe.
+# - Smoke-test na de eerste deploy op staging: inloggen, /portal,
+#   /contract/<token>, bestand-upload/-download, agenda-adres zoeken en
+#   meeting-opname. Wordt er iets geblokkeerd, dan staat het in de console als
+#   CSP-violation met de exact ontbrekende bron.
+
+/*
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; frame-src 'self'; worker-src 'self'; manifest-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.workers.dev https://nominatim.openstreetmap.org
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: browsing-topics=(), interest-cohort=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
