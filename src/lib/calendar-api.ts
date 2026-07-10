@@ -68,6 +68,53 @@ export async function listExternalCalendarEvents(organizationId: UUID, start: st
   return data.events;
 }
 
+// ── Korte client-cache voor de agendaweergave ──────────────────────────────
+// Events ophalen gaat via een edge function die live Google/Microsoft bevraagt
+// (traag). Voor de agendaweergave cachen we per (organisatie + tijdvenster) kort
+// en dedupliceren we gelijktijdige identieke verzoeken. Zo kost heen-en-weer
+// bladeren — en de dubbele fetch bij het openen van de pagina — niet elke keer de
+// volle latency. Booking-/notitie-flows blijven de ongecachte functie hierboven
+// gebruiken, zodat beschikbaarheid daar altijd vers is.
+const EVENTS_CACHE_TTL_MS = 45_000;
+type EventsCacheEntry = { events: CalendarExternalEvent[]; ts: number };
+const eventsCache = new Map<string, EventsCacheEntry>();
+const eventsInflight = new Map<string, Promise<CalendarExternalEvent[]>>();
+
+function eventsCacheKey(organizationId: UUID, start: string, end: string): string {
+  return `${organizationId}|${start}|${end}`;
+}
+
+/** Wist de agenda-event-cache na een mutatie; optioneel alleen voor één organisatie. */
+export function invalidateCalendarEventsCache(organizationId?: UUID): void {
+  if (!organizationId) { eventsCache.clear(); return; }
+  const prefix = `${organizationId}|`;
+  for (const key of [...eventsCache.keys()]) if (key.startsWith(prefix)) eventsCache.delete(key);
+}
+
+/** Direct beschikbare, nog verse gecachte events voor dit venster (voor instant paint), of null. */
+export function getCachedCalendarEvents(organizationId: UUID, start: string, end: string): CalendarExternalEvent[] | null {
+  const hit = eventsCache.get(eventsCacheKey(organizationId, start, end));
+  if (!hit || Date.now() - hit.ts >= EVENTS_CACHE_TTL_MS) return null;
+  return hit.events;
+}
+
+/** Als listExternalCalendarEvents, maar met korte cache + dedup van gelijktijdige identieke verzoeken. */
+export async function listCalendarEventsCached(organizationId: UUID, start: string, end: string): Promise<CalendarExternalEvent[]> {
+  const key = eventsCacheKey(organizationId, start, end);
+  const cached = eventsCache.get(key);
+  if (cached && Date.now() - cached.ts < EVENTS_CACHE_TTL_MS) return cached.events;
+  const inflight = eventsInflight.get(key);
+  if (inflight) return inflight;
+  const promise = (async () => {
+    const events = await listExternalCalendarEvents(organizationId, start, end);
+    eventsCache.set(key, { events, ts: Date.now() });
+    return events;
+  })();
+  eventsInflight.set(key, promise);
+  try { return await promise; }
+  finally { eventsInflight.delete(key); }
+}
+
 export async function createExternalCalendarEvent(organizationId: UUID, input: CalendarEventInput): Promise<CalendarExternalEvent> {
   const data = await invokeCalendar<{ event: CalendarExternalEvent }>(organizationId, { action: 'createEvent', event: input });
   return data.event;

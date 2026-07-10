@@ -37,29 +37,51 @@ export async function listEvents(organizationId: string, requesterUserId: string
   const endIso = assertIso(end, 'end');
   const { data: sources, error } = await supabaseAdmin.from('calendar_sources').select('*').eq('organization_id', organizationId).eq('sync_enabled', true);
   if (error) throw error;
-  const events: Record<string, unknown>[] = [];
   const visibleSources = ((sources ?? []) as CalendarSourceRow[]).filter(source => source.user_id === requesterUserId || source.visibility === 'organization');
-  for (const source of visibleSources) {
+
+  // Access tokens één keer per verbinding vernieuwen (niet per agenda) én parallel.
+  // Meerdere agenda's onder hetzelfde account delen zo één refresh — dit voorkomt
+  // dubbele refresh-calls en een refresh-race waarbij gelijktijdige refreshes elkaars
+  // roterende refresh-token overschrijven.
+  const connectionIds = [...new Set(
+    visibleSources.filter(source => source.provider !== 'native' && source.connection_id).map(source => source.connection_id as string),
+  )];
+  const tokenByConnection = new Map<string, string>();
+  await Promise.all(connectionIds.map(async (connectionId) => {
+    try {
+      const connection = await getConnection(organizationId, connectionId);
+      const token = await getToken(organizationId, connection.id);
+      tokenByConnection.set(connectionId, await refreshAccessToken(token));
+    } catch (err) {
+      console.warn('Token refresh failed for connection', connectionId, err);
+      await supabaseAdmin.from('calendar_connections').update({ status: 'error', last_error: err instanceof Error ? err.message : 'Token vernieuwen mislukt' }).eq('id', connectionId);
+    }
+  }));
+
+  // Alle bronnen parallel ophalen; een fout op één bron laat de overige agenda's intact.
+  const perSource = await Promise.all(visibleSources.map(async (source) => {
     try {
       if (source.provider === 'native') {
         const nativeEvents = await fetchNativeEvents(organizationId, source, startIso, endIso);
-        events.push(...nativeEvents.map((event: Record<string, unknown>) => maskPrivateEventForRequester(event, source, requesterUserId)));
-        continue;
+        return nativeEvents.map((event: Record<string, unknown>) => maskPrivateEventForRequester(event, source, requesterUserId));
       }
-      if (!source.connection_id) continue;
-      const connection = await getConnection(organizationId, source.connection_id);
-      const token = await getToken(organizationId, connection.id);
-      const accessToken = await refreshAccessToken(token);
+      if (!source.connection_id) return [];
+      const accessToken = tokenByConnection.get(source.connection_id);
+      if (!accessToken) return []; // token-refresh voor deze verbinding is hierboven al mislukt
       const sourceEvents = source.provider === 'google'
         ? await fetchGoogleEvents(accessToken, source, startIso, endIso)
         : await fetchMicrosoftEvents(accessToken, source, startIso, endIso);
-      events.push(...sourceEvents.map((event: Record<string, unknown>) => maskPrivateEventForRequester(event, source, requesterUserId)));
+      return sourceEvents.map((event: Record<string, unknown>) => maskPrivateEventForRequester(event, source, requesterUserId));
     } catch (err) {
       console.warn('Event sync failed for source', source.id, err);
-      await supabaseAdmin.from('calendar_connections').update({ status: 'error', last_error: err instanceof Error ? err.message : 'Event sync mislukt' }).eq('id', source.connection_id);
+      if (source.connection_id) {
+        await supabaseAdmin.from('calendar_connections').update({ status: 'error', last_error: err instanceof Error ? err.message : 'Event sync mislukt' }).eq('id', source.connection_id);
+      }
+      return [];
     }
-  }
-  return dedupeCalendarEvents(events).sort((a, b) => String(a.starts_at).localeCompare(String(b.starts_at)));
+  }));
+
+  return dedupeCalendarEvents(perSource.flat()).sort((a, b) => String(a.starts_at).localeCompare(String(b.starts_at)));
 }
 
 export function dedupeCalendarEvents(events: Record<string, unknown>[]): Record<string, unknown>[] {

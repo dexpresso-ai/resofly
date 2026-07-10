@@ -16,8 +16,10 @@ import {
   disconnectCalendarConnection,
   getCalendarEventAttendees,
   getCalendarOAuthUrl,
+  getCachedCalendarEvents,
+  invalidateCalendarEventsCache,
   listCalendarAppPasswords,
-  listExternalCalendarEvents,
+  listCalendarEventsCached,
   loadCalendarIntegrations,
   refreshCalendarSources,
   revokeCalendarAppPassword,
@@ -1855,6 +1857,23 @@ function BookingSendDialog({ sources, clients, draftCount, onCancel, onSubmit }:
   );
 }
 
+const MOBILE_BREAKPOINT_PX = 768;
+
+/** Volgt of de viewport smal genoeg is voor de mobiele agenda-ergonomie. */
+function useIsMobile(): boolean {
+  const query = `(max-width:${MOBILE_BREAKPOINT_PX}px)`;
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia(query);
+    const onChange = () => setIsMobile(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, [query]);
+  return isMobile;
+}
+
 export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, data, canWrite, onChanged, onEditTask, onNewNoteForEvent, onNewDocumentForEvent, onSetEventLink, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
   mode?: 'agenda' | 'settings';
   organizationId: UUID; currentUserId: UUID | null; data: AppData; canWrite: boolean; onEditTask: (task: Task) => void;
@@ -1873,7 +1892,11 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   const [eventsLoading, setEventsLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<CalendarView>('week');
+  const isMobile = useIsMobile();
+  // Op een telefoon is een 7-koloms weekraster onwerkbaar (horizontaal scrollen).
+  // Start daarom in dagweergave — één kolom die het scherm vult, zoals Google/Apple.
+  const [view, setView] = useState<CalendarView>(() =>
+    (typeof window !== 'undefined' && window.matchMedia(`(max-width:${MOBILE_BREAKPOINT_PX}px)`).matches) ? 'day' : 'week');
   const [showCreatePanel, setShowCreatePanel] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<CalendarExternalEvent | null>(null);
   const [showConnections, setShowConnections] = useState(() => mode === 'settings' || window.location.hash === '#calendar-connections');
@@ -1958,6 +1981,9 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   useEffect(() => { void refreshAll(); }, [organizationId, mode]); // eslint-disable-line
   useEffect(() => { if (mode === 'agenda') void refreshEventsOnly(); }, [rangeStart, rangeEnd, mode]); // eslint-disable-line
   useEffect(() => { if (mode === 'settings') setShowConnections(true); }, [mode]);
+  // Zakt het scherm naar telefoonbreedte terwijl je in de (brede) weekweergave zit?
+  // Schakel dan naar de dagweergave, die wél op een telefoon past.
+  useEffect(() => { if (isMobile && view === 'week') changeView('day'); }, [isMobile]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const handleCalendarAnchor = (event: Event) => {
       const anchor = (event as CustomEvent<{ anchor?: string }>).detail?.anchor;
@@ -1976,15 +2002,24 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     if (newEvent.sourceId && !writeableSources.some(s => s.id === newEvent.sourceId)) setNewEvent(p => ({ ...p, sourceId: writeableSources[0]?.id ?? '' }));
   }, [newEvent.sourceId, writeableSources]);
 
-  async function refreshAll() {
+  async function refreshAll(opts?: { fresh?: boolean }) {
     setLoading(true); setError(null); setMessage(null);
-    try { const n = await loadCalendarIntegrations(organizationId); setIntegrations(n); if (mode === 'agenda') await refreshEventsOnly(); }
+    try { const n = await loadCalendarIntegrations(organizationId); setIntegrations(n); if (mode === 'agenda') await refreshEventsOnly(opts); }
     catch (err) { setError(err instanceof Error ? err.message : 'Agenda-koppelingen laden mislukt.'); }
     finally { setLoading(false); }
   }
-  async function refreshEventsOnly() {
+  // `fresh` = na een mutatie of handmatig verversen: cache leegmaken en live ophalen.
+  // Zonder `fresh` (bij navigeren) tonen we een nog verse cache direct — geen spinner,
+  // geen netwerk — en dedupliceert de laag eronder de dubbele fetch bij het openen.
+  async function refreshEventsOnly(opts?: { fresh?: boolean }) {
+    if (opts?.fresh) {
+      invalidateCalendarEventsCache(organizationId);
+    } else {
+      const cached = getCachedCalendarEvents(organizationId, rangeStart, rangeEnd);
+      if (cached) { setEvents(cached); setError(null); return; }
+    }
     setEventsLoading(true); setError(null);
-    try { setEvents(await listExternalCalendarEvents(organizationId, rangeStart, rangeEnd)); }
+    try { setEvents(await listCalendarEventsCached(organizationId, rangeStart, rangeEnd)); }
     catch (err) { setError(err instanceof Error ? err.message : 'Agenda-events laden mislukt.'); }
     finally { setEventsLoading(false); }
   }
@@ -1997,7 +2032,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   async function refreshSources(connectionId: string) {
     if (!canWrite) { setError('Je hebt alleen-lezen toegang tot deze organisatie.'); return; }
     setLoading(true); setError(null); setMessage(null);
-    try { const n = await refreshCalendarSources(organizationId, connectionId); setIntegrations(n); setMessage("Agenda\u2019s opnieuw opgehaald."); if (mode === 'agenda') await refreshEventsOnly(); }
+    try { const n = await refreshCalendarSources(organizationId, connectionId); setIntegrations(n); setMessage("Agenda\u2019s opnieuw opgehaald."); if (mode === 'agenda') await refreshEventsOnly({ fresh: true }); }
     catch (err) { setError(err instanceof Error ? err.message : "Agenda\u2019s ophalen mislukt."); }
     finally { setLoading(false); }
   }
@@ -2005,7 +2040,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     if (!canWrite) { setError('Je hebt alleen-lezen toegang tot deze organisatie.'); return; }
     if (!confirm('Deze persoonlijke agenda-koppeling loskoppelen?')) return;
     setLoading(true); setError(null); setMessage(null);
-    try { await disconnectCalendarConnection(organizationId, connectionId); setIntegrations(await loadCalendarIntegrations(organizationId)); setMessage('Agenda-koppeling losgekoppeld.'); if (mode === 'agenda') await refreshEventsOnly(); }
+    try { await disconnectCalendarConnection(organizationId, connectionId); setIntegrations(await loadCalendarIntegrations(organizationId)); setMessage('Agenda-koppeling losgekoppeld.'); if (mode === 'agenda') await refreshEventsOnly({ fresh: true }); }
     catch (err) { setError(err instanceof Error ? err.message : 'Loskoppelen mislukt.'); }
     finally { setLoading(false); }
   }
@@ -2020,7 +2055,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     try {
       const upd = await updateCalendarSource(organizationId, source.id, patch);
       setIntegrations(prev => ({ ...prev, sources: prev.sources.map(s => s.id === upd.id ? upd : s) }));
-      if (mode === 'agenda' && (key === 'sync_enabled' || key === 'visibility')) await refreshEventsOnly();
+      if (mode === 'agenda' && (key === 'sync_enabled' || key === 'visibility')) await refreshEventsOnly({ fresh: true });
       if (key === 'visibility') setMessage(upd.visibility === 'organization' ? 'Agenda gedeeld met de organisatie.' : 'Agenda staat weer privé.');
     } catch (err) { setError(err instanceof Error ? err.message : 'Instelling bijwerken mislukt.'); }
   }
@@ -2142,7 +2177,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       const d = makeDefaultTimes();
       setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false }));
       setShowCreatePanel(false);
-      refreshEventsOnly().catch(() => {});
+      refreshEventsOnly({ fresh: true }).catch(() => {});
     } catch (err) { setError(err instanceof Error ? err.message : 'Opslaan mislukt.'); }
     finally { setLoading(false); }
   }
@@ -2192,7 +2227,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       await deleteCalendarEvent(organizationId, eventRef(event));
       setSelectedEvent(null);
       setMessage('Afspraak verwijderd.');
-      await refreshEventsOnly();
+      await refreshEventsOnly({ fresh: true });
     } catch (err) { setError(err instanceof Error ? err.message : 'Verwijderen mislukt.'); }
     finally { setLoading(false); }
   }
@@ -2243,10 +2278,10 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         }
       }
       setSelectedEvent(prev => (prev && prev === event) ? updated : prev);
-      await refreshEventsOnly();
+      await refreshEventsOnly({ fresh: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Verplaatsen mislukt.');
-      await refreshEventsOnly();
+      await refreshEventsOnly({ fresh: true });
     }
   }, [eventIsEditable, organizationId, data.calendarEventLinks, onSetEventLink]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2261,7 +2296,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       setNewCalendarName('');
       setIntegrations(await loadCalendarIntegrations(organizationId));
       setMessage('ResoFly-agenda aangemaakt.');
-      if (mode === 'agenda') await refreshEventsOnly();
+      if (mode === 'agenda') await refreshEventsOnly({ fresh: true });
     } catch (err) { setError(err instanceof Error ? err.message : 'Agenda aanmaken mislukt.'); }
     finally { setLoading(false); }
   }
@@ -2283,7 +2318,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     try {
       await deleteNativeCalendar(organizationId, source.id);
       setIntegrations(await loadCalendarIntegrations(organizationId));
-      if (mode === 'agenda') await refreshEventsOnly();
+      if (mode === 'agenda') await refreshEventsOnly({ fresh: true });
       setMessage('Agenda verwijderd.');
     } catch (err) { setError(err instanceof Error ? err.message : 'Verwijderen mislukt.'); }
     finally { setLoading(false); }
@@ -2457,7 +2492,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         <div className="calendar-actions">
           <Button variant="primary" onClick={() => connect('google')} disabled={loading || !canWrite}>Google koppelen</Button>
           <Button variant="primary" onClick={() => connect('microsoft')} disabled={loading || !canWrite}>Microsoft koppelen</Button>
-          <Button onClick={refreshAll} disabled={loading}><RefreshCcw size={14} /> Ververs</Button>
+          <Button onClick={() => refreshAll({ fresh: true })} disabled={loading}><RefreshCcw size={14} /> Ververs</Button>
         </div>
       </section>
 
@@ -2504,7 +2539,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
           <span className="calendar-range-label">{view === 'day' ? 'Dag' : view === 'week' ? 'Week' : view === 'month' ? 'Maand' : 'Lijst'}</span>
           <div className="calendar-range">{calendarRangeLabel}{eventsLoading ? ' · laden…' : ''}</div>
         </div>
-        <Button className="calendar-link-btn" onClick={refreshAll} disabled={loading || eventsLoading}><RefreshCcw size={14} /> Ververs</Button>
+        <Button className="calendar-link-btn" onClick={() => refreshAll({ fresh: true })} disabled={loading || eventsLoading}><RefreshCcw size={14} /> Ververs</Button>
         <div className="tb-view-tog calendar-view-tabs" aria-label="Agendaweergave">
           <button className={`tb-vbtn${view === 'day' ? ' active' : ''}`} onClick={() => changeView('day')} title="Dagweergave (D)"><CalendarDays size={14} /><span>Dag</span></button>
           <button className={`tb-vbtn${view === 'week' ? ' active' : ''}`} onClick={() => changeView('week')} title="Weekweergave (W)"><Clock size={14} /><span>Week</span></button>

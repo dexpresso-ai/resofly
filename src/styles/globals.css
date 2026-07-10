@@ -3185,3 +3185,14 @@ button.chat-member:hover{background:var(--bg3)}
    valt hier bewust buiten en blijft alles afdekken. */
 .app .modal-bg,.app .tb-overlay,.app .chat-modal-bg,.app .bk-modal-backdrop,.app .event-detail-overlay,.app .gs-backdrop{top:42px}
 @media(max-width:760px){.tabbar{padding-left:66px}}
+
+/* ── Mobiele dagweergave: één kolom over de volle breedte ────────────────
+   In dagweergave (tb-single-day) is er ruimte zat, dus ruimere, beter leesbare
+   event-blokken dan in het smalle weekraster. Alleen op telefoonbreedte. */
+@media(max-width:620px){
+  .tb-single-day .tb-ev{padding:6px 10px;border-radius:9px}
+  .tb-single-day .tb-ev-time{font-size:11px}
+  .tb-single-day .tb-ev-title{font-size:13.5px;line-height:1.25}
+  .tb-single-day .tb-ev-roomy .tb-ev-src,
+  .tb-single-day .tb-ev-compact .tb-ev-src{display:block;font-size:10.5px;opacity:.82}
+}
