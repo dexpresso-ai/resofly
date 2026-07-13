@@ -97,6 +97,8 @@ import { MeetingBookingManager } from './features/MeetingBookingManager';
 import { WeekPlanner, addWeekChecklistItem } from './features/WeekPlanner';
 import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat } from './components/GerrieChat';
+import { GerrieCommandCenter } from './features/GerrieCommandCenter';
+import type { GerrieActionHandlers } from './lib/gerrie-api';
 import { exportFinancePDF } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
 import type {
@@ -105,7 +107,7 @@ import type {
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
 
-type Page = 'dashboard'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'fiscal-years'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'fiscal-years'|'archive'|'settings'|'project';
 type EditMode =
   | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status'>> }
   | { kind: 'project'; item?: Project; defaults?: Partial<Pick<Project, 'name' | 'client_id' | 'description' | 'start_date' | 'end_date'>> }
@@ -1178,6 +1180,181 @@ function App() {
 
   const title = viewTitle(activeTab, data);
 
+  // Gedeelde uitvoer-handlers voor een door Gerrie voorgesteld actie — hergebruikt door
+  // de chat-dock (GerrieChat) én het Commandocentrum, zodat een goedgekeurd voorstel
+  // overal identiek wordt uitgevoerd (één bron van waarheid).
+  const gerrieActions: GerrieActionHandlers = {
+    onCreateInvoiceDraft: (p) => {
+      if (!ensureCanWrite()) return;
+      setPage('invoices'); setProjectId(null); setClientId(null);
+      setEdit({ kind: 'invoice', item: undefined, defaults: {
+        client_id: p.client_id, notes: p.notes ?? undefined, due_date: p.due_date ?? undefined,
+        lines: p.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat })),
+      } });
+    },
+    onCreateQuoteDraft: (p) => {
+      if (!ensureCanWrite()) return;
+      setPage('quotes'); setProjectId(null); setClientId(null);
+      setEdit({ kind: 'quote', item: undefined, defaults: {
+        client_id: p.client_id, notes: p.notes ?? undefined, valid_until: p.valid_until ?? undefined,
+        lines: p.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat })),
+      } });
+    },
+    onCreateClientDraft: (p) => {
+      if (!ensureCanWrite()) return;
+      setPage('clients'); setProjectId(null); setClientId(null);
+      setEdit({ kind: 'client', item: undefined, defaults: {
+        name: p.name, contact_name: p.contact_name ?? undefined, email: p.email ?? undefined,
+        phone: p.phone ?? undefined, notes: p.notes ?? undefined, status: (p.status as Client['status']),
+      } });
+    },
+    onSendInvoice: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      const invoice = data.invoices.find((i) => i.id === p.id);
+      let includePaymentLink = false;
+      if (invoice && !['paid', 'cancelled', 'void', 'written_off'].includes(invoice.status)) {
+        try { const mollie = await loadInvoiceMollieStatus(activeOrg.id); includePaymentLink = mollie.status === 'connected'; } catch { /* PDF-only als de status niet op te halen is */ }
+      }
+      await sendInvoiceEmailViaResend(activeOrg.id, p.id, { recipientEmail: p.recipient_email, recipientName: p.recipient_name ?? undefined, includePaymentLink });
+      await refresh();
+    },
+    onSendQuote: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      await sendQuoteEmailViaResend(activeOrg.id, p.id, { recipientEmail: p.recipient_email, recipientName: p.recipient_name ?? undefined });
+      await refresh();
+    },
+    onConvertQuote: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      const invoice = await convertAcceptedQuoteToInvoice(activeOrg.id, p.id);
+      await refresh();
+      setPage('invoices'); setProjectId(null); setClientId(null);
+      setEdit({ kind: 'invoice', item: invoice });
+    },
+    onEditInvoice: (p) => {
+      if (!ensureCanWrite()) return;
+      const existing = data.invoices.find((i) => i.id === p.id);
+      if (!existing) { setError('Factuur niet gevonden.'); return; }
+      const merged: Invoice = { ...existing };
+      if (p.changes.lines) merged.lines = p.changes.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat }));
+      if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
+      if (p.changes.due_date !== undefined) merged.due_date = p.changes.due_date;
+      setPage('invoices'); setProjectId(null); setClientId(null);
+      setEdit({ kind: 'invoice', item: merged });
+    },
+    onEditQuote: (p) => {
+      if (!ensureCanWrite()) return;
+      const existing = data.quotes.find((q) => q.id === p.id);
+      if (!existing) { setError('Offerte niet gevonden.'); return; }
+      const merged: Quote = { ...existing };
+      if (p.changes.lines) merged.lines = p.changes.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat }));
+      if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
+      if (p.changes.valid_until !== undefined) merged.valid_until = p.changes.valid_until;
+      setPage('quotes'); setProjectId(null); setClientId(null);
+      setEdit({ kind: 'quote', item: merged });
+    },
+    onEditClient: (p) => {
+      if (!ensureCanWrite()) return;
+      const existing = data.clients.find((c) => c.id === p.id);
+      if (!existing) { setError('Klant niet gevonden.'); return; }
+      const merged: Client = { ...existing };
+      if (p.changes.name !== undefined) merged.name = p.changes.name;
+      if (p.changes.contact_name !== undefined) merged.contact_name = p.changes.contact_name;
+      if (p.changes.email !== undefined) merged.email = p.changes.email;
+      if (p.changes.phone !== undefined) merged.phone = p.changes.phone;
+      if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
+      if (p.changes.status !== undefined) merged.status = p.changes.status as Client['status'];
+      setPage('clients'); setProjectId(null); setClientId(null);
+      setEdit({ kind: 'client', item: merged });
+    },
+    onSendReminders: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      let sent = 0;
+      const failed: string[] = [];
+      for (const inv of p.invoices) {
+        try { await sendInvoiceReminderEmail(activeOrg.id, inv.id); sent += 1; }
+        catch { failed.push(inv.number); }
+      }
+      await refresh();
+      if (failed.length) throw new Error(`${sent} verstuurd, ${failed.length} mislukt (${failed.join(', ')}).`);
+    },
+    onCreateProject: (p) => {
+      if (!ensureCanWrite()) return;
+      setPage('projects'); setProjectId(null); setClientId(null);
+      setEdit({ kind: 'project', item: undefined, defaults: { name: p.name, client_id: p.client_id ?? undefined, description: p.description ?? undefined, start_date: p.start_date ?? undefined, end_date: p.end_date ?? undefined } });
+    },
+    onEditProject: (p) => {
+      if (!ensureCanWrite()) return;
+      const existing = data.projects.find((pr) => pr.id === p.id);
+      if (!existing) { setError('Project niet gevonden.'); return; }
+      const merged: Project = { ...existing };
+      if (p.changes.name !== undefined) merged.name = p.changes.name;
+      if (p.changes.client_id !== undefined) merged.client_id = p.changes.client_id;
+      if (p.changes.description !== undefined) merged.description = p.changes.description;
+      if (p.changes.start_date !== undefined) merged.start_date = p.changes.start_date;
+      if (p.changes.end_date !== undefined) merged.end_date = p.changes.end_date;
+      if (p.changes.archived !== undefined) merged.archived = p.changes.archived;
+      setPage('projects'); setProjectId(null); setClientId(null);
+      setEdit({ kind: 'project', item: merged });
+    },
+    onCreateTask: (p) => {
+      if (!ensureCanWrite()) return;
+      setProjectId(p.project_id); setClientId(null); setPage('project');
+      setEdit({ kind: 'task', item: undefined, projectId: p.project_id, defaults: {
+        title: p.title, description: p.description ?? undefined, status: p.status as Task['status'], priority: p.priority as Task['priority'],
+        tags: p.tags, start_date: p.start_date ?? undefined, end_date: p.end_date ?? undefined, planned_date: p.planned_date ?? undefined,
+        estimated_minutes: p.estimated_minutes, subtasks: p.subtasks.map((s) => ({ id: uid(), label: s.label, done: s.done })),
+      } });
+    },
+    onEditTask: (p) => {
+      if (!ensureCanWrite()) return;
+      const existing = data.tasks.find((t) => t.id === p.id);
+      if (!existing) { setError('Taak niet gevonden.'); return; }
+      const merged: Task = { ...existing };
+      const c = p.changes;
+      if (c.title !== undefined) merged.title = c.title;
+      if (c.description !== undefined) merged.description = c.description;
+      if (c.status !== undefined) merged.status = c.status as Task['status'];
+      if (c.priority !== undefined) merged.priority = c.priority as Task['priority'];
+      if (c.planned_date !== undefined) merged.planned_date = c.planned_date;
+      if (c.start_date !== undefined) merged.start_date = c.start_date;
+      if (c.end_date !== undefined) merged.end_date = c.end_date;
+      if (c.estimated_minutes !== undefined) merged.estimated_minutes = c.estimated_minutes;
+      if (c.tags !== undefined) merged.tags = c.tags;
+      if (c.subtasks !== undefined) merged.subtasks = c.subtasks.map((s) => ({ id: uid(), label: s.label, done: s.done }));
+      setProjectId(existing.project_id); setClientId(null); setPage('project');
+      setEdit({ kind: 'task', item: merged, projectId: existing.project_id });
+    },
+    onCreateCalendarEvent: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      // Lokale tijd (browser = Europe/Amsterdam) -> UTC ISO voor de agenda-API.
+      const startsAt = new Date(`${p.date}T${p.start_time}:00`).toISOString();
+      const endsAt = new Date(`${p.date}T${p.end_time}:00`).toISOString();
+      await createExternalCalendarEvent(activeOrg.id, { sourceId: p.source_id, title: p.title, startsAt, endsAt, description: p.description ?? undefined, location: p.location ?? undefined });
+    },
+    onCreateWeekAction: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      // Actiepunten op de "Actiepunten deze week"-checklist (browser/localStorage) van de juiste week.
+      for (const item of p.items) addWeekChecklistItem(item.planned_date, item.title);
+    },
+    onLogTimeEntry: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      await createTimeEntry(activeOrg.id, {
+        project_id: p.project_id, client_id: p.client_id, source: 'manual',
+        description: p.description, entry_date: p.date, minutes: p.minutes,
+        billable: p.billable, hourly_rate_cents: p.hourly_rate_cents,
+      });
+      await refresh();
+    },
+    onCreateReport: (p) => {
+      if (!ensureCanWrite()) return;
+      // Open de rapportbouwer vooringevuld (nog niet opgeslagen); de gebruiker
+      // controleert de live grafiek en slaat zelf op via "Rapport opslaan".
+      setProjectId(null); setClientId(null); setStatsReportId(null);
+      setPendingReport({ key: uid(), name: p.name, definition: p.definition });
+      setPage('stats');
+    },
+  };
+
   return <div className={`app${sidebarPinned ? ' sidebar-pinned' : ''}`}>
     <button
       type="button"
@@ -1190,7 +1367,7 @@ function App() {
     <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => supabaseAuth.signOut()} clientEmailUnread={clientEmailUnread.total} ticketUnread={ticketUnreadIds.size} chatUnread={teamChat.unreadTotal} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })}/>
     <main className="main">
       <TabBar tabs={tabs} activeTabId={activeTab.id} data={data} onSelect={switchTab} onClose={closeTab} onNew={openTab} />
-      {page !== 'calendar' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
+      {page !== 'calendar' && page !== 'gerrie' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
       {/* Alle open tabbladen blijven gemount (keep-alive); alleen het actieve is
           zichtbaar. Elk pane is z'n eigen scrollcontainer én bevat z'n eigen
           EditModal, zodat een openstaande bewerking bij het wisselen bewaard blijft. */}
@@ -1202,177 +1379,7 @@ function App() {
         </section>
       ))}
     </main>
-    <GerrieChat organizationId={activeOrg.id}
-      onCreateInvoiceDraft={(p) => {
-        if (!ensureCanWrite()) return;
-        setPage('invoices'); setProjectId(null); setClientId(null);
-        setEdit({ kind: 'invoice', item: undefined, defaults: {
-          client_id: p.client_id, notes: p.notes ?? undefined, due_date: p.due_date ?? undefined,
-          lines: p.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat })),
-        } });
-      }}
-      onCreateQuoteDraft={(p) => {
-        if (!ensureCanWrite()) return;
-        setPage('quotes'); setProjectId(null); setClientId(null);
-        setEdit({ kind: 'quote', item: undefined, defaults: {
-          client_id: p.client_id, notes: p.notes ?? undefined, valid_until: p.valid_until ?? undefined,
-          lines: p.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat })),
-        } });
-      }}
-      onCreateClientDraft={(p) => {
-        if (!ensureCanWrite()) return;
-        setPage('clients'); setProjectId(null); setClientId(null);
-        setEdit({ kind: 'client', item: undefined, defaults: {
-          name: p.name, contact_name: p.contact_name ?? undefined, email: p.email ?? undefined,
-          phone: p.phone ?? undefined, notes: p.notes ?? undefined, status: (p.status as Client['status']),
-        } });
-      }}
-      onSendInvoice={async (p) => {
-        if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
-        const invoice = data.invoices.find((i) => i.id === p.id);
-        let includePaymentLink = false;
-        if (invoice && !['paid', 'cancelled', 'void', 'written_off'].includes(invoice.status)) {
-          try { const mollie = await loadInvoiceMollieStatus(activeOrg.id); includePaymentLink = mollie.status === 'connected'; } catch { /* PDF-only als de status niet op te halen is */ }
-        }
-        await sendInvoiceEmailViaResend(activeOrg.id, p.id, { recipientEmail: p.recipient_email, recipientName: p.recipient_name ?? undefined, includePaymentLink });
-        await refresh();
-      }}
-      onSendQuote={async (p) => {
-        if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
-        await sendQuoteEmailViaResend(activeOrg.id, p.id, { recipientEmail: p.recipient_email, recipientName: p.recipient_name ?? undefined });
-        await refresh();
-      }}
-      onConvertQuote={async (p) => {
-        if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
-        const invoice = await convertAcceptedQuoteToInvoice(activeOrg.id, p.id);
-        await refresh();
-        setPage('invoices'); setProjectId(null); setClientId(null);
-        setEdit({ kind: 'invoice', item: invoice });
-      }}
-      onEditInvoice={(p) => {
-        if (!ensureCanWrite()) return;
-        const existing = data.invoices.find((i) => i.id === p.id);
-        if (!existing) { setError('Factuur niet gevonden.'); return; }
-        const merged: Invoice = { ...existing };
-        if (p.changes.lines) merged.lines = p.changes.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat }));
-        if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
-        if (p.changes.due_date !== undefined) merged.due_date = p.changes.due_date;
-        setPage('invoices'); setProjectId(null); setClientId(null);
-        setEdit({ kind: 'invoice', item: merged });
-      }}
-      onEditQuote={(p) => {
-        if (!ensureCanWrite()) return;
-        const existing = data.quotes.find((q) => q.id === p.id);
-        if (!existing) { setError('Offerte niet gevonden.'); return; }
-        const merged: Quote = { ...existing };
-        if (p.changes.lines) merged.lines = p.changes.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat }));
-        if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
-        if (p.changes.valid_until !== undefined) merged.valid_until = p.changes.valid_until;
-        setPage('quotes'); setProjectId(null); setClientId(null);
-        setEdit({ kind: 'quote', item: merged });
-      }}
-      onEditClient={(p) => {
-        if (!ensureCanWrite()) return;
-        const existing = data.clients.find((c) => c.id === p.id);
-        if (!existing) { setError('Klant niet gevonden.'); return; }
-        const merged: Client = { ...existing };
-        if (p.changes.name !== undefined) merged.name = p.changes.name;
-        if (p.changes.contact_name !== undefined) merged.contact_name = p.changes.contact_name;
-        if (p.changes.email !== undefined) merged.email = p.changes.email;
-        if (p.changes.phone !== undefined) merged.phone = p.changes.phone;
-        if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
-        if (p.changes.status !== undefined) merged.status = p.changes.status as Client['status'];
-        setPage('clients'); setProjectId(null); setClientId(null);
-        setEdit({ kind: 'client', item: merged });
-      }}
-      onSendReminders={async (p) => {
-        if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
-        let sent = 0;
-        const failed: string[] = [];
-        for (const inv of p.invoices) {
-          try { await sendInvoiceReminderEmail(activeOrg.id, inv.id); sent += 1; }
-          catch { failed.push(inv.number); }
-        }
-        await refresh();
-        if (failed.length) throw new Error(`${sent} verstuurd, ${failed.length} mislukt (${failed.join(', ')}).`);
-      }}
-      onCreateProject={(p) => {
-        if (!ensureCanWrite()) return;
-        setPage('projects'); setProjectId(null); setClientId(null);
-        setEdit({ kind: 'project', item: undefined, defaults: { name: p.name, client_id: p.client_id ?? undefined, description: p.description ?? undefined, start_date: p.start_date ?? undefined, end_date: p.end_date ?? undefined } });
-      }}
-      onEditProject={(p) => {
-        if (!ensureCanWrite()) return;
-        const existing = data.projects.find((pr) => pr.id === p.id);
-        if (!existing) { setError('Project niet gevonden.'); return; }
-        const merged: Project = { ...existing };
-        if (p.changes.name !== undefined) merged.name = p.changes.name;
-        if (p.changes.client_id !== undefined) merged.client_id = p.changes.client_id;
-        if (p.changes.description !== undefined) merged.description = p.changes.description;
-        if (p.changes.start_date !== undefined) merged.start_date = p.changes.start_date;
-        if (p.changes.end_date !== undefined) merged.end_date = p.changes.end_date;
-        if (p.changes.archived !== undefined) merged.archived = p.changes.archived;
-        setPage('projects'); setProjectId(null); setClientId(null);
-        setEdit({ kind: 'project', item: merged });
-      }}
-      onCreateTask={(p) => {
-        if (!ensureCanWrite()) return;
-        setProjectId(p.project_id); setClientId(null); setPage('project');
-        setEdit({ kind: 'task', item: undefined, projectId: p.project_id, defaults: {
-          title: p.title, description: p.description ?? undefined, status: p.status as Task['status'], priority: p.priority as Task['priority'],
-          tags: p.tags, start_date: p.start_date ?? undefined, end_date: p.end_date ?? undefined, planned_date: p.planned_date ?? undefined,
-          estimated_minutes: p.estimated_minutes, subtasks: p.subtasks.map((s) => ({ id: uid(), label: s.label, done: s.done })),
-        } });
-      }}
-      onEditTask={(p) => {
-        if (!ensureCanWrite()) return;
-        const existing = data.tasks.find((t) => t.id === p.id);
-        if (!existing) { setError('Taak niet gevonden.'); return; }
-        const merged: Task = { ...existing };
-        const c = p.changes;
-        if (c.title !== undefined) merged.title = c.title;
-        if (c.description !== undefined) merged.description = c.description;
-        if (c.status !== undefined) merged.status = c.status as Task['status'];
-        if (c.priority !== undefined) merged.priority = c.priority as Task['priority'];
-        if (c.planned_date !== undefined) merged.planned_date = c.planned_date;
-        if (c.start_date !== undefined) merged.start_date = c.start_date;
-        if (c.end_date !== undefined) merged.end_date = c.end_date;
-        if (c.estimated_minutes !== undefined) merged.estimated_minutes = c.estimated_minutes;
-        if (c.tags !== undefined) merged.tags = c.tags;
-        if (c.subtasks !== undefined) merged.subtasks = c.subtasks.map((s) => ({ id: uid(), label: s.label, done: s.done }));
-        setProjectId(existing.project_id); setClientId(null); setPage('project');
-        setEdit({ kind: 'task', item: merged, projectId: existing.project_id });
-      }}
-      onCreateCalendarEvent={async (p) => {
-        if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
-        // Lokale tijd (browser = Europe/Amsterdam) -> UTC ISO voor de agenda-API.
-        const startsAt = new Date(`${p.date}T${p.start_time}:00`).toISOString();
-        const endsAt = new Date(`${p.date}T${p.end_time}:00`).toISOString();
-        await createExternalCalendarEvent(activeOrg.id, { sourceId: p.source_id, title: p.title, startsAt, endsAt, description: p.description ?? undefined, location: p.location ?? undefined });
-      }}
-      onCreateWeekAction={async (p) => {
-        if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
-        // Actiepunten op de "Actiepunten deze week"-checklist (browser/localStorage) van de juiste week.
-        for (const item of p.items) addWeekChecklistItem(item.planned_date, item.title);
-      }}
-      onLogTimeEntry={async (p) => {
-        if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
-        await createTimeEntry(activeOrg.id, {
-          project_id: p.project_id, client_id: p.client_id, source: 'manual',
-          description: p.description, entry_date: p.date, minutes: p.minutes,
-          billable: p.billable, hourly_rate_cents: p.hourly_rate_cents,
-        });
-        await refresh();
-      }}
-      onCreateReport={(p) => {
-        if (!ensureCanWrite()) return;
-        // Open de rapportbouwer vooringevuld (nog niet opgeslagen); de gebruiker
-        // controleert de live grafiek en slaat zelf op via "Rapport opslaan".
-        setProjectId(null); setClientId(null); setStatsReportId(null);
-        setPendingReport({ key: uid(), name: p.name, definition: p.definition });
-        setPage('stats');
-      }}
-    />
+    <GerrieChat organizationId={activeOrg.id} {...gerrieActions} />
     {/* Zwevend teamchat-paneel — overal beschikbaar, behalve op de volledige chatpagina. */}
     <TeamChatDock api={teamChat} hidden={page === 'chat'} />
     {/* Mobiele duim-onderbalk (alleen ≤760px, zie globals.css). Navigeert het
@@ -1418,6 +1425,7 @@ function App() {
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} unreadTicketIds={ticketUnreadIds}/>;
     if (page === 'chat') return <TeamChatPage api={teamChat} />;
+    if (page === 'gerrie') return <GerrieCommandCenter organizationId={activeOrg.id} canWrite={canWrite} {...gerrieActions} />;
     if (page === 'marketing') return <Marketing data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null }})} onEditDocument={(item)=>setEdit({kind:'document', item})}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;

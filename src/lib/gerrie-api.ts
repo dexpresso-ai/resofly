@@ -168,6 +168,33 @@ export interface GerrieTimeEntryProposal {
 }
 export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieReportProposal;
 
+/**
+ * De uitvoer-handlers voor een door Gerrie voorgestelde actie. Draft-types openen een
+ * vooringevuld formulier (void); verstuur-/aanmaak-types voeren de actie uit (Promise).
+ * Gedeeld door de chat-dock (GerrieChat) én het Commandocentrum, zodat een goedgekeurd
+ * voorstel overal identiek wordt uitgevoerd.
+ */
+export interface GerrieActionHandlers {
+  onCreateInvoiceDraft?: (proposal: GerrieInvoiceProposal) => void;
+  onCreateQuoteDraft?: (proposal: GerrieQuoteProposal) => void;
+  onCreateClientDraft?: (proposal: GerrieClientProposal) => void;
+  onSendInvoice?: (proposal: GerrieSendInvoiceProposal) => Promise<void>;
+  onSendQuote?: (proposal: GerrieSendQuoteProposal) => Promise<void>;
+  onConvertQuote?: (proposal: GerrieConvertQuoteProposal) => Promise<void>;
+  onEditInvoice?: (proposal: GerrieEditInvoiceProposal) => void;
+  onEditQuote?: (proposal: GerrieEditQuoteProposal) => void;
+  onEditClient?: (proposal: GerrieEditClientProposal) => void;
+  onSendReminders?: (proposal: GerrieSendRemindersProposal) => Promise<void>;
+  onCreateProject?: (proposal: GerrieProjectProposal) => void;
+  onEditProject?: (proposal: GerrieEditProjectProposal) => void;
+  onCreateTask?: (proposal: GerrieTaskProposal) => void;
+  onEditTask?: (proposal: GerrieEditTaskProposal) => void;
+  onCreateCalendarEvent?: (proposal: GerrieCalendarEventProposal) => Promise<void>;
+  onCreateWeekAction?: (proposal: GerrieWeekActionProposal) => Promise<void>;
+  onLogTimeEntry?: (proposal: GerrieTimeEntryProposal) => Promise<void>;
+  onCreateReport?: (proposal: GerrieReportProposal) => void;
+}
+
 export interface GerrieResult {
   conversationId: UUID;
   messageId: UUID;
@@ -182,6 +209,8 @@ export interface GerrieRequest {
   organizationId: UUID;
   conversationId: UUID | null;
   message: string;
+  /** 'cheap' = zuinig model (Haiku) voor parallelle deel-agents; laat weg voor de gewone chat ('strong'). */
+  modelKind?: 'strong' | 'cheap';
   onStatus?: (status: GerrieStatus) => void;
   onDelta?: (text: string) => void;
   signal?: AbortSignal;
@@ -195,7 +224,7 @@ export async function streamGerrieReply(req: GerrieRequest): Promise<GerrieResul
   const res = await fetch(`${FUNCTIONS_BASE}/gerrie-agent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: ANON_KEY },
-    body: JSON.stringify({ organizationId: req.organizationId, conversationId: req.conversationId, message: req.message }),
+    body: JSON.stringify({ organizationId: req.organizationId, conversationId: req.conversationId, message: req.message, modelKind: req.modelKind }),
     signal: req.signal,
   });
 
@@ -271,6 +300,64 @@ export async function loadGerrieBudget(organizationId: UUID): Promise<number | n
     return typeof payload?.remainingFraction === 'number' ? payload.remainingFraction : null;
   } catch {
     return null;
+  }
+}
+
+// ── Commandocentrum (multi-agent) ────────────────────────────────────────────
+
+/** Eén deeltaak van een missie: draait als aparte (goedkope) deel-agent. */
+export interface GerrieMissionSubtask { title: string; role: string; instruction: string; kind: 'read' | 'write' }
+export interface GerrieMissionPlan {
+  subtasks: GerrieMissionSubtask[];
+  summary: string;
+  /** Geschatte missiekosten als fractie 0..1 van het maandtegoed (null = geen limiet). */
+  estimatePct: number | null;
+  budget: { remainingFraction: number | null };
+  conversationId: string;
+}
+
+async function postGerrie(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error('Je sessie is verlopen. Log opnieuw in.');
+  const res = await fetch(`${FUNCTIONS_BASE}/gerrie-agent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: ANON_KEY },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = 'Gerrie is even niet bereikbaar. Probeer het zo opnieuw.';
+    try { const payload = await res.json(); if (payload?.error) message = String(payload.error); } catch { /* geen JSON */ }
+    throw new Error(message);
+  }
+  return (await res.json()) as Record<string, unknown>;
+}
+
+/** Laat Gerrie (sterk model) een groot doel opsplitsen in parallelle deeltaken. */
+export async function planGerrieMission(organizationId: UUID, goal: string): Promise<GerrieMissionPlan> {
+  const payload = await postGerrie({ action: 'plan', organizationId, goal });
+  const subtasks = Array.isArray(payload?.subtasks) ? (payload.subtasks as GerrieMissionSubtask[]) : [];
+  const budget = payload?.budget as { remainingFraction: number | null } | undefined;
+  return {
+    subtasks,
+    summary: String(payload?.summary ?? ''),
+    estimatePct: typeof payload?.estimatePct === 'number' ? payload.estimatePct : null,
+    budget: { remainingFraction: budget && typeof budget.remainingFraction === 'number' ? budget.remainingFraction : null },
+    conversationId: String(payload?.conversationId ?? ''),
+  };
+}
+
+/** Kosteninschatting vooraf voor een (losse) missie — fractie van het maandtegoed. */
+export async function estimateGerrieMission(organizationId: UUID, subtaskCount: number, withPlanner: boolean): Promise<{ estimatePct: number | null; remainingFraction: number | null }> {
+  try {
+    const payload = await postGerrie({ action: 'estimate', organizationId, subtaskCount, withPlanner });
+    const budget = payload?.budget as { remainingFraction: number | null } | undefined;
+    return {
+      estimatePct: typeof payload?.estimatePct === 'number' ? payload.estimatePct : null,
+      remainingFraction: budget && typeof budget.remainingFraction === 'number' ? budget.remainingFraction : null,
+    };
+  } catch {
+    return { estimatePct: null, remainingFraction: null };
   }
 }
 

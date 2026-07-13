@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { streamGerrieReply, confirmGerrieAction, loadGerrieBudget, type GerrieStatus, type GerrieProposal, type GerrieInvoiceProposal, type GerrieQuoteProposal, type GerrieClientProposal, type GerrieSendInvoiceProposal, type GerrieSendQuoteProposal, type GerrieConvertQuoteProposal, type GerrieEditInvoiceProposal, type GerrieEditQuoteProposal, type GerrieEditClientProposal, type GerrieSendRemindersProposal, type GerrieProjectProposal, type GerrieEditProjectProposal, type GerrieTaskProposal, type GerrieEditTaskProposal, type GerrieCalendarEventProposal, type GerrieWeekActionProposal, type GerrieTimeEntryProposal, type GerrieReportProposal } from '../lib/gerrie-api';
+import { streamGerrieReply, confirmGerrieAction, loadGerrieBudget, type GerrieStatus, type GerrieActionHandlers, type GerrieProposal } from '../lib/gerrie-api';
 import { euro, formatMinutes } from '../lib/format';
 import { describeReportDefinition } from '../lib/reporting';
 import { supabase } from '../lib/supabase';
@@ -100,27 +100,7 @@ const SpeechRecognitionImpl: SpeechRecognitionCtor | undefined =
       ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionCtor }).webkitSpeechRecognition;
 const speechSupported = Boolean(SpeechRecognitionImpl);
 
-export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onCreateReport }: {
-  organizationId: UUID;
-  onCreateInvoiceDraft?: (proposal: GerrieInvoiceProposal) => void;
-  onCreateQuoteDraft?: (proposal: GerrieQuoteProposal) => void;
-  onCreateClientDraft?: (proposal: GerrieClientProposal) => void;
-  onSendInvoice?: (proposal: GerrieSendInvoiceProposal) => Promise<void>;
-  onSendQuote?: (proposal: GerrieSendQuoteProposal) => Promise<void>;
-  onConvertQuote?: (proposal: GerrieConvertQuoteProposal) => Promise<void>;
-  onEditInvoice?: (proposal: GerrieEditInvoiceProposal) => void;
-  onEditQuote?: (proposal: GerrieEditQuoteProposal) => void;
-  onEditClient?: (proposal: GerrieEditClientProposal) => void;
-  onSendReminders?: (proposal: GerrieSendRemindersProposal) => Promise<void>;
-  onCreateProject?: (proposal: GerrieProjectProposal) => void;
-  onEditProject?: (proposal: GerrieEditProjectProposal) => void;
-  onCreateTask?: (proposal: GerrieTaskProposal) => void;
-  onEditTask?: (proposal: GerrieEditTaskProposal) => void;
-  onCreateCalendarEvent?: (proposal: GerrieCalendarEventProposal) => Promise<void>;
-  onCreateWeekAction?: (proposal: GerrieWeekActionProposal) => Promise<void>;
-  onLogTimeEntry?: (proposal: GerrieTimeEntryProposal) => Promise<void>;
-  onCreateReport?: (proposal: GerrieReportProposal) => void;
-}) {
+export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onCreateReport }: { organizationId: UUID } & GerrieActionHandlers) {
   const [open, setOpen] = useState(false);
   const [firstName, setFirstName] = useState<string | null>(null);
   const firstNameRef = useRef<string | null>(null);
