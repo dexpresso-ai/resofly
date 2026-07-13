@@ -3271,10 +3271,15 @@ button.chat-member:hover{background:var(--bg3)}
   /* Ruimte onderaan zodat inhoud én sticky-balken nooit achter de onderbalk vallen. */
   .main{ padding-bottom:calc(var(--bottomnav-h) + env(safe-area-inset-bottom)); }
 
-  /* Zwevende knoppen boven de onderbalk tillen. */
-  .gerrie-root{ bottom:calc(var(--bottomnav-h) + 16px + env(safe-area-inset-bottom)); }
-  .team-chat-dock-root{ bottom:calc(var(--bottomnav-h) + 80px + env(safe-area-inset-bottom)); }
-  .tb-fab{ bottom:calc(var(--bottomnav-h) + 16px + env(safe-area-inset-bottom)); }
+  /* Zwevende knoppen als nette verticale stapel boven de onderbalk — nooit
+     overlappend, allemaal op hetzelfde horizontale midden (~41px vanaf rechts).
+     Onderin de altijd-aanwezige assistenten: Gerrie (58px) onderaan, teamchat
+     (54px) daar 14px boven. De agenda-"+" (46px) verschijnt alléén in dag/week-
+     weergave en staat daarom bóvenop; ontbreekt hij, dan blijft de stapel
+     zonder gat. Hoogtes: 16 → 16+58+14=88 → 88+54+14=156. */
+  .gerrie-root{ right:12px; bottom:calc(var(--bottomnav-h) + 16px + env(safe-area-inset-bottom)); }
+  .team-chat-dock-root{ right:14px; bottom:calc(var(--bottomnav-h) + 88px + env(safe-area-inset-bottom)); }
+  .tb-fab{ right:18px; bottom:calc(var(--bottomnav-h) + 156px + env(safe-area-inset-bottom)); }
 
   /* ---------- Minimale titels: verberg de dubbele pagina-hero's ----------
      De bovenbalk toont de paginanaam al; de eigen titel/eyebrow/subtitel van
