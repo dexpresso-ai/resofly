@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Sidebar } from './components/Sidebar';
 import { TabBar } from './components/TabBar';
+import { BottomNav } from './components/BottomNav';
 import { loadPersistedTabs, savePersistedTabs, viewTitle, PAGE_TITLES, type PersistedTab } from './lib/workspaceTabs';
 import type { SearchResult } from './components/GlobalSearch';
 import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
@@ -1374,6 +1375,9 @@ function App() {
     />
     {/* Zwevend teamchat-paneel — overal beschikbaar, behalve op de volledige chatpagina. */}
     <TeamChatDock api={teamChat} hidden={page === 'chat'} />
+    {/* Mobiele duim-onderbalk (alleen ≤760px, zie globals.css). Navigeert het
+        actieve tabblad naar een kerndestinatie; sluit onderweg het uitschuifmenu. */}
+    <BottomNav page={page} onNavigate={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
       <div className="send-overlay-card">
         <span className="send-spinner" aria-hidden="true" />
