@@ -3,7 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
-type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 422 | 500 | 502;
+type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -462,6 +462,14 @@ async function sendTeamInvitation(
     throw new MailHttpError('Deze uitnodiging heeft geen geldig e-mailadres.', 422);
   }
 
+  // Zelf-registratie staat op instance-niveau uit ("Signups not allowed"). De
+  // uitgenodigde heeft nog geen auth-account, dus een magische inloglink zou
+  // anders falen. Maak het account daarom hier server-side alvast aan (service
+  // role, idempotent) — net als portal-login voor klanten doet. Dit gebeurt vóór
+  // de Resend-verzending, zodat een mislukte mail het account niet in de weg zit:
+  // het teamlid kan dan alsnog zelf inloggen en de uitnodiging accepteren.
+  await ensureAuthUser(recipientEmail);
+
   const organization = await loadOrganization(organizationId);
   const company = await loadCompanySettings(organizationId);
   const organizationName =
@@ -501,6 +509,18 @@ async function sendTeamInvitation(
   }
 
   return { providerEmailId, recipientEmail };
+}
+
+/** Zorgt dat er een auth-account bestaat voor dit e-mailadres, zodat de magische
+ *  inloglink werkt terwijl zelf-registratie op instance-niveau uit staat.
+ *  Idempotent: een al bestaand account is het gewenste eindresultaat, geen fout.
+ *  email_confirm = true zodat de link direct werkt zonder aparte bevestigingsstap. */
+async function ensureAuthUser(email: string): Promise<void> {
+  const { error } = await supabaseAdmin.auth.admin.createUser({ email, email_confirm: true });
+  if (!error) return;
+  const message = (error.message || '').toLowerCase();
+  if (message.includes('already') || message.includes('registered') || message.includes('exists')) return;
+  throw error;
 }
 
 async function loadInvitation(

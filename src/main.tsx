@@ -1449,7 +1449,11 @@ function Login() {
   const [error, setError] = useState<string | null>(null);
   async function signIn() {
     setError(null);
-    const { error } = await supabaseAuth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
+    // Zelf-registratie staat op instance-niveau uit. Teamleden krijgen hun
+    // auth-account al bij de uitnodiging (mail-functie → ensureAuthUser), dus het
+    // loginscherm hoeft — en mag — nooit zelf een account aanmaken. shouldCreateUser:
+    // false voorkomt dat een onbekend adres alsnog op "Signups not allowed" stuit.
+    const { error } = await supabaseAuth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin, shouldCreateUser: false } });
     if (error) setError(error.message); else setSent(true);
   }
   return <main className="login"><div className="login-card"><div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div><p className="eyebrow login-eyebrow">Tickets • Projecten • Serviceflows</p><h1>Werkruimte</h1><p>Login met je e-mailadres om je CRM/project-app te gebruiken.</p><Input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="jij@bedrijf.nl"/><Button variant="primary" onClick={signIn} disabled={!email}>Stuur magic link</Button>{sent && <p className="success">Check je mailbox. Open de link in dezelfde browser als waar je deze pagina hebt geopend.</p>}{error && <p className="error">{error}</p>}</div></main>;
