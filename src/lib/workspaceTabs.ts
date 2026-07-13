@@ -4,7 +4,7 @@ import type { AppData } from '../types';
  *  in de tabbalk. `page` is bewust `string` zodat deze module geen `Page`-union hoeft
  *  te importeren (voorkomt een circulaire import met main.tsx). */
 export const PAGE_TITLES: Record<string, string> = {
-  dashboard: 'Dashboard', gerrie: 'Gerrie', weekplanner: 'Weekplanner', calendar: 'Kalender',
+  dashboard: 'Dashboard', gerrie: 'Gerrie', weekplanner: 'Weekplanner', calendar: 'Agenda',
   'calendar-settings': 'Agenda-instellingen', 'meeting-booking': 'Boekingslinks',
   time: 'Uren', stats: 'Statistieken', content: 'Inhoud', notes: 'Notities',
   documents: 'Documenten', clients: 'Klanten', client: 'Klant', projects: 'Projecten',

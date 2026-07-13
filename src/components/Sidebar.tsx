@@ -12,7 +12,7 @@ const items = [
   ['gerrie', Sparkles, 'Gerrie'],
   ['chat', MessageSquare, 'Chat'],
   ['weekplanner', Calendar, 'Weekplanner'],
-  ['calendar', Calendar, 'Kalender'],
+  ['calendar', Calendar, 'Agenda'],
   ['time', Clock, 'Uren'],
   ['stats', BarChart3, 'Statistieken'],
   ['content', Library, 'Inhoud'],

@@ -1718,22 +1718,11 @@ body::before{
 .color-picker:has(.color-swatch:disabled) .color-swatch{opacity:.6}
 @media(prefers-reduced-motion:reduce){.color-swatch{transition:none}.color-swatch:hover:not(:disabled){transform:none}}
 
-/* === Full-screen pages: Klanten full-width + Kalender fills viewport height === */
-/* Klanten: edge-to-edge like Notities/Projecten */
+/* === Full-screen pages: Klanten full-width === */
 .clients-page{max-width:none;margin:0;width:100%}
-
-/* Kalender: let the agenda card fill the full viewport height and the scroll
-   grid stretch to fill it, so there is no empty black space below the grid. */
-.calendar-agenda-page{flex:1;min-height:0}
-.calendar-agenda-page .calendar-main-card,
-.calendar-agenda-page .calendar-main-card-week,
-.calendar-agenda-page .calendar-main-card-day{min-height:calc(100vh - 118px);height:calc(100vh - 118px)}
-.calendar-agenda-page .tb-scroll{flex:1 1 auto;height:auto!important;min-height:0;max-height:none}
-@media(max-width:900px){
-  .calendar-agenda-page .calendar-main-card,
-  .calendar-agenda-page .calendar-main-card-week,
-  .calendar-agenda-page .calendar-main-card-day{min-height:calc(100vh - 96px);height:calc(100vh - 96px)}
-}
+/* Agenda: de volledige paginavulling + Google-Calendar-look staan in het blok
+   "AGENDA — Google Calendar-look" onderaan dit bestand (schone flex-keten
+   i.p.v. vaste 100vh-rekensommen; wint bewust de cascade). */
 
 /* ── Gerrie — drijvende AI-chatassistent (rechtsonder) ─────────────── */
 /* Het goud is afgeleid van --accent zodat Gerrie automatisch meekleurt met
@@ -3431,3 +3420,64 @@ button.chat-member:hover{background:var(--bg3)}
   .cc-lanes{ grid-template-columns:1fr; }
   .cc-rail{ position:static; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   AGENDA — Google Calendar-look + volledige paginavulling  (2026-07-13)
+   ───────────────────────────────────────────────────────────────────────
+   Bewust achteraan zodat deze regels de cascade winnen van alle eerdere
+   .tb-* / .calendar-* regels.
+
+   1) VOLLE PAGINA (dag/week) — een schone flex-keten i.p.v. vaste 100vh-
+      rekensommen. .content wordt een pad-loze flex-kolom zodra hij dag/week
+      toont; elke laag eronder groeit mee tot exact de contenthoogte. Het
+      rooster (.tb-scroll) is de enige interne scroller; de ResizeObserver in
+      TimeBlockGrid meet die hoogte en schaalt de werkdag zodat die het scherm
+      vult. Rand-tot-rand, net als Google. Maand/lijst blijven gewone
+      scrollpagina's (niet gematcht) — die hoeven niet vast te klikken.
+
+   2) RUSTIGE LOOK — weg met glas-blur, gloed en gouden gradients; vlakke
+      vlakken, dunne uurlijnen, egale event-blokken, duidelijke "vandaag".
+      Puur visueel: layout en gedrag (slepen, herschalen, boeken) ongewijzigd.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* 1 ── Volledige paginavulling (alleen dag + week) ──────────────────────── */
+.content:has(.calendar-main-card-day),
+.content:has(.calendar-main-card-week){padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+.calendar-agenda-page{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:0}
+.calendar-agenda-page>.error,.calendar-agenda-page>.success{margin:10px 14px 0}
+.calendar-agenda-page .calendar-main-card-day,
+.calendar-agenda-page .calendar-main-card-week{flex:1 1 auto;min-height:0;height:auto;max-height:none;border:0;border-radius:0;padding:0;overflow:hidden;display:flex;flex-direction:column}
+.calendar-agenda-page .tb-container{flex:1 1 auto;min-height:0;border:0;border-radius:0;margin:0;background:var(--bg)}
+.calendar-agenda-page .tb-scroll{flex:1 1 auto;min-height:0;height:auto;max-height:none;overflow:auto;background:var(--bg);scrollbar-gutter:stable}
+
+/* 2 ── Rustige, vlakke Google-look ──────────────────────────────────────── */
+/* Toolbar: geen zwevende kaart meer, maar een vlakke kop met alleen een onderlijn. */
+.calendar-agenda-page .calendar-toolbar-premium{background:var(--bg);border:0;border-bottom:1px solid var(--border);border-radius:0;box-shadow:none;margin:0;padding:12px 16px}
+.calendar-agenda-page .calendar-view-tabs{background:var(--bg2);box-shadow:none;border:1px solid var(--border2)}
+.calendar-agenda-page .calendar-view-tabs .tb-vbtn{border-left:0}
+.calendar-agenda-page .calendar-view-tabs .tb-vbtn.active{background:var(--accent);color:#1a1a1a;box-shadow:none}
+
+/* Dagkoppen + hele-dag-balk + tijdgoot: vlak (geen blur/gradient/gloed). */
+.calendar-agenda-page .tb-day-headers{background:var(--bg);-webkit-backdrop-filter:none;backdrop-filter:none;box-shadow:none;border-bottom:1px solid var(--border)}
+.calendar-agenda-page .tb-allday-row{background:var(--bg2);-webkit-backdrop-filter:none;backdrop-filter:none;box-shadow:none;border-bottom:1px solid var(--border)}
+.calendar-agenda-page .tb-sticky-gutter{background:var(--bg);box-shadow:none;border-right:1px solid var(--border)}
+.calendar-agenda-page .tb-dh{background:transparent}
+
+/* Kolommen vlak; alleen "vandaag" krijgt een subtiele gouden waas. */
+.calendar-agenda-page .tb-col{background:transparent}
+.calendar-agenda-page .tb-today-col{background:rgba(255,217,102,.05)}
+.calendar-agenda-page .tb-workday-window{display:none}
+
+/* Uurlijnen: dun en rustig; hele uren iets sterker (net als Google). */
+.calendar-agenda-page .tb-line{border-top:1px solid rgba(255,255,255,.05);border-bottom:0}
+.calendar-agenda-page .tb-line-hour{border-top:1px solid rgba(255,255,255,.12);border-bottom:0}
+.calendar-agenda-page .tb-cell-hour,.calendar-agenda-page .tb-cell-half{border-bottom-color:transparent}
+
+/* Event-blokken: egaal gevuld, zachte schaduw, kalme hover (geen zoom/gloed). */
+.calendar-agenda-page .tb-ev{border-radius:8px;border:1px solid var(--event-edge,rgba(0,0,0,.16));box-shadow:0 1px 2px rgba(0,0,0,.32)}
+.calendar-agenda-page .tb-ev:hover{filter:brightness(1.04);box-shadow:0 6px 16px rgba(0,0,0,.36);transform:none}
+
+/* "Vandaag": goud rondje in de dagkop + rustige rode "nu"-lijn. */
+.calendar-agenda-page .tb-today .tb-dh-num,.calendar-agenda-page .tb-today-num{background:var(--accent);color:#1a1a1a}
+.calendar-agenda-page .tb-now::after{box-shadow:none}
+.calendar-agenda-page .tb-now-label{box-shadow:none}
