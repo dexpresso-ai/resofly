@@ -107,6 +107,11 @@ export async function regenerateBookingToken(organizationId: UUID, linkId: UUID)
   return await invoke<TokenResult>(organizationId, { action: 'regenerateToken', linkId });
 }
 
+/** Verwijdert een volledige boekingslink; server weigert (409) als er al geboekt is. */
+export async function deleteBookingLink(organizationId: UUID, linkId: UUID): Promise<void> {
+  await invoke<Record<string, never>>(organizationId, { action: 'deleteLink', linkId });
+}
+
 export async function addBookingSlots(organizationId: UUID, linkId: UUID, slots: Array<{ startsAt: string; endsAt: string }>): Promise<AddSlotsResult> {
   return await invoke<AddSlotsResult>(organizationId, { action: 'addSlots', linkId, slots });
 }

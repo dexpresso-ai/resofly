@@ -8,6 +8,7 @@ import {
   addBookingSlots,
   cancelBooking,
   createBookingLink,
+  deleteBookingLink,
   getBookingLink,
   listBookingLinks,
   regenerateBookingToken,
@@ -199,6 +200,14 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
               await cancelBooking(organizationId, bookingId);
               await Promise.all([reloadDetail(detail.link.id), reloadLinks()]);
             }, 'Boeking geannuleerd; het blok staat weer open.')}
+            onDelete={() => run(async () => {
+              const removedId = detail.link.id;
+              await deleteBookingLink(organizationId, removedId);
+              setTokenByLink(prev => { const next = { ...prev }; delete next[removedId]; return next; });
+              setSelectedId(null);
+              setDetail(null);
+              await reloadLinks();
+            }, 'Boekingslink verwijderd.')}
           />
         )}
 
@@ -299,7 +308,7 @@ function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }:
   );
 }
 
-function LinkDetail({ detail, organizationId, sources, clients, clientEmail, token, busy, canWrite, onSavedPatch, onRegenerate, onSendMail, onAddSlots, onRemoveSlot, onCancelBooking }: {
+function LinkDetail({ detail, organizationId, sources, clients, clientEmail, token, busy, canWrite, onSavedPatch, onRegenerate, onSendMail, onAddSlots, onRemoveSlot, onCancelBooking, onDelete }: {
   detail: BookingLinkDetail;
   organizationId: UUID;
   sources: CalendarSource[];
@@ -314,6 +323,7 @@ function LinkDetail({ detail, organizationId, sources, clients, clientEmail, tok
   onAddSlots: (slots: Array<{ startsAt: string; endsAt: string }>) => void;
   onRemoveSlot: (slotId: UUID) => void;
   onCancelBooking: (bookingId: UUID) => void;
+  onDelete: () => void;
 }) {
   const link = detail.link;
   const [editing, setEditing] = useState(false);
@@ -323,6 +333,8 @@ function LinkDetail({ detail, organizationId, sources, clients, clientEmail, tok
   const slots = detail.slots as MeetingBookingSlot[];
   const bookings = detail.bookings as MeetingBooking[];
   const openCount = slots.filter(s => s.status === 'open').length;
+  // "Niet geboekt" = geen lopende of bevestigde boekingen; alleen dan mag de hele link weg.
+  const activeBookingCount = bookings.filter(b => b.status === 'pending' || b.status === 'confirmed').length;
 
   // ── Visueel week-rooster (hergebruik TimeBlockGrid) ──────────────────────────
   const [weekAnchor, setWeekAnchor] = useState<Date>(() => startOfWeek(new Date()));
@@ -390,11 +402,23 @@ function LinkDetail({ detail, organizationId, sources, clients, clientEmail, tok
             {detail.needs_reconnect && <div className="alert alert-danger" style={{ marginTop: 8 }}>De gekoppelde agenda-verbinding is niet meer actief. Koppel het account opnieuw voordat je boekingen laat plaatsvinden.</div>}
           </div>
           {canWrite && (
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <Button onClick={() => setEditing(true)} disabled={busy}>Instellingen</Button>
               <Button variant={link.status === 'active' ? 'ghost' : 'primary'} disabled={busy}
                 onClick={() => onSavedPatch({ status: link.status === 'active' ? 'closed' : 'active' })}>
                 {link.status === 'active' ? 'Sluiten' : 'Heropenen'}
+              </Button>
+              <Button
+                variant="danger"
+                disabled={busy || activeBookingCount > 0}
+                title={activeBookingCount > 0
+                  ? 'Er staan nog boekingen op deze link. Annuleer die eerst om de link te kunnen verwijderen.'
+                  : 'Deze boekingslink volledig verwijderen'}
+                onClick={() => {
+                  if (confirm(`Boekingslink "${link.title}" volledig verwijderen? De beschikbare blokken worden ook verwijderd. Dit kan niet ongedaan worden gemaakt.`)) onDelete();
+                }}
+              >
+                Verwijderen
               </Button>
             </div>
           )}

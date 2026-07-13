@@ -78,6 +78,7 @@ Deno.serve(async (req) => {
       case 'getLink': return json({ ok: true, ...(await getLink(organizationId, String(body.linkId || ''))) });
       case 'createLink': return json({ ok: true, ...(await createLink(organizationId, user.id, body)) });
       case 'updateLink': return json({ ok: true, link: await updateLink(organizationId, String(body.linkId || ''), body.patch || {}) });
+      case 'deleteLink': await deleteLink(organizationId, String(body.linkId || '')); return json({ ok: true });
       case 'regenerateToken': return json({ ok: true, ...(await regenerateToken(organizationId, String(body.linkId || ''), Number(body.ttlDays) || DEFAULT_TOKEN_TTL_DAYS)) });
       case 'addSlots': return json({ ok: true, ...(await addSlots(organizationId, user.id, String(body.linkId || ''), body.slots || [])) });
       case 'removeSlot': await removeSlot(organizationId, String(body.linkId || ''), String(body.slotId || '')); return json({ ok: true });
@@ -281,6 +282,29 @@ async function updateLink(organizationId: string, linkId: string, patchBody: Rec
   const { data, error } = await supabaseAdmin.from('meeting_booking_links').update(patch).eq('id', linkId).eq('organization_id', organizationId).select('*').single();
   if (error || !data) throw new HttpError('Boekingslink kon niet worden bijgewerkt.', 500);
   return data as LinkRow;
+}
+
+/**
+ * Verwijdert een volledige boekingslink — maar alleen als er nog geen boeking op
+ * staat (geen pending/confirmed boekingen), zodat er geen bevestigde afspraken in
+ * iemands agenda verweesd achterblijven. Reeds geannuleerde/mislukte boekingen en
+ * alle beschikbare blokken gaan via de foreign-key cascade automatisch mee.
+ */
+async function deleteLink(organizationId: string, linkId: string): Promise<void> {
+  await loadLink(organizationId, linkId); // valideert org + bestaan (404 als onbekend)
+  const { count, error: countError } = await supabaseAdmin
+    .from('meeting_bookings')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', organizationId)
+    .eq('booking_link_id', linkId)
+    .in('status', ['pending', 'confirmed']);
+  if (countError) throw new HttpError(countError.message, 500);
+  if ((count ?? 0) > 0) {
+    throw new HttpError('Deze boekingslink is al (deels) geboekt. Annuleer eerst de boeking(en) voordat je de link verwijdert.', 409);
+  }
+  const { error } = await supabaseAdmin.from('meeting_booking_links')
+    .delete().eq('id', linkId).eq('organization_id', organizationId);
+  if (error) throw new HttpError(error.message, 500);
 }
 
 async function regenerateToken(organizationId: string, linkId: string, ttlDays: number) {
