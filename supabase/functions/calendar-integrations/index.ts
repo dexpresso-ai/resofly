@@ -30,6 +30,7 @@ import {
   normalizeRrule,
 } from '../_shared/calendarCore.ts';
 import { listEvents, nativeRowToBaseEvent } from '../_shared/calendarAvailability.ts';
+import { syncIcsSource, syncDueIcsSubscriptions, assertSafeFeedUrl } from '../_shared/icsSubscription.ts';
 import {
   createEvent,
   getEventAttendees,
@@ -72,9 +73,25 @@ const OAUTH_STATE_TTL_SECONDS = 10 * 60;
 const OAUTH_STATE_MAX_LENGTH = 4096;
 const OAUTH_STATE_CLOCK_SKEW_SECONDS = 60;
 
+// Cron-secret voor het periodiek verversen van ICS-abonnementen (x-cron-secret).
+const ICS_CRON_SECRET = Deno.env.get('CALENDAR_ICS_CRON_SECRET') || '';
+// Bronnen die langer dan dit niet ververst zijn, pakt de cron op (net onder een uur).
+const ICS_REFRESH_AGE_MINUTES = 55;
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return json({ ok: true });
   try {
+    // Cron-endpoint: ververs vervallen ICS-abonnementen. Geen gebruiker-JWT, maar
+    // een gedeeld secret (net als de campaigns-/herinnering-cron). Vóór requireUser.
+    const cron = new URL(req.url).searchParams.get('cron');
+    if (cron) {
+      if (cron !== 'ics') return json({ ok: false, error: `Onbekende cron: ${cron}` }, 400);
+      if (!ICS_CRON_SECRET || !timingSafeEqual(req.headers.get('x-cron-secret') || '', ICS_CRON_SECRET)) {
+        return json({ ok: false, error: 'Ongeldig of ontbrekend cron-secret.' }, 401);
+      }
+      return json({ ok: true, ...(await syncDueIcsSubscriptions(ICS_REFRESH_AGE_MINUTES)) });
+    }
+
     if (req.method === 'GET') return await handleOAuthCallback(req);
     if (req.method !== 'POST') return json({ ok: false, error: 'Method not allowed' }, 405);
 
@@ -99,6 +116,10 @@ serve(async (req) => {
       case 'createNativeCalendar': requireWrite(); return json({ ok: true, source: await createNativeCalendar(organizationId, user.id, body) });
       case 'updateNativeCalendar': requireWrite(); return json({ ok: true, source: await updateNativeCalendar(organizationId, user.id, body) });
       case 'deleteNativeCalendar': requireWrite(); await deleteNativeCalendar(organizationId, user.id, String(body.sourceId || '')); return json({ ok: true });
+      case 'createIcsSubscription': requireWrite(); return json({ ok: true, ...(await createIcsSubscription(organizationId, user.id, body)) });
+      case 'refreshIcsSubscription': requireWrite(); return json({ ok: true, ...(await refreshIcsSubscriptionAction(organizationId, user.id, String(body.sourceId || ''))) });
+      case 'updateIcsSubscription': requireWrite(); return json({ ok: true, source: await updateIcsSubscription(organizationId, user.id, body) });
+      case 'deleteIcsSubscription': requireWrite(); await deleteIcsSubscription(organizationId, user.id, String(body.sourceId || '')); return json({ ok: true });
       case 'createAppPassword': return json({ ok: true, ...(await createAppPassword(organizationId, user.id, body)) });
       case 'listAppPasswords': return json({ ok: true, appPasswords: await listAppPasswords(organizationId, user.id) });
       case 'revokeAppPassword': await revokeAppPassword(organizationId, user.id, String(body.appPasswordId || '')); return json({ ok: true });
@@ -333,7 +354,13 @@ async function listIntegrations(organizationId: string, requesterUserId: string)
   if (cError) throw cError;
   if (sError) throw sError;
 
-  const visibleSources = ((sources ?? []) as CalendarSourceRow[]).filter(source => source.user_id === requesterUserId || source.visibility === 'organization');
+  const visibleSources = ((sources ?? []) as CalendarSourceRow[])
+    .filter(source => source.user_id === requesterUserId || source.visibility === 'organization')
+    // De feed-URL van een ICS-abonnement is vaak een geheim token (bv. Google's
+    // "geheime iCal-adres"). Deel die niet met andere leden van een gedeelde agenda.
+    .map(source => source.provider === 'ics' && source.user_id !== requesterUserId
+      ? { ...source, feed_url: null }
+      : source);
   const visibleConnectionIds = new Set(visibleSources.map(source => source.connection_id));
   const visibleConnections = ((connections ?? []) as ConnectionRow[])
     .filter(connection => connection.user_id === requesterUserId || visibleConnectionIds.has(connection.id))
@@ -656,6 +683,91 @@ async function getOwnedNativeSource(organizationId: string, requesterUserId: str
   if (error || !data) throw new Error('ResoFly-agenda niet gevonden.');
   const source = data as CalendarSourceRow;
   if (source.user_id !== requesterUserId) throw new Error('Alleen de eigenaar kan deze agenda aanpassen.');
+  return source;
+}
+
+// ── Agenda's via link (iCal/ICS-abonnementen) ──────────────────────────────
+const ICS_DEFAULT_COLOR = '#0891b2';
+
+/** Voegt een read-only ICS-abonnement toe en haalt de feed meteen één keer op. */
+async function createIcsSubscription(organizationId: string, userId: string, body: Record<string, unknown>): Promise<{ source: CalendarSourceRow; count: number; warning?: string }> {
+  const feedUrl = await assertSafeFeedUrl(String(body.url ?? body.feedUrl ?? ''));
+  const name = (String(body.name || '').trim() || 'Externe agenda').slice(0, 120);
+  const color = body.color ? String(body.color) : ICS_DEFAULT_COLOR;
+  const visibility: CalendarVisibility = body.visibility === 'organization' ? 'organization' : 'private';
+  const { data, error } = await supabaseAdmin.from('calendar_sources').insert({
+    organization_id: organizationId,
+    user_id: userId,
+    connection_id: null,
+    provider: 'ics',
+    provider_calendar_id: crypto.randomUUID(),
+    name,
+    color,
+    timezone: null,
+    is_primary: false,
+    access_role: 'reader',
+    sync_enabled: true,
+    write_enabled: false,
+    visibility,
+    feed_url: feedUrl,
+  }).select('*').single();
+  if (error) throw error;
+  const source = data as CalendarSourceRow;
+  // Meteen ophalen zodat de agenda direct gevuld is. Mislukt dat (onbereikbare
+  // link, geen geldige iCal), dan blijft de bron staan mét foutmelding zodat de
+  // gebruiker de link kan corrigeren of later 'Ververs nu' kan proberen.
+  try {
+    const result = await syncIcsSource(source, { force: true });
+    return { source, count: result.count };
+  } catch (err) {
+    return { source, count: 0, warning: err instanceof Error ? err.message : 'De agenda kon nog niet worden opgehaald.' };
+  }
+}
+
+/** Ververst één ICS-abonnement direct ("Ververs nu"). */
+async function refreshIcsSubscriptionAction(organizationId: string, userId: string, sourceId: string): Promise<{ source: CalendarSourceRow; count: number }> {
+  const source = await getOwnedIcsSource(organizationId, userId, sourceId);
+  const result = await syncIcsSource(source, { force: true });
+  const { data } = await supabaseAdmin.from('calendar_sources').select('*').eq('id', source.id).single();
+  return { source: (data as CalendarSourceRow) ?? source, count: result.count };
+}
+
+/** Wijzigt naam/kleur/zichtbaarheid/sync of de feed-URL van een ICS-abonnement. */
+async function updateIcsSubscription(organizationId: string, userId: string, body: Record<string, unknown>): Promise<CalendarSourceRow> {
+  const source = await getOwnedIcsSource(organizationId, userId, String(body.sourceId || ''));
+  const patch: Record<string, unknown> = {};
+  if (typeof body.name === 'string' && body.name.trim()) patch.name = body.name.trim().slice(0, 120);
+  if (body.color !== undefined) patch.color = body.color ? String(body.color) : null;
+  if (body.visibility === 'private' || body.visibility === 'organization') patch.visibility = body.visibility;
+  if (typeof body.sync_enabled === 'boolean') patch.sync_enabled = body.sync_enabled;
+  let urlChanged = false;
+  if (typeof body.url === 'string' && body.url.trim()) {
+    patch.feed_url = await assertSafeFeedUrl(body.url);
+    patch.feed_etag = null;
+    patch.feed_content_hash = null; // forceer verse ophaal bij een nieuwe URL
+    urlChanged = true;
+  }
+  if (Object.keys(patch).length === 0) throw new Error('Geen geldige wijziging aangeleverd.');
+  const { data, error } = await supabaseAdmin.from('calendar_sources').update(patch).eq('id', source.id).eq('provider', 'ics').select('*').single();
+  if (error || !data) throw new Error('Agenda-abonnement kon niet worden bijgewerkt.');
+  const updated = data as CalendarSourceRow;
+  if (urlChanged) { try { await syncIcsSource(updated, { force: true }); } catch { /* fout staat al op de bron */ } }
+  return updated;
+}
+
+/** Verwijdert een ICS-abonnement (calendar_events cascaden mee via FK). */
+async function deleteIcsSubscription(organizationId: string, userId: string, sourceId: string): Promise<void> {
+  const source = await getOwnedIcsSource(organizationId, userId, sourceId);
+  const { error } = await supabaseAdmin.from('calendar_sources').delete().eq('id', source.id).eq('provider', 'ics');
+  if (error) throw error;
+}
+
+async function getOwnedIcsSource(organizationId: string, requesterUserId: string, sourceId: string): Promise<CalendarSourceRow> {
+  if (!UUID_RE.test(sourceId)) throw new Error('Ongeldige agenda.');
+  const { data, error } = await supabaseAdmin.from('calendar_sources').select('*').eq('organization_id', organizationId).eq('id', sourceId).eq('provider', 'ics').single();
+  if (error || !data) throw new Error('Agenda-abonnement niet gevonden.');
+  const source = data as CalendarSourceRow;
+  if (source.user_id !== requesterUserId) throw new Error('Alleen de eigenaar kan dit agenda-abonnement aanpassen.');
   return source;
 }
 

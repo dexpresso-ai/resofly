@@ -1469,7 +1469,7 @@ export interface SavedReport extends OrgScopedRow {
 
 export interface AppData { clients: Client[]; clientContacts: ClientContact[]; projects: Project[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; savedReports: SavedReport[]; companySettings: CompanySettings | null; }
 
-export type CalendarProvider = 'google' | 'microsoft' | 'native';
+export type CalendarProvider = 'google' | 'microsoft' | 'native' | 'ics';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';
 export type CalendarVisibility = 'private' | 'organization';
 
@@ -1548,6 +1548,10 @@ export interface CalendarSource {
   sync_enabled: boolean;
   write_enabled: boolean;
   visibility: CalendarVisibility;
+  /** Alleen voor provider='ics' (agenda via iCal/ICS-link): de feed + sync-status. */
+  feed_url?: string | null;
+  feed_last_synced_at?: string | null;
+  feed_last_error?: string | null;
   created_at: string;
   updated_at: string;
 }

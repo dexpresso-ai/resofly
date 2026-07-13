@@ -15,7 +15,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 
-export type Provider = 'google' | 'microsoft' | 'native';
+export type Provider = 'google' | 'microsoft' | 'native' | 'ics';
 export type CalendarVisibility = 'private' | 'organization';
 export type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 
@@ -35,6 +35,12 @@ export type CalendarSourceRow = {
   sync_enabled: boolean;
   write_enabled: boolean;
   visibility: CalendarVisibility;
+  // Alleen gevuld voor provider='ics' (agenda via iCal/ICS-link).
+  feed_url: string | null;
+  feed_etag: string | null;
+  feed_content_hash: string | null;
+  feed_last_synced_at: string | null;
+  feed_last_error: string | null;
   created_at: string;
   updated_at: string;
 };

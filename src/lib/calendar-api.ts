@@ -176,6 +176,35 @@ export async function deleteNativeCalendar(organizationId: UUID, sourceId: UUID)
   await invokeCalendar<Record<string, never>>(organizationId, { action: 'deleteNativeCalendar', sourceId });
 }
 
+// ── Agenda's via link (iCal/ICS-abonnementen) ──────────────────────────────
+export interface IcsSubscriptionInput {
+  url: string;
+  name: string;
+  color?: string | null;
+  visibility?: CalendarVisibility;
+}
+
+/** Voegt een read-only agenda toe via een iCal/ICS-link; haalt de feed meteen op. */
+export async function createIcsSubscription(organizationId: UUID, input: IcsSubscriptionInput): Promise<{ source: CalendarSource; count: number; warning?: string }> {
+  const data = await invokeCalendar<{ source: CalendarSource; count: number; warning?: string }>(organizationId, { action: 'createIcsSubscription', ...input });
+  return { source: data.source, count: data.count ?? 0, warning: data.warning };
+}
+
+/** Ververst één ICS-abonnement direct ("Ververs nu"). */
+export async function refreshIcsSubscription(organizationId: UUID, sourceId: UUID): Promise<{ source: CalendarSource; count: number }> {
+  const data = await invokeCalendar<{ source: CalendarSource; count: number }>(organizationId, { action: 'refreshIcsSubscription', sourceId });
+  return { source: data.source, count: data.count ?? 0 };
+}
+
+export async function updateIcsSubscription(organizationId: UUID, sourceId: UUID, patch: Partial<IcsSubscriptionInput> & { sync_enabled?: boolean }): Promise<CalendarSource> {
+  const data = await invokeCalendar<{ source: CalendarSource }>(organizationId, { action: 'updateIcsSubscription', sourceId, ...patch });
+  return data.source;
+}
+
+export async function deleteIcsSubscription(organizationId: UUID, sourceId: UUID): Promise<void> {
+  await invokeCalendar<Record<string, never>>(organizationId, { action: 'deleteIcsSubscription', sourceId });
+}
+
 /** Genereert een nieuw app-wachtwoord; `secret` wordt eenmalig teruggegeven. */
 export async function createCalendarAppPassword(organizationId: UUID, label: string): Promise<{ appPassword: CalendarAppPassword; secret: string }> {
   const data = await invokeCalendar<{ appPassword: CalendarAppPassword; secret: string }>(organizationId, { action: 'createAppPassword', label });

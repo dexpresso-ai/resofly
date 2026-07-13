@@ -61,7 +61,9 @@ export async function listEvents(organizationId: string, requesterUserId: string
   // Alle bronnen parallel ophalen; een fout op één bron laat de overige agenda's intact.
   const perSource = await Promise.all(visibleSources.map(async (source) => {
     try {
-      if (source.provider === 'native') {
+      // Lokale bronnen (eigen ResoFly-agenda én ICS-abonnementen) staan als rijen
+      // in calendar_events; ICS-items zijn read-only (door de sync-worker gevuld).
+      if (source.provider === 'native' || source.provider === 'ics') {
         const nativeEvents = await fetchNativeEvents(organizationId, source, startIso, endIso);
         return nativeEvents.map((event: Record<string, unknown>) => maskPrivateEventForRequester(event, source, requesterUserId));
       }
@@ -199,11 +201,13 @@ export async function fetchNativeEvents(organizationId: string, source: Calendar
 export function nativeRowToBaseEvent(row: NativeEventRow, source: CalendarSourceRow): Record<string, unknown> {
   return {
     id: `${source.id}:${row.uid}`,
-    provider: 'native' as Provider,
+    // 'native' (bewerkbaar) of 'ics' (read-only abonnement).
+    provider: source.provider as Provider,
     source_id: source.id,
     source_name: source.name,
     provider_event_id: row.uid,
-    native_event_id: row.id,
+    // Alleen native items zijn in-app bewerkbaar; ICS-items niet.
+    native_event_id: source.provider === 'native' ? row.id : null,
     title: row.title || '(Geen titel)',
     description: row.description ?? null,
     location: row.location ?? null,

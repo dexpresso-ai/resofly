@@ -10,10 +10,13 @@ import { detectMeetingKind, isValidMeetingUrl } from '../lib/meeting';
 import {
   createCalendarAppPassword,
   createExternalCalendarEvent,
+  createIcsSubscription,
   createNativeCalendar,
   deleteCalendarEvent,
+  deleteIcsSubscription,
   deleteNativeCalendar,
   disconnectCalendarConnection,
+  refreshIcsSubscription,
   getCalendarEventAttendees,
   getCalendarOAuthUrl,
   getCachedCalendarEvents,
@@ -249,8 +252,8 @@ function calendarDaysForView(view: CalendarView, anchor: Date): Date[] {
   return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 }
 
-function providerLabel(p: CalendarProvider): string { return p === 'google' ? 'Google' : 'Microsoft'; }
-function providerClass(p: CalendarProvider): string { return p === 'google' ? 'provider-google' : 'provider-microsoft'; }
+function providerLabel(p: CalendarProvider): string { return p === 'google' ? 'Google' : p === 'microsoft' ? 'Microsoft' : p === 'ics' ? 'Via link' : 'ResoFly'; }
+function providerClass(p: CalendarProvider): string { return p === 'google' ? 'provider-google' : p === 'microsoft' ? 'provider-microsoft' : p === 'ics' ? 'provider-ics' : 'provider-native'; }
 function visibilityLabel(v: CalendarVisibility): string { return v === 'organization' ? 'Gedeeld met organisatie' : 'Privé'; }
 
 function normalizeHexColor(color?: string | null): string {
@@ -1909,6 +1912,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   // we bij een gewijzigde starttijd de oude koppeling (en afgeleide urenpost) kunnen opruimen.
   const [editingOriginal, setEditingOriginal] = useState<CalendarExternalEvent | null>(null);
   const [newCalendarName, setNewCalendarName] = useState('');
+  const [newIcsUrl, setNewIcsUrl] = useState('');
+  const [newIcsName, setNewIcsName] = useState('');
   // Boekingstool: "beschikbaarheid voor klant"-modus in de agenda. Je zet de modus
   // aan, tekent opties (concept-blokken) op het rooster en kiest PAS bij "Doorsturen"
   // de klant/agenda. De opties van al je actieve boekingslinks blijven als aparte
@@ -2324,6 +2329,48 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     finally { setLoading(false); }
   }
 
+  // ── Agenda's via link (iCal/ICS-abonnementen) ─────────────────────────────
+  async function addIcsSubscription(e: FormEvent) {
+    e.preventDefault();
+    if (!canWrite) { setError('Je hebt alleen-lezen toegang.'); return; }
+    const url = newIcsUrl.trim();
+    if (!url) { setError('Plak de agenda-link (iCal/ICS-URL).'); return; }
+    setLoading(true); setError(null); setMessage(null);
+    try {
+      const { count, warning } = await createIcsSubscription(organizationId, { url, name: newIcsName.trim() || 'Externe agenda' });
+      setNewIcsUrl(''); setNewIcsName('');
+      setIntegrations(await loadCalendarIntegrations(organizationId));
+      if (mode === 'agenda') await refreshEventsOnly({ fresh: true });
+      setMessage(warning
+        ? `Agenda toegevoegd, maar ophalen lukte nog niet: ${warning}`
+        : `Agenda toegevoegd — ${count} afspra${count === 1 ? 'ak' : 'ken'} opgehaald.`);
+    } catch (err) { setError(err instanceof Error ? err.message : 'Agenda-link toevoegen mislukt.'); }
+    finally { setLoading(false); }
+  }
+
+  async function refreshIcs(source: CalendarSource) {
+    setLoading(true); setError(null); setMessage(null);
+    try {
+      const { count } = await refreshIcsSubscription(organizationId, source.id);
+      setIntegrations(await loadCalendarIntegrations(organizationId));
+      if (mode === 'agenda') await refreshEventsOnly({ fresh: true });
+      setMessage(`Ververst — ${count} afspra${count === 1 ? 'ak' : 'ken'}.`);
+    } catch (err) { setError(err instanceof Error ? err.message : 'Verversen mislukt.'); }
+    finally { setLoading(false); }
+  }
+
+  async function removeIcs(source: CalendarSource) {
+    if (!confirm(`Agenda "${source.name}" verwijderen? De afspraken verdwijnen uit ResoFly; de originele agenda blijft ongemoeid.`)) return;
+    setLoading(true); setError(null); setMessage(null);
+    try {
+      await deleteIcsSubscription(organizationId, source.id);
+      setIntegrations(await loadCalendarIntegrations(organizationId));
+      if (mode === 'agenda') await refreshEventsOnly({ fresh: true });
+      setMessage('Agenda verwijderd.');
+    } catch (err) { setError(err instanceof Error ? err.message : 'Verwijderen mislukt.'); }
+    finally { setLoading(false); }
+  }
+
   function tasksForDay(day: Date) { return data.tasks.filter(t => t.status !== 'done' && t.end_date && isSameDay(new Date(`${t.end_date}T12:00:00`), day)); }
   function eventsForDay(day: Date) { return events.filter(ev => eventOverlapsDay(ev, day)).sort((a, b) => a.starts_at.localeCompare(b.starts_at)); }
 
@@ -2481,6 +2528,54 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     </section>
   );
 
+  const icsSources = integrations.sources.filter(s => s.provider === 'ics');
+  const icsSourcesSection = (
+    <section className="calendar-section connections-panel" id="calendar-ics">
+      <div className="calendar-section-head">
+        <div>
+          <h3>Agenda's via link</h3>
+          <p>Abonneer je read-only op een externe agenda met een iCal/ICS-link — bijvoorbeeld de "geheime" iCal-link uit Google Calendar (Instellingen → geheime adres in iCal-formaat) of een gepubliceerde .ics uit Outlook. De afspraken lopen automatisch mee en worden periodiek ververst.</p>
+        </div>
+      </div>
+      {canWrite && (
+        <form className="native-calendar-create" onSubmit={addIcsSubscription} style={{ display: 'flex', gap: 8, margin: '8px 0 12px', flexWrap: 'wrap' }}>
+          <Input value={newIcsUrl} onChange={e => setNewIcsUrl(e.target.value)} placeholder="https://…/basic.ics of webcal://…" style={{ flex: '2 1 260px' }} />
+          <Input value={newIcsName} onChange={e => setNewIcsName(e.target.value)} placeholder="Naam (optioneel)" style={{ flex: '1 1 140px' }} />
+          <Button variant="primary" disabled={loading || !newIcsUrl.trim()}><ExternalLink size={14} /> Link toevoegen</Button>
+        </form>
+      )}
+      {icsSources.length === 0 ? (
+        <div className="calendar-empty">Nog geen agenda via link. Plak een iCal/ICS-URL om een externe agenda mee te laten lopen.</div>
+      ) : (
+        <div className="source-list">
+          {icsSources.map(src => {
+            const owns = canManageSource(src);
+            return (
+              <div className="source-row privacy" key={src.id}>
+                <span className="source-dot" style={{ background: src.color || '#0891b2' }} />
+                <div className="source-info">
+                  <strong>{src.name} <span className="privacy-pill">alleen-lezen</span></strong>
+                  <span>{src.feed_last_error
+                    ? <span className="calendar-help">Laatste ophaal mislukte: {src.feed_last_error}</span>
+                    : src.feed_last_synced_at ? `Laatst ververst: ${new Date(src.feed_last_synced_at).toLocaleString('nl-NL')}` : 'Nog niet ververst'}</span>
+                  <span>{src.visibility === 'organization' ? 'Gedeeld met de organisatie' : 'Privé'}{owns ? '' : ' · van een teamlid'}</span>
+                </div>
+                {owns && (
+                  <>
+                    <label className="toggle-row"><input type="checkbox" checked={src.sync_enabled} onChange={() => toggleSource(src, 'sync_enabled')} /> Tonen</label>
+                    <label className="toggle-row"><input type="checkbox" checked={src.visibility === 'organization'} onChange={() => toggleSource(src, 'visibility')} /> Delen met team</label>
+                    <Button onClick={() => refreshIcs(src)} disabled={loading}><RefreshCcw size={13} /> Ververs nu</Button>
+                    <Button variant="danger" onClick={() => removeIcs(src)} disabled={loading}><Trash2 size={13} /> Verwijder</Button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+
   if (mode === 'settings') {
     return <div className="calendar-page calendar-settings-page">
       <section className="calendar-hero calendar-settings-hero" id="calendar-settings">
@@ -2518,6 +2613,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       </section>
 
       {nativeCalendarsSection}
+      {icsSourcesSection}
       <PhoneCalendarCard organizationId={organizationId} />
       {connectionsSection}
     </div>;
