@@ -236,8 +236,7 @@ export function GerrieCommandCenter({ organizationId, canWrite, ...handlers }: {
             <section className="cc-plan">
               <div className="cc-plan-head">
                 <span className="cc-plan-eyebrow">Plan · {pendingPlan.subtasks.length} deel-agent{pendingPlan.subtasks.length === 1 ? '' : 's'}</span>
-                <span className="cc-chip-model gold">Planner · sterk model</span>
-                <span className="cc-chip-model">Deel-agents · Haiku (zuinig)</span>
+                <span className="cc-chip-model gold">Zuinig ingesteld</span>
               </div>
               <p className="cc-plan-summary">{pendingPlan.summary}</p>
               <ul className="cc-plan-list">
@@ -310,7 +309,7 @@ export function GerrieCommandCenter({ organizationId, canWrite, ...handlers }: {
                 <div className="cc-track"><span className="cc-track-fill" data-low={budget <= 0.2 ? 'true' : 'false'} style={{ width: `${Math.round(budget * 100)}%` }} /></div>
               </div>
             ) : <p className="cc-rail-empty">Geen maandlimiet ingesteld.</p>}
-            <p className="cc-note"><b>Zuinig:</b> deel-agents draaien op Haiku, plannen op het sterke model. Max 4 agents per missie.</p>
+            <p className="cc-note"><b>Zuinig ingesteld:</b> maximaal 4 agents tegelijk per missie, elk geoptimaliseerd voor snelheid.</p>
           </div>
 
           {(busy || lanes.some((l) => l.status !== 'running')) && (
@@ -331,7 +330,6 @@ function LaneCard({ lane, onStop }: { lane: Lane; onStop: () => void }) {
     <article className={`cc-lane${lane.status === 'waiting' ? ' attn' : ''}`}>
       <div className="cc-lane-top">
         <span className="cc-lane-name">{lane.role}</span>
-        {lane.kind !== 'read' && <span className="cc-lane-model">Haiku</span>}
         <span className="cc-lane-push" />
         <span className={`cc-pill ${pill.cls}`}><span className="cc-dot" />{pill.label}</span>
         {lane.status === 'running' && <button className="cc-lane-stop" title="Stop deze agent" onClick={onStop}><X size={13} /></button>}

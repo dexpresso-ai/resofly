@@ -56,10 +56,12 @@ const PRICE_CHEAP_CACHE_WRITE = 1.25;
 // Model-register: 'strong' = huidig Sonnet (plannen/samenvatten + gewone chat),
 // 'cheap' = Haiku (deel-agents). Prijzen zitten erbij zodat de kostenlog per model klopt.
 type ModelKind = 'strong' | 'cheap';
-interface ModelSpec { id: string; input: number; output: number; cacheRead: number; cacheWrite: number }
+// `thinking`: of het model adaptive thinking + de effort-parameter ondersteunt. Sonnet 4.6 wel;
+// Haiku 4.5 NIET (die geeft anders "adaptive thinking is not supported on this model", 400).
+interface ModelSpec { id: string; input: number; output: number; cacheRead: number; cacheWrite: number; thinking: boolean }
 const MODELS: Record<ModelKind, ModelSpec> = {
-  strong: { id: ANTHROPIC_MODEL, input: PRICE_INPUT, output: PRICE_OUTPUT, cacheRead: PRICE_CACHE_READ, cacheWrite: PRICE_CACHE_WRITE },
-  cheap: { id: ANTHROPIC_CHEAP_MODEL, input: PRICE_CHEAP_INPUT, output: PRICE_CHEAP_OUTPUT, cacheRead: PRICE_CHEAP_CACHE_READ, cacheWrite: PRICE_CHEAP_CACHE_WRITE },
+  strong: { id: ANTHROPIC_MODEL, input: PRICE_INPUT, output: PRICE_OUTPUT, cacheRead: PRICE_CACHE_READ, cacheWrite: PRICE_CACHE_WRITE, thinking: true },
+  cheap: { id: ANTHROPIC_CHEAP_MODEL, input: PRICE_CHEAP_INPUT, output: PRICE_CHEAP_OUTPUT, cacheRead: PRICE_CHEAP_CACHE_READ, cacheWrite: PRICE_CHEAP_CACHE_WRITE, thinking: false },
 };
 function resolveModelKind(raw: unknown): ModelKind { return String(raw || '') === 'cheap' ? 'cheap' : 'strong'; }
 
@@ -255,7 +257,6 @@ interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: u
 
 async function runAgent(ctx: GerrieContext, history: Array<{ role: string; content: string }>, message: string, emit: Emit, modelKind: ModelKind = 'strong'): Promise<AgentOutcome> {
   const system = buildSystemPrompt(ctx);
-  const modelId = MODELS[modelKind].id;
   // Anthropic-berichten: eerdere beurten als platte tekst, daarna het nieuwe bericht.
   const messages: AnthropicMessage[] = [
     ...history.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
@@ -268,7 +269,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i += 1) {
     await emit('status', { kind: 'thinking', label: 'Gerrie denkt na…' });
-    const response = await callAnthropicStream(system, messages, emit, false, modelId);
+    const response = await callAnthropicStream(system, messages, emit, false, modelKind);
     accumulateUsage(usage, response.usage);
     const chunkText = extractText(response.content);
     if (chunkText) answerChunks.push(chunkText);
@@ -336,7 +337,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
 
   // Loop-plafond bereikt: vraag nog één samenvattend antwoord zonder verdere tools.
   await emit('status', { kind: 'thinking', label: 'Gerrie rondt af…' });
-  const final = await callAnthropicStream(system, messages, emit, true, modelId);
+  const final = await callAnthropicStream(system, messages, emit, true, modelKind);
   accumulateUsage(usage, final.usage);
   const finalText = extractText(final.content);
   if (finalText) answerChunks.push(finalText);
@@ -349,18 +350,22 @@ interface AnthropicBlock { type: string; [key: string]: unknown }
 interface AnthropicMessage { role: 'user' | 'assistant'; content: string | AnthropicBlock[] }
 interface AnthropicResponse { content: AnthropicBlock[]; stop_reason: string; usage: Record<string, number> }
 
-async function callAnthropicStream(system: string, messages: AnthropicMessage[], emit: Emit, noTools = false, modelId: string = ANTHROPIC_MODEL): Promise<AnthropicResponse> {
+async function callAnthropicStream(system: string, messages: AnthropicMessage[], emit: Emit, noTools = false, modelKind: ModelKind = 'strong'): Promise<AnthropicResponse> {
+  const spec = MODELS[modelKind];
   const requestBody: Record<string, unknown> = {
-    model: modelId,
+    model: spec.id,
     max_tokens: MAX_OUTPUT_TOKENS,
-    // Adaptive thinking: Claude bepaalt zelf hoe diep het nadenkt (aanrader voor agentisch werk).
-    thinking: { type: 'adaptive' },
-    output_config: { effort: 'medium' },
     stream: true,
     // Prompt-caching: tools + systeemprompt zijn stabiel -> cache ze samen (~90% goedkoper input).
     system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
     messages,
   };
+  // Adaptive thinking + effort alleen op modellen die het ondersteunen (het sterke model).
+  // Zuinige deel-agents (Haiku) draaien zonder — die kennen deze parameters niet.
+  if (spec.thinking) {
+    requestBody.thinking = { type: 'adaptive' };
+    requestBody.output_config = { effort: 'medium' };
+  }
   if (!noTools) requestBody.tools = TOOL_DEFINITIONS;
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
