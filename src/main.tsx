@@ -238,6 +238,69 @@ function BootLoading({ message = 'ResoFly is aan het laden…' }: { message?: st
   return <div className="boot"><div className="boot-loading"><span className="boot-spinner" aria-hidden="true" /><span>{message}</span></div></div>;
 }
 
+const ORG_ROLE_LABELS: Record<OrganizationRole, string> = {
+  owner: 'Owner',
+  admin: 'Admin',
+  member: 'Member',
+  viewer: 'Viewer',
+};
+
+/** Getoond wanneer de ingelogde gebruiker (nog) geen actieve organisatie heeft.
+ *  Cruciaal voor een teamlid dat voor het eerst inlogt: een uitnodiging wordt pas
+ *  een lidmaatschap zodra het teamlid die accepteert. Zonder deze knop belandde de
+ *  invitee op een doodlopend "Geen organisatie gevonden"-scherm waar de enige actie
+ *  was om een eigen (losse) organisatie te maken — precies niet de bedoeling.
+ *  Openstaande uitnodigingen (server-side al gefilterd op het eigen e-mailadres)
+ *  kunnen hier direct worden aanvaard; wie er geen heeft, maakt een eigen org. */
+function NoOrganizationScreen({
+  pendingInvitations,
+  onAcceptInvitation,
+  onCreateOrganization,
+}: {
+  pendingInvitations: OrganizationContext['pendingInvitations'];
+  onAcceptInvitation: (invitationId: string) => Promise<void>;
+  onCreateOrganization: () => void;
+}) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function accept(invitationId: string) {
+    setError(null);
+    setBusyId(invitationId);
+    try {
+      // Bij succes herlaadt de aanroeper de werkruimte (switchOrganization), waardoor
+      // dit scherm vanzelf plaatsmaakt voor de app. Faalt het, dan blijven we hier.
+      await onAcceptInvitation(invitationId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Uitnodiging accepteren mislukt.');
+      setBusyId(null);
+    }
+  }
+
+  if (pendingInvitations.length > 0) {
+    return <div className="boot"><div className="login-card">
+      <h1>Je bent uitgenodigd</h1>
+      <p>Accepteer je uitnodiging om samen te werken in het team.</p>
+      {error && <div className="error">{error}</div>}
+      <div className="team-list">
+        {pendingInvitations.map(invitation => <div className="team-row" key={invitation.id}>
+          <div><span>{invitation.email}</span><small>Rol: {ORG_ROLE_LABELS[invitation.role]}</small></div>
+          <Button variant="primary" disabled={busyId !== null} onClick={() => accept(invitation.id)}>
+            {busyId === invitation.id ? 'Bezig…' : 'Accepteren'}
+          </Button>
+        </div>)}
+      </div>
+      <Button variant="ghost" disabled={busyId !== null} onClick={onCreateOrganization}>Of maak een eigen organisatie</Button>
+    </div></div>;
+  }
+
+  return <div className="boot"><div className="login-card">
+    <h1>Geen organisatie gevonden</h1>
+    <p>Er kon geen organisatie voor je account worden geladen.</p>
+    <Button variant="primary" onClick={onCreateOrganization}>Organisatie maken</Button>
+  </div></div>;
+}
+
 function App() {
   const [sessionReady, setSessionReady] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
@@ -596,7 +659,7 @@ function App() {
   // is. Toon dan het laadscherm i.p.v. kort "Geen organisatie gevonden" te flitsen;
   // die melding is alléén terecht als het laden klaar is en er echt geen org is.
   if (!activeOrganization && loading) return <BootLoading />;
-  if (!activeOrganization) return <div className="boot"><div className="login-card"><h1>Geen organisatie gevonden</h1><p>Er kon geen organisatie voor je account worden geladen.</p><Button variant="primary" onClick={createNewOrganization}>Organisatie maken</Button></div></div>;
+  if (!activeOrganization) return <NoOrganizationScreen pendingInvitations={organizationContext.pendingInvitations} onAcceptInvitation={acceptInvitation} onCreateOrganization={createNewOrganization} />;
 
   const activeOrg = activeOrganization;
 
