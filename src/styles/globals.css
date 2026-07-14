@@ -3513,3 +3513,97 @@ button.chat-member:hover{background:var(--bg3)}
   .calendar-agenda-page .calendar-view-tabs .tb-vbtn{flex:0 0 auto}
   .calendar-agenda-page .calendar-view-tabs .tb-vbtn span{display:none}
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   AGENDA · MAANDWEERGAVE — Google Calendar-look  (2026-07-14)
+   ───────────────────────────────────────────────────────────────────────
+   Zelfde vlakke, rand-tot-rand Google-stijl als dag/week, mét ResoFly-
+   branding (donker + merkgoud voor "vandaag"). Bewust achteraan zodat deze
+   regels alle eerdere .calendar-month-* / .month-chip-regels van de cascade
+   winnen.
+
+   • Desktop: het maandrooster vult het hele scherm (schone flex-keten,
+     gelijke weekrijen), rand-tot-rand met haarlijn-scheidingen — geen
+     kaarten, gaten, gradients of hover-lift meer.
+   • Hele-dag/meerdaagse afspraken = vol gevulde gekleurde balkjes.
+     Getimede afspraken = gekleurd stipje + tijd + titel (transparant).
+   • "Vandaag" = goud rondje om het getal; dagen buiten de maand gedimd.
+   • Mobiel (≤900px) blijft een nette, natuurlijke scroll-lijst per dag.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* 1 ── Volledige paginavulling op desktop (zelfde flex-truc als dag/week) ── */
+@media(min-width:901px){
+  .content:has(.calendar-main-card-month){padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+  .calendar-agenda-page .calendar-main-card-month{flex:1 1 auto;min-height:0;height:auto;max-height:none;border:0;border-radius:0;padding:0;overflow:hidden;display:flex;flex-direction:column;background:var(--bg)}
+  .calendar-agenda-page .calendar-main-card-month .calendar-month-view{flex:1 1 auto;min-height:0;height:auto}
+  .calendar-agenda-page .calendar-main-card-month .calendar-month-grid{flex:1 1 auto;min-height:0;grid-auto-rows:minmax(0,1fr);overflow:hidden}
+}
+
+/* 2 ── Layout: vlakke weekdagenkop + rand-tot-rand rooster ───────────────── */
+.calendar-agenda-page .calendar-month-view{display:flex;flex-direction:column;gap:0;margin:0;min-height:0}
+.calendar-agenda-page .calendar-month-weekdays{
+  flex:0 0 auto;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:0;padding:0;margin:0;
+  border-left:1px solid transparent;
+  color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}
+.calendar-agenda-page .calendar-month-weekdays span{text-align:center;background:transparent;border:0;border-radius:0;padding:9px 6px}
+.calendar-agenda-page .calendar-month-grid{
+  display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:0;padding:0;
+  border-top:1px solid var(--border);border-left:1px solid var(--border);background:var(--bg)}
+
+/* 3 ── Cellen: plat, haarlijn-scheidingen, geen kaart/gradient/lift ──────── */
+.calendar-agenda-page .calendar-month-cell{
+  background:transparent;border:0;border-right:1px solid var(--border);border-bottom:1px solid var(--border);
+  border-radius:0;min-height:0;padding:5px 6px 4px;gap:3px;overflow:hidden;
+  display:flex;flex-direction:column;transition:background .12s}
+.calendar-agenda-page .calendar-month-cell:hover{transform:none;box-shadow:none;border-color:var(--border);background:rgba(255,255,255,.02)}
+.calendar-agenda-page .calendar-month-cell.is-outside-month{opacity:1;background:rgba(0,0,0,.24)}
+.calendar-agenda-page .calendar-month-cell.is-outside-month .calendar-month-date strong{color:var(--muted)}
+.calendar-agenda-page .calendar-month-cell.is-outside-month .month-chip{opacity:.62}
+.calendar-agenda-page .calendar-month-cell.is-today{background:rgba(255,189,89,.06)}
+
+/* Datumkop: enkel het getal (weekdag staat in de kop); vandaag = goud rondje */
+.calendar-agenda-page .calendar-month-date{justify-content:flex-start;gap:0;padding:1px}
+.calendar-agenda-page .calendar-month-date span{display:none}
+.calendar-agenda-page .calendar-month-date strong{width:24px;height:24px;background:transparent;color:var(--text);font-size:13px;font-weight:700}
+.calendar-agenda-page .calendar-month-cell.is-today .calendar-month-date strong{background:var(--accent);color:#1a1a1a;font-weight:800}
+
+/* 4 ── Items ─────────────────────────────────────────────────────────────── */
+.calendar-agenda-page .calendar-month-items{flex:0 1 auto;min-height:0;display:flex;flex-direction:column;gap:2px;overflow:hidden}
+.calendar-agenda-page .month-chip{
+  width:100%;min-width:0;border:0;border-radius:4px;background:transparent;color:var(--text);
+  font-family:inherit;text-align:left;cursor:pointer;padding:2px 5px;display:flex;align-items:center;gap:5px;
+  line-height:1.25;transition:background .1s,filter .1s}
+.calendar-agenda-page .month-chip:hover{transform:none;filter:none;background:rgba(255,255,255,.07);border-color:transparent}
+.calendar-agenda-page .month-chip strong{flex:1 1 auto;min-width:0;font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Hele-dag / meerdaags: vol gevuld gekleurd balkje (titel, geen tijd). */
+.calendar-agenda-page .month-chip.all-day{
+  background:var(--event-solid,rgba(255,189,89,.96));color:var(--event-text,#1a1a1a);
+  border:1px solid var(--event-edge,rgba(0,0,0,.16));padding:2px 6px}
+.calendar-agenda-page .month-chip.all-day strong{color:var(--event-text,#1a1a1a);font-weight:700}
+.calendar-agenda-page .month-chip.all-day:hover{filter:brightness(1.05);background:var(--event-solid,rgba(255,189,89,.96))}
+
+/* Getimed / taak: gekleurd stipje + tijd + titel op transparant. */
+.calendar-agenda-page .month-chip-dot{flex:0 0 auto;width:7px;height:7px;border-radius:50%;background:var(--event-color,var(--accent))}
+.calendar-agenda-page .month-chip.task .month-chip-dot{background:var(--accent)}
+.calendar-agenda-page .month-chip-time{flex:0 0 auto;font-size:10px;font-weight:700;color:var(--muted2);white-space:nowrap}
+.calendar-agenda-page .month-chip.private-event{filter:saturate(.72)}
+.calendar-agenda-page .month-chip-track{flex:0 0 auto;display:inline-flex;align-items:center;gap:2px;font-style:normal;font-size:9px;font-weight:800;color:var(--muted)}
+
+/* "+N meer": vlak gedimd tekstlinkje, direct onder de zichtbare items (Google). */
+.calendar-agenda-page .month-more{
+  flex:0 0 auto;border:0;background:transparent;color:var(--muted2);font-family:inherit;font-size:10px;font-weight:700;
+  text-align:left;cursor:pointer;padding:1px 5px 2px;border-radius:4px}
+.calendar-agenda-page .month-more:hover{background:rgba(255,255,255,.07);color:var(--text)}
+
+/* 5 ── Mobiel: geen paginavulling — nette natuurlijke scroll-lijst per dag ── */
+@media(max-width:900px){
+  .calendar-agenda-page .calendar-month-view{min-height:0;gap:0}
+  .calendar-agenda-page .calendar-month-weekdays{display:none}
+  .calendar-agenda-page .calendar-month-grid{grid-template-columns:1fr;overflow:visible;border-left:0}
+  .calendar-agenda-page .calendar-month-cell{min-height:52px;overflow:visible;border-right:0;padding:8px 12px;gap:4px}
+  .calendar-agenda-page .calendar-month-cell.is-outside-month{display:none}
+  .calendar-agenda-page .calendar-month-items{overflow:visible}
+  .calendar-agenda-page .calendar-month-date{justify-content:flex-start;gap:9px}
+  .calendar-agenda-page .calendar-month-date span{display:inline-block;font-size:10px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.08em}
+}

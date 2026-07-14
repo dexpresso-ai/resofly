@@ -947,6 +947,9 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
 
 /* ── Month view ───────────────────────────────────────────────────────── */
 
+// Max. aantal items per dagcel voordat "+N meer" verschijnt (Google-stijl).
+const MONTH_MAX_ITEMS = 5;
+
 function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, trackedMinutesFor, onEditTask, onOpenDay, onOpenEvent }: {
   days: Date[];
   anchor: Date;
@@ -972,9 +975,14 @@ function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, tr
         {days.map(day => {
           const dayEvents = eventsForDay(day);
           const dayTasks = tasksForDay(day);
-          const visibleItems = [...dayEvents.map(ev => ({ kind: 'event' as const, ev })), ...dayTasks.map(task => ({ kind: 'task' as const, task }))];
-          const clippedItems = visibleItems.slice(0, 5);
-          const remaining = Math.max(0, visibleItems.length - clippedItems.length);
+          // Google-stijl: hele-dag/meerdaagse afspraken eerst (als balken), dan getimede afspraken, dan taken.
+          const allItems = [
+            ...dayEvents.filter(ev => ev.all_day).map(ev => ({ kind: 'allday' as const, ev })),
+            ...dayEvents.filter(ev => !ev.all_day).map(ev => ({ kind: 'timed' as const, ev })),
+            ...dayTasks.map(task => ({ kind: 'task' as const, task })),
+          ];
+          const clippedItems = allItems.slice(0, MONTH_MAX_ITEMS);
+          const remaining = Math.max(0, allItems.length - clippedItems.length);
           const outsideMonth = !isSameMonth(day, anchor);
           const today = isSameDay(day, new Date());
 
@@ -985,29 +993,45 @@ function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, tr
                 <strong>{day.getDate()}</strong>
               </button>
               <div className="calendar-month-items">
-                {clippedItems.map((item, idx) => item.kind === 'event' ? (
-                  <button
-                    type="button"
-                    className={`month-chip external${item.ev.visibility === 'private' ? ' private-event' : ''}`}
-                    onClick={() => onOpenEvent(item.ev)}
-                    key={`${item.ev.provider}-${item.ev.provider_event_id}-${idx}`}
-                    style={eventColorStyle(eventColor(item.ev))}
-                    title={`${formatTime(item.ev.starts_at, item.ev.all_day)} · ${item.ev.title}`}
-                  >
-                    <span>{formatTime(item.ev.starts_at, item.ev.all_day)}</span>
-                    <strong>{item.ev.title}</strong>
-                    {trackedMinutesFor(item.ev) != null && <em className="month-chip-track"><Clock size={9} />{formatMinutes(trackedMinutesFor(item.ev)!)}</em>}
-                  </button>
-                ) : (
-                  <button className="month-chip task" key={item.task.id} onClick={() => onEditTask(item.task)} title={item.task.title}>
-                    <span>Taak</span>
-                    <strong>{item.task.title}</strong>
-                    <em>{data.projects.find(p => p.id === item.task.project_id)?.name ?? 'Project'}</em>
-                  </button>
-                ))}
-                {remaining > 0 && <button className="month-chip more" onClick={() => onOpenDay(day)}>+{remaining} meer</button>}
-                {visibleItems.length === 0 && <div className="month-empty">Geen items</div>}
+                {clippedItems.map((item, idx) => {
+                  if (item.kind === 'allday') return (
+                    <button
+                      type="button"
+                      className={`month-chip all-day${item.ev.visibility === 'private' ? ' private-event' : ''}`}
+                      onClick={() => onOpenEvent(item.ev)}
+                      key={`ad-${item.ev.provider}-${item.ev.provider_event_id}-${idx}`}
+                      style={eventColorStyle(eventColor(item.ev))}
+                      title={item.ev.title}
+                    >
+                      <strong>{item.ev.title}</strong>
+                      {trackedMinutesFor(item.ev) != null && <em className="month-chip-track"><Clock size={9} />{formatMinutes(trackedMinutesFor(item.ev)!)}</em>}
+                    </button>
+                  );
+                  if (item.kind === 'timed') return (
+                    <button
+                      type="button"
+                      className={`month-chip timed${item.ev.visibility === 'private' ? ' private-event' : ''}`}
+                      onClick={() => onOpenEvent(item.ev)}
+                      key={`tm-${item.ev.provider}-${item.ev.provider_event_id}-${idx}`}
+                      style={eventColorStyle(eventColor(item.ev))}
+                      title={`${formatTime(item.ev.starts_at)} · ${item.ev.title}`}
+                    >
+                      <span className="month-chip-dot" aria-hidden="true" />
+                      <span className="month-chip-time">{formatTime(item.ev.starts_at)}</span>
+                      <strong>{item.ev.title}</strong>
+                      {trackedMinutesFor(item.ev) != null && <em className="month-chip-track"><Clock size={9} />{formatMinutes(trackedMinutesFor(item.ev)!)}</em>}
+                    </button>
+                  );
+                  return (
+                    <button className="month-chip timed task" key={item.task.id} onClick={() => onEditTask(item.task)} title={`${item.task.title} · ${data.projects.find(p => p.id === item.task.project_id)?.name ?? 'Project'}`}>
+                      <span className="month-chip-dot" aria-hidden="true" />
+                      <span className="month-chip-time">Taak</span>
+                      <strong>{item.task.title}</strong>
+                    </button>
+                  );
+                })}
               </div>
+              {remaining > 0 && <button className="month-more" onClick={() => onOpenDay(day)}>+{remaining} meer</button>}
             </article>
           );
         })}
