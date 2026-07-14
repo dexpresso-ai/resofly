@@ -474,15 +474,20 @@ function ConversationThread({ api, vm, variant, onBack, onLeft }: {
 
   // Bijlagen ophalen voor berichten die er (volgens attachment_count) hebben.
   const fetchAttachmentsFor = useCallback(async (msgs: ChatMessage[]) => {
+    // Reconcileer de bijlagen van de meegegeven berichten met de DB. We VERVANGEN
+    // alles wat bij deze berichten hoort door de vers opgehaalde set (i.p.v. enkel
+    // mergen), zodat een verwijderde bijlage ook echt uit beeld verdwijnt zonder
+    // het gesprek te herladen. Berichten buiten deze scope blijven ongemoeid.
+    const scope = msgs.map((m) => m.id);
     const need = msgs.filter((m) => m.attachment_count > 0).map((m) => m.id);
-    if (need.length === 0 || !api.organizationId) return;
+    if (scope.length === 0 || !api.organizationId) return;
     try {
-      const rows = await loadMessageAttachments(api.organizationId, need);
+      const rows = need.length > 0 ? await loadMessageAttachments(api.organizationId, need) : [];
       if (!aliveRef.current) return;
       setAttachments((prev) => {
-        const byId = new Map(prev.map((a) => [a.id, a]));
-        rows.forEach((a) => byId.set(a.id, a));
-        return Array.from(byId.values());
+        const scopeSet = new Set(scope);
+        const kept = prev.filter((a) => !scopeSet.has(a.entity_id));
+        return [...kept, ...rows];
       });
     } catch { /* */ }
   }, [api.organizationId]);
