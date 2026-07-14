@@ -3481,3 +3481,35 @@ button.chat-member:hover{background:var(--bg3)}
 .calendar-agenda-page .tb-today .tb-dh-num,.calendar-agenda-page .tb-today-num{background:var(--accent);color:#1a1a1a}
 .calendar-agenda-page .tb-now::after{box-shadow:none}
 .calendar-agenda-page .tb-now-label{box-shadow:none}
+
+/* 3 ── Compacte, Google-slanke werkbalk ─────────────────────────────────────
+   De oude grid-werkbalk stapelde op smalle schermen tot een ~200px hoge kolom
+   met volle-breedte-knoppen (halve scherm weg). Nu: één slanke flex-regel —
+   chevrons voor vorige/volgende, knoppen op auto-breedte, weergavetabs rechts —
+   zodat het rooster (bijna) het hele scherm vult. */
+.calendar-agenda-page .calendar-toolbar-premium{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 12px}
+.calendar-agenda-page .calendar-period-controls{flex:0 0 auto;flex-wrap:nowrap;gap:6px}
+.calendar-agenda-page .calendar-period-controls .btn{width:auto;flex:0 0 auto}
+.calendar-agenda-page .calendar-nav-btn{padding:6px 8px;min-height:34px}
+.calendar-agenda-page .calendar-nav-btn svg{display:block}
+.calendar-agenda-page .calendar-range-block{flex:1 1 auto;min-width:0;flex-direction:row;align-items:center;gap:8px;justify-self:start;text-align:left}
+.calendar-agenda-page .calendar-range{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.calendar-agenda-page .calendar-link-btn{width:auto;flex:0 0 auto}
+.calendar-agenda-page .calendar-view-tabs{margin-left:auto;flex:0 0 auto;width:auto}
+
+/* Tweede werkbalk (boekingsopties): compact, één regel met onderlijn. */
+.calendar-agenda-page .calendar-booking-toolbar{margin:0;padding:6px 12px;gap:8px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border);font-size:12px}
+.calendar-agenda-page .calendar-booking-toolbar .btn{min-height:32px}
+
+/* Telefoon: knoppen nooit volle breedte (overschrijft de ≤620px-stapelregels);
+   "Ververs" + de weergavetabs worden icoon-only, en het "Week/Dag"-labeltje valt
+   weg — zodat alle bediening op één à twee slanke regels past. */
+@media(max-width:620px){
+  .calendar-agenda-page .calendar-period-controls .btn,
+  .calendar-agenda-page .calendar-link-btn{width:auto}
+  .calendar-agenda-page .calendar-link-btn-label{display:none}
+  .calendar-agenda-page .calendar-range-label{display:none}
+  .calendar-agenda-page .calendar-view-tabs{width:auto;flex:0 0 auto;margin-left:auto}
+  .calendar-agenda-page .calendar-view-tabs .tb-vbtn{flex:0 0 auto}
+  .calendar-agenda-page .calendar-view-tabs .tb-vbtn span{display:none}
+}

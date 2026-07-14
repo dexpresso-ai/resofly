@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { CalendarDays, CalendarPlus, ChevronDown, ChevronRight, Clock, ExternalLink, LayoutList, Mail, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
+import { CalendarDays, CalendarPlus, ChevronDown, ChevronLeft, ChevronRight, Clock, ExternalLink, LayoutList, Mail, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { MeetingRecorder } from '../components/MeetingRecorder';
 import { RichTextExcerpt } from '../components/RichTextEditor';
@@ -2627,15 +2627,15 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     <div className={`calendar-main-card calendar-main-card-${view}`} id="calendar-agenda">
       <div className="calendar-toolbar calendar-toolbar-premium">
         <div className="calendar-period-controls">
-          <Button onClick={() => movePeriod(-1)} title={`${previousLabel} (←)`}>{previousLabel}</Button>
+          <Button className="calendar-nav-btn" onClick={() => movePeriod(-1)} title={`${previousLabel} (←)`} aria-label={previousLabel}><ChevronLeft size={18} /></Button>
           <Button onClick={goToday} title="Spring naar vandaag (V)">Vandaag</Button>
-          <Button onClick={() => movePeriod(1)} title={`${nextLabel} (→)`}>{nextLabel}</Button>
+          <Button className="calendar-nav-btn" onClick={() => movePeriod(1)} title={`${nextLabel} (→)`} aria-label={nextLabel}><ChevronRight size={18} /></Button>
         </div>
         <div className="calendar-range-block">
           <span className="calendar-range-label">{view === 'day' ? 'Dag' : view === 'week' ? 'Week' : view === 'month' ? 'Maand' : 'Lijst'}</span>
           <div className="calendar-range">{calendarRangeLabel}{eventsLoading ? ' · laden…' : ''}</div>
         </div>
-        <Button className="calendar-link-btn" onClick={() => refreshAll({ fresh: true })} disabled={loading || eventsLoading}><RefreshCcw size={14} /> Ververs</Button>
+        <Button className="calendar-link-btn" onClick={() => refreshAll({ fresh: true })} disabled={loading || eventsLoading} title="Ververs"><RefreshCcw size={14} /> <span className="calendar-link-btn-label">Ververs</span></Button>
         <div className="tb-view-tog calendar-view-tabs" aria-label="Agendaweergave">
           <button className={`tb-vbtn${view === 'day' ? ' active' : ''}`} onClick={() => changeView('day')} title="Dagweergave (D)"><CalendarDays size={14} /><span>Dag</span></button>
           <button className={`tb-vbtn${view === 'week' ? ' active' : ''}`} onClick={() => changeView('week')} title="Weekweergave (W)"><Clock size={14} /><span>Week</span></button>
@@ -2645,7 +2645,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       </div>
 
       {(view === 'day' || view === 'week') && canWrite && writeableSources.length > 0 && (
-        <div className="calendar-toolbar" style={{ marginTop: 8, gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="calendar-toolbar calendar-booking-toolbar">
           {!bookingMode ? (
             <>
               <Button onClick={() => { setBookingMode(true); setDraftSlots([]); }} title="Blokkeer tijden om als opties naar een klant te sturen">
@@ -2653,7 +2653,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
               </Button>
               {bookingLinks.some(l => l.status === 'active') && (
                 <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-                  <input type="checkbox" checked={showBookingOptions} onChange={e => setShowBookingOptions(e.target.checked)} /> Toon boekingsopties in de agenda
+                  <input type="checkbox" checked={showBookingOptions} onChange={e => setShowBookingOptions(e.target.checked)} /> Toon boekingsopties
                 </label>
               )}
             </>
