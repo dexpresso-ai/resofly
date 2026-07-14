@@ -3540,15 +3540,24 @@ button.chat-member:hover{background:var(--bg3)}
 }
 
 /* 2 ── Layout: vlakke weekdagenkop + rand-tot-rand rooster ───────────────── */
-.calendar-agenda-page .calendar-month-view{display:flex;flex-direction:column;gap:0;margin:0;min-height:0}
+.calendar-agenda-page .calendar-month-view{--wkcol:30px;display:flex;flex-direction:column;gap:0;margin:0;min-height:0}
 .calendar-agenda-page .calendar-month-weekdays{
-  flex:0 0 auto;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:0;padding:0;margin:0;
+  flex:0 0 auto;display:grid;grid-template-columns:var(--wkcol) repeat(7,minmax(0,1fr));gap:0;padding:0;margin:0;
   border-left:1px solid transparent;
   color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}
 .calendar-agenda-page .calendar-month-weekdays span{text-align:center;background:transparent;border:0;border-radius:0;padding:9px 6px}
+.calendar-agenda-page .calendar-weeknum-head{background:transparent;border:0}
 .calendar-agenda-page .calendar-month-grid{
-  display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:0;padding:0;
+  display:grid;grid-template-columns:var(--wkcol) repeat(7,minmax(0,1fr));gap:0;padding:0;
   border-top:1px solid var(--border);border-left:1px solid var(--border);background:var(--bg)}
+
+/* Weeknummer-kolom (Google-stijl): smalle linkerkolom, één nummer per weekrij. */
+.calendar-agenda-page .calendar-week-number{
+  display:flex;align-items:flex-start;justify-content:center;overflow:hidden;
+  padding:6px 2px;border-right:1px solid var(--border);border-bottom:1px solid var(--border);
+  background:transparent;color:var(--muted);font-size:10px;font-weight:800;line-height:1}
+.calendar-agenda-page .calendar-week-number .cw-label{display:none}
+.calendar-agenda-page .calendar-week-number strong{font-weight:800}
 
 /* 3 ── Cellen: plat, haarlijn-scheidingen, geen kaart/gradient/lift ──────── */
 .calendar-agenda-page .calendar-month-cell{
@@ -3606,4 +3615,12 @@ button.chat-member:hover{background:var(--bg3)}
   .calendar-agenda-page .calendar-month-items{overflow:visible}
   .calendar-agenda-page .calendar-month-date{justify-content:flex-start;gap:9px}
   .calendar-agenda-page .calendar-month-date span{display:inline-block;font-size:10px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.08em}
+  /* Weeknummer = volledige-breedte sectiekop boven de dagen van die week. */
+  .calendar-agenda-page .calendar-week-number{
+    justify-content:flex-start;align-items:center;gap:6px;
+    padding:12px 12px 4px;border-right:0;border-bottom:0;border-top:1px solid var(--border);
+    color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;line-height:1.2}
+  .calendar-agenda-page .calendar-week-number:first-child{border-top:0}
+  .calendar-agenda-page .calendar-week-number .cw-label{display:inline}
+  .calendar-agenda-page .calendar-week-number.is-outside-week{display:none}
 }

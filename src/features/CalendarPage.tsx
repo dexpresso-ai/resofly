@@ -4,7 +4,7 @@ import { Button, Input, Select, Textarea } from '../components/Ui';
 import { MeetingRecorder } from '../components/MeetingRecorder';
 import { RichTextExcerpt } from '../components/RichTextEditor';
 import { createNoteWithCalendarLink } from '../lib/repository';
-import { addDays, DAY_NAMES_NL, formatISODate, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
+import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
 import { dateNL, formatMinutes } from '../lib/format';
 import { detectMeetingKind, isValidMeetingUrl } from '../lib/meeting';
 import {
@@ -950,6 +950,13 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
 // Max. aantal items per dagcel voordat "+N meer" verschijnt (Google-stijl).
 const MONTH_MAX_ITEMS = 5;
 
+// Deelt het maandrooster op in weken van 7 dagen (voor de weeknummer-kolom).
+function weekChunks(days: Date[]): Date[][] {
+  const weeks: Date[][] = [];
+  for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
+  return weeks;
+}
+
 function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, trackedMinutesFor, onEditTask, onOpenDay, onOpenEvent }: {
   days: Date[];
   anchor: Date;
@@ -969,10 +976,18 @@ function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, tr
   return (
     <div className="calendar-month-view">
       <div className="calendar-month-weekdays">
+        <span className="calendar-weeknum-head" aria-hidden="true" />
         {DAY_NAMES_NL.map(day => <span key={day}>{day}</span>)}
       </div>
       <div className="calendar-month-grid">
-        {days.map(day => {
+        {weekChunks(days).flatMap(week => {
+          const weekNo = isoWeekNumber(week[0]);
+          const allOutside = week.every(d => !isSameMonth(d, anchor));
+          return [
+            <div className={`calendar-week-number${allOutside ? ' is-outside-week' : ''}`} key={`wk-${formatISODate(week[0])}`}>
+              <span className="cw-label">Week </span><strong>{weekNo}</strong>
+            </div>,
+            ...week.map(day => {
           const dayEvents = eventsForDay(day);
           const dayTasks = tasksForDay(day);
           // Google-stijl: hele-dag/meerdaagse afspraken eerst (als balken), dan getimede afspraken, dan taken.
@@ -1034,6 +1049,8 @@ function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, tr
               {remaining > 0 && <button className="month-more" onClick={() => onOpenDay(day)}>+{remaining} meer</button>}
             </article>
           );
+            }),
+          ];
         })}
       </div>
     </div>
