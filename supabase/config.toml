@@ -43,6 +43,13 @@ verify_jwt = false
 [functions.gerrie-agent]
 verify_jwt = false
 
+# gerrie-agent-runner is de headless motor voor "Gerrie Routines" (geplande agents).
+# Bedient de agents-cron (?cron=tick, geauthenticeerd via AGENTS_CRON_SECRET, geen
+# Supabase JWT) én ingelogde beheer-acties (create/update/status/delete/run_now via
+# requireUser + requireOrganizationAccess + owner/admin in code).
+[functions.gerrie-agent-runner]
+verify_jwt = false
+
 # billing wordt aangeroepen door de Mollie payment-/subscription-webhook (geen Supabase
 # JWT). De webhook-route is geverifieerd via het Mollie webhook-secret (?secret=...), en
 # elke authenticated app-actie verifieert zelf requireUser() + requireOrganizationAccess().

@@ -386,6 +386,155 @@ export async function loadGerrieUsage(organizationId: UUID): Promise<GerrieUsage
   return (payload?.rows ?? []) as GerrieUsageRow[];
 }
 
+// ── Gerrie Routines (gebruikers bouwen eigen geplande agents) ─────────────────
+
+export type RoutineScheduleKind = 'daily' | 'weekly' | 'monthly';
+export type RoutineMode = 'report' | 'propose';
+export type RoutineStatus = 'draft' | 'active' | 'paused' | 'archived';
+export type RoutineRunStatus = 'claimed' | 'running' | 'succeeded' | 'failed' | 'partial' | 'skipped_budget' | 'cancelled';
+
+export interface GerrieRoutine {
+  id: UUID;
+  name: string;
+  description: string | null;
+  instruction: string;
+  model_kind: 'cheap' | 'strong';
+  mode: RoutineMode;
+  enabled_tools: string[];
+  schedule_kind: RoutineScheduleKind;
+  hour: number;
+  day_of_week: number | null;
+  day_of_month: number | null;
+  timezone: string;
+  status: RoutineStatus;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  max_cost_eur_per_run: number;
+  monthly_budget_eur: number | null;
+  max_runs_per_day: number;
+  consecutive_failures: number;
+  delivery: { channels: string[]; recipient_user_ids: string[] };
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GerrieRoutineRun {
+  id: UUID;
+  agent_id: UUID;
+  triggered_by: 'schedule' | 'manual' | 'retry';
+  status: RoutineRunStatus;
+  scheduled_for: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  summary: string | null;
+  cost_usd: number;
+  proposals_created: number;
+  error: string | null;
+  created_at: string;
+}
+
+/** Velden die de beheer-Edge-Function (gerrie-agent-runner) accepteert bij create/update. */
+export interface GerrieRoutineInput {
+  name: string;
+  description?: string | null;
+  instruction: string;
+  model_kind: 'cheap' | 'strong';
+  mode: RoutineMode;
+  enabled_tools: string[];
+  schedule_kind: RoutineScheduleKind;
+  hour: number;
+  day_of_week?: number | null;
+  day_of_month?: number | null;
+  timezone: string;
+  max_cost_eur_per_run?: number;
+  monthly_budget_eur?: number | null;
+  max_runs_per_day?: number;
+  delivery: { channels: string[] };
+}
+
+const RUNNER_FN = 'gerrie-agent-runner';
+
+async function postRunner(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error('Je sessie is verlopen. Log opnieuw in.');
+  const res = await fetch(`${FUNCTIONS_BASE}/${RUNNER_FN}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: ANON_KEY },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = 'De Routines-motor is even niet bereikbaar. Probeer het zo opnieuw.';
+    try { const payload = await res.json(); if (payload?.error) message = String(payload.error); } catch { /* geen JSON */ }
+    throw new Error(message);
+  }
+  return (await res.json()) as Record<string, unknown>;
+}
+
+/** Alle Routines van de organisatie (owner/admin, via RLS). */
+export async function listRoutines(organizationId: UUID): Promise<GerrieRoutine[]> {
+  const { data, error } = await supabase.from('ai_agents')
+    .select('*').eq('organization_id', organizationId).order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as GerrieRoutine[];
+}
+
+/** De laatste runs van één Routine (nieuwste eerst). */
+export async function listRoutineRuns(organizationId: UUID, agentId: UUID): Promise<GerrieRoutineRun[]> {
+  const { data, error } = await supabase.from('ai_agent_runs')
+    .select('*').eq('organization_id', organizationId).eq('agent_id', agentId)
+    .order('created_at', { ascending: false }).limit(25);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as GerrieRoutineRun[];
+}
+
+/** Maakt een nieuwe Routine aan (concept) of werkt een bestaande bij. */
+export async function saveRoutine(organizationId: UUID, input: GerrieRoutineInput, id?: UUID): Promise<{ id?: string }> {
+  const payload = await postRunner({ action: id ? 'update' : 'create', organizationId, id, ...input });
+  return { id: typeof payload?.id === 'string' ? payload.id : id };
+}
+
+/** Activeer/pauzeer/archiveer een Routine. */
+export async function setRoutineStatus(organizationId: UUID, id: UUID, status: RoutineStatus): Promise<{ next_run_at: string | null }> {
+  const payload = await postRunner({ action: 'set_status', organizationId, id, status });
+  return { next_run_at: typeof payload?.next_run_at === 'string' ? payload.next_run_at : null };
+}
+
+export async function deleteRoutine(organizationId: UUID, id: UUID): Promise<void> {
+  await postRunner({ action: 'delete', organizationId, id });
+}
+
+/** Draait een Routine direct (handmatig; verandert het schema niet). Wacht op het resultaat. */
+export async function runRoutineNow(organizationId: UUID, id: UUID): Promise<{ status: string; proposalsCreated?: number }> {
+  const payload = await postRunner({ action: 'run_now', organizationId, id });
+  return { status: String(payload?.status ?? 'onbekend'), proposalsCreated: Number(payload?.proposalsCreated ?? 0) };
+}
+
+/** Openstaande voorstellen van één run (uit de goedkeurwachtrij ai_action_audit). */
+export async function listRunProposals(organizationId: UUID, runId: UUID): Promise<Array<{ auditId: string; proposal: GerrieProposal }>> {
+  const { data, error } = await supabase.from('ai_action_audit')
+    .select('id, params, status').eq('organization_id', organizationId).eq('agent_run_id', runId).eq('status', 'proposed');
+  if (error) throw new Error(error.message);
+  return (data ?? [])
+    .map((r: { id: string; params: unknown }) => ({ auditId: String(r.id), proposal: r.params as GerrieProposal }))
+    .filter((r) => r.proposal && typeof r.proposal.type === 'string');
+}
+
+/** De echte, org-scoped tool-namen die een Routine mag gebruiken (voor de UI-selectie). */
+export const ROUTINE_READ_TOOLS: Array<{ name: string; label: string }> = [
+  { name: 'list_invoices', label: 'Facturen bekijken' },
+  { name: 'list_due_reminders', label: 'Openstaande herinneringen' },
+  { name: 'get_financial_summary', label: 'Financieel overzicht' },
+  { name: 'list_quotes', label: 'Offertes bekijken' },
+  { name: 'search_clients', label: 'Klanten opzoeken' },
+  { name: 'list_projects', label: 'Projecten bekijken' },
+  { name: 'list_tasks', label: 'Taken bekijken' },
+  { name: 'list_tickets', label: 'Tickets bekijken' },
+];
+export const ROUTINE_PROPOSE_TOOLS: Array<{ name: string; label: string }> = [
+  { name: 'propose_send_reminders', label: 'Betalingsherinneringen voorstellen' },
+];
+
 function parseSseBlock(block: string): { event: string; data: unknown } | null {
   let event = 'message';
   let dataStr = '';
