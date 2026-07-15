@@ -531,8 +531,17 @@ export const ROUTINE_READ_TOOLS: Array<{ name: string; label: string }> = [
   { name: 'list_tasks', label: 'Taken bekijken' },
   { name: 'list_tickets', label: 'Tickets bekijken' },
 ];
+// Acties die een propose-routine mag VÓÓRSTELLEN. Na jouw goedkeuring in de
+// run-historie worden ze écht uitgevoerd (via dezelfde apply-laag als de chat).
 export const ROUTINE_PROPOSE_TOOLS: Array<{ name: string; label: string }> = [
-  { name: 'propose_send_reminders', label: 'Betalingsherinneringen voorstellen' },
+  { name: 'propose_send_reminders', label: 'Betalingsherinneringen versturen' },
+  { name: 'propose_send_invoice', label: 'Een factuur versturen' },
+  { name: 'propose_send_quote', label: 'Een offerte versturen' },
+  { name: 'propose_convert_quote', label: 'Offerte omzetten naar factuur' },
+  { name: 'propose_invoice', label: 'Conceptfactuur klaarzetten' },
+  { name: 'propose_quote', label: 'Conceptofferte klaarzetten' },
+  { name: 'propose_calendar_event', label: 'Agenda-afspraak aanmaken' },
+  { name: 'propose_time_entry', label: 'Uren registreren' },
 ];
 
 function parseSseBlock(block: string): { event: string; data: unknown } | null {

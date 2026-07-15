@@ -648,6 +648,7 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
             </select>
           </label>
         </div>
+        {f.mode === 'report' && <p className="cc-note">Wil je dat de agent ook iets kan <b>versturen of aanmaken</b> (bv. herinneringen of facturen)? Zet “Wat mag de agent?” op <b>Voorstellen doen</b>.</p>}
         <div className="cc-field-row">
           <label className="cc-field"><span>Wanneer</span>
             <select className="cc-text" value={f.schedule_kind} onChange={(e) => setF((p) => ({ ...p, schedule_kind: e.target.value as RoutineScheduleKind }))}>
@@ -691,7 +692,7 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
                 </label>
               ))}
             </div>
-            <p className="cc-note">Voorgestelde acties belanden in de goedkeurwachtrij; er wordt niets uitgevoerd zonder jouw akkoord.</p>
+            <p className="cc-note">De agent <b>stelt deze acties alleen voor</b>. Jij keurt ze daarna goed in de run-historie — en dán worden ze <b>écht uitgevoerd</b> (verstuurd/aangemaakt), via dezelfde weg als in de chat. Zonder jouw akkoord gebeurt er niets.</p>
           </div>
         )}
 
