@@ -1272,6 +1272,8 @@ export interface ParsedBankStatement {
 
 export interface Attachment extends OrgScopedRow {
   entity_type: EntityType; entity_id: UUID; parent_task_id: UUID | null; name: string; mime_type: string; size_bytes: number; storage_key: string; public_url: string | null; created_at: string;
+  /** Online Office-bewerken: oplopend versienummer + laatst-bewerkt + zachte lock. Alleen gevuld voor office-bestanden die via de editor bewerkt zijn. */
+  edit_version?: number; last_edited_by?: UUID | null; last_edited_at?: string | null; locked_by?: UUID | null; locked_at?: string | null;
 }
 
 // ── Teamchat (interne chat tussen organisatieleden) ──────────────────────────

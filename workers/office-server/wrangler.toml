@@ -1,0 +1,27 @@
+name = "resofly-office-server"
+main = "src/index.ts"
+compatibility_date = "2026-04-30"
+
+# Collabora Online (CODE) draait als één container, gefront door een Durable Object.
+# Vereist het Workers Paid-plan. Image = linux/amd64 (collabora/code is amd64).
+[[containers]]
+class_name = "CollaboraContainer"
+# Vooraf-gebouwd image direct uit Docker Hub → GEEN lokale Docker-daemon nodig om te bouwen.
+# Onze eigen Dockerfile voegde alleen ENV-defaults toe die de Container-class via `envVars`
+# tóch al overschrijft, dus we verwijzen rechtstreeks naar het officiële Collabora-image.
+# (Dockerfile blijft als referentie staan, voor als je later een custom image wilt bouwen.)
+image = "docker.io/collabora/code:26.04.2.1.1"
+# standard-2 = 1 vCPU / 6 GiB RAM / 12 GB disk — comfortabel voor de Collabora-PoC.
+# (standard-1 = 1/2 vCPU / 4 GiB is het marginale minimum.)
+instance_type = "standard-2"
+# PoC: één instance. Zie src/index.ts — alle sessies routeren naar dezelfde instance,
+# want een open document is in-memory aan één coolwsd-proces gepind.
+max_instances = 1
+
+[[durable_objects.bindings]]
+name = "COLLABORA"
+class_name = "CollaboraContainer"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["CollaboraContainer"]

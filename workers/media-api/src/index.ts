@@ -6,7 +6,12 @@ export interface Env {
   SUPABASE_SERVICE_ROLE_KEY?: string;
   /** Shared secret for server-side (Edge Function) PDF snapshot storage. */
   INTERNAL_UPLOAD_SECRET?: string;
+  /** HMAC-secret voor korte office-edit-tokens (WOPI access_token). */
   MEDIA_SIGNING_SECRET?: string;
+  /** Publieke URL van de office-server Worker (Collabora), voor WOPI-discovery + editor-URL. */
+  COLLABORA_URL?: string;
+  /** Optionele override voor de eigen publieke basis-URL (host in de WOPISrc). Standaard: request-origin. */
+  MEDIA_PUBLIC_URL?: string;
 }
 
 type JsonBody = Record<string, unknown> | Array<unknown>;
@@ -132,6 +137,30 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
     return errorResponse('Method not allowed', 405, context);
   }
 
+  // ── Online Office-bewerken (Collabora via WOPI) ────────────────────────
+  // App-gerichte routes (Supabase-JWT):
+  if (method === 'POST' && pathname === '/office/session') {
+    return handleOfficeSession(request, env, context);
+  }
+  if (method === 'POST' && pathname === '/office/new') {
+    return handleOfficeNew(request, env, context);
+  }
+  // WOPI-host-routes (Collabora → media-api, geauthenticeerd met een edit-token in de URL):
+  const wopi = pathname.match(/^\/wopi\/files\/([^/]+?)(\/contents)?$/);
+  if (wopi) {
+    const id = wopi[1];
+    const isContents = Boolean(wopi[2]);
+    if (!isUuid(id)) return errorResponse('Ongeldige bestand-id.', 400, context);
+    if (isContents) {
+      if (method === 'GET') return handleWopiGetFile(request, env, context, id);
+      if (method === 'POST') return handleWopiPutFile(request, env, context, id);
+      return errorResponse('Method not allowed', 405, context);
+    }
+    if (method === 'GET') return handleWopiCheckFileInfo(request, env, context, id);
+    if (method === 'POST') return handleWopiOperation(request, env, context, id);
+    return errorResponse('Method not allowed', 405, context);
+  }
+
   return errorResponse('Route not found', 404, context);
 }
 
@@ -244,6 +273,409 @@ async function handleInternalDownload(
   if (!object) throw new HttpError(404, 'Snapshot niet gevonden.');
 
   return streamObject(object, context);
+}
+
+// ── Online Office-bewerken (Collabora via WOPI) ─────────────────────────────
+//
+// De media-api Worker is de WOPI-HOST. Collabora (op de office-server Worker) is de
+// WOPI-client. Flow:
+//   1. Browser → POST /office/session (Supabase-JWT). We verifiëren lidmaatschap,
+//      munten een kort HMAC-token (gebonden aan bestand + gebruiker + schrijfrecht) en
+//      geven de Collabora-editor-URL terug (via WOPI-discovery).
+//   2. Collabora → GET /wopi/files/{id}            (CheckFileInfo) — metadata.
+//   3. Collabora → GET /wopi/files/{id}/contents   (GetFile)      — bytes uit R2.
+//   4. Collabora → POST /wopi/files/{id}/contents  (PutFile)      — bewerkte bytes → R2,
+//      versie + last_edited bijgewerkt.
+// Het token in de URL (access_token) is de capability; elke WOPI-handler verifieert het
+// en controleert dat het bij exact dit bestand + deze organisatie hoort.
+
+/** Office-mimetypes die we in de browser laten bewerken (Collabora/LibreOffice-engine). */
+const OFFICE_MIME_EXT: Record<string, string> = {
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'application/vnd.oasis.opendocument.text': 'odt',
+  'application/vnd.oasis.opendocument.spreadsheet': 'ods',
+  'application/vnd.oasis.opendocument.presentation': 'odp',
+  'application/msword': 'doc',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.ms-powerpoint': 'ppt',
+};
+
+/** Mimetype per nieuw-aan-te-maken office-type. */
+const OFFICE_NEW_MIME: Record<string, string> = {
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+
+/** 10 uur — dekt ruim een lange bewerksessie zonder token-vernieuwing. */
+const OFFICE_TOKEN_TTL_MS = 10 * 60 * 60 * 1000;
+/** Office-bestanden met afbeeldingen kunnen groter zijn dan de 25 MB upload-cap. */
+const OFFICE_MAX_BYTES = 50 * 1024 * 1024;
+
+type OfficeTokenPayload = { fid: string; org: string; uid: string; w: boolean; exp: number; nm?: string };
+
+function officeSecret(env: Env): string {
+  if (!env.MEDIA_SIGNING_SECRET) throw new HttpError(500, 'Office-bewerken niet geconfigureerd (MEDIA_SIGNING_SECRET).');
+  return env.MEDIA_SIGNING_SECRET;
+}
+
+async function hmacKey(secret: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+}
+
+function b64urlEncode(bytes: Uint8Array): string {
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function b64urlDecodeToStr(value: string): string {
+  const b64 = value.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((value.length + 3) % 4);
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+async function signOfficeToken(payload: OfficeTokenPayload, secret: string): Promise<string> {
+  const body = b64urlEncode(new TextEncoder().encode(JSON.stringify(payload)));
+  const sig = await crypto.subtle.sign('HMAC', await hmacKey(secret), new TextEncoder().encode(body));
+  return `${body}.${b64urlEncode(new Uint8Array(sig))}`;
+}
+
+async function verifyOfficeToken(token: string, secret: string): Promise<OfficeTokenPayload | null> {
+  const dot = token.indexOf('.');
+  if (dot <= 0) return null;
+  const body = token.slice(0, dot);
+  const providedSig = token.slice(dot + 1);
+  const expectedSig = b64urlEncode(new Uint8Array(await crypto.subtle.sign('HMAC', await hmacKey(secret), new TextEncoder().encode(body))));
+  if (!timingSafeEqual(providedSig, expectedSig)) return null;
+  try {
+    const payload = JSON.parse(b64urlDecodeToStr(body)) as OfficeTokenPayload;
+    if (!payload || typeof payload.exp !== 'number' || payload.exp < Date.now()) return null;
+    if (!isUuid(payload.fid) || !isUuid(payload.org) || !isUuid(payload.uid)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+/** Verifieer het WOPI-access_token uit de query en controleer dat het bij dit bestand hoort. */
+async function requireOfficeToken(request: Request, env: Env, id: string): Promise<OfficeTokenPayload> {
+  const secret = officeSecret(env);
+  const token = new URL(request.url).searchParams.get('access_token') || '';
+  const payload = token ? await verifyOfficeToken(token, secret) : null;
+  if (!payload) throw new HttpError(401, 'Ongeldig of verlopen office-token.');
+  if (payload.fid !== id) throw new HttpError(403, 'Token hoort niet bij dit bestand.');
+  return payload;
+}
+
+// ── Supabase REST-helpers (service-role, net als requireMembership) ──────────
+
+type AttachmentRow = {
+  id: string; organization_id: string; entity_type: string; entity_id: string;
+  storage_key: string; name: string; mime_type: string; size_bytes: number; edit_version: number | null;
+};
+
+function supabaseBase(env: Env): string {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) throw new HttpError(500, 'Server niet geconfigureerd (Supabase).');
+  return env.SUPABASE_URL.replace(/\/$/, '');
+}
+
+function serviceHeaders(env: Env, extra?: Record<string, string>): Record<string, string> {
+  return {
+    apikey: env.SUPABASE_SERVICE_ROLE_KEY!,
+    authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY!}`,
+    accept: 'application/json',
+    ...(extra || {}),
+  };
+}
+
+async function fetchAttachment(env: Env, id: string): Promise<AttachmentRow> {
+  const query = new URLSearchParams({
+    select: 'id,organization_id,entity_type,entity_id,storage_key,name,mime_type,size_bytes,edit_version',
+    id: `eq.${id}`,
+    limit: '1',
+  });
+  const res = await fetch(`${supabaseBase(env)}/rest/v1/attachments?${query.toString()}`, { headers: serviceHeaders(env) });
+  if (!res.ok) throw new HttpError(502, 'Kon bijlage niet ophalen.');
+  const rows = (await res.json()) as AttachmentRow[];
+  const row = Array.isArray(rows) ? rows[0] : undefined;
+  if (!row) throw new HttpError(404, 'Bestand niet gevonden.');
+  return row;
+}
+
+async function patchAttachment(env: Env, id: string, patch: Record<string, unknown>): Promise<void> {
+  const res = await fetch(`${supabaseBase(env)}/rest/v1/attachments?id=eq.${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: serviceHeaders(env, { 'content-type': 'application/json', prefer: 'return=minimal' }),
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new HttpError(502, 'Kon bijlage-status niet bijwerken.');
+}
+
+/** Best-effort weergavenaam van de ingelogde gebruiker (voor de co-editing-labels in Collabora). */
+async function fetchUserName(request: Request, env: Env, fallback: string): Promise<string> {
+  try {
+    const token = bearerToken(request);
+    const res = await fetch(`${supabaseBase(env)}/auth/v1/user`, {
+      headers: { authorization: `Bearer ${token}`, apikey: env.SUPABASE_SERVICE_ROLE_KEY! },
+    });
+    if (!res.ok) return fallback;
+    const u = (await res.json()) as { email?: string; user_metadata?: { full_name?: string; name?: string } };
+    return u.user_metadata?.full_name || u.user_metadata?.name || u.email || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Rol van de gebruiker binnen de organisatie, of null als geen (actief) lid. */
+async function membershipRole(env: Env, organizationId: string, userId: string): Promise<string | null> {
+  if (!isUuid(organizationId)) return null;
+  const query = new URLSearchParams({
+    select: 'role',
+    organization_id: `eq.${organizationId}`,
+    user_id: `eq.${userId}`,
+    limit: '1',
+  });
+  const res = await fetch(`${supabaseBase(env)}/rest/v1/organization_members?${query.toString()}`, { headers: serviceHeaders(env) });
+  if (!res.ok) throw new HttpError(502, 'Kon lidmaatschap niet verifiëren.');
+  const rows = (await res.json()) as Array<{ role?: string }>;
+  const row = Array.isArray(rows) ? rows[0] : undefined;
+  return row?.role ?? null;
+}
+
+// ── Collabora WOPI-discovery ─────────────────────────────────────────────────
+
+let discoveryCache: { at: number; xml: string } | null = null;
+const DISCOVERY_TTL_MS = 60 * 60 * 1000;
+
+async function collaboraDiscovery(env: Env): Promise<string> {
+  if (!env.COLLABORA_URL) throw new HttpError(500, 'Office-editor niet geconfigureerd (COLLABORA_URL).');
+  if (discoveryCache && Date.now() - discoveryCache.at < DISCOVERY_TTL_MS) return discoveryCache.xml;
+  const res = await fetch(`${env.COLLABORA_URL.replace(/\/$/, '')}/hosting/discovery`);
+  if (!res.ok) throw new HttpError(502, 'Kon Collabora-discovery niet ophalen.');
+  const xml = await res.text();
+  discoveryCache = { at: Date.now(), xml };
+  return xml;
+}
+
+function normalizeUrlSrc(u: string): string {
+  if (/[?&]$/.test(u)) return u;
+  return u.includes('?') ? `${u}&` : `${u}?`;
+}
+
+/** Vind de editor-urlsrc voor een extensie uit de discovery-XML (voorkeur voor 'edit'/'view'). */
+async function collaboraUrlSrc(env: Env, ext: string, prefer: 'edit' | 'view'): Promise<string> {
+  const xml = await collaboraDiscovery(env);
+  const attr = (tag: string, name: string) => tag.match(new RegExp(`${name}="([^"]*)"`))?.[1];
+  let preferred: string | undefined;
+  let editable: string | undefined;
+  let any: string | undefined;
+  for (const m of xml.matchAll(/<action\b[^>]*?\/?>/g)) {
+    const tag = m[0];
+    if (attr(tag, 'ext') !== ext) continue;
+    const urlsrc = attr(tag, 'urlsrc');
+    if (!urlsrc) continue;
+    const name = attr(tag, 'name');
+    if (name === prefer && !preferred) preferred = urlsrc;
+    if ((name === 'edit' || name === 'view') && !editable) editable = urlsrc;
+    if (!any) any = urlsrc;
+  }
+  const chosen = preferred || editable || any;
+  if (!chosen) throw new HttpError(415, 'Collabora ondersteunt dit bestandstype niet.');
+  return normalizeUrlSrc(chosen);
+}
+
+function fileExt(name: string): string {
+  return name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? '';
+}
+
+function mediaPublicOrigin(request: Request, env: Env): string {
+  return env.MEDIA_PUBLIC_URL ? env.MEDIA_PUBLIC_URL.replace(/\/$/, '') : new URL(request.url).origin;
+}
+
+// ── Route-handlers ───────────────────────────────────────────────────────────
+
+/** Bouw een editor-sessie voor een bestaand office-bestand. */
+async function handleOfficeSession(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const userId = await requireUser(request, env);
+  const secret = officeSecret(env);
+
+  const body = (await request.json().catch(() => ({}))) as { attachmentId?: string };
+  const attachmentId = (body.attachmentId || '').trim();
+  if (!isUuid(attachmentId)) throw new HttpError(400, 'Ongeldige attachmentId.');
+
+  const att = await fetchAttachment(env, attachmentId);
+  const role = await membershipRole(env, att.organization_id, userId);
+  if (!role) throw new HttpError(403, 'Geen toegang tot dit bestand.');
+  const canWrite = role !== 'viewer';
+
+  const ext = OFFICE_MIME_EXT[att.mime_type] || fileExt(att.name);
+  if (!ext) throw new HttpError(415, 'Dit bestandstype kan niet online bewerkt worden.');
+
+  const urlsrc = await collaboraUrlSrc(env, ext, canWrite ? 'edit' : 'view');
+  const wopiSrc = `${mediaPublicOrigin(request, env)}/wopi/files/${attachmentId}`;
+  const editorUrl = `${urlsrc}WOPISrc=${encodeURIComponent(wopiSrc)}&lang=nl-NL`;
+
+  const exp = Date.now() + OFFICE_TOKEN_TTL_MS;
+  const displayName = await fetchUserName(request, env, 'ResoFly-gebruiker');
+  const accessToken = await signOfficeToken(
+    { fid: attachmentId, org: att.organization_id, uid: userId, w: canWrite, exp, nm: displayName },
+    secret,
+  );
+
+  return jsonResponse(
+    { editorUrl, accessToken, accessTokenTtl: OFFICE_TOKEN_TTL_MS, accessTokenExp: exp, fileName: att.name, canWrite },
+    200,
+    context,
+  );
+}
+
+/** Maak een nieuw, leeg office-bestand in een map (kopie van een blanco sjabloon in R2). */
+async function handleOfficeNew(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const userId = await requireUser(request, env);
+  officeSecret(env); // faal snel als edit-config ontbreekt
+
+  const body = (await request.json().catch(() => ({}))) as { organizationId?: string; folderId?: string; docType?: string; name?: string };
+  const organizationId = (body.organizationId || '').trim();
+  const folderId = (body.folderId || '').trim();
+  const docType = (body.docType || '').trim();
+  if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige organization id.');
+  if (!isUuid(folderId)) throw new HttpError(400, 'Ongeldige map id.');
+  if (!OFFICE_NEW_MIME[docType]) throw new HttpError(400, 'Ongeldig documenttype.');
+
+  const role = await membershipRole(env, organizationId, userId);
+  if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+
+  const templateKey = `_office-templates/blank.${docType}`;
+  const template = await env.MEDIA_BUCKET.get(templateKey);
+  if (!template) throw new HttpError(500, `Sjabloon ontbreekt (${templateKey}). Seed de blanco sjablonen — zie deploy-runbook.`);
+
+  const cleaned = sanitizeFileName(body.name || 'Nieuw document');
+  const base = cleaned.toLowerCase().endsWith(`.${docType}`) ? cleaned.slice(0, -(docType.length + 1)) : cleaned;
+  const fileName = `${base || 'Nieuw_document'}.${docType}`;
+  const mime = OFFICE_NEW_MIME[docType];
+  const key = `${organizationId}/folder/${folderId}/${crypto.randomUUID()}-${fileName}`;
+
+  const object = await env.MEDIA_BUCKET.put(key, template.body, {
+    httpMetadata: { contentType: mime },
+    customMetadata: {
+      name: fileName, organizationId, entityType: 'folder', entityId: folderId,
+      uploadedBy: userId, uploadedAt: new Date().toISOString(),
+    },
+  });
+
+  // De attachments-rij maakt de frontend aan (RLS + created_by = auth.uid()), net als bij
+  // een gewone upload. We geven de gegevens terug die daarvoor nodig zijn.
+  return jsonResponse(
+    { ok: true, key, size_bytes: object.size, mime_type: mime, name: fileName },
+    200,
+    context,
+  );
+}
+
+/** WOPI CheckFileInfo — metadata voor Collabora. */
+async function handleWopiCheckFileInfo(request: Request, env: Env, context: RouteContext, id: string): Promise<Response> {
+  const token = await requireOfficeToken(request, env, id);
+  const att = await fetchAttachment(env, id);
+  if (att.organization_id !== token.org) throw new HttpError(403, 'Token/bestand-mismatch.');
+
+  const appOrigin = getAllowedOrigins(env).values().next().value || '';
+  const info = {
+    BaseFileName: att.name,
+    Size: att.size_bytes,
+    Version: String(att.edit_version ?? 1),
+    OwnerId: att.organization_id,
+    UserId: token.uid,
+    UserFriendlyName: token.nm || 'ResoFly-gebruiker',
+    UserCanWrite: token.w,
+    UserCanNotWriteRelative: true,
+    SupportsUpdate: true,
+    SupportsLocks: false,
+    PostMessageOrigin: appOrigin,
+  };
+  return jsonResponse(info, 200, context);
+}
+
+/** WOPI GetFile — lever de bytes uit R2 (inline, geen forced download). */
+async function handleWopiGetFile(request: Request, env: Env, context: RouteContext, id: string): Promise<Response> {
+  const token = await requireOfficeToken(request, env, id);
+  const att = await fetchAttachment(env, id);
+  if (att.organization_id !== token.org) throw new HttpError(403, 'Token/bestand-mismatch.');
+
+  const object = await env.MEDIA_BUCKET.get(att.storage_key);
+  if (!object) throw new HttpError(404, 'Bestand niet gevonden.');
+
+  const headers = new Headers();
+  headers.set('Content-Type', 'application/octet-stream');
+  headers.set('Content-Length', String(object.size));
+  headers.set('Cache-Control', 'no-store');
+  headers.set('X-Request-Id', context.requestId);
+  return new Response(object.body, { status: 200, headers });
+}
+
+/** WOPI PutFile — schrijf de bewerkte bytes terug naar dezelfde R2-key + bump versie. */
+async function handleWopiPutFile(request: Request, env: Env, context: RouteContext, id: string): Promise<Response> {
+  const token = await requireOfficeToken(request, env, id);
+  if (!token.w) throw new HttpError(403, 'Geen schrijfrechten.');
+  const att = await fetchAttachment(env, id);
+  if (att.organization_id !== token.org) throw new HttpError(403, 'Token/bestand-mismatch.');
+  if (!request.body) throw new HttpError(400, 'Lege PutFile.');
+
+  // Buffer de body zodat we de grootte kunnen afdwingen vóór het overschrijven van R2. Een
+  // pre-check op Content-Length alleen is te omzeilen met chunked transfer (geen lengte).
+  // De body is begrensd door Cloudflare's request-limiet; 50 MB past in het Worker-geheugen.
+  const buf = await request.arrayBuffer();
+  if (buf.byteLength === 0) throw new HttpError(400, 'Lege PutFile.');
+  if (buf.byteLength > OFFICE_MAX_BYTES) {
+    throw new HttpError(413, `Bestand is te groot. Maximum is ${Math.round(OFFICE_MAX_BYTES / 1024 / 1024)} MB.`);
+  }
+
+  const object = await env.MEDIA_BUCKET.put(att.storage_key, buf, {
+    httpMetadata: { contentType: att.mime_type || 'application/octet-stream' },
+    customMetadata: {
+      name: att.name,
+      organizationId: att.organization_id,
+      editedBy: token.uid,
+      editedAt: new Date().toISOString(),
+    },
+  });
+
+  const nextVersion = (att.edit_version ?? 1) + 1;
+  await patchAttachment(env, id, {
+    edit_version: nextVersion,
+    size_bytes: object.size,
+    last_edited_by: token.uid,
+    last_edited_at: new Date().toISOString(),
+  });
+
+  const headers = new Headers();
+  headers.set('Content-Type', 'application/json; charset=utf-8');
+  headers.set('Cache-Control', 'no-store');
+  headers.set('X-WOPI-ItemVersion', String(nextVersion));
+  return new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers });
+}
+
+/**
+ * WOPI-operaties op /wopi/files/{id} (X-WOPI-Override). We adverteren SupportsLocks:false
+ * en UserCanNotWriteRelative:true, dus Collabora stuurt normaal geen LOCK/PUT_RELATIVE;
+ * we beantwoorden lock-varianten idempotent voor de zekerheid.
+ */
+async function handleWopiOperation(request: Request, env: Env, context: RouteContext, id: string): Promise<Response> {
+  await requireOfficeToken(request, env, id);
+  const op = (request.headers.get('x-wopi-override') || '').toUpperCase();
+  switch (op) {
+    case 'LOCK':
+    case 'UNLOCK':
+    case 'REFRESH_LOCK':
+    case 'GET_LOCK':
+      return new Response(null, { status: 200, headers: { 'X-WOPI-Lock': '' } });
+    default:
+      throw new HttpError(501, `WOPI-operatie niet ondersteund: ${op || 'onbekend'}`);
+  }
 }
 
 // ── Auth helpers ───────────────────────────────────────────────────────────

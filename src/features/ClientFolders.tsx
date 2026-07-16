@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  ChevronDown, ChevronLeft, ChevronRight, Download, FileText, Folder, FolderOpen, FolderPlus,
-  Image as ImageIcon, LayoutGrid, Link2, List, MoreVertical, Pencil, Plus, Search, StickyNote,
-  Trash2, Upload, UploadCloud, X,
+  ChevronDown, ChevronLeft, ChevronRight, Download, FilePen, FileText, Folder, FolderOpen, FolderPlus,
+  Image as ImageIcon, LayoutGrid, Link2, List, MoreVertical, Pencil, Plus, Presentation, Search, Sheet,
+  StickyNote, Trash2, Upload, UploadCloud, X,
 } from 'lucide-react';
 import type { AppData, Attachment, Client, ContentFolder, InternalDocument, Note } from '../types';
 import { RichTextExcerpt } from '../components/RichTextEditor';
 import { dateNL } from '../lib/format';
 import { insertRow, updateRow, deleteContentFolder, deleteAttachment } from '../lib/repository';
 import { uploadToR2, downloadAttachment } from '../lib/r2';
+import { createOfficeSession, createOfficeDocument, isOfficeEditable, NEW_OFFICE_LABEL, type NewOfficeType, type OfficeSession } from '../lib/office';
+import { OfficeEditor } from './OfficeEditor';
 import { childFolders, clientFolderOptions, folderDescendantIds, folderPath } from '../lib/folders';
 
 /**
@@ -97,6 +99,8 @@ export function ClientFolders({
   const [dragOver, setDragOver] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const [menu, setMenu] = useState<{ key: string; mode: 'main' | 'move' } | null>(null);
+  const [officeSession, setOfficeSession] = useState<OfficeSession | null>(null);
+  const [opening, setOpening] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const folders = data.folders.filter(f => f.client_id === client.id);
@@ -213,6 +217,38 @@ export function ClientFolders({
     }
   }
 
+  async function openOffice(att: Attachment) {
+    if (opening) return; // voorkom dubbele/racy sessies bij snel klikken
+    setError(null); setOpening(true);
+    try {
+      setOfficeSession(await createOfficeSession(att));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Kon de editor niet openen');
+    } finally {
+      setOpening(false);
+    }
+  }
+
+  function createNewOffice(docType: NewOfficeType) {
+    setNewOpen(false);
+    const folderId = currentId;
+    if (!folderId) return;
+    const name = window.prompt(`Naam van het nieuwe ${NEW_OFFICE_LABEL[docType]}:`, 'Nieuw document');
+    if (!name || !name.trim()) return;
+    setError(null); setOpening(true);
+    void (async () => {
+      try {
+        const att = await createOfficeDocument(organizationId, folderId, docType, name.trim());
+        onChanged();
+        setOfficeSession(await createOfficeSession(att));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Kon geen nieuw document aanmaken');
+      } finally {
+        setOpening(false);
+      }
+    })();
+  }
+
   const canDrop = Boolean(currentId) && canWrite;
 
   return <div
@@ -256,6 +292,12 @@ export function ClientFolders({
           <div className="drive-pop-sep" />
           <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewNote(currentId); }}><StickyNote size={16} style={{ color: 'var(--accent-v)' }} /> Notitie</button>
           <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewDocument(currentId); }}><FileText size={16} style={{ color: 'var(--accent-g)' }} /> Document</button>
+          {currentId && <>
+            <div className="drive-pop-sep" />
+            <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('docx')}><FileText size={16} style={{ color: 'var(--accent-o)' }} /> Word-document</button>
+            <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('xlsx')}><Sheet size={16} style={{ color: 'var(--accent-o)' }} /> Excel-werkblad</button>
+            <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('pptx')}><Presentation size={16} style={{ color: 'var(--accent-o)' }} /> PowerPoint</button>
+          </>}
           {currentId && <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} style={{ color: 'var(--accent-o)' }} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>}
           {currentId && (linkableNotes.length > 0 || linkableDocs.length > 0) && <>
             <div className="drive-pop-sep" />
@@ -314,6 +356,9 @@ export function ClientFolders({
     {canDrop && !isEmpty && <div className={`drive-dropzone${dragOver ? ' is-dragging' : ''}`}>
       <UploadCloud size={18} /> Sleep bestanden hierheen om ze te uploaden
     </div>}
+
+    {opening && <span className="drive-uploading" style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 1500 }}><UploadCloud size={14} /> Editor openen…</span>}
+    {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); onChanged(); }} />}
   </div>;
 
   // ── Renderers ────────────────────────────────────────────────────────────
@@ -358,6 +403,7 @@ export function ClientFolders({
 
   function fileMenu(att: Attachment) {
     return <>
+      {isOfficeEditable(att) && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); openOffice(att); }}><FilePen size={16} style={{ color: 'var(--accent-o)' }} /> Openen in editor</button>}
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); handleDownload(att); }}><Download size={16} /> Downloaden</button>
       {canWrite && <>
         <div className="drive-pop-sep" />
@@ -392,6 +438,7 @@ export function ClientFolders({
   function fileOpen(it: DriveFile) {
     if (it.kind === 'note') onEditNote(it.note);
     else if (it.kind === 'document') onEditDocument(it.doc);
+    else if (isOfficeEditable(it.att)) openOffice(it.att);
     else handleDownload(it.att);
   }
 

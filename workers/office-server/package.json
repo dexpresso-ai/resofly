@@ -1,0 +1,19 @@
+{
+  "name": "resofly-office-server",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Collabora Online (CODE) op Cloudflare Containers — render-engine voor online Office-bewerken; documenten blijven op R2 via de media-api WOPI-host.",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "deploy:staging": "wrangler deploy --env staging",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260715.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.0.0"
+  }
+}
