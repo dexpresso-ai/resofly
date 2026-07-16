@@ -287,18 +287,18 @@ export function ClientFolders({
         <button type="button" className="drive-new drive-pop-trigger" disabled={busy} onClick={() => { setNewOpen(o => !o); setMenu(null); }} aria-haspopup="menu" aria-expanded={newOpen}>
           <Plus size={16} /> Nieuw <ChevronDown size={14} />
         </button>
-        {newOpen && <div className="drive-pop" role="menu">
+        {newOpen && <div className="drive-pop" role="menu" style={{ maxHeight: 'min(70vh, 460px)', overflowY: 'auto' }}>
           <button type="button" className="drive-pop-item" role="menuitem" onClick={createFolder}><FolderPlus size={16} style={{ color: 'var(--accent)' }} /> {currentId ? 'Nieuwe submap' : 'Nieuwe map'}</button>
           <div className="drive-pop-sep" />
           <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewNote(currentId); }}><StickyNote size={16} style={{ color: 'var(--accent-v)' }} /> Notitie</button>
           <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewDocument(currentId); }}><FileText size={16} style={{ color: 'var(--accent-g)' }} /> Document</button>
+          {currentId && <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} style={{ color: 'var(--accent-o)' }} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>}
           {currentId && <>
             <div className="drive-pop-sep" />
             <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('docx')}><FileText size={16} style={{ color: 'var(--accent-o)' }} /> Word-document</button>
             <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('xlsx')}><Sheet size={16} style={{ color: 'var(--accent-o)' }} /> Excel-werkblad</button>
             <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('pptx')}><Presentation size={16} style={{ color: 'var(--accent-o)' }} /> PowerPoint</button>
           </>}
-          {currentId && <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} style={{ color: 'var(--accent-o)' }} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>}
           {currentId && (linkableNotes.length > 0 || linkableDocs.length > 0) && <>
             <div className="drive-pop-sep" />
             <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); setLinkOpen(true); }}><Link2 size={16} /> Bestaande inhoud koppelen</button>
