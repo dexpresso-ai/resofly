@@ -862,6 +862,10 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                     const visibleDuration = segment.endMinute - segment.startMinute;
                     const densityClass = visibleDuration < 30 ? ' tb-ev-tight' : visibleDuration < 60 ? ' tb-ev-compact' : ' tb-ev-roomy';
                     const eventMeta = [providerLabel(ev.provider), ev.source_name, ev.location].filter(Boolean).join(' · ');
+                    // In het rooster tonen we alleen de locatie (de kleur duidt de
+                    // agenda/bron al aan) — "Google · Agenda" eronder was vooral ruis.
+                    // De volledige bron blijft in de tooltip en het detailpaneel.
+                    const eventLocation = ev.location?.trim() ?? '';
                     const trackedMin = trackedMinutesFor(ev);
                     const draggable = !readOnlyEvents && canDragEvent(ev) && !segment.startsBeforeDay && !segment.endsAfterDay;
                     const isGhosted = Boolean(interaction) && eventIdentityKey(interaction!.event) === eventIdentityKey(ev);
@@ -882,7 +886,7 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                         {draggable && <span className="tb-ev-handle tb-ev-handle-top" onPointerDown={e => beginEventInteraction(e, ev, di, 'resize-start')} title="Sleep om de starttijd te wijzigen" />}
                         <span className="tb-ev-time">{visualTime}</span>
                         <span className="tb-ev-title">{ev.title}</span>
-                        <span className="tb-ev-src">{eventMeta}</span>
+                        {eventLocation && <span className="tb-ev-src">{eventLocation}</span>}
                         {draggable && <span className="tb-ev-handle tb-ev-handle-bottom" onPointerDown={e => beginEventInteraction(e, ev, di, 'resize-end')} title="Sleep om de eindtijd te wijzigen" />}
                       </button>
                     );
