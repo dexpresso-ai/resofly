@@ -52,11 +52,14 @@ const TOTAL_SLOTS = (HOUR_END - HOUR_START) * (60 / SLOT_MINUTES);
 const MIN_EVENT_HEIGHT_SLOTS = 0.85;
 // De volledige dag (00:00-24:00) blijft scrollbaar zodat ook de vroege/late uren
 // bereikbaar zijn. De rijhoogte schaalt zo dat de WERKDAG de zichtbare hoogte
-// vult (ruime, schermvullende blokken); de grid scrollt voor de overige uren en
-// opent automatisch op de werkdag-start.
+// vult (schermvullende blokken); de grid scrollt voor de overige uren en opent
+// automatisch op de werkdag-start.
+// De clamp houdt de rijen compact (Google-dichtheid, ~44-56px per uur i.p.v. de
+// oude ~100px per uur op grote schermen) zodat je in één oogopslag veel meer van
+// de dag ziet.
 const WORKDAY_SLOTS = (WORKDAY_END - WORKDAY_START) * (60 / SLOT_MINUTES);
-const MIN_ROW_HEIGHT = 24;
-const MAX_ROW_HEIGHT = 52;
+const MIN_ROW_HEIGHT = 22;
+const MAX_ROW_HEIGHT = 28;
 // Slepen & herschalen van agenda-items: de zichtbare dag beslaat DAY_MINUTES
 // minuten; tijden worden op SNAP_MIN-rasters afgerond zodat slepen netjes "klikt".
 const DAY_MINUTES = (HOUR_END - HOUR_START) * 60;
@@ -2476,6 +2479,44 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [mode, view, showCreatePanel, selectedEvent]); // eslint-disable-line
 
+  // Muiswiel navigeert door periodes (net als de pijltjes). In dag/week scrollt het
+  // wiel eerst het tijdrooster; pas aan de boven-/onderrand springt het naar de
+  // vorige/volgende periode ("blijf scrollen om naar de volgende week te gaan").
+  // In de maandweergave (geen interne scroll) springt elk wieltje meteen een maand.
+  // Een korte vergrendeling ontdubbelt trackpad-momentum tot één sprong per gebaar.
+  const mainCardRef = useRef<HTMLDivElement | null>(null);
+  const wheelLockRef = useRef(0);
+  useEffect(() => {
+    if (mode !== 'agenda') return;
+    const el = mainCardRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      if (showCreatePanel || selectedEvent || bookingMode) return;
+      if (view === 'list') return; // de lijst scrollt gewoon verticaal
+      if (e.deltaY === 0 || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return; // negeer horizontaal
+      const dir: -1 | 1 = e.deltaY > 0 ? 1 : -1;
+      // Maand op mobiel is een natuurlijke scroll-lijst — die niet kapen.
+      if (view === 'month' && window.innerWidth <= 900) return;
+      // Dag/week: respecteer de interne tijdscroll; navigeer pas aan de rand.
+      if (view === 'day' || view === 'week') {
+        const scroller = el!.querySelector<HTMLElement>('.tb-scroll');
+        if (scroller) {
+          const atTop = scroller.scrollTop <= 1;
+          const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
+          if (dir === 1 && !atBottom) return; // laat het rooster naar beneden scrollen
+          if (dir === -1 && !atTop) return;   // laat het rooster naar boven scrollen
+        }
+      }
+      e.preventDefault();
+      const now = Date.now();
+      if (now < wheelLockRef.current) return; // binnen de ontdubbel-vergrendeling
+      wheelLockRef.current = now + 450;
+      movePeriod(dir);
+    }
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [mode, view, showCreatePanel, selectedEvent, bookingMode]); // eslint-disable-line
+
   const previousLabel = view === 'day' ? 'Vorige dag' : view === 'month' ? 'Vorige maand' : 'Vorige week';
   const nextLabel = view === 'day' ? 'Volgende dag' : view === 'month' ? 'Volgende maand' : 'Volgende week';
 
@@ -2665,7 +2706,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     {message && <div className="success">{message}</div>}
 
     {/* Calendar view */}
-    <div className={`calendar-main-card calendar-main-card-${view}`} id="calendar-agenda">
+    <div className={`calendar-main-card calendar-main-card-${view}`} id="calendar-agenda" ref={mainCardRef}>
       <div className="calendar-toolbar calendar-toolbar-premium">
         <div className="calendar-period-controls">
           <Button className="calendar-nav-btn" onClick={() => movePeriod(-1)} title={`${previousLabel} (←)`} aria-label={previousLabel}><ChevronLeft size={18} /></Button>
