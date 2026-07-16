@@ -421,6 +421,7 @@ export interface GerrieRoutine {
 export interface GerrieRoutineRun {
   id: UUID;
   agent_id: UUID;
+  conversation_id: UUID | null;
   triggered_by: 'schedule' | 'manual' | 'retry';
   status: RoutineRunStatus;
   scheduled_for: string | null;
@@ -518,6 +519,27 @@ export async function listRunProposals(organizationId: UUID, runId: UUID): Promi
   return (data ?? [])
     .map((r: { id: string; params: unknown }) => ({ auditId: String(r.id), proposal: r.params as GerrieProposal }))
     .filter((r) => r.proposal && typeof r.proposal.type === 'string');
+}
+
+/** Eén beurt in het gesprek/transcript van een run. */
+export interface GerrieRunMessage { role: 'user' | 'assistant'; content: string; created_at: string }
+
+/** Het volledige transcript (user + assistant) van een run, oplopend gesorteerd. */
+export async function loadRunTranscript(organizationId: UUID, conversationId: UUID): Promise<GerrieRunMessage[]> {
+  const { data, error } = await supabase.from('ai_messages')
+    .select('role, content, created_at').eq('organization_id', organizationId).eq('conversation_id', conversationId)
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((m: { role: string; content: string; created_at: string }) => ({
+    role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content ?? ''), created_at: m.created_at,
+  }));
+}
+
+/** Antwoord op een run (bv. "ja, verstuur maar"). De agent draait nog een beurt; een
+ *  eventueel voorstel belandt in de goedkeurwachtrij. */
+export async function replyToRun(organizationId: UUID, runId: UUID, message: string): Promise<{ text: string; proposalCreated: number }> {
+  const payload = await postRunner({ action: 'reply', organizationId, runId, message });
+  return { text: String(payload?.text ?? ''), proposalCreated: Number(payload?.proposalCreated ?? 0) };
 }
 
 /** De echte, org-scoped tool-namen die een Routine mag gebruiken (voor de UI-selectie). */

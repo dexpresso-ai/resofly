@@ -24,7 +24,7 @@ import {
   supabaseAdmin, HttpError, ANTHROPIC_API_KEY, USD_TO_EUR, TOOL_DEFINITIONS,
   resolveModelKind, runAgent, buildContext, createConversation, insertMessage,
   recordUsage, costUsd, checkUserBudget, requireUser, requireOrganizationAccess,
-  describeError, isUuid, todayIso, tzOffsetMs, parseAllowedOrigins,
+  describeError, isUuid, todayIso, tzOffsetMs, parseAllowedOrigins, loadHistory,
 } from '../_shared/gerrieCore.ts';
 import type { Emit, OrganizationRole } from '../_shared/gerrieCore.ts';
 import { sendViaResend } from '../_shared/resend.ts';
@@ -82,6 +82,7 @@ Deno.serve(async (req) => {
       case 'set_status': return json(req, await setStatus(organizationId, String(body.id || ''), String(body.status || '')));
       case 'delete': return json(req, await deleteAgent(organizationId, String(body.id || '')));
       case 'run_now': return json(req, await runNow(organizationId, String(body.id || '')));
+      case 'reply': return json(req, await replyToRun(organizationId, user.id, role, body));
       default: throw new HttpError('Onbekende actie.', 400);
     }
   } catch (error) {
@@ -471,6 +472,64 @@ async function runNow(orgId: string, id: string): Promise<Record<string, unknown
   // Handmatige run: eigen occurrence-key, verandert het schema NIET.
   const occurrenceKey = `manual:${new Date().toISOString()}`;
   return await executeAgentRun(agent, 'manual', occurrenceKey, { reschedule: false });
+}
+
+/**
+ * Antwoord van de (aanwezige) gebruiker op een run: zet het gesprek van die run voort.
+ * Handig als de agent om input vroeg ("mag ik dit versturen?") — de gebruiker antwoordt,
+ * de agent draait nog een beurt en kan alsnog een propose_* voorstel klaarzetten. Draait
+ * met dezelfde modus/tools als de agent; een voorstel belandt (zoals altijd) in de
+ * goedkeurwachtrij en wordt pas na expliciete goedkeuring uitgevoerd.
+ */
+async function replyToRun(orgId: string, userId: string, role: OrganizationRole, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const runId = String(body.runId || '');
+  const message = String(body.message || '').trim();
+  if (!isUuid(runId)) throw new HttpError('Ongeldig run-id.', 400);
+  if (!message) throw new HttpError('Leeg bericht.', 400);
+  if (message.length > 4000) throw new HttpError('Bericht is te lang.', 400);
+  if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
+
+  const { data: run, error: runErr } = await supabaseAdmin.from('ai_agent_runs')
+    .select('agent_id, conversation_id').eq('id', runId).eq('organization_id', orgId).maybeSingle();
+  if (runErr) throw new HttpError(`Run ophalen mislukt: ${runErr.message}`, 500);
+  if (!run) throw new HttpError('Run niet gevonden.', 404);
+  const convId = run.conversation_id ? String(run.conversation_id) : '';
+  if (!convId) throw new HttpError('Deze run heeft geen gesprek om op te antwoorden.', 400);
+
+  const { data: agent, error: agErr } = await supabaseAdmin.from('ai_agents')
+    .select('*').eq('id', run.agent_id).eq('organization_id', orgId).maybeSingle();
+  if (agErr) throw new HttpError(`Agent ophalen mislukt: ${agErr.message}`, 500);
+  if (!agent) throw new HttpError('Agent niet gevonden.', 404);
+  const mode = String(agent.mode || 'report') === 'propose' ? 'propose' : 'report';
+  const modelKind = resolveModelKind(agent.model_kind);
+
+  const budget = await checkUserBudget(userId);
+  if (!budget.allowed) throw new HttpError('Je AI-tegoed voor deze maand is op.', 429);
+
+  const history = await loadHistory(convId, orgId);
+  await insertMessage(convId, orgId, userId, 'user', message, []);
+
+  const ctx = await buildContext(orgId, role, { id: userId });
+  const allowedToolNames = resolveAllowedTools(agent, mode);
+  const outcome = await runAgent(ctx, history, message, noopEmit, modelKind, allowedToolNames);
+
+  const assistantId = await insertMessage(convId, orgId, userId, 'assistant', outcome.text, outcome.toolCalls);
+  await recordUsage(orgId, convId, assistantId, userId, outcome.usage, modelKind, String(agent.id), runId);
+
+  let proposalCreated = 0;
+  if (outcome.proposal && mode === 'propose') {
+    await supabaseAdmin.from('ai_action_audit').insert({
+      organization_id: orgId, conversation_id: convId, message_id: assistantId, user_id: userId,
+      action: `propose_${outcome.proposal.type}`, params: outcome.proposal, status: 'proposed',
+      agent_id: String(agent.id), agent_run_id: runId,
+    });
+    proposalCreated = 1;
+    // Houd de teller op de run bij (voor de UI-badge).
+    const { data: cur } = await supabaseAdmin.from('ai_agent_runs').select('proposals_created').eq('id', runId).maybeSingle();
+    await supabaseAdmin.from('ai_agent_runs').update({ proposals_created: Number(cur?.proposals_created || 0) + 1 }).eq('id', runId);
+  }
+
+  return { text: outcome.text, proposalCreated };
 }
 
 // ── HTTP-helpers ─────────────────────────────────────────────────────────────

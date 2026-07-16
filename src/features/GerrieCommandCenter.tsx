@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Sparkles, Send, Check, X, AlertTriangle, Square, ListChecks, Wand2, Clock, Plus, Play, Pause, Trash2, Pencil, RotateCw } from 'lucide-react';
+import { Sparkles, Send, Check, X, AlertTriangle, Square, ListChecks, Wand2, Clock, Plus, Play, Pause, Trash2, Pencil, RotateCw, Loader2, ChevronDown, ChevronRight, CornerDownLeft } from 'lucide-react';
 import {
   streamGerrieReply, planGerrieMission, loadGerrieBudget, confirmGerrieAction,
   listRoutines, listRoutineRuns, saveRoutine, setRoutineStatus, deleteRoutine, runRoutineNow, listRunProposals,
-  ROUTINE_READ_TOOLS, ROUTINE_PROPOSE_TOOLS,
+  loadRunTranscript, replyToRun, ROUTINE_READ_TOOLS, ROUTINE_PROPOSE_TOOLS,
   type GerrieActionHandlers, type GerrieProposal, type GerrieMissionSubtask,
-  type GerrieRoutine, type GerrieRoutineRun, type GerrieRoutineInput,
+  type GerrieRoutine, type GerrieRoutineRun, type GerrieRoutineInput, type GerrieRunMessage,
   type RoutineMode, type RoutineScheduleKind, type RoutineStatus, type RoutineRunStatus,
 } from '../lib/gerrie-api';
 import { euro, formatMinutes } from '../lib/format';
@@ -478,8 +478,15 @@ function RoutinesPanel({ organizationId, canWrite, handlers }: { organizationId:
   const [editing, setEditing] = useState<GerrieRoutine | 'new' | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [openRuns, setOpenRuns] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [runsKey, setRunsKey] = useState(0);
+  const [toast, setToast] = useState<{ text: string; kind: 'info' | 'success' | 'error' } | null>(null);
+  const toastTimer = useRef<number | null>(null);
   const reload = () => setReloadKey((k) => k + 1);
+  function notify(text: string, kind: 'info' | 'success' | 'error' = 'info', sticky = false) {
+    setToast({ text, kind });
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    if (!sticky) toastTimer.current = window.setTimeout(() => setToast(null), kind === 'error' ? 6000 : 4000);
+  }
 
   useEffect(() => {
     let alive = true;
@@ -493,24 +500,25 @@ function RoutinesPanel({ organizationId, canWrite, handlers }: { organizationId:
 
   async function doStatus(r: GerrieRoutine, status: RoutineStatus) {
     setBusyId(r.id);
-    try { await setRoutineStatus(organizationId, r.id, status); reload(); }
-    catch (e) { setToast(e instanceof Error ? e.message : 'Mislukt.'); }
+    try { await setRoutineStatus(organizationId, r.id, status); reload(); notify(status === 'active' ? 'Routine geactiveerd.' : status === 'paused' ? 'Routine gepauzeerd.' : 'Bijgewerkt.', 'success'); }
+    catch (e) { notify(e instanceof Error ? e.message : 'Mislukt.', 'error'); }
     finally { setBusyId(null); }
   }
   async function doDelete(r: GerrieRoutine) {
     if (!confirm(`Routine "${r.name || 'naamloos'}" verwijderen?`)) return;
     setBusyId(r.id);
-    try { await deleteRoutine(organizationId, r.id); reload(); }
-    catch (e) { setToast(e instanceof Error ? e.message : 'Verwijderen mislukt.'); }
+    try { await deleteRoutine(organizationId, r.id); reload(); notify('Routine verwijderd.', 'success'); }
+    catch (e) { notify(e instanceof Error ? e.message : 'Verwijderen mislukt.', 'error'); }
     finally { setBusyId(null); }
   }
   async function doRunNow(r: GerrieRoutine) {
-    setBusyId(r.id); setToast(`"${r.name || 'Routine'}" draait…`);
+    setBusyId(r.id); setOpenRuns(r.id);
+    notify(`"${r.name || 'Routine'}" draait…`, 'info', true);
     try {
       const res = await runRoutineNow(organizationId, r.id);
-      setToast(res.proposalsCreated ? `Klaar — ${res.proposalsCreated} voorstel klaargezet om goed te keuren.` : 'Klaar — bekijk de run-historie.');
-      setOpenRuns(r.id); reload();
-    } catch (e) { setToast(e instanceof Error ? e.message : 'Draaien mislukt.'); }
+      notify(res.proposalsCreated ? `Klaar — ${res.proposalsCreated} voorstel${res.proposalsCreated === 1 ? '' : 'len'} klaargezet om goed te keuren.` : 'Klaar — bekijk de run hieronder.', 'success');
+      setRunsKey((k) => k + 1); reload();
+    } catch (e) { notify(e instanceof Error ? e.message : 'Draaien mislukt.', 'error'); }
     finally { setBusyId(null); }
   }
 
@@ -529,7 +537,12 @@ function RoutinesPanel({ organizationId, canWrite, handlers }: { organizationId:
         <button className="cc-btn primary" onClick={() => setEditing('new')}><Plus size={15} /> Nieuwe routine</button>
       </div>
 
-      {toast && <div className="cc-routines-toast" role="status" onClick={() => setToast(null)}>{toast}</div>}
+      {toast && (
+        <div className={`cc-routines-toast ${toast.kind}`} role="status" onClick={() => setToast(null)}>
+          {toast.kind === 'success' ? <Check size={15} /> : toast.kind === 'error' ? <AlertTriangle size={15} /> : <Loader2 size={15} className="cc-spin" />}
+          <span>{toast.text}</span>
+        </div>
+      )}
       {error && <div className="cc-plan-error">{error}</div>}
 
       {routines.length === 0 && !loading && (
@@ -559,7 +572,9 @@ function RoutinesPanel({ organizationId, canWrite, handlers }: { organizationId:
               </div>
               {r.instruction && <p className="cc-routine-instr">{r.instruction}</p>}
               <div className="cc-routine-actions">
-                <button className="cc-btn tiny ghost" disabled={busyId === r.id} onClick={() => void doRunNow(r)}><Play size={13} /> Nu draaien</button>
+                <button className="cc-btn tiny ghost" disabled={busyId === r.id} onClick={() => void doRunNow(r)}>
+                  {busyId === r.id ? <><Loader2 size={13} className="cc-spin" /> Draait…</> : <><Play size={13} /> Nu draaien</>}
+                </button>
                 {r.status === 'active'
                   ? <button className="cc-btn tiny ghost" disabled={busyId === r.id} onClick={() => void doStatus(r, 'paused')}><Pause size={13} /> Pauzeren</button>
                   : <button className="cc-btn tiny primary" disabled={busyId === r.id} onClick={() => void doStatus(r, 'active')}><Play size={13} /> Activeren</button>}
@@ -567,7 +582,7 @@ function RoutinesPanel({ organizationId, canWrite, handlers }: { organizationId:
                 <button className="cc-btn tiny ghost" onClick={() => setOpenRuns(openRuns === r.id ? null : r.id)}><RotateCw size={13} /> Runs</button>
                 <button className="cc-btn tiny ghost danger" disabled={busyId === r.id} onClick={() => void doDelete(r)} title="Verwijderen"><Trash2 size={13} /></button>
               </div>
-              {openRuns === r.id && <RoutineRuns organizationId={organizationId} agentId={r.id} canWrite={canWrite} handlers={handlers} />}
+              {openRuns === r.id && <RoutineRuns organizationId={organizationId} agentId={r.id} canWrite={canWrite} handlers={handlers} refreshKey={runsKey} />}
             </article>
           ))}
         </div>
@@ -708,7 +723,13 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
   );
 }
 
-function RoutineRuns({ organizationId, agentId, canWrite, handlers }: { organizationId: UUID; agentId: UUID; canWrite: boolean; handlers: GerrieActionHandlers }) {
+function Spin({ size = 14 }: { size?: number }) { return <Loader2 size={size} className="cc-spin" />; }
+
+function runPillClass(s: RoutineRunStatus): string {
+  return s === 'succeeded' ? 'done' : s === 'failed' ? 'fail' : (s === 'running' || s === 'claimed') ? 'run' : s === 'partial' ? 'wait' : 'cancel';
+}
+
+function RoutineRuns({ organizationId, agentId, canWrite, handlers, refreshKey }: { organizationId: UUID; agentId: UUID; canWrite: boolean; handlers: GerrieActionHandlers; refreshKey: number }) {
   const [runs, setRuns] = useState<GerrieRoutineRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -721,83 +742,138 @@ function RoutineRuns({ organizationId, agentId, canWrite, handlers }: { organiza
       .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : 'Runs laden mislukt.'); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [organizationId, agentId]);
+  }, [organizationId, agentId, refreshKey]);
 
-  if (loading) return <div className="cc-runs">Runs laden…</div>;
+  if (loading) return <div className="cc-runs"><Spin size={13} /> Runs laden…</div>;
   if (err) return <div className="cc-runs cc-plan-error">{err}</div>;
   if (runs.length === 0) return <div className="cc-runs cc-rail-empty">Nog geen runs. Klik “Nu draaien” om te testen.</div>;
 
   return (
     <div className="cc-runs">
-      {runs.map((run) => (
-        <div key={run.id} className="cc-run">
-          <div className="cc-run-top">
-            <span className={`cc-pill ${run.status === 'succeeded' ? 'done' : run.status === 'failed' ? 'fail' : run.status === 'running' ? 'run' : 'cancel'}`}><span className="cc-dot" />{runStatusLabel(run.status)}</span>
-            <span className="cc-run-when">{fmtWhen(run.created_at)}</span>
-            {run.triggered_by === 'manual' && <span className="cc-run-tag">handmatig</span>}
-          </div>
-          {run.summary && <div className="cc-run-summary">{run.summary}</div>}
-          {run.error && <div className="cc-lane-err"><AlertTriangle size={13} /> {run.error}</div>}
-          {run.proposals_created > 0 && <RunProposals organizationId={organizationId} runId={run.id} canWrite={canWrite} handlers={handlers} />}
-        </div>
+      {runs.map((run, i) => (
+        <RunItem key={run.id} run={run} organizationId={organizationId} canWrite={canWrite} handlers={handlers} defaultOpen={i === 0} />
       ))}
     </div>
   );
 }
 
-function RunProposals({ organizationId, runId, canWrite, handlers }: { organizationId: UUID; runId: UUID; canWrite: boolean; handlers: GerrieActionHandlers }) {
-  const [items, setItems] = useState<Array<{ auditId: string; proposal: GerrieProposal }>>([]);
-  const [state, setState] = useState<Record<string, 'idle' | 'busy' | 'done' | 'rejected' | 'error'>>({});
-  const [msg, setMsg] = useState<Record<string, string>>({});
+function RunItem({ run, organizationId, canWrite, handlers, defaultOpen }: { run: GerrieRoutineRun; organizationId: UUID; canWrite: boolean; handlers: GerrieActionHandlers; defaultOpen: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const running = run.status === 'running' || run.status === 'claimed';
+  return (
+    <div className={`cc-run${open ? ' open' : ''}`}>
+      <button className="cc-run-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        <span className="cc-run-chev">{open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
+        <span className={`cc-pill ${runPillClass(run.status)}`}>{running ? <Spin size={11} /> : <span className="cc-dot" />}{runStatusLabel(run.status)}</span>
+        <span className="cc-run-when">{fmtWhen(run.created_at)}</span>
+        {run.triggered_by === 'manual' && <span className="cc-run-tag">handmatig</span>}
+        {run.proposals_created > 0 && <span className="cc-run-badge">{run.proposals_created} voorstel{run.proposals_created === 1 ? '' : 'len'}</span>}
+        {!open && run.summary && <span className="cc-run-peek">{run.summary}</span>}
+      </button>
+      {open && <RunDetail run={run} organizationId={organizationId} canWrite={canWrite} handlers={handlers} />}
+    </div>
+  );
+}
+
+type PropState = 'idle' | 'busy' | 'done' | 'rejected' | 'error';
+
+function RunDetail({ run, organizationId, canWrite, handlers }: { run: GerrieRoutineRun; organizationId: UUID; canWrite: boolean; handlers: GerrieActionHandlers }) {
+  const [transcript, setTranscript] = useState<GerrieRunMessage[]>([]);
+  const [proposals, setProposals] = useState<Array<{ auditId: string; proposal: GerrieProposal }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [refresh, setRefresh] = useState(0);
+  const [reply, setReply] = useState('');
+  const [replying, setReplying] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [pstate, setPstate] = useState<Record<string, PropState>>({});
+  const [pmsg, setPmsg] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let alive = true;
-    listRunProposals(organizationId, runId).then((r) => { if (alive) setItems(r); }).catch(() => { /* stil */ });
+    setLoading(true);
+    const convId = run.conversation_id;
+    Promise.all([
+      convId ? loadRunTranscript(organizationId, convId) : Promise.resolve([] as GerrieRunMessage[]),
+      listRunProposals(organizationId, run.id),
+    ])
+      .then(([t, p]) => { if (alive) { setTranscript(t); setProposals(p); } })
+      .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : 'Laden mislukt.'); })
+      .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [organizationId, runId]);
+  }, [organizationId, run.id, run.conversation_id, refresh]);
 
-  if (items.length === 0) return null;
-
+  async function sendReply() {
+    const m = reply.trim();
+    if (!m || replying) return;
+    setReplying(true); setErr(null);
+    try { await replyToRun(organizationId, run.id, m); setReply(''); setRefresh((x) => x + 1); }
+    catch (e) { setErr(e instanceof Error ? e.message : 'Antwoord mislukt.'); }
+    finally { setReplying(false); }
+  }
   async function approve(auditId: string, p: GerrieProposal) {
-    setState((s) => ({ ...s, [auditId]: 'busy' }));
+    setPstate((s) => ({ ...s, [auditId]: 'busy' }));
     try {
       await executeProposal(p, handlers);
       void confirmGerrieAction(organizationId, auditId, 'executed');
-      setState((s) => ({ ...s, [auditId]: 'done' }));
+      setPstate((s) => ({ ...s, [auditId]: 'done' }));
     } catch (e) {
       const m = e instanceof Error ? e.message : 'Uitvoeren mislukt.';
       void confirmGerrieAction(organizationId, auditId, 'failed', m);
-      setState((s) => ({ ...s, [auditId]: 'error' })); setMsg((x) => ({ ...x, [auditId]: m }));
+      setPstate((s) => ({ ...s, [auditId]: 'error' })); setPmsg((x) => ({ ...x, [auditId]: m }));
     }
   }
   function reject(auditId: string) {
     void confirmGerrieAction(organizationId, auditId, 'failed', 'Afgewezen door gebruiker.');
-    setState((s) => ({ ...s, [auditId]: 'rejected' }));
+    setPstate((s) => ({ ...s, [auditId]: 'rejected' }));
   }
 
   return (
-    <div className="cc-run-proposals">
-      {items.map(({ auditId, proposal }) => {
-        const info = proposalLabel(proposal);
-        const st = state[auditId] ?? 'idle';
-        return (
-          <div key={auditId} className="cc-approve">
-            <div className="cc-approve-t">{info.title}</div>
-            {info.sub && <div className="cc-approve-s">{info.sub}</div>}
-            {st === 'error' && msg[auditId] && <div className="cc-approve-err">{msg[auditId]}</div>}
-            {st === 'done' ? <div className="cc-lane-ok"><Check size={13} /> Uitgevoerd</div>
-              : st === 'rejected' ? <div className="cc-lane-cancel">Afgewezen.</div>
-              : (
-                <div className="cc-approve-actions">
-                  <button className="cc-btn tiny ghost" disabled={st === 'busy'} onClick={() => reject(auditId)}>Afwijzen</button>
-                  <button className="cc-btn tiny primary" disabled={st === 'busy' || (info.write && !canWrite)} onClick={() => void approve(auditId, proposal)}>
-                    {st === 'busy' ? 'Bezig…' : info.write ? 'Goedkeuren' : 'Openen'}
-                  </button>
-                </div>
-              )}
+    <div className="cc-run-detail">
+      {loading ? <div className="cc-run-loading"><Spin size={13} /> Laden…</div> : (
+        <>
+          {transcript.length > 0 ? (
+            <div className="cc-thread">
+              {transcript.map((m, i) => <div key={i} className={`cc-msg ${m.role}`}>{m.content}</div>)}
+            </div>
+          ) : run.summary ? <div className="cc-msg assistant">{run.summary}</div> : null}
+          {run.error && <div className="cc-lane-err"><AlertTriangle size={13} /> {run.error}</div>}
+
+          {proposals.map(({ auditId, proposal }) => {
+            const info = proposalLabel(proposal);
+            const st = pstate[auditId] ?? 'idle';
+            return (
+              <div key={auditId} className="cc-approve">
+                <div className="cc-approve-t">{info.title}</div>
+                {info.sub && <div className="cc-approve-s">{info.sub}</div>}
+                {st === 'error' && pmsg[auditId] && <div className="cc-approve-err">{pmsg[auditId]}</div>}
+                {st === 'done' ? <div className="cc-lane-ok"><Check size={13} /> Uitgevoerd</div>
+                  : st === 'rejected' ? <div className="cc-lane-cancel">Afgewezen.</div>
+                  : (
+                    <div className="cc-approve-actions">
+                      <button className="cc-btn tiny ghost" disabled={st === 'busy'} onClick={() => reject(auditId)}>Afwijzen</button>
+                      <button className="cc-btn tiny primary" disabled={st === 'busy' || (info.write && !canWrite)} onClick={() => void approve(auditId, proposal)}>
+                        {st === 'busy' ? <><Spin size={13} /> Bezig…</> : info.write ? 'Goedkeuren' : 'Openen'}
+                      </button>
+                    </div>
+                  )}
+              </div>
+            );
+          })}
+
+          <div className="cc-reply">
+            <input
+              className="cc-text" value={reply} disabled={replying}
+              placeholder="Antwoord de agent… (bv. “ja, verstuur maar”)"
+              onChange={(e) => setReply(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendReply(); } }}
+            />
+            <button className="cc-btn tiny primary" disabled={!reply.trim() || replying} onClick={() => void sendReply()}>
+              {replying ? <Spin size={13} /> : <CornerDownLeft size={13} />} Stuur
+            </button>
           </div>
-        );
-      })}
+          {err && <div className="cc-approve-err">{err}</div>}
+        </>
+      )}
     </div>
   );
 }
