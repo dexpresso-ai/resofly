@@ -305,6 +305,8 @@ export interface Note extends OrgScopedRow {
 }
 export interface InternalDocument extends OrgScopedRow {
   client_id: UUID | null; project_id: UUID | null; folder_id: UUID | null; title: string; content: string; document_type: DocumentType; created_at: string; updated_at: string;
+  /** Word-modus: is `storage_key` gezet, dan is dit een .docx op R2 (Collabora/WOPI) i.p.v. rich-text; `content` is dan een tekst-spiegel voor previews/zoeken. */
+  storage_key?: string | null; mime_type?: string | null; size_bytes?: number | null; edit_version?: number; last_edited_by?: UUID | null; last_edited_at?: string | null;
 }
 export interface ContentFolder extends OrgScopedRow {
   client_id: UUID | null; parent_id: UUID | null; name: string; position: number; created_at: string; updated_at: string;

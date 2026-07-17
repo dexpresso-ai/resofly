@@ -55,6 +55,47 @@ async function errText(res: Response, fallback: string): Promise<string> {
   }
 }
 
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+/** Bouw een bewerksessie voor een intern Document dat in Word-modus staat (documents.storage_key gezet). */
+export async function createOfficeSessionForDocument(documentId: UUID): Promise<OfficeSession> {
+  const base = getWorkerBase();
+  const token = await getAccessToken();
+  const res = await fetch(`${base}/office/session`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ documentId }),
+  });
+  if (!res.ok) throw new Error(await errText(res, 'Kon de editor niet openen'));
+  return (await res.json()) as OfficeSession;
+}
+
+/**
+ * Schrijf de .docx-bytes van een Word-document naar R2 (nieuw of geconverteerd uit rich-text).
+ * De documents-rij (met de teruggegeven storage_key) maakt/werkt de aanroeper zelf bij via de repository.
+ */
+export async function uploadDocumentDocx(
+  organizationId: UUID,
+  name: string,
+  blob: Blob,
+): Promise<{ key: string; size_bytes: number; mime_type: string; name: string }> {
+  const base = getWorkerBase();
+  const token = await getAccessToken();
+  const fileName = name.toLowerCase().endsWith('.docx') ? name : `${name}.docx`;
+  const res = await fetch(`${base}/office/document-upload`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'x-organization-id': organizationId,
+      'x-file-name': encodeURIComponent(fileName),
+      'x-file-type': DOCX_MIME,
+    },
+    body: blob,
+  });
+  if (!res.ok) throw new Error(await errText(res, 'Kon het Word-document niet opslaan'));
+  return (await res.json()) as { key: string; size_bytes: number; mime_type: string; name: string };
+}
+
 /** Bouw een bewerksessie voor een bestaand office-bestand. */
 export async function createOfficeSession(att: Attachment): Promise<OfficeSession> {
   const base = getWorkerBase();

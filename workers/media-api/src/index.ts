@@ -145,6 +145,9 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
   if (method === 'POST' && pathname === '/office/new') {
     return handleOfficeNew(request, env, context);
   }
+  if (method === 'POST' && pathname === '/office/document-upload') {
+    return handleOfficeDocumentUpload(request, env, context);
+  }
   // WOPI-host-routes (Collabora → media-api, geauthenticeerd met een edit-token in de URL):
   const wopi = pathname.match(/^\/wopi\/files\/([^/]+?)(\/contents)?$/);
   if (wopi) {
@@ -314,7 +317,7 @@ const OFFICE_TOKEN_TTL_MS = 10 * 60 * 60 * 1000;
 /** Office-bestanden met afbeeldingen kunnen groter zijn dan de 25 MB upload-cap. */
 const OFFICE_MAX_BYTES = 50 * 1024 * 1024;
 
-type OfficeTokenPayload = { fid: string; org: string; uid: string; w: boolean; exp: number; nm?: string };
+type OfficeTokenPayload = { fid: string; org: string; uid: string; w: boolean; exp: number; nm?: string; k?: 'a' | 'd' };
 
 function officeSecret(env: Env): string {
   if (!env.MEDIA_SIGNING_SECRET) throw new HttpError(500, 'Office-bewerken niet geconfigureerd (MEDIA_SIGNING_SECRET).');
@@ -447,6 +450,66 @@ async function membershipRole(env: Env, organizationId: string, userId: string):
   return row?.role ?? null;
 }
 
+// ── Office-doel: attachment OF document (Word-modus) ────────────────────────
+//
+// De WOPI-laag bedient twee bronnen: geüploade `attachments` (kind 'a') én interne
+// `documents` in Word-modus (kind 'd', `documents.storage_key` gezet). Het edit-token
+// draagt de soort mee zodat GetFile/PutFile de juiste tabel raadplegen/bijwerken.
+
+type OfficeKind = 'a' | 'd';
+type OfficeTarget = { organization_id: string; storage_key: string; name: string; mime_type: string; size_bytes: number; edit_version: number };
+
+/** Normaliseer een attachment- of document-rij naar één office-doelvorm. */
+async function fetchOfficeTarget(env: Env, kind: OfficeKind, id: string): Promise<OfficeTarget> {
+  if (kind === 'd') {
+    const query = new URLSearchParams({
+      select: 'organization_id,title,storage_key,mime_type,size_bytes,edit_version',
+      id: `eq.${id}`,
+      limit: '1',
+    });
+    const res = await fetch(`${supabaseBase(env)}/rest/v1/documents?${query.toString()}`, { headers: serviceHeaders(env) });
+    if (!res.ok) throw new HttpError(502, 'Kon document niet ophalen.');
+    const rows = (await res.json()) as Array<{ organization_id: string; title: string; storage_key: string | null; mime_type: string | null; size_bytes: number | null; edit_version: number | null }>;
+    const row = Array.isArray(rows) ? rows[0] : undefined;
+    if (!row) throw new HttpError(404, 'Document niet gevonden.');
+    if (!row.storage_key) throw new HttpError(409, 'Dit document is geen Word-document.');
+    const mime = row.mime_type || OFFICE_NEW_MIME.docx;
+    const ext = OFFICE_MIME_EXT[mime] || 'docx';
+    const title = (row.title || 'Document').replace(/[\\/]+/g, ' ').trim() || 'Document';
+    return {
+      organization_id: row.organization_id,
+      storage_key: row.storage_key,
+      name: title.toLowerCase().endsWith(`.${ext}`) ? title : `${title}.${ext}`,
+      mime_type: mime,
+      size_bytes: row.size_bytes ?? 0,
+      edit_version: row.edit_version ?? 1,
+    };
+  }
+  const att = await fetchAttachment(env, id);
+  return {
+    organization_id: att.organization_id,
+    storage_key: att.storage_key,
+    name: att.name,
+    mime_type: att.mime_type,
+    size_bytes: att.size_bytes,
+    edit_version: att.edit_version ?? 1,
+  };
+}
+
+/** Werk edit-state bij op de juiste tabel (attachments of documents). */
+async function patchOfficeTarget(env: Env, kind: OfficeKind, id: string, patch: Record<string, unknown>): Promise<void> {
+  if (kind === 'd') {
+    const res = await fetch(`${supabaseBase(env)}/rest/v1/documents?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: serviceHeaders(env, { 'content-type': 'application/json', prefer: 'return=minimal' }),
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw new HttpError(502, 'Kon document-status niet bijwerken.');
+    return;
+  }
+  await patchAttachment(env, id, patch);
+}
+
 // ── Collabora WOPI-discovery ─────────────────────────────────────────────────
 
 let discoveryCache: { at: number; xml: string } | null = null;
@@ -504,31 +567,32 @@ async function handleOfficeSession(request: Request, env: Env, context: RouteCon
   const userId = await requireUser(request, env);
   const secret = officeSecret(env);
 
-  const body = (await request.json().catch(() => ({}))) as { attachmentId?: string };
-  const attachmentId = (body.attachmentId || '').trim();
-  if (!isUuid(attachmentId)) throw new HttpError(400, 'Ongeldige attachmentId.');
+  const body = (await request.json().catch(() => ({}))) as { attachmentId?: string; documentId?: string };
+  const kind: OfficeKind = body.documentId ? 'd' : 'a';
+  const id = ((kind === 'd' ? body.documentId : body.attachmentId) || '').trim();
+  if (!isUuid(id)) throw new HttpError(400, kind === 'd' ? 'Ongeldige documentId.' : 'Ongeldige attachmentId.');
 
-  const att = await fetchAttachment(env, attachmentId);
-  const role = await membershipRole(env, att.organization_id, userId);
+  const target = await fetchOfficeTarget(env, kind, id);
+  const role = await membershipRole(env, target.organization_id, userId);
   if (!role) throw new HttpError(403, 'Geen toegang tot dit bestand.');
   const canWrite = role !== 'viewer';
 
-  const ext = OFFICE_MIME_EXT[att.mime_type] || fileExt(att.name);
+  const ext = OFFICE_MIME_EXT[target.mime_type] || fileExt(target.name);
   if (!ext) throw new HttpError(415, 'Dit bestandstype kan niet online bewerkt worden.');
 
   const urlsrc = await collaboraUrlSrc(env, ext, canWrite ? 'edit' : 'view');
-  const wopiSrc = `${mediaPublicOrigin(request, env)}/wopi/files/${attachmentId}`;
+  const wopiSrc = `${mediaPublicOrigin(request, env)}/wopi/files/${id}`;
   const editorUrl = `${urlsrc}WOPISrc=${encodeURIComponent(wopiSrc)}&lang=nl-NL`;
 
   const exp = Date.now() + OFFICE_TOKEN_TTL_MS;
   const displayName = await fetchUserName(request, env, 'ResoFly-gebruiker');
   const accessToken = await signOfficeToken(
-    { fid: attachmentId, org: att.organization_id, uid: userId, w: canWrite, exp, nm: displayName },
+    { fid: id, org: target.organization_id, uid: userId, w: canWrite, exp, nm: displayName, k: kind },
     secret,
   );
 
   return jsonResponse(
-    { editorUrl, accessToken, accessTokenTtl: OFFICE_TOKEN_TTL_MS, accessTokenExp: exp, fileName: att.name, canWrite },
+    { editorUrl, accessToken, accessTokenTtl: OFFICE_TOKEN_TTL_MS, accessTokenExp: exp, fileName: target.name, canWrite },
     200,
     context,
   );
@@ -577,18 +641,50 @@ async function handleOfficeNew(request: Request, env: Env, context: RouteContext
   );
 }
 
+/**
+ * Ontvang de .docx-bytes van een Word-document (nieuw of geconverteerd uit rich-text) en
+ * schrijf ze naar R2. De `documents`-rij maakt/werkt de frontend zelf bij (RLS + created_by).
+ */
+async function handleOfficeDocumentUpload(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const userId = await requireUser(request, env);
+  officeSecret(env);
+
+  const organizationId = (request.headers.get('x-organization-id') || '').trim();
+  const fileName = sanitizeFileName(decodeMaybe(request.headers.get('x-file-name')) || 'document.docx');
+  const mime = (request.headers.get('x-file-type') || OFFICE_NEW_MIME.docx).trim();
+  if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige organization id.');
+
+  const role = await membershipRole(env, organizationId, userId);
+  if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  if (!request.body) throw new HttpError(400, 'Lege upload.');
+
+  const buf = await request.arrayBuffer();
+  if (buf.byteLength === 0) throw new HttpError(400, 'Lege upload.');
+  if (buf.byteLength > OFFICE_MAX_BYTES) {
+    throw new HttpError(413, `Bestand is te groot. Maximum is ${Math.round(OFFICE_MAX_BYTES / 1024 / 1024)} MB.`);
+  }
+
+  const key = `${organizationId}/document/${crypto.randomUUID()}-${fileName}`;
+  const object = await env.MEDIA_BUCKET.put(key, buf, {
+    httpMetadata: { contentType: mime },
+    customMetadata: { name: fileName, organizationId, entityType: 'document', uploadedBy: userId, uploadedAt: new Date().toISOString() },
+  });
+
+  return jsonResponse({ ok: true, key, size_bytes: object.size, mime_type: mime, name: fileName }, 200, context);
+}
+
 /** WOPI CheckFileInfo — metadata voor Collabora. */
 async function handleWopiCheckFileInfo(request: Request, env: Env, context: RouteContext, id: string): Promise<Response> {
   const token = await requireOfficeToken(request, env, id);
-  const att = await fetchAttachment(env, id);
-  if (att.organization_id !== token.org) throw new HttpError(403, 'Token/bestand-mismatch.');
+  const target = await fetchOfficeTarget(env, token.k ?? 'a', id);
+  if (target.organization_id !== token.org) throw new HttpError(403, 'Token/bestand-mismatch.');
 
   const appOrigin = getAllowedOrigins(env).values().next().value || '';
   const info = {
-    BaseFileName: att.name,
-    Size: att.size_bytes,
-    Version: String(att.edit_version ?? 1),
-    OwnerId: att.organization_id,
+    BaseFileName: target.name,
+    Size: target.size_bytes,
+    Version: String(target.edit_version),
+    OwnerId: target.organization_id,
     UserId: token.uid,
     UserFriendlyName: token.nm || 'ResoFly-gebruiker',
     UserCanWrite: token.w,
@@ -603,10 +699,10 @@ async function handleWopiCheckFileInfo(request: Request, env: Env, context: Rout
 /** WOPI GetFile — lever de bytes uit R2 (inline, geen forced download). */
 async function handleWopiGetFile(request: Request, env: Env, context: RouteContext, id: string): Promise<Response> {
   const token = await requireOfficeToken(request, env, id);
-  const att = await fetchAttachment(env, id);
-  if (att.organization_id !== token.org) throw new HttpError(403, 'Token/bestand-mismatch.');
+  const target = await fetchOfficeTarget(env, token.k ?? 'a', id);
+  if (target.organization_id !== token.org) throw new HttpError(403, 'Token/bestand-mismatch.');
 
-  const object = await env.MEDIA_BUCKET.get(att.storage_key);
+  const object = await env.MEDIA_BUCKET.get(target.storage_key);
   if (!object) throw new HttpError(404, 'Bestand niet gevonden.');
 
   const headers = new Headers();
@@ -621,8 +717,9 @@ async function handleWopiGetFile(request: Request, env: Env, context: RouteConte
 async function handleWopiPutFile(request: Request, env: Env, context: RouteContext, id: string): Promise<Response> {
   const token = await requireOfficeToken(request, env, id);
   if (!token.w) throw new HttpError(403, 'Geen schrijfrechten.');
-  const att = await fetchAttachment(env, id);
-  if (att.organization_id !== token.org) throw new HttpError(403, 'Token/bestand-mismatch.');
+  const kind: OfficeKind = token.k ?? 'a';
+  const target = await fetchOfficeTarget(env, kind, id);
+  if (target.organization_id !== token.org) throw new HttpError(403, 'Token/bestand-mismatch.');
   if (!request.body) throw new HttpError(400, 'Lege PutFile.');
 
   // Buffer de body zodat we de grootte kunnen afdwingen vóór het overschrijven van R2. Een
@@ -634,18 +731,18 @@ async function handleWopiPutFile(request: Request, env: Env, context: RouteConte
     throw new HttpError(413, `Bestand is te groot. Maximum is ${Math.round(OFFICE_MAX_BYTES / 1024 / 1024)} MB.`);
   }
 
-  const object = await env.MEDIA_BUCKET.put(att.storage_key, buf, {
-    httpMetadata: { contentType: att.mime_type || 'application/octet-stream' },
+  const object = await env.MEDIA_BUCKET.put(target.storage_key, buf, {
+    httpMetadata: { contentType: target.mime_type || 'application/octet-stream' },
     customMetadata: {
-      name: att.name,
-      organizationId: att.organization_id,
+      name: target.name,
+      organizationId: target.organization_id,
       editedBy: token.uid,
       editedAt: new Date().toISOString(),
     },
   });
 
-  const nextVersion = (att.edit_version ?? 1) + 1;
-  await patchAttachment(env, id, {
+  const nextVersion = target.edit_version + 1;
+  await patchOfficeTarget(env, kind, id, {
     edit_version: nextVersion,
     size_bytes: object.size,
     last_edited_by: token.uid,

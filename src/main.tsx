@@ -62,6 +62,8 @@ import { memberShortName, memberColor, memberInitials } from './lib/members';
 import { uploadToR2 } from './lib/r2';
 import { listExternalCalendarEvents, createExternalCalendarEvent } from './lib/calendar-api';
 import { buildDocumentPdfBlob, buildDocumentDocxBlob, downloadBlob, documentFileBaseName, type DocumentExportMeta } from './lib/documentExport';
+import { createOfficeSessionForDocument, uploadDocumentDocx, type OfficeSession } from './lib/office';
+import { OfficeEditor } from './features/OfficeEditor';
 import { Dashboard } from './features/Dashboard';
 import { ClientDetailPage, Clients } from './features/Clients';
 import { useClientEmailUnread, ClientEmailToasts } from './components/ClientEmailNotifications';
@@ -337,6 +339,10 @@ function App() {
   const setSettingsNav = (v: React.SetStateAction<{ tab: SettingsTab; key: number } | null>) => patchActiveTab(t => ({ settingsNav: applyUpdater(v, t.settingsNav) }));
   const setPendingReport = (v: React.SetStateAction<{ key: string; name: string; definition: ReportDefinition } | null>) => patchActiveTab(t => ({ pendingReport: applyUpdater(v, t.pendingReport) }));
   const setEdit = (v: React.SetStateAction<EditMode>) => patchActiveTab(t => ({ edit: applyUpdater(v, t.edit) }));
+  // Word-modus voor interne Documents: de Collabora-editor leeft op app-niveau, zodat een
+  // Word-document vanuit elke pagina (project/klant/Inhoud) geopend kan worden.
+  const [officeSession, setOfficeSession] = useState<OfficeSession | null>(null);
+  const [officeOpening, setOfficeOpening] = useState(false);
   // Mobiel uitschuifmenu (drawer). Op laptop/desktop is de zijbalk een iconenbalk
   // die bij hover openschuift; dit stuurt alleen het mobiele gedrag (≤760px) aan.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -771,6 +777,47 @@ function App() {
       setError(e instanceof Error ? e.message : 'Opslaan mislukt');
     } finally {
       setLoading(false);
+    }
+  }
+
+  /** Open een intern Document: Word-modus → Collabora-editor; rich-text → de gewone editor-modal. */
+  async function openDocument(doc: InternalDocument) {
+    if (!doc.storage_key) { setEdit({ kind: 'document', item: doc }); return; }
+    setOfficeOpening(true); setError(null);
+    try {
+      setOfficeSession(await createOfficeSessionForDocument(doc.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Kon de Word-editor niet openen');
+    } finally {
+      setOfficeOpening(false);
+    }
+  }
+
+  /** Zet een bestaand rich-text Document eenmalig om naar een Word-document (.docx op R2) en open het. */
+  async function convertDocumentToWord(doc: InternalDocument) {
+    if (doc.storage_key) { await openDocument(doc); return; }
+    setOfficeOpening(true); setError(null);
+    try {
+      const client = data.clients.find(c => c.id === doc.client_id);
+      const project = data.projects.find(p => p.id === doc.project_id);
+      const meta: DocumentExportMeta = {
+        title: doc.title || 'Document',
+        categoryLabel: documentTypeLabels[(doc.document_type || 'general') as keyof typeof documentTypeLabels] ?? 'Algemeen',
+        clientName: client?.name ?? null,
+        projectName: project?.name ?? null,
+        dateLabel: new Date(doc.created_at).toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' }),
+        companyName: data.companySettings?.company_name ?? null,
+        content: doc.content || '',
+      };
+      const blob = buildDocumentDocxBlob(meta);
+      const up = await uploadDocumentDocx(activeOrg.id, doc.title || 'Document', blob);
+      await updateRow<InternalDocument>('documents', doc.id, { storage_key: up.key, mime_type: up.mime_type, size_bytes: up.size_bytes }, activeOrg.id);
+      await refresh();
+      setOfficeSession(await createOfficeSessionForDocument(doc.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Omzetten naar Word mislukt');
+    } finally {
+      setOfficeOpening(false);
     }
   }
 
@@ -1438,11 +1485,13 @@ function App() {
         <section key={tab.id} className="content" hidden={tab.id !== activeTab.id}>
           {tab.id === activeTab.id && error && <div className="error">{error}</div>}
           {renderPage(tab)}
-          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} />}
+          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} />}
         </section>
       ))}
     </main>
     <GerrieChat organizationId={activeOrg.id} {...gerrieActions} />
+    {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); refresh(); }} />}
+    {officeOpening && !officeSession && <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 2100, background: 'var(--panel-strong)', border: '1px solid var(--border2)', borderRadius: 10, padding: '8px 14px', fontWeight: 600 }}>Word-editor openen…</div>}
     {/* Zwevend teamchat-paneel — overal beschikbaar, behalve op de volledige chatpagina. */}
     <TeamChatDock api={teamChat} hidden={page === 'chat'} />
     {/* Mobiele duim-onderbalk (alleen ≤760px, zie globals.css). Navigeert het
@@ -1481,16 +1530,16 @@ function App() {
     const settingsNav = view.settingsNav;
     const pendingReport = view.pendingReport;
     if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} />;
-    if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={(doc) => setEdit({kind:'document', item: doc})} setTaskStatus={setTaskStatus}/>;
+    if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
     if (page === 'projects') return <ProjectsListPage data={data} canWrite={canWrite} onNewProject={() => ensureCanWrite() && setEdit({kind:'project'})} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} onEditProject={(item) => setEdit({kind:'project', item})}/>;
     if (page === 'project-planning') return <ProjectsPlanningPage data={data} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} />;
-    if (page === 'client' && client) return <ClientDetailPage data={data} client={client} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewNote={(folderId) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(folderId) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditDocument={(doc) => setEdit({kind:'document', item: doc})} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread}/>;
+    if (page === 'client' && client) return <ClientDetailPage data={data} client={client} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewNote={(folderId) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(folderId) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditDocument={openDocument} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread}/>;
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} unreadTicketIds={ticketUnreadIds}/>;
     if (page === 'chat') return <TeamChatPage api={teamChat} />;
     if (page === 'gerrie') return <GerrieCommandCenter organizationId={activeOrg.id} canWrite={canWrite} {...gerrieActions} />;
     if (page === 'marketing') return <Marketing data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
-    if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null }})} onEditDocument={(item)=>setEdit({kind:'document', item})}/>;
+    if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null }})} onEditDocument={openDocument}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onEmailCreditNote={emailCreditNote} onPostToLedger={postInvoiceToLedger}/>;
@@ -1637,7 +1686,7 @@ function TaskAssigneePicker({ projectId, assigneeIds, teamMembers, projectMember
   </div>;
 }
 
-function EditModal({ edit, data, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void }) {
+function EditModal({ edit, data, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void }) {
   const item = 'item' in edit ? edit.item : undefined;
   const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit, data));
   const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
@@ -1764,7 +1813,7 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
     edit.kind === 'task' || edit.kind === 'ticket' || edit.kind === 'project' ? 'modal-task-editor' : '',
   ].filter(Boolean).join(' ');
 
-  return <Modal title={title} className={modalClassName} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{effectiveReadOnly ? 'Sluiten' : 'Annuleren'}</Button>{!effectiveReadOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!effectiveReadOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form))} disabled={saveBlockedByDuplicate}>Opslaan</Button>}</>}>
+  return <Modal title={title} className={modalClassName} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{effectiveReadOnly ? 'Sluiten' : 'Annuleren'}</Button>{!effectiveReadOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!effectiveReadOnly && edit.kind === 'document' && item && !(item as InternalDocument).storage_key && <Button variant="ghost" onClick={() => { onClose(); onConvertToWord(item as InternalDocument); }}>Bewerk als Word</Button>}{!effectiveReadOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form))} disabled={saveBlockedByDuplicate}>Opslaan</Button>}</>}>
     {readOnly && <div className="readonly-note">Je bekijkt dit item met alleen-lezen rechten. Wijzigen, verwijderen en uploaden zijn uitgeschakeld.</div>}
     {quoteWorkflowLocked && <div className="readonly-note">Deze offerte zit al in de goedkeuringsflow. Inhoudelijke velden zijn vergrendeld zodat een goedgekeurde of verzonden offerte niet ongemerkt kan wijzigen.</div>}
     {edit.kind === 'client' && <FormGrid className="client-form-grid">
