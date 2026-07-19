@@ -1805,18 +1805,6 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
     };
   }
 
-  async function handleDownloadDocx() {
-    setDocExport({ busy: 'docx', error: null });
-    try {
-      const meta = buildDocumentMeta();
-      const blob = buildDocumentDocxBlob(meta);
-      downloadBlob(blob, `${documentFileBaseName(meta.title)}.docx`);
-      setDocExport({ busy: null, error: null });
-    } catch (e) {
-      setDocExport({ busy: null, error: e instanceof Error ? e.message : 'Word-export mislukt' });
-    }
-  }
-
   async function handleDownloadPdf() {
     setDocExport({ busy: 'pdf', error: null });
     try {
@@ -1974,14 +1962,13 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
       {form.client_id && <Field label="Map" hint="Plaats dit document in een map van de gekozen klant.">
         <Select value={form.folder_id} onChange={e=>set('folder_id',e.target.value)} disabled={disabled}><option value="">Geen map</option>{clientFolderOptions(data.folders, form.client_id || null).map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</Select>
       </Field>}
-      <div className="document-export">
+      {item && <div className="document-export">
         <div className="document-export-actions">
           <Button onClick={handleDownloadPdf} disabled={docExport.busy !== null}>{docExport.busy === 'pdf' ? 'PDF maken…' : 'Download PDF'}</Button>
-          <Button onClick={handleDownloadDocx} disabled={docExport.busy !== null}>{docExport.busy === 'docx' ? 'Word maken…' : 'Download Word (.docx)'}</Button>
         </div>
-        <span className="document-export-hint">{item ? 'De PDF wordt ook opgeslagen in Cloudflare R2 en verschijnt hieronder als bijlage.' : 'Sla het document eerst op om de PDF ook in Cloudflare R2 te bewaren.'}</span>
+        <span className="document-export-hint">De PDF wordt ook opgeslagen in Cloudflare R2 en verschijnt hieronder als bijlage. Een Word-bestand nodig? Gebruik "Bewerk als Word" — daarna download je het origineel vanuit de editor.</span>
         {docExport.error && <span className="document-export-error">{docExport.error}</span>}
-      </div>
+      </div>}
       {item && <div className="note-created-meta"><span>Aangemaakt: {new Date((item as InternalDocument).created_at).toLocaleString('nl-NL')}</span><span>Bijgewerkt: {new Date((item as InternalDocument).updated_at).toLocaleString('nl-NL')}</span></div>}
       {!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.document} id={item.id} onUploaded={onAttachmentsChanged}/>}
       {attachmentBlock}
