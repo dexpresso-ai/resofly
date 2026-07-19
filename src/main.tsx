@@ -62,7 +62,7 @@ import { memberShortName, memberColor, memberInitials } from './lib/members';
 import { uploadToR2 } from './lib/r2';
 import { listExternalCalendarEvents, createExternalCalendarEvent } from './lib/calendar-api';
 import { buildDocumentPdfBlob, buildDocumentDocxBlob, downloadBlob, documentFileBaseName, type DocumentExportMeta } from './lib/documentExport';
-import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumentFile, OFFICE_UPLOAD_ACCEPT, type OfficeSession } from './lib/office';
+import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumentFile, downloadOfficeDocument, officeFileNameForDocument, OFFICE_UPLOAD_ACCEPT, type OfficeSession } from './lib/office';
 import { deleteR2Object } from './lib/r2-api';
 import { OfficeEditor } from './features/OfficeEditor';
 import { Dashboard } from './features/Dashboard';
@@ -344,6 +344,8 @@ function App() {
   // Word-document vanuit elke pagina (project/klant/Inhoud) geopend kan worden.
   const [officeSession, setOfficeSession] = useState<OfficeSession | null>(null);
   const [officeOpening, setOfficeOpening] = useState(false);
+  /** Het document dat in de editor openstaat — drijft de "Downloaden"-knop (native formaat). */
+  const [officeDoc, setOfficeDoc] = useState<InternalDocument | null>(null);
   // Mobiel uitschuifmenu (drawer). Op laptop/desktop is de zijbalk een iconenbalk
   // die bij hover openschuift; dit stuurt alleen het mobiele gedrag (≤760px) aan.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -787,6 +789,7 @@ function App() {
     setOfficeOpening(true); setError(null);
     try {
       setOfficeSession(await createOfficeSessionForDocument(doc.id));
+      setOfficeDoc(doc);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Kon de Word-editor niet openen');
     } finally {
@@ -815,6 +818,7 @@ function App() {
       await updateRow<InternalDocument>('documents', doc.id, { storage_key: up.key, mime_type: up.mime_type, size_bytes: up.size_bytes }, activeOrg.id);
       await refresh();
       setOfficeSession(await createOfficeSessionForDocument(doc.id));
+      setOfficeDoc({ ...doc, storage_key: up.key, mime_type: up.mime_type, size_bytes: up.size_bytes });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Omzetten naar Word mislukt');
     } finally {
@@ -854,10 +858,21 @@ function App() {
       setEdit(null);
       await refresh();
       setOfficeSession(await createOfficeSessionForDocument(doc.id));
+      setOfficeDoc(doc);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Kon het document niet aanmaken vanuit het bestand');
     } finally {
       setOfficeOpening(false);
+    }
+  }
+
+  /** Download het openstaande Office-document in z'n originele formaat (.docx/.xlsx/.pptx). */
+  async function downloadOfficeDoc() {
+    if (!officeDoc) return;
+    try {
+      await downloadOfficeDocument(officeDoc.id, officeFileNameForDocument(officeDoc));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Download mislukt');
     }
   }
 
@@ -1530,7 +1545,7 @@ function App() {
       ))}
     </main>
     <GerrieChat organizationId={activeOrg.id} {...gerrieActions} />
-    {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); refresh(); }} />}
+    {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeDoc(null); refresh(); }} onDownload={officeDoc ? downloadOfficeDoc : undefined} />}
     {officeOpening && !officeSession && <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 2100, background: 'var(--panel-strong)', border: '1px solid var(--border2)', borderRadius: 10, padding: '8px 14px', fontWeight: 600 }}>Word-editor openen…</div>}
     {/* Zwevend teamchat-paneel — overal beschikbaar, behalve op de volledige chatpagina. */}
     <TeamChatDock api={teamChat} hidden={page === 'chat'} />

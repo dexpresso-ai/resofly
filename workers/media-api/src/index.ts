@@ -161,6 +161,12 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
   if (method === 'POST' && pathname === '/office/document-upload') {
     return handleOfficeDocumentUpload(request, env, context);
   }
+  const officeFile = pathname.match(/^\/office\/document-file\/([^/]+)$/);
+  if (officeFile) {
+    if (!isUuid(officeFile[1])) return errorResponse('Ongeldige document-id.', 400, context);
+    if (method === 'GET') return handleOfficeDocumentDownload(request, env, context, officeFile[1]);
+    return errorResponse('Method not allowed', 405, context);
+  }
   // WOPI-host-routes (Collabora → media-api, geauthenticeerd met een edit-token in de URL):
   const wopi = pathname.match(/^\/wopi\/files\/([^/]+?)(\/contents)?$/);
   if (wopi) {
@@ -690,6 +696,25 @@ async function handleOfficeDocumentUpload(request: Request, env: Env, context: R
   });
 
   return jsonResponse({ ok: true, key, size_bytes: object.size, mime_type: mime, name: fileName }, 200, context);
+}
+
+/** Download de originele bytes van een Office-modus document, in het native formaat. */
+async function handleOfficeDocumentDownload(request: Request, env: Env, context: RouteContext, id: string): Promise<Response> {
+  const userId = await requireUser(request, env);
+  const target = await fetchOfficeTarget(env, 'd', id);
+  await requireMembership(env, target.organization_id, userId);
+
+  const object = await env.MEDIA_BUCKET.get(target.storage_key);
+  if (!object) throw new HttpError(404, 'Bestand niet gevonden.');
+
+  const headers = new Headers(context.corsHeaders);
+  headers.set('Content-Type', target.mime_type || 'application/octet-stream');
+  headers.set('Content-Length', String(object.size));
+  headers.set('Cache-Control', 'private, no-store');
+  headers.set('X-Request-Id', context.requestId);
+  // target.name volgt de actuele documenttitel (niet de upload-naam van destijds).
+  headers.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(target.name)}`);
+  return new Response(object.body, { status: 200, headers });
 }
 
 /** WOPI CheckFileInfo — metadata voor Collabora. */

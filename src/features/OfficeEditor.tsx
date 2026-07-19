@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { X } from 'lucide-react';
+import { Download, X } from 'lucide-react';
 import type { OfficeSession } from '../lib/office';
 
 /**
@@ -10,7 +10,7 @@ import type { OfficeSession } from '../lib/office';
  */
 const FRAME_NAME = 'resofly-office-frame';
 
-export function OfficeEditor({ session, onClose }: { session: OfficeSession; onClose: () => void }) {
+export function OfficeEditor({ session, onClose, onDownload }: { session: OfficeSession; onClose: () => void; onDownload?: () => void }) {
   const formRef = useRef<HTMLFormElement>(null);
   const [phase, setPhase] = useState<'loading' | 'ready' | 'timeout'>('loading');
 
@@ -35,9 +35,14 @@ export function OfficeEditor({ session, onClose }: { session: OfficeSession; onC
         <span style={titleStyle} title={session.fileName}>
           {session.fileName}{!session.canWrite && ' — alleen-lezen'}
         </span>
-        <button type="button" onClick={onClose} style={closeBtn} aria-label="Editor sluiten">
-          <X size={16} /> Sluiten
-        </button>
+        <div style={{ display: 'flex', gap: 8, flex: '0 0 auto' }}>
+          {onDownload && <button type="button" onClick={onDownload} style={closeBtn} aria-label="Download in origineel formaat">
+            <Download size={16} /> Downloaden
+          </button>}
+          <button type="button" onClick={onClose} style={closeBtn} aria-label="Editor sluiten">
+            <X size={16} /> Sluiten
+          </button>
+        </div>
       </div>
       <form ref={formRef} action={session.editorUrl} method="post" target={FRAME_NAME} style={{ display: 'none' }}>
         <input type="hidden" name="access_token" value={session.accessToken} />

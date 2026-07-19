@@ -100,6 +100,8 @@ export function ClientFolders({
   const [newOpen, setNewOpen] = useState(false);
   const [menu, setMenu] = useState<{ key: string; mode: 'main' | 'move' } | null>(null);
   const [officeSession, setOfficeSession] = useState<OfficeSession | null>(null);
+  /** Het bestand dat in de editor openstaat — drijft de "Downloaden"-knop (native formaat). */
+  const [officeAtt, setOfficeAtt] = useState<Attachment | null>(null);
   const [opening, setOpening] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -222,6 +224,7 @@ export function ClientFolders({
     setError(null); setOpening(true);
     try {
       setOfficeSession(await createOfficeSession(att));
+      setOfficeAtt(att);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Kon de editor niet openen');
     } finally {
@@ -241,6 +244,7 @@ export function ClientFolders({
         const att = await createOfficeDocument(organizationId, folderId, docType, name.trim());
         onChanged();
         setOfficeSession(await createOfficeSession(att));
+        setOfficeAtt(att);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Kon geen nieuw document aanmaken');
       } finally {
@@ -358,7 +362,7 @@ export function ClientFolders({
     </div>}
 
     {opening && <span className="drive-uploading" style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 1500 }}><UploadCloud size={14} /> Editor openen…</span>}
-    {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); onChanged(); }} />}
+    {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeAtt(null); onChanged(); }} onDownload={officeAtt ? () => handleDownload(officeAtt) : undefined} />}
   </div>;
 
   // ── Renderers ────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { getAccessToken, getWorkerBase, deleteR2Object } from './r2-api';
 import { createAttachment } from './repository';
-import type { Attachment, UUID } from '../types';
+import type { Attachment, InternalDocument, UUID } from '../types';
 
 /**
  * Online Office-bewerken: opent office-bestanden uit R2 in een zelf-gehoste Collabora-editor
@@ -79,6 +79,39 @@ export function officeMimeForFile(name: string, type?: string): string | null {
   if (type && OFFICE_EDITABLE_MIME.has(type)) return type;
   const ext = name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
   return ext ? EXT_TO_MIME[ext] ?? null : null;
+}
+
+const MIME_TO_EXT: Record<string, string> = Object.fromEntries(
+  Object.entries(EXT_TO_MIME).map(([ext, mime]) => [mime, ext]),
+);
+
+/** Downloadnaam voor een Office-modus document: actuele titel + extensie in het native formaat. */
+export function officeFileNameForDocument(doc: Pick<InternalDocument, 'title' | 'mime_type'>): string {
+  const ext = (doc.mime_type && MIME_TO_EXT[doc.mime_type]) || 'docx';
+  const base = (doc.title || 'Document').replace(/[\\/]+/g, ' ').trim() || 'Document';
+  return base.toLowerCase().endsWith(`.${ext}`) ? base : `${base}.${ext}`;
+}
+
+/** Download de originele bytes van een Office-modus document (native .docx/.xlsx/.pptx). */
+export async function downloadOfficeDocument(documentId: UUID, fileName: string): Promise<void> {
+  const base = getWorkerBase();
+  const token = await getAccessToken();
+  const res = await fetch(`${base}/office/document-file/${documentId}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await errText(res, 'Download mislukt'));
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
 }
 
 /** Bouw een bewerksessie voor een intern Document dat in Word-modus staat (documents.storage_key gezet). */
