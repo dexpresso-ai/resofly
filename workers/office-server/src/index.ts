@@ -15,7 +15,7 @@ import { Container, getContainer } from '@cloudflare/containers';
 const WOPI_HOST_PROD = 'https://resofly-media-api.gerjan.workers.dev';
 const WOPI_HOST_STAGING = 'https://resofly-media-api-staging.gerjan.workers.dev';
 // Welke origins de editor in een <iframe> mogen inbedden (de ResoFly-app).
-const FRAME_ANCESTORS = 'https://app.resofly.nl https://staging.resofly.nl https://staging.resofly.com';
+const FRAME_ANCESTORS = 'https://app.resofly.nl https://staging.resofly.nl https://staging.resofly.com http://localhost:5173';
 
 export class CollaboraContainer extends Container<Env> {
   // coolwsd: HTTP + WebSocket op 9980.
@@ -63,6 +63,21 @@ export default {
     if (pathname.endsWith('/admin.html') || pathname.includes('adminws') || pathname.includes('/dist/admin')) {
       return new Response('Not found', { status: 404 });
     }
-    return getContainer(env.COLLABORA, INSTANCE_ID).fetch(request);
+
+    const response = await getContainer(env.COLLABORA, INSTANCE_ID).fetch(request);
+
+    // WebSocket-upgrades ongemoeid doorlaten (co-editing rijdt hierop).
+    if (response.status === 101) return response;
+
+    // Collabora's eigen frame-ancestors-parameter is onbetrouwbaar bij meerdere origins
+    // (extra_params splitst op spaties, dus alleen de eerste origin overleeft). Deze Worker
+    // is de voordeur, dus wíj zetten hier de definitieve inbed-policy.
+    const headers = new Headers(response.headers);
+    headers.delete('X-Frame-Options');
+    const csp = headers.get('Content-Security-Policy');
+    if (csp && /frame-ancestors/i.test(csp)) {
+      headers.set('Content-Security-Policy', csp.replace(/frame-ancestors[^;]*/i, `frame-ancestors ${FRAME_ANCESTORS}`));
+    }
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
   },
 };

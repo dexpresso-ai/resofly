@@ -10,6 +10,8 @@ export interface Env {
   MEDIA_SIGNING_SECRET?: string;
   /** Publieke URL van de office-server Worker (Collabora), voor WOPI-discovery + editor-URL. */
   COLLABORA_URL?: string;
+  /** Service binding naar de office-server: Worker→Worker via workers.dev is geblokkeerd op hetzelfde account. */
+  OFFICE_SERVER?: Fetcher;
   /** Optionele override voor de eigen publieke basis-URL (host in de WOPISrc). Standaard: request-origin. */
   MEDIA_PUBLIC_URL?: string;
 }
@@ -138,6 +140,17 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
   }
 
   // ── Online Office-bewerken (Collabora via WOPI) ────────────────────────
+  // Boot-health: bewijst zonder login dat media-api de Collabora-discovery kan bereiken
+  // (via de service binding). Lekt niets — alleen ok/fail.
+  if (method === 'GET' && pathname === '/office/health') {
+    try {
+      const xml = await collaboraDiscovery(env);
+      return jsonResponse({ ok: true, discovery: xml.includes('urlsrc') ? 'ok' : 'unexpected-body' }, 200, context);
+    } catch (error) {
+      const message = error instanceof HttpError ? error.message : 'onbekende fout';
+      return jsonResponse({ ok: false, discovery: 'failed', error: message }, 502, context);
+    }
+  }
   // App-gerichte routes (Supabase-JWT):
   if (method === 'POST' && pathname === '/office/session') {
     return handleOfficeSession(request, env, context);
@@ -518,7 +531,10 @@ const DISCOVERY_TTL_MS = 60 * 60 * 1000;
 async function collaboraDiscovery(env: Env): Promise<string> {
   if (!env.COLLABORA_URL) throw new HttpError(500, 'Office-editor niet geconfigureerd (COLLABORA_URL).');
   if (discoveryCache && Date.now() - discoveryCache.at < DISCOVERY_TTL_MS) return discoveryCache.xml;
-  const res = await fetch(`${env.COLLABORA_URL.replace(/\/$/, '')}/hosting/discovery`);
+  const url = `${env.COLLABORA_URL.replace(/\/$/, '')}/hosting/discovery`;
+  // Via de service binding: een gewone fetch naar de workers.dev-URL van een Worker op
+  // hetzelfde account wordt door Cloudflare geblokkeerd; de binding is de interne route.
+  const res = env.OFFICE_SERVER ? await env.OFFICE_SERVER.fetch(url) : await fetch(url);
   if (!res.ok) throw new HttpError(502, 'Kon Collabora-discovery niet ophalen.');
   const xml = await res.text();
   discoveryCache = { at: Date.now(), xml };

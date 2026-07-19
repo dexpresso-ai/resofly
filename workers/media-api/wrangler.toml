@@ -14,6 +14,12 @@ COLLABORA_URL = "https://resofly-office-server.gerjan.workers.dev"
 # Eigen publieke URL = host in de WOPISrc die Collabora terugbelt (pin i.p.v. request-origin).
 MEDIA_PUBLIC_URL = "https://resofly-media-api.gerjan.workers.dev"
 
+# Directe interne koppeling naar de office-server: Worker→Worker-fetch via de publieke
+# workers.dev-URL is op hetzelfde account geblokkeerd, dus discovery loopt via deze binding.
+[[services]]
+binding = "OFFICE_SERVER"
+service = "resofly-office-server"
+
 [[r2_buckets]]
 binding = "MEDIA_BUCKET"
 bucket_name = "resofly-media-production"
@@ -29,6 +35,10 @@ SUPABASE_URL = "https://enzghpduqwaojcxgwarr.supabase.co"
 COLLABORA_URL = "https://resofly-office-server.gerjan.workers.dev"
 MEDIA_PUBLIC_URL = "https://resofly-media-api-staging.gerjan.workers.dev"
 
+[[env.staging.services]]
+binding = "OFFICE_SERVER"
+service = "resofly-office-server"
+
 [[env.staging.r2_buckets]]
 binding = "MEDIA_BUCKET"
 bucket_name = "resofly-media-staging"
@@ -42,6 +52,10 @@ ALLOWED_ORIGINS = "https://app.resofly.nl"
 SUPABASE_URL = "https://enzghpduqwaojcxgwarr.supabase.co"
 COLLABORA_URL = "https://resofly-office-server.gerjan.workers.dev"
 MEDIA_PUBLIC_URL = "https://resofly-media-api.gerjan.workers.dev"
+
+[[env.production.services]]
+binding = "OFFICE_SERVER"
+service = "resofly-office-server"
 
 [[env.production.r2_buckets]]
 binding = "MEDIA_BUCKET"
