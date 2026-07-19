@@ -57,6 +57,30 @@ async function errText(res: Response, fallback: string): Promise<string> {
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
+const EXT_TO_MIME: Record<string, string> = {
+  docx: DOCX_MIME,
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  odt: 'application/vnd.oasis.opendocument.text',
+  ods: 'application/vnd.oasis.opendocument.spreadsheet',
+  odp: 'application/vnd.oasis.opendocument.presentation',
+  doc: 'application/msword',
+  xls: 'application/vnd.ms-excel',
+  ppt: 'application/vnd.ms-powerpoint',
+};
+
+/** Bestandskiezer-filter voor office-bestanden die de online editor aankan. */
+export const OFFICE_UPLOAD_ACCEPT = '.docx,.xlsx,.pptx,.odt,.ods,.odp,.doc,.xls,.ppt';
+/** Zelfde limiet als de PutFile-cap in de media-api Worker. */
+export const OFFICE_MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+/** Office-mimetype voor een bestand, of null als het geen bewerkbaar office-bestand is. */
+export function officeMimeForFile(name: string, type?: string): string | null {
+  if (type && OFFICE_EDITABLE_MIME.has(type)) return type;
+  const ext = name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  return ext ? EXT_TO_MIME[ext] ?? null : null;
+}
+
 /** Bouw een bewerksessie voor een intern Document dat in Word-modus staat (documents.storage_key gezet). */
 export async function createOfficeSessionForDocument(documentId: UUID): Promise<OfficeSession> {
   const base = getWorkerBase();
@@ -70,30 +94,42 @@ export async function createOfficeSessionForDocument(documentId: UUID): Promise<
   return (await res.json()) as OfficeSession;
 }
 
-/**
- * Schrijf de .docx-bytes van een Word-document naar R2 (nieuw of geconverteerd uit rich-text).
- * De documents-rij (met de teruggegeven storage_key) maakt/werkt de aanroeper zelf bij via de repository.
- */
-export async function uploadDocumentDocx(
-  organizationId: UUID,
-  name: string,
-  blob: Blob,
-): Promise<{ key: string; size_bytes: number; mime_type: string; name: string }> {
+type OfficeUploadResult = { key: string; size_bytes: number; mime_type: string; name: string };
+
+async function postOfficeDocumentBytes(organizationId: UUID, fileName: string, mime: string, blob: Blob): Promise<OfficeUploadResult> {
   const base = getWorkerBase();
   const token = await getAccessToken();
-  const fileName = name.toLowerCase().endsWith('.docx') ? name : `${name}.docx`;
   const res = await fetch(`${base}/office/document-upload`, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${token}`,
       'x-organization-id': organizationId,
       'x-file-name': encodeURIComponent(fileName),
-      'x-file-type': DOCX_MIME,
+      'x-file-type': mime,
     },
     body: blob,
   });
-  if (!res.ok) throw new Error(await errText(res, 'Kon het Word-document niet opslaan'));
-  return (await res.json()) as { key: string; size_bytes: number; mime_type: string; name: string };
+  if (!res.ok) throw new Error(await errText(res, 'Kon het document niet opslaan'));
+  return (await res.json()) as OfficeUploadResult;
+}
+
+/**
+ * Schrijf de .docx-bytes van een Word-document naar R2 (nieuw of geconverteerd uit rich-text).
+ * De documents-rij (met de teruggegeven storage_key) maakt/werkt de aanroeper zelf bij via de repository.
+ */
+export async function uploadDocumentDocx(organizationId: UUID, name: string, blob: Blob): Promise<OfficeUploadResult> {
+  const fileName = name.toLowerCase().endsWith('.docx') ? name : `${name}.docx`;
+  return postOfficeDocumentBytes(organizationId, fileName, DOCX_MIME, blob);
+}
+
+/** Upload een bestaand Word/Excel/PowerPoint-bestand als basis voor een nieuw (Office-modus) document. */
+export async function uploadOfficeDocumentFile(organizationId: UUID, file: File): Promise<OfficeUploadResult> {
+  const mime = officeMimeForFile(file.name, file.type);
+  if (!mime) throw new Error('Alleen Word-, Excel- of PowerPoint-bestanden kunnen als document geüpload worden.');
+  if (file.size > OFFICE_MAX_UPLOAD_BYTES) {
+    throw new Error(`Bestand is te groot. Maximum is ${Math.round(OFFICE_MAX_UPLOAD_BYTES / 1024 / 1024)} MB.`);
+  }
+  return postOfficeDocumentBytes(organizationId, file.name, mime, file);
 }
 
 /** Bouw een bewerksessie voor een bestaand office-bestand. */

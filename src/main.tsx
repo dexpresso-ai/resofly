@@ -62,7 +62,8 @@ import { memberShortName, memberColor, memberInitials } from './lib/members';
 import { uploadToR2 } from './lib/r2';
 import { listExternalCalendarEvents, createExternalCalendarEvent } from './lib/calendar-api';
 import { buildDocumentPdfBlob, buildDocumentDocxBlob, downloadBlob, documentFileBaseName, type DocumentExportMeta } from './lib/documentExport';
-import { createOfficeSessionForDocument, uploadDocumentDocx, type OfficeSession } from './lib/office';
+import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumentFile, OFFICE_UPLOAD_ACCEPT, type OfficeSession } from './lib/office';
+import { deleteR2Object } from './lib/r2-api';
 import { OfficeEditor } from './features/OfficeEditor';
 import { Dashboard } from './features/Dashboard';
 import { ClientDetailPage, Clients } from './features/Clients';
@@ -821,6 +822,45 @@ function App() {
     }
   }
 
+  /**
+   * Maak een document rechtstreeks vanuit een geüpload Word/Excel/PowerPoint-bestand
+   * (Office-modus vanaf dag één) en open het meteen in de editor.
+   */
+  async function createDocumentFromOfficeFile(file: File, values: Record<string, unknown>) {
+    if (!ensureCanWrite()) return;
+    setOfficeOpening(true); setError(null);
+    try {
+      const up = await uploadOfficeDocumentFile(activeOrg.id, file);
+      const title = String(values.title || '').trim() || file.name.replace(/\.[a-z0-9]+$/i, '') || 'Document';
+      let doc: InternalDocument;
+      try {
+        doc = await insertRow<InternalDocument>('documents', activeOrg.id, {
+          title,
+          document_type: values.document_type || 'general',
+          client_id: values.client_id ?? null,
+          project_id: values.project_id ?? null,
+          folder_id: values.folder_id ?? null,
+          content: '',
+          storage_key: up.key,
+          mime_type: up.mime_type,
+          size_bytes: up.size_bytes,
+        });
+      } catch (e) {
+        await deleteR2Object(up.key).catch((cleanupErr) => {
+          console.warn('Office-upload opruimen mislukt na documents-insert-fout (mogelijk weesbestand in R2):', up.key, cleanupErr);
+        });
+        throw e;
+      }
+      setEdit(null);
+      await refresh();
+      setOfficeSession(await createOfficeSessionForDocument(doc.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Kon het document niet aanmaken vanuit het bestand');
+    } finally {
+      setOfficeOpening(false);
+    }
+  }
+
   async function removeCurrent() {
     if (!edit || !('item' in edit) || !edit.item) return;
     if (!ensureCanWrite()) return;
@@ -1485,7 +1525,7 @@ function App() {
         <section key={tab.id} className="content" hidden={tab.id !== activeTab.id}>
           {tab.id === activeTab.id && error && <div className="error">{error}</div>}
           {renderPage(tab)}
-          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} />}
+          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} />}
         </section>
       ))}
     </main>
@@ -1686,10 +1726,11 @@ function TaskAssigneePicker({ projectId, assigneeIds, teamMembers, projectMember
   </div>;
 }
 
-function EditModal({ edit, data, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void }) {
+function EditModal({ edit, data, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord, onCreateFromOfficeFile }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void; onCreateFromOfficeFile: (file: File, values: Record<string, unknown>) => void }) {
   const item = 'item' in edit ? edit.item : undefined;
   const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit, data));
   const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
+  const officeFileRef = useRef<HTMLInputElement>(null);
 
   const [noteCalEvents, setNoteCalEvents] = useState<CalendarExternalEvent[]>([]);
   const [noteCalEventsLoading, setNoteCalEventsLoading] = useState(false);
@@ -1897,6 +1938,17 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
       <Field label="Categorie">
         <Select value={form.document_type} onChange={e=>set('document_type',e.target.value)} disabled={disabled}>{Object.entries(documentTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select>
       </Field>
+      {!disabled && !item && <div className="document-export">
+        <input ref={officeFileRef} type="file" accept={OFFICE_UPLOAD_ACCEPT} hidden onChange={e => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) onCreateFromOfficeFile(file, cleanForm('document', form));
+        }}/>
+        <div className="document-export-actions">
+          <Button onClick={() => officeFileRef.current?.click()}>Word/Excel/PowerPoint uploaden…</Button>
+        </div>
+        <span className="document-export-hint">Of start vanuit een bestaand Office-bestand: het wordt dit document en opent direct in de online editor. Typ je hieronder zelf, dan blijft het een gewoon tekstdocument.</span>
+      </div>}
       <RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf de inhoud van het document…" disabled={disabled}/>
       <Field label="Klant">
         <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>

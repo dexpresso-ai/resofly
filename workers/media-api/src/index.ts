@@ -669,6 +669,9 @@ async function handleOfficeDocumentUpload(request: Request, env: Env, context: R
   const fileName = sanitizeFileName(decodeMaybe(request.headers.get('x-file-name')) || 'document.docx');
   const mime = (request.headers.get('x-file-type') || OFFICE_NEW_MIME.docx).trim();
   if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige organization id.');
+  // Documents-in-Office-modus zijn per definitie bewerkbare office-bestanden; weiger de rest
+  // zodat een documents-rij nooit naar een willekeurige blob kan wijzen.
+  if (!OFFICE_MIME_EXT[mime]) throw new HttpError(415, 'Alleen Word-, Excel- of PowerPoint-bestanden zijn toegestaan.');
 
   const role = await membershipRole(env, organizationId, userId);
   if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
