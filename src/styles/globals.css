@@ -3965,3 +3965,95 @@ button.odrv-th:hover{color:var(--text)}
   .odrv-headtools{width:100%}
   .odrv-search{flex:1;min-width:0}
 }
+
+/* ── KLANTDOSSIER · "Bestanden" in dezelfde OneDrive-look (odrv-embed) ─────
+   (2026-07-20) Ingebed in het klantdossier: geen zijkolom, hoogte volgt de
+   pagina (de klantpagina scrolt zelf) en popovers mogen buiten de kaart
+   vallen. Elke rij/tegel krijgt een ⋮-actiekolom (hernoemen, verplaatsen,
+   downloaden, verwijderen); kolommen en koppen komen 1-op-1 van de
+   Inhoud-pagina zodat beide verkenners één geheel vormen. */
+.odrv.odrv-embed{display:flex;flex-direction:column;height:auto;min-height:460px;overflow:visible}
+.odrv-embed .odrv-head{padding:14px 16px 8px}
+.odrv-embed .odrv-scroll{overflow:visible;padding:0 16px 16px}
+.odrv-embed .odrv-crumbs button,.odrv-embed .odrv-crumb-current{font-size:17px}
+.odrv-crumb-step{display:inline-flex;align-items:center;gap:2px;min-width:0}
+.odrv-crumb-step>svg{color:var(--muted);flex-shrink:0}
+.odrv-embed-band{display:flex;flex-direction:column;gap:10px;padding:0 16px 10px}
+.odrv-tr.has-act{grid-template-columns:34px minmax(0,1fr) 150px 104px 108px 34px}
+.odrv-td-act{display:inline-flex;align-items:center;justify-content:flex-end}
+div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.odrv-row .drive-kebab-wrap{position:relative;top:auto;right:auto}
+.odrv-row .drive-kebab{opacity:0}
+.odrv-row:hover .drive-kebab,.odrv-row:focus-within .drive-kebab,.odrv-row .drive-kebab.is-open{opacity:1}
+.odrv-tile-wrap{position:relative;overflow:visible}
+.odrv-tile-wrap .odrv-tile-canvas{border-radius:15px 15px 0 0}
+.odrv-tile-main{display:flex;flex-direction:column;flex:1;min-width:0;background:none;border:none;padding:0;font-family:inherit;color:var(--text);text-align:left;cursor:pointer}
+.odrv-tile-wrap .drive-kebab-wrap{position:absolute;top:7px;right:7px;z-index:2}
+.odrv-tile-wrap .drive-kebab{opacity:0;background:rgba(0,0,0,.35);color:var(--text)}
+.odrv-tile-wrap:hover .drive-kebab,.odrv-tile-wrap .drive-kebab.is-open{opacity:1}
+.odrv-dropzone{margin-top:14px}
+.odrv-embed .drive-new{padding:8px 13px}
+@media(max-width:900px){
+  .odrv.odrv-embed{min-height:380px}
+  .odrv-tr.has-act{grid-template-columns:30px minmax(0,1fr) 118px 34px}
+  .odrv-row .drive-kebab,.odrv-tile-wrap .drive-kebab{opacity:.9}
+}
+@media(max-width:760px){
+  .odrv-embed .odrv-head{padding:12px 12px 8px}
+  .odrv-embed .odrv-scroll{padding:0 12px 14px}
+  .odrv-embed-band{padding:0 12px 10px}
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   AGENDA · MOBIEL — Google Calendar-werkwijze op de telefoon  (2026-07-20)
+   ───────────────────────────────────────────────────────────────────────
+   • Werkbalk: titel voorop ("20 juli 2026"), navigatie rechts ernaast; de
+     weergavetabs strekken als segmenten over een eigen regel.
+   • Dagstrip: de week als tikbare dagrondjes onder de werkbalk (gekozen
+     dag gevuld, vandaag goud); vegen over het rooster bladert per dag of
+     maand (TSX). In de dagweergave vervalt de dubbele dagkop — de strip
+     en de titel tonen de datum al.
+   • Afspraak tikken = meteen bewerken in een volledig-scherm paneel met
+     sticky Opslaan-balk; 16px-invoervelden voorkomen iOS-zoom.
+   • Roosterhoogte op dvh boven de duim-onderbalk. Bewust achteraan zodat
+     deze regels alle eerdere mobiele agenda-regels van de cascade winnen.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* 1 ── Dagstrip (alleen gerenderd op mobiel in dagweergave) ─────────────── */
+.cal-daystrip{display:flex;gap:2px;padding:4px 6px 8px;justify-content:space-between;border-bottom:1px solid var(--border)}
+.cal-daystrip-day{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;background:none;border:none;font-family:inherit;color:var(--muted2);cursor:pointer;padding:4px 0 5px;border-radius:12px}
+.cal-daystrip-day:active{background:rgba(255,255,255,.06)}
+.cds-name{font-size:9.5px;font-weight:800;letter-spacing:.06em;color:var(--muted)}
+.cds-num{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:750}
+.cal-daystrip-day.is-today .cds-name,.cal-daystrip-day.is-today .cds-num{color:var(--accent)}
+.cal-daystrip-day.is-active .cds-num{background:var(--accent);color:#1a1a1a}
+
+@media(max-width:768px){
+  /* 2 ── Werkbalk: titel voorop, tabs op een eigen volle regel ──────────── */
+  .calendar-agenda-page .calendar-toolbar-premium{row-gap:6px;padding:8px 10px}
+  .calendar-agenda-page .calendar-range-block{order:-1;flex:1 1 auto}
+  .calendar-agenda-page .calendar-range{font-size:16px;font-weight:750}
+  .calendar-agenda-page .calendar-toolbar-right{flex:1 0 100%;margin-left:0;gap:6px;flex-wrap:nowrap}
+  .calendar-agenda-page .calendar-toolbar-right .calendar-view-tabs{flex:1 1 auto;margin-left:auto}
+  .calendar-agenda-page .calendar-view-tabs .tb-vbtn{flex:1;justify-content:center;min-width:0}
+
+  /* 3 ── Dagweergave zonder dubbele dagkop; rooster vult het scherm ─────── */
+  .calendar-agenda-page .tb-single-day .tb-day-headers{display:none}
+  .calendar-agenda-page .tb-single-day .tb-allday-row{top:0}
+  .calendar-agenda-page .tb-scroll,.tb-scroll{height:calc(100dvh - 330px - env(safe-area-inset-bottom));min-height:340px;max-height:none}
+  .calendar-main-card{padding:8px}
+
+  /* 4 ── Afspraak tikken = meteen bewerken, volledig scherm ─────────────── */
+  .event-detail-overlay{padding:0;align-items:stretch;justify-content:stretch}
+  .event-detail-panel{width:100%;max-width:none;height:100%;max-height:none;border-radius:0;border-left:0;border-top:3px solid var(--event-color,var(--accent));padding:14px 14px 0;animation:eventPanelUp .2s ease-out}
+  .event-detail-actions{position:sticky;bottom:0;z-index:2;margin:auto -14px 0;padding:12px 14px calc(12px + env(safe-area-inset-bottom));background:rgba(20,20,20,.97);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);border-top:1px solid var(--border)}
+  .event-detail-actions .btn{width:auto;flex:1 1 auto;justify-content:center}
+  /* Nieuwe afspraak: ook volledig scherm i.p.v. midden-popup. */
+  .tb-overlay{padding:0;align-items:stretch}
+  .tb-panel{width:100%;max-width:none;height:100%;max-height:none;border-radius:0}
+  /* Geen iOS-zoom bij focus: invoervelden op 16px in de bewerkpanelen. */
+  .event-detail-panel .form-input,.event-detail-panel .form-select,.event-detail-panel .form-textarea,
+  .tb-panel .form-input,.tb-panel .form-select,.tb-panel .form-textarea{font-size:16px}
+  .event-detail-title-edit .form-input{font-size:17px}
+}
+@keyframes eventPanelUp{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:none}}

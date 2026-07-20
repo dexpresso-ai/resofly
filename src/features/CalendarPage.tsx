@@ -2133,6 +2133,9 @@ function BookingSendDialog({ sources, clients, draftCount, onCancel, onSubmit }:
 
 const MOBILE_BREAKPOINT_PX = 768;
 
+/** Smalle daglabels ("M D W D V Z Z") voor de mobiele dagstrip, zoals Google. */
+const NARROW_DAY_FMT = new Intl.DateTimeFormat('nl-NL', { weekday: 'narrow' });
+
 /** Volgt of de viewport smal genoeg is voor de mobiele agenda-ergonomie. */
 function useIsMobile(): boolean {
   const query = `(max-width:${MOBILE_BREAKPOINT_PX}px)`;
@@ -2198,6 +2201,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   const [bookingCreated, setBookingCreated] = useState<{ url: string; token: string; linkId: string } | null>(null);
 
   const days = useMemo(() => calendarDaysForView(view, anchor), [view, anchor]);
+  // Mobiele dagstrip (Google): de week rond de gekozen dag; tikken = die dag openen.
+  const stripDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(anchor), i)), [anchor]);
   const rangeStart = useMemo(() => days[0].toISOString(), [days]);
   const rangeEnd = useMemo(() => addDays(days[days.length - 1], 1).toISOString(), [days]);
   // Google-stijl titel: "juli 2026" (met korte maanden als de week over een
@@ -2766,6 +2771,43 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     return () => el.removeEventListener('wheel', onWheel);
   }, [mode, view, showCreatePanel, selectedEvent, bookingMode]); // eslint-disable-line
 
+  // Vegen op de telefoon (Google-werkwijze): veeg links/rechts over de dag- of
+  // maandweergave om naar de volgende/vorige dag of maand te gaan. Week en lijst
+  // scrollen zelf (horizontaal/verticaal) en blijven daarom buiten schot; een
+  // overwegend verticale veeg blijft gewoon scrollen.
+  useEffect(() => {
+    if (mode !== 'agenda' || !isMobile) return;
+    const el = mainCardRef.current;
+    if (!el) return;
+    let startX = 0;
+    let startY = 0;
+    let tracking = false;
+    function onTouchStart(e: TouchEvent) {
+      if (e.touches.length !== 1) { tracking = false; return; }
+      tracking = true;
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+    }
+    function onTouchEnd(e: TouchEvent) {
+      if (!tracking) return;
+      tracking = false;
+      if (view !== 'day' && view !== 'month') return;
+      if (showCreatePanel || selectedEvent || bookingMode) return;
+      const t = e.changedTouches[0];
+      if (!t) return;
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
+      movePeriod(dx < 0 ? 1 : -1);
+    }
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchend', onTouchEnd, { passive: true });
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchend', onTouchEnd);
+    };
+  }, [mode, isMobile, view, showCreatePanel, selectedEvent, bookingMode]); // eslint-disable-line
+
   const previousLabel = view === 'day' ? 'Vorige dag' : view === 'month' ? 'Vorige maand' : 'Vorige week';
   const nextLabel = view === 'day' ? 'Volgende dag' : view === 'month' ? 'Volgende maand' : 'Volgende week';
 
@@ -2997,6 +3039,29 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
           <Button variant="primary" disabled={draftSlots.length === 0} onClick={() => setShowBookingSend(true)}>Doorsturen naar klant…</Button>
           {draftSlots.length > 0 && <Button onClick={() => setDraftSlots([])}>Wissen</Button>}
           <Button onClick={() => { setBookingMode(false); setDraftSlots([]); }}>Sluiten</Button>
+        </div>
+      )}
+
+      {/* Mobiele dagstrip (Google): de weekdagen als tikbare rondjes boven het
+          dagrooster — de gekozen dag is gevuld, vandaag kleurt goud. */}
+      {isMobile && view === 'day' && !bookingMode && (
+        <div className="cal-daystrip" aria-label="Dag kiezen">
+          {stripDays.map(d => {
+            const active = isSameDay(d, anchor);
+            const isToday = isSameDay(d, new Date());
+            return (
+              <button
+                type="button"
+                key={formatISODate(d)}
+                className={`cal-daystrip-day${active ? ' is-active' : ''}${isToday ? ' is-today' : ''}`}
+                onClick={() => setAnchor(startOfDay(d))}
+                aria-current={active ? 'date' : undefined}
+              >
+                <span className="cds-name">{NARROW_DAY_FMT.format(d)}</span>
+                <span className="cds-num">{d.getDate()}</span>
+              </button>
+            );
+          })}
         </div>
       )}
 

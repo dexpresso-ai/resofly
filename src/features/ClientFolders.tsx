@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import {
-  ChevronDown, ChevronLeft, ChevronRight, Download, FilePen, FileText, Folder, FolderOpen, FolderPlus,
-  Image as ImageIcon, LayoutGrid, Link2, List, MoreVertical, Pencil, Plus, Presentation, Search, Sheet,
-  StickyNote, Trash2, Upload, UploadCloud, X,
+  ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Download, File,
+  FilePen, FileText, Folder, FolderOpen, FolderPlus, Image as ImageIcon, LayoutGrid, Link2, List,
+  MoreVertical, Pencil, Plus, Presentation, Search, Sheet, StickyNote, Trash2, Upload, UploadCloud, X,
 } from 'lucide-react';
 import type { AppData, Attachment, Client, ContentFolder, InternalDocument, Note } from '../types';
-import { RichTextExcerpt } from '../components/RichTextEditor';
 import { dateNL } from '../lib/format';
 import { insertRow, updateRow, deleteContentFolder, deleteAttachment } from '../lib/repository';
 import { uploadToR2, downloadAttachment } from '../lib/r2';
@@ -15,16 +14,19 @@ import { OfficeEditor } from './OfficeEditor';
 import { childFolders, clientFolderOptions, folderDescendantIds, folderPath } from '../lib/folders';
 
 /**
- * Klant-"Bestanden": een cloud-drive voor het hele klantdossier. Mappen, notities,
- * documenten en geüploade bestanden leven in één navigeerbare ruimte met een padbalk,
- * één "+ Nieuw"-menu, een grid/lijst-schakelaar en slepen-om-te-uploaden. Aanmaken
- * gaat via de centrale editor (folder_id-default), de rest rechtstreeks via de
- * repository met een onChanged-refresh — net als TicketNotesTimeline en AttachmentList.
+ * Klant-"Bestanden" in dezelfde OneDrive-verkennerlook als de Inhoud-pagina (odrv):
+ * broodkruimels bovenin, één "+ Nieuw"-menu, zoeken, een Sorteren-menu en een
+ * lijst- (kolommen Naam / Gewijzigd / Grootte / Type) of tegelweergave. Mappen,
+ * notities, documenten en geüploade bestanden staan in één doorlopende lijst
+ * (mappen eerst); acties per item zitten achter het ⋮-menu. Aanmaken gaat via de
+ * centrale editor (folder_id-default), de rest rechtstreeks via de repository met
+ * een onChanged-refresh. Slepen-om-te-uploaden blijft werken in een open map.
  */
 
+/** Gedeelde grid/lijst-voorkeur met de Inhoud-pagina; lijst (OneDrive-details) is standaard. */
 const VIEW_KEY = 'resofly:driveView';
 function readView(): 'grid' | 'list' {
-  try { return window.localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'grid'; } catch { return 'grid'; }
+  try { return window.localStorage.getItem(VIEW_KEY) === 'grid' ? 'grid' : 'list'; } catch { return 'list'; }
 }
 
 function fmtBytes(bytes: number): string {
@@ -44,16 +46,25 @@ type DriveFile =
 function fileName(it: DriveFile): string {
   return it.kind === 'note' ? it.note.title : it.kind === 'document' ? it.doc.title : it.att.name;
 }
-function fileDate(it: DriveFile): string {
-  return it.kind === 'note' ? it.note.created_at : it.kind === 'document' ? it.doc.created_at : it.att.created_at;
+function fileModified(it: DriveFile): string {
+  if (it.kind === 'note') return it.note.updated_at || it.note.created_at;
+  if (it.kind === 'document') return it.doc.updated_at || it.doc.created_at;
+  return it.att.created_at;
+}
+function attTypeLabel(att: Attachment): string {
+  const ext = att.name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? '';
+  if (['docx', 'doc', 'odt'].includes(ext)) return 'Word-document';
+  if (['xlsx', 'xls', 'ods'].includes(ext)) return 'Excel-werkblad';
+  if (['pptx', 'ppt', 'odp'].includes(ext)) return 'PowerPoint';
+  const m = att.mime_type || '';
+  if (m.startsWith('image/')) return 'Afbeelding';
+  if (m === 'application/pdf') return 'PDF';
+  return 'Bestand';
 }
 function fileKindLabel(it: DriveFile): string {
   if (it.kind === 'note') return 'Notitie';
   if (it.kind === 'document') return 'Document';
-  const m = it.att.mime_type || '';
-  if (m.startsWith('image/')) return 'Afbeelding';
-  if (m === 'application/pdf') return 'PDF';
-  return 'Bestand';
+  return attTypeLabel(it.att);
 }
 function kindColor(kind: 'folder' | 'note' | 'document' | 'file'): string {
   return kind === 'folder' ? 'var(--accent)'
@@ -64,9 +75,29 @@ function kindColor(kind: 'folder' | 'note' | 'document' | 'file'): string {
 function FileGlyph({ it, size }: { it: DriveFile; size: number }) {
   if (it.kind === 'note') return <StickyNote size={size} />;
   if (it.kind === 'document') return <FileText size={size} />;
-  if ((it.att.mime_type || '').startsWith('image/')) return <ImageIcon size={size} />;
+  const label = attTypeLabel(it.att);
+  if (label === 'Afbeelding') return <ImageIcon size={size} />;
+  if (label === 'Excel-werkblad') return <Sheet size={size} />;
+  if (label === 'PowerPoint') return <Presentation size={size} />;
   return <FileText size={size} />;
 }
+
+type SortKey = 'name' | 'modified' | 'type';
+
+/** Eén rij in de verkenner: map of item, met de kolomwaarden en het ⋮-menu erbij.
+ *  `menu` krijgt de werkelijke kebab-key mee (lijst en tegels hebben elk hun eigen),
+ *  zodat het "Verplaatsen naar"-submenu in beide weergaven blijft werken. */
+type Row = {
+  key: string;
+  kind: 'folder' | 'note' | 'document' | 'file';
+  name: string;
+  modified: string | null;
+  size: string;
+  typeLabel: string;
+  onOpen: () => void;
+  glyph: (size: number) => ReactNode;
+  menu: ((menuKey: string) => ReactNode) | null;
+};
 
 export function ClientFolders({
   data,
@@ -92,6 +123,9 @@ export function ClientFolders({
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [view, setView] = useState<'grid' | 'list'>(readView);
   const [query, setQuery] = useState('');
+  const [sortKey, setSortKey] = useState<SortKey>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [sortOpen, setSortOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -122,8 +156,19 @@ export function ClientFolders({
   const linkableNotes = currentId ? clientNotes.filter(n => n.folder_id !== currentId) : [];
   const linkableDocs = currentId ? clientDocuments.filter(d => d.folder_id !== currentId) : [];
 
-  const itemCount = (folderId: string) =>
-    data.notes.filter(n => n.folder_id === folderId).length + data.documents.filter(d => d.folder_id === folderId).length;
+  // Kolomwaarden per map: aantal directe items + het jongste item erin.
+  const folderCount = (folderId: string) =>
+    data.notes.filter(n => n.folder_id === folderId).length
+    + data.documents.filter(d => d.folder_id === folderId).length
+    + data.attachments.filter(a => a.entity_type === 'folder' && a.entity_id === folderId).length;
+  const folderModified = (folderId: string): string | null => {
+    let last: string | null = null;
+    const bump = (m: string) => { if (!last || last < m) last = m; };
+    for (const n of data.notes) if (n.folder_id === folderId) bump(n.updated_at || n.created_at);
+    for (const d of data.documents) if (d.folder_id === folderId) bump(d.updated_at || d.created_at);
+    for (const a of data.attachments) if (a.entity_type === 'folder' && a.entity_id === folderId) bump(a.created_at);
+    return last;
+  };
 
   const files: DriveFile[] = [
     ...notesHere.map(n => ({ key: `n-${n.id}`, kind: 'note', note: n } as DriveFile)),
@@ -133,25 +178,23 @@ export function ClientFolders({
 
   const q = query.trim().toLowerCase();
   const shownFolders = subfolders.filter(f => !q || f.name.toLowerCase().includes(q));
-  const shownFiles = files
-    .filter(it => !q || fileName(it).toLowerCase().includes(q))
-    .sort((a, b) => fileName(a).localeCompare(fileName(b), 'nl'));
+  const shownFiles = files.filter(it => !q || fileName(it).toLowerCase().includes(q));
   const isEmpty = shownFolders.length === 0 && shownFiles.length === 0;
 
   useEffect(() => { try { window.localStorage.setItem(VIEW_KEY, view); } catch { /* ignore */ } }, [view]);
 
-  // Sluit het "+ Nieuw"-menu en de item-menu's bij een klik buitenom of Escape.
+  // Sluit de menu's ("+ Nieuw", Sorteren, ⋮) bij een klik buitenom of Escape.
   useEffect(() => {
-    if (!newOpen && !menu) return;
+    if (!newOpen && !menu && !sortOpen) return;
     const onDown = (e: MouseEvent) => {
       if ((e.target as HTMLElement).closest('.drive-pop, .drive-pop-trigger')) return;
-      setNewOpen(false); setMenu(null);
+      setNewOpen(false); setMenu(null); setSortOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setNewOpen(false); setMenu(null); } };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setNewOpen(false); setMenu(null); setSortOpen(false); } };
     window.addEventListener('mousedown', onDown);
     window.addEventListener('keydown', onKey);
     return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey); };
-  }, [newOpen, menu]);
+  }, [newOpen, menu, sortOpen]);
 
   function openFolder(id: string | null) { setCurrentId(id); setLinkOpen(false); setQuery(''); setMenu(null); }
 
@@ -253,128 +296,199 @@ export function ClientFolders({
     })();
   }
 
+  function fileOpen(it: DriveFile) {
+    if (it.kind === 'note') onEditNote(it.note);
+    else if (it.kind === 'document') onEditDocument(it.doc);
+    else if (isOfficeEditable(it.att)) openOffice(it.att);
+    else handleDownload(it.att);
+  }
+
   const canDrop = Boolean(currentId) && canWrite;
+  const plural = (n: number) => `${n} ${n === 1 ? 'item' : 'items'}`;
+
+  // ── Rijen voor de open map (mappen eerst, dan items; beide gesorteerd) ──
+  const folderRows: Row[] = shownFolders.map(folder => ({
+    key: `fo-${folder.id}`,
+    kind: 'folder',
+    name: folder.name,
+    modified: folderModified(folder.id),
+    size: plural(folderCount(folder.id)),
+    typeLabel: currentId ? 'Submap' : 'Map',
+    onOpen: () => openFolder(folder.id),
+    glyph: size => <Folder size={size} fill="currentColor" strokeWidth={1.4} />,
+    menu: canWrite ? () => folderMenu(folder) : null,
+  }));
+  const fileRows: Row[] = shownFiles.map(it => {
+    const itemId = it.kind === 'note' ? it.note.id : it.kind === 'document' ? it.doc.id : it.att.id;
+    const menu: Row['menu'] = it.kind === 'file'
+      ? () => fileMenu(it.att)
+      : canWrite
+        ? (menuKey: string) => contentMenu(menuKey, it.kind as 'note' | 'document', itemId, () => fileOpen(it))
+        : null;
+    return {
+      key: it.key,
+      kind: it.kind,
+      name: fileName(it) || 'Naamloos',
+      modified: fileModified(it),
+      size: it.kind === 'file' ? fmtBytes(it.att.size_bytes) : '',
+      typeLabel: fileKindLabel(it),
+      onOpen: () => fileOpen(it),
+      glyph: size => <FileGlyph it={it} size={size} />,
+      menu,
+    };
+  });
+  const cmp = (a: Row, b: Row): number => {
+    let r = 0;
+    if (sortKey === 'name') r = a.name.localeCompare(b.name, 'nl', { numeric: true, sensitivity: 'base' });
+    else if (sortKey === 'modified') r = (a.modified ?? '').localeCompare(b.modified ?? '');
+    else r = a.typeLabel.localeCompare(b.typeLabel, 'nl') || a.name.localeCompare(b.name, 'nl', { numeric: true, sensitivity: 'base' });
+    return sortDir === 'asc' ? r : -r;
+  };
+  const rows: Row[] = [...folderRows.sort(cmp), ...fileRows.sort(cmp)];
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key); setSortDir(key === 'modified' ? 'desc' : 'asc'); }
+  }
+
+  const SortCaret = ({ col }: { col: SortKey }) => sortKey === col
+    ? (sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)
+    : <ChevronDown size={12} style={{ opacity: .45 }} />;
+
+  const rowKeyDown = (e: ReactKeyboardEvent, open: () => void) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+  };
 
   return <div
-    className={`drive${dragOver ? ' is-dragging' : ''}`}
+    className={`odrv odrv-embed${dragOver ? ' is-dragging' : ''}`}
     onDragOver={canDrop ? e => { e.preventDefault(); setDragOver(true); } : undefined}
     onDragLeave={canDrop ? e => { if (e.currentTarget === e.target) setDragOver(false); } : undefined}
     onDrop={canDrop ? e => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files?.length) uploadFiles(e.dataTransfer.files); } : undefined}
   >
     <input ref={fileInputRef} type="file" multiple hidden onChange={e => { if (e.target.files?.length) uploadFiles(e.target.files); e.target.value = ''; }} />
 
-    <div className="drive-bar">
-      <div className="drive-crumbs">
-        <button type="button" className={currentId === null ? 'active' : ''} onClick={() => openFolder(null)}>
-          <FolderOpen size={15} aria-hidden="true" /> {client.name}
-        </button>
-        {path.map(folder => <span key={folder.id} className="drive-crumb">
-          <ChevronRight size={14} aria-hidden="true" />
-          <button type="button" className={folder.id === currentId ? 'active' : ''} onClick={() => openFolder(folder.id)}>{folder.name}</button>
-        </span>)}
-      </div>
-      <div className="drive-bar-right">
-        <label className="drive-search">
-          <Search size={14} aria-hidden="true" />
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Zoeken in map…" autoComplete="off" aria-label="Zoeken in map" />
-          {query && <button type="button" className="drive-search-clear" onClick={() => setQuery('')} aria-label="Wissen"><X size={13} /></button>}
-        </label>
-        <div className="drive-view" role="group" aria-label="Weergave">
-          <button type="button" className={view === 'grid' ? 'active' : ''} onClick={() => setView('grid')} aria-label="Rasterweergave" aria-pressed={view === 'grid'}><LayoutGrid size={16} /></button>
-          <button type="button" className={view === 'list' ? 'active' : ''} onClick={() => setView('list')} aria-label="Lijstweergave" aria-pressed={view === 'list'}><List size={16} /></button>
+    <div className="odrv-main">
+      <div className="odrv-head">
+        <nav className="odrv-crumbs" aria-label="Locatie">
+          {currentId === null
+            ? <span className="odrv-crumb-current">{client.name}</span>
+            : <>
+                <button type="button" onClick={() => openFolder(null)}>{client.name}</button>
+                {path.map((folder, i) => <span key={folder.id} className="odrv-crumb-step">
+                  <ChevronRight size={17} aria-hidden="true" />
+                  {i === path.length - 1
+                    ? <span className="odrv-crumb-current">{folder.name}</span>
+                    : <button type="button" onClick={() => openFolder(folder.id)}>{folder.name}</button>}
+                </span>)}
+              </>}
+        </nav>
+        <div className="odrv-headtools">
+          {canWrite && <div className="drive-new-wrap">
+            <button type="button" className="drive-new drive-pop-trigger" disabled={busy} onClick={() => { setNewOpen(o => !o); setMenu(null); setSortOpen(false); }} aria-haspopup="menu" aria-expanded={newOpen}>
+              <Plus size={16} /> Nieuw <ChevronDown size={14} />
+            </button>
+            {newOpen && <div className="drive-pop" role="menu" style={{ maxHeight: 'min(70vh, 460px)', overflowY: 'auto' }}>
+              {(currentId || path.length > 0) && <div className="drive-pop-head">In {path[path.length - 1]?.name ?? client.name}</div>}
+              <button type="button" className="drive-pop-item" role="menuitem" onClick={createFolder}><FolderPlus size={16} style={{ color: 'var(--accent)' }} /> {currentId ? 'Nieuwe submap' : 'Nieuwe map'}</button>
+              <div className="drive-pop-sep" />
+              <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewNote(currentId); }}><StickyNote size={16} style={{ color: 'var(--accent-v)' }} /> Notitie</button>
+              <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewDocument(currentId); }}><FileText size={16} style={{ color: 'var(--accent-g)' }} /> Document</button>
+              {currentId && <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} style={{ color: 'var(--accent-o)' }} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>}
+              {currentId && <>
+                <div className="drive-pop-sep" />
+                <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('docx')}><FileText size={16} style={{ color: 'var(--accent-o)' }} /> Word-document</button>
+                <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('xlsx')}><Sheet size={16} style={{ color: 'var(--accent-o)' }} /> Excel-werkblad</button>
+                <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('pptx')}><Presentation size={16} style={{ color: 'var(--accent-o)' }} /> PowerPoint</button>
+              </>}
+              {currentId && (linkableNotes.length > 0 || linkableDocs.length > 0) && <>
+                <div className="drive-pop-sep" />
+                <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); setLinkOpen(true); }}><Link2 size={16} /> Bestaande inhoud koppelen</button>
+              </>}
+            </div>}
+          </div>}
+          {uploading && <span className="drive-uploading"><UploadCloud size={14} /> Uploaden…</span>}
+          <label className="drive-search odrv-search">
+            <Search size={14} aria-hidden="true" />
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Zoeken in map…" autoComplete="off" aria-label="Zoeken in map" />
+            {query && <button type="button" className="drive-search-clear" onClick={() => setQuery('')} aria-label="Wissen"><X size={13} /></button>}
+          </label>
+          <div className="drive-new-wrap">
+            <button type="button" className="odrv-tool drive-pop-trigger" onClick={() => { setSortOpen(o => !o); setNewOpen(false); setMenu(null); }} aria-haspopup="menu" aria-expanded={sortOpen}>
+              <ArrowUpDown size={14} /> Sorteren <ChevronDown size={13} />
+            </button>
+            {sortOpen && <div className="drive-pop is-right" role="menu">
+              {([['name', 'Naam'], ['modified', 'Gewijzigd'], ['type', 'Type']] as const).map(([k, label]) =>
+                <button type="button" key={k} className="drive-pop-item" role="menuitemradio" aria-checked={sortKey === k} onClick={() => { if (sortKey !== k) { setSortKey(k); setSortDir(k === 'modified' ? 'desc' : 'asc'); } setSortOpen(false); }}>
+                  {label}{sortKey === k && <Check size={14} style={{ marginLeft: 'auto', color: 'var(--accent)' }} />}
+                </button>)}
+              <div className="drive-pop-sep" />
+              <button type="button" className="drive-pop-item" role="menuitemradio" aria-checked={sortDir === 'asc'} onClick={() => { setSortDir('asc'); setSortOpen(false); }}>
+                Oplopend{sortDir === 'asc' && <Check size={14} style={{ marginLeft: 'auto', color: 'var(--accent)' }} />}
+              </button>
+              <button type="button" className="drive-pop-item" role="menuitemradio" aria-checked={sortDir === 'desc'} onClick={() => { setSortDir('desc'); setSortOpen(false); }}>
+                Aflopend{sortDir === 'desc' && <Check size={14} style={{ marginLeft: 'auto', color: 'var(--accent)' }} />}
+              </button>
+            </div>}
+          </div>
+          <div className="drive-view" role="group" aria-label="Weergave">
+            <button type="button" className={view === 'list' ? 'active' : ''} onClick={() => setView('list')} aria-label="Lijstweergave" aria-pressed={view === 'list'}><List size={16} /></button>
+            <button type="button" className={view === 'grid' ? 'active' : ''} onClick={() => setView('grid')} aria-label="Tegelweergave" aria-pressed={view === 'grid'}><LayoutGrid size={16} /></button>
+          </div>
         </div>
       </div>
-    </div>
 
-    {canWrite && <div className="drive-tools">
-      <div className="drive-new-wrap">
-        <button type="button" className="drive-new drive-pop-trigger" disabled={busy} onClick={() => { setNewOpen(o => !o); setMenu(null); }} aria-haspopup="menu" aria-expanded={newOpen}>
-          <Plus size={16} /> Nieuw <ChevronDown size={14} />
-        </button>
-        {newOpen && <div className="drive-pop" role="menu" style={{ maxHeight: 'min(70vh, 460px)', overflowY: 'auto' }}>
-          <button type="button" className="drive-pop-item" role="menuitem" onClick={createFolder}><FolderPlus size={16} style={{ color: 'var(--accent)' }} /> {currentId ? 'Nieuwe submap' : 'Nieuwe map'}</button>
-          <div className="drive-pop-sep" />
-          <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewNote(currentId); }}><StickyNote size={16} style={{ color: 'var(--accent-v)' }} /> Notitie</button>
-          <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewDocument(currentId); }}><FileText size={16} style={{ color: 'var(--accent-g)' }} /> Document</button>
-          {currentId && <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} style={{ color: 'var(--accent-o)' }} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>}
-          {currentId && <>
-            <div className="drive-pop-sep" />
-            <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('docx')}><FileText size={16} style={{ color: 'var(--accent-o)' }} /> Word-document</button>
-            <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('xlsx')}><Sheet size={16} style={{ color: 'var(--accent-o)' }} /> Excel-werkblad</button>
-            <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('pptx')}><Presentation size={16} style={{ color: 'var(--accent-o)' }} /> PowerPoint</button>
-          </>}
-          {currentId && (linkableNotes.length > 0 || linkableDocs.length > 0) && <>
-            <div className="drive-pop-sep" />
-            <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); setLinkOpen(true); }}><Link2 size={16} /> Bestaande inhoud koppelen</button>
-          </>}
+      {(error || (linkOpen && currentId)) && <div className="odrv-embed-band">
+        {error && <div className="error">{error}</div>}
+        {linkOpen && currentId && <div className="folder-link-panel">
+          <div className="folder-link-head">
+            <strong>Bestaande inhoud in deze map plaatsen</strong>
+            <button type="button" className="folder-link-close" onClick={() => setLinkOpen(false)} aria-label="Sluiten"><X size={14} /></button>
+          </div>
+          {linkableNotes.length === 0 && linkableDocs.length === 0
+            ? <div className="client-empty-line">Geen andere notities of documenten van deze klant beschikbaar.</div>
+            : <div className="folder-link-list">
+                {linkableNotes.map(n => <button type="button" key={`ln-${n.id}`} className="folder-link-row" onClick={() => moveItem('note', n.id, currentId)} disabled={busy}>
+                  <StickyNote size={13} aria-hidden="true" /><span>{n.title}</span><em>Notitie</em>
+                </button>)}
+                {linkableDocs.map(d => <button type="button" key={`ld-${d.id}`} className="folder-link-row" onClick={() => moveItem('document', d.id, currentId)} disabled={busy}>
+                  <FileText size={13} aria-hidden="true" /><span>{d.title}</span><em>Document</em>
+                </button>)}
+              </div>}
+        </div>}
+      </div>}
+
+      <div className="odrv-scroll">
+        {isEmpty
+          ? <div className="drive-empty odrv-empty">
+              <span className="drive-empty-ic">{q ? <Search size={24} /> : <FolderOpen size={24} />}</span>
+              {q
+                ? <><strong>Geen resultaten</strong><span>Niets gevonden voor “{query.trim()}” in deze map.</span></>
+                : <>
+                    <strong>{currentId ? 'Deze map is leeg' : 'Nog geen mappen of bestanden'}</strong>
+                    <span>{canWrite ? 'Gebruik “+ Nieuw” om een map te maken, een notitie of document toe te voegen of een bestand te uploaden.' : 'Er is hier nog geen inhoud geplaatst.'}</span>
+                  </>}
+            </div>
+          : view === 'list' ? renderList() : renderTiles()}
+
+        {canDrop && !isEmpty && <div className={`drive-dropzone odrv-dropzone${dragOver ? ' is-dragging' : ''}`}>
+          <UploadCloud size={18} /> Sleep bestanden hierheen om ze te uploaden
         </div>}
       </div>
-      {uploading && <span className="drive-uploading"><UploadCloud size={14} /> Uploaden…</span>}
-    </div>}
-
-    {error && <div className="error">{error}</div>}
-
-    {linkOpen && currentId && <div className="folder-link-panel">
-      <div className="folder-link-head">
-        <strong>Bestaande inhoud in deze map plaatsen</strong>
-        <button type="button" className="folder-link-close" onClick={() => setLinkOpen(false)} aria-label="Sluiten"><X size={14} /></button>
-      </div>
-      {linkableNotes.length === 0 && linkableDocs.length === 0
-        ? <div className="client-empty-line">Geen andere notities of documenten van deze klant beschikbaar.</div>
-        : <div className="folder-link-list">
-            {linkableNotes.map(n => <button type="button" key={`ln-${n.id}`} className="folder-link-row" onClick={() => moveItem('note', n.id, currentId)} disabled={busy}>
-              <StickyNote size={13} aria-hidden="true" /><span>{n.title}</span><em>Notitie</em>
-            </button>)}
-            {linkableDocs.map(d => <button type="button" key={`ld-${d.id}`} className="folder-link-row" onClick={() => moveItem('document', d.id, currentId)} disabled={busy}>
-              <FileText size={13} aria-hidden="true" /><span>{d.title}</span><em>Document</em>
-            </button>)}
-          </div>}
-    </div>}
-
-    {isEmpty
-      ? <div className="drive-empty">
-          <span className="drive-empty-ic">{q ? <Search size={24} /> : <FolderOpen size={24} />}</span>
-          {q
-            ? <><strong>Geen resultaten</strong><span>Niets gevonden voor “{query.trim()}” in deze map.</span></>
-            : <>
-                <strong>{currentId ? 'Deze map is leeg' : 'Nog geen mappen of bestanden'}</strong>
-                <span>{canWrite ? 'Gebruik “+ Nieuw” om een map te maken, een notitie of document toe te voegen of een bestand te uploaden.' : 'Er is hier nog geen inhoud geplaatst.'}</span>
-              </>}
-        </div>
-      : <>
-          {shownFolders.length > 0 && <section className="drive-group">
-            <div className="drive-group-head"><span>Mappen</span><span className="drive-group-count">{shownFolders.length}</span></div>
-            {view === 'grid'
-              ? <div className="drive-grid">{shownFolders.map(folder => renderFolderCard(folder))}</div>
-              : <div className="drive-list">{shownFolders.map(folder => renderFolderRow(folder))}</div>}
-          </section>}
-
-          {shownFiles.length > 0 && <section className="drive-group">
-            <div className="drive-group-head"><span>{currentId ? 'Bestanden' : 'Niet ingedeeld'}</span><span className="drive-group-count">{shownFiles.length}</span></div>
-            {view === 'grid'
-              ? <div className="drive-grid">{shownFiles.map(it => renderFileCard(it))}</div>
-              : <div className="drive-list">{shownFiles.map(it => renderFileRow(it))}</div>}
-          </section>}
-        </>}
-
-    {canDrop && !isEmpty && <div className={`drive-dropzone${dragOver ? ' is-dragging' : ''}`}>
-      <UploadCloud size={18} /> Sleep bestanden hierheen om ze te uploaden
-    </div>}
+    </div>
 
     {opening && <span className="drive-uploading" style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 1500 }}><UploadCloud size={14} /> Editor openen…</span>}
     {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeAtt(null); onChanged(); }} onDownload={officeAtt ? () => handleDownload(officeAtt) : undefined} />}
   </div>;
 
   // ── Renderers ────────────────────────────────────────────────────────────
-  function kebab(key: string, content: () => ReactNode, show: boolean) {
-    if (!show) return null;
+  function kebab(key: string, content: () => ReactNode) {
     return <div className="drive-kebab-wrap">
       <button
         type="button"
         className={`drive-kebab drive-pop-trigger${menu?.key === key ? ' is-open' : ''}`}
         aria-label="Acties"
         disabled={busy}
-        onClick={e => { e.stopPropagation(); setMenu(menu?.key === key ? null : { key, mode: 'main' }); setNewOpen(false); }}
+        onClick={e => { e.stopPropagation(); setMenu(menu?.key === key ? null : { key, mode: 'main' }); setNewOpen(false); setSortOpen(false); }}
       ><MoreVertical size={16} /></button>
       {menu?.key === key && <div className="drive-pop is-right" role="menu">{content()}</div>}
     </div>;
@@ -416,67 +530,48 @@ export function ClientFolders({
     </>;
   }
 
-  function renderFolderCard(folder: ContentFolder) {
-    return <div className="drive-card is-folder" key={`fc-${folder.id}`}>
-      <button type="button" className="drive-card-main" onClick={() => openFolder(folder.id)}>
-        <span className="drive-ic" style={{ color: kindColor('folder') }}><Folder size={22} /></span>
-        <span className="drive-card-text">
-          <span className="drive-card-name">{folder.name}</span>
-          <span className="drive-card-meta">{itemCount(folder.id)} item(s)</span>
+  function renderList() {
+    return <div className="odrv-table">
+      <div className="odrv-tr odrv-thead has-act">
+        <span className="odrv-td-ic odrv-thead-ic"><File size={14} /></span>
+        <button type="button" className={`odrv-th${sortKey === 'name' ? ' is-active' : ''}`} onClick={() => toggleSort('name')}>Naam <SortCaret col="name" /></button>
+        <button type="button" className={`odrv-th odrv-td-mod${sortKey === 'modified' ? ' is-active' : ''}`} onClick={() => toggleSort('modified')}>Gewijzigd <SortCaret col="modified" /></button>
+        <span className="odrv-th is-static odrv-td-size">Grootte</span>
+        <button type="button" className={`odrv-th odrv-td-type${sortKey === 'type' ? ' is-active' : ''}`} onClick={() => toggleSort('type')}>Type <SortCaret col="type" /></button>
+        <span className="odrv-td-act" aria-hidden="true" />
+      </div>
+      {rows.map(row => <div
+        className="odrv-tr odrv-row has-act"
+        key={row.key}
+        role="button"
+        tabIndex={0}
+        onClick={row.onOpen}
+        onKeyDown={e => rowKeyDown(e, row.onOpen)}
+      >
+        <span className="odrv-td-ic" style={{ color: kindColor(row.kind) }}>{row.glyph(20)}</span>
+        <span className="odrv-td-name" title={row.name}>{row.name}</span>
+        <span className="odrv-td-mod">{row.modified ? dateNL(row.modified) : '—'}</span>
+        <span className="odrv-td-size">{row.size}</span>
+        <span className="odrv-td-type">{row.typeLabel}</span>
+        <span className="odrv-td-act" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
+          {row.menu ? kebab(row.key, () => row.menu!(row.key)) : null}
         </span>
-      </button>
-      {kebab(`fc-${folder.id}`, () => folderMenu(folder), canWrite)}
+      </div>)}
     </div>;
   }
 
-  function renderFolderRow(folder: ContentFolder) {
-    return <div className="drive-row" key={`fr-${folder.id}`}>
-      <button type="button" className="drive-row-main" onClick={() => openFolder(folder.id)}>
-        <span className="drive-ic" style={{ color: kindColor('folder') }}><Folder size={20} /></span>
-        <span className="drive-row-text"><span className="drive-row-name">{folder.name}</span><span className="drive-row-sub">{itemCount(folder.id)} item(s)</span></span>
-      </button>
-      {kebab(`fr-${folder.id}`, () => folderMenu(folder), canWrite)}
-    </div>;
-  }
-
-  function fileOpen(it: DriveFile) {
-    if (it.kind === 'note') onEditNote(it.note);
-    else if (it.kind === 'document') onEditDocument(it.doc);
-    else if (isOfficeEditable(it.att)) openOffice(it.att);
-    else handleDownload(it.att);
-  }
-
-  function renderFileCard(it: DriveFile) {
-    return <div className="drive-card" key={`c-${it.key}`}>
-      <button type="button" className="drive-card-main" onClick={() => fileOpen(it)}>
-        <span className="drive-ic" style={{ color: kindColor(it.kind) }}><FileGlyph it={it} size={24} /></span>
-        <span className="drive-card-text">
-          <span className="drive-card-name" title={fileName(it)}>{fileName(it)}</span>
-          <span className="drive-card-meta"><em style={{ color: kindColor(it.kind), fontStyle: 'normal' }}>{fileKindLabel(it)}</em> · {dateNL(fileDate(it))}</span>
-        </span>
-      </button>
-      {kebab(`c-${it.key}`, () => it.kind === 'file'
-        ? fileMenu(it.att)
-        : contentMenu(`c-${it.key}`, it.kind, it.kind === 'note' ? it.note.id : it.doc.id, () => fileOpen(it)), it.kind === 'file' || canWrite)}
-    </div>;
-  }
-
-  function renderFileRow(it: DriveFile) {
-    const sub = it.kind === 'file'
-      ? <>{fmtBytes(it.att.size_bytes)} · {it.att.mime_type}</>
-      : <RichTextExcerpt content={it.kind === 'note' ? it.note.content : it.doc.content} emptyText="Geen inhoud" />;
-    return <div className="drive-row" key={`r-${it.key}`}>
-      <button type="button" className="drive-row-main" onClick={() => fileOpen(it)}>
-        <span className="drive-ic" style={{ color: kindColor(it.kind) }}><FileGlyph it={it} size={20} /></span>
-        <span className="drive-row-text">
-          <span className="drive-row-name" title={fileName(it)}>{fileName(it)}</span>
-          <span className="drive-row-sub">{sub}</span>
-        </span>
-      </button>
-      <span className="drive-row-meta">{dateNL(fileDate(it))}</span>
-      {kebab(`r-${it.key}`, () => it.kind === 'file'
-        ? fileMenu(it.att)
-        : contentMenu(`r-${it.key}`, it.kind, it.kind === 'note' ? it.note.id : it.doc.id, () => fileOpen(it)), it.kind === 'file' || canWrite)}
+  function renderTiles() {
+    return <div className="odrv-tiles">
+      {rows.map(row => <div className="odrv-tile odrv-tile-wrap" key={`t-${row.key}`}>
+        <button type="button" className="odrv-tile-main" onClick={row.onOpen}>
+          <span className="odrv-tile-canvas" style={{ color: kindColor(row.kind) }}>{row.glyph(row.kind === 'folder' ? 46 : 38)}</span>
+          <span className="odrv-tile-foot">
+            <span className="odrv-tile-name" title={row.name}>{row.name}</span>
+            <span className="odrv-tile-meta">{row.kind === 'folder' ? `${row.typeLabel} · ${row.size}` : `${row.typeLabel}${row.modified ? ` · ${dateNL(row.modified)}` : ''}`}</span>
+          </span>
+        </button>
+        {row.menu && kebab(`t-${row.key}`, () => row.menu!(`t-${row.key}`))}
+      </div>)}
     </div>;
   }
 }
