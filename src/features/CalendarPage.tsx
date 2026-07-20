@@ -422,6 +422,11 @@ interface DragState { dayIndex: number; startSlot: number; endSlot: number }
 /* ── TimeBlockGrid ───────────────────────────────────────────────────── */
 
 const MAX_OVERLAP_COLS = 2;
+// Rechts in elke dagkolom blijft een smalle strook rooster vrij van
+// afspraakblokken (zoals Google Calendar): daar kun je altijd klikken en
+// slepen, ook op tijden die al bezet zijn, zodat je een overlappende afspraak
+// kunt aanmaken zonder dat het bestaande blok de muis afvangt.
+const EVENT_CLICK_STRIP_PX = 12;
 // Afspraken die (bijna) een hele dag vullen (bv. "op locatie", langdurige blokkade)
 // tellen niet mee in de kolomverdeling: ze krijgen altijd de volle breedte als
 // achtergrondlaag, zodat kortere afspraken die ermee overlappen nooit worden
@@ -1007,8 +1012,8 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                           ...eventColorStyle(eventColor(ev)),
                           top: `${segment.top}%`,
                           height: `${segment.height}%`,
-                          left: `calc(${left}% + 2px)`,
-                          right: `calc(${right}% + 2px)`,
+                          left: `calc((100% - ${EVENT_CLICK_STRIP_PX}px) * ${left / 100} + 2px)`,
+                          right: `calc((100% - ${EVENT_CLICK_STRIP_PX}px) * ${right / 100} + ${EVENT_CLICK_STRIP_PX + 2}px)`,
                         }}
                         title={`${visualTime}\n${ev.title}\n${eventMeta}${trackedMin != null ? `\n${formatMinutes(trackedMin)} geregistreerd` : ''}${draggable ? '\nSleep om te verplaatsen · sleep de randen om de duur te wijzigen' : ''}`}>
                         {trackedMin != null && <span className="tb-ev-track" title={`${formatMinutes(trackedMin)} geregistreerd`}><Clock size={10} />{formatMinutes(trackedMin)}</span>}
@@ -1053,7 +1058,7 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                     const height = Math.max(((pv.endMin - pv.startMin) / DAY_MINUTES) * 100, (100 / TOTAL_SLOTS) * MIN_EVENT_HEIGHT_SLOTS);
                     const fmt = (m: number) => formatHour(Math.floor(m / 60) % 24, Math.round(m % 60));
                     return (
-                      <div className="tb-ev tb-ev-preview" style={{ ...eventColorStyle(eventColor(interaction.event)), top: `${top}%`, height: `${height}%`, left: '2px', right: '2px' }}>
+                      <div className="tb-ev tb-ev-preview" style={{ ...eventColorStyle(eventColor(interaction.event)), top: `${top}%`, height: `${height}%`, left: '2px', right: `${EVENT_CLICK_STRIP_PX + 2}px` }}>
                         <span className="tb-ev-time">{fmt(pv.startMin)} – {fmt(pv.endMin)}</span>
                         <span className="tb-ev-title">{interaction.event.title}</span>
                       </div>
