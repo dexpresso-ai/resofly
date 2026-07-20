@@ -3859,3 +3859,23 @@ button.chat-member:hover{background:var(--bg3)}
   .tb-allday-lanes{grid-auto-rows:19px}
   .tb-ad-bar{font-size:10px;padding:0 5px}
 }
+
+/* ── AGENDA · Detailpaneel = direct bewerken (2026-07-20) ──────────────────
+   Bewerkbare afspraken staan meteen in bewerkmodus in het rechterpaneel:
+   titel/tijd/locatie/omschrijving/genodigden inline, "Opslaan" in de kop
+   zodra iets afwijkt. De losse midden-popup voor bewerken is vervallen
+   (EventCreationPanel is alleen nog voor nieuwe afspraken). */
+.event-detail-head-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
+.event-detail-head-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.event-detail-title-edit .form-input{width:100%;font-size:17px;font-weight:800;letter-spacing:-.02em;padding:9px 11px}
+.event-detail-save-error{position:relative;z-index:1;color:var(--accent-r);font-size:12px;border:1px solid rgba(240,107,107,.4);background:rgba(240,107,107,.08);border-radius:10px;padding:8px 10px}
+.event-allday-row{font-size:12px;color:var(--muted2)}
+.event-detail-recur-edit .event-recur-edit{display:flex;gap:8px;flex-wrap:wrap;flex:1 1 auto;min-width:0}
+.event-recur-edit .form-input{flex:1 1 130px;min-width:120px;font-size:12.5px;padding:7px 9px}
+.event-detail-loc-edit{align-items:center}
+.event-detail-loc-edit .location-field{flex:1 1 auto;min-width:0}
+.event-detail-desc-edit .form-textarea{width:100%;min-height:74px;resize:vertical;font-size:13px}
+.event-detail-meeting-edit{position:relative;z-index:1;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.028);border-radius:14px;padding:13px;display:grid;gap:8px}
+.event-attendees-panel .event-attendees{display:grid;gap:8px}
+/* De sectiekop "Genodigden" staat al boven de picker — dubbele kop verbergen. */
+.event-attendees-panel .event-attendees .tb-panel-section-label{display:none}

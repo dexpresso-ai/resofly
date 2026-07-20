@@ -1556,7 +1556,34 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
 }
 
 
-function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, canWrite, editable, onNewNote, onNewDocument, onSetEventLink, onLogTime, onReschedule, onEditNote, onLinkExistingNote, onUnlinkNote, onEditEvent, onDeleteEvent, onClose }: {
+/** Formulier-state van het detailpaneel: bewerken gebeurt direct in het paneel
+ *  (geen losse popup); "Opslaan" verschijnt zodra iets afwijkt van het event. */
+export type EventDetailForm = {
+  title: string; location: string; description: string;
+  startLocal: string; endLocal: string; allDay: boolean;
+  recurrenceFreq: '' | RecurrenceFrequency; recurrenceUntil: string;
+  meetingUrl: string; addConference: boolean;
+  attendees: { email: string; name: string }[];
+};
+
+function detailFormFromEvent(event: CalendarExternalEvent): EventDetailForm {
+  const rec = parseRruleToForm(event.rrule ?? null);
+  return {
+    title: event.title === '(Geen titel)' ? '' : (event.title ?? ''),
+    location: event.location ?? '',
+    description: event.description ?? '',
+    startLocal: toInputDateTime(new Date(event.starts_at)),
+    endLocal: toInputDateTime(new Date(event.ends_at)),
+    allDay: event.all_day,
+    recurrenceFreq: rec.freq,
+    recurrenceUntil: rec.until,
+    meetingUrl: event.meeting_url ?? '',
+    addConference: false,
+    attendees: (event.attendees ?? []).map(a => ({ email: a.email, name: a.name ?? '' })),
+  };
+}
+
+function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, canWrite, editable, onNewNote, onNewDocument, onSetEventLink, onLogTime, onEditNote, onLinkExistingNote, onUnlinkNote, onSaveEvent, onDeleteEvent, onClose }: {
   event: CalendarExternalEvent | null;
   organizationId: UUID;
   data: AppData;
@@ -1567,42 +1594,56 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
   onNewDocument: (event: CalendarExternalEvent) => void;
   onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null, trackTime?: boolean) => void | Promise<void>;
   onLogTime: (event: CalendarExternalEvent) => void;
-  onReschedule: (event: CalendarExternalEvent, startIso: string, endIso: string) => void | Promise<void>;
   onEditNote: (note: Note) => void;
   onLinkExistingNote: (noteId: UUID, event: CalendarExternalEvent) => void | Promise<void>;
   onUnlinkNote: (linkId: UUID) => void | Promise<void>;
-  onEditEvent: (event: CalendarExternalEvent) => void;
+  onSaveEvent: (event: CalendarExternalEvent, form: EventDetailForm) => Promise<void>;
   onDeleteEvent: (event: CalendarExternalEvent) => void | Promise<void>;
   onClose: () => void;
 }) {
   const [selectedNoteId, setSelectedNoteId] = useState('');
   const [attendees, setAttendees] = useState<CalendarEventAttendee[]>([]);
-  // Snel de tijd aanpassen direct in het detailpaneel (zonder het volledige
-  // bewerk-formulier te openen).
-  const [startLocal, setStartLocal] = useState('');
-  const [endLocal, setEndLocal] = useState('');
-  const [savingTime, setSavingTime] = useState(false);
-  const [timeError, setTimeError] = useState<string | null>(null);
+  // Bewerkbare events staan meteen in bewerkmodus: één formulier, voorgevuld
+  // vanuit het event; de basislijn bepaalt of er iets te "Opslaan" valt.
+  const [form, setForm] = useState<EventDetailForm | null>(null);
+  const [baseline, setBaseline] = useState<EventDetailForm | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     setSelectedNoteId('');
-  }, [event?.id, event?.provider_event_id, event?.starts_at]);
-
-  useEffect(() => {
-    setTimeError(null);
-    if (!event) return;
-    setStartLocal(toInputDateTime(new Date(event.starts_at)));
-    setEndLocal(toInputDateTime(new Date(event.ends_at)));
-  }, [event?.id, event?.provider_event_id, event?.starts_at, event?.ends_at]);
+    setSaveError(null);
+    const f = event ? detailFormFromEvent(event) : null;
+    setForm(f);
+    setBaseline(f);
+  }, [event]);
 
   const nativeEventId = event?.provider === 'native' ? event.native_event_id : undefined;
   useEffect(() => {
     setAttendees([]);
     if (!nativeEventId) return;
     let active = true;
-    getCalendarEventAttendees(organizationId, nativeEventId).then(rows => { if (active) setAttendees(rows); }).catch(() => {});
+    getCalendarEventAttendees(organizationId, nativeEventId).then(rows => {
+      if (!active) return;
+      setAttendees(rows);
+      // Native genodigden zitten niet op het event zelf: vul formulier én
+      // basislijn aan zodra ze binnen zijn (géén onbedoelde "wijziging").
+      const mapped = rows.map(r => ({ email: r.email, name: r.display_name ?? '' }));
+      setForm(prev => prev ? { ...prev, attendees: mapped } : prev);
+      setBaseline(prev => prev ? { ...prev, attendees: mapped } : prev);
+    }).catch(() => {});
     return () => { active = false; };
   }, [nativeEventId, organizationId]);
+
+  const dirty = Boolean(editable && form && baseline && JSON.stringify(form) !== JSON.stringify(baseline));
+
+  async function saveEdits() {
+    if (!event || !form || !dirty || saving) return;
+    setSaving(true); setSaveError(null);
+    try { await onSaveEvent(event, form); }
+    catch (err) { setSaveError(err instanceof Error ? err.message : 'Opslaan mislukt.'); }
+    finally { setSaving(false); }
+  }
 
   if (!event) return null;
 
@@ -1655,49 +1696,44 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
         ? 'Je hebt alleen-lezen toegang tot deze organisatie.'
         : null;
 
-  const isTimeEditable = editable && !event.all_day;
-  const timeChanged = isTimeEditable && (
-    startLocal !== toInputDateTime(new Date(event.starts_at)) || endLocal !== toInputDateTime(new Date(event.ends_at))
-  );
-  async function saveTime() {
-    const sIso = inputDateTimeToIso(startLocal);
-    const eIso = inputDateTimeToIso(endLocal);
-    if (new Date(eIso).getTime() <= new Date(sIso).getTime()) { setTimeError('Eindtijd moet na starttijd liggen.'); return; }
-    setSavingTime(true); setTimeError(null);
-    try { await onReschedule(event!, sIso, eIso); }
-    catch (err) { setTimeError(err instanceof Error ? err.message : 'Tijd opslaan mislukt.'); }
-    finally { setSavingTime(false); }
-  }
+  const editing = editable && form !== null;
 
   return (
     <div className="event-detail-overlay" onClick={onClose}>
       <aside className="event-detail-panel" onClick={e => e.stopPropagation()} style={eventColorStyle(color)}>
         <div className="event-detail-glow" />
         <div className="event-detail-head">
-          <div>
+          <div className="event-detail-head-main">
             <span className="event-detail-kicker">{providerLabel(event.provider)} · {event.source_name}</span>
-            <h3>{event.title}</h3>
+            {editing ? (
+              <div className="event-detail-title-edit">
+                <Input value={form!.title} placeholder="Titel van de afspraak" aria-label="Titel"
+                  onChange={e => setForm(p => p ? { ...p, title: e.target.value } : p)} />
+              </div>
+            ) : (
+              <h3>{event.title}</h3>
+            )}
           </div>
-          <button type="button" className="tb-panel-close" onClick={onClose} aria-label="Sluit eventdetails"><X size={17} /></button>
+          <div className="event-detail-head-actions">
+            {editing && <Button type="button" variant="primary" disabled={!dirty || saving} onClick={saveEdits}>{saving ? 'Opslaan…' : 'Opslaan'}</Button>}
+            <button type="button" className="tb-panel-close" onClick={onClose} aria-label="Sluit eventdetails"><X size={17} /></button>
+          </div>
         </div>
+        {saveError && <div className="event-detail-save-error">{saveError}</div>}
 
         <div className="event-detail-meta-grid">
-          {isTimeEditable ? (
+          {editing ? (
             <div className="event-detail-meta-card event-detail-time-edit">
               <Clock size={15} />
               <div className="event-time-edit">
                 <div className="event-time-edit-fields">
-                  <Input type="datetime-local" value={startLocal} onChange={e => setStartLocal(e.target.value)} aria-label="Starttijd" />
+                  <Input type="datetime-local" value={form!.startLocal} onChange={e => setForm(p => p ? { ...p, startLocal: e.target.value } : p)} aria-label="Starttijd" />
                   <span className="event-time-edit-sep">tot</span>
-                  <Input type="datetime-local" value={endLocal} onChange={e => setEndLocal(e.target.value)} aria-label="Eindtijd" />
+                  <Input type="datetime-local" value={form!.endLocal} onChange={e => setForm(p => p ? { ...p, endLocal: e.target.value } : p)} aria-label="Eindtijd" />
                 </div>
-                {timeChanged && (
-                  <div className="event-time-edit-actions">
-                    <Button type="button" variant="primary" disabled={savingTime} onClick={saveTime}>{savingTime ? 'Opslaan…' : 'Tijd opslaan'}</Button>
-                    <Button type="button" variant="ghost" disabled={savingTime} onClick={() => { setStartLocal(toInputDateTime(new Date(event.starts_at))); setEndLocal(toInputDateTime(new Date(event.ends_at))); setTimeError(null); }}>Herstel</Button>
-                  </div>
-                )}
-                {timeError && <span className="event-time-edit-error">{timeError}</span>}
+                <label className="check-row event-allday-row">
+                  <input type="checkbox" checked={form!.allDay} onChange={e => setForm(p => p ? { ...p, allDay: e.target.checked } : p)} /> Hele dag
+                </label>
               </div>
             </div>
           ) : (
@@ -1710,19 +1746,39 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
             <CalendarDays size={15} />
             <span>{event.visibility === 'private' ? 'Privé-agenda' : 'Gedeeld met organisatie'}{event.is_private_masked ? ' · details afgeschermd' : ''}</span>
           </div>
-          {recurrenceLabel(event.rrule) && (
+          {editing && event.provider === 'native' ? (
+            <div className="event-detail-meta-card event-detail-recur-edit">
+              <Repeat size={15} />
+              <div className="event-recur-edit">
+                <Select value={form!.recurrenceFreq} onChange={e => setForm(p => p ? { ...p, recurrenceFreq: e.target.value as '' | RecurrenceFrequency } : p)} aria-label="Herhaling">
+                  <option value="">Niet herhalen</option>
+                  <option value="daily">Elke dag</option>
+                  <option value="weekly">Elke week</option>
+                  <option value="monthly">Elke maand</option>
+                </Select>
+                {form!.recurrenceFreq && <Input type="date" value={form!.recurrenceUntil} title="Herhalen tot en met" aria-label="Herhalen tot en met"
+                  onChange={e => setForm(p => p ? { ...p, recurrenceUntil: e.target.value } : p)} />}
+              </div>
+            </div>
+          ) : recurrenceLabel(event.rrule) ? (
             <div className="event-detail-meta-card">
               <Repeat size={15} />
               <span>{recurrenceLabel(event.rrule)}</span>
             </div>
-          )}
-          {event.location && (
+          ) : null}
+          {editing ? (
+            <div className="event-detail-meta-card event-detail-loc-edit">
+              <MapPin size={15} />
+              <LocationField value={form!.location} placeholder="Locatie toevoegen…"
+                onChange={next => setForm(p => p ? { ...p, location: next } : p)} />
+            </div>
+          ) : event.location ? (
             <a className="event-detail-meta-card event-detail-map-link" href={googleMapsSearchUrl(event.location)} target="_blank" rel="noreferrer" title="Open locatie in Google Maps">
               <MapPin size={15} />
               <span>{event.location}</span>
               <ExternalLink size={12} className="event-detail-map-ext" />
             </a>
-          )}
+          ) : null}
           {event.meeting_url && (
             <a className="event-detail-meta-card event-detail-join-link" href={event.meeting_url} target="_blank" rel="noreferrer" title="Deelnemen aan de videocall">
               <Video size={15} />
@@ -1732,13 +1788,26 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
           )}
         </div>
 
-        {event.description ? (
+        {editing ? (
+          <div className="event-detail-description event-detail-desc-edit">
+            <span>Omschrijving</span>
+            <Textarea value={form!.description} placeholder="Omschrijving toevoegen…"
+              onChange={e => setForm(p => p ? { ...p, description: e.target.value } : p)} />
+          </div>
+        ) : event.description ? (
           <div className="event-detail-description">
             <span>Omschrijving</span>
             <p>{event.description}</p>
           </div>
         ) : (
           <div className="event-detail-empty">Geen omschrijving toegevoegd.</div>
+        )}
+
+        {editing && (
+          <div className="event-detail-meeting-edit">
+            <MeetingFields provider={event.provider} meetingUrl={form!.meetingUrl} addConference={form!.addConference}
+              onChange={patch => setForm(p => p ? { ...p, ...patch } : p)} />
+          </div>
         )}
 
         <section className="event-link-panel">
@@ -1834,7 +1903,30 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
           )}
         </section>
 
-        {displayAttendees.length > 0 && (
+        {editing ? (
+          <section className="event-link-panel event-attendees-panel">
+            <div className="event-link-head">
+              <span className="event-notes-kicker">Genodigden</span>
+              <h4>Uitnodigingen</h4>
+              <p>{displayAttendees.length > 0
+                ? `${displayAttendees.filter(a => a.status === 'accepted').length} van ${displayAttendees.length} geaccepteerd`
+                : 'Nodig contacten of e-mailadressen uit; wijzigingen worden bij het opslaan gemaild.'}</p>
+            </div>
+            <AttendeePicker organizationId={organizationId} sourceId={event.source_id} sourceProvider={event.provider}
+              clients={data.clients} suppliers={data.suppliers} attendees={form!.attendees}
+              onChange={next => setForm(p => p ? { ...p, attendees: next } : p)} />
+            {displayAttendees.length > 0 && (
+              <div className="attendee-status-list">
+                {displayAttendees.map(a => (
+                  <div key={a.key} className="attendee-status-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', gap: 8 }}>
+                    <span>{a.label}</span>
+                    <span className={`attendee-status attendee-status-${a.status}`}>{ATTENDEE_STATUS_LABELS[a.status]}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        ) : displayAttendees.length > 0 ? (
           <section className="event-link-panel">
             <div className="event-link-head">
               <span className="event-notes-kicker">Genodigden</span>
@@ -1850,7 +1942,7 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
               ))}
             </div>
           </section>
-        )}
+        ) : null}
 
         <MeetingRecorder
           organizationId={organizationId}
@@ -1870,11 +1962,9 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
         />
 
         <div className="event-detail-actions">
-          {event.html_link && <a className="btn btn-primary" href={event.html_link} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open in agenda</a>}
-          {editable && (<>
-            <button type="button" className="btn btn-primary" onClick={() => onEditEvent(event)}><Pencil size={14} /> Bewerken</button>
-            <button type="button" className="btn btn-danger" onClick={() => onDeleteEvent(event)}><Trash2 size={14} /> Verwijderen</button>
-          </>)}
+          {editing && <Button type="button" variant="primary" disabled={!dirty || saving} onClick={saveEdits}>{saving ? 'Opslaan…' : 'Opslaan'}</Button>}
+          {event.html_link && <a className={`btn ${editing ? 'btn-ghost' : 'btn-primary'}`} href={event.html_link} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open in agenda</a>}
+          {editable && <button type="button" className="btn btn-danger" onClick={() => onDeleteEvent(event)}><Trash2 size={14} /> Verwijderen</button>}
           <button type="button" className="btn btn-ghost" onClick={onClose}>Sluiten</button>
         </div>
       </aside>
@@ -2372,42 +2462,46 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     finally { setLoading(false); }
   }
 
-  async function startEditEvent(event: CalendarExternalEvent) {
+  // Slaat wijzigingen uit het detailpaneel op — bewerken gebeurt direct in het
+  // paneel rechts (geen losse popup meer). Verhuist de klant/project-koppeling
+  // mee als de starttijd wijzigt (die zit in de unieke sleutel).
+  const saveEventEdits = useCallback(async (event: CalendarExternalEvent, form: EventDetailForm) => {
     if (!eventIsEditable(event)) return;
+    const title = form.title.trim();
+    if (!title) throw new Error('Geef de afspraak een titel.');
+    const sIso = form.allDay ? `${form.startLocal.slice(0, 10)}T00:00:00.000Z` : inputDateTimeToIso(form.startLocal);
+    const eIso = form.allDay ? `${form.endLocal.slice(0, 10)}T00:00:00.000Z` : inputDateTimeToIso(form.endLocal);
+    if (!form.allDay && new Date(eIso).getTime() <= new Date(sIso).getTime()) throw new Error('Eindtijd moet na starttijd liggen.');
+    if (form.allDay && dateKeyFromValue(eIso) < dateKeyFromValue(sIso)) throw new Error('Einddatum mag niet voor startdatum liggen.');
     const isNative = event.provider === 'native';
-    const rec = parseRruleToForm(event.rrule ?? null);
-    const link = data.calendarEventLinks.find(l => calendarEventLinkMatchesEvent(l, event)) ?? null;
-    let attendees: { email: string; name: string }[] = [];
-    if (isNative && event.native_event_id) {
-      try {
-        const rows = await getCalendarEventAttendees(organizationId, event.native_event_id);
-        attendees = rows.map(r => ({ email: r.email, name: r.display_name ?? '' }));
-      } catch { /* genodigden zijn optioneel */ }
-    } else if (!isNative && event.attendees) {
-      // Externe (Google/Microsoft) genodigden komen mee met het event zelf.
-      attendees = event.attendees.map(a => ({ email: a.email, name: a.name ?? '' }));
-    }
-    setSelectedEvent(null);
-    setEditingOriginal(event);
-    setNewEvent(p => ({
-      ...p,
+    const recurrence: EventRecurrence | null = isNative && form.recurrenceFreq
+      ? { freq: form.recurrenceFreq, until: form.recurrenceUntil ? `${form.recurrenceUntil}T23:59:59.000Z` : null }
+      : null;
+    const input = {
       sourceId: event.source_id,
-      title: event.title === '(Geen titel)' ? '' : event.title,
-      description: event.description ?? '',
-      location: event.location ?? '',
-      allDay: event.all_day,
-      startsAt: toInputDateTime(new Date(event.starts_at)),
-      endsAt: toInputDateTime(new Date(event.ends_at)),
-      clientId: link?.client_id ?? '', projectId: link?.project_id ?? '',
-      trackTime: link?.track_time ?? true,
-      recurrenceFreq: rec.freq, recurrenceUntil: rec.until,
-      editingEventId: isNative ? (event.native_event_id as string) : event.provider_event_id,
-      attendees,
-      meetingUrl: event.meeting_url ?? '',
-      addConference: false,
-    }));
-    setShowCreatePanel(true);
-  }
+      title,
+      description: form.description.trim() || null,
+      location: form.location.trim() || null,
+      startsAt: sIso, endsAt: eIso, allDay: form.allDay,
+      recurrence,
+      attendees: form.attendees.map(a => ({ email: a.email, name: a.name || null })),
+      // Automatisch genereren kan alleen bij Google/Microsoft; native accepteert alleen een geplakte link.
+      meetingUrl: form.addConference && !isNative ? null : (form.meetingUrl.trim() || null),
+      addConference: !isNative && form.addConference,
+    };
+    const updated = await updateCalendarEvent(organizationId, eventRef(event), input);
+    const startChanged = new Date(event.starts_at).getTime() !== new Date(updated.starts_at).getTime();
+    if (startChanged) {
+      const link = data.calendarEventLinks.find(l => calendarEventLinkMatchesEvent(l, event)) ?? null;
+      if (link && (link.client_id || link.project_id)) {
+        await onSetEventLink(event, null, null);
+        await onSetEventLink(updated, link.client_id, link.project_id, link.track_time);
+      }
+    }
+    setSelectedEvent(updated);
+    setMessage('Afspraak bijgewerkt.');
+    refreshEventsOnly({ fresh: true }).catch(() => {});
+  }, [eventIsEditable, organizationId, data.calendarEventLinks, onSetEventLink]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function removeEvent(event: CalendarExternalEvent) {
     if (!eventIsEditable(event)) return;
@@ -2985,7 +3079,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       selectedSourceProvider={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider ?? null}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => { setShowCreatePanel(false); setEditingOriginal(null); }} />}
 
-    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sourceColors={sourceColors} canWrite={canWrite} editable={selectedEvent ? eventIsEditable(selectedEvent) : false} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onLogTime={openLogTimeForEvent} onReschedule={rescheduleEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onEditEvent={startEditEvent} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
+    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sourceColors={sourceColors} canWrite={canWrite} editable={selectedEvent ? eventIsEditable(selectedEvent) : false} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onLogTime={openLogTimeForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onSaveEvent={saveEventEdits} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
 
     {showBookingSend && (
       <BookingSendDialog sources={writeableSources} clients={data.clients} draftCount={draftSlots.length}
