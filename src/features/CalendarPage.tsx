@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { CalendarDays, CalendarPlus, ChevronDown, ChevronLeft, ChevronRight, Clock, ExternalLink, LayoutList, Mail, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
+import { CalendarDays, CalendarPlus, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, ExternalLink, LayoutList, Mail, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { MeetingRecorder } from '../components/MeetingRecorder';
 import { RichTextExcerpt } from '../components/RichTextEditor';
@@ -201,10 +201,6 @@ function dayNameNl(day: Date): string {
 
 function monthLabelNl(day: Date): string {
   return new Intl.DateTimeFormat('nl-NL', { month: 'long', year: 'numeric' }).format(day);
-}
-
-function fullDateLabelNl(day: Date): string {
-  return new Intl.DateTimeFormat('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(day);
 }
 
 function isSameMonth(a: Date, b: Date): boolean {
@@ -447,6 +443,83 @@ type TimedEventSegment = {
 
 type OverflowChip = { top: number; count: number };
 
+/* ── Hele-dag-rij: doorlopende balken over meerdere dagen (Google-stijl) ──
+   Hele-dag-afspraken én getimede afspraken van ≥24 uur worden als één balk
+   over de betreffende dagkolommen getekend (met de starttijd in het label,
+   zoals Google "Optie, 15:30"). Kortere afspraken die over middernacht heen
+   lopen blijven geknipt in het tijdrooster staan. */
+const MULTI_DAY_TIMED_MS = 24 * 60 * 60 * 1000;
+
+function isAllDayBarEvent(ev: CalendarExternalEvent): boolean {
+  if (ev.all_day) return true;
+  return new Date(ev.ends_at).getTime() - new Date(ev.starts_at).getTime() >= MULTI_DAY_TIMED_MS;
+}
+
+type AllDayBar = {
+  key: string;
+  kind: 'event' | 'task';
+  event?: CalendarExternalEvent;
+  task?: Task;
+  startIdx: number;
+  span: number;
+  continuesLeft: boolean;
+  continuesRight: boolean;
+  lane: number;
+  timeLabel: string | null;
+};
+
+function layoutAllDayBars(days: Date[], events: CalendarExternalEvent[], tasks: Task[]): { bars: AllDayBar[]; laneCount: number } {
+  const dayKeys = days.map(formatISODate);
+  const firstKey = dayKeys[0];
+  const lastKeyExclusive = addDateKeyDays(dayKeys[dayKeys.length - 1], 1);
+  const bars: AllDayBar[] = [];
+  for (const ev of events) {
+    if (!isAllDayBarEvent(ev)) continue;
+    let startKey: string;
+    let endKeyExclusive: string;
+    let timeLabel: string | null = null;
+    if (ev.all_day) {
+      startKey = allDayStartDateKey(ev);
+      endKeyExclusive = allDayEndDateKeyExclusive(ev);
+    } else {
+      // Getimede meerdaagse: lokale kalenderdagen; einde-min-1ms zodat een
+      // einde om exact middernacht geen extra dag oplevert.
+      startKey = formatISODate(new Date(ev.starts_at));
+      endKeyExclusive = addDateKeyDays(formatISODate(new Date(new Date(ev.ends_at).getTime() - 1)), 1);
+      timeLabel = formatTime(ev.starts_at);
+    }
+    if (endKeyExclusive <= firstKey || startKey >= lastKeyExclusive) continue;
+    const clampedStart = startKey < firstKey ? firstKey : startKey;
+    const clampedLastDay = addDateKeyDays(endKeyExclusive > lastKeyExclusive ? lastKeyExclusive : endKeyExclusive, -1);
+    const startIdx = dayKeys.indexOf(clampedStart);
+    const endIdx = dayKeys.indexOf(clampedLastDay);
+    if (startIdx < 0 || endIdx < 0) continue;
+    bars.push({
+      key: `ev-${eventIdentityKey(ev)}`, kind: 'event', event: ev,
+      startIdx, span: endIdx - startIdx + 1,
+      continuesLeft: startKey < firstKey, continuesRight: endKeyExclusive > lastKeyExclusive,
+      lane: 0, timeLabel,
+    });
+  }
+  for (const task of tasks) {
+    if (!task.end_date) continue;
+    const idx = dayKeys.indexOf(dateKeyFromValue(task.end_date));
+    if (idx < 0) continue;
+    bars.push({ key: `task-${task.id}`, kind: 'task', task, startIdx: idx, span: 1, continuesLeft: false, continuesRight: false, lane: 0, timeLabel: null });
+  }
+  // Lange balken eerst per startdag (Google): die claimen de bovenste lanes,
+  // de rest vult de gaten eronder op.
+  bars.sort((a, b) => a.startIdx - b.startIdx || b.span - a.span || (a.kind === 'task' ? 1 : 0) - (b.kind === 'task' ? 1 : 0));
+  const laneEnds: number[] = [];
+  for (const bar of bars) {
+    let lane = laneEnds.findIndex(end => end <= bar.startIdx);
+    if (lane === -1) { lane = laneEnds.length; laneEnds.push(0); }
+    bar.lane = lane;
+    laneEnds[lane] = bar.startIdx + bar.span;
+  }
+  return { bars, laneCount: laneEnds.length };
+}
+
 function layoutTimedEventsForDay(
   day: Date,
   events: CalendarExternalEvent[],
@@ -454,7 +527,9 @@ function layoutTimedEventsForDay(
   const { start: visibleStartBound, end: visibleEndBound } = visibleTimeBounds(day);
   const minutesInWindow = (HOUR_END - HOUR_START) * 60;
   const raw = events
-    .filter(ev => eventOverlapsVisibleWindow(ev, day))
+    // ≥24-uurs getimede afspraken staan als balk in de hele-dag-rij (Google-stijl),
+    // dus niet nogmaals in het tijdrooster.
+    .filter(ev => eventOverlapsVisibleWindow(ev, day) && !isAllDayBarEvent(ev))
     .map(ev => {
       const eventStart = new Date(ev.starts_at);
       const eventEnd = new Date(ev.ends_at);
@@ -537,7 +612,7 @@ function eventIdentityKey(ev: CalendarExternalEvent): string {
  *  `removable` = een verwijderbaar blok (concept/eigen link); anders alleen-lezen (aangeboden optie). */
 export type BookingOverlaySlot = { id: string; starts_at: string; ends_at: string; status: string; removable?: boolean };
 
-export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false }: {
+export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent, onOpenDay, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false }: {
   days: Date[];
   events: CalendarExternalEvent[];
   tasks: Task[];
@@ -549,6 +624,8 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   onEditTask: (task: Task) => void;
   onOpenEvent: (event: CalendarExternalEvent) => void;
   onMoveEvent: (event: CalendarExternalEvent, startIso: string, endIso: string) => void | Promise<void>;
+  /** Maakt de dagkoppen klikbaar (Google): klik op een dag opent de dagweergave. */
+  onOpenDay?: (day: Date) => void;
   /** Beschikbaarheid-modus voor de boekingstool: sleep-selectie maakt blokken, en de bestaande/concept-blokken worden als aparte laag getoond. */
   bookingMode?: boolean;
   bookingSlots?: BookingOverlaySlot[];
@@ -559,6 +636,8 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   const [drag, setDrag] = useState<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
+  // Hele-dag-rij: standaard alles tonen (zoals Google); inklapbaar bij 3+ lanes.
+  const [allDayExpanded, setAllDayExpanded] = useState(true);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const colRefs = useRef<(HTMLDivElement | null)[]>([]);
   const canSelect = canWrite && writeableSources.length > 0;
@@ -706,10 +785,22 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
     const firstSlot = scrollEl.querySelector<HTMLElement>('.tb-time-label');
     const grid = scrollEl.querySelector<HTMLElement>('.tb-grid');
     const slotHeight = firstSlot?.getBoundingClientRect().height ?? 24;
-    const workdayStartSlot = ((WORKDAY_START - HOUR_START) * 60) / SLOT_MINUTES;
     const gridOffsetTop = grid?.offsetTop ?? 0;
-    scrollEl.scrollTop = Math.max(0, gridOffsetTop + Math.round(workdayStartSlot * slotHeight) - 2);
-  }, [daysKey]);
+    // Google-gedrag: staat vandaag in beeld, open dan met de "nu"-lijn op ±30%
+    // van de hoogte; anders op het begin van de werkdag.
+    const nowDate = new Date();
+    let target: number;
+    if (days.some(d => isSameDay(d, nowDate))) {
+      const nowFraction = (nowDate.getHours() * 60 + nowDate.getMinutes()) / DAY_MINUTES;
+      target = gridOffsetTop + nowFraction * slotHeight * TOTAL_SLOTS - scrollEl.clientHeight * 0.3;
+    } else {
+      const workdayStartSlot = ((WORKDAY_START - HOUR_START) * 60) / SLOT_MINUTES;
+      target = gridOffsetTop + workdayStartSlot * slotHeight - 2;
+    }
+    // Instant (niet smooth): de agenda opent direct op de juiste positie; de
+    // CSS `scroll-behavior:smooth` op de scroller zou de sprong anders annuleren.
+    scrollEl.scrollTo({ top: Math.max(0, Math.round(target)), behavior: 'instant' });
+  }, [daysKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleMouseDown = useCallback((dayIndex: number, slot: number) => {
     if (!canSelect) return;
@@ -746,9 +837,24 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
     hourLabels.push({ ...t, label: formatHour(t.hour, t.minutes) });
   }
 
-  function allDayEventsForDay(day: Date) { return events.filter(e => e.all_day && eventOverlapsDay(e, day)); }
-  function tasksForDay(day: Date) { return tasks.filter(t => t.end_date && isSameDay(new Date(`${t.end_date}T12:00:00`), day)); }
   function eventColor(ev: CalendarExternalEvent): string { return sourceColors.get(ev.source_id) ?? '#FFD966'; }
+
+  // Hele-dag-rij als doorlopende balken (Google): lanes over de dagkolommen heen.
+  const { bars: allDayBars, laneCount: allDayLaneCount } = useMemo(
+    () => layoutAllDayBars(days, events, tasks),
+    [daysKey, events, tasks], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const ALLDAY_COLLAPSED_LANES = 2;
+  const allDayCollapsible = allDayLaneCount > ALLDAY_COLLAPSED_LANES;
+  const allDayShowAll = allDayExpanded || !allDayCollapsible;
+  const visibleAllDayBars = allDayShowAll ? allDayBars : allDayBars.filter(b => b.lane < ALLDAY_COLLAPSED_LANES);
+  // Bij ingeklapte rij: per dag hoeveel balken verborgen zijn ("+N").
+  const hiddenAllDayCounts = allDayShowAll ? [] : days.map((_, di) =>
+    allDayBars.filter(b => b.lane >= ALLDAY_COLLAPSED_LANES && di >= b.startIdx && di < b.startIdx + b.span).length);
+
+  // Tijdzone-label in de hoek van de tijdgoot, zoals Google ("GMT+2").
+  const tzOffsetMin = -new Date().getTimezoneOffset();
+  const gmtLabel = `GMT${tzOffsetMin >= 0 ? '+' : '-'}${Math.floor(Math.abs(tzOffsetMin) / 60)}`;
 
   function isInSelection(di: number, si: number): boolean {
     if (!drag || !isDragging || di !== drag.dayIndex) return false;
@@ -783,35 +889,59 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
       <div className="tb-scroll" ref={scrollRef}>
         <div className="tb-canvas">
           <div className="tb-day-headers">
-            <div className="tb-gutter tb-sticky-gutter tb-corner" />
+            <div className="tb-gutter tb-sticky-gutter tb-corner"><span className="tb-gmt">{gmtLabel}</span></div>
             {days.map(day => {
               const td = today(day);
-              return <div className={`tb-dh${td ? ' tb-today' : ''}`} key={formatISODate(day)}>
+              const inner = <>
                 <span className="tb-dh-name">{dayNameNl(day)}</span>
                 <span className={`tb-dh-num${td ? ' tb-today-num' : ''}`}>{day.getDate()}</span>
-                <span className="tb-dh-month">{new Intl.DateTimeFormat('nl-NL', { month: 'short' }).format(day)}</span>
-                {td && <span className="tb-dh-today">Vandaag</span>}
+              </>;
+              return <div className={`tb-dh${td ? ' tb-today' : ''}`} key={formatISODate(day)}>
+                {onOpenDay
+                  ? <button type="button" className="tb-dh-hit" onClick={() => onOpenDay(day)} title="Open dagweergave">{inner}</button>
+                  : inner}
               </div>;
             })}
           </div>
 
           <div className="tb-allday-row">
-            <div className="tb-gutter tb-sticky-gutter tb-allday-label">Hele dag</div>
-            {days.map((day, di) => {
-              const ad = allDayEventsForDay(day);
-              const dt = tasksForDay(day);
-              return (
-                <div className={`tb-allday-cell${today(day) ? ' tb-today-col' : ''}`} key={di}>
-                  {ad.map(ev => (
-                    <button type="button" className="tb-ad-chip ext" key={`${ev.provider}-${ev.provider_event_id}-${di}`} onClick={() => onOpenEvent(ev)} title={ev.title} style={eventColorStyle(eventColor(ev))}>{ev.title}</button>
-                  ))}
-                  {dt.map(t => (
-                    <button type="button" className="tb-ad-chip task" key={t.id} onClick={() => onEditTask(t)} title={t.title}>{t.title}</button>
-                  ))}
-                  {ad.length === 0 && dt.length === 0 && <span className="tb-ad-empty">—</span>}
-                </div>
-              );
-            })}
+            <div className="tb-gutter tb-sticky-gutter tb-allday-label">
+              <span className="tb-allday-text">Hele dag</span>
+              {allDayCollapsible && (
+                <button type="button" className="tb-allday-toggle" onClick={() => setAllDayExpanded(v => !v)}
+                  title={allDayExpanded ? 'Minder tonen' : 'Alle hele-dag-items tonen'}
+                  aria-label={allDayExpanded ? 'Hele-dag-rij inklappen' : 'Hele-dag-rij uitklappen'}>
+                  {allDayExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </button>
+              )}
+            </div>
+            <div className="tb-allday-lanes" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))` }}>
+              {visibleAllDayBars.map(bar => bar.kind === 'event' && bar.event ? (
+                <button type="button"
+                  className={`tb-ad-bar${bar.continuesLeft ? ' tb-ad-cont-l' : ''}${bar.continuesRight ? ' tb-ad-cont-r' : ''}${bar.event.visibility === 'private' ? ' tb-ev-priv' : ''}`}
+                  key={bar.key}
+                  style={{ ...eventColorStyle(eventColor(bar.event)), gridColumn: `${bar.startIdx + 1} / span ${bar.span}`, gridRow: bar.lane + 1 }}
+                  onClick={() => onOpenEvent(bar.event!)}
+                  title={`${bar.event.title}\n${formatEventRange(bar.event)}`}>
+                  {bar.continuesLeft && <ChevronLeft size={11} className="tb-ad-bar-cont" />}
+                  <span className="tb-ad-bar-title">{bar.event.title}{bar.timeLabel ? `, ${bar.timeLabel}` : ''}</span>
+                  {bar.continuesRight && <ChevronRight size={11} className="tb-ad-bar-cont tb-ad-bar-cont-r" />}
+                </button>
+              ) : bar.task ? (
+                <button type="button" className="tb-ad-bar tb-ad-bar-task" key={bar.key}
+                  style={{ gridColumn: `${bar.startIdx + 1} / span ${bar.span}`, gridRow: bar.lane + 1 }}
+                  onClick={() => onEditTask(bar.task!)} title={`Taak · ${bar.task.title}`}>
+                  <span className="tb-ad-bar-title">{bar.task.title}</span>
+                </button>
+              ) : null)}
+              {!allDayShowAll && hiddenAllDayCounts.map((count, di) => count > 0 ? (
+                <button type="button" className="tb-ad-more" key={`more-${di}`}
+                  style={{ gridColumn: `${di + 1} / span 1`, gridRow: ALLDAY_COLLAPSED_LANES + 1 }}
+                  onClick={() => setAllDayExpanded(true)} title="Toon alle hele-dag-items">
+                  +{count}
+                </button>
+              ) : null)}
+            </div>
           </div>
 
 
@@ -946,8 +1076,6 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
         </div>
       </div>
 
-      {canSelect && !bookingMode && <p className="tb-hint">Sleep over lege tijdslots om snel een event aan te maken · sleep een afspraak om te verplaatsen · sleep de boven-/onderrand om de duur te wijzigen</p>}
-      {bookingMode && <p className="tb-hint">Beschikbaarheid-modus: sleep over het rooster om beschikbare blokken voor de klant te maken · klik op een groen blok om het te verwijderen (🔒 = al geboekt).</p>}
     </div>
   );
 }
@@ -1977,11 +2105,20 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   const days = useMemo(() => calendarDaysForView(view, anchor), [view, anchor]);
   const rangeStart = useMemo(() => days[0].toISOString(), [days]);
   const rangeEnd = useMemo(() => addDays(days[days.length - 1], 1).toISOString(), [days]);
+  // Google-stijl titel: "juli 2026" (met korte maanden als de week over een
+  // maandgrens valt); de dagweergave toont de volledige datum.
   const calendarRangeLabel = useMemo(() => {
-    if (view === 'day') return fullDateLabelNl(anchor);
+    if (view === 'day') return new Intl.DateTimeFormat('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' }).format(anchor);
     if (view === 'month') return monthLabelNl(anchor);
-    return `${formatISODate(days[0])} t/m ${formatISODate(days[days.length - 1])}`;
+    const first = days[0];
+    const last = days[days.length - 1];
+    if (isSameMonth(first, last)) return monthLabelNl(first);
+    const shortMonth = (d: Date) => new Intl.DateTimeFormat('nl-NL', { month: 'short' }).format(d).replace('.', '');
+    if (first.getFullYear() === last.getFullYear()) return `${shortMonth(first)} – ${shortMonth(last)} ${last.getFullYear()}`;
+    return `${shortMonth(first)} ${first.getFullYear()} – ${shortMonth(last)} ${last.getFullYear()}`;
   }, [anchor, days, view]);
+  // Weeknummer-chip naast de titel (Google toont die in de weekweergave).
+  const calendarWeekNumber = view === 'week' || view === 'list' ? isoWeekNumber(days[0]) : null;
   const canManageSource = (src: CalendarSource) => Boolean(canWrite && currentUserId && src.user_id === currentUserId);
   const canManageConnection = (uid: UUID) => Boolean(canWrite && currentUserId && uid === currentUserId);
   const writeableSources = useMemo(
@@ -2457,13 +2594,22 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     if (next !== view) changeView(next);
   }
 
-  // Sneltoetsen voor snelle navigatie. Genegeerd tijdens typen in formulieren of
-  // als er een paneel/modal openstaat (Escape sluit die i.p.v. hier te navigeren).
+  // Sneltoetsen voor snelle navigatie (Google-stijl): ←/→ vorige/volgende
+  // periode, ↑/↓ zoomt dag↔week↔maand, T/V vandaag, D/W/M/L weergaven en
+  // Escape sluit een openstaand paneel. Genegeerd tijdens typen in formulieren.
   useEffect(() => {
     if (mode !== 'agenda') return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (showCreatePanel || selectedEvent) return;
+      if (e.key === 'Escape') {
+        if (showBookingSend) { setShowBookingSend(false); return; }
+        if (bookingCreated) { setBookingCreated(null); return; }
+        if (logTimeEvent) { setLogTimeEvent(null); return; }
+        if (showCreatePanel) { setShowCreatePanel(false); setEditingOriginal(null); return; }
+        if (selectedEvent) { setSelectedEvent(null); return; }
+        return;
+      }
+      if (showCreatePanel || selectedEvent || showBookingSend || bookingCreated || logTimeEvent) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
       switch (e.key) {
@@ -2471,7 +2617,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         case 'ArrowRight': e.preventDefault(); movePeriod(1); break;
         case 'ArrowUp': e.preventDefault(); cycleView(-1); break;
         case 'ArrowDown': e.preventDefault(); cycleView(1); break;
-        case 'v': case 'V': e.preventDefault(); goToday(); break;
+        case 't': case 'T': case 'v': case 'V': e.preventDefault(); goToday(); break;
         case 'd': case 'D': e.preventDefault(); changeView('day'); break;
         case 'w': case 'W': e.preventDefault(); changeView('week'); break;
         case 'm': case 'M': e.preventDefault(); changeView('month'); break;
@@ -2481,7 +2627,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [mode, view, showCreatePanel, selectedEvent]); // eslint-disable-line
+  }, [mode, view, showCreatePanel, selectedEvent, showBookingSend, bookingCreated, logTimeEvent]); // eslint-disable-line
 
   // Muiswiel navigeert door periodes (net als de pijltjes). In dag/week scrollt het
   // wiel eerst het tijdrooster; pas aan de boven-/onderrand springt het naar de
@@ -2713,51 +2859,52 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     <div className={`calendar-main-card calendar-main-card-${view}`} id="calendar-agenda" ref={mainCardRef}>
       <div className="calendar-toolbar calendar-toolbar-premium">
         <div className="calendar-period-controls">
+          <Button onClick={goToday} title="Naar vandaag (T)">Vandaag</Button>
           <Button className="calendar-nav-btn" onClick={() => movePeriod(-1)} title={`${previousLabel} (←)`} aria-label={previousLabel}><ChevronLeft size={18} /></Button>
-          <Button onClick={goToday} title="Spring naar vandaag (V)">Vandaag</Button>
           <Button className="calendar-nav-btn" onClick={() => movePeriod(1)} title={`${nextLabel} (→)`} aria-label={nextLabel}><ChevronRight size={18} /></Button>
         </div>
         <div className="calendar-range-block">
-          <span className="calendar-range-label">{view === 'day' ? 'Dag' : view === 'week' ? 'Week' : view === 'month' ? 'Maand' : 'Lijst'}</span>
-          <div className="calendar-range">{calendarRangeLabel}{eventsLoading ? ' · laden…' : ''}</div>
+          <div className="calendar-range">{calendarRangeLabel}</div>
+          {calendarWeekNumber != null && <span className="calendar-week-chip">Week {calendarWeekNumber}</span>}
+          {eventsLoading && <span className="calendar-loading-hint">laden…</span>}
         </div>
-        <Button className="calendar-link-btn" onClick={() => refreshAll({ fresh: true })} disabled={loading || eventsLoading} title="Ververs"><RefreshCcw size={14} /> <span className="calendar-link-btn-label">Ververs</span></Button>
-        <div className="tb-view-tog calendar-view-tabs" aria-label="Agendaweergave">
-          <button className={`tb-vbtn${view === 'day' ? ' active' : ''}`} onClick={() => changeView('day')} title="Dagweergave (D)"><CalendarDays size={14} /><span>Dag</span></button>
-          <button className={`tb-vbtn${view === 'week' ? ' active' : ''}`} onClick={() => changeView('week')} title="Weekweergave (W)"><Clock size={14} /><span>Week</span></button>
-          <button className={`tb-vbtn${view === 'month' ? ' active' : ''}`} onClick={() => changeView('month')} title="Maandweergave (M)"><CalendarDays size={14} /><span>Maand</span></button>
-          <button className={`tb-vbtn${view === 'list' ? ' active' : ''}`} onClick={() => changeView('list')} title="Lijstweergave (L)"><LayoutList size={14} /><span>Lijst</span></button>
-        </div>
-      </div>
-
-      {(view === 'day' || view === 'week') && canWrite && writeableSources.length > 0 && (
-        <div className="calendar-toolbar calendar-booking-toolbar">
-          {!bookingMode ? (
+        <div className="calendar-toolbar-right">
+          {(view === 'day' || view === 'week') && canWrite && writeableSources.length > 0 && !bookingMode && (
             <>
-              <Button onClick={() => { setBookingMode(true); setDraftSlots([]); }} title="Blokkeer tijden om als opties naar een klant te sturen">
-                <CalendarPlus size={14} /> Beschikbaarheid voor klant
+              <Button onClick={() => { setBookingMode(true); setDraftSlots([]); }} title="Beschikbaarheid voor klant — teken blokken en stuur ze als boekingsopties door">
+                <CalendarPlus size={14} /> <span className="calendar-availability-label">Beschikbaarheid</span>
               </Button>
               {bookingLinks.some(l => l.status === 'active') && (
-                <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-                  <input type="checkbox" checked={showBookingOptions} onChange={e => setShowBookingOptions(e.target.checked)} /> Toon boekingsopties
+                <label className="calendar-options-toggle" title="Toon aangeboden boekingsopties in de agenda">
+                  <input type="checkbox" checked={showBookingOptions} onChange={e => setShowBookingOptions(e.target.checked)} /> <span>Opties</span>
                 </label>
               )}
             </>
-          ) : (
-            <>
-              <span className="calendar-range-label">Opties tekenen</span>
-              <span className="muted" style={{ fontSize: 13 }}>Sleep op het rooster om opties te maken ({draftSlots.length} gekozen) · klik een concept-blok om het te verwijderen.</span>
-              <Button variant="primary" disabled={draftSlots.length === 0} onClick={() => setShowBookingSend(true)}>Doorsturen naar klant…</Button>
-              {draftSlots.length > 0 && <Button onClick={() => setDraftSlots([])}>Wissen</Button>}
-              <Button onClick={() => { setBookingMode(false); setDraftSlots([]); }}>Sluiten</Button>
-            </>
           )}
+          <Button className="calendar-link-btn" onClick={() => refreshAll({ fresh: true })} disabled={loading || eventsLoading} title="Ververs agenda's" aria-label="Ververs agenda's"><RefreshCcw size={14} /></Button>
+          <div className="tb-view-tog calendar-view-tabs" aria-label="Agendaweergave">
+            <button className={`tb-vbtn${view === 'day' ? ' active' : ''}`} onClick={() => changeView('day')} title="Dagweergave (D)"><CalendarDays size={14} /><span>Dag</span></button>
+            <button className={`tb-vbtn${view === 'week' ? ' active' : ''}`} onClick={() => changeView('week')} title="Weekweergave (W)"><Clock size={14} /><span>Week</span></button>
+            <button className={`tb-vbtn${view === 'month' ? ' active' : ''}`} onClick={() => changeView('month')} title="Maandweergave (M)"><CalendarDays size={14} /><span>Maand</span></button>
+            <button className={`tb-vbtn${view === 'list' ? ' active' : ''}`} onClick={() => changeView('list')} title="Lijstweergave (L)"><LayoutList size={14} /><span>Lijst</span></button>
+          </div>
+        </div>
+      </div>
+
+      {(view === 'day' || view === 'week') && bookingMode && (
+        <div className="calendar-toolbar calendar-booking-toolbar">
+          <span className="calendar-range-label">Opties tekenen</span>
+          <span className="muted" style={{ fontSize: 13 }}>Sleep op het rooster om opties te maken ({draftSlots.length} gekozen) · klik een concept-blok om het te verwijderen.</span>
+          <Button variant="primary" disabled={draftSlots.length === 0} onClick={() => setShowBookingSend(true)}>Doorsturen naar klant…</Button>
+          {draftSlots.length > 0 && <Button onClick={() => setDraftSlots([])}>Wissen</Button>}
+          <Button onClick={() => { setBookingMode(false); setDraftSlots([]); }}>Sluiten</Button>
         </div>
       )}
 
       {view === 'day' || view === 'week' ? (
         <TimeBlockGrid days={days} events={events} tasks={data.tasks.filter(t => t.status !== 'done')}
           sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} onMoveEvent={rescheduleEvent}
+          onOpenDay={view === 'week' ? openDay : undefined}
           bookingMode={bookingMode} bookingSlots={bookingOverlay} onRemoveBookingSlot={handleRemoveBookingSlot} />
       ) : view === 'month' ? (
         <CalendarMonthView days={days} anchor={anchor} events={events} tasks={data.tasks.filter(t => t.status !== 'done')} data={data}
