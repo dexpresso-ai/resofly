@@ -3993,6 +3993,9 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .odrv-tile-wrap:hover .drive-kebab,.odrv-tile-wrap .drive-kebab.is-open{opacity:1}
 .odrv-dropzone{margin-top:14px}
 .odrv-embed .drive-new{padding:8px 13px}
+/* In een intern scrollende lijst (globale Inhoud-pagina) opent het ⋮-menu omhoog
+   voor rijen onderin beeld, zodat het niet door de scrollrand wordt afgeknipt. */
+.drive-pop.is-up{top:auto;bottom:calc(100% + 4px)}
 @media(max-width:900px){
   .odrv.odrv-embed{min-height:380px}
   .odrv-tr.has-act{grid-template-columns:30px minmax(0,1fr) 118px 34px}

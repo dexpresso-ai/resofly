@@ -29,7 +29,7 @@ function readView(): 'grid' | 'list' {
   try { return window.localStorage.getItem(VIEW_KEY) === 'grid' ? 'grid' : 'list'; } catch { return 'list'; }
 }
 
-function fmtBytes(bytes: number): string {
+export function fmtBytes(bytes: number): string {
   if (!bytes) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB'];
   let i = 0;
@@ -51,7 +51,7 @@ function fileModified(it: DriveFile): string {
   if (it.kind === 'document') return it.doc.updated_at || it.doc.created_at;
   return it.att.created_at;
 }
-function attTypeLabel(att: Attachment): string {
+export function attTypeLabel(att: Attachment): string {
   const ext = att.name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? '';
   if (['docx', 'doc', 'odt'].includes(ext)) return 'Word-document';
   if (['xlsx', 'xls', 'ods'].includes(ext)) return 'Excel-werkblad';
@@ -60,6 +60,14 @@ function attTypeLabel(att: Attachment): string {
   if (m.startsWith('image/')) return 'Afbeelding';
   if (m === 'application/pdf') return 'PDF';
   return 'Bestand';
+}
+/** Icoon voor een geüpload bestand op basis van het bestandstype. Gedeeld met de Inhoud-pagina. */
+export function AttachmentGlyph({ att, size }: { att: Attachment; size: number }) {
+  const label = attTypeLabel(att);
+  if (label === 'Afbeelding') return <ImageIcon size={size} />;
+  if (label === 'Excel-werkblad') return <Sheet size={size} />;
+  if (label === 'PowerPoint') return <Presentation size={size} />;
+  return <FileText size={size} />;
 }
 function fileKindLabel(it: DriveFile): string {
   if (it.kind === 'note') return 'Notitie';
@@ -75,11 +83,7 @@ function kindColor(kind: 'folder' | 'note' | 'document' | 'file'): string {
 function FileGlyph({ it, size }: { it: DriveFile; size: number }) {
   if (it.kind === 'note') return <StickyNote size={size} />;
   if (it.kind === 'document') return <FileText size={size} />;
-  const label = attTypeLabel(it.att);
-  if (label === 'Afbeelding') return <ImageIcon size={size} />;
-  if (label === 'Excel-werkblad') return <Sheet size={size} />;
-  if (label === 'PowerPoint') return <Presentation size={size} />;
-  return <FileText size={size} />;
+  return <AttachmentGlyph att={it.att} size={size} />;
 }
 
 type SortKey = 'name' | 'modified' | 'type';
