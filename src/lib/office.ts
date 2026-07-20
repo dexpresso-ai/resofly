@@ -165,6 +165,19 @@ export async function uploadOfficeDocumentFile(organizationId: UUID, file: File)
   return postOfficeDocumentBytes(organizationId, file.name, mime, file);
 }
 
+/** Maak een nieuw, leeg Word/Excel/PowerPoint-bestand aan als basis voor een nieuw (Office-modus) document — geen upload nodig. */
+export async function createBlankOfficeDocument(organizationId: UUID, docType: NewOfficeType, name: string): Promise<OfficeUploadResult> {
+  const base = getWorkerBase();
+  const token = await getAccessToken();
+  const res = await fetch(`${base}/office/document-new`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ organizationId, docType, name }),
+  });
+  if (!res.ok) throw new Error(await errText(res, 'Kon geen nieuw document aanmaken'));
+  return (await res.json()) as OfficeUploadResult;
+}
+
 /** Bouw een bewerksessie voor een bestaand office-bestand. */
 export async function createOfficeSession(att: Attachment): Promise<OfficeSession> {
   const base = getWorkerBase();

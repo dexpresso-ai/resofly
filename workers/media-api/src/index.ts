@@ -161,6 +161,9 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
   if (method === 'POST' && pathname === '/office/document-upload') {
     return handleOfficeDocumentUpload(request, env, context);
   }
+  if (method === 'POST' && pathname === '/office/document-new') {
+    return handleOfficeDocumentNew(request, env, context);
+  }
   const officeFile = pathname.match(/^\/office\/document-file\/([^/]+)$/);
   if (officeFile) {
     if (!isUuid(officeFile[1])) return errorResponse('Ongeldige document-id.', 400, context);
@@ -695,6 +698,43 @@ async function handleOfficeDocumentUpload(request: Request, env: Env, context: R
     customMetadata: { name: fileName, organizationId, entityType: 'document', uploadedBy: userId, uploadedAt: new Date().toISOString() },
   });
 
+  return jsonResponse({ ok: true, key, size_bytes: object.size, mime_type: mime, name: fileName }, 200, context);
+}
+
+/**
+ * Maak een nieuw, leeg Office-document (kopie van een blanco sjabloon in R2) — Office-modus
+ * vanaf het aanmaken, zonder dat de gebruiker eerst zelf een bestand hoeft te uploaden.
+ */
+async function handleOfficeDocumentNew(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const userId = await requireUser(request, env);
+  officeSecret(env); // faal snel als edit-config ontbreekt
+
+  const body = (await request.json().catch(() => ({}))) as { organizationId?: string; docType?: string; name?: string };
+  const organizationId = (body.organizationId || '').trim();
+  const docType = (body.docType || '').trim();
+  if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige organization id.');
+  if (!OFFICE_NEW_MIME[docType]) throw new HttpError(400, 'Ongeldig documenttype.');
+
+  const role = await membershipRole(env, organizationId, userId);
+  if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+
+  const templateKey = `_office-templates/blank.${docType}`;
+  const template = await env.MEDIA_BUCKET.get(templateKey);
+  if (!template) throw new HttpError(500, `Sjabloon ontbreekt (${templateKey}). Seed de blanco sjablonen — zie deploy-runbook.`);
+
+  const cleaned = sanitizeFileName(body.name || 'Nieuw document');
+  const base = cleaned.toLowerCase().endsWith(`.${docType}`) ? cleaned.slice(0, -(docType.length + 1)) : cleaned;
+  const fileName = `${base || 'Nieuw_document'}.${docType}`;
+  const mime = OFFICE_NEW_MIME[docType];
+  const key = `${organizationId}/document/${crypto.randomUUID()}-${fileName}`;
+
+  const object = await env.MEDIA_BUCKET.put(key, template.body, {
+    httpMetadata: { contentType: mime },
+    customMetadata: { name: fileName, organizationId, entityType: 'document', uploadedBy: userId, uploadedAt: new Date().toISOString() },
+  });
+
+  // De documents-rij maakt de frontend aan (RLS + created_by = auth.uid()), net als bij
+  // een geüploade Office-file.
   return jsonResponse({ ok: true, key, size_bytes: object.size, mime_type: mime, name: fileName }, 200, context);
 }
 

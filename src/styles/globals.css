@@ -688,6 +688,7 @@
 .drive.is-dragging .drive-dropzone,.drive-dropzone.is-dragging{border-color:var(--accent);background:var(--accent-soft);color:var(--text)}
 @media(max-width:640px){.drive-bar-right{flex:1;min-width:100%}.drive-search{flex:1}.drive-grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}}
 .document-export{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border);border-radius:10px;background:rgba(255,255,255,.025)}
+.document-export-label{font-size:12px;font-weight:600;color:var(--text)}
 .document-export-actions{display:flex;gap:8px;flex-wrap:wrap}
 .document-export-hint{font-size:11px;color:var(--muted);line-height:1.4}
 .document-export-error{font-size:11px;color:var(--accent-r)}

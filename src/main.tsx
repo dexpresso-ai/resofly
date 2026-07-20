@@ -62,7 +62,7 @@ import { memberShortName, memberColor, memberInitials } from './lib/members';
 import { uploadToR2 } from './lib/r2';
 import { listExternalCalendarEvents, createExternalCalendarEvent } from './lib/calendar-api';
 import { buildDocumentPdfBlob, buildDocumentDocxBlob, downloadBlob, documentFileBaseName, type DocumentExportMeta } from './lib/documentExport';
-import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumentFile, downloadOfficeDocument, officeFileNameForDocument, OFFICE_UPLOAD_ACCEPT, type OfficeSession } from './lib/office';
+import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumentFile, createBlankOfficeDocument, downloadOfficeDocument, officeFileNameForDocument, OFFICE_UPLOAD_ACCEPT, NEW_OFFICE_LABEL, type OfficeSession, type NewOfficeType } from './lib/office';
 import { deleteR2Object } from './lib/r2-api';
 import { OfficeEditor } from './features/OfficeEditor';
 import { Dashboard } from './features/Dashboard';
@@ -866,6 +866,46 @@ function App() {
     }
   }
 
+  /**
+   * Maak een document aan als nieuw, leeg Word/Excel/PowerPoint-bestand — Office-modus vanaf
+   * dag één, zonder dat er eerst iets geüpload hoeft te worden — en open het meteen in de editor.
+   */
+  async function createDocumentFromBlankOffice(docType: NewOfficeType, values: Record<string, unknown>) {
+    if (!ensureCanWrite()) return;
+    setOfficeOpening(true); setError(null);
+    try {
+      const title = String(values.title || '').trim() || 'Nieuw document';
+      const up = await createBlankOfficeDocument(activeOrg.id, docType, title);
+      let doc: InternalDocument;
+      try {
+        doc = await insertRow<InternalDocument>('documents', activeOrg.id, {
+          title,
+          document_type: values.document_type || 'general',
+          client_id: values.client_id ?? null,
+          project_id: values.project_id ?? null,
+          folder_id: values.folder_id ?? null,
+          content: '',
+          storage_key: up.key,
+          mime_type: up.mime_type,
+          size_bytes: up.size_bytes,
+        });
+      } catch (e) {
+        await deleteR2Object(up.key).catch((cleanupErr) => {
+          console.warn('Office-sjabloon opruimen mislukt na documents-insert-fout (mogelijk weesbestand in R2):', up.key, cleanupErr);
+        });
+        throw e;
+      }
+      setEdit(null);
+      await refresh();
+      setOfficeSession(await createOfficeSessionForDocument(doc.id));
+      setOfficeDoc(doc);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Kon het document niet aanmaken');
+    } finally {
+      setOfficeOpening(false);
+    }
+  }
+
   /** Download het openstaande Office-document in z'n originele formaat (.docx/.xlsx/.pptx). */
   async function downloadOfficeDoc() {
     if (!officeDoc) return;
@@ -1540,13 +1580,13 @@ function App() {
         <section key={tab.id} className="content" hidden={tab.id !== activeTab.id}>
           {tab.id === activeTab.id && error && <div className="error">{error}</div>}
           {renderPage(tab)}
-          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} />}
+          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} />}
         </section>
       ))}
     </main>
     <GerrieChat organizationId={activeOrg.id} {...gerrieActions} />
     {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeDoc(null); refresh(); }} onDownload={officeDoc ? downloadOfficeDoc : undefined} />}
-    {officeOpening && !officeSession && <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 2100, background: 'var(--panel-strong)', border: '1px solid var(--border2)', borderRadius: 10, padding: '8px 14px', fontWeight: 600 }}>Word-editor openen…</div>}
+    {officeOpening && !officeSession && <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 2100, background: 'var(--panel-strong)', border: '1px solid var(--border2)', borderRadius: 10, padding: '8px 14px', fontWeight: 600 }}>Editor openen…</div>}
     {/* Zwevend teamchat-paneel — overal beschikbaar, behalve op de volledige chatpagina. */}
     <TeamChatDock api={teamChat} hidden={page === 'chat'} />
     {/* Mobiele duim-onderbalk (alleen ≤760px, zie globals.css). Navigeert het
@@ -1741,7 +1781,7 @@ function TaskAssigneePicker({ projectId, assigneeIds, teamMembers, projectMember
   </div>;
 }
 
-function EditModal({ edit, data, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord, onCreateFromOfficeFile }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void; onCreateFromOfficeFile: (file: File, values: Record<string, unknown>) => void }) {
+function EditModal({ edit, data, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord, onCreateFromOfficeFile, onCreateBlankOffice }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void; onCreateFromOfficeFile: (file: File, values: Record<string, unknown>) => void; onCreateBlankOffice: (docType: NewOfficeType, values: Record<string, unknown>) => void }) {
   const item = 'item' in edit ? edit.item : undefined;
   const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit, data));
   const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
@@ -1947,10 +1987,14 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
           e.target.value = '';
           if (file) onCreateFromOfficeFile(file, cleanForm('document', form));
         }}/>
+        <span className="document-export-label">Kies het type bestand dat je wilt aanmaken</span>
         <div className="document-export-actions">
-          <Button onClick={() => officeFileRef.current?.click()}>Word/Excel/PowerPoint uploaden…</Button>
+          <Button onClick={() => onCreateBlankOffice('docx', cleanForm('document', form))}>+ {NEW_OFFICE_LABEL.docx}</Button>
+          <Button onClick={() => onCreateBlankOffice('xlsx', cleanForm('document', form))}>+ {NEW_OFFICE_LABEL.xlsx}</Button>
+          <Button onClick={() => onCreateBlankOffice('pptx', cleanForm('document', form))}>+ {NEW_OFFICE_LABEL.pptx}</Button>
+          <Button variant="ghost" onClick={() => officeFileRef.current?.click()}>Bestaand bestand uploaden…</Button>
         </div>
-        <span className="document-export-hint">Of start vanuit een bestaand Office-bestand: het wordt dit document en opent direct in de online editor. Typ je hieronder zelf, dan blijft het een gewoon tekstdocument.</span>
+        <span className="document-export-hint">Elk type opent leeg in de online editor — uploaden is optioneel, geen verplichte stap. Typ je liever hieronder zelf, dan blijft het een gewoon tekstdocument.</span>
       </div>}
       <RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf de inhoud van het document…" disabled={disabled}/>
       <Field label="Klant">
