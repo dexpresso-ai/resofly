@@ -32,6 +32,14 @@ verify_jwt = false
 [functions.mail-inbound]
 verify_jwt = false
 
+# resend-webhook wordt door Resend aangeroepen (delivered/opened/clicked/bounced).
+# Resend stuurt géén Supabase JWT, alleen Svix-signatuurheaders — met verify_jwt=true
+# blokkeert het platform elk event met 401 vóór de functie draait, waardoor open-/klik-
+# tracking stil uitvalt. De functie authenticeert zelf via RESEND_WEBHOOK_SIGNING_SECRET
+# (Svix HMAC + timestamp-tolerantie), net als mail-inbound.
+[functions.resend-webhook]
+verify_jwt = false
+
 # bank-sync (GoCardless PSD2-koppeling) handelt CORS-preflight + auth zelf af, net
 # als invoice-workflow: elke actie verifieert requireUser() + requireOrganizationAccess().
 [functions.bank-sync]
