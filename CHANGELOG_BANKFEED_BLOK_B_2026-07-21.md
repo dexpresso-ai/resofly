@@ -132,6 +132,29 @@ opgeruimd (ze worden omgenummerd en blijven bestaan; `duplicate_suspects` meldt 
 genegeerde transacties tellen mee in de aansluiting omdat ze wél op het afschrift staan
 — de UI legt dat nu uit.
 
+## Deploy-readiness-review — na de eerste push nog twee fixes (commit 00e9d69)
+Een tweede, onafhankelijke controle op deploy-volgorde, contract-consumenten en
+rollback vond nog twee echte problemen:
+
+1. **Het aansluitpaneel gaf een instructie die de UI onmogelijk maakte.** Voor een
+   gekoppelde rekening levert de PSD2-sync geen begin-/eindsaldo, dus toont het paneel
+   "lees eens per periode een CAMT.053-afschrift in" — maar de UI verving de knop
+   "Afschrift inlezen" door "Synchroniseer" zodra `source !== 'import'`. Voor precies
+   de rekeningen die een afschrift nodig hebben was importeren dus onmogelijk. Beide
+   knoppen zijn nu beschikbaar; ontdubbeling gebeurt op inhoud en wat er tóch
+   doorheen glipt wordt zichtbaar in ditzelfde paneel.
+2. **De IBAN-fallback verschoof de dubbeltelling in plaats van hem op te lossen.** De
+   fallback sloeg rijen mét een `external_account_id` over. Bij herkoppelen na een
+   verlopen toestemming geeft Enable Banking vaak een nieuw account-uid uit: de
+   lookup op uid mist dan, de IBAN-match weigerde vanwege het oude uid, en er kwam een
+   tweede rij met dezelfde IBAN die óók op 1100 boekt. Nu wint de IBAN (wereldwijd
+   uniek), met voorrang voor een nog niet gekoppelde rij.
+
+Bevestigd niet-relevant: de deploy-volgorde-blocker (migratie is als eerste toegepast)
+en de vrees dat de backfill op de unique index zou klappen (`db push` slaagde schoon).
+Contract-consumenten geverifieerd: exact twee (`src/lib/repository.ts` en
+`supabase/functions/bank-sync/index.ts`), beide meegewijzigd.
+
 ## Verificatie
 - **Parsertests: 44 asserts groen** (esbuild → node), met realistische ING-, Rabobank-,
   ABN-paar-, creditcard- en MT940-bestanden. Expliciet gedekt: ING-omschrijving uit
