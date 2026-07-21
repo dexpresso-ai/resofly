@@ -427,7 +427,7 @@ function PersonalSenderCard({ organizationId }: { organizationId: string }) {
     <div className="settings-card-head">
       <div>
         <h3>Persoonlijke afzender</h3>
-        <p className="settings-help">Verstuur klant-mails en campagnes onder je eigen naam, bijvoorbeeld <code>Jan de Vries &lt;jan@jouwdomein.nl&gt;</code>. Dit geldt alleen voor mails die jíj verstuurt (of campagnes/stromen die jij aanmaakt); collega's stellen hun eigen afzender in. Het adres moet op een geverifieerd verzenddomein eindigen — is dat er niet, dan wordt alleen je naam gebruikt.</p>
+        <p className="settings-help">Verstuur klant-mails en campagnes onder je eigen naam, bijvoorbeeld <code>Jan de Vries &lt;jan@jouwdomein.nl&gt;</code>. Dit geldt alleen voor mails die jíj verstuurt (of campagnes/stromen die jij aanmaakt); collega's stellen hun eigen afzender in. Werkt zodra je organisatie een geverifieerd verzenddomein heeft; een eigen adres moet daar dan op eindigen.</p>
       </div>
     </div>
 
@@ -435,6 +435,7 @@ function PersonalSenderCard({ organizationId }: { organizationId: string }) {
     {error && <div className="error">{error}</div>}
 
     {!loaded ? <p className="settings-help">Laden…</p> : <>
+      {verifiedDomains.length === 0 && <p className="settings-help">Je organisatie heeft nog geen geverifieerd verzenddomein. Koppel en verifieer er hierboven eerst een — tot die tijd wordt een persoonlijke afzender <strong>niet</strong> toegepast en gaat alle mail via het standaardadres.</p>}
       <div className="settings-grid compact">
         <label>Jouw afzendernaam
           <Input value={fromName} onChange={e => { setFromName(e.target.value); setError(null); setMessage(null); }} placeholder="Jan de Vries" />
@@ -444,7 +445,7 @@ function PersonalSenderCard({ organizationId }: { organizationId: string }) {
         </label>
       </div>
       {preview && <p className="settings-help">Jouw mails worden verstuurd als: <strong>{preview}</strong></p>}
-      {!preview && (fromName.trim() || fromEmail.trim()) && <p className="settings-help">Let op: zonder geverifieerd verzenddomein wordt je persoonlijke afzender nog niet toegepast — mails gaan via het standaardadres.</p>}
+      {!preview && verifiedDomains.length > 0 && (fromName.trim() || fromEmail.trim()) && <p className="settings-help">Let op: je verzenddomein heeft nog geen afzenderadres ingesteld, dus je persoonlijke afzender wordt nog niet toegepast. Vul hierboven bij het domein een afzenderadres in.</p>}
       {!preview && !fromName.trim() && !fromEmail.trim() && orgSender && <p className="settings-help">Zonder persoonlijke afzender mail je als: <strong>{orgSender}</strong></p>}
       <div className="settings-actions-row">
         <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Bezig…' : 'Opslaan'}</Button>
