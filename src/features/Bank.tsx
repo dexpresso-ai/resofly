@@ -294,7 +294,7 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
           Geen afschriftsaldo bekend — saldocontrole niet mogelijk.
           {rec.source === 'import'
             ? ' CSV bevat geen begin-/eindsaldo; gebruik een CAMT.053- of MT940-export.'
-            : ' De bankkoppeling levert geen saldo mee; lees eens per periode een CAMT.053-afschrift in.'}
+            : ' De bankkoppeling levert geen saldo mee; lees met “Afschrift inlezen” eens per periode een CAMT.053-afschrift in — dan kan de aansluiting wél worden gecontroleerd.'}
         </span>
       </div>
     );
@@ -461,9 +461,15 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
                   <div className="bank-account-meta">
                     <span className="bk-muted">{count} transacties · {linked ? lastSync(a) : lastImport(a)}</span>
                     <span className="bk-spacer" />
-                    {linked
-                      ? <Button disabled={!canWrite || syncingId === a.id} onClick={() => sync(a)}><RefreshCw size={14} /> {syncingId === a.id ? 'Synchroniseren…' : 'Synchroniseer'}</Button>
-                      : <ImportButton account={a} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
+                    {/* Afschrift inlezen kan ALTIJD, ook bij een gekoppelde rekening: de
+                        PSD2-sync levert geen begin-/eindsaldo mee, dus zonder een CAMT- of
+                        MT940-afschrift is de saldo-aansluiting hierboven onmogelijk — terwijl
+                        die er juist om vraagt. Dubbele transacties worden op inhoud ontdubbeld
+                        en wat er tóch doorheen glipt zie je meteen in het aansluitpaneel. */}
+                    {linked && (
+                      <Button disabled={!canWrite || syncingId === a.id} onClick={() => sync(a)}><RefreshCw size={14} /> {syncingId === a.id ? 'Synchroniseren…' : 'Synchroniseer'}</Button>
+                    )}
+                    <ImportButton account={a} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />
                   </div>
                 </div>
               );

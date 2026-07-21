@@ -224,8 +224,16 @@ async function finalizeRequisition(userId: string, code: string, state: string) 
       const normalized = iban.replace(/\s+/g, '').toUpperCase();
       const { data: candidates } = await supabaseAdmin.from('bank_accounts')
         .select('id, iban, external_account_id').eq('organization_id', organizationId);
-      const match = (candidates ?? []).find((c: { id: string; iban: string | null; external_account_id: string | null }) =>
-        !c.external_account_id && (c.iban || '').replace(/\s+/g, '').toUpperCase() === normalized);
+      const sameIban = (candidates ?? []).filter((c: { id: string; iban: string | null; external_account_id: string | null }) =>
+        (c.iban || '').replace(/\s+/g, '').toUpperCase() === normalized);
+      // Een IBAN is wereldwijd uniek, dus een rij met deze IBAN ís deze rekening.
+      // Bij voorkeur een rij die nog nooit gekoppeld was (de klassieke
+      // import→koppel-samenvoeging); anders een rij met een ANDER extern id — dat
+      // is het herkoppel-geval: na het verlopen van de toestemming geeft Enable
+      // Banking vaak een nieuw account-uid uit. Zouden we die overslaan, dan komt
+      // er een tweede rij met dezelfde IBAN die óók op 1100 boekt, en is de
+      // dubbeltelling alleen maar verschoven van "import→koppel" naar "herkoppel".
+      const match = sameIban.find(c => !c.external_account_id) ?? sameIban[0];
       if (match) existing = { id: match.id };
     }
     if (existing) {
