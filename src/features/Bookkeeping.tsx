@@ -658,16 +658,27 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
         const lines = linesByEntry.get(entry.id) ?? [];
         const debit = lines.reduce((s, l) => s + l.debit_cents, 0);
         const credit = lines.reduce((s, l) => s + l.credit_cents, 0);
+        // Sinds fix 20260721: een tegengeboekt origineel blijft 'posted' (het paar
+        // telt netto op tot nul); reversed_by_entry_id markeert het. status='reversed'
+        // betekent "volledig uit de rapporten" en komt alleen nog van boekjaar-heropening.
+        const isReversedPair = entry.reversed_by_entry_id != null;
+        const isReversalEntry = entry.reverses_entry_id != null;
+        const pill = entry.status === 'draft' ? 'Concept'
+          : entry.status === 'reversed' ? 'Vervallen'
+          : isReversedPair ? 'Tegengeboekt'
+          : isReversalEntry ? 'Tegenboeking'
+          : 'Geboekt';
+        const canReverse = canWrite && entry.status === 'posted' && !isReversedPair && entry.source_type !== 'year_close';
         return (
-          <div key={entry.id} className={`bk-entry${entry.status === 'reversed' ? ' is-reversed' : ''}`}>
+          <div key={entry.id} className={`bk-entry${entry.status === 'reversed' || isReversedPair ? ' is-reversed' : ''}`}>
             <div className="bk-entry-head">
               <div>
                 <strong>{entry.entry_number}</strong>
                 <span className="bk-muted"> · {dateNL(entry.date)} · {entry.description}</span>
               </div>
               <div className="bk-entry-actions">
-                <span className={`status-pill bk-je-${entry.status}`}>{entry.status === 'posted' ? 'Geboekt' : entry.status === 'reversed' ? 'Tegengeboekt' : 'Concept'}</span>
-                {entry.status === 'posted' && canWrite && (
+                <span className={`status-pill bk-je-${isReversedPair ? 'reversed' : entry.status}`}>{pill}</span>
+                {canReverse && (
                   <Button onClick={() => reverse(entry)} disabled={busyId === entry.id}><RotateCcw size={13} /> {busyId === entry.id ? '…' : 'Tegenboeken'}</Button>
                 )}
               </div>

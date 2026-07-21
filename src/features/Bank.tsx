@@ -131,12 +131,15 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, onChanged
   const [error, setError] = useState<string | null>(null);
 
   const accounts = useMemo(() => data.ledgerAccounts.filter(a => a.is_active), [data.ledgerAccounts]);
+  // Alleen documenten die in het grootboek staan zijn afletterbaar (fix 20260721):
+  // zonder debitering van 1300/creditering van 1600 zou de bankboeking de
+  // debiteuren-/crediteurenstand negatief maken — de server weigert die nu ook.
   const openInvoices = useMemo(
-    () => data.invoices.filter(i => i.status !== 'cancelled' && i.status !== 'void').slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')),
+    () => data.invoices.filter(i => i.status !== 'cancelled' && i.status !== 'void' && i.journal_entry_id != null).slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')),
     [data.invoices],
   );
   const openPurchases = useMemo(
-    () => data.purchaseInvoices.filter(p => p.status !== 'cancelled').slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')),
+    () => data.purchaseInvoices.filter(p => p.status !== 'cancelled' && p.journal_entry_id != null).slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')),
     [data.purchaseInvoices],
   );
   const clientName = (id: string | null) => data.clients.find(c => c.id === id)?.name ?? '';
@@ -211,20 +214,30 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, onChanged
           </div>
 
           {mode === 'invoice' && (
-            <Select value={invoiceId} onChange={e => setInvoiceId(e.target.value)} disabled={!canWrite}>
-              <option value="">— kies factuur —</option>
-              {openInvoices.map((i: Invoice) => (
-                <option key={i.id} value={i.id}>{i.number} · {euro(i.total_amount ?? 0)}{clientName(i.client_id) ? ` · ${clientName(i.client_id)}` : ''}</option>
-              ))}
-            </Select>
+            <>
+              <Select value={invoiceId} onChange={e => setInvoiceId(e.target.value)} disabled={!canWrite}>
+                <option value="">— kies factuur —</option>
+                {openInvoices.map((i: Invoice) => (
+                  <option key={i.id} value={i.id}>{i.number} · {euro(i.total_amount ?? 0)}{clientName(i.client_id) ? ` · ${clientName(i.client_id)}` : ''}</option>
+                ))}
+              </Select>
+              {openInvoices.length === 0 && (
+                <small className="bank-tx-hint">Geen afletterbare facturen: alleen facturen die in het grootboek staan kun je afletteren. Gebruik eerst “Boek naar grootboek” op de factuur.</small>
+              )}
+            </>
           )}
           {mode === 'purchase' && (
-            <Select value={purchaseId} onChange={e => setPurchaseId(e.target.value)} disabled={!canWrite}>
-              <option value="">— kies inkoopfactuur —</option>
-              {openPurchases.map((p: PurchaseInvoice) => (
-                <option key={p.id} value={p.id}>{p.internal_number || p.supplier_invoice_number || '—'} · {euroCents(p.total_cents)}{supplierName(p.supplier_id) ? ` · ${supplierName(p.supplier_id)}` : ''}</option>
-              ))}
-            </Select>
+            <>
+              <Select value={purchaseId} onChange={e => setPurchaseId(e.target.value)} disabled={!canWrite}>
+                <option value="">— kies inkoopfactuur —</option>
+                {openPurchases.map((p: PurchaseInvoice) => (
+                  <option key={p.id} value={p.id}>{p.internal_number || p.supplier_invoice_number || '—'} · {euroCents(p.total_cents)}{supplierName(p.supplier_id) ? ` · ${supplierName(p.supplier_id)}` : ''}</option>
+                ))}
+              </Select>
+              {openPurchases.length === 0 && (
+                <small className="bank-tx-hint">Geen afletterbare inkoopfacturen: boek de inkoopfactuur eerst naar het grootboek.</small>
+              )}
+            </>
           )}
           {mode === 'account' && (
             <>

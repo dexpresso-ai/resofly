@@ -777,7 +777,12 @@ function App() {
       await refresh();
       if (deferredWarning) setError(deferredWarning);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Opslaan mislukt');
+      const msg = e instanceof Error ? e.message : 'Opslaan mislukt';
+      // Uniek-factuurnummer-index (migratie 20260721): race of handmatig
+      // dubbel nummer → leg uit i.p.v. de kale Postgres-melding tonen.
+      setError(/invoices_org_number_key|duplicate key.*invoices/i.test(msg)
+        ? 'Dit factuurnummer bestaat al binnen je organisatie. Kies een ander nummer en sla opnieuw op.'
+        : msg);
     } finally {
       setLoading(false);
     }
@@ -919,6 +924,23 @@ function App() {
   async function removeCurrent() {
     if (!edit || !('item' in edit) || !edit.item) return;
     if (!ensureCanWrite()) return;
+    // Geboekte/verstuurde facturen zijn niet verwijderbaar (bewaarplicht + het
+    // grootboek zou een journaalpost zonder brondocument overhouden). De database
+    // blokkeert dit sinds migratie 20260721 ook hard; hier vangen we het vóór de
+    // confirm af met een duidelijke uitleg.
+    if (edit.kind === 'invoice') {
+      const inv = edit.item as Invoice;
+      if (inv.journal_entry_id) {
+        setError('Deze factuur staat in het grootboek en kan niet worden verwijderd. Boek de journaalpost tegen of maak een creditnota.');
+        return;
+      }
+      if (inv.status && inv.status !== 'draft') {
+        setError(inv.status === 'cancelled' || inv.status === 'void'
+          ? 'Deze factuur is geannuleerd maar valt onder de bewaarplicht en kan niet worden verwijderd.'
+          : `Deze factuur is al verstuurd (status: ${inv.status}) en valt onder de bewaarplicht. Annuleer of crediteer de factuur in plaats van verwijderen.`);
+        return;
+      }
+    }
     if (!confirm('Weet je zeker dat je dit item wilt verwijderen? Bijbehorende bijlagen worden ook verwijderd.')) return;
     setLoading(true); setError(null);
     try {

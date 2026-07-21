@@ -187,7 +187,7 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
               ? <p className="bk-muted">{saldo >= 0 ? 'Betaald' : 'Teruggave ontvangen'} via de bank op {dateNL(txn.booking_date)} — automatisch afgeletterd tegen “Te betalen omzetbelasting”.</p>
               : null;
           })()}
-          {finalized && <p className="bk-muted">Deze periode is vergrendeld. Latere boekingen met een datum in deze periode worden geweigerd en vallen in de eerstvolgende open aangifte.</p>}
+          {finalized && <p className="bk-muted">Deze periode is vergrendeld. Boekingen met een datum in deze periode worden geweigerd; kies voor een nagekomen post een boekdatum in de eerstvolgende open periode.</p>}
         </>}
     </div>
   );

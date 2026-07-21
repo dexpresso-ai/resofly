@@ -850,7 +850,7 @@ export type VatCodeKind =
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed';
 export type JournalSourceType =
   | 'sales_invoice' | 'purchase_invoice' | 'asset_depreciation' | 'asset_acquisition'
-  | 'vat_return' | 'payment' | 'opening_balance' | 'manual';
+  | 'vat_return' | 'payment' | 'opening_balance' | 'manual' | 'year_close';
 export type PurchaseInvoiceStatus = 'draft' | 'booked' | 'paid' | 'cancelled';
 export type PurchaseInvoicePaymentStatus = 'unpaid' | 'partially_paid' | 'paid';
 /** Herkomst van de inkoopfactuur: handmatig, door AI uitgelezen, bank of import. */
