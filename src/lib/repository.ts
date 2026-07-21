@@ -66,6 +66,7 @@ import type {
   BankRule,
   BankRequisition,
   BankInstitution,
+  BankReconciliation,
   ParsedBankStatement,
   CalendarNoteLinkInput,
   NoteCalendarLink,
@@ -1135,16 +1136,21 @@ export async function syncBankAccount(organizationId: UUID, bankAccountId?: UUID
 }
 
 /**
- * Leest een afschrift in: voegt nieuwe transacties idempotent toe (dedup op
- * bank_account_id + dedup_key) en stelt direct matches/voorstellen voor. Geeft
- * het aantal toegevoegde en overgeslagen (reeds bekende) regels terug.
+ * Leest een afschrift in: voegt nieuwe transacties idempotent toe (de dedup-sleutel
+ * wordt server-side uit de inhoud afgeleid) en stelt direct matches/voorstellen voor.
+ * `balanceOk` zegt of beginsaldo + de regels van dit afschrift het eindsaldo geven;
+ * null als het afschrift geen saldi meelevert (CSV, PSD2-sync).
  */
 export async function importBankTransactions(
   organizationId: UUID,
   bankAccountId: UUID,
   statement: ParsedBankStatement,
-): Promise<{ inserted: number; skipped: number; statement_id: UUID | null }> {
-  const { transactions, ...meta } = statement;
+): Promise<{
+  inserted: number; skipped: number; statement_id: UUID | null;
+  duplicates: number; skippedNoDate: number; skippedZeroAmount: number;
+  balanceOk: boolean | null; balanceDifferenceCents: number | null;
+}> {
+  const { transactions, warnings: _warnings, ...meta } = statement;
   const { data, error } = await supabase.rpc('import_bank_transactions', {
     p_organization_id: organizationId,
     p_bank_account_id: bankAccountId,
@@ -1152,8 +1158,43 @@ export async function importBankTransactions(
     p_transactions: transactions,
   });
   if (error) throw bookkeepingError(error);
-  const row = (data ?? {}) as { inserted?: number; skipped?: number; statement_id?: UUID | null };
-  return { inserted: row.inserted ?? 0, skipped: row.skipped ?? 0, statement_id: row.statement_id ?? null };
+  const row = (data ?? {}) as {
+    inserted?: number; skipped?: number; statement_id?: UUID | null;
+    duplicates?: number; skipped_no_date?: number; skipped_zero_amount?: number;
+    balance_ok?: boolean | null; balance_difference_cents?: number | null;
+  };
+  return {
+    inserted: row.inserted ?? 0,
+    skipped: row.skipped ?? 0,
+    statement_id: row.statement_id ?? null,
+    duplicates: row.duplicates ?? row.skipped ?? 0,
+    skippedNoDate: row.skipped_no_date ?? 0,
+    skippedZeroAmount: row.skipped_zero_amount ?? 0,
+    balanceOk: row.balance_ok ?? null,
+    balanceDifferenceCents: row.balance_difference_cents ?? null,
+  };
+}
+
+/**
+ * Sluit de bank aan op het grootboek: per bankrekening het eindsaldo van het
+ * laatste afschrift naast de grootboekstand (plus wat nog niet geboekt is).
+ * Server-side omdat de journaalregels ver boven de PostgREST-rijlimiet uitkomen.
+ */
+export async function selectBankReconciliation(organizationId: UUID): Promise<BankReconciliation[]> {
+  const { data, error } = await supabase.rpc('report_bank_reconciliation', {
+    p_organization_id: organizationId,
+  });
+  if (error) {
+    // De RPC komt uit migratie 20260721010000; vóór het toepassen daarvan tonen
+    // we gewoon geen aansluiting in plaats van de hele Bankpagina te breken.
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/report_bank_reconciliation|schema cache|does not exist|function/i.test(message)) {
+      console.warn('report_bank_reconciliation is nog niet beschikbaar.', error);
+      return [];
+    }
+    throw bookkeepingError(error);
+  }
+  return (data ?? []) as BankReconciliation[];
 }
 
 /** Stelt opnieuw matches/voorstellen voor over de openstaande transacties. */

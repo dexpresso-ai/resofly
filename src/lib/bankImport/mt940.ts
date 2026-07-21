@@ -1,5 +1,5 @@
 import type { ParsedBankStatement, ParsedBankTransaction } from '../../types';
-import { amountToCents, finalizeDedupKeys } from './dedup';
+import { amountToCents } from './dedup';
 
 /** yymmdd -> ISO. Eeuw heuristiek: 70-99 => 19xx, anders 20xx. */
 function isoFromYYMMDD(yymmdd: string): string | null {
@@ -9,9 +9,14 @@ function isoFromYYMMDD(yymmdd: string): string | null {
   return `${year}-${yymmdd.slice(2, 4)}-${yymmdd.slice(4, 6)}`;
 }
 
-/** Haalt een SEPA-subveld (/NAME/, /IBAN/, /REMI/, /EREF/) uit een :86:-blok. */
+/**
+ * Haalt een SEPA-subveld (/NAME/, /IBAN/, /REMI/, /EREF/) uit een :86:-blok.
+ * De waarde loopt door tot het VOLGENDE subveld (`/TAG/`), niet tot de eerstvolgende
+ * schuine streep: een omschrijving als `/REMI/FACT 2026/0007` leverde anders
+ * "FACT 2026" op, waarmee het factuurnummer — en dus de aflettering — sneuvelde.
+ */
 function sepaField(block: string, tag: string): string | null {
-  const re = new RegExp(`/${tag}/([^/]*)`);
+  const re = new RegExp(`/${tag}/((?:(?!/[A-Z]{2,6}/).)*)`);
   const m = re.exec(block);
   return m ? m[1].trim() || null : null;
 }
@@ -32,6 +37,7 @@ export function parseMt940(raw: string, fileName: string): ParsedBankStatement {
   let periodEnd: string | null = null;
   let opening: number | null = null;
   let closing: number | null = null;
+  const accounts: string[] = [];
 
   const balanceCents = (body: string): number | null => {
     // [C|D]yymmddCCYamount  -> bv. C250101EUR1234,56
@@ -75,7 +81,6 @@ export function parseMt940(raw: string, fileName: string): ParsedBankStatement {
       const refTail = body.trim().slice(m[0].length);
       const bankRef = (/\/\/(\S+)/.exec(refTail)?.[1]) || null;
       pending = {
-        dedup_key: '',
         booking_date: bookingDate ?? valueDate ?? '',
         value_date: valueDate,
         amount_cents: credit ? cents : -cents,
@@ -98,7 +103,12 @@ export function parseMt940(raw: string, fileName: string): ParsedBankStatement {
         pending.description = body.trim() || null;
       }
     } else if (tag === '25') {
-      // accountnummer; niet nodig voor de transacties zelf.
+      // Rekeningnummer van dít afschriftblok. We gebruiken het niet om te boeken
+      // (de gebruiker kiest de bankrekening), maar wel om te merken dat er
+      // meerdere rekeningen in één bestand zitten — dan klopt de saldo-
+      // aansluiting niet en hoort er een waarschuwing bij.
+      const acct = body.trim();
+      if (acct && !accounts.includes(acct)) accounts.push(acct);
     }
   }
   if (pending) transactions.push(pending);
@@ -106,6 +116,15 @@ export function parseMt940(raw: string, fileName: string): ParsedBankStatement {
   const cleaned = transactions.filter(t => t.booking_date && t.amount_cents !== 0);
   if (cleaned.length === 0) {
     throw new Error('Geen transacties (:61:) gevonden in dit MT940-bestand.');
+  }
+
+  const warnings: string[] = [];
+  const skipped = transactions.length - cleaned.length;
+  if (skipped > 0) {
+    warnings.push(`${skipped} regel(s) overgeslagen: geen leesbare boekdatum of een bedrag van € 0,00.`);
+  }
+  if (accounts.length > 1) {
+    warnings.push(`Dit bestand bevat afschriften van ${accounts.length} rekeningen (${accounts.join(', ')}). Alle transacties komen op deze ene bankrekening binnen en het begin-/eindsaldo is dat van het eerste afschrift. Exporteer bij voorkeur per rekening.`);
   }
 
   return {
@@ -116,6 +135,7 @@ export function parseMt940(raw: string, fileName: string): ParsedBankStatement {
     period_end: periodEnd,
     opening_balance_cents: opening,
     closing_balance_cents: closing,
-    transactions: finalizeDedupKeys(cleaned),
+    warnings,
+    transactions: cleaned,
   };
 }

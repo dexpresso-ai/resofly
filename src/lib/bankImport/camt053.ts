@@ -1,5 +1,5 @@
 import type { ParsedBankStatement, ParsedBankTransaction } from '../../types';
-import { finalizeDedupKeys, normalizeDate } from './dedup';
+import { normalizeDate } from './dedup';
 
 /**
  * CAMT.053-parser (ISO 20022 bankafschrift, het formaat dat élke NL-bank levert).
@@ -59,7 +59,6 @@ export function parseCamt053(xml: string, fileName: string): ParsedBankStatement
     }
 
     return {
-      dedup_key: '',
       booking_date: bookingDate ?? valueDate ?? '',
       value_date: valueDate,
       amount_cents: amount,
@@ -89,6 +88,19 @@ export function parseCamt053(xml: string, fileName: string): ParsedBankStatement
   };
   const frToDt = stmt ? firstLocal(stmt, 'FrToDt') : null;
 
+  const warnings: string[] = [];
+  const skipped = entries.length - transactions.length;
+  if (skipped > 0) {
+    warnings.push(`${skipped} regel(s) overgeslagen: geen leesbare boekdatum of een bedrag van € 0,00.`);
+  }
+  // Meerdere Stmt-blokken = meerdere rekeningen in één bestand. We lezen álle
+  // entries in, maar begin-/eindsaldo komen uit het eerste blok — dan klopt de
+  // saldo-aansluiting niet en moet de gebruiker per rekening exporteren.
+  const stmtCount = local(doc, 'Stmt').length;
+  if (stmtCount > 1) {
+    warnings.push(`Dit bestand bevat ${stmtCount} afschriften (meerdere rekeningen). Alle transacties komen op deze ene bankrekening binnen en het begin-/eindsaldo is dat van het eerste afschrift. Exporteer bij voorkeur per rekening.`);
+  }
+
   return {
     format: 'camt053',
     file_name: fileName,
@@ -97,6 +109,7 @@ export function parseCamt053(xml: string, fileName: string): ParsedBankStatement
     period_end: frToDt ? normalizeDate(text(firstLocal(frToDt, 'ToDtTm')).slice(0, 10)) : null,
     opening_balance_cents: balanceCents('OPBD'),
     closing_balance_cents: balanceCents('CLBD'),
-    transactions: finalizeDedupKeys(transactions),
+    warnings,
+    transactions,
   };
 }

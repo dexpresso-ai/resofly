@@ -211,11 +211,27 @@ async function finalizeRequisition(userId: string, code: string, state: string) 
       name = details?.name || details?.product || (iban ? `${reqRow.institution_name || 'Bank'} ${iban.slice(-4)}` : name);
     } catch { /* details optioneel */ }
 
-    const { data: existing } = await supabaseAdmin.from('bank_accounts').select('id')
+    // Eerst op het externe account-id (deze rekening is al eens gekoppeld), dan op
+    // IBAN. Die tweede stap is essentieel: zonder dat kreeg een rekening waarvan je
+    // eerder afschriften had ingelezen bij het koppelen een TWEEDE rij, die op
+    // dezelfde grootboekrekening (1100) boekt — waarmee elke transactie dubbel in
+    // het banksaldo belandde.
+    let existing: { id: string } | null = null;
+    const byExternal = await supabaseAdmin.from('bank_accounts').select('id')
       .eq('organization_id', organizationId).eq('external_account_id', uid).limit(1).maybeSingle();
+    existing = byExternal.data ?? null;
+    if (!existing && iban) {
+      const normalized = iban.replace(/\s+/g, '').toUpperCase();
+      const { data: candidates } = await supabaseAdmin.from('bank_accounts')
+        .select('id, iban, external_account_id').eq('organization_id', organizationId);
+      const match = (candidates ?? []).find((c: { id: string; iban: string | null; external_account_id: string | null }) =>
+        !c.external_account_id && (c.iban || '').replace(/\s+/g, '').toUpperCase() === normalized);
+      if (match) existing = { id: match.id };
+    }
     if (existing) {
       const { error: updErr } = await supabaseAdmin.from('bank_accounts').update({
-        name, iban, provider: 'enablebanking', source: 'enablebanking', bank_requisition_id: reqRow.id, is_active: true,
+        name, iban, provider: 'enablebanking', source: 'enablebanking',
+        external_account_id: uid, bank_requisition_id: reqRow.id, is_active: true,
       }).eq('id', existing.id);
       if (!updErr) linked += 1;
     } else {
@@ -311,9 +327,11 @@ function mapEbTransaction(tx: any) {
   const remittance = Array.isArray(tx?.remittance_information)
     ? tx.remittance_information.filter(Boolean).join(' ').trim()
     : (tx?.remittance_information || '');
-  const dedupKey = id ? `eb:${id}` : `eb:${cyrb53(`${bookingDate}|${cents}|${counterpartyIban || ''}|${remittance}`)}`;
+  // Géén dedup_key meer: import_bank_transactions leidt die server-side af uit de
+  // inhoud. Voorheen maakte deze functie `eb:`-sleutels terwijl de afschrift-import
+  // `tx:`/`h:` gebruikte — dezelfde transactie via beide wegen gaf dus twee rijen.
   return {
-    dedup_key: dedupKey, booking_date: bookingDate, value_date: valueDate, amount_cents: cents,
+    booking_date: bookingDate, value_date: valueDate, amount_cents: cents,
     currency: tx?.transaction_amount?.currency || 'EUR', counterparty_name: counterpartyName,
     counterparty_iban: counterpartyIban, description: remittance || null, structured_reference: null,
     end_to_end_id: null, bank_tx_id: id,
@@ -342,14 +360,6 @@ function pemToDer(pem: string): Uint8Array {
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
   return out;
-}
-
-function cyrb53(str: string, seed = 0): string {
-  let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
-  for (let i = 0; i < str.length; i += 1) { const ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507); h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507); h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, '0');
 }
 
 function assertRedirectAllowed(req: Request, redirectUrl: string): void {

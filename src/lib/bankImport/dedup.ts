@@ -1,10 +1,12 @@
-import type { ParsedBankTransaction } from '../../types';
-
 /**
- * cyrb53 — een snelle, 53-bits niet-cryptografische hash. Gebruikt om een stabiele
- * dedup-sleutel te maken voor transacties die geen eigen bank-id hebben (veel
- * CSV-exports). Stabiel betekent: dezelfde regel levert altijd dezelfde sleutel,
- * zodat her-importeren niets dubbel toevoegt (unique(bank_account_id, dedup_key)).
+ * cyrb53 — een snelle, 53-bits niet-cryptografische hash. Wordt gebruikt voor de
+ * bestands-hash (file_hash) waarmee de import hetzelfde afschrift herkent.
+ *
+ * NB: de dedup-sleutel per transactie wordt sinds migratie 20260721010000
+ * uitsluitend server-side afgeleid (import_bank_transactions → bank_canonical_key).
+ * Dat is bewust: de client-import en de PSD2-sync maakten elk hun eigen sleutel
+ * (`tx:`/`h:` versus `eb:`), waardoor dezelfde transactie via beide wegen twee
+ * rijen opleverde. Eén afleiding op één plek kan per definitie niet uiteenlopen.
  */
 export function cyrb53(str: string, seed = 0): string {
   let h1 = 0xdeadbeef ^ seed;
@@ -23,30 +25,15 @@ export function cyrb53(str: string, seed = 0): string {
 }
 
 /**
- * Vult ontbrekende dedup-sleutels in. Voorkeur: het unieke bank-id (bank_tx_id).
- * Anders een hash van datum+bedrag+tegenrekening+omschrijving, met een volgnummer
- * dat oploopt bij identieke regels binnen hetzelfde bestand — zodat twee échte
- * dezelfde betalingen op dezelfde dag elk een eigen sleutel krijgen, maar een
- * her-import van hetzelfde afschrift exact dezelfde sleutels reproduceert.
+ * Parseert een bedragstekst naar hele centen. Ondersteunt NL ('1.234,56'),
+ * EN ('1,234.56'), losse decimalen ('12,50' / '12.50') en hele bedragen met
+ * duizendtalscheiding ('1.234' → € 1.234,00).
+ *
+ * De laatste separator is de decimaalscheiding — BEHALVE als er precies drie
+ * cijfers achter staan en er geen andere separator is: dan is het een
+ * duizendtalscheiding. Zonder die regel werd '1.234' als € 1,23 gelezen, wat
+ * gebeurt bij elk uit Excel heropgeslagen bankbestand met hele euro's.
  */
-export function finalizeDedupKeys(txns: ParsedBankTransaction[]): ParsedBankTransaction[] {
-  const seen = new Map<string, number>();
-  return txns.map(t => {
-    if (t.dedup_key && t.dedup_key.trim()) return t;
-    if (t.bank_tx_id && t.bank_tx_id.trim()) return { ...t, dedup_key: `tx:${t.bank_tx_id.trim()}` };
-    const canonical = [
-      t.booking_date,
-      t.amount_cents,
-      (t.counterparty_iban || '').toUpperCase().replace(/\s+/g, ''),
-      (t.description || '').toLowerCase().replace(/\s+/g, ' ').trim(),
-    ].join('|');
-    const n = (seen.get(canonical) ?? 0) + 1;
-    seen.set(canonical, n);
-    return { ...t, dedup_key: `h:${cyrb53(canonical)}:${n}` };
-  });
-}
-
-/** Parseert een bedragstekst (NL '1.234,56' of EN '1234.56') naar hele centen. */
 export function amountToCents(raw: string): number {
   let s = (raw || '').trim().replace(/\s/g, '').replace(/[€$]/g, '');
   if (!s) return 0;
@@ -54,14 +41,21 @@ export function amountToCents(raw: string): number {
   s = s.replace(/[()]/g, '').replace(/^-|-$/g, '');
   const lastComma = s.lastIndexOf(',');
   const lastDot = s.lastIndexOf('.');
-  // De laatste separator is de decimaalscheiding; de andere is duizendtal.
   if (lastComma > -1 && lastDot > -1) {
+    // Beide aanwezig: de laatste is de decimaalscheiding, de andere duizendtal.
     if (lastComma > lastDot) s = s.replace(/\./g, '').replace(',', '.');
     else s = s.replace(/,/g, '');
-  } else if (lastComma > -1) {
-    s = s.replace(/\./g, '').replace(',', '.');
-  } else {
-    s = s.replace(/,/g, '');
+  } else if (lastComma > -1 || lastDot > -1) {
+    const sep = lastComma > -1 ? ',' : '.';
+    const idx = lastComma > -1 ? lastComma : lastDot;
+    const decimals = s.length - idx - 1;
+    const onlyOne = s.indexOf(sep) === idx;
+    if (decimals === 3 && onlyOne) {
+      // '1.234' / '1,234' → duizendtalscheiding, geen decimalen.
+      s = s.split(sep).join('');
+    } else {
+      s = s.replace(/[.,]/g, m => (m === sep ? '.' : ''));
+    }
   }
   const value = Math.round(parseFloat(s) * 100);
   if (!Number.isFinite(value)) return 0;

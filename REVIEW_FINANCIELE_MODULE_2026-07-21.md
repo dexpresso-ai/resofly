@@ -355,7 +355,8 @@ zie `CHANGELOG_FINANCE_BLOK_A_FIXES_2026-07-21.md`.**
 5. `unique (organization_id, number)` op `invoices` + DELETE blokkeren zodra geboekt (3.3, 3.4).
 6. Org-validatie op `p_lines[].account_id` (§4) — stond al open sinds juni.
 
-**Blok B — maak de bankfeed betrouwbaar.**
+**Blok B — maak de bankfeed betrouwbaar.** **STATUS: GEBOUWD (2026-07-21) — migratie
+`20260721010000_bankfeed_reconciliation_dedup.sql`, zie `CHANGELOG_BANKFEED_BLOK_B_2026-07-21.md`.**
 7. Saldo-aansluiting: afschriftsaldo vs. grootboekstand 1100, zichtbaar per rekening (1.4).
    Zonder dit blijft al het andere onzichtbaar.
 8. Dedup uniformeren over import en PSD2, en IBAN-matching bij het koppelen (1.5).

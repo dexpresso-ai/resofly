@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Banknote, Check, Landmark, Link2, Plus, RefreshCw, RotateCcw, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
 import type {
-  AppData, BankAccount, BankInstitution, BankRequisition, BankRule, BankTransaction, Invoice, LedgerAccount, PurchaseInvoice,
+  AppData, BankAccount, BankInstitution, BankReconciliation, BankRequisition, BankRule, BankTransaction,
+  Invoice, LedgerAccount, PurchaseInvoice,
 } from '../types';
 import { Modal } from '../components/Modal';
 import { Button, Input, Select, Textarea } from '../components/Ui';
@@ -10,8 +11,8 @@ import { SetupBanner } from './Bookkeeping';
 import { parseBankFile } from '../lib/bankImport';
 import {
   bookBankTransaction, createBankRequisition, deleteRow, finalizeBankRequisition, importBankTransactions,
-  insertRow, listBankInstitutions, matchBankTransactions, setBankTransactionStatus, syncBankAccount,
-  unbookBankTransaction, updateRow,
+  insertRow, listBankInstitutions, matchBankTransactions, selectBankReconciliation, setBankTransactionStatus,
+  syncBankAccount, unbookBankTransaction, updateRow,
 } from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
@@ -278,12 +279,105 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, onChanged
 
 // ───────────────────────── Rekeningen & koppeling ─────────────────────────
 
+/**
+ * Saldo-aansluiting per bankrekening: staat het geld dat de bank zegt te hebben
+ * ook echt in de boekhouding? Het eindsaldo van het laatste afschrift wordt
+ * vergeleken met de grootboekstand plus alles wat nog niet geboekt is. Loopt dat
+ * uiteen, dan missen er transacties of staan ze dubbel — zonder deze controle
+ * merk je dat pas bij de jaarrekening.
+ */
+function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
+  if (rec.statement_closing_cents === null) {
+    return (
+      <div className="bank-recon bank-recon-unknown">
+        <span className="bk-muted">
+          Geen afschriftsaldo bekend — saldocontrole niet mogelijk.
+          {rec.source === 'import'
+            ? ' CSV bevat geen begin-/eindsaldo; gebruik een CAMT.053- of MT940-export.'
+            : ' De bankkoppeling levert geen saldo mee; lees eens per periode een CAMT.053-afschrift in.'}
+        </span>
+      </div>
+    );
+  }
+  // Delen meerdere bankrekeningen dezelfde grootboekrekening, dan is die stand de
+  // som van allemaal en zou elk verschil per rekening onzin zijn. De server geeft
+  // dan bewust geen getal terug.
+  if (rec.difference_cents === null) {
+    return (
+      <div className="bank-recon bank-recon-unknown">
+        <span className="bk-muted">
+          Saldo volgens afschrift {euroCents(rec.statement_closing_cents)}
+          {rec.as_of ? ` per ${dateNL(rec.as_of)}` : ''}. Aansluiting niet te berekenen: meerdere
+          bankrekeningen boeken op {rec.ledger_code}, dus die stand is de som van al die rekeningen.
+          Geef elke bankrekening een eigen grootboekrekening om per rekening te kunnen aansluiten.
+        </span>
+      </div>
+    );
+  }
+
+  const diff = rec.difference_cents;
+  const ok = diff === 0;
+  return (
+    <div className={`bank-recon ${ok ? 'bank-recon-ok' : 'bank-recon-off'}`}>
+      <div className="bank-recon-head">
+        {ok ? <Check size={14} /> : <AlertTriangle size={14} />}
+        <strong>{ok ? 'Bank sluit aan' : `Verschil ${euroCents(Math.abs(diff))}`}</strong>
+        {rec.as_of && <span className="bk-muted">per {dateNL(rec.as_of)}</span>}
+      </div>
+      <dl className="bank-recon-rows">
+        <div><dt>Saldo volgens afschrift</dt><dd>{euroCents(rec.statement_closing_cents)}</dd></div>
+        <div><dt>Grootboek {rec.ledger_code}</dt><dd>{euroCents(rec.ledger_balance_cents)}</dd></div>
+        {rec.unbooked_count > 0 && (
+          <div><dt>Nog te boeken ({rec.unbooked_count})</dt><dd>{euroCents(rec.unbooked_sum_cents)}</dd></div>
+        )}
+        {rec.ignored_count > 0 && (
+          <div><dt>Genegeerd ({rec.ignored_count})</dt><dd>{euroCents(rec.ignored_sum_cents)}</dd></div>
+        )}
+      </dl>
+      {!ok && (
+        <ul className="bank-recon-hints">
+          {rec.ignored_count > 0 && (
+            <li>Genegeerde transacties staan wél op het afschrift en tellen dus mee in de aansluiting. Heb je een dubbele regel genegeerd, dan blijft het verschil zichtbaar tot de dubbele rij echt weg is.</li>
+          )}
+          {!rec.has_opening_balance && (
+            <li>Er is geen beginbalans op {rec.ledger_code} geboekt. Begon je met een saldo op deze rekening, dan verklaart dat het verschil.</li>
+          )}
+          {rec.duplicate_suspects > 0 && (
+            <li>{rec.duplicate_suspects} transactie(s) zijn qua datum, bedrag, tegenrekening én omschrijving identiek aan een andere. Meestal een dubbele import — controleer ze in “Af te letteren”.</li>
+          )}
+          {rec.statement_issues.length > 0 && (
+            <li>
+              {rec.statement_issues.length} afschrift(en) kloppen intern niet (beginsaldo + regels ≠ eindsaldo):{' '}
+              {rec.statement_issues.map(s => `${s.file_name || 'afschrift'} (${euroCents(s.difference_cents)})`).join(', ')}. Er ontbreken regels in die bestanden.
+            </li>
+          )}
+          {rec.has_opening_balance && rec.duplicate_suspects === 0 && rec.statement_issues.length === 0 && rec.ignored_count === 0 && (
+            <li>Controleer of alle afschriften over deze periode zijn ingelezen, en of er handmatige journaalposten op {rec.ledger_code} staan die niet van de bank komen.</li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
   const [edit, setEdit] = useState<BankAccount | 'new' | null>(null);
   const [connect, setConnect] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [finalizing, setFinalizing] = useState(false);
+  const [recon, setRecon] = useState<BankReconciliation[]>([]);
+
+  // De aansluiting komt uit een RPC (server-side aggregatie): de journaalregels
+  // van 1100 lopen ver boven de PostgREST-rijlimiet, dus client-side optellen
+  // zou stilzwijgend een verkeerd saldo geven.
+  useEffect(() => {
+    let active = true;
+    selectBankReconciliation(organizationId)
+      .then(rows => { if (active) setRecon(rows); })
+      .catch(() => { if (active) setRecon([]); });
+    return () => { active = false; };
+  }, [organizationId, data.bankTransactions, data.journalLines]);
   const lastImport = (a: BankAccount) =>
     a.last_imported_at ? `Laatste import ${dateNL(a.last_imported_at.slice(0, 10))}` : 'Nog niets ingelezen';
   const lastSync = (a: BankAccount) =>
@@ -360,6 +454,10 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
                     <button className="bk-cell-action" onClick={() => setEdit(a)} disabled={!canWrite}>Bewerk</button>
                   </div>
                   {expired && <div className="bank-reconsent"><AlertTriangle size={14} /> Toestemming verlopen — koppel de bank opnieuw via "Koppel bank".</div>}
+                  {(() => {
+                    const rec = recon.find(r => r.bank_account_id === a.id);
+                    return rec ? <ReconciliationPanel rec={rec} /> : null;
+                  })()}
                   <div className="bank-account-meta">
                     <span className="bk-muted">{count} transacties · {linked ? lastSync(a) : lastImport(a)}</span>
                     <span className="bk-spacer" />
@@ -434,18 +532,29 @@ function ImportButton({ account, organizationId, canWrite, onChanged }: { accoun
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (inputRef.current) inputRef.current.value = '';
     if (!file) return;
-    setBusy(true); setError(null); setMsg(null);
+    setBusy(true); setError(null); setMsg(null); setWarnings([]);
     try {
       const parsed = await parseBankFile(file);
       if (parsed.transactions.length === 0) throw new Error('Geen transacties in dit bestand gevonden.');
       const res = await importBankTransactions(organizationId, account.id, parsed);
-      setMsg(`${res.inserted} nieuw, ${res.skipped} al bekend (${parsed.format.toUpperCase()}).`);
+      setMsg(`${res.inserted} nieuw, ${res.duplicates} al bekend (${parsed.format.toUpperCase()}).`);
+      // Klopt het afschrift met zichzelf? Beginsaldo + regels moet het eindsaldo
+      // geven; zo niet, dan mist het bestand regels en zou de bank straks niet
+      // aansluiten zonder dat je weet waarom.
+      const serverWarnings: string[] = [];
+      if (res.skippedNoDate > 0) serverWarnings.push(`${res.skippedNoDate} regel(s) niet ingelezen: geen leesbare boekdatum.`);
+      if (res.skippedZeroAmount > 0) serverWarnings.push(`${res.skippedZeroAmount} regel(s) niet ingelezen: bedrag € 0,00.`);
+      if (res.balanceOk === false) {
+        serverWarnings.push(`Let op: beginsaldo + alle mutaties in deze periode wijken ${euroCents(Math.abs(res.balanceDifferenceCents ?? 0))} af van het eindsaldo. Er ontbreken transacties over deze periode.`);
+      }
+      setWarnings([...parsed.warnings, ...serverWarnings]);
       onChanged();
     } catch (err) { setError(err instanceof Error ? err.message : 'Inlezen mislukt'); }
     finally { setBusy(false); }
@@ -456,6 +565,7 @@ function ImportButton({ account, organizationId, canWrite, onChanged }: { accoun
       <input ref={inputRef} type="file" accept=".xml,.940,.sta,.mt940,.csv,.txt,text/xml,text/csv" style={{ display: 'none' }} onChange={onFile} />
       <Button disabled={!canWrite || busy} onClick={() => inputRef.current?.click()}><Upload size={14} /> {busy ? 'Inlezen…' : 'Afschrift inlezen'}</Button>
       {msg && <small className="bank-import-msg">{msg}</small>}
+      {warnings.map((w, i) => <small key={i} className="bank-import-warn"><AlertTriangle size={12} /> {w}</small>)}
       {error && <small className="error bank-import-msg">{error}</small>}
     </span>
   );

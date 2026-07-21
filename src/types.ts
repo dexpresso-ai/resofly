@@ -1248,7 +1248,9 @@ export interface BankRule extends OrgScopedRow {
 
 /** Genormaliseerde transactie zoals een parser die aanlevert aan import_bank_transactions. */
 export interface ParsedBankTransaction {
-  dedup_key: string;
+  // Géén dedup_key: die wordt sinds migratie 20260721010000 uitsluitend
+  // server-side afgeleid (import_bank_transactions), zodat de afschrift-import
+  // en de PSD2-sync per definitie dezelfde sleutel produceren.
   booking_date: string;
   value_date: string | null;
   amount_cents: number;
@@ -1269,7 +1271,46 @@ export interface ParsedBankStatement {
   period_end: string | null;
   opening_balance_cents: number | null;
   closing_balance_cents: number | null;
+  /** Waarschuwingen van de parser (overgeslagen regels, niet-herkende kolommen). Getoond na de import. */
+  warnings: string[];
   transactions: ParsedBankTransaction[];
+}
+
+/** Eén regel uit report_bank_reconciliation: sluit de bank aan op het grootboek. */
+export interface BankReconciliation {
+  bank_account_id: UUID;
+  name: string;
+  iban: string | null;
+  source: BankAccountSource;
+  ledger_code: string;
+  ledger_name: string;
+  /** Meerdere bankrekeningen boeken op dezelfde grootboekrekening → per rekening aansluiten kan niet. */
+  shares_ledger_account: boolean;
+  /** Peildatum = einde van het laatste afschrift mét eindsaldo; null als dat er niet is. */
+  as_of: string | null;
+  statement_id: UUID | null;
+  statement_closing_cents: number | null;
+  ledger_balance_cents: number;
+  has_opening_balance: boolean;
+  unbooked_count: number;
+  unbooked_sum_cents: number;
+  ignored_count: number;
+  ignored_sum_cents: number;
+  booked_count: number;
+  expected_cents: number;
+  /** Afschriftsaldo − (grootboekstand + nog niet geboekt). 0 = sluitend; null = geen afschriftsaldo bekend. */
+  difference_cents: number | null;
+  duplicate_suspects: number;
+  statement_issues: Array<{
+    statement_id: UUID;
+    file_name: string | null;
+    period_start: string | null;
+    period_end: string | null;
+    opening_balance_cents: number;
+    closing_balance_cents: number;
+    transactions_sum_cents: number;
+    difference_cents: number;
+  }>;
 }
 
 export interface Attachment extends OrgScopedRow {
