@@ -40,6 +40,7 @@ import type {
   EmailFlowStepStats,
   FlowStopCondition,
   FlowStepInput,
+  UserSenderIdentity,
   CreditNote,
   InvoiceChargeback,
   Note,
@@ -1868,6 +1869,49 @@ const SENDING_DOMAIN_COLUMNS = 'id,organization_id,created_by,domain,provider,re
  * Alleen-lezen: aanmaken/verifiëren/verwijderen loopt via de `mail` Edge Function
  * (Resend-API), maar elk lid mag de status en DNS-records inzien (RLS: can_read_org).
  */
+// ── Persoonlijke afzender (per teamlid) ─────────────────────────────────────
+
+/** De persoonlijke afzender van de ingelogde gebruiker binnen deze organisatie. */
+export async function loadMySenderIdentity(organizationId: UUID): Promise<UserSenderIdentity | null> {
+  const userId = await currentUserId();
+  if (!userId) return null;
+  const { data, error } = await supabase
+    .from('user_sender_identities')
+    .select('organization_id,user_id,from_name,from_email,created_at,updated_at')
+    .eq('organization_id', organizationId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data ?? null) as UserSenderIdentity | null;
+}
+
+/** Sla de persoonlijke afzender op (upsert op eigen rij; RLS dwingt user_id = auth.uid() af). */
+export async function saveMySenderIdentity(organizationId: UUID, input: { from_name: string | null; from_email: string | null }): Promise<UserSenderIdentity> {
+  const userId = await currentUserId();
+  const { data, error } = await supabase
+    .from('user_sender_identities')
+    .upsert(
+      { organization_id: organizationId, user_id: userId, from_name: input.from_name, from_email: input.from_email },
+      { onConflict: 'organization_id,user_id' },
+    )
+    .select('organization_id,user_id,from_name,from_email,created_at,updated_at')
+    .single();
+  if (error) throw error;
+  return data as UserSenderIdentity;
+}
+
+/** Verwijder de persoonlijke afzender (terug naar de organisatie-afzender). */
+export async function clearMySenderIdentity(organizationId: UUID): Promise<void> {
+  const userId = await currentUserId();
+  if (!userId) return;
+  const { error } = await supabase
+    .from('user_sender_identities')
+    .delete()
+    .eq('organization_id', organizationId)
+    .eq('user_id', userId);
+  if (error) throw error;
+}
+
 export async function loadSendingDomains(organizationId: UUID): Promise<SendingDomain[]> {
   const { data, error } = await supabase
     .from('organization_email_domains')

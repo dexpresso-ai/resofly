@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Bell, BookOpen, CreditCard, Mail, Receipt, ShieldCheck, Sparkles, Users } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
-import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus } from '../types';
+import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains } from '../lib/repository';
+import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity } from '../lib/repository';
 import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
 
@@ -347,6 +347,111 @@ function DnsRecordsTable({ records }: { records: SendingDomainDnsRecord[] }) {
       ))}
     </div>
   </div>;
+}
+
+function PersonalSenderCard({ organizationId }: { organizationId: string }) {
+  const [loaded, setLoaded] = useState(false);
+  const [fromName, setFromName] = useState('');
+  const [fromEmail, setFromEmail] = useState('');
+  const [hasRow, setHasRow] = useState(false);
+  const [verifiedDomains, setVerifiedDomains] = useState<string[]>([]);
+  const [orgSender, setOrgSender] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    Promise.all([loadMySenderIdentity(organizationId), loadSendingDomains(organizationId)])
+      .then(([identity, domains]: [UserSenderIdentity | null, SendingDomain[]]) => {
+        if (cancelled) return;
+        setFromName(identity?.from_name ?? '');
+        setFromEmail(identity?.from_email ?? '');
+        setHasRow(!!identity);
+        setVerifiedDomains(domains.filter(d => d.status === 'verified').map(d => d.domain.toLowerCase()));
+        const primary = domains.find(d => d.status === 'verified');
+        setOrgSender(primary?.from_email ? (primary.from_name ? `${primary.from_name} <${primary.from_email}>` : primary.from_email) : null);
+      })
+      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'Laden mislukt.'); })
+      .finally(() => { if (!cancelled) setLoaded(true); });
+    return () => { cancelled = true; };
+  }, [organizationId]);
+
+  async function save() {
+    const name = fromName.trim();
+    const email = fromEmail.trim().toLowerCase();
+    if (!name && !email) { setError('Vul minimaal een afzendernaam of afzenderadres in.'); return; }
+    if (email) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setError('Het afzenderadres is geen geldig e-mailadres.'); return; }
+      const domain = email.slice(email.lastIndexOf('@') + 1);
+      if (verifiedDomains.length === 0) {
+        setError('Er is nog geen geverifieerd verzenddomein. Laat het adres leeg (alleen je naam wordt dan gebruikt) of koppel eerst een domein.');
+        return;
+      }
+      if (!verifiedDomains.includes(domain)) {
+        setError(`Het adres moet eindigen op een geverifieerd domein: ${verifiedDomains.map(d => `@${d}`).join(', ')}.`);
+        return;
+      }
+    }
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      await saveMySenderIdentity(organizationId, { from_name: name || null, from_email: email || null });
+      setHasRow(true);
+      setMessage('Persoonlijke afzender opgeslagen.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Opslaan mislukt.');
+    } finally { setBusy(false); }
+  }
+
+  async function clear() {
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      await clearMySenderIdentity(organizationId);
+      setFromName(''); setFromEmail(''); setHasRow(false);
+      setMessage('Persoonlijke afzender verwijderd; je mailt weer als de organisatie.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Verwijderen mislukt.');
+    } finally { setBusy(false); }
+  }
+
+  // Preview spiegelt het echte servergedrag: een persoonlijke From ontstaat alleen
+  // wanneer er een concreet adres is (persoonlijk óf van het org-domein).
+  const orgEmail = orgSender ? (orgSender.includes('<') ? orgSender.slice(orgSender.lastIndexOf('<') + 1, orgSender.lastIndexOf('>')) : orgSender) : null;
+  const effectiveEmail = fromEmail.trim().toLowerCase() || orgEmail;
+  const preview = effectiveEmail && (fromName.trim() || fromEmail.trim())
+    ? (fromName.trim() ? `${fromName.trim()} <${effectiveEmail}>` : effectiveEmail)
+    : null;
+
+  return <section className="settings-card organization-card">
+    <div className="settings-card-head">
+      <div>
+        <h3>Persoonlijke afzender</h3>
+        <p className="settings-help">Verstuur klant-mails en campagnes onder je eigen naam, bijvoorbeeld <code>Jan de Vries &lt;jan@jouwdomein.nl&gt;</code>. Dit geldt alleen voor mails die jíj verstuurt (of campagnes/stromen die jij aanmaakt); collega's stellen hun eigen afzender in. Het adres moet op een geverifieerd verzenddomein eindigen — is dat er niet, dan wordt alleen je naam gebruikt.</p>
+      </div>
+    </div>
+
+    {message && <div className="success">{message}</div>}
+    {error && <div className="error">{error}</div>}
+
+    {!loaded ? <p className="settings-help">Laden…</p> : <>
+      <div className="settings-grid compact">
+        <label>Jouw afzendernaam
+          <Input value={fromName} onChange={e => { setFromName(e.target.value); setError(null); setMessage(null); }} placeholder="Jan de Vries" />
+        </label>
+        <label>Jouw afzenderadres (optioneel)
+          <Input type="email" value={fromEmail} onChange={e => { setFromEmail(e.target.value); setError(null); setMessage(null); }} placeholder={verifiedDomains.length > 0 ? `jan@${verifiedDomains[0]}` : 'eerst een domein koppelen'} disabled={verifiedDomains.length === 0} />
+        </label>
+      </div>
+      {preview && <p className="settings-help">Jouw mails worden verstuurd als: <strong>{preview}</strong></p>}
+      {!preview && (fromName.trim() || fromEmail.trim()) && <p className="settings-help">Let op: zonder geverifieerd verzenddomein wordt je persoonlijke afzender nog niet toegepast — mails gaan via het standaardadres.</p>}
+      {!preview && !fromName.trim() && !fromEmail.trim() && orgSender && <p className="settings-help">Zonder persoonlijke afzender mail je als: <strong>{orgSender}</strong></p>}
+      <div className="settings-actions-row">
+        <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Bezig…' : 'Opslaan'}</Button>
+        {hasRow && <Button variant="danger" onClick={clear} disabled={busy}>Verwijderen</Button>}
+      </div>
+    </>}
+  </section>;
 }
 
 type EmailTemplateForm = { subject: string; intro: string; closing: string; cta_label: string };
@@ -1573,6 +1678,7 @@ export function Settings({
 
     {activeTab === 'email' && <div className="settings-tab-panel">
     {activeOrganization && <SendingDomainCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
+    {activeOrganization && <PersonalSenderCard organizationId={activeOrganization.id} />}
     {activeOrganization && <EmailTemplatesCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     <section className="settings-card organization-card">
       <div className="settings-card-head">

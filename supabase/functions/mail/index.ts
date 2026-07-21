@@ -679,7 +679,9 @@ async function sendClientEmail(
   const organizationName =
     company?.trade_name || company?.company_name || organization.name || 'ResoFly';
 
-  const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+  // Persoonlijke afzender van het versturende teamlid (indien ingesteld) —
+  // naam altijd, adres alleen op een geverifieerd org-domein.
+  const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO, user.id);
   if (!sender.from) {
     throw new MailHttpError(
       'Er is nog geen afzenderadres geconfigureerd. Koppel eerst een verzenddomein of stel RESEND_FROM_EMAIL in.',

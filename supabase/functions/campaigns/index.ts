@@ -345,6 +345,7 @@ async function previewAudience(
 type CampaignRow = {
   id: string;
   organization_id: string;
+  created_by: string | null;
   name: string;
   subject: string;
   preheader: string | null;
@@ -357,7 +358,7 @@ type CampaignRow = {
 };
 
 const CAMPAIGN_COLUMNS =
-  'id,organization_id,name,subject,preheader,body_html,body_text,accent_color,audience,status,scheduled_at';
+  'id,organization_id,created_by,name,subject,preheader,body_html,body_text,accent_color,audience,status,scheduled_at';
 
 async function loadCampaign(organizationId: string, campaignId: string): Promise<CampaignRow> {
   if (!isUuid(campaignId)) throw new CampaignHttpError('Ongeldige campagne.', 400);
@@ -384,7 +385,7 @@ async function sendTestCampaign(
   if (!campaign.subject.trim()) throw new CampaignHttpError('De campagne heeft nog geen onderwerp.', 422);
 
   const brandName = await loadOrgBrand(organizationId);
-  const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+  const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO, campaign.created_by);
   if (!sender.from) throw new CampaignHttpError('Er is nog geen afzenderadres geconfigureerd (verzenddomein of RESEND_FROM_EMAIL).', 422);
 
   const unsubToken = await makeUnsubscribeToken(UNSUBSCRIBE_SECRET, organizationId, recipientEmail);
@@ -469,7 +470,7 @@ async function sendCampaign(
     throw new CampaignHttpError('Alleen een concept- of ingeplande campagne kan hier verstuurd worden.', 409);
   }
 
-  const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+  const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO, campaign.created_by);
   if (!sender.from) {
     throw new CampaignHttpError('Er is nog geen afzenderadres geconfigureerd (verzenddomein of RESEND_FROM_EMAIL).', 422);
   }
@@ -550,7 +551,7 @@ type RecipientRow = {
 };
 
 async function dispatchCampaign(campaign: CampaignRow, limit: number): Promise<{ sent: number; failed: number }> {
-  const sender = await resolveSenderIdentity(supabaseAdmin, campaign.organization_id, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+  const sender = await resolveSenderIdentity(supabaseAdmin, campaign.organization_id, RESEND_FROM_EMAIL, RESEND_REPLY_TO, campaign.created_by);
   if (!sender.from || !RESEND_API_KEY) {
     // Zonder afzender/API-key kunnen we niet versturen: pauzeer i.p.v. rijen te verbranden.
     await supabaseAdmin
@@ -811,7 +812,7 @@ async function handleCampaignDispatch(): Promise<{ promoted: number; campaigns: 
 
 // ── Follow-up-stromen ───────────────────────────────────────────────────────
 
-type FlowRow = { id: string; organization_id: string; name: string; status: string; audience: Record<string, unknown> | null; stop_condition: string };
+type FlowRow = { id: string; organization_id: string; created_by: string | null; name: string; status: string; audience: Record<string, unknown> | null; stop_condition: string };
 type FlowStepRow = { id: string; flow_id: string; step_index: number; delay_days: number; subject: string; preheader: string | null; body_html: string; body_text: string | null; accent_color: string | null };
 type EnrollmentRow = {
   id: string; organization_id: string; flow_id: string; client_id: string | null; contact_id: string | null;
@@ -819,7 +820,7 @@ type EnrollmentRow = {
   current_step_index: number; next_step_due_at: string | null; last_reply_at: string | null;
 };
 
-const FLOW_COLUMNS = 'id,organization_id,name,status,audience,stop_condition';
+const FLOW_COLUMNS = 'id,organization_id,created_by,name,status,audience,stop_condition';
 const FLOW_STEP_COLUMNS = 'id,flow_id,step_index,delay_days,subject,preheader,body_html,body_text,accent_color';
 const FLOW_BATCH = Number(Deno.env.get('CAMPAIGN_FLOW_BATCH') || '100') || 100;
 
@@ -890,7 +891,7 @@ async function activateFlow(organizationId: string, flowId: string): Promise<{ f
   const steps = await loadFlowSteps(organizationId, flowId);
   if (steps.length === 0) throw new CampaignHttpError('Deze stroom heeft nog geen stappen.', 422);
 
-  const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+  const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO, flow.created_by);
   if (!sender.from) {
     throw new CampaignHttpError('Er is nog geen afzenderadres geconfigureerd (verzenddomein of RESEND_FROM_EMAIL).', 422);
   }
@@ -972,12 +973,16 @@ async function handleFlowTick(): Promise<{ claimed: number; sent: number; stoppe
 
   const suppressedByOrg = new Map<string, Set<string>>();
   const brandByOrg = new Map<string, string>();
-  const senderByOrg = new Map<string, { from: string; replyTo?: string; fromEmail: string | null }>();
   for (const orgId of orgIds) {
     const emails = enrollments.filter((e) => e.organization_id === orgId).map((e) => e.to_email);
     suppressedByOrg.set(orgId, await loadSuppressedFor(orgId, emails));
     brandByOrg.set(orgId, await loadOrgBrand(orgId));
-    senderByOrg.set(orgId, await resolveSenderIdentity(supabaseAdmin, orgId, RESEND_FROM_EMAIL, RESEND_REPLY_TO));
+  }
+  // Afzender per STROOM (niet per org): de persoonlijke afzender van de maker
+  // (created_by) bepaalt mede de From, en die verschilt per stroom.
+  const senderByFlow = new Map<string, { from: string; replyTo?: string; fromEmail: string | null }>();
+  for (const flow of flows.values()) {
+    senderByFlow.set(flow.id, await resolveSenderIdentity(supabaseAdmin, flow.organization_id, RESEND_FROM_EMAIL, RESEND_REPLY_TO, flow.created_by));
   }
 
   let sent = 0;
@@ -1021,7 +1026,7 @@ async function handleFlowTick(): Promise<{ claimed: number; sent: number; stoppe
 
       const step = steps[nextIndex];
       const brandName = brandByOrg.get(enrollment.organization_id) || 'ResoFly';
-      const sender = senderByOrg.get(enrollment.organization_id);
+      const sender = senderByFlow.get(enrollment.flow_id);
       if (!sender || !sender.from) continue; // geen afzender geconfigureerd → overslaan (lease retryt later)
       const threadId = await sendFlowStep(enrollment, flow, step, sender, brandName);
 

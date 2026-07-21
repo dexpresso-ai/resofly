@@ -276,6 +276,11 @@ export interface EmailFlowStepStats {
 export interface FlowStepInput {
   step_index: number; delay_days: number; subject: string; preheader?: string | null; body_html: string; body_text?: string | null; accent_color?: string | null;
 }
+
+/** Persoonlijke afzender van een teamlid (naam + optioneel adres op een geverifieerd org-domein). */
+export interface UserSenderIdentity {
+  organization_id: UUID; user_id: UUID; from_name: string | null; from_email: string | null; created_at: string; updated_at: string;
+}
 export type ProjectBillingType = 'hourly' | 'fixed_price';
 export interface Project extends OrgScopedRow {
   client_id: UUID | null; name: string; description: string | null; color: string; archived: boolean; start_date: string | null; end_date: string | null; contract_id: UUID | null; hourly_rate_cents: number | null; billing_type: ProjectBillingType; created_at: string; updated_at: string;

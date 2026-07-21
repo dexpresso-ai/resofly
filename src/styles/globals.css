@@ -3128,6 +3128,9 @@ button.chat-member:hover{background:var(--bg3)}
   .mk-editor-grid{grid-template-columns:1fr}
 }
 
+/* Instellingen — persoonlijke afzender */
+.settings-actions-row{display:flex;gap:10px;align-items:center}
+
 /* Stromen — stap-editor */
 .mk-steps{display:flex;flex-direction:column;gap:12px}
 .mk-step{border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-deep);padding:14px;display:flex;flex-direction:column;gap:10px}
