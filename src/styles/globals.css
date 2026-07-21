@@ -3881,31 +3881,22 @@ button.chat-member:hover{background:var(--bg3)}
 /* De sectiekop "Genodigden" staat al boven de picker — dubbele kop verbergen. */
 .event-attendees-panel .event-attendees .tb-panel-section-label{display:none}
 
-/* ── INHOUD · OneDrive-achtige verkenner (2026-07-20) ──────────────────────
+/* ── INHOUD · OneDrive-achtige verkenner (2026-07-20, zijkolom weg 2026-07-21)
    De Inhoud-pagina als cloud-verkenner in OneDrive-stijl met ResoFly-branding:
-   links "+ Nieuw" + klantenlijst, in het midden één doorlopende lijst met de
-   kolommen Naam/Gewijzigd/Grootte/Type (sorteerbaar via kolomkoppen of het
-   Sorteren-menu), tegelweergave en een inklapbaar Details-paneel. Popovers en
-   het zoekveld hergebruiken de bestaande .drive-*-stijl. */
-.odrv{display:grid;grid-template-columns:252px minmax(0,1fr);height:calc(100vh - 110px);border:1px solid var(--border);border-radius:var(--radius-lg,22px);overflow:hidden;background:rgba(18,18,18,.76)}
-.odrv-side{display:flex;flex-direction:column;gap:2px;padding:14px 10px 18px;border-right:1px solid var(--border);overflow:auto;background:rgba(255,255,255,.02)}
-.odrv-new-wrap{margin:0 2px 6px}
-.odrv-newbtn{width:100%;justify-content:center;padding:11px 15px;font-size:13px}
-.odrv-side-title{padding:12px 10px 2px;font-size:15px;font-weight:850;letter-spacing:-.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.odrv-side-section{padding:16px 10px 5px;font-size:10px;font-weight:900;letter-spacing:.11em;text-transform:uppercase;color:var(--muted)}
-.odrv-nav{display:flex;flex-direction:column;gap:1px}
-.odrv-nav-row{display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:var(--muted2);cursor:pointer;padding:9px 10px;border-radius:10px;text-align:left;font-size:13px;font-weight:600;font-family:inherit;transition:background .12s,color .12s}
-.odrv-nav-row svg{flex-shrink:0}
-.odrv-nav-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.odrv-nav-row strong{color:var(--muted);font-size:11px;font-weight:700;flex-shrink:0}
-.odrv-nav-row:hover{background:var(--bg3);color:var(--text)}
-.odrv-nav-row.active{background:var(--accent-soft,rgba(255,189,89,.14));color:var(--text)}
-.odrv-nav-row.active strong{color:var(--accent)}
-.odrv-toggle.is-off{color:var(--muted)}
-.odrv-toggle.is-off strong{color:var(--muted)}
-.odrv-side-empty{padding:8px 10px;font-size:12px;color:var(--muted)}
-.odrv-main{display:flex;flex-direction:column;min-width:0;overflow:hidden}
-.odrv-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 18px 10px;flex-wrap:wrap}
+   bovenin een broodkruimeltitel + zoekveld, daaronder de commandobalk
+   ("+ Nieuw" links; Weergeven/Sorteren/lijst-tegels/Details rechts) en dan één
+   doorlopende lijst met de kolommen Naam/Gewijzigd/Grootte/Type (sorteerbaar
+   via kolomkoppen of het Sorteren-menu), tegelweergave en een inklapbaar
+   Details-paneel. Popovers en het zoekveld hergebruiken de .drive-*-stijl.
+   Navigeren gaat via de mappen zelf (klanten staan als mappen in de lijst),
+   plus de broodkruimels en de "Terug"-knop. */
+.odrv{display:flex;flex-direction:column;height:calc(100vh - 110px);border:1px solid var(--border);border-radius:var(--radius-lg,22px);overflow:hidden;background:rgba(18,18,18,.76)}
+.odrv-main{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden}
+.odrv-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 18px 8px;flex-wrap:wrap}
+.odrv-cmdbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 18px 10px;border-bottom:1px solid var(--border);margin-bottom:2px}
+.odrv-cmdbar-right{margin-left:auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.odrv-up{padding:8px 11px}
+.odrv-pop-count{margin-left:auto;font-size:11px;font-weight:700;color:var(--muted)}
 .odrv-crumbs{display:flex;align-items:center;gap:2px;min-width:0;flex-wrap:wrap}
 .odrv-crumbs>svg{color:var(--muted);flex-shrink:0}
 .odrv-crumbs button{background:none;border:none;font-family:inherit;cursor:pointer;font-size:19px;font-weight:700;letter-spacing:-.02em;color:var(--muted);padding:3px 7px;border-radius:9px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -3953,17 +3944,21 @@ button.odrv-th:hover{color:var(--text)}
 .odrv-details-props dd{color:var(--text);font-weight:650;text-align:right;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:1100px){.odrv-details,.odrv-tool-details{display:none}}
 @media(max-width:900px){
-  .odrv{grid-template-columns:1fr;height:auto;min-height:calc(100vh - 110px)}
-  .odrv-side{border-right:0;border-bottom:1px solid var(--border);max-height:330px}
+  .odrv{height:auto;min-height:calc(100vh - 110px)}
   .odrv-tr{grid-template-columns:30px minmax(0,1fr) 118px}
   .odrv-td-size,.odrv-td-type{display:none}
   .odrv-crumbs button,.odrv-crumb-current{font-size:16px}
 }
 @media(max-width:760px){
   .odrv-head{padding:12px 12px 8px}
+  .odrv-cmdbar{padding:0 12px 10px}
   .odrv-scroll{padding:0 12px 14px}
   .odrv-headtools{width:100%}
-  .odrv-search{flex:1;min-width:0}
+  .odrv-search{flex:1 1 100%;min-width:0}
+  .odrv-cmdbar-right{gap:4px}
+  .odrv-tool{padding:8px 9px;font-size:12px;gap:5px}
+  /* Icoon-only knoppen zodat de commandobalk op één regel na "+ Nieuw" past. */
+  .odrv-tool-label{display:none}
 }
 
 /* ── KLANTDOSSIER · "Bestanden" in dezelfde OneDrive-look (odrv-embed) ─────

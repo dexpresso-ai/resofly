@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import {
   ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Download, Eye, EyeOff,
-  File, FilePen, FileText, Folder, FolderOpen, FolderPlus, Home, Info, LayoutGrid, List, MoreVertical,
-  Pencil, Plus, Presentation, Search, Sheet, StickyNote, Trash2, Upload, UploadCloud, X,
+  File, FilePen, FileText, Folder, FolderOpen, FolderPlus, Info, LayoutGrid, List, MoreVertical,
+  Pencil, Plus, Presentation, Search, Sheet, SlidersHorizontal, StickyNote, Trash2, Upload, UploadCloud, X,
 } from 'lucide-react';
 import type { AppData, Attachment, ContentFolder, InternalDocument, Note, Project } from '../types';
 import { dateNL } from '../lib/format';
@@ -76,10 +76,11 @@ function RowGlyph({ row, size }: { row: Row; size: number }) {
 }
 
 /**
- * "Inhoud" als OneDrive-achtige verkenner: links een navigatiekolom met de "+ Nieuw"-knop
- * en alle klanten, in het midden één doorlopende lijst (mappen eerst) met de kolommen
- * Naam / Gewijzigd / Grootte / Type, sorteerbaar via de kolomkoppen of het Sorteren-menu,
- * plus een tegelweergave en een inklapbaar Details-paneel. Binnen een klant leven naast de
+ * "Inhoud" als OneDrive-achtige verkenner: bovenin een broodkruimeltitel met zoekveld en
+ * daaronder een commandobalk ("+ Nieuw", Weergeven-filter, Sorteren, lijst/tegels, Details),
+ * daaronder één doorlopende lijst (mappen eerst) met de kolommen Naam / Gewijzigd /
+ * Grootte / Type, sorteerbaar via de kolomkoppen of het Sorteren-menu, plus een
+ * tegelweergave en een inklapbaar Details-paneel. Binnen een klant leven naast de
  * afgeleide projectmappen ook de échte dossiermappen (content_folders) — dezelfde mappen
  * als in het klantdossier-tabblad "Bestanden", incl. submappen, uploads en office-bestanden.
  * Nieuwe items worden in de open map aangemaakt (klant/project/map vooringevuld); de
@@ -119,6 +120,7 @@ export function ContentLibrary({
   const [detailsOpen, setDetailsOpen] = useState(readDetails);
   const [newOpen, setNewOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
   const [menu, setMenu] = useState<{ key: string; mode: 'main' | 'move'; up: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -133,18 +135,19 @@ export function ContentLibrary({
   useEffect(() => { try { window.localStorage.setItem(VIEW_KEY, view); } catch { /* ignore */ } }, [view]);
   useEffect(() => { try { window.localStorage.setItem(DETAILS_KEY, detailsOpen ? '1' : '0'); } catch { /* ignore */ } }, [detailsOpen]);
 
-  // Sluit de menu's ("+ Nieuw", Sorteren, ⋮) bij een klik buitenom of Escape.
+  // Sluit de menu's ("+ Nieuw", Weergeven, Sorteren, ⋮) bij een klik buitenom of Escape.
   useEffect(() => {
-    if (!newOpen && !sortOpen && !menu) return;
+    if (!newOpen && !sortOpen && !filterOpen && !menu) return;
+    const closeAll = () => { setNewOpen(false); setSortOpen(false); setFilterOpen(false); setMenu(null); };
     const onDown = (e: MouseEvent) => {
       if ((e.target as HTMLElement).closest('.drive-pop, .drive-pop-trigger')) return;
-      setNewOpen(false); setSortOpen(false); setMenu(null);
+      closeAll();
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setNewOpen(false); setSortOpen(false); setMenu(null); } };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeAll(); };
     window.addEventListener('mousedown', onDown);
     window.addEventListener('keydown', onKey);
     return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey); };
-  }, [newOpen, sortOpen, menu]);
+  }, [newOpen, sortOpen, filterOpen, menu]);
 
   const projectsById = useMemo(() => new Map(data.projects.map(p => [p.id, p] as const)), [data.projects]);
   const clientsById = useMemo(() => new Map(data.clients.map(c => [c.id, c] as const)), [data.clients]);
@@ -296,6 +299,15 @@ export function ContentLibrary({
   function openClient(id: string | null) { setClientId(id); setProjectId(null); setFolderId(null); setQuery(''); setMenu(null); }
   function openProject(id: string | null) { setProjectId(id); setFolderId(null); setQuery(''); setMenu(null); }
   function openFolder(id: string | null) { setFolderId(id); setProjectId(null); setQuery(''); setMenu(null); }
+
+  /** Eén niveau omhoog: submap → bovenliggende map → klantwortel → alle klanten. */
+  function goUp() {
+    if (folderId) { openFolder(currentFolder?.parent_id ?? null); return; }
+    if (projectId) { openProject(null); return; }
+    openClient(null);
+  }
+
+  const anyFilterOff = !showNotes || !showDocuments || !showFiles;
 
   // Create-context: nieuwe items belanden in de open map (klant/project/dossiermap).
   const createTarget: ContentCreateTarget | undefined =
@@ -521,7 +533,7 @@ export function ContentLibrary({
   const emptyState = () => {
     if (q) return <div className="drive-empty odrv-empty"><span className="drive-empty-ic"><Search size={24} /></span><strong>Geen resultaten</strong><span>Niets gevonden voor “{query.trim()}” in deze map.</span></div>;
     if (atRoot) return <div className="drive-empty odrv-empty"><span className="drive-empty-ic"><FolderOpen size={24} /></span><strong>Nog geen klanten</strong><span>Maak eerst een klant aan via de pagina Klanten; elke klant wordt hier automatisch een map.</span></div>;
-    return <div className="drive-empty odrv-empty"><span className="drive-empty-ic"><FolderOpen size={24} /></span><strong>Deze map is leeg</strong><span>Gebruik de knop “+ Nieuw” links om hier {folderId ? 'een submap, notitie, document of bestand' : 'een notitie of document'} aan te maken.</span></div>;
+    return <div className="drive-empty odrv-empty"><span className="drive-empty-ic"><FolderOpen size={24} /></span><strong>Deze map is leeg</strong><span>Gebruik de knop “+ Nieuw” hierboven om hier {folderId ? 'een submap, notitie, document of bestand' : 'een map, notitie of document'} aan te maken.</span></div>;
   };
 
   // ── ⋮-menu's (zelfde acties als het klantdossier) ──────────────────
@@ -635,65 +647,13 @@ export function ContentLibrary({
   >
     <input ref={fileInputRef} type="file" multiple hidden onChange={e => { if (e.target.files?.length) uploadFiles(e.target.files); e.target.value = ''; }} />
 
-    <aside className="odrv-side">
-      {canWrite && <div className="drive-new-wrap odrv-new-wrap">
-        <button type="button" className="drive-new odrv-newbtn drive-pop-trigger" disabled={busy} onClick={() => { setNewOpen(o => !o); setSortOpen(false); setMenu(null); }} aria-haspopup="menu" aria-expanded={newOpen}>
-          <Plus size={16} /> Nieuw <ChevronDown size={14} />
-        </button>
-        {newOpen && <div className="drive-pop" role="menu" style={{ maxHeight: 'min(70vh, 460px)', overflowY: 'auto' }}>
-          {!atRoot && <div className="drive-pop-head">In {currentFolder ? currentFolder.name : currentProject ? currentProject.name : currentClientName}</div>}
-          {realClient && !projectId && <>
-            <button type="button" className="drive-pop-item" role="menuitem" onClick={createFolder}><FolderPlus size={16} style={{ color: 'var(--accent)' }} /> {folderId ? 'Nieuwe submap' : 'Nieuwe map'}</button>
-            <div className="drive-pop-sep" />
-          </>}
-          <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewNote(createTarget); }}><StickyNote size={16} style={{ color: 'var(--accent-v)' }} /> Notitie</button>
-          <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewDocument(createTarget); }}><FileText size={16} style={{ color: 'var(--accent-g)' }} /> Document</button>
-          {folderId && <>
-            <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} style={{ color: 'var(--accent-o)' }} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>
-            <div className="drive-pop-sep" />
-            <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('docx')}><FileText size={16} style={{ color: 'var(--accent-o)' }} /> Word-document</button>
-            <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('xlsx')}><Sheet size={16} style={{ color: 'var(--accent-o)' }} /> Excel-werkblad</button>
-            <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('pptx')}><Presentation size={16} style={{ color: 'var(--accent-o)' }} /> PowerPoint</button>
-          </>}
-        </div>}
-      </div>}
-
-      <div className="odrv-side-title">{companyName}</div>
-      <nav className="odrv-nav">
-        <button type="button" className={`odrv-nav-row${atRoot ? ' active' : ''}`} onClick={() => openClient(null)}>
-          <Home size={16} aria-hidden="true" /><span>Alle klanten</span><strong>{items.length + (showFiles ? folderAttachments.length : 0)}</strong>
-        </button>
-      </nav>
-
-      <div className="odrv-side-section">Bladeren op klant</div>
-      <nav className="odrv-nav odrv-side-clients">
-        {clientFolders.map(f => <button type="button" key={f.id} className={`odrv-nav-row${clientId === f.id ? ' active' : ''}`} onClick={() => openClient(f.id)}>
-          <Folder size={16} fill="currentColor" strokeWidth={1.4} style={{ color: f.color || 'var(--accent)' }} aria-hidden="true" /><span>{f.name}</span><strong>{f.count}</strong>
-        </button>)}
-        {clientFolders.length === 0 && <div className="odrv-side-empty">Nog geen klanten.</div>}
-      </nav>
-
-      <div className="odrv-side-section">Weergeven</div>
-      <nav className="odrv-nav">
-        <button type="button" role="switch" aria-checked={showNotes} className={`odrv-nav-row odrv-toggle${showNotes ? '' : ' is-off'}`} onClick={() => setShowNotes(v => !v)}>
-          {showNotes ? <Eye size={15} /> : <EyeOff size={15} />}<span>Notities</span><strong>{noteCount}</strong>
-        </button>
-        <button type="button" role="switch" aria-checked={showDocuments} className={`odrv-nav-row odrv-toggle${showDocuments ? '' : ' is-off'}`} onClick={() => setShowDocuments(v => !v)}>
-          {showDocuments ? <Eye size={15} /> : <EyeOff size={15} />}<span>Documenten</span><strong>{documentCount}</strong>
-        </button>
-        <button type="button" role="switch" aria-checked={showFiles} className={`odrv-nav-row odrv-toggle${showFiles ? '' : ' is-off'}`} onClick={() => setShowFiles(v => !v)}>
-          {showFiles ? <Eye size={15} /> : <EyeOff size={15} />}<span>Bestanden</span><strong>{folderAttachments.length}</strong>
-        </button>
-      </nav>
-    </aside>
-
     <main className="odrv-main">
       <div className="odrv-head">
         <nav className="odrv-crumbs" aria-label="Locatie">
           {atRoot
-            ? <span className="odrv-crumb-current">Inhoud</span>
+            ? <span className="odrv-crumb-current">{companyName}</span>
             : <>
-                <button type="button" onClick={() => openClient(null)}>Inhoud</button>
+                <button type="button" onClick={() => openClient(null)}>{companyName}</button>
                 <ChevronRight size={17} aria-hidden="true" />
                 {projectId === null && folderId === null
                   ? <span className="odrv-crumb-current">{currentClientName}</span>
@@ -713,16 +673,62 @@ export function ContentLibrary({
                     </>}
               </>}
         </nav>
-        <div className="odrv-headtools">
-          {uploading && <span className="drive-uploading"><UploadCloud size={14} /> Uploaden…</span>}
-          <label className="drive-search odrv-search">
-            <Search size={14} aria-hidden="true" />
-            <input value={query} onChange={e => setQuery(e.target.value)} placeholder={atRoot ? 'Zoek klant…' : 'Zoeken in deze map…'} autoComplete="off" aria-label="Zoeken in inhoud" />
-            {query && <button type="button" className="drive-search-clear" onClick={() => setQuery('')} aria-label="Wissen"><X size={13} /></button>}
-          </label>
+        <label className="drive-search odrv-search">
+          <Search size={14} aria-hidden="true" />
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder={atRoot ? 'Zoek klant…' : 'Zoeken in deze map…'} autoComplete="off" aria-label="Zoeken in inhoud" />
+          {query && <button type="button" className="drive-search-clear" onClick={() => setQuery('')} aria-label="Wissen"><X size={13} /></button>}
+        </label>
+      </div>
+
+      {/* Commandobalk (OneDrive): aanmaken links, weergave-opties rechts. */}
+      <div className="odrv-cmdbar">
+        {canWrite && <div className="drive-new-wrap">
+          <button type="button" className="drive-new drive-pop-trigger" disabled={busy} onClick={() => { setNewOpen(o => !o); setSortOpen(false); setFilterOpen(false); setMenu(null); }} aria-haspopup="menu" aria-expanded={newOpen}>
+            <Plus size={16} /> Nieuw <ChevronDown size={14} />
+          </button>
+          {newOpen && <div className="drive-pop" role="menu" style={{ maxHeight: 'min(70vh, 460px)', overflowY: 'auto' }}>
+            {!atRoot && <div className="drive-pop-head">In {currentFolder ? currentFolder.name : currentProject ? currentProject.name : currentClientName}</div>}
+            {realClient && !projectId && <>
+              <button type="button" className="drive-pop-item" role="menuitem" onClick={createFolder}><FolderPlus size={16} style={{ color: 'var(--accent)' }} /> {folderId ? 'Nieuwe submap' : 'Nieuwe map'}</button>
+              <div className="drive-pop-sep" />
+            </>}
+            <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewNote(createTarget); }}><StickyNote size={16} style={{ color: 'var(--accent-v)' }} /> Notitie</button>
+            <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewDocument(createTarget); }}><FileText size={16} style={{ color: 'var(--accent-g)' }} /> Document</button>
+            {folderId && <>
+              <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} style={{ color: 'var(--accent-o)' }} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>
+              <div className="drive-pop-sep" />
+              <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('docx')}><FileText size={16} style={{ color: 'var(--accent-o)' }} /> Word-document</button>
+              <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('xlsx')}><Sheet size={16} style={{ color: 'var(--accent-o)' }} /> Excel-werkblad</button>
+              <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('pptx')}><Presentation size={16} style={{ color: 'var(--accent-o)' }} /> PowerPoint</button>
+            </>}
+          </div>}
+        </div>}
+        {!atRoot && <button type="button" className="odrv-tool odrv-up" onClick={goUp} title="Eén niveau omhoog" aria-label="Eén niveau omhoog">
+          <ChevronLeft size={15} /> <span className="odrv-tool-label">Terug</span>
+        </button>}
+        {uploading && <span className="drive-uploading"><UploadCloud size={14} /> Uploaden…</span>}
+
+        <div className="odrv-cmdbar-right">
           <div className="drive-new-wrap">
-            <button type="button" className="odrv-tool drive-pop-trigger" onClick={() => { setSortOpen(o => !o); setNewOpen(false); setMenu(null); }} aria-haspopup="menu" aria-expanded={sortOpen}>
-              <ArrowUpDown size={14} /> Sorteren <ChevronDown size={13} />
+            <button type="button" className={`odrv-tool drive-pop-trigger${anyFilterOff ? ' is-active' : ''}`} onClick={() => { setFilterOpen(o => !o); setNewOpen(false); setSortOpen(false); setMenu(null); }} aria-haspopup="menu" aria-expanded={filterOpen}>
+              <SlidersHorizontal size={14} /> <span className="odrv-tool-label">Weergeven</span> <ChevronDown size={13} />
+            </button>
+            {filterOpen && <div className="drive-pop is-right" role="menu">
+              <div className="drive-pop-head">Tonen in de lijst</div>
+              <button type="button" className="drive-pop-item" role="menuitemcheckbox" aria-checked={showNotes} onClick={() => setShowNotes(v => !v)}>
+                {showNotes ? <Eye size={16} style={{ color: 'var(--accent-v)' }} /> : <EyeOff size={16} />} Notities <span className="odrv-pop-count">{noteCount}</span>
+              </button>
+              <button type="button" className="drive-pop-item" role="menuitemcheckbox" aria-checked={showDocuments} onClick={() => setShowDocuments(v => !v)}>
+                {showDocuments ? <Eye size={16} style={{ color: 'var(--accent-g)' }} /> : <EyeOff size={16} />} Documenten <span className="odrv-pop-count">{documentCount}</span>
+              </button>
+              <button type="button" className="drive-pop-item" role="menuitemcheckbox" aria-checked={showFiles} onClick={() => setShowFiles(v => !v)}>
+                {showFiles ? <Eye size={16} style={{ color: 'var(--accent-o)' }} /> : <EyeOff size={16} />} Bestanden <span className="odrv-pop-count">{folderAttachments.length}</span>
+              </button>
+            </div>}
+          </div>
+          <div className="drive-new-wrap">
+            <button type="button" className="odrv-tool drive-pop-trigger" onClick={() => { setSortOpen(o => !o); setNewOpen(false); setFilterOpen(false); setMenu(null); }} aria-haspopup="menu" aria-expanded={sortOpen} aria-label="Sorteren">
+              <ArrowUpDown size={14} /> <span className="odrv-tool-label">Sorteren</span> <ChevronDown size={13} />
             </button>
             {sortOpen && <div className="drive-pop is-right" role="menu">
               {([['name', 'Naam'], ['modified', 'Gewijzigd'], ['type', 'Type']] as const).map(([k, label]) =>
@@ -754,7 +760,7 @@ export function ContentLibrary({
         ? <div className="odrv-scroll"><div className="drive-empty odrv-empty">
             <span className="drive-empty-ic"><EyeOff size={24} /></span>
             <strong>Geen filter actief</strong>
-            <span>Zet links onder “Weergeven” Notities, Documenten of Bestanden aan om je inhoud te tonen.</span>
+            <span>Zet in het menu “Weergeven” Notities, Documenten of Bestanden aan om je inhoud te tonen.</span>
           </div></div>
         : <div className="odrv-body">
             <div className="odrv-scroll">
