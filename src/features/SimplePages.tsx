@@ -6,7 +6,7 @@ import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity } from '../lib/repository';
+import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity } from '../lib/repository';
 import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
 
@@ -88,6 +88,88 @@ function clampReminderDays(value: string): number {
   const parsed = Math.round(Number(value));
   if (!Number.isFinite(parsed) || parsed < 0) return 0;
   return Math.min(parsed, 365);
+}
+
+function DunningSettingsCard({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
+  const [settings, setSettings] = useState<InvoiceReminderSettings | null>(null);
+  const [rates, setRates] = useState<Array<{ kind: 'consumer' | 'commercial'; rate_basis_points: number; valid_from: string; source_note: string | null }>>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setError(null);
+    loadInvoiceReminderSettings(organizationId)
+      .then(loaded => { if (!cancelled) setSettings(loaded); })
+      .catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : 'Debiteureninstellingen laden mislukt.'); });
+    loadStatutoryInterestRates().then(r => { if (!cancelled) setRates(r); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [organizationId]);
+
+  function update<K extends keyof InvoiceReminderSettings>(key: K, value: InvoiceReminderSettings[K]) {
+    setSettings(prev => prev ? { ...prev, [key]: value } : prev);
+    setMessage(null);
+  }
+
+  async function save() {
+    if (!settings) return;
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      await saveInvoiceDunningSettings(organizationId, {
+        dunning_enabled: settings.dunning_enabled ?? false,
+        dunning_offset_days: settings.dunning_offset_days ?? 30,
+        dunning_collection_costs_vat: settings.dunning_collection_costs_vat ?? false,
+      });
+      setMessage('Debiteureninstellingen opgeslagen.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Debiteureninstellingen opslaan mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const currentConsumer = rates.filter(r => r.kind === 'consumer')[0];
+  const currentCommercial = rates.filter(r => r.kind === 'commercial')[0];
+  const pct = (bp: number) => `${(bp / 100).toString().replace('.', ',')}%`;
+
+  return <section className="settings-card organization-card billing-card">
+    <div className="settings-card-head">
+      <div>
+        <h3>Debiteurenautomaat (aanmaningen)</h3>
+        <p className="settings-help">Voor te late facturen die de herinneringen voorbij zijn: stel automatisch een formele aanmaning voor met wettelijke (handels)rente + WIK-incassokosten. De aanmaning wordt nooit vanzelf verstuurd — jij bevestigt hem eerst.</p>
+      </div>
+    </div>
+    {message && <div className="success">{message}</div>}
+    {error && <div className="error">{error}</div>}
+    {!canAdmin ? <p className="settings-help">Alleen owners en admins kunnen de debiteureninstellingen aanpassen.</p>
+      : !settings ? <p className="settings-help">Instellingen laden…</p>
+      : <>
+        <div className="billing-control-row">
+          <div>
+            <strong>Aanmaningen automatisch voorstellen</strong>
+            <p className="settings-help">Staat dit uit, dan kun je nog steeds handmatig een aanmaning opstellen vanuit een factuur.</p>
+          </div>
+          <label className="settings-toggle"><input type="checkbox" checked={Boolean(settings.dunning_enabled)} onChange={e => update('dunning_enabled', e.target.checked)} /> {settings.dunning_enabled ? 'Aan' : 'Uit'}</label>
+        </div>
+        <div className="billing-control-row">
+          <div>
+            <strong>Aanmaning voorstellen na (dagen)</strong>
+            <p className="settings-help">Aantal dagen ná de vervaldatum voordat een aanmaning wordt voorgesteld (bovenop de herinneringen).</p>
+            <Input type="number" min={0} value={String(settings.dunning_offset_days ?? 30)} onChange={e => update('dunning_offset_days', clampReminderDays(e.target.value))} />
+          </div>
+        </div>
+        <div className="billing-control-row">
+          <div>
+            <strong>Btw over incassokosten meesturen</strong>
+            <p className="settings-help">Alleen aanzetten als je géén btw-aftrekrecht hebt (bijv. vrijgestelde diensten). Normaal gesproken uit laten.</p>
+          </div>
+          <label className="settings-toggle"><input type="checkbox" checked={Boolean(settings.dunning_collection_costs_vat)} onChange={e => update('dunning_collection_costs_vat', e.target.checked)} /> {settings.dunning_collection_costs_vat ? 'Aan' : 'Uit'}</label>
+        </div>
+        {(currentConsumer || currentCommercial) && <p className="settings-help">Actuele rentetarieven: wettelijke rente {currentConsumer ? pct(currentConsumer.rate_basis_points) : '—'} (consument) · handelsrente {currentCommercial ? pct(currentCommercial.rate_basis_points) : '—'} (zakelijk). Nationaal vastgesteld; verifieer bij twijfel bij de officiële bron.</p>}
+        <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Opslaan…' : 'Debiteurenautomaat opslaan'}</Button>
+      </>}
+  </section>;
 }
 
 function InvoiceReminderSettingsCard({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
@@ -1536,6 +1618,7 @@ export function Settings({
     </section>
 
     {activeOrganization && <InvoiceReminderSettingsCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
+    {activeOrganization && <DunningSettingsCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     </div>}
 
     {activeTab === 'abonnement' && <div className="settings-tab-panel">

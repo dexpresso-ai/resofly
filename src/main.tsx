@@ -43,6 +43,9 @@ import {
   sendInvoiceEmailViaResend,
   sendInvoiceReminderEmail,
   setInvoiceRemindersPaused,
+  proposeInvoiceDunningNotice,
+  sendInvoiceDunningNotice,
+  cancelInvoiceDunningNotice,
   sendQuoteEmailViaResend,
   downloadQuotePdfSnapshot,
   downloadInvoicePdfSnapshot,
@@ -105,7 +108,7 @@ import type { GerrieActionHandlers } from './lib/gerrie-api';
 import { exportFinancePDF } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
 import type {
-  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettingsInput, CreditNote, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, Quote, Task, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
+  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettingsInput, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, Quote, Task, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
 } from './types';
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
@@ -122,7 +125,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id' | 'notes' | 'due_date' | 'lines'>> }
   | null;
 
-const emptyData: AppData = { clients: [], clientContacts: [], projects: [], tasks: [], projectMembers: [], taskAssignees: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], savedReports: [], companySettings: null };
+const emptyData: AppData = { clients: [], clientContacts: [], projects: [], tasks: [], projectMembers: [], taskAssignees: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], savedReports: [], companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
@@ -1179,6 +1182,54 @@ function App() {
     }
   }
 
+  async function proposeDunning(invoice: Invoice) {
+    if (!ensureCanWrite()) return;
+    const client = data.clients.find(item => item.id === invoice.client_id);
+    if (!client?.email) { setError('Deze factuur heeft geen klant met e-mailadres; vul dat eerst in bij de klant.'); return; }
+    if (!confirm(`Een formele aanmaning voorstellen voor factuur ${invoice.number}? Je bevestigt daarna zelf vóór verzending.`)) return;
+    setLoading(true); setError(null);
+    try {
+      await proposeInvoiceDunningNotice(activeOrg.id, invoice.id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Aanmaning voorstellen mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function sendDunning(notice: DunningNotice) {
+    if (!ensureCanWrite()) return;
+    const invoice = data.invoices.find(i => i.id === notice.invoice_id);
+    const client = invoice ? data.clients.find(c => c.id === invoice.client_id) : null;
+    if (!client?.email) { setError('Deze factuur heeft geen klant met e-mailadres.'); return; }
+    if (!confirm(`Aanmaning versturen naar ${client.email} voor factuur ${invoice?.number ?? ''}? De rente wordt op vandaag herberekend en de formele brief (PDF) gaat mee.`)) return;
+    setSending('Aanmaning wordt verstuurd via Resend…');
+    setLoading(true); setError(null);
+    try {
+      await sendInvoiceDunningNotice(activeOrg.id, notice.id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Aanmaning verzenden mislukt');
+    } finally {
+      setLoading(false); setSending(null);
+    }
+  }
+
+  async function cancelDunning(notice: DunningNotice) {
+    if (!ensureCanWrite()) return;
+    if (!confirm('Dit aanmaningsvoorstel annuleren?')) return;
+    setLoading(true); setError(null);
+    try {
+      await cancelInvoiceDunningNotice(activeOrg.id, notice.id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Aanmaning annuleren mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function postInvoiceToLedger(invoice: Invoice) {
     if (!ensureCanWrite()) return;
     setLoading(true); setError(null);
@@ -1659,7 +1710,7 @@ function App() {
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditDocument={openDocument}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
-    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onEmailCreditNote={emailCreditNote} onPostToLedger={postInvoiceToLedger}/>;
+    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onEmailCreditNote={emailCreditNote} onPostToLedger={postInvoiceToLedger} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning}/>;
     if (page === 'suppliers') return <SuppliersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'ledger') return <LedgerPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
@@ -1952,6 +2003,9 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
       </Field>
       <Field label="Status">
         <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="active">Actief</option><option value="prospect">Prospect</option><option value="inactive">Inactief</option></Select>
+      </Field>
+      <Field label="Type klant" hint="Bepaalt bij aanmaningen de rentesoort (consument: wettelijke rente; zakelijk: handelsrente) en of de WIK-14-dagenbrief verplicht is.">
+        <Select value={form.client_kind} onChange={e=>set('client_kind',e.target.value)} disabled={disabled}><option value="business">Zakelijk (B2B)</option><option value="consumer">Consument</option></Select>
       </Field>
       <Field label="Klantwaarde" hint="Indicatieve waarde voor dashboard en klantoverzicht.">
         <Input type="number" value={form.value_eur} onChange={e=>set('value_eur',Number(e.target.value))} placeholder="Waarde" disabled={disabled}/>
@@ -2619,7 +2673,7 @@ function sanitizeTicketValues(values: Record<string, unknown>, existingTicket?: 
 function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string, any> {
   if (edit.kind === "client") {
     const item = edit.item;
-    return { name: item?.name ?? edit.defaults?.name ?? "", client_code: item?.client_code ?? "", contact_name: item?.contact_name ?? edit.defaults?.contact_name ?? "", email: item?.email ?? edit.defaults?.email ?? "", phone: item?.phone ?? edit.defaults?.phone ?? "", status: item?.status ?? edit.defaults?.status ?? "active", value_eur: item?.value_eur ?? 0, tags: item?.tags?.join(", ") ?? "", notes: item?.notes ?? edit.defaults?.notes ?? "", color: item?.color ?? "#FFD966", _sendWelcomeEmail: !item };
+    return { name: item?.name ?? edit.defaults?.name ?? "", client_code: item?.client_code ?? "", contact_name: item?.contact_name ?? edit.defaults?.contact_name ?? "", email: item?.email ?? edit.defaults?.email ?? "", phone: item?.phone ?? edit.defaults?.phone ?? "", status: item?.status ?? edit.defaults?.status ?? "active", client_kind: item?.client_kind ?? "business", value_eur: item?.value_eur ?? 0, tags: item?.tags?.join(", ") ?? "", notes: item?.notes ?? edit.defaults?.notes ?? "", color: item?.color ?? "#FFD966", _sendWelcomeEmail: !item };
   }
   if (edit.kind === "project") {
     const item = edit.item;

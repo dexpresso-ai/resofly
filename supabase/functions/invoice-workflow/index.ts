@@ -3,6 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB } from 'https://esm.sh/pdf-lib@1.17.1';
 import { renderEmailTemplate, type EmailTemplateContent, type EmailTemplateContentKey } from '../_shared/emailTemplates/index.ts';
+import { calculateDunningClaim, type DunningClaim, type InterestKind, type RatePeriod } from '../_shared/dunning.ts';
 import { decryptSecret, encryptSecret, mollieKeySuffix, validateMollieApiKey } from '../_shared/mollieSecrets.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
@@ -93,6 +94,12 @@ serve(async (req) => {
       return await handleReminderCron(req, url);
     }
 
+    // Debiteurenautomaat: dagelijkse cron die FORMELE aanmaningen VOORSTELT (nooit
+    // automatisch verstuurt). Zelfde gedeelde secret als de herinneringscron.
+    if (url.searchParams.get('cron') === 'dunning') {
+      return await handleDunningCron(req, url);
+    }
+
     assertAllowedOrigin(req);
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const action = String(body.action || '');
@@ -128,6 +135,9 @@ serve(async (req) => {
     switch (action) {
       case 'sendInvoiceEmail': return json(req, { ok: true, ...(await sendInvoiceEmail(user.id, organizationId, invoiceId, body)) });
       case 'sendInvoiceReminderEmail': return json(req, { ok: true, ...(await sendInvoiceReminderEmail(user.id, organizationId, invoiceId, body)) });
+      case 'proposeDunningNotice': return json(req, { ok: true, ...(await proposeDunningNotice(user.id, organizationId, invoiceId, body)) });
+      case 'sendDunningNotice': return json(req, { ok: true, ...(await sendDunningNotice(user.id, organizationId, body)) });
+      case 'cancelDunningNotice': return json(req, { ok: true, ...(await cancelDunningNotice(user.id, organizationId, body)) });
       case 'createInvoicePaymentCheckout': return json(req, { ok: true, ...(await createInvoicePaymentCheckout(user.id, organizationId, invoiceId, body)) });
       case 'createInvoiceRefund': return json(req, { ok: true, ...(await createInvoiceRefund(user.id, organizationId, role, invoiceId, body)) });
       case 'sendCreditNoteEmail': return json(req, { ok: true, ...(await sendCreditNoteEmail(user.id, organizationId, body)) });
@@ -560,6 +570,458 @@ async function completeInvoiceReminderSend(deliveryId: string, organizationId: s
 async function failInvoiceReminderSend(deliveryId: string, organizationId: string, userId: string | null, errorMessage: string): Promise<void> {
   const { error } = await supabaseAdmin.rpc('fail_invoice_reminder_send', { p_delivery_id: deliveryId, p_organization_id: organizationId, p_actor_user_id: userId, p_error_message: errorMessage });
   if (error) console.warn('Reminder failure registration failed', error.message);
+}
+
+// ============================================================
+// Debiteurenautomaat (NL-incassorecht) — formele aanmaning / WIK-14-dagenbrief.
+// Bouwt voort op de herinneringsflow hierboven: waar de 3 herinneringen vriendelijk
+// en automatisch zijn, is de aanmaning juridisch geladen (wettelijke (handels)rente
+// + WIK-incassokosten) en HUMAN-IN-THE-LOOP: de cron stelt alleen voor, de gebruiker
+// bevestigt en verstuurt. Rekenlogica komt uit _shared/dunning.ts (unit-getest).
+// ============================================================
+
+type ClientKind = 'business' | 'consumer';
+const DUNNING_COSTS_VAT_BP = 2100; // 21% btw over incassokosten, alleen als de org-instelling dat vraagt.
+
+type DunningNoticeRow = {
+  id: string; organization_id: string; invoice_id: string; status: string;
+  client_kind: string; interest_kind: string;
+  principal_cents: number; interest_cents: number; collection_costs_cents: number;
+  collection_costs_vat_cents: number; total_claim_cents: number;
+  calculation_date: string; due_date: string | null; deadline_date: string | null;
+};
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function loadStatutoryRatePeriods(): Promise<RatePeriod[]> {
+  const { data, error } = await supabaseAdmin
+    .from('statutory_interest_rates')
+    .select('kind,rate_basis_points,valid_from')
+    .order('valid_from', { ascending: true });
+  if (error) { console.warn('statutory rates lookup mislukte', error.message); return []; }
+  return ((data ?? []) as Array<{ kind: string; rate_basis_points: number; valid_from: string }>)
+    .filter((r) => r.kind === 'consumer' || r.kind === 'commercial')
+    .map((r) => ({ kind: r.kind as InterestKind, rateBasisPoints: Number(r.rate_basis_points) || 0, validFrom: String(r.valid_from).slice(0, 10) }));
+}
+
+async function loadClientKind(organizationId: string, clientId: string): Promise<ClientKind> {
+  const { data, error } = await supabaseAdmin
+    .from('clients').select('client_kind').eq('organization_id', organizationId).eq('id', clientId).maybeSingle();
+  if (error) { console.warn('client_kind lookup mislukte', error.message); return 'business'; }
+  return data?.client_kind === 'consumer' ? 'consumer' : 'business';
+}
+
+async function loadDunningSettings(organizationId: string): Promise<{ dunning_enabled: boolean; dunning_offset_days: number; dunning_collection_costs_vat: boolean; include_payment_link: boolean } | null> {
+  const { data, error } = await supabaseAdmin
+    .from('invoice_reminder_settings')
+    .select('dunning_enabled,dunning_offset_days,dunning_collection_costs_vat,include_payment_link')
+    .eq('organization_id', organizationId).maybeSingle();
+  if (error) { console.warn('dunning settings lookup mislukte', error.message); return null; }
+  return (data ?? null) as { dunning_enabled: boolean; dunning_offset_days: number; dunning_collection_costs_vat: boolean; include_payment_link: boolean } | null;
+}
+
+async function loadDunningNotice(organizationId: string, noticeId: string): Promise<DunningNoticeRow> {
+  const { data, error } = await supabaseAdmin
+    .from('invoice_dunning_notices').select('*').eq('organization_id', organizationId).eq('id', noticeId).single();
+  if (error || !data) throw new WorkflowHttpError('Aanmaning niet gevonden.', 404);
+  return data as DunningNoticeRow;
+}
+
+function buildRateSnapshot(claim: DunningClaim, interestKind: InterestKind): Record<string, unknown> {
+  const currentRateBasisPoints = claim.interest.segments.length ? claim.interest.segments[claim.interest.segments.length - 1].rateBasisPoints : 0;
+  return {
+    interestKind,
+    interestDays: claim.interest.days,
+    dailyInterestCents: claim.interest.dailyRateCentsAtEnd,
+    currentRateBasisPoints,
+    segments: claim.interest.segments,
+  };
+}
+
+// Bereken de vordering (hoofdsom + rente + WIK-kosten) op een peildatum. De hoofdsom
+// is het factuurtotaal incl. btw; de rentesoort volgt het klanttype (consument →
+// wettelijke rente, zakelijk → handelsrente).
+async function computeDunningClaim(organizationId: string, invoice: InvoiceRow, calcDate: string): Promise<{ clientKind: ClientKind; interestKind: InterestKind; claim: DunningClaim }> {
+  if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
+  if (!invoice.due_date) throw new WorkflowHttpError('Deze factuur heeft geen vervaldatum; een aanmaning is niet mogelijk.', 422);
+  const [clientKind, ratePeriods, settings] = await Promise.all([
+    loadClientKind(organizationId, invoice.client_id),
+    loadStatutoryRatePeriods(),
+    loadDunningSettings(organizationId),
+  ]);
+  const interestKind: InterestKind = clientKind === 'consumer' ? 'consumer' : 'commercial';
+  const costsVatBp = settings?.dunning_collection_costs_vat ? DUNNING_COSTS_VAT_BP : 0;
+  const principalCents = calculateTotals(invoice.lines).totalCents;
+  const claim = calculateDunningClaim({
+    principalCents,
+    dueDate: invoice.due_date,
+    calculationDate: calcDate,
+    interestKind,
+    ratePeriods,
+    collectionCostsVatRateBasisPoints: costsVatBp,
+  });
+  return { clientKind, interestKind, claim };
+}
+
+// Cron: stelt aanmaningen VOOR (status 'proposed'). Verstuurt nooit zelf.
+async function handleDunningCron(req: Request, url: URL): Promise<Response> {
+  if (!INVOICE_REMINDER_CRON_SECRET) return json(req, { ok: false, error: 'INVOICE_REMINDER_CRON_SECRET ontbreekt in de Edge Function secrets.' }, 500);
+  const provided = req.headers.get('x-cron-secret') || url.searchParams.get('secret') || '';
+  if (!timingSafeEqual(provided, INVOICE_REMINDER_CRON_SECRET)) return json(req, { ok: false, error: 'Invalid cron secret' }, 401);
+  try {
+    const summary = await runDunningBatch();
+    return json(req, { ok: true, ...summary });
+  } catch (error) {
+    console.error('dunning cron error', describeError(error), serializeError(error));
+    return json(req, { ok: false, error: describeError(error) }, 500);
+  }
+}
+
+async function runDunningBatch(): Promise<{ candidates: number; proposed: number; failed: number; errors: Array<{ invoiceId: string; error: string }> }> {
+  const calcDate = todayIsoDate();
+  const candidates = await findDueDunningCandidates(INVOICE_REMINDER_BATCH_LIMIT);
+  let proposed = 0; let failed = 0;
+  const errors: Array<{ invoiceId: string; error: string }> = [];
+  for (const candidate of candidates) {
+    try {
+      const invoice = await loadInvoice(candidate.organization_id, candidate.invoice_id);
+      if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) continue;
+      const { clientKind, interestKind, claim } = await computeDunningClaim(candidate.organization_id, invoice, calcDate);
+      if (claim.principalCents <= 0) continue;
+      await beginDunningNoticeRpc({ organizationId: candidate.organization_id, invoiceId: candidate.invoice_id, actorUserId: null, clientKind, interestKind, claim });
+      proposed += 1;
+    } catch (error) {
+      failed += 1;
+      errors.push({ invoiceId: candidate.invoice_id, error: describeError(error) });
+      console.warn('Aanmaning voorstellen mislukt', candidate.invoice_id, describeError(error));
+    }
+  }
+  return { candidates: candidates.length, proposed, failed, errors };
+}
+
+// Handmatig een aanmaning voorstellen voor één factuur (owner/admin/member).
+async function proposeDunningNotice(userId: string, organizationId: string, invoiceId: string, _body: Record<string, unknown>) {
+  if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
+  const invoice = await loadInvoice(organizationId, invoiceId);
+  if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) throw new WorkflowHttpError('Voor een betaalde, geannuleerde of afgeboekte factuur kan geen aanmaning worden gemaakt.', 409);
+  if (!invoice.due_date) throw new WorkflowHttpError('Deze factuur heeft geen vervaldatum.', 422);
+  const { data: existing } = await supabaseAdmin.from('invoice_dunning_notices').select('id,status').eq('organization_id', organizationId).eq('invoice_id', invoiceId).maybeSingle();
+  if (existing) throw new WorkflowHttpError('Er bestaat al een aanmaning voor deze factuur.', 409);
+  const calcDate = todayIsoDate();
+  const { clientKind, interestKind, claim } = await computeDunningClaim(organizationId, invoice, calcDate);
+  if (claim.principalCents <= 0) throw new WorkflowHttpError('Deze factuur heeft geen openstaand bedrag om aan te manen.', 422);
+  return await beginDunningNoticeRpc({ organizationId, invoiceId, actorUserId: userId, clientKind, interestKind, claim });
+}
+
+// Aanmaning bevestigen én versturen: rente wordt op de VERZENDDATUM herberekend
+// (autoritatief), de formele brief-PDF gegenereerd, en via Resend verstuurd.
+async function sendDunningNotice(userId: string, organizationId: string, body: Record<string, unknown>) {
+  if (!RESEND_API_KEY) throw new WorkflowHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
+  if (!RESEND_FROM_EMAIL) throw new WorkflowHttpError('RESEND_FROM_EMAIL ontbreekt in de Edge Function secrets.', 500);
+  if (!INVOICE_PUBLIC_BASE_URL) throw new WorkflowHttpError('INVOICE_PUBLIC_BASE_URL of APP_PUBLIC_URL ontbreekt.', 500);
+  const noticeId = String(body.noticeId || '');
+  if (!isUuid(noticeId)) throw new WorkflowHttpError('Ongeldige aanmaning.', 400);
+
+  const notice = await loadDunningNotice(organizationId, noticeId);
+  if (notice.status === 'sent') throw new WorkflowHttpError('Deze aanmaning is al verstuurd.', 409);
+  if (notice.status === 'cancelled') throw new WorkflowHttpError('Deze aanmaning is geannuleerd.', 409);
+  if (notice.status === 'confirmed') throw new WorkflowHttpError('Deze aanmaning wordt al verstuurd.', 409);
+
+  const invoice = await loadInvoice(organizationId, notice.invoice_id);
+  if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) throw new WorkflowHttpError('Voor deze factuur kan geen aanmaning worden verstuurd.', 409);
+  if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
+  if (!invoice.due_date) throw new WorkflowHttpError('Deze factuur heeft geen vervaldatum.', 422);
+
+  const calcDate = todayIsoDate();
+  const [computed, client, company, content, settings] = await Promise.all([
+    computeDunningClaim(organizationId, invoice, calcDate),
+    loadClient(organizationId, invoice.client_id),
+    loadCompanySettings(organizationId),
+    loadEmailTemplateContent(organizationId, 'invoice.dunning.wik14'),
+    loadDunningSettings(organizationId),
+  ]);
+  const { clientKind, interestKind, claim } = computed;
+  if (claim.principalCents <= 0) throw new WorkflowHttpError('Deze factuur heeft geen openstaand bedrag.', 422);
+
+  const recipientEmail = String(body.recipientEmail || client.email || '').trim().toLowerCase();
+  const recipientName = String(body.recipientName || client.contact_name || client.name || '').trim();
+  if (!isEmail(recipientEmail)) throw new WorkflowHttpError('Vul een geldig klant-e-mailadres in voordat je een aanmaning verstuurt.', 422);
+
+  // 14-dagen-termijn vanaf de verzenddatum (benadering van "de dag na ontvangst").
+  const deadlineDate = new Date(Date.parse(`${calcDate}T00:00:00Z`) + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const token = randomToken();
+  const tokenHash = await sha256Hex(token);
+  const expiresAt = new Date(Date.now() + Math.max(1, INVOICE_TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000).toISOString();
+  const publicUrl = `${INVOICE_PUBLIC_BASE_URL.replace(/\/$/, '')}/invoice/${encodeURIComponent(token)}`;
+
+  // Betaallink best-effort — een fout mag de aanmaning nooit blokkeren.
+  let paymentUrl: string | null = null;
+  if (settings?.include_payment_link ?? true) {
+    try {
+      const checkout = await createInvoicePaymentCheckout(userId, organizationId, invoice.id, {});
+      paymentUrl = checkout.checkoutUrl || null;
+    } catch (error) {
+      console.warn('Aanmaning-betaallink mislukte (niet fataal):', error instanceof Error ? error.message : error);
+      paymentUrl = null;
+    }
+  }
+
+  const attachment = await createDunningLetterPdfAttachment({ invoice, client, company, clientKind, interestKind, claim, deadlineDate, publicUrl });
+  validateInvoicePdfAttachment(attachment);
+
+  const rendered = renderEmailTemplate('invoice.dunning.wik14', {
+    clientKind,
+    invoice: { number: invoice.number, due_date: invoice.due_date },
+    client: { name: client.name, contact_name: client.contact_name, email: client.email },
+    company,
+    amounts: {
+      principalCents: claim.principalCents,
+      interestCents: claim.interestCents,
+      interestDays: claim.interest.days,
+      collectionCostsCents: claim.collectionCostsCents,
+      collectionCostsVatCents: claim.collectionCostsVatCents,
+      totalClaimCents: claim.totalClaimCents,
+    },
+    deadlineDate,
+    publicUrl,
+    paymentUrl,
+    recipientName,
+    content,
+  });
+  const subject = rendered.subject;
+
+  const prepared = await beginDunningSend({
+    noticeId, organizationId, userId, claim, deadlineDate, interestKind,
+    tokenHash, expiresAt, recipientEmail, recipientName, subject, publicUrl,
+    attachmentFileName: attachment.fileName, attachmentMimeType: attachment.mimeType, attachmentSizeBytes: attachment.sizeBytes, attachmentSha256: attachment.sha256,
+  });
+
+  const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+  const resendPayload = {
+    from: senderIdentity.from,
+    to: [recipientEmail],
+    reply_to: senderIdentity.replyTo,
+    subject,
+    html: rendered.html,
+    text: rendered.text,
+    attachments: [{ filename: attachment.fileName, content: attachment.base64 }],
+    tags: [
+      { name: 'organization_id', value: sanitizeTagValue(organizationId) },
+      { name: 'invoice_id', value: sanitizeTagValue(invoice.id) },
+      { name: 'invoice_number', value: sanitizeTagValue(invoice.number) },
+      { name: 'template_key', value: 'invoice_dunning_wik14' },
+    ],
+  };
+
+  let resendResponse: Response;
+  let resendPayloadResponse: Record<string, unknown> = {};
+  try {
+    resendResponse = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': sanitizeIdempotencyKey(`dunning-${noticeId}-${prepared.deliveryId}`) },
+      body: JSON.stringify(resendPayload),
+    });
+    resendPayloadResponse = (await resendResponse.json().catch(() => ({}))) as Record<string, unknown>;
+  } catch (error) {
+    const message = `Resend provider request failed before a response was received: ${describeError(error)}`;
+    await failDunningSend(noticeId, prepared.deliveryId, organizationId, userId, message);
+    throw new WorkflowHttpError(`Resend kon de aanmaning niet versturen: ${message}`, 502);
+  }
+  if (!resendResponse.ok) {
+    const message = String(resendPayloadResponse.message || resendPayloadResponse.error || resendResponse.statusText || 'Resend send failed');
+    await failDunningSend(noticeId, prepared.deliveryId, organizationId, userId, message);
+    throw new WorkflowHttpError(`Resend kon de aanmaning niet versturen: ${message}`, 502);
+  }
+  const providerEmailId = String(resendPayloadResponse.id || resendPayloadResponse.email_id || '').trim();
+  if (!providerEmailId) {
+    await failDunningSend(noticeId, prepared.deliveryId, organizationId, userId, 'Resend accepted the request but did not return a provider email id.');
+    throw new WorkflowHttpError('Resend gaf geen e-mail-ID terug. De aanmaning is niet definitief gemarkeerd.', 502);
+  }
+
+  const finalized = await completeDunningSend(noticeId, prepared.deliveryId, organizationId, userId, providerEmailId);
+  return { notice: finalized.notice, deliveryId: prepared.deliveryId, deadlineDate, totalClaimCents: claim.totalClaimCents, publicUrl, providerEmailId, paymentLinkIncluded: Boolean(paymentUrl), recipientEmail };
+}
+
+async function cancelDunningNotice(userId: string, organizationId: string, body: Record<string, unknown>) {
+  const noticeId = String(body.noticeId || '');
+  if (!isUuid(noticeId)) throw new WorkflowHttpError('Ongeldige aanmaning.', 400);
+  const { data, error } = await supabaseAdmin.rpc('cancel_dunning_notice', { p_notice_id: noticeId, p_organization_id: organizationId, p_actor_user_id: userId });
+  if (error) throwRpcError('cancel_dunning_notice', error);
+  return (data ?? {}) as Record<string, unknown>;
+}
+
+async function findDueDunningCandidates(limit: number): Promise<Array<{ organization_id: string; invoice_id: string; client_id: string; days_overdue: number }>> {
+  const { data, error } = await supabaseAdmin.rpc('find_due_dunning_candidates', { p_now: new Date().toISOString(), p_limit: limit });
+  if (error) throwRpcError('find_due_dunning_candidates', error);
+  return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    organization_id: String(row.organization_id), invoice_id: String(row.invoice_id), client_id: String(row.client_id), days_overdue: Number(row.days_overdue) || 0,
+  }));
+}
+
+async function beginDunningNoticeRpc(input: { organizationId: string; invoiceId: string; actorUserId: string | null; clientKind: ClientKind; interestKind: InterestKind; claim: DunningClaim }): Promise<{ noticeId: string }> {
+  const { claim } = input;
+  const { data, error } = await supabaseAdmin.rpc('begin_dunning_notice', {
+    p_organization_id: input.organizationId,
+    p_invoice_id: input.invoiceId,
+    p_actor_user_id: input.actorUserId,
+    p_client_kind: input.clientKind,
+    p_interest_kind: input.interestKind,
+    p_principal_cents: claim.principalCents,
+    p_interest_cents: claim.interestCents,
+    p_interest_days: claim.interest.days,
+    p_daily_interest_cents: claim.interest.dailyRateCentsAtEnd,
+    p_collection_costs_cents: claim.collectionCostsCents,
+    p_collection_costs_vat_cents: claim.collectionCostsVatCents,
+    p_total_claim_cents: claim.totalClaimCents,
+    p_calculation_date: claim.calculationDate,
+    p_due_date: claim.dueDate,
+    p_rate_snapshot: buildRateSnapshot(claim, input.interestKind),
+  });
+  if (error) throwRpcError('begin_dunning_notice', error);
+  const payload = data as { noticeId?: string } | null;
+  if (!payload?.noticeId) throw new WorkflowHttpError('Aanmaning kon niet worden aangemaakt.', 500);
+  return { noticeId: payload.noticeId };
+}
+
+async function beginDunningSend(input: {
+  noticeId: string; organizationId: string; userId: string | null; claim: DunningClaim; deadlineDate: string; interestKind: InterestKind;
+  tokenHash: string; expiresAt: string; recipientEmail: string; recipientName: string; subject: string; publicUrl: string;
+  attachmentFileName: string; attachmentMimeType: string; attachmentSizeBytes: number; attachmentSha256: string;
+}): Promise<{ deliveryId: string }> {
+  const { claim } = input;
+  const { data, error } = await supabaseAdmin.rpc('begin_dunning_send', {
+    p_notice_id: input.noticeId,
+    p_organization_id: input.organizationId,
+    p_actor_user_id: input.userId,
+    p_interest_cents: claim.interestCents,
+    p_interest_days: claim.interest.days,
+    p_daily_interest_cents: claim.interest.dailyRateCentsAtEnd,
+    p_collection_costs_cents: claim.collectionCostsCents,
+    p_collection_costs_vat_cents: claim.collectionCostsVatCents,
+    p_total_claim_cents: claim.totalClaimCents,
+    p_calculation_date: claim.calculationDate,
+    p_deadline_date: input.deadlineDate,
+    p_rate_snapshot: buildRateSnapshot(claim, input.interestKind),
+    p_token_hash: input.tokenHash,
+    p_token_expires_at: input.expiresAt,
+    p_recipient_email: input.recipientEmail,
+    p_recipient_name: input.recipientName,
+    p_subject: input.subject,
+    p_public_url: input.publicUrl,
+    p_attachment_file_name: input.attachmentFileName,
+    p_attachment_mime_type: input.attachmentMimeType,
+    p_attachment_size_bytes: input.attachmentSizeBytes,
+    p_attachment_sha256: input.attachmentSha256,
+  });
+  if (error) throwRpcError('begin_dunning_send', error);
+  const payload = data as { deliveryId?: string } | null;
+  if (!payload?.deliveryId) throw new WorkflowHttpError('Aanmaning kon niet worden voorbereid.', 500);
+  return { deliveryId: payload.deliveryId };
+}
+
+async function completeDunningSend(noticeId: string, deliveryId: string, organizationId: string, userId: string | null, providerEmailId: string): Promise<{ notice?: unknown; delivery?: unknown }> {
+  const { data, error } = await supabaseAdmin.rpc('complete_dunning_send', { p_notice_id: noticeId, p_delivery_id: deliveryId, p_organization_id: organizationId, p_actor_user_id: userId, p_provider_email_id: providerEmailId });
+  if (error) throwRpcError('complete_dunning_send', error);
+  return (data ?? {}) as { notice?: unknown; delivery?: unknown };
+}
+
+async function failDunningSend(noticeId: string, deliveryId: string, organizationId: string, userId: string | null, errorMessage: string): Promise<void> {
+  const { error } = await supabaseAdmin.rpc('fail_dunning_send', { p_notice_id: noticeId, p_delivery_id: deliveryId, p_organization_id: organizationId, p_actor_user_id: userId, p_error_message: errorMessage });
+  if (error) console.warn('Dunning failure registration failed', error.message);
+}
+
+// Formele aanmaningsbrief als PDF. Consument → WIK-14-dagenbrief (incassokosten pas
+// verschuldigd ná de termijn, met de wettelijk vereiste formulering); zakelijk →
+// sommatie (alles direct opeisbaar). Hergebruikt de pdf-lib draw-helpers onderaan.
+async function createDunningLetterPdfAttachment(input: {
+  invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null;
+  clientKind: ClientKind; interestKind: InterestKind; claim: DunningClaim; deadlineDate: string; publicUrl: string;
+}): Promise<InvoicePdfAttachment> {
+  const { invoice, client, company, clientKind, claim, deadlineDate, publicUrl } = input;
+  const isConsumer = clientKind === 'consumer';
+  const pdfDoc = await PDFDocument.create();
+  const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const accent = hexToPdfRgb(company?.invoice_accent_color || '#FFD966');
+  const muted = rgb(0.38, 0.38, 0.38);
+  let page = pdfDoc.addPage([595.28, 841.89]);
+  let y = 780;
+  const companyName = company?.trade_name || company?.company_name || 'ResoFly';
+  const maxWidth = 499;
+  const rightX = 547;
+  const euros = (cents: number) => formatEuro((Number(cents) || 0) / 100);
+  const currentBp = claim.interest.segments.length ? claim.interest.segments[claim.interest.segments.length - 1].rateBasisPoints : 0;
+  const ratePct = (currentBp / 100).toString().replace('.', ',');
+  const dueNowCents = isConsumer ? claim.principalCents + claim.interestCents : claim.totalClaimCents;
+  const interestLabel = isConsumer ? 'wettelijke rente' : 'wettelijke handelsrente';
+  const hasVat = claim.collectionCostsVatCents > 0;
+  const vatSentence = hasVat
+    ? `De incassokosten worden verhoogd met ${euros(claim.collectionCostsVatCents)} btw (incassokosten inclusief btw: ${euros(claim.collectionCostsCents + claim.collectionCostsVatCents)}).`
+    : `Over de incassokosten wordt geen btw in rekening gebracht.`;
+
+  page.drawRectangle({ x: 0, y: 824, width: 595.28, height: 18, color: accent, opacity: 0.85 });
+  drawPdfText(page, 'AANMANING', 48, y, bold, 26);
+  drawPdfText(page, invoice.number || '-', rightX, y + 6, bold, 12, { align: 'right' });
+  y -= 30;
+  drawPdfText(page, companyName, 48, y, bold, 13); y -= 16;
+  for (const line of companyAddressLines(company).slice(0, 8)) { drawPdfText(page, line, 48, y, regular, 9, { color: muted }); y -= 12; }
+  y -= 12;
+
+  drawSectionTitle(page, 'Aan', 48, y, bold, accent, muted); y -= 20;
+  drawPdfText(page, client.name || '-', 48, y, bold, 11); y -= 14;
+  if (client.contact_name) { drawPdfText(page, `T.a.v. ${client.contact_name}`, 48, y, regular, 9, { color: muted }); y -= 12; }
+  if (client.email) { drawPdfText(page, client.email, 48, y, regular, 9, { color: muted }); y -= 12; }
+  y -= 6;
+
+  drawPdfText(page, `Datum: ${formatDateNl(claim.calculationDate)}`, rightX, y, regular, 9, { align: 'right', color: muted });
+  drawPdfText(page, `Betreft: aanmaning factuur ${invoice.number}`, 48, y, bold, 11); y -= 24;
+
+  const intro = `Ondanks eerdere herinneringen is factuur ${invoice.number} met vervaldatum ${formatDateNl(invoice.due_date)} nog niet volledig voldaan. De openstaande hoofdsom bedraagt ${euros(claim.principalCents)}.`;
+  y = drawWrappedPdfText(page, intro, 48, y, maxWidth, regular, 10, 15) - 8;
+
+  const body2 = isConsumer
+    ? `Wij verzoeken u het openstaande bedrag van ${euros(dueNowCents)} (de hoofdsom en de tot op heden verschenen wettelijke rente) te voldoen binnen veertien dagen vanaf de dag nadat deze brief bij u is bezorgd. Betaalt u niet binnen deze termijn, dan bent u daarnaast een vergoeding voor buitengerechtelijke incassokosten van ${euros(claim.collectionCostsCents)} verschuldigd, en blijft de wettelijke rente oplopen. ${vatSentence}`
+    : `Uw onderneming is van rechtswege in verzuim. Wij sommeren u het volledige openstaande bedrag van ${euros(claim.totalClaimCents)} — de hoofdsom, de wettelijke handelsrente en de buitengerechtelijke incassokosten — te voldoen binnen veertien dagen, uiterlijk op ${formatDateNl(deadlineDate)}. ${vatSentence}`;
+  y = drawWrappedPdfText(page, body2, 48, y, maxWidth, regular, 10, 15) - 12;
+
+  drawSectionTitle(page, 'Specificatie', 48, y, bold, accent, muted); y -= 20;
+  const row = (label: string, amount: string, isBold = false) => {
+    drawPdfText(page, label, 48, y, isBold ? bold : regular, 10, isBold ? undefined : { color: muted });
+    drawPdfText(page, amount, rightX, y, isBold ? bold : regular, 10, { align: 'right' });
+    y -= 15;
+  };
+  row('Hoofdsom (openstaand)', euros(claim.principalCents));
+  row(`${interestLabel[0].toUpperCase()}${interestLabel.slice(1)} (${claim.interest.days} dagen, ${ratePct}%)`, euros(claim.interestCents));
+  row(isConsumer ? 'Buitengerechtelijke incassokosten (bij uitblijven betaling)' : 'Buitengerechtelijke incassokosten', euros(claim.collectionCostsCents));
+  if (hasVat) row('Btw over incassokosten', euros(claim.collectionCostsVatCents));
+  y -= 3;
+  if (isConsumer) {
+    row('Nu te voldoen (hoofdsom + rente)', euros(dueNowCents), true);
+    row('Totaal bij niet-tijdige betaling', euros(claim.totalClaimCents), true);
+  } else {
+    row('Totaal te voldoen', euros(claim.totalClaimCents), true);
+  }
+  y -= 12;
+
+  const iban = company?.iban ? String(company.iban).trim() : '';
+  const paymentLine = iban
+    ? `U kunt het bedrag overmaken op ${iban} t.n.v. ${companyName} onder vermelding van factuurnummer ${invoice.number}. Online betalen of de factuur bekijken kan via: ${publicUrl}`
+    : `Bekijk of betaal de factuur online via: ${publicUrl}`;
+  y = drawWrappedPdfText(page, paymentLine, 48, y, maxWidth, regular, 10, 15) - 10;
+
+  const closing = `Wij vertrouwen op een tijdige betaling. Heeft u vragen of heeft u inmiddels betaald, neem dan contact met ons op.`;
+  y = drawWrappedPdfText(page, closing, 48, y, maxWidth, regular, 10, 15) - 14;
+  drawPdfText(page, 'Met vriendelijke groet,', 48, y, regular, 10); y -= 14;
+  drawPdfText(page, companyName, 48, y, bold, 11);
+
+  drawPdfFooter(page, regular, company);
+  const bytes = await pdfDoc.save();
+  const sha256 = await sha256HexBytes(bytes);
+  const fileName = `aanmaning-${sanitizeFileName(invoice.number || invoice.id)}.pdf`;
+  return { fileName, mimeType: 'application/pdf', bytes, base64: bytesToBase64(bytes), sizeBytes: bytes.byteLength, sha256 };
 }
 
 async function createInvoicePaymentCheckout(userId: string, organizationId: string, invoiceId: string, body: Record<string, unknown>) {

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Bell, BookOpen, CreditCard, Download, Eye, FileText, Mail, Pause, Play, RotateCcw, Search, ShieldCheck, SlidersHorizontal, Send, XCircle } from 'lucide-react';
-import type { AppData, CreditNote, FinanceLine, FinanceStatus, Invoice, InvoiceChargeback, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceRefund, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
+import type { AppData, CreditNote, DunningNotice, FinanceLine, FinanceStatus, Invoice, InvoiceChargeback, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceRefund, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
 import { Modal } from '../components/Modal';
 import { FinanceDocPreview } from '../components/FinanceDocPreview';
 import { Button, Select } from '../components/Ui';
@@ -52,8 +52,8 @@ export function Quotes({
   />;
 }
 
-export function Invoices({ data, canWrite, canAdmin = false, onNew, onEdit, onSend, onSendReminder, onToggleRemindersPaused, onDownloadPdf, onRefund, onDownloadCreditNote, onEmailCreditNote, onPostToLedger }: { data: AppData; canWrite: boolean; canAdmin?: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onSendReminder?: (i: Invoice) => void; onToggleRemindersPaused?: (i: Invoice, paused: boolean) => void; onDownloadPdf?: (i: Invoice) => void; onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>; onDownloadCreditNote?: (creditNote: CreditNote) => void; onEmailCreditNote?: (creditNote: CreditNote) => void; onPostToLedger?: (i: Invoice) => void }) {
-  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onSendInvoiceReminder={onSendReminder} onToggleInvoiceRemindersPaused={onToggleRemindersPaused} onDownloadInvoicePdf={onDownloadPdf} onRefundInvoice={onRefund} onDownloadCreditNote={onDownloadCreditNote} onEmailCreditNote={onEmailCreditNote} onPostInvoiceToLedger={onPostToLedger}/>;
+export function Invoices({ data, canWrite, canAdmin = false, onNew, onEdit, onSend, onSendReminder, onToggleRemindersPaused, onDownloadPdf, onRefund, onDownloadCreditNote, onEmailCreditNote, onPostToLedger, onProposeDunning, onSendDunning, onCancelDunning }: { data: AppData; canWrite: boolean; canAdmin?: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onSendReminder?: (i: Invoice) => void; onToggleRemindersPaused?: (i: Invoice, paused: boolean) => void; onDownloadPdf?: (i: Invoice) => void; onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>; onDownloadCreditNote?: (creditNote: CreditNote) => void; onEmailCreditNote?: (creditNote: CreditNote) => void; onPostToLedger?: (i: Invoice) => void; onProposeDunning?: (i: Invoice) => void; onSendDunning?: (n: DunningNotice) => void; onCancelDunning?: (n: DunningNotice) => void }) {
+  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onSendInvoiceReminder={onSendReminder} onToggleInvoiceRemindersPaused={onToggleRemindersPaused} onDownloadInvoicePdf={onDownloadPdf} onRefundInvoice={onRefund} onDownloadCreditNote={onDownloadCreditNote} onEmailCreditNote={onEmailCreditNote} onPostInvoiceToLedger={onPostToLedger} onProposeDunning={onProposeDunning} onSendDunning={onSendDunning} onCancelDunning={onCancelDunning}/>;
 }
 
 function FinanceList<T extends Quote | Invoice>({
@@ -79,6 +79,9 @@ function FinanceList<T extends Quote | Invoice>({
   onDownloadCreditNote,
   onEmailCreditNote,
   onPostInvoiceToLedger,
+  onProposeDunning,
+  onSendDunning,
+  onCancelDunning,
 }: {
   kind: 'quote' | 'invoice';
   title: string;
@@ -102,6 +105,9 @@ function FinanceList<T extends Quote | Invoice>({
   onDownloadCreditNote?: (creditNote: CreditNote) => void;
   onEmailCreditNote?: (creditNote: CreditNote) => void;
   onPostInvoiceToLedger?: (i: Invoice) => void;
+  onProposeDunning?: (i: Invoice) => void;
+  onSendDunning?: (n: DunningNotice) => void;
+  onCancelDunning?: (n: DunningNotice) => void;
 }) {
   if (kind === 'quote') {
     return <QuoteTable
@@ -136,6 +142,9 @@ function FinanceList<T extends Quote | Invoice>({
     onRefund={onRefundInvoice}
     onDownloadCreditNote={onDownloadCreditNote}
     onPostToLedger={onPostInvoiceToLedger}
+    onProposeDunning={onProposeDunning}
+    onSendDunning={onSendDunning}
+    onCancelDunning={onCancelDunning}
   />;
 }
 
@@ -485,6 +494,9 @@ function InvoiceTable({
   onDownloadCreditNote,
   onEmailCreditNote,
   onPostToLedger,
+  onProposeDunning,
+  onSendDunning,
+  onCancelDunning,
 }: {
   title: string;
   invoices: Invoice[];
@@ -501,6 +513,9 @@ function InvoiceTable({
   onDownloadCreditNote?: (creditNote: CreditNote) => void;
   onEmailCreditNote?: (creditNote: CreditNote) => void;
   onPostToLedger?: (invoice: Invoice) => void;
+  onProposeDunning?: (invoice: Invoice) => void;
+  onSendDunning?: (notice: DunningNotice) => void;
+  onCancelDunning?: (notice: DunningNotice) => void;
 }) {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
   const [searchFilters, setSearchFilters] = useState<FinanceSearchFilters>(() => createDefaultFinanceSearchFilters());
@@ -574,6 +589,9 @@ function InvoiceTable({
       onDownloadCreditNote={onDownloadCreditNote}
       onEmailCreditNote={onEmailCreditNote}
       onPostToLedger={onPostToLedger}
+      onProposeDunning={onProposeDunning}
+      onSendDunning={onSendDunning}
+      onCancelDunning={onCancelDunning}
     />}
   </>;
 }
@@ -671,6 +689,9 @@ function InvoiceDetailModal({
   onDownloadCreditNote,
   onEmailCreditNote,
   onPostToLedger,
+  onProposeDunning,
+  onSendDunning,
+  onCancelDunning,
 }: {
   invoice: Invoice;
   data: AppData;
@@ -686,6 +707,9 @@ function InvoiceDetailModal({
   onDownloadCreditNote?: (creditNote: CreditNote) => void;
   onEmailCreditNote?: (creditNote: CreditNote) => void;
   onPostToLedger?: (invoice: Invoice) => void;
+  onProposeDunning?: (invoice: Invoice) => void;
+  onSendDunning?: (notice: DunningNotice) => void;
+  onCancelDunning?: (notice: DunningNotice) => void;
 }) {
   const client = data.clients.find(c => c.id === invoice.client_id) ?? null;
   const project = data.projects.find(p => p.id === invoice.project_id) ?? null;
@@ -701,6 +725,7 @@ function InvoiceDetailModal({
   const refunds = data.invoiceRefunds.filter(refund => refund.invoice_id === invoice.id);
   const creditNotes = data.creditNotes.filter(creditNote => creditNote.invoice_id === invoice.id);
   const chargebacks = data.invoiceChargebacks.filter(chargeback => chargeback.invoice_id === invoice.id);
+  const dunningNotice = data.dunningNotices.find(notice => notice.invoice_id === invoice.id) ?? null;
   const refundedAmount = invoice.refunded_amount ?? 0;
   const chargedBackAmount = invoice.charged_back_amount ?? 0;
   // Nog niet-afgeronde (Mollie-)terugbetalingen tellen wel mee in de over-refund-guard
@@ -754,6 +779,11 @@ function InvoiceDetailModal({
       {(invoiceIsReminderEligible(invoice) || (invoice.reminder_level ?? 0) > 0 || reminderDeliveries.length > 0) && <section className="quote-detail-section">
         <div className="quote-detail-section-head"><div><span>Betalingsherinneringen</span><strong>Getrapte aanmaningen</strong></div></div>
         <InvoiceReminderPanel invoice={invoice} reminders={reminderDeliveries} canWrite={canWrite} onToggleRemindersPaused={onToggleRemindersPaused} />
+      </section>}
+
+      {(dunningNotice || invoiceIsReminderEligible(invoice)) && <section className="quote-detail-section">
+        <div className="quote-detail-section-head"><div><span>Aanmaning</span><strong>Formele aanmaning · rente + WIK-incassokosten</strong></div></div>
+        <InvoiceDunningPanel invoice={invoice} notice={dunningNotice} canWrite={canWrite} onPropose={onProposeDunning} onSend={onSendDunning} onCancel={onCancelDunning} />
       </section>}
 
       <section className="quote-detail-split">
@@ -969,7 +999,7 @@ function InvoiceVersions({ versions }: { versions: InvoiceVersion[] }) {
 
 function InvoiceDeliveries({ deliveries }: { deliveries: InvoiceEmailDelivery[] }) {
   if (deliveries.length === 0) return <div className="quote-timeline-empty">Nog geen factuurmail verzonden.</div>;
-  return <div className="quote-versions">{deliveries.map(delivery => <div className="quote-version-pill" key={delivery.id}><strong>{delivery.delivery_kind === 'reminder' ? `Herinnering N${delivery.reminder_level ?? '?'} · ` : ''}{emailStatusLabel(delivery.status)}</strong><span>{delivery.recipient_email}</span><small>{dateNL(delivery.created_at)} · {delivery.subject}</small>{delivery.attachment_file_name && <small>{delivery.attachment_file_name}</small>}{delivery.error_message && <small>{delivery.error_message}</small>}</div>)}</div>;
+  return <div className="quote-versions">{deliveries.map(delivery => <div className="quote-version-pill" key={delivery.id}><strong>{delivery.delivery_kind === 'reminder' ? `Herinnering N${delivery.reminder_level ?? '?'} · ` : delivery.delivery_kind === 'dunning' ? 'Aanmaning · ' : ''}{emailStatusLabel(delivery.status)}</strong><span>{delivery.recipient_email}</span><small>{dateNL(delivery.created_at)} · {delivery.subject}</small>{delivery.attachment_file_name && <small>{delivery.attachment_file_name}</small>}{delivery.error_message && <small>{delivery.error_message}</small>}</div>)}</div>;
 }
 
 function reminderLevelLabel(level: number): string {
@@ -992,6 +1022,57 @@ function InvoiceReminderPanel({ invoice, reminders, canWrite, onToggleRemindersP
     {reminders.length === 0
       ? <div className="quote-timeline-empty">Nog geen herinnering verstuurd.</div>
       : <div className="quote-versions">{reminders.map(delivery => <div className="quote-version-pill" key={delivery.id}><strong>Niveau {delivery.reminder_level ?? '-'} · {emailStatusLabel(delivery.status)}</strong><span>{delivery.recipient_email}</span><small>{dateNL(delivery.created_at)} · {delivery.subject}</small>{delivery.error_message && <small>{delivery.error_message}</small>}</div>)}</div>}
+  </div>;
+}
+
+function dunningStatusLabel(status: DunningNotice['status']): string {
+  switch (status) {
+    case 'proposed': return 'Aanmaning voorgesteld — wacht op bevestiging';
+    case 'confirmed': return 'Aanmaning wordt verstuurd…';
+    case 'sent': return 'Aanmaning verstuurd';
+    case 'failed': return 'Aanmaning mislukt';
+    case 'cancelled': return 'Aanmaning geannuleerd';
+    default: return 'Aanmaning';
+  }
+}
+
+function InvoiceDunningPanel({ invoice, notice, canWrite, onPropose, onSend, onCancel }: {
+  invoice: Invoice;
+  notice: DunningNotice | null;
+  canWrite: boolean;
+  onPropose?: (invoice: Invoice) => void;
+  onSend?: (notice: DunningNotice) => void;
+  onCancel?: (notice: DunningNotice) => void;
+}) {
+  const c = (cents: number) => euro((Number(cents) || 0) / 100);
+  if (!notice) {
+    return <div className="invoice-reminder-panel">
+      <div className="quote-timeline-empty">Nog geen aanmaning. Een formele aanmaning berekent de wettelijke (handels)rente en WIK-incassokosten en verstuurt na jouw bevestiging een 14-dagenbrief.</div>
+      {canWrite && onPropose && <Button onClick={() => onPropose(invoice)} title="Berekent de bedragen en maakt een aanmaningsvoorstel dat je daarna zelf bevestigt."><FileText size={14}/> Stel aanmaning op</Button>}
+    </div>;
+  }
+  const isConsumer = notice.client_kind === 'consumer';
+  const dueNowCents = isConsumer ? notice.principal_cents + notice.interest_cents : notice.total_claim_cents;
+  const open = notice.status === 'proposed' || notice.status === 'confirmed' || notice.status === 'failed';
+  return <div className="invoice-reminder-panel">
+    <div className="invoice-reminder-summary">
+      <span className="quote-version-pill"><strong>{dunningStatusLabel(notice.status)}</strong>
+        <small>{isConsumer ? 'Consument · wettelijke rente · 14-dagenbrief' : 'Zakelijk · wettelijke handelsrente'}</small>
+        {notice.deadline_date && <small>Uiterste betaaldatum: {dateNL(notice.deadline_date)}</small>}
+        {notice.sent_at && <small>Verstuurd: {dateNL(notice.sent_at)}</small>}
+        {notice.error_message && <small>{notice.error_message}</small>}
+      </span>
+    </div>
+    <div className="quote-versions">
+      <div className="quote-version-pill"><strong>Hoofdsom</strong><span>{c(notice.principal_cents)}</span></div>
+      <div className="quote-version-pill"><strong>{isConsumer ? 'Wettelijke rente' : 'Handelsrente'} · {notice.interest_days} dagen</strong><span>{c(notice.interest_cents)}</span></div>
+      <div className="quote-version-pill"><strong>Incassokosten{isConsumer ? ' (na termijn)' : ''}{notice.collection_costs_vat_cents > 0 ? ' + btw' : ''}</strong><span>{c(notice.collection_costs_cents + notice.collection_costs_vat_cents)}</span></div>
+      <div className="quote-version-pill total"><strong>{isConsumer ? 'Nu te voldoen' : 'Totaal te voldoen'}</strong><span>{c(isConsumer ? dueNowCents : notice.total_claim_cents)}</span></div>
+    </div>
+    {open && canWrite && <div className="invoice-reminder-summary">
+      {onSend && <Button variant="primary" onClick={() => onSend(notice)} title="Bevestigt de bedragen (rente herberekend op vandaag) en verstuurt de formele 14-dagenbrief per e-mail."><Send size={14}/> {notice.status === 'failed' ? 'Opnieuw versturen' : 'Bevestig & verstuur'}</Button>}
+      {onCancel && notice.status !== 'confirmed' && <Button onClick={() => onCancel(notice)} title="Annuleer dit aanmaningsvoorstel."><XCircle size={14}/> Annuleer voorstel</Button>}
+    </div>}
   </div>;
 }
 

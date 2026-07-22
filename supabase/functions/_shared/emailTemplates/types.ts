@@ -7,6 +7,7 @@ export type EmailTemplateKey =
   | 'quote.sent'
   | 'invoice.sent'
   | 'invoice.reminder'
+  | 'invoice.dunning.wik14'
   | 'creditNote.sent'
   | 'contract.sent'
   | 'contract.signed.client'
@@ -21,6 +22,7 @@ export type EmailTemplateContentKey =
   | 'invoice.reminder.1'
   | 'invoice.reminder.2'
   | 'invoice.reminder.3'
+  | 'invoice.dunning.wik14'
   | 'creditNote.sent'
   | 'contract.sent'
   | 'contract.signed.client';
@@ -108,6 +110,40 @@ export type InvoiceReminderEmailInput = {
   paymentUrl?: string | null;
   recipientName?: string | null;
   daysOverdue?: number | null;
+  content?: EmailTemplateContent | null;
+};
+
+export type InvoiceDunningWik14EmailInput = {
+  clientKind: 'business' | 'consumer';
+  invoice: {
+    number: string;
+    due_date?: string | null;
+  };
+  client: {
+    name: string;
+    contact_name?: string | null;
+    email?: string | null;
+  };
+  company?: {
+    company_name?: string | null;
+    trade_name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    website?: string | null;
+    invoice_accent_color?: string | null;
+  } | null;
+  amounts: {
+    principalCents: number;
+    interestCents: number;
+    interestDays: number;
+    collectionCostsCents: number;
+    collectionCostsVatCents: number;
+    totalClaimCents: number;
+  };
+  deadlineDate: string;
+  publicUrl: string;
+  paymentUrl?: string | null;
+  recipientName?: string | null;
   content?: EmailTemplateContent | null;
 };
 
@@ -233,6 +269,7 @@ export type EmailTemplateInputMap = {
   'quote.sent': QuoteSentEmailInput;
   'invoice.sent': InvoiceSentEmailInput;
   'invoice.reminder': InvoiceReminderEmailInput;
+  'invoice.dunning.wik14': InvoiceDunningWik14EmailInput;
   'creditNote.sent': CreditNoteSentEmailInput;
   'contract.sent': ContractSentEmailInput;
   'contract.signed.client': ContractSignedClientEmailInput;

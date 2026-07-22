@@ -2,6 +2,7 @@ import type { ReportDefinition } from './lib/reporting';
 
 export type UUID = string;
 export type ClientStatus = 'active' | 'prospect' | 'inactive';
+export type ClientKind = 'business' | 'consumer';
 export type TaskStatus = 'todo' | 'doing' | 'review' | 'done';
 export type Priority = 'low' | 'med' | 'high';
 export type TicketStatus = 'new' | 'review' | 'approved' | 'rejected' | 'converted';
@@ -219,7 +220,7 @@ export interface ContractVersion {
 }
 
 export interface Client extends OrgScopedRow {
-  name: string; client_code: string | null; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; color: string; status: ClientStatus; tags: string[]; follow_up: string | null; value_eur: number; created_at: string; updated_at: string;
+  name: string; client_code: string | null; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; color: string; status: ClientStatus; client_kind: ClientKind; tags: string[]; follow_up: string | null; value_eur: number; created_at: string; updated_at: string;
 }
 export interface ClientContact extends OrgScopedRow {
   client_id: UUID; name: string; email: string; phone: string | null; role: string | null; gives_portal_access: boolean; is_active: boolean; created_at: string; updated_at: string;
@@ -595,8 +596,44 @@ export interface InvoiceReminderSettings {
   level2_offset_days: number;
   level3_offset_days: number;
   include_payment_link: boolean;
+  dunning_enabled?: boolean;
+  dunning_offset_days?: number;
+  dunning_collection_costs_vat?: boolean;
   created_at?: string;
   updated_at?: string;
+}
+
+export type DunningNoticeStatus = 'proposed' | 'confirmed' | 'sent' | 'failed' | 'cancelled';
+
+export interface DunningNotice {
+  id: UUID;
+  organization_id: UUID;
+  invoice_id: UUID;
+  stage: 'wik_14day';
+  client_kind: ClientKind;
+  interest_kind: 'consumer' | 'commercial';
+  principal_cents: number;
+  interest_cents: number;
+  interest_days: number;
+  daily_interest_cents: number;
+  collection_costs_cents: number;
+  collection_costs_vat_cents: number;
+  total_claim_cents: number;
+  calculation_date: string;
+  due_date: string | null;
+  deadline_date: string | null;
+  rate_snapshot: Record<string, unknown>;
+  status: DunningNoticeStatus;
+  delivery_id: UUID | null;
+  public_url: string | null;
+  error_message: string | null;
+  proposed_at: string;
+  confirmed_at: string | null;
+  sent_at: string | null;
+  created_by: UUID | null;
+  confirmed_by: UUID | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // Eigen-domein e-mail: per organisatie een bij Resend geverifieerd verzenddomein.
@@ -709,7 +746,7 @@ export interface InvoiceEmailDelivery {
   recipient_name: string | null;
   subject: string;
   status: InvoiceEmailDeliveryStatus;
-  delivery_kind?: 'invoice' | 'reminder';
+  delivery_kind?: 'invoice' | 'reminder' | 'dunning';
   reminder_level?: number | null;
   sent_at: string | null;
   delivered_at: string | null;
@@ -1524,7 +1561,7 @@ export interface SavedReport extends OrgScopedRow {
   updated_at: string;
 }
 
-export interface AppData { clients: Client[]; clientContacts: ClientContact[]; projects: Project[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; savedReports: SavedReport[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; clientContacts: ClientContact[]; projects: Project[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; savedReports: SavedReport[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft' | 'native' | 'ics';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';

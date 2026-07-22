@@ -2,6 +2,7 @@ import { renderContractSentEmail } from './contractSent.ts';
 import { renderContractSignedClientEmail } from './contractSignedClient.ts';
 import { renderContractSignedInternalEmail } from './contractSignedInternal.ts';
 import { renderCreditNoteSentEmail } from './creditNoteSent.ts';
+import { renderInvoiceDunningWik14Email } from './invoiceDunningWik14.ts';
 import { renderInvoiceReminderEmail } from './invoiceReminder.ts';
 import { renderInvoiceSentEmail } from './invoiceSent.ts';
 import { renderQuoteSentEmail } from './quoteSent.ts';
@@ -20,6 +21,8 @@ export function renderEmailTemplate<K extends EmailTemplateKey>(templateKey: K, 
       return renderInvoiceSentEmail(data as EmailTemplateInputMap['invoice.sent']);
     case 'invoice.reminder':
       return renderInvoiceReminderEmail(data as EmailTemplateInputMap['invoice.reminder']);
+    case 'invoice.dunning.wik14':
+      return renderInvoiceDunningWik14Email(data as EmailTemplateInputMap['invoice.dunning.wik14']);
     case 'creditNote.sent':
       return renderCreditNoteSentEmail(data as EmailTemplateInputMap['creditNote.sent']);
     case 'contract.sent':

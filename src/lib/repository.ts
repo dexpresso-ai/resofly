@@ -23,6 +23,7 @@ import type {
   InvoiceWorkflowEvent,
   InvoiceMollieSettingsStatus,
   InvoiceReminderSettings,
+  DunningNotice,
   SendingDomain,
   ClientEmail,
   ClientEmailThread,
@@ -379,6 +380,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     invoiceRefunds,
     creditNotes,
     invoiceChargebacks,
+    dunningNotices,
     ledgerAccounts,
     vatCodes,
     journalEntries,
@@ -405,7 +407,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     select<Client>('clients', organizationId), selectClientContacts(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
     selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectCalendarEventLinks(organizationId), selectTimeEntries(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
-    selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId),
+    selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId), selectDunningNotices(organizationId),
     selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectFiscalYears(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId), selectFixedAssets(organizationId), selectAssetDepreciations(organizationId), selectVatReturns(organizationId),
     selectBankAccounts(organizationId), selectBankStatements(organizationId), selectBankTransactions(organizationId), selectBankRules(organizationId), selectBankRequisitions(organizationId),
     select<Attachment>('attachments', organizationId),
@@ -415,7 +417,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectProjectMembers(organizationId),
     selectTaskAssignees(organizationId),
   ]);
-  return { clients, clientContacts, projects, tasks, projectMembers, taskAssignees, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, savedReports, companySettings };
+  return { clients, clientContacts, projects, tasks, projectMembers, taskAssignees, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, savedReports, companySettings };
 }
 
 const PROJECT_TEAM_MIGRATION_HINT =
@@ -920,6 +922,15 @@ const TIME_TRACKING_MIGRATION_HINT =
 export async function selectTimeEntries(organizationId: UUID): Promise<TimeEntry[]> {
   return selectOptional<TimeEntry>('time_entries', organizationId, {
     orderBy: 'entry_date', ascending: false, hint: TIME_TRACKING_MIGRATION_HINT,
+  });
+}
+
+const DUNNING_MIGRATION_HINT =
+  'Voer de migratie 20260722000000_debtor_dunning.sql uit in Supabase om de debiteurenautomaat (aanmaningen) te activeren.';
+
+export async function selectDunningNotices(organizationId: UUID): Promise<DunningNotice[]> {
+  return selectOptional<DunningNotice>('invoice_dunning_notices', organizationId, {
+    orderBy: 'created_at', ascending: false, hint: DUNNING_MIGRATION_HINT,
   });
 }
 
@@ -1838,7 +1849,7 @@ export async function sendInvoiceReminderEmail(
 export async function loadInvoiceReminderSettings(organizationId: UUID): Promise<InvoiceReminderSettings> {
   const { data, error } = await supabase
     .from('invoice_reminder_settings')
-    .select('organization_id,auto_reminders_enabled,level1_offset_days,level2_offset_days,level3_offset_days,include_payment_link,created_at,updated_at')
+    .select('organization_id,auto_reminders_enabled,level1_offset_days,level2_offset_days,level3_offset_days,include_payment_link,dunning_enabled,dunning_offset_days,dunning_collection_costs_vat,created_at,updated_at')
     .eq('organization_id', organizationId)
     .maybeSingle();
   if (error) throw error;
@@ -1850,6 +1861,9 @@ export async function loadInvoiceReminderSettings(organizationId: UUID): Promise
     level2_offset_days: 10,
     level3_offset_days: 17,
     include_payment_link: true,
+    dunning_enabled: false,
+    dunning_offset_days: 30,
+    dunning_collection_costs_vat: false,
   };
 }
 
@@ -1868,6 +1882,72 @@ export async function saveInvoiceReminderSettings(
     .single();
   if (error) throw error;
   return data as InvoiceReminderSettings;
+}
+
+/**
+ * Sla de debiteurenautomaat-instellingen op (op dezelfde invoice_reminder_settings-
+ * rij als de herinneringen; de partiële upsert raakt alleen de dunning-kolommen).
+ */
+export async function saveInvoiceDunningSettings(
+  organizationId: UUID,
+  input: { dunning_enabled: boolean; dunning_offset_days: number; dunning_collection_costs_vat: boolean },
+): Promise<void> {
+  const { error } = await supabase
+    .from('invoice_reminder_settings')
+    .upsert({ organization_id: organizationId, ...input, updated_at: new Date().toISOString() }, { onConflict: 'organization_id' });
+  if (error) throw error;
+}
+
+/**
+ * Nationale wettelijke rentetarieven (read-only) voor een informatieve weergave in de
+ * instellingen. Leeg bij ontbrekende tabel (migratie nog niet uitgevoerd).
+ */
+export async function loadStatutoryInterestRates(): Promise<Array<{ kind: 'consumer' | 'commercial'; rate_basis_points: number; valid_from: string; source_note: string | null }>> {
+  const { data, error } = await supabase
+    .from('statutory_interest_rates')
+    .select('kind,rate_basis_points,valid_from,source_note')
+    .order('valid_from', { ascending: false });
+  if (error) return [];
+  return (data ?? []) as Array<{ kind: 'consumer' | 'commercial'; rate_basis_points: number; valid_from: string; source_note: string | null }>;
+}
+
+/**
+ * Stel een formele aanmaning (WIK-14-dagenbrief) voor één factuur VOOR. De cron doet
+ * dit automatisch; deze functie is voor handmatig voorstellen vanuit de UI.
+ */
+export async function proposeInvoiceDunningNotice(organizationId: UUID, invoiceId: UUID): Promise<{ noticeId?: string }> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'proposeDunningNotice', organizationId, invoiceId },
+  });
+  if (error) await throwFunctionError(error, 'Aanmaning voorstellen mislukt.');
+  if (!data?.ok) throw new Error(data?.error || 'Aanmaning voorstellen mislukt');
+  return data as { noticeId?: string };
+}
+
+/**
+ * Bevestig én verstuur een voorgestelde aanmaning. De rente wordt server-side op de
+ * verzenddatum herberekend en de formele brief-PDF gaat via Resend naar de klant.
+ */
+export async function sendInvoiceDunningNotice(
+  organizationId: UUID,
+  noticeId: UUID,
+  input: { recipientEmail?: string; recipientName?: string } = {},
+): Promise<{ deadlineDate?: string; totalClaimCents?: number; recipientEmail?: string }> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'sendDunningNotice', organizationId, noticeId, ...input },
+  });
+  if (error) await throwFunctionError(error, 'Aanmaning verzenden mislukt.');
+  if (!data?.ok) throw new Error(data?.error || 'Aanmaning verzenden mislukt');
+  return data as { deadlineDate?: string; totalClaimCents?: number; recipientEmail?: string };
+}
+
+/** Annuleer een voorgestelde aanmaning (kan niet meer nadat die verstuurd is). */
+export async function cancelInvoiceDunningNotice(organizationId: UUID, noticeId: UUID): Promise<void> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'cancelDunningNotice', organizationId, noticeId },
+  });
+  if (error) await throwFunctionError(error, 'Aanmaning annuleren mislukt.');
+  if (!data?.ok) throw new Error(data?.error || 'Aanmaning annuleren mislukt');
 }
 
 const SENDING_DOMAIN_COLUMNS = 'id,organization_id,created_by,domain,provider,resend_domain_id,region,from_email,from_name,status,dns_records,is_default,last_checked_at,verified_at,created_at,updated_at';
