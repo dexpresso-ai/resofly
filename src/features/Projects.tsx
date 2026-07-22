@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import type { AppData, InternalDocument, Invoice, Note, OrganizationMember, Project, ProjectMember, Quote, Task, TaskStatus, TimeEntry, UUID } from '../types';
 import { Button, Select } from '../components/Ui';
 import { AssigneeAvatars } from '../components/AssigneeAvatars';
-import { dateNL, euro, formatMinutes, priorityLabel } from '../lib/format';
+import { dateNL, euro, formatMinutes, priorityLabel, total } from '../lib/format';
 import { memberColor, memberInitials, memberName } from '../lib/members';
 import { RelatedNotes } from './Notes';
 import { RelatedDocuments } from './Documents';
@@ -687,6 +687,16 @@ export function ProjectPage({
   const trackedMinutes = projectTimeEntries.reduce((s, t) => s + t.minutes, 0);
   const trackedValueCents = projectTimeEntries.reduce((s, t) => s + timeEntryValueCents(t), 0);
 
+  // Marge/effectief uurtarief: echte gefactureerde omzet (excl. btw, zonder
+  // concepten en geannuleerde facturen) afgezet tegen de werkelijk geboekte uren.
+  const invoicedSubtotal = projectInvoices
+    .filter(i => !['draft', 'cancelled', 'void'].includes(i.status))
+    .reduce((sum, i) => sum + total(i.lines).subtotal, 0);
+  const effectiveRate = trackedMinutes > 0 && invoicedSubtotal > 0 ? invoicedSubtotal / (trackedMinutes / 60) : null;
+  const budgetedMinutes = project.budgeted_minutes;
+  const budgetPct = budgetedMinutes != null && budgetedMinutes > 0 ? (trackedMinutes / budgetedMinutes) * 100 : null;
+  const overBudget = budgetPct != null && budgetPct > 100;
+
   async function removeTimeEntry(entry: TimeEntry) {
     if (!canWrite) return;
     if (!confirm('Deze urenregistratie verwijderen?')) return;
@@ -797,6 +807,7 @@ export function ProjectPage({
             <dl className="client-info-list">
               <div><dt>Klant</dt><dd>{client?.name ?? '—'}</dd></div>
               <div><dt>Facturatie</dt><dd>{project.billing_type === 'fixed_price' ? 'Aangenomen prijs' : 'Urenbasis'}{project.billing_type === 'hourly' && project.hourly_rate_cents != null ? ` · ${euro(project.hourly_rate_cents / 100)}/u` : ''}</dd></div>
+              {budgetedMinutes != null && <div><dt>Urenbudget</dt><dd>{formatMinutes(trackedMinutes)} van {formatMinutes(budgetedMinutes)}{budgetPct != null ? ` (${Math.round(budgetPct)}%)` : ''}</dd></div>}
               <div><dt>Startdatum</dt><dd>{dateNL(project.start_date) || '—'}</dd></div>
               <div><dt>Einddatum</dt><dd>{dateNL(project.end_date) || '—'}</dd></div>
               <div><dt>Aangemaakt</dt><dd>{dateNL(project.created_at)}</dd></div>
@@ -1001,6 +1012,17 @@ export function ProjectPage({
         {project.billing_type === 'fixed_price'
           ? <p className="settings-help" style={{ margin: '0 0 10px' }}>Aangenomen-prijs-project: uren worden geregistreerd voor inzicht, maar staan standaard niet-declarabel — factureren loopt via offerte/factuur.</p>
           : <p className="settings-help" style={{ margin: '0 0 10px' }}>Urenbasis-project: geregistreerde uren zijn declarabel en vormen de factuurbasis.</p>}
+
+        {/* Marge: begroot vs. werkelijk + effectief uurtarief op echte omzet */}
+        <div className="proj-time-stats">
+          <div className="proj-time-stat"><strong>{budgetedMinutes != null ? formatMinutes(budgetedMinutes) : '—'}</strong><span>Begroot</span></div>
+          <div className="proj-time-stat"><strong style={overBudget ? { color: 'var(--accent-r)' } : undefined}>{formatMinutes(trackedMinutes)}{budgetPct != null ? ` (${Math.round(budgetPct)}%)` : ''}</strong><span>Werkelijk</span></div>
+          <div className="proj-time-stat"><strong>{invoicedSubtotal > 0 ? euro(invoicedSubtotal) : '—'}</strong><span>Gefactureerd (excl. btw)</span></div>
+          <div className="proj-time-stat"><strong>{effectiveRate != null ? `${euro(effectiveRate)}/u` : '—'}</strong><span>Effectief uurtarief</span></div>
+        </div>
+        {budgetPct != null && <div className="proj-time-budget-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Math.round(budgetPct))} title={overBudget ? `${Math.round(budgetPct)}% van het budget — over budget` : `${Math.round(budgetPct)}% van het budget gebruikt`}>
+          <div className={`proj-time-budget-fill${overBudget ? ' over' : ''}`} style={{ width: `${Math.min(100, budgetPct)}%` }} />
+        </div>}
         <div className="proj-time-list">
           {projectTimeEntries.length === 0 && <div className="client-empty-line">Nog geen uren op dit project. Koppel een afspraak in de agenda of log handmatig uren.</div>}
           {projectTimeEntries.map(entry => {
@@ -1010,7 +1032,7 @@ export function ProjectPage({
               <div className="proj-time-row" key={entry.id}>
                 <span className="proj-time-date">{dateNL(entry.entry_date)}</span>
                 <span className="proj-time-dur">{formatMinutes(entry.minutes)}</span>
-                <span className="proj-time-desc">{entry.description || (entry.source === 'calendar' ? 'Agenda-afspraak' : 'Registratie')}</span>
+                <span className="proj-time-desc">{entry.description || (entry.source === 'calendar' ? 'Agenda-afspraak' : 'Registratie')}{entry.entry_type === 'indirect' && <em className="proj-time-indirect"> · indirect</em>}</span>
                 <span className={`tt-source-badge tt-source-${entry.source}`}>{entry.source === 'calendar' ? 'Agenda' : entry.source === 'timer' ? 'Timer' : 'Handmatig'}</span>
                 <button type="button" className={`tt-billable-pill${entry.billable ? ' is-billable' : ''}`} disabled={!canWrite} onClick={() => toggleTimeEntryBillable(entry)} title="Declarabel aan/uit">{entry.billable ? 'Declarabel' : 'Niet decl.'}</button>
                 <span className="proj-time-value">{value > 0 ? euro(value / 100) : '—'}</span>

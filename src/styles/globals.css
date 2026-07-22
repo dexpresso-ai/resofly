@@ -739,7 +739,7 @@
 .client-billing-alert strong{font-size:14px}.client-billing-alert span{color:var(--muted2);font-size:13px}
 .client-billing-alert.danger{background:rgba(240,107,107,.12);border-color:rgba(240,107,107,.35);color:var(--accent-r)}
 .client-billing-alert.warning{background:rgba(255,159,67,.12);border-color:rgba(255,159,67,.35);color:var(--accent-o)}
-.client-kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.client-kpi-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
 .client-kpi{background:var(--bg2);border:1px solid var(--border);border-top:2px solid var(--border2);border-radius:var(--r2);padding:14px 15px;display:flex;flex-direction:column;gap:4px;transition:border-color .15s,box-shadow .15s,transform .15s;font-family:inherit;text-align:left}
 .client-kpi.is-clickable{cursor:pointer}.client-kpi.is-clickable:hover{background:var(--bg3);border-color:var(--border2);transform:translateY(-1px);box-shadow:0 6px 20px rgba(0,0,0,.24)}
 .client-kpi span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em;font-weight:800}
@@ -1354,6 +1354,28 @@ body::before{
 .tt-kpi-val{font-size:22px;font-weight:900;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
 .tt-kpi-lbl{font-size:12px;color:var(--muted);font-weight:700}
 
+/* Urencriterium-teller (1225 u per kalenderjaar) */
+.tt-criterion{border:1px solid var(--border);border-radius:16px;background:var(--bg2);padding:16px;display:flex;flex-direction:column;gap:10px}
+.tt-criterion-head{display:flex;align-items:center;gap:8px;color:var(--accent)}
+.tt-criterion-head h3{margin:0;font-size:15px;letter-spacing:-.02em;flex:1;color:var(--text)}
+.tt-criterion-year{display:inline-flex;align-items:center;gap:4px}
+.tt-criterion-year button{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--border);background:var(--bg3);color:var(--text);width:26px;height:26px;border-radius:9px;cursor:pointer}
+.tt-criterion-year button:disabled{opacity:.35;cursor:default}
+.tt-criterion-main{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.tt-criterion-val{font-size:30px;font-weight:900;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.tt-criterion-val small{font-size:15px;color:var(--muted);font-weight:700}
+.tt-criterion-pct{font-weight:800;color:var(--muted);font-variant-numeric:tabular-nums}
+.tt-criterion-bar{height:10px;border-radius:999px;background:var(--bg3);overflow:hidden}
+.tt-criterion-fill{height:100%;border-radius:999px;background:var(--accent);transition:width .3s}
+.tt-criterion-fill.reached{background:var(--accent-g)}
+.tt-criterion-split{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12.5px;color:var(--muted);font-weight:700}
+.tt-criterion-split .pill{border:1px solid var(--border);border-radius:999px;padding:3px 10px;background:var(--bg3);font-variant-numeric:tabular-nums}
+.tt-criterion-cats{font-size:12px;color:var(--muted2)}
+.tt-criterion-prognosis{margin:0;font-size:13px;font-weight:700}
+.tt-criterion-prognosis.ok{color:var(--accent-g)}
+.tt-criterion-prognosis.behind{color:var(--accent)}
+.tt-criterion-note{margin:0;font-size:12px;color:var(--muted2);line-height:1.5}
+
 .tt-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .tt-list-panel{display:flex;flex-direction:column;gap:12px}
 .tt-filters{display:flex;gap:10px;flex-wrap:wrap}
@@ -1378,6 +1400,14 @@ body::before{
 .time-duration-fields label{flex:1;display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted);font-weight:700}
 
 /* Uren-tab op het projectdashboard */
+.proj-time-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:0 0 10px}
+.proj-time-stat{border:1px solid var(--border);border-radius:12px;background:var(--bg3);padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.proj-time-stat strong{font-size:17px;font-weight:900;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.proj-time-stat span{font-size:11.5px;color:var(--muted);font-weight:700}
+.proj-time-budget-bar{height:8px;border-radius:999px;background:var(--bg3);overflow:hidden;margin:0 0 12px}
+.proj-time-budget-fill{height:100%;border-radius:999px;background:var(--accent)}
+.proj-time-budget-fill.over{background:var(--accent-r)}
+.proj-time-indirect{color:var(--muted);font-style:normal;font-size:12px}
 .proj-time-list{display:flex;flex-direction:column}
 .proj-time-row{display:grid;grid-template-columns:92px 60px minmax(0,1fr) auto auto 72px auto;gap:12px;align-items:center;padding:10px 2px;border-bottom:1px solid rgba(255,255,255,.06)}
 .proj-time-date{color:var(--muted);font-size:13px;white-space:nowrap}

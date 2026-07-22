@@ -283,7 +283,7 @@ export interface UserSenderIdentity {
 }
 export type ProjectBillingType = 'hourly' | 'fixed_price';
 export interface Project extends OrgScopedRow {
-  client_id: UUID | null; name: string; description: string | null; color: string; archived: boolean; start_date: string | null; end_date: string | null; contract_id: UUID | null; hourly_rate_cents: number | null; billing_type: ProjectBillingType; created_at: string; updated_at: string;
+  client_id: UUID | null; name: string; description: string | null; color: string; archived: boolean; start_date: string | null; end_date: string | null; contract_id: UUID | null; hourly_rate_cents: number | null; billing_type: ProjectBillingType; budgeted_minutes: number | null; created_at: string; updated_at: string;
 }
 export interface Subtask { id: UUID; label: string; done: boolean; }
 export interface Comment { id: UUID; text: string; author?: string; created_at: string; }
@@ -347,6 +347,10 @@ export interface CalendarEventLinkInput {
 }
 
 export type TimeEntrySource = 'manual' | 'calendar' | 'timer';
+/** Urencriterium: 'direct' = klantwerk, 'indirect' = administratie/acquisitie/reistijd/scholing. Beide tellen mee voor de 1225 uur. */
+export type TimeEntryType = 'direct' | 'indirect';
+/** Soort indirect werk, voor de uitsplitsing op het urendashboard. */
+export type IndirectHoursCategory = 'admin' | 'acquisition' | 'travel' | 'education' | 'other';
 
 /**
  * Geregistreerde uren. Enige bron van waarheid voor het uren-dashboard en de
@@ -366,6 +370,9 @@ export interface TimeEntry extends OrgScopedRow {
   ended_at: string | null;
   minutes: number;
   billable: boolean;
+  /** Urentype voor het urencriterium (1225 u/kalenderjaar) — los van `billable`. */
+  entry_type: TimeEntryType;
+  indirect_category: IndirectHoursCategory | null;
   hourly_rate_cents: number | null;
   created_at: string;
   updated_at: string;

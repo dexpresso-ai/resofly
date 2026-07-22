@@ -74,6 +74,8 @@ import type {
   CalendarEventLink,
   CalendarEventLinkInput,
   TimeEntry,
+  TimeEntryType,
+  IndirectHoursCategory,
   Organization,
   OrganizationContext,
   OrganizationInvitation,
@@ -931,6 +933,9 @@ export interface TimeEntryInput {
   ended_at?: string | null;
   minutes: number;
   billable?: boolean;
+  /** Urentype voor het urencriterium; default 'direct'. */
+  entry_type?: TimeEntryType;
+  indirect_category?: IndirectHoursCategory | null;
   hourly_rate_cents?: number | null;
 }
 
@@ -952,6 +957,9 @@ export async function createTimeEntry(organizationId: UUID, input: TimeEntryInpu
       ended_at: input.ended_at ?? null,
       minutes: input.minutes,
       billable: input.billable ?? true,
+      entry_type: input.entry_type ?? 'direct',
+      // Categorie alleen bij indirecte uren (DB-check dwingt dit ook af).
+      indirect_category: (input.entry_type ?? 'direct') === 'indirect' ? (input.indirect_category ?? null) : null,
       hourly_rate_cents: input.hourly_rate_cents ?? null,
     })
     .select('*')
@@ -963,7 +971,7 @@ export async function createTimeEntry(organizationId: UUID, input: TimeEntryInpu
 export async function updateTimeEntry(
   organizationId: UUID,
   id: UUID,
-  patch: Partial<Pick<TimeEntry, 'project_id' | 'client_id' | 'description' | 'entry_date' | 'started_at' | 'ended_at' | 'minutes' | 'billable' | 'hourly_rate_cents'>>,
+  patch: Partial<Pick<TimeEntry, 'project_id' | 'client_id' | 'description' | 'entry_date' | 'started_at' | 'ended_at' | 'minutes' | 'billable' | 'entry_type' | 'indirect_category' | 'hourly_rate_cents'>>,
 ): Promise<TimeEntry> {
   const { data, error } = await supabase
     .from('time_entries')

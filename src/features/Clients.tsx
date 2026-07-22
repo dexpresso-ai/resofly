@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, RotateCcw, Upload, ChevronDown, ChevronRight, Mail } from 'lucide-react';
 import type { AppData, Client, ClientEmail, ClientEmailStatus, ClientEmailThread, ClientStatus, Contract, InternalDocument, Invoice, Note, Project, Quote } from '../types';
-import { dateNL, euro, total } from '../lib/format';
+import { dateNL, euro, formatMinutes, minutesToHours, total } from '../lib/format';
 import { sanitizeEmailHtml } from '../lib/sanitizeHtml';
 import { Button, Input, Select } from '../components/Ui';
 import { CsvImportModal } from '../components/CsvImportModal';
@@ -300,6 +300,17 @@ export function ClientDetailPage({
   const overdueInvoiceTotal = overdueInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
   const quoteTotal = quotes.reduce((sum, quote) => sum + total(quote.lines).total, 0);
 
+  // Effectief uurtarief: echte gefactureerde omzet (excl. btw, zonder concepten
+  // en geannuleerde facturen) gedeeld door alle geboekte uren op deze klant.
+  const clientProjectIds = new Set(projects.map(project => project.id));
+  const clientTrackedMinutes = data.timeEntries
+    .filter(entry => entry.client_id === client.id || Boolean(entry.project_id && clientProjectIds.has(entry.project_id)))
+    .reduce((sum, entry) => sum + entry.minutes, 0);
+  const invoicedSubtotal = invoices
+    .filter(invoice => !['draft', 'cancelled', 'void'].includes(invoice.status))
+    .reduce((sum, invoice) => sum + total(invoice.lines).subtotal, 0);
+  const effectiveRate = clientTrackedMinutes > 0 && invoicedSubtotal > 0 ? invoicedSubtotal / (clientTrackedMinutes / 60) : null;
+
   // Zoek/filter over het volledige klantdossier (projecten, offertes, facturen
   // en notities). De KPI's en facturatie-waarschuwing blijven het totaalbeeld
   // tonen; alleen de detaillijsten hieronder reageren op de filters.
@@ -383,6 +394,7 @@ export function ClientDetailPage({
       <ClientKpi label="Openstaand" value={openInvoices.length} sub={euro(openInvoiceTotal)} tone={openInvoices.length ? 'warning' : undefined} onClick={() => switchTab('invoices')} />
       <ClientKpi label="Vervallen" value={overdueInvoices.length} sub={euro(overdueInvoiceTotal)} tone={overdueInvoices.length ? 'danger' : undefined} onClick={() => switchTab('invoices')} />
       <ClientKpi label="Betaald" value={paidInvoices.length} sub={euro(paidInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0))} tone="success" onClick={() => switchTab('invoices')} />
+      <ClientKpi label="Uren" value={Math.round(minutesToHours(clientTrackedMinutes))} sub={effectiveRate != null ? `Effectief ${euro(effectiveRate)}/u` : clientTrackedMinutes > 0 ? formatMinutes(clientTrackedMinutes) : 'Geen uren geboekt'} onClick={() => switchTab('projects')} />
     </section>
 
     <div className="client-tabs-bar" role="tablist">

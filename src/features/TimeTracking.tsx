@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { CalendarDays, Clock, Pencil, Play, Plus, Square, Trash2 } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Clock, Pencil, Play, Plus, Square, Target, Trash2 } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { BarChart, LineChart } from '../components/Charts';
@@ -7,7 +7,7 @@ import { dateNL, euro, formatMinutes, minutesToHours } from '../lib/format';
 import { addDays, formatISODate, parseISODate, startOfWeek } from '../lib/dates';
 import { createTimeEntry, deleteTimeEntry, updateTimeEntry } from '../lib/repository';
 import type { ReportRow } from '../lib/reporting';
-import type { AppData, OrganizationMember, TimeEntry, TimeEntrySource, UUID } from '../types';
+import type { AppData, IndirectHoursCategory, OrganizationMember, TimeEntry, TimeEntrySource, TimeEntryType, UUID } from '../types';
 
 /* ── Helpers ──────────────────────────────────────────────────────────── */
 
@@ -41,6 +41,14 @@ export function defaultBillableForProject(data: AppData, projectId: string | nul
 }
 
 const SOURCE_LABEL: Record<TimeEntrySource, string> = { calendar: 'Agenda', manual: 'Handmatig', timer: 'Timer' };
+
+/** Labels voor soorten indirect werk (urencriterium-uitsplitsing). */
+export const INDIRECT_CATEGORY_LABEL: Record<IndirectHoursCategory, string> = {
+  admin: 'Administratie', acquisition: 'Acquisitie', travel: 'Reistijd', education: 'Scholing', other: 'Overig',
+};
+
+/** Urencriterium Belastingdienst: 1225 uur per kalenderjaar (incl. indirecte uren). */
+const HOUR_CRITERION_MINUTES = 1225 * 60;
 
 /* ── Gedeelde klant/project-keuze ─────────────────────────────────────── */
 
@@ -96,6 +104,8 @@ export function TimeEntryModal({ organizationId, data, entry, defaults, onClose,
   const [hours, setHours] = useState(() => (entry ? Math.floor(entry.minutes / 60) : Math.floor((defaults?.minutes ?? 60) / 60)));
   const [minutes, setMinutes] = useState(() => (entry ? entry.minutes % 60 : (defaults?.minutes ?? 60) % 60));
   const [description, setDescription] = useState(entry?.description ?? defaults?.description ?? '');
+  const [entryType, setEntryType] = useState<TimeEntryType>(entry?.entry_type ?? 'direct');
+  const [indirectCategory, setIndirectCategory] = useState<IndirectHoursCategory>(entry?.indirect_category ?? 'admin');
   const [billable, setBillable] = useState(entry ? entry.billable : defaultBillableForProject(data, defaults?.projectId ?? null));
   const [billableTouched, setBillableTouched] = useState(false);
   // Tarief in euro's voor de invoer; leeg = projecttarief/bedrijfsdefault gebruiken.
@@ -113,11 +123,12 @@ export function TimeEntryModal({ organizationId, data, entry, defaults, onClose,
     setRateEuro(r != null ? String(r / 100) : '');
   }, [projectId, editing, rateTouched, data]);
 
-  // Declarabel-default meeschuiven met het projecttype, zolang niet handmatig gewijzigd.
+  // Declarabel-default meeschuiven met projecttype én urentype, zolang niet
+  // handmatig gewijzigd: indirecte uren (admin, acquisitie…) zijn niet declarabel.
   useEffect(() => {
     if (editing || billableTouched) return;
-    setBillable(defaultBillableForProject(data, projectId || null));
-  }, [projectId, editing, billableTouched, data]);
+    setBillable(entryType === 'indirect' ? false : defaultBillableForProject(data, projectId || null));
+  }, [projectId, entryType, editing, billableTouched, data]);
 
   async function submit(e?: FormEvent) {
     e?.preventDefault();
@@ -132,12 +143,14 @@ export function TimeEntryModal({ organizationId, data, entry, defaults, onClose,
           project_id: projectId || null, client_id: clientId || null,
           description: description.trim() || null, entry_date: date,
           minutes: totalMinutes, billable, hourly_rate_cents: rateCents,
+          entry_type: entryType, indirect_category: entryType === 'indirect' ? indirectCategory : null,
         });
       } else {
         await createTimeEntry(organizationId, {
           project_id: projectId || null, client_id: clientId || null, source: 'manual',
           description: description.trim() || null, entry_date: date,
           minutes: totalMinutes, billable, hourly_rate_cents: rateCents,
+          entry_type: entryType, indirect_category: entryType === 'indirect' ? indirectCategory : null,
         });
       }
       await onSaved();
@@ -155,6 +168,20 @@ export function TimeEntryModal({ organizationId, data, entry, defaults, onClose,
       </>}>
       <form onSubmit={submit} className="time-entry-form">
         {error && <div className="error">{error}</div>}
+        <div className="settings-grid compact">
+          <label>Soort uren
+            <Select value={entryType} onChange={e => setEntryType(e.target.value as TimeEntryType)}>
+              <option value="direct">Direct (klantwerk)</option>
+              <option value="indirect">Indirect (geen klantwerk)</option>
+            </Select>
+          </label>
+          {entryType === 'indirect' && <label>Categorie
+            <Select value={indirectCategory} onChange={e => setIndirectCategory(e.target.value as IndirectHoursCategory)}>
+              {(Object.entries(INDIRECT_CATEGORY_LABEL) as [IndirectHoursCategory, string][]).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </Select>
+          </label>}
+        </div>
+        {entryType === 'indirect' && <p className="settings-help" style={{ margin: 0 }}>Indirecte uren (administratie, acquisitie, reistijd, scholing) tellen mee voor het urencriterium van 1225 uur. Klant/project is optioneel.</p>}
         <ProjectClientFields data={data} clientId={clientId} projectId={projectId} onChange={next => { setClientId(next.clientId); setProjectId(next.projectId); }} />
         <div className="settings-grid compact">
           <label>Datum<Input type="date" value={date} onChange={e => setDate(e.target.value)} /></label>
@@ -259,6 +286,90 @@ function TimerCard({ organizationId, data, storageKey, onSaved }: {
   );
 }
 
+/* ── Urencriterium (1225 u/kalenderjaar) ──────────────────────────────── */
+
+/**
+ * Persoonlijke teller richting het urencriterium van de Belastingdienst:
+ * 1225 uur per KALENDERJAAR (bewust niet het boekjaar — de fiscale toets loopt
+ * altijd over het kalenderjaar), inclusief indirecte uren. Telt alle
+ * geregistreerde uren van de ingelogde gebruiker, ongeacht declarabel.
+ */
+function HourCriterionCard({ data, currentUserId }: { data: AppData; currentUserId: UUID | null }) {
+  const currentYear = new Date().getFullYear();
+  const [year, setYear] = useState(currentYear);
+
+  const stats = useMemo(() => {
+    const from = `${year}-01-01`;
+    const to = `${year}-12-31`;
+    let direct = 0;
+    let indirect = 0;
+    const perCategory = new Map<IndirectHoursCategory, number>();
+    for (const e of data.timeEntries) {
+      if (!currentUserId || e.user_id !== currentUserId) continue;
+      if (e.entry_date < from || e.entry_date > to) continue;
+      if (e.entry_type === 'indirect') {
+        indirect += e.minutes;
+        if (e.indirect_category) perCategory.set(e.indirect_category, (perCategory.get(e.indirect_category) ?? 0) + e.minutes);
+      } else {
+        direct += e.minutes;
+      }
+    }
+    return { direct, indirect, total: direct + indirect, perCategory };
+  }, [data.timeEntries, currentUserId, year]);
+
+  const reached = stats.total >= HOUR_CRITERION_MINUTES;
+  const pct = Math.min(100, (stats.total / HOUR_CRITERION_MINUTES) * 100);
+
+  // Prognose alleen voor het lopende jaar: extrapoleer het tempo tot nu toe.
+  const isCurrentYear = year === currentYear;
+  const now = new Date();
+  const yearStart = new Date(year, 0, 1);
+  const daysInYear = Math.round((new Date(year + 1, 0, 1).getTime() - yearStart.getTime()) / 86400000);
+  const dayOfYear = Math.min(daysInYear, Math.max(1, Math.floor((now.getTime() - yearStart.getTime()) / 86400000) + 1));
+  const projectedMinutes = Math.round(stats.total * (daysInYear / dayOfYear));
+  const remainingMinutes = Math.max(0, HOUR_CRITERION_MINUTES - stats.total);
+  const weeksLeft = Math.max(1, (new Date(year, 11, 31).getTime() - now.getTime()) / (7 * 86400000));
+  const neededPerWeek = Math.round(remainingMinutes / weeksLeft);
+
+  const categoryLine = [...stats.perCategory.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([cat, mins]) => `${INDIRECT_CATEGORY_LABEL[cat]} ${formatMinutes(mins)}`)
+    .join(' · ');
+
+  return (
+    <article className="tt-criterion">
+      <div className="tt-criterion-head">
+        <Target size={16} aria-hidden="true" />
+        <h3>Urencriterium {year}</h3>
+        <div className="tt-criterion-year">
+          <button type="button" onClick={() => setYear(y => y - 1)} title="Vorig jaar" aria-label="Vorig jaar"><ChevronLeft size={14} /></button>
+          <button type="button" onClick={() => setYear(y => y + 1)} disabled={year >= currentYear} title="Volgend jaar" aria-label="Volgend jaar"><ChevronRight size={14} /></button>
+        </div>
+      </div>
+      <div className="tt-criterion-main">
+        <span className="tt-criterion-val">{minutesToHours(stats.total).toLocaleString('nl-NL')} <small>/ 1225 u</small></span>
+        <span className="tt-criterion-pct">{Math.floor(pct)}%</span>
+      </div>
+      <div className="tt-criterion-bar" role="progressbar" aria-valuemin={0} aria-valuemax={1225} aria-valuenow={Math.round(minutesToHours(stats.total))}>
+        <div className={`tt-criterion-fill${reached ? ' reached' : ''}`} style={{ width: `${pct}%` }} />
+      </div>
+      <div className="tt-criterion-split">
+        <span className="pill">Direct {formatMinutes(stats.direct)}</span>
+        <span className="pill">Indirect {formatMinutes(stats.indirect)}</span>
+        {categoryLine && <span className="tt-criterion-cats">{categoryLine}</span>}
+      </div>
+      {reached
+        ? <p className="tt-criterion-prognosis ok">✓ De 1225 uur is binnen voor {year}.</p>
+        : isCurrentYear
+          ? (projectedMinutes >= HOUR_CRITERION_MINUTES
+            ? <p className="tt-criterion-prognosis ok">Op koers: in dit tempo kom je uit op ± {Math.round(minutesToHours(projectedMinutes))} uur.</p>
+            : <p className="tt-criterion-prognosis behind">Onder koers (prognose ± {Math.round(minutesToHours(projectedMinutes))} u): nog {formatMinutes(remainingMinutes)} nodig — gemiddeld {formatMinutes(neededPerWeek)} per week t/m december.</p>)
+          : <p className="tt-criterion-prognosis behind">Niet gehaald: {formatMinutes(remainingMinutes)} tekort in {year}.</p>}
+      <p className="tt-criterion-note">Telt al jóuw geregistreerde uren in kalenderjaar {year}, inclusief indirecte uren (administratie, acquisitie, reistijd, scholing). Indicatieve teller — geen fiscaal advies.</p>
+    </article>
+  );
+}
+
 /* ── Hoofdpagina ──────────────────────────────────────────────────────── */
 
 export function TimeTracking({ data, organizationId, currentUserId, teamMembers, canWrite, canAdmin, onChanged }: {
@@ -278,6 +389,7 @@ export function TimeTracking({ data, organizationId, currentUserId, teamMembers,
   const [filterClient, setFilterClient] = useState('');
   const [filterBillable, setFilterBillable] = useState<'all' | 'billable' | 'nonbillable'>('all');
   const [filterSource, setFilterSource] = useState<'all' | TimeEntrySource>('all');
+  const [filterType, setFilterType] = useState<'all' | TimeEntryType>('all');
   const [modal, setModal] = useState<{ entry: TimeEntry | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -311,8 +423,9 @@ export function TimeTracking({ data, organizationId, currentUserId, teamMembers,
     if (filterBillable === 'billable' && !e.billable) return false;
     if (filterBillable === 'nonbillable' && e.billable) return false;
     if (filterSource !== 'all' && e.source !== filterSource) return false;
+    if (filterType !== 'all' && e.entry_type !== filterType) return false;
     return true;
-  }), [scopedEntries, filterProject, filterClient, filterBillable, filterSource]);
+  }), [scopedEntries, filterProject, filterClient, filterBillable, filterSource, filterType]);
 
   // KPI's.
   const totalMinutes = entries.reduce((s, e) => s + e.minutes, 0);
@@ -420,6 +533,9 @@ export function TimeTracking({ data, organizationId, currentUserId, teamMembers,
         <div className="tt-kpi"><span className="tt-kpi-val">{formatMinutes(Math.round(avgPerDay))}</span><span className="tt-kpi-lbl">Gemiddeld per dag</span></div>
       </section>
 
+      {/* Urencriterium (persoonlijk, per kalenderjaar) */}
+      <HourCriterionCard data={data} currentUserId={currentUserId} />
+
       {/* Grafieken */}
       <section className="tt-charts">
         <article className="client-panel"><div className="client-panel-head"><h3>Uren per dag</h3></div><LineChart rows={perDayRows} format={hoursFmt} /></article>
@@ -450,6 +566,11 @@ export function TimeTracking({ data, organizationId, currentUserId, teamMembers,
             <option value="manual">Handmatig</option>
             <option value="timer">Timer</option>
           </Select>
+          <Select value={filterType} onChange={e => setFilterType(e.target.value as typeof filterType)}>
+            <option value="all">Direct + indirect</option>
+            <option value="direct">Alleen direct</option>
+            <option value="indirect">Alleen indirect</option>
+          </Select>
         </div>
 
         {grouped.length === 0 ? (
@@ -472,6 +593,7 @@ export function TimeTracking({ data, organizationId, currentUserId, teamMembers,
                         <strong>{e.description || (project?.name ?? client?.name ?? 'Registratie')}</strong>
                         <span className="tt-entry-sub">
                           {[client?.name, project?.name].filter(Boolean).join(' · ') || 'Geen koppeling'}
+                          {e.entry_type === 'indirect' && ` · Indirect${e.indirect_category ? ` (${INDIRECT_CATEGORY_LABEL[e.indirect_category]})` : ''}`}
                           {scope === 'team' && ` · ${memberName(e.user_id)}`}
                         </span>
                       </div>
