@@ -51,22 +51,66 @@ function fileModified(it: DriveFile): string {
   if (it.kind === 'document') return it.doc.updated_at || it.doc.created_at;
   return it.att.created_at;
 }
-export function attTypeLabel(att: Attachment): string {
-  const ext = att.name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? '';
-  if (['docx', 'doc', 'odt'].includes(ext)) return 'Word-document';
-  if (['xlsx', 'xls', 'ods'].includes(ext)) return 'Excel-werkblad';
-  if (['pptx', 'ppt', 'odp'].includes(ext)) return 'PowerPoint';
+function attExt(att: Attachment): string {
+  return att.name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? '';
+}
+/** Bestandscategorie — stuurt icoon én kleur, zodat die twee nooit uit de pas lopen. */
+type AttCategory = 'word' | 'sheet' | 'slides' | 'image' | 'pdf' | 'other';
+function attCategory(att: Attachment): AttCategory {
+  const ext = attExt(att);
+  if (['docx', 'doc', 'odt'].includes(ext)) return 'word';
+  if (['xlsx', 'xls', 'ods', 'csv'].includes(ext)) return 'sheet';
+  if (['pptx', 'ppt', 'odp'].includes(ext)) return 'slides';
   const m = att.mime_type || '';
-  if (m.startsWith('image/')) return 'Afbeelding';
-  if (m === 'application/pdf') return 'PDF';
-  return 'Bestand';
+  if (m.startsWith('image/')) return 'image';
+  if (m === 'application/pdf') return 'pdf';
+  return 'other';
+}
+export function attTypeLabel(att: Attachment): string {
+  switch (attCategory(att)) {
+    case 'word': return 'Word-document';
+    case 'sheet': return attExt(att) === 'csv' ? 'CSV-bestand' : 'Excel-werkblad';
+    case 'slides': return 'PowerPoint';
+    case 'image': return 'Afbeelding';
+    case 'pdf': return 'PDF';
+    default: return 'Bestand';
+  }
 }
 /** Icoon voor een geüpload bestand op basis van het bestandstype. Gedeeld met de Inhoud-pagina. */
 export function AttachmentGlyph({ att, size }: { att: Attachment; size: number }) {
-  const label = attTypeLabel(att);
-  if (label === 'Afbeelding') return <ImageIcon size={size} />;
-  if (label === 'Excel-werkblad') return <Sheet size={size} />;
-  if (label === 'PowerPoint') return <Presentation size={size} />;
+  switch (attCategory(att)) {
+    case 'image': return <ImageIcon size={size} />;
+    case 'sheet': return <Sheet size={size} />;
+    case 'slides': return <Presentation size={size} />;
+    default: return <FileText size={size} />;
+  }
+}
+/**
+ * Bestandstype-kleur: Word/tekst blauw, Excel/csv groen, presentaties oranje, PDF rood
+ * (conventie), overig neutraal — zodat oranje exclusief van presentaties blijft.
+ * Notities blijven paars en mappen goud (zie de aanroepers). Gedeeld met de Inhoud-pagina.
+ */
+export function attAccentColor(att: Attachment): string {
+  switch (attCategory(att)) {
+    case 'word': return 'var(--accent-b)';
+    case 'sheet': return 'var(--accent-g)';
+    case 'slides': return 'var(--accent-o)';
+    case 'pdf': return 'var(--accent-r)';
+    default: return 'var(--muted2)';
+  }
+}
+/** Zelfde kleurtaal voor interne Documents: Office-modus volgt het mime-type, rich-text = tekstdocument = blauw. */
+export function documentAccentColor(doc?: Pick<InternalDocument, 'mime_type'> | null): string {
+  const m = doc?.mime_type || '';
+  if (m.includes('spreadsheet') || m.includes('ms-excel') || m === 'text/csv') return 'var(--accent-g)';
+  if (m.includes('presentation') || m.includes('powerpoint')) return 'var(--accent-o)';
+  return 'var(--accent-b)';
+}
+/** Icoon voor een intern Document — volgt in Office-modus het bestandstype (Sheet/Presentation). */
+export function DocumentGlyph({ doc, size }: { doc?: Pick<InternalDocument, 'mime_type'> | null; size: number }) {
+  const m = doc?.mime_type || '';
+  if (m.includes('spreadsheet') || m.includes('ms-excel') || m === 'text/csv') return <Sheet size={size} />;
+  if (m.includes('presentation') || m.includes('powerpoint')) return <Presentation size={size} />;
   return <FileText size={size} />;
 }
 function fileKindLabel(it: DriveFile): string {
@@ -74,15 +118,15 @@ function fileKindLabel(it: DriveFile): string {
   if (it.kind === 'document') return 'Document';
   return attTypeLabel(it.att);
 }
-function kindColor(kind: 'folder' | 'note' | 'document' | 'file'): string {
-  return kind === 'folder' ? 'var(--accent)'
-    : kind === 'note' ? 'var(--accent-v)'
-    : kind === 'document' ? 'var(--accent-g)'
-    : 'var(--accent-o)';
+/** Kleur per rij: mappen goud, notities paars, documenten/bestanden per bestandstype. */
+function fileColor(it: DriveFile): string {
+  if (it.kind === 'note') return 'var(--accent-v)';
+  if (it.kind === 'document') return documentAccentColor(it.doc);
+  return attAccentColor(it.att);
 }
 function FileGlyph({ it, size }: { it: DriveFile; size: number }) {
   if (it.kind === 'note') return <StickyNote size={size} />;
-  if (it.kind === 'document') return <FileText size={size} />;
+  if (it.kind === 'document') return <DocumentGlyph doc={it.doc} size={size} />;
   return <AttachmentGlyph att={it.att} size={size} />;
 }
 
@@ -95,6 +139,8 @@ type Row = {
   key: string;
   kind: 'folder' | 'note' | 'document' | 'file';
   name: string;
+  /** Icoonkleur — per bestandstype (Word blauw, Excel groen, presentatie oranje, notitie paars, map goud). */
+  color: string;
   modified: string | null;
   size: string;
   typeLabel: string;
@@ -315,6 +361,7 @@ export function ClientFolders({
     key: `fo-${folder.id}`,
     kind: 'folder',
     name: folder.name,
+    color: 'var(--accent)',
     modified: folderModified(folder.id),
     size: plural(folderCount(folder.id)),
     typeLabel: currentId ? 'Submap' : 'Map',
@@ -333,6 +380,7 @@ export function ClientFolders({
       key: it.key,
       kind: it.kind,
       name: fileName(it) || 'Naamloos',
+      color: fileColor(it),
       modified: fileModified(it),
       size: it.kind === 'file' ? fmtBytes(it.att.size_bytes) : '',
       typeLabel: fileKindLabel(it),
@@ -396,12 +444,12 @@ export function ClientFolders({
               <button type="button" className="drive-pop-item" role="menuitem" onClick={createFolder}><FolderPlus size={16} style={{ color: 'var(--accent)' }} /> {currentId ? 'Nieuwe submap' : 'Nieuwe map'}</button>
               <div className="drive-pop-sep" />
               <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewNote(currentId); }}><StickyNote size={16} style={{ color: 'var(--accent-v)' }} /> Notitie</button>
-              <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewDocument(currentId); }}><FileText size={16} style={{ color: 'var(--accent-g)' }} /> Document</button>
-              {currentId && <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} style={{ color: 'var(--accent-o)' }} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>}
+              <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewDocument(currentId); }}><FileText size={16} style={{ color: 'var(--accent-b)' }} /> Document</button>
+              {currentId && <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>}
               {currentId && <>
                 <div className="drive-pop-sep" />
-                <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('docx')}><FileText size={16} style={{ color: 'var(--accent-o)' }} /> Word-document</button>
-                <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('xlsx')}><Sheet size={16} style={{ color: 'var(--accent-o)' }} /> Excel-werkblad</button>
+                <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('docx')}><FileText size={16} style={{ color: 'var(--accent-b)' }} /> Word-document</button>
+                <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('xlsx')}><Sheet size={16} style={{ color: 'var(--accent-g)' }} /> Excel-werkblad</button>
                 <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('pptx')}><Presentation size={16} style={{ color: 'var(--accent-o)' }} /> PowerPoint</button>
               </>}
               {currentId && (linkableNotes.length > 0 || linkableDocs.length > 0) && <>
@@ -552,7 +600,7 @@ export function ClientFolders({
         onClick={row.onOpen}
         onKeyDown={e => rowKeyDown(e, row.onOpen)}
       >
-        <span className="odrv-td-ic" style={{ color: kindColor(row.kind) }}>{row.glyph(20)}</span>
+        <span className="odrv-td-ic" style={{ color: row.color }}>{row.glyph(20)}</span>
         <span className="odrv-td-name" title={row.name}>{row.name}</span>
         <span className="odrv-td-mod">{row.modified ? dateNL(row.modified) : '—'}</span>
         <span className="odrv-td-size">{row.size}</span>
@@ -568,7 +616,7 @@ export function ClientFolders({
     return <div className="odrv-tiles">
       {rows.map(row => <div className="odrv-tile odrv-tile-wrap" key={`t-${row.key}`}>
         <button type="button" className="odrv-tile-main" onClick={row.onOpen}>
-          <span className="odrv-tile-canvas" style={{ color: kindColor(row.kind) }}>{row.glyph(row.kind === 'folder' ? 46 : 38)}</span>
+          <span className="odrv-tile-canvas" style={{ color: row.color }}>{row.glyph(row.kind === 'folder' ? 46 : 38)}</span>
           <span className="odrv-tile-foot">
             <span className="odrv-tile-name" title={row.name}>{row.name}</span>
             <span className="odrv-tile-meta">{row.kind === 'folder' ? `${row.typeLabel} · ${row.size}` : `${row.typeLabel}${row.modified ? ` · ${dateNL(row.modified)}` : ''}`}</span>

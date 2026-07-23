@@ -12,7 +12,7 @@ import { uploadToR2, downloadAttachment } from '../lib/r2';
 import { createOfficeSession, createOfficeDocument, isOfficeEditable, NEW_OFFICE_LABEL, type NewOfficeType, type OfficeSession } from '../lib/office';
 import { OfficeEditor } from './OfficeEditor';
 import { childFolders, clientFolderOptions, folderDescendantIds, folderPath } from '../lib/folders';
-import { AttachmentGlyph, attTypeLabel, fmtBytes } from './ClientFolders';
+import { AttachmentGlyph, DocumentGlyph, attAccentColor, attTypeLabel, documentAccentColor, fmtBytes } from './ClientFolders';
 
 export type ContentView = 'all' | 'notes' | 'documents';
 
@@ -45,9 +45,6 @@ type ContentItem = {
   doc?: InternalDocument;
 };
 
-function itemColor(kind: 'note' | 'document' | 'file'): string {
-  return kind === 'note' ? 'var(--accent-v)' : kind === 'document' ? 'var(--accent-g)' : 'var(--accent-o)';
-}
 
 type SortKey = 'name' | 'modified' | 'type';
 
@@ -65,12 +62,14 @@ type Row = {
   typeLabel: string;
   onOpen: () => void;
   att?: Attachment;
+  doc?: InternalDocument;
   menu?: ((menuKey: string) => ReactNode) | null;
 };
 const isFolderRow = (r: Row) => r.kind === 'client' || r.kind === 'project' || r.kind === 'folder';
 
 function RowGlyph({ row, size }: { row: Row; size: number }) {
   if (row.kind === 'file' && row.att) return <AttachmentGlyph att={row.att} size={size} />;
+  if (row.kind === 'document') return <DocumentGlyph doc={row.doc} size={size} />;
   if (isFolderRow(row)) return <Folder size={size} fill="currentColor" strokeWidth={1.4} />;
   return row.kind === 'note' ? <StickyNote size={size} /> : <FileText size={size} />;
 }
@@ -432,10 +431,11 @@ export function ContentLibrary({
     key: `${it.kind}-${it.id}`,
     kind: it.kind,
     name: it.title || 'Naamloos',
-    color: itemColor(it.kind),
+    color: it.kind === 'note' ? 'var(--accent-v)' : documentAccentColor(it.doc),
     modified: it.modified,
     size: '',
     typeLabel: it.kind === 'note' ? 'Notitie' : 'Document',
+    doc: it.doc,
     onOpen: () => it.kind === 'note' ? onEditNote(it.note!) : onEditDocument(it.doc!),
     menu: canWrite && realClient
       ? (menuKey: string) => contentMenu(menuKey, it.kind, it.id, () => it.kind === 'note' ? onEditNote(it.note!) : onEditDocument(it.doc!))
@@ -456,7 +456,7 @@ export function ContentLibrary({
     key: `a-${att.id}`,
     kind: 'file',
     name: att.name,
-    color: itemColor('file'),
+    color: attAccentColor(att),
     modified: att.created_at,
     size: fmtBytes(att.size_bytes),
     typeLabel: attTypeLabel(att),
@@ -693,12 +693,12 @@ export function ContentLibrary({
               <div className="drive-pop-sep" />
             </>}
             <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewNote(createTarget); }}><StickyNote size={16} style={{ color: 'var(--accent-v)' }} /> Notitie</button>
-            <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewDocument(createTarget); }}><FileText size={16} style={{ color: 'var(--accent-g)' }} /> Document</button>
+            <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewDocument(createTarget); }}><FileText size={16} style={{ color: 'var(--accent-b)' }} /> Document</button>
             {folderId && <>
-              <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} style={{ color: 'var(--accent-o)' }} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>
+              <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>
               <div className="drive-pop-sep" />
-              <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('docx')}><FileText size={16} style={{ color: 'var(--accent-o)' }} /> Word-document</button>
-              <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('xlsx')}><Sheet size={16} style={{ color: 'var(--accent-o)' }} /> Excel-werkblad</button>
+              <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('docx')}><FileText size={16} style={{ color: 'var(--accent-b)' }} /> Word-document</button>
+              <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('xlsx')}><Sheet size={16} style={{ color: 'var(--accent-g)' }} /> Excel-werkblad</button>
               <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('pptx')}><Presentation size={16} style={{ color: 'var(--accent-o)' }} /> PowerPoint</button>
             </>}
           </div>}
