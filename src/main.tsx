@@ -65,7 +65,7 @@ import { memberShortName, memberColor, memberInitials } from './lib/members';
 import { uploadToR2 } from './lib/r2';
 import { listExternalCalendarEvents, createExternalCalendarEvent } from './lib/calendar-api';
 import { buildDocumentPdfBlob, buildDocumentDocxBlob, downloadBlob, documentFileBaseName, type DocumentExportMeta } from './lib/documentExport';
-import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumentFile, createBlankOfficeDocument, downloadOfficeDocument, officeFileNameForDocument, OFFICE_UPLOAD_ACCEPT, NEW_OFFICE_LABEL, type OfficeSession, type NewOfficeType } from './lib/office';
+import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumentFile, createBlankOfficeDocument, downloadOfficeDocument, officeFileNameForDocument, warmupOfficeEditor, OFFICE_UPLOAD_ACCEPT, NEW_OFFICE_LABEL, type OfficeSession, type NewOfficeType } from './lib/office';
 import { deleteR2Object } from './lib/r2-api';
 import { OfficeEditor } from './features/OfficeEditor';
 import { Dashboard } from './features/Dashboard';
@@ -347,6 +347,14 @@ function App() {
   // Word-document vanuit elke pagina (project/klant/Inhoud) geopend kan worden.
   const [officeSession, setOfficeSession] = useState<OfficeSession | null>(null);
   const [officeOpening, setOfficeOpening] = useState(false);
+  // Wek de Collabora-render-engine alvast op pagina's waar office-bestanden geopend kunnen
+  // worden — een koude containerboot overlapt dan met het navigeren i.p.v. met de klik op
+  // het bestand. Throttled in warmupOfficeEditor (5 min per tab) + server-side (1 min).
+  useEffect(() => {
+    if (page === 'content' || page === 'notes' || page === 'documents' || page === 'client' || page === 'project') {
+      warmupOfficeEditor();
+    }
+  }, [page]);
   /** Het document dat in de editor openstaat — drijft de "Downloaden"-knop (native formaat). */
   const [officeDoc, setOfficeDoc] = useState<InternalDocument | null>(null);
   // Mobiel uitschuifmenu (drawer). Op laptop/desktop is de zijbalk een iconenbalk

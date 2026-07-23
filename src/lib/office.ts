@@ -114,6 +114,35 @@ export async function downloadOfficeDocument(documentId: UUID, fileName: string)
   }
 }
 
+// Warmup-throttle per tabblad: vaker pingen dan dit voegt niets toe (de server throttlet
+// zelf ook nog eens per minuut) en zou de container onnodig wakker houden bij idle tabs.
+let lastWarmupAt = 0;
+const WARMUP_TAB_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Wek de Collabora-render-engine alvast (fire-and-forget). Aanroepen zodra de gebruiker op
+ * een pagina komt waar office-bestanden geopend kunnen worden: een koude containerboot
+ * (tientallen seconden) overlapt dan met het navigeren in plaats van met de klik op het
+ * bestand. Best-effort — fouten zijn hier nooit relevant voor de gebruiker.
+ */
+export function warmupOfficeEditor(): void {
+  const now = Date.now();
+  if (now - lastWarmupAt < WARMUP_TAB_INTERVAL_MS) return;
+  lastWarmupAt = now;
+  void (async () => {
+    try {
+      const base = getWorkerBase();
+      const token = await getAccessToken();
+      await fetch(`${base}/office/warmup`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+    } catch {
+      // Stil: warmup is een optimalisatie; de echte foutmelding komt zo nodig bij het openen.
+    }
+  })();
+}
+
 /** Bouw een bewerksessie voor een intern Document dat in Word-modus staat (documents.storage_key gezet). */
 export async function createOfficeSessionForDocument(documentId: UUID): Promise<OfficeSession> {
   const base = getWorkerBase();

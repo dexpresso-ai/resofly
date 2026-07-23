@@ -17,9 +17,10 @@ export function OfficeEditor({ session, onClose, onDownload }: { session: Office
   useEffect(() => {
     setPhase('loading');
     formRef.current?.submit();
-    // Collabora (cold start op CF Containers) kan tientallen seconden nodig hebben; toon na
-    // 45s een nette fout-/opnieuw-status i.p.v. een blanco frame.
-    const t = setTimeout(() => setPhase((p) => (p === 'loading' ? 'timeout' : p)), 45000);
+    // Een koude start van de render-engine kan ruim een minuut duren (de warmup-ping en de
+    // sessie-call vangen dat meestal al af); toon pas na 90s een nette fout-/opnieuw-status
+    // i.p.v. een blanco frame — eerder opgeven zou een nog bootende server "stuk" noemen.
+    const t = setTimeout(() => setPhase((p) => (p === 'loading' ? 'timeout' : p)), 90000);
     return () => clearTimeout(t);
   }, [session]);
 
@@ -59,7 +60,12 @@ export function OfficeEditor({ session, onClose, onDownload }: { session: Office
         {phase !== 'ready' && (
           <div style={loadingOverlay}>
             {phase === 'loading' ? (
-              <span>Editor wordt gestart…</span>
+              <div style={{ textAlign: 'center', padding: 16 }}>
+                <div>Editor wordt gestart…</div>
+                <div style={{ opacity: 0.6, fontSize: 13, marginTop: 8 }}>
+                  De eerste start na een pauze kan tot een minuut duren.
+                </div>
+              </div>
             ) : (
               <div style={{ textAlign: 'center', maxWidth: 420, padding: 16 }}>
                 <p style={{ margin: '0 0 12px' }}>

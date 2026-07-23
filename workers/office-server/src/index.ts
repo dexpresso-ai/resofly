@@ -20,10 +20,13 @@ const FRAME_ANCESTORS = 'https://app.resofly.nl https://staging.resofly.nl https
 export class CollaboraContainer extends Container<Env> {
   // coolwsd: HTTP + WebSocket op 9980.
   defaultPort = 9980;
-  // Collabora start in seconden op, maar een koude start is merkbaar. Houd de container
-  // nog even warm na het laatste verzoek zodat een pauze tussen bewerkingen geen reboot
-  // forceert. (Een actieve bewerksessie houdt 'm sowieso wakker via het WS-verkeer.)
-  sleepAfter = '30m';
+  // Een koude start (placement + image + Collabora-boot) kost tientallen seconden tot ruim
+  // een minuut — dé oorzaak van "openen is traag". Houd de container daarom een uur warm na
+  // het laatste verzoek, zodat een pauze binnen de werkdag geen reboot forceert. De frontend
+  // pingt bovendien /office/warmup zodra iemand een bestandenpagina opent, zodat de boot met
+  // het navigeren overlapt. (Kostenknop: langer = minder koude starts, meer actieve uren.
+  // Een actieve bewerksessie houdt 'm sowieso wakker via het WS-verkeer.)
+  sleepAfter = '1h';
   // LET OP — jail/capabilities is de #1 deploy-onzekerheid (zie OFFICE_EDITING_SETUP.md §7.1).
   // CF Containers geven GEEN Linux-capabilities. `--o:mount_namespaces=false` is een POGING
   // om zonder namespaces te draaien; of stock Collabora capability-loos boot op CF is ONBEWEZEN.

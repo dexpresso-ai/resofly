@@ -22,6 +22,8 @@ type RouteContext = {
   requestId: string;
   url: URL;
   corsHeaders: Headers;
+  /** Laat werk doorlopen ná de response (ExecutionContext.waitUntil) — voor de office-warmup. */
+  waitUntil: (promise: Promise<unknown>) => void;
 };
 
 const ALLOWED_METHODS = 'GET,POST,PUT,DELETE,OPTIONS';
@@ -75,8 +77,8 @@ class HttpError extends Error {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const context = createContext(request, env);
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const context = createContext(request, env, ctx);
 
     if (request.method === 'OPTIONS') {
       return handleOptions(context);
@@ -152,6 +154,9 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
     }
   }
   // App-gerichte routes (Supabase-JWT):
+  if (method === 'POST' && pathname === '/office/warmup') {
+    return handleOfficeWarmup(request, env, context);
+  }
   if (method === 'POST' && pathname === '/office/session') {
     return handleOfficeSession(request, env, context);
   }
@@ -535,12 +540,15 @@ async function patchOfficeTarget(env: Env, kind: OfficeKind, id: string, patch: 
 // ── Collabora WOPI-discovery ─────────────────────────────────────────────────
 
 let discoveryCache: { at: number; xml: string } | null = null;
+/** Lopende discovery-fetch — dedupet parallelle aanvragen zodat een koude containerboot
+ *  maar één keer wordt afgewacht (en de warmup + sessie-call dezelfde promise delen). */
+let discoveryInflight: Promise<string> | null = null;
 const DISCOVERY_TTL_MS = 60 * 60 * 1000;
 
-async function collaboraDiscovery(env: Env): Promise<string> {
-  if (!env.COLLABORA_URL) throw new HttpError(500, 'Office-editor niet geconfigureerd (COLLABORA_URL).');
-  if (discoveryCache && Date.now() - discoveryCache.at < DISCOVERY_TTL_MS) return discoveryCache.xml;
-  const url = `${env.COLLABORA_URL.replace(/\/$/, '')}/hosting/discovery`;
+/** Haal de discovery-XML op bij de office-server. Dit wékt de Collabora-container als die
+ *  slaapt — bij een koude start blokkeert deze fetch tot de container geboot is. */
+async function fetchDiscoveryXml(env: Env): Promise<string> {
+  const url = `${env.COLLABORA_URL!.replace(/\/$/, '')}/hosting/discovery`;
   // Via de service binding: een gewone fetch naar de workers.dev-URL van een Worker op
   // hetzelfde account wordt door Cloudflare geblokkeerd; de binding is de interne route.
   const res = env.OFFICE_SERVER ? await env.OFFICE_SERVER.fetch(url) : await fetch(url);
@@ -548,6 +556,15 @@ async function collaboraDiscovery(env: Env): Promise<string> {
   const xml = await res.text();
   discoveryCache = { at: Date.now(), xml };
   return xml;
+}
+
+async function collaboraDiscovery(env: Env): Promise<string> {
+  if (!env.COLLABORA_URL) throw new HttpError(500, 'Office-editor niet geconfigureerd (COLLABORA_URL).');
+  if (discoveryCache && Date.now() - discoveryCache.at < DISCOVERY_TTL_MS) return discoveryCache.xml;
+  if (!discoveryInflight) {
+    discoveryInflight = fetchDiscoveryXml(env).finally(() => { discoveryInflight = null; });
+  }
+  return discoveryInflight;
 }
 
 function normalizeUrlSrc(u: string): string {
@@ -587,6 +604,39 @@ function mediaPublicOrigin(request: Request, env: Env): string {
 
 // ── Route-handlers ───────────────────────────────────────────────────────────
 
+// Warmup-throttle per isolate: herhaalde warmups binnen dit venster doen niets extra —
+// de container is dan al wakker (of aan het booten) door een eerdere ping.
+let lastWarmupAt = 0;
+const WARMUP_MIN_INTERVAL_MS = 60_000;
+
+/**
+ * Wek de Collabora-container alvast (fire-and-forget). De frontend roept dit aan zodra de
+ * gebruiker op een pagina komt waar office-bestanden geopend kunnen worden, zodat een koude
+ * containerboot (placement + image + Collabora-start, tientallen seconden) overlapt met het
+ * navigeren in plaats van met de klik op het bestand. JWT vereist — anoniem internetverkeer
+ * mag onze container niet laten draaien (kosten).
+ */
+async function handleOfficeWarmup(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  await requireUser(request, env);
+  if (!env.COLLABORA_URL) return jsonResponse({ ok: false, warming: 'not-configured' }, 200, context);
+
+  const now = Date.now();
+  if (now - lastWarmupAt < WARMUP_MIN_INTERVAL_MS) {
+    return jsonResponse({ ok: true, warming: 'recent' }, 202, context);
+  }
+  lastWarmupAt = now;
+
+  // Bewust géén discovery-cache-shortcut: de cache (1 u TTL) kan warm zijn terwijl de
+  // container allang weer slaapt — het doel hier is de container zélf raken. De fetch loopt
+  // via waitUntil door ná de response; ook als de runtime 'm later afbreekt is de
+  // containerstart dan al getriggerd (de boot loopt in de container-DO gewoon door).
+  if (!discoveryInflight) {
+    discoveryInflight = fetchDiscoveryXml(env).finally(() => { discoveryInflight = null; });
+  }
+  context.waitUntil(discoveryInflight.catch(() => undefined));
+  return jsonResponse({ ok: true, warming: 'started' }, 202, context);
+}
+
 /** Bouw een editor-sessie voor een bestaand office-bestand. */
 async function handleOfficeSession(request: Request, env: Env, context: RouteContext): Promise<Response> {
   const userId = await requireUser(request, env);
@@ -596,6 +646,13 @@ async function handleOfficeSession(request: Request, env: Env, context: RouteCon
   const kind: OfficeKind = body.documentId ? 'd' : 'a';
   const id = ((kind === 'd' ? body.documentId : body.attachmentId) || '').trim();
   if (!isUuid(id)) throw new HttpError(400, kind === 'd' ? 'Ongeldige documentId.' : 'Ongeldige attachmentId.');
+
+  // Start de (bij een koude container trage) discovery alvast, parallel met de DB-checks
+  // hieronder — collaboraUrlSrc pakt straks dezelfde in-flight promise. Fouten hier niet
+  // fataal: de echte foutafhandeling zit bij collaboraUrlSrc.
+  void collaboraDiscovery(env).catch(() => undefined);
+  // Weergavenaam parallel ophalen (eigen try/catch — rejectet nooit).
+  const displayNamePromise = fetchUserName(request, env, 'ResoFly-gebruiker');
 
   const target = await fetchOfficeTarget(env, kind, id);
   const role = await membershipRole(env, target.organization_id, userId);
@@ -610,7 +667,7 @@ async function handleOfficeSession(request: Request, env: Env, context: RouteCon
   const editorUrl = `${urlsrc}WOPISrc=${encodeURIComponent(wopiSrc)}&lang=nl-NL`;
 
   const exp = Date.now() + OFFICE_TOKEN_TTL_MS;
-  const displayName = await fetchUserName(request, env, 'ResoFly-gebruiker');
+  const displayName = await displayNamePromise;
   const accessToken = await signOfficeToken(
     { fid: id, org: target.organization_id, uid: userId, w: canWrite, exp, nm: displayName, k: kind },
     secret,
@@ -988,11 +1045,12 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 // ── Generic helpers (CORS / responses / routing) ────────────────────────────
 
-function createContext(request: Request, env: Env): RouteContext {
+function createContext(request: Request, env: Env, ctx: ExecutionContext): RouteContext {
   return {
     requestId: crypto.randomUUID(),
     url: new URL(request.url),
     corsHeaders: createCorsHeaders(request, env),
+    waitUntil: (promise) => ctx.waitUntil(promise),
   };
 }
 
