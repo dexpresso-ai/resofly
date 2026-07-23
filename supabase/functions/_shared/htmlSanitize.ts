@@ -28,7 +28,7 @@ const filter = new FilterXSS({
   stripIgnoreTag: false, // onbekende tags: tekst behouden, tag-zelf escapen
   stripIgnoreTagBody: ['script', 'style'], // inhoud van script/style volledig weg
   // Forceer veilige links: alleen http(s)/mailto/tel/anker, en altijd noopener.
-  onTagAttr: (tag, name, value) => {
+  onTagAttr: (tag: string, name: string, value: string) => {
     if (tag === 'a' && name === 'href') {
       if (!/^(https?:|mailto:|tel:|#)/i.test(value.trim())) return 'href=""';
     }

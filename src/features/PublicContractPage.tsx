@@ -265,6 +265,8 @@ function SignaturePad({ onChange }: { onChange: (dataUrl: string | null) => void
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
   const inked = useRef(false);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
 
   useEffect(() => {
     const setup = () => {
@@ -279,6 +281,11 @@ function SignaturePad({ onChange }: { onChange: (dataUrl: string | null) => void
       if (!ctx) return;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
       ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111';
+      // canvas.width zetten wist de tekening. Reset daarom ook de bewijs-state,
+      // zodat de klant nooit ondertekent met een handtekening die door een resize
+      // onzichtbaar is geworden (of met een oude tekening na remount).
+      inked.current = false;
+      onChangeRef.current(null);
     };
     setup();
     window.addEventListener('resize', setup);

@@ -118,9 +118,12 @@ serve(async (req) => {
     const status = error instanceof PublicHttpError ? error.status : 500;
     const internalMessage = describeError(error);
     if (status >= 500) console.error('contract-public error', internalMessage, error instanceof Error ? error.stack : undefined);
+    // Nooit interne fout-/DB-details naar de ongeauthenticeerde beller lekken
+    // (CWE-209). Verwachte fouten zijn PublicHttpError met een veilige boodschap;
+    // al het overige krijgt een generieke 500. De details staan alleen in de log.
     const publicMessage = error instanceof PublicHttpError
       ? error.message
-      : `Contract kon niet worden geladen: ${internalMessage}`.slice(0, 500);
+      : 'Er ging iets mis bij het verwerken van dit contract. Probeer het later opnieuw.';
     return json(req, { ok: false, error: publicMessage }, status);
   }
 });
@@ -173,51 +176,65 @@ async function signPublicContract(tokenHash: string, body: Record<string, unknow
     loadCompanySettings(contract.organization_id),
   ]);
 
-  // 2. Genereer het getekende PDF + ondertekenbewijs.
-  const signature: PdfSignature = {
-    signerName,
-    signerEmail,
-    signedAt,
-    method,
-    signatureImage: method === 'drawn' ? signatureImage : null,
-    ip,
-    userAgent,
-    consentText,
-  };
-  const projectName = await loadLinkedProjectName(contract.organization_id, contract.id);
-  const tokens = buildContractTokens({
-    contract: { number: contract.number, date: contract.date, amount_cents: contract.amount_cents, currency: contract.currency },
-    client, company, projectName,
-  });
-  const filledBody = sanitizeContractHtml(fillContractTokens(contract.body, tokens));
-  const pdfBytes = await renderContractPdf({
-    contract: { id: contract.id, number: contract.number, title: contract.title, body: filledBody, date: contract.date, valid_until: contract.valid_until },
-    client: client || { name: client?.name || 'Klant', contact_name: null, email: signerEmail },
-    company,
-    signature,
-  });
-  const sha256 = await sha256HexBytes(pdfBytes);
-  const base64 = bytesToBase64(pdfBytes);
-  const fileName = `contract-${sanitizeFileName(contract.number || contract.id)}-getekend.pdf`;
+  // 2+3. Genereer + koppel het onveranderlijke getekende PDF. Dit gebeurt ná de
+  //       reeds vastgelegde ondertekening (handtekening + bewijs staan al in
+  //       contract_signers), dus een fout hierin mag de klant NOOIT een 500 geven.
+  //       We loggen en gaan door; het PDF kan later worden hergenereerd — de
+  //       bewijskolommen zijn dan nog null, dus de service-role mag ze alsnog
+  //       vullen (zie immutability-trigger 20260723000000).
+  let pdfForEmail: { fileName: string; base64: string; sizeBytes: number } | null = null;
+  try {
+    const signature: PdfSignature = {
+      signerName,
+      signerEmail,
+      signedAt,
+      method,
+      signatureImage: method === 'drawn' ? signatureImage : null,
+      ip,
+      userAgent,
+      consentText,
+    };
+    const projectName = await loadLinkedProjectName(contract.organization_id, contract.id);
+    const tokens = buildContractTokens({
+      contract: { number: contract.number, date: contract.date, amount_cents: contract.amount_cents, currency: contract.currency },
+      client, company, projectName,
+    });
+    const filledBody = sanitizeContractHtml(fillContractTokens(contract.body, tokens));
+    const pdfBytes = await renderContractPdf({
+      contract: { id: contract.id, number: contract.number, title: contract.title, body: filledBody, date: contract.date, valid_until: contract.valid_until },
+      client: client ?? { name: 'Klant', contact_name: null, email: signerEmail },
+      company,
+      signature,
+    });
+    const sha256 = await sha256HexBytes(pdfBytes);
+    const base64 = bytesToBase64(pdfBytes);
+    const fileName = `contract-${sanitizeFileName(contract.number || contract.id)}-getekend.pdf`;
 
-  // 3. Sla onveranderlijk op (R2 of base64-fallback) en koppel aan het contract.
-  const stored = await storeSignedPdf(contract.organization_id, contract.id, pdfBytes, sha256);
-  const { error: attachError } = await supabaseAdmin.rpc('attach_signed_contract_pdf', {
-    p_contract_id: contract.id,
-    p_organization_id: contract.organization_id,
-    p_storage_provider: stored.provider,
-    p_storage_key: stored.key,
-    p_sha256: sha256,
-    p_file_name: fileName,
-    p_size_bytes: pdfBytes.byteLength,
-    p_data_base64: stored.storeBase64 ? base64 : null,
-  });
-  if (attachError) console.error('attach_signed_contract_pdf failed', attachError.message);
+    const stored = await storeSignedPdf(contract.organization_id, contract.id, pdfBytes, sha256);
+    const { error: attachError } = await supabaseAdmin.rpc('attach_signed_contract_pdf', {
+      p_contract_id: contract.id,
+      p_organization_id: contract.organization_id,
+      p_storage_provider: stored.provider,
+      p_storage_key: stored.key,
+      p_sha256: sha256,
+      p_file_name: fileName,
+      p_size_bytes: pdfBytes.byteLength,
+      p_data_base64: stored.storeBase64 ? base64 : null,
+    });
+    if (attachError) throw attachError;
+    pdfForEmail = { fileName, base64, sizeBytes: pdfBytes.byteLength };
+  } catch (pdfError) {
+    console.error('contract signed PDF generatie/koppeling mislukt (handtekening is wél vastgelegd)', describeError(pdfError));
+  }
 
-  // 4. Bevestigingsmails (best-effort: blokkeren de ondertekening nooit).
-  await sendConfirmationEmails(contract, client, company, { signerName, signerEmail, signedAt }, { fileName, base64, sizeBytes: pdfBytes.byteLength }).catch((e) => {
+  // 4. Bevestigingsmails (best-effort: blokkeren de ondertekening nooit). Zonder
+  //    gegenereerd PDF sturen we de mails zonder bijlage.
+  await sendConfirmationEmails(contract, client, company, { signerName, signerEmail, signedAt }, pdfForEmail).catch((e) => {
     console.error('contract confirmation emails failed', describeError(e));
   });
+
+  // 5. Beperk het PII-venster van de bearer-ondertekenlink ná de terminale actie.
+  await shortenTokenWindow(contract.id);
 
   return await buildPayload(contract);
 }
@@ -239,6 +256,7 @@ async function declinePublicContract(tokenHash: string, body: Record<string, unk
     throw error;
   }
   const contract = (Array.isArray(data) ? data[0] : data) as ContractRow;
+  await shortenTokenWindow(contract.id);
   return await buildPayload(contract);
 }
 
@@ -267,11 +285,11 @@ async function sendConfirmationEmails(
   client: { name: string; contact_name: string | null; email: string | null } | null,
   company: CompanyRow | null,
   signer: { signerName: string; signerEmail: string; signedAt: string },
-  pdf: { fileName: string; base64: string; sizeBytes: number },
+  pdf: { fileName: string; base64: string; sizeBytes: number } | null,
 ): Promise<void> {
   if (!RESEND_API_KEY || !RESEND_FROM_EMAIL) return;
   const senderIdentity = await resolveSenderIdentity(supabaseAdmin, contract.organization_id, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
-  const attachPdf = pdf.sizeBytes <= CONTRACT_PDF_MAX_ATTACHMENT_BYTES;
+  const attachPdf = pdf !== null && pdf.sizeBytes <= CONTRACT_PDF_MAX_ATTACHMENT_BYTES;
   const portalUrl = APP_PUBLIC_URL ? `${APP_PUBLIC_URL}/portal` : null;
 
   // Klantbevestiging (met getekend PDF als bijlage).
@@ -292,7 +310,7 @@ async function sendConfirmationEmails(
     subject: clientEmail.subject,
     html: clientEmail.html,
     text: clientEmail.text,
-    attachments: attachPdf ? [{ filename: pdf.fileName, content: pdf.base64 }] : undefined,
+    attachments: attachPdf && pdf ? [{ filename: pdf.fileName, content: pdf.base64 }] : undefined,
     tags: contractTags(contract, 'contract_signed_client'),
   }).then(() => insertEvent(contract.organization_id, contract.id, 'email_sent', 'Bevestiging naar klant verstuurd'))
     .catch((e) => console.error('client confirmation send failed', describeError(e)));
@@ -380,7 +398,7 @@ async function storeSignedPdf(
       'X-SHA256': sha256,
       'X-Size-Bytes': String(bytes.byteLength),
     },
-    body: bytes,
+    body: bytes as unknown as BodyInit,
   });
   if (!response.ok) {
     const message = await response.text().catch(() => response.statusText);
@@ -558,9 +576,32 @@ async function buildPayload(contract: ContractRow) {
 
 // ------------------------------------------------------------ helpers
 function clientIp(req: Request): string | null {
+  // Geef voorrang aan de door de infra gezette headers (cf-connecting-ip /
+  // x-real-ip); die zijn niet door de client te spoofen. De meest linkse
+  // X-Forwarded-For-waarde is dat wél, dus die is enkel de laatste terugval —
+  // relevant omdat dit IP als ondertekenbewijs (eIDAS-audit trail) wordt vastgelegd.
+  const trusted = req.headers.get('cf-connecting-ip') || req.headers.get('x-real-ip');
+  if (trusted) return trusted.trim();
   const xff = req.headers.get('x-forwarded-for');
   if (xff) return xff.split(',')[0].trim();
-  return req.headers.get('cf-connecting-ip') || req.headers.get('x-real-ip') || null;
+  return null;
+}
+
+// Verkort het geldigheidsvenster van de publieke bearer-link ná een terminale
+// actie (tekenen/weigeren): de link hoeft daarna niet nog wekenlang de volledige
+// contract-body + klant-PII te blijven serveren. Verlengt nooit (alleen rijen
+// waarvan de expiry ná de cutoff ligt worden verkort). Best-effort.
+async function shortenTokenWindow(contractId: string): Promise<void> {
+  try {
+    const cutoff = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    await supabaseAdmin
+      .from('contracts')
+      .update({ public_token_expires_at: cutoff })
+      .eq('id', contractId)
+      .gt('public_token_expires_at', cutoff);
+  } catch (e) {
+    console.warn('shortenTokenWindow failed', describeError(e));
+  }
 }
 function sanitizeFileName(value: string): string {
   return value.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'contract';
@@ -568,7 +609,7 @@ function sanitizeFileName(value: string): string {
 function sanitizeTagValue(value: unknown): string {
   return String(value ?? '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 256) || 'contract';
 }
-function parsePositiveInt(value: string | null, fallback: number): number {
+function parsePositiveInt(value: string | null | undefined, fallback: number): number {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }

@@ -511,11 +511,11 @@ function randomToken(): string {
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
-function parsePositiveInt(value: string | null, fallback: number): number {
+function parsePositiveInt(value: string | null | undefined, fallback: number): number {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
-function parseAllowedOrigins(values: Array<string | null>): string[] {
+function parseAllowedOrigins(values: Array<string | null | undefined>): string[] {
   const origins = new Set<string>();
   for (const value of values) {
     if (!value) continue;
