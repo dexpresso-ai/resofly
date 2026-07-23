@@ -247,7 +247,7 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
       <div className="bk-head">
         <div><h2>Inkoopfacturen</h2><p>Boek leveranciersfacturen in en verwerk de voorbelasting.</p></div>
         <div className="bk-head-actions">
-          <Button disabled={!canWrite || notReady} onClick={() => setScan(true)} title="Lees een factuur (PDF/foto) automatisch uit met AI"><Sparkles size={15} /> Factuur scannen (AI)</Button>
+          <Button disabled={!canWrite || notReady} onClick={() => setScan(true)} title="Lees een factuur automatisch uit: UBL-e-facturen (XML) deterministisch, PDF/foto met AI"><Sparkles size={15} /> Factuur scannen (AI / UBL)</Button>
           <Button variant="primary" disabled={!canWrite || notReady} onClick={() => { setSeed(null); setEdit('new'); }}><Plus size={15} /> Nieuwe inkoopfactuur</Button>
         </div>
       </div>
@@ -294,10 +294,12 @@ interface NewSupplierPayload {
   city: string | null; country: string | null; default_expense_account_id: UUID | null; default_vat_code: string | null;
 }
 
-/** Vooringevuld voorstel dat de AI-scan doorgeeft aan het inkoopfactuurformulier. */
+/** Vooringevuld voorstel dat de scan (AI of UBL) doorgeeft aan het inkoopfactuurformulier. */
 interface InvoiceFormSeed {
   supplierId: UUID | null;
   newSupplier: NewSupplierPayload | null;
+  /** Herkomst van het concept: 'ai_scan' (Claude) of 'import' (UBL-e-factuur). */
+  source: 'ai_scan' | 'import';
   form: { supplier_invoice_number: string; date: string; due_date: string; notes: string };
   lines: PurchaseInvoiceLine[];
   pendingFile: File | null;
@@ -345,6 +347,7 @@ function InvoiceScanModal({ data, organizationId, onClose, onSeed }: {
       : [{ id: uid(), description: '', amount_cents: 0, vat_code: 'HOOG', vat_rate: 21, account_id: null }];
     onSeed({
       supplierId: p.supplier.matchedId,
+      source: result.method === 'ubl' ? 'import' : 'ai_scan',
       newSupplier: p.supplier.matchedId ? null : {
         name: p.supplier.name || 'Onbekende leverancier',
         vat_number: p.supplier.vat_number, kvk_number: p.supplier.kvk_number, iban: p.supplier.iban,
@@ -381,7 +384,7 @@ function InvoiceScanModal({ data, organizationId, onClose, onSeed }: {
 
       {!p ? (
         <>
-          <p className="bk-muted">Upload een inkoopfactuur als PDF of foto. De AI leest leverancier, regels, bedragen en BTW uit en stelt per regel een grootboekrekening voor. Je controleert alles daarna in het concept — er wordt niets automatisch geboekt.</p>
+          <p className="bk-muted">Upload een inkoopfactuur als PDF, foto of UBL-e-factuur (XML). E-facturen worden exact uitgelezen (zonder AI); PDF's en foto's leest de AI uit. Je controleert alles daarna in het concept — er wordt niets automatisch geboekt.</p>
           <div
             className={`bk-dropzone${dragOver ? ' is-over' : ''}`}
             onClick={() => inputRef.current?.click()}
@@ -392,7 +395,7 @@ function InvoiceScanModal({ data, organizationId, onClose, onSeed }: {
             <Upload size={22} />
             {file
               ? <div><strong>{file.name}</strong><div className="bk-muted">{(file.size / 1024).toFixed(0)} kB — klik om te wijzigen</div></div>
-              : <div>Sleep een factuur hierheen of <span className="bk-link">kies een bestand</span><div className="bk-muted">PDF, JPG, PNG, WEBP of GIF · max {Math.round(SCAN_MAX_BYTES / 1024 / 1024)} MB</div></div>}
+              : <div>Sleep een factuur hierheen of <span className="bk-link">kies een bestand</span><div className="bk-muted">PDF, JPG, PNG, WEBP, GIF of UBL-XML · max {Math.round(SCAN_MAX_BYTES / 1024 / 1024)} MB</div></div>}
           </div>
           <input ref={inputRef} type="file" accept={SCAN_ACCEPT} style={{ display: 'none' }}
             onChange={e => pick(e.target.files?.[0] ?? null)} />
@@ -401,7 +404,10 @@ function InvoiceScanModal({ data, organizationId, onClose, onSeed }: {
       ) : (
         <div className="bk-scan-review">
           <div className="bk-note bk-ai-note">
-            <strong><Sparkles size={13} /> Uitgelezen voorstel</strong> — controleer alles voordat je het overneemt. Betrouwbaarheid: {CONFIDENCE_LABEL[p.confidence]}.
+            {result?.method === 'ubl'
+              ? <strong><Sparkles size={13} /> E-factuur (UBL) — exact uitgelezen, zonder AI</strong>
+              : <strong><Sparkles size={13} /> Uitgelezen voorstel</strong>}
+            {' '}— controleer alles voordat je het overneemt.{result?.method !== 'ubl' && <> Betrouwbaarheid: {CONFIDENCE_LABEL[p.confidence]}.</>}
             {p.warnings.length > 0 && <ul className="bk-ai-warnings">{p.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>}
           </div>
           <div className="bk-grid2">
@@ -514,7 +520,7 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
       } else {
         const saved = await insertRow<PurchaseInvoice>('purchase_invoices', organizationId, {
           ...values, status: 'draft', payment_status: 'unpaid',
-          ...(seed ? { source: 'ai_scan', extraction_meta: seed.extractionMeta } : {}),
+          ...(seed ? { source: seed.source, extraction_meta: seed.extractionMeta } : {}),
         });
         // Originele factuur als bewijsstuk koppelen (best-effort: een R2-hapering
         // mag de al opgeslagen boeking niet blokkeren).
@@ -537,7 +543,7 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
       {error && <div className="error">{error}</div>}
       {seed && (
         <div className="bk-note bk-ai-note">
-          <strong><Sparkles size={13} /> AI-voorstel</strong> — controleer leverancier, grootboekrekeningen, BTW en bedragen voordat je opslaat. Betrouwbaarheid: {CONFIDENCE_LABEL[seed.ai.confidence]}.
+          <strong><Sparkles size={13} /> {seed.source === 'import' ? 'E-factuur (UBL)' : 'AI-voorstel'}</strong> — controleer leverancier, grootboekrekeningen, BTW en bedragen voordat je opslaat.{seed.source !== 'import' && <> Betrouwbaarheid: {CONFIDENCE_LABEL[seed.ai.confidence]}.</>}
           {seed.ai.warnings.length > 0 && <ul className="bk-ai-warnings">{seed.ai.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>}
         </div>
       )}

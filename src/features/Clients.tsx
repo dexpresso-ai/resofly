@@ -445,6 +445,9 @@ export function ClientDetailPage({
             <div><dt>Contactpersoon</dt><dd>{client.contact_name || '—'}</dd></div>
             <div><dt>E-mail</dt><dd>{client.email || '—'}</dd></div>
             <div><dt>Telefoon</dt><dd>{client.phone || '—'}</dd></div>
+            <div><dt>Adres</dt><dd>{[client.address_line1, client.address_line2, [client.postal_code, client.city].filter(Boolean).join(' '), client.country].filter(Boolean).join(', ') || '—'}</dd></div>
+            <div><dt>Btw-nummer</dt><dd>{client.vat_number || '—'}</dd></div>
+            <div><dt>KVK</dt><dd>{client.kvk_number || '—'}</dd></div>
             <div><dt>Waarde</dt><dd>{euro(client.value_eur)}</dd></div>
             <div><dt>Aangemaakt</dt><dd>{dateNL(client.created_at)}</dd></div>
             <div><dt>Bijgewerkt</dt><dd>{dateNL(client.updated_at)}</dd></div>

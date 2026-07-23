@@ -49,6 +49,8 @@ import {
   sendQuoteEmailViaResend,
   downloadQuotePdfSnapshot,
   downloadInvoicePdfSnapshot,
+  downloadInvoiceUbl,
+  downloadCreditNoteUbl,
   createInvoiceRefund,
   postSalesInvoiceToLedger,
   downloadCreditNotePdf,
@@ -1109,6 +1111,33 @@ function App() {
     }
   }
 
+  // UBL-e-factuur (Peppol BIS 3.0): server-side gegenereerd. Blokkerende
+  // gebreken (ontbrekende KVK/adres/land) komen als duidelijke NL-fout terug;
+  // niet-blokkerende Peppol-waarschuwingen tonen we informatief.
+  async function downloadInvoiceUblFile(invoice: Invoice) {
+    setLoading(true); setError(null);
+    try {
+      const { warnings } = await downloadInvoiceUbl(activeOrg.id, invoice.id);
+      if (warnings.length > 0) alert(`E-factuur gedownload, met aandachtspunten:\n\n- ${warnings.join('\n- ')}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'E-factuur (UBL) downloaden mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function downloadCreditNoteUblFile(creditNote: CreditNote) {
+    setLoading(true); setError(null);
+    try {
+      const { warnings } = await downloadCreditNoteUbl(activeOrg.id, creditNote.id);
+      if (warnings.length > 0) alert(`E-creditnota gedownload, met aandachtspunten:\n\n- ${warnings.join('\n- ')}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'E-creditnota (UBL) downloaden mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function sendInvoice(invoice: Invoice) {
     if (!ensureCanWrite()) return;
     const client = data.clients.find(item => item.id === invoice.client_id);
@@ -1139,11 +1168,19 @@ function App() {
     try {
       const result = await sendInvoiceEmailViaResend(activeOrg.id, invoice.id, { recipientEmail, recipientName, includePaymentLink });
       await refresh();
-      // The invoice itself went out fine; only the optional Mollie link failed.
-      // Surface it as a non-blocking warning so the user can fix Mollie config.
+      // De factuur zelf ging goed de deur uit; alleen niet-blokkerende bijzaken
+      // (Mollie-link, e-factuur) verdienen een melding zodat de gebruiker weet
+      // wat er wél/niet is meegestuurd en de configuratie kan bijwerken.
+      const notes: string[] = [];
       if (includePaymentLink && result.paymentLinkError) {
-        setError(`Factuur is verstuurd, maar de Mollie-betaallink kon niet worden aangemaakt (alleen de PDF is meegestuurd): ${result.paymentLinkError}`);
+        notes.push(`de Mollie-betaallink kon niet worden aangemaakt: ${result.paymentLinkError}`);
       }
+      if (result.ubl && !result.ubl.attached) {
+        notes.push(`de e-factuur (UBL) is niet meegestuurd${result.ubl.reason ? ` — ${result.ubl.reason}` : ''}. Vul de ontbrekende gegevens aan om ook de e-factuur mee te sturen.`);
+      } else if (result.ubl?.attached && result.ubl.warnings && result.ubl.warnings.length > 0) {
+        notes.push(`e-factuur meegestuurd met aandachtspunten: ${result.ubl.warnings.join('; ')}`);
+      }
+      if (notes.length > 0) setError(`Factuur is verstuurd, maar ${notes.join(' Daarnaast: ')}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Factuur verzenden via Resend mislukt');
     } finally {
@@ -1718,7 +1755,7 @@ function App() {
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditDocument={openDocument}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
-    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onEmailCreditNote={emailCreditNote} onPostToLedger={postInvoiceToLedger} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning}/>;
+    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostToLedger={postInvoiceToLedger} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning}/>;
     if (page === 'suppliers') return <SuppliersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'ledger') return <LedgerPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
@@ -2014,6 +2051,27 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
       </Field>
       <Field label="Type klant" hint="Bepaalt bij aanmaningen de rentesoort (consument: wettelijke rente; zakelijk: handelsrente) en of de WIK-14-dagenbrief verplicht is.">
         <Select value={form.client_kind} onChange={e=>set('client_kind',e.target.value)} disabled={disabled}><option value="business">Zakelijk (B2B)</option><option value="consumer">Consument</option></Select>
+      </Field>
+      <Field label="Adres" hint="Straat + huisnummer. Nodig voor de UBL-e-factuur (verplicht bij NL-klanten).">
+        <Input value={form.address_line1} onChange={e=>set('address_line1',e.target.value)} placeholder="Straatnaam 1" disabled={disabled}/>
+      </Field>
+      <Field label="Adresregel 2">
+        <Input value={form.address_line2} onChange={e=>set('address_line2',e.target.value)} placeholder="Toevoeging (optioneel)" disabled={disabled}/>
+      </Field>
+      <Field label="Postcode">
+        <Input value={form.postal_code} onChange={e=>set('postal_code',e.target.value)} placeholder="1234 AB" disabled={disabled}/>
+      </Field>
+      <Field label="Plaats">
+        <Input value={form.city} onChange={e=>set('city',e.target.value)} placeholder="Amsterdam" disabled={disabled}/>
+      </Field>
+      <Field label="Land" hint="Landnaam of ISO-code (bv. Nederland of NL).">
+        <Input value={form.country} onChange={e=>set('country',e.target.value)} placeholder="Nederland" disabled={disabled}/>
+      </Field>
+      <Field label="Btw-nummer" hint="Bv. NL123456789B01. Verplicht bij verlegde of intracommunautaire facturen.">
+        <Input value={form.vat_number} onChange={e=>set('vat_number',e.target.value)} placeholder="NL123456789B01" disabled={disabled}/>
+      </Field>
+      <Field label="KVK-nummer" hint="8 cijfers (of 20-cijferig OIN voor overheden). Verplicht voor e-facturen aan NL-bedrijven via Peppol.">
+        <Input value={form.kvk_number} onChange={e=>set('kvk_number',e.target.value)} placeholder="12345678" disabled={disabled}/>
       </Field>
       <Field label="Klantwaarde" hint="Indicatieve waarde voor dashboard en klantoverzicht.">
         <Input type="number" value={form.value_eur} onChange={e=>set('value_eur',Number(e.target.value))} placeholder="Waarde" disabled={disabled}/>
@@ -2397,6 +2455,26 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
   const addLine = () => set('lines', [...lines, { id: uid(), description: '', quantity: 1, unit_price: 0, vat: 21 }]);
   const removeLine = (id: string) => set('lines', lines.length <= 1 ? lines : lines.filter(x => x.id !== id));
 
+  // Verkooprelevante btw-codes van de organisatie: die bepalen naast het tarief
+  // ook de UBL-categorie van de e-factuur (verlegd/ICP/vrijgesteld i.p.v. een
+  // ambigu 0%). Zonder geconfigureerde codes valt de editor terug op het kale
+  // percentageveld (en leidt de UBL-generator de categorie af uit het tarief).
+  const SALES_VAT_KINDS = ['standard', 'reduced', 'zero', 'exempt', 'reverse_charge_sales', 'icp_goods', 'icp_services'];
+  const salesVatCodes = data.vatCodes.filter(v => SALES_VAT_KINDS.includes(v.kind) && v.is_active !== false);
+  const lineVatSelectValue = (line: FinanceLine): string => {
+    if (line.vat_code && salesVatCodes.some(v => v.code === line.vat_code)) return line.vat_code;
+    // Een opgeslagen code die niet meer bestaat/actief is niet stil op een
+    // andere code laten matchen — dan maskeer je verlies. Toon '__custom'.
+    if (line.vat_code) return '__custom';
+    const byRate = salesVatCodes.find(v => ['standard', 'reduced', 'zero'].includes(v.kind) && Math.abs(v.rate - (Number(line.vat) || 0)) < 0.005);
+    return byRate?.code ?? '__custom';
+  };
+  const setLineVatCode = (id: string, code: string) => set('lines', lines.map(l => {
+    if (l.id !== id) return l;
+    const vc = salesVatCodes.find(v => v.code === code);
+    return vc ? { ...l, vat: vc.rate, vat_code: vc.code } : l;
+  }));
+
   const handleDownloadPdf = () => {
     const client = data.clients.find(c => c.id === form.client_id) ?? null;
     // Build a doc-shaped object from the current form so the user can preview before saving.
@@ -2486,8 +2564,13 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
             <Field label="Prijs ex. btw" compact>
               <Input type="number" min="0" step="0.01" value={line.unit_price} onChange={e=>updateLine(line.id,'unit_price',e.target.value)} disabled={disabled}/>
             </Field>
-            <Field label="BTW %" compact>
-              <Input type="number" min="0" step="0.01" value={line.vat} onChange={e=>updateLine(line.id,'vat',e.target.value)} disabled={disabled}/>
+            <Field label="BTW" compact>
+              {salesVatCodes.length > 0
+                ? <Select value={lineVatSelectValue(line)} onChange={e=>setLineVatCode(line.id, e.target.value)} disabled={disabled}>
+                    {lineVatSelectValue(line) === '__custom' && <option value="__custom">{line.vat}% (aangepast)</option>}
+                    {salesVatCodes.map(v => <option key={v.code} value={v.code}>{v.label}</option>)}
+                  </Select>
+                : <Input type="number" min="0" step="0.01" value={line.vat} onChange={e=>updateLine(line.id,'vat',e.target.value)} disabled={disabled}/>}
             </Field>
             <div className="finance-line-total"><span>Regeltotaal</span><strong>{euro(lineTotal)}</strong></div>
             <Button className="finance-line-remove" onClick={()=>removeLine(line.id)} disabled={disabled || lines.length <= 1} title="Regel verwijderen">×</Button>
@@ -2681,7 +2764,7 @@ function sanitizeTicketValues(values: Record<string, unknown>, existingTicket?: 
 function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string, any> {
   if (edit.kind === "client") {
     const item = edit.item;
-    return { name: item?.name ?? edit.defaults?.name ?? "", client_code: item?.client_code ?? "", contact_name: item?.contact_name ?? edit.defaults?.contact_name ?? "", email: item?.email ?? edit.defaults?.email ?? "", phone: item?.phone ?? edit.defaults?.phone ?? "", status: item?.status ?? edit.defaults?.status ?? "active", client_kind: item?.client_kind ?? "business", value_eur: item?.value_eur ?? 0, tags: item?.tags?.join(", ") ?? "", notes: item?.notes ?? edit.defaults?.notes ?? "", color: item?.color ?? "#FFD966", _sendWelcomeEmail: !item };
+    return { name: item?.name ?? edit.defaults?.name ?? "", client_code: item?.client_code ?? "", contact_name: item?.contact_name ?? edit.defaults?.contact_name ?? "", email: item?.email ?? edit.defaults?.email ?? "", phone: item?.phone ?? edit.defaults?.phone ?? "", status: item?.status ?? edit.defaults?.status ?? "active", client_kind: item?.client_kind ?? "business", value_eur: item?.value_eur ?? 0, tags: item?.tags?.join(", ") ?? "", notes: item?.notes ?? edit.defaults?.notes ?? "", color: item?.color ?? "#FFD966", address_line1: item?.address_line1 ?? "", address_line2: item?.address_line2 ?? "", postal_code: item?.postal_code ?? "", city: item?.city ?? "", country: item?.country ?? (item ? "" : "Nederland"), vat_number: item?.vat_number ?? "", kvk_number: item?.kvk_number ?? "", _sendWelcomeEmail: !item };
   }
   if (edit.kind === "project") {
     const item = edit.item;
@@ -2721,6 +2804,13 @@ function cleanForm(kind: string, form: Record<string, any>) {
     cleaned.email = normalizeOptionalText(cleaned.email)?.toLowerCase() ?? null;
     cleaned.phone = normalizeOptionalText(cleaned.phone);
     cleaned.notes = normalizeOptionalText(cleaned.notes);
+    cleaned.address_line1 = normalizeOptionalText(cleaned.address_line1);
+    cleaned.address_line2 = normalizeOptionalText(cleaned.address_line2);
+    cleaned.postal_code = normalizeOptionalText(cleaned.postal_code);
+    cleaned.city = normalizeOptionalText(cleaned.city);
+    cleaned.country = normalizeOptionalText(cleaned.country);
+    cleaned.vat_number = normalizeOptionalText(cleaned.vat_number);
+    cleaned.kvk_number = normalizeOptionalText(cleaned.kvk_number);
   }
   for (const key of ["client_id","project_id","folder_id","quote_id","valid_until","due_date","start_date","end_date","planned_date"]) {
     if (cleaned[key] === "") cleaned[key] = null;
@@ -2765,6 +2855,11 @@ function cleanForm(kind: string, form: Record<string, any>) {
         quantity: Number.isFinite(Number(line.quantity)) ? Number(line.quantity) : 0,
         unit_price: Number.isFinite(Number(line.unit_price)) ? Number(line.unit_price) : 0,
         vat: Number.isFinite(Number(line.vat)) ? Number(line.vat) : 0,
+        // vat_code moet behouden blijven: het maakt 0%-regels ondubbelzinnig voor
+        // de UBL-e-factuur (verlegd/ICP/vrijgesteld i.p.v. nul). Zonder deze regel
+        // valt de server-side UBL-generator terug op tarief-afleiding en wordt een
+        // verlegde regel als 'zero-rated' geëxporteerd.
+        ...(typeof line.vat_code === "string" && line.vat_code.trim() ? { vat_code: line.vat_code } : {}),
       }))
       .filter((line: FinanceLine) => line.description || line.quantity || line.unit_price);
   }

@@ -16,8 +16,8 @@ const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
 /** 10 MB — gelijk aan de limiet in de edge-functie (direct-naar-edge base64). */
 export const SCAN_MAX_BYTES = 10 * 1024 * 1024;
-export const SCAN_ACCEPT = 'application/pdf,image/png,image/jpeg,image/webp,image/gif,.pdf';
-const SUPPORTED_MIME = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+export const SCAN_ACCEPT = 'application/pdf,image/png,image/jpeg,image/webp,image/gif,application/xml,text/xml,.pdf,.xml';
+const SUPPORTED_MIME = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/xml', 'text/xml'];
 
 export type ScanConfidence = 'high' | 'medium' | 'low';
 
@@ -65,6 +65,8 @@ export interface ScanProposal {
 }
 
 export interface ScanResult {
+  /** 'ubl' = deterministisch geparste e-factuur (XML), 'ai' = Claude-uitlezing. */
+  method: 'ai' | 'ubl';
   proposal: ScanProposal;
   extraction_meta: Record<string, unknown>;
 }
@@ -84,14 +86,17 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-/** Leest één inkoopfactuur (PDF/afbeelding) uit tot een voorstel. */
+/** Leest één inkoopfactuur (PDF/afbeelding via AI, UBL-XML deterministisch) uit tot een voorstel. */
 export async function scanInvoice(organizationId: UUID, file: File): Promise<ScanResult> {
   if (file.size > SCAN_MAX_BYTES) {
     throw new Error(`Bestand is te groot (max ${Math.round(SCAN_MAX_BYTES / 1024 / 1024)} MB). Comprimeer het en probeer opnieuw.`);
   }
-  const mimeType = (file.type || '').toLowerCase();
-  if (!SUPPORTED_MIME.includes(mimeType)) {
-    throw new Error('Alleen PDF, JPG, PNG, WEBP of GIF worden ondersteund.');
+  // Windows/browsers geven .xml-bestanden soms geen (of een leeg) MIME-type mee;
+  // op extensie terugvallen zodat een UBL-e-factuur altijd herkend wordt.
+  const isXmlByName = file.name.toLowerCase().endsWith('.xml');
+  const mimeType = (file.type || '').toLowerCase() || (isXmlByName ? 'application/xml' : '');
+  if (!SUPPORTED_MIME.includes(mimeType) && !isXmlByName) {
+    throw new Error('Alleen PDF, JPG, PNG, WEBP, GIF of UBL-e-facturen (XML) worden ondersteund.');
   }
 
   const { data } = await supabase.auth.getSession();
@@ -111,5 +116,5 @@ export async function scanInvoice(organizationId: UUID, file: File): Promise<Sca
     const msg = payload && 'error' in payload && payload.error ? payload.error : `Uitlezen mislukt (${res.status}).`;
     throw new Error(msg);
   }
-  return { proposal: payload.proposal, extraction_meta: payload.extraction_meta };
+  return { method: payload.method ?? 'ai', proposal: payload.proposal, extraction_meta: payload.extraction_meta };
 }

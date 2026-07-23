@@ -1,18 +1,18 @@
 // ============================================================
-// invoice-extract — inkoopfactuur (PDF/afbeelding) -> AI-uitlezing + grootboekvoorstel.
+// invoice-extract — inkoopfactuur -> concept-inkoopfactuurvoorstel.
 //
-// Eén POST-actie (Supabase JWT + org-toegang + schrijfrol):
-//  - de frontend stuurt het factuurbestand (base64) mee;
-//  - Claude leest leverancier, factuurnummer, datums, regels (excl. + BTW) en
-//    totalen uit en stelt per regel een grootboekrekening + BTW-code voor;
-//  - de server matcht de leverancier deterministisch (BTW-nr -> IBAN -> naam),
-//    valideert dat elke voorgestelde rekening/BTW-code echt van deze organisatie
-//    is (nooit AI-uitvoer vertrouwen), rekent bedragen om naar centen en
-//    controleert de totalen;
-//  - het resultaat is een VOORSTEL dat de frontend vooringevuld in het bestaande
-//    concept-inkoopfactuurformulier toont. Er wordt niets automatisch geboekt.
+// Twee routes, één POST-actie (Supabase JWT + org-toegang + schrijfrol):
+//  - UBL/e-factuur (XML): DETERMINISTISCH geparst (geen AI, geen tegoed nodig)
+//    — leverancier, regels en btw-categorieën komen 1-op-1 uit de XML; de
+//    EN16931-categorie (S/Z/E/AE/K) wordt op KIND naar een org-btw-code gemapt.
+//  - PDF/afbeelding: AI-uitlezing via Claude (bestaande flow).
+// Beide routes leveren hetzelfde VOORSTEL-formaat: de frontend toont het
+// vooringevuld in het bestaande concept-inkoopfactuurformulier; de server
+// matcht de leverancier deterministisch (BTW-nr -> IBAN -> naam) en valideert
+// dat elke rekening/btw-code echt van deze organisatie is. Er wordt niets
+// automatisch geboekt.
 //
-// Kosten lopen tegen dezelfde ai_usage-tabel + maandplafond als Gerrie.
+// AI-kosten lopen tegen dezelfde ai_usage-tabel + maandplafond als Gerrie.
 // ============================================================
 
 import {
@@ -25,6 +25,7 @@ import {
   type AccountRef, type VatCodeRef,
 } from '../_shared/claudeInvoice.ts';
 import { recordAiUsage, userHasBudget } from '../_shared/claudeSummary.ts';
+import { parseUblDocument, type ParsedUblDocument } from '../_shared/ubl.ts';
 
 const admin = createAdminClient();
 
@@ -57,12 +58,24 @@ Deno.serve(async (req) => {
     const role = await requireOrganizationAccess(admin, user.id, organizationId);
     assertWriteRole(role);
 
+    const file = readFilePayload(body);
+
+    // UBL/e-factuur (XML): deterministisch parsen — geen AI, dus ook geen
+    // API-key- of tegoedcontrole nodig.
+    if (isXmlFile(file)) {
+      const result = await importUblInvoice(organizationId, file);
+      return cors.json(req, { ok: true, ...result });
+    }
+
+    if (!SUPPORTED_MIME_TYPES.includes(file.mimeType)) {
+      throw new HttpError('Bestandstype wordt niet ondersteund. Gebruik PDF, JPG, PNG, WEBP, GIF of een UBL-e-factuur (XML).', 400);
+    }
     if (!hasAnthropicKey()) throw new HttpError('AI is nog niet geconfigureerd (ANTHROPIC_API_KEY ontbreekt).', 500);
     if (!(await userHasBudget(admin, user.id))) {
       throw new HttpError('Je AI-tegoed voor deze maand is op. Probeer het volgende maand opnieuw.', 429);
     }
 
-    const proposal = await scanInvoice(organizationId, user.id, body);
+    const proposal = await scanInvoice(organizationId, user.id, file);
     return cors.json(req, { ok: true, ...proposal });
   } catch (err) {
     const status = err instanceof HttpError ? err.status : 500;
@@ -74,22 +87,31 @@ Deno.serve(async (req) => {
   }
 });
 
-// ── Kernactie ──────────────────────────────────────────────────────────────────
+// ── Bestandspayload ─────────────────────────────────────────────────────────────
 
-async function scanInvoice(organizationId: string, userId: string, body: Record<string, unknown>) {
+interface FilePayload { fileName: string; mimeType: string; dataBase64: string }
+
+function readFilePayload(body: Record<string, unknown>): FilePayload {
   const file = (body.file && typeof body.file === 'object' ? body.file : {}) as Record<string, unknown>;
   const fileName = String(file.name || 'factuur');
   const mimeType = String(file.mimeType || '').toLowerCase();
   const dataBase64 = normalizeBase64(String(file.dataBase64 || ''));
-
   if (!dataBase64) throw new HttpError('Geen bestand ontvangen.', 400);
-  if (!SUPPORTED_MIME_TYPES.includes(mimeType)) {
-    throw new HttpError('Bestandstype wordt niet ondersteund. Gebruik PDF, JPG, PNG, WEBP of GIF.', 400);
-  }
   const approxBytes = Math.floor((dataBase64.length * 3) / 4);
   if (approxBytes > MAX_DECODED_BYTES) {
     throw new HttpError(`Bestand is te groot voor de scan (max ${Math.round(MAX_DECODED_BYTES / 1024 / 1024)} MB). Comprimeer of splits het.`, 413);
   }
+  return { fileName, mimeType, dataBase64 };
+}
+
+function isXmlFile(file: FilePayload): boolean {
+  return ['application/xml', 'text/xml'].includes(file.mimeType) || file.fileName.toLowerCase().endsWith('.xml');
+}
+
+// ── Kernactie (AI-route) ───────────────────────────────────────────────────────
+
+async function scanInvoice(organizationId: string, userId: string, filePayload: FilePayload) {
+  const { fileName, mimeType, dataBase64 } = filePayload;
 
   // Context laden (org-scoped). Kandidaatrekeningen = zelfde filter als de UI-dropdown.
   const [accounts, vatCodes, suppliers] = await Promise.all([
@@ -186,6 +208,7 @@ async function scanInvoice(organizationId: string, userId: string, body: Record<
   if (warnings.length && confidence === 'high') confidence = 'medium';
 
   return {
+    method: 'ai' as const,
     proposal: {
       supplier: {
         matchedId: match.id,
@@ -226,6 +249,221 @@ async function scanInvoice(organizationId: string, userId: string, body: Record<
   };
 }
 
+// ── UBL-route (deterministisch, geen AI) ───────────────────────────────────────
+
+/**
+ * EN16931-categorie -> btw-code van deze organisatie, gemapt op KIND (nooit op
+ * de code-string of — voor verlegd/EU — op tarief; die veranderen de boeking
+ * fundamenteel). Levert ook het vat_rate voor de regel: bij verlegd/EU-verwerving
+ * is dat het tarief van de org-code (zelf aangeven), niet de 0 uit het document.
+ */
+function resolveVatCodeForCategory(
+  category: string,
+  documentRate: number,
+  vatCodes: VatRow[],
+  warnings: string[],
+): { vat_code: string; vat_rate: number } {
+  const byKind = (kinds: string[], preferRate?: number): VatRow | undefined => {
+    const candidates = vatCodes.filter((v) => kinds.includes(v.kind));
+    if (preferRate != null) {
+      const exact = candidates.find((v) => Math.abs(v.rate - preferRate) < 0.005);
+      if (exact) return exact;
+    }
+    return candidates[0];
+  };
+
+  switch (category) {
+    case 'S': {
+      const hit = byKind(['standard', 'reduced'], documentRate);
+      if (hit && Math.abs(hit.rate - documentRate) < 0.005) return { vat_code: hit.code, vat_rate: hit.rate };
+      if (hit) {
+        warnings.push(`Btw-tarief ${documentRate}% uit de e-factuur wijkt af van de tarieven van je btw-codes; het documenttarief is aangehouden — controleer de regel.`);
+        return { vat_code: hit.code, vat_rate: documentRate };
+      }
+      warnings.push('Geen standaard-btw-code gevonden voor deze organisatie; controleer de btw per regel.');
+      return { vat_code: 'HOOG', vat_rate: documentRate };
+    }
+    case 'Z': {
+      const hit = byKind(['zero']);
+      return { vat_code: hit?.code ?? 'NUL', vat_rate: 0 };
+    }
+    case 'E': {
+      const hit = byKind(['exempt']) ?? byKind(['zero']);
+      if (!hit) warnings.push('Geen vrijgesteld-btw-code gevonden; controleer de btw per regel.');
+      return { vat_code: hit?.code ?? 'VRIJ', vat_rate: 0 };
+    }
+    case 'AE': {
+      // Verlegde btw op een INKOOPfactuur = zelf aangeven én aftrekken (VERL_INK).
+      const hit = byKind(['reverse_charge_purchase']);
+      if (hit) return { vat_code: hit.code, vat_rate: hit.rate };
+      warnings.push('De e-factuur bevat verlegde btw (categorie AE), maar deze organisatie heeft geen verlegd-inkoopcode (VERL_INK). De regel staat nu op 0% — corrigeer de btw-code vóór het boeken.');
+      const zero = byKind(['zero']);
+      return { vat_code: zero?.code ?? 'NUL', vat_rate: 0 };
+    }
+    case 'K': {
+      // Intracommunautaire levering van de verkoper = EU-verwerving bij ons.
+      const hit = byKind(['eu_acquisition']);
+      if (hit) return { vat_code: hit.code, vat_rate: hit.rate };
+      warnings.push('De e-factuur is een intracommunautaire levering (categorie K), maar deze organisatie heeft geen EU-verwervingscode (EU_VERW). De regel staat nu op 0% — corrigeer de btw-code vóór het boeken.');
+      const zero = byKind(['zero']);
+      return { vat_code: zero?.code ?? 'NUL', vat_rate: 0 };
+    }
+    default: {
+      // G (export) / O (buiten heffing) en onbekende categorieën: 0% + controle.
+      warnings.push(`Btw-categorie '${category}' uit de e-factuur is als 0% overgenomen — controleer de btw-code per regel.`);
+      const zero = byKind(['zero']);
+      return { vat_code: zero?.code ?? 'NUL', vat_rate: 0 };
+    }
+  }
+}
+
+/** Leest een UBL-e-factuur deterministisch uit tot hetzelfde voorstel-formaat als de AI-route. */
+async function importUblInvoice(organizationId: string, file: FilePayload) {
+  let xmlBytes: Uint8Array;
+  try {
+    xmlBytes = base64ToBytes(file.dataBase64);
+  } catch {
+    throw new HttpError('Het bestand kon niet worden gedecodeerd (ongeldige inhoud).', 400);
+  }
+  let doc: ParsedUblDocument;
+  try {
+    doc = parseUblDocument(new TextDecoder('utf-8').decode(xmlBytes));
+  } catch (err) {
+    throw new HttpError(err instanceof Error ? err.message : 'De UBL-e-factuur kon niet worden gelezen.', 400);
+  }
+
+  const [accounts, vatCodes, suppliers] = await Promise.all([
+    loadAccounts(organizationId),
+    loadVatCodes(organizationId),
+    loadSuppliers(organizationId),
+  ]);
+
+  const warnings: string[] = [];
+  if (doc.docType === 'creditNote') {
+    warnings.push('Dit is een creditnota (UBL CreditNote) — de bedragen zijn negatief overgenomen zodat de creditering tegen de kosten wegvalt.');
+  }
+
+  // Leverancier matchen op dezelfde harde identifiers als de AI-route.
+  const match = matchSupplier(
+    { name: doc.supplier.name, vat_number: doc.supplier.vatNumber, iban: doc.supplier.iban },
+    suppliers,
+  );
+  if (!doc.supplier.name) warnings.push('De leverancier kon niet uit de e-factuur worden gelezen. Kies of maak zelf een leverancier.');
+  const matchedSupplier = match.id ? suppliers.find((s) => s.id === match.id) ?? null : null;
+  const accountById = new Map(accounts.map((a) => [a.id, a.code]));
+  const defaultAccountId = matchedSupplier?.default_expense_account_id && accountById.has(matchedSupplier.default_expense_account_id)
+    ? matchedSupplier.default_expense_account_id
+    : null;
+
+  const lines = doc.lines.map((l) => {
+    const resolved = resolveVatCodeForCategory(l.category, l.vatRate, vatCodes, warnings);
+    return {
+      description: l.description,
+      amount_cents: l.netCents,
+      vat_code: resolved.vat_code,
+      vat_rate: resolved.vat_rate,
+      account_id: defaultAccountId,
+      account_code: defaultAccountId ? accountById.get(defaultAccountId) ?? null : null,
+    };
+  });
+  if (lines.length === 0) warnings.push('Er zijn geen factuurregels in de e-factuur gevonden. Vul ze handmatig aan.');
+  if (doc.hasDocumentAllowanceCharge) {
+    warnings.push('Deze e-factuur bevat een korting of toeslag op documentniveau die niet als aparte regel is overgenomen — controleer of het totaal klopt en voeg de korting/toeslag zo nodig handmatig toe.');
+  }
+
+  // Totalencontrole tegen wat de afzender zelf vermeldt (±2 cent, zelfde
+  // tolerantie als de AI-route). BELANGRIJK: bij verlegde/EU/vrijgestelde regels
+  // (AE/K/G/E) brengt de leverancier GEEN btw in rekening — de vat_rate op de
+  // regel (bv. 21 bij VERL_INK) dient alleen voor de eigen aangifte/aftrek. Voor
+  // de vergelijking met het document tellen we daarom alléén categorie-S-btw mee,
+  // anders slaat de check bij elke verleggingsfactuur ten onrechte aan en toont
+  // het voorstel een opgeblazen totaal.
+  const displayTotals = (() => {
+    const byRate = new Map<number, number>();
+    let subtotal = 0;
+    doc.lines.forEach((dl) => {
+      subtotal += dl.netCents;
+      if (dl.category === 'S') byRate.set(dl.vatRate, (byRate.get(dl.vatRate) || 0) + dl.netCents);
+    });
+    let vat = 0;
+    byRate.forEach((base, rate) => { vat += Math.round((base * rate) / 100); });
+    return { subtotal_cents: subtotal, vat_cents: vat, total_cents: subtotal + vat };
+  })();
+  const totals = displayTotals;
+  const extractedTotals = {
+    subtotal_cents: doc.totals.netCents,
+    vat_cents: doc.totals.vatCents,
+    total_cents: doc.totals.grossCents,
+  };
+  const off = (a: number | null, b: number) => a != null && Math.abs(a - b) > 2;
+  if (off(extractedTotals.total_cents, totals.total_cents) || off(extractedTotals.subtotal_cents, totals.subtotal_cents) || off(extractedTotals.vat_cents, totals.vat_cents)) {
+    warnings.push(
+      `De herberekende bedragen (excl. € ${(totals.subtotal_cents / 100).toFixed(2)}, BTW € ${(totals.vat_cents / 100).toFixed(2)}, ` +
+      `totaal € ${(totals.total_cents / 100).toFixed(2)}) wijken af van de totalen in de e-factuur. ` +
+      `Controleer de regels en btw-codes.`,
+    );
+  }
+
+  // Duplicaatsignalering: er is geen unique constraint op leveranciersfactuurnummers,
+  // dus een tweede import van dezelfde e-factuur zou stilzwijgend dubbel in de
+  // kosten lopen. Signaleren, niet blokkeren (nummerhergebruik komt voor).
+  if (doc.number) {
+    const { data: existing, error: dupError } = await admin.from('purchase_invoices')
+      .select('id, internal_number')
+      .eq('organization_id', organizationId)
+      .eq('supplier_invoice_number', doc.number)
+      .limit(1);
+    if (dupError) console.warn('duplicaatcheck inkoopfactuur mislukte:', dupError.message);
+    else if ((existing ?? []).length > 0) {
+      warnings.push(`Er bestaat al een inkoopfactuur met leveranciersfactuurnummer '${doc.number}' (${(existing![0] as { internal_number: string | null }).internal_number ?? 'zonder intern nummer'}) — mogelijk een duplicaat.`);
+    }
+  }
+
+  const defaultVatCode = mostCommon(lines.map((l) => l.vat_code));
+
+  return {
+    method: 'ubl' as const,
+    proposal: {
+      supplier: {
+        matchedId: match.id,
+        matchedBy: match.by,
+        name: doc.supplier.name,
+        vat_number: doc.supplier.vatNumber,
+        kvk_number: doc.supplier.kvkNumber,
+        iban: doc.supplier.iban,
+        email: doc.supplier.email,
+        phone: null,
+        address_line1: doc.supplier.addressLine1,
+        postal_code: doc.supplier.postalCode,
+        city: doc.supplier.city,
+        country: doc.supplier.countryCode,
+        default_expense_account_id: defaultAccountId,
+        default_vat_code: defaultVatCode,
+      },
+      supplier_invoice_number: doc.number,
+      date: doc.issueDate,
+      due_date: doc.dueDate,
+      currency: doc.currency,
+      notes: doc.note,
+      confidence: 'high' as const,
+      warnings,
+      lines,
+      totals,
+      extracted_totals: extractedTotals,
+    },
+    extraction_meta: {
+      method: 'ubl',
+      customization_id: doc.customizationId,
+      doc_type: doc.docType,
+      buyer_reference: doc.buyerReference,
+      payment_reference: doc.paymentReference,
+      file_name: file.fileName,
+      imported_at: new Date().toISOString(),
+      warnings,
+    },
+  };
+}
+
 // ── Context laden ───────────────────────────────────────────────────────────────
 
 interface AccountRow { id: string; code: string; name: string; type: string; subtype: string | null }
@@ -247,10 +485,10 @@ async function loadVatCodes(organizationId: string): Promise<VatRow[]> {
   return (data ?? []).map((v) => ({ code: String(v.code), label: String(v.label), rate: Number(v.rate) || 0, kind: String(v.kind) }));
 }
 
-interface SupplierRow { id: string; name: string; vat_number: string | null; iban: string | null }
+interface SupplierRow { id: string; name: string; vat_number: string | null; iban: string | null; default_expense_account_id: string | null; default_vat_code: string | null }
 async function loadSuppliers(organizationId: string): Promise<SupplierRow[]> {
   const { data, error } = await admin.from('suppliers')
-    .select('id, name, vat_number, iban')
+    .select('id, name, vat_number, iban, default_expense_account_id, default_vat_code')
     .eq('organization_id', organizationId);
   if (error) throw new HttpError(`Leveranciers laden mislukt: ${error.message}`, 500);
   return (data ?? []) as SupplierRow[];
@@ -262,6 +500,13 @@ function normalizeBase64(raw: string): string {
   const s = raw.trim();
   const comma = s.indexOf(',');
   return s.startsWith('data:') && comma !== -1 ? s.slice(comma + 1) : s;
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 function round2(n: number): number {

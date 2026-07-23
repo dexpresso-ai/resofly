@@ -1800,6 +1800,57 @@ export async function downloadInvoicePdfSnapshot(organizationId: UUID, invoiceId
 }
 
 
+/**
+ * Download de factuur als UBL 2.1 e-factuur (Peppol BIS 3.0). De XML wordt
+ * server-side opgebouwd uit factuur + klant + bedrijfsgegevens; bij ontbrekende
+ * gegevens (KVK, adres, land, …) gooit de Edge Function een duidelijke NL-fout.
+ * Geeft eventuele niet-blokkerende waarschuwingen terug (bv. Peppol-endpoint
+ * niet afleidbaar) zodat de UI ze kan tonen.
+ */
+export async function downloadInvoiceUbl(organizationId: UUID, invoiceId: UUID): Promise<{ warnings: string[] }> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'downloadInvoiceUbl', organizationId, invoiceId },
+  });
+  if (error) await throwFunctionError(error, 'E-factuur (UBL) downloaden mislukt.');
+  if (!data?.ok) throw new Error(data?.error || 'E-factuur (UBL) downloaden mislukt');
+  const ubl = data.ubl as { fileName?: string; mimeType?: string; base64?: string; warnings?: string[] } | undefined;
+  if (!ubl?.base64) throw new Error('Er kwam geen UBL-bestand terug van de server.');
+  downloadBase64File(ubl.base64, ubl.fileName || `factuur-${invoiceId}-ubl.xml`, ubl.mimeType || 'application/xml');
+  return { warnings: Array.isArray(ubl.warnings) ? ubl.warnings : [] };
+}
+
+/** Download een creditnota als UBL 2.1 CreditNote (spiegel van downloadInvoiceUbl). */
+export async function downloadCreditNoteUbl(organizationId: UUID, creditNoteId: UUID): Promise<{ warnings: string[] }> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'downloadCreditNoteUbl', organizationId, creditNoteId },
+  });
+  if (error) await throwFunctionError(error, 'E-creditnota (UBL) downloaden mislukt.');
+  if (!data?.ok) throw new Error(data?.error || 'E-creditnota (UBL) downloaden mislukt');
+  const ubl = data.ubl as { fileName?: string; mimeType?: string; base64?: string; warnings?: string[] } | undefined;
+  if (!ubl?.base64) throw new Error('Er kwam geen UBL-bestand terug van de server.');
+  downloadBase64File(ubl.base64, ubl.fileName || `creditfactuur-${creditNoteId}-ubl.xml`, ubl.mimeType || 'application/xml');
+  return { warnings: Array.isArray(ubl.warnings) ? ubl.warnings : [] };
+}
+
+/** Base64 -> Blob -> browserdownload (zelfde patroon als de PDF-snapshots). */
+function downloadBase64File(base64: string, fileName: string, mimeType: string): void {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  const blob = new Blob([bytes], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+}
+
 export async function convertAcceptedQuoteToInvoice(organizationId: UUID, quoteId: UUID): Promise<Invoice> {
   const { data, error } = await supabase.rpc('convert_accepted_quote_to_invoice', {
     p_quote_id: quoteId,
@@ -1810,7 +1861,7 @@ export async function convertAcceptedQuoteToInvoice(organizationId: UUID, quoteI
   return row as Invoice;
 }
 
-export async function sendInvoiceEmailViaResend(organizationId: UUID, invoiceId: UUID, input: { recipientEmail?: string; recipientName?: string; subject?: string; includePaymentLink?: boolean } = {}): Promise<{ publicUrl?: string; providerEmailId?: string; paymentLinkIncluded?: boolean; paymentLinkError?: string | null }> {
+export async function sendInvoiceEmailViaResend(organizationId: UUID, invoiceId: UUID, input: { recipientEmail?: string; recipientName?: string; subject?: string; includePaymentLink?: boolean } = {}): Promise<{ publicUrl?: string; providerEmailId?: string; paymentLinkIncluded?: boolean; paymentLinkError?: string | null; ubl?: { attached: boolean; fileName?: string; reason?: string | null; warnings?: string[] } }> {
   const { data, error } = await supabase.functions.invoke('invoice-workflow', {
     body: {
       action: 'sendInvoiceEmail',
@@ -1821,7 +1872,7 @@ export async function sendInvoiceEmailViaResend(organizationId: UUID, invoiceId:
   });
   if (error) throw error;
   if (!data?.ok) throw new Error(data?.error || 'Factuur verzenden mislukt');
-  return data as { publicUrl?: string; providerEmailId?: string; paymentLinkIncluded?: boolean; paymentLinkError?: string | null };
+  return data as { publicUrl?: string; providerEmailId?: string; paymentLinkIncluded?: boolean; paymentLinkError?: string | null; ubl?: { attached: boolean; fileName?: string; reason?: string | null; warnings?: string[] } };
 }
 
 /**

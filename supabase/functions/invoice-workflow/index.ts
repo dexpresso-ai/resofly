@@ -5,16 +5,21 @@ import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB }
 import { renderEmailTemplate, type EmailTemplateContent, type EmailTemplateContentKey } from '../_shared/emailTemplates/index.ts';
 import { calculateDunningClaim, type DunningClaim, type InterestKind, type RatePeriod } from '../_shared/dunning.ts';
 import { decryptSecret, encryptSecret, mollieKeySuffix, validateMollieApiKey } from '../_shared/mollieSecrets.ts';
+import { buildUblXml, deriveSalesLineCategory, validateUblInput, type UblDocumentInput, type UblLine, type VatKindRef } from '../_shared/ubl.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
-type InvoiceLine = { id?: string; description: string; quantity: number; unit_price: number; vat?: number };
+type InvoiceLine = { id?: string; description: string; quantity: number; unit_price: number; vat?: number; vat_code?: string | null };
 type InvoiceRow = {
   id: string; organization_id: string; client_id: string | null; project_id: string | null; quote_id: string | null;
   number: string; date: string; due_date: string | null; lines: InvoiceLine[]; status: string; notes: string | null;
   public_token_hash?: string | null; public_token_expires_at?: string | null;
   reminder_level?: number | null; last_reminder_at?: string | null; reminders_paused?: boolean | null; currency?: string | null;
 };
-type ClientRow = { id: string; name: string; contact_name: string | null; email: string | null };
+type ClientRow = {
+  id: string; name: string; contact_name: string | null; email: string | null;
+  client_code?: string | null; client_kind?: string | null; vat_number?: string | null; kvk_number?: string | null;
+  address_line1?: string | null; address_line2?: string | null; postal_code?: string | null; city?: string | null; country?: string | null;
+};
 type ProjectRow = { id: string; name: string; description: string | null };
 type QuoteRow = { id: string; number: string };
 type CompanySettingsRow = {
@@ -22,8 +27,10 @@ type CompanySettingsRow = {
   postal_code?: string | null; city?: string | null; country?: string | null; email: string | null; phone: string | null;
   website: string | null; kvk_number?: string | null; vat_number?: string | null; iban?: string | null;
   invoice_payment_terms?: string | null; invoice_footer?: string | null; invoice_accent_color?: string | null;
+  kor_enabled?: boolean | null;
 };
 type InvoicePdfAttachment = { fileName: string; mimeType: 'application/pdf'; bytes: Uint8Array; base64: string; sizeBytes: number; sha256: string };
+type UblAttachment = { fileName: string; mimeType: 'application/xml'; base64: string; sizeBytes: number; sha256: string; warnings: string[] };
 type StoredInvoicePdfSnapshot = { provider: 'r2' | 'database'; key: string | null; shouldStoreBase64InDatabase: boolean };
 type WorkflowHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
 
@@ -124,6 +131,29 @@ serve(async (req) => {
       return json(req, { ok: true, ...(await downloadCreditNotePdf(organizationId, body)) });
     }
 
+    // E-factuur (UBL 2.1 / Peppol BIS 3.0) genereren is niet-muterend: de XML
+    // wordt live opgebouwd uit factuur + klant + bedrijfsgegevens, dus elke
+    // actieve member (ook viewer) mag downloaden — net als de PDF-snapshot.
+    if (action === 'downloadInvoiceUbl') {
+      if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
+      const invoice = await loadInvoice(organizationId, invoiceId);
+      // Geen officiële e-factuur genereren voor een geannuleerde/ongeldige factuur:
+      // die zou naar buiten kunnen als geldig document terwijl hij dat niet is.
+      if (['cancelled', 'void'].includes(invoice.status)) throw new WorkflowHttpError('Voor een geannuleerde of ongeldig gemaakte factuur kan geen e-factuur worden gemaakt.', 409);
+      const ubl = await createInvoiceUblAttachment(organizationId, invoice);
+      return json(req, { ok: true, ubl });
+    }
+    if (action === 'downloadCreditNoteUbl') {
+      const creditNoteId = String(body.creditNoteId || '');
+      if (!isUuid(creditNoteId)) throw new WorkflowHttpError('Ongeldige creditfactuur.', 400);
+      const creditNote = await loadCreditNote(organizationId, creditNoteId);
+      if (!creditNote) throw new WorkflowHttpError('Creditfactuur niet gevonden.', 404);
+      if (creditNote.status === 'void') throw new WorkflowHttpError('Voor een ingetrokken creditfactuur kan geen e-creditnota worden gemaakt.', 409);
+      const invoice = await loadInvoice(organizationId, String(creditNote.invoice_id));
+      const ubl = await createCreditNoteUblAttachment(organizationId, creditNote, invoice);
+      return json(req, { ok: true, ubl });
+    }
+
     // Masked Mollie status is readable by any active member (no secret leaves the
     // server), so the send dialog can decide whether to offer a payment link.
     if (action === 'getInvoiceMollieStatus') {
@@ -219,6 +249,18 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   validateInvoicePdfAttachment(pdfAttachment);
   const storedPdf = await storeInvoicePdfSnapshot(organizationId, invoiceId, pdfAttachment);
 
+  // E-factuur (UBL) als tweede bijlage zodra de gegevens compleet zijn. Een
+  // onvolledige klant of instelling mag de verzending zelf nooit blokkeren:
+  // dan gaat alleen de PDF mee en rapporteren we de reden terug aan de UI.
+  let ublAttachment: UblAttachment | null = null;
+  let ublSkippedReason: string | null = null;
+  try {
+    ublAttachment = await createInvoiceUblAttachment(organizationId, invoice, { client, company });
+  } catch (ublError) {
+    ublSkippedReason = ublError instanceof Error ? ublError.message : 'E-factuur (UBL) kon niet worden gegenereerd.';
+    console.warn('UBL-bijlage overgeslagen bij factuurmail:', ublSkippedReason);
+  }
+
   const prepared = await beginInvoiceEmailSend({
     invoiceId,
     organizationId,
@@ -246,7 +288,10 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     subject,
     html: renderedEmail.html,
     text: renderedEmail.text,
-    attachments: [{ filename: pdfAttachment.fileName, content: pdfAttachment.base64 }],
+    attachments: [
+      { filename: pdfAttachment.fileName, content: pdfAttachment.base64 },
+      ...(ublAttachment ? [{ filename: ublAttachment.fileName, content: ublAttachment.base64 }] : []),
+    ],
     tags: [
       { name: 'organization_id', value: sanitizeTagValue(organizationId) },
       { name: 'invoice_id', value: sanitizeTagValue(invoiceId) },
@@ -283,7 +328,7 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   }
 
   const finalized = await completeInvoiceEmailSend(prepared.deliveryId, organizationId, userId, providerEmailId);
-  return { delivery: finalized.delivery, version: finalized.version, publicUrl, providerEmailId, paymentLinkIncluded: Boolean(paymentUrl), paymentLinkError, attachment: { fileName: pdfAttachment.fileName, sizeBytes: pdfAttachment.sizeBytes, sha256: pdfAttachment.sha256, storageProvider: storedPdf.provider, storageKey: storedPdf.key } };
+  return { delivery: finalized.delivery, version: finalized.version, publicUrl, providerEmailId, paymentLinkIncluded: Boolean(paymentUrl), paymentLinkError, attachment: { fileName: pdfAttachment.fileName, sizeBytes: pdfAttachment.sizeBytes, sha256: pdfAttachment.sha256, storageProvider: storedPdf.provider, storageKey: storedPdf.key }, ubl: ublAttachment ? { attached: true, fileName: ublAttachment.fileName, warnings: ublAttachment.warnings } : { attached: false, reason: ublSkippedReason } };
 }
 
 // ============================================================
@@ -1263,7 +1308,13 @@ async function issueCreditNoteForRefund(input: { userId: string | null; organiza
     subtotal = Math.round(totals.subtotal * ratio * 100) / 100;
     vat = Math.round((total - subtotal) * 100) / 100;
     const blendedRate = subtotal > 0 ? Math.round((vat / subtotal) * 10000) / 100 : 0;
-    lines = [{ description: `Gedeeltelijke terugbetaling factuur ${invoice.number}${reason ? ` – ${reason}` : ''}`, quantity: 1, unit_price: subtotal, vat: blendedRate }];
+    // Btw-code overnemen als de factuur één categorie heeft: dan blijft de UBL-
+    // e-creditnota fiscaal juist (verlegd/ICP/vrijgesteld). Bij gemengde codes
+    // laten we hem weg — dan leidt de UBL-generator af uit het tarief.
+    const invoiceLines = Array.isArray(invoice.lines) ? invoice.lines : [];
+    const distinctVatCodes = [...new Set(invoiceLines.map((l) => String(l.vat_code ?? '').trim()).filter(Boolean))];
+    const uniformVatCode = distinctVatCodes.length === 1 ? distinctVatCodes[0] : null;
+    lines = [{ description: `Gedeeltelijke terugbetaling factuur ${invoice.number}${reason ? ` – ${reason}` : ''}`, quantity: 1, unit_price: subtotal, vat: blendedRate, ...(uniformVatCode ? { vat_code: uniformVatCode } : {}) }];
   }
 
   // 1. Creditfactuur server-side aanmaken (kent atomair het CN-nummer toe).
@@ -1474,7 +1525,7 @@ async function issueCreditNote(input: { organizationId: string; invoiceId: strin
 async function loadCreditNote(organizationId: string, creditNoteId: string): Promise<Record<string, unknown> | null> {
   const { data, error } = await supabaseAdmin
     .from('credit_notes')
-    .select('id,organization_id,invoice_id,refund_id,number,date,reason,currency,subtotal_amount,vat_amount,total_amount,status,pdf_file_name,pdf_mime_type,pdf_size_bytes,pdf_sha256,pdf_data_base64,pdf_storage_provider,pdf_storage_key,created_at')
+    .select('id,organization_id,invoice_id,refund_id,number,date,reason,currency,subtotal_amount,vat_amount,total_amount,status,lines,pdf_file_name,pdf_mime_type,pdf_size_bytes,pdf_sha256,pdf_data_base64,pdf_storage_provider,pdf_storage_key,created_at')
     .eq('id', creditNoteId)
     .eq('organization_id', organizationId)
     .maybeSingle();
@@ -1537,6 +1588,15 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
 
   const creditNoteNumber = String(input.creditNote.number || '');
   const fileName = String(input.creditNote.pdf_file_name || `creditfactuur-${creditNoteNumber}.pdf`);
+
+  // E-creditnota (UBL) meesturen zodra de gegevens compleet zijn — nooit
+  // blokkerend voor de mail zelf (zelfde patroon als de factuurmail).
+  let creditUbl: UblAttachment | null = null;
+  try {
+    creditUbl = await createCreditNoteUblAttachment(input.organizationId, input.creditNote, input.invoice, { client: input.client, company: input.company });
+  } catch (ublError) {
+    console.warn('UBL-bijlage overgeslagen bij creditnota-mail:', ublError instanceof Error ? ublError.message : ublError);
+  }
   const recipientName = input.recipientName?.trim() || input.client.contact_name || input.client.name || null;
   const content = await loadEmailTemplateContent(input.organizationId, 'creditNote.sent');
 
@@ -1563,7 +1623,10 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
     subject: rendered.subject,
     html: rendered.html,
     text: rendered.text,
-    attachments: [{ filename: fileName, content: base64 }],
+    attachments: [
+      { filename: fileName, content: base64 },
+      ...(creditUbl ? [{ filename: creditUbl.fileName, content: creditUbl.base64 }] : []),
+    ],
     tags: [
       { name: 'organization_id', value: sanitizeTagValue(input.organizationId) },
       { name: 'invoice_id', value: sanitizeTagValue(input.invoice.id) },
@@ -1981,9 +2044,25 @@ async function loadInvoice(organizationId: string, invoiceId: string): Promise<I
   return data as InvoiceRow;
 }
 async function loadClient(organizationId: string, clientId: string): Promise<ClientRow> {
-  const { data, error } = await supabaseAdmin.from('clients').select('id,name,contact_name,email').eq('id', clientId).eq('organization_id', organizationId).single();
+  const { data, error } = await supabaseAdmin.from('clients')
+    .select('id,name,contact_name,email,client_code,client_kind,vat_number,kvk_number,address_line1,address_line2,postal_code,city,country')
+    .eq('id', clientId).eq('organization_id', organizationId).single();
   if (error || !data) throw new WorkflowHttpError('Klant niet gevonden.', 404);
   return data as ClientRow;
+}
+// Btw-code -> kind/tarief van deze organisatie, voor de UBL-categorie-afleiding.
+// Fail-open: zonder (geconfigureerde) btw-codes valt de afleiding terug op het
+// kale tarief per regel — een lookup-fout mag de e-factuur niet blokkeren.
+async function loadVatKindsByCode(organizationId: string): Promise<Record<string, VatKindRef>> {
+  const { data, error } = await supabaseAdmin.from('vat_codes')
+    .select('code,kind,rate')
+    .eq('organization_id', organizationId).eq('is_active', true);
+  if (error) { console.warn('vat_codes lookup voor UBL mislukte:', error.message); return {}; }
+  const byCode: Record<string, VatKindRef> = {};
+  for (const row of (data ?? []) as Array<{ code: string; kind: string; rate: number }>) {
+    byCode[String(row.code)] = { kind: String(row.kind), rate: Number(row.rate) || 0 };
+  }
+  return byCode;
 }
 async function loadProject(organizationId: string, projectId: string): Promise<ProjectRow | null> {
   const { data, error } = await supabaseAdmin.from('projects').select('id,name,description').eq('id', projectId).eq('organization_id', organizationId).maybeSingle();
@@ -1994,8 +2073,130 @@ async function loadQuote(organizationId: string, quoteId: string): Promise<Quote
   if (error) throwSupabaseError('quotes lookup', error); return (data ?? null) as QuoteRow | null;
 }
 async function loadCompanySettings(organizationId: string): Promise<CompanySettingsRow | null> {
-  const { data, error } = await supabaseAdmin.from('company_settings').select('company_name,trade_name,address_line1,address_line2,postal_code,city,country,email,phone,website,kvk_number,vat_number,iban,invoice_payment_terms,invoice_footer,invoice_accent_color').eq('organization_id', organizationId).maybeSingle();
+  const { data, error } = await supabaseAdmin.from('company_settings').select('company_name,trade_name,address_line1,address_line2,postal_code,city,country,email,phone,website,kvk_number,vat_number,iban,invoice_payment_terms,invoice_footer,invoice_accent_color,kor_enabled').eq('organization_id', organizationId).maybeSingle();
   if (error) throwSupabaseError('company_settings lookup', error); return (data ?? null) as CompanySettingsRow | null;
+}
+
+// ============================================================
+// E-factuur (UBL 2.1 / Peppol BIS 3.0)
+// ============================================================
+
+/** company_settings -> UBL-verkoperpartij. */
+function companyToUblParty(company: CompanySettingsRow) {
+  return {
+    name: company.company_name, tradeName: company.trade_name,
+    vatNumber: company.vat_number ?? null, kvkNumber: company.kvk_number ?? null,
+    country: company.country ?? null, addressLine1: company.address_line1 ?? null, addressLine2: company.address_line2 ?? null,
+    postalCode: company.postal_code ?? null, city: company.city ?? null, email: company.email ?? null,
+  };
+}
+
+/** clients-rij -> UBL-koperpartij. */
+function clientToUblParty(client: ClientRow) {
+  return {
+    name: client.name, vatNumber: client.vat_number ?? null, kvkNumber: client.kvk_number ?? null,
+    country: client.country ?? null, addressLine1: client.address_line1 ?? null, addressLine2: client.address_line2 ?? null,
+    postalCode: client.postal_code ?? null, city: client.city ?? null, email: client.email ?? null,
+  };
+}
+
+/** FinanceLine-array -> UBL-regels; verzamelt afleidingswaarschuwingen. */
+function financeLinesToUbl(lines: InvoiceLine[], vatKinds: Record<string, VatKindRef>, korEnabled: boolean, warnings: string[]): UblLine[] {
+  return (Array.isArray(lines) ? lines : []).map((line) => {
+    const derived = deriveSalesLineCategory({ vat: Number(line.vat || 0), vat_code: line.vat_code ?? null }, vatKinds, korEnabled);
+    if (derived.warning) warnings.push(derived.warning);
+    return {
+      description: String(line.description || ''),
+      quantity: Number(line.quantity || 0),
+      unitPrice: Number(line.unit_price || 0),
+      vatRate: derived.vatRate,
+      category: derived.category,
+      exemptionReason: derived.exemptionReason,
+    };
+  });
+}
+
+// Aanroepers die client/company al geladen hebben (sendInvoiceEmail) kunnen ze
+// meegeven zodat we ze niet nogmaals uit de DB halen.
+type UblPreloaded = { client?: ClientRow; company?: CompanySettingsRow | null; vatKinds?: Record<string, VatKindRef> };
+
+/** Bouwt de UBL-XML voor een verkoopfactuur, of gooit 422 met wat er ontbreekt. */
+async function createInvoiceUblAttachment(organizationId: string, invoice: InvoiceRow, preloaded: UblPreloaded = {}): Promise<UblAttachment> {
+  if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld — een e-factuur (UBL) vereist een klant.', 422);
+  const [client, company, vatKinds] = await Promise.all([
+    preloaded.client ?? loadClient(organizationId, invoice.client_id),
+    preloaded.company !== undefined ? preloaded.company : loadCompanySettings(organizationId),
+    preloaded.vatKinds ?? loadVatKindsByCode(organizationId),
+  ]);
+  if (!company) throw new WorkflowHttpError('Vul eerst je bedrijfsgegevens in bij Instellingen → Facturatie voordat je een e-factuur (UBL) maakt.', 422);
+
+  const warnings: string[] = [];
+  const input: UblDocumentInput = {
+    docType: 'invoice',
+    number: invoice.number,
+    issueDate: invoice.date,
+    dueDate: invoice.due_date,
+    currency: invoice.currency || 'EUR',
+    note: invoice.notes,
+    buyerReference: client.client_code || invoice.number,
+    paymentReference: invoice.number,
+    paymentTermsNote: company.invoice_payment_terms ?? null,
+    sellerIban: company.iban ?? null,
+    seller: companyToUblParty(company),
+    buyer: clientToUblParty(client),
+    buyerIsConsumer: client.client_kind === 'consumer',
+    lines: financeLinesToUbl(invoice.lines, vatKinds, Boolean(company.kor_enabled), warnings),
+  };
+  return finalizeUblAttachment(input, `factuur-${sanitizeFileName(invoice.number || invoice.id)}-ubl.xml`, warnings);
+}
+
+/** Bouwt de UBL-CreditNote-XML voor een creditnota (bedragen positief, type 381). */
+async function createCreditNoteUblAttachment(organizationId: string, creditNote: Record<string, unknown>, invoice: InvoiceRow, preloaded: UblPreloaded = {}): Promise<UblAttachment> {
+  if (!invoice.client_id) throw new WorkflowHttpError('De oorspronkelijke factuur heeft geen klant gekoppeld — een e-creditnota (UBL) vereist een klant.', 422);
+  const [client, company, vatKinds] = await Promise.all([
+    preloaded.client ?? loadClient(organizationId, invoice.client_id),
+    preloaded.company !== undefined ? preloaded.company : loadCompanySettings(organizationId),
+    preloaded.vatKinds ?? loadVatKindsByCode(organizationId),
+  ]);
+  if (!company) throw new WorkflowHttpError('Vul eerst je bedrijfsgegevens in bij Instellingen → Facturatie voordat je een e-creditnota (UBL) maakt.', 422);
+
+  const creditNumber = String(creditNote.number || '');
+  const warnings: string[] = [];
+  const creditLines = (Array.isArray(creditNote.lines) ? creditNote.lines : []) as InvoiceLine[];
+  const input: UblDocumentInput = {
+    docType: 'creditNote',
+    number: creditNumber,
+    issueDate: String(creditNote.date || ''),
+    currency: String(creditNote.currency || invoice.currency || 'EUR'),
+    note: (creditNote.reason as string | null) ?? null,
+    buyerReference: client.client_code || creditNumber,
+    originalInvoiceNumber: invoice.number,
+    originalInvoiceDate: invoice.date,
+    seller: companyToUblParty(company),
+    buyer: clientToUblParty(client),
+    buyerIsConsumer: client.client_kind === 'consumer',
+    lines: financeLinesToUbl(creditLines, vatKinds, Boolean(company.kor_enabled), warnings),
+  };
+  return finalizeUblAttachment(input, `creditfactuur-${sanitizeFileName(creditNumber || String(creditNote.id))}-ubl.xml`, warnings);
+}
+
+/** Valideert, bouwt en verpakt de XML als downloadbare/mailbare bijlage. */
+async function finalizeUblAttachment(input: UblDocumentInput, fileName: string, warnings: string[]): Promise<UblAttachment> {
+  const validation = validateUblInput(input);
+  if (validation.errors.length > 0) {
+    throw new WorkflowHttpError(`E-factuur (UBL) kan nog niet worden gemaakt:\n- ${validation.errors.join('\n- ')}`, 422);
+  }
+  warnings.push(...validation.warnings);
+  const xml = buildUblXml(input);
+  const bytes = new TextEncoder().encode(xml);
+  return {
+    fileName,
+    mimeType: 'application/xml',
+    base64: bytesToBase64(bytes),
+    sizeBytes: bytes.byteLength,
+    sha256: await sha256HexBytes(bytes),
+    warnings,
+  };
 }
 
 // Per-organisatie aanpasbare e-mailtekst (onderwerp/aanhef/afsluiting/knoptekst).
@@ -2253,7 +2454,9 @@ async function createInvoicePdfAttachment(input: { invoice: InvoiceRow; client: 
   y = 620;
   drawSectionTitle(page, 'Klant', 48, y, bold, accent, muted); y -= 24;
   for (const line of clientAddressLines(client)) { drawPdfText(page, line, 48, y, line === client.name ? bold : regular, 10); y -= 14; }
-  y = 500;
+  // Tabelstart dynamisch: een klant met volledig adres + btw-nummer telt tot 8
+  // regels, die anders over de vaste tabelkop (y=500) zouden lopen.
+  y = Math.min(500, y - 10);
   drawTableHeader(page, y, bold, accent, muted); y -= 28;
   const lines = Array.isArray(invoice.lines) ? invoice.lines : [];
   for (const line of lines) {
@@ -2312,7 +2515,9 @@ async function createCreditNotePdfAttachment(input: { creditNoteNumber: string; 
   drawSectionTitle(page, 'Klant', 48, y, bold, accent, muted); y -= 24;
   for (const line of clientAddressLines(client)) { drawPdfText(page, line, 48, y, line === client.name ? bold : regular, 10); y -= 14; }
 
-  y = 510;
+  // Tabelstart dynamisch (zie factuur-PDF): voorkom overlap met de tabelkop bij
+  // een klant met volledig adres + btw-nummer.
+  y = Math.min(510, y - 10);
   drawTableHeader(page, y, bold, accent, muted); y -= 28;
   for (const line of (Array.isArray(lines) ? lines : [])) {
     if (y < 180) { drawPdfFooter(page, regular, company); page = pdfDoc.addPage([595.28, 841.89]); y = 780; drawTableHeader(page, y, bold, accent, muted); y -= 28; }
@@ -2347,7 +2552,7 @@ function wrapPdfText(text: string, font: PDFFont, size: number, maxWidth: number
 function splitLongPdfWord(word: string, font: PDFFont, size: number, maxWidth: number): string[] { const chunks: string[] = []; let current = ''; for (const char of word) { const candidate = current + char; if (current && font.widthOfTextAtSize(candidate, size) > maxWidth) { chunks.push(current); current = char; } else current = candidate; } if (current) chunks.push(current); return chunks; }
 function normalizePdfText(value: unknown): string { return String(value ?? '').normalize('NFKC').replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"').replace(/[\u2013\u2014\u2212]/g, '-').replace(/\u2026/g, '...').replace(/\u2022/g, '-').replace(/€/g, 'EUR').replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').split('').filter((char) => { const code = char.charCodeAt(0); return (code >= 32 && code <= 126) || (code >= 160 && code <= 255); }).join('').trim(); }
 function companyAddressLines(company: CompanySettingsRow | null): string[] { if (!company) return ['ResoFly']; const cityLine = [company.postal_code, company.city].filter(Boolean).join(' '); return [company.company_name, company.trade_name && company.trade_name !== company.company_name ? company.trade_name : '', company.address_line1, company.address_line2, cityLine, company.country, company.email ? `E-mail: ${company.email}` : '', company.phone ? `Tel: ${company.phone}` : '', company.website ? `Web: ${company.website}` : '', company.kvk_number ? `KvK: ${company.kvk_number}` : '', company.vat_number ? `BTW: ${company.vat_number}` : '', company.iban ? `IBAN: ${company.iban}` : ''].filter((value) => normalizePdfText(value).length > 0).map(normalizePdfText); }
-function clientAddressLines(client: ClientRow): string[] { return [client.name, client.contact_name ? `T.a.v. ${client.contact_name}` : '', client.email ? `E-mail: ${client.email}` : ''].filter((value) => normalizePdfText(value).length > 0).map(normalizePdfText); }
+function clientAddressLines(client: ClientRow): string[] { const cityLine = [client.postal_code, client.city].filter(Boolean).join(' '); return [client.name, client.contact_name ? `T.a.v. ${client.contact_name}` : '', client.address_line1 ?? '', client.address_line2 ?? '', cityLine, client.country ?? '', client.vat_number ? `BTW: ${client.vat_number}` : '', client.email ? `E-mail: ${client.email}` : ''].filter((value) => normalizePdfText(value).length > 0).map(normalizePdfText); }
 function toCents(euros: number): number {
   if (!Number.isFinite(euros)) return 0;
   const scaled = euros * 100;

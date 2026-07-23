@@ -220,7 +220,7 @@ export interface ContractVersion {
 }
 
 export interface Client extends OrgScopedRow {
-  name: string; client_code: string | null; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; color: string; status: ClientStatus; client_kind: ClientKind; tags: string[]; follow_up: string | null; value_eur: number; created_at: string; updated_at: string;
+  name: string; client_code: string | null; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; color: string; status: ClientStatus; client_kind: ClientKind; tags: string[]; follow_up: string | null; value_eur: number; vat_number: string | null; kvk_number: string | null; address_line1: string | null; address_line2: string | null; postal_code: string | null; city: string | null; country: string | null; created_at: string; updated_at: string;
 }
 export interface ClientContact extends OrgScopedRow {
   client_id: UUID; name: string; email: string; phone: string | null; role: string | null; gives_portal_access: boolean; is_active: boolean; created_at: string; updated_at: string;
@@ -408,7 +408,10 @@ export interface CalendarNoteLinkInput {
   visibility_snapshot: CalendarVisibility;
   is_private_masked_snapshot: boolean;
 }
-export interface FinanceLine { id: UUID; description: string; quantity: number; unit_price: number; vat: number; }
+// vat_code is optioneel: verwijst naar vat_codes.code van de organisatie en maakt
+// 0%-regels ondubbelzinnig voor de UBL-e-factuur (nul/verlegd/ICP/vrijgesteld).
+// Zonder code leidt de UBL-generator de categorie af uit het kale percentage.
+export interface FinanceLine { id: UUID; description: string; quantity: number; unit_price: number; vat: number; vat_code?: string | null; }
 export interface Quote extends OrgScopedRow {
   client_id: UUID | null;
   project_id: UUID | null;
