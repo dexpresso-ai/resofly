@@ -28,7 +28,7 @@ alter table public.journal_entries drop constraint if exists journal_entries_sou
 alter table public.journal_entries
   add constraint journal_entries_source_type_check check (source_type in (
     'sales_invoice','purchase_invoice','asset_depreciation','asset_acquisition','asset_disposal',
-    'vat_return','payment','opening_balance','manual','year_close'
+    'vat_return','payment','opening_balance','manual','year_close','credit_note'
   ));
 
 -- ------------------------------------------------------------
