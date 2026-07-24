@@ -1,7 +1,7 @@
-import { useMemo, useRef, useState } from 'react';
-import { BookOpen, FileDown, FileText, Layers, PenSquare, Plus, RotateCcw, Scale, Sparkles, Trash2, Upload } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, Calculator, FileDown, FileText, Layers, PenSquare, Plus, RotateCcw, Scale, Sparkles, Trash2, Upload } from 'lucide-react';
 import type {
-  AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PurchaseInvoice, PurchaseInvoiceLine, Supplier, UUID, VatCode,
+  AccountLedgerRow, AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PurchaseInvoice, PurchaseInvoiceLine, Supplier, TrialBalanceRow, UUID, VatCode,
 } from '../types';
 import { Modal } from '../components/Modal';
 import { CsvImportModal } from '../components/CsvImportModal';
@@ -10,7 +10,7 @@ import { Button, Input, Select, Textarea } from '../components/Ui';
 import { dateNL, euro, uid } from '../lib/format';
 import {
   bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, insertRow,
-  postManualJournalEntry, reverseJournalEntry, updateRow,
+  postManualJournalEntry, reportAccountLedger, reportTrialBalance, reverseJournalEntry, updateRow,
 } from '../lib/repository';
 import { downloadXaf } from '../lib/xaf';
 import { uploadToR2 } from '../lib/r2';
@@ -208,17 +208,30 @@ function nextPurchaseNumber(data: AppData, date = new Date()): string {
   return `${prefix}${String(max + 1).padStart(4, '0')}`;
 }
 
-/** Header-totalen: BTW per tariefgroep afgerond (gelijk aan de serverboeking). */
-function purchaseTotals(lines: PurchaseInvoiceLine[]) {
-  const byRate = new Map<number, number>();
+/** Header-totalen: BTW per (kostenrekening, btw-code, tarief)-groep afgerond, dan
+ *  gesommeerd — identiek aan book_purchase_invoice (dat per zo'n groep boekt met
+ *  round(Σbase * tarief/100)). Zo sluiten de opgeslagen totalen cent-exact aan op
+ *  de crediteurenregel (1600) van de grootboekboeking, ook als twee regels met
+ *  hetzelfde tarief op verschillende kostenrekeningen staan.
+ *  fallbackAccountId spiegelt de server-coalesce van een lege rekening → 4500,
+ *  zodat een blanco regel en een expliciete 4500-regel in dezelfde groep vallen. */
+function purchaseTotals(lines: PurchaseInvoiceLine[], fallbackAccountId: UUID | null = null) {
+  const groups = new Map<string, { base: number; rate: number }>();
   let subtotal = 0;
   for (const l of lines) {
     const base = Number(l.amount_cents) || 0;
     subtotal += base;
-    byRate.set(l.vat_rate || 0, (byRate.get(l.vat_rate || 0) || 0) + base);
+    const rate = l.vat_rate || 0;
+    // Groepeer zoals de backend: op (account_id, vat_code, tarief). Een lege
+    // rekening valt (net als server-side coalesce) op de vangnetrekening 4500.
+    const account = l.account_id || fallbackAccountId || '';
+    const key = `${account}|${(l.vat_code ?? '').trim()}|${rate}`;
+    const g = groups.get(key);
+    if (g) g.base += base;
+    else groups.set(key, { base, rate });
   }
   let vat = 0;
-  byRate.forEach((base, rate) => { vat += Math.round((base * rate) / 100); });
+  groups.forEach(g => { vat += Math.round((g.base * g.rate) / 100); });
   return { subtotal_cents: subtotal, vat_cents: vat, total_cents: subtotal + vat };
 }
 
@@ -465,6 +478,8 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
   onClose: () => void; onSaved: () => void;
 }) {
   const expenseAccounts = useMemo(() => data.ledgerAccounts.filter(a => a.type === 'expense' || a.type === 'asset'), [data.ledgerAccounts]);
+  // Vangnetrekening voor regels zonder gekozen grootboek (spiegelt de server-coalesce → 4500).
+  const fallbackAccountId = useMemo(() => data.ledgerAccounts.find(a => a.code === '4500')?.id ?? null, [data.ledgerAccounts]);
   const defaultVat = data.vatCodes.find(v => v.code === 'HOOG') ?? data.vatCodes[0];
   const today = new Date().toISOString().slice(0, 10);
   const readOnly = !canWrite || (invoice != null && invoice.status !== 'draft');
@@ -495,7 +510,7 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
   const addLine = () => setLines(ls => [...ls, { id: uid(), description: '', amount_cents: 0, vat_code: defaultVat?.code ?? 'HOOG', vat_rate: defaultVat?.rate ?? 21, account_id: null }]);
   const removeLine = (id: string) => setLines(ls => ls.length > 1 ? ls.filter(l => l.id !== id) : ls);
 
-  const totals = purchaseTotals(lines);
+  const totals = purchaseTotals(lines, fallbackAccountId);
 
   async function save() {
     if (!form.supplier_id) { setError('Kies een leverancier.'); return; }
@@ -510,7 +525,7 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
         const createdSupplier = await insertRow<Supplier>('suppliers', organizationId, { ...seed.newSupplier, status: 'active' });
         supplierId = createdSupplier.id;
       }
-      const t = purchaseTotals(cleaned);
+      const t = purchaseTotals(cleaned, fallbackAccountId);
       const values = {
         supplier_id: supplierId, supplier_invoice_number: form.supplier_invoice_number || null,
         internal_number: form.internal_number || nextPurchaseNumber(data), date: form.date, due_date: form.due_date || null,
@@ -620,7 +635,7 @@ function ledgerFiscalYearBounds(startMonth: number, year: number): { start: stri
 }
 
 export function LedgerPage({ data, organizationId, canWrite, onChanged }: PageProps) {
-  const [tab, setTab] = useState<'journal' | 'accounts' | 'vat' | 'opening'>('journal');
+  const [tab, setTab] = useState<'journal' | 'accounts' | 'trial' | 'vat' | 'opening'>('journal');
   const [xafYear, setXafYear] = useState(new Date().getFullYear());
   const fiscalStartMonth = data.companySettings?.fiscal_year_start_month ?? 1;
 
@@ -654,14 +669,121 @@ export function LedgerPage({ data, organizationId, canWrite, onChanged }: PagePr
       <div className="bk-tabs">
         <button className={tab === 'journal' ? 'is-active' : ''} onClick={() => setTab('journal')}><BookOpen size={15} /> Journaal</button>
         <button className={tab === 'accounts' ? 'is-active' : ''} onClick={() => setTab('accounts')}><Layers size={15} /> Rekeningschema</button>
+        <button className={tab === 'trial' ? 'is-active' : ''} onClick={() => setTab('trial')}><Calculator size={15} /> Saldibalans</button>
         <button className={tab === 'vat' ? 'is-active' : ''} onClick={() => setTab('vat')}><FileDown size={15} /> BTW-codes</button>
         <button className={tab === 'opening' ? 'is-active' : ''} onClick={() => setTab('opening')}><Scale size={15} /> Beginbalans</button>
       </div>
       {tab === 'journal' && <JournalView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
       {tab === 'accounts' && <AccountsView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
+      {tab === 'trial' && <TrialBalanceView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
       {tab === 'vat' && <VatCodesView vatCodes={data.vatCodes} />}
       {tab === 'opening' && <OpeningBalanceView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
     </div>
+  );
+}
+
+// ─────────────────────────── Saldibalans + grootboekkaart ───────────────────────────
+
+/** Proef-/saldibalans per peildatum; elke rekening opent een klikbare grootboekkaart. */
+function TrialBalanceView({ organizationId }: PageProps) {
+  const [asOf, setAsOf] = useState(() => new Date().toISOString().slice(0, 10));
+  const [rows, setRows] = useState<TrialBalanceRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [ledgerAccount, setLedgerAccount] = useState<{ id: UUID; code: string; name: string } | null>(null);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try { setRows(await reportTrialBalance(organizationId, asOf)); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Saldibalans laden mislukt'); }
+  }, [organizationId, asOf]);
+  useEffect(() => { load(); }, [load]);
+
+  const totalDebit = (rows ?? []).reduce((s, r) => s + r.debit_cents, 0);
+  const totalCredit = (rows ?? []).reduce((s, r) => s + r.credit_cents, 0);
+  const balanced = totalDebit === totalCredit;
+
+  return (
+    <div className="bk-accounts">
+      <div className="bk-subhead">
+        <p className="bk-muted">Per grootboekrekening het totaal geboekte debet en credit met het saldo t/m de peildatum — inclusief de jaarafsluiting, dus de werkelijke grootboekstand. Klik een rekening voor de grootboekkaart.</p>
+        <Field label="Peildatum"><Input type="date" value={asOf} onChange={e => setAsOf(e.target.value)} /></Field>
+      </div>
+      {error && <div className="error">{error}</div>}
+      {rows === null
+        ? <div className="bk-report-loading bk-muted">Saldibalans laden…</div>
+        : rows.length === 0
+        ? <div className="empty"><div className="e-big">Nog geen boekingen</div><p>Zodra je boekt, verschijnt hier de proef- en saldibalans.</p></div>
+        : <div className="bk-table-wrap"><table className="bk-table">
+            <thead><tr><th>Rekening</th><th className="bk-num">Debet</th><th className="bk-num">Credit</th><th className="bk-num">Saldo</th></tr></thead>
+            <tbody>{rows.map(r => (
+              <tr key={r.account_id} className="bk-row" onClick={() => setLedgerAccount({ id: r.account_id, code: r.code, name: r.name })}>
+                <td><strong>{r.code}</strong> · {r.name}</td>
+                <td className="bk-num">{r.debit_cents ? euroCents(r.debit_cents) : ''}</td>
+                <td className="bk-num">{r.credit_cents ? euroCents(r.credit_cents) : ''}</td>
+                <td className="bk-num">{euroCents(r.balance_cents)}</td>
+              </tr>
+            ))}</tbody>
+            <tfoot><tr className="bk-report-total">
+              <td>Totaal · {balanced ? <span className="bk-balance-ok">✓ in balans</span> : <span className="bk-balance-bad">⚠ niet in balans</span>}</td>
+              <td className="bk-num"><strong>{euroCents(totalDebit)}</strong></td>
+              <td className="bk-num"><strong>{euroCents(totalCredit)}</strong></td>
+              <td className="bk-num" />
+            </tr></tfoot>
+          </table></div>}
+      {ledgerAccount && <AccountLedgerModal organizationId={organizationId} account={ledgerAccount} onClose={() => setLedgerAccount(null)} />}
+    </div>
+  );
+}
+
+/** Grootboekkaart: mutaties op één rekening in een periode, met beginsaldo en lopend saldo. */
+function AccountLedgerModal({ organizationId, account, onClose }: {
+  organizationId: string; account: { id: UUID; code: string; name: string }; onClose: () => void;
+}) {
+  const year = new Date().getFullYear();
+  const [from, setFrom] = useState(`${year}-01-01`);
+  const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [rows, setRows] = useState<AccountLedgerRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try { setRows(await reportAccountLedger(organizationId, account.id, from, to)); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Grootboekkaart laden mislukt'); }
+  }, [organizationId, account.id, from, to]);
+  useEffect(() => { load(); }, [load]);
+
+  // De laatste rij draagt het eindsaldo (loopt door vanaf het beginsaldo).
+  const endBalance = rows && rows.length > 0 ? rows[rows.length - 1].running_balance_cents : 0;
+  const hasMovement = (rows ?? []).some(r => r.entry_id);
+
+  return (
+    <Modal className="bk-modal-wide" title={`Grootboekkaart ${account.code} · ${account.name}`} onClose={onClose}
+      footer={<div className="bk-foot"><span className="bk-spacer" /><Button onClick={onClose}>Sluiten</Button></div>}>
+      <div className="bk-form-grid">
+        <Field label="Van"><Input type="date" value={from} onChange={e => setFrom(e.target.value)} /></Field>
+        <Field label="Tot en met"><Input type="date" value={to} onChange={e => setTo(e.target.value)} /></Field>
+      </div>
+      {error && <div className="error">{error}</div>}
+      {rows === null
+        ? <div className="bk-report-loading bk-muted">Grootboekkaart laden…</div>
+        : <>
+            <div className="bk-table-wrap"><table className="bk-table">
+              <thead><tr><th>Datum</th><th>Boekstuk</th><th>Omschrijving</th><th className="bk-num">Debet</th><th className="bk-num">Credit</th><th className="bk-num">Saldo</th></tr></thead>
+              <tbody>{rows.map((r, i) => (
+                <tr key={r.entry_id ?? `open-${i}`} className={r.entry_id ? '' : 'bk-ledger-open'}>
+                  <td>{r.date ? dateNL(r.date) : ''}</td>
+                  <td>{r.entry_number || ''}</td>
+                  <td>{r.description || '—'}</td>
+                  <td className="bk-num">{r.debit_cents ? euroCents(r.debit_cents) : ''}</td>
+                  <td className="bk-num">{r.credit_cents ? euroCents(r.credit_cents) : ''}</td>
+                  <td className="bk-num">{euroCents(r.running_balance_cents)}</td>
+                </tr>
+              ))}</tbody>
+              <tfoot><tr className="bk-report-total"><td colSpan={5}>Eindsaldo per {dateNL(to)}</td><td className="bk-num"><strong>{euroCents(endBalance)}</strong></td></tr></tfoot>
+            </table></div>
+            {!hasMovement && <p className="bk-muted">Geen mutaties in deze periode; alleen het beginsaldo wordt getoond.</p>}
+          </>}
+    </Modal>
   );
 }
 
@@ -669,6 +791,8 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showMemorial, setShowMemorial] = useState(false);
+  const [reversing, setReversing] = useState<JournalEntry | null>(null);
+  const [reverseDate, setReverseDate] = useState(() => new Date().toISOString().slice(0, 10));
   const accountLabel = (id: string) => {
     const a = data.ledgerAccounts.find(x => x.id === id);
     return a ? `${a.code} · ${a.name}` : id;
@@ -683,10 +807,18 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
     return map;
   }, [data.journalLines]);
 
-  async function reverse(entry: JournalEntry) {
-    if (!canWrite || !confirm(`Boekstuk ${entry.entry_number} tegenboeken?`)) return;
+  function askReverse(entry: JournalEntry) {
+    if (!canWrite) return;
+    setError(null);
+    setReverseDate(new Date().toISOString().slice(0, 10));
+    setReversing(entry);
+  }
+
+  async function confirmReverse() {
+    if (!reversing) return;
+    const entry = reversing;
     setBusyId(entry.id); setError(null);
-    try { await reverseJournalEntry(entry.id); onChanged(); }
+    try { await reverseJournalEntry(entry.id, reverseDate); setReversing(null); onChanged(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Tegenboeken mislukt'); }
     finally { setBusyId(null); }
   }
@@ -705,6 +837,17 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
           onClose={() => setShowMemorial(false)}
           onSaved={() => { setShowMemorial(false); onChanged(); }}
         />
+      )}
+      {reversing && (
+        <Modal title={`Boekstuk ${reversing.entry_number ?? ''} tegenboeken`} onClose={() => setReversing(null)}
+          footer={<div className="bk-foot">
+            <span className="bk-spacer" />
+            <Button onClick={() => setReversing(null)}>Annuleren</Button>
+            <Button variant="primary" onClick={confirmReverse} disabled={busyId === reversing.id}><RotateCcw size={14} /> {busyId === reversing.id ? 'Bezig…' : 'Tegenboeken'}</Button>
+          </div>}>
+          <p className="bk-muted">Er wordt een spiegelboeking gemaakt die {reversing.entry_number} neutraliseert. Kies de boekdatum van de tegenboeking (standaard vandaag); in een afgesloten periode boeken kan niet.</p>
+          <Field label="Boekdatum tegenboeking"><Input type="date" value={reverseDate} onChange={e => setReverseDate(e.target.value)} /></Field>
+        </Modal>
       )}
       {data.journalEntries.length === 0 && (
         <div className="empty"><div className="e-big">Nog geen journaalposten</div><p>Boek een inkoop- of verkoopfactuur om te beginnen, of maak een memoriaalboeking.</p></div>
@@ -734,7 +877,7 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
               <div className="bk-entry-actions">
                 <span className={`status-pill bk-je-${isReversedPair ? 'reversed' : entry.status}`}>{pill}</span>
                 {canReverse && (
-                  <Button onClick={() => reverse(entry)} disabled={busyId === entry.id}><RotateCcw size={13} /> {busyId === entry.id ? '…' : 'Tegenboeken'}</Button>
+                  <Button onClick={() => askReverse(entry)} disabled={busyId === entry.id}><RotateCcw size={13} /> {busyId === entry.id ? '…' : 'Tegenboeken'}</Button>
                 )}
               </div>
             </div>
@@ -759,7 +902,7 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
 
 // ─────────────────────────────── Memoriaalboeking ───────────────────────────────
 
-type MemorialLine = { key: string; account_id: string; description: string; debit: string; credit: string; vat_code: string };
+type MemorialLine = { key: string; account_id: string; description: string; debit: string; credit: string; vat_code: string; client_id: string; supplier_id: string; project_id: string };
 
 const parseEuro = (v: string): number => Math.round((parseFloat(v.replace(',', '.')) || 0) * 100);
 
@@ -768,12 +911,13 @@ function MemorialModal({ data, organizationId, onClose, onSaved }: {
 }) {
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [description, setDescription] = useState('');
-  const emptyLine = (): MemorialLine => ({ key: uid(), account_id: '', description: '', debit: '', credit: '', vat_code: '' });
+  const emptyLine = (): MemorialLine => ({ key: uid(), account_id: '', description: '', debit: '', credit: '', vat_code: '', client_id: '', supplier_id: '', project_id: '' });
   const [lines, setLines] = useState<MemorialLine[]>([emptyLine(), emptyLine()]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const accounts = data.ledgerAccounts.filter(a => a.is_active);
+  const activeProjects = useMemo(() => data.projects.filter(p => !p.archived), [data.projects]);
   const accountById = useMemo(() => new Map(data.ledgerAccounts.map(a => [a.id, a])), [data.ledgerAccounts]);
   const update = (key: string, patch: Partial<MemorialLine>) => setLines(ls => ls.map(l => (l.key === key ? { ...l, ...patch } : l)));
 
@@ -804,6 +948,11 @@ function MemorialModal({ data, organizationId, onClose, onSaved }: {
             description: l.description.trim() || null,
             debit_cents: debit,
             credit_cents: credit,
+            // Tegenpartij/project meesturen zodat handmatige correcties op
+            // debiteuren/crediteuren per partij meetellen in report_open_items.
+            ...(l.client_id ? { client_id: l.client_id } : {}),
+            ...(l.supplier_id ? { supplier_id: l.supplier_id } : {}),
+            ...(l.project_id ? { project_id: l.project_id } : {}),
             ...(code ? {
               vat_code: code.code,
               vat_rate: code.rate,
@@ -822,22 +971,45 @@ function MemorialModal({ data, organizationId, onClose, onSaved }: {
   }
 
   return (
-    <Modal title="Memoriaalboeking" onClose={onClose}>
-      <p className="bk-muted">Vrije journaalpost. Debet en credit moeten gelijk zijn; een btw-code op een omzet- of kostenregel zorgt dat de aangifte de grondslag in de juiste rubriek telt (boek de btw zelf op 1500/1510).</p>
+    <Modal className="bk-modal-wide" title="Memoriaalboeking" onClose={onClose}>
+      <p className="bk-muted">Vrije journaalpost. Debet en credit moeten gelijk zijn; een btw-code op een omzet- of kostenregel zorgt dat de aangifte de grondslag in de juiste rubriek telt (boek de btw zelf op 1500/1510). Kies bij een debiteuren- of crediteurenregel de klant of leverancier, zodat de correctie in de openstaande posten per partij meetelt.</p>
       {error && <div className="error">{error}</div>}
       <div className="bk-form-grid">
         <Field label="Boekdatum" hint="In een afgesloten periode boeken kan niet; kies een datum in een open periode."><Input type="date" value={date} onChange={e => setDate(e.target.value)} /></Field>
         <Field label="Omschrijving"><Input value={description} onChange={e => setDescription(e.target.value)} placeholder="Bijv. correctie telefoonkosten Q1" /></Field>
       </div>
       <div className="bk-lines">
-        <div className="bk-lines-head bk-lines-head-memorial"><span>Rekening</span><span>Omschrijving</span><span>BTW-code</span><span className="bk-num">Debet</span><span className="bk-num">Credit</span><span /></div>
-        {lines.map(l => (
+        <div className="bk-lines-head bk-lines-head-memorial"><span>Rekening</span><span>Omschrijving</span><span>Tegenpartij</span><span>Project</span><span>BTW</span><span className="bk-num">Debet</span><span className="bk-num">Credit</span><span /></div>
+        {lines.map(l => {
+          const acc = accountById.get(l.account_id);
+          const isReceivable = acc?.subtype === 'accounts_receivable';
+          const isPayable = acc?.subtype === 'accounts_payable';
+          return (
           <div className="bk-line bk-line-memorial" key={l.key}>
-            <Select value={l.account_id} onChange={e => update(l.key, { account_id: e.target.value })}>
+            <Select value={l.account_id} onChange={e => update(l.key, { account_id: e.target.value, client_id: '', supplier_id: '' })}>
               <option value="">— rekening —</option>
               {accounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
             </Select>
             <Input value={l.description} placeholder="Omschrijving" onChange={e => update(l.key, { description: e.target.value })} />
+            {isReceivable ? (
+              <Select value={l.client_id} onChange={e => update(l.key, { client_id: e.target.value })} aria-label="Klant">
+                <option value="">— klant —</option>
+                {data.clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </Select>
+            ) : isPayable ? (
+              <Select value={l.supplier_id} onChange={e => update(l.key, { supplier_id: e.target.value })} aria-label="Leverancier">
+                <option value="">— leverancier —</option>
+                {data.suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </Select>
+            ) : (
+              <Select value="" disabled aria-label="Tegenpartij niet van toepassing">
+                <option value="">n.v.t.</option>
+              </Select>
+            )}
+            <Select value={l.project_id} onChange={e => update(l.key, { project_id: e.target.value })} aria-label="Project">
+              <option value="">— geen —</option>
+              {activeProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </Select>
             <Select value={l.vat_code} onChange={e => update(l.key, { vat_code: e.target.value })}>
               <option value="">— geen —</option>
               {data.vatCodes.filter(v => v.is_active).map(v => <option key={v.id} value={v.code}>{v.code}</option>)}
@@ -848,7 +1020,8 @@ function MemorialModal({ data, organizationId, onClose, onSaved }: {
               onChange={e => update(l.key, { credit: e.target.value, debit: e.target.value ? '' : l.debit })} />
             <button className="bk-line-del" onClick={() => setLines(ls => (ls.length > 2 ? ls.filter(x => x.key !== l.key) : ls))} title="Regel verwijderen">×</button>
           </div>
-        ))}
+          );
+        })}
         <button className="bk-add-line" onClick={() => setLines(ls => [...ls, emptyLine()])}><Plus size={14} /> Regel toevoegen</button>
       </div>
       <div className="bk-totals">
@@ -1040,10 +1213,12 @@ function LedgerAccountForm({ data, organizationId, canWrite, account, onClose, o
     setBusy(true); setError(null);
     try {
       if (account) {
-        // Systeemrekeningen: alleen naam, BTW-standaard en actief-status mogen wijzigen.
-        // Code en type worden door de boekings-RPC's op code opgezocht en moeten stabiel blijven.
+        // Systeemrekeningen: alleen naam en BTW-standaard mogen wijzigen. Code en type
+        // worden door de boekings-RPC's op code opgezocht en moeten stabiel blijven; de
+        // actief-status blijft óók vast, want anders zou een systeemrekening uit de
+        // keuzelijsten verdwijnen terwijl automatische boekingen hem nog op code opzoeken.
         const patch = isSystem
-          ? { name: form.name, default_vat_code: form.default_vat_code || null, is_active: Boolean(form.is_active) }
+          ? { name: form.name, default_vat_code: form.default_vat_code || null }
           : { code: String(form.code).trim(), name: form.name, type: form.type, subtype: form.subtype || null, default_vat_code: form.default_vat_code || null, is_active: Boolean(form.is_active) };
         await updateRow<LedgerAccount>('ledger_accounts', account.id, patch, organizationId);
       } else {
@@ -1073,7 +1248,7 @@ function LedgerAccountForm({ data, organizationId, canWrite, account, onClose, o
         {canWrite && <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Bezig…' : 'Opslaan'}</Button>}
       </div>}>
       {error && <div className="error">{error}</div>}
-      {isSystem && <div className="bk-note">Dit is een systeemrekening. De code en het type liggen vast omdat het automatisch boeken die rekening op code opzoekt — je kunt wel de naam, standaard-BTW en de actief-status aanpassen.</div>}
+      {isSystem && <div className="bk-note">Dit is een systeemrekening. De code, het type en de actief-status liggen vast omdat het automatisch boeken deze rekening op code opzoekt — je kunt wel de naam en standaard-BTW aanpassen.</div>}
       <div className="bk-grid2">
         <Field label="Code" hint="Bijv. 4600 of 8040"><Input value={form.code} onChange={e => set('code', e.target.value)} disabled={!canWrite || isSystem} /></Field>
         <Field label="Naam"><Input value={form.name} onChange={e => set('name', e.target.value)} disabled={!canWrite} /></Field>
@@ -1090,8 +1265,8 @@ function LedgerAccountForm({ data, organizationId, canWrite, account, onClose, o
         </Field>
       </div>
       <label className="bk-setting-check bk-account-active">
-        <input type="checkbox" checked={Boolean(form.is_active)} onChange={e => set('is_active', e.target.checked)} disabled={!canWrite} />
-        <span>Actief (verschijnt in keuzelijsten bij het boeken)</span>
+        <input type="checkbox" checked={Boolean(form.is_active)} onChange={e => set('is_active', e.target.checked)} disabled={!canWrite || isSystem} />
+        <span>Actief (verschijnt in keuzelijsten bij het boeken){isSystem && <small className="bk-muted"> · systeemrekening blijft altijd actief</small>}</span>
       </label>
     </Modal>
   );

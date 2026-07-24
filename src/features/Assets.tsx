@@ -5,7 +5,7 @@ import { Modal } from '../components/Modal';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { dateNL, euro, uid } from '../lib/format';
 import {
-  bookAssetAcquisition, deleteRow, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, postAssetDepreciation, updateRow,
+  bookAssetAcquisition, bookAssetDisposal, deleteRow, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, postAssetDepreciation, updateRow,
 } from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
@@ -150,6 +150,9 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
   const [error, setError] = useState<string | null>(null);
   const [throughDate, setThroughDate] = useState<string>(endOfCurrentMonth());
   const [creditAccountId, setCreditAccountId] = useState<string>(() => accountId('1600'));
+  const [counterAccountId, setCounterAccountId] = useState<string>(() => accountId('1100'));
+  const [disposalDate, setDisposalDate] = useState<string>(today);
+  const [disposalProceedsCents, setDisposalProceedsCents] = useState<number>(0);
   const set = (k: string, v: unknown) => setForm(f => ({ ...f, [k]: v }));
 
   const schedule = useMemo(
@@ -157,7 +160,11 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
     [data.assetDepreciations, currentAsset],
   );
   const hasPosted = schedule.some(d => d.status === 'posted');
-  const financialsLocked = !canWrite || hasPosted;
+  // Zodra de aanschaf op de balans staat (of er is afgeschreven) zijn de financiële
+  // velden vergrendeld — anders zouden het activum en de journaalpost uiteenlopen.
+  const acquisitionBooked = Boolean(currentAsset?.acquisition_journal_entry_id);
+  const isDisposed = currentAsset?.status === 'disposed';
+  const financialsLocked = !canWrite || hasPosted || acquisitionBooked;
 
   async function save() {
     if (!String(form.name || '').trim()) { setError('Naam is verplicht.'); return; }
@@ -190,6 +197,17 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
     setBusy(true); setError(null);
     try { const updated = await bookAssetAcquisition(organizationId, currentAsset.id, creditAccountId); setCurrentAsset(updated); onChanged(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Aanschaf boeken mislukt'); }
+    finally { setBusy(false); }
+  }
+
+  async function dispose() {
+    if (!currentAsset || !counterAccountId) return;
+    if (!confirm(`Activum ${currentAsset.name} afstoten per ${dateNL(disposalDate)}? De boekwaarde wordt afgeboekt en het boekwinst/-verlies (opbrengst − boekwaarde) wordt geboekt op 4950. Dit kan niet ongedaan worden gemaakt (corrigeren via tegenboeking).`)) return;
+    setBusy(true); setError(null);
+    try {
+      const updated = await bookAssetDisposal(organizationId, currentAsset.id, counterAccountId, disposalProceedsCents, disposalDate);
+      setCurrentAsset(updated); onChanged();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Desinvestering boeken mislukt'); }
     finally { setBusy(false); }
   }
 
@@ -228,7 +246,7 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
         {canWrite && <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Bezig…' : currentAsset ? 'Opslaan' : 'Opslaan & doorgaan'}</Button>}
       </div>}>
       {error && <div className="error">{error}</div>}
-      {hasPosted && <div className="bk-note">Er is al afgeschreven op dit activum; de financiële velden zijn vergrendeld om het schema sluitend te houden. Corrigeren kan via een tegenboeking in het grootboek.</div>}
+      {(hasPosted || acquisitionBooked) && !isDisposed && <div className="bk-note">De aanschaf staat in het grootboek{hasPosted ? ' en er is al afgeschreven' : ''}; de financiële velden zijn vergrendeld zodat het activum en de journaalposten gelijk blijven. Corrigeren kan via een tegenboeking in het grootboek.</div>}
 
       <div className="bk-grid2">
         <Field label="Naam"><Input value={form.name} onChange={e => set('name', e.target.value)} disabled={!canWrite} /></Field>
@@ -282,6 +300,27 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
                 {canWrite && <Button variant="primary" onClick={bookAcquisition} disabled={busy || !creditAccountId}><Landmark size={14} /> Boek aanschaf</Button>}
               </div>
             </div>
+      )}
+
+      {acquisitionBooked && !isDisposed && (
+        <div className="bk-acq bk-dispose">
+          <div className="bk-acq-text">
+            <strong>Desinvestering / verkoop</strong>
+            <span className="bk-muted"> Boekt de boekwaarde af (credit activarekening, debet cumulatieve afschrijving), verwerkt de opbrengst tegen de tegenrekening, en boekt het verschil als boekwinst/-verlies op 4950.</span>
+          </div>
+          <div className="bk-acq-actions">
+            <Input type="date" value={disposalDate} onChange={e => setDisposalDate(e.target.value)} disabled={!canWrite} title="Datum van verkoop/afstoting" />
+            <Input type="number" step="0.01" value={(disposalProceedsCents / 100).toString()} onChange={e => setDisposalProceedsCents(centsFromInput(e.target.value))} disabled={!canWrite} title="Opbrengst (0 bij schenken/schroot)" />
+            <Select value={counterAccountId} onChange={e => setCounterAccountId(e.target.value)} disabled={!canWrite}>
+              <option value="">— tegenrekening opbrengst —</option>
+              {creditAccounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+            </Select>
+            {canWrite && <Button variant="danger" onClick={dispose} disabled={busy || !counterAccountId}><Trash2 size={14} /> Desinvesteren</Button>}
+          </div>
+        </div>
+      )}
+      {isDisposed && (
+        <div className="bk-note bk-acq-done"><Landmark size={14} /> Afgestoten op {dateNL(currentAsset!.disposal_date)} · opbrengst {euroCents(currentAsset!.disposal_proceeds_cents)}. De boekwaarde is afgeboekt en het boekresultaat staat op 4950.</div>
       )}
 
       {currentAsset ? (

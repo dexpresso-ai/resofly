@@ -60,6 +60,8 @@ import type {
   AssetDepreciation,
   ProfitAndLossRow,
   BalanceSheetRow,
+  TrialBalanceRow,
+  AccountLedgerRow,
   VatReturn,
   VatReturnRubrieken,
   VatSupplementEntry,
@@ -1436,6 +1438,20 @@ export async function bookAssetAcquisition(organizationId: UUID, assetId: UUID, 
   return (Array.isArray(data) ? data[0] : data) as FixedAsset;
 }
 
+/** Stoot een activum af: boekt boekwaarde af, verwerkt de opbrengst tegen de
+ *  tegenrekening en boekt boekwinst/-verlies naar 4950. */
+export async function bookAssetDisposal(organizationId: UUID, assetId: UUID, counterAccountId: UUID, proceedsCents: number, date?: string): Promise<FixedAsset> {
+  const { data, error } = await supabase.rpc('book_asset_disposal', {
+    p_organization_id: organizationId,
+    p_asset_id: assetId,
+    p_counter_account_id: counterAccountId,
+    p_proceeds_cents: proceedsCents,
+    p_disposal_date: date ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as FixedAsset;
+}
+
 /** Winst- en verliesrekening over een periode (alleen geboekte journaalposten). */
 export async function reportProfitAndLoss(organizationId: UUID, from: string, to: string): Promise<ProfitAndLossRow[]> {
   const { data, error } = await supabase.rpc('report_profit_and_loss', {
@@ -1457,6 +1473,28 @@ export async function reportBalanceSheet(organizationId: UUID, asOf: string): Pr
   return (data ?? []) as BalanceSheetRow[];
 }
 
+/** Proef-/saldibalans per peildatum: debet/credit/saldo per grootboekrekening (incl. jaarafsluiting). */
+export async function reportTrialBalance(organizationId: UUID, asOf: string): Promise<TrialBalanceRow[]> {
+  const { data, error } = await supabase.rpc('report_trial_balance', {
+    p_organization_id: organizationId,
+    p_as_of: asOf,
+  });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as TrialBalanceRow[];
+}
+
+/** Grootboekkaart: alle mutaties op één rekening in een periode, met beginsaldo en lopend saldo. */
+export async function reportAccountLedger(organizationId: UUID, accountId: UUID, from: string, to: string): Promise<AccountLedgerRow[]> {
+  const { data, error } = await supabase.rpc('report_account_ledger', {
+    p_organization_id: organizationId,
+    p_account_id: accountId,
+    p_from: from,
+    p_to: to,
+  });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as AccountLedgerRow[];
+}
+
 /** Boekt een inkoopfactuur naar het grootboek (server-side, security definer). */
 export async function bookPurchaseInvoice(organizationId: UUID, purchaseInvoiceId: UUID): Promise<JournalEntry> {
   const { data, error } = await supabase.rpc('book_purchase_invoice', {
@@ -1475,6 +1513,17 @@ export async function postSalesInvoiceToLedger(organizationId: UUID, invoiceId: 
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
+/** Boekt alle nog niet-geboekte uitgegeven verkoopfacturen alsnog naar het
+ *  grootboek (vangnet naast de automatische boeking bij versturen). Geeft het
+ *  aantal alsnog geboekte facturen terug. */
+export async function bookAllUnbookedSalesInvoices(organizationId: UUID): Promise<number> {
+  const { data, error } = await supabase.rpc('book_all_unbooked_sales_invoices', {
+    p_organization_id: organizationId,
+  });
+  if (error) throw bookkeepingError(error);
+  return Number(data ?? 0);
 }
 
 /** Maakt een tegenboeking van een geboekt boekstuk. */

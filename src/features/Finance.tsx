@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Bell, BookOpen, CreditCard, Download, Eye, FileText, Mail, Pause, Play, RotateCcw, Search, ShieldCheck, SlidersHorizontal, Send, XCircle } from 'lucide-react';
+import { AlertTriangle, Bell, BookOpen, CreditCard, Download, Eye, FileText, Mail, Pause, Play, RotateCcw, Search, ShieldCheck, SlidersHorizontal, Send, XCircle } from 'lucide-react';
 import type { AppData, CreditNote, DunningNotice, FinanceLine, FinanceStatus, Invoice, InvoiceChargeback, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceRefund, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
 import { Modal } from '../components/Modal';
 import { FinanceDocPreview } from '../components/FinanceDocPreview';
@@ -52,8 +52,8 @@ export function Quotes({
   />;
 }
 
-export function Invoices({ data, canWrite, canAdmin = false, onNew, onEdit, onSend, onSendReminder, onToggleRemindersPaused, onDownloadPdf, onDownloadUbl, onRefund, onDownloadCreditNote, onDownloadCreditNoteUbl, onEmailCreditNote, onPostCreditNote, onPostToLedger, onProposeDunning, onSendDunning, onCancelDunning }: { data: AppData; canWrite: boolean; canAdmin?: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onSendReminder?: (i: Invoice) => void; onToggleRemindersPaused?: (i: Invoice, paused: boolean) => void; onDownloadPdf?: (i: Invoice) => void; onDownloadUbl?: (i: Invoice) => void; onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>; onDownloadCreditNote?: (creditNote: CreditNote) => void; onDownloadCreditNoteUbl?: (creditNote: CreditNote) => void; onEmailCreditNote?: (creditNote: CreditNote) => void; onPostCreditNote?: (creditNote: CreditNote) => void; onPostToLedger?: (i: Invoice) => void; onProposeDunning?: (i: Invoice) => void; onSendDunning?: (n: DunningNotice) => void; onCancelDunning?: (n: DunningNotice) => void }) {
-  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onSendInvoiceReminder={onSendReminder} onToggleInvoiceRemindersPaused={onToggleRemindersPaused} onDownloadInvoicePdf={onDownloadPdf} onDownloadInvoiceUbl={onDownloadUbl} onRefundInvoice={onRefund} onDownloadCreditNote={onDownloadCreditNote} onDownloadCreditNoteUbl={onDownloadCreditNoteUbl} onEmailCreditNote={onEmailCreditNote} onPostCreditNote={onPostCreditNote} onPostInvoiceToLedger={onPostToLedger} onProposeDunning={onProposeDunning} onSendDunning={onSendDunning} onCancelDunning={onCancelDunning}/>;
+export function Invoices({ data, canWrite, canAdmin = false, onNew, onEdit, onSend, onSendReminder, onToggleRemindersPaused, onDownloadPdf, onDownloadUbl, onRefund, onDownloadCreditNote, onDownloadCreditNoteUbl, onEmailCreditNote, onPostCreditNote, onPostToLedger, onBookAllUnbooked, onProposeDunning, onSendDunning, onCancelDunning }: { data: AppData; canWrite: boolean; canAdmin?: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onSendReminder?: (i: Invoice) => void; onToggleRemindersPaused?: (i: Invoice, paused: boolean) => void; onDownloadPdf?: (i: Invoice) => void; onDownloadUbl?: (i: Invoice) => void; onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>; onDownloadCreditNote?: (creditNote: CreditNote) => void; onDownloadCreditNoteUbl?: (creditNote: CreditNote) => void; onEmailCreditNote?: (creditNote: CreditNote) => void; onPostCreditNote?: (creditNote: CreditNote) => void; onPostToLedger?: (i: Invoice) => void; onBookAllUnbooked?: () => void; onProposeDunning?: (i: Invoice) => void; onSendDunning?: (n: DunningNotice) => void; onCancelDunning?: (n: DunningNotice) => void }) {
+  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onSendInvoiceReminder={onSendReminder} onToggleInvoiceRemindersPaused={onToggleRemindersPaused} onDownloadInvoicePdf={onDownloadPdf} onDownloadInvoiceUbl={onDownloadUbl} onRefundInvoice={onRefund} onDownloadCreditNote={onDownloadCreditNote} onDownloadCreditNoteUbl={onDownloadCreditNoteUbl} onEmailCreditNote={onEmailCreditNote} onPostCreditNote={onPostCreditNote} onPostInvoiceToLedger={onPostToLedger} onBookAllUnbooked={onBookAllUnbooked} onProposeDunning={onProposeDunning} onSendDunning={onSendDunning} onCancelDunning={onCancelDunning}/>;
 }
 
 function FinanceList<T extends Quote | Invoice>({
@@ -82,6 +82,7 @@ function FinanceList<T extends Quote | Invoice>({
   onEmailCreditNote,
   onPostCreditNote,
   onPostInvoiceToLedger,
+  onBookAllUnbooked,
   onProposeDunning,
   onSendDunning,
   onCancelDunning,
@@ -111,6 +112,7 @@ function FinanceList<T extends Quote | Invoice>({
   onEmailCreditNote?: (creditNote: CreditNote) => void;
   onPostCreditNote?: (creditNote: CreditNote) => void;
   onPostInvoiceToLedger?: (i: Invoice) => void;
+  onBookAllUnbooked?: () => void;
   onProposeDunning?: (i: Invoice) => void;
   onSendDunning?: (n: DunningNotice) => void;
   onCancelDunning?: (n: DunningNotice) => void;
@@ -152,6 +154,7 @@ function FinanceList<T extends Quote | Invoice>({
     onEmailCreditNote={onEmailCreditNote}
     onPostCreditNote={onPostCreditNote}
     onPostToLedger={onPostInvoiceToLedger}
+    onBookAllUnbooked={onBookAllUnbooked}
     onProposeDunning={onProposeDunning}
     onSendDunning={onSendDunning}
     onCancelDunning={onCancelDunning}
@@ -507,6 +510,7 @@ function InvoiceTable({
   onEmailCreditNote,
   onPostCreditNote,
   onPostToLedger,
+  onBookAllUnbooked,
   onProposeDunning,
   onSendDunning,
   onCancelDunning,
@@ -529,6 +533,7 @@ function InvoiceTable({
   onEmailCreditNote?: (creditNote: CreditNote) => void;
   onPostCreditNote?: (creditNote: CreditNote) => void;
   onPostToLedger?: (invoice: Invoice) => void;
+  onBookAllUnbooked?: () => void;
   onProposeDunning?: (invoice: Invoice) => void;
   onSendDunning?: (notice: DunningNotice) => void;
   onCancelDunning?: (notice: DunningNotice) => void;
@@ -538,6 +543,12 @@ function InvoiceTable({
   const filteredInvoices = useMemo(() => filterFinanceDocs('invoice', invoices, data, searchFilters), [data, invoices, searchFilters]);
   const selectedInvoice = useMemo(() => invoices.find(invoice => invoice.id === selectedInvoiceId) ?? null, [invoices, selectedInvoiceId]);
   const visibleTotalAmount = useMemo(() => filteredInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0), [filteredInvoices]);
+  // Uitgegeven facturen (verstuurd t/m betaald) horen automatisch in het grootboek
+  // te staan. Zijn er toch niet-geboekte, dan is er iets misgegaan bij het
+  // automatisch boeken — toon een vangnet-banner om alsnog te boeken.
+  const unbookedInvoices = useMemo(
+    () => invoices.filter(i => ['sent', 'accepted', 'paid', 'overdue'].includes(i.status) && !i.journal_entry_id),
+    [invoices]);
 
   return <>
     <div className="fin-header quote-table-header">
@@ -547,6 +558,14 @@ function InvoiceTable({
       </div>
       <Button variant="primary" onClick={onNew}>+ Nieuw</Button>
     </div>
+
+    {onBookAllUnbooked && unbookedInvoices.length > 0 && (
+      <div className="fin-autobook-banner" role="status">
+        <AlertTriangle size={16} />
+        <span>{unbookedInvoices.length} verstuurde/betaalde factuur(en) staan nog niet in het grootboek. Verstuurde facturen worden normaal automatisch geboekt (factuurstelsel).</span>
+        {canWrite && <Button onClick={onBookAllUnbooked}><BookOpen size={14} /> Boek nu alsnog</Button>}
+      </div>
+    )}
 
     <FinanceSearchPanel kind="invoice" docs={invoices} data={data} filters={searchFilters} visibleCount={filteredInvoices.length} visibleTotalAmount={visibleTotalAmount} onChange={setSearchFilters} />
 
@@ -574,7 +593,7 @@ function InvoiceTable({
                 <td data-label="Bedrag ex." className="money"><span>{euro(amounts.subtotal)}</span></td>
                 <td data-label="BTW" className="money"><span>{euro(amounts.vat)}</span></td>
                 <td data-label="Totaal" className="money total"><strong>{euro(amounts.total)}</strong></td>
-                <td data-label="Status"><span className={`fin-status ${invoice.status}`}>{statusLabel(invoice.status)}</span>{(invoice.reminder_level ?? 0) > 0 && <span className="fin-reminder-pill" title={`Laatste herinnering verstuurd: niveau ${invoice.reminder_level}${invoice.last_reminder_at ? ` op ${dateNL(invoice.last_reminder_at)}` : ''}`}>H{invoice.reminder_level}</span>}{invoice.reminders_paused && <span className="fin-reminder-pill paused" title="Automatische herinneringen gepauzeerd">⏸</span>}</td>
+                <td data-label="Status"><span className={`fin-status ${invoice.status}`}>{statusLabel(invoice.status)}</span>{['sent','accepted','paid','overdue'].includes(invoice.status) && !invoice.journal_entry_id && <span className="fin-reminder-pill unbooked" title="Nog niet in het grootboek geboekt">niet geboekt</span>}{(invoice.reminder_level ?? 0) > 0 && <span className="fin-reminder-pill" title={`Laatste herinnering verstuurd: niveau ${invoice.reminder_level}${invoice.last_reminder_at ? ` op ${dateNL(invoice.last_reminder_at)}` : ''}`}>H{invoice.reminder_level}</span>}{invoice.reminders_paused && <span className="fin-reminder-pill paused" title="Automatische herinneringen gepauzeerd">⏸</span>}</td>
                 <td className="quote-row-actions" onClick={event => event.stopPropagation()}>
                   <button type="button" className="att-btn" onClick={() => setSelectedInvoiceId(invoice.id)} title="Bekijk details"><Eye size={14}/></button>
                   {invoiceHasStoredPdf(invoice) && onDownloadPdf

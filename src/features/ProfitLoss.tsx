@@ -10,8 +10,22 @@ const pad2 = (n: number) => String(n).padStart(2, '0');
 const lastDay = (year: number, month: number) => new Date(year, month, 0).getDate();
 const MONTHS = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
 
-type PeriodType = 'month' | 'quarter' | 'year';
+type PeriodType = 'month' | 'quarter' | 'year' | 'custom';
 type PeriodBounds = { from: string; to: string; label: string };
+
+// Vrij datumbereik: de "vorige" periode is het even lange bereik direct ervóór,
+// zodat de W&V-vergelijking betekenisvol blijft.
+function customPeriod(from: string, to: string): { current: PeriodBounds; previous: PeriodBounds } {
+  const iso = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const f = new Date(`${from}T00:00:00`), t = new Date(`${to}T00:00:00`);
+  const days = Math.max(1, Math.round((t.getTime() - f.getTime()) / 86400000) + 1);
+  const pt = new Date(f.getTime() - 86400000);
+  const pf = new Date(pt.getTime() - (days - 1) * 86400000);
+  return {
+    current: { from, to, label: `${dateNL(from)} – ${dateNL(to)}` },
+    previous: { from: iso(pf), to: iso(pt), label: `${dateNL(iso(pf))} – ${dateNL(iso(pt))}` },
+  };
+}
 
 function fiscalYearBounds(startMonth: number, year: number): PeriodBounds {
   const from = `${year}-${pad2(startMonth)}-01`;
@@ -46,7 +60,14 @@ function getPeriod(type: PeriodType, year: number, month: number, quarter: numbe
 }
 
 function downloadCsv(filename: string, header: string[], rows: (string | number)[][]) {
-  const escape = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
+  const escape = (v: string | number) => {
+    let s = String(v);
+    // Geldbedragen (bijv. "-1234.56") naar NL-decimaal (komma) zodat Excel/nl-NL ze
+    // als getal leest bij een ;-gescheiden bestand. Alleen exacte bedrag-cellen —
+    // omschrijvingen, codes en datums bevatten dit patroon niet.
+    if (/^-?\d+\.\d{2}$/.test(s)) s = s.replace('.', ',');
+    return `"${s.replace(/"/g, '""')}"`;
+  };
   const csv = [header, ...rows].map(r => r.map(escape).join(';')).join('\r\n');
   const url = URL.createObjectURL(new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a');
@@ -78,6 +99,8 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [quarter, setQuarter] = useState(Math.floor(now.getMonth() / 3) + 1);
+  const [customFrom, setCustomFrom] = useState(`${now.getFullYear()}-01-01`);
+  const [customTo, setCustomTo] = useState(`${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`);
 
   const [pnlCurrent, setPnlCurrent] = useState<ProfitAndLossRow[]>([]);
   const [pnlPrevious, setPnlPrevious] = useState<ProfitAndLossRow[]>([]);
@@ -87,7 +110,10 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
   const [error, setError] = useState<string | null>(null);
 
   const fiscalStartMonth = data.companySettings?.fiscal_year_start_month ?? 1;
-  const period = useMemo(() => getPeriod(periodType, year, month, quarter, fiscalStartMonth), [periodType, year, month, quarter, fiscalStartMonth]);
+  const period = useMemo(
+    () => periodType === 'custom' ? customPeriod(customFrom, customTo) : getPeriod(periodType, year, month, quarter, fiscalStartMonth),
+    [periodType, year, month, quarter, fiscalStartMonth, customFrom, customTo],
+  );
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -121,18 +147,28 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
 
       <div className="bk-report-controls">
         <div className="bk-seg">
-          {(['month', 'quarter', 'year'] as PeriodType[]).map(t => (
+          {(['month', 'quarter', 'year', 'custom'] as PeriodType[]).map(t => (
             <button key={t} className={periodType === t ? 'is-active' : ''} onClick={() => setPeriodType(t)}>
-              {t === 'month' ? 'Maand' : t === 'quarter' ? 'Kwartaal' : 'Jaar'}
+              {t === 'month' ? 'Maand' : t === 'quarter' ? 'Kwartaal' : t === 'year' ? 'Jaar' : 'Vrij'}
             </button>
           ))}
         </div>
         <div className="bk-period-pick">
-          <button className="bk-step" onClick={() => setYear(y => y - 1)} title="Vorig jaar"><ChevronLeft size={16} /></button>
-          <strong>{year}</strong>
-          <button className="bk-step" onClick={() => setYear(y => y + 1)} title="Volgend jaar"><ChevronRight size={16} /></button>
-          {periodType === 'quarter' && <div className="bk-seg bk-seg-sm">{[1, 2, 3, 4].map(q => <button key={q} className={quarter === q ? 'is-active' : ''} onClick={() => setQuarter(q)}>Q{q}</button>)}</div>}
-          {periodType === 'month' && <select className="form-select bk-month-select" value={month} onChange={e => setMonth(Number(e.target.value))}>{MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}</select>}
+          {periodType === 'custom' ? (
+            <>
+              <input type="date" className="form-input" value={customFrom} max={customTo} onChange={e => setCustomFrom(e.target.value)} title="Vanaf" />
+              <span className="bk-muted">t/m</span>
+              <input type="date" className="form-input" value={customTo} min={customFrom} onChange={e => setCustomTo(e.target.value)} title="Tot en met" />
+            </>
+          ) : (
+            <>
+              <button className="bk-step" onClick={() => setYear(y => y - 1)} title="Vorig jaar"><ChevronLeft size={16} /></button>
+              <strong>{year}</strong>
+              <button className="bk-step" onClick={() => setYear(y => y + 1)} title="Volgend jaar"><ChevronRight size={16} /></button>
+              {periodType === 'quarter' && <div className="bk-seg bk-seg-sm">{[1, 2, 3, 4].map(q => <button key={q} className={quarter === q ? 'is-active' : ''} onClick={() => setQuarter(q)}>Q{q}</button>)}</div>}
+              {periodType === 'month' && <select className="form-select bk-month-select" value={month} onChange={e => setMonth(Number(e.target.value))}>{MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}</select>}
+            </>
+          )}
         </div>
         <div className="bk-seg">
           <button className={view === 'pnl' ? 'is-active' : ''} onClick={() => setView('pnl')}><TrendingUp size={14} /> W&amp;V</button>
@@ -147,7 +183,7 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
         : view === 'pnl'
           ? <PnlReport current={pnlCurrent} previous={pnlPrevious} period={period} />
           : view === 'balance'
-            ? <BalanceReport rows={balance} label={period.current.label} data={data} />
+            ? <BalanceReport rows={balance} label={period.current.label} asOf={period.current.to} data={data} />
             : openItems
               ? <OpenItemsView report={openItems} label={period.current.label} />
               : <div className="bk-muted bk-report-loading">Laden…</div>}
@@ -222,7 +258,7 @@ function PnlReport({ current, previous, period }: { current: ProfitAndLossRow[];
   );
 }
 
-function BalanceReport({ rows, label, data }: { rows: BalanceSheetRow[]; label: string; data: AppData }) {
+function BalanceReport({ rows, label, asOf, data }: { rows: BalanceSheetRow[]; label: string; asOf: string; data: AppData }) {
   const [assetsExpanded, setAssetsExpanded] = useState(true);
   const assets = rows.filter(r => r.section === 'asset');
   const liabilities = rows.filter(r => r.section === 'liability');
@@ -241,9 +277,13 @@ function BalanceReport({ rows, label, data }: { rows: BalanceSheetRow[]; label: 
   const otherAssets = assets.filter(r => !(r.account_id && fixedAccountIds.has(r.account_id)));
   const fixedNet = sum(fixedRows);
 
+  // Per-activum boekwaarde op de PEILDATUM: alleen afschrijvingen t/m asOf, alleen
+  // activa aangeschaft t/m asOf en (nog) niet afgestoten op de peildatum — zodat de
+  // sub-regels aansluiten op de datumgefilterde groepsregel (fixedNet uit het grootboek).
   const postedByAsset = new Map<string, number>();
-  for (const d of data.assetDepreciations) if (d.status === 'posted') postedByAsset.set(d.asset_id, (postedByAsset.get(d.asset_id) ?? 0) + d.amount_cents);
+  for (const d of data.assetDepreciations) if (d.status === 'posted' && d.date <= asOf) postedByAsset.set(d.asset_id, (postedByAsset.get(d.asset_id) ?? 0) + d.amount_cents);
   const perAsset = data.fixedAssets
+    .filter(a => a.acquisition_date <= asOf && !(a.status === 'disposed' && a.disposal_date != null && a.disposal_date <= asOf))
     .map(a => ({ id: a.id, name: a.asset_number ? `${a.asset_number} · ${a.name}` : a.name, bookValue: a.acquisition_cost_cents - (postedByAsset.get(a.id) ?? 0) }))
     .sort((x, y) => x.name.localeCompare(y.name));
 

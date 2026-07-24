@@ -1139,6 +1139,28 @@ export interface BalanceSheetRow {
   amount_cents: number;
 }
 
+/** Regel uit report_trial_balance (proef-/saldibalans). Over het geheel geldt Σdebit = Σcredit. */
+export interface TrialBalanceRow {
+  account_id: UUID;
+  code: string;
+  name: string;
+  account_type: LedgerAccountType;
+  debit_cents: number;
+  credit_cents: number;
+  balance_cents: number;
+}
+
+/** Regel uit report_account_ledger (grootboekkaart). De beginsaldo-regel heeft entry_id/date = null. */
+export interface AccountLedgerRow {
+  entry_id: UUID | null;
+  entry_number: string | null;
+  date: string | null;
+  description: string | null;
+  debit_cents: number;
+  credit_cents: number;
+  running_balance_cents: number;
+}
+
 export type VatReturnPeriodType = 'monthly' | 'quarterly';
 export type VatReturnStatus = 'draft' | 'finalized' | 'filed' | 'paid';
 

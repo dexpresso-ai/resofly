@@ -112,6 +112,14 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
     () => (existing ? data.vatReturns.filter(r => r.supplements_return_id === existing.id).sort((a, b) => a.created_at.localeCompare(b.created_at)) : []),
     [data.vatReturns, existing],
   );
+  // Overlapt de gekozen periode een AL afgesloten aangifteperiode (bijv. maand
+  // januari terwijl Q1 al is afgesloten)? Dan mag ze niet nog eens afgesloten worden
+  // — anders ontstaat een overlappende, dubbele periode-lock.
+  const overlapsClosed = useMemo(
+    () => data.closedPeriods.some(cp => cp.period_start != null && cp.period_end != null
+      && !(period.to < cp.period_start || period.from > cp.period_end)),
+    [data.closedPeriods, period],
+  );
 
   const load = useCallback(async () => {
     setIcp(null);
@@ -212,15 +220,40 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
       </div>
 
       {error && <div className="error">{error}</div>}
+
+      <details className="bk-vat-overview">
+        <summary>Jaaroverzicht {year} — alle {view === 'monthly' ? 'maanden' : 'kwartalen'} in één oogopslag</summary>
+        <div className="bk-table-wrap">
+          <table className="bk-table">
+            <thead><tr><th>Periode</th><th>Status</th><th className="bk-num">Saldo (afgerond)</th></tr></thead>
+            <tbody>
+              {(view === 'monthly' ? MONTHS.map((m, i) => ({ index: i + 1, label: m })) : [1, 2, 3, 4].map(q => ({ index: q, label: `Q${q}` }))).map(p => {
+                const ret = data.vatReturns.find(vr => vr.year === year && vr.period_type === (view === 'monthly' ? 'month' : 'quarter') && vr.period_index === p.index && !vr.supplements_return_id);
+                const saldoC = ret ? Number(ret.rubrieken?.saldo_afgerond ?? ret.rubrieken?.saldo ?? 0) : null;
+                const isCur = p.index === (view === 'monthly' ? month : quarter);
+                return (
+                  <tr key={p.index} className={isCur ? 'is-active' : ''} style={{ cursor: 'pointer' }} onClick={() => view === 'monthly' ? setMonth(p.index) : setQuarter(p.index)}>
+                    <td>{p.label}</td>
+                    <td>{ret ? <span className={`status-pill bk-vat-${ret.status}`}>{statusLabel[ret.status]}</span> : <span className="bk-muted">Nog niet aangegeven</span>}</td>
+                    <td className="bk-num">{saldoC != null ? `${euroCents(Math.abs(saldoC))}${saldoC > 0 ? ' te betalen' : saldoC < 0 ? ' terug' : ''}` : '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </details>
+
       {loading || !r
         ? <div className="bk-muted bk-report-loading">Laden…</div>
         : <>
           <div className="bk-report-bar">
             <div className="bk-report-kpis">
-              <div><span>Saldo {period.label}</span><strong className={saldo > 0 ? 'bk-neg' : 'bk-pos'}>{euroCents(Math.abs(saldo))}</strong></div>
-              <div className={saldo > 0 ? 'bk-balance-bad' : 'bk-balance-ok'}>{saldo > 0 ? 'Te betalen' : saldo < 0 ? 'Terug te ontvangen' : 'Nihil'}</div>
+              <div><span>Saldo {period.label}</span><strong className={saldoAfgerond > 0 ? 'bk-neg' : 'bk-pos'}>{euroCents(Math.abs(saldoAfgerond))}</strong></div>
+              <div className={saldoAfgerond > 0 ? 'bk-balance-bad' : 'bk-balance-ok'}>{saldoAfgerond > 0 ? 'Te betalen' : saldoAfgerond < 0 ? 'Terug te ontvangen' : 'Nihil'}</div>
             </div>
-            {!finalized && canWrite && <Button variant="primary" onClick={() => setShowClose(true)} disabled={busy}><Landmark size={14} /> Periode afsluiten</Button>}
+            {!finalized && !overlapsClosed && canWrite && <Button variant="primary" onClick={() => setShowClose(true)} disabled={busy}><Landmark size={14} /> Periode afsluiten</Button>}
+            {!finalized && overlapsClosed && <span className="bk-muted">Deze periode valt binnen een al afgesloten aangifteperiode.</span>}
             {finalized && existing!.status === 'finalized' && canWrite && <Button onClick={() => setStatus(existing!, 'filed')} disabled={busy}><CheckCircle2 size={14} /> Markeer als ingediend</Button>}
             {finalized && existing!.status === 'filed' && canWrite && <Button onClick={() => setStatus(existing!, 'paid')} disabled={busy}><CheckCircle2 size={14} /> Markeer als betaald</Button>}
           </div>

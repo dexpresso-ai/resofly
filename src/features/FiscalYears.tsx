@@ -173,6 +173,9 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, onCh
                     <td className={`bk-num ${result >= 0 ? 'bk-pos' : 'bk-neg'}`}>
                       {euroCents(result)}
                       {r.status === 'open' && <span className="bk-muted bk-fy-hint"> (lopend)</span>}
+                      {r.status === 'closed' && (r.result_cents ?? 0) !== r.computed_result_cents && (
+                        <span className="bk-fy-hint bk-neg" title={`Na afsluiting is er nog in dit boekjaar geboekt. Bestemd naar ${resultLabel}: ${euroCents(r.result_cents ?? 0)}; nu herberekend: ${euroCents(r.computed_result_cents)}. Heropen en sluit opnieuw af om te corrigeren.`}> ⚠ afwijking</span>
+                      )}
                     </td>
                     <td className="bk-fy-actions">
                       {r.status === 'open' && canWrite && (
@@ -195,7 +198,8 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, onCh
           title={`Boekjaar ${confirmClose.label} afsluiten?`}
           confirmLabel="Definitief afsluiten"
           busy={busyId === confirmClose.id}
-          onCancel={() => setConfirmClose(null)}
+          error={actionError}
+          onCancel={() => { setConfirmClose(null); setActionError(null); }}
           onConfirm={() => doClose(confirmClose)}
         >
           <p>Het resultaat van dit boekjaar wordt geboekt naar <strong>{resultLabel}</strong> en het volledige jaar wordt vergrendeld — er kan daarna niet meer in geboekt worden.</p>
@@ -209,7 +213,8 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, onCh
           title={`Boekjaar ${confirmReopen.label} heropenen?`}
           confirmLabel="Heropenen"
           busy={busyId === confirmReopen.id}
-          onCancel={() => setConfirmReopen(null)}
+          error={actionError}
+          onCancel={() => { setConfirmReopen(null); setActionError(null); }}
           onConfirm={() => doReopen(confirmReopen)}
         >
           <p>De resultaatbestemming wordt teruggedraaid en de jaar-vergrendeling opgeheven, zodat je weer in dit boekjaar kunt boeken.</p>
@@ -220,14 +225,14 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, onCh
   );
 }
 
-function ConfirmDialog({ title, confirmLabel, busy, children, onCancel, onConfirm }: {
-  title: string; confirmLabel: string; busy: boolean; children: ReactNode; onCancel: () => void; onConfirm: () => void;
+function ConfirmDialog({ title, confirmLabel, busy, error, children, onCancel, onConfirm }: {
+  title: string; confirmLabel: string; busy: boolean; error?: string | null; children: ReactNode; onCancel: () => void; onConfirm: () => void;
 }) {
   return (
     <div className="bk-modal-backdrop" onClick={onCancel}>
       <div className="bk-modal" onClick={e => e.stopPropagation()}>
         <h3>{title}</h3>
-        <div className="bk-modal-body">{children}</div>
+        <div className="bk-modal-body">{children}{error && <div className="error bk-modal-error">{error}</div>}</div>
         <div className="bk-modal-actions">
           <Button variant="ghost" onClick={onCancel} disabled={busy}>Annuleren</Button>
           <Button variant="primary" onClick={onConfirm} disabled={busy}>{busy ? 'Bezig…' : confirmLabel}</Button>

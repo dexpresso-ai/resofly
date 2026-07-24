@@ -1040,6 +1040,10 @@
 /* Betalingsherinneringen */
 .fin-reminder-pill { display:inline-flex; align-items:center; justify-content:center; margin-left:6px; min-width:20px; padding:1px 6px; border-radius:999px; font-size:11px; font-weight:850; line-height:1.5; background:rgba(231,162,61,.16); color:#e7a23d; border:1px solid rgba(231,162,61,.32); vertical-align:middle; }
 .fin-reminder-pill.paused { background:rgba(255,255,255,.08); color:rgba(255,255,255,.6); border-color:rgba(255,255,255,.16); }
+.fin-reminder-pill.unbooked { background:rgba(255,105,105,.16); color:#ff8b8b; border-color:rgba(255,105,105,.32); }
+/* Vangnet-banner: uitgegeven facturen die (nog) niet in het grootboek staan */
+.fin-autobook-banner { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:12px 0; padding:10px 14px; border-radius:12px; background:rgba(231,162,61,.12); border:1px solid rgba(231,162,61,.32); color:#e7a23d; font-size:13px; font-weight:650; }
+.fin-autobook-banner span { flex:1; min-width:220px; }
 .invoice-reminder-panel { display:grid; gap:12px; }
 .invoice-reminder-summary { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; }
 .settings-toggle { display:inline-flex; align-items:center; gap:8px; font-size:13px; font-weight:750; color:rgba(255,255,255,.86); cursor:pointer; white-space:nowrap; }
@@ -2467,8 +2471,10 @@ button.chat-member:hover{background:var(--bg3)}
 
 /* ── Blok C/D: memoriaal, beginbalans, suppletie, openstaande posten ── */
 .bk-head-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.bk-lines-head-memorial,.bk-line-memorial{grid-template-columns:minmax(0,2fr) minmax(0,1.6fr) minmax(0,.9fr) minmax(0,.9fr) minmax(0,.9fr) 34px}
+.bk-lines-head-memorial,.bk-line-memorial{grid-template-columns:minmax(0,1.5fr) minmax(0,1.4fr) minmax(0,1.3fr) minmax(0,1.1fr) minmax(0,.8fr) minmax(0,.9fr) minmax(0,.9fr) 34px}
 .bk-lines-head-opening,.bk-line-opening{grid-template-columns:minmax(0,2.6fr) minmax(0,1fr) minmax(0,1fr) 34px}
+/* Grootboekkaart: de beginsaldo-regel is geen boeking maar een afgeleide stand. */
+.bk-ledger-open td{color:var(--muted,rgba(245,245,245,.6));font-style:italic}
 .bk-subsection{margin-top:18px;padding-top:16px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:10px}
 .bk-subsection h3{margin:0;display:inline-flex;align-items:center;gap:8px;font-size:1rem}
 .bk-check{display:inline-flex;align-items:center;gap:9px;font-size:.85rem;margin:6px 0}
