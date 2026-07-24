@@ -880,6 +880,8 @@ export interface CreditNote {
   total_amount: number;
   lines: FinanceLine[];
   status: CreditNoteStatus;
+  /** Grootboekkoppeling (post_credit_note_to_ledger); null = nog niet geboekt. */
+  journal_entry_id?: UUID | null;
   pdf_file_name: string | null;
   pdf_mime_type: string | null;
   pdf_size_bytes: number | null;
@@ -898,11 +900,11 @@ export type LedgerAccountType = 'asset' | 'liability' | 'equity' | 'revenue' | '
 export type VatCodeKind =
   | 'standard' | 'reduced' | 'zero' | 'exempt'
   | 'reverse_charge_sales' | 'reverse_charge_purchase'
-  | 'icp_goods' | 'icp_services' | 'eu_acquisition' | 'kor';
+  | 'icp_goods' | 'icp_services' | 'eu_acquisition' | 'kor' | 'import_non_eu';
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed';
 export type JournalSourceType =
   | 'sales_invoice' | 'purchase_invoice' | 'asset_depreciation' | 'asset_acquisition'
-  | 'vat_return' | 'payment' | 'opening_balance' | 'manual' | 'year_close';
+  | 'vat_return' | 'payment' | 'opening_balance' | 'manual' | 'year_close' | 'credit_note';
 export type PurchaseInvoiceStatus = 'draft' | 'booked' | 'paid' | 'cancelled';
 export type PurchaseInvoicePaymentStatus = 'unpaid' | 'partially_paid' | 'paid';
 /** Herkomst van de inkoopfactuur: handmatig, door AI uitgelezen, bank of import. */
@@ -1141,6 +1143,9 @@ export type VatReturnPeriodType = 'monthly' | 'quarterly';
 export type VatReturnStatus = 'draft' | 'finalized' | 'filed' | 'paid';
 
 /** Rubriektotalen uit compute_vat_return (bedragen in centen). */
+/** Eén aangifterubriek in centen: grondslag + (waar van toepassing) btw. */
+export interface VatReturnBox { base: number; vat?: number }
+
 export interface VatReturnRubrieken {
   omzet_hoog_base: number;
   omzet_hoog_btw: number;
@@ -1155,6 +1160,67 @@ export interface VatReturnRubrieken {
   saldo_afgerond?: number;
   /** saldo - saldo_afgerond; geboekt op 4900 Afrondingsverschillen bij het doorboeken. */
   afronding_cents?: number;
+  /** Volledige rubriekverdeling (1a–1e, 2a, 3a–3c, 4a/4b) in centen — sinds Blok C. Oudere snapshots hebben dit niet. */
+  boxes?: Record<string, VatReturnBox>;
+  /** Formulierwaarden in HELE EURO'S per rubriek + 5a/5b/5c, zoals in te vullen bij de Belastingdienst. */
+  form?: Record<string, VatReturnBox | number>;
+  /** Sluit de rubriek-metadata aan op het grootboek (1510+1520)? Zo niet, dan valt saldo_afgerond terug op afronding-op-het-totaal. */
+  boxes_consistent?: boolean;
+  boxes_vat_diff_cents?: number;
+  clear_output?: number;
+  clear_reverse?: number;
+  clear_input?: number;
+  /** Alleen op suppletie-rijen: de verrekende boekstukken. */
+  is_supplement?: boolean;
+  entry_ids?: UUID[];
+}
+
+/** Koppelrij: welk boekstuk is in welke btw-suppletie verrekend. */
+export interface VatSupplementEntry {
+  id: UUID;
+  organization_id: UUID;
+  supplement_id: UUID;
+  entry_id: UUID;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Openstaande posten (report_open_items) en ICP-opgaaf (compute_icp_declaration).
+// ---------------------------------------------------------------------------
+export interface OpenReceivableRow {
+  invoice_id: UUID; number: string | null; date: string; due_date: string | null;
+  client_id: UUID | null; client_name: string | null;
+  booked_cents: number; paid_cents: number; credited_cents: number; open_cents: number;
+}
+export interface OpenPayableRow {
+  purchase_invoice_id: UUID; number: string | null; date: string; due_date: string | null;
+  supplier_id: UUID | null; supplier_name: string | null;
+  booked_cents: number; paid_cents: number; open_cents: number;
+}
+export interface OpenItemsSide<T> {
+  rows: T[];
+  open_total_cents: number;
+  gl_balance_cents: number;
+  /** Beweging op 1300/1600 die niet aan een factuur toe te rekenen is (beginbalans, vrije boekingen). */
+  unmatched_cents: number;
+}
+export interface OpenItemsReport {
+  as_of: string;
+  receivables: OpenItemsSide<OpenReceivableRow>;
+  payables: OpenItemsSide<OpenPayableRow>;
+}
+
+export interface IcpDeclarationRow {
+  client_id: UUID | null; client_name: string; vat_number: string | null; country: string | null;
+  goods_cents: number; services_cents: number;
+}
+export interface IcpDeclaration {
+  rows: IcpDeclarationRow[];
+  goods_total_cents: number;
+  services_total_cents: number;
+  total_cents: number;
+  unassigned_cents: number;
+  missing_vat_numbers: number;
 }
 
 export interface VatReturn {
@@ -1175,6 +1241,9 @@ export interface VatReturn {
   paid_bank_transaction_id: UUID | null;
   notes: string | null;
   finalized_at: string | null;
+  /** Attestatie bij periode-afsluiting: moment + gebruiker die bevestigde de OB-aangifte zelf te hebben ingediend. */
+  filed_at: string | null;
+  filed_by: UUID | null;
   created_at: string;
   updated_at: string;
 }

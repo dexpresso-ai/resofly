@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { BookOpen, FileDown, FileText, Layers, Plus, RotateCcw, Sparkles, Trash2, Upload } from 'lucide-react';
+import { BookOpen, FileDown, FileText, Layers, PenSquare, Plus, RotateCcw, Scale, Sparkles, Trash2, Upload } from 'lucide-react';
 import type {
   AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PurchaseInvoice, PurchaseInvoiceLine, Supplier, UUID, VatCode,
 } from '../types';
@@ -9,8 +9,10 @@ import type { ImportColumn } from '../lib/csvImport';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { dateNL, euro, uid } from '../lib/format';
 import {
-  bookPurchaseInvoice, deleteRow, ensureDefaultLedgerAccounts, insertRow, reverseJournalEntry, updateRow,
+  bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, insertRow,
+  postManualJournalEntry, reverseJournalEntry, updateRow,
 } from '../lib/repository';
+import { downloadXaf } from '../lib/xaf';
 import { uploadToR2 } from '../lib/r2';
 import { scanInvoice, SCAN_ACCEPT, SCAN_MAX_BYTES, type ScanResult } from '../lib/invoice-scan-api';
 
@@ -607,24 +609,58 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
 
 // ─────────────────────────────── Grootboek ───────────────────────────────
 
+/** Boekjaargrenzen (ondersteunt gebroken boekjaren via fiscal_year_start_month). */
+function ledgerFiscalYearBounds(startMonth: number, year: number): { start: string; end: string; label: string } {
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  const start = `${year}-${p2(startMonth)}-01`;
+  const endYear = startMonth === 1 ? year : year + 1;
+  const endMonth = startMonth === 1 ? 12 : startMonth - 1;
+  const end = `${endYear}-${p2(endMonth)}-${p2(new Date(endYear, endMonth, 0).getDate())}`;
+  return { start, end, label: startMonth === 1 ? `${year}` : `${year}-${year + 1}` };
+}
+
 export function LedgerPage({ data, organizationId, canWrite, onChanged }: PageProps) {
-  const [tab, setTab] = useState<'journal' | 'accounts' | 'vat'>('journal');
+  const [tab, setTab] = useState<'journal' | 'accounts' | 'vat' | 'opening'>('journal');
+  const [xafYear, setXafYear] = useState(new Date().getFullYear());
+  const fiscalStartMonth = data.companySettings?.fiscal_year_start_month ?? 1;
+
+  // Jaren waarin daadwerkelijk geboekt is (+ huidig jaar), voor de XAF-keuzelijst.
+  const years = useMemo(() => {
+    const set = new Set<number>([new Date().getFullYear()]);
+    for (const e of data.journalEntries) set.add(Number(e.date.slice(0, 4)));
+    return [...set].sort((a, b) => b - a);
+  }, [data.journalEntries]);
+
   if (data.ledgerAccounts.length === 0) {
     return <div className="bk-page"><SetupBanner organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} /></div>;
   }
+
+  function exportXaf() {
+    const fy = ledgerFiscalYearBounds(fiscalStartMonth, xafYear);
+    downloadXaf({ data, fiscalYearLabel: fy.label, startDate: fy.start, endDate: fy.end });
+  }
+
   return (
     <div className="bk-page">
       <div className="bk-head">
         <div><h2>Grootboek</h2><p>Journaalposten en rekeningschema — de basis onder je W&amp;V en BTW-aangifte.</p></div>
+        <div className="bk-head-actions">
+          <Select inline value={String(xafYear)} onChange={e => setXafYear(Number(e.target.value))}>
+            {years.map(y => <option key={y} value={y}>{ledgerFiscalYearBounds(fiscalStartMonth, y).label}</option>)}
+          </Select>
+          <Button onClick={exportXaf} title="XML Auditfile Financieel 3.2 — voor je accountant of de Belastingdienst"><FileDown size={14} /> Auditfile (XAF)</Button>
+        </div>
       </div>
       <div className="bk-tabs">
         <button className={tab === 'journal' ? 'is-active' : ''} onClick={() => setTab('journal')}><BookOpen size={15} /> Journaal</button>
         <button className={tab === 'accounts' ? 'is-active' : ''} onClick={() => setTab('accounts')}><Layers size={15} /> Rekeningschema</button>
         <button className={tab === 'vat' ? 'is-active' : ''} onClick={() => setTab('vat')}><FileDown size={15} /> BTW-codes</button>
+        <button className={tab === 'opening' ? 'is-active' : ''} onClick={() => setTab('opening')}><Scale size={15} /> Beginbalans</button>
       </div>
       {tab === 'journal' && <JournalView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
       {tab === 'accounts' && <AccountsView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
       {tab === 'vat' && <VatCodesView vatCodes={data.vatCodes} />}
+      {tab === 'opening' && <OpeningBalanceView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
     </div>
   );
 }
@@ -632,6 +668,7 @@ export function LedgerPage({ data, organizationId, canWrite, onChanged }: PagePr
 function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showMemorial, setShowMemorial] = useState(false);
   const accountLabel = (id: string) => {
     const a = data.ledgerAccounts.find(x => x.id === id);
     return a ? `${a.code} · ${a.name}` : id;
@@ -654,12 +691,24 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
     finally { setBusyId(null); }
   }
 
-  if (data.journalEntries.length === 0) {
-    return <div className="empty"><div className="e-big">Nog geen journaalposten</div><p>Boek een inkoop- of verkoopfactuur om te beginnen.</p></div>;
-  }
   return (
     <div className="bk-journal">
+      <div className="bk-subhead">
+        <p className="bk-muted">Elke boeking — automatisch of handmatig — is een boekstuk. Met een memoriaalboeking corrigeer je vrij (afschrijving, privé-opname, correctie op een eerdere periode).</p>
+        <Button variant="primary" disabled={!canWrite} onClick={() => setShowMemorial(true)}><PenSquare size={14} /> Memoriaalboeking</Button>
+      </div>
       {error && <div className="error">{error}</div>}
+      {showMemorial && (
+        <MemorialModal
+          data={data}
+          organizationId={organizationId}
+          onClose={() => setShowMemorial(false)}
+          onSaved={() => { setShowMemorial(false); onChanged(); }}
+        />
+      )}
+      {data.journalEntries.length === 0 && (
+        <div className="empty"><div className="e-big">Nog geen journaalposten</div><p>Boek een inkoop- of verkoopfactuur om te beginnen, of maak een memoriaalboeking.</p></div>
+      )}
       {data.journalEntries.map(entry => {
         const lines = linesByEntry.get(entry.id) ?? [];
         const debit = lines.reduce((s, l) => s + l.debit_cents, 0);
@@ -704,6 +753,221 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ─────────────────────────────── Memoriaalboeking ───────────────────────────────
+
+type MemorialLine = { key: string; account_id: string; description: string; debit: string; credit: string; vat_code: string };
+
+const parseEuro = (v: string): number => Math.round((parseFloat(v.replace(',', '.')) || 0) * 100);
+
+function MemorialModal({ data, organizationId, onClose, onSaved }: {
+  data: AppData; organizationId: UUID; onClose: () => void; onSaved: () => void;
+}) {
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [description, setDescription] = useState('');
+  const emptyLine = (): MemorialLine => ({ key: uid(), account_id: '', description: '', debit: '', credit: '', vat_code: '' });
+  const [lines, setLines] = useState<MemorialLine[]>([emptyLine(), emptyLine()]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const accounts = data.ledgerAccounts.filter(a => a.is_active);
+  const accountById = useMemo(() => new Map(data.ledgerAccounts.map(a => [a.id, a])), [data.ledgerAccounts]);
+  const update = (key: string, patch: Partial<MemorialLine>) => setLines(ls => ls.map(l => (l.key === key ? { ...l, ...patch } : l)));
+
+  const totalDebit = lines.reduce((s, l) => s + parseEuro(l.debit), 0);
+  const totalCredit = lines.reduce((s, l) => s + parseEuro(l.credit), 0);
+  const diff = totalDebit - totalCredit;
+  const filled = lines.filter(l => l.account_id && (parseEuro(l.debit) !== 0 || parseEuro(l.credit) !== 0));
+  const canSave = !busy && description.trim().length > 0 && filled.length >= 2 && diff === 0;
+
+  async function save() {
+    if (!canSave) return;
+    setBusy(true); setError(null);
+    try {
+      await postManualJournalEntry(organizationId, {
+        date,
+        description: description.trim(),
+        lines: filled.map(l => {
+          const debit = parseEuro(l.debit);
+          const credit = parseEuro(l.credit);
+          const account = accountById.get(l.account_id);
+          const code = l.vat_code ? data.vatCodes.find(v => v.code === l.vat_code) : undefined;
+          // Rubriek-metadata: de grondslag volgt de natuurlijke kant van de
+          // rekening (omzet = credit − debet, kosten/activa = debet − credit),
+          // zodat compute_vat_boxes de regel in de juiste rubriek kan tellen.
+          const base = account?.type === 'revenue' ? credit - debit : debit - credit;
+          return {
+            account_id: l.account_id,
+            description: l.description.trim() || null,
+            debit_cents: debit,
+            credit_cents: credit,
+            ...(code ? {
+              vat_code: code.code,
+              vat_rate: code.rate,
+              vat_base_cents: base,
+              vat_amount_cents: Math.round(base * (code.rate / 100)),
+            } : {}),
+          };
+        }),
+      });
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Boeken mislukt');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Memoriaalboeking" onClose={onClose}>
+      <p className="bk-muted">Vrije journaalpost. Debet en credit moeten gelijk zijn; een btw-code op een omzet- of kostenregel zorgt dat de aangifte de grondslag in de juiste rubriek telt (boek de btw zelf op 1500/1510).</p>
+      {error && <div className="error">{error}</div>}
+      <div className="bk-form-grid">
+        <Field label="Boekdatum" hint="In een afgesloten periode boeken kan niet; kies een datum in een open periode."><Input type="date" value={date} onChange={e => setDate(e.target.value)} /></Field>
+        <Field label="Omschrijving"><Input value={description} onChange={e => setDescription(e.target.value)} placeholder="Bijv. correctie telefoonkosten Q1" /></Field>
+      </div>
+      <div className="bk-lines">
+        <div className="bk-lines-head bk-lines-head-memorial"><span>Rekening</span><span>Omschrijving</span><span>BTW-code</span><span className="bk-num">Debet</span><span className="bk-num">Credit</span><span /></div>
+        {lines.map(l => (
+          <div className="bk-line bk-line-memorial" key={l.key}>
+            <Select value={l.account_id} onChange={e => update(l.key, { account_id: e.target.value })}>
+              <option value="">— rekening —</option>
+              {accounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+            </Select>
+            <Input value={l.description} placeholder="Omschrijving" onChange={e => update(l.key, { description: e.target.value })} />
+            <Select value={l.vat_code} onChange={e => update(l.key, { vat_code: e.target.value })}>
+              <option value="">— geen —</option>
+              {data.vatCodes.filter(v => v.is_active).map(v => <option key={v.id} value={v.code}>{v.code}</option>)}
+            </Select>
+            <Input className="bk-num" type="number" step="0.01" min="0" value={l.debit} placeholder="0,00"
+              onChange={e => update(l.key, { debit: e.target.value, credit: e.target.value ? '' : l.credit })} />
+            <Input className="bk-num" type="number" step="0.01" min="0" value={l.credit} placeholder="0,00"
+              onChange={e => update(l.key, { credit: e.target.value, debit: e.target.value ? '' : l.debit })} />
+            <button className="bk-line-del" onClick={() => setLines(ls => (ls.length > 2 ? ls.filter(x => x.key !== l.key) : ls))} title="Regel verwijderen">×</button>
+          </div>
+        ))}
+        <button className="bk-add-line" onClick={() => setLines(ls => [...ls, emptyLine()])}><Plus size={14} /> Regel toevoegen</button>
+      </div>
+      <div className="bk-totals">
+        <div><span>Debet</span><strong>{euroCents(totalDebit)}</strong></div>
+        <div><span>Credit</span><strong>{euroCents(totalCredit)}</strong></div>
+        <div className={diff === 0 ? 'bk-balance-ok' : 'bk-balance-bad'}>
+          {diff === 0 ? '✓ In balans' : `⚠ Verschil ${euroCents(Math.abs(diff))}`}
+        </div>
+      </div>
+      <div className="bk-modal-actions">
+        <Button onClick={onClose}>Annuleren</Button>
+        <Button variant="primary" onClick={save} disabled={!canSave}>{busy ? 'Bezig…' : 'Boeken'}</Button>
+      </div>
+    </Modal>
+  );
+}
+
+// ─────────────────────────────── Beginbalans ───────────────────────────────
+
+type OpeningLine = { key: string; account_id: string; debit: string; credit: string };
+
+function OpeningBalanceView({ data, organizationId, canWrite, onChanged }: PageProps) {
+  const existing = useMemo(
+    () => data.journalEntries.find(e => e.source_type === 'opening_balance' && e.status === 'posted' && !e.reversed_by_entry_id) ?? null,
+    [data.journalEntries],
+  );
+  const emptyLine = (): OpeningLine => ({ key: uid(), account_id: '', debit: '', credit: '' });
+  const [date, setDate] = useState(data.companySettings?.bookkeeping_start_date ?? `${new Date().getFullYear()}-01-01`);
+  const [lines, setLines] = useState<OpeningLine[]>([emptyLine(), emptyLine(), emptyLine()]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const accountById = useMemo(() => new Map(data.ledgerAccounts.map(a => [a.id, a])), [data.ledgerAccounts]);
+  // Beginbalans = balansstanden; W&V-rekeningen horen er niet in.
+  const balanceAccounts = data.ledgerAccounts.filter(a => a.is_active && (a.type === 'asset' || a.type === 'liability' || a.type === 'equity'));
+  const update = (key: string, patch: Partial<OpeningLine>) => setLines(ls => ls.map(l => (l.key === key ? { ...l, ...patch } : l)));
+
+  const totalDebit = lines.reduce((s, l) => s + parseEuro(l.debit), 0);
+  const totalCredit = lines.reduce((s, l) => s + parseEuro(l.credit), 0);
+  const equity = totalDebit - totalCredit;
+  const filled = lines.filter(l => l.account_id && (parseEuro(l.debit) !== 0 || parseEuro(l.credit) !== 0));
+
+  async function save() {
+    if (!canWrite || filled.length === 0) return;
+    if (!confirm(`Beginbalans per ${dateNL(date)} vastleggen? Het verschil van ${euroCents(Math.abs(equity))} wordt automatisch op 0500 Eigen vermogen gezet. Dit kan maar één keer.`)) return;
+    setBusy(true); setError(null);
+    try {
+      await createOpeningBalance(organizationId, date, filled.map(l => ({
+        account_id: l.account_id,
+        description: `Beginbalans ${accountById.get(l.account_id)?.name ?? ''}`.trim(),
+        debit_cents: parseEuro(l.debit),
+        credit_cents: parseEuro(l.credit),
+      })));
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Beginbalans vastleggen mislukt');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (existing) {
+    const entryLines = data.journalLines.filter(l => l.entry_id === existing.id).sort((a, b) => a.line_index - b.line_index);
+    return (
+      <div className="bk-accounts">
+        <p className="bk-muted">De beginbalans is vastgelegd op {dateNL(existing.date)} (boekstuk {existing.entry_number}). Klopt er iets niet, boek het boekstuk dan tegen via het Journaal en leg een nieuwe beginbalans vast.</p>
+        <div className="bk-table-wrap"><table className="bk-table">
+          <thead><tr><th>Rekening</th><th>Omschrijving</th><th className="bk-num">Debet</th><th className="bk-num">Credit</th></tr></thead>
+          <tbody>{entryLines.map(l => {
+            const a = accountById.get(l.account_id);
+            return (
+              <tr key={l.id}>
+                <td>{a ? `${a.code} · ${a.name}` : l.account_id}</td>
+                <td>{l.description || '—'}</td>
+                <td className="bk-num">{l.debit_cents ? euroCents(l.debit_cents) : ''}</td>
+                <td className="bk-num">{l.credit_cents ? euroCents(l.credit_cents) : ''}</td>
+              </tr>
+            );
+          })}</tbody>
+        </table></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bk-accounts">
+      <div className="bk-subhead">
+        <p className="bk-muted">
+          Stap je over van een ander pakket? Vul hier de eindbalans van je oude administratie in (banksaldo, openstaande debiteuren/crediteuren, activa).
+          Het verschil tussen debet en credit wordt automatisch als eigen vermogen geboekt, zodat de balans sluit.
+        </p>
+        <Button variant="primary" disabled={!canWrite || busy || filled.length === 0} onClick={save}>{busy ? 'Bezig…' : 'Beginbalans vastleggen'}</Button>
+      </div>
+      {error && <div className="error">{error}</div>}
+      <div className="bk-form-grid">
+        <Field label="Per datum" hint="Meestal de boekhoud-startdatum (zie Instellingen → Boekhouding)."><Input type="date" value={date} onChange={e => setDate(e.target.value)} disabled={!canWrite} /></Field>
+      </div>
+      <div className="bk-lines">
+        <div className="bk-lines-head bk-lines-head-opening"><span>Rekening</span><span className="bk-num">Debet</span><span className="bk-num">Credit</span><span /></div>
+        {lines.map(l => (
+          <div className="bk-line bk-line-opening" key={l.key}>
+            <Select value={l.account_id} onChange={e => update(l.key, { account_id: e.target.value })} disabled={!canWrite}>
+              <option value="">— rekening —</option>
+              {balanceAccounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+            </Select>
+            <Input className="bk-num" type="number" step="0.01" min="0" value={l.debit} placeholder="0,00"
+              onChange={e => update(l.key, { debit: e.target.value, credit: e.target.value ? '' : l.credit })} disabled={!canWrite} />
+            <Input className="bk-num" type="number" step="0.01" min="0" value={l.credit} placeholder="0,00"
+              onChange={e => update(l.key, { credit: e.target.value, debit: e.target.value ? '' : l.debit })} disabled={!canWrite} />
+            <button className="bk-line-del" onClick={() => setLines(ls => (ls.length > 1 ? ls.filter(x => x.key !== l.key) : ls))} title="Regel verwijderen">×</button>
+          </div>
+        ))}
+        <button className="bk-add-line" onClick={() => setLines(ls => [...ls, emptyLine()])}><Plus size={14} /> Regel toevoegen</button>
+      </div>
+      <div className="bk-totals">
+        <div><span>Debet</span><strong>{euroCents(totalDebit)}</strong></div>
+        <div><span>Credit</span><strong>{euroCents(totalCredit)}</strong></div>
+        <div><span>Sluitpost eigen vermogen (0500)</span><strong>{euroCents(Math.abs(equity))} {equity >= 0 ? 'credit' : 'debet'}</strong></div>
+      </div>
     </div>
   );
 }

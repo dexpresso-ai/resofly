@@ -53,6 +53,7 @@ import {
   downloadCreditNoteUbl,
   createInvoiceRefund,
   postSalesInvoiceToLedger,
+  postCreditNoteToLedger,
   downloadCreditNotePdf,
   sendCreditNoteEmail,
   loadInvoiceMollieStatus,
@@ -1288,6 +1289,20 @@ function App() {
     }
   }
 
+  async function postCreditNoteLedger(creditNote: CreditNote) {
+    if (!ensureCanWrite()) return;
+    if (!confirm(`Creditnota ${creditNote.number} naar het grootboek boeken? Omzet en af te dragen btw worden teruggenomen en de vordering op de klant wordt verlaagd.`)) return;
+    setLoading(true); setError(null);
+    try {
+      await postCreditNoteToLedger(activeOrg.id, creditNote.id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Creditnota naar grootboek boeken mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function refundInvoice(invoice: Invoice, input: RefundInput) {
     if (!ensureCanAdmin()) throw new Error('Alleen owners en admins mogen terugbetalingen registreren.');
     setLoading(true); setError(null);
@@ -1755,7 +1770,7 @@ function App() {
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditDocument={openDocument}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
-    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostToLedger={postInvoiceToLedger} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning}/>;
+    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostCreditNote={postCreditNoteLedger} onPostToLedger={postInvoiceToLedger} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning}/>;
     if (page === 'suppliers') return <SuppliersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'ledger') return <LedgerPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;

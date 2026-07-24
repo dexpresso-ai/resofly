@@ -62,6 +62,9 @@ import type {
   BalanceSheetRow,
   VatReturn,
   VatReturnRubrieken,
+  VatSupplementEntry,
+  OpenItemsReport,
+  IcpDeclaration,
   BankAccount,
   BankStatement,
   BankTransaction,
@@ -639,7 +642,7 @@ export async function selectCreditNotes(organizationId: UUID): Promise<CreditNot
   // pdf_data_base64 bewust NIET meeladen: dat blob hoort alleen bij de download.
   const { data, error } = await supabase
     .from('credit_notes')
-    .select('id,organization_id,invoice_id,refund_id,number,date,reason,currency,subtotal_amount,vat_amount,total_amount,lines,status,pdf_file_name,pdf_mime_type,pdf_size_bytes,pdf_sha256,pdf_storage_provider,pdf_storage_key,issued_by,created_at,updated_at')
+    .select('id,organization_id,invoice_id,refund_id,number,date,reason,currency,subtotal_amount,vat_amount,total_amount,lines,status,journal_entry_id,pdf_file_name,pdf_mime_type,pdf_size_bytes,pdf_sha256,pdf_storage_provider,pdf_storage_key,issued_by,created_at,updated_at')
     .eq('organization_id', organizationId)
     .order('created_at', { ascending: false });
   if (error) {
@@ -1025,14 +1028,37 @@ export async function upsertCompanySettings(organizationId: UUID, values: Compan
   return data as CompanySettings;
 }
 
+/**
+ * PostgREST kapt elk antwoord stil af op ~1000 rijen (review 3.10: onafgeletterde
+ * banktransacties verdwenen uit de inbox, het Grootboek toonde onvolledige
+ * boekstukken met een niet-sluitend totaal). Daarom halen alle lijst-loaders
+ * hun data in pagina's van 1000 op tot een pagina niet meer vol is. De vaste
+ * secundaire sortering op id houdt de paginagrenzen stabiel wanneer de primaire
+ * sorteerkolom gelijke waarden heeft (created_at/date zijn niet uniek).
+ */
+const FETCH_PAGE_SIZE = 1000;
+
+async function fetchAllPages<T>(
+  makeQuery: () => { range: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message?: string; details?: string } | null }> },
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let offset = 0; ; offset += FETCH_PAGE_SIZE) {
+    const { data, error } = await makeQuery().range(offset, offset + FETCH_PAGE_SIZE - 1);
+    if (error) throw error;
+    const page = (data ?? []) as T[];
+    rows.push(...page);
+    if (page.length < FETCH_PAGE_SIZE) break;
+  }
+  return rows;
+}
+
 export async function select<T>(table: Table, organizationId: UUID): Promise<T[]> {
-  const { data, error } = await supabase
+  return fetchAllPages<T>(() => supabase
     .from(table)
     .select('*')
     .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false });
-  if (error) throw error;
-  return (data ?? []) as T[];
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: true }));
 }
 
 const BOOKKEEPING_MIGRATION_HINT =
@@ -1054,20 +1080,22 @@ async function selectOptional<T>(
   organizationId: UUID,
   opts: { orderBy: string; ascending: boolean; hint: string },
 ): Promise<T[]> {
-  const { data, error } = await supabase
-    .from(table)
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order(opts.orderBy, { ascending: opts.ascending });
-  if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+  try {
+    return await fetchAllPages<T>(() => supabase
+      .from(table)
+      .select('*')
+      .eq('organization_id', organizationId)
+      .order(opts.orderBy, { ascending: opts.ascending })
+      .order('id', { ascending: true }));
+  } catch (error) {
+    const err = error as { message?: string; details?: string };
+    const message = `${err?.message ?? ''} ${err?.details ?? ''}`;
     if (new RegExp(`${table}|schema cache|does not exist|relation`, 'i').test(message)) {
       console.warn(`${table} is nog niet beschikbaar. ${opts.hint}`, error);
       return [];
     }
     throw error;
   }
-  return (data ?? []) as T[];
 }
 
 export const selectClientContacts = (organizationId: UUID) =>
@@ -1309,6 +1337,28 @@ export async function finalizeVatReturn(
   return (Array.isArray(data) ? data[0] : data) as VatReturn;
 }
 
+/**
+ * Sluit een OB-periode af: de gebruiker bevestigt de aangifte zelf bij de
+ * Belastingdienst te hebben ingediend, waarna in één transactie wordt
+ * doorgeboekt naar 1530, de periode wordt vergrendeld en de aangifte op 'filed'
+ * komt (met wie/wanneer als audit-spoor via filed_at/filed_by).
+ */
+export async function closeVatPeriod(
+  organizationId: UUID,
+  input: { periodType: 'month' | 'quarter'; year: number; periodIndex: number; from: string; to: string },
+): Promise<VatReturn> {
+  const { data, error } = await supabase.rpc('close_vat_period', {
+    p_organization_id: organizationId,
+    p_period_type: input.periodType,
+    p_year: input.year,
+    p_period_index: input.periodIndex,
+    p_from: input.from,
+    p_to: input.to,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as VatReturn;
+}
+
 /** Lijst met boekjaren + server-side (her)berekend resultaat per boekjaar. */
 export async function listFiscalYears(organizationId: UUID): Promise<FiscalYearListRow[]> {
   const { data, error } = await supabase.rpc('list_fiscal_years', {
@@ -1467,6 +1517,70 @@ export async function createOpeningBalance(
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
+/** Boekt een uitgegeven creditnota naar het grootboek (debet omzet + 1510, credit 1300). */
+export async function postCreditNoteToLedger(organizationId: UUID, creditNoteId: UUID): Promise<JournalEntry> {
+  const { data, error } = await supabase.rpc('post_credit_note_to_ledger', {
+    p_organization_id: organizationId,
+    p_credit_note_id: creditNoteId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
+/** Rubriek-delta (voorvertoning) van een set correctieboekstukken voor een suppletie. */
+export async function computeVatSupplementDelta(organizationId: UUID, entryIds: UUID[]): Promise<VatReturnRubrieken> {
+  const { data, error } = await supabase.rpc('compute_vat_supplement_delta', {
+    p_organization_id: organizationId,
+    p_entry_ids: entryIds,
+  });
+  if (error) throw bookkeepingError(error);
+  return (data ?? {}) as VatReturnRubrieken;
+}
+
+/** Maakt een btw-suppletie definitief: boekt het delta-saldo door naar 1530 en sluit de verrekende boekstukken uit van de reguliere aangifte. */
+export async function createVatSupplement(
+  organizationId: UUID,
+  input: { originalReturnId: UUID; entryIds: UUID[]; date?: string; notes?: string | null },
+): Promise<VatReturn> {
+  const { data, error } = await supabase.rpc('create_vat_supplement', {
+    p_organization_id: organizationId,
+    p_original_return_id: input.originalReturnId,
+    p_entry_ids: input.entryIds,
+    p_date: input.date ?? null,
+    p_notes: input.notes ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as VatReturn;
+}
+
+/** Welke boekstukken zijn al in een suppletie verrekend (voor de kandidatenlijst). */
+export async function listVatSupplementEntries(organizationId: UUID): Promise<VatSupplementEntry[]> {
+  return selectOptional<VatSupplementEntry>('vat_supplement_entries', organizationId, {
+    orderBy: 'created_at', ascending: false, hint: BOOKKEEPING_MIGRATION_HINT,
+  });
+}
+
+/** ICP-opgaaf: intracommunautaire leveringen/diensten per afnemer over een periode. */
+export async function computeIcpDeclaration(organizationId: UUID, from: string, to: string): Promise<IcpDeclaration> {
+  const { data, error } = await supabase.rpc('compute_icp_declaration', {
+    p_organization_id: organizationId,
+    p_from: from,
+    p_to: to,
+  });
+  if (error) throw bookkeepingError(error);
+  return (data ?? { rows: [] }) as IcpDeclaration;
+}
+
+/** Openstaande debiteuren/crediteuren per factuur uit het grootboek, met 1300/1600-aansluiting. */
+export async function reportOpenItems(organizationId: UUID, asOf?: string): Promise<OpenItemsReport> {
+  const { data, error } = await supabase.rpc('report_open_items', {
+    p_organization_id: organizationId,
+    p_as_of: asOf ?? new Date().toISOString().slice(0, 10),
+  });
+  if (error) throw bookkeepingError(error);
+  return data as OpenItemsReport;
 }
 
 /** Zorgt dat het standaard rekeningschema + BTW-codes geseed zijn voor de organisatie. */

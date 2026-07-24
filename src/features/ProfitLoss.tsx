@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronLeft, ChevronRight, Download, Scale, TrendingUp } from 'lucide-react';
-import type { AppData, BalanceSheetRow, ProfitAndLossRow } from '../types';
+import { ChevronDown, ChevronLeft, ChevronRight, Download, ListChecks, Scale, TrendingUp } from 'lucide-react';
+import type { AppData, BalanceSheetRow, OpenItemsReport, ProfitAndLossRow } from '../types';
 import { Button } from '../components/Ui';
-import { euro } from '../lib/format';
-import { ensureDefaultLedgerAccounts, reportBalanceSheet, reportProfitAndLoss } from '../lib/repository';
+import { dateNL, euro } from '../lib/format';
+import { ensureDefaultLedgerAccounts, reportBalanceSheet, reportOpenItems, reportProfitAndLoss } from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -73,7 +73,7 @@ function SetupBanner({ organizationId, onChanged }: { organizationId: string; on
 
 export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppData; organizationId: string; onChanged: () => void }) {
   const now = new Date();
-  const [view, setView] = useState<'pnl' | 'balance'>('pnl');
+  const [view, setView] = useState<'pnl' | 'balance' | 'open'>('pnl');
   const [periodType, setPeriodType] = useState<PeriodType>('quarter');
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
@@ -82,6 +82,7 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
   const [pnlCurrent, setPnlCurrent] = useState<ProfitAndLossRow[]>([]);
   const [pnlPrevious, setPnlPrevious] = useState<ProfitAndLossRow[]>([]);
   const [balance, setBalance] = useState<BalanceSheetRow[]>([]);
+  const [openItems, setOpenItems] = useState<OpenItemsReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -97,8 +98,10 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
           reportProfitAndLoss(organizationId, period.previous.from, period.previous.to),
         ]);
         setPnlCurrent(cur); setPnlPrevious(prev);
-      } else {
+      } else if (view === 'balance') {
         setBalance(await reportBalanceSheet(organizationId, period.current.to));
+      } else {
+        setOpenItems(await reportOpenItems(organizationId, period.current.to));
       }
     } catch (e) { setError(e instanceof Error ? e.message : 'Overzicht laden mislukt'); }
     finally { setLoading(false); }
@@ -134,6 +137,7 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
         <div className="bk-seg">
           <button className={view === 'pnl' ? 'is-active' : ''} onClick={() => setView('pnl')}><TrendingUp size={14} /> W&amp;V</button>
           <button className={view === 'balance' ? 'is-active' : ''} onClick={() => setView('balance')}><Scale size={14} /> Balans</button>
+          <button className={view === 'open' ? 'is-active' : ''} onClick={() => setView('open')}><ListChecks size={14} /> Openstaand</button>
         </div>
       </div>
 
@@ -142,7 +146,11 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
         ? <div className="bk-muted bk-report-loading">Laden…</div>
         : view === 'pnl'
           ? <PnlReport current={pnlCurrent} previous={pnlPrevious} period={period} />
-          : <BalanceReport rows={balance} label={period.current.label} data={data} />}
+          : view === 'balance'
+            ? <BalanceReport rows={balance} label={period.current.label} data={data} />
+            : openItems
+              ? <OpenItemsView report={openItems} label={period.current.label} />
+              : <div className="bk-muted bk-report-loading">Laden…</div>}
     </div>
   );
 }
@@ -302,6 +310,96 @@ function BalanceReport({ rows, label, data }: { rows: BalanceSheetRow[]; label: 
           <tfoot><tr className="bk-report-result"><td>Totaal passiva</td><td className="bk-num">{euroCents(totalPassiva)}</td></tr></tfoot>
         </table></div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Openstaande-postenlijst (review 3.5): per factuur geboekt − betaald − gecrediteerd
+ * uit het grootboek, met aansluiting op het 1300/1600-saldo. Het "niet aan een
+ * factuur gekoppeld"-bedrag maakt desyncs zichtbaar die eerder onvindbaar waren.
+ */
+function OpenItemsView({ report, label }: { report: OpenItemsReport; label: string }) {
+  const recv = report.receivables;
+  const pay = report.payables;
+  const today = new Date().toISOString().slice(0, 10);
+
+  const exportCsv = () => downloadCsv(
+    `openstaande-posten-${label.replace(/\s/g, '-')}.csv`,
+    ['Soort', 'Nummer', 'Relatie', 'Datum', 'Vervaldatum', 'Geboekt', 'Betaald', 'Gecrediteerd', 'Open'],
+    [
+      ...recv.rows.map(r => ['Debiteur', r.number ?? '', r.client_name ?? '', r.date, r.due_date ?? '', (r.booked_cents / 100).toFixed(2), (r.paid_cents / 100).toFixed(2), (r.credited_cents / 100).toFixed(2), (r.open_cents / 100).toFixed(2)] as (string | number)[]),
+      ...pay.rows.map(r => ['Crediteur', r.number ?? '', r.supplier_name ?? '', r.date, r.due_date ?? '', (r.booked_cents / 100).toFixed(2), (r.paid_cents / 100).toFixed(2), '', (r.open_cents / 100).toFixed(2)] as (string | number)[]),
+    ],
+  );
+
+  const side = (title: string, kpis: { open: number; gl: number; unmatched: number }, table: React.ReactNode) => (
+    <div className="bk-report">
+      <div className="bk-open-kpis">
+        <div><span>{title} openstaand</span><strong>{euroCents(kpis.open)}</strong></div>
+        <div><span>Grootboeksaldo</span><strong>{euroCents(kpis.gl)}</strong></div>
+        <div>
+          <span>Niet aan factuur gekoppeld</span>
+          <strong className={kpis.unmatched === 0 ? 'bk-pos' : 'bk-neg'}>{euroCents(kpis.unmatched)}</strong>
+        </div>
+      </div>
+      {kpis.unmatched !== 0 && (
+        <p className="bk-muted">Het grootboeksaldo bevat {euroCents(Math.abs(kpis.unmatched))} die niet uit facturen komt (beginbalans of vrije boekingen op de rekening). Openstaand + dit bedrag = grootboeksaldo.</p>
+      )}
+      {table}
+    </div>
+  );
+
+  return (
+    <div className="bk-report">
+      <div className="bk-report-bar">
+        <div className="bk-report-kpis">
+          <div><span>Openstaand per {dateNL(report.as_of)}</span><strong>{euroCents(recv.open_total_cents)} <span className="bk-muted">te ontvangen</span></strong></div>
+          <div><span>&nbsp;</span><strong>{euroCents(pay.open_total_cents)} <span className="bk-muted">te betalen</span></strong></div>
+        </div>
+        <Button onClick={exportCsv}><Download size={14} /> Exporteer CSV</Button>
+      </div>
+
+      {side('Debiteuren (1300)', { open: recv.open_total_cents, gl: recv.gl_balance_cents, unmatched: recv.unmatched_cents },
+        <div className="bk-table-wrap"><table className="bk-table">
+          <thead><tr><th>Factuur</th><th>Klant</th><th>Datum</th><th>Vervalt</th><th className="bk-num">Geboekt</th><th className="bk-num">Betaald</th><th className="bk-num">Gecrediteerd</th><th className="bk-num">Open</th></tr></thead>
+          <tbody>
+            {recv.rows.length === 0 && <tr><td colSpan={8} className="bk-muted">Geen openstaande debiteuren. 🎉</td></tr>}
+            {recv.rows.map(r => (
+              <tr key={r.invoice_id}>
+                <td><strong>{r.number ?? '—'}</strong></td>
+                <td>{r.client_name ?? '—'}</td>
+                <td>{dateNL(r.date)}</td>
+                <td className={r.due_date && r.due_date < today && r.open_cents > 0 ? 'bk-neg' : ''}>{r.due_date ? dateNL(r.due_date) : '—'}</td>
+                <td className="bk-num">{euroCents(r.booked_cents)}</td>
+                <td className="bk-num">{euroCents(r.paid_cents)}</td>
+                <td className="bk-num">{r.credited_cents ? euroCents(r.credited_cents) : ''}</td>
+                <td className="bk-num"><strong>{euroCents(r.open_cents)}</strong></td>
+              </tr>
+            ))}
+          </tbody>
+          {recv.rows.length > 0 && <tfoot><tr className="bk-report-result"><td colSpan={7}>Totaal openstaand</td><td className="bk-num">{euroCents(recv.open_total_cents)}</td></tr></tfoot>}
+        </table></div>)}
+
+      {side('Crediteuren (1600)', { open: pay.open_total_cents, gl: pay.gl_balance_cents, unmatched: pay.unmatched_cents },
+        <div className="bk-table-wrap"><table className="bk-table">
+          <thead><tr><th>Inkoopfactuur</th><th>Leverancier</th><th>Datum</th><th>Vervalt</th><th className="bk-num">Geboekt</th><th className="bk-num">Betaald</th><th className="bk-num">Open</th></tr></thead>
+          <tbody>
+            {pay.rows.length === 0 && <tr><td colSpan={7} className="bk-muted">Geen openstaande crediteuren.</td></tr>}
+            {pay.rows.map(r => (
+              <tr key={r.purchase_invoice_id}>
+                <td><strong>{r.number ?? '—'}</strong></td>
+                <td>{r.supplier_name ?? '—'}</td>
+                <td>{dateNL(r.date)}</td>
+                <td className={r.due_date && r.due_date < today && r.open_cents > 0 ? 'bk-neg' : ''}>{r.due_date ? dateNL(r.due_date) : '—'}</td>
+                <td className="bk-num">{euroCents(r.booked_cents)}</td>
+                <td className="bk-num">{euroCents(r.paid_cents)}</td>
+                <td className="bk-num"><strong>{euroCents(r.open_cents)}</strong></td>
+              </tr>
+            ))}
+          </tbody>
+          {pay.rows.length > 0 && <tfoot><tr className="bk-report-result"><td colSpan={6}>Totaal openstaand</td><td className="bk-num">{euroCents(pay.open_total_cents)}</td></tr></tfoot>}
+        </table></div>)}
     </div>
   );
 }

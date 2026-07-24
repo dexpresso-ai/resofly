@@ -1574,6 +1574,7 @@ body::before{
 .fin-status.refunded { background:rgba(255,149,89,.15); color:#ffb27a; }
 .fin-status.charged-back { background:rgba(240,107,107,.16); color:#ff9b9b; }
 .cn-pill-actions { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.cn-ledger-pill { display:inline-flex; align-items:center; gap:4px; color:#34d399; font-weight:700; }
 .refund-form { display:grid; gap:14px; }
 .refund-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; }
 .refund-method { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
@@ -2463,6 +2464,30 @@ button.chat-member:hover{background:var(--bg3)}
 .bk-report-table tfoot .bk-report-result td{border-top:2px solid var(--border);font-size:1.02rem;font-weight:800;padding-top:11px;padding-bottom:11px}
 .bk-balance-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
 @media (max-width:880px){.bk-balance-cols{grid-template-columns:1fr}}
+
+/* ── Blok C/D: memoriaal, beginbalans, suppletie, openstaande posten ── */
+.bk-head-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.bk-lines-head-memorial,.bk-line-memorial{grid-template-columns:minmax(0,2fr) minmax(0,1.6fr) minmax(0,.9fr) minmax(0,.9fr) minmax(0,.9fr) 34px}
+.bk-lines-head-opening,.bk-line-opening{grid-template-columns:minmax(0,2.6fr) minmax(0,1fr) minmax(0,1fr) 34px}
+.bk-subsection{margin-top:18px;padding-top:16px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:10px}
+.bk-subsection h3{margin:0;display:inline-flex;align-items:center;gap:8px;font-size:1rem}
+.bk-check{display:inline-flex;align-items:center;gap:9px;font-size:.85rem;margin:6px 0}
+.bk-check input{width:16px;height:16px;accent-color:var(--accent)}
+.bk-supplement-list{display:flex;flex-direction:column;border:1px solid var(--border);border-radius:14px;overflow:hidden;max-height:320px;overflow-y:auto}
+.bk-supplement-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border-top:1px solid rgba(255,255,255,.05);cursor:pointer;font-size:.86rem}
+.bk-supplement-row:first-child{border-top:none}
+.bk-supplement-row:hover{background:rgba(255,255,255,.04)}
+.bk-supplement-row input{width:15px;height:15px;accent-color:var(--accent);flex:none}
+.bk-supplement-main{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bk-supplement-row .bk-num{flex:none;font-variant-numeric:tabular-nums;font-size:.8rem}
+.bk-supplement-delta{margin:12px 0;padding:12px 14px;border:1px solid rgba(255,189,89,.35);border-radius:14px;background:linear-gradient(145deg,rgba(255,189,89,.08),rgba(255,255,255,.02))}
+.bk-supplement-delta p{margin:.5rem 0 0;font-weight:700}
+.bk-supplement-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.bk-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid var(--border);border-radius:999px;font-size:.76rem;font-variant-numeric:tabular-nums}
+.bk-open-kpis{display:flex;gap:12px;flex-wrap:wrap}
+.bk-open-kpis>div{flex:1;min-width:170px;display:flex;flex-direction:column;gap:3px;padding:13px 15px;border:1px solid var(--border);border-radius:14px;background:rgba(255,255,255,.022)}
+.bk-open-kpis span{font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted,rgba(245,245,245,.55))}
+.bk-open-kpis strong{font-size:1.15rem;font-variant-numeric:tabular-nums}
 
 /* ── Boekjaren (afsluiten / openen / heropenen) ──────────────────────── */
 .bk-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;border:1px solid var(--border);font-size:.74rem;font-weight:700}
