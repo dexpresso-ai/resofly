@@ -17,6 +17,62 @@ const WOPI_HOST_STAGING = 'https://resofly-media-api-staging.gerjan.workers.dev'
 // Welke origins de editor in een <iframe> mogen inbedden (de ResoFly-app).
 const FRAME_ANCESTORS = 'https://app.resofly.nl https://staging.resofly.nl https://staging.resofly.com http://localhost:5173';
 
+/**
+ * Client-voorkeuren die we vóór het laden aan de editor meegeven (zie patchUiDefaults).
+ *
+ * `smartZoom=false` → Writer-documenten openen op 100% i.p.v. "paginabreedte passend"
+ * (Collabora's smart zoom, die op een breed scherm al snel op 150-180% uitkomt). Collabora
+ * leest deze voorkeur als `window.prefs.get('smartZoom')`; staat die op "false", dan zet de
+ * editor bij het laden de zoom op zijn standaardniveau — precies 100%. Zelf zoomen blijft
+ * gewoon werken (Beeld > Paginabreedte / 100%), en een handmatig gekozen zoom blijft bij
+ * verkleinen/vergroten van het venster staan.
+ */
+const UI_DEFAULT_OVERRIDES: Record<string, string> = {
+  smartZoom: 'false',
+};
+
+/**
+ * Zet UI_DEFAULT_OVERRIDES in de `data-ui-defaults` van cool.html.
+ *
+ * Waarom hier en niet via de `?ui_defaults=`-parameter op de editor-URL (media-api): coolwsd
+ * filtert die parameter op een eigen allowlist (UIMode, TextRuler, TextSidebar, SavedUIState,
+ * …). `smartZoom` zit daar niet in en wordt stilletjes weggegooid — geverifieerd tegen deze
+ * versie (26.04): `?ui_defaults=smartZoom%3Dfalse` levert `data-ui-defaults="e30="` (= `{}`).
+ * Deze Worker is de voordeur van de editor, dus zetten we de sleutel hier alsnog in dezelfde
+ * base64-JSON die Collabora zelf uitleest.
+ *
+ * Bewust conservatief: bij een onbekend formaat (ander attribuut, geen geldige base64/JSON,
+ * sleutel al gezet) laten we de HTML ongemoeid — de editor moet het altijd blijven doen.
+ */
+class UiDefaultsPatcher {
+  element(el: Element): void {
+    const raw = el.getAttribute('data-ui-defaults');
+    if (raw === null) return;
+
+    let parsed: Record<string, unknown>;
+    try {
+      const trimmed = raw.trim();
+      parsed = trimmed ? (JSON.parse(atob(trimmed)) as Record<string, unknown>) : {};
+    } catch {
+      return;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return;
+
+    let changed = false;
+    for (const [key, value] of Object.entries(UI_DEFAULT_OVERRIDES)) {
+      // Een waarde die er al staat (bv. ooit wél via ui_defaults doorgelaten) wint: dan is het
+      // een bewuste keuze van de aanroeper en niet onze vangnet-default.
+      if (parsed[key] !== undefined) continue;
+      parsed[key] = value;
+      changed = true;
+    }
+    if (!changed) return;
+
+    // atob/btoa werken hier byte-voor-byte, dus bestaande (UTF-8) waarden komen ongeschonden terug.
+    el.setAttribute('data-ui-defaults', btoa(JSON.stringify(parsed)));
+  }
+}
+
 export class CollaboraContainer extends Container<Env> {
   // coolwsd: HTTP + WebSocket op 9980.
   defaultPort = 9980;
@@ -81,6 +137,16 @@ export default {
     if (csp && /frame-ancestors/i.test(csp)) {
       headers.set('Content-Security-Policy', csp.replace(/frame-ancestors[^;]*/i, `frame-ancestors ${FRAME_ANCESTORS}`));
     }
+
+    // De editor-pagina krijgt onze client-voorkeuren mee (o.a. openen op 100%).
+    if (response.ok && pathname.endsWith('/cool.html') && (headers.get('content-type') || '').includes('text/html')) {
+      // De rewrite verandert de lengte van het antwoord; een meegekomen content-length zou liegen.
+      headers.delete('content-length');
+      return new HTMLRewriter()
+        .on('#initial-variables', new UiDefaultsPatcher())
+        .transform(new Response(response.body, { status: response.status, statusText: response.statusText, headers }));
+    }
+
     return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
   },
 };
