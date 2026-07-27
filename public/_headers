@@ -12,6 +12,10 @@
 #   Word/Excel-editor is een iframe naar die Worker, geladen via een form-POST
 #   met het WOPI-access_token. Zonder deze uitzonderingen blokkeert de browser
 #   de editor met "This content is blocked".
+# - LET OP bij het uitbreiden van Permissions-Policy: zet clipboard-read/clipboard-write
+#   hier NIET neer. Zodra een feature in deze header staat, geldt die allowlist ook voor
+#   het doorgeven aan iframes, en verliest de Collabora-editor (andere origin) het
+#   systeemklembord. Nu ze ontbreken, regelt het allow-attribuut in OfficeEditor.tsx het.
 # - Smoke-test na de eerste deploy op staging: inloggen, /portal,
 #   /contract/<token>, bestand-upload/-download, agenda-adres zoeken en
 #   meeting-opname. Wordt er iets geblokkeerd, dan staat het in de console als

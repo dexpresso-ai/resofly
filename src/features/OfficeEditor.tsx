@@ -10,6 +10,32 @@ import type { OfficeSession } from '../lib/office';
  */
 const FRAME_NAME = 'resofly-office-frame';
 
+/**
+ * Permissions Policy expliciet aan de editor-origin delegeren.
+ *
+ * Deze iframe heeft bewust GEEN src-attribuut (Collabora komt binnen via de form-POST
+ * hierboven). Het `allow`-attribuut kent daardoor een valkuil: een kale featurenaam
+ * ("clipboard-write") betekent volgens de spec "de origin uit src", en zonder src lost dat op
+ * naar ONZE eigen origin. De policy wordt niet opnieuw berekend als de POST het frame daarna
+ * naar de office-server navigeert, dus Collabora draait dáár zónder clipboard-permissie:
+ * kopiëren werkt dan wel binnen het document (interne clipboard), maar
+ * `navigator.clipboard.write()` faalt en het systeemklembord van de laptop blijft ongemoeid.
+ * Geverifieerd met een cross-origin testopstelling: kaal `allow` → allowsFeature() = false,
+ * met expliciete origin → true.
+ */
+function frameAllow(editorUrl: string): string {
+  // Valt terug op '*' als de URL onverwacht niet te parsen is: liever de permissie doorgeven
+  // aan het (door CSP frame-src al beperkte) frame dan een editor zonder klembord.
+  let origin = '*';
+  try {
+    origin = new URL(editorUrl).origin;
+  } catch {
+    /* houd '*' */
+  }
+  // fullscreen zit in hetzelfde schuitje (presentatiemodus in Impress).
+  return ['clipboard-read', 'clipboard-write', 'fullscreen'].map((feature) => `${feature} ${origin}`).join('; ');
+}
+
 export function OfficeEditor({ session, onClose, onDownload }: { session: OfficeSession; onClose: () => void; onDownload?: () => void }) {
   const formRef = useRef<HTMLFormElement>(null);
   const [phase, setPhase] = useState<'loading' | 'ready' | 'timeout'>('loading');
@@ -54,7 +80,7 @@ export function OfficeEditor({ session, onClose, onDownload }: { session: Office
           name={FRAME_NAME}
           title={session.fileName}
           style={frame}
-          allow="clipboard-read; clipboard-write; fullscreen"
+          allow={frameAllow(session.editorUrl)}
           onLoad={() => setPhase('ready')}
         />
         {phase !== 'ready' && (
