@@ -94,6 +94,7 @@ export function ContentLibrary({
   onNewNote,
   onEditNote,
   onNewDocument,
+  onNewOfficeDocument,
   onEditDocument,
 }: {
   data: AppData;
@@ -104,6 +105,8 @@ export function ContentLibrary({
   onNewNote: (target?: ContentCreateTarget) => void;
   onEditNote: (n: Note) => void;
   onNewDocument: (target?: ContentCreateTarget) => void;
+  /** Nieuw leeg Word/Excel/PowerPoint-document buiten een dossiermap (klantwortel of project). */
+  onNewOfficeDocument: (docType: NewOfficeType, title: string, target?: ContentCreateTarget) => void;
   onEditDocument: (d: InternalDocument) => void;
 }) {
   const [showNotes, setShowNotes] = useState(initialView !== 'documents');
@@ -398,12 +401,17 @@ export function ContentLibrary({
     }
   }
 
+  /**
+   * "+ Nieuw → Word/Excel/PowerPoint". In een dossiermap wordt het een bestand ín die map;
+   * daarbuiten (klantwortel of projectmap) is er geen map om het aan te hangen en maken we
+   * er een document in Office-modus van, dat op diezelfde plek in de lijst verschijnt.
+   */
   function createNewOffice(docType: NewOfficeType) {
     setNewOpen(false);
-    const fid = folderId;
-    if (!fid) return;
     const name = window.prompt(`Naam van het nieuwe ${NEW_OFFICE_LABEL[docType]}:`, 'Nieuw document');
     if (!name || !name.trim()) return;
+    const fid = folderId;
+    if (!fid) { onNewOfficeDocument(docType, name.trim(), createTarget); return; }
     setError(null); setOpening(true);
     void (async () => {
       try {
@@ -694,12 +702,13 @@ export function ContentLibrary({
             </>}
             <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewNote(createTarget); }}><StickyNote size={16} style={{ color: 'var(--accent-v)' }} /> Notitie</button>
             <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewDocument(createTarget); }}><FileText size={16} style={{ color: 'var(--accent-b)' }} /> Document</button>
+            <div className="drive-pop-sep" />
+            <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('docx')}><FileText size={16} style={{ color: 'var(--accent-b)' }} /> Word-document</button>
+            <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('xlsx')}><Sheet size={16} style={{ color: 'var(--accent-g)' }} /> Excel-werkblad</button>
+            <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('pptx')}><Presentation size={16} style={{ color: 'var(--accent-o)' }} /> PowerPoint</button>
             {folderId && <>
-              <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>
               <div className="drive-pop-sep" />
-              <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('docx')}><FileText size={16} style={{ color: 'var(--accent-b)' }} /> Word-document</button>
-              <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('xlsx')}><Sheet size={16} style={{ color: 'var(--accent-g)' }} /> Excel-werkblad</button>
-              <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('pptx')}><Presentation size={16} style={{ color: 'var(--accent-o)' }} /> PowerPoint</button>
+              <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>
             </>}
           </div>}
         </div>}
