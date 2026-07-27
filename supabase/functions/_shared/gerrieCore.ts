@@ -110,7 +110,7 @@ interface ProposalSubtask { label: string; done: boolean }
 interface ProjectProposal { type: 'project'; name: string; client_id: string | null; client_name: string; description: string | null; start_date: string | null; end_date: string | null }
 interface EditProjectProposal { type: 'edit_project'; id: string; name: string; changes: { name?: string; client_id?: string | null; description?: string | null; start_date?: string | null; end_date?: string | null; archived?: boolean } }
 interface TaskProposal { type: 'task'; project_id: string; project_name: string; title: string; description: string | null; status: string; priority: string; planned_date: string | null; start_date: string | null; end_date: string | null; estimated_minutes: number; tags: string[]; subtasks: ProposalSubtask[] }
-interface EditTaskProposal { type: 'edit_task'; id: string; title: string; project_id: string; changes: { title?: string; description?: string | null; status?: string; priority?: string; planned_date?: string | null; start_date?: string | null; end_date?: string | null; estimated_minutes?: number; tags?: string[]; subtasks?: ProposalSubtask[] } }
+interface EditTaskProposal { type: 'edit_task'; id: string; title: string; project_id: string | null; changes: { title?: string; description?: string | null; status?: string; priority?: string; planned_date?: string | null; start_date?: string | null; end_date?: string | null; estimated_minutes?: number; tags?: string[]; subtasks?: ProposalSubtask[] } }
 interface CalendarEventProposal { type: 'calendar_event'; source_id: string; source_name: string; title: string; date: string; start_time: string; end_time: string; description: string | null; location: string | null }
 interface WeekActionProposal { type: 'week_action'; items: Array<{ title: string; planned_date: string }>; total: number }
 interface TimeEntryProposal { type: 'time_entry'; project_id: string | null; project_name: string | null; client_id: string | null; client_name: string | null; date: string; minutes: number; description: string | null; billable: boolean; hourly_rate_cents: number | null }
@@ -1519,7 +1519,7 @@ async function buildEditTaskProposal(ctx: GerrieContext, input: Record<string, u
   if (input.estimated_minutes !== undefined) changes.estimated_minutes = Math.max(0, Math.round(num(input.estimated_minutes)));
   if (input.tags !== undefined) changes.tags = parseTags(input.tags);
   if (input.subtasks !== undefined) changes.subtasks = parseSubtasks(input.subtasks);
-  return { ok: true, proposal: { type: 'edit_task', id: String(task.id), title: String(task.title), project_id: String(task.project_id), changes } };
+  return { ok: true, proposal: { type: 'edit_task', id: String(task.id), title: String(task.title), project_id: task.project_id ? String(task.project_id) : null, changes } };
 }
 
 interface DueReminder { id: string; number: string; client_id: string | null; client_name: string; reminder_level: number; next_level: number; days_overdue: number; total_eur: number }

@@ -58,6 +58,15 @@
 .wp-day-count{margin-left:auto;font-size:10px;color:var(--muted);background:var(--bg3);padding:1px 6px;border-radius:99px}
 .wp-day-body{padding:8px;display:flex;flex-direction:column;gap:6px;flex:1;min-height:0}
 .wp-day-empty{font-size:11px;color:var(--muted);text-align:center;padding:14px 6px;border:1px dashed var(--border);border-radius:6px}
+.wp-day-add{display:flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border-radius:6px;border:1px solid var(--border);background:var(--bg3);color:var(--muted2);cursor:pointer;flex-shrink:0;transition:background .12s,border-color .12s,color .12s}
+.wp-day-add:hover,.wp-day-add[aria-expanded="true"]{background:var(--bg4);border-color:var(--accent);color:var(--accent)}
+.wp-day-add:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wp-quick-add{display:flex;flex-direction:column;gap:5px;padding:8px;border:1px solid var(--accent);border-radius:7px;background:var(--bg3)}
+.wp-quick-add-input{width:100%;border:0;background:transparent;color:var(--text);font-family:inherit;font-size:12px;font-weight:600;outline:none}
+.wp-quick-add-input::placeholder{color:var(--muted);font-weight:500}
+.wp-quick-add-input:disabled{opacity:.55}
+.wp-quick-add-hint{font-size:9px;line-height:1.4;color:var(--muted)}
+.wp-task-project.is-unlinked{color:var(--muted);font-style:italic}
 .wp-task{display:flex;gap:8px;background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:8px 10px;cursor:grab;align-items:flex-start}
 .wp-task:hover{background:var(--bg4);border-color:var(--border2)}
 .wp-task.is-dragging{opacity:.4}

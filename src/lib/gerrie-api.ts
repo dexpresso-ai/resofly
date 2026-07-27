@@ -128,7 +128,8 @@ export interface GerrieEditTaskProposal {
   type: 'edit_task';
   id: UUID;
   title: string;
-  project_id: UUID;
+  /** Null bij een losse taak die nog niet aan een project gekoppeld is. */
+  project_id: UUID | null;
   changes: { title?: string; description?: string | null; status?: string; priority?: string; planned_date?: string | null; start_date?: string | null; end_date?: string | null; estimated_minutes?: number; tags?: string[]; subtasks?: GerrieProposalSubtask[] };
 }
 export interface GerrieCalendarEventProposal {

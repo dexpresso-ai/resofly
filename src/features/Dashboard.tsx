@@ -161,12 +161,14 @@ export function Dashboard({
             ? <p className="week-empty">Geen taken met een planning of deadline in de komende 7 dagen.</p>
             : <div className="week-list">
                 {weekTasks.map(({ task, date }) => {
-                  const project = data.projects.find(p => p.id === task.project_id);
+                  const project = task.project_id ? data.projects.find(p => p.id === task.project_id) : null;
+                  const client = task.client_id ? data.clients.find(c => c.id === task.client_id) : null;
                   const overdue = date < startOfToday;
-                  return <button type="button" key={task.id} className={`week-row ${overdue ? 'is-overdue' : ''}`} onClick={() => openProject(task.project_id)}>
+                  // Een taak zonder project heeft geen projectpagina: dan naar de weekplanner.
+                  return <button type="button" key={task.id} className={`week-row ${overdue ? 'is-overdue' : ''}`} onClick={() => task.project_id ? openProject(task.project_id) : openPage('weekplanner')}>
                     <span className="week-row-main">
                       <strong>{task.title}</strong>
-                      <span>{project?.name ?? 'Project'}</span>
+                      <span>{project?.name ?? client?.name ?? 'Geen project'}</span>
                     </span>
                     <span className="week-date">{overdue ? 'te laat · ' : ''}{formatDayShort(date)}</span>
                   </button>;

@@ -289,7 +289,8 @@ export interface Project extends OrgScopedRow {
 export interface Subtask { id: UUID; label: string; done: boolean; }
 export interface Comment { id: UUID; text: string; author?: string; created_at: string; }
 export interface Task extends OrgScopedRow {
-  project_id: UUID; title: string; description: string | null; status: TaskStatus; priority: Priority; tags: string[]; start_date: string | null; end_date: string | null; planned_date: string | null; planned_order: number | null; estimated_minutes: number; subtasks: Subtask[]; comments: Comment[]; created_at: string; updated_at: string;
+  /** Optioneel: een taak kan los bestaan (bijv. snel toegevoegd in de weekplanner) en pas later aan een project worden gekoppeld. */
+  project_id: UUID | null; client_id: UUID | null; title: string; description: string | null; status: TaskStatus; priority: Priority; tags: string[]; start_date: string | null; end_date: string | null; planned_date: string | null; planned_order: number | null; estimated_minutes: number; subtasks: Subtask[]; comments: Comment[]; created_at: string; updated_at: string;
 }
 /** Koppeling van een organisatielid aan een project ("projectteam"). */
 export interface ProjectMember extends OrgScopedRow {

@@ -34,6 +34,9 @@ type ChecklistItem = {
   done: boolean;
 };
 
+/** Filterwaarde voor "taken die (nog) geen project of klant hebben". */
+const NO_LINK = '__none__';
+
 const DEFAULT_TASK_ESTIMATE_MINUTES = 60;
 const WEEKDAY_CAPACITY_MINUTES = 8 * 60;
 const WEEKEND_CAPACITY_MINUTES = 0;
@@ -44,6 +47,7 @@ export function WeekPlanner({
   teamMembers,
   currentUserId,
   onPlanTask,
+  onQuickAddTask,
   onEditTask,
 }: {
   data: AppData;
@@ -51,6 +55,7 @@ export function WeekPlanner({
   teamMembers: OrganizationMember[];
   currentUserId: string | null;
   onPlanTask: (taskId: UUID, plannedDate: string | null, beforeTaskId?: UUID | null) => Promise<void>;
+  onQuickAddTask: (plannedDate: string, title: string) => Promise<void>;
   onEditTask: (task: Task) => void;
 }) {
   const [anchor, setAnchor] = useState<Date>(() => startOfWeek(new Date()));
@@ -59,6 +64,8 @@ export function WeekPlanner({
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
   const [dragOverTaskId, setDragOverTaskId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [quickAddDay, setQuickAddDay] = useState<string | null>(null);
+  const [quickAddBusy, setQuickAddBusy] = useState(false);
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(anchor, i)), [anchor]);
   const weekEnd = days[6];
@@ -76,7 +83,7 @@ export function WeekPlanner({
   }, [data.taskAssignees]);
 
   const projectOptions = useMemo(() => {
-    if (!filters.clientId) return data.projects;
+    if (!filters.clientId || filters.clientId === NO_LINK) return data.projects;
     return data.projects.filter(project => project.client_id === filters.clientId);
   }, [data.projects, filters.clientId]);
 
@@ -84,14 +91,17 @@ export function WeekPlanner({
     const normalizedQuery = filters.query.trim().toLowerCase();
 
     return data.tasks.filter(task => {
-      const project = projectsById.get(task.project_id) ?? null;
-      const client = project?.client_id ? clientsById.get(project.client_id) ?? null : null;
+      const project = task.project_id ? projectsById.get(task.project_id) ?? null : null;
+      const clientId = project?.client_id ?? task.client_id ?? null;
+      const client = clientId ? clientsById.get(clientId) ?? null : null;
 
       if (filters.status === 'open' && task.status === 'done') return false;
       if (filters.status !== 'open' && filters.status !== 'all' && task.status !== filters.status) return false;
       if (filters.priority !== 'all' && task.priority !== filters.priority) return false;
-      if (filters.projectId && task.project_id !== filters.projectId) return false;
-      if (filters.clientId && project?.client_id !== filters.clientId) return false;
+      if (filters.projectId === NO_LINK && task.project_id) return false;
+      if (filters.projectId && filters.projectId !== NO_LINK && task.project_id !== filters.projectId) return false;
+      if (filters.clientId === NO_LINK && clientId) return false;
+      if (filters.clientId && filters.clientId !== NO_LINK && clientId !== filters.clientId) return false;
 
       if (!normalizedQuery) return true;
       const haystack = [
@@ -209,20 +219,41 @@ export function WeekPlanner({
     }
   }
 
-  const projectColor = (projectId: string) => projectsById.get(projectId)?.color ?? '#FFD966';
-  const projectName = (projectId: string) => projectsById.get(projectId)?.name ?? '—';
-  const clientName = (projectId: string) => {
-    const clientId = projectsById.get(projectId)?.client_id;
-    return clientId ? clientsById.get(clientId)?.name ?? null : null;
+  async function quickAdd(dateKey: string, title: string): Promise<boolean> {
+    const trimmed = title.trim();
+    if (!trimmed || quickAddBusy) return false;
+    setError(null);
+    setQuickAddBusy(true);
+    try {
+      await onQuickAddTask(dateKey, trimmed);
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Taak aanmaken mislukt');
+      return false;
+    } finally {
+      setQuickAddBusy(false);
+    }
+  }
+
+  /** Project en klant van een taak. Beide zijn optioneel: een taak die net in de
+   *  weekplanner is aangemaakt heeft ze nog niet. Hangt er een project aan, dan is dat
+   *  leidend voor de klant; anders telt de eigen klantkoppeling van de taak. */
+  const taskLinks = (task: Task) => {
+    const project = task.project_id ? projectsById.get(task.project_id) ?? null : null;
+    const clientId = project?.client_id ?? task.client_id ?? null;
+    const client = clientId ? clientsById.get(clientId) ?? null : null;
+    return {
+      projectName: project?.name ?? null,
+      clientName: client?.name ?? null,
+      color: project?.color ?? client?.color ?? '#FFD966',
+    };
   };
 
   const taskCard = (task: Task, options: { plannedDate?: string | null; showPlannedDate?: boolean } = {}) => (
     <TaskCard
       key={task.id}
       task={task}
-      projectName={projectName(task.project_id)}
-      clientName={clientName(task.project_id)}
-      projectColor={projectColor(task.project_id)}
+      {...taskLinks(task)}
       assigneeIds={assigneesByTask.get(task.id) ?? []}
       teamMembers={teamMembers}
       currentUserId={currentUserId}
@@ -262,10 +293,10 @@ export function WeekPlanner({
     <section className="wp-filters" aria-label="Weekplanner filters">
       <Input value={filters.query} onChange={e => updateFilter('query', e.target.value)} placeholder="Zoek op taak, project, klant of tag" />
       <Select value={filters.clientId} onChange={e => updateFilter('clientId', e.target.value)}>
-        <option value="">Alle klanten</option>{data.clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
+        <option value="">Alle klanten</option><option value={NO_LINK}>Zonder klant</option>{data.clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
       </Select>
       <Select value={filters.projectId} onChange={e => updateFilter('projectId', e.target.value)}>
-        <option value="">Alle projecten</option>{projectOptions.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+        <option value="">Alle projecten</option><option value={NO_LINK}>Zonder project</option>{projectOptions.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
       </Select>
       <Select value={filters.priority} onChange={e => updateFilter('priority', e.target.value as PlannerFilters['priority'])}>
         <option value="all">Alle prioriteiten</option>
@@ -304,14 +335,29 @@ export function WeekPlanner({
             <span className="wp-day-name">{DAY_NAMES_NL[i]}</span>
             <span className="wp-day-num">{day.getDate()}</span>
             <span className="wp-day-count">{bucket.count} · {formatDuration(bucket.minutes)}</span>
+            {canWrite && <button
+              type="button"
+              className="wp-day-add"
+              onClick={() => setQuickAddDay(prev => prev === key ? null : key)}
+              aria-expanded={quickAddDay === key}
+              aria-label={`Taak toevoegen op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
+              title={`Taak toevoegen op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
+            >
+              <Plus size={13}/>
+            </button>}
           </div>
           <div className="wp-day-capacity">
             <span>{capacity ? `${Math.round((bucket.minutes / capacity) * 100)}% van dag` : 'Weekend'}</span>
             <span>{bucket.count === 1 ? '1 taak' : `${bucket.count} taken`}</span>
           </div>
           <div className="wp-day-body">
+            {quickAddDay === key && <QuickAddTask
+              busy={quickAddBusy}
+              onSubmit={title => quickAdd(key, title)}
+              onCancel={() => setQuickAddDay(null)}
+            />}
             {bucket.tasks.map(task => taskCard(task, { plannedDate: key }))}
-            {bucket.tasks.length === 0 && <div className="wp-day-empty">Sleep een taak hierheen</div>}
+            {bucket.tasks.length === 0 && quickAddDay !== key && <div className="wp-day-empty">Sleep een taak hierheen of gebruik <strong>+</strong></div>}
             {bucket.tasks.length > 0 && <div className="wp-drop-to-bottom">Sleep hierheen voor onderaan</div>}
           </div>
         </div>;
@@ -344,7 +390,7 @@ function TaskCard({
   task,
   projectName,
   clientName,
-  projectColor,
+  color,
   assigneeIds,
   teamMembers,
   currentUserId,
@@ -359,9 +405,9 @@ function TaskCard({
   onClick,
 }: {
   task: Task;
-  projectName: string;
+  projectName: string | null;
   clientName: string | null;
-  projectColor: string;
+  color: string;
   assigneeIds: string[];
   teamMembers: OrganizationMember[];
   currentUserId: string | null;
@@ -384,11 +430,11 @@ function TaskCard({
     onDrop={onDrop}
     onClick={onClick}
   >
-    <span className="wp-task-dot" style={{ background: projectColor }}/>
+    <span className="wp-task-dot" style={{ background: color }}/>
     <div className="wp-task-body">
       <div className="wp-task-title">{task.title}</div>
       <div className="wp-task-meta">
-        <span className="wp-task-project">{projectName}</span>
+        <span className={`wp-task-project${projectName ? '' : ' is-unlinked'}`}>{projectName ?? 'Geen project'}</span>
         {clientName && <span className="wp-task-client">{clientName}</span>}
         <span className={`pri-badge pri-${task.priority}`}>{priorityLabel(task.priority)}</span>
         <span className={`wp-task-status status-${task.status}`}>{statusLabel(task.status)}</span>
@@ -402,6 +448,44 @@ function TaskCard({
       </div>
     </div>
   </article>;
+}
+
+/** Snelinvoer in een dagkolom: titel typen, Enter, en de taak staat op die dag.
+ *  Bewust zonder project of klant — die koppel je daarna door de kaart te openen. */
+function QuickAddTask({ busy, onSubmit, onCancel }: {
+  busy: boolean;
+  onSubmit: (title: string) => Promise<boolean>;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Focus bij openen én opnieuw zodra het opslaan klaar is: tijdens het opslaan staat
+  // het veld op `disabled`, wat de focus wegneemt. Pas ná de her-render kan hij terug.
+  useEffect(() => { if (!busy) inputRef.current?.focus(); }, [busy]);
+
+  async function submit() {
+    // Veld leegmaken zodat je meteen de volgende taak kunt typen.
+    if (await onSubmit(title)) setTitle('');
+  }
+
+  return <div className="wp-quick-add">
+    <input
+      ref={inputRef}
+      className="wp-quick-add-input"
+      value={title}
+      disabled={busy}
+      placeholder="Taaktitel…"
+      aria-label="Nieuwe taak op deze dag"
+      onChange={e => setTitle(e.target.value)}
+      onKeyDown={e => {
+        if (e.key === 'Enter') { e.preventDefault(); void submit(); }
+        if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+      }}
+      onBlur={() => { if (!title.trim()) onCancel(); }}
+    />
+    <div className="wp-quick-add-hint">Enter voegt toe · Esc sluit. Project en klant koppel je daarna in de taak.</div>
+  </div>;
 }
 
 function PlannerSection({ title, mutedText, className, children, onDragOver, onDragLeave, onDrop }: {

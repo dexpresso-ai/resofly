@@ -660,7 +660,8 @@ create table public.tasks (
   id uuid primary key default gen_random_uuid(),
   organization_id uuid not null references public.organizations(id) on delete cascade,
   created_by uuid references auth.users(id) on delete set null,
-  project_id uuid not null references public.projects(id) on delete cascade,
+  project_id uuid references public.projects(id) on delete cascade,
+  client_id uuid references public.clients(id) on delete set null,
   title text not null,
   description text,
   status text not null default 'todo' check (status in ('todo','doing','review','done')),
@@ -819,8 +820,20 @@ end; $$;
 
 create or replace function public.enforce_tasks_org_integrity()
 returns trigger language plpgsql as $$
+declare
+  v_project_client uuid;
 begin
   perform public.assert_same_org_reference('public.projects', new.project_id, new.organization_id, 'tasks.project_id');
+  perform public.assert_same_org_reference('public.clients', new.client_id, new.organization_id, 'tasks.client_id');
+
+  -- Zolang er een project mét klant aan hangt, is dat project leidend voor de klant.
+  if new.project_id is not null then
+    select client_id into v_project_client from public.projects where id = new.project_id;
+    if v_project_client is not null then
+      new.client_id := v_project_client;
+    end if;
+  end if;
+
   return new;
 end; $$;
 
@@ -1036,6 +1049,7 @@ create index idx_tasks_org on public.tasks(organization_id, status, end_date);
 create index idx_tasks_org_planned_date_order on public.tasks(organization_id, planned_date, planned_order, created_at, id);
 create index idx_tasks_org_status_planned_date on public.tasks(organization_id, status, planned_date);
 create index idx_tasks_project on public.tasks(project_id);
+create index idx_tasks_org_client on public.tasks(organization_id, client_id);
 create index idx_tickets_org on public.tickets(organization_id, status, created_at desc);
 create index idx_tickets_client on public.tickets(client_id);
 create index idx_notes_org on public.notes(organization_id, created_at desc);
@@ -1076,7 +1090,7 @@ create trigger invoices_prevent_org_change before update of organization_id on p
 create trigger attachments_prevent_org_change before update of organization_id on public.attachments for each row execute function public.prevent_organization_id_change();
 
 create trigger projects_org_integrity before insert or update of organization_id, client_id on public.projects for each row execute function public.enforce_projects_org_integrity();
-create trigger tasks_org_integrity before insert or update of organization_id, project_id on public.tasks for each row execute function public.enforce_tasks_org_integrity();
+create trigger tasks_org_integrity before insert or update of organization_id, project_id, client_id on public.tasks for each row execute function public.enforce_tasks_org_integrity();
 create trigger tickets_00_conversion_state before insert or update of status, converted_to_project_id on public.tickets for each row execute function public.normalize_ticket_conversion_state();
 create trigger tickets_org_integrity before insert or update of organization_id, client_id, converted_to_project_id on public.tickets for each row execute function public.enforce_tickets_org_integrity();
 create trigger notes_org_integrity before insert or update of organization_id, client_id, project_id on public.notes for each row execute function public.enforce_notes_org_integrity();

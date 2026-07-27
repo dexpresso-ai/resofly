@@ -86,8 +86,9 @@ export function GlobalSearch({ data, onNavigate }: { data: AppData; onNavigate: 
     }
     for (const t of data.tasks) {
       if (matches(term, t.title, plain(t.description), t.tags?.join(' '))) {
-        const project = projectById.get(t.project_id);
-        out.push({ kind: 'task', id: t.id, title: t.title, subtitle: project?.name ?? 'Taak', item: t });
+        const project = t.project_id ? projectById.get(t.project_id) : null;
+        const client = t.client_id ? clientById.get(t.client_id) : null;
+        out.push({ kind: 'task', id: t.id, title: t.title, subtitle: project?.name ?? client?.name ?? 'Taak', item: t });
       }
     }
     for (const t of data.tickets) {
