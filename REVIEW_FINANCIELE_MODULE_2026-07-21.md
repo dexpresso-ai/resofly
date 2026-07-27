@@ -363,7 +363,12 @@ zie `CHANGELOG_FINANCE_BLOK_A_FIXES_2026-07-21.md`.**
 9. `volgnr` uit `refCol` halen; dedup-sleutel altijd datum+bedrag+tegenpartij (1.6).
 10. CSV-kolomherkenning: exacte match vóór substring, `descCol` los van `nameCol` (3.7, 3.8).
 
-**Blok C — maak de aangifte kloppend.**
+**Blok C — maak de aangifte kloppend.** **STATUS: GEBOUWD (2026-07-23) — migratie
+`20260723200000_finance_blok_c_d.sql`, zie `CHANGELOG_FINANCE_BLOK_C_D_2026-07-23.md`.
+Toegepast op staging. Nalezing 2026-07-26 vond nog twee punten in
+`post_credit_note_to_ledger` (creditnota op een niet-geboekte factuur maakte 1300
+negatief; restcent kon op de verkeerde groep landen) — gefixt in
+`20260726100000_credit_note_posting_guard.sql`.**
 11. `vat_code` op factuurregels i.p.v. alleen een percentage; 8030 gebruiken (2.1).
 12. Ontbrekende rubrieken + `vat_codes.sales_box`/`vat_box` daadwerkelijk lezen (2.4).
 13. Creditnota's naar het grootboek (1.2).
@@ -371,7 +376,10 @@ zie `CHANGELOG_FINANCE_BLOK_A_FIXES_2026-07-21.md`.**
 15. `clients.vat_number`/`country` + ICP-opgaaf (2.5) — of expliciet communiceren dat intra-EU
     niet ondersteund wordt.
 
-**Blok D — voordat er een echte klant op gaat.**
+**Blok D — voordat er een echte klant op gaat.** **STATUS: GEBOUWD (2026-07-23) —
+zelfde migratie + `src/lib/xaf.ts`; toegepast op staging.** Daarna nog uitgebreid met
+auto-boekketen, activa-desinvestering en saldibalans/grootboekkaart
+(`20260724100000` t/m `20260724120000`).
 16. XAF-export (3.1), beginbalans-UI (3.2), openstaande-postenlijst (3.5), paginering (3.10).
 
 ---
