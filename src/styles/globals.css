@@ -4124,10 +4124,18 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .calendar-agenda-page .calendar-toolbar-right{flex:1 0 100%;margin-left:0;gap:6px;flex-wrap:nowrap}
   .calendar-agenda-page .calendar-toolbar-right .calendar-view-tabs{flex:1 1 auto;margin-left:auto}
   .calendar-agenda-page .calendar-view-tabs .tb-vbtn{flex:1;justify-content:center;min-width:0}
+  /* Vijf weergavetabs (Dag · 3 dagen · Week · Maand · Lijst) passen hier alleen
+     als tekst; de iconen waren op deze breedte toch dubbelzinnig — Dag en Maand
+     deelden hetzelfde icoon. */
+  .calendar-agenda-page .calendar-view-tabs .tb-vbtn svg{display:none}
+  .calendar-agenda-page .calendar-view-tabs .tb-vbtn span{display:inline-block;font-size:10.5px}
+  .calendar-agenda-page .calendar-view-tabs .tb-vbtn{padding:7px 4px;gap:0;letter-spacing:0}
 
-  /* 3 ── Dagweergave zonder dubbele dagkop; rooster vult het scherm ─────── */
-  .calendar-agenda-page .tb-single-day .tb-day-headers{display:none}
-  .calendar-agenda-page .tb-single-day .tb-allday-row{top:0}
+  /* 3 ── Dag/3 dagen: dagkoppen zichtbaar; rooster vult het scherm ───────── */
+  /* De weekdagnaam blijft staan in dag- en 3-daagse weergave (≤620px verbergt
+     'm normaal om zeven weekkolommen te laten passen — bij één of drie
+     kolommen is daar ruimte zat voor). */
+  .calendar-agenda-page .tb-few-days .tb-dh-name{display:block}
   .calendar-agenda-page .tb-scroll,.tb-scroll{height:calc(100dvh - 330px - env(safe-area-inset-bottom));min-height:340px;max-height:none}
   .calendar-main-card{padding:8px}
 
@@ -4145,6 +4153,15 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .event-detail-title-edit .form-input{font-size:17px}
 }
 @keyframes eventPanelUp{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:none}}
+
+/* "3 dagen"-weergave (Google op de telefoon): één of drie dagkolommen passen
+   altijd binnen het scherm, dus geen minimumbreedte forceren — anders zou het
+   rooster onnodig horizontaal scrollen. Hogere specificiteit dan de
+   `.tb-canvas{min-width:…}`-regels hierboven, ook binnen hun media queries. */
+.tb-container.tb-few-days .tb-canvas{min-width:0}
+/* Drie kolommen: iets ruimere dagkoppen dan in de weekweergave. */
+.calendar-agenda-page .tb-few-days .tb-dh{height:56px}
+.calendar-agenda-page .tb-few-days .tb-allday-row{top:56px}
 
 /* ══════════════════════════════════════════════════════════════════════════
    NACHTVLUCHT — additieve verfijningen bovenop het bestaande premium-thema.

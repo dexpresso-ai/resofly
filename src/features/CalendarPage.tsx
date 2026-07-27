@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { CalendarDays, CalendarPlus, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, ExternalLink, LayoutList, Mail, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
+import { CalendarDays, CalendarPlus, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Mail, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { MeetingRecorder } from '../components/MeetingRecorder';
 import { RichTextExcerpt } from '../components/RichTextEditor';
@@ -48,6 +48,8 @@ const HOUR_END = 24;
 const WORKDAY_START = 8;
 const WORKDAY_END = 18;
 const SLOT_MINUTES = 30;
+/** Aantal dagkolommen in de "3 dagen"-weergave (Google-stijl, vooral voor mobiel). */
+const THREE_DAY_COUNT = 3;
 const TOTAL_SLOTS = (HOUR_END - HOUR_START) * (60 / SLOT_MINUTES);
 const MIN_EVENT_HEIGHT_SLOTS = 0.85;
 // De volledige dag (00:00-24:00) blijft scrollbaar zodat ook de vroege/late uren
@@ -238,6 +240,8 @@ function eventOverlapsDay(event: CalendarExternalEvent, day: Date): boolean {
 
 function calendarDaysForView(view: CalendarView, anchor: Date): Date[] {
   if (view === 'day') return [startOfDay(anchor)];
+  // "3 dagen" (zoals Google op de telefoon): de gekozen dag plus de twee erna.
+  if (view === '3day') return Array.from({ length: THREE_DAY_COUNT }, (_, i) => addDays(startOfDay(anchor), i));
   if (view === 'month') {
     const monthStart = startOfMonth(anchor);
     const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0);
@@ -249,6 +253,11 @@ function calendarDaysForView(view: CalendarView, anchor: Date): Date[] {
   }
   const weekStart = startOfWeek(anchor);
   return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+}
+
+/** Weergaven met een tijdrooster (dagkolommen × uren): dag, 3 dagen en week. */
+function isTimeGridView(view: CalendarView): boolean {
+  return view === 'day' || view === '3day' || view === 'week';
 }
 
 function providerLabel(p: CalendarProvider): string { return p === 'google' ? 'Google' : p === 'microsoft' ? 'Microsoft' : p === 'ics' ? 'Via link' : 'ResoFly'; }
@@ -415,7 +424,7 @@ function eventOverlapsVisibleWindow(event: CalendarExternalEvent, day: Date): bo
   return eventStart < end && eventEnd > start;
 }
 
-type CalendarView = 'day' | 'week' | 'month' | 'list';
+type CalendarView = 'day' | '3day' | 'week' | 'month' | 'list';
 
 interface DragState { dayIndex: number; startSlot: number; endSlot: number }
 
@@ -890,7 +899,7 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   } as CSSProperties;
 
   return (
-    <div className={`tb-container${days.length === 1 ? ' tb-single-day' : ''}`} style={gridStyle} onMouseLeave={() => { if (isDragging) handleMouseUp(); }}>
+    <div className={`tb-container${days.length === 1 ? ' tb-single-day' : ''}${days.length <= THREE_DAY_COUNT ? ' tb-few-days' : ''}`} style={gridStyle} onMouseLeave={() => { if (isDragging) handleMouseUp(); }}>
       <div className="tb-scroll" ref={scrollRef}>
         <div className="tb-canvas">
           <div className="tb-day-headers">
@@ -2205,6 +2214,15 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   const stripDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(anchor), i)), [anchor]);
   const rangeStart = useMemo(() => days[0].toISOString(), [days]);
   const rangeEnd = useMemo(() => addDays(days[days.length - 1], 1).toISOString(), [days]);
+  // Het zichtbare tijdvenster in een ref. Callbacks als opslaan/verslepen worden
+  // gememoïseerd zónder het venster in hun deps; zonder deze ref ververste zo'n
+  // callback het venster van een eerder bekeken week en zette die events terug —
+  // waardoor de agenda na "Opslaan" leeg leek tot je de pagina handmatig ververste.
+  const rangeRef = useRef({ start: rangeStart, end: rangeEnd });
+  rangeRef.current = { start: rangeStart, end: rangeEnd };
+  // Volgnummer per ophaalactie: alleen het antwoord van de láátste aanvraag mag de
+  // lijst zetten, zodat een traag antwoord van een vorige week een nieuwere niet overschrijft.
+  const eventsRequestRef = useRef(0);
   // Google-stijl titel: "juli 2026" (met korte maanden als de week over een
   // maandgrens valt); de dagweergave toont de volledige datum.
   const calendarRangeLabel = useMemo(() => {
@@ -2212,8 +2230,14 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     if (view === 'month') return monthLabelNl(anchor);
     const first = days[0];
     const last = days[days.length - 1];
-    if (isSameMonth(first, last)) return monthLabelNl(first);
     const shortMonth = (d: Date) => new Intl.DateTimeFormat('nl-NL', { month: 'short' }).format(d).replace('.', '');
+    // "3 dagen" toont het dagbereik zelf ("27 – 29 juli 2026"); week/lijst de maand.
+    if (view === '3day') {
+      if (isSameMonth(first, last)) return `${first.getDate()} – ${last.getDate()} ${monthLabelNl(first)}`;
+      if (first.getFullYear() === last.getFullYear()) return `${first.getDate()} ${shortMonth(first)} – ${last.getDate()} ${shortMonth(last)} ${last.getFullYear()}`;
+      return `${first.getDate()} ${shortMonth(first)} ${first.getFullYear()} – ${last.getDate()} ${shortMonth(last)} ${last.getFullYear()}`;
+    }
+    if (isSameMonth(first, last)) return monthLabelNl(first);
     if (first.getFullYear() === last.getFullYear()) return `${shortMonth(first)} – ${shortMonth(last)} ${last.getFullYear()}`;
     return `${shortMonth(first)} ${first.getFullYear()} – ${shortMonth(last)} ${last.getFullYear()}`;
   }, [anchor, days, view]);
@@ -2301,18 +2325,28 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   // `fresh` = na een mutatie of handmatig verversen: cache leegmaken en live ophalen.
   // Zonder `fresh` (bij navigeren) tonen we een nog verse cache direct — geen spinner,
   // geen netwerk — en dedupliceert de laag eronder de dubbele fetch bij het openen.
-  async function refreshEventsOnly(opts?: { fresh?: boolean }) {
+  const refreshEventsOnly = useCallback(async (opts?: { fresh?: boolean }) => {
+    // Altijd het venster dat NU in beeld staat (via de ref), nooit dat van de
+    // render waarin een aanroepende callback toevallig gemaakt is.
+    const { start, end } = rangeRef.current;
+    const seq = ++eventsRequestRef.current;
     if (opts?.fresh) {
       invalidateCalendarEventsCache(organizationId);
     } else {
-      const cached = getCachedCalendarEvents(organizationId, rangeStart, rangeEnd);
-      if (cached) { setEvents(cached); setError(null); return; }
+      // Ook de laadindicator vrijgeven: een nog lopende oudere aanvraag wordt
+      // straks door de volgnummer-check genegeerd en zet 'm dus niet meer terug.
+      const cached = getCachedCalendarEvents(organizationId, start, end);
+      if (cached) { setEvents(cached); setError(null); setEventsLoading(false); return; }
     }
     setEventsLoading(true); setError(null);
-    try { setEvents(await listCalendarEventsCached(organizationId, rangeStart, rangeEnd)); }
-    catch (err) { setError(err instanceof Error ? err.message : 'Agenda-events laden mislukt.'); }
-    finally { setEventsLoading(false); }
-  }
+    try {
+      const rows = await listCalendarEventsCached(organizationId, start, end);
+      if (seq !== eventsRequestRef.current) return; // een nieuwere aanvraag is leidend
+      setEvents(rows);
+    }
+    catch (err) { if (seq === eventsRequestRef.current) setError(err instanceof Error ? err.message : 'Agenda-events laden mislukt.'); }
+    finally { if (seq === eventsRequestRef.current) setEventsLoading(false); }
+  }, [organizationId]);
   async function connect(provider: CalendarProvider) {
     if (!canWrite) { setError('Je hebt alleen-lezen toegang tot deze organisatie.'); return; }
     setLoading(true); setError(null); setMessage(null);
@@ -2508,10 +2542,14 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         await onSetEventLink(updated, link.client_id, link.project_id, link.track_time);
       }
     }
+    // Het bijgewerkte item meteen in het rooster verwerken, zodat de agenda niet
+    // even leeg/verouderd staat terwijl het verse ophalen nog loopt.
+    const previousKey = eventIdentityKey(event);
+    setEvents(prev => prev.map(e => eventIdentityKey(e) === previousKey ? updated : e));
     setSelectedEvent(updated);
     setMessage('Afspraak bijgewerkt.');
     refreshEventsOnly({ fresh: true }).catch(() => {});
-  }, [eventIsEditable, organizationId, data.calendarEventLinks, onSetEventLink]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [eventIsEditable, organizationId, data.calendarEventLinks, onSetEventLink, refreshEventsOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function removeEvent(event: CalendarExternalEvent) {
     if (!eventIsEditable(event)) return;
@@ -2519,6 +2557,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     setLoading(true); setError(null); setMessage(null);
     try {
       await deleteCalendarEvent(organizationId, eventRef(event));
+      const removedKey = eventIdentityKey(event);
+      setEvents(prev => prev.filter(e => eventIdentityKey(e) !== removedKey));
       setSelectedEvent(null);
       setMessage('Afspraak verwijderd.');
       await refreshEventsOnly({ fresh: true });
@@ -2536,7 +2576,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     if (new Date(endIso).getTime() <= new Date(startIso).getTime()) { setError('Eindtijd moet na starttijd liggen.'); return; }
     const isNative = event.provider === 'native';
     // Optimistisch verschuiven zodat het blok meteen op de nieuwe plek staat.
-    setEvents(prev => prev.map(e => e === event ? { ...e, starts_at: startIso, ends_at: endIso } : e));
+    const originalKey = eventIdentityKey(event);
+    setEvents(prev => prev.map(e => eventIdentityKey(e) === originalKey ? { ...e, starts_at: startIso, ends_at: endIso } : e));
     setError(null);
     let recurrence: EventRecurrence | null = null;
     let attendees: { email: string; name: string | null }[] | undefined;
@@ -2571,13 +2612,15 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
           await onSetEventLink(updated, link.client_id, link.project_id, link.track_time);
         }
       }
-      setSelectedEvent(prev => (prev && prev === event) ? updated : prev);
+      // `events` staat al optimistisch goed; alleen het geopende detailpaneel moet
+      // nog naar het bijgewerkte item wijzen (dat draagt nog de oude starttijd).
+      setSelectedEvent(prev => (prev && eventIdentityKey(prev) === originalKey) ? updated : prev);
       await refreshEventsOnly({ fresh: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Verplaatsen mislukt.');
       await refreshEventsOnly({ fresh: true });
     }
-  }, [eventIsEditable, organizationId, data.calendarEventLinks, onSetEventLink]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [eventIsEditable, organizationId, data.calendarEventLinks, onSetEventLink, refreshEventsOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function addNativeCalendar(e: FormEvent) {
     e.preventDefault();
@@ -2675,6 +2718,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   function movePeriod(direction: -1 | 1) {
     setAnchor(prev => {
       if (view === 'day') return addDays(prev, direction);
+      if (view === '3day') return addDays(prev, direction * THREE_DAY_COUNT);
       if (view === 'month') return addMonths(prev, direction);
       return addDays(prev, direction * 7);
     });
@@ -2689,9 +2733,9 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     setAnchor(startOfDay(new Date()));
   }
 
-  // ↑/↓ zoomt in/uit langs dag → week → maand (lijst blijft via 'l').
+  // ↑/↓ zoomt in/uit langs dag → 3 dagen → week → maand (lijst blijft via 'l').
   function cycleView(direction: -1 | 1) {
-    const order: CalendarView[] = ['day', 'week', 'month'];
+    const order: CalendarView[] = ['day', '3day', 'week', 'month'];
     const current = order.indexOf(view);
     const base = current === -1 ? order.indexOf('week') : current;
     const next = order[Math.min(order.length - 1, Math.max(0, base + direction))];
@@ -2723,6 +2767,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         case 'ArrowDown': e.preventDefault(); cycleView(1); break;
         case 't': case 'T': case 'v': case 'V': e.preventDefault(); goToday(); break;
         case 'd': case 'D': e.preventDefault(); changeView('day'); break;
+        case '3': e.preventDefault(); changeView('3day'); break;
         case 'w': case 'W': e.preventDefault(); changeView('week'); break;
         case 'm': case 'M': e.preventDefault(); changeView('month'); break;
         case 'l': case 'L': e.preventDefault(); changeView('list'); break;
@@ -2751,8 +2796,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       const dir: -1 | 1 = e.deltaY > 0 ? 1 : -1;
       // Maand op mobiel is een natuurlijke scroll-lijst — die niet kapen.
       if (view === 'month' && window.innerWidth <= 900) return;
-      // Dag/week: respecteer de interne tijdscroll; navigeer pas aan de rand.
-      if (view === 'day' || view === 'week') {
+      // Dag/3 dagen/week: respecteer de interne tijdscroll; navigeer pas aan de rand.
+      if (isTimeGridView(view)) {
         const scroller = el!.querySelector<HTMLElement>('.tb-scroll');
         if (scroller) {
           const atTop = scroller.scrollTop <= 1;
@@ -2771,9 +2816,9 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     return () => el.removeEventListener('wheel', onWheel);
   }, [mode, view, showCreatePanel, selectedEvent, bookingMode]); // eslint-disable-line
 
-  // Vegen op de telefoon (Google-werkwijze): veeg links/rechts over de dag- of
-  // maandweergave om naar de volgende/vorige dag of maand te gaan. Week en lijst
-  // scrollen zelf (horizontaal/verticaal) en blijven daarom buiten schot; een
+  // Vegen op de telefoon (Google-werkwijze): veeg links/rechts over de dag-,
+  // 3-daagse of maandweergave om naar de volgende/vorige periode te gaan. Week en
+  // lijst scrollen zelf (horizontaal/verticaal) en blijven daarom buiten schot; een
   // overwegend verticale veeg blijft gewoon scrollen.
   useEffect(() => {
     if (mode !== 'agenda' || !isMobile) return;
@@ -2791,7 +2836,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     function onTouchEnd(e: TouchEvent) {
       if (!tracking) return;
       tracking = false;
-      if (view !== 'day' && view !== 'month') return;
+      if (view !== 'day' && view !== '3day' && view !== 'month') return;
       if (showCreatePanel || selectedEvent || bookingMode) return;
       const t = e.changedTouches[0];
       if (!t) return;
@@ -2808,8 +2853,8 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     };
   }, [mode, isMobile, view, showCreatePanel, selectedEvent, bookingMode]); // eslint-disable-line
 
-  const previousLabel = view === 'day' ? 'Vorige dag' : view === 'month' ? 'Vorige maand' : 'Vorige week';
-  const nextLabel = view === 'day' ? 'Volgende dag' : view === 'month' ? 'Volgende maand' : 'Volgende week';
+  const previousLabel = view === 'day' ? 'Vorige dag' : view === '3day' ? 'Vorige 3 dagen' : view === 'month' ? 'Vorige maand' : 'Vorige week';
+  const nextLabel = view === 'day' ? 'Volgende dag' : view === '3day' ? 'Volgende 3 dagen' : view === 'month' ? 'Volgende maand' : 'Volgende week';
 
   const connectionsSection = <section className="calendar-section connections-panel" id="calendar-connections">
     <button className="calendar-section-head calendar-collapse-head" onClick={() => setShowConnections(prev => !prev)} aria-expanded={showConnections}>
@@ -3010,7 +3055,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
           {eventsLoading && <span className="calendar-loading-hint">laden…</span>}
         </div>
         <div className="calendar-toolbar-right">
-          {(view === 'day' || view === 'week') && canWrite && writeableSources.length > 0 && !bookingMode && (
+          {isTimeGridView(view) && canWrite && writeableSources.length > 0 && !bookingMode && (
             <>
               <Button onClick={() => { setBookingMode(true); setDraftSlots([]); }} title="Beschikbaarheid voor klant — teken blokken en stuur ze als boekingsopties door">
                 <CalendarPlus size={14} /> <span className="calendar-availability-label">Beschikbaarheid</span>
@@ -3025,6 +3070,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
           <Button className="calendar-link-btn" onClick={() => refreshAll({ fresh: true })} disabled={loading || eventsLoading} title="Ververs agenda's" aria-label="Ververs agenda's"><RefreshCcw size={14} /></Button>
           <div className="tb-view-tog calendar-view-tabs" aria-label="Agendaweergave">
             <button className={`tb-vbtn${view === 'day' ? ' active' : ''}`} onClick={() => changeView('day')} title="Dagweergave (D)"><CalendarDays size={14} /><span>Dag</span></button>
+            <button className={`tb-vbtn${view === '3day' ? ' active' : ''}`} onClick={() => changeView('3day')} title="3-daagse weergave (3)"><Columns3 size={14} /><span>3 dagen</span></button>
             <button className={`tb-vbtn${view === 'week' ? ' active' : ''}`} onClick={() => changeView('week')} title="Weekweergave (W)"><Clock size={14} /><span>Week</span></button>
             <button className={`tb-vbtn${view === 'month' ? ' active' : ''}`} onClick={() => changeView('month')} title="Maandweergave (M)"><CalendarDays size={14} /><span>Maand</span></button>
             <button className={`tb-vbtn${view === 'list' ? ' active' : ''}`} onClick={() => changeView('list')} title="Lijstweergave (L)"><LayoutList size={14} /><span>Lijst</span></button>
@@ -3032,7 +3078,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         </div>
       </div>
 
-      {(view === 'day' || view === 'week') && bookingMode && (
+      {isTimeGridView(view) && bookingMode && (
         <div className="calendar-toolbar calendar-booking-toolbar">
           <span className="calendar-range-label">Opties tekenen</span>
           <span className="muted" style={{ fontSize: 13 }}>Sleep op het rooster om opties te maken ({draftSlots.length} gekozen) · klik een concept-blok om het te verwijderen.</span>
@@ -3044,10 +3090,11 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
 
       {/* Mobiele dagstrip (Google): de weekdagen als tikbare rondjes boven het
           dagrooster — de gekozen dag is gevuld, vandaag kleurt goud. */}
-      {isMobile && view === 'day' && !bookingMode && (
+      {isMobile && (view === 'day' || view === '3day') && !bookingMode && (
         <div className="cal-daystrip" aria-label="Dag kiezen">
           {stripDays.map(d => {
-            const active = isSameDay(d, anchor);
+            // In "3 dagen" zijn alle zichtbare dagen actief; tikken zet de eerste dag.
+            const active = days.some(shown => isSameDay(shown, d));
             const isToday = isSameDay(d, new Date());
             return (
               <button
@@ -3065,10 +3112,10 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         </div>
       )}
 
-      {view === 'day' || view === 'week' ? (
+      {isTimeGridView(view) ? (
         <TimeBlockGrid days={days} events={events} tasks={data.tasks.filter(t => t.status !== 'done')}
           sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} onMoveEvent={rescheduleEvent}
-          onOpenDay={view === 'week' ? openDay : undefined}
+          onOpenDay={view === 'day' ? undefined : openDay}
           bookingMode={bookingMode} bookingSlots={bookingOverlay} onRemoveBookingSlot={handleRemoveBookingSlot} />
       ) : view === 'month' ? (
         <CalendarMonthView days={days} anchor={anchor} events={events} tasks={data.tasks.filter(t => t.status !== 'done')} data={data}
@@ -3136,7 +3183,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     )}
 
     {/* FAB for time-grid views */}
-    {(view === 'day' || view === 'week') && canWrite && writeableSources.length > 0 && !showCreatePanel && (
+    {isTimeGridView(view) && canWrite && writeableSources.length > 0 && !showCreatePanel && (
       <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setEditingOriginal(null); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false })); setShowCreatePanel(true); }} title="Nieuwe afspraak aanmaken">
         <Plus size={22} />
       </button>

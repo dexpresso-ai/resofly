@@ -79,6 +79,10 @@ const EVENTS_CACHE_TTL_MS = 45_000;
 type EventsCacheEntry = { events: CalendarExternalEvent[]; ts: number };
 const eventsCache = new Map<string, EventsCacheEntry>();
 const eventsInflight = new Map<string, Promise<CalendarExternalEvent[]>>();
+// Generatieteller: elke invalidatie (na een mutatie) verhoogt 'm. Verzoeken die
+// vóór de mutatie vertrokken, mogen hun — inmiddels verouderde — antwoord daarna
+// niet meer in de cache zetten.
+let eventsCacheGeneration = 0;
 
 function eventsCacheKey(organizationId: UUID, start: string, end: string): string {
   return `${organizationId}|${start}|${end}`;
@@ -86,9 +90,13 @@ function eventsCacheKey(organizationId: UUID, start: string, end: string): strin
 
 /** Wist de agenda-event-cache na een mutatie; optioneel alleen voor één organisatie. */
 export function invalidateCalendarEventsCache(organizationId?: UUID): void {
-  if (!organizationId) { eventsCache.clear(); return; }
+  eventsCacheGeneration++;
+  if (!organizationId) { eventsCache.clear(); eventsInflight.clear(); return; }
   const prefix = `${organizationId}|`;
   for (const key of [...eventsCache.keys()]) if (key.startsWith(prefix)) eventsCache.delete(key);
+  // Ook de lopende verzoeken loslaten: anders krijgt de eerstvolgende "vers
+  // ophalen" via de dedup-map het antwoord van vóór de mutatie terug.
+  for (const key of [...eventsInflight.keys()]) if (key.startsWith(prefix)) eventsInflight.delete(key);
 }
 
 /** Direct beschikbare, nog verse gecachte events voor dit venster (voor instant paint), of null. */
@@ -105,14 +113,15 @@ export async function listCalendarEventsCached(organizationId: UUID, start: stri
   if (cached && Date.now() - cached.ts < EVENTS_CACHE_TTL_MS) return cached.events;
   const inflight = eventsInflight.get(key);
   if (inflight) return inflight;
+  const generation = eventsCacheGeneration;
   const promise = (async () => {
     const events = await listExternalCalendarEvents(organizationId, start, end);
-    eventsCache.set(key, { events, ts: Date.now() });
+    if (generation === eventsCacheGeneration) eventsCache.set(key, { events, ts: Date.now() });
     return events;
   })();
   eventsInflight.set(key, promise);
   try { return await promise; }
-  finally { eventsInflight.delete(key); }
+  finally { if (eventsInflight.get(key) === promise) eventsInflight.delete(key); }
 }
 
 export async function createExternalCalendarEvent(organizationId: UUID, input: CalendarEventInput): Promise<CalendarExternalEvent> {
