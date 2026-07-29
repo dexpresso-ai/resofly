@@ -12,6 +12,12 @@
 #   Word/Excel-editor is een iframe naar die Worker, geladen via een form-POST
 #   met het WOPI-access_token. Zonder deze uitzonderingen blokkeert de browser
 #   de editor met "This content is blocked".
+# - frame-src bevat OOK blob:. Het live offerte-/factuurvoorbeeld genereert de PDF
+#   in de browser en toont die via een blob:-object-URL in een iframe
+#   (src/components/FinanceDocPreview.tsx). 'self' dekt blob: NIET — een
+#   blob:-URL heeft een eigen scheme en moet expliciet worden toegestaan, anders
+#   toont Chrome exact hetzelfde "This content is blocked"-scherm in het
+#   voorbeeldpaneel.
 # - LET OP bij het uitbreiden van Permissions-Policy: zet clipboard-read/clipboard-write
 #   hier NIET neer. Zodra een feature in deze header staat, geldt die allowlist ook voor
 #   het doorgeven aan iframes, en verliest de Collabora-editor (andere origin) het
@@ -22,7 +28,7 @@
 #   CSP-violation met de exact ontbrekende bron.
 
 /*
-  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self' https://resofly-office-server.gerjan.workers.dev; frame-src 'self' https://resofly-office-server.gerjan.workers.dev; worker-src 'self'; manifest-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.workers.dev https://nominatim.openstreetmap.org
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self' https://resofly-office-server.gerjan.workers.dev; frame-src 'self' blob: https://resofly-office-server.gerjan.workers.dev; worker-src 'self'; manifest-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.workers.dev https://nominatim.openstreetmap.org
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   X-Frame-Options: DENY
