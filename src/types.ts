@@ -316,7 +316,10 @@ export interface InternalDocument extends OrgScopedRow {
   storage_key?: string | null; mime_type?: string | null; size_bytes?: number | null; edit_version?: number; last_edited_by?: UUID | null; last_edited_at?: string | null;
 }
 export interface ContentFolder extends OrgScopedRow {
-  client_id: UUID | null; parent_id: UUID | null; name: string; position: number; created_at: string; updated_at: string;
+  client_id: UUID | null;
+  /** null = map op klantniveau; gevuld = map binnen die projectmap. Vast na aanmaken. */
+  project_id: UUID | null;
+  parent_id: UUID | null; name: string; position: number; created_at: string; updated_at: string;
 }
 export interface CalendarEventLink extends OrgScopedRow {
   provider: CalendarProvider;

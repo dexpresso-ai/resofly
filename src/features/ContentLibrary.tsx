@@ -11,7 +11,7 @@ import { insertRow, updateRow, deleteContentFolder, deleteAttachment } from '../
 import { uploadToR2, downloadAttachment } from '../lib/r2';
 import { createOfficeSession, createOfficeDocument, isOfficeEditable, NEW_OFFICE_LABEL, type NewOfficeType, type OfficeSession } from '../lib/office';
 import { OfficeEditor } from './OfficeEditor';
-import { childFolders, clientFolderOptions, folderDescendantIds, folderPath } from '../lib/folders';
+import { childFolders, clientFolderOptions, folderDescendantIds, folderPath, scopedFolders } from '../lib/folders';
 import { AttachmentGlyph, DocumentGlyph, attAccentColor, attTypeLabel, documentAccentColor, fmtBytes } from './ClientFolders';
 
 export type ContentView = 'all' | 'notes' | 'documents';
@@ -82,8 +82,11 @@ function RowGlyph({ row, size }: { row: Row; size: number }) {
  * tegelweergave en een inklapbaar Details-paneel. Binnen een klant leven naast de
  * afgeleide projectmappen ook de échte dossiermappen (content_folders) — dezelfde mappen
  * als in het klantdossier-tabblad "Bestanden", incl. submappen, uploads en office-bestanden.
- * Nieuwe items worden in de open map aangemaakt (klant/project/map vooringevuld); de
- * sidebar-ingangen Overzicht/Notities/Documenten deeplinken via `initialView`.
+ * Zo'n mappenboom bestaat op elk niveau onder een klant: op klantniveau én ín elke
+ * projectmap (content_folders.project_id), en in elke map kun je onbeperkt dieper
+ * submappen maken. Nieuwe items worden in de open map aangemaakt (klant/project/map
+ * vooringevuld); de sidebar-ingangen Overzicht/Notities/Documenten deeplinken via
+ * `initialView`.
  */
 export function ContentLibrary({
   data,
@@ -228,16 +231,17 @@ export function ContentLibrary({
   const currentClientName = clientId === NO_CLIENT ? 'Geen klant' : currentClient?.name ?? '';
   const currentProject = projectId ? projectsById.get(projectId) ?? null : null;
 
-  // Dossiermappen (content_folders) van de open klant — dezelfde mappen als in het
-  // klantdossier-tabblad "Bestanden".
-  const scopedFolders = useMemo(
-    () => realClient ? data.folders.filter(f => f.client_id === clientId) : [],
-    [data.folders, clientId, realClient],
+  // Dossiermappen (content_folders) van de open plek. Op klantniveau zijn dat dezelfde
+  // mappen als in het klantdossier-tabblad "Bestanden"; binnen een projectmap krijgt dat
+  // project zijn eigen boom (content_folders.project_id). Beide nesten onbeperkt diep.
+  const folderScope = useMemo(
+    () => realClient ? scopedFolders(data.folders, clientId, projectId) : [],
+    [data.folders, clientId, projectId, realClient],
   );
-  const currentFolderPath = folderId ? folderPath(scopedFolders, folderId) : [];
+  const currentFolderPath = folderId ? folderPath(folderScope, folderId) : [];
   const currentFolder = currentFolderPath.length ? currentFolderPath[currentFolderPath.length - 1] : null;
-  const subfolderList = realClient && clientId ? childFolders(scopedFolders, clientId, folderId) : [];
-  const folderOptions = realClient ? clientFolderOptions(data.folders, clientId) : [];
+  const subfolderList = realClient ? childFolders(folderScope, clientId, projectId, folderId) : [];
+  const folderOptions = realClient ? clientFolderOptions(data.folders, clientId, projectId) : [];
 
   const folderCount = (id: string) =>
     data.notes.filter(n => n.folder_id === id).length
@@ -276,7 +280,11 @@ export function ContentLibrary({
     () => clientItems.filter(it => !it.projectId && (clientId === NO_CLIENT || !it.folderId)),
     [clientItems, clientId],
   );
-  const projectItems = useMemo(() => projectId ? clientItems.filter(it => it.projectId === projectId) : [], [clientItems, projectId]);
+  // Idem binnen een projectmap: wat in een map van dit project is opgeborgen staat ín die map.
+  const projectItems = useMemo(
+    () => projectId ? clientItems.filter(it => it.projectId === projectId && !it.folderId) : [],
+    [clientItems, projectId],
+  );
 
   // Inhoud van de open dossiermap (notities/documenten op folder_id + uploads).
   const folderNotes = folderId && showNotes ? data.notes.filter(n => n.folder_id === folderId) : [];
@@ -300,9 +308,10 @@ export function ContentLibrary({
 
   function openClient(id: string | null) { setClientId(id); setProjectId(null); setFolderId(null); setQuery(''); setMenu(null); }
   function openProject(id: string | null) { setProjectId(id); setFolderId(null); setQuery(''); setMenu(null); }
-  function openFolder(id: string | null) { setFolderId(id); setProjectId(null); setQuery(''); setMenu(null); }
+  /** Mappen leven binnen de open scope: het project blijft dus staan bij het openen. */
+  function openFolder(id: string | null) { setFolderId(id); setQuery(''); setMenu(null); }
 
-  /** Eén niveau omhoog: submap → bovenliggende map → klantwortel → alle klanten. */
+  /** Eén niveau omhoog: submap → bovenliggende map → projectmap → klantwortel → alle klanten. */
   function goUp() {
     if (folderId) { openFolder(currentFolder?.parent_id ?? null); return; }
     if (projectId) { openProject(null); return; }
@@ -313,7 +322,7 @@ export function ContentLibrary({
 
   // Create-context: nieuwe items belanden in de open map (klant/project/dossiermap).
   const createTarget: ContentCreateTarget | undefined =
-    folderId && realClient ? { client_id: clientId, folder_id: folderId } :
+    folderId && realClient ? { client_id: clientId, project_id: projectId, folder_id: folderId } :
     projectId ? { client_id: currentClient?.id ?? null, project_id: projectId } :
     realClient ? { client_id: clientId } :
     undefined;
@@ -336,8 +345,9 @@ export function ContentLibrary({
     const position = subfolderList.length;
     const parent = folderId;
     const cid = clientId;
+    const pid = projectId;
     run(async () => {
-      await insertRow<ContentFolder>('content_folders', organizationId, { client_id: cid, parent_id: parent, name: name.trim(), position });
+      await insertRow<ContentFolder>('content_folders', organizationId, { client_id: cid, project_id: pid, parent_id: parent, name: name.trim(), position });
     });
   }
 
@@ -348,7 +358,7 @@ export function ContentLibrary({
   }
 
   function deleteFolder(folder: ContentFolder) {
-    const descendants = folderDescendantIds(scopedFolders, folder.id);
+    const descendants = folderDescendantIds(folderScope, folder.id);
     const sub = descendants.length ? ` en ${descendants.length} submap(pen)` : '';
     if (!window.confirm(`Map "${folder.name}"${sub} verwijderen? Notities en documenten blijven bestaan (ze worden ontkoppeld); geüploade bestanden in deze map(pen) worden verwijderd.`)) return;
     run(async () => {
@@ -484,8 +494,8 @@ export function ContentLibrary({
     });
   } else if (folderId) {
     for (const f of subfolderList) folderRows.push(contentFolderRow(f, 'Submap'));
-    for (const n of folderNotes) fileRows.push(itemRow({ kind: 'note', id: n.id, title: n.title, content: n.content, modified: n.updated_at || n.created_at, clientId, projectId: null, folderId, note: n }));
-    for (const d of folderDocs) fileRows.push(itemRow({ kind: 'document', id: d.id, title: d.title, content: d.content, modified: d.updated_at || d.created_at, clientId, projectId: null, folderId, doc: d }));
+    for (const n of folderNotes) fileRows.push(itemRow({ kind: 'note', id: n.id, title: n.title, content: n.content, modified: n.updated_at || n.created_at, clientId, projectId, folderId, note: n }));
+    for (const d of folderDocs) fileRows.push(itemRow({ kind: 'document', id: d.id, title: d.title, content: d.content, modified: d.updated_at || d.created_at, clientId, projectId, folderId, doc: d }));
     for (const a of folderAtts) fileRows.push(attRow(a));
   } else if (projectId === null) {
     for (const f of projectFolders) folderRows.push({
@@ -496,6 +506,7 @@ export function ContentLibrary({
     for (const f of subfolderList) folderRows.push(contentFolderRow(f, 'Map'));
     for (const it of generalItems) fileRows.push(itemRow(it));
   } else {
+    for (const f of subfolderList) folderRows.push(contentFolderRow(f, 'Map'));
     for (const it of projectItems) fileRows.push(itemRow(it));
   }
   const cmp = (a: Row, b: Row): number => {
@@ -584,7 +595,7 @@ export function ContentLibrary({
       return <>
         <div className="drive-pop-head"><button type="button" className="drive-pop-back" onClick={() => setMenu({ key, mode: 'main', up: menu.up })} aria-label="Terug"><ChevronLeft size={14} /></button> Verplaatsen naar</div>
         <div className="drive-pop-scroll">
-          <button type="button" className="drive-pop-item" role="menuitem" onClick={() => moveItem(kind, id, null)}><FolderOpen size={16} /> {currentClientName} (geen map)</button>
+          <button type="button" className="drive-pop-item" role="menuitem" onClick={() => moveItem(kind, id, null)}><FolderOpen size={16} /> {currentProject?.name ?? currentClientName} (geen map)</button>
           {folderOptions.map(o => <button type="button" key={o.id} className="drive-pop-item" role="menuitem" onClick={() => moveItem(kind, id, o.id)}><Folder size={16} style={{ color: 'var(--accent)' }} /> {o.label}</button>)}
         </div>
       </>;
@@ -665,20 +676,19 @@ export function ContentLibrary({
                 <ChevronRight size={17} aria-hidden="true" />
                 {projectId === null && folderId === null
                   ? <span className="odrv-crumb-current">{currentClientName}</span>
-                  : <>
-                      <button type="button" onClick={() => folderId ? openFolder(null) : openProject(null)}>{currentClientName}</button>
-                      {folderId
-                        ? currentFolderPath.map((folder, i) => <span key={folder.id} className="odrv-crumb-step">
-                            <ChevronRight size={17} aria-hidden="true" />
-                            {i === currentFolderPath.length - 1
-                              ? <span className="odrv-crumb-current">{folder.name}</span>
-                              : <button type="button" onClick={() => openFolder(folder.id)}>{folder.name}</button>}
-                          </span>)
-                        : <>
-                            <ChevronRight size={17} aria-hidden="true" />
-                            <span className="odrv-crumb-current">{currentProject?.name ?? ''}</span>
-                          </>}
-                    </>}
+                  : <button type="button" onClick={() => openClient(clientId)}>{currentClientName}</button>}
+                {projectId && <span className="odrv-crumb-step">
+                  <ChevronRight size={17} aria-hidden="true" />
+                  {folderId
+                    ? <button type="button" onClick={() => openProject(projectId)}>{currentProject?.name ?? ''}</button>
+                    : <span className="odrv-crumb-current">{currentProject?.name ?? ''}</span>}
+                </span>}
+                {currentFolderPath.map((folder, i) => <span key={folder.id} className="odrv-crumb-step">
+                  <ChevronRight size={17} aria-hidden="true" />
+                  {i === currentFolderPath.length - 1
+                    ? <span className="odrv-crumb-current">{folder.name}</span>
+                    : <button type="button" onClick={() => openFolder(folder.id)}>{folder.name}</button>}
+                </span>)}
               </>}
         </nav>
         <label className="drive-search odrv-search">
@@ -696,7 +706,7 @@ export function ContentLibrary({
           </button>
           {newOpen && <div className="drive-pop" role="menu" style={{ maxHeight: 'min(70vh, 460px)', overflowY: 'auto' }}>
             {!atRoot && <div className="drive-pop-head">In {currentFolder ? currentFolder.name : currentProject ? currentProject.name : currentClientName}</div>}
-            {realClient && !projectId && <>
+            {realClient && <>
               <button type="button" className="drive-pop-item" role="menuitem" onClick={createFolder}><FolderPlus size={16} style={{ color: 'var(--accent)' }} /> {folderId ? 'Nieuwe submap' : 'Nieuwe map'}</button>
               <div className="drive-pop-sep" />
             </>}
@@ -791,8 +801,9 @@ export function ContentLibrary({
               <dl className="odrv-details-props">
                 {atRoot && <div><dt>Klanten</dt><dd>{clientFolders.length}</dd></div>}
                 {!atRoot && !currentProject && !folderId && <div><dt>Projecten</dt><dd>{projectFolders.length}</dd></div>}
-                {!atRoot && !currentProject && realClient && <div><dt>{folderId ? 'Submappen' : 'Mappen'}</dt><dd>{subfolderList.length}</dd></div>}
+                {!atRoot && realClient && <div><dt>{folderId ? 'Submappen' : 'Mappen'}</dt><dd>{subfolderList.length}</dd></div>}
                 {(currentProject || folderId) && <div><dt>Klant</dt><dd>{currentClientName || '—'}</dd></div>}
+                {currentProject && folderId && <div><dt>Project</dt><dd>{currentProject.name}</dd></div>}
                 <div><dt>Notities</dt><dd>{scopeNotes}</dd></div>
                 <div><dt>Documenten</dt><dd>{scopeDocs}</dd></div>
                 {showFiles && <div><dt>Bestanden</dt><dd>{scopeFiles}</dd></div>}

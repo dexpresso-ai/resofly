@@ -7,11 +7,38 @@ function byPositionThenName(a: ContentFolder, b: ContentFolder): number {
 }
 
 /**
- * Hiërarchisch geordende mapopties voor één klant, bedoeld voor dropdowns.
+ * Eén "map-scope" = de plek waarin een mappenboom leeft: een klant (project null)
+ * of een projectmap binnen die klant. Mappen uit verschillende scopes worden nooit
+ * door elkaar getoond; binnen een scope mag onbeperkt genest worden.
+ */
+export function inFolderScope(
+  folder: ContentFolder,
+  clientId: UUID | null | undefined,
+  projectId: UUID | null | undefined,
+): boolean {
+  return (folder.client_id ?? null) === (clientId ?? null)
+    && (folder.project_id ?? null) === (projectId ?? null);
+}
+
+/** Alle mappen van één scope (klant + eventueel project). */
+export function scopedFolders(
+  folders: ContentFolder[],
+  clientId: UUID | null | undefined,
+  projectId: UUID | null | undefined,
+): ContentFolder[] {
+  return folders.filter(f => inFolderScope(f, clientId, projectId));
+}
+
+/**
+ * Hiërarchisch geordende mapopties voor één scope, bedoeld voor dropdowns.
  * Diepere mappen krijgen een streepje-inspringing in het label.
  */
-export function clientFolderOptions(folders: ContentFolder[], clientId: UUID | null | undefined): FolderOption[] {
-  const scoped = folders.filter(f => f.client_id === (clientId ?? null));
+export function clientFolderOptions(
+  folders: ContentFolder[],
+  clientId: UUID | null | undefined,
+  projectId: UUID | null | undefined = null,
+): FolderOption[] {
+  const scoped = scopedFolders(folders, clientId, projectId);
   const byParent = new Map<string | null, ContentFolder[]>();
   for (const folder of scoped) {
     const key = folder.parent_id ?? null;
@@ -32,10 +59,18 @@ export function clientFolderOptions(folders: ContentFolder[], clientId: UUID | n
   return out;
 }
 
-/** Directe submappen van een map (of van de wortel als parentId null is), gesorteerd. */
-export function childFolders(folders: ContentFolder[], clientId: UUID, parentId: UUID | null): ContentFolder[] {
+/**
+ * Directe submappen van een map (of van de wortel van de scope als parentId null is),
+ * gesorteerd. `folders` mag de volledige lijst zijn of al op scope gefilterd.
+ */
+export function childFolders(
+  folders: ContentFolder[],
+  clientId: UUID | null | undefined,
+  projectId: UUID | null | undefined,
+  parentId: UUID | null,
+): ContentFolder[] {
   return folders
-    .filter(f => f.client_id === clientId && (f.parent_id ?? null) === parentId)
+    .filter(f => inFolderScope(f, clientId, projectId) && (f.parent_id ?? null) === parentId)
     .sort(byPositionThenName);
 }
 

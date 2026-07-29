@@ -11,7 +11,7 @@ import { insertRow, updateRow, deleteContentFolder, deleteAttachment } from '../
 import { uploadToR2, downloadAttachment } from '../lib/r2';
 import { createOfficeSession, createOfficeDocument, isOfficeEditable, NEW_OFFICE_LABEL, type NewOfficeType, type OfficeSession } from '../lib/office';
 import { OfficeEditor } from './OfficeEditor';
-import { childFolders, clientFolderOptions, folderDescendantIds, folderPath } from '../lib/folders';
+import { childFolders, clientFolderOptions, folderDescendantIds, folderPath, scopedFolders } from '../lib/folders';
 
 /**
  * Klant-"Bestanden" in dezelfde OneDrive-verkennerlook als de Inhoud-pagina (odrv):
@@ -189,10 +189,12 @@ export function ClientFolders({
   const [opening, setOpening] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const folders = data.folders.filter(f => f.client_id === client.id);
+  // Alleen de mappenboom op klantniveau; mappen ín een projectmap (project_id gevuld)
+  // horen bij dat project en zijn daar te vinden via Inhoud → klant → project.
+  const folders = scopedFolders(data.folders, client.id, null);
   const path = folderPath(folders, currentId);
-  const subfolders = childFolders(folders, client.id, currentId);
-  const folderOptions = clientFolderOptions(data.folders, client.id);
+  const subfolders = childFolders(folders, client.id, null, currentId);
+  const folderOptions = clientFolderOptions(data.folders, client.id, null);
 
   // Items van deze klant (direct of via een project), voor de wortel en het koppelen.
   const projectIds = new Set(data.projects.filter(p => p.client_id === client.id).map(p => p.id));
@@ -261,7 +263,7 @@ export function ClientFolders({
     if (!name || !name.trim()) return;
     const position = subfolders.length;
     run(async () => {
-      await insertRow<ContentFolder>('content_folders', organizationId, { client_id: client.id, parent_id: currentId, name: name.trim(), position });
+      await insertRow<ContentFolder>('content_folders', organizationId, { client_id: client.id, project_id: null, parent_id: currentId, name: name.trim(), position });
     });
   }
 
