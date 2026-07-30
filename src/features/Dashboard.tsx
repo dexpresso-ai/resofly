@@ -1,9 +1,9 @@
-import { useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, CheckCircle2, ChevronRight, Clock, FileText, Landmark, ListChecks, Percent, Pin, Ticket as TicketIcon, Users } from 'lucide-react';
 import type { AppData, Invoice, OrganizationContext, SavedReport, Task } from '../types';
 import { euro, total } from '../lib/format';
 import { Button } from '../components/Ui';
-import { BarChart, LineChart, PieChart } from '../components/Charts';
+import { BarChart, LineChart, PieChart, Sparkline } from '../components/Charts';
 import { REPORT_SOURCES, formatMeasure, runReport } from '../lib/reporting';
 import { ProjectTimeline } from './ProjectTimeline';
 
@@ -14,6 +14,48 @@ type StatTone = 'default' | 'accent' | 'danger';
 type AttentionItem = { key: string; tone: 'default' | 'danger'; icon: ReactNode; label: string; meta?: string; count: number; onClick: () => void };
 
 const pl = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** Formatter voor statwaarden die geen bedrag zijn (aantallen). */
+const countValue = (n: number) => String(Math.round(n));
+
+/** Telt bij binnenkomst op naar `target`, zodat het belangrijkste cijfer op het
+ *  dashboard even de aandacht pakt. Respecteert prefers-reduced-motion (dan
+ *  meteen de eindwaarde) en telt opnieuw zodra het doel wijzigt. Geeft `null`
+ *  terug wanneer er niets te tellen valt, zodat de kaart de gewone waarde toont. */
+function useCountUp(target: number | undefined): number | null {
+  const prefersReduced = () =>
+    typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+
+  const [value, setValue] = useState<number | null>(() => {
+    if (target == null || !Number.isFinite(target)) return null;
+    return prefersReduced() ? target : 0;
+  });
+
+  useEffect(() => {
+    if (target == null || !Number.isFinite(target)) { setValue(null); return; }
+    if (prefersReduced()) { setValue(target); return; }
+
+    let frame = 0;
+    let startedAt: number | null = null;
+    const duration = 600;
+    const step = (now: number) => {
+      if (startedAt === null) startedAt = now;
+      const progress = Math.min((now - startedAt) / duration, 1);
+      // ease-out cubic: snel op gang, zacht uitdempend op de eindwaarde.
+      setValue(target * (1 - Math.pow(1 - progress, 3)));
+      if (progress < 1) frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    // Vangnet: requestAnimationFrame staat stil zolang het tabblad op de
+    // achtergrond ligt. Zonder dit zou een dashboard dat daar wordt geladen
+    // blijven hangen op € 0 — onacceptabel voor bedragen. Deze timer zet
+    // hoe dan ook de echte eindwaarde neer.
+    const settle = window.setTimeout(() => setValue(target), duration + 400);
+    return () => { cancelAnimationFrame(frame); window.clearTimeout(settle); };
+  }, [target]);
+
+  return value;
+}
 
 export function Dashboard({
   data,
@@ -39,6 +81,12 @@ export function Dashboard({
   const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const revenuePrevMonth = sumInvoices(paidInvoices.filter(i => isSameMonth(paidDate(i), prevMonth.getFullYear(), prevMonth.getMonth())));
   const revenueTrend = revenuePrevMonth > 0 ? Math.round(((revenueThisMonth - revenuePrevMonth) / revenuePrevMonth) * 100) : null;
+  // Betaalde omzet per maand over het laatste halfjaar (oud → nieuw); voedt de
+  // trendlijn in de omzetkaart, zodat die richting toont in plaats van decoratie.
+  const revenueSeries = Array.from({ length: 6 }, (_, index) => {
+    const month = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1);
+    return sumInvoices(paidInvoices.filter(invoice => isSameMonth(paidDate(invoice), month.getFullYear(), month.getMonth())));
+  });
 
   const outstandingInvoices = data.invoices.filter(i => i.status === 'sent' || i.status === 'overdue');
   const outstandingTotal = sumInvoices(outstandingInvoices);
@@ -111,7 +159,7 @@ export function Dashboard({
     </section>
 
     <div className="dash-stats dash-stats-rich">
-      <Stat label="Omzet deze maand" value={euro(revenueThisMonth)} tone="accent" trend={revenueTrend} sub={revenueTrend != null ? 'vs. vorige maand' : undefined} onClick={() => openPage('invoices')} />
+      <Stat label="Omzet deze maand" value={euro(revenueThisMonth)} tone="accent" trend={revenueTrend} sub={revenueTrend != null ? 'vs. vorige maand' : undefined} spark={revenueSeries} countTo={revenueThisMonth} countFormat={euro} onClick={() => openPage('invoices')} />
       <Stat label="Openstaand" value={euro(outstandingTotal)} sub={pl(outstandingInvoices.length, 'openstaande factuur', 'openstaande facturen')} onClick={() => openPage('invoices')} />
       <Stat label="Te laat betaald" value={euro(overdueTotal)} tone={overdueInvoices.length ? 'danger' : 'default'} sub={pl(overdueInvoices.length, 'factuur', 'facturen')} onClick={() => openPage('invoices')} />
       <Stat label="Open tickets" value={openTickets} sub={newTickets ? `${newTickets} nieuw` : undefined} onClick={() => openPage('tickets')} />
@@ -223,24 +271,35 @@ function PinnedReportCard({ report, data, onOpen }: { report: SavedReport; data:
   );
 }
 
-function Stat({ label, value, sub, tone = 'default', trend, onClick }: {
+function Stat({ label, value, sub, tone = 'default', trend, spark, countTo, countFormat, onClick }: {
   label: string;
   value: string | number;
   sub?: string;
   tone?: StatTone;
   trend?: number | null;
+  /** Reeks voor de trendlijn rechtsboven in de kaart (minimaal 2 punten). */
+  spark?: number[];
+  /** Wanneer gezet telt de kaart bij binnenkomst op naar deze waarde. */
+  countTo?: number;
+  /** Formatter voor de tellende waarde; zonder deze blijft `value` staan. */
+  countFormat?: (n: number) => string;
   onClick?: () => void;
 }) {
+  const counted = useCountUp(countTo);
+  const shown = counted != null && countFormat ? countFormat(counted) : value;
+  const hasSpark = Boolean(spark && spark.length > 1);
   const inner = <>
+    {hasSpark && <Sparkline values={spark!} tone={tone === 'danger' ? 'danger' : 'accent'} />}
     <div className="sc-label">{label}</div>
-    <div className="sc-val">{value}</div>
+    <div className="sc-val">{shown}</div>
     {(sub || trend != null) && <div className="sc-sub">
       {trend != null && <span className={`sc-trend ${trend >= 0 ? 'up' : 'down'}`}>{trend >= 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}{Math.abs(trend)}%</span>}
       {sub && <span>{sub}</span>}
     </div>}
   </>;
-  if (onClick) return <button type="button" className={`stat-card stat-card-${tone} stat-card-clickable`} onClick={onClick}>{inner}</button>;
-  return <div className={`stat-card stat-card-${tone}`}>{inner}</div>;
+  const className = `stat-card stat-card-${tone}${hasSpark ? ' has-spark' : ''}`;
+  if (onClick) return <button type="button" className={`${className} stat-card-clickable`} onClick={onClick}>{inner}</button>;
+  return <div className={className}>{inner}</div>;
 }
 
 // Cent-exacte bruto-totalen via de centrale geldmodule, identiek aan de Financiën-module.

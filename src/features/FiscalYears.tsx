@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { CalendarClock, Lock, Plus, Unlock } from 'lucide-react';
 import type { AppData, FiscalYearListRow } from '../types';
-import { Button } from '../components/Ui';
+import { Button, Skeleton } from '../components/Ui';
 import { dateNL, euro } from '../lib/format';
 import { closeFiscalYear, ensureDefaultLedgerAccounts, listFiscalYears, openFiscalYear, reopenFiscalYear } from '../lib/repository';
 
@@ -151,7 +151,7 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, onCh
         </div>
       )}
 
-      {loading ? <div className="bk-muted bk-report-loading">Laden…</div> : (
+      {loading ? <div className="bk-muted bk-report-loading"><Skeleton lines={5} /></div> : (
         <div className="bk-table-wrap">
           <table className="bk-table">
             <thead><tr>

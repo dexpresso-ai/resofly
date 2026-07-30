@@ -8,6 +8,20 @@ export function Button(props: ButtonHTMLAttributes<HTMLButtonElement> & { varian
 }
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) { return <input className="form-input" {...props} />; }
 
+/** Laadplaceholder in de huisstijl — vervangt kale "Laden…"-tekst door rustig
+ *  glanzende regels die de vorm van de komende inhoud aankondigen. `role=status`
+ *  + `aria-label` houden het aangekondigd voor schermlezers; de losse regels zijn
+ *  puur decoratief. */
+export function Skeleton({ lines = 3, className = '' }: { lines?: number; className?: string }) {
+  return (
+    <div className={`skeleton ${className}`.trim()} role="status" aria-label="Laden…" aria-busy="true">
+      {Array.from({ length: Math.max(1, lines) }, (_, i) => (
+        <span key={i} className="skeleton-line" aria-hidden="true" />
+      ))}
+    </div>
+  );
+}
+
 /** Curated project color palette. Built around the workspace accent tokens so
  *  every chosen colour stays on-brand and legible against the dark surfaces. */
 export const PROJECT_COLORS: { value: string; label: string }[] = [

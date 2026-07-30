@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Download, FilePlus2, Globe2, Landmark, Lock } from 'lucide-react';
 import type { AppData, IcpDeclaration, VatReturn, VatReturnBox, VatReturnRubrieken } from '../types';
-import { Button, Textarea } from '../components/Ui';
+import { Button, Skeleton, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { dateNL, euro } from '../lib/format';
 import { downloadCsv } from '../lib/csv';
@@ -245,7 +245,7 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
       </details>
 
       {loading || !r
-        ? <div className="bk-muted bk-report-loading">Laden…</div>
+        ? <div className="bk-muted bk-report-loading"><Skeleton lines={5} /></div>
         : <>
           <div className="bk-report-bar">
             <div className="bk-report-kpis">

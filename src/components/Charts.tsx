@@ -1,6 +1,7 @@
 // Lichte, dependency-vrije grafieken voor de rapportbouwer. Staafdiagram in CSS
 // (consistent met ProfitLoss/Dashboard), lijn- en taartdiagram in pure SVG.
 // Elke grafiek krijgt al-geaggregeerde rijen + een waardeformatter.
+import { useId } from 'react';
 import type { ReportRow } from '../lib/reporting';
 
 // On-brand palet, afgeleid van de workspace-accenttokens.
@@ -108,4 +109,38 @@ export function PieChart({ rows, format }: ChartProps) {
 
 function ChartEmpty() {
   return <div className="rb-chart-empty">Geen gegevens om weer te geven voor deze selectie.</div>;
+}
+
+/** Compacte trendlijn voor statkaarten: één reeks, geen assen of legenda — de
+ *  kaartkop en het bedrag dragen de betekenis, de lijn toont alleen de richting.
+ *  Bewust `aria-hidden`: de waarde en het trendpercentage staan al als tekst in
+ *  de kaart, dus voor schermlezers zou de lijn enkel ruis zijn. */
+export function Sparkline({ values, tone = 'accent' }: { values: number[]; tone?: 'accent' | 'danger' }) {
+  const gradientId = useId();
+  if (values.length < 2) return null;
+
+  const W = 96, H = 30, pad = 3;
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const span = max - min || 1;
+  const x = (i: number) => pad + (i / (values.length - 1)) * (W - pad * 2);
+  const y = (v: number) => pad + (1 - (v - min) / span) * (H - pad * 2);
+
+  const points = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+  const area = `M ${x(0).toFixed(1)},${H - pad} L ${points.join(' L ')} L ${x(values.length - 1).toFixed(1)},${H - pad} Z`;
+  const stroke = tone === 'danger' ? 'var(--accent-r)' : 'var(--accent)';
+
+  return (
+    <svg className="sc-spark" viewBox={`0 0 ${W} ${H}`} aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor={stroke} stopOpacity=".3" />
+          <stop offset="1" stopColor={stroke} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={area} fill={`url(#${gradientId})`} />
+      <polyline points={points.join(' ')} fill="none" stroke={stroke} strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={x(values.length - 1)} cy={y(values[values.length - 1])} r={2.2} fill={stroke} />
+    </svg>
+  );
 }

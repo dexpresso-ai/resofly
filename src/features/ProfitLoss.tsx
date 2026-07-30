@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronLeft, ChevronRight, Download, ListChecks, Scale, TrendingUp } from 'lucide-react';
 import type { AppData, BalanceSheetRow, OpenItemsReport, ProfitAndLossRow } from '../types';
-import { Button } from '../components/Ui';
+import { Button, Skeleton } from '../components/Ui';
 import { dateNL, euro } from '../lib/format';
 import { ensureDefaultLedgerAccounts, reportBalanceSheet, reportOpenItems, reportProfitAndLoss } from '../lib/repository';
 
@@ -179,14 +179,14 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
 
       {error && <div className="error">{error}</div>}
       {loading
-        ? <div className="bk-muted bk-report-loading">Laden…</div>
+        ? <div className="bk-muted bk-report-loading"><Skeleton lines={5} /></div>
         : view === 'pnl'
           ? <PnlReport current={pnlCurrent} previous={pnlPrevious} period={period} />
           : view === 'balance'
             ? <BalanceReport rows={balance} label={period.current.label} asOf={period.current.to} data={data} />
             : openItems
               ? <OpenItemsView report={openItems} label={period.current.label} />
-              : <div className="bk-muted bk-report-loading">Laden…</div>}
+              : <div className="bk-muted bk-report-loading"><Skeleton lines={5} /></div>}
     </div>
   );
 }
