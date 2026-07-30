@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
+import { getModuleLevel } from '../_shared/edgeAuth.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
@@ -121,6 +122,8 @@ serve(async (req) => {
             403,
           );
         }
+        // Service-role omzeilt RLS: klantcommunicatie hoort bij de module Klanten.
+        await assertClientModuleWrite(user.id, organizationId);
 
         const result = await sendClientPortalWelcome(req, organizationId, body);
         return json(req, { ok: true, ...result });
@@ -145,6 +148,7 @@ serve(async (req) => {
             403,
           );
         }
+        await assertClientModuleWrite(user.id, organizationId);
 
         const result = await sendClientEmail(organizationId, user, body);
         return json(req, { ok: true, ...result });
@@ -862,6 +866,23 @@ const SENDING_DOMAIN_COLUMNS =
 function requireDomainAdmin(role: OrganizationRole): void {
   if (!['owner', 'admin'].includes(role)) {
     throw new MailHttpError('Alleen owners en admins kunnen verzenddomeinen beheren.', 403);
+  }
+}
+
+/**
+ * Klantcommunicatie (portaal-welkomstmail, vrije klantmail) valt onder de module
+ * Klanten. Deze functie draait op de service-role en omzeilt RLS, dus de
+ * modulerechten van het teamlid controleren we hier expliciet.
+ */
+async function assertClientModuleWrite(userId: string, organizationId: string): Promise<void> {
+  const level = await getModuleLevel(supabaseAdmin, userId, organizationId, 'clients');
+  if (level !== 'write') {
+    throw new MailHttpError(
+      level === 'none'
+        ? 'Je hebt geen toegang tot de module Klanten in deze organisatie.'
+        : 'Je mag niets wijzigen in de module Klanten van deze organisatie.',
+      403,
+    );
   }
 }
 

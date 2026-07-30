@@ -65,6 +65,69 @@ export function assertWriteRole(role: OrganizationRole): void {
   if (!['owner', 'admin', 'member'].includes(role)) throw new HttpError('Geen schrijfrechten in deze organisatie.', 403);
 }
 
+// ── Modulerechten ────────────────────────────────────────────────────────────
+//
+// Edge functions draaien op de service-role en omzeilen daarmee RLS én de
+// schrijf-triggers. De modulerechten van het teamlid moeten hier dus expliciet
+// gecontroleerd worden, anders is elke edge function een achterdeur naar een
+// module die de owner juist heeft dichtgezet.
+//
+// Deze helpers geven alleen het niveau terug; de aanroeper gooit zijn eigen
+// foutklasse, zodat de HTTP-status per functie klopt.
+
+export type ModuleKey =
+  | 'clients' | 'projects' | 'time' | 'calendar' | 'tickets'
+  | 'content' | 'stats' | 'marketing' | 'finance' | 'chat' | 'gerrie';
+
+export type ModuleLevel = 'none' | 'read' | 'write';
+
+export const MODULE_LABELS: Record<ModuleKey, string> = {
+  clients: 'Klanten', projects: 'Projecten', time: 'Uren', calendar: 'Agenda',
+  tickets: 'Tickets', content: 'Inhoud', stats: 'Statistieken',
+  marketing: 'Marketing', finance: 'Financiën', chat: 'Teamchat', gerrie: 'Gerrie',
+};
+
+/** Exacte spiegel van `public.org_module_level`: owners/admins zijn nooit
+ *  beperkt, een viewer nooit meer dan lezen, ontbrekende sleutel = volledig. */
+export async function getModuleLevel(
+  admin: SupabaseClient,
+  userId: string,
+  organizationId: string,
+  module: ModuleKey,
+): Promise<ModuleLevel> {
+  const { data, error } = await admin.from('organization_members')
+    .select('role, module_access')
+    .eq('organization_id', organizationId).eq('user_id', userId).eq('status', 'active').limit(1);
+  if (error) throw new HttpError(`organization_members lookup mislukt: ${error.message}`, 500);
+  const row = data?.[0] as { role?: string; module_access?: Record<string, unknown> } | undefined;
+  if (!row?.role) return 'none';
+  if (row.role === 'owner' || row.role === 'admin') return 'write';
+  const raw = row.module_access?.[module];
+  const stored: ModuleLevel = raw === 'none' || raw === 'read' || raw === 'write' ? raw : 'write';
+  if (row.role === 'viewer') return stored === 'none' ? 'none' : 'read';
+  return stored;
+}
+
+/** Gooit een 403 wanneer het teamlid deze module niet op het vereiste niveau mag. */
+export async function assertModuleAccess(
+  admin: SupabaseClient,
+  userId: string,
+  organizationId: string,
+  module: ModuleKey,
+  need: 'read' | 'write' = 'write',
+): Promise<void> {
+  const level = await getModuleLevel(admin, userId, organizationId, module);
+  const ok = need === 'read' ? level !== 'none' : level === 'write';
+  if (!ok) {
+    throw new HttpError(
+      level === 'none'
+        ? `Je hebt geen toegang tot de module ${MODULE_LABELS[module]} in deze organisatie.`
+        : `Je mag niets wijzigen in de module ${MODULE_LABELS[module]} van deze organisatie.`,
+      403,
+    );
+  }
+}
+
 // ── CORS ─────────────────────────────────────────────────────────────────────
 
 export interface Cors {

@@ -6,6 +6,7 @@ import { Button } from '../components/Ui';
 import { BarChart, LineChart, PieChart, Sparkline } from '../components/Charts';
 import { REPORT_SOURCES, formatMeasure, runReport } from '../lib/reporting';
 import { ProjectTimeline } from './ProjectTimeline';
+import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
 
 export type DashboardNavPage =
   | 'clients' | 'projects' | 'tickets' | 'quotes' | 'invoices' | 'bank' | 'vat-returns' | 'weekplanner' | 'settings' | 'stats';
@@ -64,11 +65,15 @@ export function Dashboard({
   openSettings,
   openPage,
   openReport,
+  permissions = FULL_PERMISSIONS,
 }: {
   data: AppData;
   organizationContext: OrganizationContext;
   openProject: (id: string) => void;
   openSettings: () => void;
+  /** Modulerechten: kaarten van een dichtgezette module tonen we niet — anders
+   *  suggereert "€ 0 omzet" dat er niets is, terwijl je het alleen niet mág zien. */
+  permissions?: Permissions;
   openPage: (page: DashboardNavPage) => void;
   openReport: (id: string) => void;
 }) {
@@ -121,14 +126,20 @@ export function Dashboard({
     .sort((a, b) => a.date.getTime() - b.date.getTime())
     .slice(0, 6);
 
+  // ── Modulerechten van dit teamlid ───────────────────────────────────────
+  const showFinance = permissions.canRead('finance');
+  const showProjects = permissions.canRead('projects');
+
   // ── Vereist je aandacht ─────────────────────────────────────────────────
+  // Elke regel hangt aan een module; staat die dicht, dan hoort de regel er
+  // niet te staan (de tellingen zijn dan sowieso 0 door RLS, maar expliciet is beter).
   const attention: AttentionItem[] = [];
-  if (overdueInvoices.length) attention.push({ key: 'overdue-inv', tone: 'danger', icon: <AlertTriangle size={16} />, label: pl(overdueInvoices.length, 'factuur te laat', 'facturen te laat'), meta: `${euro(overdueTotal)} openstaand`, count: overdueInvoices.length, onClick: () => openPage('invoices') });
-  if (bankToReconcile) attention.push({ key: 'bank', tone: 'default', icon: <Landmark size={16} />, label: pl(bankToReconcile, 'banktransactie af te letteren', 'banktransacties af te letteren'), count: bankToReconcile, onClick: () => openPage('bank') });
-  if (openQuotes) attention.push({ key: 'quotes', tone: 'default', icon: <FileText size={16} />, label: pl(openQuotes, 'offerte open bij klanten', 'offertes open bij klanten'), count: openQuotes, onClick: () => openPage('quotes') });
-  if (newTickets) attention.push({ key: 'tickets', tone: 'default', icon: <TicketIcon size={16} />, label: pl(newTickets, 'ticket onbehandeld', 'tickets onbehandeld'), count: newTickets, onClick: () => openPage('tickets') });
-  if (overdueTasks) attention.push({ key: 'tasks', tone: 'default', icon: <Clock size={16} />, label: pl(overdueTasks, 'taak over de deadline', 'taken over de deadline'), count: overdueTasks, onClick: () => openPage('weekplanner') });
-  if (vatToFile) attention.push({ key: 'vat', tone: 'default', icon: <Percent size={16} />, label: pl(vatToFile, 'btw-aangifte klaar om in te dienen', 'btw-aangiftes klaar om in te dienen'), count: vatToFile, onClick: () => openPage('vat-returns') });
+  if (showFinance && overdueInvoices.length) attention.push({ key: 'overdue-inv', tone: 'danger', icon: <AlertTriangle size={16} />, label: pl(overdueInvoices.length, 'factuur te laat', 'facturen te laat'), meta: `${euro(overdueTotal)} openstaand`, count: overdueInvoices.length, onClick: () => openPage('invoices') });
+  if (showFinance && bankToReconcile) attention.push({ key: 'bank', tone: 'default', icon: <Landmark size={16} />, label: pl(bankToReconcile, 'banktransactie af te letteren', 'banktransacties af te letteren'), count: bankToReconcile, onClick: () => openPage('bank') });
+  if (showFinance && openQuotes) attention.push({ key: 'quotes', tone: 'default', icon: <FileText size={16} />, label: pl(openQuotes, 'offerte open bij klanten', 'offertes open bij klanten'), count: openQuotes, onClick: () => openPage('quotes') });
+  if (permissions.canRead('tickets') && newTickets) attention.push({ key: 'tickets', tone: 'default', icon: <TicketIcon size={16} />, label: pl(newTickets, 'ticket onbehandeld', 'tickets onbehandeld'), count: newTickets, onClick: () => openPage('tickets') });
+  if (showProjects && overdueTasks) attention.push({ key: 'tasks', tone: 'default', icon: <Clock size={16} />, label: pl(overdueTasks, 'taak over de deadline', 'taken over de deadline'), count: overdueTasks, onClick: () => openPage('weekplanner') });
+  if (showFinance && vatToFile) attention.push({ key: 'vat', tone: 'default', icon: <Percent size={16} />, label: pl(vatToFile, 'btw-aangifte klaar om in te dienen', 'btw-aangiftes klaar om in te dienen'), count: vatToFile, onClick: () => openPage('vat-returns') });
 
   // ── Onboarding ──────────────────────────────────────────────────────────
   const activeOrganization = organizationContext.activeOrganization;
@@ -159,12 +170,12 @@ export function Dashboard({
     </section>
 
     <div className="dash-stats dash-stats-rich">
-      <Stat label="Omzet deze maand" value={euro(revenueThisMonth)} tone="accent" trend={revenueTrend} sub={revenueTrend != null ? 'vs. vorige maand' : undefined} spark={revenueSeries} countTo={revenueThisMonth} countFormat={euro} onClick={() => openPage('invoices')} />
-      <Stat label="Openstaand" value={euro(outstandingTotal)} sub={pl(outstandingInvoices.length, 'openstaande factuur', 'openstaande facturen')} onClick={() => openPage('invoices')} />
-      <Stat label="Te laat betaald" value={euro(overdueTotal)} tone={overdueInvoices.length ? 'danger' : 'default'} sub={pl(overdueInvoices.length, 'factuur', 'facturen')} onClick={() => openPage('invoices')} />
-      <Stat label="Open tickets" value={openTickets} sub={newTickets ? `${newTickets} nieuw` : undefined} onClick={() => openPage('tickets')} />
-      <Stat label="Open taken" value={openTasks} tone={overdueTasks ? 'danger' : 'default'} sub={overdueTasks ? `${overdueTasks} te laat` : undefined} onClick={() => openPage('weekplanner')} />
-      <Stat label="Actieve klanten" value={activeClients} onClick={() => openPage('clients')} />
+      {showFinance && <Stat label="Omzet deze maand" value={euro(revenueThisMonth)} tone="accent" trend={revenueTrend} sub={revenueTrend != null ? 'vs. vorige maand' : undefined} spark={revenueSeries} countTo={revenueThisMonth} countFormat={euro} onClick={() => openPage('invoices')} />}
+      {showFinance && <Stat label="Openstaand" value={euro(outstandingTotal)} sub={pl(outstandingInvoices.length, 'openstaande factuur', 'openstaande facturen')} onClick={() => openPage('invoices')} />}
+      {showFinance && <Stat label="Te laat betaald" value={euro(overdueTotal)} tone={overdueInvoices.length ? 'danger' : 'default'} sub={pl(overdueInvoices.length, 'factuur', 'facturen')} onClick={() => openPage('invoices')} />}
+      {permissions.canRead('tickets') && <Stat label="Open tickets" value={openTickets} sub={newTickets ? `${newTickets} nieuw` : undefined} onClick={() => openPage('tickets')} />}
+      {showProjects && <Stat label="Open taken" value={openTasks} tone={overdueTasks ? 'danger' : 'default'} sub={overdueTasks ? `${overdueTasks} te laat` : undefined} onClick={() => openPage('weekplanner')} />}
+      {permissions.canRead('clients') && <Stat label="Actieve klanten" value={activeClients} onClick={() => openPage('clients')} />}
     </div>
 
     <section className="dashboard-layout">
@@ -189,9 +200,9 @@ export function Dashboard({
               </div>}
         </div>
 
-        <ProjectTimeline data={data} openProject={openProject} />
+        {showProjects && <ProjectTimeline data={data} openProject={openProject} />}
 
-        {pinnedReports.length > 0 && <div className="dash-reports">
+        {permissions.canRead('stats') && pinnedReports.length > 0 && <div className="dash-reports">
           <header className="dash-reports-head">
             <h2><BarChart3 size={16} /> Mijn rapportages</h2>
             <button type="button" onClick={() => openPage('stats')}>Rapportbouwer <ChevronRight size={14} /></button>
@@ -203,7 +214,7 @@ export function Dashboard({
       </div>
 
       <aside className="dash-side">
-        <div className="week-card">
+        {showProjects && <div className="week-card">
           <h3>Deze week</h3>
           {weekTasks.length === 0
             ? <p className="week-empty">Geen taken met een planning of deadline in de komende 7 dagen.</p>
@@ -222,7 +233,7 @@ export function Dashboard({
                   </button>;
                 })}
               </div>}
-        </div>
+        </div>}
 
         {showOnboarding && <div className="onboarding-card">
           <div className="onboarding-head">

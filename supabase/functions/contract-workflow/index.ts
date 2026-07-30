@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
+import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
 import { renderContractPdf, bytesToBase64, sha256HexBytes } from '../_shared/contractPdf.ts';
 import { sanitizeContractHtml } from '../_shared/htmlSanitize.ts';
@@ -116,10 +117,16 @@ serve(async (req) => {
 
     const user = await requireUser(req);
     const role = await requireOrganizationAccess(user.id, organizationId);
+    // Service-role omzeilt RLS: modulerechten hier expliciet controleren.
+    // Contracten vallen onder Financiën, net als in de zijbalk.
+    const financeLevel = await getModuleLevel(supabaseAdmin, user.id, organizationId, 'finance');
+    if (financeLevel === 'none') {
+      throw new HttpError('Je hebt geen toegang tot de module Financiën in deze organisatie.', 403);
+    }
 
     switch (action) {
       case 'sendContractForSignature': {
-        if (!['owner', 'admin', 'member'].includes(role)) {
+        if (!['owner', 'admin', 'member'].includes(role) || financeLevel !== 'write') {
           throw new HttpError('Geen schrijfrechten voor deze organisatie.', 403);
         }
         const result = await sendContractForSignature(user.id, organizationId, contractId, body);

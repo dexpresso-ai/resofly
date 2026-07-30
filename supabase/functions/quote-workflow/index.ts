@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
+import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import {
   PDFDocument,
   StandardFonts,
@@ -188,10 +189,15 @@ serve(async (req) => {
 
     const user = await requireUser(req);
     const role = await requireOrganizationAccess(user.id, organizationId);
+    // Service-role omzeilt RLS: modulerechten hier expliciet controleren.
+    const financeLevel = await getModuleLevel(supabaseAdmin, user.id, organizationId, 'finance');
+    if (financeLevel === 'none') {
+      throw new WorkflowHttpError('Je hebt geen toegang tot de module Financiën in deze organisatie.', 403);
+    }
 
     switch (action) {
       case 'sendQuoteEmail': {
-        if (!['owner', 'admin', 'member'].includes(role)) {
+        if (!['owner', 'admin', 'member'].includes(role) || financeLevel !== 'write') {
           throw new WorkflowHttpError(
             'Geen schrijfrechten voor deze organisatie.',
             403,

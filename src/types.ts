@@ -54,6 +54,9 @@ export interface OrganizationMember {
   created_at: string;
   updated_at: string;
   email?: string | null;
+  /** Rechtenniveau per module (none/read/write). Ontbrekende sleutel = volledig.
+   *  Zie src/lib/permissions.ts; genegeerd voor owners en admins. */
+  module_access?: Record<string, string> | null;
 }
 
 export interface AuditLog {
@@ -81,6 +84,8 @@ export interface OrganizationInvitation {
   expires_at: string | null;
   created_at: string;
   updated_at: string;
+  /** Modulerechten die het teamlid krijgt zodra het de uitnodiging accepteert. */
+  module_access?: Record<string, string> | null;
 }
 
 export interface OrganizationMembershipView extends OrganizationMember {

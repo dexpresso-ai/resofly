@@ -4,6 +4,7 @@ import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, type SettingsTab } from '../features/SimplePages';
 import { Select } from './Ui';
+import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'fiscal-years'|'archive'|'settings'|'project';
 
@@ -48,6 +49,7 @@ export function Sidebar({
   onCloseMobile,
   pinned = false,
   onTogglePin,
+  permissions = FULL_PERMISSIONS,
 }: {
   page: Page;
   data: AppData;
@@ -68,6 +70,9 @@ export function Sidebar({
   onCloseMobile?: () => void;
   pinned?: boolean;
   onTogglePin?: () => void;
+  /** Modulerechten van het ingelogde teamlid; modules zonder leesrecht
+   *  verschijnen niet in het menu. Standaard alles zichtbaar. */
+  permissions?: Permissions;
 }) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
   const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
@@ -152,7 +157,7 @@ export function Sidebar({
     <nav className="sidebar-nav">
       <GlobalSearch data={data} onNavigate={onSearchNavigate} />
       <div className="nav-section"><span>Menu</span></div>
-      {items.map(([key, Icon, label]) => {
+      {items.filter(([key]) => permissions.canOpenPage(key === 'finance' ? 'quotes' : key)).map(([key, Icon, label]) => {
         const calendarHash = window.location.hash;
         const isProjectsActive = key === 'projects' && projectPages.includes(page);
         const isCalendarActive = key === 'calendar' && calendarPages.includes(page);

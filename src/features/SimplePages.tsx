@@ -10,6 +10,7 @@ import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, 
 import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
 import { ProjectTemplatesManager } from './ProjectTemplates';
+import { LEVEL_LABELS, MODULES, parseModuleAccess, type ModuleAccess, type ModuleLevel } from '../lib/permissions';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -63,6 +64,54 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
 };
 
 export type SettingsTab = 'organisatie' | 'sjablonen' | 'meldingen' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'email';
+
+/**
+ * Rechtenraster: per module kiezen tussen geen toegang, alleen lezen en
+ * volledig. Een ontbrekende sleutel betekent volledig — daarom slaan we
+ * 'write' niet op, zodat later toegevoegde modules automatisch openstaan.
+ */
+function ModuleAccessGrid({ value, onChange, disabled = false, readOnlyCap = false }: {
+  value: ModuleAccess;
+  onChange: (next: ModuleAccess) => void;
+  disabled?: boolean;
+  /** Voor een viewer: 'volledig' bestaat niet, die kan hoogstens lezen. */
+  readOnlyCap?: boolean;
+}) {
+  function set(key: string, level: ModuleLevel) {
+    const next: ModuleAccess = { ...value };
+    if (level === 'write') delete next[key as keyof ModuleAccess];
+    else next[key as keyof ModuleAccess] = level;
+    onChange(next);
+  }
+
+  return <div className="settings-grid compact">
+    {MODULES.map(module => {
+      const current: ModuleLevel = value[module.key] ?? 'write';
+      return <label key={module.key} title={module.description}>{module.label}
+        <Select value={current} disabled={disabled} onChange={event => set(module.key, event.target.value as ModuleLevel)}>
+          <option value="none">{LEVEL_LABELS.none}</option>
+          <option value="read">{LEVEL_LABELS.read}</option>
+          {!readOnlyCap && <option value="write">{LEVEL_LABELS.write}</option>}
+        </Select>
+      </label>;
+    })}
+  </div>;
+}
+
+/** Korte samenvatting onder een teamlid: "Financiën verborgen · Uren alleen lezen". */
+function moduleAccessSummary(role: OrganizationRole, raw: unknown): string {
+  if (role === 'owner' || role === 'admin') return 'Toegang tot alle modules';
+  const access = parseModuleAccess(raw);
+  const hidden = MODULES.filter(m => access[m.key] === 'none').map(m => m.label);
+  const readOnly = role === 'viewer'
+    ? MODULES.filter(m => access[m.key] !== 'none').map(m => m.label)
+    : MODULES.filter(m => access[m.key] === 'read').map(m => m.label);
+  if (!hidden.length && !readOnly.length) return 'Toegang tot alle modules';
+  const parts: string[] = [];
+  if (hidden.length) parts.push(`${hidden.join(', ')} verborgen`);
+  if (readOnly.length) parts.push(role === 'viewer' ? 'rest alleen lezen' : `${readOnly.join(', ')} alleen lezen`);
+  return parts.join(' · ');
+}
 
 export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof Users; description: string }> = [
   { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen, en bekijk de recente activiteit.' },
@@ -776,6 +825,7 @@ export function Settings({
   onInviteMember,
   onAcceptInvitation,
   onUpdateMemberRole,
+  onSetMemberModuleAccess,
   onDisableMember,
   onRevokeInvitation,
   onSave,
@@ -791,9 +841,10 @@ export function Settings({
   settingsNav?: { tab: SettingsTab; key: number } | null;
   onCreateOrganization: () => void;
   onSwitchOrganization: (organizationId: string) => void;
-  onInviteMember: (email: string, role: OrganizationRole) => Promise<{ emailSent: boolean; emailError?: string }>;
+  onInviteMember: (email: string, role: OrganizationRole, moduleAccess: ModuleAccess) => Promise<{ emailSent: boolean; emailError?: string }>;
   onAcceptInvitation: (invitationId: string) => Promise<void>;
   onUpdateMemberRole: (memberId: string, role: OrganizationRole) => Promise<void>;
+  onSetMemberModuleAccess: (memberId: string, moduleAccess: ModuleAccess) => Promise<void>;
   onDisableMember: (memberId: string) => Promise<void>;
   onRevokeInvitation: (invitationId: string) => Promise<void>;
   onSave: (settings: CompanySettingsInput) => Promise<void>;
@@ -808,6 +859,13 @@ export function Settings({
   const [isSaving, setIsSaving] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<OrganizationRole>('member');
+  // Modulerechten voor de uit te nodigen medewerker. Leeg = overal volledige
+  // toegang; de owner zet gericht modules dicht vóór het versturen.
+  const [inviteAccess, setInviteAccess] = useState<ModuleAccess>({});
+  const [inviteAccessOpen, setInviteAccessOpen] = useState(false);
+  // Welk teamlid heeft zijn rechtenpaneel openstaan, en de nog niet opgeslagen wijziging.
+  const [accessMemberId, setAccessMemberId] = useState<string | null>(null);
+  const [accessDraft, setAccessDraft] = useState<ModuleAccess>({});
   const [orgMessage, setOrgMessage] = useState<string | null>(null);
   const [orgError, setOrgError] = useState<string | null>(null);
   const [busyMemberId, setBusyMemberId] = useState<string | null>(null);
@@ -921,8 +979,10 @@ export function Settings({
     }
     try {
       const invitedEmail = inviteEmail.trim();
-      const result = await onInviteMember(inviteEmail, inviteRole);
+      const result = await onInviteMember(inviteEmail, inviteRole, inviteAccess);
       setInviteEmail('');
+      setInviteAccess({});
+      setInviteAccessOpen(false);
       const seatNote = isBillingExempt
         ? 'Deze organisatie is intern/onbeperkt, dus er gelden geen seat-limieten.'
         : 'Er is één gebruikerslicentie gereserveerd totdat de uitnodiging wordt geaccepteerd of ingetrokken.';
@@ -958,6 +1018,29 @@ export function Settings({
       setOrgMessage('Rol bijgewerkt.');
     } catch (error) {
       setOrgError(error instanceof Error ? error.message : 'Rol wijzigen mislukt.');
+    } finally {
+      setBusyMemberId(null);
+    }
+  }
+
+  function toggleAccessPanel(member: OrganizationMember) {
+    setOrgMessage(null);
+    setOrgError(null);
+    if (accessMemberId === member.id) { setAccessMemberId(null); return; }
+    setAccessMemberId(member.id);
+    setAccessDraft(parseModuleAccess(member.module_access));
+  }
+
+  async function saveMemberAccess(memberId: string) {
+    setOrgMessage(null);
+    setOrgError(null);
+    setBusyMemberId(memberId);
+    try {
+      await onSetMemberModuleAccess(memberId, accessDraft);
+      setAccessMemberId(null);
+      setOrgMessage('Modulerechten opgeslagen. Het teamlid ziet de wijziging zodra het de pagina ververst.');
+    } catch (error) {
+      setOrgError(error instanceof Error ? error.message : 'Modulerechten opslaan mislukt.');
     } finally {
       setBusyMemberId(null);
     }
@@ -1314,8 +1397,8 @@ export function Settings({
     <section className="settings-card organization-card">
       <div className="settings-card-head">
         <div>
-          <h3>Rollenbeheer</h3>
-          <p className="settings-help">Owner = volledig beheer. Admin = organisatie-instellingen en uitnodigingen. Member = werken in CRM/projecten. Viewer = alleen lezen.</p>
+          <h3>Rollen en modulerechten</h3>
+          <p className="settings-help">Owner = volledig beheer. Admin = organisatie-instellingen en uitnodigingen. Member = werken in CRM/projecten. Viewer = alleen lezen. Per member of viewer stel je daarnaast met <strong>Rechten</strong> in welke modules diegene ziet — bijvoorbeeld wél projecten en uren, maar geen financiën. Owners en admins houden altijd toegang tot alles.</p>
         </div>
       </div>
 
@@ -1325,29 +1408,60 @@ export function Settings({
           const isSelf = member.user_id === currentUserId;
           const isLastOwner = member.role === 'owner' && activeOwnerCount <= 1;
           const roleLocked = !canManageRoles || isSelf || isLastOwner || busyMemberId === member.id;
-          return <div className="team-row role-row" key={member.id}>
-            <div><span>{member.email ?? member.user_id}</span><small>{isSelf ? 'Jijzelf · ' : ''}{ROLE_LABELS[member.role]}{isLastOwner ? ' · laatste owner' : ''}</small></div>
-            <Select value={member.role} disabled={roleLocked} onChange={event => changeRole(member.id, event.target.value as OrganizationRole)}>
-              <option value="owner">Owner</option>
-              <option value="admin">Admin</option>
-              <option value="member">Member</option>
-              <option value="viewer">Viewer</option>
-            </Select>
-            <Button variant="danger" disabled={!canManageRoles || isSelf || isLastOwner || busyMemberId === member.id} onClick={() => disableMember(member.id)}>Uitschakelen</Button>
+          // Rechten instellen mag een admin voor members/viewers; alleen een owner
+          // mag ook een admin beperken (die beperking gaat pas gelden na degradatie).
+          const canEditAccess = canAdminOrganization && member.role !== 'owner'
+            && (member.role !== 'admin' || canManageRoles) && busyMemberId !== member.id;
+          const accessOpen = accessMemberId === member.id;
+          return <div key={member.id}>
+            <div className="team-row role-row">
+              <div>
+                <span>{member.email ?? member.user_id}</span>
+                <small>{isSelf ? 'Jijzelf · ' : ''}{ROLE_LABELS[member.role]}{isLastOwner ? ' · laatste owner' : ''} · {moduleAccessSummary(member.role, member.module_access)}</small>
+              </div>
+              <Select value={member.role} disabled={roleLocked} onChange={event => changeRole(member.id, event.target.value as OrganizationRole)}>
+                <option value="owner">Owner</option>
+                <option value="admin">Admin</option>
+                <option value="member">Member</option>
+                <option value="viewer">Viewer</option>
+              </Select>
+              <Button disabled={!canEditAccess} onClick={() => toggleAccessPanel(member)} aria-expanded={accessOpen}>{accessOpen ? 'Sluiten' : 'Rechten'}</Button>
+              <Button variant="danger" disabled={!canManageRoles || isSelf || isLastOwner || busyMemberId === member.id} onClick={() => disableMember(member.id)}>Uitschakelen</Button>
+            </div>
+
+            {accessOpen && <div className="settings-card">
+              <p className="settings-help">Wat mag <strong>{member.email ?? 'dit teamlid'}</strong> per module? “Geen toegang” laat de module volledig uit het menu verdwijnen; de gegevens zijn dan ook via de database niet op te vragen.{member.role === 'viewer' && ' Een viewer kan sowieso nergens wijzigen, dus hier kies je alleen tussen lezen en verbergen.'}{member.role === 'admin' && ' Let op: als admin houdt dit teamlid nu nog toegang tot alles — deze instelling gaat pas gelden zodra je de rol naar member of viewer zet.'}</p>
+              <ModuleAccessGrid value={accessDraft} onChange={setAccessDraft} disabled={busyMemberId === member.id} readOnlyCap={member.role === 'viewer'} />
+              <div className="invite-row">
+                <Button onClick={() => setAccessDraft({})} disabled={busyMemberId === member.id}>Alles openzetten</Button>
+                <Button onClick={() => setAccessDraft(Object.fromEntries(MODULES.map(m => [m.key, 'none'])) as ModuleAccess)} disabled={busyMemberId === member.id}>Alles dichtzetten</Button>
+                <Button variant="primary" onClick={() => saveMemberAccess(member.id)} disabled={busyMemberId === member.id}>{busyMemberId === member.id ? 'Opslaan…' : 'Rechten opslaan'}</Button>
+              </div>
+            </div>}
           </div>;
         })}
         {organizationContext.teamMembers.length === 0 && <p className="settings-help">Nog geen teamleden gevonden.</p>}
       </div>
 
-      {canAdminOrganization ? <div className="invite-row">
-        <Input type="email" value={inviteEmail} onChange={event => setInviteEmail(event.target.value)} placeholder="teamlid@bedrijf.nl" />
-        <Select value={inviteRole} onChange={event => setInviteRole(event.target.value as OrganizationRole)}>
-          <option value="admin">Admin</option>
-          <option value="member">Member</option>
-          <option value="viewer">Viewer</option>
-        </Select>
-        <Button variant="primary" onClick={inviteMember} disabled={inviteDisabled}>Uitnodigen</Button>
-      </div> : <p className="settings-help">Alleen owners en admins kunnen teamleden uitnodigen.</p>}
+      {canAdminOrganization ? <>
+        <div className="invite-row">
+          <Input type="email" value={inviteEmail} onChange={event => setInviteEmail(event.target.value)} placeholder="teamlid@bedrijf.nl" />
+          <Select value={inviteRole} onChange={event => setInviteRole(event.target.value as OrganizationRole)}>
+            <option value="admin">Admin</option>
+            <option value="member">Member</option>
+            <option value="viewer">Viewer</option>
+          </Select>
+          <Button onClick={() => setInviteAccessOpen(open => !open)} aria-expanded={inviteAccessOpen}>Modulerechten</Button>
+          <Button variant="primary" onClick={inviteMember} disabled={inviteDisabled}>Uitnodigen</Button>
+        </div>
+
+        {inviteAccessOpen && (inviteRole === 'admin'
+          ? <p className="settings-help">Een admin heeft altijd toegang tot alle modules. Kies rol <strong>Member</strong> of <strong>Viewer</strong> als je de nieuwe medewerker per module wilt beperken.</p>
+          : <div className="settings-card">
+              <p className="settings-help">Wat mag deze nieuwe medewerker straks zien? Standaard staat alles open; zet hier gericht modules dicht. Je kunt dit na het accepteren altijd nog aanpassen via <strong>Rechten</strong> bij het teamlid.</p>
+              <ModuleAccessGrid value={inviteAccess} onChange={setInviteAccess} readOnlyCap={inviteRole === 'viewer'} />
+            </div>)}
+      </> : <p className="settings-help">Alleen owners en admins kunnen teamleden uitnodigen.</p>}
 
       {isBillingExempt && canAdminOrganization && <p className="settings-help">Deze organisatie is <strong>intern/onbeperkt</strong> — je kunt zonder seat-limiet teamleden uitnodigen.</p>}
       {!isBillingExempt && !hasAvailableLicense && <p className="settings-help">Er zijn geen vrije licenties meer. Trek een openstaande uitnodiging in, schakel een teamlid uit of laat billing eerst extra seats synchroniseren.</p>}
@@ -1355,7 +1469,7 @@ export function Settings({
       {organizationContext.organizationInvitations.length > 0 && <div className="team-list">
         <strong>Openstaande teamuitnodigingen</strong>
         {organizationContext.organizationInvitations.map(invitation => <div className="team-row" key={invitation.id}>
-          <div><span>{invitation.email}</span><small>{ROLE_LABELS[invitation.role]} · verloopt {formatDate(invitation.expires_at)}</small></div>
+          <div><span>{invitation.email}</span><small>{ROLE_LABELS[invitation.role]} · {moduleAccessSummary(invitation.role, invitation.module_access)} · verloopt {formatDate(invitation.expires_at)}</small></div>
           <Button variant="danger" disabled={!canAdminOrganization || busyInvitationId === invitation.id} onClick={() => revokeInvitation(invitation.id)}>Intrekken</Button>
         </div>)}
       </div>}

@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
+import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { renderEmailLayout, escapeHtml } from '../_shared/emailTemplates/layout.ts';
 import {
   sendViaResend,
@@ -119,6 +120,14 @@ serve(async (req) => {
 
     const user = await requireUser(req);
     const role = await requireOrganizationAccess(user.id, organizationId);
+    // Service-role omzeilt RLS: de modulerechten van dit teamlid hier controleren.
+    const marketingLevel = await getModuleLevel(supabaseAdmin, user.id, organizationId, 'marketing');
+    if (marketingLevel === 'none') {
+      throw new CampaignHttpError('Je hebt geen toegang tot de module Marketing in deze organisatie.', 403);
+    }
+    // Zonder schrijfrecht op Marketing behandelen we dit lid verderop als viewer,
+    // zodat elke bestaande requireWrite-controle meteen klopt.
+    const effectiveRole: OrganizationRole = marketingLevel === 'write' ? role : 'viewer';
 
     switch (action) {
       case 'previewAudience': {
@@ -128,52 +137,52 @@ serve(async (req) => {
         return json(req, { ok: true, ...preview });
       }
       case 'sendTestCampaign': {
-        requireWrite(role);
+        requireWrite(effectiveRole);
         const result = await sendTestCampaign(organizationId, body);
         return json(req, { ok: true, ...result });
       }
       case 'sendCampaign': {
-        requireWrite(role);
+        requireWrite(effectiveRole);
         const result = await sendCampaign(organizationId, String(body.campaignId || ''));
         return json(req, { ok: true, ...result });
       }
       case 'scheduleCampaign': {
-        requireWrite(role);
+        requireWrite(effectiveRole);
         const result = await scheduleCampaign(organizationId, String(body.campaignId || ''), body.scheduledAt);
         return json(req, { ok: true, ...result });
       }
       case 'pauseCampaign': {
-        requireWrite(role);
+        requireWrite(effectiveRole);
         const result = await setCampaignStatus(organizationId, String(body.campaignId || ''), 'paused', ['sending', 'scheduled']);
         return json(req, { ok: true, ...result });
       }
       case 'resumeCampaign': {
-        requireWrite(role);
+        requireWrite(effectiveRole);
         const result = await setCampaignStatus(organizationId, String(body.campaignId || ''), 'sending', ['paused']);
         return json(req, { ok: true, ...result });
       }
       case 'cancelCampaign': {
-        requireWrite(role);
+        requireWrite(effectiveRole);
         const result = await setCampaignStatus(organizationId, String(body.campaignId || ''), 'cancelled', ['draft', 'scheduled', 'sending', 'paused']);
         return json(req, { ok: true, ...result });
       }
       case 'activateFlow': {
-        requireWrite(role);
+        requireWrite(effectiveRole);
         const result = await activateFlow(organizationId, String(body.flowId || ''));
         return json(req, { ok: true, ...result });
       }
       case 'pauseFlow': {
-        requireWrite(role);
+        requireWrite(effectiveRole);
         const result = await setFlowStatus(organizationId, String(body.flowId || ''), 'paused', ['active']);
         return json(req, { ok: true, ...result });
       }
       case 'resumeFlow': {
-        requireWrite(role);
+        requireWrite(effectiveRole);
         const result = await setFlowStatus(organizationId, String(body.flowId || ''), 'active', ['paused']);
         return json(req, { ok: true, ...result });
       }
       case 'cancelFlow': {
-        requireWrite(role);
+        requireWrite(effectiveRole);
         const result = await cancelFlow(organizationId, String(body.flowId || ''));
         return json(req, { ok: true, ...result });
       }

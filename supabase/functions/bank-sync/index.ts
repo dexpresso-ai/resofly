@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { assertModuleAccess } from '../_shared/edgeAuth.ts';
 
 // ============================================================
 // bank-sync — directe PSD2-bankkoppeling via Enable Banking (EU/Fins AISP).
@@ -64,6 +65,9 @@ serve(async (req) => {
     }
 
     if (!['owner', 'admin', 'member'].includes(role)) throw new HttpError('Geen schrijfrechten voor deze organisatie.', 403);
+    // Service-role omzeilt RLS: bankkoppelingen vallen onder Financiën, dus die
+    // module moet ook echt openstaan voor dit teamlid.
+    await assertModuleAccess(supabaseAdmin, user.id, organizationId, 'finance', 'write');
 
     switch (action) {
       case 'createRequisition':
@@ -178,6 +182,9 @@ async function finalizeRequisition(userId: string, code: string, state: string) 
   const organizationId = reqRow.organization_id as string;
   const role = await requireOrganizationAccess(userId, organizationId);
   if (!['owner', 'admin', 'member'].includes(role)) throw new HttpError('Geen schrijfrechten voor deze organisatie.', 403);
+  // Service-role omzeilt RLS: bankkoppelingen vallen onder Financiën, dus die
+  // module moet ook echt openstaan voor dit teamlid.
+  await assertModuleAccess(supabaseAdmin, userId, organizationId, 'finance', 'write');
 
   let session: any;
   try {

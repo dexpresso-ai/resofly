@@ -1,4 +1,5 @@
 import { Calendar, FolderOpen, LayoutDashboard, Receipt, Users } from 'lucide-react';
+import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'fiscal-years'|'archive'|'settings'|'project';
 
@@ -21,11 +22,13 @@ const ITEMS: { key: Page; Icon: typeof LayoutDashboard; label: string; group: Pa
 
 /** Vaste onderbalk (alleen mobiel, zie globals.css ≤760px). Duim-bereikbare
  *  navigatie naar de vijf kerndestinaties; de rest blijft in het hamburgermenu. */
-export function BottomNav({ page, onNavigate }: { page: Page; onNavigate: (p: Page) => void }) {
+export function BottomNav({ page, onNavigate, permissions = FULL_PERMISSIONS }: { page: Page; onNavigate: (p: Page) => void; permissions?: Permissions }) {
   const activeKey = ITEMS.find(item => item.group.includes(page))?.key ?? null;
+  // Modules die voor dit teamlid dichtstaan, verdwijnen ook uit de duimbalk.
+  const items = ITEMS.filter(item => permissions.canOpenPage(item.key));
   return (
     <nav className="bottomnav" aria-label="Hoofdnavigatie">
-      {ITEMS.map(({ key, Icon, label }) => {
+      {items.map(({ key, Icon, label }) => {
         const active = key === activeKey;
         return (
           <button

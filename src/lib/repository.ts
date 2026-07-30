@@ -3,6 +3,7 @@ import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
 import { throwFunctionError } from './functionErrors';
 import type { ReportDefinition } from './reporting';
+import type { ModuleAccess } from './permissions';
 import type {
   AppData,
   AuditLog,
@@ -270,7 +271,12 @@ export async function createOrganization(name: string): Promise<Organization> {
   return row as Organization;
 }
 
-export async function inviteOrganizationMember(organizationId: UUID, email: string, role: OrganizationRole): Promise<OrganizationInvitation> {
+export async function inviteOrganizationMember(
+  organizationId: UUID,
+  email: string,
+  role: OrganizationRole,
+  moduleAccess: ModuleAccess = {},
+): Promise<OrganizationInvitation> {
   const cleanEmail = email.trim().toLowerCase();
   if (!cleanEmail) throw new Error('E-mailadres ontbreekt.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) throw new Error('Vul een geldig e-mailadres in.');
@@ -278,6 +284,7 @@ export async function inviteOrganizationMember(organizationId: UUID, email: stri
     p_organization_id: organizationId,
     p_email: cleanEmail,
     p_role: role,
+    p_module_access: moduleAccess,
   });
   if (error) {
     if (/licentie|seat|Geen vrije/i.test(error.message)) {
@@ -332,6 +339,21 @@ export async function updateOrganizationMemberRole(memberId: UUID, organizationI
     .eq('id', memberId)
     .eq('organization_id', organizationId);
   if (error) throw error;
+}
+
+/**
+ * Zet de modulerechten van één teamlid (owner/admin). Loopt via een RPC omdat
+ * de tabel-policy alleen owners laat schrijven — de RPC laat ook admins toe,
+ * behalve op owners en (voor een admin) op andere admins.
+ */
+export async function setMemberModuleAccess(memberId: UUID, moduleAccess: ModuleAccess): Promise<OrganizationMember> {
+  const { data, error } = await supabase.rpc('set_member_module_access', {
+    p_member_id: memberId,
+    p_module_access: moduleAccess,
+  });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as OrganizationMember;
 }
 
 export async function disableOrganizationMember(memberId: UUID, organizationId: UUID): Promise<void> {

@@ -4,6 +4,7 @@ import { Sidebar } from './components/Sidebar';
 import { TabBar } from './components/TabBar';
 import { BottomNav } from './components/BottomNav';
 import { loadPersistedTabs, savePersistedTabs, viewTitle, PAGE_TITLES, type PersistedTab } from './lib/workspaceTabs';
+import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, MODULE_LABELS, PAGE_MODULE, type ModuleAccess } from './lib/permissions';
 import type { SearchResult } from './components/GlobalSearch';
 import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
 import { RichTextEditor, sanitizeRichText } from './components/RichTextEditor';
@@ -60,6 +61,7 @@ import {
   sendCreditNoteEmail,
   loadInvoiceMollieStatus,
   updateOrganizationMemberRole,
+  setMemberModuleAccess,
   updateRow,
   upsertCompanySettings,
   markTicketRead,
@@ -391,8 +393,14 @@ function App() {
 
   const activeOrganization = organizationContext.activeOrganization;
   const activeMembership = organizationContext.activeMembership;
-  const canWrite = activeMembership ? ['owner', 'admin', 'member'].includes(activeMembership.role) : false;
+  // Organisatiebreed schrijfrecht (rol). Per módule kan dit alsnog beperkt zijn —
+  // gebruik daarom binnen een pagina `permissions.canWritePage(...)`.
+  const orgCanWrite = activeMembership ? ['owner', 'admin', 'member'].includes(activeMembership.role) : false;
   const canAdmin = activeMembership ? ['owner', 'admin'].includes(activeMembership.role) : false;
+  // Modulerechten van dit lid: bepaalt welke modules in de navigatie verschijnen
+  // en of er binnen een module gewijzigd mag worden. De database dwingt hetzelfde
+  // af (restrictive RLS + schrijf-triggers); dit is de beleving eromheen.
+  const permissions = useMemo(() => buildPermissions(activeMembership), [activeMembership]);
 
   // Ongelezen klant-mail (per gebruiker) + live notificaties bij nieuwe berichten.
   const {
@@ -527,10 +535,10 @@ function App() {
     }
   }
 
-  async function inviteMember(email: string, role: OrganizationRole): Promise<{ emailSent: boolean; emailError?: string }> {
+  async function inviteMember(email: string, role: OrganizationRole, moduleAccess: ModuleAccess = {}): Promise<{ emailSent: boolean; emailError?: string }> {
     if (!ensureCanAdmin()) throw new Error('Alleen owners en admins kunnen teamleden uitnodigen.');
     if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
-    const invitation = await inviteOrganizationMember(activeOrganizationId, email, role);
+    const invitation = await inviteOrganizationMember(activeOrganizationId, email, role, moduleAccess);
     // De uitnodiging staat nu in de database. De e-mail is een aparte stap: faalt
     // die, dan blijft de uitnodiging bestaan en melden we dat apart terug.
     let emailSent = false;
@@ -557,6 +565,15 @@ function App() {
     await loadWorkspace(activeOrganizationId);
   }
 
+  /** Modulerechten van één teamlid opslaan. De RPC bewaakt zelf wie dit mag
+   *  (owner/admin, en niet op een owner); hier alleen de snelle voorcontrole. */
+  async function changeMemberModuleAccess(memberId: string, moduleAccess: ModuleAccess) {
+    if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
+    if (!canAdmin) throw new Error('Alleen owners en admins kunnen modulerechten aanpassen.');
+    await setMemberModuleAccess(memberId, moduleAccess);
+    await loadWorkspace(activeOrganizationId);
+  }
+
   async function disableMember(memberId: string) {
     if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
     if (!activeMembership || activeMembership.role !== 'owner') throw new Error('Alleen owners kunnen teamleden uitschakelen.');
@@ -572,9 +589,27 @@ function App() {
   }
 
   function ensureCanWrite(): boolean {
-    if (canWrite) return true;
-    setError('Je hebt alleen-lezen toegang tot deze organisatie. Vraag een owner/admin om schrijfrechten.');
-    return false;
+    if (!orgCanWrite) {
+      setError('Je hebt alleen-lezen toegang tot deze organisatie. Vraag een owner/admin om schrijfrechten.');
+      return false;
+    }
+    // Binnen de organisatie mag je schrijven, maar deze módule kan dichtstaan.
+    if (!permissions.canWritePage(page)) {
+      const moduleKey = PAGE_MODULE[page];
+      const label = moduleKey ? MODULE_LABELS[moduleKey] : 'deze module';
+      setError(`Je hebt geen wijzigrechten voor ${label}. Vraag een owner of admin om deze module voor je open te zetten.`);
+      return false;
+    }
+    return true;
+  }
+
+  /** Mag er in het bewerkvenster van dit soort record gewijzigd worden? Volgt de
+   *  module van het record zelf (een factuur blijft financieel, ook als je hem
+   *  vanuit een project opent). */
+  function canEditKind(kind: string): boolean {
+    if (!orgCanWrite) return false;
+    const moduleKey = EDIT_KIND_MODULE[kind];
+    return moduleKey ? permissions.canWrite(moduleKey) : true;
   }
 
   function ensureCanAdmin(): boolean {
@@ -1748,10 +1783,10 @@ function App() {
       onClick={() => setMobileNavOpen(open => !open)}
     >{mobileNavOpen ? <X size={22}/> : <Menu size={22}/>}</button>
     <div className={`sidebar-backdrop${mobileNavOpen ? ' is-open' : ''}`} onClick={() => setMobileNavOpen(false)} aria-hidden="true" />
-    <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => supabaseAuth.signOut()} clientEmailUnread={clientEmailUnread.total} ticketUnread={ticketUnreadIds.size} chatUnread={teamChat.unreadTotal} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })}/>
+    <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => supabaseAuth.signOut()} clientEmailUnread={clientEmailUnread.total} ticketUnread={ticketUnreadIds.size} chatUnread={teamChat.unreadTotal} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })} permissions={permissions}/>
     <main className="main">
       <TabBar tabs={tabs} activeTabId={activeTab.id} data={data} onSelect={switchTab} onClose={closeTab} onNew={openTab} />
-      {page !== 'calendar' && page !== 'gerrie' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!canWrite && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
+      {page !== 'calendar' && page !== 'gerrie' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!(orgCanWrite && permissions.canWritePage(page)) && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
       {/* Alle open tabbladen blijven gemount (keep-alive); alleen het actieve is
           zichtbaar. Elk pane is z'n eigen scrollcontainer én bevat z'n eigen
           EditModal, zodat een openstaande bewerking bij het wisselen bewaard blijft. */}
@@ -1759,7 +1794,7 @@ function App() {
         <section key={tab.id} className="content" hidden={tab.id !== activeTab.id}>
           {tab.id === activeTab.id && error && <div className="error">{error}</div>}
           {renderPage(tab)}
-          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} readOnly={!canWrite} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} />}
+          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} />}
         </section>
       ))}
     </main>
@@ -1770,7 +1805,7 @@ function App() {
     <TeamChatDock api={teamChat} hidden={page === 'chat'} />
     {/* Mobiele duim-onderbalk (alleen ≤760px, zie globals.css). Navigeert het
         actieve tabblad naar een kerndestinatie; sluit onderweg het uitschuifmenu. */}
-    <BottomNav page={page} onNavigate={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} />
+    <BottomNav page={page} permissions={permissions} onNavigate={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} />
     {sending && <div className="send-overlay" role="status" aria-live="polite">
       <div className="send-overlay-card">
         <span className="send-spinner" aria-hidden="true" />
@@ -1803,7 +1838,25 @@ function App() {
     const statsReportId = view.statsReportId;
     const settingsNav = view.settingsNav;
     const pendingReport = view.pendingReport;
-    if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} />;
+
+    // Staat deze module dicht voor dit teamlid, dan tonen we hier niets — ook
+    // niet via een onthouden tabblad of een gedeelde link. De database geeft
+    // sowieso geen rijen terug; dit voorkomt een verwarrende lege pagina.
+    if (!permissions.canOpenPage(page)) {
+      const moduleKey = PAGE_MODULE[page];
+      return <div className="empty">
+        <div className="e-big">Geen toegang tot {moduleKey ? MODULE_LABELS[moduleKey] : 'deze module'}</div>
+        <p>Een owner of admin van deze organisatie heeft deze module voor jou dichtgezet. Vraag hen om toegang als je die nodig hebt voor je werk.</p>
+        <Button onClick={() => { setPage(firstAllowedPage(permissions) as Page); setProjectId(null); setClientId(null); setStatsReportId(null); }}>Naar een pagina die wél open is</Button>
+      </div>;
+    }
+
+    // Binnen een open module bepaalt het niveau (lezen/volledig) of de
+    // wijzig-knoppen in de pagina actief zijn. Schaduwt bewust de organisatie-
+    // brede canWrite hierboven, zodat elke pagina automatisch het juiste niveau
+    // meekrijgt zonder dat elke prop apart aangepast hoeft te worden.
+    const canWrite = orgCanWrite && permissions.canWritePage(page);
+    if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} permissions={permissions} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} />;
     if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
     if (page === 'projects') return <ProjectsListPage data={data} canWrite={canWrite} onNewProject={() => ensureCanWrite() && setEdit({kind:'project'})} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} onEditProject={(item) => setEdit({kind:'project', item})}/>;
     if (page === 'project-planning') return <ProjectsPlanningPage data={data} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} />;
@@ -1832,7 +1885,7 @@ function App() {
     if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;
     if (page === 'stats') return <Statistics data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} openReportId={statsReportId} pendingReport={pendingReport}/>;
     if (page === 'archive') return <Archive data={data} onOpen={(id) => { setProjectId(id); setPage('project'); }} onRestore={async (project) => { if (!ensureCanWrite()) return; setError(null); try { await updateRow<Project>('projects', project.id, { archived: false }, activeOrg.id); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Herstellen mislukt'); } }}/>;
-    if (page === 'settings') return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
+    if (page === 'settings') return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
     return <div className="empty"><div className="e-big">Geen project geselecteerd</div></div>;
   }
 }

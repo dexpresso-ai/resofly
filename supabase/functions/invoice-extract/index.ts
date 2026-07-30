@@ -16,7 +16,7 @@
 // ============================================================
 
 import {
-  HttpError, assertWriteRole, createAdminClient, makeCors,
+  HttpError, assertModuleAccess, assertWriteRole, createAdminClient, makeCors,
   parseAllowedOrigins, requireOrganizationAccess, requireUser,
   type HttpStatus,
 } from '../_shared/edgeAuth.ts';
@@ -57,6 +57,9 @@ Deno.serve(async (req) => {
     const organizationId = String(body.organizationId || '');
     const role = await requireOrganizationAccess(admin, user.id, organizationId);
     assertWriteRole(role);
+    // Inkoopfacturen scannen valt onder Financiën; staat die module dicht voor
+    // dit teamlid, dan mag het ook niet via deze edge function.
+    await assertModuleAccess(admin, user.id, organizationId, 'finance', 'write');
 
     const file = readFilePayload(body);
 

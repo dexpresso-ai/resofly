@@ -93,7 +93,7 @@ type Emit = (event: string, data: unknown) => Promise<void>;
 
 // ── Agentische loop ──────────────────────────────────────────────────────────
 
-interface GerrieContext { organizationId: string; role: OrganizationRole; userId: string; userLabel: string; orgName: string; today: string }
+interface GerrieContext { organizationId: string; role: OrganizationRole; userId: string; userLabel: string; orgName: string; today: string; moduleAccess: Record<string, string> }
 interface Usage { input: number; output: number; cacheRead: number; cacheWrite: number }
 interface ProposalLine { description: string; quantity: number; unit_price: number; vat: number }
 interface InvoiceProposal { type: 'invoice'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; due_date: string | null; total_eur: number }
@@ -134,7 +134,10 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
   // Optionele tool-allowlist (voor geplande agents): beperk welke tools het model
   // ziet. Zonder allowlist (de gewone chat) krijgt het model álle tools — dus dat
   // gedrag blijft ongewijzigd. Een 'report'-agent krijgt alleen lees-tools mee.
-  const tools = allowedToolNames ? TOOL_DEFINITIONS.filter((t) => allowedToolNames.includes(t.name)) : TOOL_DEFINITIONS;
+  // Daar bovenop vallen de tools weg van modules die voor dit teamlid dichtstaan,
+  // zodat het model niets aanbiedt wat het toch niet mag ophalen of wijzigen.
+  const permittedNames = allowedToolNamesFor(ctx, allowedToolNames);
+  const tools = TOOL_DEFINITIONS.filter((t) => permittedNames.includes(t.name));
   // Anthropic-berichten: eerdere beurten als platte tekst, daarna het nieuwe bericht.
   const messages: AnthropicMessage[] = [
     ...history.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
@@ -945,11 +948,76 @@ function toolLabel(name: string): string {
   }
 }
 
+// ── Modulerechten (spiegel van public.org_module_level) ──────────────────────
+
+/** Welke module hoort bij welke tool. Ontbreekt een tool hier, dan is hij niet
+ *  module-gebonden (bijv. vrije agenda-momenten zoeken binnen je eigen agenda). */
+const TOOL_MODULE: Record<string, string> = {
+  search_clients: 'clients',
+  list_invoices: 'finance',
+  list_quotes: 'finance',
+  get_financial_summary: 'finance',
+  list_due_reminders: 'finance',
+  list_projects: 'projects',
+  list_tasks: 'projects',
+  list_tickets: 'tickets',
+  list_calendars: 'calendar',
+  suggest_meeting_slots: 'calendar',
+  propose_invoice: 'finance',
+  propose_quote: 'finance',
+  propose_send_invoice: 'finance',
+  propose_send_quote: 'finance',
+  propose_convert_quote: 'finance',
+  propose_edit_invoice: 'finance',
+  propose_edit_quote: 'finance',
+  propose_send_reminders: 'finance',
+  propose_client: 'clients',
+  propose_edit_client: 'clients',
+  propose_project: 'projects',
+  propose_edit_project: 'projects',
+  propose_task: 'projects',
+  propose_edit_task: 'projects',
+  propose_week_action: 'projects',
+  propose_calendar_event: 'calendar',
+  propose_time_entry: 'time',
+  propose_report: 'stats',
+};
+
+/** Menselijke naam van een module, voor de foutmelding die de gebruiker leest. */
+const MODULE_LABEL: Record<string, string> = {
+  clients: 'Klanten', projects: 'Projecten', time: 'Uren', calendar: 'Agenda',
+  tickets: 'Tickets', content: 'Inhoud', stats: 'Statistieken',
+  marketing: 'Marketing', finance: 'Financiën', chat: 'Teamchat', gerrie: 'Gerrie',
+};
+
+function moduleLevel(ctx: GerrieContext, module: string): 'none' | 'read' | 'write' {
+  if (ctx.role === 'owner' || ctx.role === 'admin') return 'write';
+  const stored = (ctx.moduleAccess[module] as 'none' | 'read' | 'write' | undefined) ?? 'write';
+  if (ctx.role === 'viewer') return stored === 'none' ? 'none' : 'read';
+  return stored;
+}
+
+/** Tools van modules die dichtstaan bieden we niet eens aan het model aan. */
+function allowedToolNamesFor(ctx: GerrieContext, base?: string[]): string[] {
+  const names = base ?? TOOL_DEFINITIONS.map((t) => t.name as string);
+  return names.filter((name) => {
+    const module = TOOL_MODULE[name];
+    if (!module) return true;
+    const level = moduleLevel(ctx, module);
+    return name.startsWith('propose_') ? level === 'write' : level !== 'none';
+  });
+}
+
 // ── Tools (uitvoering — STRIKT org-scoped) ───────────────────────────────────
 
 async function runTool(ctx: GerrieContext, name: string, input: Record<string, unknown>): Promise<unknown> {
   const orgId = ctx.organizationId;
   const limit = clampLimit(input.limit);
+  // Tweede slot op de deur: ook als het model toch een afgeschermde tool kiest.
+  const module = TOOL_MODULE[name];
+  if (module && moduleLevel(ctx, module) === 'none') {
+    throw new HttpError(`Je hebt geen toegang tot de module ${MODULE_LABEL[module] ?? module} in deze organisatie.`, 403);
+  }
   switch (name) {
     case 'search_clients': return searchClients(orgId, input, limit);
     case 'list_invoices': return listInvoices(orgId, input, limit);
@@ -1145,6 +1213,12 @@ function proposeLabel(toolName: string): string {
 async function buildProposal(ctx: GerrieContext, toolName: string, input: Record<string, unknown>): Promise<ProposalResult> {
   if (!['owner', 'admin', 'member'].includes(ctx.role)) {
     return { ok: false, error: 'Deze gebruiker heeft alleen leesrechten en mag geen acties uitvoeren.' };
+  }
+  // Een voorstel klaarzetten voor een module waar dit teamlid niet in mag
+  // wijzigen, heeft geen zin — de database weigert het straks toch.
+  const module = TOOL_MODULE[toolName];
+  if (module && moduleLevel(ctx, module) !== 'write') {
+    return { ok: false, error: `Deze gebruiker mag niets wijzigen in de module ${MODULE_LABEL[module] ?? module}.` };
   }
   switch (toolName) {
     case 'propose_invoice': return buildInvoiceProposal(ctx, input);
@@ -1924,11 +1998,23 @@ function round2(n: number): number { return Math.round(n * 100) / 100; }
 
 async function buildContext(organizationId: string, role: OrganizationRole, user: { id: string; email?: string }): Promise<GerrieContext> {
   const { data } = await supabaseAdmin.from('organizations').select('name').eq('id', organizationId).limit(1).maybeSingle();
+  // Gerrie draait op de service-role en omzeilt daarmee RLS. De modulerechten
+  // van dit teamlid moeten we dus zélf ophalen en afdwingen — anders is de
+  // assistent een achterdeur naar precies de modules die dichtstaan.
+  const { data: member } = await supabaseAdmin.from('organization_members')
+    .select('module_access').eq('organization_id', organizationId).eq('user_id', user.id)
+    .eq('status', 'active').limit(1).maybeSingle();
+  const rawAccess = (member?.module_access ?? {}) as Record<string, unknown>;
+  const moduleAccess: Record<string, string> = {};
+  for (const [key, value] of Object.entries(rawAccess)) {
+    if (value === 'none' || value === 'read' || value === 'write') moduleAccess[key] = value;
+  }
   return {
     organizationId, role, userId: user.id,
     userLabel: user.email || 'medewerker',
     orgName: (data?.name as string) || 'je organisatie',
     today: todayIso(),
+    moduleAccess,
   };
 }
 

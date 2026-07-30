@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
+import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB } from 'https://esm.sh/pdf-lib@1.17.1';
 import { renderEmailTemplate, type EmailTemplateContent, type EmailTemplateContentKey } from '../_shared/emailTemplates/index.ts';
 import { calculateDunningClaim, type DunningClaim, type InterestKind, type RatePeriod } from '../_shared/dunning.ts';
@@ -114,6 +115,11 @@ serve(async (req) => {
     const invoiceId = String(body.invoiceId || '');
     const user = await requireUser(req);
     const role = await requireOrganizationAccess(user.id, organizationId);
+    // Deze functie draait op de service-role en omzeilt dus RLS. Staat de module
+    // Financiën dicht voor dit teamlid, dan mag er hier ook niets — lezen noch
+    // schrijven. Bij 'alleen lezen' blijven de download-acties hieronder werken.
+    const financeLevel = await getModuleLevel(supabaseAdmin, user.id, organizationId, 'finance');
+    if (financeLevel === 'none') throw new WorkflowHttpError('Je hebt geen toegang tot de module Financiën in deze organisatie.', 403);
 
     // Reading the stored PDF snapshot doesn't mutate anything, so any
     // organization member (including viewers) may download it. Handle it
@@ -161,6 +167,7 @@ serve(async (req) => {
     }
 
     if (!['owner', 'admin', 'member'].includes(role)) throw new WorkflowHttpError('Geen schrijfrechten voor deze organisatie.', 403);
+    if (financeLevel !== 'write') throw new WorkflowHttpError('Je mag niets wijzigen in de module Financiën van deze organisatie.', 403);
 
     switch (action) {
       case 'sendInvoiceEmail': return json(req, { ok: true, ...(await sendInvoiceEmail(user.id, organizationId, invoiceId, body)) });

@@ -14,6 +14,7 @@ import {
   HttpError,
   requireUser,
   requireOrganizationAccess,
+  assertModuleAccess,
   assertWriteRole,
   isUuid,
 } from '../_shared/edgeAuth.ts';
@@ -71,6 +72,8 @@ Deno.serve(async (req) => {
     const organizationId = String(body.organizationId || '');
     const role = await requireOrganizationAccess(supabaseAdmin, user.id, organizationId);
     assertWriteRole(role);
+    // Boekingslinks horen bij de Agenda-module.
+    await assertModuleAccess(supabaseAdmin, user.id, organizationId, 'calendar', 'write');
 
     switch (action) {
       case 'listLinks': return json({ ok: true, links: await listLinks(organizationId) });

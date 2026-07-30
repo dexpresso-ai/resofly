@@ -45,6 +45,7 @@ import {
   sendEventCancellations,
 } from '../_shared/calendarEventWrite.ts';
 import { cancelConflictingBookingSlots, cancelConflictingBookingSlotsForNativeEvent } from '../_shared/meetingBookingSync.ts';
+import { getModuleLevel } from '../_shared/edgeAuth.ts';
 
 type OAuthState = {
   provider: Provider;
@@ -101,7 +102,13 @@ serve(async (req) => {
 
     const organizationId = String(body.organizationId || '');
     const role = await requireOrganizationAccess(user.id, organizationId);
-    const requireWrite = () => requireRole(role, ['owner', 'admin', 'member'], 'Deze agenda-actie vereist schrijfrechten binnen de organisatie.');
+    // Service-role omzeilt RLS: modulerechten hier expliciet controleren.
+    const calendarLevel = await getModuleLevel(supabaseAdmin, user.id, organizationId, 'calendar');
+    if (calendarLevel === 'none') throw new Error('Je hebt geen toegang tot de module Agenda in deze organisatie.');
+    const requireWrite = () => {
+      requireRole(role, ['owner', 'admin', 'member'], 'Deze agenda-actie vereist schrijfrechten binnen de organisatie.');
+      if (calendarLevel !== 'write') throw new Error('Je mag niets wijzigen in de module Agenda van deze organisatie.');
+    };
 
     switch (action) {
       case 'oauthStart': requireWrite(); return json({ ok: true, authUrl: await startOAuth(user.id, organizationId, body) });

@@ -15,7 +15,7 @@
 // ============================================================
 
 import {
-  HttpError, assertWriteRole, createAdminClient, isUuid, makeCors,
+  HttpError, assertModuleAccess, assertWriteRole, createAdminClient, isUuid, makeCors,
   parseAllowedOrigins, requireOrganizationAccess, requireUser,
   type HttpStatus, type OrganizationRole,
 } from '../_shared/edgeAuth.ts';
@@ -56,6 +56,9 @@ Deno.serve(async (req) => {
 
     const user = await requireUser(admin, req);
     const role = await requireOrganizationAccess(admin, user.id, organizationId);
+    // Meeting-opnames hangen aan de Agenda-module. Lezen mag met leesrecht;
+    // de acties zelf controleren hieronder al op de schrijfrol.
+    await assertModuleAccess(admin, user.id, organizationId, 'calendar', 'read');
 
     switch (action) {
       case 'create': return cors.json(req, await createRecording(organizationId, user.id, role, body));
