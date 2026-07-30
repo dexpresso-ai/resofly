@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Bell, BookOpen, CreditCard, Mail, Receipt, ShieldCheck, Sparkles, Users } from 'lucide-react';
+import { Bell, BookOpen, CreditCard, ListChecks, Mail, Receipt, ShieldCheck, Sparkles, Users } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
@@ -9,6 +9,7 @@ import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendi
 import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity } from '../lib/repository';
 import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
+import { ProjectTemplatesManager } from './ProjectTemplates';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -61,10 +62,11 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   viewer: 'Viewer',
 };
 
-export type SettingsTab = 'organisatie' | 'meldingen' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'email';
+export type SettingsTab = 'organisatie' | 'sjablonen' | 'meldingen' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'email';
 
 export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof Users; description: string }> = [
   { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen, en bekijk de recente activiteit.' },
+  { id: 'sjablonen', label: 'Projectsjablonen', Icon: ListChecks, description: 'Leg je vaste werkwijze vast als standaardtaken en subtaken, en rol die bij elk nieuw project in één klik uit.' },
   { id: 'meldingen', label: 'Meldingen', Icon: Bell, description: 'Ontvang OS-meldingen op je apparaat bij nieuwe tickets, chatberichten, e-mails en boekingen — ook als ResoFly dicht is.' },
   { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens, factuurtemplate en betaalteksten die op je facturen en offertes verschijnen.' },
   { id: 'boekhouding', label: 'Boekhouding', Icon: BookOpen, description: 'De boekhoud-startdatum (knipdatum) en de KOR-regeling voor je grootboek en BTW-aangifte.' },
@@ -761,6 +763,10 @@ function AiUsagePanel({ organizationId, members }: { organizationId: string; mem
 
 export function Settings({
   settings,
+  data,
+  organizationId,
+  canWrite,
+  onChanged,
   organizationContext,
   currentUserId,
   push,
@@ -775,6 +781,10 @@ export function Settings({
   onSave,
 }: {
   settings: CompanySettings | null;
+  data: AppData;
+  organizationId: string;
+  canWrite: boolean;
+  onChanged: () => void | Promise<void>;
   organizationContext: OrganizationContext;
   currentUserId: string | null;
   push: PushApi;
@@ -1363,6 +1373,10 @@ export function Settings({
         {organizationContext.auditLogs.length === 0 && <p className="settings-help">Nog geen audit-events. Voer de Sprint 1 SQL-migratie uit en maak daarna een wijziging om dit te vullen.</p>}
       </div>
     </section>
+    </div>}
+
+    {activeTab === 'sjablonen' && <div className="settings-tab-panel">
+      <ProjectTemplatesManager data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />
     </div>}
 
     {activeTab === 'meldingen' && <div className="settings-tab-panel">

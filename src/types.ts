@@ -292,6 +292,35 @@ export interface Task extends OrgScopedRow {
   /** Optioneel: een taak kan los bestaan (bijv. snel toegevoegd in de weekplanner) en pas later aan een project worden gekoppeld. */
   project_id: UUID | null; client_id: UUID | null; title: string; description: string | null; status: TaskStatus; priority: Priority; tags: string[]; start_date: string | null; end_date: string | null; planned_date: string | null; planned_order: number | null; estimated_minutes: number; subtasks: Subtask[]; comments: Comment[]; created_at: string; updated_at: string;
 }
+// ── Projectsjablonen ────────────────────────────────────────────────────────
+// Vaste werkwijze van een organisatie voor één soort project, één keer
+// vastgelegd en bij elk nieuw project uit te rollen.
+
+/** Subtaak in een sjabloon. Bewust zonder `done`: een sjabloon heeft geen voortgang. */
+export interface TemplateSubtask { id: UUID; label: string; }
+
+export interface ProjectTemplate extends OrgScopedRow {
+  name: string; description: string | null; is_active: boolean; created_at: string; updated_at: string;
+}
+
+/**
+ * Standaardtaak binnen een sjabloon. Datums staan relatief vast als dagoffsets
+ * t.o.v. de startdatum van het project (`due_offset_days: 14` = twee weken na
+ * de start); null laat die datum bij het uitrollen leeg.
+ */
+export interface ProjectTemplateTask extends OrgScopedRow {
+  template_id: UUID; position: number; title: string; description: string | null; status: TaskStatus; priority: Priority; tags: string[];
+  start_offset_days: number | null; due_offset_days: number | null; planned_offset_days: number | null;
+  estimated_minutes: number; subtasks: TemplateSubtask[]; created_at: string; updated_at: string;
+}
+
+/** Bewerkbare sjabloontaak in de editor (nog zonder db-id/timestamps). */
+export interface ProjectTemplateTaskInput {
+  id?: UUID; position: number; title: string; description: string | null; status: TaskStatus; priority: Priority; tags: string[];
+  start_offset_days: number | null; due_offset_days: number | null; planned_offset_days: number | null;
+  estimated_minutes: number; subtasks: TemplateSubtask[];
+}
+
 /** Koppeling van een organisatielid aan een project ("projectteam"). */
 export interface ProjectMember extends OrgScopedRow {
   project_id: UUID; user_id: UUID; created_at: string;
@@ -1659,7 +1688,7 @@ export interface SavedReport extends OrgScopedRow {
   updated_at: string;
 }
 
-export interface AppData { clients: Client[]; clientContacts: ClientContact[]; projects: Project[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; savedReports: SavedReport[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; clientContacts: ClientContact[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; savedReports: SavedReport[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft' | 'native' | 'ics';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';

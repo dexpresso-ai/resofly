@@ -666,7 +666,15 @@ export function ProjectPage({
   const [activeTab, setActiveTab] = useState<ProjectTab>('overview');
   const [timeModal, setTimeModal] = useState<{ entry: TimeEntry | null } | null>(null);
 
-  const tasks = data.tasks.filter(t => t.project_id === project.id);
+  // Oudste eerst: binnen een project lees je de takenlijst als werkvolgorde, niet
+  // als nieuwsfeed. Een uitgerold projectsjabloon staat daardoor van stap 1 naar
+  // stap 4 in de kanban i.p.v. omgekeerd (data.tasks komt aflopend binnen).
+  const tasks = useMemo(
+    () => data.tasks
+      .filter(t => t.project_id === project.id)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)),
+    [data.tasks, project.id],
+  );
   const client = data.clients.find(c => c.id === project.client_id);
   const projectNotes = data.notes.filter(note => note.project_id === project.id);
   const projectDocuments = data.documents.filter(doc => doc.project_id === project.id);

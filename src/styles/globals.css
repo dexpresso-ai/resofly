@@ -4203,6 +4203,75 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .skeleton-line:only-child{width:100%}
 @keyframes nv-glans{to{background-position:-140% 0}}
 
+/* ── Projectsjablonen: standaardtaken per projecttype ───────────────────── */
+.tpl-card{display:flex;flex-direction:column;gap:14px}
+.tpl-empty{border:1px dashed var(--border);border-radius:14px;padding:26px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:10px}
+.tpl-empty strong{font-size:15px}
+.tpl-empty p{color:var(--muted2);font-size:12px;line-height:1.6;max-width:520px}
+
+.tpl-list{display:flex;gap:8px;flex-wrap:wrap}
+.tpl-chip{display:flex;flex-direction:column;gap:2px;align-items:flex-start;text-align:left;min-width:170px;padding:10px 13px;border-radius:12px;border:1px solid var(--border);background:var(--bg3);color:var(--text);cursor:pointer;font:inherit;transition:border-color .15s,background .15s}
+.tpl-chip:hover{border-color:var(--border2);background:var(--bg4)}
+.tpl-chip.is-active{border-color:var(--accent);background:rgba(255,217,102,.1)}
+.tpl-chip strong{font-size:13px;font-weight:800}
+.tpl-chip span{font-size:11px;color:var(--muted)}
+.tpl-chip em{font-size:10px;font-style:normal;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.tpl-chip.is-inactive strong{color:var(--muted2)}
+
+.tpl-editor{display:flex;flex-direction:column;gap:14px;border-top:1px solid var(--border);padding-top:14px}
+.tpl-editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start}
+.tpl-editor-grid .check-row{grid-column:1/-1}
+
+.tpl-tasks-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.tpl-tasks-head div{display:flex;flex-direction:column;gap:2px}
+.tpl-tasks-head strong{font-size:12px;text-transform:uppercase;letter-spacing:.08em}
+.tpl-tasks-head span{font-size:11px;color:var(--muted)}
+.tpl-empty-line{font-size:11px;color:var(--muted);border:1px dashed var(--border);border-radius:7px;padding:10px;text-align:center}
+
+.tpl-task-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
+.tpl-task{background:var(--bg3);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.tpl-task.is-open{border-color:var(--border2)}
+.tpl-task-row{display:flex;align-items:center;gap:8px;padding:8px 10px}
+.tpl-task-toggle{display:flex;align-items:center;gap:8px;flex:1;min-width:0;background:transparent;border:0;color:var(--text);font:inherit;text-align:left;cursor:pointer;padding:0}
+.tpl-task-index{font-size:10px;font-weight:800;color:var(--muted);min-width:16px}
+.tpl-task-title{font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tpl-task-title em{color:var(--muted);font-weight:500}
+.tpl-task-meta{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.tpl-task-offset{font-size:10px;color:var(--muted);background:var(--bg4);border-radius:4px;padding:2px 6px;white-space:nowrap}
+.tpl-task-actions{display:flex;gap:3px;flex-shrink:0}
+.tpl-task-actions .icon-btn{width:26px;height:26px}
+.tpl-task-actions .icon-btn:disabled{opacity:.35;cursor:default}
+
+.tpl-task-body{display:flex;flex-direction:column;gap:10px;padding:0 10px 12px;border-top:1px solid var(--border);padding-top:12px}
+.tpl-task-fields{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.tpl-offsets{background:var(--bg2);border:1px solid var(--border);border-radius:9px;padding:10px}
+.tpl-offsets .settings-help{margin:0 0 8px;font-size:11px}
+.tpl-offsets .tpl-task-fields{grid-template-columns:repeat(3,1fr)}
+.tpl-subtasks{background:var(--bg2);border:1px solid var(--border);border-radius:9px;padding:10px}
+.tpl-subtasks .subtask-row{grid-template-columns:1fr auto}
+
+.tpl-editor-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tpl-dirty{font-size:11px;color:var(--accent-o)}
+
+/* Sjabloonkeuze in het projectvenster */
+.tpl-pick{grid-column:1/-1;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:9px}
+.tpl-pick-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.tpl-pick-head strong{font-size:12px;text-transform:uppercase;letter-spacing:.08em}
+.tpl-pick-preview{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;max-height:230px;overflow:auto}
+.tpl-pick-preview ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.tpl-pick-row{display:flex;align-items:baseline;gap:8px;font-size:12px}
+.tpl-pick-row .tpl-task-index{flex-shrink:0}
+.tpl-pick-row span:not(.tpl-task-index){color:var(--muted2)}
+.tpl-pick-row strong{font-weight:700;color:var(--text)}
+.tpl-pick-sub{font-size:11px;color:var(--muted);padding-left:24px}
+.tpl-pick-date{margin-left:auto;font-size:10px;color:var(--muted);white-space:nowrap}
+
+@media(max-width:900px){
+  .tpl-editor-grid{grid-template-columns:1fr}
+  .tpl-task-fields,.tpl-offsets .tpl-task-fields{grid-template-columns:1fr 1fr}
+  .tpl-task-meta{display:none}
+}
+
 /* ── Toegankelijkheid: respecteer 'minder beweging' systeembreed ─────────── */
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{

@@ -92,6 +92,9 @@ import type {
   OrganizationRole,
   Project,
   ProjectMember,
+  ProjectTemplate,
+  ProjectTemplateTask,
+  ProjectTemplateTaskInput,
   Quote,
   QuoteApprovalEvent,
   QuoteEmailDelivery,
@@ -104,7 +107,7 @@ import type {
   UUID,
 } from '../types';
 
-const tables = ['clients', 'client_contacts', 'projects', 'tasks', 'project_members', 'task_assignees', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'saved_reports', 'company_settings'] as const;
+const tables = ['clients', 'client_contacts', 'projects', 'project_templates', 'project_template_tasks', 'tasks', 'project_members', 'task_assignees', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'saved_reports', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -115,6 +118,8 @@ const tableToEntity: Record<Table, EntityType | null> = {
   clients: 'client',
   client_contacts: null,
   projects: 'project',
+  project_templates: null,
+  project_template_tasks: null,
   tasks: 'task',
   project_members: null,
   task_assignees: null,
@@ -408,6 +413,8 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     companySettings,
     projectMembers,
     taskAssignees,
+    projectTemplates,
+    projectTemplateTasks,
   ] = await Promise.all([
     select<Client>('clients', organizationId), selectClientContacts(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
     selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectCalendarEventLinks(organizationId), selectTimeEntries(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
@@ -421,8 +428,10 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     loadCompanySettings(organizationId),
     selectProjectMembers(organizationId),
     selectTaskAssignees(organizationId),
+    selectProjectTemplates(organizationId),
+    selectProjectTemplateTasks(organizationId),
   ]);
-  return { clients, clientContacts, projects, tasks, projectMembers, taskAssignees, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, savedReports, companySettings };
+  return { clients, clientContacts, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, savedReports, companySettings };
 }
 
 const PROJECT_TEAM_MIGRATION_HINT =
@@ -490,6 +499,128 @@ export async function setTaskAssignees(organizationId: UUID, taskId: UUID, userI
   for (const userId of toAdd) {
     await insertRow<TaskAssignee>('task_assignees', organizationId, { task_id: taskId, user_id: userId });
   }
+}
+
+// ── Projectsjablonen ────────────────────────────────────────────────────────
+
+const PROJECT_TEMPLATES_MIGRATION_HINT =
+  'Voer de migratie 20260730000000_project_templates.sql uit in Supabase om projectsjablonen te activeren.';
+
+/** Sjabloonkoppen (org-breed). */
+export async function selectProjectTemplates(organizationId: UUID): Promise<ProjectTemplate[]> {
+  return selectOptional<ProjectTemplate>('project_templates', organizationId, {
+    orderBy: 'name', ascending: true, hint: PROJECT_TEMPLATES_MIGRATION_HINT,
+  });
+}
+
+/** Sjabloontaken (org-breed; filter client-side op template_id). */
+export async function selectProjectTemplateTasks(organizationId: UUID): Promise<ProjectTemplateTask[]> {
+  return selectOptional<ProjectTemplateTask>('project_template_tasks', organizationId, {
+    orderBy: 'position', ascending: true, hint: PROJECT_TEMPLATES_MIGRATION_HINT,
+  });
+}
+
+export async function createProjectTemplate(organizationId: UUID, values: { name: string; description?: string | null }): Promise<ProjectTemplate> {
+  return insertRow<ProjectTemplate>('project_templates', organizationId, {
+    name: values.name.trim(),
+    description: values.description?.trim() || null,
+  });
+}
+
+export async function updateProjectTemplate(organizationId: UUID, id: UUID, patch: Partial<{ name: string; description: string | null; is_active: boolean }>): Promise<ProjectTemplate> {
+  const values: Record<string, unknown> = {};
+  if (patch.name !== undefined) values.name = patch.name.trim();
+  if (patch.description !== undefined) values.description = patch.description?.trim() || null;
+  if (patch.is_active !== undefined) values.is_active = patch.is_active;
+  return updateRow<ProjectTemplate>('project_templates', id, values, organizationId);
+}
+
+/** Verwijdert een sjabloon; de database ruimt de bijbehorende taken op (on delete cascade). */
+export async function deleteProjectTemplate(organizationId: UUID, id: UUID): Promise<void> {
+  return deleteRow('project_templates', id, organizationId);
+}
+
+/**
+ * Zet de takenlijst van één sjabloon gelijk aan `tasks` (in die volgorde).
+ * Diff-based, net als setTaskAssignees: bestaande rijen worden bijgewerkt i.p.v.
+ * weggegooid en opnieuw aangemaakt, zodat id's en aanmaakdatums blijven staan.
+ *
+ * Geeft de opgeslagen rijen terug (mét database-id), zodat de editor zijn eigen
+ * concepten kan bijwerken. Zonder dat zou een net toegevoegde taak lokaal id-loos
+ * blijven en bij de volgende keer opslaan onnodig verwijderd + opnieuw aangemaakt
+ * worden.
+ */
+export async function saveProjectTemplateTasks(organizationId: UUID, templateId: UUID, tasks: ProjectTemplateTaskInput[]): Promise<ProjectTemplateTask[]> {
+  const { data, error } = await supabase
+    .from('project_template_tasks')
+    .select('id')
+    .eq('organization_id', organizationId)
+    .eq('template_id', templateId);
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/project_template_tasks|schema cache|does not exist|relation/i.test(message)) {
+      throw new Error(`Projectsjablonen zijn nog niet beschikbaar. ${PROJECT_TEMPLATES_MIGRATION_HINT}`);
+    }
+    throw error;
+  }
+
+  const existingIds = new Set(((data ?? []) as { id: UUID }[]).map(row => row.id));
+  const keptIds = new Set(tasks.map(task => task.id).filter((id): id is UUID => Boolean(id && existingIds.has(id))));
+  const removedIds = [...existingIds].filter(id => !keptIds.has(id));
+
+  if (removedIds.length > 0) {
+    const { error: deleteError } = await supabase
+      .from('project_template_tasks')
+      .delete()
+      .eq('organization_id', organizationId)
+      .eq('template_id', templateId)
+      .in('id', removedIds);
+    if (deleteError) throw deleteError;
+  }
+
+  const saved: ProjectTemplateTask[] = [];
+  for (const [index, task] of tasks.entries()) {
+    const values = {
+      template_id: templateId,
+      position: index,
+      title: task.title.trim(),
+      description: task.description?.trim() || null,
+      status: task.status,
+      priority: task.priority,
+      tags: task.tags,
+      start_offset_days: task.start_offset_days,
+      due_offset_days: task.due_offset_days,
+      planned_offset_days: task.planned_offset_days,
+      estimated_minutes: task.estimated_minutes,
+      subtasks: task.subtasks.map(subtask => ({ id: subtask.id, label: subtask.label })),
+    };
+    saved.push(task.id && existingIds.has(task.id)
+      ? await updateRow<ProjectTemplateTask>('project_template_tasks', task.id, values, organizationId)
+      : await insertRow<ProjectTemplateTask>('project_template_tasks', organizationId, values));
+  }
+  return saved;
+}
+
+/**
+ * Rolt een sjabloon uit op een bestaand project: maakt server-side in één
+ * transactie alle sjabloontaken aan en geeft het aantal terug. `startDate` is het
+ * ankerpunt voor de dagoffsets; zonder ankerpunt komen de taken datumloos binnen.
+ */
+export async function applyProjectTemplate(organizationId: UUID, projectId: UUID, templateId: UUID, startDate: string | null): Promise<number> {
+  const { data, error } = await supabase.rpc('apply_project_template', {
+    p_organization_id: organizationId,
+    p_project_id: projectId,
+    p_template_id: templateId,
+    p_start_date: startDate || null,
+  });
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/apply_project_template|schema cache|does not exist|function/i.test(message)) {
+      throw new Error(`Projectsjablonen zijn nog niet beschikbaar. ${PROJECT_TEMPLATES_MIGRATION_HINT}`);
+    }
+    throw error;
+  }
+  return Number(Array.isArray(data) ? data[0] : data) || 0;
 }
 
 const SAVED_REPORTS_MIGRATION_HINT =
