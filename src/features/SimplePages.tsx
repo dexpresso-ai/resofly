@@ -1398,7 +1398,7 @@ export function Settings({
       <div className="settings-card-head">
         <div>
           <h3>Rollen en modulerechten</h3>
-          <p className="settings-help">Owner = volledig beheer. Admin = organisatie-instellingen en uitnodigingen. Member = werken in CRM/projecten. Viewer = alleen lezen. Per member of viewer stel je daarnaast met <strong>Rechten</strong> in welke modules diegene ziet — bijvoorbeeld wél projecten en uren, maar geen financiën. Owners en admins houden altijd toegang tot alles.</p>
+          <p className="settings-help">Owner = volledig beheer. Admin = organisatie-instellingen en uitnodigingen. Member = werken in CRM/projecten. Viewer = alleen lezen. Per member of viewer stel je daarnaast met <strong>Rechten</strong> in welke modules diegene ziet — bijvoorbeeld wél projecten en uren, maar geen financiën. Owners en admins houden altijd toegang tot alles. Owners zijn bovendien tegen elkaar beschermd: geen enkele owner kan een andere owner degraderen, uitschakelen of verwijderen.</p>
         </div>
       </div>
 
@@ -1407,7 +1407,10 @@ export function Settings({
         {organizationContext.teamMembers.map(member => {
           const isSelf = member.user_id === currentUserId;
           const isLastOwner = member.role === 'owner' && activeOwnerCount <= 1;
-          const roleLocked = !canManageRoles || isSelf || isLastOwner || busyMemberId === member.id;
+          // Owners zijn tegen elkaar beschermd: een andere owner kun je niet
+          // degraderen of uitschakelen (de database blokkeert het ook).
+          const isPeerOwner = member.role === 'owner' && !isSelf;
+          const roleLocked = !canManageRoles || isSelf || isLastOwner || isPeerOwner || busyMemberId === member.id;
           // Rechten instellen mag een admin voor members/viewers; alleen een owner
           // mag ook een admin beperken (die beperking gaat pas gelden na degradatie).
           const canEditAccess = canAdminOrganization && member.role !== 'owner'
@@ -1417,7 +1420,7 @@ export function Settings({
             <div className="team-row role-row">
               <div>
                 <span>{member.email ?? member.user_id}</span>
-                <small>{isSelf ? 'Jijzelf · ' : ''}{ROLE_LABELS[member.role]}{isLastOwner ? ' · laatste owner' : ''} · {moduleAccessSummary(member.role, member.module_access)}</small>
+                <small>{isSelf ? 'Jijzelf · ' : ''}{ROLE_LABELS[member.role]}{isLastOwner ? ' · laatste owner' : isPeerOwner ? ' · beschermd' : ''} · {moduleAccessSummary(member.role, member.module_access)}</small>
               </div>
               <Select value={member.role} disabled={roleLocked} onChange={event => changeRole(member.id, event.target.value as OrganizationRole)}>
                 <option value="owner">Owner</option>
@@ -1426,7 +1429,7 @@ export function Settings({
                 <option value="viewer">Viewer</option>
               </Select>
               <Button disabled={!canEditAccess} onClick={() => toggleAccessPanel(member)} aria-expanded={accessOpen}>{accessOpen ? 'Sluiten' : 'Rechten'}</Button>
-              <Button variant="danger" disabled={!canManageRoles || isSelf || isLastOwner || busyMemberId === member.id} onClick={() => disableMember(member.id)}>Uitschakelen</Button>
+              <Button variant="danger" disabled={!canManageRoles || isSelf || isLastOwner || isPeerOwner || busyMemberId === member.id} onClick={() => disableMember(member.id)}>Uitschakelen</Button>
             </div>
 
             {accessOpen && <div className="settings-card">

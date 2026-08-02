@@ -558,9 +558,20 @@ function App() {
     await switchOrganization(membership.organization_id);
   }
 
+  /** Owners zijn tegen elkaar beschermd: niemand raakt de rij van een ándere
+   *  actieve owner aan. De database dwingt dit ook af (RLS + trigger, migratie
+   *  20260802000000); hier vangen we het vóór de call af met een nette melding. */
+  function assertNotPeerOwner(memberId: string, action: string) {
+    const target = organizationContext.teamMembers.find(member => member.id === memberId);
+    if (target && target.role === 'owner' && target.status === 'active' && target.user_id !== currentUserId) {
+      throw new Error(`Owners zijn tegen elkaar beschermd: je kunt een andere owner niet ${action}.`);
+    }
+  }
+
   async function changeMemberRole(memberId: string, role: OrganizationRole) {
     if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
     if (!activeMembership || activeMembership.role !== 'owner') throw new Error('Alleen owners kunnen rollen wijzigen.');
+    assertNotPeerOwner(memberId, 'degraderen');
     await updateOrganizationMemberRole(memberId, activeOrganizationId, role);
     await loadWorkspace(activeOrganizationId);
   }
@@ -577,6 +588,7 @@ function App() {
   async function disableMember(memberId: string) {
     if (!activeOrganizationId) throw new Error('Geen actieve organisatie.');
     if (!activeMembership || activeMembership.role !== 'owner') throw new Error('Alleen owners kunnen teamleden uitschakelen.');
+    assertNotPeerOwner(memberId, 'uitschakelen');
     await disableOrganizationMember(memberId, activeOrganizationId);
     await loadWorkspace(activeOrganizationId);
   }
