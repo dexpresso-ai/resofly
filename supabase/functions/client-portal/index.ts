@@ -598,11 +598,13 @@ async function getGalleryDetail(user: { id: string; email: string }, body: Recor
   const galleryId = String(body.galleryId || '').trim();
   const { gallery, client } = await requireAccessibleGallery(user, galleryId);
 
-  const [items, favorites, tokens, contact] = await Promise.all([
+  const [items, favorites, tokens, contact, categories] = await Promise.all([
     selectRows('gallery_items', (q) => q.eq('gallery_id', gallery.id).eq('organization_id', gallery.organization_id).order('sort_order', { ascending: true }).order('created_at', { ascending: true })),
     selectRows('gallery_favorites', (q) => q.eq('gallery_id', gallery.id).eq('organization_id', gallery.organization_id)),
     fetchGalleryTokens(gallery.organization_id, gallery.id, gallery.allow_downloads),
     resolveActingContact(client, user.email),
+    selectRows('gallery_categories', (q) => q.eq('gallery_id', gallery.id).eq('organization_id', gallery.organization_id).order('position', { ascending: true }).order('created_at', { ascending: true }))
+      .catch(() => [] as Record<string, unknown>[]),
   ]);
 
   const sessionKey = `portal:${user.id}`;
@@ -613,6 +615,7 @@ async function getGalleryDetail(user: { id: string; email: string }, body: Recor
   return {
     gallery: sanitizeGallery(gallery),
     items: items.map(sanitizeGalleryItem),
+    categories: categories.map((row) => ({ id: row.id, name: row.name })),
     tokens,
     myFavoriteIds,
   };
@@ -666,6 +669,7 @@ function sanitizeGallery(row: Record<string, unknown>) {
     title: row.title,
     description: row.description ?? null,
     format: row.format ?? 'hybrid',
+    hero_template: row.hero_template ?? 'full',
     published_at: row.published_at ?? null,
     allow_downloads: Boolean(row.allow_downloads),
     download_quality: row.download_quality ?? 'original',
@@ -679,6 +683,7 @@ function sanitizeGalleryItem(row: Record<string, unknown>) {
     id: row.id,
     media_type: row.media_type,
     file_name: row.file_name,
+    category_id: row.category_id ?? null,
     storage_key: row.storage_key ?? null,
     preview_key: row.preview_key ?? null,
     thumb_key: row.thumb_key ?? null,

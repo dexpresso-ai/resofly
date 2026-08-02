@@ -386,6 +386,25 @@ export interface ContentFolder extends OrgScopedRow {
 export type GalleryStatus = 'draft' | 'published' | 'archived';
 /** Bepaalt de weergave bij de klant én welke media er in de galerij mogen. */
 export type GalleryFormat = 'photo' | 'video' | 'hybrid';
+/** Opening van de galerij. De hero-foto is `cover_item_id`. */
+export type GalleryHeroTemplate = 'full' | 'split' | 'collage' | 'minimal';
+
+/** Categorie binnen één galerij (bijv. Ceremonie, Diner, Feest). */
+export interface GalleryCategory extends OrgScopedRow {
+  gallery_id: UUID;
+  name: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Standaardcategorie op organisatieniveau; landt in elke nieuwe galerij. */
+export interface GalleryCategoryPreset extends OrgScopedRow {
+  name: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
 export type GalleryDownloadQuality = 'original' | 'web';
 export type GalleryMediaType = 'photo' | 'video';
 export type GalleryStreamStatus = 'uploading' | 'processing' | 'ready' | 'error';
@@ -395,6 +414,7 @@ export interface Gallery extends OrgScopedRow {
   title: string;
   description: string | null;
   format: GalleryFormat;
+  hero_template: GalleryHeroTemplate;
   status: GalleryStatus;
   published_at: string | null;
   cover_item_id: UUID | null;
@@ -413,6 +433,7 @@ export interface Gallery extends OrgScopedRow {
 
 export interface GalleryItem extends OrgScopedRow {
   gallery_id: UUID;
+  category_id: UUID | null;
   media_type: GalleryMediaType;
   file_name: string;
   content_type: string | null;

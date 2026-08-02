@@ -6,14 +6,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import {
-  Copy, Download, Film, HardDrive, Heart, Image as ImageIcon, Layers, Link2, Loader2, Settings2, Star, Trash2, Upload,
+  CheckSquare, ChevronDown, ChevronUp, Copy, Download, Film, FolderTree, HardDrive, Heart,
+  Image as ImageIcon, Layers, Link2, Loader2, Plus, Settings2, Star, Trash2, Upload,
 } from 'lucide-react';
-import type { AppData, Gallery, GalleryFavorite, GalleryFormat, GalleryItem, OrganizationStorageStatus, Project, UUID } from '../types';
+import type {
+  AppData, Gallery, GalleryCategory, GalleryCategoryPreset, GalleryFavorite, GalleryFormat,
+  GalleryHeroTemplate, GalleryItem, OrganizationStorageStatus, Project, UUID,
+} from '../types';
 import { Button, Input, Select } from '../components/Ui';
 import { dateNL } from '../lib/format';
 import { supabase, supabaseAuth } from '../lib/supabase';
 import {
-  deleteRow, fetchOrganizationStorageStatus, insertRow, selectGalleryFavorites, selectGalleryItems, updateRow,
+  deleteRow, fetchOrganizationStorageStatus, insertRow, replaceGalleryCategoryPresets,
+  selectGalleryCategories, selectGalleryCategoryPresets, selectGalleryFavorites, selectGalleryItems,
+  setGalleryItemsCategory, updateRow,
 } from '../lib/repository';
 import { deleteR2Object } from '../lib/r2-api';
 import {
@@ -56,6 +62,14 @@ function formatConfig(format: GalleryFormat) {
   return galleryFormats.find(f => f.key === format) ?? galleryFormats[2];
 }
 
+/** De vier openingen; het miniatuur ernaast is puur CSS (geen echte foto nodig). */
+const heroTemplates: Array<{ key: GalleryHeroTemplate; label: string }> = [
+  { key: 'full', label: 'Volledig beeld' },
+  { key: 'split', label: 'Beeld naast tekst' },
+  { key: 'collage', label: 'Collage' },
+  { key: 'minimal', label: 'Alleen tekst' },
+];
+
 function fmtBytesShort(bytes: number): string {
   if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
   if (bytes >= 1048576) return `${Math.round(bytes / 1048576)} MB`;
@@ -92,10 +106,17 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
   const openGallery = galleries.find(g => g.id === openId) ?? null;
 
   const [items, setItems] = useState<GalleryItem[]>([]);
+  const [categories, setCategories] = useState<GalleryCategory[]>([]);
+  const [presets, setPresets] = useState<GalleryCategoryPreset[]>([]);
+  const [showCategories, setShowCategories] = useState(false);
+  const [newCategory, setNewCategory] = useState('');
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [favorites, setFavorites] = useState<GalleryFavorite[]>([]);
   const [bundle, setBundle] = useState<GalleryTokenBundle | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [storage, setStorage] = useState<OrganizationStorageStatus | null>(null);
 
   const [creating, setCreating] = useState(false);
@@ -121,6 +142,13 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
   }, [organizationId]);
 
   useEffect(() => { void refreshStorage(); }, [refreshStorage]);
+
+  const refreshCategories = useCallback(async (galleryId: string) => {
+    try {
+      const rows = await selectGalleryCategories(organizationId, galleryId);
+      if (openIdRef.current === galleryId) setCategories(rows);
+    } catch { /* categorieën zijn nooit blokkerend voor de weergave */ }
+  }, [organizationId]);
 
   const refreshFavorites = useCallback(async (galleryId: string) => {
     try {
@@ -212,15 +240,19 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
     pollTimers.current.clear();
     if (refreshTimer.current) { window.clearTimeout(refreshTimer.current); refreshTimer.current = null; }
 
-    if (!openId) { setItems([]); setFavorites([]); setBundle(null); return; }
+    if (!openId) { setItems([]); setCategories([]); setFavorites([]); setBundle(null); return; }
     let cancelled = false;
     setLoading(true);
     setError(null);
     setOnlyFavorites(false);
+    setSelectMode(false);
+    setSelectedIds(new Set());
+    setShowCategories(false);
     (async () => {
       try {
         const [loadedItems] = await Promise.all([
           selectGalleryItems(organizationId, openId),
+          refreshCategories(openId),
           refreshFavorites(openId),
           refreshSession(openId),
         ]);
@@ -234,7 +266,7 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
       }
     })();
     return () => { cancelled = true; };
-  }, [openId, organizationId, refreshFavorites, refreshSession, pollStreamItem]);
+  }, [openId, organizationId, refreshCategories, refreshFavorites, refreshSession, pollStreamItem]);
 
   // ── Live favorieten (klant markeert in portaal/deellink) ──
   useEffect(() => {
@@ -529,6 +561,145 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
    * deellink-modal) moet weten of het opslaan écht is gelukt: anders zou een
    * mislukte update een deellink tonen waarvan de tokenhash nooit is bewaard.
    */
+  // ── Categorieën ──
+  async function addCategory(name: string) {
+    if (!openGallery) return;
+    const clean = name.trim();
+    if (!clean) return;
+    setError(null);
+    try {
+      const position = categories.reduce((max, c) => Math.max(max, c.position), -1) + 1;
+      await insertRow<GalleryCategory>('gallery_categories', organizationId, {
+        gallery_id: openGallery.id, name: clean, position,
+      });
+      setNewCategory('');
+      await refreshCategories(openGallery.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Categorie toevoegen mislukt.');
+    }
+  }
+
+  async function renameCategory(category: GalleryCategory, name: string) {
+    const clean = name.trim();
+    if (!openGallery || !clean || clean === category.name) return;
+    setError(null);
+    try {
+      await updateRow<GalleryCategory>('gallery_categories', category.id, { name: clean }, organizationId);
+      await refreshCategories(openGallery.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Hernoemen mislukt.');
+      await refreshCategories(openGallery.id);
+    }
+  }
+
+  /** Wisselt de positie met de buur; de volgorde bepaalt de secties bij de klant. */
+  async function moveCategory(category: GalleryCategory, delta: number) {
+    if (!openGallery) return;
+    const index = categories.findIndex(c => c.id === category.id);
+    const target = categories[index + delta];
+    if (!target) return;
+    setError(null);
+    // Optimistisch omwisselen zodat de lijst niet zichtbaar "springt".
+    setCategories(prev => {
+      const next = [...prev];
+      next[index] = target;
+      next[index + delta] = category;
+      return next;
+    });
+    try {
+      await Promise.all([
+        updateRow<GalleryCategory>('gallery_categories', category.id, { position: target.position }, organizationId),
+        updateRow<GalleryCategory>('gallery_categories', target.id, { position: category.position }, organizationId),
+      ]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Volgorde wijzigen mislukt.');
+    } finally {
+      await refreshCategories(openGallery.id);
+    }
+  }
+
+  async function removeCategory(category: GalleryCategory) {
+    if (!openGallery) return;
+    const count = items.filter(i => i.category_id === category.id).length;
+    const vraag = count > 0
+      ? `“${category.name}” verwijderen? De ${count} foto's erin blijven bestaan en komen onder “Overig” te staan.`
+      : `“${category.name}” verwijderen?`;
+    if (!confirm(vraag)) return;
+    setError(null);
+    try {
+      await deleteRow('gallery_categories', category.id, organizationId);
+      // De database zet category_id op null (on delete set null); lokaal meteen ook.
+      setItems(prev => prev.map(i => (i.category_id === category.id ? { ...i, category_id: null } : i)));
+      await refreshCategories(openGallery.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Verwijderen mislukt.');
+    }
+  }
+
+  /** Neemt de standaardlijst van de organisatie over (voegt alleen ontbrekende toe). */
+  async function applyPresets() {
+    if (!openGallery) return;
+    setError(null);
+    try {
+      const list = presets.length > 0 ? presets : await selectGalleryCategoryPresets(organizationId);
+      setPresets(list);
+      if (list.length === 0) {
+        setError('Je hebt nog geen standaardlijst. Stel hier categorieën in en kies “Als standaard opslaan”.');
+        return;
+      }
+      const existing = new Set(categories.map(c => c.name.toLowerCase()));
+      let position = categories.reduce((max, c) => Math.max(max, c.position), -1) + 1;
+      for (const preset of list) {
+        if (existing.has(preset.name.toLowerCase())) continue;
+        await insertRow<GalleryCategory>('gallery_categories', organizationId, {
+          gallery_id: openGallery.id, name: preset.name, position: position++,
+        });
+      }
+      await refreshCategories(openGallery.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Standaardlijst overnemen mislukt.');
+    }
+  }
+
+  /** Bewaart de huidige indeling als standaard voor nieuwe galerijen. */
+  async function saveAsPresets() {
+    setError(null);
+    try {
+      const saved = await replaceGalleryCategoryPresets(organizationId, categories.map(c => c.name));
+      setPresets(saved);
+      setMessage('Deze indeling is nu je standaardlijst voor nieuwe galerijen.');
+      window.setTimeout(() => setMessage(null), 4000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Standaardlijst opslaan mislukt.');
+    }
+  }
+
+  // ── Bulkselectie ──
+  function toggleSelected(itemId: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId); else next.add(itemId);
+      return next;
+    });
+  }
+
+  async function assignSelectedTo(categoryId: string | null) {
+    if (!openGallery || selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    setBusy(true);
+    setError(null);
+    try {
+      await setGalleryItemsCategory(organizationId, ids, categoryId);
+      setItems(prev => prev.map(i => (selectedIds.has(i.id) ? { ...i, category_id: categoryId } : i)));
+      setSelectedIds(new Set());
+      setSelectMode(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Toewijzen mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function patchGallery(gallery: Gallery, patch: Partial<Gallery>) {
     setBusy(true);
     setError(null);
@@ -684,6 +855,22 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
           )}
           {writable && (
             <>
+              <Button
+                onClick={() => {
+                  setShowCategories(v => !v);
+                  if (presets.length === 0) void selectGalleryCategoryPresets(organizationId).then(setPresets).catch(() => undefined);
+                }}
+              >
+                <FolderTree size={14} /> Categorieën{categories.length > 0 ? ` (${categories.length})` : ''}
+              </Button>
+              {items.length > 0 && categories.length > 0 && (
+                <Button
+                  onClick={() => { setSelectMode(v => !v); setSelectedIds(new Set()); }}
+                  variant={selectMode ? 'primary' : undefined}
+                >
+                  <CheckSquare size={14} /> {selectMode ? 'Selectie stoppen' : 'Indelen'}
+                </Button>
+              )}
               <Button onClick={() => setShowShare(true)}><Link2 size={14} /> Delen</Button>
               <Button onClick={() => setShowSettings(true)}><Settings2 size={14} /> Instellingen</Button>
               {openGallery.status !== 'published'
@@ -698,6 +885,77 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
       </div>
 
       {error && <div className="error">{error}</div>}
+      {message && <div className="gal-notice">{message}</div>}
+
+      {showCategories && writable && (
+        <div className="gal-cats">
+          <div className="gal-cats-head">
+            <strong>Categorieën</strong>
+            <span className="gal-cats-help">Bepalen de secties die de klant bovenaan als knoppen ziet.</span>
+            <span className="gal-modal-spacer" />
+            <Button onClick={() => void applyPresets()}>Standaardlijst overnemen</Button>
+            <Button onClick={() => void saveAsPresets()} disabled={categories.length === 0}>Als standaard opslaan</Button>
+          </div>
+          {categories.length === 0 && (
+            <div className="client-empty-line">
+              Nog geen categorieën. Voeg er hieronder een toe, of neem je standaardlijst over.
+            </div>
+          )}
+          <ul className="gal-cat-list">
+            {categories.map((category, index) => {
+              const count = items.filter(i => i.category_id === category.id).length;
+              return (
+                <li key={category.id} className="gal-cat-row">
+                  <Input
+                    defaultValue={category.name}
+                    onBlur={(e) => void renameCategory(category, e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                    aria-label={`Naam van ${category.name}`}
+                  />
+                  <span className="gal-cat-count">{count} {count === 1 ? 'item' : 'items'}</span>
+                  <button type="button" className="icon-btn" disabled={index === 0} onClick={() => void moveCategory(category, -1)} title="Omhoog"><ChevronUp size={14} /></button>
+                  <button type="button" className="icon-btn" disabled={index === categories.length - 1} onClick={() => void moveCategory(category, 1)} title="Omlaag"><ChevronDown size={14} /></button>
+                  <button type="button" className="icon-btn danger" onClick={() => void removeCategory(category)} title="Verwijderen"><Trash2 size={14} /></button>
+                </li>
+              );
+            })}
+          </ul>
+          <form className="gal-cat-add" onSubmit={(e) => { e.preventDefault(); void addCategory(newCategory); }}>
+            <Input
+              placeholder="Nieuwe categorie (bijv. Ceremonie)"
+              value={newCategory}
+              onChange={(e) => setNewCategory(e.target.value)}
+              maxLength={60}
+            />
+            <Button type="submit" variant="primary" disabled={!newCategory.trim()}><Plus size={14} /> Toevoegen</Button>
+          </form>
+        </div>
+      )}
+
+      {selectMode && (
+        <div className="gal-selectbar">
+          <strong>{selectedIds.size} geselecteerd</strong>
+          <button type="button" className="gal-linkbtn" onClick={() => setSelectedIds(new Set(shownItems.map(i => i.id)))}>Alles</button>
+          <button type="button" className="gal-linkbtn" onClick={() => setSelectedIds(new Set())}>Niets</button>
+          <span className="gal-modal-spacer" />
+          <Select
+            inline
+            value=""
+            disabled={selectedIds.size === 0 || busy}
+            onChange={(e) => {
+              const value = e.target.value;
+              if (!value) return;
+              void assignSelectedTo(value === '__none__' ? null : value);
+            }}
+            aria-label="Toewijzen aan categorie"
+          >
+            <option value="">Verplaats naar…</option>
+            {categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
+            <option value="__none__">Geen categorie</option>
+          </Select>
+        </div>
+      )}
+
       <input
         ref={fileInputRef}
         type="file"
@@ -731,8 +989,18 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
             bundle={bundle}
             allowDownload
             format={openGallery.format}
+            categories={categories}
+            hero={{
+              template: openGallery.hero_template,
+              title: openGallery.title,
+              description: openGallery.description,
+              itemId: openGallery.cover_item_id,
+            }}
             favoriteCounts={favoriteCounts}
             canFavorite={false}
+            selectable={selectMode}
+            selected={selectedIds}
+            onToggleSelect={(item) => toggleSelected(item.id)}
             onDownloadItem={downloadItem}
             emptyText={onlyFavorites
               ? 'De klant heeft nog geen favorieten gemarkeerd.'
@@ -797,6 +1065,7 @@ function GallerySettingsModal({ gallery, busy, onClose, onSave, onDelete }: {
   const [title, setTitle] = useState(gallery.title);
   const [description, setDescription] = useState(gallery.description ?? '');
   const [format, setFormat] = useState<GalleryFormat>(gallery.format);
+  const [heroTemplate, setHeroTemplate] = useState<GalleryHeroTemplate>(gallery.hero_template);
   const [allowDownloads, setAllowDownloads] = useState(gallery.allow_downloads);
   const [quality, setQuality] = useState(gallery.download_quality);
   const [expiresAt, setExpiresAt] = useState(gallery.expires_at ? gallery.expires_at.slice(0, 10) : '');
@@ -846,6 +1115,26 @@ function GallerySettingsModal({ gallery, busy, onClose, onSave, onDelete }: {
               Beperken kan alleen zolang er geen media in staan die er dan uit zouden vallen; “Foto én video” kan altijd.
             </p>
           </div>
+          <div className="gal-field">
+            <span>Opening (hero)</span>
+            <div className="gal-format-options is-compact gal-hero-options">
+              {heroTemplates.map(({ key, label }) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`gal-format-card${heroTemplate === key ? ' is-active' : ''}`}
+                  onClick={() => setHeroTemplate(key)}
+                  aria-pressed={heroTemplate === key}
+                >
+                  <span className={`gal-hero-thumb gal-hero-thumb-${key}`} aria-hidden="true" />
+                  <span className="gal-format-label">{label}</span>
+                </button>
+              ))}
+            </div>
+            <p className="gal-field-help">
+              De hero-foto is de coverfoto: kies die met het sterretje op een foto in de galerij.
+            </p>
+          </div>
           <label className="gal-field gal-field-row">
             <input type="checkbox" checked={allowDownloads} onChange={(e) => setAllowDownloads(e.target.checked)} />
             <span>Klant mag downloaden</span>
@@ -876,6 +1165,7 @@ function GallerySettingsModal({ gallery, busy, onClose, onSave, onDelete }: {
               title: title.trim(),
               description: description.trim() || null,
               format,
+              hero_template: heroTemplate,
               allow_downloads: allowDownloads,
               download_quality: quality,
               expires_at: expiresAt ? new Date(`${expiresAt}T23:59:59`).toISOString() : null,

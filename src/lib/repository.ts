@@ -49,6 +49,8 @@ import type {
   InternalDocument,
   ContentFolder,
   Gallery,
+  GalleryCategory,
+  GalleryCategoryPreset,
   GalleryFavorite,
   GalleryItem,
   LedgerAccount,
@@ -113,7 +115,7 @@ import type {
   UUID,
 } from '../types';
 
-const tables = ['clients', 'client_contacts', 'projects', 'project_templates', 'project_template_tasks', 'tasks', 'project_members', 'task_assignees', 'contract_projects', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'galleries', 'gallery_items', 'gallery_favorites', 'saved_reports', 'company_settings'] as const;
+const tables = ['clients', 'client_contacts', 'projects', 'project_templates', 'project_template_tasks', 'tasks', 'project_members', 'task_assignees', 'contract_projects', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'galleries', 'gallery_items', 'gallery_favorites', 'gallery_categories', 'gallery_category_presets', 'saved_reports', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -148,6 +150,8 @@ const tableToEntity: Record<Table, EntityType | null> = {
   galleries: null,
   gallery_items: null,
   gallery_favorites: null,
+  gallery_categories: null,
+  gallery_category_presets: null,
   saved_reports: null,
   company_settings: null,
 };
@@ -561,6 +565,66 @@ export async function fetchOrganizationStorageStatus(organizationId: UUID): Prom
   }
   const row = Array.isArray(data) ? data[0] : data;
   return (row ?? null) as OrganizationStorageStatus | null;
+}
+
+/** Categorieën van één galerij, in weergavevolgorde. */
+export async function selectGalleryCategories(organizationId: UUID, galleryId: UUID): Promise<GalleryCategory[]> {
+  const { data, error } = await supabase
+    .from('gallery_categories')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('gallery_id', galleryId)
+    .order('position', { ascending: true })
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as GalleryCategory[];
+}
+
+/** Standaardcategorieën van de organisatie (startpunt voor nieuwe galerijen). */
+export async function selectGalleryCategoryPresets(organizationId: UUID): Promise<GalleryCategoryPreset[]> {
+  return selectOptional<GalleryCategoryPreset>('gallery_category_presets', organizationId, {
+    orderBy: 'position', ascending: true, hint: GALLERY_MIGRATION_HINT,
+  });
+}
+
+/**
+ * Vervangt de standaardlijst van de organisatie door deze namen. Wordt gebruikt
+ * vanuit een galerij ("bewaar deze indeling als standaard"), zodat de gebruiker
+ * geen apart instellingenscherm nodig heeft.
+ */
+export async function replaceGalleryCategoryPresets(organizationId: UUID, names: string[]): Promise<GalleryCategoryPreset[]> {
+  const { error: deleteError } = await supabase
+    .from('gallery_category_presets')
+    .delete()
+    .eq('organization_id', organizationId);
+  if (deleteError) throw deleteError;
+
+  const cleaned = names.map(name => name.trim()).filter(Boolean);
+  if (cleaned.length === 0) return [];
+
+  const createdBy = await currentUserId();
+  const { data, error } = await supabase
+    .from('gallery_category_presets')
+    .insert(cleaned.map((name, index) => ({
+      organization_id: organizationId,
+      created_by: createdBy,
+      name,
+      position: index,
+    })))
+    .select('*');
+  if (error) throw error;
+  return (data ?? []) as GalleryCategoryPreset[];
+}
+
+/** Zet de categorie van meerdere items in één keer (bulk-toewijzing). */
+export async function setGalleryItemsCategory(organizationId: UUID, itemIds: UUID[], categoryId: UUID | null): Promise<void> {
+  if (itemIds.length === 0) return;
+  const { error } = await supabase
+    .from('gallery_items')
+    .update({ category_id: categoryId, updated_at: new Date().toISOString() })
+    .eq('organization_id', organizationId)
+    .in('id', itemIds);
+  if (error) throw error;
 }
 
 /** Favorieten (klantselectie) van één galerij. */

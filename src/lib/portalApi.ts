@@ -156,6 +156,8 @@ export interface PortalGallery {
   description: string | null;
   /** 'photo' | 'video' | 'hybrid' — bepaalt de weergave bij de klant. */
   format: string;
+  /** 'full' | 'split' | 'collage' | 'minimal' — de opening van de galerij. */
+  hero_template: string;
   published_at: string | null;
   allow_downloads: boolean;
   download_quality: string;
@@ -163,10 +165,16 @@ export interface PortalGallery {
   expires_at: string | null;
 }
 
+export interface PortalGalleryCategory {
+  id: string;
+  name: string;
+}
+
 export interface PortalGalleryItem {
   id: string;
   media_type: 'photo' | 'video';
   file_name: string;
+  category_id: string | null;
   storage_key: string | null;
   preview_key: string | null;
   thumb_key: string | null;
@@ -187,6 +195,7 @@ export interface PortalGalleryTokens {
 export interface PortalGalleryDetail {
   gallery: PortalGallery;
   items: PortalGalleryItem[];
+  categories: PortalGalleryCategory[];
   tokens: PortalGalleryTokens;
   myFavoriteIds: string[];
 }
@@ -278,6 +287,7 @@ export async function fetchPortalGalleryDetail(galleryId: string): Promise<Porta
   return {
     gallery: data.gallery as PortalGallery,
     items: Array.isArray(data.items) ? data.items : [],
+    categories: Array.isArray(data.categories) ? data.categories : [],
     tokens: data.tokens as PortalGalleryTokens,
     myFavoriteIds: Array.isArray(data.myFavoriteIds) ? data.myFavoriteIds.map(String) : [],
   };

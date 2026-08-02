@@ -400,6 +400,13 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
         bundle={detail.tokens}
         allowDownload={detail.gallery.allow_downloads}
         format={detail.gallery.format}
+        categories={detail.categories}
+        hero={{
+          template: detail.gallery.hero_template,
+          title: detail.gallery.title,
+          description: detail.gallery.description,
+          itemId: detail.gallery.cover_item_id,
+        }}
         favorites={favoriteIds}
         canFavorite
         onToggleFavorite={(item, on) => void toggleFavorite(item, on)}

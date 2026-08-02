@@ -34,6 +34,7 @@ type PublicGallery = {
   title: string;
   description: string | null;
   format: string;
+  hero_template: string;
   published_at: string | null;
   allow_downloads: boolean;
   download_quality: string;
@@ -44,6 +45,7 @@ type PublicGallery = {
 type Payload = {
   gallery: PublicGallery;
   items: GalleryViewerItem[];
+  categories: Array<{ id: string; name: string }>;
   tokens: GalleryTokenBundle;
   myFavoriteIds: string[];
 };
@@ -205,9 +207,9 @@ export function PublicGalleryPage({ token }: { token: string }) {
 
   return (
     <main className="pgal">
+      {/* De titel en omschrijving staan in de hero van de viewer; hier alleen
+          de praktische regel eronder, anders staat alles dubbel. */}
       <header className="pgal-hero">
-        <h1>{payload.gallery.title}</h1>
-        {payload.gallery.description && <p className="pgal-desc">{payload.gallery.description}</p>}
         <div className="pgal-meta">
           {payload.gallery.published_at && <span>{dateNL(payload.gallery.published_at)}</span>}
           <span>{payload.items.length} item{payload.items.length === 1 ? '' : 's'}</span>
@@ -225,6 +227,13 @@ export function PublicGalleryPage({ token }: { token: string }) {
           bundle={payload.tokens}
           allowDownload={payload.gallery.allow_downloads}
           format={payload.gallery.format}
+          categories={payload.categories}
+          hero={{
+            template: payload.gallery.hero_template,
+            title: payload.gallery.title,
+            description: payload.gallery.description,
+            itemId: payload.gallery.cover_item_id,
+          }}
           favorites={favoriteIds}
           canFavorite
           onToggleFavorite={(item, on) => void toggleFavorite(item, on)}
