@@ -197,7 +197,10 @@ export interface PortalGalleryDetail {
   items: PortalGalleryItem[];
   categories: PortalGalleryCategory[];
   tokens: PortalGalleryTokens;
+  /** Eigen selectie (privé) en eigen likes; likeCounts is voor iedereen zichtbaar. */
   myFavoriteIds: string[];
+  myLikeIds: string[];
+  likeCounts: Record<string, number>;
 }
 
 export interface PortalData {
@@ -290,13 +293,20 @@ export async function fetchPortalGalleryDetail(galleryId: string): Promise<Porta
     categories: Array.isArray(data.categories) ? data.categories : [],
     tokens: data.tokens as PortalGalleryTokens,
     myFavoriteIds: Array.isArray(data.myFavoriteIds) ? data.myFavoriteIds.map(String) : [],
+    myLikeIds: Array.isArray(data.myLikeIds) ? data.myLikeIds.map(String) : [],
+    likeCounts: (data.likeCounts ?? {}) as Record<string, number>,
   };
 }
 
-/** Favoriet aan/uit op een galerij-item (attributie via de ingelogde contactpersoon). */
-export async function togglePortalGalleryFavorite(galleryId: string, itemId: string, on: boolean): Promise<void> {
+/** Favoriet of like aan/uit (attributie via de ingelogde contactpersoon). */
+export async function togglePortalGalleryFavorite(
+  galleryId: string,
+  itemId: string,
+  on: boolean,
+  reaction: 'favorite' | 'like' = 'favorite',
+): Promise<void> {
   const { data, error } = await supabasePortal.functions.invoke('client-portal', {
-    body: { action: 'toggleGalleryFavorite', galleryId, itemId, on },
+    body: { action: 'toggleGalleryFavorite', galleryId, itemId, on, reaction },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Favoriet bijwerken mislukt'));
   if (!data?.ok) throw new Error(data?.error || 'Favoriet bijwerken mislukt');

@@ -305,6 +305,8 @@ function GalleriesTab({ account }: { account: PortalAccount }) {
 function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGallery; account: PortalAccount; onBack: () => void }) {
   const [detail, setDetail] = useState<PortalGalleryDetail | null>(null);
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [likeIds, setLikeIds] = useState<Set<string>>(new Set());
+  const [likeCounts, setLikeCounts] = useState<Map<string, number>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -322,6 +324,8 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
         if (!active) return;
         setDetail(result);
         setFavoriteIds(new Set(result.myFavoriteIds));
+        setLikeIds(new Set(result.myLikeIds));
+        setLikeCounts(new Map(Object.entries(result.likeCounts ?? {})));
         const delay = galleryRefreshDelayMs(result.tokens);
         if (delay != null) timer = window.setTimeout(load, delay);
       })
@@ -340,13 +344,37 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
       return next;
     });
     try {
-      await togglePortalGalleryFavorite(gallery.id, item.id, on);
+      await togglePortalGalleryFavorite(gallery.id, item.id, on, 'favorite');
     } catch {
       setFavoriteIds(prev => {
         const next = new Set(prev);
         if (on) next.delete(item.id); else next.add(item.id);
         return next;
       });
+    }
+  }
+
+  async function toggleLike(item: GalleryViewerItem, on: boolean) {
+    const shift = (delta: number) => setLikeCounts(prev => {
+      const next = new Map(prev);
+      next.set(item.id, Math.max(0, (next.get(item.id) ?? 0) + delta));
+      return next;
+    });
+    setLikeIds(prev => {
+      const next = new Set(prev);
+      if (on) next.add(item.id); else next.delete(item.id);
+      return next;
+    });
+    shift(on ? 1 : -1);
+    try {
+      await togglePortalGalleryFavorite(gallery.id, item.id, on, 'like');
+    } catch {
+      setLikeIds(prev => {
+        const next = new Set(prev);
+        if (on) next.delete(item.id); else next.add(item.id);
+        return next;
+      });
+      shift(on ? -1 : 1);
     }
   }
 
@@ -409,6 +437,10 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
         }}
         favorites={favoriteIds}
         canFavorite
+        likes={likeIds}
+        likeCounts={likeCounts}
+        canLike
+        onToggleLike={(item, on) => void toggleLike(item, on)}
         onToggleFavorite={(item, on) => void toggleFavorite(item, on)}
         onDownloadItem={downloadItem}
         emptyText="Deze galerij bevat nog geen media."

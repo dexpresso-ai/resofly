@@ -48,6 +48,8 @@ type Payload = {
   categories: Array<{ id: string; name: string }>;
   tokens: GalleryTokenBundle;
   myFavoriteIds: string[];
+  myLikeIds: string[];
+  likeCounts: Record<string, number>;
 };
 
 const SESSION_STORAGE_KEY = 'resofly.gallery.session';
@@ -74,6 +76,8 @@ export function PublicGalleryPage({ token }: { token: string }) {
   const [galleryTitle, setGalleryTitle] = useState('');
   const [pin, setPin] = useState('');
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [likeIds, setLikeIds] = useState<Set<string>>(new Set());
+  const [likeCounts, setLikeCounts] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessionKey] = useState(getSessionKey);
@@ -96,6 +100,8 @@ export function PublicGalleryPage({ token }: { token: string }) {
         const result = data as Payload & { ok: true };
         setPayload(result);
         setFavoriteIds(new Set((result.myFavoriteIds || []).map(String)));
+        setLikeIds(new Set((result.myLikeIds || []).map(String)));
+        setLikeCounts(new Map(Object.entries(result.likeCounts ?? {})));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Galerij laden mislukt');
@@ -117,6 +123,13 @@ export function PublicGalleryPage({ token }: { token: string }) {
     return () => window.clearTimeout(timer);
   }, [payload, pin, load]);
 
+  async function sendReaction(item: GalleryViewerItem, on: boolean, reaction: 'favorite' | 'like') {
+    const { data, error } = await supabase.functions.invoke('gallery-public', {
+      body: { action: 'toggleFavorite', token, pin: pin || undefined, sessionKey, itemId: item.id, on, reaction },
+    });
+    if (error || !data?.ok) throw new Error('Reactie bijwerken mislukt');
+  }
+
   async function toggleFavorite(item: GalleryViewerItem, on: boolean) {
     setFavoriteIds(prev => {
       const next = new Set(prev);
@@ -124,16 +137,37 @@ export function PublicGalleryPage({ token }: { token: string }) {
       return next;
     });
     try {
-      const { data, error } = await supabase.functions.invoke('gallery-public', {
-        body: { action: 'toggleFavorite', token, pin: pin || undefined, sessionKey, itemId: item.id, on },
-      });
-      if (error || !data?.ok) throw new Error('Favoriet bijwerken mislukt');
+      await sendReaction(item, on, 'favorite');
     } catch {
       setFavoriteIds(prev => {
         const next = new Set(prev);
         if (on) next.delete(item.id); else next.add(item.id);
         return next;
       });
+    }
+  }
+
+  async function toggleLike(item: GalleryViewerItem, on: boolean) {
+    const shift = (delta: number) => setLikeCounts(prev => {
+      const next = new Map(prev);
+      next.set(item.id, Math.max(0, (next.get(item.id) ?? 0) + delta));
+      return next;
+    });
+    setLikeIds(prev => {
+      const next = new Set(prev);
+      if (on) next.add(item.id); else next.delete(item.id);
+      return next;
+    });
+    shift(on ? 1 : -1);
+    try {
+      await sendReaction(item, on, 'like');
+    } catch {
+      setLikeIds(prev => {
+        const next = new Set(prev);
+        if (on) next.delete(item.id); else next.add(item.id);
+        return next;
+      });
+      shift(on ? -1 : 1);
     }
   }
 
@@ -236,6 +270,10 @@ export function PublicGalleryPage({ token }: { token: string }) {
           }}
           favorites={favoriteIds}
           canFavorite
+          likes={likeIds}
+          likeCounts={likeCounts}
+          canLike
+          onToggleLike={(item, on) => void toggleLike(item, on)}
           onToggleFavorite={(item, on) => void toggleFavorite(item, on)}
           onDownloadItem={downloadItem}
           emptyText="Deze galerij bevat nog geen media."

@@ -4,7 +4,7 @@
 // De component is puur presentationeel: media-URL's komen uit het meegegeven
 // tokenbundel, favorieten en downloads lopen via callbacks van de host.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, Film, Heart, Play, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Film, Heart, Play, ThumbsUp, X } from 'lucide-react';
 import {
   galleryFileUrl,
   streamIframeUrl,
@@ -82,6 +82,10 @@ export function GalleryViewer({
   favorites,
   favoriteCounts,
   canFavorite,
+  likes,
+  likeCounts,
+  canLike = false,
+  onToggleLike,
   selectable = false,
   selected,
   onToggleSelect,
@@ -106,6 +110,11 @@ export function GalleryViewer({
   /** Favoriet-tellingen per item (beheerweergave in de app). */
   favoriteCounts?: Map<string, number>;
   canFavorite: boolean;
+  /** Likes: eigen likes, de zichtbare teller, en of deze kijker mag liken. */
+  likes?: Set<string>;
+  likeCounts?: Map<string, number>;
+  canLike?: boolean;
+  onToggleLike?: (item: GalleryViewerItem, on: boolean) => void;
   /** Selectiestand voor bulkacties in de beheerweergave. */
   selectable?: boolean;
   selected?: Set<string>;
@@ -258,8 +267,33 @@ export function GalleryViewer({
     (item.stream_uid && item.stream_status === 'ready' && item.stream_playback_base && bundle.streamTokens[item.stream_uid])
     || (!item.stream_uid && item.storage_key);
 
+  /**
+   * De like is de zichtbare waardering: de teller staat er altijd bij zodra
+   * iemand geliket heeft, ook voor kijkers die zelf niet mogen reageren (de
+   * beeldmaker ziet zo in één oogopslag wat aanslaat).
+   */
+  const likeBtn = (item: GalleryViewerItem) => {
+    const isLiked = likes?.has(item.id) ?? false;
+    const count = likeCounts?.get(item.id) ?? 0;
+    if (!canLike && count === 0) return null;
+    return (
+      <button
+        type="button"
+        className={`galv-like${isLiked ? ' is-on' : ''}`}
+        onClick={(e) => { e.stopPropagation(); if (canLike) onToggleLike?.(item, !isLiked); }}
+        disabled={!canLike}
+        title={canLike ? (isLiked ? 'Like weghalen' : 'Like deze foto') : `${count} like${count === 1 ? '' : 's'}`}
+        aria-pressed={isLiked}
+      >
+        <ThumbsUp size={14} fill={isLiked ? 'currentColor' : 'none'} />
+        {count > 0 && <span className="galv-like-count">{count}</span>}
+      </button>
+    );
+  };
+
   const tools = (item: GalleryViewerItem) => (
     <span className="galv-tile-tools">
+      {likeBtn(item)}
       {heart(item)}
       {downloadBtn(item)}
       {renderItemActions?.(item)}
@@ -431,6 +465,7 @@ export function GalleryViewer({
             <div className="galv-lightbox-bar">
               <span className="galv-lightbox-name">{orderedPhotos[lightbox.index].file_name}</span>
               <span className="galv-lightbox-tools">
+                {likeBtn(orderedPhotos[lightbox.index])}
                 {heart(orderedPhotos[lightbox.index])}
                 {downloadBtn(orderedPhotos[lightbox.index])}
                 <span className="galv-lightbox-count">{lightbox.index + 1} / {orderedPhotos.length}</span>
@@ -472,6 +507,7 @@ export function GalleryViewer({
             <div className="galv-lightbox-bar">
               <span className="galv-lightbox-name">{playing.file_name}</span>
               <span className="galv-lightbox-tools">
+                {likeBtn(playing)}
                 {heart(playing)}
                 {downloadBtn(playing)}
               </span>

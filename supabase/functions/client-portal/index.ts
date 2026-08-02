@@ -608,16 +608,26 @@ async function getGalleryDetail(user: { id: string; email: string }, body: Recor
   ]);
 
   const sessionKey = `portal:${user.id}`;
-  const myFavoriteIds = favorites
-    .filter((f) => (contact ? f.contact_id === contact.id : f.session_key === sessionKey))
-    .map((f) => String(f.item_id));
+  const isMine = (row: Record<string, unknown>) =>
+    contact ? row.contact_id === contact.id : row.session_key === sessionKey;
+  const reactionOf = (row: Record<string, unknown>) => String(row.reaction ?? 'favorite');
+
+  // Favorieten zijn persoonlijk; de like-teller is juist wat iederéén ziet.
+  const likeCounts: Record<string, number> = {};
+  for (const row of favorites) {
+    if (reactionOf(row) !== 'like') continue;
+    const id = String(row.item_id);
+    likeCounts[id] = (likeCounts[id] ?? 0) + 1;
+  }
 
   return {
     gallery: sanitizeGallery(gallery),
     items: items.map(sanitizeGalleryItem),
     categories: categories.map((row) => ({ id: row.id, name: row.name })),
     tokens,
-    myFavoriteIds,
+    myFavoriteIds: favorites.filter((f) => reactionOf(f) === 'favorite' && isMine(f)).map((f) => String(f.item_id)),
+    myLikeIds: favorites.filter((f) => reactionOf(f) === 'like' && isMine(f)).map((f) => String(f.item_id)),
+    likeCounts,
   };
 }
 
@@ -625,6 +635,7 @@ async function toggleGalleryFavorite(user: { id: string; email: string }, body: 
   const galleryId = String(body.galleryId || '').trim();
   const itemId = String(body.itemId || '').trim();
   const on = body.on === true;
+  const reaction = String(body.reaction || 'favorite') === 'like' ? 'like' : 'favorite';
   if (!isUuid(itemId)) throw new PortalError('Ongeldig galerij-item.', 400);
   const { gallery, client } = await requireAccessibleGallery(user, galleryId);
 
@@ -649,17 +660,19 @@ async function toggleGalleryFavorite(user: { id: string; email: string }, body: 
       organization_id: gallery.organization_id,
       gallery_id: gallery.id,
       item_id: itemId,
+      reaction,
       ...insert,
     });
     // Dubbel klikken → unieke index botst; dat is geen fout voor de klant.
     if (error && error.code !== '23505') throw error;
   } else {
-    let query = supabaseAdmin.from('gallery_favorites').delete().eq('item_id', itemId).eq('gallery_id', gallery.id);
+    let query = supabaseAdmin.from('gallery_favorites').delete()
+      .eq('item_id', itemId).eq('gallery_id', gallery.id).eq('reaction', reaction);
     query = contact ? query.eq('contact_id', contact.id) : query.eq('session_key', sessionKey);
     const { error } = await query;
     if (error) throw error;
   }
-  return { itemId, on };
+  return { itemId, on, reaction };
 }
 
 function sanitizeGallery(row: Record<string, unknown>) {

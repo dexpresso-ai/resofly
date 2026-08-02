@@ -292,9 +292,23 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
     };
   }, [openId, refreshFavorites]);
 
+  // Favorieten = de persoonlijke selectie van kijkers; likes = de zichtbare
+  // waardering. Beide komen uit dezelfde tabel, gescheiden op `reaction`.
   const favoriteCounts = useMemo(() => {
     const map = new Map<string, number>();
-    for (const fav of favorites) map.set(fav.item_id, (map.get(fav.item_id) ?? 0) + 1);
+    for (const row of favorites) {
+      if ((row.reaction ?? 'favorite') !== 'favorite') continue;
+      map.set(row.item_id, (map.get(row.item_id) ?? 0) + 1);
+    }
+    return map;
+  }, [favorites]);
+
+  const likeCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of favorites) {
+      if (row.reaction !== 'like') continue;
+      map.set(row.item_id, (map.get(row.item_id) ?? 0) + 1);
+    }
     return map;
   }, [favorites]);
 
@@ -1073,6 +1087,8 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
             }}
             favoriteCounts={favoriteCounts}
             canFavorite={false}
+            likeCounts={likeCounts}
+            canLike={false}
             selectable={selectMode}
             selected={selectedIds}
             onToggleSelect={(item) => toggleSelected(item.id)}

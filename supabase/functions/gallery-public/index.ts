@@ -117,13 +117,23 @@ async function getGallery(body: Record<string, unknown>) {
   const sessionKey = normalizeSessionKey(body.sessionKey);
   const [items, favorites, tokens, categories] = await Promise.all([
     selectRows('gallery_items', (q) => q.eq('gallery_id', gallery.id).eq('organization_id', gallery.organization_id).order('sort_order', { ascending: true }).order('created_at', { ascending: true })),
-    sessionKey
-      ? selectRows('gallery_favorites', (q) => q.eq('gallery_id', gallery.id).eq('session_key', sessionKey))
-      : Promise.resolve([] as Record<string, unknown>[]),
+    // Alle reacties van deze galerij: de like-teller is voor iedereen zichtbaar,
+    // de eigen favorieten filteren we er hieronder uit op sessiesleutel.
+    selectRows('gallery_favorites', (q) => q.eq('gallery_id', gallery.id).eq('organization_id', gallery.organization_id)),
     fetchGalleryTokens(gallery.organization_id, gallery.id, gallery.allow_downloads),
     selectRows('gallery_categories', (q) => q.eq('gallery_id', gallery.id).eq('organization_id', gallery.organization_id).order('position', { ascending: true }).order('created_at', { ascending: true }))
       .catch(() => [] as Record<string, unknown>[]),
   ]);
+
+  const reactionOf = (row: Record<string, unknown>) => String(row.reaction ?? 'favorite');
+  const isMine = (row: Record<string, unknown>) => Boolean(sessionKey) && row.session_key === sessionKey;
+
+  const likeCounts: Record<string, number> = {};
+  for (const row of favorites) {
+    if (reactionOf(row) !== 'like') continue;
+    const id = String(row.item_id);
+    likeCounts[id] = (likeCounts[id] ?? 0) + 1;
+  }
 
   return {
     ok: true,
@@ -132,7 +142,9 @@ async function getGallery(body: Record<string, unknown>) {
     items: items.map(sanitizeGalleryItem),
     categories: categories.map((row) => ({ id: row.id, name: row.name })),
     tokens,
-    myFavoriteIds: favorites.map((f) => String(f.item_id)),
+    myFavoriteIds: favorites.filter((f) => reactionOf(f) === 'favorite' && isMine(f)).map((f) => String(f.item_id)),
+    myLikeIds: favorites.filter((f) => reactionOf(f) === 'like' && isMine(f)).map((f) => String(f.item_id)),
+    likeCounts,
   };
 }
 
@@ -142,6 +154,7 @@ async function toggleFavorite(body: Record<string, unknown>) {
 
   const itemId = String(body.itemId || '').trim();
   const on = body.on === true;
+  const reaction = String(body.reaction || 'favorite') === 'like' ? 'like' : 'favorite';
   const sessionKey = normalizeSessionKey(body.sessionKey);
   if (!isUuid(itemId)) throw new PublicError('Ongeldig galerij-item.', 400);
   if (!sessionKey) throw new PublicError('Ongeldige sessie.', 400);
@@ -162,6 +175,7 @@ async function toggleFavorite(body: Record<string, unknown>) {
       organization_id: gallery.organization_id,
       gallery_id: gallery.id,
       item_id: itemId,
+      reaction,
       actor_kind: 'share_link',
       session_key: sessionKey,
       actor_label: visitorName || 'Via deellink',
@@ -173,10 +187,11 @@ async function toggleFavorite(body: Record<string, unknown>) {
       .delete()
       .eq('item_id', itemId)
       .eq('gallery_id', gallery.id)
+      .eq('reaction', reaction)
       .eq('session_key', sessionKey);
     if (error) throw error;
   }
-  return { itemId, on };
+  return { itemId, on, reaction };
 }
 
 // ── Token + pincode ───────────────────────────────────────────────────

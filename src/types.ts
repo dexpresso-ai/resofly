@@ -466,11 +466,15 @@ export interface OrganizationStorageStatus {
   storage_addon_gb: number | null;
 }
 
+/** favorite = persoonlijke selectie van de kijker; like = zichtbare waardering. */
+export type GalleryReaction = 'favorite' | 'like';
+
 export interface GalleryFavorite {
   id: UUID;
   organization_id: UUID;
   gallery_id: UUID;
   item_id: UUID;
+  reaction: GalleryReaction;
   actor_kind: 'portal_contact' | 'share_link';
   contact_id: UUID | null;
   session_key: string | null;
