@@ -4489,9 +4489,16 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .galv-section{display:flex;flex-direction:column;gap:10px}
 .galv-section-title{display:flex;align-items:center;gap:7px;margin:0;font-size:12px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--muted2)}
 
-/* ── Fotogrid ── */
-.galv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:8px}
-.galv-tile{position:relative;margin:0;border-radius:10px;overflow:hidden;background:var(--bg3);border:1px solid var(--border);cursor:zoom-in;aspect-ratio:1/1}
+/* ── Fotoraster: justified rows ──────────────────────────────────────────────
+   Rijen vullen exact de breedte en elke foto houdt haar eigen beeldverhouding:
+   geen bijgesneden randen en geen gaten. De rijhoogte komt uit de TSX (die
+   rekent met de werkelijke containerbreedte); hier alleen de opmaak. */
+.galv-just{display:flex;flex-direction:column;gap:6px}
+.galv-just-row{display:flex;gap:6px;min-width:0}
+.galv-just-row .galv-tile{min-width:0;height:100%}
+.galv-tile{position:relative;margin:0;border-radius:8px;overflow:hidden;background:var(--bg3);cursor:zoom-in}
+.galv-tile.is-draggable{cursor:grab}
+.galv-tile.is-draggable:active{cursor:grabbing}
 .galv-tile img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .25s ease}
 .galv-tile:hover img{transform:scale(1.04)}
 .galv-tile-fallback{display:flex;align-items:center;justify-content:center;height:100%;padding:10px;font-size:11px;color:var(--muted);word-break:break-all;text-align:center}
@@ -4551,7 +4558,8 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .galv-player-video{width:100%;max-height:calc(92vh - 52px);border-radius:10px;background:#000}
 
 @media(max-width:760px){
-  .galv-grid{grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:5px}
+  /* De rijhoogte schaalt al mee in de TSX; hier alleen de tussenruimte. */
+  .galv-just,.galv-just-row{gap:4px}
   .galv-video-card{flex-basis:230px}
   .galv-video-grid{grid-template-columns:1fr;gap:10px}
   .gal-format-options{grid-template-columns:1fr}

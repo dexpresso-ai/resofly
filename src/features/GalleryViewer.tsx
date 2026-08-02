@@ -85,6 +85,8 @@ export function GalleryViewer({
   selectable = false,
   selected,
   onToggleSelect,
+  reorderable = false,
+  onReorder,
   onToggleFavorite,
   onDownloadItem,
   renderItemActions,
@@ -108,6 +110,10 @@ export function GalleryViewer({
   selectable?: boolean;
   selected?: Set<string>;
   onToggleSelect?: (item: GalleryViewerItem) => void;
+  /** Sleepstand: foto's herschikken in de beheerweergave. */
+  reorderable?: boolean;
+  /** `movedId` wordt vóór `targetId` geplaatst. */
+  onReorder?: (movedId: string, targetId: string) => void;
   onToggleFavorite?: (item: GalleryViewerItem, on: boolean) => void;
   onDownloadItem?: (item: GalleryViewerItem) => void;
   /** Extra beheer-acties per item (app: cover kiezen / verwijderen). */
@@ -119,6 +125,7 @@ export function GalleryViewer({
   const [playing, setPlaying] = useState<GalleryViewerItem | null>(null);
   const [activeChip, setActiveChip] = useState<string | null>(null);
   const sectionRefs = useRef(new Map<string, HTMLElement>());
+  const dragItemId = useRef<string | null>(null);
 
   // Items groeperen per categorie; wat geen (bestaande) categorie heeft valt
   // onderaan in "Overig". Zonder categorieën blijft het één doorlopende reeks.
@@ -315,15 +322,29 @@ export function GalleryViewer({
   );
 
   const renderPhotos = (list: GalleryViewerItem[]) => (
-    <div className="galv-grid">
-      {list.map(item => {
+    <JustifiedPhotos
+      photos={list}
+      renderTile={(item, style) => {
         const thumb = itemThumbUrl(item, bundle);
         const isSelected = selected?.has(item.id) ?? false;
         return (
           <figure
             key={item.id}
-            className={`galv-tile${isSelected ? ' is-selected' : ''}`}
-            onClick={() => (selectable ? onToggleSelect?.(item) : openPhoto(item))}
+            className={`galv-tile${isSelected ? ' is-selected' : ''}${reorderable ? ' is-draggable' : ''}`}
+            style={style}
+            draggable={reorderable}
+            onDragStart={reorderable ? () => { dragItemId.current = item.id; } : undefined}
+            onDragOver={reorderable ? (e) => e.preventDefault() : undefined}
+            onDrop={reorderable ? (e) => {
+              e.preventDefault();
+              const from = dragItemId.current;
+              dragItemId.current = null;
+              if (from && from !== item.id) onReorder?.(from, item.id);
+            } : undefined}
+            onClick={() => {
+              if (reorderable) return;
+              if (selectable) onToggleSelect?.(item); else openPhoto(item);
+            }}
           >
             {thumb
               ? <img src={thumb} alt={item.file_name} loading="lazy" />
@@ -332,8 +353,8 @@ export function GalleryViewer({
             {tools(item)}
           </figure>
         );
-      })}
-    </div>
+      }}
+    />
   );
 
   return (
@@ -458,6 +479,112 @@ export function GalleryViewer({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Justified rows: vullen zonder bijsnijden ────────────────────────────────
+//
+// Elke rij krijgt precies de containerbreedte: we tellen de beeldverhoudingen
+// van de foto's in de rij op en leiden daar de rijhoogte uit af. Zo houdt elke
+// foto haar eigen verhouding (geen crop) en blijft er geen loze ruimte over.
+// De laatste rij wordt óók volgemaakt; dreigt die onevenredig hoog te worden
+// (bijvoorbeeld één staande foto), dan schuiven we er foto's uit de rij erboven
+// bij tot het weer in verhouding is.
+
+const PHOTO_GAP = 6;
+const FALLBACK_RATIO = 3 / 2;
+/** Boven deze factor maal de streefhoogte oogt een laatste rij als een uitvergroting. */
+const LAST_ROW_MAX_FACTOR = 1.45;
+
+function aspectRatio(item: GalleryViewerItem): number {
+  if (item.width && item.height && item.width > 0 && item.height > 0) {
+    // Extreme panorama's/stroken begrenzen, anders duwen ze een hele rij plat.
+    return Math.min(4, Math.max(0.35, item.width / item.height));
+  }
+  return FALLBACK_RATIO;
+}
+
+/** Streefhoogte schaalt mee met de breedte: op een telefoon kleinere rijen. */
+function targetRowHeight(width: number): number {
+  if (width < 520) return 150;
+  if (width < 900) return 200;
+  if (width < 1400) return 250;
+  return 290;
+}
+
+type PhotoRow = { items: GalleryViewerItem[]; height: number };
+
+function buildPhotoRows(photos: GalleryViewerItem[], width: number): PhotoRow[] {
+  if (photos.length === 0 || width <= 0) return [];
+  const target = targetRowHeight(width);
+  const heightOf = (list: GalleryViewerItem[]) => {
+    const sum = list.reduce((total, item) => total + aspectRatio(item), 0);
+    if (sum <= 0) return target;
+    return (width - PHOTO_GAP * (list.length - 1)) / sum;
+  };
+
+  const rows: PhotoRow[] = [];
+  let current: GalleryViewerItem[] = [];
+  for (const photo of photos) {
+    current.push(photo);
+    if (heightOf(current) <= target) {
+      rows.push({ items: current, height: heightOf(current) });
+      current = [];
+    }
+  }
+
+  if (current.length > 0) {
+    let height = heightOf(current);
+    // Laatste rij vult ook de volle breedte; te hoog = foto's uit de vorige rij
+    // erbij halen tot het klopt (maximaal een paar keer, nooit oneindig).
+    let guard = 0;
+    while (height > target * LAST_ROW_MAX_FACTOR && rows.length > 0 && guard < 20) {
+      const previous = rows[rows.length - 1];
+      if (previous.items.length <= 1) break;
+      const moved = previous.items.pop() as GalleryViewerItem;
+      previous.height = heightOf(previous.items);
+      current = [moved, ...current];
+      height = heightOf(current);
+      guard += 1;
+    }
+    rows.push({ items: current, height });
+  }
+
+  return rows;
+}
+
+function JustifiedPhotos({ photos, renderTile }: {
+  photos: GalleryViewerItem[];
+  renderTile: (item: GalleryViewerItem, style: React.CSSProperties) => React.ReactNode;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  // Beginbreedte zodat de eerste paint al een zinnige indeling toont; de
+  // ResizeObserver corrigeert 'm meteen daarna (en bij elke venstermaat).
+  const [width, setWidth] = useState(1200);
+
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node) return;
+    const apply = (value: number) => { if (value > 0) setWidth(value); };
+    apply(node.clientWidth);
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(entries => {
+      for (const entry of entries) apply(entry.contentRect.width);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  const rows = useMemo(() => buildPhotoRows(photos, width), [photos, width]);
+
+  return (
+    <div className="galv-just" ref={containerRef}>
+      {rows.map((row, index) => (
+        <div className="galv-just-row" key={row.items[0]?.id ?? index} style={{ height: `${row.height}px` }}>
+          {row.items.map(item => renderTile(item, { flexGrow: aspectRatio(item), flexBasis: 0 }))}
+        </div>
+      ))}
     </div>
   );
 }

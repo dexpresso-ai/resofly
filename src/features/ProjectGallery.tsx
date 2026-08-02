@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import {
-  CheckSquare, ChevronDown, ChevronUp, Copy, Download, Film, FolderTree, HardDrive, Heart,
+  ArrowUpDown, CheckSquare, ChevronDown, ChevronUp, Copy, Download, Film, FolderTree, HardDrive, Heart,
   Image as ImageIcon, Layers, Link2, Loader2, Plus, Settings2, Star, Trash2, Upload,
 } from 'lucide-react';
 import type {
@@ -19,7 +19,7 @@ import { supabase, supabaseAuth } from '../lib/supabase';
 import {
   deleteRow, fetchOrganizationStorageStatus, insertRow, replaceGalleryCategoryPresets,
   selectGalleryCategories, selectGalleryCategoryPresets, selectGalleryFavorites, selectGalleryItems,
-  setGalleryItemsCategory, updateRow,
+  setGalleryItemOrder, setGalleryItemsCategory, updateRow,
 } from '../lib/repository';
 import { deleteR2Object } from '../lib/r2-api';
 import {
@@ -111,6 +111,7 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
   const [showCategories, setShowCategories] = useState(false);
   const [newCategory, setNewCategory] = useState('');
   const [selectMode, setSelectMode] = useState(false);
+  const [orderMode, setOrderMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [favorites, setFavorites] = useState<GalleryFavorite[]>([]);
   const [bundle, setBundle] = useState<GalleryTokenBundle | null>(null);
@@ -674,6 +675,46 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
     }
   }
 
+  // ── Volgorde ──
+  /** Schrijft de opgegeven volgorde weg en houdt de lokale lijst gelijk. */
+  async function persistOrder(ordered: GalleryItem[]) {
+    if (!openGallery) return;
+    const renumbered = ordered.map((item, index) => ({ ...item, sort_order: index }));
+    setItems(renumbered);
+    try {
+      await setGalleryItemOrder(openGallery.id, renumbered.map(i => i.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Volgorde opslaan mislukt.');
+      // Terug naar de opgeslagen waarheid, anders zie je een volgorde die niet bestaat.
+      const fresh = await selectGalleryItems(organizationId, openGallery.id).catch(() => null);
+      if (fresh && openIdRef.current === openGallery.id) setItems(fresh);
+    }
+  }
+
+  function sortItems(mode: 'name' | 'name-desc' | 'oldest' | 'newest') {
+    const sorted = [...items].sort((a, b) => {
+      switch (mode) {
+        case 'name': return a.file_name.localeCompare(b.file_name, 'nl', { numeric: true, sensitivity: 'base' });
+        case 'name-desc': return b.file_name.localeCompare(a.file_name, 'nl', { numeric: true, sensitivity: 'base' });
+        case 'newest': return b.created_at.localeCompare(a.created_at);
+        case 'oldest':
+        default: return a.created_at.localeCompare(b.created_at);
+      }
+    });
+    void persistOrder(sorted);
+  }
+
+  /** Sleep-en-neerzetten: `movedId` komt vóór `targetId` te staan. */
+  function reorderItem(movedId: string, targetId: string) {
+    const from = items.findIndex(i => i.id === movedId);
+    const to = items.findIndex(i => i.id === targetId);
+    if (from < 0 || to < 0 || from === to) return;
+    const next = [...items];
+    const [moved] = next.splice(from, 1);
+    next.splice(from < to ? to - 1 : to, 0, moved);
+    void persistOrder(next);
+  }
+
   // ── Bulkselectie ──
   function toggleSelected(itemId: string) {
     setSelectedIds(prev => {
@@ -865,11 +906,38 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
               </Button>
               {items.length > 0 && categories.length > 0 && (
                 <Button
-                  onClick={() => { setSelectMode(v => !v); setSelectedIds(new Set()); }}
+                  onClick={() => { setSelectMode(v => !v); setSelectedIds(new Set()); setOrderMode(false); }}
                   variant={selectMode ? 'primary' : undefined}
                 >
                   <CheckSquare size={14} /> {selectMode ? 'Selectie stoppen' : 'Indelen'}
                 </Button>
+              )}
+              {items.length > 1 && (
+                <>
+                  <Button
+                    onClick={() => { setOrderMode(v => !v); setSelectMode(false); setSelectedIds(new Set()); }}
+                    variant={orderMode ? 'primary' : undefined}
+                    title="Sleep foto's naar de gewenste plek"
+                  >
+                    <ArrowUpDown size={14} /> {orderMode ? 'Slepen stoppen' : 'Volgorde'}
+                  </Button>
+                  <Select
+                    inline
+                    value=""
+                    disabled={busy}
+                    onChange={(e) => {
+                      const mode = e.target.value as 'name' | 'name-desc' | 'oldest' | 'newest' | '';
+                      if (mode) sortItems(mode);
+                    }}
+                    aria-label="Sorteren"
+                  >
+                    <option value="">Sorteren…</option>
+                    <option value="name">Bestandsnaam (A→Z)</option>
+                    <option value="name-desc">Bestandsnaam (Z→A)</option>
+                    <option value="oldest">Oudste eerst</option>
+                    <option value="newest">Nieuwste eerst</option>
+                  </Select>
+                </>
               )}
               <Button onClick={() => setShowShare(true)}><Link2 size={14} /> Delen</Button>
               <Button onClick={() => setShowSettings(true)}><Settings2 size={14} /> Instellingen</Button>
@@ -929,6 +997,13 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
             />
             <Button type="submit" variant="primary" disabled={!newCategory.trim()}><Plus size={14} /> Toevoegen</Button>
           </form>
+        </div>
+      )}
+
+      {orderMode && (
+        <div className="gal-selectbar">
+          <strong>Volgorde aanpassen</strong>
+          <span className="gal-cats-help">Sleep een foto op de plek waar hij moet komen. Elke wijziging wordt meteen bewaard.</span>
         </div>
       )}
 
@@ -1001,6 +1076,8 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
             selectable={selectMode}
             selected={selectedIds}
             onToggleSelect={(item) => toggleSelected(item.id)}
+            reorderable={orderMode}
+            onReorder={reorderItem}
             onDownloadItem={downloadItem}
             emptyText={onlyFavorites
               ? 'De klant heeft nog geen favorieten gemarkeerd.'

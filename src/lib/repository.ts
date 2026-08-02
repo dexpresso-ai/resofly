@@ -616,6 +616,20 @@ export async function replaceGalleryCategoryPresets(organizationId: UUID, names:
   return (data ?? []) as GalleryCategoryPreset[];
 }
 
+/**
+ * Zet de volledige volgorde van een galerij in één statement. `itemIds` is de
+ * gewenste volgorde; de database schrijft sort_order 0..n-1. Eén round-trip,
+ * dus ook bij honderden foto's geen half toegepaste volgorde.
+ */
+export async function setGalleryItemOrder(galleryId: UUID, itemIds: UUID[]): Promise<void> {
+  if (itemIds.length === 0) return;
+  const { error } = await supabase.rpc('gallery_set_item_order', {
+    p_gallery_id: galleryId,
+    p_item_ids: itemIds,
+  });
+  if (error) throw error;
+}
+
 /** Zet de categorie van meerdere items in één keer (bulk-toewijzing). */
 export async function setGalleryItemsCategory(organizationId: UUID, itemIds: UUID[], categoryId: UUID | null): Promise<void> {
   if (itemIds.length === 0) return;
