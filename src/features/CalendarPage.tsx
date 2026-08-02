@@ -612,11 +612,26 @@ interface EventInteraction {
   pointerStartY: number;
   preview: { dayIndex: number; startMin: number; endMin: number };
   moved: boolean;
+  /** Touch-gebaren tellen meteen als "verplaatst": de lange druk ís al de bevestiging. */
+  touch: boolean;
 }
 
 // Pas slepen pas toe nadat de cursor merkbaar bewogen is; zo opent een gewone
 // klik (met minieme trilling) gewoon het item i.p.v. het ongewild te verzetten.
 const DRAG_THRESHOLD_PX = 4;
+// Touch: vegen moet gewoon blijven scrollen, dus pakken we een sleep pas op
+// nadat de vinger ~⅓ seconde stil ligt (zelfde gebaar als in Google Agenda).
+const TOUCH_HOLD_MS = 320;
+// Beweegt de vinger tijdens dat wachten meer dan dit, dan was het een veeg.
+const TOUCH_HOLD_TOLERANCE_PX = 10;
+// Sleep je tegen de boven-/onderrand van het rooster, dan scrollt het mee.
+const EDGE_SCROLL_ZONE_PX = 68;
+const EDGE_SCROLL_MAX_PX = 16;
+
+/** Korte trilling als een sleep- of selectiegebaar "pakt" (waar ondersteund). */
+function hapticTick() {
+  try { navigator.vibrate?.(12); } catch { /* niet ondersteund — puur cosmetisch */ }
+}
 
 function eventIdentityKey(ev: CalendarExternalEvent): string {
   return `${ev.provider}|${ev.source_id}|${ev.provider_event_id}|${ev.starts_at}`;
@@ -649,6 +664,8 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
 }) {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  // Loopt de tijdselectie via een vinger? Dan houden we de pagina stil.
+  const [touchSelecting, setTouchSelecting] = useState(false);
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   // Hele-dag-rij: standaard alles tonen (zoals Google); inklapbaar bij 3+ lanes.
   const [allDayExpanded, setAllDayExpanded] = useState(true);
@@ -656,6 +673,15 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   const colRefs = useRef<(HTMLDivElement | null)[]>([]);
   const canSelect = canWrite && writeableSources.length > 0;
   const daysKey = days.map(formatISODate).join('|');
+  // Tijdens een sleep lopen de luisteraars op `window`. Die lezen `days` en de
+  // callbacks via refs, zodat de effecten niet bij élke render (dus bij elke
+  // muisbeweging) opnieuw aan- en afgekoppeld worden.
+  const daysRef = useRef(days);
+  daysRef.current = days;
+  const onSelectSlotRef = useRef(onSelectSlot);
+  onSelectSlotRef.current = onSelectSlot;
+  const onMoveEventRef = useRef(onMoveEvent);
+  onMoveEventRef.current = onMoveEvent;
 
   // Slepen/herschalen van bestaande native afspraken.
   const [interaction, setInteraction] = useState<EventInteraction | null>(null);
@@ -691,38 +717,109 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
     return { dayIndex, minutes: frac * DAY_MINUTES };
   }, []);
 
-  const beginEventInteraction = useCallback((e: React.PointerEvent, ev: CalendarExternalEvent, dayIndex: number, mode: EventInteractionMode) => {
-    if (e.pointerType === 'touch') return; // op touch: tikken opent, vegen blijft scrollen
-    if (e.button !== 0) return;
-    if (!canDragEvent(ev)) return;
+  // ── Lange druk op touch ────────────────────────────────────────────────
+  // Zolang we wachten annuleert elke noemenswaardige beweging de druk, zodat
+  // een veeg over een afspraak gewoon het rooster scrollt i.p.v. te verslepen.
+  // `cancelHold` ruimt de lopende druk volledig op (timer én luisteraars); met
+  // alleen de timer wissen zou een tweede vinger de eerste kunnen slopen.
+  const holdCancelRef = useRef<(() => void) | null>(null);
+  const cancelHold = useCallback(() => { holdCancelRef.current?.(); }, []);
+  const startHold = useCallback((x: number, y: number, arm: () => void) => {
+    cancelHold();
+    let timer = 0;
+    function detach() {
+      window.clearTimeout(timer);
+      if (holdCancelRef.current === detach) holdCancelRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', detach);
+      window.removeEventListener('pointercancel', detach);
+    }
+    function onMove(ev: PointerEvent) {
+      if (Math.hypot(ev.clientX - x, ev.clientY - y) > TOUCH_HOLD_TOLERANCE_PX) detach();
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', detach);
+    window.addEventListener('pointercancel', detach);
+    timer = window.setTimeout(() => { detach(); hapticTick(); arm(); }, TOUCH_HOLD_MS);
+    holdCancelRef.current = detach;
+  }, [cancelHold]);
+  useEffect(() => cancelHold, [cancelHold]);
+
+  // ── Meescrollen bij de randen ──────────────────────────────────────────
+  const autoScrollDyRef = useRef(0);
+  const autoScrollRafRef = useRef<number | null>(null);
+  const stopAutoScroll = useCallback(() => {
+    autoScrollDyRef.current = 0;
+    if (autoScrollRafRef.current != null) { cancelAnimationFrame(autoScrollRafRef.current); autoScrollRafRef.current = null; }
+  }, []);
+  const autoScrollFor = useCallback((clientY: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const topGap = clientY - r.top;
+    const bottomGap = r.bottom - clientY;
+    let dy = 0;
+    if (topGap < EDGE_SCROLL_ZONE_PX) dy = -EDGE_SCROLL_MAX_PX * Math.min(1, (EDGE_SCROLL_ZONE_PX - topGap) / EDGE_SCROLL_ZONE_PX);
+    else if (bottomGap < EDGE_SCROLL_ZONE_PX) dy = EDGE_SCROLL_MAX_PX * Math.min(1, (EDGE_SCROLL_ZONE_PX - bottomGap) / EDGE_SCROLL_ZONE_PX);
+    autoScrollDyRef.current = dy;
+    if (dy !== 0 && autoScrollRafRef.current == null) {
+      const step = () => {
+        const sc = scrollRef.current;
+        const d = autoScrollDyRef.current;
+        if (!sc || d === 0) { autoScrollRafRef.current = null; return; }
+        sc.scrollTop += d;
+        autoScrollRafRef.current = requestAnimationFrame(step);
+      };
+      autoScrollRafRef.current = requestAnimationFrame(step);
+    }
+  }, []);
+  useEffect(() => stopAutoScroll, [stopAutoScroll]);
+
+  const armEventInteraction = useCallback((clientX: number, clientY: number, ev: CalendarExternalEvent, dayIndex: number, mode: EventInteractionMode, touch: boolean) => {
     const dayStart = startOfDay(days[dayIndex]).getTime();
     const startMin = (new Date(ev.starts_at).getTime() - dayStart) / 60000;
     const endMin = (new Date(ev.ends_at).getTime() - dayStart) / 60000;
     if (startMin < 0 || endMin > DAY_MINUTES) return; // meerdaagse blokken: niet slepen
-    e.preventDefault();
-    e.stopPropagation();
-    const hit = pointerToCol(e.clientX, e.clientY);
+    const hit = pointerToCol(clientX, clientY);
     const grabOffsetMin = hit ? hit.minutes - startMin : 0;
     const next: EventInteraction = {
       mode, event: ev, originDayIndex: dayIndex,
       originStartMin: startMin, originEndMin: endMin, grabOffsetMin,
-      pointerStartX: e.clientX, pointerStartY: e.clientY,
-      preview: { dayIndex, startMin, endMin }, moved: false,
+      pointerStartX: clientX, pointerStartY: clientY,
+      preview: { dayIndex, startMin, endMin }, moved: false, touch,
     };
     interactionRef.current = next;
     setInteraction(next);
-  }, [canDragEvent, days, pointerToCol]);
+  }, [days, pointerToCol]);
+
+  const beginEventInteraction = useCallback((e: React.PointerEvent, ev: CalendarExternalEvent, dayIndex: number, mode: EventInteractionMode) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (!canDragEvent(ev)) return;
+    if (interactionRef.current || dragRef.current) return; // tweede vinger negeren
+    e.stopPropagation(); // nooit ook nog een tijdselectie eronder starten
+    if (e.pointerType === 'mouse') {
+      e.preventDefault();
+      armEventInteraction(e.clientX, e.clientY, ev, dayIndex, mode, false);
+      return;
+    }
+    // Touch/pen: pas oppakken na een lange druk. Tot dan blijft scrollen werken
+    // en opent een gewone tik het item nog steeds.
+    const { clientX, clientY } = e;
+    startHold(clientX, clientY, () => armEventInteraction(clientX, clientY, ev, dayIndex, mode, true));
+  }, [canDragEvent, armEventInteraction, startHold]);
 
   // Pointermove/-up wereldwijd volgen zolang er een interactie loopt.
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   useEffect(() => {
     if (!interaction) return;
     const snap = (m: number) => Math.round(m / SNAP_MIN) * SNAP_MIN;
-    function onMove(e: PointerEvent) {
+    function applyPointer(clientX: number, clientY: number) {
       const it = interactionRef.current;
       if (!it) return;
-      // Pas reageren zodra de drempel gepasseerd is (anders blijft het een klik).
-      if (!it.moved && Math.hypot(e.clientX - it.pointerStartX, e.clientY - it.pointerStartY) <= DRAG_THRESHOLD_PX) return;
-      const hit = pointerToCol(e.clientX, e.clientY);
+      // Pas reageren zodra de cursor merkbaar bewogen is (anders blijft het een
+      // klik). Bij touch is de lange druk zelf al de bevestiging.
+      if (!it.moved && !it.touch && Math.hypot(clientX - it.pointerStartX, clientY - it.pointerStartY) <= DRAG_THRESHOLD_PX) return;
+      const hit = pointerToCol(clientX, clientY);
       if (!hit) return;
       let preview: EventInteraction['preview'];
       if (it.mode === 'move') {
@@ -740,33 +837,60 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
         s = Math.min(it.originEndMin - MIN_EVENT_MINUTES, Math.max(0, s));
         preview = { dayIndex: it.originDayIndex, startMin: s, endMin: it.originEndMin };
       }
+      if (it.moved && preview.dayIndex === it.preview.dayIndex && preview.startMin === it.preview.startMin && preview.endMin === it.preview.endMin) return;
       const updated: EventInteraction = { ...it, preview, moved: true };
       interactionRef.current = updated;
       setInteraction(updated);
     }
+    function onMove(e: PointerEvent) {
+      lastPointerRef.current = { x: e.clientX, y: e.clientY };
+      // Sleep je tegen de rand, dan scrollt het rooster mee; de rAF-lus hieronder
+      // houdt het voorbeeld bijwerken terwijl het rooster onder de vinger schuift.
+      autoScrollFor(e.clientY);
+      applyPointer(e.clientX, e.clientY);
+    }
+    // Herbereken het voorbeeld ook tijdens het randscrollen (vinger staat stil).
+    let raf = requestAnimationFrame(function tick() {
+      const p = lastPointerRef.current;
+      if (p && autoScrollDyRef.current !== 0) applyPointer(p.x, p.y);
+      raf = requestAnimationFrame(tick);
+    });
     function onUp() {
       const it = interactionRef.current;
       interactionRef.current = null;
+      lastPointerRef.current = null;
+      stopAutoScroll();
       setInteraction(null);
-      if (!it || !it.moved) return; // gewone klik → laat onClick het item openen
-      draggedRef.current = true; // onderdruk de klik die direct na het slepen volgt
-      window.setTimeout(() => { draggedRef.current = false; }, 0);
+      if (!it) return;
+      // Na een touch-oppak nooit meteen het detailpaneel openen: de lange druk
+      // was een sleepgebaar, geen tik.
+      if (it.moved || it.touch) {
+        draggedRef.current = true; // onderdruk de klik die direct na het slepen volgt
+        window.setTimeout(() => { draggedRef.current = false; }, 0);
+      }
+      if (!it.moved) return; // gewone klik → laat onClick het item openen
       const pv = it.preview;
       const changed = pv.dayIndex !== it.originDayIndex || pv.startMin !== it.originStartMin || pv.endMin !== it.originEndMin;
       if (!changed) return; // teruggesleept naar de oorspronkelijke plek: niets opslaan
-      const day = days[pv.dayIndex] ?? days[it.originDayIndex];
+      const shown = daysRef.current;
+      const day = shown[pv.dayIndex] ?? shown[it.originDayIndex];
+      if (!day) return;
       const base = startOfDay(day).getTime();
       const startIso = new Date(base + pv.startMin * 60000).toISOString();
       const endIso = new Date(base + pv.endMin * 60000).toISOString();
-      void onMoveEvent(it.event, startIso, endIso);
+      void onMoveEventRef.current(it.event, startIso, endIso);
     }
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
     return () => {
+      cancelAnimationFrame(raf);
+      stopAutoScroll();
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
     };
-  }, [interaction !== null, days, onMoveEvent, pointerToCol]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [interaction !== null, daysKey, pointerToCol, autoScrollFor, stopAutoScroll]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Meet de zichtbare hoogte en kies een rijhoogte zó dat de werkdag die hoogte
   // vult (ruime blokken die het scherm vullen); de volledige dag blijft scrollbaar
@@ -816,34 +940,120 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
     scrollEl.scrollTo({ top: Math.max(0, Math.round(target)), behavior: 'instant' });
   }, [daysKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleMouseDown = useCallback((dayIndex: number, slot: number) => {
-    if (!canSelect) return;
-    if (interactionRef.current) return; // niet selecteren terwijl een item gesleept wordt
-    setDrag({ dayIndex, startSlot: slot, endSlot: slot });
+  // ── Tijd selecteren door te slepen (muis, pen én vinger) ───────────────
+  // Eén pointer-gebaar voor alle invoerapparaten. Op de muis begint de selectie
+  // meteen; op touch maakt een korte tik een standaardblok en selecteert
+  // ingedrukt-houden-en-slepen een eigen tijdvak (zoals Google Agenda).
+  const dragRef = useRef<DragState | null>(null);
+  const slotFromClientY = useCallback((dayIndex: number, clientY: number): number | null => {
+    const el = colRefs.current[dayIndex];
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (r.height <= 0) return null;
+    const frac = Math.min(0.999999, Math.max(0, (clientY - r.top) / r.height));
+    return Math.floor(frac * TOTAL_SLOTS);
+  }, []);
+
+  const armSelection = useCallback((dayIndex: number, clientY: number, touch: boolean) => {
+    const slot = slotFromClientY(dayIndex, clientY);
+    if (slot == null) return;
+    const next: DragState = { dayIndex, startSlot: slot, endSlot: slot };
+    dragRef.current = next;
+    setDrag(next);
     setIsDragging(true);
-  }, [canSelect]);
+    setTouchSelecting(touch);
+  }, [slotFromClientY]);
 
-  const handleMouseEnter = useCallback((_dayIndex: number, slot: number) => {
-    if (!isDragging || !drag) return;
-    if (_dayIndex !== drag.dayIndex) return;
-    setDrag(prev => prev ? { ...prev, endSlot: slot } : null);
-  }, [isDragging, drag]);
-
-  const handleMouseUp = useCallback(() => {
-    if (drag && isDragging) {
-      const minS = Math.min(drag.startSlot, drag.endSlot);
-      const maxS = Math.max(drag.startSlot, drag.endSlot);
-      onSelectSlot(days[drag.dayIndex], minS, maxS);
+  const beginSelection = useCallback((e: React.PointerEvent, dayIndex: number) => {
+    if (!canSelect) return;
+    if (interactionRef.current || dragRef.current) return; // niet selecteren tijdens een sleep
+    // Op een bestaand item, boekingsblok of "+N"-chip nooit een selectie starten.
+    if ((e.target as HTMLElement).closest('.tb-ev,.tb-booking-slot,.tb-overflow-chip')) return;
+    const { clientX, clientY } = e;
+    if (e.pointerType === 'mouse') {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      armSelection(dayIndex, clientY, false);
+      return;
     }
-    setIsDragging(false);
-    setDrag(null);
-  }, [drag, isDragging, days, onSelectSlot]);
+    // Touch/pen: onderscheid tik (standaardblok) van lange druk (eigen tijdvak).
+    let isTap = true;
+    function cleanup() {
+      window.removeEventListener('pointermove', onTapMove);
+      window.removeEventListener('pointerup', onTapUp);
+      window.removeEventListener('pointercancel', cleanup);
+    }
+    function onTapMove(ev: PointerEvent) {
+      if (Math.hypot(ev.clientX - clientX, ev.clientY - clientY) > TOUCH_HOLD_TOLERANCE_PX) { isTap = false; cleanup(); }
+    }
+    function onTapUp() {
+      cleanup();
+      if (!isTap || dragRef.current) return; // de lange druk heeft het overgenomen
+      const slot = slotFromClientY(dayIndex, clientY);
+      const day = daysRef.current[dayIndex];
+      if (slot != null && day) onSelectSlotRef.current(day, slot, slot);
+    }
+    window.addEventListener('pointermove', onTapMove);
+    window.addEventListener('pointerup', onTapUp);
+    window.addEventListener('pointercancel', cleanup);
+    startHold(clientX, clientY, () => { isTap = false; cleanup(); armSelection(dayIndex, clientY, true); });
+  }, [canSelect, armSelection, startHold, slotFromClientY]);
 
   useEffect(() => {
-    const up = () => { if (isDragging) handleMouseUp(); };
-    window.addEventListener('mouseup', up);
-    return () => window.removeEventListener('mouseup', up);
-  }, [isDragging, handleMouseUp]);
+    if (!isDragging) return;
+    function apply(clientY: number) {
+      const cur = dragRef.current;
+      if (!cur) return;
+      const slot = slotFromClientY(cur.dayIndex, clientY);
+      if (slot == null || slot === cur.endSlot) return;
+      const next: DragState = { ...cur, endSlot: slot };
+      dragRef.current = next;
+      setDrag(next);
+    }
+    function onMove(e: PointerEvent) {
+      lastPointerRef.current = { x: e.clientX, y: e.clientY };
+      autoScrollFor(e.clientY);
+      apply(e.clientY);
+    }
+    let raf = requestAnimationFrame(function tick() {
+      const p = lastPointerRef.current;
+      if (p && autoScrollDyRef.current !== 0) apply(p.y);
+      raf = requestAnimationFrame(tick);
+    });
+    function onUp() {
+      const cur = dragRef.current;
+      dragRef.current = null;
+      lastPointerRef.current = null;
+      stopAutoScroll();
+      setIsDragging(false);
+      setDrag(null);
+      setTouchSelecting(false);
+      if (!cur) return;
+      const day = daysRef.current[cur.dayIndex];
+      if (!day) return;
+      onSelectSlotRef.current(day, Math.min(cur.startSlot, cur.endSlot), Math.max(cur.startSlot, cur.endSlot));
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      cancelAnimationFrame(raf);
+      stopAutoScroll();
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [isDragging, daysKey, slotFromClientY, autoScrollFor, stopAutoScroll]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Zolang een touch-gebaar loopt mag de pagina niet meescrollen — anders
+  // schuift het rooster onder je vinger vandaan tijdens het slepen.
+  const blockPageScroll = touchSelecting || interaction?.touch === true;
+  useEffect(() => {
+    if (!blockPageScroll) return;
+    const block = (e: TouchEvent) => { if (e.cancelable) e.preventDefault(); };
+    window.addEventListener('touchmove', block, { passive: false });
+    return () => window.removeEventListener('touchmove', block);
+  }, [blockPageScroll]);
 
   const hourLabels: { hour: number; minutes: number; label: string }[] = [];
   for (let s = 0; s < TOTAL_SLOTS; s++) {
@@ -899,7 +1109,7 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   } as CSSProperties;
 
   return (
-    <div className={`tb-container${days.length === 1 ? ' tb-single-day' : ''}${days.length <= THREE_DAY_COUNT ? ' tb-few-days' : ''}`} style={gridStyle} onMouseLeave={() => { if (isDragging) handleMouseUp(); }}>
+    <div className={`tb-container${days.length === 1 ? ' tb-single-day' : ''}${days.length <= THREE_DAY_COUNT ? ' tb-few-days' : ''}${isDragging || interaction ? ' tb-gesturing' : ''}${blockPageScroll ? ' tb-touch-gesture' : ''}`} style={gridStyle}>
       <div className="tb-scroll" ref={scrollRef}>
         <div className="tb-canvas">
           <div className="tb-day-headers">
@@ -972,7 +1182,8 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
               const isToday = today(day);
               const nowFrac = isToday ? dateToVisibleDayFraction(day, now) : 0;
               return (
-                <div className={`tb-col${isToday ? ' tb-today-col' : ''}`} key={di} ref={el => { colRefs.current[di] = el; }} style={{ gridColumn: di + 2, gridRow: `1 / span ${TOTAL_SLOTS}` }}>
+                <div className={`tb-col${isToday ? ' tb-today-col' : ''}`} key={di} ref={el => { colRefs.current[di] = el; }} style={{ gridColumn: di + 2, gridRow: `1 / span ${TOTAL_SLOTS}` }}
+                  onPointerDown={canSelect ? e => beginSelection(e, di) : undefined}>
                   {hourLabels.map((h, si) => {
                     const selected = isInSelection(di, si);
                     return (
@@ -980,8 +1191,6 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                         className={`tb-cell${h.minutes === 0 ? ' tb-cell-hour' : ' tb-cell-half'}${selected ? ' tb-cell-sel' : ''}${canSelect ? ' tb-cell-can' : ''}`}
                         key={si}
                         style={{ top: `calc(var(--tb-h) * ${si})`, height: 'var(--tb-h)' }}
-                        onMouseDown={() => handleMouseDown(di, si)}
-                        onMouseEnter={() => handleMouseEnter(di, si)}
                       >
                         {selected && si === Math.min(drag!.startSlot, drag!.endSlot) && (
                           <span className="tb-sel-label">{selectionLabel()}</span>
@@ -2325,7 +2534,10 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   // `fresh` = na een mutatie of handmatig verversen: cache leegmaken en live ophalen.
   // Zonder `fresh` (bij navigeren) tonen we een nog verse cache direct — geen spinner,
   // geen netwerk — en dedupliceert de laag eronder de dubbele fetch bij het openen.
-  const refreshEventsOnly = useCallback(async (opts?: { fresh?: boolean }) => {
+  // `silent` = na een mutatie die al optimistisch in beeld staat: wel opnieuw
+  // ophalen, maar zónder laadindicator, zodat het rooster niet zichtbaar
+  // "knippert" nadat je net hebt opgeslagen.
+  const refreshEventsOnly = useCallback(async (opts?: { fresh?: boolean; silent?: boolean }) => {
     // Altijd het venster dat NU in beeld staat (via de ref), nooit dat van de
     // render waarin een aanroepende callback toevallig gemaakt is.
     const { start, end } = rangeRef.current;
@@ -2338,14 +2550,15 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       const cached = getCachedCalendarEvents(organizationId, start, end);
       if (cached) { setEvents(cached); setError(null); setEventsLoading(false); return; }
     }
-    setEventsLoading(true); setError(null);
+    if (!opts?.silent) setEventsLoading(true);
+    setError(null);
     try {
       const rows = await listCalendarEventsCached(organizationId, start, end);
       if (seq !== eventsRequestRef.current) return; // een nieuwere aanvraag is leidend
       setEvents(rows);
     }
     catch (err) { if (seq === eventsRequestRef.current) setError(err instanceof Error ? err.message : 'Agenda-events laden mislukt.'); }
-    finally { if (seq === eventsRequestRef.current) setEventsLoading(false); }
+    finally { if (seq === eventsRequestRef.current && !opts?.silent) setEventsLoading(false); }
   }, [organizationId]);
   async function connect(provider: CalendarProvider) {
     if (!canWrite) { setError('Je hebt alleen-lezen toegang tot deze organisatie.'); return; }
@@ -2542,13 +2755,15 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         await onSetEventLink(updated, link.client_id, link.project_id, link.track_time);
       }
     }
-    // Het bijgewerkte item meteen in het rooster verwerken, zodat de agenda niet
-    // even leeg/verouderd staat terwijl het verse ophalen nog loopt.
+    // Het bijgewerkte item meteen in het rooster verwerken en terug naar de
+    // agenda: opslaan is klaar, dus het paneel hoeft niet open te blijven.
+    // Het verse ophalen loopt stil op de achtergrond door (geen spinner, geen
+    // wachttijd) — wat je ziet staat al goed.
     const previousKey = eventIdentityKey(event);
     setEvents(prev => prev.map(e => eventIdentityKey(e) === previousKey ? updated : e));
-    setSelectedEvent(updated);
+    setSelectedEvent(null);
     setMessage('Afspraak bijgewerkt.');
-    refreshEventsOnly({ fresh: true }).catch(() => {});
+    refreshEventsOnly({ fresh: true, silent: true }).catch(() => {});
   }, [eventIsEditable, organizationId, data.calendarEventLinks, onSetEventLink, refreshEventsOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function removeEvent(event: CalendarExternalEvent) {
@@ -2615,10 +2830,12 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
       // `events` staat al optimistisch goed; alleen het geopende detailpaneel moet
       // nog naar het bijgewerkte item wijzen (dat draagt nog de oude starttijd).
       setSelectedEvent(prev => (prev && eventIdentityKey(prev) === originalKey) ? updated : prev);
-      await refreshEventsOnly({ fresh: true });
+      // Stil bijwerken: het blok staat al op de nieuwe plek, dus een spinner of
+      // wachttijd zou het slepen alleen maar stroef laten aanvoelen.
+      refreshEventsOnly({ fresh: true, silent: true }).catch(() => {});
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Verplaatsen mislukt.');
-      await refreshEventsOnly({ fresh: true });
+      await refreshEventsOnly({ fresh: true }); // draai de optimistische verschuiving terug
     }
   }, [eventIsEditable, organizationId, data.calendarEventLinks, onSetEventLink, refreshEventsOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
