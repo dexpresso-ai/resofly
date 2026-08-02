@@ -100,6 +100,7 @@ import { PublicQuotePage } from './features/PublicQuotePage';
 import { PublicInvoicePage } from './features/PublicInvoicePage';
 import { PublicContractPage } from './features/PublicContractPage';
 import { PublicBookingPage } from './features/PublicBookingPage';
+import { PublicGalleryPage } from './features/PublicGalleryPage';
 import { Contracts } from './features/Contracts';
 import { ClientPortal } from './features/portal/ClientPortal';
 import { Archive, Settings, type SettingsTab } from './features/SimplePages';
@@ -133,7 +134,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id' | 'notes' | 'due_date' | 'lines'>> }
   | null;
 
-const emptyData: AppData = { clients: [], clientContacts: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], savedReports: [], companySettings: null };
+const emptyData: AppData = { clients: [], clientContacts: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], galleries: [], savedReports: [], companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
@@ -235,6 +236,14 @@ function getPublicBookingTokenFromLocation(): string | null {
   const queryToken = url.searchParams.get('booking_token');
   if (queryToken) return queryToken;
   const match = url.pathname.match(/^\/booking\/([^/]+)\/?$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function getPublicGalleryTokenFromLocation(): string | null {
+  const url = new URL(window.location.href);
+  const queryToken = url.searchParams.get('gallery_token');
+  if (queryToken) return queryToken;
+  const match = url.pathname.match(/^\/gallerij\/([^/]+)\/?$/);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -381,6 +390,7 @@ function App() {
   const publicInvoiceToken = getPublicInvoiceTokenFromLocation();
   const publicContractToken = getPublicContractTokenFromLocation();
   const publicBookingToken = getPublicBookingTokenFromLocation();
+  const publicGalleryToken = getPublicGalleryTokenFromLocation();
   const portalRoute = isClientPortalRoute();
 
   // Track which user + organization we have loaded data for, so auth events do not
@@ -726,6 +736,7 @@ function App() {
   if (publicInvoiceToken) return <PublicInvoicePage token={publicInvoiceToken} />;
   if (publicContractToken) return <PublicContractPage token={publicContractToken} />;
   if (publicBookingToken) return <PublicBookingPage token={publicBookingToken} />;
+  if (publicGalleryToken) return <PublicGalleryPage token={publicGalleryToken} />;
   if (!sessionReady) return <BootLoading />;
   if (!loggedIn) return <Login />;
   // Zolang de werkruimte nog wordt geladen weten we nog niet of er een organisatie
@@ -1868,8 +1879,13 @@ function App() {
     // brede canWrite hierboven, zodat elke pagina automatisch het juiste niveau
     // meekrijgt zonder dat elke prop apart aangepast hoeft te worden.
     const canWrite = orgCanWrite && permissions.canWritePage(page);
+    // Contracten horen bij de financiële module, ook als je ze vanaf een project
+    // bekijkt. De projectpagina leunt dus niet op canWrite hierboven (dat is
+    // 'projects'), maar op het niveau van 'finance'.
+    const canReadContracts = permissions.canRead('finance');
+    const canWriteContracts = orgCanWrite && permissions.canWrite('finance');
     if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} permissions={permissions} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} />;
-    if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
+    if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} canReadContracts={canReadContracts} canWriteContracts={canWriteContracts} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
     if (page === 'projects') return <ProjectsListPage data={data} canWrite={canWrite} onNewProject={() => ensureCanWrite() && setEdit({kind:'project'})} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} onEditProject={(item) => setEdit({kind:'project', item})}/>;
     if (page === 'project-planning') return <ProjectsPlanningPage data={data} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} />;
     if (page === 'client' && client) return <ClientDetailPage data={data} client={client} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewNote={(folderId) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(folderId) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditDocument={openDocument} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread}/>;

@@ -146,6 +146,47 @@ export interface PortalAccount {
   quotes: PortalQuote[];
   contracts: PortalContract[];
   tickets: PortalTicket[];
+  galleries: PortalGallery[];
+}
+
+export interface PortalGallery {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string | null;
+  published_at: string | null;
+  allow_downloads: boolean;
+  download_quality: string;
+  cover_item_id: string | null;
+  expires_at: string | null;
+}
+
+export interface PortalGalleryItem {
+  id: string;
+  media_type: 'photo' | 'video';
+  file_name: string;
+  storage_key: string | null;
+  preview_key: string | null;
+  thumb_key: string | null;
+  width: number | null;
+  height: number | null;
+  duration_seconds: number | null;
+  stream_uid: string | null;
+  stream_status: string | null;
+  stream_playback_base: string | null;
+}
+
+export interface PortalGalleryTokens {
+  mediaToken: string;
+  streamTokens: Record<string, string>;
+  exp: number;
+}
+
+export interface PortalGalleryDetail {
+  gallery: PortalGallery;
+  items: PortalGalleryItem[];
+  tokens: PortalGalleryTokens;
+  myFavoriteIds: string[];
 }
 
 export interface PortalData {
@@ -223,6 +264,30 @@ export async function fetchPortalProjectDetail(projectId: string): Promise<Porta
   if (error) throw new Error(await extractFunctionError(error, 'Project laden mislukt'));
   if (!data?.ok) throw new Error(data?.error || 'Project laden mislukt');
   return { project: data.project as PortalProject, tasks: Array.isArray(data.tasks) ? data.tasks : [] };
+}
+
+/** Galerij-detail: items + kijk-/downloadtokens + eigen favorieten. */
+export async function fetchPortalGalleryDetail(galleryId: string): Promise<PortalGalleryDetail> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'getGalleryDetail', galleryId },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Galerij laden mislukt'));
+  if (!data?.ok) throw new Error(data?.error || 'Galerij laden mislukt');
+  return {
+    gallery: data.gallery as PortalGallery,
+    items: Array.isArray(data.items) ? data.items : [],
+    tokens: data.tokens as PortalGalleryTokens,
+    myFavoriteIds: Array.isArray(data.myFavoriteIds) ? data.myFavoriteIds.map(String) : [],
+  };
+}
+
+/** Favoriet aan/uit op een galerij-item (attributie via de ingelogde contactpersoon). */
+export async function togglePortalGalleryFavorite(galleryId: string, itemId: string, on: boolean): Promise<void> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'toggleGalleryFavorite', galleryId, itemId, on },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Favoriet bijwerken mislukt'));
+  if (!data?.ok) throw new Error(data?.error || 'Favoriet bijwerken mislukt');
 }
 
 /**

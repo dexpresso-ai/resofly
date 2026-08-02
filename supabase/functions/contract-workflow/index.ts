@@ -6,6 +6,13 @@ import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/email
 import { renderContractPdf, bytesToBase64, sha256HexBytes } from '../_shared/contractPdf.ts';
 import { sanitizeContractHtml } from '../_shared/htmlSanitize.ts';
 import { buildContractTokens, fillContractTokens } from '../_shared/contractTokens.ts';
+import {
+  convertContractDocxToPdf,
+  isOfficeContract,
+  loadLinkedProjectNames,
+  OfficeContractError,
+  storeContractPdf,
+} from '../_shared/contractOffice.ts';
 
 // ============================================================
 // contract-workflow (ingelogd): verstuurt een contract ter ondertekening en
@@ -33,7 +40,14 @@ type ContractRow = {
   signed_document_sha256: string | null;
   amount_cents: number | null;
   currency: string | null;
+  editor_mode: string | null;
+  body_storage_key: string | null;
 };
+
+// Eén literal (geen concatenatie): postgrest-js leidt het rijtype af uit de
+// letterlijke select-string, dus samengestelde strings vallen terug op `unknown`.
+const CONTRACT_COLUMNS =
+  'id,organization_id,client_id,number,title,body,date,valid_until,status,signed_storage_provider,signed_storage_key,signed_pdf_file_name,signed_pdf_size_bytes,signed_pdf_data_base64,signed_document_sha256,amount_cents,currency,editor_mode,body_storage_key' as const;
 
 type ClientRow = { id: string; name: string; contact_name: string | null; email: string | null };
 type CompanyRow = {
@@ -146,6 +160,13 @@ serve(async (req) => {
         return json(req, { ok: false, error: `Onbekende contract workflow action: ${action}` }, 400);
     }
   } catch (error) {
+    // Conversie-/opslagfouten van Word-contracten zijn voor de gebruiker
+    // begrijpelijk én oplosbaar (documentserver start op), dus die tonen we
+    // letterlijk in plaats van als algemene serverfout.
+    if (error instanceof OfficeContractError) {
+      console.error('contract-workflow office error', error.message);
+      return json(req, { ok: false, error: error.message }, 502);
+    }
     const status = error instanceof HttpError ? error.status : 500;
     const internalMessage = error instanceof Error ? error.message : 'Onbekende fout.';
     if (status >= 500) console.error('contract-workflow error', internalMessage);
@@ -173,8 +194,14 @@ async function sendContractForSignature(
     throw new HttpError('Dit contract kan niet meer ter ondertekening worden verstuurd.', 409);
   }
   if (!contract.client_id) throw new HttpError('Dit contract heeft geen klant gekoppeld.', 422);
-  if (!String(contract.title || '').trim() || !String(contract.body || '').trim()) {
-    throw new HttpError('Vul een titel en inhoud in voordat je het contract verstuurt.', 422);
+  if (!String(contract.title || '').trim()) {
+    throw new HttpError('Vul een titel in voordat je het contract verstuurt.', 422);
+  }
+  // Word-contracten hebben geen HTML-body; hun inhoud is het .docx op R2.
+  if (isOfficeContract(contract)) {
+    if (!contract.body_storage_key) throw new HttpError('Dit contract heeft nog geen Word-document.', 422);
+  } else if (!String(contract.body || '').trim()) {
+    throw new HttpError('Vul de inhoud in voordat je het contract verstuurt.', 422);
   }
   if (isDateBeforeToday(contract.valid_until)) {
     throw new HttpError('De ondertekendeadline ligt in het verleden. Pas de datum aan voordat je verstuurt.', 409);
@@ -220,10 +247,22 @@ async function sendContractForSignature(
     contract: { number: contract.number, date: contract.date, amount_cents: contract.amount_cents, currency: contract.currency },
     client, company, projectName,
   });
-  const filledBody = sanitizeContractHtml(fillContractTokens(contract.body, tokens));
+  const office = isOfficeContract(contract);
+  // Bij een Word-contract is de tekst al definitief in het .docx; variabelen zijn
+  // daar bij het aanmaken al ingevuld. Alleen richtext-contracten vullen hier nog.
+  const filledBody = office ? '' : sanitizeContractHtml(fillContractTokens(contract.body, tokens));
 
-  const pdf = await buildConceptAttachment(contract, client, company, publicUrl, filledBody);
+  const pdf = office
+    ? await buildOfficeAttachment(contract)
+    : await buildConceptAttachment(contract, client, company, publicUrl, filledBody);
   validatePdf(pdf);
+
+  // Leg de verstuurde PDF vast vóór de e-mail: dit is precies het document dat de
+  // klant als bijlage krijgt én straks op de ondertekenpagina ziet.
+  let sentPdfKey: string | null = null;
+  if (office) {
+    sentPdfKey = await storeContractPdf(organizationId, contractId, pdf.bytes, pdf.sha256, 'verstuurd');
+  }
 
   const deliveryId = await beginSignatureSend({
     contractId,
@@ -291,6 +330,10 @@ async function sendContractForSignature(
     p_amount_cents: contract.amount_cents,
     p_currency: contract.currency,
     p_created_by: userId,
+    // Bij Word-contracten is de PDF de momentopname — er is geen HTML om te bevriezen.
+    p_pdf_storage_key: sentPdfKey,
+    p_pdf_sha256: sentPdfKey ? pdf.sha256 : null,
+    p_pdf_size_bytes: sentPdfKey ? pdf.sizeBytes : null,
   });
   if (snapshotResult.error) console.warn('contract version snapshot failed', snapshotResult.error.message);
 
@@ -302,7 +345,18 @@ async function sendContractForSignature(
   };
 }
 
-type ContractAttachment = { fileName: string; mimeType: 'application/pdf'; base64: string; sizeBytes: number; sha256: string };
+type ContractAttachment = { fileName: string; mimeType: 'application/pdf'; base64: string; bytes: Uint8Array; sizeBytes: number; sha256: string };
+
+async function toAttachment(contract: ContractRow, bytes: Uint8Array): Promise<ContractAttachment> {
+  return {
+    fileName: `contract-${sanitizeFileName(contract.number || contract.id)}.pdf`,
+    mimeType: 'application/pdf',
+    base64: bytesToBase64(bytes),
+    bytes,
+    sizeBytes: bytes.byteLength,
+    sha256: await sha256HexBytes(bytes),
+  };
+}
 
 async function buildConceptAttachment(contract: ContractRow, client: ClientRow, company: CompanyRow | null, publicUrl: string, body: string): Promise<ContractAttachment> {
   const bytes = await renderContractPdf({
@@ -311,14 +365,17 @@ async function buildConceptAttachment(contract: ContractRow, client: ClientRow, 
     company,
     publicUrl,
   });
-  const sha256 = await sha256HexBytes(bytes);
-  return {
-    fileName: `contract-${sanitizeFileName(contract.number || contract.id)}.pdf`,
-    mimeType: 'application/pdf',
-    base64: bytesToBase64(bytes),
-    sizeBytes: bytes.byteLength,
-    sha256,
-  };
+  return toAttachment(contract, bytes);
+}
+
+/**
+ * PDF van een Word-contract: rechtstreeks uit het .docx via Collabora, zodat de
+ * klant exact de opmaak krijgt die in de editor stond (inclusief tabellen,
+ * afbeeldingen en kopteksten die onze HTML→PDF-opbouw niet kent).
+ */
+async function buildOfficeAttachment(contract: ContractRow): Promise<ContractAttachment> {
+  const bytes = await convertContractDocxToPdf(contract.organization_id, contract.body_storage_key!);
+  return toAttachment(contract, bytes);
 }
 
 function validatePdf(pdf: ContractAttachment): void {
@@ -338,6 +395,18 @@ async function previewContractPdf(
   contractId: string,
 ): Promise<{ fileName: string; mimeType: string; base64: string }> {
   const contract = await loadContract(organizationId, contractId);
+
+  // Word-contract: de PDF is het document zelf, zonder tussenkomst van onze
+  // HTML-opbouw. Geen opslag — dit is puur een voorbeeld van het concept.
+  if (isOfficeContract(contract)) {
+    const bytes = await convertContractDocxToPdf(contract.organization_id, contract.body_storage_key!);
+    return {
+      fileName: `contract-${sanitizeFileName(contract.number || contract.id)}-preview.pdf`,
+      mimeType: 'application/pdf',
+      base64: bytesToBase64(bytes),
+    };
+  }
+
   const [client, company, projectName] = await Promise.all([
     contract.client_id ? loadClient(organizationId, contract.client_id).catch(() => null) : Promise.resolve(null),
     loadCompanySettings(organizationId),
@@ -361,9 +430,7 @@ async function previewContractPdf(
 async function loadContract(organizationId: string, contractId: string): Promise<ContractRow> {
   const { data, error } = await supabaseAdmin
     .from('contracts')
-    .select(
-      'id,organization_id,client_id,number,title,body,date,valid_until,status,signed_storage_provider,signed_storage_key,signed_pdf_file_name,signed_pdf_size_bytes,signed_pdf_data_base64,signed_document_sha256,amount_cents,currency',
-    )
+    .select(CONTRACT_COLUMNS)
     .eq('id', contractId)
     .eq('organization_id', organizationId)
     .single();
@@ -371,12 +438,8 @@ async function loadContract(organizationId: string, contractId: string): Promise
   return data as ContractRow;
 }
 
-async function loadLinkedProjectName(organizationId: string, contractId: string): Promise<string | null> {
-  const { data } = await supabaseAdmin
-    .from('projects').select('name')
-    .eq('organization_id', organizationId).eq('contract_id', contractId)
-    .order('created_at', { ascending: true }).limit(1).maybeSingle();
-  return (data?.name as string | undefined) ?? null;
+function loadLinkedProjectName(organizationId: string, contractId: string): Promise<string | null> {
+  return loadLinkedProjectNames(supabaseAdmin, organizationId, contractId);
 }
 
 async function loadClient(organizationId: string, clientId: string): Promise<ClientRow> {

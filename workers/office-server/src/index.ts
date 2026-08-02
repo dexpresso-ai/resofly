@@ -106,6 +106,22 @@ export class CollaboraContainer extends Container<Env> {
 
 export interface Env {
   COLLABORA: DurableObjectNamespace<CollaboraContainer>;
+  /**
+   * Gedeeld geheim met de media-api voor Collabora's convert-to-REST-endpoint.
+   * Zonder deze afscherming is /cool/convert-to publiek bereikbaar: iedereen op
+   * internet kan onze container dan als gratis conversiedienst gebruiken (kosten,
+   * en de LibreOffice-documentparser als aanvalsoppervlak). Het editor- en
+   * WOPI-verkeer heeft zijn eigen capability (het access_token) en blijft open.
+   */
+  OFFICE_CONVERT_SECRET?: string;
+}
+
+/** Vergelijking in constante tijd — een secret mag niet byte-voor-byte te raden zijn. */
+function secretMatches(provided: string, expected: string): boolean {
+  if (provided.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < provided.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);
+  return diff === 0;
 }
 
 // Route élk verzoek naar ÉÉN vaste instance. Een geopend document is in-memory vastgepind
@@ -121,6 +137,16 @@ export default {
     // verkeer. (We zetten geen admin-credentials, maar sluit het oppervlak expliciet af.)
     if (pathname.endsWith('/admin.html') || pathname.includes('adminws') || pathname.includes('/dist/admin')) {
       return new Response('Not found', { status: 404 });
+    }
+
+    // Collabora's convert-to-REST-API (docx→pdf) staat standaard open voor
+    // iedereen die deze Worker kan bereiken. Alleen onze eigen media-api mag hem
+    // gebruiken; die stuurt het gedeelde geheim mee over de service binding.
+    if (pathname.includes('/convert-to')) {
+      const provided = request.headers.get('x-resofly-convert') || '';
+      if (!env.OFFICE_CONVERT_SECRET || !secretMatches(provided, env.OFFICE_CONVERT_SECRET)) {
+        return new Response('Not found', { status: 404 });
+      }
     }
 
     const response = await getContainer(env.COLLABORA, INSTANCE_ID).fetch(request);

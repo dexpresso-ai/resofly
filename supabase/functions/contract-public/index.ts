@@ -2,9 +2,15 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
-import { renderContractPdf, bytesToBase64, sha256HexBytes, type PdfSignature } from '../_shared/contractPdf.ts';
+import { renderContractPdf, appendSignaturePagesToPdf, bytesToBase64, sha256HexBytes, type PdfSignature } from '../_shared/contractPdf.ts';
 import { sanitizeContractHtml } from '../_shared/htmlSanitize.ts';
 import { buildContractTokens, fillContractTokens } from '../_shared/contractTokens.ts';
+import {
+  convertContractDocxToPdf,
+  isOfficeContract,
+  loadLinkedProjectNames,
+  loadSentContractPdf,
+} from '../_shared/contractOffice.ts';
 
 // ============================================================
 // contract-public (publiek, geen login): de API achter de ondertekenpagina
@@ -24,6 +30,8 @@ type ContractRow = {
   number: string;
   title: string;
   body: string;
+  editor_mode: string | null;
+  body_storage_key: string | null;
   date: string;
   valid_until: string | null;
   status: string;
@@ -199,13 +207,30 @@ async function signPublicContract(tokenHash: string, body: Record<string, unknow
       contract: { number: contract.number, date: contract.date, amount_cents: contract.amount_cents, currency: contract.currency },
       client, company, projectName,
     });
-    const filledBody = sanitizeContractHtml(fillContractTokens(contract.body, tokens));
-    const pdfBytes = await renderContractPdf({
-      contract: { id: contract.id, number: contract.number, title: contract.title, body: filledBody, date: contract.date, valid_until: contract.valid_until },
-      client: client ?? { name: 'Klant', contact_name: null, email: signerEmail },
-      company,
-      signature,
-    });
+    const pdfContract = {
+      id: contract.id, number: contract.number, title: contract.title,
+      body: '', date: contract.date, valid_until: contract.valid_until,
+    };
+    const pdfClient = client ?? { name: 'Klant', contact_name: null, email: signerEmail };
+
+    // Word-contract: het getekende exemplaar is de PDF die de klant hierboven ook
+    // écht heeft gezien, met onze handtekening- en bewijspagina's erachter. Het
+    // Word-document zelf blijft ongemoeid — opnieuw renderen zou een ander
+    // document kunnen opleveren dan waar de klant op akkoord ging.
+    const pdfBytes = isOfficeContract(contract)
+      ? await appendSignaturePagesToPdf({
+          basePdf: await loadContractPdfForDisplay(contract),
+          contract: pdfContract,
+          client: pdfClient,
+          company,
+          signature,
+        })
+      : await renderContractPdf({
+          contract: { ...pdfContract, body: sanitizeContractHtml(fillContractTokens(contract.body, tokens)) },
+          client: pdfClient,
+          company,
+          signature,
+        });
     const sha256 = await sha256HexBytes(pdfBytes);
     const base64 = bytesToBase64(pdfBytes);
     const fileName = `contract-${sanitizeFileName(contract.number || contract.id)}-getekend.pdf`;
@@ -413,7 +438,7 @@ async function storeSignedPdf(
 async function loadContractByTokenHash(tokenHash: string): Promise<ContractRow> {
   const { data, error } = await supabaseAdmin
     .from('contracts')
-    .select('id,organization_id,client_id,number,title,body,date,valid_until,status,signed_at,public_token_expires_at,amount_cents,currency')
+    .select('id,organization_id,client_id,number,title,body,date,valid_until,status,signed_at,public_token_expires_at,amount_cents,currency,editor_mode,body_storage_key')
     .eq('public_token_hash', tokenHash)
     .maybeSingle();
   if (error) throw error;
@@ -530,12 +555,25 @@ async function insertEvent(organizationId: string, contractId: string, eventType
   if (error) console.warn('contract event insert failed', error.message);
 }
 
-async function loadLinkedProjectName(organizationId: string, contractId: string): Promise<string | null> {
-  const { data } = await supabaseAdmin
-    .from('projects').select('name')
-    .eq('organization_id', organizationId).eq('contract_id', contractId)
-    .order('created_at', { ascending: true }).limit(1).maybeSingle();
-  return (data?.name as string | undefined) ?? null;
+function loadLinkedProjectName(organizationId: string, contractId: string): Promise<string | null> {
+  return loadLinkedProjectNames(supabaseAdmin, organizationId, contractId);
+}
+
+/**
+ * De PDF die de klant te zien krijgt bij een Word-contract.
+ *
+ * Eerste keuze is de bij het versturen vastgelegde PDF: dát is aantoonbaar het
+ * document dat als bijlage is meegestuurd. Ontbreekt die (oud contract, of de
+ * versie-snapshot faalde ná het versturen), dan zetten we het .docx alsnog om —
+ * liever een verse conversie dan een ondertekenpagina zonder inhoud.
+ */
+async function loadContractPdfForDisplay(contract: ContractRow): Promise<Uint8Array> {
+  const stored = await loadSentContractPdf(supabaseAdmin, contract.organization_id, contract.id).catch((e) => {
+    console.warn('vastgelegde contract-PDF ophalen mislukt, val terug op conversie', describeError(e));
+    return null;
+  });
+  if (stored) return stored.bytes;
+  return convertContractDocxToPdf(contract.organization_id, contract.body_storage_key!);
 }
 
 async function buildPayload(contract: ContractRow) {
@@ -552,13 +590,28 @@ async function buildPayload(contract: ContractRow) {
     contract: { number: contract.number, date: contract.date, amount_cents: contract.amount_cents, currency: contract.currency },
     client, company, projectName,
   });
-  const renderedBody = sanitizeContractHtml(fillContractTokens(contract.body, tokens));
+  const office = isOfficeContract(contract);
+  const renderedBody = office ? '' : sanitizeContractHtml(fillContractTokens(contract.body, tokens));
+  // Word-contract: de klant krijgt de PDF zelf te zien in plaats van HTML. Dat is
+  // exact het document dat hij ondertekent — geen benadering ervan.
+  let documentPdfBase64: string | null = null;
+  if (office) {
+    try {
+      documentPdfBase64 = bytesToBase64(await loadContractPdfForDisplay(contract));
+    } catch (e) {
+      // De pagina moet blijven werken (weigeren, vraag stellen, status zien),
+      // ook als de documentserver even niet bereikbaar is.
+      console.error('contract-PDF voor ondertekenpagina niet beschikbaar', describeError(e));
+    }
+  }
   return {
     contract: {
       id: contract.id,
       number: contract.number,
       title: contract.title,
       body: renderedBody,
+      content_kind: office ? 'pdf' : 'html',
+      document_pdf_base64: documentPdfBase64,
       date: contract.date,
       valid_until: contract.valid_until,
       status: contract.status,

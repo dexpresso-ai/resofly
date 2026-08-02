@@ -163,6 +163,58 @@ export async function renderContractPdf(params: {
   return await doc.save();
 }
 
+/**
+ * Zet het handtekeningblok + ondertekenbewijs ACHTER een bestaand PDF.
+ *
+ * Voor contracten die in Word (Collabora) zijn opgesteld is de PDF al gemaakt —
+ * door Collabora, uit het .docx dat de klant ook echt te zien kreeg. Die pagina's
+ * mogen we niet opnieuw opbouwen (dan zouden opmaak, tabellen en afbeeldingen
+ * door onze eenvoudige HTML-parser heen moeten), dus laten we het bronbestand
+ * ongemoeid en hangen we er alleen onze eigen pagina's achter.
+ *
+ * Voettekst en paginanummering worden bewust alléén op de toegevoegde pagina's
+ * gezet: over het Word-document heen stempelen zou de opmaak van de klant
+ * beschadigen.
+ */
+export async function appendSignaturePagesToPdf(params: {
+  basePdf: Uint8Array;
+  contract: PdfContract;
+  client: PdfClient;
+  company: PdfCompany;
+  signature: PdfSignature;
+}): Promise<Uint8Array> {
+  const { basePdf, contract, client, company, signature } = params;
+  const doc = await PDFDocument.load(basePdf);
+  const untouchedPages = doc.getPageCount();
+
+  const ctx: Ctx = {
+    doc,
+    page: doc.addPage([PAGE_W, PAGE_H]),
+    y: TOP,
+    regular: await doc.embedFont(StandardFonts.Helvetica),
+    bold: await doc.embedFont(StandardFonts.HelveticaBold),
+    italic: await doc.embedFont(StandardFonts.HelveticaOblique),
+    accent: hexToPdfRgb(company?.invoice_accent_color || '#FFD966'),
+    muted: rgb(0.38, 0.38, 0.38),
+  };
+
+  ctx.page.drawRectangle({ x: 0, y: PAGE_H - 18, width: PAGE_W, height: 18, color: ctx.accent, opacity: 0.85 });
+  drawText(ctx.page, 'ONDERTEKENING', LEFT, ctx.y, ctx.bold, 20);
+  ctx.y -= 18;
+  drawText(
+    ctx.page,
+    `Behorend bij contract ${contract.number}${contract.title ? ` — ${contract.title}` : ''}`,
+    LEFT, ctx.y, ctx.regular, 9, { color: ctx.muted },
+  );
+  ctx.y -= 20;
+
+  await drawSignatureBlock(ctx, signature);
+  drawCertificatePage(ctx, contract, client, company, signature);
+
+  paintFootersAndPageNumbers(ctx, company, untouchedPages);
+  return await doc.save();
+}
+
 // ------------------------------------------------------------ sections
 function drawHeader(ctx: Ctx, contract: PdfContract, company: PdfCompany): void {
   const { page, accent, muted } = ctx;
@@ -291,11 +343,17 @@ function newPage(ctx: Ctx): void {
   ctx.y = TOP;
 }
 
-function paintFootersAndPageNumbers(ctx: Ctx, company: PdfCompany): void {
+/**
+ * `skipFirst` laat de eerste N pagina's ongemoeid. Alleen gebruikt bij het
+ * aanvullen van een bestaand (door Collabora gerenderd) PDF: daar zou een
+ * voettekst over de opmaak van het Word-document heen komen.
+ */
+function paintFootersAndPageNumbers(ctx: Ctx, company: PdfCompany, skipFirst = 0): void {
   const pages = ctx.doc.getPages();
   const total = pages.length;
   const footerText = company?.invoice_footer || 'Bedankt voor het vertrouwen.';
   pages.forEach((page, index) => {
+    if (index < skipFirst) return;
     page.drawLine({ start: { x: LEFT, y: 58 }, end: { x: RIGHT, y: 58 }, thickness: 0.45, color: ctx.muted, opacity: 0.35 });
     for (const [i, line] of wrapPdfText(footerText, ctx.regular, 8, 380).slice(0, 2).entries()) {
       drawText(page, line, LEFT, 44 - i * 10, ctx.regular, 8, { color: ctx.muted });

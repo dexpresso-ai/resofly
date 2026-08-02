@@ -2,6 +2,11 @@ name = "resofly-office-server"
 main = "src/index.ts"
 compatibility_date = "2026-04-30"
 
+# Secret (via `wrangler secret put OFFICE_CONVERT_SECRET`, NIET hier):
+# schermt Collabora's convert-to-REST-API af, die anders publiek bereikbaar is.
+# Moet exact gelijk zijn aan OFFICE_CONVERT_SECRET op resofly-media-api
+# (staging én production — deze Worker is gedeeld).
+
 # Collabora Online (CODE) draait als één container, gefront door een Durable Object.
 # Vereist het Workers Paid-plan. Image = linux/amd64 (collabora/code is amd64).
 [[containers]]

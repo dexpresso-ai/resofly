@@ -119,3 +119,9 @@ verify_jwt = false
 # schrijfrol, plus een AI-budgetcheck vóór de betaalde Claude-call.
 [functions.invoice-extract]
 verify_jwt = false
+
+# gallery-public: login-loze galerij-deellink (/gallerij/<token>). Toegang loopt via een
+# onraadbaar 32-byte token (sha256-hash in de DB) + optionele pincode met lockout; de
+# functie hardt zelf via een origin-allowlist (zoals contract-public). Daarom geen JWT-eis.
+[functions.gallery-public]
+verify_jwt = false

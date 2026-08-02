@@ -4,7 +4,7 @@ import { PushNotificationsCard, type PushApi } from '../components/usePushNotifi
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
-import { changeOrganizationPlan, createExtraSeatCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startSubscriptionCheckout } from '../services/billingService';
+import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
 import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity } from '../lib/repository';
 import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
@@ -913,9 +913,20 @@ export function Settings({
   const selectedPlanHasYearly = (selectedPlanObj?.yearly_price_cents ?? 0) > 0;
   const billingIntervalUnit = billingOverview?.billing_interval === 'year' ? 'jaar' : 'maand';
   const currentSeatCents = billingOverview ? (billingOverview.billing_interval === 'year' ? billingOverview.extra_seat_yearly_price_cents : billingOverview.extra_seat_price_cents) : 0;
-  const currentCostCents = billingOverview
-    ? (billingOverview.billing_interval === 'year' ? billingOverview.yearly_price_cents : billingOverview.monthly_price_cents) + billingOverview.purchased_seats * currentSeatCents
+  // Opslagbundels (accountbrede opslag) tellen mee in het huidige periodebedrag.
+  const currentStorageAddons = billingOverview?.storage_addons ?? 0;
+  const currentStorageCents = billingOverview
+    ? (billingOverview.billing_interval === 'year' ? (billingOverview.storage_addon_yearly_price_cents ?? 0) : (billingOverview.storage_addon_price_cents ?? 0))
     : 0;
+  const currentCostCents = billingOverview
+    ? (billingOverview.billing_interval === 'year' ? billingOverview.yearly_price_cents : billingOverview.monthly_price_cents)
+      + billingOverview.purchased_seats * currentSeatCents
+      + currentStorageAddons * currentStorageCents
+    : 0;
+  const storageUsedBytes = billingOverview?.storage_used_bytes ?? 0;
+  const storageLimitGb = billingOverview?.storage_limit_gb ?? null;
+  const storageUsedGb = storageUsedBytes / 1073741824;
+  const storagePct = storageLimitGb != null && storageLimitGb > 0 ? Math.min(100, (storageUsedGb / storageLimitGb) * 100) : null;
 
   useEffect(() => {
     setForm(settingsToForm(settings));
@@ -1178,6 +1189,38 @@ export function Settings({
     }
   }
 
+  async function buyStorageAddon() {
+    if (!activeOrganization || !canAdminOrganization) return;
+    setBillingBusy('storage');
+    setBillingError(null);
+    setBillingMessage(null);
+    try {
+      await createStorageAddonCheckout(activeOrganization.id, 1);
+      await refreshBilling();
+      setBillingMessage('Opslagbundel toegevoegd. Het abonnementsbedrag is aangepast en de extra opslag is direct beschikbaar.');
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : 'Opslagbundel toevoegen mislukt.');
+    } finally {
+      setBillingBusy(null);
+    }
+  }
+
+  function requestBuyStorageAddon() {
+    if (!activeOrganization || !canAdminOrganization || !billingOverview) return;
+    const addonGb = billingOverview.storage_addon_gb ?? 100;
+    setBillingError(null);
+    setBillingMessage(null);
+    setPendingChange({
+      title: 'Opslagbundel bijkopen',
+      description: `Je voegt een opslagbundel van ${addonGb} GB toe aan het ${billingOverview.plan_name}-abonnement. De opslag geldt voor je hele account (galerijen, bestanden en bijlagen samen) en is direct beschikbaar.`,
+      currentCostCents,
+      newCostCents: currentCostCents + currentStorageCents,
+      intervalUnit: billingIntervalUnit,
+      currency: billingOverview.currency,
+      execute: buyStorageAddon,
+    });
+  }
+
   async function completeMockPayment() {
     if (!activeOrganization || !lastMockPaymentId) return;
     setBillingBusy('mock-paid');
@@ -1273,7 +1316,7 @@ export function Settings({
       title: 'Plan wijzigen',
       description: `Je wijzigt je abonnement van ${billingOverview.plan_name} naar ${selectedPlanObj.name}. De wijziging gaat direct in; je blijft ${billingOverview.billing_interval === 'year' ? 'jaarlijks' : 'maandelijks'} betalen.`,
       currentCostCents,
-      newCostCents: planCostCents(selectedPlanObj, billingOverview.purchased_seats, billingOverview.billing_interval),
+      newCostCents: planCostCents(selectedPlanObj, billingOverview.purchased_seats, billingOverview.billing_interval, currentStorageAddons),
       intervalUnit: billingIntervalUnit,
       currency: billingOverview.currency,
       execute: changePlan,
@@ -1827,6 +1870,32 @@ export function Settings({
           <Button variant="primary" onClick={requestBuyExtraSeat} disabled={billingBusy === 'seat' || !hasMollieSubscription}>{billingBusy === 'seat' ? 'Bezig…' : 'Extra gebruiker toevoegen'}</Button>
         </div>}
 
+        {/* ── Accountbrede opslag (galerijen + bestanden + bijlagen) ── */}
+        <div className="billing-control-row billing-storage-row">
+          <div>
+            <strong>Opslag</strong>
+            <p className="settings-help">
+              {storageUsedGb >= 0.05 ? `${storageUsedGb.toFixed(1)} GB in gebruik` : 'Vrijwel geen opslag in gebruik'}
+              {storageLimitGb != null ? ` van ${storageLimitGb} GB` : isBillingExempt ? ' · geen limiet (interne organisatie)' : ' · geen limiet ingesteld'}
+              {currentStorageAddons > 0 ? ` · ${currentStorageAddons} bundel${currentStorageAddons === 1 ? '' : 's'} bijgekocht` : ''}
+            </p>
+            {storagePct != null && <div className="billing-storage-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(storagePct)}>
+              <div className={`billing-storage-fill${storagePct >= 90 ? ' warn' : ''}`} style={{ width: `${storagePct}%` }} />
+            </div>}
+            {storagePct != null && storagePct >= 90 && <p className="settings-help billing-storage-warn">Je opslag is bijna vol — nieuwe uploads worden geweigerd zodra de limiet is bereikt.</p>}
+          </div>
+          {canAdminOrganization && !isBillingExempt && storageLimitGb != null && (
+            <Button
+              variant={storagePct != null && storagePct >= 90 ? 'primary' : undefined}
+              onClick={requestBuyStorageAddon}
+              disabled={billingBusy === 'storage' || !hasMollieSubscription || currentStorageCents <= 0}
+              title={!hasMollieSubscription ? 'Start eerst een abonnement' : undefined}
+            >
+              {billingBusy === 'storage' ? 'Bezig…' : `+${billingOverview.storage_addon_gb ?? 100} GB bijkopen (${formatEur(currentStorageCents, billingOverview.currency)}/${billingIntervalUnit})`}
+            </Button>
+          )}
+        </div>
+
         {canAdminOrganization && lastMockPaymentId && <div className="billing-control-row mock-row">
           <div>
             <strong>Mockbetaling klaar</strong>
@@ -1945,11 +2014,13 @@ function formatEur(cents: number, currency = 'EUR') {
   return new Intl.NumberFormat('nl-NL', { style: 'currency', currency }).format((cents ?? 0) / 100);
 }
 
-// Totale periodekosten van een plan = basisprijs + extra seats × seatprijs, in het interval.
-function planCostCents(plan: BillingPlan, purchasedSeats: number, interval: 'month' | 'year'): number {
+// Totale periodekosten van een plan = basisprijs + extra seats × seatprijs +
+// opslagbundels × bundelprijs, in het interval.
+function planCostCents(plan: BillingPlan, purchasedSeats: number, interval: 'month' | 'year', storageAddons = 0): number {
   const base = interval === 'year' ? plan.yearly_price_cents : plan.monthly_price_cents;
   const seat = interval === 'year' ? plan.extra_seat_yearly_price_cents : plan.extra_seat_price_cents;
-  return base + Math.max(0, purchasedSeats) * seat;
+  const storage = interval === 'year' ? (plan.storage_addon_yearly_price_cents ?? 0) : (plan.storage_addon_price_cents ?? 0);
+  return base + Math.max(0, purchasedSeats) * seat + Math.max(0, storageAddons) * storage;
 }
 
 type PendingBillingChange = {

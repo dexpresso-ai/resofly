@@ -10,12 +10,16 @@ import {
   downloadPortalContractPdf,
   downloadPortalInvoicePdf,
   fetchPortalData,
+  fetchPortalGalleryDetail,
   fetchPortalInvoicePaymentInfo,
   fetchPortalProjectDetail,
   fetchPortalTicketThread,
   requestPortalLogin,
+  togglePortalGalleryFavorite,
   type PortalAccount,
   type PortalContract,
+  type PortalGallery,
+  type PortalGalleryDetail,
   type PortalInvoice,
   type PortalInvoicePaymentInfo,
   type PortalProject,
@@ -27,8 +31,10 @@ import {
 } from '../../lib/portalApi';
 import { dateNL, euro, lineGross, priorityLabel, total } from '../../lib/format';
 import type { FinanceLine, Priority } from '../../types';
+import { GalleryViewer, type GalleryViewerItem } from '../GalleryViewer';
+import { galleryFileUrl, galleryRefreshDelayMs, galleryZipUrl, streamDownloadUrl } from '../../lib/gallery';
 
-type PortalTab = 'overview' | 'invoices' | 'quotes' | 'contracts' | 'tickets' | 'projects';
+type PortalTab = 'overview' | 'invoices' | 'quotes' | 'contracts' | 'tickets' | 'projects' | 'galleries';
 
 /**
  * Klantportaal-root. Aparte route (/portal) met een eigen, wachtwoordloze login
@@ -205,6 +211,7 @@ function PortalAccountView({ account, onTicketCreated }: { account: PortalAccoun
     { id: 'contracts', label: 'Contracten', count: account.contracts?.length ?? 0 },
     { id: 'tickets', label: 'Tickets', count: account.tickets.length },
     { id: 'projects', label: 'Projecten', count: ongoingProjects.length },
+    { id: 'galleries', label: 'Galerijen', count: account.galleries?.length ?? 0 },
   ];
 
   return <div className="portal-account">
@@ -256,7 +263,150 @@ function PortalAccountView({ account, onTicketCreated }: { account: PortalAccoun
     {tab === 'tickets' && <TicketsTab account={account} onTicketCreated={onTicketCreated} />}
 
     {tab === 'projects' && <ProjectsTab account={account} />}
+
+    {tab === 'galleries' && <GalleriesTab account={account} />}
   </div>;
+}
+
+// ── Galerijen (foto/video-oplevering) ───────────────────────────────────────
+
+function GalleriesTab({ account }: { account: PortalAccount }) {
+  const galleries = account.galleries ?? [];
+  const [openGallery, setOpenGallery] = useState<PortalGallery | null>(null);
+
+  if (openGallery) {
+    return <PortalGalleryView gallery={openGallery} account={account} onBack={() => setOpenGallery(null)} />;
+  }
+
+  return <article className="portal-card">
+    <div className="portal-card-head"><h2>Galerijen</h2><span>{galleries.length}</span></div>
+    {galleries.length === 0 && <p className="portal-muted">Er zijn nog geen galerijen voor je gepubliceerd.</p>}
+    <div className="portal-rows">
+      {galleries.map(gallery => {
+        const project = account.projects.find(p => p.id === gallery.project_id);
+        return (
+          <button key={gallery.id} type="button" className="portal-row portal-row-clickable" onClick={() => setOpenGallery(gallery)}>
+            <div className="portal-row-main">
+              <span className="portal-row-number">{gallery.title}</span>
+              <span className="portal-muted">
+                {project ? `${project.name} · ` : ''}
+                {gallery.published_at ? `Gepubliceerd ${dateNL(gallery.published_at)}` : ''}
+                {gallery.expires_at ? ` · beschikbaar tot ${dateNL(gallery.expires_at)}` : ''}
+              </span>
+            </div>
+            <span className="portal-row-status">Bekijken →</span>
+          </button>
+        );
+      })}
+    </div>
+  </article>;
+}
+
+function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGallery; account: PortalAccount; onBack: () => void }) {
+  const [detail, setDetail] = useState<PortalGalleryDetail | null>(null);
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    let timer: number | null = null;
+    setLoading(true);
+    setError(null);
+
+    // De media-tokens leven een uur. Ruim vóór het verlopen halen we het detail
+    // opnieuw op, anders breken thumbnails, video en downloads stilletjes af bij
+    // een tabblad dat lang open blijft staan.
+    const load = () => fetchPortalGalleryDetail(gallery.id)
+      .then(result => {
+        if (!active) return;
+        setDetail(result);
+        setFavoriteIds(new Set(result.myFavoriteIds));
+        const delay = galleryRefreshDelayMs(result.tokens);
+        if (delay != null) timer = window.setTimeout(load, delay);
+      })
+      .catch(e => { if (active) setError(e instanceof Error ? e.message : 'Galerij laden mislukt.'); })
+      .finally(() => { if (active) setLoading(false); });
+
+    void load();
+    return () => { active = false; if (timer) window.clearTimeout(timer); };
+  }, [gallery.id]);
+
+  async function toggleFavorite(item: GalleryViewerItem, on: boolean) {
+    // Optimistisch bijwerken; bij een fout draaien we terug.
+    setFavoriteIds(prev => {
+      const next = new Set(prev);
+      if (on) next.add(item.id); else next.delete(item.id);
+      return next;
+    });
+    try {
+      await togglePortalGalleryFavorite(gallery.id, item.id, on);
+    } catch {
+      setFavoriteIds(prev => {
+        const next = new Set(prev);
+        if (on) next.delete(item.id); else next.add(item.id);
+        return next;
+      });
+    }
+  }
+
+  function downloadItem(item: GalleryViewerItem) {
+    if (!detail) return;
+    // Webkwaliteit: foto's als web-preview; anders het origineel uit R2.
+    const webPhoto = detail.gallery.download_quality === 'web' && item.media_type === 'photo';
+    const r2Key = (webPhoto ? item.preview_key : null) || item.storage_key || item.preview_key;
+    let url: string | null = null;
+    if (r2Key) {
+      url = galleryFileUrl(r2Key, detail.tokens.mediaToken, { download: true });
+    } else if (item.stream_uid && item.stream_playback_base && detail.tokens.streamTokens[item.stream_uid]) {
+      url = streamDownloadUrl(item.stream_playback_base, detail.tokens.streamTokens[item.stream_uid]);
+    }
+    if (!url) return;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = item.file_name;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  const project = account.projects.find(p => p.id === gallery.project_id);
+
+  return <article className="portal-card portal-gallery">
+    <div className="portal-card-head">
+      <div className="portal-gallery-head">
+        <button type="button" className="portal-back" onClick={onBack}>← Terug</button>
+        <h2>{gallery.title}</h2>
+      </div>
+      {detail?.gallery.allow_downloads && detail.items.some(i => i.storage_key || i.preview_key) && (
+        <a className="portal-gallery-zip" href={galleryZipUrl(gallery.id, detail.tokens.mediaToken)} download>
+          Alles downloaden (zip)
+        </a>
+      )}
+    </div>
+    {(gallery.description || project) && (
+      <p className="portal-muted portal-gallery-sub">
+        {project ? `Project: ${project.name}` : ''}
+        {project && gallery.description ? ' — ' : ''}
+        {gallery.description ?? ''}
+      </p>
+    )}
+    {error && <p className="portal-error">{error}</p>}
+    {loading && <p className="portal-muted">Galerij laden…</p>}
+    {detail && !loading && (
+      <GalleryViewer
+        items={detail.items}
+        bundle={detail.tokens}
+        allowDownload={detail.gallery.allow_downloads}
+        favorites={favoriteIds}
+        canFavorite
+        onToggleFavorite={(item, on) => void toggleFavorite(item, on)}
+        onDownloadItem={downloadItem}
+        emptyText="Deze galerij bevat nog geen media."
+      />
+    )}
+  </article>;
 }
 
 function PortalKpi({ label, value, sub, tone }: { label: string; value: string; sub: string; tone?: 'warning' | 'danger' }) {

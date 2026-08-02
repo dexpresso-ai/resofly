@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, FileSignature, FileText, Link2, Plus, Send, Trash2, X } from 'lucide-react';
-import type { AppData, Contract, ContractEvent, ContractInternalNote, ContractSigner, ContractStatus, ContractTemplate, ContractVersion, Project } from '../types';
+import { Download, FileSignature, FileText, Link2, Pencil, Plus, Send, Trash2, X } from 'lucide-react';
+import type { AppData, Contract, ContractEvent, ContractInternalNote, ContractSigner, ContractStatus, ContractTemplate, ContractVersion, Project, UUID } from '../types';
 import { Modal } from '../components/Modal';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { dateNL, euro, total } from '../lib/format';
 import { supabase } from '../lib/supabase';
-import { insertRow, updateRow } from '../lib/repository';
+import { addContractProject, insertRow, removeContractProject, setContractProjects } from '../lib/repository';
 import { RichTextEditor, RichTextViewer, richTextToPlainText } from '../components/RichTextEditor';
 import { CONTRACT_TOKENS, buildContractTokens, fillContractTokens } from '../lib/contractTokens';
+import { buildContractDocxBlob } from '../lib/documentExport';
+import { deleteR2Object } from '../lib/r2-api';
+import { createOfficeSessionForContract, downloadContractDocx, uploadContractDocx, warmupOfficeEditor, type OfficeSession } from '../lib/office';
+import { OfficeEditor } from './OfficeEditor';
 
 type PageProps = {
   data: AppData;
@@ -39,6 +43,8 @@ export function Contracts({ data, organizationId, canWrite, onChanged }: PagePro
   const [edit, setEdit] = useState<Contract | 'new' | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [officeSession, setOfficeSession] = useState<{ session: OfficeSession; contract: Contract } | null>(null);
+  const [officeBusy, setOfficeBusy] = useState(false);
 
   async function reload() {
     setError(null);
@@ -48,6 +54,26 @@ export function Contracts({ data, organizationId, canWrite, onChanged }: PagePro
     setLoading(false);
   }
   useEffect(() => { setLoading(true); void reload(); /* eslint-disable-next-line */ }, [organizationId]);
+
+  // Wek de Collabora-container zodra iemand de contractpagina opent: een koude
+  // containerstart duurt tientallen seconden en overlapt zo met het rondkijken
+  // in plaats van met de klik op "Openen in Word".
+  useEffect(() => { warmupOfficeEditor(); }, []);
+
+  async function openInWord(contract: Contract) {
+    setOfficeBusy(true); setError(null);
+    try {
+      setOfficeSession({ session: await createOfficeSessionForContract(contract.id), contract });
+    } catch (e) { setError(errMsg(e, 'De editor kon niet worden geopend')); }
+    finally { setOfficeBusy(false); }
+  }
+
+  async function closeOfficeEditor() {
+    setOfficeSession(null);
+    // Collabora heeft tijdens de sessie al opgeslagen (PutFile); herladen zodat
+    // versie en bestandsgrootte in de app kloppen.
+    await reload();
+  }
 
   const open = useMemo(() => contracts.find(c => c.id === openId) ?? null, [contracts, openId]);
   const clientName = (id: string | null) => data.clients.find(c => c.id === id)?.name ?? '—';
@@ -84,12 +110,24 @@ export function Contracts({ data, organizationId, canWrite, onChanged }: PagePro
       {edit && <ContractForm
         data={data} organizationId={organizationId} canWrite={canWrite}
         contract={edit === 'new' ? null : edit}
+        officeBusy={officeBusy}
+        onOpenInWord={openInWord}
         onClose={() => setEdit(null)}
-        onSaved={async (id) => { setEdit(null); await reload(); if (id) setOpenId(id); }}
+        onSaved={async (id, createdContract) => {
+          setEdit(null);
+          await reload();
+          onChanged();
+          if (id) setOpenId(id);
+          // Net aangemaakt Word-contract: meteen door naar de editor. De
+          // gebruiker wilde een contract schrijven, niet een formulier invullen.
+          if (createdContract) await openInWord(createdContract);
+        }}
       />}
 
       {open && <ContractDetail
         data={data} organizationId={organizationId} canWrite={canWrite} contract={open}
+        officeBusy={officeBusy}
+        onOpenInWord={openInWord}
         onClose={() => setOpenId(null)}
         onEdit={() => { setEdit(open); setOpenId(null); }}
         onChanged={async () => { await reload(); onChanged(); }}
@@ -97,6 +135,12 @@ export function Contracts({ data, organizationId, canWrite, onChanged }: PagePro
       />}
 
       {showTemplates && <ContractTemplatesManager organizationId={organizationId} canWrite={canWrite} onClose={() => setShowTemplates(false)} />}
+
+      {officeSession && <OfficeEditor
+        session={officeSession.session}
+        onClose={() => { void closeOfficeEditor(); }}
+        onDownload={() => { void downloadContractDocx(officeSession.contract.id, officeSession.session.fileName); }}
+      />}
     </div>
   );
 }
@@ -184,9 +228,11 @@ function ContractTemplatesManager({ organizationId, canWrite, onClose }: { organ
 
 // ───────────────────────────── Opstellen / bewerken ─────────────────────────────
 
-function ContractForm({ data, organizationId, canWrite, contract, onClose, onSaved }: {
+function ContractForm({ data, organizationId, canWrite, contract, officeBusy, onOpenInWord, onClose, onSaved }: {
   data: AppData; organizationId: string; canWrite: boolean; contract: Contract | null;
-  onClose: () => void; onSaved: (id?: string) => void;
+  officeBusy: boolean;
+  onOpenInWord: (contract: Contract) => void | Promise<void>;
+  onClose: () => void; onSaved: (id?: string, createdContract?: Contract) => void;
 }) {
   const [clientId, setClientId] = useState(contract?.client_id ?? '');
   const [title, setTitle] = useState(contract?.title ?? '');
@@ -200,7 +246,14 @@ function ContractForm({ data, organizationId, canWrite, contract, onClose, onSav
   const [showPreview, setShowPreview] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [projectIds, setProjectIds] = useState<UUID[]>(
+    () => contract ? data.contractProjects.filter(cp => cp.contract_id === contract.id).map(cp => cp.project_id) : [],
+  );
 
+  // Nieuwe contracten stel je op in Word (Collabora). Bestaande contracten
+  // houden hun eigen modus: een al getekend richtext-contract omzetten zou de
+  // inhoud van een juridisch stuk veranderen.
+  const officeMode = contract ? contract.editor_mode === 'office' : true;
   const readOnly = !canWrite || (contract != null && contract.status !== 'draft');
 
   useEffect(() => {
@@ -215,6 +268,29 @@ function ContractForm({ data, organizationId, canWrite, contract, onClose, onSav
   const quoteTotal = selectedQuote ? total(selectedQuote.lines).total : null;
   const amountCents = amount.trim() ? Math.round(Number(amount.replace(',', '.')) * 100) : null;
 
+  // Projecten van deze klant; koppelen aan een ander klant-project weigert de
+  // database (23514), dus die bieden we niet eens aan.
+  const clientProjects = useMemo(
+    () => data.projects.filter(p => p.client_id === clientId && !p.archived),
+    [data.projects, clientId],
+  );
+  const selectedProjects = useMemo(
+    () => projectIds.map(id => data.projects.find(p => p.id === id)).filter((p): p is Project => Boolean(p)),
+    [projectIds, data.projects],
+  );
+
+  /**
+   * Van klant wisselen ontkoppelt de projecten van de vorige klant. Zonder dit
+   * blijven ze in de selectie staan en weigert de database ze bij het opslaan
+   * (een project mag alleen aan een contract van dezelfde klant hangen) — de
+   * gebruiker kreeg dan een onbegrijpelijke fout op een veld dat hij niet zag.
+   */
+  function changeClient(nextClientId: string) {
+    setClientId(nextClientId);
+    setQuoteId('');
+    setProjectIds(ids => ids.filter(id => data.projects.find(p => p.id === id)?.client_id === nextClientId));
+  }
+
   const previewTokens = buildContractTokens({
     clientName: selectedClient?.name,
     contactName: selectedClient?.contact_name,
@@ -222,14 +298,17 @@ function ContractForm({ data, organizationId, canWrite, contract, onClose, onSav
     date,
     amountCents,
     currency,
-    projectName: data.projects.find(p => p.contract_id === contract?.id)?.name ?? null,
+    projectName: formatProjectNames(selectedProjects.map(p => p.name)),
     companyName: data.companySettings?.trade_name || data.companySettings?.company_name,
     companyAddress: formatCompanyAddress(data.companySettings),
   });
 
   async function save() {
     if (!title.trim()) { setError('Geef het contract een titel.'); return; }
-    if (!richTextToPlainText(bodyHtml).trim()) { setError('Vul de inhoud van het contract in.'); return; }
+    // Bij een Word-contract zit de inhoud in het .docx; alleen bij het aanmaken
+    // is de starttekst hier nog relevant (en die mag leeg zijn — je schrijft
+    // het contract straks in Word).
+    if (!officeMode && !richTextToPlainText(bodyHtml).trim()) { setError('Vul de inhoud van het contract in.'); return; }
     if (amount.trim() && (amountCents === null || !Number.isFinite(amountCents))) { setError('Vul een geldig bedrag in (bijv. 1500 of 1500,00).'); return; }
     setBusy(true); setError(null);
     try {
@@ -237,21 +316,65 @@ function ContractForm({ data, organizationId, canWrite, contract, onClose, onSav
         client_id: clientId || null,
         quote_id: quoteId || null,
         title: title.trim(),
-        body: bodyHtml,
         date,
         valid_until: validUntil || null,
         amount_cents: amountCents,
         currency: currency || 'EUR',
       };
+
       if (contract) {
-        await supabase.from('contracts').update(values).eq('id', contract.id).eq('organization_id', organizationId).throwOnError();
+        // Bij een bestaand Word-contract laten we body/opslagvelden met rust:
+        // de inhoud beheert Collabora, dit formulier alleen de kenmerken.
+        const patch = officeMode ? values : { ...values, body: bodyHtml };
+        await supabase.from('contracts').update(patch).eq('id', contract.id).eq('organization_id', organizationId).throwOnError();
+        await setContractProjects(organizationId, contract.id, projectIds);
         onSaved(contract.id);
-      } else {
-        const { data: row, error } = await supabase.from('contracts')
-          .insert({ organization_id: organizationId, ...values }).select('id').single();
-        if (error) throw error;
-        onSaved((row as { id: string }).id);
+        return;
       }
+
+      if (!officeMode) {
+        const { data: row, error } = await supabase.from('contracts')
+          .insert({ organization_id: organizationId, ...values, body: bodyHtml }).select('*').single();
+        if (error) throw error;
+        const created = row as Contract;
+        await setContractProjects(organizationId, created.id, projectIds);
+        onSaved(created.id);
+        return;
+      }
+
+      // Word-contract: variabelen worden hier ÉÉN keer ingevuld en daarna is de
+      // tekst gewoon tekst in het document. Dat is bewust — een {{variabele}} die
+      // pas bij versturen wordt vervangen zou in Word onzichtbaar meeliften in
+      // opmaak die we niet meer kunnen aanpassen.
+      const startHtml = fillContractTokens(bodyHtml, previewTokens);
+      const uploaded = await uploadContractDocx(organizationId, title.trim() || 'Contract', buildContractDocxBlob({
+        title: title.trim(),
+        contentHtml: startHtml,
+      }));
+
+      let created: Contract;
+      try {
+        const { data: row, error } = await supabase.from('contracts').insert({
+          organization_id: organizationId,
+          ...values,
+          body: '',
+          editor_mode: 'office',
+          body_storage_key: uploaded.key,
+          body_mime_type: uploaded.mime_type,
+          body_size_bytes: uploaded.size_bytes,
+        }).select('*').single();
+        if (error) throw error;
+        created = row as Contract;
+      } catch (insertError) {
+        // Het bestand staat al op R2 maar er komt geen contractrij die ernaar
+        // wijst: opruimen, anders blijft er een weesbestand achter.
+        await deleteR2Object(uploaded.key).catch(cleanupError => {
+          console.warn('Opruimen van het contractdocument mislukt (mogelijk weesbestand in R2):', uploaded.key, cleanupError);
+        });
+        throw insertError;
+      }
+      await setContractProjects(organizationId, created.id, projectIds);
+      onSaved(created.id, created);
     } catch (e) { setError(errMsg(e, 'Opslaan mislukt')); }
     finally { setBusy(false); }
   }
@@ -283,7 +406,7 @@ function ContractForm({ data, organizationId, canWrite, contract, onClose, onSav
 
       <div className="bk-grid2">
         <label className="bk-field"><span>Klant</span>
-          <Select value={clientId} onChange={e => { setClientId(e.target.value); setQuoteId(''); }} disabled={readOnly}>
+          <Select value={clientId} onChange={e => { changeClient(e.target.value); }} disabled={readOnly}>
             <option value="">— kies klant —</option>
             {data.clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
@@ -321,7 +444,18 @@ function ContractForm({ data, organizationId, canWrite, contract, onClose, onSav
         </div>}
       </div>
 
-      {!readOnly && <div className="bk-field">
+      <ProjectPicker
+        allProjects={data.projects}
+        selectable={clientProjects}
+        selected={projectIds}
+        onChange={setProjectIds}
+        disabled={readOnly}
+        hasClient={Boolean(clientId)}
+      />
+
+      {/* Startpunt kiezen — alleen bij een NIEUW Word-contract. Daarna leeft de
+          tekst in het document zelf en zou een sjabloonkeuze hier niets meer doen. */}
+      {!readOnly && (!officeMode || !contract) && <div className="bk-field">
         <span>Sjabloon &amp; variabelen</span>
         <Select value="" onChange={e => { const t = templates.find(x => x.id === e.target.value); if (t) setBodyHtml(t.body); }} disabled={templates.length === 0}>
           <option value="">{templates.length ? 'Start vanuit sjabloon…' : 'Nog geen sjablonen'}</option>
@@ -330,24 +464,116 @@ function ContractForm({ data, organizationId, canWrite, contract, onClose, onSav
         <VariableChips />
       </div>}
 
-      <div className="bk-field">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>Inhoud van het contract</span>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <MiniTab active={!showPreview} onClick={() => setShowPreview(false)}>Bewerken</MiniTab>
-            <MiniTab active={showPreview} onClick={() => setShowPreview(true)}>Voorbeeld</MiniTab>
+      {officeMode
+        ? <div className="bk-field">
+            <span>Inhoud van het contract</span>
+            {contract
+              ? <div style={officePanel}>
+                  <p style={{ margin: '0 0 10px' }}>
+                    Dit contract stel je op in <strong>Word</strong>. Opmaak, tabellen en afbeeldingen komen
+                    één-op-één in het PDF dat de klant ondertekent.
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <Button variant="primary" disabled={officeBusy} onClick={() => { void onOpenInWord(contract); }}>
+                      <Pencil size={14} /> {officeBusy ? 'Editor starten…' : readOnly ? 'Openen in Word' : 'Bewerken in Word'}
+                    </Button>
+                    <Button onClick={() => { void downloadContractDocx(contract.id, `${contract.number || 'contract'}.docx`); }}>
+                      <Download size={14} /> Word-bestand downloaden
+                    </Button>
+                  </div>
+                  {contract.last_edited_at && <small style={{ display: 'block', marginTop: 8 }}>
+                    Laatst bewerkt op {new Date(contract.last_edited_at).toLocaleString('nl-NL', { dateStyle: 'short', timeStyle: 'short' })}.
+                  </small>}
+                </div>
+              : <div style={officePanel}>
+                  <p style={{ margin: '0 0 10px' }}>
+                    Na opslaan opent het contract meteen in <strong>Word</strong>, waar je de tekst schrijft.
+                    Kies hierboven eventueel een sjabloon als startpunt — de variabelen worden dan direct ingevuld.
+                  </p>
+                  {richTextToPlainText(bodyHtml).trim()
+                    ? <div className="contract-preview" style={{ border: '1px solid #2a2a31', borderRadius: 12, padding: 16, background: '#0e0e11', maxHeight: 220, overflow: 'auto' }}>
+                        <RichTextViewer content={fillContractTokens(bodyHtml, previewTokens)} emptyText="Nog geen inhoud." />
+                      </div>
+                    : <small>Geen sjabloon gekozen — je begint met een leeg document.</small>}
+                </div>}
           </div>
-        </div>
-        {showPreview
-          ? <div className="contract-preview" style={{ border: '1px solid #2a2a31', borderRadius: 12, padding: 16, background: '#0e0e11', minHeight: 200 }}>
-              <RichTextViewer content={fillContractTokens(bodyHtml, previewTokens)} emptyText="Nog geen inhoud." />
+        : <div className="bk-field">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Inhoud van het contract</span>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <MiniTab active={!showPreview} onClick={() => setShowPreview(false)}>Bewerken</MiniTab>
+                <MiniTab active={showPreview} onClick={() => setShowPreview(true)}>Voorbeeld</MiniTab>
+              </div>
             </div>
-          : <RichTextEditor value={bodyHtml} onChange={setBodyHtml} disabled={readOnly} placeholder="Schrijf de contracttekst… gebruik de werkbalk voor koppen, lijsten en opmaak." />}
-        <small>De klant ziet deze inhoud op de ondertekenpagina en in het PDF. Afbeeldingen en tabellen volgen in een latere fase.</small>
-      </div>
+            {showPreview
+              ? <div className="contract-preview" style={{ border: '1px solid #2a2a31', borderRadius: 12, padding: 16, background: '#0e0e11', minHeight: 200 }}>
+                  <RichTextViewer content={fillContractTokens(bodyHtml, previewTokens)} emptyText="Nog geen inhoud." />
+                </div>
+              : <RichTextEditor value={bodyHtml} onChange={setBodyHtml} disabled={readOnly} placeholder="Schrijf de contracttekst… gebruik de werkbalk voor koppen, lijsten en opmaak." />}
+            <small>Dit is een ouder contract in de eenvoudige tekstverwerker. Nieuwe contracten stel je op in Word.</small>
+          </div>}
     </Modal>
   );
 }
+
+const officePanel: React.CSSProperties = {
+  border: '1px solid #2a2a31', borderRadius: 12, padding: 16, background: '#0e0e11',
+};
+
+/**
+ * Projecten koppelen aan een contract. Meervoud: één contract dekt vaak meerdere
+ * opdrachten (bijv. een jaarcontract met drie shoots), en die wil je allemaal aan
+ * hetzelfde contract kunnen hangen.
+ */
+function ProjectPicker({ allProjects, selectable, selected, onChange, disabled, hasClient }: {
+  /** Alle projecten — om de namen van gekoppelde projecten op te zoeken, ook gearchiveerde. */
+  allProjects: Project[];
+  /** Wat er nog bij mag: niet-gearchiveerde projecten van dezelfde klant. */
+  selectable: Project[];
+  selected: UUID[]; onChange: (ids: UUID[]) => void; disabled: boolean; hasClient: boolean;
+}) {
+  const available = selectable.filter(p => !selected.includes(p.id));
+  // Namen komen bewust uit ALLE projecten: een gekoppeld project dat inmiddels
+  // gearchiveerd is hoort gewoon zichtbaar te blijven, niet als anonieme rest.
+  const chosen = selected
+    .map(id => allProjects.find(p => p.id === id))
+    .filter((p): p is Project => Boolean(p));
+
+  return (
+    <div className="bk-field">
+      <span>Projecten</span>
+      {chosen.length === 0
+        ? <p className="bk-muted" style={{ margin: '0 0 6px', fontSize: 13 }}>Nog geen project gekoppeld.</p>
+        : <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+            {chosen.map(p => <span key={p.id} style={projectChip}>
+              {p.name}{p.archived && ' (gearchiveerd)'}
+              {!disabled && <button
+                type="button"
+                aria-label={`${p.name} ontkoppelen`}
+                onClick={() => onChange(selected.filter(id => id !== p.id))}
+                style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 0, lineHeight: 1 }}
+              ><X size={13} /></button>}
+            </span>)}
+          </div>}
+
+      {!disabled && (
+        !hasClient
+          ? <small>Kies eerst een klant — je kunt alleen projecten van dezelfde klant koppelen.</small>
+          : available.length === 0
+            ? <small>{selectable.length === 0 ? 'Deze klant heeft nog geen lopende projecten.' : 'Alle projecten van deze klant zijn al gekoppeld.'}</small>
+            : <Select value="" onChange={e => { if (e.target.value) onChange([...selected, e.target.value]); }}>
+                <option value="">Project koppelen…</option>
+                {available.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </Select>
+      )}
+    </div>
+  );
+}
+
+const projectChip: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid #2a2a31',
+  borderRadius: 999, padding: '3px 10px', fontSize: 12, color: '#d8d8df',
+};
 
 function MiniTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return <button type="button" onClick={onClick} style={{
@@ -386,8 +612,10 @@ function VariableChips() {
 
 // ───────────────────────────── Detail / acties ─────────────────────────────
 
-function ContractDetail({ data, organizationId, canWrite, contract, onClose, onEdit, onChanged, onDeleted }: {
+function ContractDetail({ data, organizationId, canWrite, contract, officeBusy, onOpenInWord, onClose, onEdit, onChanged, onDeleted }: {
   data: AppData; organizationId: string; canWrite: boolean; contract: Contract;
+  officeBusy: boolean;
+  onOpenInWord: (contract: Contract) => void | Promise<void>;
   onClose: () => void; onEdit: () => void; onChanged: () => void; onDeleted: () => void;
 }) {
   const [signer, setSigner] = useState<ContractSigner | null>(null);
@@ -398,8 +626,14 @@ function ContractDetail({ data, organizationId, canWrite, contract, onClose, onE
   const [showSend, setShowSend] = useState(false);
 
   const client = data.clients.find(c => c.id === contract.client_id) ?? null;
-  const linkedProject = data.projects.find(p => p.contract_id === contract.id) ?? null;
-  const clientProjects = data.projects.filter(p => p.client_id === contract.client_id && !p.archived);
+  const linkedProjects = data.contractProjects
+    .filter(cp => cp.contract_id === contract.id)
+    .map(cp => data.projects.find(p => p.id === cp.project_id))
+    .filter((p): p is Project => Boolean(p));
+  const clientProjects = data.projects.filter(
+    p => p.client_id === contract.client_id && !p.archived && !linkedProjects.some(lp => lp.id === p.id),
+  );
+  const officeMode = contract.editor_mode === 'office';
 
   const [recipientEmail, setRecipientEmail] = useState(client?.email ?? '');
   const [recipientName, setRecipientName] = useState(client?.contact_name || client?.name || '');
@@ -495,6 +729,9 @@ function ContractDetail({ data, organizationId, canWrite, contract, onClose, onE
 
       {/* Acties */}
       <div className="contract-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
+        {officeMode && <Button onClick={() => { void onOpenInWord(contract); }} disabled={!!busy || officeBusy}>
+          <Pencil size={14} /> {officeBusy ? 'Editor starten…' : contract.status === 'draft' && canWrite ? 'Bewerken in Word' : 'Bekijken in Word'}
+        </Button>}
         {canSend && <Button variant="primary" onClick={() => setShowSend(v => !v)} disabled={!!busy}><Send size={14} /> Verstuur ter ondertekening</Button>}
         {canResend && <Button onClick={() => setShowSend(v => !v)} disabled={!!busy}><Send size={14} /> Opnieuw versturen</Button>}
         {contract.status === 'signed' && <Button variant="primary" onClick={download} disabled={!!busy}><Download size={14} /> {busy === 'download' ? 'Bezig…' : 'Download getekend PDF'}</Button>}
@@ -526,10 +763,10 @@ function ContractDetail({ data, organizationId, canWrite, contract, onClose, onE
               : <p className="bk-muted">Nog niet verstuurd ter ondertekening.</p>}
       </Section>
 
-      {/* Projectkoppeling */}
-      <ProjectLinkSection
+      {/* Projectkoppeling — meerdere projecten per contract */}
+      <ContractProjectsSection
         organizationId={organizationId} canWrite={canWrite} contract={contract}
-        linkedProject={linkedProject} clientProjects={clientProjects}
+        linkedProjects={linkedProjects} clientProjects={clientProjects}
         onChanged={onChanged} setError={setError}
       />
 
@@ -553,9 +790,14 @@ function ContractDetail({ data, organizationId, canWrite, contract, onClose, onE
   );
 }
 
-function ProjectLinkSection({ organizationId, canWrite, contract, linkedProject, clientProjects, onChanged, setError }: {
+/**
+ * Projecten bij een contract. Meervoud sinds contract_projects: één contract kan
+ * meerdere opdrachten dekken, en één project kan onder meerdere contracten vallen
+ * (bijv. een raamovereenkomst plus een aanvullende opdracht).
+ */
+function ContractProjectsSection({ organizationId, canWrite, contract, linkedProjects, clientProjects, onChanged, setError }: {
   organizationId: string; canWrite: boolean; contract: Contract;
-  linkedProject: Project | null; clientProjects: Project[];
+  linkedProjects: Project[]; clientProjects: Project[];
   onChanged: () => void; setError: (m: string | null) => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -563,17 +805,18 @@ function ProjectLinkSection({ organizationId, canWrite, contract, linkedProject,
   const [newName, setNewName] = useState(contract.title || '');
   const [pickId, setPickId] = useState('');
 
-  const nudge = contract.status === 'signed' && !linkedProject;
+  const nudge = contract.status === 'signed' && linkedProjects.length === 0;
 
   async function createProject() {
     if (!newName.trim()) { setError('Geef het project een naam.'); return; }
     setBusy(true); setError(null);
     try {
-      await insertRow<Project>('projects', organizationId, {
-        client_id: contract.client_id, name: newName.trim(), contract_id: contract.id,
+      const project = await insertRow<Project>('projects', organizationId, {
+        client_id: contract.client_id, name: newName.trim(),
         start_date: contract.date, end_date: contract.valid_until,
       });
-      setMode('none'); onChanged();
+      await addContractProject(organizationId, contract.id, project.id);
+      setMode('none'); setNewName(contract.title || ''); onChanged();
     } catch (e) { setError(errMsg(e, 'Project aanmaken mislukt')); }
     finally { setBusy(false); }
   }
@@ -581,54 +824,57 @@ function ProjectLinkSection({ organizationId, canWrite, contract, linkedProject,
     if (!pickId) return;
     setBusy(true); setError(null);
     try {
-      await updateRow<Project>('projects', pickId, { contract_id: contract.id }, organizationId);
-      setMode('none'); onChanged();
+      await addContractProject(organizationId, contract.id, pickId);
+      setMode('none'); setPickId(''); onChanged();
     } catch (e) { setError(errMsg(e, 'Koppelen mislukt')); }
     finally { setBusy(false); }
   }
-  async function unlink() {
-    if (!linkedProject) return;
+  async function unlink(project: Project) {
+    if (!confirm(`Project "${project.name}" ontkoppelen van dit contract?`)) return;
     setBusy(true); setError(null);
     try {
-      await updateRow<Project>('projects', linkedProject.id, { contract_id: null }, organizationId);
+      await removeContractProject(organizationId, contract.id, project.id);
       onChanged();
     } catch (e) { setError(errMsg(e, 'Ontkoppelen mislukt')); }
     finally { setBusy(false); }
   }
 
   return (
-    <Section icon={<Link2 size={15} />} title="Project">
-      {linkedProject
-        ? <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-            <span>Gekoppeld aan project <strong>{linkedProject.name}</strong>.</span>
-            {canWrite && <Button onClick={unlink} disabled={busy}>Ontkoppelen</Button>}
-          </div>
-        : <>
-            {nudge && <p style={{ color: '#ffd966', marginTop: 0 }}>📌 Contract getekend — wil je nu een project starten?</p>}
-            {!nudge && <p className="bk-muted" style={{ marginTop: 0 }}>Nog geen project gekoppeld. Je kunt dit nu of later doen.</p>}
-            {canWrite && contract.client_id && <>
-              {mode === 'none' && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <Button onClick={() => setMode('new')} disabled={busy}><Plus size={14} /> Nieuw project aanmaken</Button>
-                {clientProjects.length > 0 && <Button onClick={() => setMode('existing')} disabled={busy}><Link2 size={14} /> Bestaand project koppelen</Button>}
-              </div>}
-              {mode === 'new' && <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                <label className="bk-field" style={{ flex: 1, minWidth: 200 }}><span>Projectnaam</span><Input value={newName} onChange={e => setNewName(e.target.value)} /></label>
-                <Button variant="primary" onClick={createProject} disabled={busy}>Aanmaken</Button>
-                <Button onClick={() => setMode('none')} disabled={busy}>Annuleren</Button>
-              </div>}
-              {mode === 'existing' && <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                <label className="bk-field" style={{ flex: 1, minWidth: 200 }}><span>Kies project</span>
-                  <Select value={pickId} onChange={e => setPickId(e.target.value)}>
-                    <option value="">— kies —</option>
-                    {clientProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </Select>
-                </label>
-                <Button variant="primary" onClick={linkExisting} disabled={busy || !pickId}>Koppelen</Button>
-                <Button onClick={() => setMode('none')} disabled={busy}>Annuleren</Button>
-              </div>}
-            </>}
-            {!contract.client_id && <p className="bk-muted">Koppel eerst een klant aan dit contract.</p>}
-          </>}
+    <Section icon={<Link2 size={15} />} title={linkedProjects.length > 1 ? 'Projecten' : 'Project'}>
+      {linkedProjects.length > 0 && <div style={{ display: 'grid', gap: 6, marginBottom: 10 }}>
+        {linkedProjects.map(p => <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, border: '1px solid #2a2a31', borderRadius: 10, padding: '8px 12px' }}>
+          <span><strong>{p.name}</strong>{p.archived && <span className="bk-muted"> · gearchiveerd</span>}</span>
+          {canWrite && <Button onClick={() => unlink(p)} disabled={busy}><Trash2 size={14} /></Button>}
+        </div>)}
+      </div>}
+
+      {linkedProjects.length === 0 && <>
+        {nudge && <p style={{ color: '#ffd966', marginTop: 0 }}>📌 Contract getekend — wil je nu een project starten?</p>}
+        {!nudge && <p className="bk-muted" style={{ marginTop: 0 }}>Nog geen project gekoppeld. Je kunt dit nu of later doen.</p>}
+      </>}
+
+      {canWrite && contract.client_id && <>
+        {mode === 'none' && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Button onClick={() => setMode('new')} disabled={busy}><Plus size={14} /> Nieuw project aanmaken</Button>
+          {clientProjects.length > 0 && <Button onClick={() => setMode('existing')} disabled={busy}><Link2 size={14} /> Bestaand project koppelen</Button>}
+        </div>}
+        {mode === 'new' && <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <label className="bk-field" style={{ flex: 1, minWidth: 200 }}><span>Projectnaam</span><Input value={newName} onChange={e => setNewName(e.target.value)} /></label>
+          <Button variant="primary" onClick={createProject} disabled={busy}>Aanmaken</Button>
+          <Button onClick={() => setMode('none')} disabled={busy}>Annuleren</Button>
+        </div>}
+        {mode === 'existing' && <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <label className="bk-field" style={{ flex: 1, minWidth: 200 }}><span>Kies project</span>
+            <Select value={pickId} onChange={e => setPickId(e.target.value)}>
+              <option value="">— kies —</option>
+              {clientProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </Select>
+          </label>
+          <Button variant="primary" onClick={linkExisting} disabled={busy || !pickId}>Koppelen</Button>
+          <Button onClick={() => setMode('none')} disabled={busy}>Annuleren</Button>
+        </div>}
+      </>}
+      {!contract.client_id && <p className="bk-muted">Koppel eerst een klant aan dit contract.</p>}
     </Section>
   );
 }
@@ -750,9 +996,13 @@ function ContractVersionsSection({ contractId, organizationId }: { contractId: s
           <strong style={{ fontSize: 13 }}>v{v.version_number}</strong>
           <span className="bk-muted" style={{ fontSize: 12 }}>{reasonLabel(v.snapshot_reason)} · {new Date(v.created_at).toLocaleString('nl-NL', { dateStyle: 'short', timeStyle: 'short' })}</span>
           <span style={{ flex: 1 }} />
-          <button type="button" onClick={() => setOpenId(openId === v.id ? null : v.id)} style={noteLinkBtn}>{openId === v.id ? 'Verberg' : 'Bekijk inhoud'}</button>
+          {/* Word-contracten hebben geen HTML-momentopname: daar IS de verstuurde
+              PDF de versie. Die is als bijlage bij de klant en staat in de opslag. */}
+          {v.pdf_storage_key
+            ? <span className="bk-muted" style={{ fontSize: 12 }}>Verstuurd als PDF</span>
+            : <button type="button" onClick={() => setOpenId(openId === v.id ? null : v.id)} style={noteLinkBtn}>{openId === v.id ? 'Verberg' : 'Bekijk inhoud'}</button>}
         </div>
-        {openId === v.id && <div style={{ marginTop: 8, borderTop: '1px solid #2a2a31', paddingTop: 8 }}>
+        {openId === v.id && !v.pdf_storage_key && <div style={{ marginTop: 8, borderTop: '1px solid #2a2a31', paddingTop: 8 }}>
           {v.title && <div style={{ fontWeight: 600, marginBottom: 6 }}>{v.title}</div>}
           <RichTextViewer content={v.body} emptyText="Geen inhoud." />
         </div>}
@@ -769,6 +1019,14 @@ function Section({ icon, title, children }: { icon?: React.ReactNode; title: str
 }
 
 // ───────────────────────────── helpers ─────────────────────────────
+
+/** "A", "A en B", "A, B en C" — zoals het in een contracttekst hoort te staan. */
+function formatProjectNames(names: string[]): string | null {
+  const clean = names.map(n => n.trim()).filter(Boolean);
+  if (clean.length === 0) return null;
+  if (clean.length === 1) return clean[0];
+  return `${clean.slice(0, -1).join(', ')} en ${clean[clean.length - 1]}`;
+}
 
 function formatCompanyAddress(cs: AppData['companySettings']): string {
   if (!cs) return '';

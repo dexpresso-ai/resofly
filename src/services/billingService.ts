@@ -45,6 +45,15 @@ export async function createExtraSeatCheckout(organizationId: UUID, quantity = 1
   });
 }
 
+// Opslagbundel(s) bijkopen (accountbrede opslag): past het abonnementsbedrag
+// direct aan op een lopend mandaat, zoals extra seats.
+export async function createStorageAddonCheckout(organizationId: UUID, quantity = 1): Promise<BillingCheckoutResult> {
+  return await invokeBillingFunction<BillingCheckoutResult>('createStorageAddonCheckout', {
+    organizationId,
+    quantity,
+  });
+}
+
 // Planwijziging: past het bedrag aan (actief abonnement) of start een nieuw
 // abonnement op het gekozen plan (nog geen abonnement).
 export async function createPlanChangeCheckout(organizationId: UUID, planKey: string): Promise<BillingCheckoutResult> {

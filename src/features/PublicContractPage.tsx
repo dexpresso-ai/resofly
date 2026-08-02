@@ -28,6 +28,15 @@ type PublicContract = {
   number: string;
   title: string;
   body: string;
+  /**
+   * 'pdf' = het contract is in Word opgesteld; de klant leest het echte document
+   * (dan is `body` leeg). 'html' = de oude rich-text-contracten. Het veld is
+   * optioneel omdat een nog niet bijgewerkte edge function het niet meestuurt —
+   * dan valt de pagina terug op het HTML-pad, precies zoals vroeger.
+   */
+  content_kind?: 'html' | 'pdf';
+  /** De PDF zelf, base64. Null als de documentserver even niet bereikbaar was. */
+  document_pdf_base64?: string | null;
   date: string;
   valid_until: string | null;
   status: string;
@@ -57,6 +66,10 @@ export function PublicContractPage({ token }: { token: string }) {
   const [question, setQuestion] = useState('');
   const [questionSent, setQuestionSent] = useState(false);
 
+  // Word-contract: de PDF komt als base64 mee en wordt hier een blob-URL.
+  const [documentUrl, setDocumentUrl] = useState<string | null>(null);
+  const [documentBroken, setDocumentBroken] = useState(false);
+
   async function load() {
     setLoading(true); setError(null);
     try {
@@ -73,6 +86,23 @@ export function PublicContractPage({ token }: { token: string }) {
     }
   }
   useEffect(() => { void load(); }, [token]);
+
+  const documentBase64 = payload?.contract.content_kind === 'pdf' ? payload?.contract.document_pdf_base64 ?? null : null;
+  useEffect(() => {
+    if (!documentBase64) { setDocumentUrl(null); setDocumentBroken(false); return; }
+    let url: string;
+    try {
+      url = URL.createObjectURL(base64ToPdfBlob(documentBase64));
+    } catch {
+      // Onleesbare base64 telt als "geen document": dan mag er ook niet getekend worden.
+      setDocumentUrl(null); setDocumentBroken(true);
+      return;
+    }
+    setDocumentUrl(url); setDocumentBroken(false);
+    // Na tekenen of weigeren komt er een verse payload binnen met opnieuw de hele
+    // PDF. Zonder revoke houdt de browser elke eerdere versie in het geheugen.
+    return () => URL.revokeObjectURL(url);
+  }, [documentBase64]);
 
   async function sign() {
     setSubmitting(true); setError(null);
@@ -134,7 +164,23 @@ export function PublicContractPage({ token }: { token: string }) {
   const companyName = company?.trade_name || company?.company_name || 'ResoFly';
   const accent = company?.invoice_accent_color && /^#[0-9a-f]{6}$/i.test(company.invoice_accent_color) ? company.invoice_accent_color : '#FFD966';
   const isFinal = contract && ['signed', 'declined', 'expired', 'voided'].includes(contract.status);
-  const canSign = Boolean(name.trim()) && isValidEmail(email) && consent && (method === 'typed' ? Boolean(name.trim()) : Boolean(drawnImage));
+  const isPdfContract = contract?.content_kind === 'pdf';
+  // Niemand tekent iets wat hij niet heeft kunnen lezen: zonder document geen
+  // ondertekenmogelijkheid. Weigeren en een vraag stellen blijven wél gewoon werken.
+  const documentUnavailable = Boolean(isPdfContract && (!contract?.document_pdf_base64 || documentBroken));
+  const canSign = !documentUnavailable && Boolean(name.trim()) && isValidEmail(email) && consent && (method === 'typed' ? Boolean(name.trim()) : Boolean(drawnImage));
+
+  function downloadDocument() {
+    if (!documentUrl || !contract) return;
+    const link = document.createElement('a');
+    link.href = documentUrl;
+    link.download = `contract-${(contract.number || 'document').replace(/[^\w.-]+/g, '-')}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Bewust géén revoke: deze object-URL is van de useEffect hierboven en voedt
+    // ook het iframe — intrekken zou de weergave leegmaken.
+  }
 
   if (loading) return <main className="public-quote-page"><div className="public-quote-card"><h1>Contract laden…</h1></div></main>;
   if (error && !payload) return <main className="public-quote-page"><div className="public-quote-card"><p className="eyebrow">Contract</p><h1>Deze link werkt niet meer</h1><p>{error}</p></div></main>;
@@ -165,7 +211,9 @@ export function PublicContractPage({ token }: { token: string }) {
 
     <section className="public-quote-card">
       <h2>Het contract</h2>
-      <div className="contract-body" style={{ lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: sanitizeRichText(contract.body) || '<p>(geen inhoud)</p>' }} />
+      {isPdfContract
+        ? <ContractDocument url={documentUrl} unavailable={documentUnavailable} onDownload={downloadDocument} onRetry={() => void load()} />
+        : <div className="contract-body" style={{ lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: sanitizeRichText(contract.body) || '<p>(geen inhoud)</p>' }} />}
     </section>
 
     <section className="public-quote-card">
@@ -177,29 +225,35 @@ export function PublicContractPage({ token }: { token: string }) {
             <Input value={email} onChange={e => setEmail(e.target.value)} placeholder="E-mailadres" />
           </div>
 
-          <div style={{ marginTop: 14 }}>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-              <MethodTab active={method === 'typed'} onClick={() => setMethod('typed')} accent={accent}>Typ je naam</MethodTab>
-              <MethodTab active={method === 'drawn'} onClick={() => setMethod('drawn')} accent={accent}>Teken handtekening</MethodTab>
-            </div>
-            {method === 'typed'
-              ? <div style={{ border: '1px solid #2a2a31', borderRadius: 14, padding: '18px 16px', background: '#0e0e11', minHeight: 72, display: 'flex', alignItems: 'center' }}>
-                  <span style={{ fontFamily: '"Brush Script MT","Segoe Script",cursive', fontSize: 34, color: '#fff' }}>{name || 'Je naam'}</span>
+          {documentUnavailable
+            ? <p style={{ marginTop: 14, color: '#d8d8df' }}>
+                Ondertekenen kan pas zodra het contractdocument weer geladen kan worden — je hoort eerst te kunnen lezen wat je tekent. Je kunt hierboven opnieuw proberen, of ons nu al een vraag stellen of het contract weigeren.
+              </p>
+            : <>
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                    <MethodTab active={method === 'typed'} onClick={() => setMethod('typed')} accent={accent}>Typ je naam</MethodTab>
+                    <MethodTab active={method === 'drawn'} onClick={() => setMethod('drawn')} accent={accent}>Teken handtekening</MethodTab>
+                  </div>
+                  {method === 'typed'
+                    ? <div style={{ border: '1px solid #2a2a31', borderRadius: 14, padding: '18px 16px', background: '#0e0e11', minHeight: 72, display: 'flex', alignItems: 'center' }}>
+                        <span style={{ fontFamily: '"Brush Script MT","Segoe Script",cursive', fontSize: 34, color: '#fff' }}>{name || 'Je naam'}</span>
+                      </div>
+                    : <SignaturePad onChange={setDrawnImage} />}
                 </div>
-              : <SignaturePad onChange={setDrawnImage} />}
-          </div>
 
-          <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginTop: 14, cursor: 'pointer', color: '#d8d8df' }}>
-            <input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} style={{ marginTop: 3 }} />
-            <span>{CONSENT_TEXT}</span>
-          </label>
+                <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginTop: 14, cursor: 'pointer', color: '#d8d8df' }}>
+                  <input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} style={{ marginTop: 3 }} />
+                  <span>{CONSENT_TEXT}</span>
+                </label>
+              </>}
 
           <div className="public-decision-actions" style={{ marginTop: 14 }}>
             <Button variant="ghost" onClick={() => { setPanel(panel === 'question' ? 'none' : 'question'); setQuestionSent(false); }} disabled={submitting}>Stel een vraag</Button>
             <Button variant="danger" onClick={() => setPanel(panel === 'decline' ? 'none' : 'decline')} disabled={submitting}>Weigeren</Button>
-            <Button variant="primary" onClick={sign} disabled={submitting || !canSign}>Onderteken contract</Button>
+            {!documentUnavailable && <Button variant="primary" onClick={sign} disabled={submitting || !canSign}>Onderteken contract</Button>}
           </div>
-          <p style={{ marginTop: 10, color: '#9b9ba7', fontSize: 13 }}>🔒 Beveiligde ondertekening. Tijdstip, IP-adres en je akkoord worden vastgelegd als bewijs (eenvoudige elektronische handtekening, eIDAS).</p>
+          {!documentUnavailable && <p style={{ marginTop: 10, color: '#9b9ba7', fontSize: 13 }}>🔒 Beveiligde ondertekening. Tijdstip, IP-adres en je akkoord worden vastgelegd als bewijs (eenvoudige elektronische handtekening, eIDAS).</p>}
         </div>
 
         {panel === 'decline' && <div style={{ marginTop: 14, borderTop: '1px solid #2a2a31', paddingTop: 14 }}>
@@ -235,6 +289,54 @@ export function PublicContractPage({ token }: { token: string }) {
       </div>
     </section>}
   </main>;
+}
+
+/**
+ * Word-contract: de klant krijgt het échte document te zien, niet een benadering
+ * ervan in HTML. Het iframe is de comfortabele route; de downloadknop is het
+ * vangnet, want een deel van de mobiele browsers weigert PDF's in een iframe te
+ * tonen en dan moet de klant het contract alsnog kunnen lezen vóór hij tekent.
+ */
+function ContractDocument({ url, unavailable, onDownload, onRetry }: {
+  url: string | null;
+  unavailable: boolean;
+  onDownload: () => void;
+  onRetry: () => void;
+}) {
+  if (unavailable) {
+    return <div className="public-decision-done">
+      <h3>Het document kan nu niet worden geladen</h3>
+      <p>Dit contract is als document opgesteld, maar we krijgen het op dit moment niet opgehaald. Dat ligt niet aan jou — probeer het over een paar minuten nog eens.</p>
+      <p>Blijft het misgaan? Laat het ons weten via ‘Stel een vraag’ hieronder, dan sturen we je het contract per e-mail.</p>
+      <div className="public-decision-actions" style={{ marginTop: 12 }}>
+        <Button variant="primary" onClick={onRetry}>Opnieuw proberen</Button>
+      </div>
+    </div>;
+  }
+
+  return <div style={{ display: 'grid', gap: 12 }}>
+    <div style={{ display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+      {/* flex-basis 240px: op een telefoon zakt de downloadknop netjes onder de tekst i.p.v. hem plat te drukken. */}
+      <span style={{ color: '#9b9ba7', fontSize: 13, flex: '1 1 240px', minWidth: 0 }}>Lees het contract hieronder. Zie je het niet (dat gebeurt op sommige telefoons)? Download dan de PDF.</span>
+      <Button variant="ghost" onClick={onDownload} disabled={!url}>Download PDF</Button>
+    </div>
+    {url
+      ? <iframe
+          key={url}
+          src={`${url}#view=FitH`}
+          title="Contractdocument (PDF)"
+          style={{ width: '100%', height: 'min(80vh, 900px)', minHeight: 360, display: 'block', border: '1px solid #2a2a31', borderRadius: 14, background: '#fff' }}
+        />
+      : <div style={{ padding: 24, textAlign: 'center', color: '#9b9ba7', border: '1px solid #2a2a31', borderRadius: 14 }}>Document wordt geladen…</div>}
+  </div>;
+}
+
+/** Base64 uit de edge function → blob, zodat het iframe en de download dezelfde PDF gebruiken. */
+function base64ToPdfBlob(base64: string): Blob {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: 'application/pdf' });
 }
 
 function FinalState({ contract }: { contract: PublicContract }) {

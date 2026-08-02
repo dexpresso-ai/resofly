@@ -33,6 +33,8 @@ type BillingProfile = {
   next_invoice_date: string | null;
   trial_ends_at: string | null;
   last_payment_status: string | null;
+  /** Aantal bijgekochte opslagbundels (à limits.storage_addon_gb GB). */
+  storage_addons: number | null;
 };
 
 type BillingPlan = {
@@ -47,6 +49,9 @@ type BillingPlan = {
   trial_days: number;
   is_custom?: boolean;
   is_active: boolean;
+  storage_addon_price_cents: number;
+  storage_addon_yearly_price_cents: number;
+  limits: Record<string, unknown> | null;
 };
 
 type BillingInterval = 'month' | 'year';
@@ -112,6 +117,8 @@ serve(async (req) => {
         return json(req, { ok: true, ...(await startSubscriptionCheckout(user.id, organizationId, String(body.planKey || ''), String(body.returnUrl || ''), String(body.interval || 'month'))) });
       case 'createExtraSeatCheckout':
         return json(req, { ok: true, ...(await createExtraSeatCheckout(user.id, organizationId, Number(body.quantity || 1), String(body.returnUrl || ''))) });
+      case 'createStorageAddonCheckout':
+        return json(req, { ok: true, ...(await createStorageAddonCheckout(organizationId, Number(body.quantity || 1))) });
       case 'createPlanChangeCheckout':
         return json(req, { ok: true, ...(await createPlanChangeCheckout(user.id, organizationId, String(body.planKey || ''), String(body.returnUrl || ''), String(body.interval || 'month'))) });
       case 'cancelSubscription':
@@ -259,12 +266,34 @@ function normalizeInterval(value: unknown): BillingInterval {
   return String(value) === 'year' ? 'year' : 'month';
 }
 
-// Totaalbedrag per factuurperiode = basisprijs + extra seats × seatprijs, in het
-// gekozen interval (maand of jaar). Extra seats volgen dus het interval van het plan.
-function intervalAmountCents(plan: BillingPlan, purchasedSeats: number, interval: BillingInterval): number {
+// Totaalbedrag per factuurperiode = basisprijs + extra seats × seatprijs + opslag-
+// bundels × bundelprijs, in het gekozen interval (maand of jaar). LET OP: elke plek
+// die het Mollie-bedrag (her)berekent moet ALLE componenten meerekenen, anders wordt
+// een eerder gekochte add-on bij de volgende mutatie stilzwijgend uit het bedrag gesloopt.
+function intervalAmountCents(plan: BillingPlan, purchasedSeats: number, interval: BillingInterval, storageAddons = 0): number {
   const base = interval === 'year' ? plan.yearly_price_cents : plan.monthly_price_cents;
   const seat = interval === 'year' ? plan.extra_seat_yearly_price_cents : plan.extra_seat_price_cents;
-  return base + Math.max(0, purchasedSeats) * seat;
+  const storage = interval === 'year' ? (plan.storage_addon_yearly_price_cents || 0) : (plan.storage_addon_price_cents || 0);
+  return base + Math.max(0, purchasedSeats) * seat + Math.max(0, storageAddons) * storage;
+}
+
+/** Gelijk aan de CHECK-constraint op organization_billing_profiles.storage_addons. */
+const MAX_STORAGE_ADDONS = 100;
+
+function profileStorageAddons(profile: BillingProfile): number {
+  return Math.max(0, Number(profile.storage_addons ?? 0));
+}
+
+function planStorageGb(plan: BillingPlan): number | null {
+  const raw = plan.limits && typeof plan.limits === 'object' ? (plan.limits as Record<string, unknown>).storage_gb : null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function planStorageAddonGb(plan: BillingPlan): number {
+  const raw = plan.limits && typeof plan.limits === 'object' ? (plan.limits as Record<string, unknown>).storage_addon_gb : null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : 100;
 }
 
 // Service-role-veilige overview (de RPC vereist auth.uid()/can_admin_org en werkt niet
@@ -290,6 +319,18 @@ async function loadBillingOverview(organizationId: string): Promise<unknown> {
   const active = activeMembers ?? 0;
   const pending = pendingInvitations ?? 0;
   const used = active + pending;
+
+  // Opslagverbruik via de RPC; nooit blokkerend voor de rest van het overzicht.
+  let storageUsedBytes = 0;
+  try {
+    const { data: storageRows } = await supabaseAdmin.rpc('organization_storage_status', { p_organization_id: organizationId });
+    const storageRow = Array.isArray(storageRows) ? storageRows[0] : storageRows;
+    storageUsedBytes = Number(storageRow?.used_bytes ?? 0) || 0;
+  } catch { /* migratie nog niet toegepast */ }
+
+  const storageAddons = profileStorageAddons(profile);
+  const storageGb = planStorageGb(plan);
+  const storageAddonGb = planStorageAddonGb(plan);
 
   return {
     organization_id: profile.organization_id,
@@ -319,6 +360,13 @@ async function loadBillingOverview(organizationId: string): Promise<unknown> {
     billing_interval: profile.billing_interval,
     yearly_price_cents: plan.yearly_price_cents,
     extra_seat_yearly_price_cents: plan.extra_seat_yearly_price_cents,
+    storage_addons: storageAddons,
+    plan_storage_gb: storageGb,
+    storage_addon_gb: storageAddonGb,
+    storage_addon_price_cents: plan.storage_addon_price_cents || 0,
+    storage_addon_yearly_price_cents: plan.storage_addon_yearly_price_cents || 0,
+    storage_limit_gb: profile.billing_exempt || storageGb == null ? null : storageGb + storageAddons * storageAddonGb,
+    storage_used_bytes: storageUsedBytes,
   };
 }
 
@@ -407,7 +455,7 @@ async function startSubscriptionCheckout(userId: string, organizationId: string,
     throw new BillingHttpError('Voor dit plan is geen jaarprijs ingesteld. Kies maandelijks of stel eerst een jaarprijs in.', 400);
   }
 
-  const amountCents = intervalAmountCents(plan, profile.purchased_seats, interval);
+  const amountCents = intervalAmountCents(plan, profile.purchased_seats, interval, profileStorageAddons(profile));
   if (amountCents <= 0) throw new BillingHttpError(`Voor dit plan is geen ${interval === 'year' ? 'jaar' : 'maand'}bedrag ingesteld.`, 400);
 
   const returnUrl = sanitizeReturnTo(returnUrlRaw);
@@ -461,7 +509,7 @@ async function createPlanChangeCheckout(userId: string, organizationId: string, 
   // Actief abonnement → bedrag aanpassen in het bestaande interval en planwijziging direct toepassen.
   const interval = normalizeInterval(profile.billing_interval);
   const newPurchased = profile.purchased_seats;
-  const amountCents = intervalAmountCents(targetPlan, newPurchased, interval);
+  const amountCents = intervalAmountCents(targetPlan, newPurchased, interval, profileStorageAddons(profile));
   await updateMollieSubscriptionAmount(profile, amountCents, targetPlan, `ResoFly ${targetPlan.name} — abonnement`);
   const { error } = await supabaseAdmin.rpc('apply_organization_seat_change', {
     p_organization_id: organizationId,
@@ -490,12 +538,51 @@ async function createExtraSeatCheckout(_userId: string, organizationId: string, 
   }
 
   const newPurchased = profile.purchased_seats + quantity;
-  const amountCents = intervalAmountCents(plan, newPurchased, interval);
+  const amountCents = intervalAmountCents(plan, newPurchased, interval, profileStorageAddons(profile));
   await updateMollieSubscriptionAmount(profile, amountCents, plan, `ResoFly ${plan.name} — abonnement`);
   const { error } = await supabaseAdmin.rpc('apply_organization_seat_change', {
     p_organization_id: organizationId,
     p_purchased_seats: newPurchased,
     p_metadata: { source: 'extra_seat', quantity, amount_cents: amountCents, interval },
+  });
+  if (error) throw error;
+  return { applied: true };
+}
+
+// Opslagbundel bijkopen op een lopend mandaat — zelfde patroon als extra seats:
+// Mollie-bedrag PATchen en de mutatie direct vastleggen via de service-role RPC.
+async function createStorageAddonCheckout(organizationId: string, quantityRaw: number): Promise<CheckoutResult> {
+  const quantity = Math.max(1, Math.min(20, Math.floor(Number.isFinite(quantityRaw) ? quantityRaw : 1)));
+  const profile = await ensureBillingProfile(organizationId);
+  await assertNotExempt(profile);
+
+  if (!hasActiveSubscription(profile)) {
+    throw new BillingHttpError('Start eerst een abonnement voordat je extra opslag toevoegt.', 400);
+  }
+
+  const interval = normalizeInterval(profile.billing_interval);
+  const plan = await getPlan(profile.plan_key);
+  const storagePrice = interval === 'year' ? plan.storage_addon_yearly_price_cents : plan.storage_addon_price_cents;
+  if (!storagePrice || storagePrice <= 0) {
+    throw new BillingHttpError('Voor dit plan is geen opslagbundel-prijs ingesteld. Neem contact op voor een maatwerkafspraak.', 400);
+  }
+  if (planStorageGb(plan) == null) {
+    throw new BillingHttpError('Dit plan heeft geen opslaglimiet; extra bundels zijn niet nodig.', 400);
+  }
+
+  const newAddons = profileStorageAddons(profile) + quantity;
+  // Bovengrens vóór de Mollie-PATCH controleren (de DB-constraint is 100): anders
+  // zou het abonnementsbedrag al verhoogd zijn wanneer de RPC daarna afketst.
+  if (newAddons > MAX_STORAGE_ADDONS) {
+    throw new BillingHttpError(`Maximaal ${MAX_STORAGE_ADDONS} opslagbundels per organisatie. Neem contact op voor een maatwerkafspraak.`, 400);
+  }
+
+  const amountCents = intervalAmountCents(plan, profile.purchased_seats, interval, newAddons);
+  await updateMollieSubscriptionAmount(profile, amountCents, plan, `ResoFly ${plan.name} — abonnement`);
+  const { error } = await supabaseAdmin.rpc('apply_organization_storage_change', {
+    p_organization_id: organizationId,
+    p_storage_addons: newAddons,
+    p_metadata: { source: 'storage_addon', quantity, addon_gb: planStorageAddonGb(plan), amount_cents: amountCents, interval },
   });
   if (error) throw error;
   return { applied: true };
@@ -638,7 +725,7 @@ async function activateSubscriptionFromFirstPayment(organizationId: string, plan
   const profile = await getProfile(organizationId);
   const effectivePlanKey = planKey || profile.plan_key || 'starter';
   const plan = await getPlan(effectivePlanKey);
-  const amountCents = intervalAmountCents(plan, profile.purchased_seats, interval);
+  const amountCents = intervalAmountCents(plan, profile.purchased_seats, interval, profileStorageAddons(profile));
   const effectiveCustomerId = customerId || profile.mollie_customer_id || '';
   const mollieInterval = interval === 'year' ? '12 months' : '1 month';
   const intervalLabel = interval === 'year' ? 'jaarabonnement' : 'maandabonnement';

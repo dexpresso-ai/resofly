@@ -34,6 +34,15 @@ const INVOICE_PDF_STORAGE_SECRET =
   Deno.env.get('QUOTE_PDF_STORAGE_SECRET') ||
   '';
 
+// Galerij-weergave: de media-api worker munt kijk-/downloadtokens voor het
+// portaal via /internal/gallery/tokens (zelfde secret-keten als meeting-transcribe).
+const MEDIA_WORKER_URL = (Deno.env.get('MEDIA_WORKER_URL') || '').replace(/\/$/, '');
+const MEDIA_INTERNAL_SECRET =
+  Deno.env.get('INTERNAL_UPLOAD_SECRET') ||
+  Deno.env.get('INVOICE_PDF_STORAGE_SECRET') ||
+  Deno.env.get('QUOTE_PDF_STORAGE_SECRET') ||
+  '';
+
 const allowedOrigins = parseAllowedOrigins([
   Deno.env.get('CLIENT_PORTAL_ALLOWED_ORIGINS'),
   Deno.env.get('APP_PUBLIC_URL'),
@@ -98,6 +107,10 @@ serve(async (req) => {
         return json(req, { ok: true, ...(await getInvoicePdf(user, body)) });
       case 'getContractPdf':
         return json(req, { ok: true, ...(await getContractPdf(user, body)) });
+      case 'getGalleryDetail':
+        return json(req, { ok: true, ...(await getGalleryDetail(user, body)) });
+      case 'toggleGalleryFavorite':
+        return json(req, { ok: true, ...(await toggleGalleryFavorite(user, body)) });
       default:
         throw new PortalError(`Onbekende actie: ${action}`, 400);
     }
@@ -523,6 +536,160 @@ async function getContractPdf(user: { id: string; email: string }, body: Record<
   };
 }
 
+// ── Galerijen (foto/video-oplevering) ─────────────────────────────────
+
+type GalleryRow = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  published_at: string | null;
+  cover_item_id: string | null;
+  allow_downloads: boolean;
+  download_quality: string;
+  expires_at: string | null;
+};
+
+/** Haal de galerij op en dwing publicatie + geldigheid + klant-eigendom af. */
+async function requireAccessibleGallery(user: { email: string }, galleryId: string): Promise<{ gallery: GalleryRow; client: ClientRow; clients: ClientRow[] }> {
+  if (!isUuid(galleryId)) throw new PortalError('Ongeldige galerij.', 400);
+  const clients = await resolveAccountsForEmail(user.email);
+
+  const { data, error } = await supabaseAdmin.from('galleries').select('*').eq('id', galleryId).maybeSingle();
+  if (error) throw error;
+  const gallery = data as GalleryRow | null;
+  if (!gallery) throw new PortalError('Galerij niet gevonden.', 404);
+  if (gallery.status !== 'published') throw new PortalError('Deze galerij is niet (meer) gepubliceerd.', 403);
+  if (gallery.expires_at && new Date(gallery.expires_at) < new Date()) {
+    throw new PortalError('De toegang tot deze galerij is verlopen.', 403);
+  }
+
+  // Eigendom via het project van de klant (galerijen hangen niet direct aan client_id).
+  const { data: project, error: projectError } = await supabaseAdmin
+    .from('projects')
+    .select('client_id')
+    .eq('id', gallery.project_id)
+    .eq('organization_id', gallery.organization_id)
+    .maybeSingle();
+  if (projectError) throw projectError;
+  const client = clients.find((row) => row.id === project?.client_id) || null;
+  if (!client) throw new PortalError('Geen toegang tot deze galerij.', 403);
+
+  return { gallery, client, clients };
+}
+
+/** Tokenbundel (R2 + Stream) via de media-api worker; het portaal serveert nooit zelf bytes. */
+async function fetchGalleryTokens(organizationId: string, galleryId: string, allowDownload: boolean) {
+  if (!MEDIA_WORKER_URL || !MEDIA_INTERNAL_SECRET) {
+    throw new PortalError('Galerij-weergave is niet geconfigureerd (MEDIA_WORKER_URL + INTERNAL_UPLOAD_SECRET).', 500);
+  }
+  const res = await fetch(`${MEDIA_WORKER_URL}/internal/gallery/tokens`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${MEDIA_INTERNAL_SECRET}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ organizationId, galleryId, allowDownload, ttlSeconds: 21600 }),
+  });
+  if (!res.ok) throw new PortalError('Kon galerij-tokens niet ophalen.', 502);
+  return (await res.json()) as { mediaToken: string; streamTokens: Record<string, string>; exp: number };
+}
+
+async function getGalleryDetail(user: { id: string; email: string }, body: Record<string, unknown>) {
+  const galleryId = String(body.galleryId || '').trim();
+  const { gallery, client } = await requireAccessibleGallery(user, galleryId);
+
+  const [items, favorites, tokens, contact] = await Promise.all([
+    selectRows('gallery_items', (q) => q.eq('gallery_id', gallery.id).eq('organization_id', gallery.organization_id).order('sort_order', { ascending: true }).order('created_at', { ascending: true })),
+    selectRows('gallery_favorites', (q) => q.eq('gallery_id', gallery.id).eq('organization_id', gallery.organization_id)),
+    fetchGalleryTokens(gallery.organization_id, gallery.id, gallery.allow_downloads),
+    resolveActingContact(client, user.email),
+  ]);
+
+  const sessionKey = `portal:${user.id}`;
+  const myFavoriteIds = favorites
+    .filter((f) => (contact ? f.contact_id === contact.id : f.session_key === sessionKey))
+    .map((f) => String(f.item_id));
+
+  return {
+    gallery: sanitizeGallery(gallery),
+    items: items.map(sanitizeGalleryItem),
+    tokens,
+    myFavoriteIds,
+  };
+}
+
+async function toggleGalleryFavorite(user: { id: string; email: string }, body: Record<string, unknown>) {
+  const galleryId = String(body.galleryId || '').trim();
+  const itemId = String(body.itemId || '').trim();
+  const on = body.on === true;
+  if (!isUuid(itemId)) throw new PortalError('Ongeldig galerij-item.', 400);
+  const { gallery, client } = await requireAccessibleGallery(user, galleryId);
+
+  const { data: item, error: itemError } = await supabaseAdmin
+    .from('gallery_items')
+    .select('id')
+    .eq('id', itemId)
+    .eq('gallery_id', gallery.id)
+    .eq('organization_id', gallery.organization_id)
+    .maybeSingle();
+  if (itemError) throw itemError;
+  if (!item) throw new PortalError('Galerij-item niet gevonden.', 404);
+
+  const contact = await resolveActingContact(client, user.email);
+  const sessionKey = `portal:${user.id}`;
+
+  if (on) {
+    const insert = contact
+      ? { actor_kind: 'portal_contact', contact_id: contact.id, actor_label: contact.name || contact.email }
+      : { actor_kind: 'share_link', session_key: sessionKey, actor_label: client.contact_name || client.name || user.email };
+    const { error } = await supabaseAdmin.from('gallery_favorites').insert({
+      organization_id: gallery.organization_id,
+      gallery_id: gallery.id,
+      item_id: itemId,
+      ...insert,
+    });
+    // Dubbel klikken → unieke index botst; dat is geen fout voor de klant.
+    if (error && error.code !== '23505') throw error;
+  } else {
+    let query = supabaseAdmin.from('gallery_favorites').delete().eq('item_id', itemId).eq('gallery_id', gallery.id);
+    query = contact ? query.eq('contact_id', contact.id) : query.eq('session_key', sessionKey);
+    const { error } = await query;
+    if (error) throw error;
+  }
+  return { itemId, on };
+}
+
+function sanitizeGallery(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    project_id: row.project_id,
+    title: row.title,
+    description: row.description ?? null,
+    published_at: row.published_at ?? null,
+    allow_downloads: Boolean(row.allow_downloads),
+    download_quality: row.download_quality ?? 'original',
+    cover_item_id: row.cover_item_id ?? null,
+    expires_at: row.expires_at ?? null,
+  };
+}
+
+function sanitizeGalleryItem(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    media_type: row.media_type,
+    file_name: row.file_name,
+    storage_key: row.storage_key ?? null,
+    preview_key: row.preview_key ?? null,
+    thumb_key: row.thumb_key ?? null,
+    width: row.width ?? null,
+    height: row.height ?? null,
+    duration_seconds: row.duration_seconds != null ? Number(row.duration_seconds) : null,
+    stream_uid: row.stream_uid ?? null,
+    stream_status: row.stream_status ?? null,
+    stream_playback_base: row.stream_playback_base ?? null,
+  };
+}
+
 // ── Dataopbouw ────────────────────────────────────────────────────────
 
 async function resolveAccountsForEmail(email: string): Promise<ClientRow[]> {
@@ -543,13 +710,24 @@ async function buildAccount(client: ClientRow, email: string) {
 
   // Facturen: alleen uitgegeven (geen concepten). Offertes: alleen die echt naar de
   // klant zijn verstuurd (sent_at gezet). Beide ook gekoppeld via projecten van de klant.
-  const [invoices, quotes, tickets, contracts] = await Promise.all([
+  const [invoices, quotes, tickets, contracts, galleries] = await Promise.all([
     selectRows('invoices', (q) => scopeToClient(q.eq('organization_id', orgId).neq('status', 'draft'), client.id, projectIds).order('date', { ascending: false })),
     selectRows('quotes', (q) => scopeToClient(q.eq('organization_id', orgId).not('sent_at', 'is', null), client.id, projectIds).order('date', { ascending: false })),
     selectRows('tickets', (q) => q.eq('organization_id', orgId).eq('client_id', client.id).order('created_at', { ascending: false })),
     // Contracten zijn alleen op client_id gekoppeld; toon enkel verstuurde/getekende/geweigerde.
     selectRows('contracts', (q) => q.eq('organization_id', orgId).eq('client_id', client.id).in('status', ['sent', 'signed', 'declined']).order('created_at', { ascending: false })),
+    // Galerijen hangen aan projecten van de klant; alleen gepubliceerd en niet
+    // verlopen. Stil degraderen als de galerij-migratie nog niet is toegepast:
+    // het portaal mag nooit omvallen op een module die nog niet bestaat.
+    projectIds.length > 0
+      ? selectRows('galleries', (q) => q.eq('organization_id', orgId).eq('status', 'published').in('project_id', projectIds).order('published_at', { ascending: false }))
+        .catch((error) => {
+          console.warn('client-portal galleries lookup overgeslagen', error instanceof Error ? error.message : error);
+          return [] as Record<string, unknown>[];
+        })
+      : Promise.resolve([] as Record<string, unknown>[]),
   ]);
+  const activeGalleries = galleries.filter((g) => !g.expires_at || new Date(String(g.expires_at)) > new Date());
 
   return {
     id: client.id,
@@ -562,6 +740,7 @@ async function buildAccount(client: ClientRow, email: string) {
     quotes: quotes.map(sanitizeQuote),
     tickets: tickets.map(sanitizeTicket),
     contracts: contracts.map(sanitizeContract),
+    galleries: activeGalleries.map(sanitizeGallery),
   };
 }
 

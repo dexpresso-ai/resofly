@@ -207,6 +207,64 @@ export async function createBlankOfficeDocument(organizationId: UUID, docType: N
   return (await res.json()) as OfficeUploadResult;
 }
 
+/**
+ * Schrijf de .docx-bytes van een contract naar R2. De contractrij (met de
+ * teruggegeven storage_key) maakt/werkt de aanroeper zelf bij — net als bij
+ * documenten, zodat RLS en created_by = auth.uid() blijven gelden.
+ */
+export async function uploadContractDocx(organizationId: UUID, name: string, blob: Blob): Promise<OfficeUploadResult> {
+  const fileName = name.toLowerCase().endsWith('.docx') ? name : `${name}.docx`;
+  const base = getWorkerBase();
+  const token = await getAccessToken();
+  const res = await fetch(`${base}/office/contract-upload`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'x-organization-id': organizationId,
+      'x-file-name': encodeURIComponent(fileName),
+      'x-file-type': DOCX_MIME,
+    },
+    body: blob,
+  });
+  if (!res.ok) throw new Error(await errText(res, 'Kon het contractdocument niet opslaan'));
+  return (await res.json()) as OfficeUploadResult;
+}
+
+/** Bouw een bewerksessie voor een contract in Word-modus. */
+export async function createOfficeSessionForContract(contractId: UUID): Promise<OfficeSession> {
+  const base = getWorkerBase();
+  const token = await getAccessToken();
+  const res = await fetch(`${base}/office/session`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ contractId }),
+  });
+  if (!res.ok) throw new Error(await errText(res, 'Kon de editor niet openen'));
+  return (await res.json()) as OfficeSession;
+}
+
+/** Download het Word-bronbestand van een contract. */
+export async function downloadContractDocx(contractId: UUID, fileName: string): Promise<void> {
+  const base = getWorkerBase();
+  const token = await getAccessToken();
+  const res = await fetch(`${base}/office/contract-file/${contractId}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await errText(res, 'Download mislukt'));
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+}
+
 /** Bouw een bewerksessie voor een bestaand office-bestand. */
 export async function createOfficeSession(att: Attachment): Promise<OfficeSession> {
   const base = getWorkerBase();

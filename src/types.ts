@@ -160,8 +160,30 @@ export interface Contract extends OrgScopedRow {
   amount_cents: number | null;
   currency: string;
   template_id: UUID | null;
+  /**
+   * 'office' = de inhoud is een .docx op R2 (`body_storage_key`), bewerkt in
+   * Collabora; `body` blijft dan leeg. 'richtext' = de oude HTML in `body`.
+   * Bestaande contracten blijven 'richtext' — een getekend contract wordt nooit
+   * omgezet.
+   */
+  editor_mode: ContractEditorMode;
+  body_storage_key: string | null;
+  body_mime_type: string | null;
+  body_size_bytes: number | null;
+  edit_version: number;
+  last_edited_by: UUID | null;
+  last_edited_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type ContractEditorMode = 'richtext' | 'office';
+
+/** Koppeling contract ↔ project (meerdere projecten per contract, en omgekeerd). */
+export interface ContractProject extends OrgScopedRow {
+  contract_id: UUID;
+  project_id: UUID;
+  created_at: string;
 }
 
 export interface ContractSigner extends OrgScopedRow {
@@ -222,6 +244,10 @@ export interface ContractVersion {
   currency: string | null;
   created_by: UUID | null;
   created_at: string;
+  /** Word-contracten: de PDF zoals verstuurd is de momentopname (er is geen HTML-body). */
+  pdf_storage_key: string | null;
+  pdf_sha256: string | null;
+  pdf_size_bytes: number | null;
 }
 
 export interface Client extends OrgScopedRow {
@@ -354,6 +380,78 @@ export interface ContentFolder extends OrgScopedRow {
   /** null = map op klantniveau; gevuld = map binnen die projectmap. Vast na aanmaken. */
   project_id: UUID | null;
   parent_id: UUID | null; name: string; position: number; created_at: string; updated_at: string;
+}
+
+// ── Galerij-oplevering (foto/video per project) ─────────────────────────────
+export type GalleryStatus = 'draft' | 'published' | 'archived';
+export type GalleryDownloadQuality = 'original' | 'web';
+export type GalleryMediaType = 'photo' | 'video';
+export type GalleryStreamStatus = 'uploading' | 'processing' | 'ready' | 'error';
+
+export interface Gallery extends OrgScopedRow {
+  project_id: UUID;
+  title: string;
+  description: string | null;
+  status: GalleryStatus;
+  published_at: string | null;
+  cover_item_id: UUID | null;
+  allow_downloads: boolean;
+  download_quality: GalleryDownloadQuality;
+  share_enabled: boolean;
+  /** Alleen de SHA-256-hash; het token zelf bestaat alleen op het moment van genereren. */
+  share_token_hash: string | null;
+  share_pin_hash: string | null;
+  share_pin_failed_count: number;
+  share_pin_locked_until: string | null;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GalleryItem extends OrgScopedRow {
+  gallery_id: UUID;
+  media_type: GalleryMediaType;
+  file_name: string;
+  content_type: string | null;
+  size_bytes: number;
+  derived_bytes: number;
+  storage_key: string | null;
+  preview_key: string | null;
+  thumb_key: string | null;
+  width: number | null;
+  height: number | null;
+  duration_seconds: number | null;
+  stream_uid: string | null;
+  stream_status: GalleryStreamStatus | null;
+  stream_playback_base: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Accountbreed opslagverbruik + limiet (RPC organization_storage_status). limit_bytes null = geen limiet. */
+export interface OrganizationStorageStatus {
+  used_bytes: number;
+  attachments_bytes: number;
+  documents_bytes: number;
+  recordings_bytes: number;
+  gallery_bytes: number;
+  limit_bytes: number | null;
+  plan_storage_gb: number | null;
+  storage_addons: number;
+  storage_addon_gb: number | null;
+}
+
+export interface GalleryFavorite {
+  id: UUID;
+  organization_id: UUID;
+  gallery_id: UUID;
+  item_id: UUID;
+  actor_kind: 'portal_contact' | 'share_link';
+  contact_id: UUID | null;
+  session_key: string | null;
+  actor_label: string | null;
+  created_at: string;
 }
 export interface CalendarEventLink extends OrgScopedRow {
   provider: CalendarProvider;
@@ -1693,7 +1791,7 @@ export interface SavedReport extends OrgScopedRow {
   updated_at: string;
 }
 
-export interface AppData { clients: Client[]; clientContacts: ClientContact[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; savedReports: SavedReport[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; clientContacts: ClientContact[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; galleries: Gallery[]; savedReports: SavedReport[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft' | 'native' | 'ics';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';
@@ -1827,6 +1925,8 @@ export interface BillingPlan {
   is_active: boolean;
   sort_order: number;
   limits: Record<string, unknown>;
+  storage_addon_price_cents?: number;
+  storage_addon_yearly_price_cents?: number;
   created_at: string;
   updated_at: string;
 }
@@ -1884,6 +1984,15 @@ export interface OrganizationBillingOverview {
   billing_interval: 'month' | 'year';
   yearly_price_cents: number;
   extra_seat_yearly_price_cents: number;
+  /** Opslagbundels (accountbrede opslag): aantal + limieten + prijzen. Optioneel
+   *  zolang de gallery-migratie nog niet overal is toegepast. */
+  storage_addons?: number;
+  plan_storage_gb?: number | null;
+  storage_addon_gb?: number;
+  storage_addon_price_cents?: number;
+  storage_addon_yearly_price_cents?: number;
+  storage_limit_gb?: number | null;
+  storage_used_bytes?: number;
 }
 
 export interface BillingCheckoutResult {

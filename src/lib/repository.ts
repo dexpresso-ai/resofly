@@ -48,6 +48,9 @@ import type {
   Note,
   InternalDocument,
   ContentFolder,
+  Gallery,
+  GalleryFavorite,
+  GalleryItem,
   LedgerAccount,
   VatCode,
   JournalEntry,
@@ -84,6 +87,7 @@ import type {
   TimeEntryType,
   IndirectHoursCategory,
   Organization,
+  OrganizationStorageStatus,
   OrganizationContext,
   OrganizationInvitation,
   OrganizationBillingOverview,
@@ -101,6 +105,7 @@ import type {
   QuoteEmailDelivery,
   QuoteVersion,
   SavedReport,
+  ContractProject,
   Task,
   TaskAssignee,
   Ticket,
@@ -108,7 +113,7 @@ import type {
   UUID,
 } from '../types';
 
-const tables = ['clients', 'client_contacts', 'projects', 'project_templates', 'project_template_tasks', 'tasks', 'project_members', 'task_assignees', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'saved_reports', 'company_settings'] as const;
+const tables = ['clients', 'client_contacts', 'projects', 'project_templates', 'project_template_tasks', 'tasks', 'project_members', 'task_assignees', 'contract_projects', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'galleries', 'gallery_items', 'gallery_favorites', 'saved_reports', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -124,6 +129,7 @@ const tableToEntity: Record<Table, EntityType | null> = {
   tasks: 'task',
   project_members: null,
   task_assignees: null,
+  contract_projects: null,
   tickets: 'ticket',
   notes: 'note',
   documents: 'document',
@@ -139,6 +145,9 @@ const tableToEntity: Record<Table, EntityType | null> = {
   bank_accounts: null,
   bank_rules: null,
   attachments: null,
+  galleries: null,
+  gallery_items: null,
+  gallery_favorites: null,
   saved_reports: null,
   company_settings: null,
 };
@@ -431,12 +440,14 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     bankRequisitions,
     attachments,
     folders,
+    galleries,
     savedReports,
     companySettings,
     projectMembers,
     taskAssignees,
     projectTemplates,
     projectTemplateTasks,
+    contractProjects,
   ] = await Promise.all([
     select<Client>('clients', organizationId), selectClientContacts(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
     selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectCalendarEventLinks(organizationId), selectTimeEntries(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
@@ -446,14 +457,122 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectBankAccounts(organizationId), selectBankStatements(organizationId), selectBankTransactions(organizationId), selectBankRules(organizationId), selectBankRequisitions(organizationId),
     select<Attachment>('attachments', organizationId),
     selectFolders(organizationId),
+    selectGalleries(organizationId),
     selectSavedReports(organizationId),
     loadCompanySettings(organizationId),
     selectProjectMembers(organizationId),
     selectTaskAssignees(organizationId),
     selectProjectTemplates(organizationId),
     selectProjectTemplateTasks(organizationId),
+    selectContractProjects(organizationId),
   ]);
-  return { clients, clientContacts, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, savedReports, companySettings };
+  return { clients, clientContacts, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, galleries, savedReports, companySettings };
+}
+
+const CONTRACT_PROJECTS_MIGRATION_HINT =
+  'Voer de migratie 20260803000000_contract_office_editing_and_projects.sql uit in Supabase om contracten aan meerdere projecten te kunnen koppelen.';
+
+/**
+ * Contract↔project-koppelingen. De contracten zélf zitten niet in AppData (die
+ * laadt elke contractpagina zelf), maar de koppelrijen wél: de projectpagina en
+ * het contractformulier hebben ze allebei nodig en ze zijn klein.
+ */
+export async function selectContractProjects(organizationId: UUID): Promise<ContractProject[]> {
+  return selectOptional<ContractProject>('contract_projects', organizationId, {
+    orderBy: 'created_at', ascending: true, hint: CONTRACT_PROJECTS_MIGRATION_HINT,
+  });
+}
+
+/** Koppel een project aan een contract (idempotent: dubbel koppelen is geen fout). */
+export async function addContractProject(organizationId: UUID, contractId: UUID, projectId: UUID): Promise<void> {
+  const { error } = await supabase
+    .from('contract_projects')
+    .upsert({ organization_id: organizationId, contract_id: contractId, project_id: projectId }, { onConflict: 'contract_id,project_id', ignoreDuplicates: true });
+  if (error) throw error;
+}
+
+/** Ontkoppel een project van een contract. */
+export async function removeContractProject(organizationId: UUID, contractId: UUID, projectId: UUID): Promise<void> {
+  const { error } = await supabase
+    .from('contract_projects')
+    .delete()
+    .eq('organization_id', organizationId)
+    .eq('contract_id', contractId)
+    .eq('project_id', projectId);
+  if (error) throw error;
+}
+
+/** Zet de projectkoppelingen van één contract op exact deze lijst. */
+export async function setContractProjects(organizationId: UUID, contractId: UUID, projectIds: UUID[]): Promise<void> {
+  const wanted = [...new Set(projectIds)];
+  const { data, error } = await supabase
+    .from('contract_projects').select('project_id')
+    .eq('organization_id', organizationId).eq('contract_id', contractId);
+  if (error) throw error;
+  const current = ((data ?? []) as Array<{ project_id: UUID }>).map(r => r.project_id);
+
+  const toAdd = wanted.filter(id => !current.includes(id));
+  const toRemove = current.filter(id => !wanted.includes(id));
+
+  if (toAdd.length) {
+    const { error: insertError } = await supabase.from('contract_projects').insert(
+      toAdd.map(projectId => ({ organization_id: organizationId, contract_id: contractId, project_id: projectId })),
+    );
+    if (insertError) throw insertError;
+  }
+  if (toRemove.length) {
+    const { error: deleteError } = await supabase
+      .from('contract_projects').delete()
+      .eq('organization_id', organizationId).eq('contract_id', contractId)
+      .in('project_id', toRemove);
+    if (deleteError) throw deleteError;
+  }
+}
+
+const GALLERY_MIGRATION_HINT =
+  'Voer de migratie 20260802000000_gallery_module.sql uit in Supabase om galerij-oplevering te activeren.';
+
+/** Galerijen (org-breed; filter client-side op project_id). */
+export async function selectGalleries(organizationId: UUID): Promise<Gallery[]> {
+  return selectOptional<Gallery>('galleries', organizationId, {
+    orderBy: 'created_at', ascending: false, hint: GALLERY_MIGRATION_HINT,
+  });
+}
+
+/** Items van één galerij (lazy — kan honderden rijen per galerij zijn). */
+export async function selectGalleryItems(organizationId: UUID, galleryId: UUID): Promise<GalleryItem[]> {
+  const { data, error } = await supabase
+    .from('gallery_items')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('gallery_id', galleryId)
+    .order('sort_order', { ascending: true })
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as GalleryItem[];
+}
+
+/** Accountbreed opslagverbruik + limiet; null bij fouten (bijv. migratie nog niet toegepast). */
+export async function fetchOrganizationStorageStatus(organizationId: UUID): Promise<OrganizationStorageStatus | null> {
+  const { data, error } = await supabase.rpc('organization_storage_status', { p_organization_id: organizationId });
+  if (error) {
+    console.warn(`organization_storage_status niet beschikbaar. ${GALLERY_MIGRATION_HINT}`, error);
+    return null;
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  return (row ?? null) as OrganizationStorageStatus | null;
+}
+
+/** Favorieten (klantselectie) van één galerij. */
+export async function selectGalleryFavorites(organizationId: UUID, galleryId: UUID): Promise<GalleryFavorite[]> {
+  const { data, error } = await supabase
+    .from('gallery_favorites')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('gallery_id', galleryId)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as GalleryFavorite[];
 }
 
 const PROJECT_TEAM_MIGRATION_HINT =

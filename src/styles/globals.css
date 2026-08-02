@@ -4266,6 +4266,173 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .tpl-pick-sub{font-size:11px;color:var(--muted);padding-left:24px}
 .tpl-pick-date{margin-left:auto;font-size:10px;color:var(--muted);white-space:nowrap}
 
+/* ══════════════════════════════════════════════════════════════════════════
+   GALERIJ-OPLEVERING · foto/video per project  (2026-08-02)
+   ───────────────────────────────────────────────────────────────────────────
+   • .gal-*  = beheer in de app (projecttab): lijst, upload-wachtrij, deellink,
+     opslagmeter.
+   • .galv-* = gedeelde weergave (app + klantportaal + publieke deellink):
+     fotogrid, Netflix-achtige videorij met horizontale scroll-snap, lightbox
+     en videospeler-overlay. Donker canvas; goud alleen als accent.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Beheer: lijst van galerijen ── */
+.gal-create{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+.gal-create .form-input{flex:1}
+.gal-list{display:flex;flex-direction:column;gap:8px}
+.gal-list-card{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--bg3);color:var(--text);cursor:pointer;font:inherit;transition:border-color .15s,background .15s}
+.gal-list-card:hover{border-color:var(--border2);background:var(--bg4)}
+.gal-list-icon{display:flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:10px;background:rgba(255,217,102,.09);color:var(--accent);flex-shrink:0}
+.gal-list-main{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.gal-list-title{font-size:13.5px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gal-list-sub{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.status-pill.gal-status-draft{background:var(--bg4);color:var(--muted2)}
+.status-pill.gal-status-published{background:rgba(96,200,120,.14);color:var(--accent-g)}
+.status-pill.gal-status-archived{background:var(--bg4);color:var(--muted)}
+
+/* ── Beheer: detailkop + gereedschap ── */
+.gal-detail-title{display:flex;align-items:center;gap:10px;min-width:0}
+.gal-detail-title h3{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gal-back{background:none;border:0;color:var(--muted2);font:inherit;font-size:12px;cursor:pointer;padding:4px 6px;border-radius:7px;white-space:nowrap}
+.gal-back:hover{color:var(--text);background:rgba(255,255,255,.06)}
+.gal-detail-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.gal-fav-filter{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);background:var(--bg3);color:var(--accent-r);border-radius:999px;padding:5px 11px;font:inherit;font-size:12px;font-weight:700;cursor:pointer}
+.gal-fav-filter.active{border-color:var(--accent-r);background:rgba(224,92,92,.12)}
+.gal-spin{animation:galSpin 1s linear infinite}
+@keyframes galSpin{to{transform:rotate(360deg)}}
+
+/* ── Opslagmeter (accountbreed) ── */
+.gal-storage{display:inline-flex;align-items:center;gap:7px;font-size:11px;color:var(--muted2);border:1px solid var(--border);border-radius:999px;padding:5px 11px;background:var(--bg3)}
+.gal-storage-bar{display:inline-block;width:64px;height:5px;border-radius:3px;background:rgba(255,255,255,.09);overflow:hidden}
+.gal-storage-bar span{display:block;height:100%;border-radius:3px;background:var(--accent)}
+.gal-storage-bar.warn span{background:var(--accent-r)}
+
+/* ── Upload-wachtrij ── */
+.gal-queue{display:flex;flex-direction:column;gap:4px;margin-bottom:12px;border:1px solid var(--border);border-radius:10px;padding:9px 11px;background:var(--bg2);max-height:180px;overflow:auto}
+.gal-queue-row{display:flex;justify-content:space-between;gap:10px;font-size:11.5px}
+.gal-queue-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted2)}
+.gal-queue-status{flex-shrink:0;color:var(--muted)}
+.gal-queue-row.is-bezig .gal-queue-status{color:var(--accent)}
+.gal-queue-row.is-klaar .gal-queue-status{color:var(--accent-g)}
+.gal-queue-row.is-fout .gal-queue-status{color:var(--accent-r)}
+
+/* ── Modals (instellingen + delen) ── */
+.gal-modal{max-width:520px;width:min(520px,92vw)}
+.gal-modal-body{display:flex;flex-direction:column;gap:12px}
+.gal-field{display:flex;flex-direction:column;gap:5px;font-size:12px}
+.gal-field>span{color:var(--muted2);font-weight:600}
+.gal-field-row{flex-direction:row;align-items:center;gap:8px;font-size:12.5px}
+.gal-modal-actions{display:flex;align-items:center;gap:8px}
+.gal-modal-spacer{flex:1}
+.gal-share-note{font-size:12px;color:var(--muted2);line-height:1.55;margin:0}
+.gal-share-active{display:flex;align-items:center;gap:6px;color:var(--accent)}
+.gal-share-url{display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:9px;padding:8px 10px;background:var(--bg3)}
+.gal-share-url code{flex:1;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--accent)}
+
+/* ── Gedeelde weergave: secties ── */
+.galv{display:flex;flex-direction:column;gap:18px}
+.galv-empty{border:1px dashed var(--border);border-radius:12px;padding:30px;text-align:center;color:var(--muted);font-size:12.5px}
+.galv-section{display:flex;flex-direction:column;gap:10px}
+.galv-section-title{display:flex;align-items:center;gap:7px;margin:0;font-size:12px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--muted2)}
+
+/* ── Fotogrid ── */
+.galv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:8px}
+.galv-tile{position:relative;margin:0;border-radius:10px;overflow:hidden;background:var(--bg3);border:1px solid var(--border);cursor:zoom-in;aspect-ratio:1/1}
+.galv-tile img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .25s ease}
+.galv-tile:hover img{transform:scale(1.04)}
+.galv-tile-fallback{display:flex;align-items:center;justify-content:center;height:100%;padding:10px;font-size:11px;color:var(--muted);word-break:break-all;text-align:center}
+.galv-tile-tools{position:absolute;top:6px;right:6px;display:flex;gap:4px;opacity:0;transition:opacity .15s}
+.galv-tile:hover .galv-tile-tools,.galv-video-card:hover .galv-tile-tools,
+.galv-tile:focus-within .galv-tile-tools,.galv-video-card:focus-within .galv-tile-tools{opacity:1}
+.galv-heart,.galv-dl,.galv-tool{display:inline-flex;align-items:center;gap:3px;border:0;border-radius:8px;padding:5px 7px;background:rgba(10,10,10,.72);color:#fff;cursor:pointer;font:inherit;font-size:11px;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+.galv-heart:hover,.galv-dl:hover,.galv-tool:hover{background:rgba(10,10,10,.9)}
+.galv-heart.is-fav,.galv-heart[disabled]{color:var(--accent-r)}
+.galv-heart[disabled]{cursor:default}
+.galv-heart-count{font-weight:800}
+.galv-tool.active{color:var(--accent)}
+.galv-tool.danger:hover{color:var(--accent-r)}
+/* Favoriet-hartjes altijd zichtbaar zodra er favorieten zijn (beheerweergave). */
+.galv-tile .galv-heart.is-fav,.galv-tile .galv-heart[disabled]{opacity:1}
+
+/* ── Netflix-videorij ── */
+.galv-video-row{display:flex;gap:10px;overflow-x:auto;padding:2px 2px 10px;scroll-snap-type:x mandatory;scrollbar-width:thin}
+.galv-video-card{position:relative;flex:0 0 300px;aspect-ratio:16/9;border-radius:12px;overflow:hidden;border:1px solid var(--border);background:var(--bg3);padding:0;font:inherit;color:var(--text);scroll-snap-align:start;transition:transform .22s ease,border-color .22s ease}
+.galv-video-card:hover:not(.is-idle){transform:scale(1.03);border-color:var(--border2);z-index:1}
+/* De hele kaart is klikbaar via deze knop; de acties erboven blijven bereikbaar
+   (ook bij een nog verwerkende of mislukte video, die geen afspeelknop heeft). */
+.galv-video-hit{position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent;padding:0;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.galv-video-thumb{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.galv-video-thumb-empty{display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.galv-video-shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0) 40%,rgba(0,0,0,.78) 100%)}
+.galv-video-play{display:flex;align-items:center;justify-content:center;width:46px;height:46px;border-radius:50%;background:rgba(10,10,10,.62);color:#fff;opacity:0;transition:opacity .18s}
+.galv-video-card:hover .galv-video-play,.galv-video-hit:focus-visible .galv-video-play{opacity:1}
+.galv-video-processing{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:11px;font-weight:700;color:var(--accent);background:rgba(10,10,10,.72);border-radius:999px;padding:5px 12px}
+.galv-video-error{color:var(--accent-r)}
+.galv-video-meta{position:absolute;left:10px;right:10px;bottom:8px;display:flex;align-items:baseline;justify-content:space-between;gap:8px;text-align:left}
+.galv-video-name{font-size:12.5px;font-weight:800;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 1px 6px rgba(0,0,0,.7)}
+.galv-video-dur{font-size:10.5px;color:rgba(255,255,255,.82);flex-shrink:0;font-variant-numeric:tabular-nums}
+
+/* ── Lightbox + videospeler ── */
+.galv-lightbox{position:fixed;inset:0;z-index:220;background:rgba(5,5,5,.94);display:flex;align-items:center;justify-content:center;padding:26px}
+.galv-lightbox-stage{position:relative;max-width:min(1400px,94vw);max-height:92vh;display:flex;flex-direction:column;gap:0}
+.galv-lightbox-stage img{max-width:100%;max-height:calc(92vh - 52px);object-fit:contain;border-radius:10px}
+.galv-lightbox-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 2px 0}
+.galv-lightbox-name{font-size:12px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.galv-lightbox-tools{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.galv-lightbox-tools .galv-heart,.galv-lightbox-tools .galv-dl{opacity:1;background:rgba(255,255,255,.08)}
+.galv-lightbox-count{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.galv-lightbox-close{position:absolute;top:16px;right:16px;z-index:2;display:flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.1);color:#fff;cursor:pointer}
+.galv-lightbox-close:hover{background:rgba(255,255,255,.2)}
+.galv-lightbox-nav{position:absolute;top:50%;transform:translateY(-50%);z-index:2;display:flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:#fff;cursor:pointer}
+.galv-lightbox-nav:hover{background:rgba(255,255,255,.18)}
+.galv-prev{left:14px}
+.galv-next{right:14px}
+.galv-player-stage{width:min(1200px,94vw);display:flex;flex-direction:column}
+.galv-player-frame{width:100%;aspect-ratio:16/9;border:0;border-radius:10px;background:#000}
+.galv-player-video{width:100%;max-height:calc(92vh - 52px);border-radius:10px;background:#000}
+
+@media(max-width:760px){
+  .galv-grid{grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:5px}
+  .galv-video-card{flex-basis:230px}
+  .galv-lightbox{padding:10px}
+  .galv-lightbox-nav{width:38px;height:38px}
+  .gal-detail-tools{gap:6px}
+  .gal-detail-title h3{font-size:15px}
+}
+
+/* ── Portaal: Galerijen-tab ── */
+.portal-gallery-head{display:flex;align-items:center;gap:10px;min-width:0}
+.portal-gallery-head h2{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.portal-gallery-sub{margin:-4px 0 12px}
+.portal-gallery-zip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--accent);text-decoration:none;border:1px solid var(--border);border-radius:9px;padding:7px 12px;background:var(--bg3)}
+.portal-gallery-zip:hover{border-color:var(--accent)}
+
+/* ── Publieke deellinkpagina (/gallerij/<token>) ── */
+.pgal{min-height:100dvh;background:var(--bg);color:var(--text);display:flex;flex-direction:column}
+.pgal-gate{align-items:center;justify-content:center;padding:20px}
+.pgal-pin-card{display:flex;flex-direction:column;gap:12px;align-items:center;text-align:center;max-width:380px;width:100%;border:1px solid var(--border);border-radius:var(--radius-lg,18px);background:var(--bg2);padding:30px 26px}
+.pgal-pin-card h1{font-size:19px;margin:0}
+.pgal-pin-card p{font-size:12.5px;color:var(--muted2);line-height:1.6;margin:0}
+.pgal-pin-card .form-input{text-align:center;font-size:17px;letter-spacing:.25em}
+.pgal-pin-icon{display:flex;align-items:center;justify-content:center;width:46px;height:46px;border-radius:50%;background:rgba(255,217,102,.1);color:var(--accent)}
+.pgal-error{font-size:12px;color:var(--accent-r)}
+.pgal-loading{display:flex;align-items:center;gap:10px;color:var(--muted2);font-size:13px}
+.pgal-hero{padding:44px 22px 20px;text-align:center;display:flex;flex-direction:column;gap:9px;align-items:center}
+.pgal-hero h1{font-size:clamp(22px,4vw,34px);margin:0;letter-spacing:-.02em}
+.pgal-desc{margin:0;max-width:640px;color:var(--muted2);font-size:13.5px;line-height:1.65}
+.pgal-meta{display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:center;font-size:12px;color:var(--muted)}
+.pgal-zip{display:inline-flex;align-items:center;gap:6px;color:#1a1a1a;background:var(--accent);border-radius:999px;padding:8px 16px;font-weight:800;text-decoration:none;font-size:12.5px}
+.pgal-zip:hover{filter:brightness(1.06)}
+.pgal-body{flex:1;width:min(1440px,100%);margin:0 auto;padding:8px 18px 30px}
+.pgal-foot{padding:18px;text-align:center;font-size:11px;color:var(--muted);border-top:1px solid var(--border)}
+
+/* ── Instellingen · Abonnement: accountbrede opslagmeter ── */
+.billing-storage-row>div:first-child{flex:1;min-width:0}
+.billing-storage-bar{width:min(360px,100%);height:7px;border-radius:4px;background:rgba(255,255,255,.09);overflow:hidden;margin-top:7px}
+.billing-storage-fill{height:100%;border-radius:4px;background:var(--accent)}
+.billing-storage-fill.warn{background:var(--accent-r)}
+.billing-storage-warn{color:var(--accent-o)}
+
 @media(max-width:900px){
   .tpl-editor-grid{grid-template-columns:1fr}
   .tpl-task-fields,.tpl-offsets .tpl-task-fields{grid-template-columns:1fr 1fr}

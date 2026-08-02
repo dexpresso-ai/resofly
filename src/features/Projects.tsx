@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from 'react';
-import type { AppData, InternalDocument, Invoice, Note, OrganizationMember, Project, ProjectMember, Quote, Task, TaskStatus, TimeEntry, UUID } from '../types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { AppData, Contract, InternalDocument, Invoice, Note, OrganizationMember, Project, ProjectMember, Quote, Task, TaskStatus, TimeEntry, UUID } from '../types';
 import { Button, Select } from '../components/Ui';
 import { AssigneeAvatars } from '../components/AssigneeAvatars';
 import { dateNL, euro, formatMinutes, priorityLabel, total } from '../lib/format';
@@ -7,10 +7,13 @@ import { memberColor, memberInitials, memberName } from '../lib/members';
 import { RelatedNotes } from './Notes';
 import { RelatedDocuments } from './Documents';
 import { ProjectQuotesPanel } from './Finance';
+import { ContractStatusBadge } from './Contracts';
 import { ProjectTimeline } from './ProjectTimeline';
 import { TimeEntryModal, timeEntryValueCents } from './TimeTracking';
-import { addProjectMember, deleteTimeEntry, removeProjectMember, updateTimeEntry } from '../lib/repository';
-import { ChevronDown, ChevronRight, Clock, Pencil, Trash2, UserPlus } from 'lucide-react';
+import { GalleryTab } from './ProjectGallery';
+import { supabase } from '../lib/supabase';
+import { addContractProject, addProjectMember, deleteTimeEntry, removeContractProject, removeProjectMember, updateTimeEntry } from '../lib/repository';
+import { ChevronDown, ChevronRight, Clock, Link2, Pencil, Trash2, UserPlus } from 'lucide-react';
 
 /** Uitklapbare dashboard-sectie */
 function DashboardSection({
@@ -67,7 +70,7 @@ function DashboardSection({
 
 const columns: {key: TaskStatus; label: string}[] = [{key:'todo',label:'Te doen'}, {key:'doing',label:'Bezig'}, {key:'review',label:'Review'}, {key:'done',label:'Klaar'}];
 
-type ProjectTab = 'overview' | 'kanban' | 'quotes' | 'invoices' | 'time' | 'notes' | 'documents';
+type ProjectTab = 'overview' | 'kanban' | 'quotes' | 'contracts' | 'invoices' | 'time' | 'notes' | 'documents' | 'gallery';
 
 const projectQuoteStatusLabels: Record<string, string> = {
   draft: 'Concept',
@@ -606,6 +609,139 @@ function ProjectTeamPanel({ project, data, teamMembers, currentUserId, organizat
   </article>;
 }
 
+/**
+ * De koppeltrigger weigert een contract van een ándere klant met errcode 23514.
+ * Die database-melding zegt de gebruiker niets, dus vertalen we hem hier.
+ */
+function contractLinkErrorText(err: unknown): string {
+  const failure = err as { code?: string; message?: string } | null;
+  if (failure?.code === '23514') {
+    return 'Dit contract hoort bij een andere klant dan dit project. Je kunt alleen contracten van dezelfde klant koppelen.';
+  }
+  return failure?.message || 'Er ging iets mis. Probeer het opnieuw.';
+}
+
+/**
+ * Contracten bij dit project koppelen/ontkoppelen.
+ *
+ * Contracten zitten bewust niet in de centrale AppData (financiële module met
+ * eigen RLS), dus we halen ze hier zelf op. De koppelrijen komen wél uit
+ * AppData: daarvoor volstaat `onChanged()`, maar de contracten zelf moeten we
+ * na een wijziging opnieuw ophalen.
+ */
+function ProjectContractsPanel({ project, data, organizationId, canWrite, onChanged }: {
+  project: Project;
+  data: AppData;
+  organizationId: UUID;
+  canWrite: boolean;
+  onChanged: () => void | Promise<void>;
+}) {
+  const [contracts, setContracts] = useState<Contract[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    void supabase.from('contracts').select('*')
+      .eq('organization_id', organizationId)
+      .order('created_at', { ascending: false })
+      .then(({ data: rows, error: loadError }) => {
+        if (cancelled) return;
+        if (loadError) setError(loadError.message);
+        else setContracts((rows ?? []) as Contract[]);
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [organizationId, reloadKey]);
+
+  const client = data.clients.find(item => item.id === project.client_id);
+  const linkedIds = useMemo(
+    () => new Set(data.contractProjects.filter(link => link.project_id === project.id).map(link => link.contract_id)),
+    [data.contractProjects, project.id],
+  );
+  const linked = useMemo(() => contracts.filter(contract => linkedIds.has(contract.id)), [contracts, linkedIds]);
+  // Alleen contracten van de klant van dit project: de database weigert de rest
+  // toch, dus een keuzelijst met onmogelijke opties helpt niemand.
+  const clientContracts = useMemo(
+    () => (project.client_id ? contracts.filter(contract => contract.client_id === project.client_id) : []),
+    [contracts, project.client_id],
+  );
+  const available = useMemo(
+    () => clientContracts.filter(contract => !linkedIds.has(contract.id)),
+    [clientContracts, linkedIds],
+  );
+
+  async function link(contractId: string) {
+    if (!contractId || busy) return;
+    setBusy(true); setError(null);
+    try {
+      await addContractProject(organizationId, contractId, project.id);
+      await onChanged();
+      // AppData bevat alleen de koppelrijen; de contractgegevens halen we zelf opnieuw op.
+      setReloadKey(key => key + 1);
+    } catch (e) {
+      setError(contractLinkErrorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unlink(contract: Contract) {
+    if (busy) return;
+    if (!confirm(`Contract ${contract.number} loskoppelen van dit project? Het contract zelf blijft gewoon bestaan.`)) return;
+    setBusy(true); setError(null);
+    try {
+      await removeContractProject(organizationId, contract.id, project.id);
+      await onChanged();
+    } catch (e) {
+      setError(contractLinkErrorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <article className="client-panel">
+    <div className="client-panel-head"><h3>Contracten</h3><span>{linked.length}</span></div>
+    {error && <div className="error">{error}</div>}
+    {loading
+      ? <div className="client-empty-line">Contracten laden…</div>
+      : linked.length === 0
+        ? <div className="client-empty-line">Nog geen contract aan dit project gekoppeld.</div>
+        : <div className="project-team-list">
+            {linked.map(contract => (
+              <div className="project-team-row" key={contract.id}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <strong>{contract.number}</strong>{contract.title ? ` · ${contract.title}` : ''}
+                  <div className="bk-muted" style={{ fontSize: 12 }}>
+                    {dateNL(contract.date)}{contract.signed_at ? ` · getekend ${dateNL(contract.signed_at)}` : ''}
+                  </div>
+                </div>
+                <ContractStatusBadge status={contract.status} />
+                {canWrite && <button type="button" className="icon-btn danger" onClick={() => unlink(contract)} disabled={busy} title="Contract loskoppelen"><Trash2 size={14} /></button>}
+              </div>
+            ))}
+          </div>}
+    {canWrite && !loading && (
+      !project.client_id
+        ? <p className="project-team-allset">Dit project heeft nog geen klant. Koppel eerst een klant aan het project; daarna kun je de contracten van die klant koppelen.</p>
+        : clientContracts.length === 0
+          ? <p className="project-team-allset">Er zijn nog geen contracten voor {client?.name ?? 'deze klant'}. Maak ze aan onder Financiën → Contracten.</p>
+          : available.length === 0
+            ? <p className="project-team-allset">Alle contracten van {client?.name ?? 'deze klant'} zijn al gekoppeld.</p>
+            : <label className="project-team-add">
+                <Link2 size={15} className="project-team-add-icon" aria-hidden="true" />
+                <Select inline value="" disabled={busy} onChange={e => link(e.target.value)} aria-label="Contract koppelen aan dit project">
+                  <option value="">Contract koppelen…</option>
+                  {available.map(contract => <option key={contract.id} value={contract.id}>{contract.number}{contract.title ? ` · ${contract.title}` : ''}</option>)}
+                </Select>
+              </label>
+    )}
+  </article>;
+}
+
 export function ProjectPage({
   data,
   project,
@@ -615,6 +751,8 @@ export function ProjectPage({
   onChanged,
   canWrite,
   canAdmin,
+  canReadContracts,
+  canWriteContracts,
   onNewTask,
   onEditTask,
   onEditProject,
@@ -642,6 +780,9 @@ export function ProjectPage({
   onChanged: () => void | Promise<void>;
   canWrite: boolean;
   canAdmin: boolean;
+  /** Contracten vallen onder Financiën, niet onder Projecten — vandaar eigen rechten. */
+  canReadContracts: boolean;
+  canWriteContracts: boolean;
   onNewTask: () => void;
   onEditTask: (task: Task) => void;
   onEditProject: () => void;
@@ -680,6 +821,9 @@ export function ProjectPage({
   const projectDocuments = data.documents.filter(doc => doc.project_id === project.id);
   const projectQuotes = data.quotes.filter(q => q.project_id === project.id);
   const projectInvoices = data.invoices.filter(i => i.project_id === project.id);
+  const projectGalleries = data.galleries.filter(g => g.project_id === project.id);
+  // Alleen de koppelrijen komen uit AppData; het tabblad haalt de contracten zelf op.
+  const linkedContractCount = data.contractProjects.filter(link => link.project_id === project.id).length;
   const projectTimeEntries = useMemo(
     () => data.timeEntries.filter(t => t.project_id === project.id).sort((a, b) => b.entry_date.localeCompare(a.entry_date)),
     [data.timeEntries, project.id],
@@ -730,10 +874,14 @@ export function ProjectPage({
     { id: 'overview', label: 'Overzicht', count: 0 },
     { id: 'kanban', label: 'Kanban', count: openTasks },
     { id: 'quotes', label: 'Offertes', count: projectQuotes.length },
+    // Zonder leesrecht op Financiën bestaat het tabblad niet; de rijen zijn er
+    // door RLS dan toch niet.
+    ...(canReadContracts ? [{ id: 'contracts' as ProjectTab, label: 'Contracten', count: linkedContractCount }] : []),
     { id: 'invoices', label: 'Facturen', count: projectInvoices.length },
     { id: 'time', label: 'Uren', count: projectTimeEntries.length },
     { id: 'notes', label: 'Notities', count: projectNotes.length },
     { id: 'documents', label: 'Documenten', count: projectDocuments.length },
+    { id: 'gallery', label: 'Galerij', count: projectGalleries.length },
   ];
 
   return (
@@ -984,6 +1132,15 @@ export function ProjectPage({
         />
       </article>}
 
+      {/* ── Tab: Contracten (koppelen aan bestaande contracten uit Financiën) ── */}
+      {activeTab === 'contracts' && canReadContracts && <ProjectContractsPanel
+        project={project}
+        data={data}
+        organizationId={organizationId}
+        canWrite={canWriteContracts && !project.archived}
+        onChanged={onChanged}
+      />}
+
       {/* ── Tab: Facturen ── */}
       {activeTab === 'invoices' && <article className="client-panel">
         <div className="client-panel-head">
@@ -1074,6 +1231,15 @@ export function ProjectPage({
         onNew={onNewDocument}
         onEdit={onEditDocument}
         emptyText="Nog geen documenten bij dit project."
+      />}
+
+      {/* ── Tab: Galerij (foto/video-oplevering aan de klant) ── */}
+      {activeTab === 'gallery' && <GalleryTab
+        data={data}
+        project={project}
+        organizationId={organizationId}
+        canWrite={canWrite}
+        onChanged={onChanged}
       />}
 
       {timeModal && (

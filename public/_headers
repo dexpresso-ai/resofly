@@ -22,13 +22,23 @@
 #   hier NIET neer. Zodra een feature in deze header staat, geldt die allowlist ook voor
 #   het doorgeven aan iframes, en verliest de Collabora-editor (andere origin) het
 #   systeemklembord. Nu ze ontbreken, regelt het allow-attribuut in OfficeEditor.tsx het.
+# - Galerij-oplevering (2026-08-03): media-src is nodig voor <video> uit de
+#   media-worker (R2-fallback; zonder media-src valt die terug op default-src
+#   'self' en blokkeert het afspelen), en frame-src staat het Cloudflare
+#   Stream-iframe (customer-<code>.cloudflarestream.com) toe voor de
+#   Netflix-weergave. Stream-thumbnails vallen al onder img-src https:.
+#   connect-src bevat óók upload.videodelivery.net + *.cloudflarestream.com:
+#   video's gaan met een direct-creator-upload rechtstreeks vanuit de browser
+#   naar Cloudflare Stream (basic POST of tus-PATCH). Zonder die hosts faalt
+#   elke video-upload pas op staging/productie — lokaal (Vite) geldt dit
+#   bestand namelijk niet.
 # - Smoke-test na de eerste deploy op staging: inloggen, /portal,
 #   /contract/<token>, bestand-upload/-download, agenda-adres zoeken en
 #   meeting-opname. Wordt er iets geblokkeerd, dan staat het in de console als
 #   CSP-violation met de exact ontbrekende bron.
 
 /*
-  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self' https://resofly-office-server.gerjan.workers.dev; frame-src 'self' blob: https://resofly-office-server.gerjan.workers.dev; worker-src 'self'; manifest-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.workers.dev https://nominatim.openstreetmap.org
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self' https://resofly-office-server.gerjan.workers.dev; frame-src 'self' blob: https://resofly-office-server.gerjan.workers.dev https://*.cloudflarestream.com; worker-src 'self'; manifest-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob: https://*.workers.dev; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.workers.dev https://nominatim.openstreetmap.org https://upload.videodelivery.net https://*.cloudflarestream.com
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   X-Frame-Options: DENY

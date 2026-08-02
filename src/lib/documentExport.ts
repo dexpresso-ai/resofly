@@ -363,14 +363,40 @@ function buildZip(entries: ZipEntry[]): Uint8Array {
   return new Uint8Array(out);
 }
 
-export function buildDocumentDocxBlob(meta: DocumentExportMeta): Blob {
+function packDocx(documentXml: string): Blob {
   const enc = new TextEncoder();
   const zip = buildZip([
     { name: '[Content_Types].xml', data: enc.encode(CONTENT_TYPES_XML) },
     { name: '_rels/.rels', data: enc.encode(ROOT_RELS_XML) },
     { name: 'word/_rels/document.xml.rels', data: enc.encode(DOC_RELS_XML) },
-    { name: 'word/document.xml', data: enc.encode(buildDocumentXml(meta)) },
+    { name: 'word/document.xml', data: enc.encode(documentXml) },
   ]);
   const buffer = zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength) as ArrayBuffer;
   return new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+}
+
+export function buildDocumentDocxBlob(meta: DocumentExportMeta): Blob {
+  return packDocx(buildDocumentXml(meta));
+}
+
+/**
+ * Startdocument voor een contract dat in Word wordt opgesteld.
+ *
+ * Bewust zonder de documentkop (categorie · klant · datum) van
+ * buildDocumentDocxBlob: een contract is een op zichzelf staand juridisch stuk,
+ * en alles wat hier in het .docx belandt komt letterlijk in de PDF die de klant
+ * ondertekent. De titel staat er wél in als kop — die kan de gebruiker in
+ * Collabora gewoon weghalen als het sjabloon er zelf al een heeft.
+ */
+export function buildContractDocxBlob(meta: { title: string; contentHtml: string }): Blob {
+  const blocks = parseRichTextToBlocks(meta.contentHtml);
+  const parts: string[] = [];
+  if (meta.title.trim()) {
+    parts.push(paragraphXml(runXml({ text: meta.title.trim(), bold: true }, { size: 32 }), { after: 200 }));
+  }
+  parts.push(blocks.length ? blocksToDocxBody(blocks) : paragraphXml(runXml({ text: '' }, { size: 21 })));
+  const sectPr = '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>';
+  const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${parts.join('')}${sectPr}</w:body></w:document>`;
+  return packDocx(xml);
 }
