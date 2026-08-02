@@ -4681,6 +4681,10 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .portal-gallery-brand{display:flex;justify-content:center;padding:4px 0 14px}
 .portal-gallery-brand img{max-height:46px;max-width:min(240px,55vw);object-fit:contain}
 .portal-gallery-own-note{margin:-4px 0 12px;font-size:12.5px;color:var(--muted2)}
+/* Waarde die elders wordt beheerd: tonen, niet bewerken. */
+.brand-locked{display:flex;align-items:center;gap:9px}
+.brand-locked-dot{width:22px;height:22px;border-radius:7px;border:1px solid var(--border);flex-shrink:0}
+.brand-locked-value{font-size:12px;color:var(--muted2);font-variant-numeric:tabular-nums}
 
 /* ── Instellingen · Abonnement: accountbrede opslagmeter ── */
 .billing-storage-row>div:first-child{flex:1;min-width:0}

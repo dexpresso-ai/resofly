@@ -1572,7 +1572,8 @@ export function Settings({
       <h3>Bedrijfsgegevens op factuur</h3>
       <div className="settings-grid">
         <Input value={form.company_name ?? ''} onChange={e=>set('company_name', e.target.value)} placeholder="Bedrijfsnaam" />
-        <Input value={form.trade_name ?? ''} onChange={e=>set('trade_name', e.target.value)} placeholder="Handelsnaam / label" />
+        {/* Merknaam wordt bij Huisstijl beheerd; hier alleen tonen. */}
+        <Input value={form.trade_name ?? ''} readOnly disabled placeholder="Merknaam — in te stellen bij Huisstijl" title="Je merknaam staat bij Instellingen → Huisstijl" />
         <Input value={form.address_line1 ?? ''} onChange={e=>set('address_line1', e.target.value)} placeholder="Adresregel 1" />
         <Input value={form.address_line2 ?? ''} onChange={e=>set('address_line2', e.target.value)} placeholder="Adresregel 2" />
         <Input value={form.postal_code ?? ''} onChange={e=>set('postal_code', e.target.value)} placeholder="Postcode" />
@@ -1627,16 +1628,16 @@ export function Settings({
               <Input value={form.invoice_template_text_color ?? '#1a1a1a'} onChange={e => set('invoice_template_text_color', e.target.value)} placeholder="#1a1a1a" />
             </div>
           </div>
+          {/* De accentkleur is de merkkleur en heeft één bewerkplek: Huisstijl.
+              Hier alleen tonen wat je krijgt, zodat het voorbeeld klopt. */}
           <div className="color-setting">
-            <span className="style-label">Accentkleur</span>
-            <div className="color-input-pair">
-              <input
-                type="color"
-                className="color-dot-input"
-                value={/^#[0-9a-f]{6}$/i.test(form.invoice_accent_color ?? '') ? (form.invoice_accent_color as string) : '#FFD966'}
-                onChange={e => set('invoice_accent_color', e.target.value)}
-              />
-              <Input value={form.invoice_accent_color ?? '#FFD966'} onChange={e => set('invoice_accent_color', e.target.value)} placeholder="#FFD966" />
+            <span className="style-label">Merkkleur</span>
+            <div className="color-input-pair brand-locked">
+              <span className="brand-locked-dot" style={{ background: form.brand_accent_color || '#FFD966' }} aria-hidden="true" />
+              <span className="brand-locked-value">{form.brand_accent_color || '#FFD966'}</span>
+              <button type="button" className="gal-linkbtn" onClick={() => setActiveTab('huisstijl')}>
+                Wijzigen bij Huisstijl
+              </button>
             </div>
           </div>
           <div className="font-size-setting">
@@ -1663,7 +1664,7 @@ export function Settings({
             className="invoice-preview-card"
             style={{ color: form.invoice_template_text_color ?? '#1a1a1a', fontSize: `${form.invoice_font_size ?? 10}px` }}
           >
-            <div className="invoice-preview-accent-bar" style={{ background: form.invoice_accent_color ?? '#FFD966' }} />
+            <div className="invoice-preview-accent-bar" style={{ background: form.brand_accent_color ?? '#FFD966' }} />
             <div className="invoice-preview-body">
               <div className="invoice-preview-header-row">
                 <div>
@@ -1679,7 +1680,7 @@ export function Settings({
                   <div style={{ opacity: 0.5, fontSize: `${Math.max(7, (form.invoice_font_size ?? 10) - 1)}px` }}>Nummer: 2025-001</div>
                 </div>
               </div>
-              <div style={{ height: 1.5, background: form.invoice_accent_color ?? '#FFD966', margin: '6px 0' }} />
+              <div style={{ height: 1.5, background: form.brand_accent_color ?? '#FFD966', margin: '6px 0' }} />
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span>Werkzaamheden Q1 2025</span>
                 <span style={{ fontWeight: 600 }}>EUR 1.000,00</span>
@@ -1688,7 +1689,7 @@ export function Settings({
                 <span>BTW 21%</span>
                 <span>EUR 210,00</span>
               </div>
-              <div style={{ borderTop: `1.5px solid ${form.invoice_accent_color ?? '#FFD966'}`, marginTop: 6, paddingTop: 6, display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: `${(form.invoice_font_size ?? 10) + 2}px` }}>
+              <div style={{ borderTop: `1.5px solid ${form.brand_accent_color ?? '#FFD966'}`, marginTop: 6, paddingTop: 6, display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: `${(form.invoice_font_size ?? 10) + 2}px` }}>
                 <span>Totaal</span>
                 <span>EUR 1.210,00</span>
               </div>
@@ -2133,12 +2134,23 @@ function BrandingCard({ form, setForm, canWrite }: {
 
   return (
     <section className="settings-card">
-      <h3>Huisstijl op klantpagina&apos;s</h3>
+      <h3>Je merk</h3>
       <p className="settings-help">
-        Deze instellingen gelden voor wat je klant ziet: de galerij in het portaal en de publieke deellink.
+        Hier staat je merk in z&apos;n geheel: naam, logo, kleur en lettertypen. De merkkleur werkt door in
+        álles wat je klant ziet — galerijen, facturen, offertes, contracten en e-mails.
       </p>
 
       <div className="brand-grid">
+        <div className="brand-field brand-field-wide">
+          <span className="brand-label">Merknaam</span>
+          <Input
+            value={form.trade_name ?? ''}
+            onChange={(e) => setForm(prev => ({ ...prev, trade_name: e.target.value }))}
+            placeholder="Bijv. Studio Noord"
+            disabled={!canWrite}
+          />
+          <p className="settings-help">De naam waaronder je naar buiten treedt. Je juridische bedrijfsnaam staat bij Facturatie.</p>
+        </div>
         <div className="brand-field">
           <span className="brand-label">Logo</span>
           <div className="brand-logo-row">
@@ -2168,7 +2180,7 @@ function BrandingCard({ form, setForm, canWrite }: {
         </div>
 
         <div className="brand-field">
-          <span className="brand-label">Accentkleur</span>
+          <span className="brand-label">Merkkleur</span>
           <div className="brand-color-row">
             <input
               type="color"
@@ -2186,7 +2198,7 @@ function BrandingCard({ form, setForm, canWrite }: {
               aria-label="Accentkleur als hexcode"
             />
           </div>
-          <p className="settings-help">Gebruikt voor knoppen, chips en highlights in de galerij.</p>
+          <p className="settings-help">Werkt door in de galerij én op je facturen, offertes, contracten en e-mails.</p>
         </div>
 
         <div className="brand-field">
@@ -2335,7 +2347,10 @@ function cleanSettingsInput(input: CompanySettingsInput): CompanySettingsInput {
     invoice_template_data_url: templateKind === 'none' ? null : input.invoice_template_data_url,
     invoice_template_updated_at: templateKind === 'none' ? null : input.invoice_template_updated_at,
     invoice_template_text_color: normalizeHex(input.invoice_template_text_color, '#1a1a1a'),
-    invoice_accent_color: normalizeHex(input.invoice_accent_color, '#FFD966'),
+    // De merkkleur is de enige bron; de factuurkleur volgt (de database houdt
+    // dit ook af met een trigger, hier al zodat de UI meteen klopt).
+    brand_accent_color: normalizeHex(input.brand_accent_color, '#FFD966'),
+    invoice_accent_color: normalizeHex(input.brand_accent_color, '#FFD966'),
     invoice_font_size: Math.max(8, Math.min(14, Number(input.invoice_font_size ?? 10))),
   };
 }
