@@ -399,6 +399,7 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
         items={detail.items}
         bundle={detail.tokens}
         allowDownload={detail.gallery.allow_downloads}
+        format={detail.gallery.format}
         favorites={favoriteIds}
         canFavorite
         onToggleFavorite={(item, on) => void toggleFavorite(item, on)}

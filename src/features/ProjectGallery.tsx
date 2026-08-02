@@ -6,9 +6,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import {
-  Copy, Download, HardDrive, Heart, Image as ImageIcon, Link2, Loader2, Settings2, Star, Trash2, Upload,
+  Copy, Download, Film, HardDrive, Heart, Image as ImageIcon, Layers, Link2, Loader2, Settings2, Star, Trash2, Upload,
 } from 'lucide-react';
-import type { AppData, Gallery, GalleryFavorite, GalleryItem, OrganizationStorageStatus, Project, UUID } from '../types';
+import type { AppData, Gallery, GalleryFavorite, GalleryFormat, GalleryItem, OrganizationStorageStatus, Project, UUID } from '../types';
 import { Button, Input, Select } from '../components/Ui';
 import { dateNL } from '../lib/format';
 import { supabase, supabaseAuth } from '../lib/supabase';
@@ -30,6 +30,31 @@ const galleryStatusLabels: Record<Gallery['status'], string> = {
   published: 'Gepubliceerd',
   archived: 'Gearchiveerd',
 };
+
+/**
+ * Het formaat bepaalt zowel de weergave bij de klant als welke bestanden er in
+ * de galerij mogen. De database bewaakt dat laatste ook (trigger), zodat het
+ * niet alleen een UI-afspraak is.
+ */
+const galleryFormats: Array<{
+  key: GalleryFormat;
+  label: string;
+  hint: string;
+  Icon: typeof ImageIcon;
+  accept: string;
+}> = [
+  { key: 'photo', label: 'Fotogalerij', hint: 'Alleen foto’s, als raster met lightbox.', Icon: ImageIcon, accept: 'image/jpeg,image/png,image/webp' },
+  { key: 'video', label: 'Videogalerij', hint: 'Alleen video’s, filmisch met grote tegels.', Icon: Film, accept: 'video/*' },
+  { key: 'hybrid', label: 'Foto én video', hint: 'Beide in één oplevering; video’s bovenaan.', Icon: Layers, accept: 'image/jpeg,image/png,image/webp,video/*' },
+];
+
+const galleryFormatLabels: Record<GalleryFormat, string> = {
+  photo: 'Foto', video: 'Video', hybrid: 'Foto + video',
+};
+
+function formatConfig(format: GalleryFormat) {
+  return galleryFormats.find(f => f.key === format) ?? galleryFormats[2];
+}
 
 function fmtBytesShort(bytes: number): string {
   if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
@@ -75,6 +100,7 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
 
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState('');
+  const [newFormat, setNewFormat] = useState<GalleryFormat>('hybrid');
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [onlyFavorites, setOnlyFavorites] = useState(false);
@@ -246,9 +272,10 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
     setBusy(true);
     setError(null);
     try {
-      const gallery = await insertRow<Gallery>('galleries', organizationId, { project_id: project.id, title });
+      const gallery = await insertRow<Gallery>('galleries', organizationId, { project_id: project.id, title, format: newFormat });
       setCreating(false);
       setNewTitle('');
+      setNewFormat('hybrid');
       await onChanged();
       setOpenId(gallery.id);
     } catch (e) {
@@ -292,6 +319,14 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
     const isVideo = file.type.startsWith('video/');
     if (!isPhoto && !isVideo) {
       throw new Error('Alleen JPEG-, PNG- of WebP-foto\'s en videobestanden worden ondersteund.');
+    }
+    // Het formaat van de galerij is leidend. De database weigert dit ook, maar
+    // hier kunnen we het meteen en in begrijpelijke taal melden.
+    if (gallery.format === 'photo' && isVideo) {
+      throw new Error('Dit is een fotogalerij — video’s kunnen hier niet in. Wijzig het formaat in de instellingen naar “Foto én video”.');
+    }
+    if (gallery.format === 'video' && isPhoto) {
+      throw new Error('Dit is een videogalerij — foto’s kunnen hier niet in. Wijzig het formaat in de instellingen naar “Foto én video”.');
     }
     if (file.size > GALLERY_ORIGINAL_MAX_BYTES) {
       throw new Error('Bestand is groter dan 4 GB.');
@@ -558,14 +593,34 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
         {error && <div className="error">{error}</div>}
         {creating && (
           <form className="gal-create" onSubmit={(e) => { e.preventDefault(); void createGallery(); }}>
-            <Input
-              autoFocus
-              placeholder="Naam van de galerij (bijv. Bruiloft — selectie)"
-              value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-            />
-            <Button type="submit" variant="primary" disabled={busy || !newTitle.trim()}>Aanmaken</Button>
-            <Button type="button" variant="ghost" onClick={() => { setCreating(false); setNewTitle(''); }}>Annuleren</Button>
+            <fieldset className="gal-format-picker">
+              <legend>Wat lever je op?</legend>
+              <div className="gal-format-options">
+                {galleryFormats.map(({ key, label, hint, Icon }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`gal-format-card${newFormat === key ? ' is-active' : ''}`}
+                    onClick={() => setNewFormat(key)}
+                    aria-pressed={newFormat === key}
+                  >
+                    <span className="gal-format-icon"><Icon size={19} /></span>
+                    <span className="gal-format-label">{label}</span>
+                    <span className="gal-format-hint">{hint}</span>
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+            <div className="gal-create-row">
+              <Input
+                autoFocus
+                placeholder="Naam van de galerij (bijv. Bruiloft — selectie)"
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+              />
+              <Button type="submit" variant="primary" disabled={busy || !newTitle.trim()}>Aanmaken</Button>
+              <Button type="button" variant="ghost" onClick={() => { setCreating(false); setNewTitle(''); setNewFormat('hybrid'); }}>Annuleren</Button>
+            </div>
           </form>
         )}
         {galleries.length === 0 && !creating && (
@@ -574,20 +629,24 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
           </div>
         )}
         <div className="gal-list">
-          {galleries.map(gallery => (
-            <button key={gallery.id} type="button" className="gal-list-card" onClick={() => setOpenId(gallery.id)}>
-              <span className="gal-list-icon"><ImageIcon size={18} /></span>
-              <span className="gal-list-main">
-                <span className="gal-list-title">{gallery.title}</span>
-                <span className="gal-list-sub">
-                  {gallery.published_at ? `Gepubliceerd ${dateNL(gallery.published_at)}` : `Aangemaakt ${dateNL(gallery.created_at)}`}
-                  {gallery.share_enabled && <> · <Link2 size={11} /> deellink actief</>}
-                  {gallery.expires_at && <> · verloopt {dateNL(gallery.expires_at)}</>}
+          {galleries.map(gallery => {
+            const { Icon } = formatConfig(gallery.format);
+            return (
+              <button key={gallery.id} type="button" className="gal-list-card" onClick={() => setOpenId(gallery.id)}>
+                <span className={`gal-list-icon gal-fmt-${gallery.format}`}><Icon size={18} /></span>
+                <span className="gal-list-main">
+                  <span className="gal-list-title">{gallery.title}</span>
+                  <span className="gal-list-sub">
+                    <span className="gal-format-tag">{galleryFormatLabels[gallery.format]}</span>
+                    {gallery.published_at ? `Gepubliceerd ${dateNL(gallery.published_at)}` : `Aangemaakt ${dateNL(gallery.created_at)}`}
+                    {gallery.share_enabled && <> · <Link2 size={11} /> deellink actief</>}
+                    {gallery.expires_at && <> · verloopt {dateNL(gallery.expires_at)}</>}
+                  </span>
                 </span>
-              </span>
-              <span className={`status-pill gal-status-${gallery.status}`}>{galleryStatusLabels[gallery.status]}</span>
-            </button>
-          ))}
+                <span className={`status-pill gal-status-${gallery.status}`}>{galleryStatusLabels[gallery.status]}</span>
+              </button>
+            );
+          })}
         </div>
       </article>
     );
@@ -603,6 +662,7 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
         <div className="gal-detail-title">
           <button type="button" className="gal-back" onClick={() => setOpenId(null)}>← Galerijen</button>
           <h3>{openGallery.title}</h3>
+          <span className={`gal-format-tag gal-fmt-${openGallery.format}`}>{galleryFormatLabels[openGallery.format]}</span>
           <span className={`status-pill gal-status-${openGallery.status}`}>{galleryStatusLabels[openGallery.status]}</span>
         </div>
         <div className="client-panel-head-right gal-detail-tools">
@@ -642,7 +702,7 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
         ref={fileInputRef}
         type="file"
         multiple
-        accept="image/jpeg,image/png,image/webp,video/*"
+        accept={formatConfig(openGallery.format).accept}
         style={{ display: 'none' }}
         onChange={(e) => void handleFiles(e.target.files)}
       />
@@ -670,10 +730,17 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
             items={shownItems}
             bundle={bundle}
             allowDownload
+            format={openGallery.format}
             favoriteCounts={favoriteCounts}
             canFavorite={false}
             onDownloadItem={downloadItem}
-            emptyText={onlyFavorites ? 'De klant heeft nog geen favorieten gemarkeerd.' : 'Nog geen media. Upload foto\'s of video\'s om de galerij te vullen.'}
+            emptyText={onlyFavorites
+              ? 'De klant heeft nog geen favorieten gemarkeerd.'
+              : openGallery.format === 'video'
+                ? 'Nog geen video’s. Upload je films om de galerij te vullen.'
+                : openGallery.format === 'photo'
+                  ? 'Nog geen foto’s. Upload je beelden om de galerij te vullen.'
+                  : 'Nog geen media. Upload foto’s of video’s om de galerij te vullen.'}
             renderItemActions={(viewerItem) => writable && (
               <>
                 <button
@@ -729,6 +796,7 @@ function GallerySettingsModal({ gallery, busy, onClose, onSave, onDelete }: {
 }) {
   const [title, setTitle] = useState(gallery.title);
   const [description, setDescription] = useState(gallery.description ?? '');
+  const [format, setFormat] = useState<GalleryFormat>(gallery.format);
   const [allowDownloads, setAllowDownloads] = useState(gallery.allow_downloads);
   const [quality, setQuality] = useState(gallery.download_quality);
   const [expiresAt, setExpiresAt] = useState(gallery.expires_at ? gallery.expires_at.slice(0, 10) : '');
@@ -758,6 +826,26 @@ function GallerySettingsModal({ gallery, busy, onClose, onSave, onDelete }: {
             <span>Omschrijving (zichtbaar voor de klant)</span>
             <textarea className="form-input" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
           </label>
+          <div className="gal-field">
+            <span>Formaat</span>
+            <div className="gal-format-options is-compact">
+              {galleryFormats.map(({ key, label, Icon }) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`gal-format-card${format === key ? ' is-active' : ''}`}
+                  onClick={() => setFormat(key)}
+                  aria-pressed={format === key}
+                >
+                  <span className="gal-format-icon"><Icon size={16} /></span>
+                  <span className="gal-format-label">{label}</span>
+                </button>
+              ))}
+            </div>
+            <p className="gal-field-help">
+              Beperken kan alleen zolang er geen media in staan die er dan uit zouden vallen; “Foto én video” kan altijd.
+            </p>
+          </div>
           <label className="gal-field gal-field-row">
             <input type="checkbox" checked={allowDownloads} onChange={(e) => setAllowDownloads(e.target.checked)} />
             <span>Klant mag downloaden</span>
@@ -787,6 +875,7 @@ function GallerySettingsModal({ gallery, busy, onClose, onSave, onDelete }: {
             onClick={() => void save({
               title: title.trim(),
               description: description.trim() || null,
+              format,
               allow_downloads: allowDownloads,
               download_quality: quality,
               expires_at: expiresAt ? new Date(`${expiresAt}T23:59:59`).toISOString() : null,

@@ -33,6 +33,7 @@ type PublicGallery = {
   id: string;
   title: string;
   description: string | null;
+  format: string;
   published_at: string | null;
   allow_downloads: boolean;
   download_quality: string;
@@ -223,6 +224,7 @@ export function PublicGalleryPage({ token }: { token: string }) {
           items={payload.items}
           bundle={payload.tokens}
           allowDownload={payload.gallery.allow_downloads}
+          format={payload.gallery.format}
           favorites={favoriteIds}
           canFavorite
           onToggleFavorite={(item, on) => void toggleFavorite(item, on)}

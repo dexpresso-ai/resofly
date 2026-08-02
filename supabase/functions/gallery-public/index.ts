@@ -60,6 +60,7 @@ type GalleryRow = {
   project_id: string;
   title: string;
   description: string | null;
+  format: string | null;
   status: string;
   published_at: string | null;
   cover_item_id: string | null;
@@ -246,6 +247,7 @@ function sanitizeGallery(row: GalleryRow) {
     id: row.id,
     title: row.title,
     description: row.description ?? null,
+    format: row.format ?? 'hybrid',
     published_at: row.published_at ?? null,
     allow_downloads: Boolean(row.allow_downloads),
     download_quality: row.download_quality ?? 'original',

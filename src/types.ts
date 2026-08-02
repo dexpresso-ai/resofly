@@ -384,6 +384,8 @@ export interface ContentFolder extends OrgScopedRow {
 
 // ── Galerij-oplevering (foto/video per project) ─────────────────────────────
 export type GalleryStatus = 'draft' | 'published' | 'archived';
+/** Bepaalt de weergave bij de klant én welke media er in de galerij mogen. */
+export type GalleryFormat = 'photo' | 'video' | 'hybrid';
 export type GalleryDownloadQuality = 'original' | 'web';
 export type GalleryMediaType = 'photo' | 'video';
 export type GalleryStreamStatus = 'uploading' | 'processing' | 'ready' | 'error';
@@ -392,6 +394,7 @@ export interface Gallery extends OrgScopedRow {
   project_id: UUID;
   title: string;
   description: string | null;
+  format: GalleryFormat;
   status: GalleryStatus;
   published_at: string | null;
   cover_item_id: UUID | null;

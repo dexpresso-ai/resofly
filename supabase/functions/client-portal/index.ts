@@ -665,6 +665,7 @@ function sanitizeGallery(row: Record<string, unknown>) {
     project_id: row.project_id,
     title: row.title,
     description: row.description ?? null,
+    format: row.format ?? 'hybrid',
     published_at: row.published_at ?? null,
     allow_downloads: Boolean(row.allow_downloads),
     download_quality: row.download_quality ?? 'original',

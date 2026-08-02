@@ -58,6 +58,7 @@ export function GalleryViewer({
   items,
   bundle,
   allowDownload,
+  format = 'hybrid',
   favorites,
   favoriteCounts,
   canFavorite,
@@ -69,6 +70,8 @@ export function GalleryViewer({
   items: GalleryViewerItem[];
   bundle: GalleryTokenBundle | null;
   allowDownload: boolean;
+  /** 'photo' = raster, 'video' = filmische tegels, 'hybrid' = video's boven de foto's. */
+  format?: string;
   /** Item-id's die de huidige kijker als favoriet heeft gemarkeerd. */
   favorites?: Set<string>;
   /** Favoriet-tellingen per item (beheerweergave in de app). */
@@ -82,6 +85,11 @@ export function GalleryViewer({
 }) {
   const photos = useMemo(() => items.filter(i => i.media_type === 'photo'), [items]);
   const videos = useMemo(() => items.filter(i => i.media_type === 'video'), [items]);
+  // In een videogalerij krijgen de tegels een groot, filmisch raster; in een
+  // hybride oplevering blijven ze een strook boven de foto's. Kopjes zijn
+  // alleen zinvol als er écht twee soorten media in de galerij zitten.
+  const videoOnly = format === 'video';
+  const showSectionTitles = photos.length > 0 && videos.length > 0;
   const [lightbox, setLightbox] = useState<{ index: number } | null>(null);
   const [playing, setPlaying] = useState<GalleryViewerItem | null>(null);
 
@@ -157,8 +165,8 @@ export function GalleryViewer({
       {/* ── Video's: Netflix-rij ── */}
       {videos.length > 0 && (
         <section className="galv-section">
-          <h4 className="galv-section-title"><Film size={15} /> Video&apos;s</h4>
-          <div className="galv-video-row">
+          {showSectionTitles && <h4 className="galv-section-title"><Film size={15} /> Video&apos;s</h4>}
+          <div className={videoOnly ? 'galv-video-grid' : 'galv-video-row'}>
             {videos.map(item => {
               const thumb = itemThumbUrl(item, bundle);
               const playable = videoIsPlayable(item);
@@ -204,7 +212,7 @@ export function GalleryViewer({
       {/* ── Foto's: grid ── */}
       {photos.length > 0 && (
         <section className="galv-section">
-          {videos.length > 0 && <h4 className="galv-section-title">Foto&apos;s</h4>}
+          {showSectionTitles && <h4 className="galv-section-title">Foto&apos;s</h4>}
           <div className="galv-grid">
             {photos.map((item, index) => {
               const thumb = itemThumbUrl(item, bundle);

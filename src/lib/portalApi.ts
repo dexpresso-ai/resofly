@@ -154,6 +154,8 @@ export interface PortalGallery {
   project_id: string;
   title: string;
   description: string | null;
+  /** 'photo' | 'video' | 'hybrid' — bepaalt de weergave bij de klant. */
+  format: string;
   published_at: string | null;
   allow_downloads: boolean;
   download_quality: string;
