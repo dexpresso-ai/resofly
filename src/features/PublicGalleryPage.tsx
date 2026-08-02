@@ -46,6 +46,13 @@ type Payload = {
   gallery: PublicGallery;
   items: GalleryViewerItem[];
   categories: Array<{ id: string; name: string }>;
+  branding?: {
+    logoDataUrl: string | null;
+    accentColor: string;
+    footerText: string | null;
+    hidePoweredBy: boolean;
+    companyName: string | null;
+  };
   tokens: GalleryTokenBundle;
   myFavoriteIds: string[];
   myLikeIds: string[];
@@ -239,8 +246,20 @@ export function PublicGalleryPage({ token }: { token: string }) {
 
   const downloadableCount = payload.items.filter(i => i.storage_key || i.preview_key).length;
 
+  const branding = payload.branding;
+  // De accentkleur van de beeldmaker overschrijft het ResoFly-goud, maar alleen
+  // op deze pagina — via een CSS-variabele, zodat alle bestaande stijlen meegaan.
+  const brandStyle = branding?.accentColor
+    ? ({ '--accent': branding.accentColor } as React.CSSProperties)
+    : undefined;
+
   return (
-    <main className="pgal">
+    <main className="pgal" style={brandStyle}>
+      {branding?.logoDataUrl && (
+        <div className="pgal-brand">
+          <img src={branding.logoDataUrl} alt={branding.companyName ?? 'Logo'} />
+        </div>
+      )}
       {/* De titel en omschrijving staan in de hero van de viewer; hier alleen
           de praktische regel eronder, anders staat alles dubbel. */}
       <header className="pgal-hero">
@@ -279,7 +298,10 @@ export function PublicGalleryPage({ token }: { token: string }) {
           emptyText="Deze galerij bevat nog geen media."
         />
       </section>
-      <footer className="pgal-foot">Geleverd via ResoFly</footer>
+      <footer className="pgal-foot">
+        {branding?.footerText && <span className="pgal-foot-own">{branding.footerText}</span>}
+        {!branding?.hidePoweredBy && <span>Geleverd via ResoFly</span>}
+      </footer>
     </main>
   );
 }

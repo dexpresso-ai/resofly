@@ -651,6 +651,82 @@ function GalleryHero({ hero, items, bundle, onOpenPhoto }: {
   }
 
   const openCover = () => { if (cover.media_type === 'photo') onOpenPhoto(cover); };
+  const text = (
+    <div className="galv-hero-text">
+      <h2>{hero.title}</h2>
+      {hero.description && <p>{hero.description}</p>}
+    </div>
+  );
+
+  // ── Modern: asymmetrisch, de titel valt over het beeld heen ──
+  if (hero.template === 'editorial') {
+    return (
+      <header className="galv-hero galv-hero-editorial">
+        <div className="galv-hero-media" onClick={openCover}>
+          <img src={coverUrl} alt={hero.title} />
+        </div>
+        {text}
+      </header>
+    );
+  }
+
+  // ── Modern: beeld in een ruim kader, titel eronder in kapitalen ──
+  if (hero.template === 'frame') {
+    return (
+      <header className="galv-hero galv-hero-frame">
+        <div className="galv-hero-media" onClick={openCover}>
+          <img src={coverUrl} alt={hero.title} />
+        </div>
+        {text}
+      </header>
+    );
+  }
+
+  // ── Klassiek: gecentreerde titel tussen dunne lijnen, beeld eronder ──
+  if (hero.template === 'classic') {
+    return (
+      <header className="galv-hero galv-hero-classic">
+        {text}
+        <div className="galv-hero-media" onClick={openCover}>
+          <img src={coverUrl} alt={hero.title} />
+        </div>
+      </header>
+    );
+  }
+
+  // ── Spectaculair: langzame zoom op het beeld, titel zweeft in ──
+  if (hero.template === 'cinematic') {
+    return (
+      <header className="galv-hero galv-hero-cinematic" onClick={openCover}>
+        <img className="galv-hero-bg" src={coverUrl} alt={hero.title} />
+        <span className="galv-hero-veil" aria-hidden="true" />
+        {text}
+      </header>
+    );
+  }
+
+  // ── Spectaculair: mozaïek van meerdere beelden achter de titel ──
+  if (hero.template === 'mosaic') {
+    const tiles = [cover, ...photos.filter(p => p.id !== cover.id)].slice(0, 9);
+    return (
+      <header className="galv-hero galv-hero-mosaic">
+        <div className="galv-hero-mosaic-grid" aria-hidden="true">
+          {tiles.map((tile, index) => {
+            const url = itemPreviewUrl(tile, bundle);
+            return url ? (
+              // Elke tegel drijft met een eigen vertraging; bij "minder beweging"
+              // zet de globale reduced-motion-regel dit stil.
+              <span key={tile.id} className="galv-hero-mosaic-cell" style={{ animationDelay: `${index * 0.35}s` }}>
+                <img src={url} alt="" loading="lazy" />
+              </span>
+            ) : null;
+          })}
+        </div>
+        <span className="galv-hero-veil" aria-hidden="true" />
+        {text}
+      </header>
+    );
+  }
 
   if (hero.template === 'split') {
     return (

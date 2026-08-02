@@ -125,6 +125,8 @@ async function getGallery(body: Record<string, unknown>) {
       .catch(() => [] as Record<string, unknown>[]),
   ]);
 
+  const branding = await loadBranding(gallery.organization_id);
+
   const reactionOf = (row: Record<string, unknown>) => String(row.reaction ?? 'favorite');
   const isMine = (row: Record<string, unknown>) => Boolean(sessionKey) && row.session_key === sessionKey;
 
@@ -141,6 +143,7 @@ async function getGallery(body: Record<string, unknown>) {
     gallery: sanitizeGallery(gallery),
     items: items.map(sanitizeGalleryItem),
     categories: categories.map((row) => ({ id: row.id, name: row.name })),
+    branding,
     tokens,
     myFavoriteIds: favorites.filter((f) => reactionOf(f) === 'favorite' && isMine(f)).map((f) => String(f.item_id)),
     myLikeIds: favorites.filter((f) => reactionOf(f) === 'like' && isMine(f)).map((f) => String(f.item_id)),
@@ -257,6 +260,33 @@ async function fetchGalleryTokens(organizationId: string, galleryId: string, all
   });
   if (!res.ok) throw new PublicError('Kon galerij-tokens niet ophalen.', 502);
   return (await res.json()) as { mediaToken: string; streamTokens: Record<string, string>; exp: number };
+}
+
+/**
+ * Huisstijl van de beeldmaker. Nooit blokkerend: zonder instellingen (of als de
+ * migratie nog niet is toegepast) valt de galerij terug op de ResoFly-stijl.
+ */
+async function loadBranding(organizationId: string) {
+  const fallback = { logoDataUrl: null, accentColor: '#FFD966', footerText: null, hidePoweredBy: false, companyName: null };
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('company_settings')
+      .select('company_name,trade_name,brand_logo_data_url,brand_accent_color,brand_footer_text,brand_hide_powered_by')
+      .eq('organization_id', organizationId)
+      .maybeSingle();
+    if (error || !data) return fallback;
+    const row = data as Record<string, unknown>;
+    const accent = String(row.brand_accent_color ?? '');
+    return {
+      logoDataUrl: (row.brand_logo_data_url as string | null) ?? null,
+      accentColor: /^#[0-9A-Fa-f]{6}$/.test(accent) ? accent : fallback.accentColor,
+      footerText: (row.brand_footer_text as string | null) ?? null,
+      hidePoweredBy: row.brand_hide_powered_by === true,
+      companyName: (row.trade_name as string | null) || (row.company_name as string | null) || null,
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 // ── Saneren ───────────────────────────────────────────────────────────

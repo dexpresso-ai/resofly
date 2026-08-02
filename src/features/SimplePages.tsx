@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Bell, BookOpen, CreditCard, ListChecks, Mail, Receipt, ShieldCheck, Sparkles, Users } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Bell, BookOpen, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, Users } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
@@ -54,6 +54,10 @@ const emptySettings: CompanySettingsInput = {
   fiscal_year_start_month: 1,
   year_result_account_code: '0510',
   default_hourly_rate_cents: null,
+  brand_logo_data_url: null,
+  brand_accent_color: '#FFD966',
+  brand_footer_text: null,
+  brand_hide_powered_by: false,
 };
 
 const ROLE_LABELS: Record<OrganizationRole, string> = {
@@ -63,7 +67,7 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   viewer: 'Viewer',
 };
 
-export type SettingsTab = 'organisatie' | 'sjablonen' | 'meldingen' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'email';
+export type SettingsTab = 'organisatie' | 'sjablonen' | 'huisstijl' | 'meldingen' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'email';
 
 /**
  * Rechtenraster: per module kiezen tussen geen toegang, alleen lezen en
@@ -116,6 +120,7 @@ function moduleAccessSummary(role: OrganizationRole, raw: unknown): string {
 export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof Users; description: string }> = [
   { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen, en bekijk de recente activiteit.' },
   { id: 'sjablonen', label: 'Projectsjablonen', Icon: ListChecks, description: 'Leg je vaste werkwijze vast als standaardtaken en subtaken, en rol die bij elk nieuw project in één klik uit.' },
+  { id: 'huisstijl', label: 'Huisstijl', Icon: Palette, description: 'Je logo, accentkleur en afsluiting op klantgerichte pagina\'s zoals de galerij — zodat een oplevering van jou is, niet van ResoFly.' },
   { id: 'meldingen', label: 'Meldingen', Icon: Bell, description: 'Ontvang OS-meldingen op je apparaat bij nieuwe tickets, chatberichten, e-mails en boekingen — ook als ResoFly dicht is.' },
   { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens, factuurtemplate en betaalteksten die op je facturen en offertes verschijnen.' },
   { id: 'boekhouding', label: 'Boekhouding', Icon: BookOpen, description: 'De boekhoud-startdatum (knipdatum) en de KOR-regeling voor je grootboek en BTW-aangifte.' },
@@ -1543,6 +1548,15 @@ export function Settings({
       <PushNotificationsCard api={push} />
     </div>}
 
+    {activeTab === 'huisstijl' && <div className="settings-tab-panel">
+      <div className="settings-save-bar">
+        <p className="settings-help">Zo ziet je klant de galerij: je eigen logo, je eigen accentkleur en je eigen afsluiting. Opslaan is nodig voordat het live staat.</p>
+        <Button variant="primary" onClick={save} disabled={isSaving || !canAdminOrganization}>{isSaving ? 'Opslaan…' : 'Opslaan'}</Button>
+      </div>
+      {message && <div className="success">{message}</div>}
+      <BrandingCard form={form} setForm={setForm} canWrite={canAdminOrganization} />
+    </div>}
+
     {activeTab === 'facturatie' && <div className="settings-tab-panel">
     <div className="settings-save-bar">
       <p className="settings-help">Wijzigingen aan bedrijfsgegevens, factuurtemplate en betaalteksten worden pas actief nadat je ze opslaat. Nieuwe factuur-PDFs gebruiken deze gegevens direct.</p>
@@ -2056,6 +2070,142 @@ function formatDateTime(value: string) {
   return new Intl.DateTimeFormat('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 
+/** Max. logobreedte; groter heeft geen zin en het logo gaat als data-URL mee. */
+const BRAND_LOGO_MAX_WIDTH = 600;
+const BRAND_LOGO_MAX_BYTES = 300 * 1024;
+
+/**
+ * Schaalt het logo terug en levert een data-URL op. Data-URL i.p.v. R2 omdat de
+ * publieke galerijpagina geen sessie heeft en dus geen media-token kan gebruiken;
+ * zo blijft het logo daar gewoon zichtbaar. PNG blijft PNG (transparantie),
+ * de rest wordt JPEG.
+ */
+async function logoToDataUrl(file: File): Promise<string> {
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+    throw new Error('Kies een PNG-, JPEG- of WebP-bestand.');
+  }
+  const bitmap = await createImageBitmap(file);
+  try {
+    const scale = Math.min(1, BRAND_LOGO_MAX_WIDTH / bitmap.width);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Canvas niet beschikbaar.');
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const usePng = file.type === 'image/png';
+    const dataUrl = canvas.toDataURL(usePng ? 'image/png' : 'image/jpeg', usePng ? undefined : 0.9);
+    if (dataUrl.length > BRAND_LOGO_MAX_BYTES * 1.4) {
+      throw new Error('Dit logo is te groot. Gebruik een kleiner bestand (richtlijn: onder 300 kB).');
+    }
+    return dataUrl;
+  } finally {
+    bitmap.close();
+  }
+}
+
+function BrandingCard({ form, setForm, canWrite }: {
+  form: CompanySettingsInput;
+  setForm: React.Dispatch<React.SetStateAction<CompanySettingsInput>>;
+  canWrite: boolean;
+}) {
+  const [logoError, setLogoError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  async function pickLogo(file: File | undefined) {
+    if (!file) return;
+    setLogoError(null);
+    try {
+      const dataUrl = await logoToDataUrl(file);
+      setForm(prev => ({ ...prev, brand_logo_data_url: dataUrl }));
+    } catch (e) {
+      setLogoError(e instanceof Error ? e.message : 'Logo verwerken mislukt.');
+    }
+  }
+
+  return (
+    <section className="settings-card">
+      <h3>Huisstijl op klantpagina&apos;s</h3>
+      <p className="settings-help">
+        Deze instellingen gelden voor wat je klant ziet: de galerij in het portaal en de publieke deellink.
+      </p>
+
+      <div className="brand-grid">
+        <div className="brand-field">
+          <span className="brand-label">Logo</span>
+          <div className="brand-logo-row">
+            <div className="brand-logo-preview">
+              {form.brand_logo_data_url
+                ? <img src={form.brand_logo_data_url} alt="Je logo" />
+                : <span className="brand-logo-empty">Geen logo</span>}
+            </div>
+            <div className="brand-logo-actions">
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                style={{ display: 'none' }}
+                onChange={(e) => { void pickLogo(e.target.files?.[0]); e.target.value = ''; }}
+              />
+              <Button onClick={() => fileRef.current?.click()} disabled={!canWrite}>Logo kiezen</Button>
+              {form.brand_logo_data_url && (
+                <Button variant="ghost" onClick={() => setForm(prev => ({ ...prev, brand_logo_data_url: null }))} disabled={!canWrite}>
+                  Verwijderen
+                </Button>
+              )}
+              <p className="settings-help">PNG, JPEG of WebP. We schalen het automatisch terug naar {BRAND_LOGO_MAX_WIDTH}px breed.</p>
+            </div>
+          </div>
+          {logoError && <div className="error">{logoError}</div>}
+        </div>
+
+        <div className="brand-field">
+          <span className="brand-label">Accentkleur</span>
+          <div className="brand-color-row">
+            <input
+              type="color"
+              className="brand-color"
+              value={/^#[0-9A-Fa-f]{6}$/.test(form.brand_accent_color) ? form.brand_accent_color : '#FFD966'}
+              onChange={(e) => setForm(prev => ({ ...prev, brand_accent_color: e.target.value.toUpperCase() }))}
+              disabled={!canWrite}
+              aria-label="Accentkleur"
+            />
+            <Input
+              value={form.brand_accent_color}
+              onChange={(e) => setForm(prev => ({ ...prev, brand_accent_color: e.target.value.toUpperCase() }))}
+              disabled={!canWrite}
+              maxLength={7}
+              aria-label="Accentkleur als hexcode"
+            />
+          </div>
+          <p className="settings-help">Gebruikt voor knoppen, chips en highlights in de galerij.</p>
+        </div>
+
+        <div className="brand-field brand-field-wide">
+          <span className="brand-label">Afsluiting onder de galerij</span>
+          <Input
+            value={form.brand_footer_text ?? ''}
+            onChange={(e) => setForm(prev => ({ ...prev, brand_footer_text: e.target.value || null }))}
+            placeholder="Bijv. Bedankt voor het vertrouwen — Studio Noord"
+            disabled={!canWrite}
+            maxLength={160}
+          />
+        </div>
+
+        <label className="brand-field brand-field-wide check-row">
+          <input
+            type="checkbox"
+            checked={form.brand_hide_powered_by}
+            onChange={(e) => setForm(prev => ({ ...prev, brand_hide_powered_by: e.target.checked }))}
+            disabled={!canWrite}
+          />
+          <span>&ldquo;Geleverd via ResoFly&rdquo; verbergen op de publieke galerijpagina</span>
+        </label>
+      </div>
+    </section>
+  );
+}
+
 function settingsToForm(settings: CompanySettings | null): CompanySettingsInput {
   if (!settings) return emptySettings;
   return {
@@ -2089,6 +2239,10 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     fiscal_year_start_month: settings.fiscal_year_start_month ?? 1,
     year_result_account_code: settings.year_result_account_code ?? '0510',
     default_hourly_rate_cents: settings.default_hourly_rate_cents ?? null,
+    brand_logo_data_url: settings.brand_logo_data_url ?? null,
+    brand_accent_color: settings.brand_accent_color ?? '#FFD966',
+    brand_footer_text: settings.brand_footer_text ?? null,
+    brand_hide_powered_by: settings.brand_hide_powered_by ?? false,
   };
 }
 

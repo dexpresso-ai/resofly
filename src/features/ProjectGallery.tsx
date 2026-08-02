@@ -62,12 +62,40 @@ function formatConfig(format: GalleryFormat) {
   return galleryFormats.find(f => f.key === format) ?? galleryFormats[2];
 }
 
-/** De vier openingen; het miniatuur ernaast is puur CSS (geen echte foto nodig). */
-const heroTemplates: Array<{ key: GalleryHeroTemplate; label: string }> = [
-  { key: 'full', label: 'Volledig beeld' },
-  { key: 'split', label: 'Beeld naast tekst' },
-  { key: 'collage', label: 'Collage' },
-  { key: 'minimal', label: 'Alleen tekst' },
+/**
+ * De openingen, gegroepeerd op karakter. Het miniatuur bij elke keuze is puur
+ * CSS — geen echte foto nodig om de opbouw te laten zien.
+ */
+const heroGroups: Array<{ group: string; options: Array<{ key: GalleryHeroTemplate; label: string; hint: string }> }> = [
+  {
+    group: 'Basis',
+    options: [
+      { key: 'full', label: 'Volledig beeld', hint: 'Beeldvullend met de titel eroverheen.' },
+      { key: 'minimal', label: 'Alleen tekst', hint: 'Geen hero-foto; direct de galerij.' },
+    ],
+  },
+  {
+    group: 'Modern',
+    options: [
+      { key: 'editorial', label: 'Editorial', hint: 'Asymmetrisch; grote titel valt over het beeld.' },
+      { key: 'frame', label: 'Kader', hint: 'Beeld in een ruim kader, titel in kapitalen.' },
+      { key: 'split', label: 'Beeld naast tekst', hint: 'Half beeld, half tekst.' },
+    ],
+  },
+  {
+    group: 'Klassiek',
+    options: [
+      { key: 'classic', label: 'Klassiek', hint: 'Serif-titel tussen dunne lijnen, veel rust.' },
+      { key: 'collage', label: 'Collage', hint: 'Eén groot beeld met twee kleinere.' },
+    ],
+  },
+  {
+    group: 'Spectaculair',
+    options: [
+      { key: 'cinematic', label: 'Cinematisch', hint: 'Trage zoom op het beeld, titel zweeft in.' },
+      { key: 'mosaic', label: 'Mozaïek', hint: 'Negen beelden achter een gecentreerde titel.' },
+    ],
+  },
 ];
 
 function fmtBytesShort(bytes: number): string {
@@ -1210,20 +1238,26 @@ function GallerySettingsModal({ gallery, busy, onClose, onSave, onDelete }: {
           </div>
           <div className="gal-field">
             <span>Opening (hero)</span>
-            <div className="gal-format-options is-compact gal-hero-options">
-              {heroTemplates.map(({ key, label }) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={`gal-format-card${heroTemplate === key ? ' is-active' : ''}`}
-                  onClick={() => setHeroTemplate(key)}
-                  aria-pressed={heroTemplate === key}
-                >
-                  <span className={`gal-hero-thumb gal-hero-thumb-${key}`} aria-hidden="true" />
-                  <span className="gal-format-label">{label}</span>
-                </button>
-              ))}
-            </div>
+            {heroGroups.map(({ group, options }) => (
+              <div key={group} className="gal-hero-group">
+                <span className="gal-hero-group-label">{group}</span>
+                <div className="gal-format-options is-compact gal-hero-options">
+                  {options.map(({ key, label, hint }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      className={`gal-format-card${heroTemplate === key ? ' is-active' : ''}`}
+                      onClick={() => setHeroTemplate(key)}
+                      aria-pressed={heroTemplate === key}
+                      title={hint}
+                    >
+                      <span className={`gal-hero-thumb gal-hero-thumb-${key}`} aria-hidden="true" />
+                      <span className="gal-format-label">{label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
             <p className="gal-field-help">
               De hero-foto is de coverfoto: kies die met het sterretje op een foto in de galerij.
             </p>

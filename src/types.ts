@@ -386,8 +386,25 @@ export interface ContentFolder extends OrgScopedRow {
 export type GalleryStatus = 'draft' | 'published' | 'archived';
 /** Bepaalt de weergave bij de klant én welke media er in de galerij mogen. */
 export type GalleryFormat = 'photo' | 'video' | 'hybrid';
-/** Opening van de galerij. De hero-foto is `cover_item_id`. */
-export type GalleryHeroTemplate = 'full' | 'split' | 'collage' | 'minimal';
+/**
+ * Opening van de galerij. De hero-foto is `cover_item_id`.
+ * Basis: full/minimal · Modern: editorial/frame/split ·
+ * Klassiek: classic/collage · Spectaculair: cinematic/mosaic.
+ */
+export type GalleryHeroTemplate =
+  | 'full' | 'minimal'
+  | 'editorial' | 'frame' | 'split'
+  | 'classic' | 'collage'
+  | 'cinematic' | 'mosaic';
+
+/** Huisstijl van de organisatie, zoals de klant de galerij ziet. */
+export interface GalleryBranding {
+  logoDataUrl: string | null;
+  accentColor: string;
+  footerText: string | null;
+  hidePoweredBy: boolean;
+  companyName: string | null;
+}
 
 /** Categorie binnen één galerij (bijv. Ceremonie, Diner, Feest). */
 export interface GalleryCategory extends OrgScopedRow {
@@ -1762,6 +1779,12 @@ export interface CompanySettings extends OrgScopedRow {
   year_result_account_code: string;
   /** Bedrijfsbreed standaard uurtarief (centen) — fallback als een project geen eigen tarief heeft. */
   default_hourly_rate_cents: number | null;
+  /** Huisstijl op klantgerichte pagina's (galerij). Logo als data-URL: de
+   *  publieke galerijpagina heeft geen sessie en dus geen media-token. */
+  brand_logo_data_url: string | null;
+  brand_accent_color: string;
+  brand_footer_text: string | null;
+  brand_hide_powered_by: boolean;
   created_at: string;
   updated_at: string;
 }
