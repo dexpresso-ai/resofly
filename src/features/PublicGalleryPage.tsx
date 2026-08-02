@@ -11,6 +11,7 @@ import { Button, Input } from '../components/Ui';
 import { supabase } from '../lib/supabase';
 import { dateNL } from '../lib/format';
 import { galleryFileUrl, galleryRefreshDelayMs, galleryZipUrl, streamDownloadUrl, type GalleryTokenBundle } from '../lib/gallery';
+import { brandStyle, ensureBrandFontsLoaded, type BrandingPayload } from '../lib/branding';
 import { GalleryViewer, type GalleryViewerItem } from './GalleryViewer';
 
 async function extractFunctionError(error: unknown, fallback: string): Promise<string> {
@@ -46,13 +47,7 @@ type Payload = {
   gallery: PublicGallery;
   items: GalleryViewerItem[];
   categories: Array<{ id: string; name: string }>;
-  branding?: {
-    logoDataUrl: string | null;
-    accentColor: string;
-    footerText: string | null;
-    hidePoweredBy: boolean;
-    companyName: string | null;
-  };
+  branding?: BrandingPayload;
   tokens: GalleryTokenBundle;
   myFavoriteIds: string[];
   myLikeIds: string[];
@@ -105,6 +100,8 @@ export function PublicGalleryPage({ token }: { token: string }) {
       } else {
         setNeedsPin(false);
         const result = data as Payload & { ok: true };
+        // Lettertypen van de beeldmaker inladen vóór de galerij verschijnt.
+        ensureBrandFontsLoaded([result.branding?.headingFont, result.branding?.bodyFont]);
         setPayload(result);
         setFavoriteIds(new Set((result.myFavoriteIds || []).map(String)));
         setLikeIds(new Set((result.myLikeIds || []).map(String)));
@@ -247,14 +244,11 @@ export function PublicGalleryPage({ token }: { token: string }) {
   const downloadableCount = payload.items.filter(i => i.storage_key || i.preview_key).length;
 
   const branding = payload.branding;
-  // De accentkleur van de beeldmaker overschrijft het ResoFly-goud, maar alleen
-  // op deze pagina — via een CSS-variabele, zodat alle bestaande stijlen meegaan.
-  const brandStyle = branding?.accentColor
-    ? ({ '--accent': branding.accentColor } as React.CSSProperties)
-    : undefined;
 
   return (
-    <main className="pgal" style={brandStyle}>
+    // Accentkleur en lettertypen komen als CSS-variabelen binnen, alleen op
+    // deze pagina — zo kleuren alle bestaande stijlen mee zonder duplicatie.
+    <main className="pgal" style={brandStyle(branding)}>
       {branding?.logoDataUrl && (
         <div className="pgal-brand">
           <img src={branding.logoDataUrl} alt={branding.companyName ?? 'Logo'} />

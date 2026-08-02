@@ -624,6 +624,7 @@ async function getGalleryDetail(user: { id: string; email: string }, body: Recor
     gallery: sanitizeGallery(gallery),
     items: items.map(sanitizeGalleryItem),
     categories: categories.map((row) => ({ id: row.id, name: row.name })),
+    branding: sanitizeBranding(await optionalCompany(gallery.organization_id)),
     tokens,
     myFavoriteIds: favorites.filter((f) => reactionOf(f) === 'favorite' && isMine(f)).map((f) => String(f.item_id)),
     myLikeIds: favorites.filter((f) => reactionOf(f) === 'like' && isMine(f)).map((f) => String(f.item_id)),
@@ -673,6 +674,24 @@ async function toggleGalleryFavorite(user: { id: string; email: string }, body: 
     if (error) throw error;
   }
   return { itemId, on, reaction };
+}
+
+/**
+ * Huisstijl van de beeldmaker voor de galerij. Nooit blokkerend: zonder
+ * instellingen valt de weergave terug op de ResoFly-stijl. De lettertypen zijn
+ * sleutels uit een vaste lijst in de frontend, geen rauwe CSS.
+ */
+function sanitizeBranding(row: Record<string, unknown> | null) {
+  const accent = String(row?.brand_accent_color ?? '');
+  return {
+    logoDataUrl: (row?.brand_logo_data_url as string | null) ?? null,
+    accentColor: /^#[0-9A-Fa-f]{6}$/.test(accent) ? accent : '#FFD966',
+    footerText: (row?.brand_footer_text as string | null) ?? null,
+    hidePoweredBy: row?.brand_hide_powered_by === true,
+    companyName: (row?.trade_name as string | null) || (row?.company_name as string | null) || null,
+    headingFont: String(row?.brand_heading_font ?? 'system'),
+    bodyFont: String(row?.brand_body_font ?? 'system'),
+  };
 }
 
 function sanitizeGallery(row: Record<string, unknown>) {

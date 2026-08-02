@@ -404,6 +404,8 @@ export interface GalleryBranding {
   footerText: string | null;
   hidePoweredBy: boolean;
   companyName: string | null;
+  headingFont: string;
+  bodyFont: string;
 }
 
 /** Categorie binnen één galerij (bijv. Ceremonie, Diner, Feest). */
@@ -1785,6 +1787,9 @@ export interface CompanySettings extends OrgScopedRow {
   brand_accent_color: string;
   brand_footer_text: string | null;
   brand_hide_powered_by: boolean;
+  /** Sleutels uit de lettertypelijst in src/lib/branding.ts, nooit rauwe CSS. */
+  brand_heading_font: string;
+  brand_body_font: string;
   created_at: string;
   updated_at: string;
 }

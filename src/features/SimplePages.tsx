@@ -4,6 +4,7 @@ import { PushNotificationsCard, type PushApi } from '../components/usePushNotifi
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
+import { BRAND_BODY_FONTS, BRAND_FONTS, brandFont, ensureBrandFontsLoaded } from '../lib/branding';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
 import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity } from '../lib/repository';
@@ -58,6 +59,8 @@ const emptySettings: CompanySettingsInput = {
   brand_accent_color: '#FFD966',
   brand_footer_text: null,
   brand_hide_powered_by: false,
+  brand_heading_font: 'system',
+  brand_body_font: 'system',
 };
 
 const ROLE_LABELS: Record<OrganizationRole, string> = {
@@ -2112,6 +2115,11 @@ function BrandingCard({ form, setForm, canWrite }: {
   const [logoError, setLogoError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
+  // Het voorbeeld moet de échte letters tonen, dus de gekozen families laden.
+  useEffect(() => {
+    ensureBrandFontsLoaded([form.brand_heading_font, form.brand_body_font]);
+  }, [form.brand_heading_font, form.brand_body_font]);
+
   async function pickLogo(file: File | undefined) {
     if (!file) return;
     setLogoError(null);
@@ -2181,6 +2189,51 @@ function BrandingCard({ form, setForm, canWrite }: {
           <p className="settings-help">Gebruikt voor knoppen, chips en highlights in de galerij.</p>
         </div>
 
+        <div className="brand-field">
+          <span className="brand-label">Lettertype koppen</span>
+          <Select
+            value={form.brand_heading_font}
+            onChange={(e) => setForm(prev => ({ ...prev, brand_heading_font: e.target.value }))}
+            disabled={!canWrite}
+          >
+            {BRAND_FONTS.map(font => <option key={font.key} value={font.key}>{font.label}</option>)}
+          </Select>
+          <p className="settings-help">{brandFont(form.brand_heading_font).hint}</p>
+        </div>
+
+        <div className="brand-field">
+          <span className="brand-label">Lettertype tekst</span>
+          <Select
+            value={form.brand_body_font}
+            onChange={(e) => setForm(prev => ({ ...prev, brand_body_font: e.target.value }))}
+            disabled={!canWrite}
+          >
+            {BRAND_BODY_FONTS.map(font => <option key={font.key} value={font.key}>{font.label}</option>)}
+          </Select>
+          <p className="settings-help">{brandFont(form.brand_body_font).hint}</p>
+        </div>
+
+        {/* Voorbeeld met de daadwerkelijke lettertypen en accentkleur. */}
+        <div className="brand-field brand-field-wide">
+          <span className="brand-label">Voorbeeld</span>
+          <div
+            className="brand-preview"
+            style={{
+              '--accent': /^#[0-9A-Fa-f]{6}$/.test(form.brand_accent_color) ? form.brand_accent_color : '#FFD966',
+              fontFamily: brandFont(form.brand_body_font).stack,
+            } as React.CSSProperties}
+          >
+            {form.brand_logo_data_url && <img className="brand-preview-logo" src={form.brand_logo_data_url} alt="" />}
+            <h4 style={{ fontFamily: brandFont(form.brand_heading_font).stack }}>Bruiloft Sanne &amp; Tim</h4>
+            <p>De mooiste beelden van jullie dag — kies je favorieten en download ze in hoge resolutie.</p>
+            <span className="brand-preview-chips">
+              <span className="brand-preview-chip is-active">Ceremonie</span>
+              <span className="brand-preview-chip">Diner</span>
+              <span className="brand-preview-chip">Feest</span>
+            </span>
+          </div>
+        </div>
+
         <div className="brand-field brand-field-wide">
           <span className="brand-label">Afsluiting onder de galerij</span>
           <Input
@@ -2243,6 +2296,8 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     brand_accent_color: settings.brand_accent_color ?? '#FFD966',
     brand_footer_text: settings.brand_footer_text ?? null,
     brand_hide_powered_by: settings.brand_hide_powered_by ?? false,
+    brand_heading_font: settings.brand_heading_font ?? 'system',
+    brand_body_font: settings.brand_body_font ?? 'system',
   };
 }
 

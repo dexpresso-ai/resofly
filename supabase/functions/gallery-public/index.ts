@@ -267,11 +267,14 @@ async function fetchGalleryTokens(organizationId: string, galleryId: string, all
  * migratie nog niet is toegepast) valt de galerij terug op de ResoFly-stijl.
  */
 async function loadBranding(organizationId: string) {
-  const fallback = { logoDataUrl: null, accentColor: '#FFD966', footerText: null, hidePoweredBy: false, companyName: null };
+  const fallback = {
+    logoDataUrl: null, accentColor: '#FFD966', footerText: null,
+    hidePoweredBy: false, companyName: null, headingFont: 'system', bodyFont: 'system',
+  };
   try {
     const { data, error } = await supabaseAdmin
       .from('company_settings')
-      .select('company_name,trade_name,brand_logo_data_url,brand_accent_color,brand_footer_text,brand_hide_powered_by')
+      .select('company_name,trade_name,brand_logo_data_url,brand_accent_color,brand_footer_text,brand_hide_powered_by,brand_heading_font,brand_body_font')
       .eq('organization_id', organizationId)
       .maybeSingle();
     if (error || !data) return fallback;
@@ -283,6 +286,8 @@ async function loadBranding(organizationId: string) {
       footerText: (row.brand_footer_text as string | null) ?? null,
       hidePoweredBy: row.brand_hide_powered_by === true,
       companyName: (row.trade_name as string | null) || (row.company_name as string | null) || null,
+      headingFont: String(row.brand_heading_font ?? 'system'),
+      bodyFont: String(row.brand_body_font ?? 'system'),
     };
   } catch {
     return fallback;

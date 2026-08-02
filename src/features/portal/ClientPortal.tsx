@@ -33,6 +33,7 @@ import { dateNL, euro, lineGross, priorityLabel, total } from '../../lib/format'
 import type { FinanceLine, Priority } from '../../types';
 import { GalleryViewer, type GalleryViewerItem } from '../GalleryViewer';
 import { galleryFileUrl, galleryRefreshDelayMs, galleryZipUrl, streamDownloadUrl } from '../../lib/gallery';
+import { brandStyle, ensureBrandFontsLoaded } from '../../lib/branding';
 
 type PortalTab = 'overview' | 'invoices' | 'quotes' | 'contracts' | 'tickets' | 'projects' | 'galleries';
 
@@ -323,6 +324,8 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
       .then(result => {
         if (!active) return;
         setDetail(result);
+        // Lettertypen van de beeldmaker inladen vóór de galerij in beeld komt.
+        ensureBrandFontsLoaded([result.branding?.headingFont, result.branding?.bodyFont]);
         setFavoriteIds(new Set(result.myFavoriteIds));
         setLikeIds(new Set(result.myLikeIds));
         setLikeCounts(new Map(Object.entries(result.likeCounts ?? {})));
@@ -400,8 +403,14 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
   }
 
   const project = account.projects.find(p => p.id === gallery.project_id);
+  const branding = detail?.branding;
 
-  return <article className="portal-card portal-gallery">
+  return <article className="portal-card portal-gallery" style={brandStyle(branding)}>
+    {branding?.logoDataUrl && (
+      <div className="portal-gallery-brand">
+        <img src={branding.logoDataUrl} alt={branding.companyName ?? 'Logo'} />
+      </div>
+    )}
     <div className="portal-card-head">
       <div className="portal-gallery-head">
         <button type="button" className="portal-back" onClick={onBack}>← Terug</button>
@@ -422,6 +431,7 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
     )}
     {error && <p className="portal-error">{error}</p>}
     {loading && <p className="portal-muted">Galerij laden…</p>}
+    {detail?.branding?.footerText && <p className="portal-gallery-own-note">{detail.branding.footerText}</p>}
     {detail && !loading && (
       <GalleryViewer
         items={detail.items}

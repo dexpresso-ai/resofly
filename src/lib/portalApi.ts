@@ -1,4 +1,5 @@
 import { supabasePortal } from './supabasePortal';
+import type { BrandingPayload } from './branding';
 import type { FinanceLine, InvoiceStatus, Priority, FinanceStatus } from '../types';
 
 // Dunne wrappers rond de `client-portal` edge function, in de stijl van
@@ -196,6 +197,8 @@ export interface PortalGalleryDetail {
   gallery: PortalGallery;
   items: PortalGalleryItem[];
   categories: PortalGalleryCategory[];
+  /** Huisstijl van de beeldmaker; afwezig = de standaard ResoFly-stijl. */
+  branding?: BrandingPayload;
   tokens: PortalGalleryTokens;
   /** Eigen selectie (privé) en eigen likes; likeCounts is voor iedereen zichtbaar. */
   myFavoriteIds: string[];
@@ -291,6 +294,7 @@ export async function fetchPortalGalleryDetail(galleryId: string): Promise<Porta
     gallery: data.gallery as PortalGallery,
     items: Array.isArray(data.items) ? data.items : [],
     categories: Array.isArray(data.categories) ? data.categories : [],
+    branding: (data.branding ?? undefined) as BrandingPayload | undefined,
     tokens: data.tokens as PortalGalleryTokens,
     myFavoriteIds: Array.isArray(data.myFavoriteIds) ? data.myFavoriteIds.map(String) : [],
     myLikeIds: Array.isArray(data.myLikeIds) ? data.myLikeIds.map(String) : [],
