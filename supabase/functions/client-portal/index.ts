@@ -691,6 +691,7 @@ function sanitizeBranding(row: Record<string, unknown> | null) {
     companyName: (row?.trade_name as string | null) || (row?.company_name as string | null) || null,
     headingFont: String(row?.brand_heading_font ?? 'system'),
     bodyFont: String(row?.brand_body_font ?? 'system'),
+    galleryBg: /^#[0-9A-Fa-f]{6}$/.test(String(row?.brand_gallery_bg ?? '')) ? String(row?.brand_gallery_bg) : '#0B0B0B',
   };
 }
 

@@ -270,11 +270,12 @@ async function loadBranding(organizationId: string) {
   const fallback = {
     logoDataUrl: null, accentColor: '#FFD966', footerText: null,
     hidePoweredBy: false, companyName: null, headingFont: 'system', bodyFont: 'system',
+    galleryBg: '#0B0B0B',
   };
   try {
     const { data, error } = await supabaseAdmin
       .from('company_settings')
-      .select('company_name,trade_name,brand_logo_data_url,brand_accent_color,brand_footer_text,brand_hide_powered_by,brand_heading_font,brand_body_font')
+      .select('company_name,trade_name,brand_logo_data_url,brand_accent_color,brand_footer_text,brand_hide_powered_by,brand_heading_font,brand_body_font,brand_gallery_bg')
       .eq('organization_id', organizationId)
       .maybeSingle();
     if (error || !data) return fallback;
@@ -288,6 +289,7 @@ async function loadBranding(organizationId: string) {
       companyName: (row.trade_name as string | null) || (row.company_name as string | null) || null,
       headingFont: String(row.brand_heading_font ?? 'system'),
       bodyFont: String(row.brand_body_font ?? 'system'),
+      galleryBg: /^#[0-9A-Fa-f]{6}$/.test(String(row.brand_gallery_bg ?? '')) ? String(row.brand_gallery_bg) : fallback.galleryBg,
     };
   } catch {
     return fallback;

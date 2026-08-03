@@ -4433,6 +4433,28 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .galv-hero-text h2,.galv-section-title,.pgal-hero h1{font-family:var(--brand-heading,inherit)}
 .pgal,.portal-gallery{font-family:var(--brand-body,inherit)}
 
+/* ── Achtergrond van de galerij ──────────────────────────────────────────────
+   De gebruiker kiest één kleur; --gal-text/-muted/-border/-surface worden in
+   src/lib/branding.ts uit de helderheid afgeleid, zodat een lichte achtergrond
+   automatisch donkere tekst krijgt. Zonder keuze vallen ze terug op het
+   bestaande donkere thema, dus er verandert dan niets. */
+.pgal{background:var(--gal-bg,var(--bg));color:var(--gal-text,var(--text))}
+.portal-gallery{background:var(--gal-bg,transparent);color:var(--gal-text,inherit)}
+.galv-empty{border-color:var(--gal-border,var(--border));color:var(--gal-muted,var(--muted))}
+.galv-section-title{color:var(--gal-muted,var(--muted2))}
+.galv-hero-text p{color:var(--gal-muted,var(--muted2))}
+.galv-chips{background:linear-gradient(180deg,var(--gal-bg,var(--bg)) 62%,transparent)}
+.galv-chip{background:var(--gal-surface,var(--bg3));border-color:var(--gal-border,var(--border));color:var(--gal-muted,var(--muted2))}
+.galv-chip:hover{color:var(--gal-text,var(--text))}
+.galv-tile,.galv-video-card{background:var(--gal-surface,var(--bg3))}
+.galv-video-card{border-color:var(--gal-border,var(--border))}
+.galv-hero-frame{background:var(--gal-surface,rgba(255,255,255,.02));border-color:var(--gal-border,var(--border))}
+.galv-hero-classic .galv-hero-text{border-color:var(--gal-border,var(--border))}
+.galv-hero-media{background:var(--gal-surface,var(--bg3))}
+.pgal-foot{border-color:var(--gal-border,var(--border));color:var(--gal-muted,var(--muted))}
+.pgal-foot-own,.pgal-meta{color:var(--gal-muted,var(--muted))}
+.pgal-desc{color:var(--gal-muted,var(--muted2))}
+
 /* ── Hero: de opening van de galerij (negen templates) ── */
 .galv-hero{position:relative;border-radius:var(--radius-lg,18px);overflow:hidden}
 .galv-hero-text h2{margin:0;font-size:clamp(20px,3.2vw,34px);letter-spacing:-.02em;line-height:1.15}
@@ -4685,6 +4707,15 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .brand-locked{display:flex;align-items:center;gap:9px}
 .brand-locked-dot{width:22px;height:22px;border-radius:7px;border:1px solid var(--border);flex-shrink:0}
 .brand-locked-value{font-size:12px;color:var(--muted2);font-variant-numeric:tabular-nums}
+/* Achtergrondkeuze */
+.brand-bg-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.brand-bg-swatch{width:38px;height:38px;border-radius:9px;border:2px solid var(--border);cursor:pointer;padding:0}
+.brand-bg-swatch:hover{border-color:var(--border2)}
+.brand-bg-swatch.is-active{border-color:var(--accent);box-shadow:0 0 0 3px rgba(255,217,102,.18)}
+/* Het voorbeeld krijgt dezelfde afgeleide kleuren als de echte galerij. */
+.brand-preview{color:var(--gal-text,var(--text))}
+.brand-preview p{color:var(--gal-muted,var(--muted2))}
+.brand-preview-chip{border-color:var(--gal-border,var(--border));color:var(--gal-muted,var(--muted2))}
 
 /* ── Instellingen · Abonnement: accountbrede opslagmeter ── */
 .billing-storage-row>div:first-child{flex:1;min-width:0}

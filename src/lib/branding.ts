@@ -15,7 +15,42 @@ export type BrandingPayload = {
   companyName: string | null;
   headingFont?: string | null;
   bodyFont?: string | null;
+  galleryBg?: string | null;
 };
+
+/** Achtergronden die het vaakst gekozen worden; de kleurkiezer kan alles. */
+export const GALLERY_BACKGROUNDS: Array<{ value: string; label: string }> = [
+  { value: '#0B0B0B', label: 'Nachtzwart' },
+  { value: '#171717', label: 'Antraciet' },
+  { value: '#1C1A18', label: 'Warm donker' },
+  { value: '#F6F4F1', label: 'Gebroken wit' },
+  { value: '#FFFFFF', label: 'Zuiver wit' },
+];
+
+/** Waargenomen helderheid (0–1) volgens de sRGB-luminantieformule. */
+function luminance(hex: string): number {
+  const value = hex.replace('#', '');
+  const channel = (index: number) => parseInt(value.slice(index * 2, index * 2 + 2), 16) / 255;
+  const linear = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * linear(channel(0)) + 0.7152 * linear(channel(1)) + 0.0722 * linear(channel(2));
+}
+
+/**
+ * Leidt een leesbaar palet af uit één achtergrondkleur. De gebruiker kiest dus
+ * alleen de achtergrond; tekst, randen en tegelvlakken volgen automatisch en
+ * blijven contrastrijk — ook bij een lichte galerij.
+ */
+function galleryPalette(background: string): Record<string, string> {
+  const light = luminance(background) > 0.5;
+  return {
+    '--gal-bg': background,
+    '--gal-text': light ? '#141414' : '#f4f4f4',
+    '--gal-muted': light ? 'rgba(20,20,20,.62)' : 'rgba(244,244,244,.62)',
+    '--gal-border': light ? 'rgba(20,20,20,.14)' : 'rgba(255,255,255,.10)',
+    '--gal-surface': light ? 'rgba(20,20,20,.05)' : 'rgba(255,255,255,.05)',
+    '--gal-surface-strong': light ? 'rgba(20,20,20,.09)' : 'rgba(255,255,255,.09)',
+  };
+}
 
 type BrandFont = {
   key: string;
@@ -138,6 +173,9 @@ export function brandStyle(branding: BrandingPayload | null | undefined): React.
   }
   if (branding.bodyFont && branding.bodyFont !== DEFAULT_BRAND_FONT) {
     style['--brand-body'] = brandFont(branding.bodyFont).stack;
+  }
+  if (branding.galleryBg && /^#[0-9A-Fa-f]{6}$/.test(branding.galleryBg)) {
+    Object.assign(style, galleryPalette(branding.galleryBg));
   }
   return Object.keys(style).length > 0 ? (style as React.CSSProperties) : undefined;
 }

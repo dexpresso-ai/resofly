@@ -4,7 +4,7 @@ import { PushNotificationsCard, type PushApi } from '../components/usePushNotifi
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
-import { BRAND_BODY_FONTS, BRAND_FONTS, brandFont, ensureBrandFontsLoaded } from '../lib/branding';
+import { BRAND_BODY_FONTS, BRAND_FONTS, GALLERY_BACKGROUNDS, brandFont, brandStyle, ensureBrandFontsLoaded } from '../lib/branding';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
 import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity } from '../lib/repository';
@@ -61,6 +61,7 @@ const emptySettings: CompanySettingsInput = {
   brand_hide_powered_by: false,
   brand_heading_font: 'system',
   brand_body_font: 'system',
+  brand_gallery_bg: '#0B0B0B',
 };
 
 const ROLE_LABELS: Record<OrganizationRole, string> = {
@@ -2201,6 +2202,36 @@ function BrandingCard({ form, setForm, canWrite }: {
           <p className="settings-help">Werkt door in de galerij én op je facturen, offertes, contracten en e-mails.</p>
         </div>
 
+        <div className="brand-field brand-field-wide">
+          <span className="brand-label">Achtergrond van de galerij</span>
+          <div className="brand-bg-row">
+            {GALLERY_BACKGROUNDS.map(option => (
+              <button
+                key={option.value}
+                type="button"
+                className={`brand-bg-swatch${form.brand_gallery_bg?.toUpperCase() === option.value ? ' is-active' : ''}`}
+                style={{ background: option.value }}
+                onClick={() => setForm(prev => ({ ...prev, brand_gallery_bg: option.value }))}
+                disabled={!canWrite}
+                title={option.label}
+                aria-label={option.label}
+                aria-pressed={form.brand_gallery_bg?.toUpperCase() === option.value}
+              />
+            ))}
+            <input
+              type="color"
+              className="brand-color"
+              value={/^#[0-9A-Fa-f]{6}$/.test(form.brand_gallery_bg) ? form.brand_gallery_bg : '#0B0B0B'}
+              onChange={(e) => setForm(prev => ({ ...prev, brand_gallery_bg: e.target.value.toUpperCase() }))}
+              disabled={!canWrite}
+              aria-label="Eigen achtergrondkleur"
+            />
+          </div>
+          <p className="settings-help">
+            Tekst, randen en knoppen passen zich automatisch aan: bij een lichte achtergrond wordt de tekst donker.
+          </p>
+        </div>
+
         <div className="brand-field">
           <span className="brand-label">Lettertype koppen</span>
           <Select
@@ -2231,7 +2262,17 @@ function BrandingCard({ form, setForm, canWrite }: {
           <div
             className="brand-preview"
             style={{
-              '--accent': /^#[0-9A-Fa-f]{6}$/.test(form.brand_accent_color) ? form.brand_accent_color : '#FFD966',
+              ...brandStyle({
+                logoDataUrl: null,
+                accentColor: form.brand_accent_color,
+                footerText: null,
+                hidePoweredBy: false,
+                companyName: null,
+                headingFont: form.brand_heading_font,
+                bodyFont: form.brand_body_font,
+                galleryBg: form.brand_gallery_bg,
+              }),
+              background: /^#[0-9A-Fa-f]{6}$/.test(form.brand_gallery_bg) ? form.brand_gallery_bg : undefined,
               fontFamily: brandFont(form.brand_body_font).stack,
             } as React.CSSProperties}
           >
@@ -2310,6 +2351,7 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     brand_hide_powered_by: settings.brand_hide_powered_by ?? false,
     brand_heading_font: settings.brand_heading_font ?? 'system',
     brand_body_font: settings.brand_body_font ?? 'system',
+    brand_gallery_bg: settings.brand_gallery_bg ?? '#0B0B0B',
   };
 }
 

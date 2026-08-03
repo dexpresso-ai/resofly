@@ -48,6 +48,19 @@ export function formatDuration(seconds: number | null): string {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
 }
 
+/**
+ * Laat de browser zelf de scherpste variant kiezen. We kennen de weergavebreedte
+ * exact (rijhoogte × beeldverhouding), dus met `sizes` erbij pakt hij de
+ * thumbnail bij kleine tegels en de preview bij grote — ook op retina.
+ */
+function photoSrcSet(item: GalleryViewerItem, bundle: GalleryTokenBundle): string | undefined {
+  if (item.media_type !== 'photo') return undefined;
+  const parts: string[] = [];
+  if (item.thumb_key) parts.push(`${galleryFileUrl(item.thumb_key, bundle.mediaToken)} 1200w`);
+  if (item.preview_key) parts.push(`${galleryFileUrl(item.preview_key, bundle.mediaToken)} 2560w`);
+  return parts.length > 1 ? parts.join(', ') : undefined;
+}
+
 function itemThumbUrl(item: GalleryViewerItem, bundle: GalleryTokenBundle): string | null {
   if (item.thumb_key) return galleryFileUrl(item.thumb_key, bundle.mediaToken);
   if (item.stream_uid && item.stream_playback_base && bundle.streamTokens[item.stream_uid]) {
@@ -358,7 +371,7 @@ export function GalleryViewer({
   const renderPhotos = (list: GalleryViewerItem[]) => (
     <JustifiedPhotos
       photos={list}
-      renderTile={(item, style) => {
+      renderTile={(item, style, displayWidth) => {
         const thumb = itemThumbUrl(item, bundle);
         const isSelected = selected?.has(item.id) ?? false;
         return (
@@ -381,7 +394,15 @@ export function GalleryViewer({
             }}
           >
             {thumb
-              ? <img src={thumb} alt={item.file_name} loading="lazy" />
+              ? (
+                <img
+                  src={thumb}
+                  srcSet={photoSrcSet(item, bundle)}
+                  sizes={`${Math.round(displayWidth)}px`}
+                  alt={item.file_name}
+                  loading="lazy"
+                />
+              )
               : <div className="galv-tile-fallback">{item.file_name}</div>}
             {selectable && <span className={`galv-check${isSelected ? ' is-on' : ''}`} aria-hidden="true" />}
             {tools(item)}
@@ -592,7 +613,8 @@ function buildPhotoRows(photos: GalleryViewerItem[], width: number): PhotoRow[] 
 
 function JustifiedPhotos({ photos, renderTile }: {
   photos: GalleryViewerItem[];
-  renderTile: (item: GalleryViewerItem, style: React.CSSProperties) => React.ReactNode;
+  /** `displayWidth` is de werkelijke breedte in CSS-pixels, voor een kloppende `sizes`. */
+  renderTile: (item: GalleryViewerItem, style: React.CSSProperties, displayWidth: number) => React.ReactNode;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Beginbreedte zodat de eerste paint al een zinnige indeling toont; de
@@ -618,7 +640,11 @@ function JustifiedPhotos({ photos, renderTile }: {
     <div className="galv-just" ref={containerRef}>
       {rows.map((row, index) => (
         <div className="galv-just-row" key={row.items[0]?.id ?? index} style={{ height: `${row.height}px` }}>
-          {row.items.map(item => renderTile(item, { flexGrow: aspectRatio(item), flexBasis: 0 }))}
+          {row.items.map(item => renderTile(
+            item,
+            { flexGrow: aspectRatio(item), flexBasis: 0 },
+            aspectRatio(item) * row.height,
+          ))}
         </div>
       ))}
     </div>

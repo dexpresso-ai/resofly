@@ -196,7 +196,13 @@ export async function streamTusUpload(
 // ── Client-side beeldbewerking ──────────────────────────────────────────────
 
 const PREVIEW_MAX_EDGE = 2560;
-const THUMB_MAX_EDGE = 480;
+/**
+ * 1200 i.p.v. 480: het fotoraster toont justified rows tot ~290px hoog, en een
+ * liggende foto is daar al gauw 500px breed — op een retina-scherm dus 1000
+ * echte pixels. Met 480 werd de tegel zichtbaar opgeschaald. De viewer zet
+ * bovendien een srcset, zodat grotere tegels de preview pakken.
+ */
+const THUMB_MAX_EDGE = 1200;
 
 async function bitmapFromFile(file: Blob): Promise<ImageBitmap> {
   // 'from-image' respecteert de EXIF-orientatie van camera-JPEG's.
@@ -232,7 +238,7 @@ export async function generateImageDerivatives(file: File): Promise<{ preview: B
   try {
     const [preview, thumb] = await Promise.all([
       scaleToBlob(bitmap, PREVIEW_MAX_EDGE, 0.85),
-      scaleToBlob(bitmap, THUMB_MAX_EDGE, 0.8),
+      scaleToBlob(bitmap, THUMB_MAX_EDGE, 0.82),
     ]);
     return { preview, thumb, width: bitmap.width, height: bitmap.height };
   } finally {
@@ -266,7 +272,8 @@ export function captureVideoPoster(file: File): Promise<{ thumb: Blob | null; wi
       const height = video.videoHeight || null;
       const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null;
       const canvas = document.createElement('canvas');
-      const scale = width && height ? Math.min(1, THUMB_MAX_EDGE / Math.max(width, height)) : 1;
+      // Posterframe blijft klein: hij dient alleen als tegel, niet als preview.
+      const scale = width && height ? Math.min(1, 720 / Math.max(width, height)) : 1;
       canvas.width = Math.max(1, Math.round((width || 1) * scale));
       canvas.height = Math.max(1, Math.round((height || 1) * scale));
       const ctx = canvas.getContext('2d');
