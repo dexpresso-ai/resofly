@@ -61,7 +61,12 @@ function photoSrcSet(item: GalleryViewerItem, bundle: GalleryTokenBundle): strin
   return parts.length > 1 ? parts.join(', ') : undefined;
 }
 
-function itemThumbUrl(item: GalleryViewerItem, bundle: GalleryTokenBundle): string | null {
+/**
+ * Kleinste bruikbare afbeelding van een item. Ook de beheerschermen (het
+ * indelen van bestanden in categorieën) tonen deze miniatuur, vandaar de export:
+ * één plek die weet welke variant er bestaat.
+ */
+export function galleryItemThumbUrl(item: GalleryViewerItem, bundle: GalleryTokenBundle): string | null {
   if (item.thumb_key) return galleryFileUrl(item.thumb_key, bundle.mediaToken);
   if (item.stream_uid && item.stream_playback_base && bundle.streamTokens[item.stream_uid]) {
     return streamThumbnailUrl(item.stream_playback_base, bundle.streamTokens[item.stream_uid], { height: 480 });
@@ -75,7 +80,7 @@ function itemPreviewUrl(item: GalleryViewerItem, bundle: GalleryTokenBundle): st
     const key = item.preview_key || item.storage_key;
     return key ? galleryFileUrl(key, bundle.mediaToken) : null;
   }
-  return itemThumbUrl(item, bundle);
+  return galleryItemThumbUrl(item, bundle);
 }
 
 type GallerySection = {
@@ -316,7 +321,7 @@ export function GalleryViewer({
   const renderVideos = (list: GalleryViewerItem[]) => (
     <div className={videoOnly ? 'galv-video-grid' : 'galv-video-row'}>
       {list.map(item => {
-        const thumb = itemThumbUrl(item, bundle);
+        const thumb = galleryItemThumbUrl(item, bundle);
         const playable = videoIsPlayable(item);
         const processing = item.stream_uid && item.stream_status !== 'ready' && item.stream_status !== 'error';
         const isSelected = selected?.has(item.id) ?? false;
@@ -372,7 +377,7 @@ export function GalleryViewer({
     <JustifiedPhotos
       photos={list}
       renderTile={(item, style, displayWidth) => {
-        const thumb = itemThumbUrl(item, bundle);
+        const thumb = galleryItemThumbUrl(item, bundle);
         const isSelected = selected?.has(item.id) ?? false;
         return (
           <figure

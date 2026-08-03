@@ -7,7 +7,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import {
   ArrowUpDown, CheckSquare, ChevronDown, ChevronUp, Copy, Download, Film, FolderTree, HardDrive, Heart,
-  Image as ImageIcon, Layers, Link2, Loader2, Plus, Settings2, Star, Trash2, Upload,
+  Image as ImageIcon, Layers, Link2, Loader2, Pencil, Plus, Settings2, Sparkles, SlidersHorizontal, Star,
+  Trash2, Upload, UploadCloud, X,
 } from 'lucide-react';
 import type {
   AppData, Gallery, GalleryCategory, GalleryCategoryPreset, GalleryFavorite, GalleryFormat,
@@ -29,7 +30,7 @@ import {
   generateImageDerivatives, getGalleryStreamStatus, requestGalleryStreamUpload, streamBasicUpload,
   streamDownloadUrl, streamTusUpload, uploadGalleryFileVariant, type GalleryTokenBundle,
 } from '../lib/gallery';
-import { GalleryViewer, type GalleryViewerItem } from './GalleryViewer';
+import { GalleryViewer, galleryItemThumbUrl, type GalleryViewerItem } from './GalleryViewer';
 
 const galleryStatusLabels: Record<Gallery['status'], string> = {
   draft: 'Concept',
@@ -119,6 +120,58 @@ function randomShareToken(): string {
 
 type QueueEntry = { name: string; status: 'wacht' | 'bezig' | 'klaar' | 'fout'; detail?: string };
 
+/** Past dit bestand in een galerij van dit formaat? Spiegelt de DB-trigger. */
+function fileFitsFormat(format: GalleryFormat, file: File): boolean {
+  const isPhoto = GALLERY_PHOTO_TYPES.has(file.type);
+  const isVideo = file.type.startsWith('video/');
+  if (format === 'photo') return isPhoto;
+  if (format === 'video') return isVideo;
+  return isPhoto || isVideo;
+}
+
+/**
+ * Bestanden uit een sleepactie halen. Beeldmakers slepen zelden losse foto's:
+ * ze pakken de hele exportmap. `webkitGetAsEntry` laat ons daar doorheen lopen,
+ * inclusief submappen. Waar die API ontbreekt (of bij een gewone bestandssleep)
+ * valt alles terug op `dataTransfer.files`.
+ *
+ * LET OP: de DataTransfer is alleen geldig zolang de drop-handler loopt, dus de
+ * entries worden hier synchroon uitgelezen — vóór de eerste await.
+ */
+async function filesFromDataTransfer(transfer: DataTransfer): Promise<File[]> {
+  const entries = Array.from(transfer.items ?? [])
+    .filter(item => item.kind === 'file')
+    .map(item => (typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null));
+  const direct = Array.from(transfer.files ?? []);
+  if (entries.every(entry => entry == null)) return direct;
+
+  const files: File[] = [];
+  const walk = async (entry: FileSystemEntry | null): Promise<void> => {
+    if (!entry) return;
+    if (entry.isFile) {
+      const file = await new Promise<File | null>(resolve => {
+        (entry as FileSystemFileEntry).file(resolve, () => resolve(null));
+      });
+      if (file) files.push(file);
+      return;
+    }
+    if (!entry.isDirectory) return;
+    const reader = (entry as FileSystemDirectoryEntry).createReader();
+    // readEntries levert per aanroep maximaal ~100 items; doorlezen tot leeg,
+    // anders mist een map met 300 foto's er stilzwijgend 200.
+    for (let guard = 0; guard < 400; guard += 1) {
+      const batch = await new Promise<FileSystemEntry[]>(resolve => {
+        reader.readEntries(resolve, () => resolve([]));
+      });
+      if (batch.length === 0) return;
+      for (const child of batch) await walk(child);
+    }
+  };
+  for (const entry of entries) await walk(entry);
+  // Niets gevonden (bijv. een geweigerde map) — dan liever de platte lijst dan niets.
+  return files.length > 0 ? files : direct;
+}
+
 export function GalleryTab({ data, project, organizationId, canWrite, onChanged }: {
   data: AppData;
   project: Project;
@@ -136,8 +189,6 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [categories, setCategories] = useState<GalleryCategory[]>([]);
   const [presets, setPresets] = useState<GalleryCategoryPreset[]>([]);
-  const [showCategories, setShowCategories] = useState(false);
-  const [newCategory, setNewCategory] = useState('');
   const [selectMode, setSelectMode] = useState(false);
   const [orderMode, setOrderMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -154,8 +205,12 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [onlyFavorites, setOnlyFavorites] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<GallerySettingsTab | null>(null);
   const [showShare, setShowShare] = useState(false);
+  // Slepen over het paneel: de teller vangt de dragenter/dragleave van elk
+  // onderliggend element op, zodat de melding niet knippert.
+  const [dragActive, setDragActive] = useState(false);
+  const dragDepth = useRef(0);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const pollTimers = useRef(new Map<string, number>());
@@ -276,7 +331,10 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
     setOnlyFavorites(false);
     setSelectMode(false);
     setSelectedIds(new Set());
-    setShowCategories(false);
+    setSettingsTab(null);
+    setShowShare(false);
+    dragDepth.current = 0;
+    setDragActive(false);
     (async () => {
       try {
         const [loadedItems] = await Promise.all([
@@ -532,7 +590,7 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
     }
   }
 
-  async function handleFiles(fileList: FileList | null) {
+  async function handleFiles(fileList: FileList | File[] | null) {
     // Ook wachten op `loading`: vóórdat de bestaande items binnen zijn zou
     // nextSort op 0 beginnen en zouden nieuwe uploads tussen de bestaande
     // volgorde in springen.
@@ -571,6 +629,44 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
     window.setTimeout(() => setQueue(prev => (prev.every(q => q.status === 'klaar') ? [] : prev)), 4000);
   }
 
+  /**
+   * Bestanden die op het paneel worden losgelaten. Wat niet in dit galerij-
+   * formaat past (RAW-bestanden, sidecars, .DS_Store uit een gesleepte map)
+   * wordt overgeslagen en één keer geteld gemeld — niet als losse fouten in de
+   * wachtrij, want dan verdwijnt het echte werk uit beeld.
+   */
+  async function handleDrop(transfer: DataTransfer) {
+    if (!openGallery) return;
+    if (busy || loading) {
+      setError('Er loopt al een upload. Wacht tot die klaar is en sleep daarna opnieuw.');
+      return;
+    }
+    let dropped: File[] = [];
+    try {
+      dropped = await filesFromDataTransfer(transfer);
+    } catch {
+      setError('Kon de gesleepte bestanden niet lezen. Gebruik anders de knop “Uploaden”.');
+      return;
+    }
+    const usable = dropped.filter(file => fileFitsFormat(openGallery.format, file));
+    const skipped = dropped.length - usable.length;
+    if (usable.length === 0) {
+      setError(dropped.length === 0
+        ? 'Er zaten geen bestanden in wat je losliet.'
+        : openGallery.format === 'photo'
+          ? 'Geen bruikbare foto’s gevonden. Deze galerij accepteert JPEG, PNG of WebP.'
+          : openGallery.format === 'video'
+            ? 'Geen bruikbare video’s gevonden in wat je losliet.'
+            : 'Geen bruikbare foto’s of video’s gevonden. Foto’s moeten JPEG, PNG of WebP zijn.');
+      return;
+    }
+    if (skipped > 0) {
+      setMessage(`${skipped} bestand${skipped === 1 ? '' : 'en'} overgeslagen — die passen niet in deze galerij.`);
+      window.setTimeout(() => setMessage(null), 6000);
+    }
+    await handleFiles(usable);
+  }
+
   // ── Item-acties ──
   async function removeItem(item: GalleryItem) {
     if (!openGallery) return;
@@ -605,32 +701,27 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
    * mislukte update een deellink tonen waarvan de tokenhash nooit is bewaard.
    */
   // ── Categorieën ──
+  // Deze acties gooien hun fout dóór: ze worden bediend vanuit het venster
+  // "Bestanden", en een melding die achter dat venster verschijnt ziet niemand.
   async function addCategory(name: string) {
     if (!openGallery) return;
     const clean = name.trim();
     if (!clean) return;
-    setError(null);
-    try {
-      const position = categories.reduce((max, c) => Math.max(max, c.position), -1) + 1;
-      await insertRow<GalleryCategory>('gallery_categories', organizationId, {
-        gallery_id: openGallery.id, name: clean, position,
-      });
-      setNewCategory('');
-      await refreshCategories(openGallery.id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Categorie toevoegen mislukt.');
-    }
+    const position = categories.reduce((max, c) => Math.max(max, c.position), -1) + 1;
+    await insertRow<GalleryCategory>('gallery_categories', organizationId, {
+      gallery_id: openGallery.id, name: clean, position,
+    });
+    await refreshCategories(openGallery.id);
   }
 
   async function renameCategory(category: GalleryCategory, name: string) {
     const clean = name.trim();
     if (!openGallery || !clean || clean === category.name) return;
-    setError(null);
     try {
       await updateRow<GalleryCategory>('gallery_categories', category.id, { name: clean }, organizationId);
-      await refreshCategories(openGallery.id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Hernoemen mislukt.');
+    } finally {
+      // Ook na een mislukking opnieuw laden: dan staat de oude naam er weer,
+      // in plaats van een naam die alleen in het invoerveld bestaat.
       await refreshCategories(openGallery.id);
     }
   }
@@ -641,7 +732,6 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
     const index = categories.findIndex(c => c.id === category.id);
     const target = categories[index + delta];
     if (!target) return;
-    setError(null);
     // Optimistisch omwisselen zodat de lijst niet zichtbaar "springt".
     setCategories(prev => {
       const next = [...prev];
@@ -654,8 +744,6 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
         updateRow<GalleryCategory>('gallery_categories', category.id, { position: target.position }, organizationId),
         updateRow<GalleryCategory>('gallery_categories', target.id, { position: category.position }, organizationId),
       ]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Volgorde wijzigen mislukt.');
     } finally {
       await refreshCategories(openGallery.id);
     }
@@ -665,56 +753,40 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
     if (!openGallery) return;
     const count = items.filter(i => i.category_id === category.id).length;
     const vraag = count > 0
-      ? `“${category.name}” verwijderen? De ${count} foto's erin blijven bestaan en komen onder “Overig” te staan.`
+      ? `“${category.name}” verwijderen? De ${count} bestanden erin blijven bestaan en komen onder “Zonder categorie” te staan.`
       : `“${category.name}” verwijderen?`;
     if (!confirm(vraag)) return;
-    setError(null);
-    try {
-      await deleteRow('gallery_categories', category.id, organizationId);
-      // De database zet category_id op null (on delete set null); lokaal meteen ook.
-      setItems(prev => prev.map(i => (i.category_id === category.id ? { ...i, category_id: null } : i)));
-      await refreshCategories(openGallery.id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Verwijderen mislukt.');
-    }
+    await deleteRow('gallery_categories', category.id, organizationId);
+    // De database zet category_id op null (on delete set null); lokaal meteen ook.
+    setItems(prev => prev.map(i => (i.category_id === category.id ? { ...i, category_id: null } : i)));
+    await refreshCategories(openGallery.id);
   }
 
   /** Neemt de standaardlijst van de organisatie over (voegt alleen ontbrekende toe). */
   async function applyPresets() {
     if (!openGallery) return;
-    setError(null);
+    const list = presets.length > 0 ? presets : await selectGalleryCategoryPresets(organizationId);
+    setPresets(list);
+    if (list.length === 0) {
+      throw new Error('Je hebt nog geen standaardlijst. Maak hier categorieën aan en kies “Als standaard opslaan”.');
+    }
+    const existing = new Set(categories.map(c => c.name.toLowerCase()));
+    let position = categories.reduce((max, c) => Math.max(max, c.position), -1) + 1;
     try {
-      const list = presets.length > 0 ? presets : await selectGalleryCategoryPresets(organizationId);
-      setPresets(list);
-      if (list.length === 0) {
-        setError('Je hebt nog geen standaardlijst. Stel hier categorieën in en kies “Als standaard opslaan”.');
-        return;
-      }
-      const existing = new Set(categories.map(c => c.name.toLowerCase()));
-      let position = categories.reduce((max, c) => Math.max(max, c.position), -1) + 1;
       for (const preset of list) {
         if (existing.has(preset.name.toLowerCase())) continue;
         await insertRow<GalleryCategory>('gallery_categories', organizationId, {
           gallery_id: openGallery.id, name: preset.name, position: position++,
         });
       }
+    } finally {
       await refreshCategories(openGallery.id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Standaardlijst overnemen mislukt.');
     }
   }
 
   /** Bewaart de huidige indeling als standaard voor nieuwe galerijen. */
   async function saveAsPresets() {
-    setError(null);
-    try {
-      const saved = await replaceGalleryCategoryPresets(organizationId, categories.map(c => c.name));
-      setPresets(saved);
-      setMessage('Deze indeling is nu je standaardlijst voor nieuwe galerijen.');
-      window.setTimeout(() => setMessage(null), 4000);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Standaardlijst opslaan mislukt.');
-    }
+    setPresets(await replaceGalleryCategoryPresets(organizationId, categories.map(c => c.name)));
   }
 
   // ── Volgorde ──
@@ -766,20 +838,28 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
     });
   }
 
-  async function assignSelectedTo(categoryId: string | null) {
-    if (!openGallery || selectedIds.size === 0) return;
-    const ids = Array.from(selectedIds);
+  /** Zet de categorie van een reeks bestanden; gooit de fout dóór naar de aanroeper. */
+  async function assignItemsTo(itemIds: string[], categoryId: string | null) {
+    if (!openGallery || itemIds.length === 0) return;
+    const ids = new Set(itemIds);
     setBusy(true);
+    try {
+      await setGalleryItemsCategory(organizationId, itemIds, categoryId);
+      setItems(prev => prev.map(i => (ids.has(i.id) ? { ...i, category_id: categoryId } : i)));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function assignSelectedTo(categoryId: string | null) {
+    if (selectedIds.size === 0) return;
     setError(null);
     try {
-      await setGalleryItemsCategory(organizationId, ids, categoryId);
-      setItems(prev => prev.map(i => (selectedIds.has(i.id) ? { ...i, category_id: categoryId } : i)));
+      await assignItemsTo(Array.from(selectedIds), categoryId);
       setSelectedIds(new Set());
       setSelectMode(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Toewijzen mislukt.');
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -909,9 +989,53 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
   // ── Detailweergave ──
   const shownItems: GalleryViewerItem[] = onlyFavorites ? items.filter(i => favoriteCounts.has(i.id)) : items;
   const favoriteTotal = favoriteCounts.size;
+  const uncategorized = categories.length > 0 ? items.filter(i => !i.category_id).length : 0;
+
+  function openSettings(tab: GallerySettingsTab) {
+    // Een sleep die nog "open" stond zou de melding achter het venster laten hangen.
+    dragDepth.current = 0;
+    setDragActive(false);
+    setSettingsTab(tab);
+    if (presets.length === 0) void selectGalleryCategoryPresets(organizationId).then(setPresets).catch(() => undefined);
+  }
+
+  /**
+   * Alleen echte bestandsslepen tellen. Het herschikken van foto's sleept een
+   * element (geen 'Files'), dus dat mag deze melding nooit oproepen. Staat er een
+   * venster open, dan gaat de sleep dáárover: het paneel houdt zich dan stil.
+   */
+  function isFileDrag(e: React.DragEvent): boolean {
+    if (!writable || settingsTab || showShare) return false;
+    return Array.from(e.dataTransfer.types ?? []).includes('Files');
+  }
 
   return (
-    <article className="client-panel gal-detail">
+    <article
+      className={`client-panel gal-detail${dragActive ? ' is-dropping' : ''}`}
+      onDragEnter={(e) => {
+        if (!isFileDrag(e)) return;
+        e.preventDefault();
+        dragDepth.current += 1;
+        setDragActive(true);
+      }}
+      onDragOver={(e) => {
+        if (!isFileDrag(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeave={(e) => {
+        if (!isFileDrag(e)) return;
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) setDragActive(false);
+      }}
+      onDrop={(e) => {
+        if (!isFileDrag(e)) return;
+        e.preventDefault();
+        dragDepth.current = 0;
+        setDragActive(false);
+        void handleDrop(e.dataTransfer);
+      }}
+    >
       <div className="client-panel-head">
         <div className="gal-detail-title">
           <button type="button" className="gal-back" onClick={() => setOpenId(null)}>← Galerijen</button>
@@ -938,18 +1062,15 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
           )}
           {writable && (
             <>
-              <Button
-                onClick={() => {
-                  setShowCategories(v => !v);
-                  if (presets.length === 0) void selectGalleryCategoryPresets(organizationId).then(setPresets).catch(() => undefined);
-                }}
-              >
-                <FolderTree size={14} /> Categorieën{categories.length > 0 ? ` (${categories.length})` : ''}
+              <Button onClick={() => openSettings('files')} title="Categorieën beheren en bestanden indelen">
+                <FolderTree size={14} /> Bestanden
+                {uncategorized > 0 && <span className="gal-badge" title={`${uncategorized} nog niet ingedeeld`}>{uncategorized}</span>}
               </Button>
               {items.length > 0 && categories.length > 0 && (
                 <Button
                   onClick={() => { setSelectMode(v => !v); setSelectedIds(new Set()); setOrderMode(false); }}
                   variant={selectMode ? 'primary' : undefined}
+                  title="Foto's in het raster aanwijzen en in één keer indelen"
                 >
                   <CheckSquare size={14} /> {selectMode ? 'Selectie stoppen' : 'Indelen'}
                 </Button>
@@ -982,7 +1103,7 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
                 </>
               )}
               <Button onClick={() => setShowShare(true)}><Link2 size={14} /> Delen</Button>
-              <Button onClick={() => setShowSettings(true)}><Settings2 size={14} /> Instellingen</Button>
+              <Button onClick={() => openSettings('general')}><Settings2 size={14} /> Instellingen</Button>
               {openGallery.status !== 'published'
                 ? <Button variant="primary" disabled={busy} onClick={() => { void patchGallery(openGallery, { status: 'published' }).catch(() => undefined); }}>Publiceren</Button>
                 : <Button disabled={busy} onClick={() => { void patchGallery(openGallery, { status: 'draft' }).catch(() => undefined); }}>Terug naar concept</Button>}
@@ -996,51 +1117,6 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
 
       {error && <div className="error">{error}</div>}
       {message && <div className="gal-notice">{message}</div>}
-
-      {showCategories && writable && (
-        <div className="gal-cats">
-          <div className="gal-cats-head">
-            <strong>Categorieën</strong>
-            <span className="gal-cats-help">Bepalen de secties die de klant bovenaan als knoppen ziet.</span>
-            <span className="gal-modal-spacer" />
-            <Button onClick={() => void applyPresets()}>Standaardlijst overnemen</Button>
-            <Button onClick={() => void saveAsPresets()} disabled={categories.length === 0}>Als standaard opslaan</Button>
-          </div>
-          {categories.length === 0 && (
-            <div className="client-empty-line">
-              Nog geen categorieën. Voeg er hieronder een toe, of neem je standaardlijst over.
-            </div>
-          )}
-          <ul className="gal-cat-list">
-            {categories.map((category, index) => {
-              const count = items.filter(i => i.category_id === category.id).length;
-              return (
-                <li key={category.id} className="gal-cat-row">
-                  <Input
-                    defaultValue={category.name}
-                    onBlur={(e) => void renameCategory(category, e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                    aria-label={`Naam van ${category.name}`}
-                  />
-                  <span className="gal-cat-count">{count} {count === 1 ? 'item' : 'items'}</span>
-                  <button type="button" className="icon-btn" disabled={index === 0} onClick={() => void moveCategory(category, -1)} title="Omhoog"><ChevronUp size={14} /></button>
-                  <button type="button" className="icon-btn" disabled={index === categories.length - 1} onClick={() => void moveCategory(category, 1)} title="Omlaag"><ChevronDown size={14} /></button>
-                  <button type="button" className="icon-btn danger" onClick={() => void removeCategory(category)} title="Verwijderen"><Trash2 size={14} /></button>
-                </li>
-              );
-            })}
-          </ul>
-          <form className="gal-cat-add" onSubmit={(e) => { e.preventDefault(); void addCategory(newCategory); }}>
-            <Input
-              placeholder="Nieuwe categorie (bijv. Ceremonie)"
-              value={newCategory}
-              onChange={(e) => setNewCategory(e.target.value)}
-              maxLength={60}
-            />
-            <Button type="submit" variant="primary" disabled={!newCategory.trim()}><Plus size={14} /> Toevoegen</Button>
-          </form>
-        </div>
-      )}
 
       {orderMode && (
         <div className="gal-selectbar">
@@ -1070,6 +1146,7 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
             {categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
             <option value="__none__">Geen categorie</option>
           </Select>
+          <button type="button" className="gal-linkbtn" onClick={() => openSettings('files')}>Categorieën beheren</button>
         </div>
       )}
 
@@ -1100,6 +1177,28 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
 
       {loading
         ? <div className="galv-empty">Galerij wordt geladen…</div>
+        : items.length === 0 && writable
+        ? (
+          // Een lege galerij is precies het moment om te laten zien dát je kunt
+          // slepen; de kale zin "nog geen media" hielp daar niet bij.
+          <button
+            type="button"
+            className={`gal-dropzone${dragActive ? ' is-over' : ''}`}
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy}
+          >
+            <span className="gal-dropzone-icon"><UploadCloud size={30} /></span>
+            <strong>
+              {openGallery.format === 'video' ? 'Sleep je video’s hierheen' : 'Sleep je foto’s hierheen'}
+            </strong>
+            <span className="gal-dropzone-hint">
+              Of klik om te bladeren. Hele mappen mogen ook — submappen worden meegenomen.
+            </span>
+            <span className="gal-dropzone-meta">
+              {openGallery.format === 'photo' ? 'JPEG, PNG of WebP' : openGallery.format === 'video' ? 'MP4, MOV, WebM of MKV' : 'JPEG, PNG, WebP en video’s'} · tot 4 GB per bestand
+            </span>
+          </button>
+        )
         : (
           <GalleryViewer
             items={shownItems}
@@ -1153,13 +1252,38 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
           />
         )}
 
-      {showSettings && (
+      {/* Sleepmelding over het hele paneel: zichtbaar waar je ook loslaat. */}
+      {dragActive && (
+        <div className="gal-dropveil" aria-hidden="true">
+          <span className="gal-dropveil-card">
+            <UploadCloud size={32} />
+            <strong>Laat los om te uploaden</strong>
+            <span>naar “{openGallery.title}”</span>
+          </span>
+        </div>
+      )}
+
+      {settingsTab && (
         <GallerySettingsModal
           gallery={openGallery}
+          tab={settingsTab}
+          onTab={setSettingsTab}
           busy={busy}
-          onClose={() => setShowSettings(false)}
-          onSave={async (patch) => { await patchGallery(openGallery, patch); setShowSettings(false); }}
-          onDelete={writable ? () => { setShowSettings(false); void removeGallery(openGallery); } : undefined}
+          items={items}
+          categories={categories}
+          bundle={bundle}
+          onClose={() => setSettingsTab(null)}
+          onSave={async (patch) => { await patchGallery(openGallery, patch); setSettingsTab(null); }}
+          onDelete={writable ? () => { setSettingsTab(null); void removeGallery(openGallery); } : undefined}
+          files={{
+            onAssign: assignItemsTo,
+            onAddCategory: addCategory,
+            onRenameCategory: renameCategory,
+            onMoveCategory: moveCategory,
+            onRemoveCategory: removeCategory,
+            onApplyPresets: applyPresets,
+            onSaveAsPresets: saveAsPresets,
+          }}
         />
       )}
       {showShare && (
@@ -1176,12 +1300,59 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
 
 // ── Instellingen ────────────────────────────────────────────────────────────
 
-function GallerySettingsModal({ gallery, busy, onClose, onSave, onDelete }: {
+export type GallerySettingsTab = 'general' | 'opening' | 'files';
+
+const gallerySettingsTabs: Array<{ key: GallerySettingsTab; label: string; Icon: typeof ImageIcon }> = [
+  { key: 'general', label: 'Algemeen', Icon: SlidersHorizontal },
+  { key: 'opening', label: 'Opening', Icon: Sparkles },
+  { key: 'files', label: 'Bestanden', Icon: FolderTree },
+];
+
+/**
+ * Een bestandssleep die op een openstaand venster landt, mag de browser niet
+ * "openen" — dan navigeert hij weg van niet-opgeslagen werk. Interne sleepacties
+ * (miniaturen naar een categorie) dragen geen 'Files' en gaan hier ongemoeid
+ * doorheen.
+ */
+function swallowFileDrag(e: React.DragEvent) {
+  if (!Array.from(e.dataTransfer.types ?? []).includes('Files')) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'none';
+}
+
+/** Alles wat het tabblad "Bestanden" mag wijzigen; fouten komen als exception terug. */
+type GalleryFileActions = {
+  onAssign: (itemIds: string[], categoryId: string | null) => Promise<void>;
+  onAddCategory: (name: string) => Promise<void>;
+  onRenameCategory: (category: GalleryCategory, name: string) => Promise<void>;
+  onMoveCategory: (category: GalleryCategory, delta: number) => Promise<void>;
+  onRemoveCategory: (category: GalleryCategory) => Promise<void>;
+  onApplyPresets: () => Promise<void>;
+  onSaveAsPresets: () => Promise<void>;
+};
+
+/**
+ * Eén venster voor alles wat je aan een galerij instelt, in drie tabbladen.
+ *
+ * De opening (hero) hoort bij de galerij als geheel: hij verschijnt precies één
+ * keer, bovenaan de pagina. Categorieën zijn enkel een indeling van bestanden en
+ * hebben géén eigen opening — daarom staan ze in een eigen tabblad, ver van de
+ * hero-keuze vandaan, zodat de indruk van "een hero per categorie" niet ontstaat.
+ */
+function GallerySettingsModal({
+  gallery, tab, onTab, busy, items, categories, bundle, onClose, onSave, onDelete, files,
+}: {
   gallery: Gallery;
+  tab: GallerySettingsTab;
+  onTab: (tab: GallerySettingsTab) => void;
   busy: boolean;
+  items: GalleryItem[];
+  categories: GalleryCategory[];
+  bundle: GalleryTokenBundle | null;
   onClose: () => void;
   onSave: (patch: Partial<Gallery>) => Promise<void>;
   onDelete?: () => void;
+  files: GalleryFileActions;
 }) {
   const [title, setTitle] = useState(gallery.title);
   const [description, setDescription] = useState(gallery.description ?? '');
@@ -1191,6 +1362,12 @@ function GallerySettingsModal({ gallery, busy, onClose, onSave, onDelete }: {
   const [quality, setQuality] = useState(gallery.download_quality);
   const [expiresAt, setExpiresAt] = useState(gallery.expires_at ? gallery.expires_at.slice(0, 10) : '');
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   // Alleen sluiten wanneer het opslaan écht gelukt is; anders zou de gebruiker
   // denken dat de instelling is toegepast terwijl er niets is opgeslagen.
@@ -1203,91 +1380,164 @@ function GallerySettingsModal({ gallery, busy, onClose, onSave, onDelete }: {
     }
   }
 
+  const uncategorized = categories.length > 0 ? items.filter(i => !i.category_id).length : 0;
+  // Aan beide kanten trimmen: een oude rij met een lege string i.p.v. NULL (of
+  // een spatie in de titel) zou het venster anders eeuwig "niet opgeslagen" noemen.
+  const dirty = title.trim() !== gallery.title.trim()
+    || description.trim() !== (gallery.description ?? '').trim()
+    || format !== gallery.format
+    || heroTemplate !== gallery.hero_template
+    || allowDownloads !== gallery.allow_downloads
+    || quality !== gallery.download_quality
+    || expiresAt !== (gallery.expires_at ? gallery.expires_at.slice(0, 10) : '');
+
   return (
-    <div className="bk-modal-backdrop" onClick={onClose}>
-      <div className="bk-modal gal-modal" onClick={(e) => e.stopPropagation()}>
-        <h3>Galerij-instellingen</h3>
+    <div className="bk-modal-backdrop gal-modal-shell" onClick={onClose} onDragOver={swallowFileDrag} onDrop={swallowFileDrag}>
+      <div
+        className={`bk-modal gal-modal${tab === 'files' ? ' gal-modal-wide' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Galerij-instellingen"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="gal-modal-head">
+          <span className="gal-modal-titles">
+            <h3>Galerij-instellingen</h3>
+            <p>{gallery.title}</p>
+          </span>
+          <button type="button" className="gal-modal-close" onClick={onClose} aria-label="Sluiten"><X size={18} /></button>
+        </header>
+
+        <nav className="gal-modal-tabs" role="tablist" aria-label="Onderdelen">
+          {gallerySettingsTabs.map(({ key, label, Icon }) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={tab === key}
+              className={`gal-modal-tab${tab === key ? ' is-active' : ''}`}
+              onClick={() => onTab(key)}
+            >
+              <Icon size={14} /> {label}
+              {key === 'files' && uncategorized > 0 && <span className="gal-badge">{uncategorized}</span>}
+            </button>
+          ))}
+        </nav>
+
         <div className="bk-modal-body gal-modal-body">
-          <label className="gal-field">
-            <span>Titel</span>
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} />
-          </label>
-          <label className="gal-field">
-            <span>Omschrijving (zichtbaar voor de klant)</span>
-            <textarea className="form-input" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
-          </label>
-          <div className="gal-field">
-            <span>Formaat</span>
-            <div className="gal-format-options is-compact">
-              {galleryFormats.map(({ key, label, Icon }) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={`gal-format-card${format === key ? ' is-active' : ''}`}
-                  onClick={() => setFormat(key)}
-                  aria-pressed={format === key}
-                >
-                  <span className="gal-format-icon"><Icon size={16} /></span>
-                  <span className="gal-format-label">{label}</span>
-                </button>
-              ))}
-            </div>
-            <p className="gal-field-help">
-              Beperken kan alleen zolang er geen media in staan die er dan uit zouden vallen; “Foto én video” kan altijd.
-            </p>
-          </div>
-          <div className="gal-field">
-            <span>Opening (hero)</span>
-            {heroGroups.map(({ group, options }) => (
-              <div key={group} className="gal-hero-group">
-                <span className="gal-hero-group-label">{group}</span>
-                <div className="gal-format-options is-compact gal-hero-options">
-                  {options.map(({ key, label, hint }) => (
+          {tab === 'general' && (
+            <>
+              <section className="gal-card">
+                <label className="gal-field">
+                  <span>Titel</span>
+                  <Input value={title} onChange={(e) => setTitle(e.target.value)} />
+                </label>
+                <label className="gal-field">
+                  <span>Omschrijving (zichtbaar voor de klant)</span>
+                  <textarea className="form-input" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
+                </label>
+              </section>
+
+              <section className="gal-card">
+                <span className="gal-card-title">Wat lever je op?</span>
+                <div className="gal-format-options is-compact">
+                  {galleryFormats.map(({ key, label, Icon }) => (
                     <button
                       key={key}
                       type="button"
-                      className={`gal-format-card${heroTemplate === key ? ' is-active' : ''}`}
-                      onClick={() => setHeroTemplate(key)}
-                      aria-pressed={heroTemplate === key}
-                      title={hint}
+                      className={`gal-format-card${format === key ? ' is-active' : ''}`}
+                      onClick={() => setFormat(key)}
+                      aria-pressed={format === key}
                     >
-                      <span className={`gal-hero-thumb gal-hero-thumb-${key}`} aria-hidden="true" />
+                      <span className="gal-format-icon"><Icon size={16} /></span>
                       <span className="gal-format-label">{label}</span>
                     </button>
                   ))}
                 </div>
-              </div>
-            ))}
-            <p className="gal-field-help">
-              De hero-foto is de coverfoto: kies die met het sterretje op een foto in de galerij.
-            </p>
-          </div>
-          <label className="gal-field gal-field-row">
-            <input type="checkbox" checked={allowDownloads} onChange={(e) => setAllowDownloads(e.target.checked)} />
-            <span>Klant mag downloaden</span>
-          </label>
-          {allowDownloads && (
-            <label className="gal-field">
-              <span>Downloadkwaliteit</span>
-              <Select value={quality} onChange={(e) => setQuality(e.target.value as Gallery['download_quality'])}>
-                <option value="original">Originele bestanden (full-res)</option>
-                <option value="web">Webresolutie (kleiner, sneller)</option>
-              </Select>
-            </label>
+                <p className="gal-field-help">
+                  Beperken kan alleen zolang er geen media in staan die er dan uit zouden vallen; “Foto én video” kan altijd.
+                </p>
+              </section>
+
+              <section className="gal-card">
+                <span className="gal-card-title">Levering aan de klant</span>
+                <label className="gal-field gal-field-row">
+                  <input type="checkbox" checked={allowDownloads} onChange={(e) => setAllowDownloads(e.target.checked)} />
+                  <span>Klant mag downloaden</span>
+                </label>
+                {allowDownloads && (
+                  <label className="gal-field">
+                    <span>Downloadkwaliteit</span>
+                    <Select value={quality} onChange={(e) => setQuality(e.target.value as Gallery['download_quality'])}>
+                      <option value="original">Originele bestanden (full-res)</option>
+                      <option value="web">Webresolutie (kleiner, sneller)</option>
+                    </Select>
+                  </label>
+                )}
+                <label className="gal-field">
+                  <span>Klanttoegang verloopt op (leeg = nooit)</span>
+                  <Input type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
+                </label>
+              </section>
+            </>
           )}
-          <label className="gal-field">
-            <span>Klanttoegang verloopt op (leeg = nooit)</span>
-            <Input type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
-          </label>
+
+          {tab === 'opening' && (
+            <section className="gal-card">
+              <span className="gal-card-title">De opening van de galerij</span>
+              <p className="gal-field-help">
+                Dit is het eerste wat de klant ziet, bovenaan de pagina — één keer voor de hele galerij.
+                Categorieën zijn alleen een indeling van de bestanden en krijgen geen eigen opening.
+              </p>
+              {heroGroups.map(({ group, options }) => (
+                <div key={group} className="gal-hero-group">
+                  <span className="gal-hero-group-label">{group}</span>
+                  <div className="gal-format-options is-compact gal-hero-options">
+                    {options.map(({ key, label, hint }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className={`gal-format-card${heroTemplate === key ? ' is-active' : ''}`}
+                        onClick={() => setHeroTemplate(key)}
+                        aria-pressed={heroTemplate === key}
+                        title={hint}
+                      >
+                        <span className={`gal-hero-thumb gal-hero-thumb-${key}`} aria-hidden="true" />
+                        <span className="gal-format-label">{label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <p className="gal-field-help">
+                De hero-foto is de coverfoto: kies die met het sterretje op een foto in de galerij.
+              </p>
+            </section>
+          )}
+
+          {tab === 'files' && (
+            <GalleryFileSettings
+              items={items}
+              categories={categories}
+              bundle={bundle}
+              busy={busy}
+              actions={files}
+            />
+          )}
+
           {saveError && <div className="error">{saveError}</div>}
         </div>
+
         <div className="bk-modal-actions gal-modal-actions">
           {onDelete && <Button variant="danger" onClick={onDelete} disabled={busy}><Trash2 size={14} /> Verwijderen</Button>}
           <span className="gal-modal-spacer" />
-          <Button variant="ghost" onClick={onClose} disabled={busy}>Annuleren</Button>
+          {tab === 'files' && !dirty
+            ? <span className="gal-field-help">Indelen wordt meteen bewaard.</span>
+            : dirty && <span className="gal-unsaved">Nog niet opgeslagen</span>}
+          <Button variant="ghost" onClick={onClose} disabled={busy}>{dirty ? 'Annuleren' : 'Sluiten'}</Button>
           <Button
             variant="primary"
-            disabled={busy || !title.trim()}
+            disabled={busy || !title.trim() || !dirty}
             onClick={() => void save({
               title: title.trim(),
               description: description.trim() || null,
@@ -1306,6 +1556,313 @@ function GallerySettingsModal({ gallery, busy, onClose, onSave, onDelete }: {
   );
 }
 
+// ── Bestanden: categorieën beheren en media indelen ─────────────────────────
+
+/** Hoeveel miniaturen we in één keer tonen; grote galerijen laden anders traag. */
+const FILE_PAGE_SIZE = 120;
+
+/**
+ * Het algemene bestandsscherm van een galerij. Links de categorieën — die
+ * tegelijk neerzetplek zijn — rechts de miniaturen. Slepen is de snelle weg;
+ * de keuzelijst “Verplaats naar…” is de weg die óók op een tablet werkt, want
+ * HTML5-slepen bestaat niet op een aanraakscherm.
+ */
+function GalleryFileSettings({ items, categories, bundle, busy, actions }: {
+  items: GalleryItem[];
+  categories: GalleryCategory[];
+  bundle: GalleryTokenBundle | null;
+  busy: boolean;
+  actions: GalleryFileActions;
+}) {
+  const [bucket, setBucket] = useState<string>('all');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [newCategory, setNewCategory] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [overBucket, setOverBucket] = useState<string | null>(null);
+  const [limit, setLimit] = useState(FILE_PAGE_SIZE);
+  const [working, setWorking] = useState(false);
+  const dragIds = useRef<string[]>([]);
+  const statusRef = useRef<HTMLDivElement | null>(null);
+  // Escape tijdens hernoemen mag de oude naam niet alsnog opslaan via onBlur.
+  const skipBlur = useRef(false);
+
+  const counts = useMemo(() => {
+    const perCategory = new Map<string, number>();
+    let none = 0;
+    for (const item of items) {
+      if (item.category_id) perCategory.set(item.category_id, (perCategory.get(item.category_id) ?? 0) + 1);
+      else none += 1;
+    }
+    return { perCategory, none };
+  }, [items]);
+
+  const visible = useMemo(() => {
+    if (bucket === 'all') return items;
+    if (bucket === 'none') return items.filter(i => !i.category_id);
+    return items.filter(i => i.category_id === bucket);
+  }, [items, bucket]);
+
+  // Van categorie wisselen begint weer bovenaan; anders staat een korte lijst
+  // met een uitgeklapte "meer tonen"-teller.
+  useEffect(() => { setLimit(FILE_PAGE_SIZE); }, [bucket]);
+
+  // Een verdwenen categorie (net verwijderd) mag het filter niet leeg laten staan.
+  useEffect(() => {
+    if (bucket === 'all' || bucket === 'none') return;
+    if (!categories.some(c => c.id === bucket)) setBucket('all');
+  }, [categories, bucket]);
+
+  // De knoppen voor de standaardlijst staan onderaan de linkerkolom; de melding
+  // erover staat bovenaan. Bij een lange categorielijst zou die buiten beeld
+  // vallen en leek de knop niets te doen — dus halen we hem in beeld.
+  useEffect(() => {
+    if (error || notice) statusRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [error, notice]);
+
+  async function run(action: () => Promise<void>, done?: string) {
+    if (working) return;
+    setWorking(true);
+    setError(null);
+    try {
+      await action();
+      if (done) {
+        setNotice(done);
+        window.setTimeout(() => setNotice(null), 3500);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Actie mislukt.');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  function moveTo(itemIds: string[], categoryId: string | null) {
+    if (itemIds.length === 0) return;
+    const name = categoryId ? (categories.find(c => c.id === categoryId)?.name ?? 'categorie') : 'Zonder categorie';
+    void run(async () => {
+      await actions.onAssign(itemIds, categoryId);
+      setSelected(new Set());
+    }, `${itemIds.length} bestand${itemIds.length === 1 ? '' : 'en'} verplaatst naar “${name}”.`);
+  }
+
+  function toggle(itemId: string) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId); else next.add(itemId);
+      return next;
+    });
+  }
+
+  const locked = busy || working;
+
+  /** Eén rij in de linkerkolom: filter, neerzetplek en (bij categorieën) beheer. */
+  function bucketRow(key: string, label: string, count: number, category?: GalleryCategory, index = -1) {
+    const droppable = key !== 'all';
+    const isRenaming = renaming === key && category;
+    return (
+      <li
+        key={key}
+        className={`gal-bucket${bucket === key ? ' is-active' : ''}${overBucket === key ? ' is-over' : ''}`}
+        onDragOver={droppable ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setOverBucket(key); } : undefined}
+        onDragLeave={droppable ? (e) => { if (e.currentTarget === e.target) setOverBucket(null); } : undefined}
+        onDrop={droppable ? (e) => {
+          e.preventDefault();
+          setOverBucket(null);
+          const ids = dragIds.current.length > 0
+            ? dragIds.current
+            : (e.dataTransfer.getData('text/plain') || '').split(',').filter(Boolean);
+          dragIds.current = [];
+          moveTo(ids, key === 'none' ? null : key);
+        } : undefined}
+      >
+        {isRenaming ? (
+          <Input
+            autoFocus
+            defaultValue={category.name}
+            maxLength={60}
+            onBlur={(e) => {
+              const value = e.target.value;
+              setRenaming(null);
+              if (skipBlur.current) { skipBlur.current = false; return; }
+              void run(() => actions.onRenameCategory(category, value));
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              if (e.key === 'Escape') {
+                e.stopPropagation();
+                skipBlur.current = true;
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+            aria-label={`Naam van ${category.name}`}
+          />
+        ) : (
+          <>
+            <button type="button" className="gal-bucket-main" onClick={() => setBucket(key)} aria-pressed={bucket === key}>
+              <span className="gal-bucket-name">{label}</span>
+              <span className="gal-bucket-count">{count}</span>
+            </button>
+            {category && (
+              <span className="gal-bucket-tools">
+                <button type="button" className="icon-btn" onClick={() => setRenaming(key)} title="Hernoemen"><Pencil size={13} /></button>
+                <button type="button" className="icon-btn" disabled={index === 0 || locked} onClick={() => void run(() => actions.onMoveCategory(category, -1))} title="Omhoog"><ChevronUp size={13} /></button>
+                <button type="button" className="icon-btn" disabled={index === categories.length - 1 || locked} onClick={() => void run(() => actions.onMoveCategory(category, 1))} title="Omlaag"><ChevronDown size={13} /></button>
+                <button type="button" className="icon-btn danger" disabled={locked} onClick={() => void run(() => actions.onRemoveCategory(category))} title="Verwijderen"><Trash2 size={13} /></button>
+              </span>
+            )}
+          </>
+        )}
+      </li>
+    );
+  }
+
+  return (
+    <div className="gal-files-tab">
+      {/* Meldingen staan over de volle breedte bovenaan: ze kunnen bij beide
+          kolommen horen, en zo staan ze nooit náást het bericht dat je zoekt. */}
+      <div ref={statusRef}>
+        {error && <div className="error">{error}</div>}
+        {notice && <div className="gal-notice">{notice}</div>}
+      </div>
+      <div className="gal-files">
+      <div className="gal-files-side">
+        <span className="gal-card-title">Categorieën</span>
+        <p className="gal-field-help">
+          Dit worden de secties die de klant als knoppen bovenaan de galerij ziet.
+        </p>
+        <ul className="gal-buckets">
+          {bucketRow('all', 'Alle bestanden', items.length)}
+          {categories.length > 0 && bucketRow('none', 'Zonder categorie', counts.none)}
+          {categories.map((category, index) => bucketRow(
+            category.id, category.name, counts.perCategory.get(category.id) ?? 0, category, index,
+          ))}
+        </ul>
+        {categories.length === 0 && (
+          <p className="gal-field-help">
+            Nog geen categorieën. Voeg er hieronder een toe, of neem je standaardlijst over.
+          </p>
+        )}
+        <form
+          className="gal-cat-add"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const name = newCategory.trim();
+            if (!name) return;
+            void run(async () => { await actions.onAddCategory(name); setNewCategory(''); });
+          }}
+        >
+          <Input
+            placeholder="Nieuwe categorie (bijv. Ceremonie)"
+            value={newCategory}
+            onChange={(e) => setNewCategory(e.target.value)}
+            maxLength={60}
+          />
+          <Button type="submit" variant="primary" disabled={!newCategory.trim() || locked} title="Categorie toevoegen" aria-label="Categorie toevoegen"><Plus size={14} /></Button>
+        </form>
+        <div className="gal-preset-row">
+          <button type="button" className="gal-linkbtn" disabled={locked} onClick={() => void run(() => actions.onApplyPresets())}>
+            Standaardlijst overnemen
+          </button>
+          <button
+            type="button"
+            className="gal-linkbtn"
+            disabled={categories.length === 0 || locked}
+            onClick={() => void run(() => actions.onSaveAsPresets(), 'Deze indeling is nu je standaardlijst voor nieuwe galerijen.')}
+          >
+            Als standaard opslaan
+          </button>
+        </div>
+      </div>
+
+      <div className="gal-files-main">
+        <div className="gal-files-bar">
+          <strong>{visible.length} bestand{visible.length === 1 ? '' : 'en'}</strong>
+          {visible.length > 0 && (
+            <>
+              <button type="button" className="gal-linkbtn" onClick={() => setSelected(new Set(visible.map(i => i.id)))}>Alles</button>
+              <button type="button" className="gal-linkbtn" onClick={() => setSelected(new Set())}>Niets</button>
+            </>
+          )}
+          <span className="gal-modal-spacer" />
+          {selected.size > 0 && <span className="gal-files-count">{selected.size} geselecteerd</span>}
+          <Select
+            inline
+            value=""
+            disabled={selected.size === 0 || locked}
+            onChange={(e) => {
+              const value = e.target.value;
+              if (!value) return;
+              moveTo(Array.from(selected), value === '__none__' ? null : value);
+            }}
+            aria-label="Verplaats de selectie naar een categorie"
+          >
+            <option value="">Verplaats naar…</option>
+            {categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
+            <option value="__none__">Zonder categorie</option>
+          </Select>
+        </div>
+
+        {items.length === 0
+          ? <div className="client-empty-line">Nog geen bestanden in deze galerij. Sleep ze op de galerij om te uploaden.</div>
+          : visible.length === 0
+            ? <div className="client-empty-line">Geen bestanden in deze categorie.</div>
+            : (
+              <>
+                <p className="gal-field-help">
+                  Klik om te selecteren en sleep de selectie naar een categorie links — of gebruik “Verplaats naar…”.
+                </p>
+                <div className="gal-thumbs">
+                  {visible.slice(0, limit).map(item => {
+                    const url = bundle ? galleryItemThumbUrl(item, bundle) : null;
+                    const isSelected = selected.has(item.id);
+                    const categoryName = item.category_id
+                      ? categories.find(c => c.id === item.category_id)?.name ?? null
+                      : null;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={`gal-thumb${isSelected ? ' is-selected' : ''}`}
+                        draggable
+                        aria-pressed={isSelected}
+                        title={item.file_name}
+                        onDragStart={(e) => {
+                          // Een niet-geselecteerde foto slepen betekent: alleen die.
+                          const ids = isSelected ? Array.from(selected) : [item.id];
+                          if (!isSelected) setSelected(new Set([item.id]));
+                          dragIds.current = ids;
+                          e.dataTransfer.effectAllowed = 'move';
+                          // Firefox start geen sleep zonder payload.
+                          e.dataTransfer.setData('text/plain', ids.join(','));
+                        }}
+                        onDragEnd={() => { dragIds.current = []; setOverBucket(null); }}
+                        onClick={() => toggle(item.id)}
+                      >
+                        {url
+                          ? <img src={url} alt="" loading="lazy" />
+                          : <span className="gal-thumb-fallback">{item.media_type === 'video' ? <Film size={18} /> : <ImageIcon size={18} />}</span>}
+                        {item.media_type === 'video' && <span className="gal-thumb-badge"><Film size={11} /></span>}
+                        {isSelected && <span className="gal-thumb-check" aria-hidden="true" />}
+                        <span className="gal-thumb-foot">{categoryName ?? item.file_name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {visible.length > limit && (
+                  <Button onClick={() => setLimit(value => value + FILE_PAGE_SIZE * 2)}>
+                    Nog {visible.length - limit} tonen
+                  </Button>
+                )}
+              </>
+            )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Deellink ────────────────────────────────────────────────────────────────
 
 function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
@@ -1318,6 +1875,12 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
   const [generatedUrl, setGeneratedUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   async function generate() {
     setError(null);
@@ -1371,9 +1934,15 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
   }
 
   return (
-    <div className="bk-modal-backdrop" onClick={onClose}>
-      <div className="bk-modal gal-modal" onClick={(e) => e.stopPropagation()}>
-        <h3>Galerij delen</h3>
+    <div className="bk-modal-backdrop gal-modal-shell" onClick={onClose} onDragOver={swallowFileDrag} onDrop={swallowFileDrag}>
+      <div className="bk-modal gal-modal" role="dialog" aria-modal="true" aria-label="Galerij delen" onClick={(e) => e.stopPropagation()}>
+        <header className="gal-modal-head">
+          <span className="gal-modal-titles">
+            <h3>Galerij delen</h3>
+            <p>{gallery.title}</p>
+          </span>
+          <button type="button" className="gal-modal-close" onClick={onClose} aria-label="Sluiten"><X size={18} /></button>
+        </header>
         <div className="bk-modal-body gal-modal-body">
           <p className="gal-share-note">
             Contactpersonen met portaaltoegang zien gepubliceerde galerijen automatisch in het klantportaal.
