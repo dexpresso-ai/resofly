@@ -4362,6 +4362,11 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .gal-hero-thumb-mosaic{background-image:linear-gradient(90deg,rgba(255,255,255,.28) 32%,transparent 32%,transparent 34%,rgba(255,255,255,.28) 34%,rgba(255,255,255,.28) 66%,transparent 66%,transparent 68%,rgba(255,255,255,.28) 68%);background-size:100% 100%}
 .gal-hero-thumb-mosaic::before{left:50%;top:50%;transform:translate(-50%,-50%);width:52%;height:5px;background:rgba(255,255,255,.8)}
 .gal-hero-thumb-mosaic::after{display:none}
+/* Kopvideo: één groot vlak met de titel linksonder en een rij tegels eronder. */
+.gal-hero-thumb-netflix{background:linear-gradient(90deg,rgba(255,255,255,.34),rgba(255,255,255,.12) 62%,rgba(255,255,255,.06))}
+.gal-hero-thumb-netflix::before{left:5px;top:11px;width:44%;height:6px;background:rgba(255,255,255,.78)}
+.gal-hero-thumb-netflix::after{left:5px;right:5px;bottom:4px;height:8px;border-radius:2px;background:
+  repeating-linear-gradient(90deg,rgba(255,255,255,.42) 0 16px,transparent 16px 20px)}
 .gal-hero-group{display:flex;flex-direction:column;gap:5px;margin-bottom:9px}
 .gal-hero-group-label{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 
@@ -4662,8 +4667,66 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 /* Favoriet-hartjes altijd zichtbaar zodra er favorieten zijn (beheerweergave). */
 .galv-tile .galv-heart.is-fav,.galv-tile .galv-heart[disabled]{opacity:1}
 
-/* ── Netflix-videorij (hybride galerij: strook boven de foto's) ── */
-.galv-video-row{display:flex;gap:10px;overflow-x:auto;padding:2px 2px 10px;scroll-snap-type:x mandatory;scrollbar-width:thin}
+/* ── Kopvideo: de filmische opening van een videogalerij ─────────────────────
+   Eén video groot in beeld, stil meespelend, met de titel eroverheen. De
+   verlooplaag is geen versiering maar draagt de leesbaarheid: die titel staat
+   op bewegend beeld en moet daar onder alle omstandigheden doorheen komen.
+   Daarom zwart en niet de merkkleur — een lichte galerij-achtergrond zou witte
+   tekst anders onleesbaar maken. */
+.galv-bb{position:relative;display:flex;align-items:flex-end;margin-bottom:10px;border-radius:var(--radius-lg,18px);overflow:hidden;isolation:isolate;background:#0a0a0a;height:min(70vh,620px);min-height:360px}
+.galv-bb-media{position:absolute;inset:0;container-type:size}
+.galv-bb-poster{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+/* Een iframe kent geen object-fit, dus rekenen we `cover` zelf uit met
+   container-eenheden: neem per as de grootste van "vul de container" en "volg
+   16/9 van de andere as". Alleen 100% breed met een vaste 16/9 zou omvallen
+   zodra het kader smáller is dan 16:9 (tabletbreedte, of de kolom in het
+   klantportaal): dan bleef er zwart over boven en onder. De eerste regel is de
+   terugval voor browsers zonder containereenheden — die rekt het beeld tot de
+   randen, precies zoals het vóór deze opening ook ging.
+   Geen muisgebeurtenissen: dit is een voorproefje, de knoppen liggen erboven. */
+.galv-bb-video{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:100%;height:100%;border:0;pointer-events:none}
+.galv-bb-video{width:max(100cqw,177.7778cqh);height:max(100cqh,56.25cqw)}
+/* De horizontale laag houdt ≥.82 zwart tot 44% — precies zo breed als de
+   tekstkolom. Daarmee haalt witte tekst het contrast óók boven een spierwit
+   beeld; verder naar rechts mag het beeld gewoon zichzelf zijn. */
+.galv-bb-scrim{position:absolute;inset:0;background:
+  linear-gradient(90deg,rgba(8,8,8,.93) 0%,rgba(8,8,8,.88) 30%,rgba(8,8,8,.82) 44%,rgba(8,8,8,.3) 68%,rgba(8,8,8,0) 86%),
+  linear-gradient(180deg,rgba(8,8,8,0) 42%,rgba(8,8,8,.5) 74%,rgba(8,8,8,.88) 100%)}
+.galv-bb-content{position:relative;z-index:1;display:flex;flex-direction:column;align-items:flex-start;gap:12px;padding:clamp(20px,3.4vw,44px);max-width:min(560px,44%)}
+.galv-bb-title{margin:0;color:#fff;font-family:var(--brand-heading,inherit);font-size:clamp(26px,3.6vw,52px);line-height:1.06;letter-spacing:-.03em;font-weight:900;text-wrap:balance;text-shadow:0 2px 24px rgba(0,0,0,.55)}
+.galv-bb-desc{margin:0;color:rgba(255,255,255,.86);font-size:clamp(13px,1.15vw,15.5px);line-height:1.6;max-width:52ch;text-shadow:0 1px 12px rgba(0,0,0,.6);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.galv-bb-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:2px}
+.galv-bb-play,.galv-bb-secondary{display:inline-flex;align-items:center;gap:9px;border-radius:8px;padding:11px 22px;font:inherit;font-size:14px;font-weight:800;cursor:pointer;transition:background .18s ease,color .18s ease,border-color .18s ease}
+.galv-bb-play{background:#fff;color:#0b0b0b;border:1px solid #fff}
+.galv-bb-play:hover{background:rgba(255,255,255,.78);border-color:rgba(255,255,255,.78)}
+.galv-bb-play:active{background:rgba(255,255,255,.66)}
+.galv-bb-secondary{background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.34)}
+.galv-bb-secondary:hover{background:rgba(255,255,255,.28);border-color:rgba(255,255,255,.5)}
+.galv-bb-secondary:active{background:rgba(255,255,255,.2)}
+.galv-bb-play:focus-visible,.galv-bb-secondary:focus-visible{outline:2px solid #fff;outline-offset:3px}
+
+/* ── Videorij met bladerknoppen ──────────────────────────────────────────────
+   De rij zelf scrolt; de knoppen staan ernaast zodat een geschaalde kaart er
+   niet onderdoor schuift. Verticale ruimte in het spoor (met negatieve marge
+   gecompenseerd) geeft die schaal de ruimte — zonder die truc knipt
+   `overflow-x` de kaart aan de boven- en onderkant af. */
+.galv-row{position:relative}
+/* Geen `scroll-behavior:smooth` hier: de bladerknoppen vragen zelf om een
+   vloeiende scroll, en als CSS-regel zou élke programmatische verplaatsing
+   (ook scroll-herstel bij terugnavigatie) gaan animeren. */
+.galv-row-track{display:flex;gap:10px;overflow-x:auto;padding:14px 0;margin:-14px 0;scroll-snap-type:x proximity;scrollbar-width:thin}
+.galv-row-nav{position:absolute;top:0;bottom:0;z-index:2;display:flex;align-items:center;justify-content:center;width:46px;border:0;padding:0;background:rgba(8,8,8,.62);color:#fff;cursor:pointer;opacity:0;transition:opacity .18s ease,background .18s ease}
+.galv-row-prev{left:0;border-radius:12px 0 0 12px}
+.galv-row-next{right:0;border-radius:0 12px 12px 0}
+.galv-row-nav:hover{background:rgba(8,8,8,.82)}
+.galv-row-nav:disabled{display:none}
+.galv-row.has-overflow:hover .galv-row-nav,.galv-row-nav:focus-visible{opacity:1}
+/* Op een aanraakscherm veeg je; dan zijn de knoppen alleen maar in de weg. */
+@media(hover:none){.galv-row-nav{display:none}}
+.galv-row-title{margin:0 0 10px;font-family:var(--brand-heading,inherit);font-size:clamp(15px,1.5vw,20px);font-weight:800;letter-spacing:-.01em;color:var(--gal-text,var(--text))}
+.galv-section-billboard{margin-bottom:26px}
+.galv-section-billboard .galv-video-card{flex-basis:clamp(240px,22vw,320px)}
+.galv-section-billboard .galv-video-card:hover:not(.is-idle){transform:scale(1.08)}
 /* ── Videogalerij: filmisch raster met grote tegels i.p.v. één lange strook ── */
 .galv-video-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
 .galv-video-grid .galv-video-card{flex:none;width:100%}
@@ -4711,6 +4774,17 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .galv-video-grid{grid-template-columns:1fr;gap:10px}
   .gal-format-options{grid-template-columns:1fr}
   .gal-format-options.is-compact{grid-template-columns:1fr}
+  /* Kopvideo op een telefoon: staander, en alleen de poster — de bewegende
+     preview blijft daar bewust uit (zie GalleryViewer), dat scheelt data. */
+  .galv-bb{height:min(74vh,560px);min-height:420px}
+  /* Staand beeld: de tekst ligt onderaan over de volle breedte, dus draagt het
+     verticale verloop hier het contrast — het horizontale zou te vroeg opraken. */
+  .galv-bb-scrim{background:linear-gradient(180deg,rgba(8,8,8,.12) 0%,rgba(8,8,8,.45) 46%,rgba(8,8,8,.93) 100%)}
+  .galv-bb-content{max-width:none;width:100%;padding:18px}
+  .galv-bb-title{font-size:clamp(24px,7vw,34px)}
+  .galv-bb-actions{width:100%}
+  .galv-bb-play,.galv-bb-secondary{flex:1;justify-content:center;padding:12px 16px}
+  .galv-section-billboard .galv-video-card{flex-basis:250px}
   .galv-lightbox{padding:10px}
   .galv-lightbox-nav{width:38px;height:38px}
   .gal-detail-tools{gap:6px}
@@ -4819,6 +4893,10 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
     animation-duration:.01ms!important;animation-iteration-count:1!important;
     scroll-behavior:auto!important;
   }
+  /* De kaart mag oplichten, maar niet opzwellen: dat opduwen van de buren is
+     precies de beweging waar deze voorkeur om vraagt hem weg te laten. */
+  .galv-video-card:hover:not(.is-idle),
+  .galv-section-billboard .galv-video-card:hover:not(.is-idle){transform:none}
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

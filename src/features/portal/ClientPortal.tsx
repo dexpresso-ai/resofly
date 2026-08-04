@@ -31,7 +31,7 @@ import {
 } from '../../lib/portalApi';
 import { dateNL, euro, lineGross, priorityLabel, total } from '../../lib/format';
 import type { FinanceLine, Priority } from '../../types';
-import { GalleryViewer, type GalleryViewerItem } from '../GalleryViewer';
+import { GalleryViewer, hasZippableItems, type GalleryViewerItem } from '../GalleryViewer';
 import { galleryFileUrl, galleryRefreshDelayMs, galleryZipUrl, streamDownloadUrl } from '../../lib/gallery';
 import { brandStyle, ensureBrandFontsLoaded } from '../../lib/branding';
 
@@ -416,9 +416,9 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
         <button type="button" className="portal-back" onClick={onBack}>← Terug</button>
         <h2>{gallery.title}</h2>
       </div>
-      {detail?.gallery.allow_downloads && detail.items.some(i => i.storage_key || i.preview_key) && (
+      {detail?.gallery.allow_downloads && hasZippableItems(detail.items) && (
         <a className="portal-gallery-zip" href={galleryZipUrl(gallery.id, detail.tokens.mediaToken)} download>
-          Alles downloaden (zip)
+          Foto's downloaden (zip)
         </a>
       )}
     </div>

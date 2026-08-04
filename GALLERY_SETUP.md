@@ -92,6 +92,53 @@ dus CSP-problemen zie je nooit lokaal — altijd op staging natesten.
    Netflix-rij; zonder secrets → speelt af uit R2.
 7. Zip-download; opslagmeter in Instellingen → Abonnement.
 
+## Grote video's: master in R2, kijkkopie in Stream (2026-08-03)
+
+De klant **kijkt** via Cloudflare Stream en **downloadt** het origineel uit R2.
+Dat onderscheid is nodig omdat Stream het bronbestand nooit teruggeeft ("You
+cannot download the *exact* input file that you uploaded") en tot 1080p codeert
+— voor een 4K-master is Stream dus alleen een kijkkopie.
+
+**Eén upload, twee producten.** De browser zet de master in R2; daarna haalt
+Stream hem daar zélf op via `POST /stream/copy`. De gebruiker uploadt dus niet
+twee keer.
+
+| Stap | Route | Wat |
+| --- | --- | --- |
+| 1 | `POST /gallery/multipart/create` | start multipart, geeft key + uploadId + partSize (64 MiB) |
+| 2 | `PUT /gallery/multipart/part` | één part per request (auth + eigendomscheck per part) |
+| 3 | `POST /gallery/multipart/complete` | sluit af, controleert de wérkelijke omvang |
+| — | `POST /gallery/multipart/abort` | opruimen bij een fout; R2 ruimt zelf na 7 dagen op |
+| 4 | `POST /gallery/stream-copy` | Stream haalt de master op met een key-gebonden token |
+
+**Waarom 64 MiB parts:** een Cloudflare Worker accepteert maximaal ~100 MB
+request body. De oude route `/gallery/upload` beloofde 4 GB maar liep in de
+praktijk al bij ~100 MB tegen een Cloudflare-foutpagina aan; die route is nu
+eerlijk gecapt op 64 MB en alles daarboven gaat via multipart. R2 eist verder
+dat alle parts behalve de laatste even groot zijn, minimaal 5 MiB, maximaal
+10.000 parts — 30 GB / 64 MiB = 480 parts.
+
+**Grenzen:** video max **30 GB** (het plafond dat Stream standaard accepteert;
+hoger kan via Cloudflare-support worden aangevraagd), foto max 4 GB.
+
+**R2-varianten:** `master` = het originele videobestand (download-only),
+`source` = oude R2-fallbackvideo (speelt direct af), `original` = full-res foto,
+`preview`/`thumb` = weergavebestanden. De viewer leidt de variant af uit de key
+om te bepalen of er een afspeelknop hoort te staan.
+
+**Downloadkwaliteit** geldt alleen voor foto's. Een `master` is bereikbaar met
+elk token dat downloaden toestaat — video's worden altijd in de originele
+resolutie geleverd.
+
+**Zonder Stream-secrets** wordt de master gewoon opgeslagen, maar is er geen
+kijkkopie; het item toont dan "Alleen downloaden". De masters zitten
+**niet** in de zip-download: tientallen gigabytes door de CRC32-lus van een
+Worker halen loopt over de CPU-limiet en levert een stilzwijgend afgekapte zip.
+
+**Kosten:** Stream rekent per **minuut** speelduur (bestandsgrootte telt niet
+mee), R2 per **GB-maand**. Een master van 20 GB kost in Stream evenveel als een
+webversie van 300 MB van dezelfde lengte; de GB's betaal je in R2.
+
 ## Beveiliging in het kort
 
 - **Media-tokens** zijn HMAC-getekend, geldig voor precies één galerij en één

@@ -9,10 +9,6 @@ import type { UUID } from '../types';
 
 export type GalleryTokenBundle = { mediaToken: string; streamTokens: Record<string, string>; exp: number };
 
-export type GalleryStreamUploadTicket =
-  | { ok: true; mode: 'r2' }
-  | { ok: true; mode: 'stream-basic' | 'stream-tus'; uploadURL: string; uid: string };
-
 export type GalleryStreamStatusResult = {
   ok: true;
   ready: boolean;
@@ -25,6 +21,21 @@ export type GalleryStreamStatusResult = {
 
 /** Maximale grootte van een galerij-origineel (foto of video-fallback in R2). */
 export const GALLERY_ORIGINAL_MAX_BYTES = 4 * 1024 * 1024 * 1024;
+
+/**
+ * Maximale grootte van een video-master. 30 GB is wat Cloudflare Stream
+ * standaard accepteert; groter kunnen we wel bewaren maar dan is er geen
+ * kijkkopie, en een galerij zonder afspeelbare video is geen oplevering.
+ */
+export const GALLERY_MASTER_MAX_BYTES = 30 * 1024 * 1024 * 1024;
+
+/**
+ * Boven deze grootte gaat een upload in parts. Een Cloudflare Worker neemt
+ * maximaal ~100 MB per request aan; daarboven krijgt de browser een
+ * Cloudflare-foutpagina in plaats van onze eigen melding. Moet gelijk blijven
+ * aan GALLERY_SINGLE_REQUEST_MAX_BYTES in workers/media-api/src/index.ts.
+ */
+export const GALLERY_MULTIPART_THRESHOLD_BYTES = 64 * 1024 * 1024;
 
 /** Fototypes die de browser kan decoderen voor preview-generatie. */
 export const GALLERY_PHOTO_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -90,7 +101,7 @@ export function galleryZipUrl(galleryId: UUID, mediaToken: string): string {
  * - `source` = videobestand voor de R2-fallback; moet altijd afspeelbaar zijn.
  * - `preview` / `thumb` = client-side gegenereerde weergavebestanden.
  */
-export type GalleryVariant = 'original' | 'source' | 'preview' | 'thumb';
+export type GalleryVariant = 'original' | 'master' | 'source' | 'preview' | 'thumb';
 
 export async function uploadGalleryFileVariant(
   blob: Blob,
@@ -115,15 +126,125 @@ export async function uploadGalleryFileVariant(
   return { key: result.key, size: result.size };
 }
 
-/** Vraag een Stream-upload-ticket aan; 'r2' betekent: val terug op R2-upload. */
-export async function requestGalleryStreamUpload(
+/**
+ * Upload een groot bestand in parts. Elk part gaat als eigen request langs de
+ * Worker — die neemt maximaal ~100 MB per request aan — met eigen pogingen per
+ * part: bij een master van 20 GB zijn dat ruim 300 requests over meer dan een
+ * uur, en dan is één wifi-hik zonder herkansing gegarandeerd fataal.
+ *
+ * Mislukt het alsnog, dan breken we de multipart-upload af. R2 ruimt een
+ * onvoltooide upload na zeven dagen zelf op, maar tot die tijd tellen de
+ * geüploade parts wél mee in de opslagkosten.
+ */
+export async function uploadGalleryFileMultipart(
+  blob: Blob,
+  fileName: string,
+  contentType: string,
   organizationId: UUID,
   galleryId: UUID,
+  itemId: UUID,
+  variant: Extract<GalleryVariant, 'master' | 'original' | 'source'>,
+  onProgress?: (uploadedBytes: number, totalBytes: number) => void,
+): Promise<{ key: string; size: number }> {
+  const created = await workerPost<{ ok: true; key: string; uploadId: string; partSize: number }>(
+    '/gallery/multipart/create',
+    { json: { organizationId, galleryId, itemId, variant, fileName, contentType, fileSize: blob.size } },
+  );
+  const partSize = created.partSize > 0 ? created.partSize : GALLERY_MULTIPART_THRESHOLD_BYTES;
+  const total = blob.size;
+  const parts: Array<{ partNumber: number; etag: string }> = [];
+  const base = getWorkerBase();
+  let uploaded = 0;
+
+  try {
+    for (let offset = 0, partNumber = 1; offset < total; offset += partSize, partNumber += 1) {
+      // slice() leest niets van schijf; pas bij het versturen wordt de range gelezen.
+      const chunk = blob.slice(offset, Math.min(offset + partSize, total));
+      let lastError: unknown = null;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
+          // Token per poging opnieuw: bij een upload van uren verloopt het anders halverwege.
+          const token = await getAccessToken();
+          const response = await fetch(`${base}/gallery/multipart/part`, {
+            method: 'PUT',
+            headers: {
+              authorization: `Bearer ${token}`,
+              'x-organization-id': organizationId,
+              'x-gallery-id': galleryId,
+              // Headers zijn ASCII-only; de key bevat de (mogelijk niet-ASCII) bestandsnaam.
+              'x-key': encodeURIComponent(created.key),
+              'x-upload-id': encodeURIComponent(created.uploadId),
+              'x-part-number': String(partNumber),
+            },
+            body: chunk,
+          });
+          if (!response.ok) throw new Error(await errText(response));
+          const result = (await response.json()) as { partNumber: number; etag: string };
+          parts.push({ partNumber: result.partNumber, etag: result.etag });
+          lastError = null;
+          break;
+        } catch (e) {
+          lastError = e;
+          // Oplopend wachten (1s, 2s, 4s): een korte onderbreking is dan voorbij.
+          if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** attempt));
+        }
+      }
+      if (lastError) throw lastError;
+      uploaded += chunk.size;
+      onProgress?.(uploaded, total);
+    }
+
+    const done = await workerPost<{ ok: true; key: string; size: number }>('/gallery/multipart/complete', {
+      json: { organizationId, galleryId, key: created.key, uploadId: created.uploadId, parts },
+    });
+    return { key: done.key, size: done.size };
+  } catch (e) {
+    await workerPost('/gallery/multipart/abort', {
+      json: { organizationId, galleryId, key: created.key, uploadId: created.uploadId },
+    }).catch(() => undefined);
+    throw e;
+  }
+}
+
+/** Kiest zelf tussen één request en multipart, op basis van de bestandsgrootte. */
+export async function uploadGalleryFile(
+  blob: Blob,
   fileName: string,
-  fileSize: number,
-): Promise<GalleryStreamUploadTicket> {
-  return workerPost<GalleryStreamUploadTicket>('/gallery/stream-upload', {
-    json: { organizationId, galleryId, fileName, fileSize },
+  contentType: string,
+  organizationId: UUID,
+  galleryId: UUID,
+  itemId: UUID,
+  variant: GalleryVariant,
+  onProgress?: (uploadedBytes: number, totalBytes: number) => void,
+): Promise<{ key: string; size: number }> {
+  if (blob.size <= GALLERY_MULTIPART_THRESHOLD_BYTES) {
+    const result = await uploadGalleryFileVariant(blob, fileName, contentType, organizationId, galleryId, itemId, variant);
+    onProgress?.(result.size, result.size);
+    return result;
+  }
+  if (variant !== 'master' && variant !== 'original' && variant !== 'source') {
+    throw new Error('Alleen originelen en video-masters kunnen in delen worden geüpload.');
+  }
+  return uploadGalleryFileMultipart(blob, fileName, contentType, organizationId, galleryId, itemId, variant, onProgress);
+}
+
+export type GalleryStreamCopyResult = { ok: true; mode: 'r2' } | { ok: true; mode: 'stream'; uid: string };
+
+/**
+ * Laat Cloudflare Stream de al geüploade master uit R2 ophalen en er een
+ * kijkkopie van maken. Zo uploadt de gebruiker één keer: R2 houdt het origineel
+ * (dat de klant downloadt), Stream verzorgt het afspelen. `mode: 'r2'` betekent
+ * dat Stream niet is geconfigureerd — de master staat er dan wel, maar er is
+ * niets om af te spelen.
+ */
+export async function requestGalleryStreamCopy(
+  organizationId: UUID,
+  galleryId: UUID,
+  key: string,
+  fileName: string,
+): Promise<GalleryStreamCopyResult> {
+  return workerPost<GalleryStreamCopyResult>('/gallery/stream-copy', {
+    json: { organizationId, galleryId, key, fileName },
   });
 }
 
@@ -133,64 +254,6 @@ export async function getGalleryStreamStatus(organizationId: UUID, uid: string):
 
 export async function deleteGalleryStreamVideo(organizationId: UUID, uid: string): Promise<void> {
   await workerPost<{ ok: true }>('/gallery/stream-delete', { json: { organizationId, uid } });
-}
-
-/** Basic direct-creator-upload naar Stream (multipart, ≤ ~190 MB). */
-export async function streamBasicUpload(uploadURL: string, file: File): Promise<void> {
-  const form = new FormData();
-  form.append('file', file);
-  const response = await fetch(uploadURL, { method: 'POST', body: form });
-  if (!response.ok) throw new Error(`Video-upload naar Stream mislukt (${response.status}).`);
-}
-
-const TUS_CHUNK_BYTES = 50 * 1024 * 1024;
-
-/**
- * Minimale tus-client voor grote Stream-uploads: sequentiële PATCH-chunks met
- * hervatting via HEAD wanneer een chunk faalt (netwerkhik). De upload-URL is de
- * eenmalige direct-creator-URL die de worker heeft aangemaakt.
- */
-export async function streamTusUpload(
-  uploadURL: string,
-  file: File,
-  onProgress?: (fraction: number) => void,
-): Promise<void> {
-  let offset = 0;
-  let retried = false;
-  while (offset < file.size) {
-    const chunk = file.slice(offset, Math.min(offset + TUS_CHUNK_BYTES, file.size));
-    const response = await fetch(uploadURL, {
-      method: 'PATCH',
-      headers: {
-        'Tus-Resumable': '1.0.0',
-        'Upload-Offset': String(offset),
-        'Content-Type': 'application/offset+octet-stream',
-      },
-      body: chunk,
-    }).catch(() => null);
-
-    const nextOffset = response?.ok ? Number(response.headers.get('Upload-Offset') || 'NaN') : NaN;
-    if (response?.ok && Number.isFinite(nextOffset) && nextOffset > offset) {
-      offset = nextOffset;
-      retried = false;
-      onProgress?.(offset / file.size);
-      continue;
-    }
-
-    if (retried) {
-      throw new Error('Video-upload naar Stream mislukt (tus). Probeer het opnieuw.');
-    }
-    retried = true;
-    // Hervatting: vraag de server waar we gebleven waren.
-    const head = await fetch(uploadURL, { method: 'HEAD', headers: { 'Tus-Resumable': '1.0.0' } }).catch(() => null);
-    const serverOffset = head ? Number(head.headers.get('Upload-Offset') || 'NaN') : NaN;
-    if (head?.ok && Number.isFinite(serverOffset)) {
-      offset = serverOffset;
-      onProgress?.(offset / file.size);
-    } else {
-      throw new Error('Video-upload naar Stream mislukt (verbinding). Probeer het opnieuw.');
-    }
-  }
 }
 
 // ── Client-side beeldbewerking ──────────────────────────────────────────────

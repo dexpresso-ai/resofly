@@ -40,8 +40,11 @@ type RouteContext = {
 };
 
 const ALLOWED_METHODS = 'GET,POST,PUT,DELETE,OPTIONS';
+// LET OP: elke header die de frontend meestuurt moet hier staan, anders
+// blokkeert de browser het request al bij de preflight — de Worker ziet dat
+// niet eens. X-Key/X-Upload-Id/X-Part-Number horen bij /gallery/multipart/part.
 const ALLOWED_HEADERS =
-  'Content-Type, Authorization, X-File-Name, X-File-Type, X-Organization-Id, X-Entity-Type, X-Entity-Id, X-Parent-Task-Id, X-Storage-Key, X-SHA256, X-Size-Bytes, X-Gallery-Id, X-Item-Id, X-Variant';
+  'Content-Type, Authorization, X-File-Name, X-File-Type, X-Organization-Id, X-Entity-Type, X-Entity-Id, X-Parent-Task-Id, X-Storage-Key, X-SHA256, X-Size-Bytes, X-Gallery-Id, X-Item-Id, X-Variant, X-Key, X-Upload-Id, X-Part-Number';
 const MAX_AGE_SECONDS = '86400';
 
 /** 25 MB — must stay in sync with MAX_UPLOAD_BYTES in src/lib/r2.ts. */
@@ -177,6 +180,27 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
   if (method === 'POST' && pathname === '/gallery/upload') {
     return handleGalleryUpload(request, env, context);
   }
+  // Multipart-upload voor grote bestanden (video-masters tot 30 GB). De browser
+  // stuurt parts van 64 MiB; groter mag een Worker niet ontvangen.
+  if (method === 'POST' && pathname === '/gallery/multipart/create') {
+    return handleGalleryMultipartCreate(request, env, context);
+  }
+  if (method === 'PUT' && pathname === '/gallery/multipart/part') {
+    return handleGalleryMultipartPart(request, env, context);
+  }
+  if (method === 'POST' && pathname === '/gallery/multipart/complete') {
+    return handleGalleryMultipartComplete(request, env, context);
+  }
+  if (method === 'POST' && pathname === '/gallery/multipart/abort') {
+    return handleGalleryMultipartAbort(request, env, context);
+  }
+  // Stream haalt de master zelf op uit R2 — één upload, twee producten.
+  if (method === 'POST' && pathname === '/gallery/stream-copy') {
+    return handleGalleryStreamCopy(request, env, context);
+  }
+  // DEPRECATED: directe Stream-upload (tus/basic) vanuit de browser. De huidige
+  // frontend uploadt de master naar R2 en laat Stream die kopiëren; deze route
+  // blijft staan zodat een nog niet vernieuwd tabblad blijft werken.
   if (method === 'POST' && pathname === '/gallery/stream-upload') {
     return handleGalleryStreamUpload(request, env, context);
   }
@@ -196,7 +220,9 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
   // Media-serving met galerij-token in de URL (<img>/<video> kunnen geen Bearer sturen):
   const galleryFileKey = matchGalleryFileRoute(pathname);
   if (galleryFileKey) {
-    if (method === 'GET') return handleGalleryFile(request, env, context, galleryFileKey);
+    // HEAD hoort erbij: downloaders (en de fetcher van Cloudflare Stream die de
+    // master ophaalt) vragen eerst grootte en type op voordat ze beginnen.
+    if (method === 'GET' || method === 'HEAD') return handleGalleryFile(request, env, context, galleryFileKey);
     return errorResponse('Method not allowed', 405, context);
   }
   const galleryZip = pathname.match(/^\/gallery\/zip\/([^/]+)$/);
@@ -403,11 +429,45 @@ const GALLERY_DERIVED_MAX_BYTES = 30 * 1024 * 1024;
 const GALLERY_TOKEN_TTL_MS = 60 * 60 * 1000;
 /**
  * Varianten in de R2-key. `original` = full-res foto (alleen te serveren met
- * een downloadtoken op originele kwaliteit), `source` = video-bestand voor de
+ * een downloadtoken op originele kwaliteit), `master` = het onbewerkte
+ * videobestand dat de klant downloadt (Cloudflare Stream geeft het bronbestand
+ * nooit terug, dus dít is het archief), `source` = video-bestand voor de oude
  * R2-fallback (moet altijd afspeelbaar zijn, ook met een kijk-token),
  * `preview`/`thumb` = de client-side gegenereerde weergavebestanden.
  */
-const GALLERY_VARIANTS = ['original', 'source', 'preview', 'thumb'];
+const GALLERY_VARIANTS = ['original', 'master', 'source', 'preview', 'thumb'];
+
+/**
+ * Maximale grootte van een video-master. 30 GB is het plafond dat Cloudflare
+ * Stream standaard accepteert; boven die grens kunnen we het bestand wel
+ * bewaren maar geen kijkkopie meer maken, dus weigeren we het bewust.
+ */
+const GALLERY_MASTER_MAX_BYTES = 30 * 1024 * 1024 * 1024;
+
+/**
+ * Partgrootte voor multipart-uploads. Een Worker mag maximaal ~100 MB request
+ * body ontvangen (Free/Pro), dus 64 MiB past op elk plan. R2 eist minimaal
+ * 5 MiB per part, maximaal 10.000 parts en dezelfde grootte voor alle parts
+ * behalve de laatste: 30 GB / 64 MiB = 480 parts, ruim binnen de marge.
+ */
+const GALLERY_MULTIPART_PART_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Wat er maximaal in ÉÉN request langs kan. Cloudflare kapt een Worker-request
+ * af rond 100 MB; daarboven krijgt de browser een Cloudflare-foutpagina in
+ * plaats van onze nette melding. Alles wat groter kan zijn gaat via multipart.
+ */
+const GALLERY_SINGLE_REQUEST_MAX_BYTES = 64 * 1024 * 1024;
+
+/** Marge bovenop de partgrootte; een part mag nooit groter binnenkomen. */
+const GALLERY_MULTIPART_PART_MAX_BYTES = GALLERY_MULTIPART_PART_BYTES + 1024 * 1024;
+
+/**
+ * Levensduur van het token waarmee Cloudflare Stream de master bij ons ophaalt.
+ * Stream haalt het bestand asynchroon op; ruim genomen zodat een grote master
+ * ook bij drukte binnen het venster valt.
+ */
+const GALLERY_STREAM_COPY_TOKEN_TTL_MS = 6 * 60 * 60 * 1000;
 
 /** Boven deze grootte gebruikt de frontend het tus-protocol voor Stream-uploads. */
 const STREAM_BASIC_UPLOAD_MAX_BYTES = 190 * 1024 * 1024;
@@ -420,7 +480,15 @@ const STREAM_MAX_DURATION_SECONDS = 21600;
  * een web-kwaliteit-token krijgt de full-res originelen niet te zien, ook niet
  * als de client de storage_key kent.
  */
-type GalleryTokenPayload = { t: 'gal'; org: string; gal: string; exp: number; dl: boolean; q: 'original' | 'web' };
+type GalleryTokenPayload = {
+  t: 'gal'; org: string; gal: string; exp: number; dl: boolean; q: 'original' | 'web';
+  /**
+   * Optioneel: bindt het token aan één exacte R2-key. Gebruikt voor het token
+   * dat Cloudflare Stream meekrijgt om de master op te halen — dat token leeft
+   * uren, dus het mag niet ook de rest van de galerij openzetten.
+   */
+  k?: string;
+};
 
 function gallerySecret(env: Env): string {
   if (!env.MEDIA_SIGNING_SECRET) throw new HttpError(500, 'Galerij-links niet geconfigureerd (MEDIA_SIGNING_SECRET).');
@@ -683,11 +751,13 @@ async function handleGalleryUpload(request: Request, env: Env, context: RouteCon
   // Galerij moet bestaan én bij deze organisatie horen (voorkomt key-wedging).
   await fetchGalleryRow(env, galleryId, organizationId);
 
-  const isFullSize = variant === 'original' || variant === 'source';
-  const maxBytes = isFullSize ? GALLERY_ORIGINAL_MAX_BYTES : GALLERY_DERIVED_MAX_BYTES;
+  // LET OP: deze route neemt het hele bestand in één request aan en loopt dus
+  // tegen de Worker-limiet van ~100 MB aan, hoe hoog de variantgrens ook staat.
+  // Alles wat groter kan zijn hoort via /gallery/multipart/* te gaan.
+  const maxBytes = Math.min(galleryVariantMaxBytes(variant), GALLERY_SINGLE_REQUEST_MAX_BYTES);
   const declaredSize = Number(request.headers.get('content-length') || '0');
   if (declaredSize > maxBytes) {
-    throw new HttpError(413, `Bestand is te groot. Maximum is ${Math.round(maxBytes / 1024 / 1024)} MB.`);
+    throw new HttpError(413, tooLargeMessage(maxBytes));
   }
   // Elke variant telt mee in het quotum — previews/thumbs zijn klein, maar een
   // stroom van 30 MB-derivaten mag de limiet niet alsnog kunnen omzeilen.
@@ -710,10 +780,234 @@ async function handleGalleryUpload(request: Request, env: Env, context: RouteCon
   // Defensief: dwing de limiet ook af als Content-Length ontbrak of gespooft was.
   if (object.size > maxBytes) {
     await env.MEDIA_BUCKET.delete(key).catch(() => undefined);
-    throw new HttpError(413, `Bestand is te groot. Maximum is ${Math.round(maxBytes / 1024 / 1024)} MB.`);
+    throw new HttpError(413, tooLargeMessage(maxBytes));
   }
 
   return jsonResponse({ ok: true, key, size: object.size }, 200, context);
+}
+
+// ── Multipart-upload (grote bestanden, video-masters) ───────────────────────
+//
+// De browser knipt het bestand in parts van 64 MiB en stuurt elk part als een
+// eigen request. Dat is nodig omdat een Worker maximaal ~100 MB body accepteert:
+// de oude route /gallery/upload beloofde 4 GB maar liep in de praktijk al bij
+// ~100 MB tegen een Cloudflare-foutpagina aan. Parts mogen parallel en in
+// willekeurige volgorde; R2 eist alleen dat álle parts behalve de laatste
+// dezelfde grootte hebben.
+
+/** Varianten die groot genoeg zijn om multipart te rechtvaardigen. */
+const GALLERY_MULTIPART_VARIANTS = ['master', 'original', 'source'];
+
+/**
+ * De vier controles die elke schrijfactie op een galerij moet doorstaan:
+ * ingelogd, lid met schrijfrecht, module 'projects' toegankelijk, en de galerij
+ * hoort echt bij deze organisatie. Die laatste voorkomt key-wedging: zonder die
+ * check kun je in de key-prefix van een andere tenant schrijven.
+ */
+async function authorizeGalleryWrite(request: Request, env: Env, organizationId: string, galleryId: string): Promise<string> {
+  const userId = await requireUser(request, env);
+  if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige of ontbrekende organization id.');
+  if (!isUuid(galleryId)) throw new HttpError(400, 'Ongeldige of ontbrekende galerij id.');
+  const role = await membershipRole(env, organizationId, userId);
+  if (!role) throw new HttpError(403, 'Geen toegang tot deze organisatie.');
+  if (role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  await requireGalleryAccess(env, organizationId, userId, 'write');
+  await fetchGalleryRow(env, galleryId, organizationId);
+  return userId;
+}
+
+/** De client geeft de key terug bij elk part; die moet binnen deze galerij liggen. */
+function assertGalleryKeyBelongs(key: string, organizationId: string, galleryId: string): void {
+  if (!isSafeStorageKey(key)) throw new HttpError(400, 'Ongeldige key.');
+  if (!key.startsWith(`${organizationId}/gallery/${galleryId}/`)) {
+    throw new HttpError(403, 'Key hoort niet bij deze galerij.');
+  }
+}
+
+function galleryVariantMaxBytes(variant: string): number {
+  if (variant === 'master') return GALLERY_MASTER_MAX_BYTES;
+  if (variant === 'original' || variant === 'source') return GALLERY_ORIGINAL_MAX_BYTES;
+  return GALLERY_DERIVED_MAX_BYTES;
+}
+
+function tooLargeMessage(maxBytes: number): string {
+  return maxBytes >= 1073741824
+    ? `Bestand is te groot. Maximum is ${Math.round(maxBytes / 1073741824)} GB.`
+    : `Bestand is te groot. Maximum is ${Math.round(maxBytes / 1048576)} MB.`;
+}
+
+async function handleGalleryMultipartCreate(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as {
+    organizationId?: string; galleryId?: string; itemId?: string;
+    variant?: string; fileName?: string; contentType?: string; fileSize?: number;
+  };
+  const organizationId = (body.organizationId || '').trim();
+  const galleryId = (body.galleryId || '').trim();
+  const itemId = (body.itemId || '').trim();
+  const variant = (body.variant || 'master').trim();
+  const fileName = sanitizeFileName(body.fileName || 'bestand');
+  const contentType = (body.contentType || 'application/octet-stream').trim();
+  const fileSize = Number(body.fileSize || 0);
+
+  const userId = await authorizeGalleryWrite(request, env, organizationId, galleryId);
+  if (!isUuid(itemId)) throw new HttpError(400, 'Ongeldige of ontbrekende item id.');
+  if (!GALLERY_MULTIPART_VARIANTS.includes(variant)) throw new HttpError(400, 'Ongeldige variant.');
+  if (!Number.isFinite(fileSize) || fileSize <= 0) throw new HttpError(400, 'Ongeldige bestandsgrootte.');
+
+  const maxBytes = galleryVariantMaxBytes(variant);
+  if (fileSize > maxBytes) throw new HttpError(413, tooLargeMessage(maxBytes));
+  await assertStorageCapacity(env, organizationId, fileSize);
+
+  const key = `${organizationId}/gallery/${galleryId}/${itemId}/${variant}-${crypto.randomUUID()}-${fileName}`;
+  const upload = await env.MEDIA_BUCKET.createMultipartUpload(key, {
+    httpMetadata: { contentType },
+    customMetadata: {
+      name: fileName,
+      organizationId,
+      entityType: 'gallery',
+      entityId: galleryId,
+      uploadedBy: userId,
+      uploadedAt: new Date().toISOString(),
+    },
+  });
+
+  return jsonResponse(
+    { ok: true, key, uploadId: upload.uploadId, partSize: GALLERY_MULTIPART_PART_BYTES },
+    200,
+    context,
+  );
+}
+
+async function handleGalleryMultipartPart(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const organizationId = (request.headers.get('x-organization-id') || '').trim();
+  const galleryId = (request.headers.get('x-gallery-id') || '').trim();
+  const key = decodeMaybe(request.headers.get('x-key')) || '';
+  const uploadId = decodeMaybe(request.headers.get('x-upload-id')) || '';
+  const partNumber = Number(request.headers.get('x-part-number') || '0');
+
+  await authorizeGalleryWrite(request, env, organizationId, galleryId);
+  assertGalleryKeyBelongs(key, organizationId, galleryId);
+  if (!uploadId) throw new HttpError(400, 'Ontbrekende upload id.');
+  // R2 staat 10.000 parts toe; hoger is per definitie een fout aan onze kant.
+  if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10000) {
+    throw new HttpError(400, 'Ongeldig partnummer.');
+  }
+  if (!request.body) throw new HttpError(400, 'Leeg part.');
+  const declared = Number(request.headers.get('content-length') || '0');
+  if (declared > GALLERY_MULTIPART_PART_MAX_BYTES) throw new HttpError(413, 'Part is te groot.');
+
+  const upload = env.MEDIA_BUCKET.resumeMultipartUpload(key, uploadId);
+  const part = await upload.uploadPart(partNumber, request.body);
+  return jsonResponse({ ok: true, partNumber: part.partNumber, etag: part.etag }, 200, context);
+}
+
+async function handleGalleryMultipartComplete(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as {
+    organizationId?: string; galleryId?: string; key?: string; uploadId?: string;
+    parts?: Array<{ partNumber?: number; etag?: string }>;
+  };
+  const organizationId = (body.organizationId || '').trim();
+  const galleryId = (body.galleryId || '').trim();
+  const key = (body.key || '').trim();
+  const uploadId = (body.uploadId || '').trim();
+
+  await authorizeGalleryWrite(request, env, organizationId, galleryId);
+  assertGalleryKeyBelongs(key, organizationId, galleryId);
+  if (!uploadId) throw new HttpError(400, 'Ontbrekende upload id.');
+
+  const parts = (body.parts || []).map(part => ({
+    partNumber: Number(part?.partNumber),
+    etag: String(part?.etag ?? ''),
+  }));
+  if (parts.length === 0 || parts.some(p => !Number.isInteger(p.partNumber) || p.partNumber < 1 || !p.etag)) {
+    throw new HttpError(400, 'Ongeldige partlijst.');
+  }
+
+  const upload = env.MEDIA_BUCKET.resumeMultipartUpload(key, uploadId);
+  const object = await upload.complete(parts);
+
+  // Pas hier is de werkelijke omvang bekend: een client die bij het aanmaken
+  // een kleine fileSize opgaf en daarna méér parts stuurt, wordt hier alsnog
+  // gepakt — inclusief opruimen, anders blijven de bytes in R2 achter.
+  const maxBytes = galleryVariantMaxBytes(galleryVariantFromKey(key));
+  if (object.size > maxBytes) {
+    await env.MEDIA_BUCKET.delete(key).catch(() => undefined);
+    throw new HttpError(413, tooLargeMessage(maxBytes));
+  }
+
+  return jsonResponse({ ok: true, key, size: object.size }, 200, context);
+}
+
+async function handleGalleryMultipartAbort(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as {
+    organizationId?: string; galleryId?: string; key?: string; uploadId?: string;
+  };
+  const organizationId = (body.organizationId || '').trim();
+  const galleryId = (body.galleryId || '').trim();
+  const key = (body.key || '').trim();
+  const uploadId = (body.uploadId || '').trim();
+
+  await authorizeGalleryWrite(request, env, organizationId, galleryId);
+  assertGalleryKeyBelongs(key, organizationId, galleryId);
+  if (!uploadId) throw new HttpError(400, 'Ontbrekende upload id.');
+
+  // Mislukt afbreken is niet erg: R2 ruimt onvoltooide uploads na 7 dagen zelf op.
+  await env.MEDIA_BUCKET.resumeMultipartUpload(key, uploadId).abort().catch(() => undefined);
+  return jsonResponse({ ok: true }, 200, context);
+}
+
+/**
+ * Laat Cloudflare Stream de master ophalen uit R2 en er een kijkkopie van maken.
+ * Zo uploadt de gebruiker één keer: R2 bewaart het origineel (dát downloadt de
+ * klant), Stream levert het afspelen. Het token dat Stream meekrijgt is aan deze
+ * ene key gebonden, zodat het uren mag leven zonder de galerij open te zetten.
+ */
+async function handleGalleryStreamCopy(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as {
+    organizationId?: string; galleryId?: string; key?: string; fileName?: string;
+  };
+  const organizationId = (body.organizationId || '').trim();
+  const galleryId = (body.galleryId || '').trim();
+  const key = (body.key || '').trim();
+  const fileName = sanitizeFileName(body.fileName || 'video');
+
+  await authorizeGalleryWrite(request, env, organizationId, galleryId);
+  assertGalleryKeyBelongs(key, organizationId, galleryId);
+
+  // Zonder volledige Stream-configuratie is er geen kijkkopie; de master staat
+  // er wel. De frontend meldt dat dan aan de gebruiker.
+  if (!(await streamConfigured(env))) {
+    return jsonResponse({ ok: true, mode: 'r2' }, 200, context);
+  }
+
+  const head = await env.MEDIA_BUCKET.head(key);
+  if (!head) throw new HttpError(404, 'Bestand niet gevonden.');
+  if (head.size > GALLERY_MASTER_MAX_BYTES) throw new HttpError(413, tooLargeMessage(GALLERY_MASTER_MAX_BYTES));
+
+  const exp = Date.now() + GALLERY_STREAM_COPY_TOKEN_TTL_MS;
+  const token = await signGalleryToken(
+    { t: 'gal', org: organizationId, gal: galleryId, exp, dl: true, q: 'original', k: key },
+    gallerySecret(env),
+  );
+  // Pin de host: Stream belt ons terug, dus de URL moet publiek kloppen ook als
+  // het request via een ander domein binnenkwam.
+  const base = (env.MEDIA_PUBLIC_URL || new URL(request.url).origin).replace(/\/+$/, '');
+  const sourceUrl = `${base}/gallery/file/${encodeURIComponent(key)}?token=${encodeURIComponent(token)}`;
+
+  const res = await streamApi(env, '/stream/copy', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      url: sourceUrl,
+      requireSignedURLs: true,
+      meta: { name: fileName, organizationId, galleryId },
+    }),
+  });
+  if (!res.ok) throw new HttpError(502, 'Kon de kijkkopie bij Stream niet starten.');
+  const json = (await res.json()) as { result?: { uid?: string } };
+  if (!json.result?.uid) throw new HttpError(502, 'Onverwacht Stream-antwoord (copy).');
+
+  return jsonResponse({ ok: true, mode: 'stream', uid: json.result.uid }, 200, context);
 }
 
 /** Vraag een directe upload-URL bij Cloudflare Stream aan (of meld R2-fallback). */
@@ -933,16 +1227,26 @@ async function handleGalleryFile(request: Request, env: Env, context: RouteConte
   if (!key.startsWith(`${payload.org}/gallery/${payload.gal}/`)) {
     throw new HttpError(403, 'Token hoort niet bij dit bestand.');
   }
+  // Een key-gebonden token (Stream haalt de master op) mag niets anders raken.
+  if (payload.k && payload.k !== key) throw new HttpError(403, 'Token hoort niet bij dit bestand.');
   const wantsDownload = context.url.searchParams.get('dl') === '1';
   if (wantsDownload && !payload.dl) throw new HttpError(403, 'Downloaden is niet toegestaan voor deze link.');
 
+  const variant = galleryVariantFromKey(key);
   // Full-res originelen zijn alleen bereikbaar met een token dat downloaden op
   // originele kwaliteit toestaat. Zonder deze check zou het kennen van de
   // storage_key (die in de galerij-payload staat) genoeg zijn om de instellingen
-  // "downloaden uit" en "webkwaliteit" te omzeilen. Video's in de R2-fallback
-  // liggen bewust onder de variant `source`: die moeten altijd afspeelbaar zijn.
-  if (galleryVariantFromKey(key) === 'original' && !(payload.dl && payload.q === 'original')) {
+  // "downloaden uit" en "webkwaliteit" te omzeilen. Video's in de oude
+  // R2-fallback liggen onder de variant `source`: die moeten altijd afspeelbaar
+  // zijn.
+  if (variant === 'original' && !(payload.dl && payload.q === 'original')) {
     throw new HttpError(403, 'Het originele bestand is niet beschikbaar voor deze link.');
+  }
+  // De video-master kent geen webvariant: Stream levert het kijken, R2 levert
+  // het origineel. "Downloadkwaliteit" gaat dus alleen over foto's — een
+  // web-token mag de master gewoon downloaden zolang downloaden aan staat.
+  if (variant === 'master' && !payload.dl) {
+    throw new HttpError(403, 'Downloaden is niet toegestaan voor deze link.');
   }
 
   const head = await env.MEDIA_BUCKET.head(key);
@@ -979,6 +1283,20 @@ async function handleGalleryFile(request: Request, env: Env, context: RouteConte
   }
 
   const isRanged = start !== null && end !== null && totalSize > 0;
+
+  // Bij HEAD is de head() hierboven al genoeg: we halen het object niet op,
+  // maar antwoorden wel met dezelfde headers als een GET zou geven.
+  if (request.method === 'HEAD') {
+    const headers = new Headers(context.corsHeaders);
+    headers.set('Content-Type', head.httpMetadata?.contentType || 'application/octet-stream');
+    headers.set('Accept-Ranges', 'bytes');
+    headers.set('Cache-Control', 'private, max-age=900');
+    headers.set('X-Request-Id', context.requestId);
+    if (head.httpEtag) headers.set('ETag', head.httpEtag);
+    headers.set('Content-Length', String(totalSize));
+    return new Response(null, { status: 200, headers });
+  }
+
   const object = await env.MEDIA_BUCKET.get(
     key,
     isRanged ? { range: { offset: start as number, length: (end as number) - (start as number) + 1 } } : undefined,
@@ -1193,6 +1511,10 @@ async function handleGalleryZip(request: Request, env: Env, context: RouteContex
   for (const item of items) {
     const key = useWeb && item.media_type === 'photo' ? item.preview_key || item.storage_key : item.storage_key;
     if (!key || !key.startsWith(`${payload.org}/`)) continue; // Stream-only video's zitten niet in de zip
+    // Video-masters ook niet: tientallen gigabytes door de CRC32-lus van een
+    // Worker halen loopt over de CPU-limiet, en dan levert de zip stilzwijgend
+    // een afgekapt bestand op. Die download de klant per stuk.
+    if (galleryVariantFromKey(key) === 'master') continue;
     const base = sanitizeFileName(item.file_name || 'bestand');
     const dot = base.lastIndexOf('.');
     const stem = dot > 0 ? base.slice(0, dot) : base;

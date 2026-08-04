@@ -24,13 +24,13 @@ import {
 } from '../lib/repository';
 import { deleteR2Object } from '../lib/r2-api';
 import {
-  GALLERY_ORIGINAL_MAX_BYTES, GALLERY_PHOTO_TYPES,
+  GALLERY_MASTER_MAX_BYTES, GALLERY_MULTIPART_THRESHOLD_BYTES, GALLERY_ORIGINAL_MAX_BYTES, GALLERY_PHOTO_TYPES,
   captureVideoPoster, createGalleryViewSession, deleteGalleryStreamVideo, galleryFileUrl,
   galleryRefreshDelayMs, galleryZipUrl,
-  generateImageDerivatives, getGalleryStreamStatus, requestGalleryStreamUpload, streamBasicUpload,
-  streamDownloadUrl, streamTusUpload, uploadGalleryFileVariant, type GalleryTokenBundle,
+  generateImageDerivatives, getGalleryStreamStatus, requestGalleryStreamCopy,
+  streamDownloadUrl, uploadGalleryFile, uploadGalleryFileVariant, type GalleryTokenBundle,
 } from '../lib/gallery';
-import { GalleryViewer, galleryItemThumbUrl, type GalleryViewerItem } from './GalleryViewer';
+import { GalleryViewer, galleryItemThumbUrl, hasZippableItems, type GalleryViewerItem } from './GalleryViewer';
 
 const galleryStatusLabels: Record<Gallery['status'], string> = {
   draft: 'Concept',
@@ -93,6 +93,7 @@ const heroGroups: Array<{ group: string; options: Array<{ key: GalleryHeroTempla
   {
     group: 'Spectaculair',
     options: [
+      { key: 'netflix', label: 'Kopvideo', hint: 'Eén video groot in beeld die stil meespeelt; de rest in rijen eronder.' },
       { key: 'cinematic', label: 'Cinematisch', hint: 'Trage zoom op het beeld, titel zweeft in.' },
       { key: 'mosaic', label: 'Mozaïek', hint: 'Negen beelden achter een gecentreerde titel.' },
     ],
@@ -119,6 +120,16 @@ function randomShareToken(): string {
 }
 
 type QueueEntry = { name: string; status: 'wacht' | 'bezig' | 'klaar' | 'fout'; detail?: string };
+
+/**
+ * Het sterretje wijst de opening aan. Bij een video heet dat een kopvideo en bij
+ * een foto een cover — het is hetzelfde veld (`cover_item_id`), maar de gebruiker
+ * denkt in het ene of het andere.
+ */
+function coverLabel(item: GalleryViewerItem, isCurrent: boolean): string {
+  if (item.media_type === 'video') return isCurrent ? 'Dit is de kopvideo' : 'Als kopvideo instellen';
+  return isCurrent ? 'Dit is de cover' : 'Als cover instellen';
+}
 
 /** Past dit bestand in een galerij van dit formaat? Spiegelt de DB-trigger. */
 function fileFitsFormat(format: GalleryFormat, file: File): boolean {
@@ -405,7 +416,14 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
     setBusy(true);
     setError(null);
     try {
-      const gallery = await insertRow<Gallery>('galleries', organizationId, { project_id: project.id, title, format: newFormat });
+      const gallery = await insertRow<Gallery>('galleries', organizationId, {
+        project_id: project.id,
+        title,
+        format: newFormat,
+        // Een videogalerij opent standaard filmisch; dat is waar het formaat om
+        // vraagt. Aan te passen in de instellingen onder "Opening".
+        hero_template: newFormat === 'video' ? 'netflix' : 'full',
+      });
       setCreating(false);
       setNewTitle('');
       setNewFormat('hybrid');
@@ -461,8 +479,11 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
     if (gallery.format === 'video' && isPhoto) {
       throw new Error('Dit is een videogalerij — foto’s kunnen hier niet in. Wijzig het formaat in de instellingen naar “Foto én video”.');
     }
-    if (file.size > GALLERY_ORIGINAL_MAX_BYTES) {
-      throw new Error('Bestand is groter dan 4 GB.');
+    if (isVideo && file.size > GALLERY_MASTER_MAX_BYTES) {
+      throw new Error('Video is groter dan 30 GB — daar kan Cloudflare Stream geen kijkkopie van maken.');
+    }
+    if (isPhoto && file.size > GALLERY_ORIGINAL_MAX_BYTES) {
+      throw new Error('Foto is groter dan 4 GB.');
     }
     const uploadGroupId = crypto.randomUUID();
 
@@ -474,7 +495,9 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
       // geslaagde keys nog en kunnen we ze opruimen. Met Promise.all zouden die
       // bytes onzichtbaar in R2 achterblijven (en niet in het quotum tellen).
       const settled = await Promise.allSettled([
-        uploadGalleryFileVariant(file, file.name, file.type, organizationId, gallery.id, uploadGroupId, 'original'),
+        // Een foto van 100 megapixel haalt de 64 MB per request; uploadGalleryFile
+        // schakelt dan zelf over op delen.
+        uploadGalleryFile(file, file.name, file.type, organizationId, gallery.id, uploadGroupId, 'original'),
         uploadGalleryFileVariant(derived.preview, `preview-${file.name}.jpg`, 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'preview'),
         uploadGalleryFileVariant(derived.thumb, `thumb-${file.name}.jpg`, 'image/jpeg', organizationId, gallery.id, uploadGroupId, 'thumb'),
       ]);
@@ -507,10 +530,13 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
       }
     }
 
-    // Video: eerst een Stream-ticket vragen; 'r2' betekent fallback naar R2.
+    // ── Video ──
+    // De master gaat naar R2: dát is wat de klant downloadt, in de originele
+    // resolutie. Cloudflare Stream haalt hem daar vervolgens zélf op voor de
+    // kijkkopie — één upload, twee producten. Stream geeft het bronbestand
+    // nooit terug, dus zonder deze R2-kopie zou het origineel verloren zijn.
     onProgress('poster maken…');
     const poster = await captureVideoPoster(file);
-    const ticket = await requestGalleryStreamUpload(organizationId, gallery.id, file.name, file.size);
 
     let thumbKey: string | null = null;
     let thumbSize = 0;
@@ -520,72 +546,52 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
       thumbSize = thumb.size;
     }
 
-    if (ticket.mode === 'r2') {
-      onProgress('uploaden…');
-      // Variant 'source': video's moeten afspeelbaar blijven met een kijk-token,
-      // terwijl 'original' (foto's) juist alleen met downloadrecht wordt geserveerd.
-      let original: { key: string; size: number };
-      try {
-        original = await uploadGalleryFileVariant(file, file.name, file.type, organizationId, gallery.id, uploadGroupId, 'source');
-      } catch (e) {
-        if (thumbKey) void deleteR2Object(thumbKey).catch(() => undefined);
-        throw e;
-      }
-      try {
-        return await insertRow<GalleryItem>('gallery_items', organizationId, {
-          gallery_id: gallery.id,
-          media_type: 'video',
-          file_name: file.name,
-          content_type: file.type,
-          size_bytes: original.size,
-          derived_bytes: thumbSize,
-          storage_key: original.key,
-          thumb_key: thumbKey,
-          width: poster.width,
-          height: poster.height,
-          duration_seconds: poster.duration,
-          sort_order: sortOrder,
-        });
-      } catch (e) {
-        void deleteR2Object(original.key).catch(() => undefined);
-        if (thumbKey) void deleteR2Object(thumbKey).catch(() => undefined);
-        throw e;
-      }
-    }
-
-    onProgress('uploaden naar Stream…');
+    let master: { key: string; size: number };
     try {
-      if (ticket.mode === 'stream-basic') {
-        await streamBasicUpload(ticket.uploadURL, file);
-      } else {
-        await streamTusUpload(ticket.uploadURL, file, (fraction) => onProgress(`uploaden naar Stream… ${Math.round(fraction * 100)}%`));
-      }
+      master = await uploadGalleryFile(
+        file, file.name, file.type, organizationId, gallery.id, uploadGroupId, 'master',
+        (done, totaal) => onProgress(`uploaden… ${Math.round((done / totaal) * 100)}%`),
+      );
     } catch (e) {
       if (thumbKey) void deleteR2Object(thumbKey).catch(() => undefined);
-      void deleteGalleryStreamVideo(organizationId, ticket.uid).catch(() => undefined);
       throw e;
     }
+
+    // De kijkkopie is nadrukkelijk niet-blokkerend: de master staat er al, en een
+    // galerij met een origineel maar zonder speler is beter dan een mislukte
+    // upload van tientallen gigabytes.
+    onProgress('kijkkopie aanmaken…');
+    let streamUid: string | null = null;
+    try {
+      const copy = await requestGalleryStreamCopy(organizationId, gallery.id, master.key, file.name);
+      if (copy.mode === 'stream') streamUid = copy.uid;
+    } catch {
+      /* geen kijkkopie — het item toont dat zelf */
+    }
+
     try {
       const inserted = await insertRow<GalleryItem>('gallery_items', organizationId, {
         gallery_id: gallery.id,
         media_type: 'video',
         file_name: file.name,
         content_type: file.type,
-        size_bytes: file.size,
+        size_bytes: master.size,
         derived_bytes: thumbSize,
+        storage_key: master.key,
         thumb_key: thumbKey,
         width: poster.width,
         height: poster.height,
         duration_seconds: poster.duration,
-        stream_uid: ticket.uid,
-        stream_status: 'processing',
+        stream_uid: streamUid,
+        stream_status: streamUid ? 'processing' : null,
         sort_order: sortOrder,
       });
-      pollStreamItem(inserted);
+      if (streamUid) pollStreamItem(inserted);
       return inserted;
     } catch (e) {
+      void deleteR2Object(master.key).catch(() => undefined);
       if (thumbKey) void deleteR2Object(thumbKey).catch(() => undefined);
-      void deleteGalleryStreamVideo(organizationId, ticket.uid).catch(() => undefined);
+      if (streamUid) void deleteGalleryStreamVideo(organizationId, streamUid).catch(() => undefined);
       throw e;
     }
   }
@@ -605,7 +611,11 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
     let nextSort = items.reduce((max, item) => Math.max(max, item.sort_order), -1) + 1;
     const sortOrders = files.map(() => nextSort++);
     let cursor = 0;
-    const workerCount = Math.min(3, files.length);
+    // Grote bestanden gaan in delen van 64 MB. Drie daarvan tegelijk duwt
+    // honderden megabytes door het geheugen en maakt de upload juist trager;
+    // bij een video-master doen we er dus één tegelijk.
+    const hasLarge = files.some(file => file.size > GALLERY_MULTIPART_THRESHOLD_BYTES);
+    const workerCount = hasLarge ? 1 : Math.min(3, files.length);
     await Promise.all(Array.from({ length: workerCount }, async () => {
       for (;;) {
         const index = cursor++;
@@ -1055,8 +1065,8 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
               <Heart size={13} fill="currentColor" /> {favoriteTotal}
             </button>
           )}
-          {openGallery.allow_downloads && bundle && items.some(i => i.storage_key || i.preview_key) && (
-            <a className="btn" href={galleryZipUrl(openGallery.id, bundle.mediaToken)} download title="Alle bestanden als zip">
+          {openGallery.allow_downloads && bundle && hasZippableItems(items) && (
+            <a className="btn" href={galleryZipUrl(openGallery.id, bundle.mediaToken)} download title="Alle foto's als zip — video's download je per stuk">
               <Download size={14} /> Zip
             </a>
           )}
@@ -1235,7 +1245,8 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
                   type="button"
                   className={`galv-tool${openGallery.cover_item_id === viewerItem.id ? ' active' : ''}`}
                   onClick={(e) => { e.stopPropagation(); const item = items.find(x => x.id === viewerItem.id); if (item) void setCover(item); }}
-                  title={openGallery.cover_item_id === viewerItem.id ? 'Dit is de cover' : 'Als cover instellen'}
+                  title={coverLabel(viewerItem, openGallery.cover_item_id === viewerItem.id)}
+                  aria-label={coverLabel(viewerItem, openGallery.cover_item_id === viewerItem.id)}
                 >
                   <Star size={14} fill={openGallery.cover_item_id === viewerItem.id ? 'currentColor' : 'none'} />
                 </button>
@@ -1467,11 +1478,15 @@ function GallerySettingsModal({
                 </label>
                 {allowDownloads && (
                   <label className="gal-field">
-                    <span>Downloadkwaliteit</span>
+                    <span>Downloadkwaliteit van foto’s</span>
                     <Select value={quality} onChange={(e) => setQuality(e.target.value as Gallery['download_quality'])}>
                       <option value="original">Originele bestanden (full-res)</option>
                       <option value="web">Webresolutie (kleiner, sneller)</option>
                     </Select>
+                    <p className="gal-field-help">
+                      Video’s gaan altijd in de originele resolutie: de klant kijkt via de kijkkopie en
+                      downloadt het bronbestand zoals jij het hebt aangeleverd.
+                    </p>
                   </label>
                 )}
                 <label className="gal-field">
@@ -1510,7 +1525,9 @@ function GallerySettingsModal({
                 </div>
               ))}
               <p className="gal-field-help">
-                De hero-foto is de coverfoto: kies die met het sterretje op een foto in de galerij.
+                Welk beeld de opening vult, kies je met het sterretje in de galerij: bij “Kopvideo”
+                is dat de video die bovenaan meespeelt, bij de andere openingen de coverfoto.
+                Kies je niets, dan pakt de galerij het eerste item.
               </p>
             </section>
           )}

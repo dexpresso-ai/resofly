@@ -12,7 +12,7 @@ import { supabase } from '../lib/supabase';
 import { dateNL } from '../lib/format';
 import { galleryFileUrl, galleryRefreshDelayMs, galleryZipUrl, streamDownloadUrl, type GalleryTokenBundle } from '../lib/gallery';
 import { brandStyle, ensureBrandFontsLoaded, type BrandingPayload } from '../lib/branding';
-import { GalleryViewer, type GalleryViewerItem } from './GalleryViewer';
+import { GalleryViewer, hasZippableItems, type GalleryViewerItem } from './GalleryViewer';
 
 async function extractFunctionError(error: unknown, fallback: string): Promise<string> {
   const context = (error as { context?: unknown })?.context;
@@ -241,7 +241,7 @@ export function PublicGalleryPage({ token }: { token: string }) {
 
   if (!payload) return null;
 
-  const downloadableCount = payload.items.filter(i => i.storage_key || i.preview_key).length;
+  const canZip = hasZippableItems(payload.items);
 
   const branding = payload.branding;
 
@@ -261,9 +261,9 @@ export function PublicGalleryPage({ token }: { token: string }) {
           {payload.gallery.published_at && <span>{dateNL(payload.gallery.published_at)}</span>}
           <span>{payload.items.length} item{payload.items.length === 1 ? '' : 's'}</span>
           {payload.gallery.expires_at && <span>Beschikbaar tot {dateNL(payload.gallery.expires_at)}</span>}
-          {payload.gallery.allow_downloads && downloadableCount > 0 && (
+          {payload.gallery.allow_downloads && canZip && (
             <a className="pgal-zip" href={galleryZipUrl(payload.gallery.id, payload.tokens.mediaToken)} download>
-              <Download size={14} /> Alles downloaden
+              <Download size={14} /> Foto's downloaden (zip)
             </a>
           )}
         </div>

@@ -75,6 +75,44 @@ export function galleryItemThumbUrl(item: GalleryViewerItem, bundle: GalleryToke
   return null;
 }
 
+/**
+ * De variant staat vooraan in de bestandsnaam van de R2-key
+ * (`{variant}-{uuid}-{naam}`). `master` = het originele videobestand dat de
+ * klant downloadt; dat is nadrukkelijk géén afspeelbaar bestand, en het zit ook
+ * niet in de zip. Geëxporteerd omdat alle drie de weergaven ermee bepalen of er
+ * iets te zippen valt.
+ */
+export function keyVariant(key: string | null | undefined): string {
+  if (!key) return '';
+  const fileName = key.slice(key.lastIndexOf('/') + 1);
+  const dash = fileName.indexOf('-');
+  return dash > 0 ? fileName.slice(0, dash) : '';
+}
+
+/**
+ * Zit er iets in de zip? Video-masters laat de worker er bewust uit — tientallen
+ * gigabytes door zijn CRC32-lus halen loopt over de CPU-limiet. Een galerij met
+ * alleen video's levert dus een lege zip (en een 404), en dan hoort de knop er
+ * niet te staan.
+ */
+export function hasZippableItems(items: Array<{ storage_key: string | null; preview_key: string | null }>): boolean {
+  return items.some(item =>
+    Boolean(item.preview_key) || (Boolean(item.storage_key) && keyVariant(item.storage_key) !== 'master'));
+}
+
+/**
+ * Kan deze video hier afspelen? Via de Stream-kijkkopie, of — voor video's van
+ * vóór die kopie — rechtstreeks uit R2 onder de variant `source`. Een `master`
+ * telt niet mee: dat is het archiefbestand voor de download, tientallen
+ * gigabytes in een codec die geen browser aankan.
+ */
+function videoPlayable(item: GalleryViewerItem, bundle: GalleryTokenBundle): boolean {
+  return Boolean(
+    (item.stream_uid && item.stream_status === 'ready' && item.stream_playback_base && bundle.streamTokens[item.stream_uid])
+    || (!item.stream_uid && keyVariant(item.storage_key) === 'source'),
+  );
+}
+
 function itemPreviewUrl(item: GalleryViewerItem, bundle: GalleryTokenBundle): string | null {
   if (item.media_type === 'photo') {
     const key = item.preview_key || item.storage_key;
@@ -154,6 +192,34 @@ export function GalleryViewer({
   const sectionRefs = useRef(new Map<string, HTMLElement>());
   const dragItemId = useRef<string | null>(null);
 
+  /** De filmische opening: één kopvideo groot in beeld, de rest in rijen eronder. */
+  const billboard = hero?.template === 'netflix';
+
+  /**
+   * Het item dat de opening vult. Bij de filmische opening is dat bij voorkeur
+   * een video — anders zou een fotogalerij-achtige cover de kop stil houden.
+   */
+  const heroItem = useMemo<GalleryViewerItem | null>(() => {
+    if (!hero) return null;
+    const chosen = hero.itemId ? items.find(i => i.id === hero.itemId) : null;
+    if (chosen) return chosen;
+    const preferred = billboard
+      ? items.find(i => i.media_type === 'video')
+      : items.find(i => i.media_type === 'photo');
+    return preferred ?? items[0] ?? null;
+  }, [hero, items, billboard]);
+
+  /**
+   * De kopvideo staat al bovenaan; hem nóg een keer in de rijen tonen leest als
+   * een fout. Een foto-cover blijft wél in het raster staan — die is klein en
+   * hoort bij de reeks.
+   */
+  const hiddenItemId = billboard && heroItem?.media_type === 'video' ? heroItem.id : null;
+  const sectionSource = useMemo(
+    () => (hiddenItemId ? items.filter(i => i.id !== hiddenItemId) : items),
+    [items, hiddenItemId],
+  );
+
   // Items groeperen per categorie; wat geen (bestaande) categorie heeft valt
   // onderaan in "Overig". Zonder categorieën blijft het één doorlopende reeks.
   const sections = useMemo<GallerySection[]>(() => {
@@ -162,12 +228,12 @@ export function GalleryViewer({
       photos: list.filter(i => i.media_type === 'photo'),
     });
     const cats = categories ?? [];
-    if (cats.length === 0) return [{ key: 'all', title: null, ...split(items) }];
+    if (cats.length === 0) return [{ key: 'all', title: null, ...split(sectionSource) }];
 
     const known = new Set(cats.map(c => c.id));
     const byCategory = new Map<string, GalleryViewerItem[]>();
     const loose: GalleryViewerItem[] = [];
-    for (const item of items) {
+    for (const item of sectionSource) {
       const id = item.category_id;
       if (id && known.has(id)) {
         const list = byCategory.get(id);
@@ -183,7 +249,7 @@ export function GalleryViewer({
       result.push({ key: 'overig', title: result.length > 0 ? 'Overig' : null, ...split(loose) });
     }
     return result;
-  }, [items, categories]);
+  }, [sectionSource, categories]);
 
   // Eén doorlopende fotolijst in de volgorde waarin de kijker ze ziet, zodat
   // de pijltjes in de lightbox door de secties heen blijven kloppen.
@@ -281,9 +347,11 @@ export function GalleryViewer({
     );
   };
 
-  const videoIsPlayable = (item: GalleryViewerItem) =>
-    (item.stream_uid && item.stream_status === 'ready' && item.stream_playback_base && bundle.streamTokens[item.stream_uid])
-    || (!item.stream_uid && item.storage_key);
+  const videoIsPlayable = (item: GalleryViewerItem) => videoPlayable(item, bundle);
+
+  /** Video met een master in R2 maar (nog) geen kijkkopie bij Stream. */
+  const videoIsDownloadOnly = (item: GalleryViewerItem) =>
+    item.media_type === 'video' && !item.stream_uid && keyVariant(item.storage_key) === 'master';
 
   /**
    * De like is de zichtbare waardering: de teller staat er altijd bij zodra
@@ -318,8 +386,12 @@ export function GalleryViewer({
     </span>
   );
 
-  const renderVideos = (list: GalleryViewerItem[]) => (
-    <div className={videoOnly ? 'galv-video-grid' : 'galv-video-row'}>
+  // Bij de filmische opening staat alles in rijen — ook een videogalerij, die
+  // anders een raster zou tonen: rijen zijn juist wat die opening aankondigt.
+  const videoLayout: 'row' | 'grid' = billboard ? 'row' : videoOnly ? 'grid' : 'row';
+
+  const renderVideoCards = (list: GalleryViewerItem[]) => (
+    <>
       {list.map(item => {
         const thumb = galleryItemThumbUrl(item, bundle);
         const playable = videoIsPlayable(item);
@@ -361,6 +433,7 @@ export function GalleryViewer({
               )}
             {processing && <span className="galv-video-processing">Verwerken…</span>}
             {item.stream_status === 'error' && <span className="galv-video-processing galv-video-error">Verwerkingsfout</span>}
+            {videoIsDownloadOnly(item) && <span className="galv-video-processing">Alleen downloaden</span>}
             <span className="galv-video-meta">
               <span className="galv-video-name">{item.file_name.replace(/\.[A-Za-z0-9]+$/, '')}</span>
               {formatDuration(item.duration_seconds) && <span className="galv-video-dur">{formatDuration(item.duration_seconds)}</span>}
@@ -370,7 +443,13 @@ export function GalleryViewer({
           </div>
         );
       })}
-    </div>
+    </>
+  );
+
+  const renderVideos = (list: GalleryViewerItem[]) => (
+    videoLayout === 'grid'
+      ? <div className="galv-video-grid">{renderVideoCards(list)}</div>
+      : <VideoRow>{renderVideoCards(list)}</VideoRow>
   );
 
   const renderPhotos = (list: GalleryViewerItem[]) => (
@@ -419,7 +498,17 @@ export function GalleryViewer({
 
   return (
     <div className="galv">
-      {hero && hero.template !== 'minimal' && (
+      {billboard && heroItem && hero && (
+        <GalleryBillboard
+          hero={hero}
+          item={heroItem}
+          bundle={bundle}
+          allowDownload={allowDownload && Boolean(onDownloadItem)}
+          onPlay={(item) => { if (item.media_type === 'video') setPlaying(item); else openPhoto(item); }}
+          onDownload={onDownloadItem}
+        />
+      )}
+      {!billboard && hero && hero.template !== 'minimal' && (
         <GalleryHero hero={hero} items={items} bundle={bundle} onOpenPhoto={openPhoto} />
       )}
       {hero && hero.template === 'minimal' && (
@@ -453,18 +542,29 @@ export function GalleryViewer({
       {sections.map(section => (
         <section
           key={section.key}
-          className="galv-section"
+          className={`galv-section${billboard ? ' galv-section-billboard' : ''}`}
           data-section={section.key}
           ref={(node) => {
             if (node) sectionRefs.current.set(section.key, node);
             else sectionRefs.current.delete(section.key);
           }}
         >
-          {section.title && <h4 className="galv-section-title">{section.title}</h4>}
+          {section.title && (
+            billboard
+              ? <h3 className="galv-row-title">{section.title}</h3>
+              : <h4 className="galv-section-title">{section.title}</h4>
+          )}
           {/* Zonder categorieën houden we de oude kopjes per mediasoort aan. */}
           {section.videos.length > 0 && (
             <>
-              {!section.title && section.photos.length > 0 && (
+              {/* Een rij zonder kop leest als een gat. Staat er geen categorie
+                  boven, dan benoemen we hem naar wat hij is: de rest. */}
+              {!section.title && billboard && (
+                <h3 className="galv-row-title">
+                  {hiddenItemId ? 'Overige video’s' : 'Video’s'}
+                </h3>
+              )}
+              {!section.title && !billboard && section.photos.length > 0 && (
                 <h4 className="galv-section-title"><Film size={15} /> Video&apos;s</h4>
               )}
               {renderVideos(section.videos)}
@@ -519,7 +619,7 @@ export function GalleryViewer({
                   allowFullScreen
                 />
               )
-              : playing.storage_key
+              : keyVariant(playing.storage_key) === 'source' && playing.storage_key
                 ? (
                   <video
                     className="galv-player-video"
@@ -541,6 +641,163 @@ export function GalleryViewer({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── De kopvideo: filmische opening van een videogalerij ─────────────────────
+//
+// Eén video groot in beeld, stil meespelend, met de titel eroverheen en de
+// overige video's in rijen eronder. De volgorde is bewust: eerst het
+// posterbeeld (dat staat er meteen, dus geen gat terwijl Stream nog laadt), en
+// pas daarna de bewegende preview. Wie om minder beweging vraagt, houdt de
+// poster — de opening blijft dan gewoon kloppen.
+
+function GalleryBillboard({ hero, item, bundle, allowDownload, onPlay, onDownload }: {
+  hero: GalleryViewerHero;
+  item: GalleryViewerItem;
+  bundle: GalleryTokenBundle;
+  allowDownload: boolean;
+  onPlay: (item: GalleryViewerItem) => void;
+  onDownload?: (item: GalleryViewerItem) => void;
+}) {
+  const poster = itemPreviewUrl(item, bundle);
+  const streamToken = item.stream_uid ? bundle.streamTokens[item.stream_uid] : undefined;
+  const canPreview = Boolean(
+    item.media_type === 'video'
+    && item.stream_status === 'ready'
+    && item.stream_playback_base
+    && streamToken,
+  );
+  const [previewOn, setPreviewOn] = useState(false);
+
+  // `item.id` hoort in de dependencies: bij het aanwijzen van een ándere
+  // kopvideo blijft `canPreview` gewoon true, en zónder die dependency zou dit
+  // effect niet opnieuw draaien — de preview kwam dan nooit meer terug. Om
+  // dezelfde reden staat het terugzetten naar de poster hiér en niet in een
+  // eigen effect: twee effecten die elkaars vlag beheren lopen uit de pas.
+  useEffect(() => {
+    setPreviewOn(false);
+    if (!canPreview) return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    // Op een telefoon blijft het bij de poster: een meespelende video kost daar
+    // data die de kijker niet heeft gevraagd, en de opening werkt zonder ook.
+    if (window.matchMedia?.('(max-width: 760px)').matches) return;
+    const timer = window.setTimeout(() => setPreviewOn(true), 700);
+    return () => window.clearTimeout(timer);
+  }, [canPreview, item.id]);
+
+  const playable = item.media_type === 'video' ? videoPlayable(item, bundle) : true;
+  const downloadable = allowDownload && Boolean(onDownload) && Boolean(
+    item.storage_key || item.preview_key
+    || (item.stream_uid && item.stream_playback_base && bundle.streamTokens[item.stream_uid]),
+  );
+
+  return (
+    <header className="galv-bb">
+      <div className="galv-bb-media" aria-hidden="true">
+        {poster && <img className="galv-bb-poster" src={poster} alt="" />}
+        {previewOn && item.stream_playback_base && streamToken && (
+          <iframe
+            className="galv-bb-video"
+            // Stil, herhalend en zonder bediening: dit is een voorproefje, geen
+            // speler. De echte speler opent met de knop hieronder.
+            src={`${streamIframeUrl(item.stream_playback_base, streamToken)}?autoplay=true&muted=true&loop=true&controls=false&preload=auto`}
+            title=""
+            tabIndex={-1}
+            allow="autoplay; encrypted-media"
+          />
+        )}
+      </div>
+      <span className="galv-bb-scrim" aria-hidden="true" />
+      <div className="galv-bb-content">
+        <h2 className="galv-bb-title">{hero.title}</h2>
+        {hero.description && <p className="galv-bb-desc">{hero.description}</p>}
+        <div className="galv-bb-actions">
+          {playable && (
+            <button type="button" className="galv-bb-play" onClick={() => onPlay(item)}>
+              <Play size={19} fill="currentColor" /> Afspelen
+            </button>
+          )}
+          {downloadable && (
+            <button type="button" className="galv-bb-secondary" onClick={() => onDownload?.(item)}>
+              <Download size={17} /> Origineel downloaden
+            </button>
+          )}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+// ── Horizontale videorij met bladerknoppen ──────────────────────────────────
+//
+// De knoppen verschijnen alleen als er écht iets te bladeren valt en wanneer de
+// muis over de rij staat; op een aanraakscherm veeg je gewoon. Ze staan buiten
+// de scrollende laag zodat een geschaalde kaart er niet onderdoor schuift.
+
+function VideoRow({ children }: { children: React.ReactNode }) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const [atStart, setAtStart] = useState(true);
+  const [atEnd, setAtEnd] = useState(true);
+
+  const measure = useCallback(() => {
+    const node = trackRef.current;
+    if (!node) return;
+    // Ruime speling: browsers laten een gesnapte rij op een subpixelpositie
+    // rusten, en met een strakke drempel blijft de knop dan zichtbaar terwijl
+    // je al aan het begin (of eind) staat.
+    setAtStart(node.scrollLeft <= 4);
+    setAtEnd(node.scrollLeft + node.clientWidth >= node.scrollWidth - 4);
+  }, []);
+
+  // Bewust na élke render meten: het spoor verandert niet van formaat wanneer
+  // er kaarten bij komen, dus een ResizeObserver alléén zou de knoppen op een
+  // verouderde stand laten staan. Twee DOM-metingen zijn goedkoop, en gelijke
+  // waarden geven geen nieuwe render.
+  useEffect(() => { measure(); });
+
+  useEffect(() => {
+    const node = trackRef.current;
+    if (!node || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [measure]);
+
+  const page = (direction: 1 | -1) => {
+    const node = trackRef.current;
+    if (!node) return;
+    // Net iets minder dan een volle breedte: er blijft een kaart in beeld staan
+    // als houvast, precies zoals streamingdiensten het doen.
+    node.scrollBy({ left: direction * Math.round(node.clientWidth * 0.85), behavior: 'smooth' });
+  };
+
+  const hasOverflow = !(atStart && atEnd);
+
+  return (
+    <div className={`galv-row${hasOverflow ? ' has-overflow' : ''}`}>
+      <button
+        type="button"
+        className="galv-row-nav galv-row-prev"
+        onClick={() => page(-1)}
+        disabled={atStart}
+        aria-label="Eerdere video’s"
+      >
+        <ChevronLeft size={28} />
+      </button>
+      <div className="galv-row-track" ref={trackRef} onScroll={measure}>
+        {children}
+      </div>
+      <button
+        type="button"
+        className="galv-row-nav galv-row-next"
+        onClick={() => page(1)}
+        disabled={atEnd}
+        aria-label="Volgende video’s"
+      >
+        <ChevronRight size={28} />
+      </button>
     </div>
   );
 }

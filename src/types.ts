@@ -395,7 +395,7 @@ export type GalleryHeroTemplate =
   | 'full' | 'minimal'
   | 'editorial' | 'frame' | 'split'
   | 'classic' | 'collage'
-  | 'cinematic' | 'mosaic';
+  | 'cinematic' | 'mosaic' | 'netflix';
 
 /** Huisstijl van de organisatie, zoals de klant de galerij ziet. */
 export interface GalleryBranding {
