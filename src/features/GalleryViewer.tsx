@@ -4,7 +4,7 @@
 // De component is puur presentationeel: media-URL's komen uit het meegegeven
 // tokenbundel, favorieten en downloads lopen via callbacks van de host.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, Film, Heart, Play, ThumbsUp, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Film, Heart, Menu, Play, ThumbsUp, X } from 'lucide-react';
 import {
   galleryFileUrl,
   streamIframeUrl,
@@ -149,6 +149,7 @@ export function GalleryViewer({
   onReorder,
   onToggleFavorite,
   onDownloadItem,
+  zipUrl,
   renderItemActions,
   emptyText = 'Nog geen media in deze galerij.',
 }: {
@@ -181,6 +182,8 @@ export function GalleryViewer({
   onReorder?: (movedId: string, targetId: string) => void;
   onToggleFavorite?: (item: GalleryViewerItem, on: boolean) => void;
   onDownloadItem?: (item: GalleryViewerItem) => void;
+  /** Zip-download van de hele galerij; afwezig = geen hamburger. */
+  zipUrl?: string;
   /** Extra beheer-acties per item (app: cover kiezen / verwijderen). */
   renderItemActions?: (item: GalleryViewerItem) => React.ReactNode;
   emptyText?: string;
@@ -498,6 +501,13 @@ export function GalleryViewer({
 
   return (
     <div className="galv">
+      {allowDownload && zipUrl && (hasZippableItems(items) || items.some(i => i.media_type === 'video')) && (
+        <GalleryDownloadMenu
+          zipUrl={zipUrl}
+          zippable={hasZippableItems(items)}
+          videoCount={items.filter(i => i.media_type === 'video').length}
+        />
+      )}
       {billboard && heroItem && hero && (
         <GalleryBillboard
           hero={hero}
@@ -639,6 +649,77 @@ export function GalleryViewer({
               </span>
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Downloadmenu: één doorzichtige hamburger over de opening ────────────────
+//
+// De knop "alles als zip" stond in de kopbalk van elk van de drie weergaven en
+// nam daar een hele regel in beslag. Hij zit nu onder deze hamburger, zodat de
+// opening de volle breedte krijgt. Losse bestanden download je niet hier maar
+// op het bestand zelf — dat schaalt, een menu met 500 regels niet.
+
+function GalleryDownloadMenu({ zipUrl, zippable, videoCount }: {
+  zipUrl: string;
+  zippable: boolean;
+  videoCount: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    // mousedown i.p.v. click: anders sluit het menu pas ná de klik en vangt een
+    // element eronder die klik alsnog op.
+    const onDown = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('mousedown', onDown);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mousedown', onDown);
+    };
+  }, [open]);
+
+  return (
+    <div className="galv-menu" ref={boxRef}>
+      <button
+        type="button"
+        className="galv-menu-btn"
+        onClick={() => setOpen(v => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Downloadmogelijkheden"
+        title="Downloaden"
+      >
+        <Menu size={19} />
+      </button>
+      {open && (
+        <div className="galv-menu-panel" role="menu">
+          <span className="galv-menu-title">Downloaden</span>
+          {zippable && (
+            <a
+              className="galv-menu-item"
+              href={zipUrl}
+              download
+              role="menuitem"
+              onClick={() => setOpen(false)}
+            >
+              <Download size={15} />
+              {videoCount > 0 ? 'Alle foto’s als zip' : 'Alles als zip'}
+            </a>
+          )}
+          {videoCount > 0 && (
+            <p className="galv-menu-note">
+              Video’s zitten niet in de zip — daar zijn ze te groot voor. Je downloadt ze per stuk,
+              in de originele resolutie, met de knop op de video zelf.
+            </p>
+          )}
         </div>
       )}
     </div>

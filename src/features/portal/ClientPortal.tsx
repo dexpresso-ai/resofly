@@ -31,7 +31,7 @@ import {
 } from '../../lib/portalApi';
 import { dateNL, euro, lineGross, priorityLabel, total } from '../../lib/format';
 import type { FinanceLine, Priority } from '../../types';
-import { GalleryViewer, hasZippableItems, type GalleryViewerItem } from '../GalleryViewer';
+import { GalleryViewer, type GalleryViewerItem } from '../GalleryViewer';
 import { galleryFileUrl, galleryRefreshDelayMs, galleryZipUrl, streamDownloadUrl } from '../../lib/gallery';
 import { brandStyle, ensureBrandFontsLoaded } from '../../lib/branding';
 
@@ -416,11 +416,6 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
         <button type="button" className="portal-back" onClick={onBack}>← Terug</button>
         <h2>{gallery.title}</h2>
       </div>
-      {detail?.gallery.allow_downloads && hasZippableItems(detail.items) && (
-        <a className="portal-gallery-zip" href={galleryZipUrl(gallery.id, detail.tokens.mediaToken)} download>
-          Foto's downloaden (zip)
-        </a>
-      )}
     </div>
     {(gallery.description || project) && (
       <p className="portal-muted portal-gallery-sub">
@@ -453,6 +448,7 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
         onToggleLike={(item, on) => void toggleLike(item, on)}
         onToggleFavorite={(item, on) => void toggleFavorite(item, on)}
         onDownloadItem={downloadItem}
+        zipUrl={galleryZipUrl(gallery.id, detail.tokens.mediaToken)}
         emptyText="Deze galerij bevat nog geen media."
       />
     )}

@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import {
-  ArrowUpDown, CheckSquare, ChevronDown, ChevronUp, Copy, Download, Film, FolderTree, HardDrive, Heart,
+  ArrowUpDown, CheckSquare, ChevronDown, ChevronUp, Copy, Film, FolderTree, HardDrive, Heart,
   Image as ImageIcon, Layers, Link2, Loader2, Pencil, Plus, Settings2, Sparkles, SlidersHorizontal, Star,
   Trash2, Upload, UploadCloud, X,
 } from 'lucide-react';
@@ -30,7 +30,7 @@ import {
   generateImageDerivatives, getGalleryStreamStatus, requestGalleryStreamCopy,
   streamDownloadUrl, uploadGalleryFile, uploadGalleryFileVariant, type GalleryTokenBundle,
 } from '../lib/gallery';
-import { GalleryViewer, galleryItemThumbUrl, hasZippableItems, type GalleryViewerItem } from './GalleryViewer';
+import { GalleryViewer, galleryItemThumbUrl, type GalleryViewerItem } from './GalleryViewer';
 
 const galleryStatusLabels: Record<Gallery['status'], string> = {
   draft: 'Concept',
@@ -1065,11 +1065,6 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
               <Heart size={13} fill="currentColor" /> {favoriteTotal}
             </button>
           )}
-          {openGallery.allow_downloads && bundle && hasZippableItems(items) && (
-            <a className="btn" href={galleryZipUrl(openGallery.id, bundle.mediaToken)} download title="Alle foto's als zip — video's download je per stuk">
-              <Download size={14} /> Zip
-            </a>
-          )}
           {writable && (
             <>
               <Button onClick={() => openSettings('files')} title="Categorieën beheren en bestanden indelen">
@@ -1232,6 +1227,7 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
             reorderable={orderMode}
             onReorder={reorderItem}
             onDownloadItem={downloadItem}
+            zipUrl={bundle ? galleryZipUrl(openGallery.id, bundle.mediaToken) : undefined}
             emptyText={onlyFavorites
               ? 'De klant heeft nog geen favorieten gemarkeerd.'
               : openGallery.format === 'video'
