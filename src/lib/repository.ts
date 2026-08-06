@@ -93,6 +93,7 @@ import type {
   OrganizationContext,
   OrganizationInvitation,
   OrganizationBillingOverview,
+  OrganizationCreativeStatus,
   OrganizationLicenseUsage,
   OrganizationMember,
   OrganizationMembershipView,
@@ -214,8 +215,9 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
   let auditLogs: AuditLog[] = [];
   let licenseUsage: OrganizationLicenseUsage | null = null;
   let billingOverview: OrganizationBillingOverview | null = null;
+  let creativeStatus: OrganizationCreativeStatus | null = null;
   if (activeOrganization) {
-    const [{ data: teamRows, error: teamError }, { data: orgInvitationRows, error: orgInvitationError }, { data: auditRows, error: auditError }, { data: licenseRows, error: licenseError }, { data: billingRows, error: billingError }] = await Promise.all([
+    const [{ data: teamRows, error: teamError }, { data: orgInvitationRows, error: orgInvitationError }, { data: auditRows, error: auditError }, { data: licenseRows, error: licenseError }, { data: billingRows, error: billingError }, { data: creativeRows, error: creativeError }] = await Promise.all([
       supabase
         .from('organization_members')
         .select('*')
@@ -237,6 +239,7 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
         .limit(40),
       supabase.rpc('organization_license_usage', { p_organization_id: activeOrganization.id }),
       supabase.rpc('organization_billing_overview', { p_organization_id: activeOrganization.id }),
+      supabase.rpc('organization_creative_status', { p_organization_id: activeOrganization.id }),
     ]);
     if (teamError) throw teamError;
     if (orgInvitationError) throw orgInvitationError;
@@ -254,6 +257,13 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     licenseUsage = (firstLicenseRow ?? null) as OrganizationLicenseUsage | null;
     const firstBillingRow = Array.isArray(billingRows) ? billingRows[0] : billingRows;
     billingOverview = billingError ? null : (firstBillingRow ?? null) as OrganizationBillingOverview | null;
+    if (creativeError) {
+      // Migratie 20260806000000 nog niet toegepast: geen entitlement-informatie.
+      // De galerij valt dan terug op het gedrag van vóór de creatieve module.
+      console.warn('Status van de creatieve module kon niet worden geladen.', creativeError);
+    }
+    const firstCreativeRow = Array.isArray(creativeRows) ? creativeRows[0] : creativeRows;
+    creativeStatus = creativeError ? null : (firstCreativeRow ?? null) as OrganizationCreativeStatus | null;
   }
 
   return {
@@ -267,6 +277,7 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     licenseUsage,
     auditLogs,
     billingOverview,
+    creativeStatus,
   };
 }
 

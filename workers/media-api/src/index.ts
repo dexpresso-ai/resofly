@@ -640,6 +640,43 @@ async function assertStorageCapacity(env: Env, organizationId: string, incomingB
   }
 }
 
+// ── Creatieve module (abonnementsoptie) ─────────────────────────────────────
+
+/**
+ * De galerij hoort bij de creatieve module. Staat die niet aan, dan mag er niets
+ * meer bij: geen upload, geen kijkkopie, geen wijziging. Lezen en verwijderen
+ * blijven wel werken (bevriezen, niet buitensluiten) — die paden komen hier dus
+ * niet langs.
+ *
+ * Fail-open bij een kapotte of nog niet uitgerolde RPC, net als de opslagmeter:
+ * de database dwingt dezelfde regel af met een restrictive policy + trigger, dus
+ * een storing hier maakt de module niet gratis — het scheelt alleen de nette
+ * foutmelding.
+ */
+async function assertCreativeModule(env: Env, organizationId: string): Promise<void> {
+  let active: boolean | null = null;
+  try {
+    const res = await fetch(`${supabaseBase(env)}/rest/v1/rpc/organization_creative_status`, {
+      method: 'POST',
+      headers: serviceHeaders(env, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ p_organization_id: organizationId }),
+    });
+    if (res.ok) {
+      const rows = (await res.json()) as Array<{ active?: boolean }>;
+      const row = Array.isArray(rows) ? rows[0] : (rows as { active?: boolean } | undefined);
+      if (typeof row?.active === 'boolean') active = row.active;
+    }
+  } catch {
+    active = null;
+  }
+  if (active === false) {
+    throw new HttpError(
+      403,
+      'De creatieve module staat niet aan voor deze organisatie. Zet hem aan via Instellingen → Abonnement om galerijen te kunnen vullen.',
+    );
+  }
+}
+
 // ── Cloudflare Stream ───────────────────────────────────────────────────────
 
 /**
@@ -747,6 +784,7 @@ async function handleGalleryUpload(request: Request, env: Env, context: RouteCon
   if (!role) throw new HttpError(403, 'Geen toegang tot deze organisatie.');
   if (role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
   await requireGalleryAccess(env, organizationId, userId, 'write');
+  await assertCreativeModule(env, organizationId);
 
   // Galerij moet bestaan én bij deze organisatie horen (voorkomt key-wedging).
   await fetchGalleryRow(env, galleryId, organizationId);
@@ -799,10 +837,11 @@ async function handleGalleryUpload(request: Request, env: Env, context: RouteCon
 const GALLERY_MULTIPART_VARIANTS = ['master', 'original', 'source'];
 
 /**
- * De vier controles die elke schrijfactie op een galerij moet doorstaan:
- * ingelogd, lid met schrijfrecht, module 'projects' toegankelijk, en de galerij
- * hoort echt bij deze organisatie. Die laatste voorkomt key-wedging: zonder die
- * check kun je in de key-prefix van een andere tenant schrijven.
+ * De vijf controles die elke schrijfactie op een galerij moet doorstaan:
+ * ingelogd, lid met schrijfrecht, module 'projects' toegankelijk, de creatieve
+ * module staat aan op het abonnement, en de galerij hoort echt bij deze
+ * organisatie. Die laatste voorkomt key-wedging: zonder die check kun je in de
+ * key-prefix van een andere tenant schrijven.
  */
 async function authorizeGalleryWrite(request: Request, env: Env, organizationId: string, galleryId: string): Promise<string> {
   const userId = await requireUser(request, env);
@@ -812,6 +851,7 @@ async function authorizeGalleryWrite(request: Request, env: Env, organizationId:
   if (!role) throw new HttpError(403, 'Geen toegang tot deze organisatie.');
   if (role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
   await requireGalleryAccess(env, organizationId, userId, 'write');
+  await assertCreativeModule(env, organizationId);
   await fetchGalleryRow(env, galleryId, organizationId);
   return userId;
 }
@@ -1029,6 +1069,7 @@ async function handleGalleryStreamUpload(request: Request, env: Env, context: Ro
   const role = await membershipRole(env, organizationId, userId);
   if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
   await requireGalleryAccess(env, organizationId, userId, 'write');
+  await assertCreativeModule(env, organizationId);
   await fetchGalleryRow(env, galleryId, organizationId);
 
   // Zonder volledige Stream-configuratie (incl. bruikbare signing key) valt video terug op R2.

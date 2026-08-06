@@ -753,6 +753,8 @@ export function ProjectPage({
   canAdmin,
   canReadContracts,
   canWriteContracts,
+  creativeActive,
+  creativeGraceUntil,
   onNewTask,
   onEditTask,
   onEditProject,
@@ -783,6 +785,10 @@ export function ProjectPage({
   /** Contracten vallen onder Financiën, niet onder Projecten — vandaar eigen rechten. */
   canReadContracts: boolean;
   canWriteContracts: boolean;
+  /** Creatieve module op het abonnement: bepaalt of de galerij bestaat. */
+  creativeActive: boolean;
+  /** Tot wanneer bestaande galerijen na het uitzetten nog bereikbaar zijn. */
+  creativeGraceUntil: string | null;
   onNewTask: () => void;
   onEditTask: (task: Task) => void;
   onEditProject: () => void;
@@ -881,7 +887,12 @@ export function ProjectPage({
     { id: 'time', label: 'Uren', count: projectTimeEntries.length },
     { id: 'notes', label: 'Notities', count: projectNotes.length },
     { id: 'documents', label: 'Documenten', count: projectDocuments.length },
-    { id: 'gallery', label: 'Galerij', count: projectGalleries.length },
+    // De galerij hoort bij de creatieve module. Zonder die module is er geen
+    // tabblad — behalve wanneer dit project er al galerijen heeft: die blijven
+    // zichtbaar (bevroren) zodat niemand zijn werk kwijtraakt.
+    ...((creativeActive || projectGalleries.length > 0)
+      ? [{ id: 'gallery' as ProjectTab, label: 'Galerij', count: projectGalleries.length }]
+      : []),
   ];
 
   return (
@@ -1234,13 +1245,23 @@ export function ProjectPage({
       />}
 
       {/* ── Tab: Galerij (foto/video-oplevering aan de klant) ── */}
-      {activeTab === 'gallery' && <GalleryTab
-        data={data}
-        project={project}
-        organizationId={organizationId}
-        canWrite={canWrite}
-        onChanged={onChanged}
-      />}
+      {activeTab === 'gallery' && <>
+        {!creativeActive && <div className="gal-frozen">
+          <strong>De creatieve module staat uit.</strong>{' '}
+          Je kunt bestaande galerijen bekijken en opruimen, maar niets meer toevoegen, wijzigen of publiceren.
+          {creativeGraceUntil && new Date(creativeGraceUntil) > new Date()
+            ? ` Al gedeelde galerijen blijven bereikbaar tot ${new Date(creativeGraceUntil).toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' })}.`
+            : ' Gedeelde links en het klantportaal zijn gesloten.'}
+          {canAdmin && ' Zet de module weer aan via Instellingen → Abonnement.'}
+        </div>}
+        <GalleryTab
+          data={data}
+          project={project}
+          organizationId={organizationId}
+          canWrite={canWrite && creativeActive}
+          onChanged={onChanged}
+        />
+      </>}
 
       {timeModal && (
         <TimeEntryModal

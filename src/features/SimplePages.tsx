@@ -5,7 +5,7 @@ import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsIn
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { BRAND_BODY_FONTS, BRAND_FONTS, GALLERY_BACKGROUNDS, brandFont, brandStyle, ensureBrandFontsLoaded } from '../lib/branding';
-import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, startSubscriptionCheckout } from '../services/billingService';
+import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
 import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity } from '../lib/repository';
 import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
@@ -886,6 +886,8 @@ export function Settings({
   const [billingMessage, setBillingMessage] = useState<string | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<string>(organizationContext.billingOverview?.plan_key ?? 'starter');
   const [selectedInterval, setSelectedInterval] = useState<'month' | 'year'>('month');
+  // Creatieve module aanvinken bij de aanschaf; pas actief zodra er betaald is.
+  const [selectedCreative, setSelectedCreative] = useState(false);
   const [pendingChange, setPendingChange] = useState<PendingBillingChange | null>(null);
   const [confirmingChange, setConfirmingChange] = useState(false);
   const [lastMockPaymentId, setLastMockPaymentId] = useState<string | null>(null);
@@ -927,10 +929,20 @@ export function Settings({
   const currentStorageCents = billingOverview
     ? (billingOverview.billing_interval === 'year' ? (billingOverview.storage_addon_yearly_price_cents ?? 0) : (billingOverview.storage_addon_price_cents ?? 0))
     : 0;
+  // Creatieve module (galerij-oplevering): inbegrepen bij custom/vrijgesteld,
+  // anders een losse post op het abonnementsbedrag.
+  const creativeIncluded = billingOverview?.creative_included_in_plan ?? false;
+  const creativeEnabled = billingOverview?.creative_enabled ?? false;
+  const creativeActive = billingOverview?.creative_active ?? creativeIncluded;
+  const creativeGraceUntil = billingOverview?.creative_grace_until ?? null;
+  const currentCreativeCents = billingOverview
+    ? (billingOverview.billing_interval === 'year' ? (billingOverview.creative_addon_yearly_price_cents ?? 0) : (billingOverview.creative_addon_price_cents ?? 0))
+    : 0;
   const currentCostCents = billingOverview
     ? (billingOverview.billing_interval === 'year' ? billingOverview.yearly_price_cents : billingOverview.monthly_price_cents)
       + billingOverview.purchased_seats * currentSeatCents
       + currentStorageAddons * currentStorageCents
+      + (creativeEnabled && !creativeIncluded ? currentCreativeCents : 0)
     : 0;
   const storageUsedBytes = billingOverview?.storage_used_bytes ?? 0;
   const storageLimitGb = billingOverview?.storage_limit_gb ?? null;
@@ -1119,7 +1131,7 @@ export function Settings({
     setBillingMessage(null);
     setLastMockPaymentId(null);
     try {
-      const result = await startSubscriptionCheckout(activeOrganization.id, selectedPlan, selectedInterval);
+      const result = await startSubscriptionCheckout(activeOrganization.id, selectedPlan, selectedInterval, selectedCreative);
       if (result.mock && result.providerPaymentId) {
         setLastMockPaymentId(result.providerPaymentId);
         setBillingMessage('Mock-checkout aangemaakt. Rond de mockbetaling af om het abonnement te activeren.');
@@ -1212,6 +1224,44 @@ export function Settings({
     } finally {
       setBillingBusy(null);
     }
+  }
+
+  async function toggleCreative(enabled: boolean) {
+    if (!activeOrganization || !canAdminOrganization) return;
+    setBillingBusy('creative');
+    setBillingError(null);
+    setBillingMessage(null);
+    try {
+      await setCreativeAddon(activeOrganization.id, enabled);
+      await refreshBilling();
+      // Ook de app-brede context verversen: het galerij-tabblad bij projecten
+      // hangt aan organizationContext.creativeStatus, niet aan dit scherm.
+      await onChanged();
+      setBillingMessage(enabled
+        ? 'Creatieve module aangezet. Het galerij-tabblad staat vanaf nu bij elk project.'
+        : 'Creatieve module uitgezet. Je kunt niets meer toevoegen; al gedeelde galerijen blijven nog 30 dagen bereikbaar.');
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : 'Creatieve module wijzigen mislukt.');
+    } finally {
+      setBillingBusy(null);
+    }
+  }
+
+  function requestToggleCreative(enabled: boolean) {
+    if (!activeOrganization || !canAdminOrganization || !billingOverview) return;
+    setBillingError(null);
+    setBillingMessage(null);
+    setPendingChange({
+      title: enabled ? 'Creatieve module aanzetten' : 'Creatieve module uitzetten',
+      description: enabled
+        ? `Je voegt de creatieve module toe aan het ${billingOverview.plan_name}-abonnement. Daarmee krijgt elk project een galerij: foto's en video's opleveren aan je klant via het portaal of een deellink.`
+        : 'Je zet de creatieve module uit. Er kan meteen niets meer worden toegevoegd, gewijzigd of gepubliceerd. Bestaande galerijen blijf je zien en kun je opruimen, en al gedeelde links en het klantportaal blijven nog 30 dagen werken.',
+      currentCostCents,
+      newCostCents: enabled ? currentCostCents + currentCreativeCents : Math.max(0, currentCostCents - currentCreativeCents),
+      intervalUnit: billingIntervalUnit,
+      currency: billingOverview.currency,
+      execute: () => toggleCreative(enabled),
+    });
   }
 
   function requestBuyStorageAddon() {
@@ -1325,7 +1375,7 @@ export function Settings({
       title: 'Plan wijzigen',
       description: `Je wijzigt je abonnement van ${billingOverview.plan_name} naar ${selectedPlanObj.name}. De wijziging gaat direct in; je blijft ${billingOverview.billing_interval === 'year' ? 'jaarlijks' : 'maandelijks'} betalen.`,
       currentCostCents,
-      newCostCents: planCostCents(selectedPlanObj, billingOverview.purchased_seats, billingOverview.billing_interval, currentStorageAddons),
+      newCostCents: planCostCents(selectedPlanObj, billingOverview.purchased_seats, billingOverview.billing_interval, currentStorageAddons, creativeEnabled && !creativeIncluded),
       intervalUnit: billingIntervalUnit,
       currency: billingOverview.currency,
       execute: changePlan,
@@ -1889,6 +1939,34 @@ export function Settings({
           <Button variant="primary" onClick={requestBuyExtraSeat} disabled={billingBusy === 'seat' || !hasMollieSubscription}>{billingBusy === 'seat' ? 'Bezig…' : 'Extra gebruiker toevoegen'}</Button>
         </div>}
 
+        {/* ── Creatieve module (galerij-oplevering) ── */}
+        <div className="billing-control-row">
+          <div>
+            <strong>Creatieve module</strong>
+            <p className="settings-help">
+              Galerij-oplevering bij elk project: foto's en video's in volle resolutie naar je klant, via het portaal of een deellink met pincode, inclusief favorieten en downloaden.
+              {creativeIncluded
+                ? ' Inbegrepen bij dit abonnement.'
+                : creativeEnabled
+                  ? ` Actief · ${formatEur(currentCreativeCents, billingOverview.currency)} per ${billingIntervalUnit}.`
+                  : ` ${formatEur(currentCreativeCents, billingOverview.currency)} per ${billingIntervalUnit}.`}
+            </p>
+            {!creativeActive && creativeGraceUntil && new Date(creativeGraceUntil) > new Date() && <p className="settings-help">
+              Uitgezet: je kunt niets toevoegen of wijzigen. Al gedeelde galerijen blijven bereikbaar tot {new Date(creativeGraceUntil).toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' })}.
+            </p>}
+          </div>
+          {canAdminOrganization && !creativeIncluded && (
+            <Button
+              variant={creativeEnabled ? undefined : 'primary'}
+              onClick={() => requestToggleCreative(!creativeEnabled)}
+              disabled={billingBusy === 'creative' || (!creativeEnabled && (!hasMollieSubscription || currentCreativeCents <= 0))}
+              title={!creativeEnabled && !hasMollieSubscription ? 'Start eerst een abonnement' : undefined}
+            >
+              {billingBusy === 'creative' ? 'Bezig…' : creativeEnabled ? 'Uitzetten' : 'Aanzetten'}
+            </Button>
+          )}
+        </div>
+
         {/* ── Accountbrede opslag (galerijen + bestanden + bijlagen) ── */}
         <div className="billing-control-row billing-storage-row">
           <div>
@@ -1934,6 +2012,10 @@ export function Settings({
                 ? <>Prijs: <strong>{formatEur(selectedPlanObj.yearly_price_cents, selectedPlanObj.currency)}</strong> per jaar{selectedPlanObj.monthly_price_cents * 12 > selectedPlanObj.yearly_price_cents ? ` · je bespaart ${formatEur(selectedPlanObj.monthly_price_cents * 12 - selectedPlanObj.yearly_price_cents, selectedPlanObj.currency)} t.o.v. maandelijks` : ''}</>
                 : <>Prijs: <strong>{formatEur(selectedPlanObj.monthly_price_cents, selectedPlanObj.currency)}</strong> per maand{selectedPlanHasYearly ? ' · jaarlijks beschikbaar' : ''}</>}
             </p>}
+            {!hasMollieSubscription && selectedPlanObj && !selectedPlanObj.is_custom && creativePlanCents(selectedPlanObj, selectedInterval) > 0 && <label className="check-row">
+              <input type="checkbox" checked={selectedCreative} onChange={event => setSelectedCreative(event.target.checked)} disabled={billingBusy === 'plan' || billingBusy === 'connect'} />
+              <span>Creatieve module erbij — galerij-oplevering (foto/video) bij elk project · <strong>{formatEur(creativePlanCents(selectedPlanObj, selectedInterval), selectedPlanObj.currency)}</strong> per {selectedInterval === 'year' ? 'jaar' : 'maand'}</span>
+            </label>}
           </div>
           <Select value={selectedPlan} onChange={event => setSelectedPlan(event.target.value)} disabled={billingBusy === 'plan'}>
             {!selectedPlanIsSelfService && <option value={selectedPlan} disabled>{billingOverview.plan_name} · handmatig beheerd</option>}
@@ -2035,11 +2117,16 @@ function formatEur(cents: number, currency = 'EUR') {
 
 // Totale periodekosten van een plan = basisprijs + extra seats × seatprijs +
 // opslagbundels × bundelprijs, in het interval.
-function planCostCents(plan: BillingPlan, purchasedSeats: number, interval: 'month' | 'year', storageAddons = 0): number {
+function planCostCents(plan: BillingPlan, purchasedSeats: number, interval: 'month' | 'year', storageAddons = 0, creative = false): number {
   const base = interval === 'year' ? plan.yearly_price_cents : plan.monthly_price_cents;
   const seat = interval === 'year' ? plan.extra_seat_yearly_price_cents : plan.extra_seat_price_cents;
   const storage = interval === 'year' ? (plan.storage_addon_yearly_price_cents ?? 0) : (plan.storage_addon_price_cents ?? 0);
-  return base + Math.max(0, purchasedSeats) * seat + Math.max(0, storageAddons) * storage;
+  return base + Math.max(0, purchasedSeats) * seat + Math.max(0, storageAddons) * storage
+    + (creative ? creativePlanCents(plan, interval) : 0);
+}
+
+function creativePlanCents(plan: BillingPlan, interval: 'month' | 'year'): number {
+  return (interval === 'year' ? plan.creative_addon_yearly_price_cents : plan.creative_addon_price_cents) ?? 0;
 }
 
 type PendingBillingChange = {

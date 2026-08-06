@@ -565,6 +565,7 @@ async function requireAccessibleGallery(user: { email: string }, galleryId: stri
   if (gallery.expires_at && new Date(gallery.expires_at) < new Date()) {
     throw new PortalError('De toegang tot deze galerij is verlopen.', 403);
   }
+  await assertCreativeAccess(gallery.organization_id);
 
   // Eigendom via het project van de klant (galerijen hangen niet direct aan client_id).
   const { data: project, error: projectError } = await supabaseAdmin
@@ -578,6 +579,23 @@ async function requireAccessibleGallery(user: { email: string }, galleryId: stri
   if (!client) throw new PortalError('Geen toegang tot deze galerij.', 403);
 
   return { gallery, client, clients };
+}
+
+/**
+ * Galerijen horen bij de creatieve module. Gaat die uit, dan bevriezen we: het
+ * portaal blijft de galerij nog de respijtperiode lang tonen en sluit daarna.
+ * Fail-open bij een storing in de RPC — een kapotte teller mag de galerij van
+ * een betalende klant niet offline halen.
+ */
+async function assertCreativeAccess(organizationId: string): Promise<void> {
+  const { data, error } = await supabaseAdmin.rpc('organization_creative_status', {
+    p_organization_id: organizationId,
+  });
+  if (error) return;
+  const row = (Array.isArray(data) ? data[0] : data) as { active?: boolean; in_grace?: boolean } | null;
+  if (!row || typeof row.active !== 'boolean') return;
+  if (row.active || row.in_grace) return;
+  throw new PortalError('Deze galerij is niet meer beschikbaar. Neem contact op met je fotograaf.', 403);
 }
 
 /** Tokenbundel (R2 + Stream) via de media-api worker; het portaal serveert nooit zelf bytes. */

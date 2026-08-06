@@ -115,6 +115,8 @@ export interface OrganizationContext {
   licenseUsage: OrganizationLicenseUsage | null;
   auditLogs: AuditLog[];
   billingOverview: OrganizationBillingOverview | null;
+  /** Creatieve module: leesbaar voor elk teamlid, anders dan billingOverview. */
+  creativeStatus: OrganizationCreativeStatus | null;
 }
 
 export interface OrgScopedRow {
@@ -1986,6 +1988,8 @@ export interface BillingPlan {
   limits: Record<string, unknown>;
   storage_addon_price_cents?: number;
   storage_addon_yearly_price_cents?: number;
+  creative_addon_price_cents?: number;
+  creative_addon_yearly_price_cents?: number;
   created_at: string;
   updated_at: string;
 }
@@ -2052,6 +2056,34 @@ export interface OrganizationBillingOverview {
   storage_addon_yearly_price_cents?: number;
   storage_limit_gb?: number | null;
   storage_used_bytes?: number;
+  /** Creatieve module (galerij-oplevering) als betaalde optie op het abonnement.
+   *  Optioneel zolang migratie 20260806000000 nog niet overal is toegepast. */
+  creative_enabled?: boolean;
+  creative_included_in_plan?: boolean;
+  creative_active?: boolean;
+  creative_grace_until?: string | null;
+  creative_addon_price_cents?: number;
+  creative_addon_yearly_price_cents?: number;
+}
+
+/**
+ * Entitlement van de creatieve module, leesbaar voor ELK teamlid (het
+ * billingoverzicht is alleen voor owners/admins). Bepaalt of het galerij-tabblad
+ * bestaat en of er nog geschreven mag worden.
+ */
+export interface OrganizationCreativeStatus {
+  /** Mag er gewerkt worden: toevoegen, wijzigen, publiceren. */
+  active: boolean;
+  /** De losse add-on staat aan. */
+  enabled: boolean;
+  /** De module zit in het plan (custom-contract) of in een vrijstelling. */
+  included_in_plan: boolean;
+  /** Module uit, maar gedeelde links leven nog tot grace_until. */
+  in_grace: boolean;
+  grace_until: string | null;
+  addon_price_cents: number;
+  addon_yearly_price_cents: number;
+  billing_interval: 'month' | 'year';
 }
 
 export interface BillingCheckoutResult {

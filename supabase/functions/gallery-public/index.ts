@@ -219,6 +219,7 @@ async function resolveGallery(body: Record<string, unknown>): Promise<{ gallery:
   if (gallery.expires_at && new Date(gallery.expires_at) < new Date()) {
     throw new PublicError('De toegang tot deze galerij is verlopen.', 403);
   }
+  await assertCreativeAccess(gallery.organization_id);
 
   if (!gallery.share_pin_hash) return { gallery, needsPin: false };
 
@@ -247,6 +248,25 @@ async function resolveGallery(body: Record<string, unknown>): Promise<{ gallery:
     throw new PublicError('Onjuiste pincode.', 401);
   }
   return { gallery, needsPin: false };
+}
+
+/**
+ * Deellinks horen bij de creatieve module. Gaat die uit, dan bevriezen we: de
+ * link blijft nog de respijtperiode lang werken (de klant van onze klant staat
+ * niet ineens voor een dichte deur), en daarna gaat hij dicht.
+ *
+ * Fail-open bij een storing in de RPC: een kapotte teller mag geen galerij van
+ * een betalende klant offline halen.
+ */
+async function assertCreativeAccess(organizationId: string): Promise<void> {
+  const { data, error } = await supabaseAdmin.rpc('organization_creative_status', {
+    p_organization_id: organizationId,
+  });
+  if (error) return;
+  const row = (Array.isArray(data) ? data[0] : data) as { active?: boolean; in_grace?: boolean } | null;
+  if (!row || typeof row.active !== 'boolean') return;
+  if (row.active || row.in_grace) return;
+  throw new PublicError('Deze galerij is niet meer beschikbaar. Neem contact op met de fotograaf.', 403);
 }
 
 async function fetchGalleryTokens(organizationId: string, galleryId: string, allowDownload: boolean) {

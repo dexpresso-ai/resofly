@@ -27,12 +27,22 @@ export async function loadBillingOverview(organizationId: UUID): Promise<Organiz
 // Start (of herstart) een doorlopend abonnement op ResoFly's eigen Mollie-account.
 // Geeft een checkout-URL terug voor de eerste betaling (mandaat). De webhook maakt
 // daarna het maandelijkse Mollie-abonnement aan en zet het profiel op 'active'.
-export async function startSubscriptionCheckout(organizationId: UUID, planKey?: string, interval: 'month' | 'year' = 'month'): Promise<BillingCheckoutResult> {
+export async function startSubscriptionCheckout(organizationId: UUID, planKey?: string, interval: 'month' | 'year' = 'month', creative?: boolean): Promise<BillingCheckoutResult> {
   return await invokeBillingFunction<BillingCheckoutResult>('startSubscriptionCheckout', {
     organizationId,
     planKey,
     interval,
+    creative,
     returnUrl: window.location.href,
+  });
+}
+
+// Creatieve module (galerij-oplevering) aan- of uitzetten op een lopend mandaat.
+// Uitzetten bevriest: al gedeelde galerijen blijven de respijtperiode werken.
+export async function setCreativeAddon(organizationId: UUID, enabled: boolean): Promise<BillingCheckoutResult> {
+  return await invokeBillingFunction<BillingCheckoutResult>('setCreativeAddon', {
+    organizationId,
+    enabled,
   });
 }
 

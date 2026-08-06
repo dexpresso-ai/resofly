@@ -35,6 +35,10 @@ type BillingProfile = {
   last_payment_status: string | null;
   /** Aantal bijgekochte opslagbundels (à limits.storage_addon_gb GB). */
   storage_addons: number | null;
+  /** Creatieve module (galerij-oplevering) als betaalde optie. */
+  creative_enabled: boolean | null;
+  /** Tot wanneer gedeelde galerijen na het uitzetten nog bereikbaar blijven. */
+  creative_grace_until: string | null;
 };
 
 type BillingPlan = {
@@ -51,6 +55,8 @@ type BillingPlan = {
   is_active: boolean;
   storage_addon_price_cents: number;
   storage_addon_yearly_price_cents: number;
+  creative_addon_price_cents: number;
+  creative_addon_yearly_price_cents: number;
   limits: Record<string, unknown> | null;
 };
 
@@ -114,11 +120,13 @@ serve(async (req) => {
 
     switch (action) {
       case 'startSubscriptionCheckout':
-        return json(req, { ok: true, ...(await startSubscriptionCheckout(user.id, organizationId, String(body.planKey || ''), String(body.returnUrl || ''), String(body.interval || 'month'))) });
+        return json(req, { ok: true, ...(await startSubscriptionCheckout(user.id, organizationId, String(body.planKey || ''), String(body.returnUrl || ''), String(body.interval || 'month'), body.creative === undefined ? undefined : Boolean(body.creative))) });
       case 'createExtraSeatCheckout':
         return json(req, { ok: true, ...(await createExtraSeatCheckout(user.id, organizationId, Number(body.quantity || 1), String(body.returnUrl || ''))) });
       case 'createStorageAddonCheckout':
         return json(req, { ok: true, ...(await createStorageAddonCheckout(organizationId, Number(body.quantity || 1))) });
+      case 'setCreativeAddon':
+        return json(req, { ok: true, ...(await setCreativeAddon(organizationId, Boolean(body.enabled))) });
       case 'createPlanChangeCheckout':
         return json(req, { ok: true, ...(await createPlanChangeCheckout(user.id, organizationId, String(body.planKey || ''), String(body.returnUrl || ''), String(body.interval || 'month'))) });
       case 'cancelSubscription':
@@ -267,18 +275,47 @@ function normalizeInterval(value: unknown): BillingInterval {
 }
 
 // Totaalbedrag per factuurperiode = basisprijs + extra seats × seatprijs + opslag-
-// bundels × bundelprijs, in het gekozen interval (maand of jaar). LET OP: elke plek
-// die het Mollie-bedrag (her)berekent moet ALLE componenten meerekenen, anders wordt
-// een eerder gekochte add-on bij de volgende mutatie stilzwijgend uit het bedrag gesloopt.
-function intervalAmountCents(plan: BillingPlan, purchasedSeats: number, interval: BillingInterval, storageAddons = 0): number {
+// bundels × bundelprijs + de creatieve module, in het gekozen interval (maand of
+// jaar). LET OP: elke plek die het Mollie-bedrag (her)berekent moet ALLE componenten
+// meerekenen, anders wordt een eerder gekochte add-on bij de volgende mutatie
+// stilzwijgend uit het bedrag gesloopt.
+function intervalAmountCents(plan: BillingPlan, purchasedSeats: number, interval: BillingInterval, storageAddons = 0, creative = false): number {
   const base = interval === 'year' ? plan.yearly_price_cents : plan.monthly_price_cents;
   const seat = interval === 'year' ? plan.extra_seat_yearly_price_cents : plan.extra_seat_price_cents;
   const storage = interval === 'year' ? (plan.storage_addon_yearly_price_cents || 0) : (plan.storage_addon_price_cents || 0);
-  return base + Math.max(0, purchasedSeats) * seat + Math.max(0, storageAddons) * storage;
+  const creativePrice = creative ? creativeAddonPriceCents(plan, interval) : 0;
+  return base + Math.max(0, purchasedSeats) * seat + Math.max(0, storageAddons) * storage + creativePrice;
+}
+
+function creativeAddonPriceCents(plan: BillingPlan, interval: BillingInterval): number {
+  return (interval === 'year' ? plan.creative_addon_yearly_price_cents : plan.creative_addon_price_cents) || 0;
+}
+
+/** Zit de creatieve module al in het plan (custom-contract) of in een vrijstelling? */
+function planIncludesCreative(plan: BillingPlan): boolean {
+  const raw = plan.limits && typeof plan.limits === 'object' ? (plan.limits as Record<string, unknown>).creative_included : null;
+  return raw === true || raw === 'true';
+}
+
+/**
+ * Wordt de creatieve module apart in rekening gebracht? Alleen wanneer de
+ * organisatie hem heeft aangezet én het plan hem niet al bevat — anders zou een
+ * custom-contract er twee keer voor betalen.
+ */
+function chargesCreative(profile: BillingProfile, plan: BillingPlan, override?: boolean): boolean {
+  const enabled = override ?? Boolean(profile.creative_enabled);
+  return enabled && !planIncludesCreative(plan) && !profile.billing_exempt;
 }
 
 /** Gelijk aan de CHECK-constraint op organization_billing_profiles.storage_addons. */
 const MAX_STORAGE_ADDONS = 100;
+
+/**
+ * Respijt na het uitzetten van de creatieve module: zolang blijven reeds
+ * gedeelde galerijen en het klantportaal bereikbaar. Toevoegen en wijzigen stopt
+ * meteen. Zelfde waarde als de standaard in apply_organization_creative_change.
+ */
+const CREATIVE_GRACE_DAYS = 30;
 
 function profileStorageAddons(profile: BillingProfile): number {
   return Math.max(0, Number(profile.storage_addons ?? 0));
@@ -367,6 +404,12 @@ async function loadBillingOverview(organizationId: string): Promise<unknown> {
     storage_addon_yearly_price_cents: plan.storage_addon_yearly_price_cents || 0,
     storage_limit_gb: profile.billing_exempt || storageGb == null ? null : storageGb + storageAddons * storageAddonGb,
     storage_used_bytes: storageUsedBytes,
+    creative_enabled: Boolean(profile.creative_enabled),
+    creative_included_in_plan: planIncludesCreative(plan) || profile.billing_exempt,
+    creative_active: Boolean(profile.creative_enabled) || planIncludesCreative(plan) || profile.billing_exempt,
+    creative_grace_until: profile.creative_grace_until ?? null,
+    creative_addon_price_cents: plan.creative_addon_price_cents || 0,
+    creative_addon_yearly_price_cents: plan.creative_addon_yearly_price_cents || 0,
   };
 }
 
@@ -444,7 +487,7 @@ function webhookUrlWithSecret(): string {
 // Actions
 // ---------------------------------------------------------------------------
 
-async function startSubscriptionCheckout(userId: string, organizationId: string, planKeyRaw: string, returnUrlRaw: string, intervalRaw: string): Promise<CheckoutResult> {
+async function startSubscriptionCheckout(userId: string, organizationId: string, planKeyRaw: string, returnUrlRaw: string, intervalRaw: string, creativeRaw?: boolean): Promise<CheckoutResult> {
   const profile = await ensureBillingProfile(organizationId);
   await assertNotExempt(profile);
   const planKey = planKeyRaw || profile.plan_key || 'starter';
@@ -455,7 +498,16 @@ async function startSubscriptionCheckout(userId: string, organizationId: string,
     throw new BillingHttpError('Voor dit plan is geen jaarprijs ingesteld. Kies maandelijks of stel eerst een jaarprijs in.', 400);
   }
 
-  const amountCents = intervalAmountCents(plan, profile.purchased_seats, interval, profileStorageAddons(profile));
+  // De creatieve module wordt bij aanschaf aangevinkt, maar pas aangezet als er
+  // betaald is: de intentie reist mee in de payment-metadata en wordt in de
+  // webhook toegepast. Zo krijgt niemand de module door alleen een checkout te
+  // openen en die weg te klikken.
+  const creativeIntent = creativeRaw === undefined ? Boolean(profile.creative_enabled) : Boolean(creativeRaw);
+  if (creativeIntent && !planIncludesCreative(plan) && creativeAddonPriceCents(plan, interval) <= 0) {
+    throw new BillingHttpError('Voor dit plan is geen prijs voor de creatieve module ingesteld. Neem contact op voor een maatwerkafspraak.', 400);
+  }
+
+  const amountCents = intervalAmountCents(plan, profile.purchased_seats, interval, profileStorageAddons(profile), chargesCreative(profile, plan, creativeIntent));
   if (amountCents <= 0) throw new BillingHttpError(`Voor dit plan is geen ${interval === 'year' ? 'jaar' : 'maand'}bedrag ingesteld.`, 400);
 
   const returnUrl = sanitizeReturnTo(returnUrlRaw);
@@ -463,7 +515,7 @@ async function startSubscriptionCheckout(userId: string, organizationId: string,
 
   if (MOLLIE_ALLOW_MOCK && !MOLLIE_API_KEY) {
     const providerPaymentId = `mock_payment_${crypto.randomUUID()}`;
-    await recordPaymentRecord(organizationId, profile.id, 'subscription', providerPaymentId, amountCents, plan.currency, planKey, userId);
+    await recordPaymentRecord(organizationId, profile.id, 'subscription', providerPaymentId, amountCents, plan.currency, planKey, userId, { creative: creativeIntent });
     const checkoutUrl = `${returnUrl}${returnUrl.includes('?') ? '&' : '?'}mock_payment_id=${encodeURIComponent(providerPaymentId)}&billing_mock=1`;
     return { checkoutUrl, mock: true, providerPaymentId };
   }
@@ -471,6 +523,8 @@ async function startSubscriptionCheckout(userId: string, organizationId: string,
   const customerId = await ensureMollieCustomer(profile);
   // Idempotency-key met uur-bucket: beschermt tegen dubbelklikken, maar voorkomt dat
   // Mollie 24u lang dezelfde (mogelijk afgeronde) betaling teruggeeft bij een herstart.
+  // De creatieve-modulekeuze zit in de sleutel: anders levert het omzetten van het
+  // vinkje binnen hetzelfde uur de oude betaling met het oude bedrag terug.
   const hourBucket = Math.floor(Date.now() / (60 * 60 * 1000));
   const payment = await mollieFetch('POST', '/payments', {
     amount: { currency: plan.currency, value: formatAmount(amountCents) },
@@ -479,14 +533,14 @@ async function startSubscriptionCheckout(userId: string, organizationId: string,
     webhookUrl: webhookUrlWithSecret(),
     customerId,
     sequenceType: 'first',
-    metadata: { organizationId, planKey, interval, type: 'subscription_first' },
-  }, `sub-first:${organizationId}:${planKey}:${interval}:${hourBucket}`);
+    metadata: { organizationId, planKey, interval, type: 'subscription_first', creative: creativeIntent ? '1' : '0' },
+  }, `sub-first:${organizationId}:${planKey}:${interval}:${creativeIntent ? 'c1' : 'c0'}:${hourBucket}`);
 
   const providerPaymentId = String(payment.id || '');
   const checkoutUrl = String((payment._links as Record<string, { href?: string }> | undefined)?.checkout?.href || '');
   if (!providerPaymentId || !checkoutUrl) throw new BillingHttpError('Mollie gaf geen payment-id of checkout-URL terug.', 502);
 
-  await recordPaymentRecord(organizationId, profile.id, 'subscription', providerPaymentId, amountCents, plan.currency, planKey, userId);
+  await recordPaymentRecord(organizationId, profile.id, 'subscription', providerPaymentId, amountCents, plan.currency, planKey, userId, { creative: creativeIntent });
   return { checkoutUrl, providerPaymentId, status: String(payment.status || 'open') };
 }
 
@@ -509,7 +563,7 @@ async function createPlanChangeCheckout(userId: string, organizationId: string, 
   // Actief abonnement → bedrag aanpassen in het bestaande interval en planwijziging direct toepassen.
   const interval = normalizeInterval(profile.billing_interval);
   const newPurchased = profile.purchased_seats;
-  const amountCents = intervalAmountCents(targetPlan, newPurchased, interval, profileStorageAddons(profile));
+  const amountCents = intervalAmountCents(targetPlan, newPurchased, interval, profileStorageAddons(profile), chargesCreative(profile, targetPlan));
   await updateMollieSubscriptionAmount(profile, amountCents, targetPlan, `ResoFly ${targetPlan.name} — abonnement`);
   const { error } = await supabaseAdmin.rpc('apply_organization_seat_change', {
     p_organization_id: organizationId,
@@ -538,7 +592,7 @@ async function createExtraSeatCheckout(_userId: string, organizationId: string, 
   }
 
   const newPurchased = profile.purchased_seats + quantity;
-  const amountCents = intervalAmountCents(plan, newPurchased, interval, profileStorageAddons(profile));
+  const amountCents = intervalAmountCents(plan, newPurchased, interval, profileStorageAddons(profile), chargesCreative(profile, plan));
   await updateMollieSubscriptionAmount(profile, amountCents, plan, `ResoFly ${plan.name} — abonnement`);
   const { error } = await supabaseAdmin.rpc('apply_organization_seat_change', {
     p_organization_id: organizationId,
@@ -577,12 +631,56 @@ async function createStorageAddonCheckout(organizationId: string, quantityRaw: n
     throw new BillingHttpError(`Maximaal ${MAX_STORAGE_ADDONS} opslagbundels per organisatie. Neem contact op voor een maatwerkafspraak.`, 400);
   }
 
-  const amountCents = intervalAmountCents(plan, profile.purchased_seats, interval, newAddons);
+  const amountCents = intervalAmountCents(plan, profile.purchased_seats, interval, newAddons, chargesCreative(profile, plan));
   await updateMollieSubscriptionAmount(profile, amountCents, plan, `ResoFly ${plan.name} — abonnement`);
   const { error } = await supabaseAdmin.rpc('apply_organization_storage_change', {
     p_organization_id: organizationId,
     p_storage_addons: newAddons,
     p_metadata: { source: 'storage_addon', quantity, addon_gb: planStorageAddonGb(plan), amount_cents: amountCents, interval },
+  });
+  if (error) throw error;
+  return { applied: true };
+}
+
+/**
+ * Creatieve module aan- of uitzetten op een lopend mandaat — zelfde patroon als
+ * de opslagbundel: eerst het Mollie-bedrag PATchen, dan de mutatie vastleggen.
+ * Uitzetten bevriest: de RPC zet een respijtperiode waarin al gedeelde
+ * galerijen blijven werken, maar er niets meer bij mag.
+ */
+async function setCreativeAddon(organizationId: string, enabled: boolean): Promise<CheckoutResult> {
+  const profile = await ensureBillingProfile(organizationId);
+  const plan = await getPlan(profile.plan_key);
+
+  if (profile.billing_exempt || planIncludesCreative(plan)) {
+    throw new BillingHttpError('De creatieve module zit al bij dit abonnement inbegrepen.', 400);
+  }
+  if (Boolean(profile.creative_enabled) === enabled) {
+    return { applied: true };
+  }
+
+  const interval = normalizeInterval(profile.billing_interval);
+  if (enabled && creativeAddonPriceCents(plan, interval) <= 0) {
+    throw new BillingHttpError('Voor dit plan is geen prijs voor de creatieve module ingesteld. Neem contact op voor een maatwerkafspraak.', 400);
+  }
+
+  // Zonder lopend abonnement is er geen bedrag om aan te passen. Aanzetten loopt
+  // dan via de checkout (het vinkje bij aanschaf); uitzetten mag altijd, anders
+  // zit iemand met een verlopen abonnement eraan vast.
+  if (enabled && !hasActiveSubscription(profile)) {
+    throw new BillingHttpError('Start eerst een abonnement voordat je de creatieve module aanzet.', 400);
+  }
+
+  if (hasActiveSubscription(profile)) {
+    const amountCents = intervalAmountCents(plan, profile.purchased_seats, interval, profileStorageAddons(profile), chargesCreative(profile, plan, enabled));
+    await updateMollieSubscriptionAmount(profile, amountCents, plan, `ResoFly ${plan.name} — abonnement`);
+  }
+
+  const { error } = await supabaseAdmin.rpc('apply_organization_creative_change', {
+    p_organization_id: organizationId,
+    p_enabled: enabled,
+    p_grace_days: CREATIVE_GRACE_DAYS,
+    p_metadata: { source: 'setCreativeAddon', interval },
   });
   if (error) throw error;
   return { applied: true };
@@ -597,6 +695,19 @@ async function cancelSubscription(organizationId: string): Promise<CheckoutResul
     .from('organization_billing_profiles')
     .update({ subscription_status: 'cancelled', updated_at: new Date().toISOString() })
     .eq('organization_id', organizationId);
+
+  // Opzeggen bevriest ook de creatieve module: geen nieuwe galerijen meer, maar
+  // wat de klant al gedeeld heeft blijft de respijtperiode uit staan.
+  if (profile.creative_enabled) {
+    const { error: creativeError } = await supabaseAdmin.rpc('apply_organization_creative_change', {
+      p_organization_id: organizationId,
+      p_enabled: false,
+      p_grace_days: CREATIVE_GRACE_DAYS,
+      p_metadata: { source: 'cancelSubscription' },
+    });
+    if (creativeError) throw creativeError;
+  }
+
   await supabaseAdmin.rpc('log_billing_audit', {
     p_organization_id: organizationId,
     p_action: 'subscription_cancelled',
@@ -625,7 +736,7 @@ async function updateMollieSubscriptionAmount(profile: BillingProfile, amountCen
   });
 }
 
-async function recordPaymentRecord(organizationId: string, profileId: string, paymentType: string, providerPaymentId: string, amountCents: number, currency: string, planKey: string, userId: string): Promise<void> {
+async function recordPaymentRecord(organizationId: string, profileId: string, paymentType: string, providerPaymentId: string, amountCents: number, currency: string, planKey: string, userId: string, extraMetadata: Record<string, unknown> = {}): Promise<void> {
   await supabaseAdmin
     .from('organization_payment_records')
     .insert({
@@ -639,7 +750,7 @@ async function recordPaymentRecord(organizationId: string, profileId: string, pa
       currency,
       plan_key: planKey,
       created_by: userId,
-      metadata: { source: 'billing_function' },
+      metadata: { source: 'billing_function', ...extraMetadata },
     });
 }
 
@@ -683,7 +794,16 @@ async function handleMollieWebhook(req: Request, url: URL, body: Record<string, 
 
   if (metaType === 'subscription_first') {
     if (status === 'paid') {
-      await activateSubscriptionFromFirstPayment(organizationId, String(metadata.planKey || ''), customerId, String(payment.mandateId || ''), normalizeInterval(metadata.interval));
+      await activateSubscriptionFromFirstPayment(
+        organizationId,
+        String(metadata.planKey || ''),
+        customerId,
+        String(payment.mandateId || ''),
+        normalizeInterval(metadata.interval),
+        // Alleen een echte keuze doorgeven; ontbreekt de sleutel (betaling van
+        // vóór de creatieve module), dan blijft de stand ongemoeid.
+        metadata.creative === undefined ? undefined : String(metadata.creative) === '1',
+      );
     }
   } else if (subscriptionId) {
     await supabaseAdmin.rpc('record_organization_subscription_payment', {
@@ -721,11 +841,33 @@ async function resolveWebhookOrganization(metaOrgId: string, subscriptionId: str
   return null;
 }
 
-async function activateSubscriptionFromFirstPayment(organizationId: string, planKey: string, customerId: string, mandateId: string, interval: BillingInterval): Promise<void> {
+async function activateSubscriptionFromFirstPayment(organizationId: string, planKey: string, customerId: string, mandateId: string, interval: BillingInterval, creative?: boolean): Promise<void> {
   const profile = await getProfile(organizationId);
   const effectivePlanKey = planKey || profile.plan_key || 'starter';
   const plan = await getPlan(effectivePlanKey);
-  const amountCents = intervalAmountCents(plan, profile.purchased_seats, interval, profileStorageAddons(profile));
+
+  // De keuze bij aanschaf pas nú toepassen: er is betaald, dus de module mag aan
+  // (en het abonnementsbedrag dat we hieronder bij Mollie aanmelden bevat hem).
+  // Omgekeerd net zo hard: wie het vinkje uitzette bij een nieuw abonnement
+  // betaalt er niet meer voor, dus dan gaat de module ook uit — anders lopen
+  // bedrag en toegang uit elkaar. `undefined` betekent "geen keuze meegekomen"
+  // (betaling van vóór deze wijziging) en laat de stand met rust.
+  const wantsChange = creative !== undefined
+    && creative !== Boolean(profile.creative_enabled)
+    && !planIncludesCreative(plan)
+    && !profile.billing_exempt;
+  if (wantsChange) {
+    const { error: creativeError } = await supabaseAdmin.rpc('apply_organization_creative_change', {
+      p_organization_id: organizationId,
+      p_enabled: creative,
+      p_grace_days: CREATIVE_GRACE_DAYS,
+      p_metadata: { source: 'subscription_first_paid' },
+    });
+    if (creativeError) throw creativeError;
+    profile.creative_enabled = creative as boolean;
+  }
+
+  const amountCents = intervalAmountCents(plan, profile.purchased_seats, interval, profileStorageAddons(profile), chargesCreative(profile, plan));
   const effectiveCustomerId = customerId || profile.mollie_customer_id || '';
   const mollieInterval = interval === 'year' ? '12 months' : '1 month';
   const intervalLabel = interval === 'year' ? 'jaarabonnement' : 'maandabonnement';
@@ -788,11 +930,13 @@ async function markMockPaymentPaid(organizationId: string, providerPaymentId: st
   if (!providerPaymentId.startsWith('mock_payment_')) throw new BillingHttpError('Alleen mock payments kunnen via deze actie worden afgerond.', 400);
   const { data: record } = await supabaseAdmin
     .from('organization_payment_records')
-    .select('plan_key')
+    .select('plan_key, metadata')
     .eq('provider', 'mollie')
     .eq('provider_payment_id', providerPaymentId)
     .eq('organization_id', organizationId)
     .maybeSingle();
+  const recordedCreative = (record?.metadata as Record<string, unknown> | null)?.creative;
+  const creativeIntent = recordedCreative === undefined ? undefined : Boolean(recordedCreative);
 
   const eventKey = `mollie:payment:${providerPaymentId}:paid`;
   const shouldProcess = await claimBillingEvent(organizationId, eventKey, 'payment.paid', providerPaymentId, { mock: true });
@@ -802,7 +946,7 @@ async function markMockPaymentPaid(organizationId: string, providerPaymentId: st
       .update({ status: 'paid', updated_at: new Date().toISOString() })
       .eq('provider', 'mollie')
       .eq('provider_payment_id', providerPaymentId);
-    await activateSubscriptionFromFirstPayment(organizationId, String(record?.plan_key || ''), `mock_cst_${organizationId.slice(0, 8)}`, `mock_mdt_${organizationId.slice(0, 8)}`, 'month');
+    await activateSubscriptionFromFirstPayment(organizationId, String(record?.plan_key || ''), `mock_cst_${organizationId.slice(0, 8)}`, `mock_mdt_${organizationId.slice(0, 8)}`, 'month', creativeIntent);
     await supabaseAdmin
       .from('organization_billing_events')
       .update({ status: 'processed', processed_at: new Date().toISOString() })

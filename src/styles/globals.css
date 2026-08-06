@@ -4325,6 +4325,8 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 /* Categoriebeheer — woont sinds 2026-08-03 in het tabblad "Bestanden" van het
    instellingenvenster; hier alleen nog wat beide plekken delen. */
 .gal-notice{border:1px solid rgba(96,200,120,.35);background:rgba(96,200,120,.09);color:var(--accent-g);border-radius:10px;padding:9px 12px;font-size:12px;margin-bottom:10px}
+/* Creatieve module uit: galerij bevroren — melding in de merkkleur, geen foutrood. */
+.gal-frozen{border:1px solid rgba(255,189,89,.34);background:rgba(255,189,89,.09);color:var(--accent);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.55;margin-bottom:12px}
 .gal-cats-help{font-size:11px;color:var(--muted)}
 .gal-cat-add{display:flex;gap:7px;align-items:center}
 .gal-cat-add .form-input{flex:1;min-width:0}
