@@ -6,19 +6,30 @@ rekeningschema kent één `0500 Eigen vermogen`, het resultaat gaat rechtstreeks
 Deze roadmap maakt ResoFly geschikt voor klanten met een BV, tot en met een genereerbare
 jaarrekening en publicatiestukken.
 
-**Status: fase 0 GEBOUWD en op staging toegepast (2026-08-07). Fase 1 GEBOUWD, nog niet toegepast.
-Fase 2 t/m 5 open.**
+**Status per 2026-08-07: fase 0, 1 en 2 GEBOUWD en op staging toegepast; fase 3 deels.
+Fase 4 en 5 open.**
 
-Fase 0 — migraties `20260807000000_business_module_entities.sql` +
-`20260807010000_business_entity_limit_message.sql` toegepast; edge function `billing` opnieuw
-gedeployed (boot-health 401, geen BOOT_ERROR). Nog niet e2e getest met een ingelogde gebruiker.
+Alles staat op de branch `staging` en is toegepast op `enzghpduqwaojcxgwarr`:
 
-Fase 1 — migraties `20260807020000_bv_chart_and_report_groups.sql` +
-`20260807030000_result_appropriation.sql` geschreven; frontend aangepast (`ProfitLoss.tsx`,
-`FiscalYears.tsx`, `Bookkeeping.tsx`, `xaf.ts`, `types.ts`, `repository.ts`). `npm run build`
-en `tsc --noEmit` groen. **De SQL is nog nergens uitgevoerd** — er is lokaal geen Postgres en geen
-Docker, dus de migraties gaan rechtstreeks naar staging. Wel doorgelicht met een tegensprekende
-review (15 bevindingen, alle verholpen; zie "Wat de review opleverde" onderaan).
+| Migratie | Inhoud |
+|---|---|
+| `20260807000000` + `010000` | fase 0 — rechtsvorm, administratie-boom, entitlement, billing via de moeder |
+| `20260807020000` + `030000` | fase 1 — `report_group`, BV-rekeningschema, ingedeelde balans + W&V, resultaatbestemming |
+| `20260807040000` | vier losse eindjes uit fase 1 |
+| `20260807050000` | fase 2 — vennootschapsbelasting (tarieven, correcties, verliesverrekening, reservering) |
+| `20260807060000` | fase 3a — DGA-normen en signalen |
+
+Daarnaast: edge function `corporate-tax`, het rekenhart `_shared/vpb.ts` met 18 tests
+(`npm test`), en de schermen `CorporateTax.tsx` en de uitbreidingen in `ProfitLoss.tsx`,
+`FiscalYears.tsx` en `Bookkeeping.tsx`.
+
+**Nog niet gedaan: e2e met een ingelogde gebruiker.** Alle verificatie liep via de database
+en de rapport-RPC's; de schermen zijn niet klikkend doorlopen. Ook staat er nog geen
+BV-administratie op staging, dus het BV-rekeningschema, de resultaatbestemming en de
+Vpb-keten zijn nog niet tegen echte BV-data gedraaid.
+
+Elke migratie is vóór toepassing tegensprekend gereviewd (drie rondes, 15 + 12 + 15
+bevindingen, alle verholpen — waaronder drie blockers).
 
 ## Beslissingen (PO, 2026-08-06)
 
