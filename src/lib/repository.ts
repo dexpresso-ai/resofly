@@ -1865,6 +1865,30 @@ export async function reverseDgaInterest(organizationId: UUID, postingId: UUID):
   return (Array.isArray(data) ? data[0] : data) as DgaInterestPosting;
 }
 
+/**
+ * De loonjournaalpost van de salarisverwerker als één boekstuk innemen. ResoFly
+ * rekent niets na — wij kennen de loonheffingstabellen niet — maar controleert
+ * wel dat de post exact sluit en dat elke rekening bestaat.
+ */
+export async function postPayrollJournal(
+  organizationId: UUID,
+  input: { date: string; description: string; lines: Array<{ accountCode: string; description: string; debitCents: number; creditCents: number }> },
+): Promise<JournalEntry> {
+  const { data, error } = await supabase.rpc('post_payroll_journal', {
+    p_organization_id: organizationId,
+    p_date: input.date,
+    p_description: input.description,
+    p_lines: input.lines.map(l => ({
+      account_code: l.accountCode,
+      description: l.description,
+      debit_cents: l.debitCents,
+      credit_cents: l.creditCents,
+    })),
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
 // ── Vennootschapsbelasting ─────────────────────────────────────────────────
 // De berekening loopt via de edge function (corporateTaxService); dit zijn de
 // gewone lees- en schrijfacties eromheen.

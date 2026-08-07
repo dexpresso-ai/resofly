@@ -3,6 +3,7 @@ import { AlertTriangle, ChevronLeft, ChevronRight, Percent, Plus, RotateCcw, Tra
 import type { AppData, DgaInterestComputation, DgaInterestPosting, DgaInterestRate, DgaSignals } from '../types';
 import { Button, Input, Skeleton } from '../components/Ui';
 import { dateNL, euro } from '../lib/format';
+import { PayrollImport } from './PayrollImport';
 import {
   addDgaInterestRate, bookDgaInterest, computeDgaInterest, deleteDgaInterestRate,
   listDgaInterestPostings, listDgaInterestRates, loadDgaSignals, reverseDgaInterest,
@@ -192,6 +193,9 @@ export function DgaPage({ data, organizationId, canWrite, canAdmin, businessActi
               </div>
             </>}
           </div>
+
+          {/* ── Loonjournaalpost ── */}
+          <PayrollImport organizationId={organizationId} canWrite={canWrite} onPosted={() => { void load(); onChanged(); }} />
 
           {/* ── Renteberekening ── */}
           {interest && signals.hasCurrentAccount && (

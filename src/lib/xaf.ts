@@ -38,7 +38,7 @@ const JOURNALS: { jrnID: string; desc: string; jrnTp: string; sources: string[] 
   // brontype hier ontbreekt, verdwijnt geruisloos uit <transactions> én uit de
   // totalen, terwijl het in de beginbalans van het volgende jaar wél meetelt —
   // dan sluiten twee auditfiles onderling niet meer aan.
-  { jrnID: 'MEM', desc: 'Memoriaal', jrnTp: 'M', sources: ['manual', 'asset_depreciation', 'asset_acquisition', 'asset_disposal', 'vat_return', 'year_close', 'result_appropriation', 'corporate_tax', 'dga_interest'] },
+  { jrnID: 'MEM', desc: 'Memoriaal', jrnTp: 'M', sources: ['manual', 'asset_depreciation', 'asset_acquisition', 'asset_disposal', 'vat_return', 'year_close', 'result_appropriation', 'corporate_tax', 'dga_interest', 'payroll'] },
 ];
 
 export interface XafInput {
