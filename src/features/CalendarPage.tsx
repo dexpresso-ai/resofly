@@ -1239,6 +1239,11 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                         {draggable && <span className="tb-ev-handle tb-ev-handle-top" onPointerDown={e => beginEventInteraction(e, ev, di, 'resize-start')} title="Sleep om de starttijd te wijzigen" />}
                         <span className="tb-ev-time">{visualTime}</span>
                         <span className="tb-ev-title">{ev.title}</span>
+                        {/* Korte starttijd: op een blok van een half uur past maar
+                            één regel, dus zet de CSS titel + starttijd naast elkaar
+                            ("Titel, 10:00", zoals Google) en verbergt hij de volle
+                            tijdregel hierboven. */}
+                        <span className="tb-ev-start">{formatTime(ev.starts_at)}</span>
                         {eventLocation && <span className="tb-ev-src">{eventLocation}</span>}
                         {draggable && <span className="tb-ev-handle tb-ev-handle-bottom" onPointerDown={e => beginEventInteraction(e, ev, di, 'resize-end')} title="Sleep om de eindtijd te wijzigen" />}
                       </button>
@@ -1305,8 +1310,14 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
 
 /* ── Month view ───────────────────────────────────────────────────────── */
 
-// Max. aantal items per dagcel voordat "+N meer" verschijnt (Google-stijl).
-const MONTH_MAX_ITEMS = 5;
+// Google-dichtheid: bovenin de cel het dagnummer, daaronder rijen ("lanes") van
+// gelijke hoogte. De TSX rekent met deze pixels uit hoeveel lanes er in een
+// weekrij passen; de CSS krijgt exact dezelfde waarden via custom properties,
+// zodat er maar één bron van waarheid is.
+const MONTH_DATE_ROW_PX = 26;
+const MONTH_LANE_PX = 20;
+const MONTH_LANE_GAP_PX = 2;
+const MONTH_ROW_PAD_PX = 6;
 
 // Deelt het maandrooster op in weken van 7 dagen (voor de weeknummer-kolom).
 function weekChunks(days: Date[]): Date[][] {
@@ -1315,7 +1326,110 @@ function weekChunks(days: Date[]): Date[][] {
   return weeks;
 }
 
-function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, trackedMinutesFor, onEditTask, onOpenDay, onOpenEvent }: {
+const SHORT_MONTH_FMT = new Intl.DateTimeFormat('nl-NL', { month: 'short' });
+function shortMonthNl(day: Date): string { return SHORT_MONTH_FMT.format(day).replace('.', ''); }
+
+/**
+ * Eén item in een weekrij van de maandweergave. `span` telt dagkolommen: een
+ * meerdaagse afspraak is één doorlopende balk (Google) i.p.v. losse blokjes per
+ * dag. Loopt hij door buiten deze week, dan staat dat in continuesLeft/Right.
+ */
+type MonthChip = {
+  key: string;
+  kind: 'bar' | 'timed' | 'task';
+  event?: CalendarExternalEvent;
+  task?: Task;
+  startIdx: number;
+  span: number;
+  lane: number;
+  continuesLeft: boolean;
+  continuesRight: boolean;
+  /** Starttijd op een meerdaagse getimede balk (Google toont "Titel, 15:30"). */
+  timeLabel: string | null;
+};
+
+/** De lokale kalenderdagen die een afspraak beslaat (einde exclusief). */
+function eventDayRange(event: CalendarExternalEvent): { startKey: string; endKeyExclusive: string } {
+  if (event.all_day) return { startKey: allDayStartDateKey(event), endKeyExclusive: allDayEndDateKeyExclusive(event) };
+  const startKey = formatISODate(new Date(event.starts_at));
+  // Einde-min-1ms: een afspraak die om exact middernacht eindigt telt de
+  // volgende dag niet mee.
+  const endMs = Math.max(new Date(event.ends_at).getTime() - 1, new Date(event.starts_at).getTime());
+  return { startKey, endKeyExclusive: addDateKeyDays(formatISODate(new Date(endMs)), 1) };
+}
+
+/**
+ * Verdeelt de items van één weekrij over lanes (Google): meerdaagse en
+ * hele-dag-afspraken zijn doorlopende balken die hun lane over álle dagen die
+ * ze raken bezet houden; getimede afspraken van één dag vullen de gaten die
+ * daaronder overblijven. Zo schuiven de losse items netjes onder de balk door
+ * en blijft een meerdaagse afspraak visueel één geheel.
+ */
+function layoutMonthWeek(week: Date[], events: CalendarExternalEvent[], tasks: Task[]): MonthChip[] {
+  const dayKeys = week.map(formatISODate);
+  const firstKey = dayKeys[0];
+  const lastKeyExclusive = addDateKeyDays(dayKeys[dayKeys.length - 1], 1);
+
+  const bars: MonthChip[] = [];
+  const singles: MonthChip[] = [];
+
+  for (const event of events) {
+    const { startKey, endKeyExclusive } = eventDayRange(event);
+    if (endKeyExclusive <= firstKey || startKey >= lastKeyExclusive) continue;
+    const clampedStart = startKey < firstKey ? firstKey : startKey;
+    const clampedEndExclusive = endKeyExclusive > lastKeyExclusive ? lastKeyExclusive : endKeyExclusive;
+    const startIdx = dayKeys.indexOf(clampedStart);
+    const endIdx = dayKeys.indexOf(addDateKeyDays(clampedEndExclusive, -1));
+    if (startIdx < 0 || endIdx < 0) continue;
+    const multiDay = addDateKeyDays(startKey, 1) < endKeyExclusive;
+    const chip: MonthChip = {
+      key: `ev-${eventIdentityKey(event)}`,
+      kind: event.all_day || multiDay ? 'bar' : 'timed',
+      event,
+      startIdx,
+      span: endIdx - startIdx + 1,
+      lane: 0,
+      continuesLeft: startKey < firstKey,
+      continuesRight: endKeyExclusive > lastKeyExclusive,
+      timeLabel: !event.all_day && multiDay ? formatTime(event.starts_at) : null,
+    };
+    (chip.kind === 'bar' ? bars : singles).push(chip);
+  }
+
+  for (const task of tasks) {
+    if (!task.end_date) continue;
+    const idx = dayKeys.indexOf(dateKeyFromValue(task.end_date));
+    if (idx < 0) continue;
+    singles.push({ key: `task-${task.id}`, kind: 'task', task, startIdx: idx, span: 1, lane: 0, continuesLeft: false, continuesRight: false, timeLabel: null });
+  }
+
+  // Balken bovenaan (langste eerst, net als Google), daarna de getimede
+  // afspraken op starttijd; taken sluiten de rij af.
+  bars.sort((a, b) => a.startIdx - b.startIdx || b.span - a.span || (a.event?.title ?? '').localeCompare(b.event?.title ?? '', 'nl'));
+  singles.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === 'task' ? 1 : -1;
+    if (a.event && b.event) return a.event.starts_at.localeCompare(b.event.starts_at);
+    return (a.task?.title ?? '').localeCompare(b.task?.title ?? '', 'nl');
+  });
+
+  const laneRows: boolean[][] = [];
+  const ordered = [...bars, ...singles];
+  for (const chip of ordered) {
+    for (let lane = 0; ; lane++) {
+      if (!laneRows[lane]) laneRows[lane] = new Array(week.length).fill(false);
+      const row = laneRows[lane];
+      let free = true;
+      for (let i = chip.startIdx; i < chip.startIdx + chip.span; i++) { if (row[i]) { free = false; break; } }
+      if (!free) continue;
+      for (let i = chip.startIdx; i < chip.startIdx + chip.span; i++) row[i] = true;
+      chip.lane = lane;
+      break;
+    }
+  }
+  return ordered;
+}
+
+export function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, trackedMinutesFor, onEditTask, onOpenDay, onOpenEvent }: {
   days: Date[];
   anchor: Date;
   events: CalendarExternalEvent[];
@@ -1327,88 +1441,148 @@ function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, tr
   onOpenDay: (day: Date) => void;
   onOpenEvent: (event: CalendarExternalEvent) => void;
 }) {
-  function tasksForDay(day: Date) { return tasks.filter(t => t.end_date && isSameDay(new Date(`${t.end_date}T12:00:00`), day)); }
-  function eventsForDay(day: Date) { return events.filter(ev => eventOverlapsDay(ev, day)).sort((a, b) => a.starts_at.localeCompare(b.starts_at)); }
   function eventColor(ev: CalendarExternalEvent): string { return sourceColors.get(ev.source_id) ?? '#FFD966'; }
+  const weeks = useMemo(() => weekChunks(days), [days]);
+  const gridRef = useRef<HTMLDivElement | null>(null);
+
+  // Hoeveel items er per dag passen volgt uit de werkelijke rijhoogte — net als
+  // bij Google, dat in een maand met vijf weekrijen meer regels toont dan in een
+  // maand met zes.
+  const [maxLanes, setMaxLanes] = useState(3);
+  useLayoutEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const measure = () => {
+      const rowHeight = el.clientHeight / Math.max(1, weeks.length);
+      const usable = rowHeight - MONTH_DATE_ROW_PX - MONTH_ROW_PAD_PX;
+      setMaxLanes(Math.max(1, Math.floor((usable + MONTH_LANE_GAP_PX) / (MONTH_LANE_PX + MONTH_LANE_GAP_PX))));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [weeks.length]);
+
+  const today = new Date();
+  const gridStyle = {
+    '--cm-date-h': `${MONTH_DATE_ROW_PX}px`,
+    '--cm-lane': `${MONTH_LANE_PX}px`,
+    '--cm-gap': `${MONTH_LANE_GAP_PX}px`,
+    '--cm-pad': `${MONTH_ROW_PAD_PX}px`,
+  } as CSSProperties;
 
   return (
-    <div className="calendar-month-view">
-      <div className="calendar-month-weekdays">
-        <span className="calendar-weeknum-head" aria-hidden="true" />
-        {DAY_NAMES_NL.map(day => <span key={day}>{day}</span>)}
+    <div className="cm-view" style={gridStyle}>
+      <div className="cm-head">
+        <span className="cm-head-weekno" aria-hidden="true" />
+        {DAY_NAMES_NL.map(name => <span className="cm-head-cell" key={name}>{name}</span>)}
       </div>
-      <div className="calendar-month-grid">
-        {weekChunks(days).flatMap(week => {
-          const weekNo = isoWeekNumber(week[0]);
+      <div className="cm-grid" ref={gridRef}>
+        {weeks.map(week => {
+          const chips = layoutMonthWeek(week, events, tasks);
+          // Past niet alles? Dan houdt de laatste zichtbare lane ruimte vrij
+          // voor "+N meer" — precies zoals Google een volle dag afkapt.
+          const perDay = week.map((_, i) => chips.filter(c => i >= c.startIdx && i < c.startIdx + c.span).length);
+          const cutoff = perDay.map(count => (count > maxLanes ? Math.max(1, maxLanes - 1) : maxLanes));
+          const visibleKeys = new Set<string>();
+          for (const chip of chips) {
+            let fits = true;
+            for (let i = chip.startIdx; i < chip.startIdx + chip.span; i++) { if (chip.lane >= cutoff[i]) { fits = false; break; } }
+            if (fits) visibleKeys.add(chip.key);
+          }
+          const hiddenPerDay = week.map((_, i) => chips.filter(c => i >= c.startIdx && i < c.startIdx + c.span && !visibleKeys.has(c.key)).length);
           const allOutside = week.every(d => !isSameMonth(d, anchor));
-          return [
-            <div className={`calendar-week-number${allOutside ? ' is-outside-week' : ''}`} key={`wk-${formatISODate(week[0])}`}>
-              <span className="cw-label">Week </span><strong>{weekNo}</strong>
-            </div>,
-            ...week.map(day => {
-          const dayEvents = eventsForDay(day);
-          const dayTasks = tasksForDay(day);
-          // Google-stijl: hele-dag/meerdaagse afspraken eerst (als balken), dan getimede afspraken, dan taken.
-          const allItems = [
-            ...dayEvents.filter(ev => ev.all_day).map(ev => ({ kind: 'allday' as const, ev })),
-            ...dayEvents.filter(ev => !ev.all_day).map(ev => ({ kind: 'timed' as const, ev })),
-            ...dayTasks.map(task => ({ kind: 'task' as const, task })),
-          ];
-          const clippedItems = allItems.slice(0, MONTH_MAX_ITEMS);
-          const remaining = Math.max(0, allItems.length - clippedItems.length);
-          const outsideMonth = !isSameMonth(day, anchor);
-          const today = isSameDay(day, new Date());
 
           return (
-            <article className={`calendar-month-cell${outsideMonth ? ' is-outside-month' : ''}${today ? ' is-today' : ''}`} key={formatISODate(day)}>
-              <button className="calendar-month-date" onClick={() => onOpenDay(day)} title="Open dagweergave">
-                <span>{dayNameNl(day)}</span>
-                <strong>{day.getDate()}</strong>
-              </button>
-              <div className="calendar-month-items">
-                {clippedItems.map((item, idx) => {
-                  if (item.kind === 'allday') return (
-                    <button
-                      type="button"
-                      className={`month-chip all-day${item.ev.visibility === 'private' ? ' private-event' : ''}`}
-                      onClick={() => onOpenEvent(item.ev)}
-                      key={`ad-${item.ev.provider}-${item.ev.provider_event_id}-${idx}`}
-                      style={eventColorStyle(eventColor(item.ev))}
-                      title={item.ev.title}
-                    >
-                      <strong>{item.ev.title}</strong>
-                      {trackedMinutesFor(item.ev) != null && <em className="month-chip-track"><Clock size={9} />{formatMinutes(trackedMinutesFor(item.ev)!)}</em>}
-                    </button>
-                  );
-                  if (item.kind === 'timed') return (
-                    <button
-                      type="button"
-                      className={`month-chip timed${item.ev.visibility === 'private' ? ' private-event' : ''}`}
-                      onClick={() => onOpenEvent(item.ev)}
-                      key={`tm-${item.ev.provider}-${item.ev.provider_event_id}-${idx}`}
-                      style={eventColorStyle(eventColor(item.ev))}
-                      title={`${formatTime(item.ev.starts_at)} · ${item.ev.title}`}
-                    >
-                      <span className="month-chip-dot" aria-hidden="true" />
-                      <span className="month-chip-time">{formatTime(item.ev.starts_at)}</span>
-                      <strong>{item.ev.title}</strong>
-                      {trackedMinutesFor(item.ev) != null && <em className="month-chip-track"><Clock size={9} />{formatMinutes(trackedMinutesFor(item.ev)!)}</em>}
-                    </button>
-                  );
-                  return (
-                    <button className="month-chip timed task" key={item.task.id} onClick={() => onEditTask(item.task)} title={`${item.task.title} · ${data.projects.find(p => p.id === item.task.project_id)?.name ?? 'Project'}`}>
-                      <span className="month-chip-dot" aria-hidden="true" />
-                      <span className="month-chip-time">Taak</span>
-                      <strong>{item.task.title}</strong>
-                    </button>
-                  );
-                })}
+            <div className="cm-week" key={`wk-${formatISODate(week[0])}`}>
+              <div className={`cm-weekno${allOutside ? ' is-outside' : ''}`} title={`Week ${isoWeekNumber(week[0])}`}>
+                <span className="cm-weekno-label">Week </span>{isoWeekNumber(week[0])}
               </div>
-              {remaining > 0 && <button className="month-more" onClick={() => onOpenDay(day)}>+{remaining} meer</button>}
-            </article>
+              <div className="cm-week-body">
+                <div className="cm-cells">
+                  {week.map(day => (
+                    <div
+                      className={`cm-cell${isSameMonth(day, anchor) ? '' : ' is-outside'}${isSameDay(day, today) ? ' is-today' : ''}`}
+                      key={formatISODate(day)}
+                      role="presentation"
+                      onClick={() => onOpenDay(day)}
+                    />
+                  ))}
+                </div>
+                <div className="cm-dates">
+                  {week.map(day => {
+                    const isToday = isSameDay(day, today);
+                    return (
+                      <button
+                        type="button"
+                        className={`cm-date${isSameMonth(day, anchor) ? '' : ' is-outside'}`}
+                        key={formatISODate(day)}
+                        onClick={() => onOpenDay(day)}
+                        title={`${formatDateKey(formatISODate(day))} — open dagweergave`}
+                      >
+                        <span className={`cm-date-num${isToday ? ' is-today' : ''}`}>
+                          {day.getDate() === 1 ? `${day.getDate()} ${shortMonthNl(day)}` : day.getDate()}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="cm-lanes">
+                  {chips.filter(c => visibleKeys.has(c.key)).map(chip => {
+                    const place: CSSProperties = { gridColumn: `${chip.startIdx + 1} / span ${chip.span}`, gridRow: chip.lane + 1 };
+                    if (chip.kind === 'task' && chip.task) {
+                      const task = chip.task;
+                      return (
+                        <button type="button" className="cm-chip is-task" key={chip.key} style={place}
+                          onClick={() => onEditTask(task)}
+                          title={`Taak · ${task.title} · ${data.projects.find(p => p.id === task.project_id)?.name ?? 'Project'}`}>
+                          <span className="cm-chip-dot" aria-hidden="true" />
+                          <span className="cm-chip-time">Taak</span>
+                          <span className="cm-chip-title">{task.title}</span>
+                        </button>
+                      );
+                    }
+                    const event = chip.event!;
+                    const tracked = trackedMinutesFor(event);
+                    const outside = !isSameMonth(week[chip.startIdx], anchor);
+                    if (chip.kind === 'bar') {
+                      return (
+                        <button type="button"
+                          className={`cm-chip is-bar${chip.continuesLeft ? ' cont-l' : ''}${chip.continuesRight ? ' cont-r' : ''}${event.visibility === 'private' ? ' is-private' : ''}${outside ? ' is-outside' : ''}`}
+                          key={chip.key} style={{ ...place, ...eventColorStyle(eventColor(event)) }}
+                          onClick={() => onOpenEvent(event)}
+                          title={`${event.title}\n${formatEventRange(event)}`}>
+                          {chip.continuesLeft && <ChevronLeft size={11} className="cm-chip-cont" />}
+                          <span className="cm-chip-title">{event.title}{chip.timeLabel ? `, ${chip.timeLabel}` : ''}</span>
+                          {tracked != null && <em className="cm-chip-track"><Clock size={9} />{formatMinutes(tracked)}</em>}
+                          {chip.continuesRight && <ChevronRight size={11} className="cm-chip-cont cm-chip-cont-r" />}
+                        </button>
+                      );
+                    }
+                    return (
+                      <button type="button"
+                        className={`cm-chip is-timed${event.visibility === 'private' ? ' is-private' : ''}${outside ? ' is-outside' : ''}`}
+                        key={chip.key} style={{ ...place, ...eventColorStyle(eventColor(event)) }}
+                        onClick={() => onOpenEvent(event)}
+                        title={`${formatTime(event.starts_at)} – ${formatTime(event.ends_at)}\n${event.title}`}>
+                        <span className="cm-chip-dot" aria-hidden="true" />
+                        <span className="cm-chip-time">{formatTime(event.starts_at)}</span>
+                        <span className="cm-chip-title">{event.title}</span>
+                        {tracked != null && <em className="cm-chip-track"><Clock size={9} />{formatMinutes(tracked)}</em>}
+                      </button>
+                    );
+                  })}
+                  {hiddenPerDay.map((count, i) => count > 0 ? (
+                    <button type="button" className="cm-more" key={`more-${i}`}
+                      style={{ gridColumn: `${i + 1} / span 1`, gridRow: cutoff[i] + 1 }}
+                      onClick={() => onOpenDay(week[i])}>
+                      +{count} meer
+                    </button>
+                  ) : null)}
+                </div>
+              </div>
+            </div>
           );
-            }),
-          ];
         })}
       </div>
     </div>
