@@ -1795,6 +1795,20 @@ export async function reopenFiscalYear(organizationId: UUID, fiscalYearId: UUID)
   return (Array.isArray(data) ? data[0] : data) as FiscalYear;
 }
 
+/**
+ * Op welke rekening de sluitpost van de beginbalans landt. Hangt aan de
+ * rechtsvorm: bij een BV gaat meegebracht vermogen naar de reserves en niet naar
+ * het gestorte aandelenkapitaal.
+ */
+export async function openingBalancePlugAccount(organizationId: UUID): Promise<{ code: string; name: string } | null> {
+  const { data, error } = await supabase.rpc('opening_balance_plug_account', {
+    p_organization_id: organizationId,
+  });
+  if (error) throw bookkeepingError(error);
+  const row = Array.isArray(data) ? data[0] : data;
+  return (row ?? null) as { code: string; name: string } | null;
+}
+
 /** Besluiten van de algemene vergadering over de bestemming van het resultaat. */
 export async function listResultAppropriations(organizationId: UUID): Promise<ResultAppropriationRow[]> {
   const { data, error } = await supabase.rpc('list_result_appropriations', {

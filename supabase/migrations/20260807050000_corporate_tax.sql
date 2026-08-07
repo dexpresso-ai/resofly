@@ -96,8 +96,13 @@ end $$;
 insert into public.corporate_tax_rates
   (year, lower_bound_cents, base_amount_cents, rate_basis_points, loss_relief_threshold_cents, loss_relief_rate_basis_points, source_note)
 values
-  (2021,          0,          0, 1500, 100000000, 5000, 'Art. 22 Wet Vpb 1969 per 1-1-2021 (Belastingplan 2021, Stb. 2020, 540). Let op: de verliesverrekeningsbeperking geldt pas vanaf 2022; voor 2021 hier gelijk gezet aan de latere norm en niet gebruikt.'),
-  (2021,   24500000,    3675000, 2500, 100000000, 5000, 'Art. 22 Wet Vpb 1969 per 1-1-2021: boven € 245.000 → € 36.750 + 25%.'),
+  -- 2021 kende de beperking van art. 20 lid 2 nog NIET: die geldt pas voor
+  -- boekjaren die aanvangen op of na 1-1-2022. Een drempel van € 1 mln zou hier
+  -- dus ten onrechte verlies wegstrepen. Vandaar een drempel die nooit bindt in
+  -- combinatie met 100%: de cap komt dan altijd op de volle winst uit, precies
+  -- zoals de wet het voor 2021 bedoelde.
+  (2021,          0,          0, 1500, 100000000000000, 10000, 'Art. 22 Wet Vpb 1969 per 1-1-2021 (Belastingplan 2021, Stb. 2020, 540). Verliesverrekening onbeperkt: de drempel van art. 20 lid 2 geldt pas vanaf boekjaar 2022.'),
+  (2021,   24500000,    3675000, 2500, 100000000000000, 10000, 'Art. 22 Wet Vpb 1969 per 1-1-2021: boven € 245.000 → € 36.750 + 25%.'),
   (2022,          0,          0, 1500, 100000000, 5000, 'Art. 22 Wet Vpb 1969 per 1-1-2022 (Belastingplan 2021, Stb. 2020, 540). Verliesverrekening art. 20 lid 2 nieuw per 1-1-2022: € 1 mln + 50%.'),
   (2022,   39500000,    5925000, 2580, 100000000, 5000, 'Art. 22 per 1-1-2022; toptarief naar 25,8% via Belastingplan 2022 (Stb. 2021, 651).'),
   (2023,          0,          0, 1900, 100000000, 5000, 'Art. 22 Wet Vpb 1969 per 1-1-2023 (Belastingplan 2023, Stb. 2022, 532).'),
@@ -308,9 +313,31 @@ begin
     raise exception 'Boekjaar niet gevonden.' using errcode = '02000';
   end if;
 
-  -- Het tarief hoort bij het jaar waarin het boekjaar EINDIGT; bij een gebroken
-  -- boekjaar is dat de gangbare aanknoping.
-  v_year := extract(year from v_fy.period_end)::int;
+  -- De aangifte hoort bij het kalenderjaar waarin het boekjaar AANVANGT
+  -- (art. 7 lid 4 Wet Vpb: de winst wordt bepaald over het boekjaar, en de
+  -- aanslag draagt het jaar van aanvang). Aanknopen bij het eindjaar zou een
+  -- gebroken boekjaar 1-7-2022/30-6-2023 onder 2023 brengen.
+  v_year := extract(year from v_fy.period_start)::int;
+
+  -- Loopt het boekjaar door een tariefwijziging heen, dan schrijft art. 31 Wet
+  -- Vpb een tijdsevenredige splitsing voor: de belasting naar rato van de dagen
+  -- per kalenderjaar, elk tegen zijn eigen tabel. Dat kunnen we hier nog niet,
+  -- en een uitkomst tegen één tabel zou er tienduizenden euro's naast zitten.
+  -- Dus weigeren met een duidelijke reden in plaats van stilzwijgend fout
+  -- rekenen.
+  if extract(year from v_fy.period_end)::int <> v_year
+     and exists (
+       select 1
+       from public.corporate_tax_rates a
+       join public.corporate_tax_rates b
+         on b.year = extract(year from v_fy.period_end)::int
+        and b.lower_bound_cents = a.lower_bound_cents
+       where a.year = v_year
+         and (a.rate_basis_points <> b.rate_basis_points or a.base_amount_cents <> b.base_amount_cents)
+     ) then
+    raise exception 'Dit boekjaar loopt door een tariefwijziging heen (% en %). De wet vraagt dan een tijdsevenredige berekening per kalenderjaar (art. 31 Wet Vpb); die ondersteunen we nog niet. Laat deze aangifte door je accountant berekenen.',
+      v_year, extract(year from v_fy.period_end)::int using errcode = '0A000';
+  end if;
 
   select coalesce(sum(
     case when la.type = 'revenue' then jl.credit_cents - jl.debit_cents
@@ -325,7 +352,12 @@ begin
     and je.source_type <> 'year_close'
     and je.date between v_fy.period_start and v_fy.period_end
     and la.type in ('revenue', 'expense')
-    and coalesce(la.report_group, '') <> 'belastingen';
+    -- De vennootschapsbelasting zelf hoort niet in haar eigen grondslag. Filteren
+    -- op het SUBTYPE en niet op de rubriek: de rubriek is een presentatiekolom die
+    -- de gebruiker vrij mag zetten, en wie zijn motorrijtuigenbelasting onder
+    -- "Belastingen" schuift zou anders die kosten uit de grondslag zien vallen.
+    -- Het subtype 'corporate_tax' kent de boekhoudmotor zelf toe aan 9900.
+    and coalesce(la.subtype, '') <> 'corporate_tax';
 
   -- Betaalde voorlopige aanslagen: het debetsaldo op 1545 binnen het boekjaar.
   select coalesce(sum(jl.debit_cents - jl.credit_cents), 0)::bigint
@@ -428,6 +460,8 @@ declare
   v_expense uuid;
   v_payable uuid;
   v_post_date date;
+  v_expected_tax bigint;
+  v_expected_cap bigint;
 begin
   if auth.role() <> 'service_role' and not public.can_write_org(p_organization_id) then
     raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
@@ -475,6 +509,50 @@ begin
       using errcode = '23514';
   end if;
 
+  -- Het bedrag dat straks in het grootboek belandt komt van de aanroeper. Dus
+  -- hier hetzelfde als bij de btw-aangifte: de database rekent het zelf na en
+  -- weigert bij afwijking. De tarieftabel staat er toch al; hem niet gebruiken
+  -- zou betekenen dat één fout in de client rechtstreeks een verkeerde
+  -- belastinglast boekt.
+  select coalesce(r.base_amount_cents, 0)
+       + round(((v_taxable - coalesce(r.lower_bound_cents, 0))::numeric * r.rate_basis_points) / 10000)
+  into v_expected_tax
+  from public.corporate_tax_rates r
+  where r.year = v_year
+    and r.lower_bound_cents < greatest(v_taxable, 1)
+  order by r.lower_bound_cents desc
+  limit 1;
+
+  if v_taxable = 0 then
+    v_expected_tax := 0;
+  end if;
+  if v_expected_tax is null then
+    raise exception 'Voor % zijn geen Vpb-tarieven vastgelegd; de berekening kan niet worden nagerekend.', v_year
+      using errcode = '02000';
+  end if;
+  if v_tax <> v_expected_tax then
+    raise exception 'De berekende belasting (% cent) komt niet overeen met de tarieftabel van % (% cent). Herbereken de aangifte.',
+      v_tax, v_year, v_expected_tax using errcode = '23514';
+  end if;
+
+  -- En de verliesverrekening tegen de wettelijke bovengrens van art. 20 lid 2.
+  select case
+    when v_fiscal <= 0 then 0
+    when v_fiscal <= r.loss_relief_threshold_cents then v_fiscal
+    else r.loss_relief_threshold_cents
+         + round(((v_fiscal - r.loss_relief_threshold_cents)::numeric * r.loss_relief_rate_basis_points) / 10000)
+  end
+  into v_expected_cap
+  from public.corporate_tax_rates r
+  where r.year = v_year
+  order by r.lower_bound_cents
+  limit 1;
+
+  if v_loss_used > coalesce(v_expected_cap, 0) then
+    raise exception 'Er wordt meer verlies verrekend (% cent) dan art. 20 lid 2 Wet Vpb toestaat (% cent).',
+      v_loss_used, coalesce(v_expected_cap, 0) using errcode = '23514';
+  end if;
+
   insert into public.corporate_tax_returns as t (
     organization_id, fiscal_year_id, created_by, year,
     commercial_result_cents, corrections_cents, fiscal_profit_cents,
@@ -518,13 +596,23 @@ begin
   -- en moet de gebruiker eerst heropenen — stilzwijgend naar een andere datum
   -- schuiven zou het resultaat van twee jaren vervuilen.
   v_post_date := v_fy.period_end;
+
+  -- Alleen een JAAR-slot blokkeert. Een gefinaliseerde btw-aangifte vergrendelt
+  -- ook de maand of het kwartaal waarin de balansdatum valt — en die sloten gaan
+  -- nóóit meer open (alleen 'year'-rijen worden ooit verwijderd). Zou dat hier
+  -- blokkeren, dan kon de Vpb-reservering per definitie nooit geboekt worden:
+  -- de balansdatum ligt altijd in de laatste btw-periode van het boekjaar.
+  -- Dat mag ook: deze post raakt alleen 9900 en 1540, en die komen in geen enkele
+  -- btw-rubriek voor — precies de reden waarom 'year_close' dezelfde vrijstelling
+  -- heeft.
   if exists (
     select 1 from public.closed_periods cp
     where cp.organization_id = p_organization_id
+      and cp.period_type = 'year'
       and v_post_date between cp.period_start and cp.period_end
   ) then
-    raise exception 'De periode rond % is afgesloten; de Vpb-last hoort in het boekjaar zelf. Heropen het boekjaar om de reservering alsnog te boeken.',
-      to_char(v_post_date, 'DD-MM-YYYY') using errcode = '23514';
+    raise exception 'Boekjaar % is al afgesloten; de Vpb-last hoort ín dat boekjaar. Heropen het boekjaar om de reservering alsnog te boeken.',
+      v_fy.label using errcode = '23514';
   end if;
 
   if v_tax <> 0 then
@@ -600,11 +688,17 @@ set search_path = public
 as $$
 declare
   v_row public.corporate_tax_returns;
+  v_fy public.fiscal_years;
+  v_later text;
 begin
   if auth.role() <> 'service_role' and not public.can_admin_org(p_organization_id) then
     raise exception 'Alleen een eigenaar of beheerder mag een Vpb-berekening terugdraaien.' using errcode = '42501';
   end if;
 
+  -- Dezelfde sleutel als close_fiscal_year, reopen_fiscal_year en de
+  -- resultaatbestemming: anders zouden de controles hieronder een race verliezen
+  -- van een gelijktijdige jaarafsluiting.
+  perform pg_advisory_xact_lock(hashtext(p_organization_id::text || ':fyclose'));
   perform pg_advisory_xact_lock(hashtext(p_organization_id::text || ':vpb'));
 
   select * into v_row from public.corporate_tax_returns
@@ -614,6 +708,47 @@ begin
   end if;
   if v_row.status = 'reversed' then
     raise exception 'Deze berekening is al teruggedraaid.' using errcode = '23514';
+  end if;
+  -- Een concept heeft niets in het grootboek en niets aan de verliezen gedaan;
+  -- terugdraaien zou verliezen terugboeken die nooit zijn afgeboekt.
+  if v_row.status <> 'final' then
+    raise exception 'Deze berekening is nog een concept en hoeft niet teruggedraaid te worden; pas hem aan of laat hem staan.'
+      using errcode = '23514';
+  end if;
+
+  select * into v_fy from public.fiscal_years where id = v_row.fiscal_year_id;
+
+  -- Het boekstuk uit de rapporten halen verandert de balans van het boekjaar
+  -- waarin de last valt. Is dat jaar afgesloten, dan zou de vastgestelde balans
+  -- met terugwerkende kracht scheef komen te staan — en niet meer te herstellen
+  -- zijn, want opnieuw vaststellen weigert in een afgesloten jaar.
+  if v_fy.id is not null and exists (
+    select 1 from public.closed_periods cp
+    where cp.organization_id = p_organization_id
+      and cp.period_type = 'year'
+      and v_fy.period_end between cp.period_start and cp.period_end
+  ) then
+    raise exception 'Boekjaar % is afgesloten. Heropen dat boekjaar eerst; anders verandert de vastgestelde balans ervan met terugwerkende kracht.',
+      v_fy.label using errcode = '23514';
+  end if;
+
+  -- Heeft een later boekjaar het verlies van dit jaar al verrekend, dan zou het
+  -- terugdraaien die verrekening in de lucht laten hangen en het verlies
+  -- dubbel beschikbaar maken.
+  select r.year::text into v_later
+  from public.corporate_tax_returns r
+  where r.organization_id = p_organization_id
+    and r.status = 'final'
+    and r.year > v_row.year
+    and exists (
+      select 1 from jsonb_array_elements(coalesce(r.computation->'lossesUsed', '[]'::jsonb)) e
+      where (e->>'year')::int = v_row.year
+    )
+  order by r.year
+  limit 1;
+  if v_later is not null then
+    raise exception 'Het verlies van % is al verrekend in de vastgestelde aangifte over %. Draai die eerst terug.',
+      v_row.year, v_later using errcode = '23514';
   end if;
 
   if v_row.accrual_entry_id is not null then
@@ -652,5 +787,261 @@ $$;
 
 revoke all on function public.reverse_corporate_tax_return(uuid, uuid, uuid) from public, anon, authenticated;
 grant execute on function public.reverse_corporate_tax_return(uuid, uuid, uuid) to authenticated, service_role;
+
+-- ------------------------------------------------------------
+-- 9. De twee boekstukfuncties die van het nieuwe brontype moeten weten
+--    Beide LETTERLIJK overgenomen (post_journal_entry uit 20260721000000,
+--    reverse_journal_entry uit 20260807030000); alleen de genoemde regel is
+--    toegevoegd.
+-- ------------------------------------------------------------
+create or replace function public.post_journal_entry(
+  p_organization_id uuid,
+  p_date date,
+  p_description text,
+  p_source_type text,
+  p_source_id uuid,
+  p_lines jsonb,
+  p_created_by uuid default auth.uid()
+)
+returns public.journal_entries
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_entry public.journal_entries;
+  v_year integer := extract(year from p_date)::int;
+  v_quarter smallint := extract(quarter from p_date)::smallint;
+  v_month smallint := extract(month from p_date)::smallint;
+  v_seq bigint;
+  v_number text;
+  v_line jsonb;
+  v_idx integer := 0;
+  v_account uuid;
+  v_debit bigint;
+  v_credit bigint;
+  v_total_debit bigint := 0;
+  v_total_credit bigint := 0;
+  v_diff bigint;
+  v_count integer;
+  v_tolerance bigint;
+  v_alien_code text;
+begin
+  if auth.role() <> 'service_role' and not public.can_write_org(p_organization_id) then
+    raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
+  end if;
+
+  if p_lines is null or jsonb_typeof(p_lines) <> 'array' or jsonb_array_length(p_lines) = 0 then
+    raise exception 'Een journaalpost heeft minimaal één boekingsregel nodig.' using errcode = '23514';
+  end if;
+
+  -- Periodeslot: weiger boeken in een afgesloten aangifteperiode (maand/kwartaal/jaar).
+  -- Uitzondering: het jaarafsluit-boekstuk ('year_close') zelf, dat op de laatste dag
+  -- van het boekjaar valt en dus vaak binnen een reeds gesloten Q4/december-slot.
+  -- GEWIJZIGD (20260807050000): 'corporate_tax' krijgt dezelfde vrijstelling.
+  -- De Vpb-reservering valt per definitie op de balansdatum, en die ligt altijd
+  -- in de laatste btw-periode van het boekjaar. Zonder deze uitzondering zou de
+  -- reservering nooit geboekt kunnen worden zodra die aangifte is gefinaliseerd —
+  -- een slot dat nooit meer opengaat. De post raakt alleen 9900 en 1540 en komt
+  -- in geen enkele btw-rubriek voor, dus er valt niets te beschermen.
+  if coalesce(p_source_type, 'manual') not in ('year_close', 'corporate_tax') and exists (
+    select 1 from public.closed_periods cp
+    where cp.organization_id = p_organization_id
+      and cp.period_start is not null and cp.period_end is not null
+      and p_date between cp.period_start and cp.period_end
+  ) then
+    raise exception 'De aangifteperiode rond % is afgesloten; kies een boekdatum in de eerstvolgende open periode.', p_date
+      using errcode = '23514';
+  end if;
+
+  perform public.ensure_default_ledger_accounts(p_organization_id);
+
+  perform pg_advisory_xact_lock(hashtext(p_organization_id::text || ':' || v_year::text));
+  select count(*) + 1 into v_seq from public.journal_entries
+  where organization_id = p_organization_id and year = v_year;
+  v_number := 'JP-' || v_year || '-' || lpad(v_seq::text, 5, '0');
+
+  insert into public.journal_entries(
+    organization_id, created_by, entry_number, date, year, quarter, month,
+    description, source_type, source_id, status
+  ) values (
+    p_organization_id, p_created_by, v_number, p_date, v_year, v_quarter, v_month,
+    p_description, coalesce(p_source_type, 'manual'), p_source_id, 'draft'
+  ) returning * into v_entry;
+
+  for v_line in select value from jsonb_array_elements(p_lines)
+  loop
+    if (v_line ? 'account_id') and nullif(v_line->>'account_id','') is not null then
+      v_account := (v_line->>'account_id')::uuid;
+    else
+      v_account := public.bookkeeping_account_id(p_organization_id, v_line->>'account_code');
+    end if;
+
+    v_debit := coalesce((v_line->>'debit_cents')::bigint, 0);
+    v_credit := coalesce((v_line->>'credit_cents')::bigint, 0);
+    v_total_debit := v_total_debit + v_debit;
+    v_total_credit := v_total_credit + v_credit;
+
+    insert into public.journal_lines(
+      organization_id, entry_id, account_id, line_index, description,
+      debit_cents, credit_cents, vat_code, vat_rate, vat_base_cents, vat_amount_cents,
+      client_id, supplier_id, project_id
+    ) values (
+      p_organization_id, v_entry.id, v_account, v_idx, nullif(v_line->>'description',''),
+      v_debit, v_credit,
+      nullif(v_line->>'vat_code',''),
+      nullif(v_line->>'vat_rate','')::numeric,
+      nullif(v_line->>'vat_base_cents','')::bigint,
+      nullif(v_line->>'vat_amount_cents','')::bigint,
+      nullif(v_line->>'client_id','')::uuid,
+      nullif(v_line->>'supplier_id','')::uuid,
+      nullif(v_line->>'project_id','')::uuid
+    );
+    v_idx := v_idx + 1;
+  end loop;
+
+  -- Org-integriteit (FIX 6): elke regel moet op een grootboekrekening van
+  -- déze organisatie boeken. Een account_id van een andere org zou de balans
+  -- vervuilen met andermans rekening (cross-tenant lek in de rapportages).
+  select la.code into v_alien_code
+  from public.journal_lines jl
+  join public.ledger_accounts la on la.id = jl.account_id
+  where jl.entry_id = v_entry.id
+    and la.organization_id <> p_organization_id
+  limit 1;
+  if v_alien_code is not null then
+    raise exception 'Grootboekrekening % hoort niet bij deze organisatie.', v_alien_code
+      using errcode = '42501';
+  end if;
+
+  v_diff := v_total_debit - v_total_credit;
+  v_count := v_idx;
+  v_tolerance := greatest(2 * v_count, 2);
+
+  if v_diff <> 0 then
+    if abs(v_diff) <= v_tolerance then
+      v_account := public.bookkeeping_account_id(p_organization_id, '4900');
+      insert into public.journal_lines(
+        organization_id, entry_id, account_id, line_index, description, debit_cents, credit_cents
+      ) values (
+        p_organization_id, v_entry.id, v_account, v_idx, 'Afrondingsverschil',
+        case when v_diff < 0 then -v_diff else 0 end,
+        case when v_diff > 0 then v_diff else 0 end
+      );
+    else
+      raise exception 'Journaalpost niet in balans: debet % ≠ credit % (verschil % cent).',
+        v_total_debit, v_total_credit, v_diff using errcode = '23514';
+    end if;
+  end if;
+
+  update public.journal_entries
+  set status = 'posted', posted_at = now(), posted_by = p_created_by
+  where id = v_entry.id
+  returning * into v_entry;
+
+  return v_entry;
+end;
+$$;
+
+create or replace function public.reverse_journal_entry(
+  p_entry_id uuid,
+  p_date date default null,
+  p_created_by uuid default auth.uid()
+)
+returns public.journal_entries
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_src public.journal_entries;
+  v_lines jsonb;
+  v_reversal public.journal_entries;
+begin
+  -- for update: twee gelijktijdige tegenboekingen van hetzelfde boekstuk
+  -- zouden anders allebei de reversed_by-check passeren.
+  select * into v_src from public.journal_entries where id = p_entry_id for update;
+  if not found then
+    raise exception 'Boekstuk niet gevonden.' using errcode = '02000';
+  end if;
+  if auth.role() <> 'service_role' and not public.can_write_org(v_src.organization_id) then
+    raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
+  end if;
+  if v_src.status <> 'posted' then
+    raise exception 'Alleen een geboekt (posted) boekstuk kan worden tegengeboekt.' using errcode = '23514';
+  end if;
+  if v_src.reversed_by_entry_id is not null then
+    raise exception 'Boekstuk % is al tegengeboekt.', coalesce(v_src.entry_number, v_src.id::text)
+      using errcode = '23514';
+  end if;
+  if v_src.source_type = 'year_close' then
+    raise exception 'Een jaarafsluitboekstuk boek je niet tegen; gebruik "Boekjaar heropenen".'
+      using errcode = '23514';
+  end if;
+  -- TOEGEVOEGD (20260807030000): een resultaatbestemming is net zo'n
+  -- systeemboekstuk. Wie hem hier tegenboekt, laat de rij in
+  -- result_appropriations op 'posted' staan; het boekjaar blijft dan
+  -- geblokkeerd voor heropenen én de nette weg ("Bestemming terugdraaien")
+  -- weigert daarna met "al tegengeboekt". Dus meteen hier afvangen.
+  if v_src.source_type = 'result_appropriation' then
+    raise exception 'Een resultaatbestemming boek je niet los tegen; gebruik "Bestemming terugdraaien" bij het boekjaar.'
+      using errcode = '23514';
+  end if;
+  -- TOEGEVOEGD (20260807050000): idem voor de Vpb-reservering. Los tegenboeken
+  -- laat corporate_tax_returns op 'final' staan en de verliesadministratie
+  -- ongemoeid; daarna weigert "Berekening terugdraaien" met "al tegengeboekt".
+  if v_src.source_type = 'corporate_tax' then
+    raise exception 'Een Vpb-reservering boek je niet los tegen; gebruik "Berekening terugdraaien" bij het boekjaar.'
+      using errcode = '23514';
+  end if;
+  -- Suppletie-integriteit: het origineel is uitgesloten van de reguliere
+  -- aangifte, maar de spiegelpost zou er WEL in tellen → scheefstand. Correctie
+  -- op een suppletie = nieuwe correctieboeking + desgewenst nieuwe suppletie.
+  if exists (select 1 from public.vat_supplement_entries vse where vse.entry_id = v_src.id) then
+    raise exception 'Boekstuk % is verrekend in een btw-suppletie en kan niet worden tegengeboekt. Maak een nieuwe correctieboeking (memoriaal) en verreken die in een nieuwe suppletie.',
+      coalesce(v_src.entry_number, v_src.id::text) using errcode = '23514';
+  end if;
+
+  -- Wissel debet/credit per regel om.
+  select jsonb_agg(jsonb_build_object(
+    'account_id', jl.account_id,
+    'description', coalesce(jl.description, '') || ' (tegenboeking)',
+    'debit_cents', jl.credit_cents,
+    'credit_cents', jl.debit_cents,
+    'vat_code', jl.vat_code,
+    'vat_rate', jl.vat_rate,
+    'vat_base_cents', case when jl.vat_base_cents is null then null else -jl.vat_base_cents end,
+    'vat_amount_cents', case when jl.vat_amount_cents is null then null else -jl.vat_amount_cents end,
+    'client_id', jl.client_id,
+    'supplier_id', jl.supplier_id,
+    'project_id', jl.project_id
+  ) order by jl.line_index)
+  into v_lines
+  from public.journal_lines jl
+  where jl.entry_id = p_entry_id;
+
+  v_reversal := public.post_journal_entry(
+    v_src.organization_id,
+    coalesce(p_date, current_date),
+    'Tegenboeking van ' || coalesce(v_src.entry_number, v_src.id::text),
+    v_src.source_type,
+    v_src.source_id,
+    v_lines,
+    p_created_by
+  );
+
+  update public.journal_entries set reverses_entry_id = v_src.id where id = v_reversal.id;
+
+  -- Het origineel blijft 'posted': het is echt gebeurd en blijft meetellen;
+  -- de spiegelpost neutraliseert het saldo (netto 0 i.p.v. −1×). Alleen
+  -- reversed_by_entry_id markeert het paar. NB: status='reversed' betekent
+  -- "volledig uit de rapporten" en is gereserveerd voor reopen_fiscal_year.
+  update public.journal_entries
+  set reversed_by_entry_id = v_reversal.id, updated_at = now()
+  where id = v_src.id;
+
+  return v_reversal;
+end;
+$$;
 
 commit;

@@ -11,6 +11,7 @@ import { Button, Input, Select, Textarea } from '../components/Ui';
 import { dateNL, euro, uid } from '../lib/format';
 import {
   bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, insertRow,
+  openingBalancePlugAccount,
   postManualJournalEntry, reportAccountLedger, reportTrialBalance, reverseJournalEntry, updateRow,
 } from '../lib/repository';
 import { downloadXaf } from '../lib/xaf';
@@ -873,7 +874,7 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
         // tegenboeken zou het boekjaar in een toestand achterlaten waar geen
         // van beide knoppen nog uit komt. De database weigert het ook.
         const canReverse = canWrite && entry.status === 'posted' && !isReversedPair
-          && entry.source_type !== 'year_close' && entry.source_type !== 'result_appropriation';
+          && !['year_close', 'result_appropriation', 'corporate_tax'].includes(entry.source_type);
         return (
           <div key={entry.id} className={`bk-entry${entry.status === 'reversed' || isReversedPair ? ' is-reversed' : ''}`}>
             <div className="bk-entry-head">
@@ -1060,6 +1061,19 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged }: PageP
   const [lines, setLines] = useState<OpeningLine[]>([emptyLine(), emptyLine(), emptyLine()]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Welke rekening de sluitpost krijgt, hangt aan de rechtsvorm: bij een BV gaat
+  // het meegebrachte vermogen naar de reserves, niet naar het aandelenkapitaal.
+  // De database beslist dat; hier alleen ophalen zodat het scherm niet iets
+  // anders belooft dan er geboekt wordt.
+  const [plug, setPlug] = useState<{ code: string; name: string } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    openingBalancePlugAccount(organizationId)
+      .then(row => { if (!cancelled) setPlug(row); })
+      .catch(() => { /* val terug op de neutrale tekst hieronder */ });
+    return () => { cancelled = true; };
+  }, [organizationId]);
+  const plugLabel = plug ? `${plug.code} ${plug.name}` : 'de eigen-vermogensrekening';
 
   const accountById = useMemo(() => new Map(data.ledgerAccounts.map(a => [a.id, a])), [data.ledgerAccounts]);
   // Beginbalans = balansstanden; W&V-rekeningen horen er niet in.
@@ -1073,7 +1087,7 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged }: PageP
 
   async function save() {
     if (!canWrite || filled.length === 0) return;
-    if (!confirm(`Beginbalans per ${dateNL(date)} vastleggen? Het verschil van ${euroCents(Math.abs(equity))} wordt automatisch op 0500 Eigen vermogen gezet. Dit kan maar één keer.`)) return;
+    if (!confirm(`Beginbalans per ${dateNL(date)} vastleggen? Het verschil van ${euroCents(Math.abs(equity))} wordt automatisch op ${plugLabel} gezet. Dit kan maar één keer.`)) return;
     setBusy(true); setError(null);
     try {
       await createOpeningBalance(organizationId, date, filled.map(l => ({
@@ -1146,7 +1160,7 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged }: PageP
       <div className="bk-totals">
         <div><span>Debet</span><strong>{euroCents(totalDebit)}</strong></div>
         <div><span>Credit</span><strong>{euroCents(totalCredit)}</strong></div>
-        <div><span>Sluitpost eigen vermogen (0500)</span><strong>{euroCents(Math.abs(equity))} {equity >= 0 ? 'credit' : 'debet'}</strong></div>
+        <div><span>Sluitpost eigen vermogen{plug ? ` (${plug.code})` : ''}</span><strong>{euroCents(Math.abs(equity))} {equity >= 0 ? 'credit' : 'debet'}</strong></div>
       </div>
     </div>
   );
@@ -1188,14 +1202,15 @@ function AccountsView({ data, organizationId, canWrite, onChanged }: PageProps) 
    * onaangeroerd; de RPC voegt alleen toe wat ontbreekt.
    */
   async function syncChart() {
-    const before = data.ledgerAccounts.length;
     setSyncing(true); setSyncError(null); setSyncMessage(null);
     try {
       await ensureDefaultLedgerAccounts(organizationId);
       onChanged();
-      setSyncMessage(before === data.ledgerAccounts.length
-        ? 'Het rekeningschema was al compleet.'
-        : 'Het rekeningschema is bijgewerkt.');
+      // Niet melden wat er is toegevoegd: `data` is een prop van deze render en
+      // verandert pas ná de herlaadronde, dus een telling vóór en ná zou altijd
+      // gelijk zijn. De lijst hieronder ververst zichzelf en laat het resultaat
+      // zien; dat is eerlijker dan een bericht dat er niets naast kan zitten.
+      setSyncMessage('Het rekeningschema is nagelopen; ontbrekende rekeningen zijn toegevoegd.');
     } catch (e) {
       setSyncError(e instanceof Error ? e.message : 'Bijwerken mislukt');
     } finally {

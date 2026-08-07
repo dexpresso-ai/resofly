@@ -1122,7 +1122,7 @@ export type JournalEntryStatus = 'draft' | 'posted' | 'reversed';
 export type JournalSourceType =
   | 'sales_invoice' | 'purchase_invoice' | 'asset_depreciation' | 'asset_acquisition' | 'asset_disposal'
   | 'vat_return' | 'payment' | 'opening_balance' | 'manual' | 'year_close' | 'credit_note'
-  | 'result_appropriation';
+  | 'result_appropriation' | 'corporate_tax';
 
 /**
  * Rubriek van een grootboekrekening in de balans of de winst- en verliesrekening.
