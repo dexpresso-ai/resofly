@@ -101,6 +101,7 @@ import { PublicInvoicePage } from './features/PublicInvoicePage';
 import { PublicContractPage } from './features/PublicContractPage';
 import { PublicBookingPage } from './features/PublicBookingPage';
 import { PublicGalleryPage } from './features/PublicGalleryPage';
+import { GalleryTab } from './features/ProjectGallery';
 import { Contracts } from './features/Contracts';
 import { ClientPortal } from './features/portal/ClientPortal';
 import { Archive, Settings, type SettingsTab } from './features/SimplePages';
@@ -122,7 +123,7 @@ import type {
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'fiscal-years'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'fiscal-years'|'archive'|'settings'|'project'|'gallery';
 type EditMode =
   | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status'>> }
   | { kind: 'project'; item?: Project; defaults?: Partial<Pick<Project, 'name' | 'client_id' | 'description' | 'start_date' | 'end_date'>> }
@@ -147,6 +148,8 @@ type ViewState = {
   projectId: string | null;
   clientId: string | null;
   statsReportId: string | null;
+  /** Alleen gevuld op de pagina 'gallery': welke galerij dit tabblad toont. */
+  galleryId: string | null;
   settingsNav: { tab: SettingsTab; key: number } | null;
   pendingReport: { key: string; name: string; definition: ReportDefinition } | null;
   edit: EditMode;
@@ -155,7 +158,7 @@ type WorkspaceTab = ViewState & { id: string };
 
 /** Nieuw, leeg tabblad op een gegeven pagina (standaard het dashboard). */
 function freshTab(page: Page = 'dashboard'): WorkspaceTab {
-  return { id: uid(), page, projectId: null, clientId: null, statsReportId: null, settingsNav: null, pendingReport: null, edit: null };
+  return { id: uid(), page, projectId: null, clientId: null, statsReportId: null, galleryId: null, settingsNav: null, pendingReport: null, edit: null };
 }
 
 /** Terugkomst van de directe bankkoppeling (PSD2, ?code=&state=…): dan opent het
@@ -178,9 +181,17 @@ function rebuildTabs(persisted: PersistedTab[], data: AppData): WorkspaceTab[] {
     let page = (PAGE_TITLES[p.page] ? p.page : 'dashboard') as Page;
     let projectId = p.projectId;
     let clientId = p.clientId;
+    let galleryId = p.galleryId;
     if (page === 'project' && !data.projects.some(x => x.id === projectId)) { page = 'projects'; projectId = null; }
     if (page === 'client' && !data.clients.some(x => x.id === clientId)) { page = 'clients'; clientId = null; }
-    return { id: uid(), page, projectId, clientId, statsReportId: p.statsReportId, settingsNav: null, pendingReport: null, edit: null };
+    // Een galerij die intussen is verwijderd zou een leeg tabblad geven; val dan
+    // terug op het project waar hij bij hoorde, of anders op de projectlijst.
+    if (page === 'gallery' && !data.galleries.some(x => x.id === galleryId)) {
+      galleryId = null;
+      page = data.projects.some(x => x.id === projectId) ? 'project' : 'projects';
+      if (page === 'projects') projectId = null;
+    }
+    return { id: uid(), page, projectId, clientId, statsReportId: p.statsReportId, galleryId, settingsNav: null, pendingReport: null, edit: null };
   });
 }
 
@@ -357,6 +368,7 @@ function App() {
   const setProjectId = (v: React.SetStateAction<string | null>) => patchActiveTab(t => ({ projectId: applyUpdater(v, t.projectId) }));
   const setClientId = (v: React.SetStateAction<string | null>) => patchActiveTab(t => ({ clientId: applyUpdater(v, t.clientId) }));
   const setStatsReportId = (v: React.SetStateAction<string | null>) => patchActiveTab(t => ({ statsReportId: applyUpdater(v, t.statsReportId) }));
+  const galleryId = activeTab.galleryId;
   const setSettingsNav = (v: React.SetStateAction<{ tab: SettingsTab; key: number } | null>) => patchActiveTab(t => ({ settingsNav: applyUpdater(v, t.settingsNav) }));
   const setPendingReport = (v: React.SetStateAction<{ key: string; name: string; definition: ReportDefinition } | null>) => patchActiveTab(t => ({ pendingReport: applyUpdater(v, t.pendingReport) }));
   const setEdit = (v: React.SetStateAction<EditMode>) => patchActiveTab(t => ({ edit: applyUpdater(v, t.edit) }));
@@ -693,7 +705,7 @@ function App() {
   // anders zou het opstart-tabblad de opgeslagen set overschrijven.
   useEffect(() => {
     if (!activeOrganizationId || tabsLoadedForRef.current !== activeOrganizationId) return;
-    const persisted: PersistedTab[] = tabs.map(t => ({ page: t.page, projectId: t.projectId, clientId: t.clientId, statsReportId: t.statsReportId }));
+    const persisted: PersistedTab[] = tabs.map(t => ({ page: t.page, projectId: t.projectId, clientId: t.clientId, statsReportId: t.statsReportId, galleryId: t.galleryId }));
     const activeIndex = Math.max(0, tabs.findIndex(t => t.id === activeTabId));
     savePersistedTabs(activeOrganizationId, persisted, activeIndex);
   }, [tabs, activeTabId, activeOrganizationId]);
@@ -702,6 +714,29 @@ function App() {
   // actieve tabblad.
   function openTab() {
     const tab = freshTab('dashboard');
+    setTabs([...tabs, tab]);
+    setActiveTabId(tab.id);
+    setMobileNavOpen(false);
+  }
+  /**
+   * Opent één galerij als eigen tabblad. Staat hij al open, dan springen we
+   * daarheen in plaats van een tweede tabblad met hetzelfde te maken — anders
+   * verzamel je duplicaten bij elke klik.
+   */
+  function openGalleryTab(targetGalleryId: string, targetProjectId: string | null) {
+    const existing = tabs.find(t => t.page === 'gallery' && t.galleryId === targetGalleryId);
+    if (existing) {
+      setActiveTabId(existing.id);
+      setMobileNavOpen(false);
+      return;
+    }
+    const tab: WorkspaceTab = {
+      ...freshTab('gallery'),
+      galleryId: targetGalleryId,
+      // Het project onthouden zodat "terug" en het herstellen na herladen weten
+      // waar deze galerij bij hoort.
+      projectId: targetProjectId,
+    };
     setTabs([...tabs, tab]);
     setActiveTabId(tab.id);
     setMobileNavOpen(false);
@@ -1885,7 +1920,27 @@ function App() {
     const canReadContracts = permissions.canRead('finance');
     const canWriteContracts = orgCanWrite && permissions.canWrite('finance');
     if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} permissions={permissions} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} />;
-    if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} canReadContracts={canReadContracts} canWriteContracts={canWriteContracts} creativeActive={organizationContext.creativeStatus?.active ?? true} creativeGraceUntil={organizationContext.creativeStatus?.grace_until ?? null} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
+    if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} canReadContracts={canReadContracts} canWriteContracts={canWriteContracts} creativeActive={organizationContext.creativeStatus?.active ?? true} creativeGraceUntil={organizationContext.creativeStatus?.grace_until ?? null} onOpenGalleryTab={(gid) => openGalleryTab(gid, project.id)} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
+    if (page === 'gallery') {
+      // Het project leiden we uit de galerij zelf af: dat blijft kloppen ook als
+      // de projectverwijzing van het tabblad ooit achterloopt.
+      const gallery = data.galleries.find(g => g.id === view.galleryId) ?? null;
+      const galleryProject = gallery ? data.projects.find(p => p.id === gallery.project_id) ?? null : null;
+      if (!gallery || !galleryProject) {
+        return <div className="empty">
+          <div className="e-big">Deze galerij bestaat niet meer</div>
+          <div>Sluit dit tabblad, of open een andere galerij vanuit het project.</div>
+        </div>;
+      }
+      return <GalleryTab
+        data={data}
+        project={galleryProject}
+        organizationId={activeOrg.id}
+        canWrite={canWrite && (organizationContext.creativeStatus?.active ?? true)}
+        onChanged={refresh}
+        initialGalleryId={gallery.id}
+      />;
+    }
     if (page === 'projects') return <ProjectsListPage data={data} canWrite={canWrite} onNewProject={() => ensureCanWrite() && setEdit({kind:'project'})} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} onEditProject={(item) => setEdit({kind:'project', item})}/>;
     if (page === 'project-planning') return <ProjectsPlanningPage data={data} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} />;
     if (page === 'client' && client) return <ClientDetailPage data={data} client={client} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewNote={(folderId) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(folderId) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditDocument={openDocument} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread}/>;

@@ -7,7 +7,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import {
   ArrowUpDown, CheckSquare, ChevronDown, ChevronUp, Copy, Film, FolderTree, HardDrive, Heart,
-  Image as ImageIcon, Layers, Link2, Loader2, Pencil, Plus, Settings2, Sparkles, SlidersHorizontal, Star,
+  ExternalLink, Image as ImageIcon, Layers, Link2, Loader2, Maximize2, Minimize2, Pencil, Plus, Settings2,
+  Sparkles, SlidersHorizontal, Star,
   Trash2, Upload, UploadCloud, X,
 } from 'lucide-react';
 import type {
@@ -183,19 +184,27 @@ async function filesFromDataTransfer(transfer: DataTransfer): Promise<File[]> {
   return files.length > 0 ? files : direct;
 }
 
-export function GalleryTab({ data, project, organizationId, canWrite, onChanged }: {
+export function GalleryTab({
+  data, project, organizationId, canWrite, onChanged, initialGalleryId, onOpenInTab,
+}: {
   data: AppData;
   project: Project;
   organizationId: UUID;
   canWrite: boolean;
   onChanged: () => void | Promise<void>;
+  /** Meteen deze galerij openen i.p.v. de lijst — gebruikt door het eigen tabblad. */
+  initialGalleryId?: string;
+  /** Afwezig = we zitten al in een eigen tabblad, dan heeft die knop geen zin. */
+  onOpenInTab?: (galleryId: string) => void;
 }) {
   const galleries = useMemo(
     () => data.galleries.filter(g => g.project_id === project.id).sort((a, b) => b.created_at.localeCompare(a.created_at)),
     [data.galleries, project.id],
   );
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(initialGalleryId ?? null);
   const openGallery = galleries.find(g => g.id === openId) ?? null;
+  // Presenteerstand: alleen de galerij, zonder zijbalk en tabbalk.
+  const [fullscreen, setFullscreen] = useState(false);
 
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [categories, setCategories] = useState<GalleryCategory[]>([]);
@@ -231,6 +240,18 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
   const openIdRef = useRef<string | null>(null);
   const refreshTimer = useRef<number | null>(null);
   useEffect(() => { openIdRef.current = openId; }, [openId]);
+
+  // Escape verlaat de presenteerstand. Bewust op window: de knop kan dan de
+  // focus kwijt zijn doordat je in de galerij hebt geklikt.
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fullscreen]);
+
+  // Terug naar de lijst betekent: er is niets meer om schermvullend te tonen.
+  useEffect(() => { if (!openId) setFullscreen(false); }, [openId]);
 
   const refreshStorage = useCallback(async () => {
     setStorage(await fetchOrganizationStorageStatus(organizationId));
@@ -1021,7 +1042,7 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
 
   return (
     <article
-      className={`client-panel gal-detail${dragActive ? ' is-dropping' : ''}`}
+      className={`client-panel gal-detail${dragActive ? ' is-dropping' : ''}${fullscreen ? ' is-fullscreen' : ''}`}
       onDragEnter={(e) => {
         if (!isFileDrag(e)) return;
         e.preventDefault();
@@ -1065,6 +1086,20 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
               <Heart size={13} fill="currentColor" /> {favoriteTotal}
             </button>
           )}
+          {/* Bekijken mag ook zonder schrijfrechten, dus deze twee staan buiten
+              het writable-blok. */}
+          {onOpenInTab && (
+            <Button onClick={() => onOpenInTab(openGallery.id)} title="Deze galerij als eigen tabblad openen">
+              <ExternalLink size={14} /> Eigen tabblad
+            </Button>
+          )}
+          <Button
+            onClick={() => setFullscreen(v => !v)}
+            variant={fullscreen ? 'primary' : undefined}
+            title={fullscreen ? 'Terug naar de werkruimte (Escape)' : 'Alleen de galerij tonen'}
+          >
+            {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />} {fullscreen ? 'Verlaten' : 'Volledig scherm'}
+          </Button>
           {writable && (
             <>
               <Button onClick={() => openSettings('files')} title="Categorieën beheren en bestanden indelen">
@@ -1200,7 +1235,13 @@ export function GalleryTab({ data, project, organizationId, canWrite, onChanged 
               Of klik om te bladeren. Hele mappen mogen ook — submappen worden meegenomen.
             </span>
             <span className="gal-dropzone-meta">
-              {openGallery.format === 'photo' ? 'JPEG, PNG of WebP' : openGallery.format === 'video' ? 'MP4, MOV, WebM of MKV' : 'JPEG, PNG, WebP en video’s'} · tot 4 GB per bestand
+              {openGallery.format === 'photo' ? 'JPEG, PNG of WebP' : openGallery.format === 'video' ? 'MP4, MOV, WebM of MKV' : 'JPEG, PNG, WebP en video’s'}
+              {' · '}
+              {openGallery.format === 'photo'
+                ? 'foto’s tot 4 GB'
+                : openGallery.format === 'video'
+                  ? 'video’s tot 30 GB'
+                  : 'foto’s tot 4 GB, video’s tot 30 GB'}
             </span>
           </button>
         )

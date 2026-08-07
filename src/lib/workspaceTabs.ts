@@ -13,15 +13,18 @@ export const PAGE_TITLES: Record<string, string> = {
   suppliers: 'Leveranciers', 'purchase-invoices': 'Inkoopfacturen', ledger: 'Grootboek',
   bank: 'Bank', assets: 'Activa', pnl: 'Winst & verlies', 'vat-returns': 'Omzetbelasting',
   'fiscal-years': 'Boekjaren', archive: 'Archief', settings: 'Instellingen', project: 'Project',
+  gallery: 'Galerij',
 };
 
 /** Titel voor een view: projectnaam/klantnaam waar van toepassing, anders de paginanaam. */
 export function viewTitle(
-  view: { page: string; projectId: string | null; clientId: string | null },
+  view: { page: string; projectId: string | null; clientId: string | null; galleryId?: string | null },
   data: AppData,
 ): string {
   if (view.page === 'project') return data.projects.find(p => p.id === view.projectId)?.name ?? 'Project';
   if (view.page === 'client') return data.clients.find(c => c.id === view.clientId)?.name ?? 'Klant';
+  // De galerijtitel zegt méér dan "Galerij" zodra er twee openstaan.
+  if (view.page === 'gallery') return data.galleries.find(g => g.id === view.galleryId)?.title ?? 'Galerij';
   return PAGE_TITLES[view.page] ?? view.page;
 }
 
@@ -32,6 +35,7 @@ export type PersistedTab = {
   projectId: string | null;
   clientId: string | null;
   statsReportId: string | null;
+  galleryId: string | null;
 };
 
 /** Open tabbladen worden per organisatie onthouden. */
@@ -60,6 +64,7 @@ export function loadPersistedTabs(organizationId: string): { tabs: PersistedTab[
         projectId: typeof t.projectId === 'string' ? t.projectId : null,
         clientId: typeof t.clientId === 'string' ? t.clientId : null,
         statsReportId: typeof t.statsReportId === 'string' ? t.statsReportId : null,
+        galleryId: typeof t.galleryId === 'string' ? t.galleryId : null,
       }));
     if (!tabs.length) return null;
     const activeIndex = typeof parsed.activeIndex === 'number' ? parsed.activeIndex : 0;

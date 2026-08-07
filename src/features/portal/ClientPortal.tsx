@@ -417,13 +417,9 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
         <h2>{gallery.title}</h2>
       </div>
     </div>
-    {(gallery.description || project) && (
-      <p className="portal-muted portal-gallery-sub">
-        {project ? `Project: ${project.name}` : ''}
-        {project && gallery.description ? ' — ' : ''}
-        {gallery.description ?? ''}
-      </p>
-    )}
+    {/* Alleen de projectcontext: de titel en omschrijving toont de hero van de
+        viewer al, en die twee keer onder elkaar zetten leest als een fout. */}
+    {project && <p className="portal-muted portal-gallery-sub">Project: {project.name}</p>}
     {error && <p className="portal-error">{error}</p>}
     {loading && <p className="portal-muted">Galerij laden…</p>}
     {detail?.branding?.footerText && <p className="portal-gallery-own-note">{detail.branding.footerText}</p>}

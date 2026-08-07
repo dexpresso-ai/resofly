@@ -1,7 +1,7 @@
 import { Calendar, FolderOpen, LayoutDashboard, Receipt, Users } from 'lucide-react';
 import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'fiscal-years'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'fiscal-years'|'archive'|'settings'|'project'|'gallery';
 
 // Welke pagina's onder welke onderbalk-knop vallen (voor de actief-markering).
 // Zelfde groepering als de zijbalk, zodat bv. de Grootboek-pagina "Financiën" oplicht.

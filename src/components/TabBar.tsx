@@ -1,11 +1,11 @@
-import { Archive, BarChart3, BookOpen, Boxes, Calendar, CalendarClock, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, Megaphone, MessageSquare, Percent, Plus, Receipt, Settings, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { Archive, BarChart3, Images, BookOpen, Boxes, Calendar, CalendarClock, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, Megaphone, MessageSquare, Percent, Plus, Receipt, Settings, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData } from '../types';
 import { viewTitle } from '../lib/workspaceTabs';
 
 /** Minimale vorm van een tabblad die de tabbalk nodig heeft om te renderen. Het
  *  volledige WorkspaceTab-type (met view-state + editor) leeft in main.tsx; door
  *  hier structureel te typen vermijden we een circulaire import. */
-type TabLike = { id: string; page: string; projectId: string | null; clientId: string | null };
+type TabLike = { id: string; page: string; projectId: string | null; clientId: string | null; galleryId?: string | null };
 
 // Icoon per pagina — op de telefoon tonen de werktabs alleen dit icoon (zie
 // globals.css ≤760px), op desktop staat het vóór het tekstlabel.
@@ -16,7 +16,7 @@ const PAGE_ICON: Record<string, typeof LayoutDashboard> = {
   'project-planning': Calendar, tickets: Ticket, chat: MessageSquare, marketing: Megaphone, quotes: FileText,
   contracts: FileSignature, invoices: Receipt, suppliers: Truck, 'purchase-invoices': FileText, ledger: BookOpen,
   bank: Landmark, assets: Boxes, pnl: TrendingUp, 'vat-returns': Percent, 'fiscal-years': CalendarClock,
-  archive: Archive, settings: Settings,
+  archive: Archive, settings: Settings, gallery: Images,
 };
 
 /** Browser-achtige tabbalk boven de werkruimte. Klik = wisselen, ×/middenklik =

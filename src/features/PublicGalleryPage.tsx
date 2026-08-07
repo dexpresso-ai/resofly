@@ -55,6 +55,28 @@ type Payload = {
 };
 
 const SESSION_STORAGE_KEY = 'resofly.gallery.session';
+const VISITOR_STORAGE_KEY = 'resofly.gallery.visitor';
+
+/**
+ * De naam waaronder deze bezoeker reageert. `null` = nog nooit gevraagd; een
+ * lege string = wél gevraagd en bewust overgeslagen (dan blijft het label bij
+ * de fotograaf "Via deellink"). Zo vragen we het precies één keer per apparaat.
+ */
+function getVisitorName(): string | null {
+  try {
+    return window.localStorage.getItem(VISITOR_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeVisitorName(name: string): void {
+  try {
+    window.localStorage.setItem(VISITOR_STORAGE_KEY, name);
+  } catch {
+    /* privémodus: dan vragen we het deze sessie nog een keer */
+  }
+}
 
 function getSessionKey(): string {
   try {
@@ -72,6 +94,52 @@ function getSessionKey(): string {
   }
 }
 
+/**
+ * Wordt één keer getoond, bij de eerste favoriet of like. Er is bewust geen
+ * kruisje: elke uitweg — opslaan, overslaan of Escape — laat de reactie
+ * doorgaan, zodat een klik nooit stilletjes verloren gaat.
+ */
+function VisitorNamePrompt({ reaction, onDone }: {
+  reaction: 'favorite' | 'like';
+  onDone: (name: string) => void;
+}) {
+  const [name, setName] = useState('');
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onDone(''); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onDone]);
+
+  return (
+    <div className="pgal-ask" role="dialog" aria-modal="true" aria-labelledby="pgal-ask-title">
+      <form
+        className="pgal-pin-card"
+        onSubmit={(e) => { e.preventDefault(); onDone(name); }}
+      >
+        <h2 id="pgal-ask-title">Wie ben je?</h2>
+        <p>
+          {reaction === 'favorite'
+            ? 'Zo weet de fotograaf van wie deze selectie is. Je hoeft dit maar één keer in te vullen.'
+            : 'Zo weet de fotograaf wie er heeft gereageerd. Je hoeft dit maar één keer in te vullen.'}
+        </p>
+        <Input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Je naam"
+          maxLength={120}
+          aria-label="Je naam"
+        />
+        <div className="pgal-ask-actions">
+          <Button type="button" variant="ghost" onClick={() => onDone('')}>Overslaan</Button>
+          <Button type="submit" variant="primary" disabled={!name.trim()}>Opslaan</Button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 export function PublicGalleryPage({ token }: { token: string }) {
   const [payload, setPayload] = useState<Payload | null>(null);
   const [needsPin, setNeedsPin] = useState(false);
@@ -83,6 +151,11 @@ export function PublicGalleryPage({ token }: { token: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessionKey] = useState(getSessionKey);
+  const [visitorName, setVisitorName] = useState<string | null>(getVisitorName);
+  // De reactie die wacht tot de bezoeker zijn naam heeft ingevuld of overgeslagen.
+  const [pendingReaction, setPendingReaction] = useState<
+    { item: GalleryViewerItem; reaction: 'favorite' | 'like' } | null
+  >(null);
 
   const load = useCallback(async (pinValue: string) => {
     setLoading(true);
@@ -127,21 +200,58 @@ export function PublicGalleryPage({ token }: { token: string }) {
     return () => window.clearTimeout(timer);
   }, [payload, pin, load]);
 
-  async function sendReaction(item: GalleryViewerItem, on: boolean, reaction: 'favorite' | 'like') {
+  /**
+   * `nameOverride` bestaat omdat de naam en de reactie in dezelfde tel worden
+   * afgehandeld: `setVisitorName` is dan nog niet doorgekomen in deze closure,
+   * dus geven we de zojuist ingevulde naam rechtstreeks mee.
+   */
+  async function sendReaction(
+    item: GalleryViewerItem,
+    on: boolean,
+    reaction: 'favorite' | 'like',
+    nameOverride?: string,
+  ) {
+    const naam = nameOverride ?? visitorName ?? '';
     const { data, error } = await supabase.functions.invoke('gallery-public', {
-      body: { action: 'toggleFavorite', token, pin: pin || undefined, sessionKey, itemId: item.id, on, reaction },
+      body: {
+        action: 'toggleFavorite', token, pin: pin || undefined, sessionKey, itemId: item.id, on, reaction,
+        // Alleen bij het áánzetten schrijft de edge function een rij weg, en
+        // daar hoort het label bij. Leeg = de fotograaf ziet "Via deellink".
+        visitorName: on && naam ? naam : undefined,
+      },
     });
     if (error || !data?.ok) throw new Error('Reactie bijwerken mislukt');
   }
 
-  async function toggleFavorite(item: GalleryViewerItem, on: boolean) {
+  /**
+   * De eerste keer dat iemand iets aanvinkt, vragen we wie hij is — anders staat
+   * bij de fotograaf alles onder "Via deellink" en weet die niet wiens selectie
+   * hij voor zich heeft. Daarna nooit meer, en overslaan mag altijd.
+   */
+  function needsName(on: boolean): boolean {
+    return on && visitorName === null;
+  }
+
+  function resolveName(name: string) {
+    const clean = name.trim().slice(0, 120);
+    storeVisitorName(clean);
+    setVisitorName(clean);
+    const pending = pendingReaction;
+    setPendingReaction(null);
+    if (!pending) return;
+    // De reactie die op de naam wachtte, alsnog uitvoeren — met de naam erbij.
+    if (pending.reaction === 'favorite') void applyFavorite(pending.item, true, clean);
+    else void applyLike(pending.item, true, clean);
+  }
+
+  async function applyFavorite(item: GalleryViewerItem, on: boolean, nameOverride?: string) {
     setFavoriteIds(prev => {
       const next = new Set(prev);
       if (on) next.add(item.id); else next.delete(item.id);
       return next;
     });
     try {
-      await sendReaction(item, on, 'favorite');
+      await sendReaction(item, on, 'favorite', nameOverride);
     } catch {
       setFavoriteIds(prev => {
         const next = new Set(prev);
@@ -151,7 +261,7 @@ export function PublicGalleryPage({ token }: { token: string }) {
     }
   }
 
-  async function toggleLike(item: GalleryViewerItem, on: boolean) {
+  async function applyLike(item: GalleryViewerItem, on: boolean, nameOverride?: string) {
     const shift = (delta: number) => setLikeCounts(prev => {
       const next = new Map(prev);
       next.set(item.id, Math.max(0, (next.get(item.id) ?? 0) + delta));
@@ -164,7 +274,7 @@ export function PublicGalleryPage({ token }: { token: string }) {
     });
     shift(on ? 1 : -1);
     try {
-      await sendReaction(item, on, 'like');
+      await sendReaction(item, on, 'like', nameOverride);
     } catch {
       setLikeIds(prev => {
         const next = new Set(prev);
@@ -173,6 +283,17 @@ export function PublicGalleryPage({ token }: { token: string }) {
       });
       shift(on ? -1 : 1);
     }
+  }
+
+  // Ingangen vanuit de viewer: eerst kijken of we nog een naam moeten vragen.
+  function toggleFavorite(item: GalleryViewerItem, on: boolean) {
+    if (needsName(on)) { setPendingReaction({ item, reaction: 'favorite' }); return; }
+    void applyFavorite(item, on);
+  }
+
+  function toggleLike(item: GalleryViewerItem, on: boolean) {
+    if (needsName(on)) { setPendingReaction({ item, reaction: 'like' }); return; }
+    void applyLike(item, on);
   }
 
   function downloadItem(item: GalleryViewerItem) {
@@ -248,6 +369,12 @@ export function PublicGalleryPage({ token }: { token: string }) {
     // Accentkleur en lettertypen komen als CSS-variabelen binnen, alleen op
     // deze pagina — zo kleuren alle bestaande stijlen mee zonder duplicatie.
     <main className="pgal" style={brandStyle(branding)}>
+      {pendingReaction && (
+        <VisitorNamePrompt
+          reaction={pendingReaction.reaction}
+          onDone={resolveName}
+        />
+      )}
       {branding?.logoDataUrl && (
         <div className="pgal-brand">
           <img src={branding.logoDataUrl} alt={branding.companyName ?? 'Logo'} />

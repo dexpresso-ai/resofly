@@ -755,6 +755,7 @@ export function ProjectPage({
   canWriteContracts,
   creativeActive,
   creativeGraceUntil,
+  onOpenGalleryTab,
   onNewTask,
   onEditTask,
   onEditProject,
@@ -789,6 +790,8 @@ export function ProjectPage({
   creativeActive: boolean;
   /** Tot wanneer bestaande galerijen na het uitzetten nog bereikbaar zijn. */
   creativeGraceUntil: string | null;
+  /** Opent één galerij als eigen werkruimte-tabblad. */
+  onOpenGalleryTab: (galleryId: string) => void;
   onNewTask: () => void;
   onEditTask: (task: Task) => void;
   onEditProject: () => void;
@@ -1260,6 +1263,7 @@ export function ProjectPage({
           organizationId={organizationId}
           canWrite={canWrite && creativeActive}
           onChanged={onChanged}
+          onOpenInTab={onOpenGalleryTab}
         />
       </>}
 

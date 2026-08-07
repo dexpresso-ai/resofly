@@ -4672,6 +4672,22 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 /* Favoriet-hartjes altijd zichtbaar zodra er favorieten zijn (beheerweergave). */
 .galv-tile .galv-heart.is-fav,.galv-tile .galv-heart[disabled]{opacity:1}
 
+/* ── Presenteerstand: alleen de galerij ──────────────────────────────────────
+   Legt de galerij over de héle app heen — zijbalk, tabbalk en paneelrand vallen
+   weg, zodat je hem kunt tonen zoals de klant hem krijgt. Boven de tabbalk-
+   offset uit (die zet overlays juist op 42px) want hier moet écht alles weg. */
+.gal-detail.is-fullscreen{position:fixed;inset:0;z-index:200;margin:0;border:0;border-radius:0;overflow:auto;-webkit-overflow-scrolling:touch;padding:18px 20px 28px;background:var(--bg)}
+/* De kop blijft plakken: zonder die knop kom je er in een lange galerij niet
+   meer uit zonder naar boven te scrollen. */
+.gal-detail.is-fullscreen .client-panel-head{position:sticky;top:0;z-index:3;margin:-18px -20px 14px;padding:12px 20px;background:var(--bg);border-bottom:1px solid var(--border)}
+/* De app zet overlays op 42px zodat de tabbalk zichtbaar blijft; in deze stand
+   is die tabbalk juist wég, dus zou daar een strook galerij doorheen piepen. */
+.gal-detail.is-fullscreen .bk-modal-backdrop{top:0}
+@media(max-width:760px){
+  .gal-detail.is-fullscreen{padding:12px 12px 22px}
+  .gal-detail.is-fullscreen .client-panel-head{margin:-12px -12px 10px;padding:10px 12px}
+}
+
 /* ── Downloadmenu: doorzichtige hamburger over de opening ────────────────────
    Zweeft rechtsboven over de galerij zodat de kopbalk vrijblijft. Bewust 62%
    zwart met een blur eronder: doorzichtig genoeg om het beeld te laten spreken,
@@ -4837,6 +4853,13 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .pgal-pin-card h1{font-size:19px;margin:0}
 .pgal-pin-card p{font-size:12.5px;color:var(--muted2);line-height:1.6;margin:0}
 .pgal-pin-card .form-input{text-align:center;font-size:17px;letter-spacing:.25em}
+/* Naamvraag bij de eerste reactie. Leent de pincode-kaart, maar zonder de
+   letterspatiëring daarvan — dat is voor cijfers, niet voor een naam. */
+.pgal-ask{position:fixed;inset:0;z-index:240;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(5,5,5,.72);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
+.pgal-ask .pgal-pin-card h2{font-size:19px;margin:0}
+.pgal-ask .pgal-pin-card .form-input{text-align:left;font-size:15px;letter-spacing:normal}
+.pgal-ask-actions{display:flex;gap:8px;width:100%}
+.pgal-ask-actions .btn{flex:1;justify-content:center}
 .pgal-pin-icon{display:flex;align-items:center;justify-content:center;width:46px;height:46px;border-radius:50%;background:rgba(255,217,102,.1);color:var(--accent)}
 .pgal-error{font-size:12px;color:var(--accent-r)}
 .pgal-loading{display:flex;align-items:center;gap:10px;color:var(--muted2);font-size:13px}
