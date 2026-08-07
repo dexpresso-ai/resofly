@@ -904,22 +904,12 @@
 .tb-line,.tb-gutter{height:var(--tb-h)}
 .tb-hint{padding:8px 16px 12px}
 
-.calendar-month-view{display:flex;flex-direction:column;gap:8px;min-height:calc(100vh - 260px)}
-.calendar-month-weekdays{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;color:var(--muted);font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:.12em;padding:0 2px}
-.calendar-month-weekdays span{text-align:center;background:rgba(255,255,255,.025);border:1px solid var(--border);border-radius:9px;padding:8px 6px}
-.calendar-month-grid{display:grid;grid-template-columns:repeat(7,minmax(132px,1fr));gap:8px;flex:1;overflow:auto;padding:2px;min-height:0}
-.calendar-month-cell{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.015));border:1px solid var(--border);border-radius:13px;min-height:148px;padding:9px;display:flex;flex-direction:column;gap:8px;overflow:hidden}
-.calendar-month-cell.is-outside-month{opacity:.52;background:rgba(255,255,255,.018)}
-.calendar-month-cell.is-today{border-color:rgba(255,217,102,.55);box-shadow:0 0 0 1px rgba(255,217,102,.08) inset,0 12px 26px rgba(0,0,0,.18)}
-.calendar-month-date{display:flex;align-items:center;justify-content:space-between;gap:8px;background:transparent;border:0;color:inherit;font-family:inherit;cursor:pointer;text-align:left;padding:0}
-.calendar-month-date span{font-size:10px;color:var(--muted);font-weight:900;text-transform:uppercase;letter-spacing:.1em}.calendar-month-date strong{display:grid;place-items:center;width:28px;height:28px;border-radius:999px;background:var(--bg3);font-size:14px}.calendar-month-cell.is-today .calendar-month-date strong{background:var(--accent);color:#1a1a1a}
-.calendar-month-items{display:flex;flex-direction:column;gap:5px;min-height:0;overflow:hidden}
-.month-chip{width:100%;min-width:0;border:1px solid var(--border);border-radius:8px;background:var(--bg3);color:var(--text);font-family:inherit;text-align:left;text-decoration:none;cursor:pointer;padding:6px 7px;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:6px;line-height:1.25}
-.month-chip:hover{filter:brightness(1.08);border-color:var(--border2)}.month-chip span{font-size:9px;color:rgba(245,245,245,.72);font-weight:900;text-transform:uppercase;white-space:nowrap}.month-chip strong{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.month-chip em{grid-column:2;font-size:9px;color:var(--muted);font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.month-chip.external{background:var(--event-bg,rgba(255,217,102,.24));border-color:var(--event-border-soft,rgba(255,217,102,.36));border-left:3px solid var(--event-color,var(--accent))}.month-chip.task{border-left:3px solid var(--accent)}.month-chip.more{display:block;text-align:center;color:var(--accent);font-weight:950;background:rgba(255,217,102,.08)}.month-empty{font-size:11px;color:var(--muted);border:1px dashed var(--border);border-radius:9px;padding:10px;text-align:center;margin-top:auto}
+/* De maandweergave staat als één samenhangend blok onderaan dit bestand
+   ("AGENDA · MAANDWEERGAVE — Google Calendar-look"). */
 .calendar-list-grid .calendar-day{min-height:360px}.calendar-list-grid .calendar-day-body{overflow:auto}
 
-@media(max-width:1200px){.calendar-toolbar-premium{grid-template-columns:1fr;align-items:stretch}.calendar-range-block{justify-self:start;text-align:left}.calendar-view-tabs{justify-self:start;overflow:auto;max-width:100%}.calendar-link-btn{justify-self:start}.tb-scroll{height:calc(100vh - 330px);min-height:560px}.calendar-month-grid{grid-template-columns:repeat(7,minmax(118px,1fr))}}
-@media(max-width:900px){:root{--tb-h:36px;--tb-gutter:52px}.calendar-main-card{min-height:calc(100vh - 140px)}.calendar-view-tabs .tb-vbtn span{display:none}.tb-scroll{height:calc(100vh - 300px);min-height:500px;padding:0 10px}.tb-day-headers,.tb-allday-row{padding:0 10px}.tb-grid{min-width:880px}.tb-single-day .tb-grid{min-width:0}.calendar-month-weekdays{display:none}.calendar-month-grid{grid-template-columns:1fr;overflow:visible}.calendar-month-cell{min-height:auto}.calendar-month-view{min-height:0}.calendar-list-grid{grid-template-columns:1fr!important}}
+@media(max-width:1200px){.calendar-toolbar-premium{grid-template-columns:1fr;align-items:stretch}.calendar-range-block{justify-self:start;text-align:left}.calendar-view-tabs{justify-self:start;overflow:auto;max-width:100%}.calendar-link-btn{justify-self:start}.tb-scroll{height:calc(100vh - 330px);min-height:560px}}
+@media(max-width:900px){:root{--tb-h:36px;--tb-gutter:52px}.calendar-main-card{min-height:calc(100vh - 140px)}.calendar-view-tabs .tb-vbtn span{display:none}.tb-scroll{height:calc(100vh - 300px);min-height:500px;padding:0 10px}.tb-day-headers,.tb-allday-row{padding:0 10px}.tb-grid{min-width:880px}.tb-single-day .tb-grid{min-width:0}.calendar-list-grid{grid-template-columns:1fr!important}}
 
 /* Calendar UX polish: sticky canvas, richer hierarchy, mobile-first details */
 .calendar-main-card{isolation:isolate}
@@ -947,14 +937,13 @@
 .tb-ev{font-family:Verdana,Geneva,Tahoma,sans-serif;text-align:left;color:var(--text);background:linear-gradient(180deg,var(--event-bg,rgba(255,217,102,.62)),rgba(255,255,255,.06));border:1px solid var(--event-border-soft,rgba(255,217,102,.72));border-left:4px solid var(--event-color,var(--accent));box-shadow:0 8px 20px rgba(0,0,0,.18),0 1px 0 rgba(255,255,255,.08) inset}.tb-ev:hover{box-shadow:0 14px 32px rgba(0,0,0,.38),0 0 0 1px var(--event-border,rgba(255,217,102,.6)) inset;transform:translateY(-1px) scale(1.006)}
 .tb-ev-time{color:rgba(245,245,245,.76)}.tb-ev-title{font-weight:900}.tb-ev-src{color:rgba(245,245,245,.66)}.tb-ev-priv{filter:saturate(.75)}.tb-hint{background:rgba(0,0,0,.16);border-top:1px solid var(--border)}
 
-.calendar-month-cell{position:relative;transition:transform .15s,border-color .15s,box-shadow .15s}.calendar-month-cell:hover{transform:translateY(-1px);border-color:var(--border2);box-shadow:0 14px 28px rgba(0,0,0,.22)}.month-chip{font-family:inherit;transition:transform .12s,filter .12s,border-color .12s}.month-chip:hover{transform:translateX(2px)}.month-chip.external{background:linear-gradient(90deg,var(--event-bg,rgba(255,217,102,.22)),rgba(255,255,255,.025));color:var(--text)}
 .calendar-item.external{background:linear-gradient(90deg,var(--event-bg,rgba(255,217,102,.18)),var(--bg2));border-left-color:var(--event-color,var(--accent));font-family:inherit}.calendar-item.external:hover{border-color:var(--event-border-soft,var(--border2));transform:translateY(-1px)}
 
 .event-detail-overlay{position:fixed;inset:0;z-index:130;background:rgba(0,0,0,.46);backdrop-filter:blur(5px);display:flex;justify-content:flex-end;padding:16px;animation:eventOverlayIn .14s ease-out}.event-detail-panel{width:430px;max-width:100%;max-height:calc(100vh - 32px);overflow:auto;position:relative;background:linear-gradient(180deg,rgba(37,37,37,.98),rgba(27,27,27,.98));border:1px solid var(--event-border-soft,rgba(255,217,102,.34));border-left:4px solid var(--event-color,var(--accent));border-radius:18px;padding:18px;box-shadow:0 24px 70px rgba(0,0,0,.55);animation:eventPanelIn .18s ease-out;display:flex;flex-direction:column;gap:16px}.event-detail-glow{position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at top right,var(--event-bg,rgba(255,217,102,.18)),transparent 42%);opacity:.9}.event-detail-head,.event-detail-meta-grid,.event-detail-description,.event-detail-empty,.event-detail-actions{position:relative;z-index:1}.event-detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}.event-detail-kicker{display:inline-flex;margin-bottom:8px;font-size:10px;font-weight:950;letter-spacing:.12em;text-transform:uppercase;color:var(--event-color,var(--accent))}.event-detail-head h3{font-size:21px;line-height:1.18;font-weight:950;letter-spacing:-.025em}.event-detail-meta-grid{display:flex;flex-direction:column;gap:8px}.event-detail-meta-card{display:flex;align-items:flex-start;gap:9px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);border-radius:12px;padding:10px 11px;color:var(--muted2);font-size:12px;line-height:1.45}.event-detail-meta-card svg{color:var(--event-color,var(--accent));flex-shrink:0;margin-top:1px}.event-detail-description{border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.028);border-radius:14px;padding:13px}.event-detail-description span{display:block;font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:8px}.event-detail-description p{white-space:pre-wrap;color:var(--text);font-size:13px;line-height:1.6}.event-detail-empty{border:1px dashed var(--border2);border-radius:12px;padding:13px;color:var(--muted);font-size:12px;text-align:center}.event-detail-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto}.event-detail-actions .btn{text-decoration:none}.event-detail-actions .btn-ghost{background:transparent}
 @keyframes eventOverlayIn{from{opacity:0}to{opacity:1}}@keyframes eventPanelIn{from{opacity:0;transform:translateX(18px)}to{opacity:1;transform:translateX(0)}}
 
 @media(max-width:1200px){.tb-scroll{height:calc(100vh - 285px);min-height:600px}.tb-canvas{min-width:1040px}.tb-single-day .tb-canvas{min-width:0}.calendar-toolbar-premium{grid-template-columns:1fr}.calendar-view-tabs{width:max-content;max-width:100%;overflow:auto}.calendar-period-controls{justify-content:flex-start}.calendar-range-block{justify-self:start;text-align:left}}
-@media(max-width:900px){:root{--tb-h:38px;--tb-gutter:56px}.calendar-main-card-day,.calendar-main-card-week{min-height:calc(100vh - 120px)}.calendar-main-card{padding:10px}.calendar-toolbar-premium{padding:9px}.calendar-period-controls .btn{flex:1;min-width:0}.tb-scroll{height:calc(100vh - 300px);min-height:520px}.tb-canvas{min-width:900px}.tb-single-day .tb-canvas{min-width:0}.tb-day-headers{top:0}.tb-allday-row{top:54px}.tb-dh{min-height:54px;gap:4px}.tb-dh-month,.tb-dh-today{display:none}.tb-ev{padding:4px 6px}.tb-ev-src{display:none}.calendar-month-grid{grid-template-columns:1fr;overflow:visible}.calendar-month-weekdays{display:none}.calendar-month-cell{min-height:auto}.calendar-list-grid{grid-template-columns:1fr!important}.event-detail-overlay{padding:10px;align-items:flex-end}.event-detail-panel{width:100%;max-height:86vh;border-radius:18px 18px 10px 10px}}
+@media(max-width:900px){:root{--tb-h:38px;--tb-gutter:56px}.calendar-main-card-day,.calendar-main-card-week{min-height:calc(100vh - 120px)}.calendar-main-card{padding:10px}.calendar-toolbar-premium{padding:9px}.calendar-period-controls .btn{flex:1;min-width:0}.tb-scroll{height:calc(100vh - 300px);min-height:520px}.tb-canvas{min-width:900px}.tb-single-day .tb-canvas{min-width:0}.tb-day-headers{top:0}.tb-allday-row{top:54px}.tb-dh{min-height:54px;gap:4px}.tb-dh-month,.tb-dh-today{display:none}.tb-ev{padding:4px 6px}.tb-ev-src{display:none}.calendar-list-grid{grid-template-columns:1fr!important}.event-detail-overlay{padding:10px;align-items:flex-end}.event-detail-panel{width:100%;max-height:86vh;border-radius:18px 18px 10px 10px}}
 @media(max-width:620px){.calendar-actions .btn,.calendar-period-controls .btn{width:100%}.calendar-view-tabs{width:100%}.calendar-view-tabs .tb-vbtn{flex:1;justify-content:center}.calendar-view-tabs .tb-vbtn span{display:inline-block}.tb-scroll{height:calc(100vh - 330px);min-height:480px}.tb-single-day .tb-dh{justify-content:flex-start;padding-left:10px}.event-detail-head h3{font-size:18px}.event-detail-actions .btn{width:100%}}
 
 /* Rich text notes editor */
@@ -1449,7 +1438,6 @@ body::before{
 .tb-ev-track svg{flex:0 0 auto}
 .tb-ev-tight .tb-ev-track{font-size:0;padding:2px;gap:0}
 .tb-ev-tight .tb-ev-track svg{width:9px;height:9px}
-.month-chip-track{display:inline-flex;align-items:center;gap:2px;font-style:normal;font-size:9px;font-weight:900;opacity:.85;margin-left:4px}
 .event-log-time-btn{margin-top:10px}
 .finance-editor-layout{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,.92fr);gap:18px;align-items:start;padding:18px}.finance-editor-layout>.finance-form-pane{min-width:0}.finance-editor-layout .finance-editor{padding:0}
 /* De formulierkolom is in de tweekoloms-layout ~halve breedte; gebruik daarom altijd de compacte
@@ -1686,9 +1674,6 @@ body::before{
 .tb-line-hour{border-bottom:0;border-top:1px solid rgba(255,255,255,.14)}
 .tb-gutter-full span{color:rgba(245,245,245,.86);font-weight:800}
 .tb-ad-chip.ext{background:var(--event-solid,rgba(255,217,102,.9));color:var(--event-text,var(--text));border:1px solid var(--event-edge,rgba(0,0,0,.16));border-left:3px solid var(--event-edge,var(--event-color,var(--accent)))}
-.month-chip.external{background:var(--event-solid,rgba(255,217,102,.92));color:var(--event-text,var(--text));border-color:var(--event-edge,rgba(0,0,0,.14))}
-.month-chip.external span,.month-chip.external em{color:var(--event-text-soft,var(--muted2))}
-.month-chip.external strong{color:var(--event-text,var(--text))}
 
 /* Dagvullende afspraken (bv. "op locatie", langdurige blokkade) renderen als
    achtergrondlaag: lager in de z-order en minder dekkend, zodat kortere
@@ -3628,114 +3613,112 @@ button.chat-member:hover{background:var(--bg3)}
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   AGENDA · MAANDWEERGAVE — Google Calendar-look  (2026-07-14)
+   AGENDA · MAANDWEERGAVE — Google Calendar-look  (2026-08-07)
    ───────────────────────────────────────────────────────────────────────
-   Zelfde vlakke, rand-tot-rand Google-stijl als dag/week, mét ResoFly-
-   branding (donker + merkgoud voor "vandaag"). Bewust achteraan zodat deze
-   regels alle eerdere .calendar-month-* / .month-chip-regels van de cascade
-   winnen.
+   Eén schermvullend rooster (ook op de telefoon) met per weekrij een laag
+   "lanes". Daardoor loopt een meerdaagse afspraak als één doorlopende balk
+   over de dagkolommen heen i.p.v. als losse blokjes per dag.
 
-   • Desktop: het maandrooster vult het hele scherm (schone flex-keten,
-     gelijke weekrijen), rand-tot-rand met haarlijn-scheidingen — geen
-     kaarten, gaten, gradients of hover-lift meer.
-   • Hele-dag/meerdaagse afspraken = vol gevulde gekleurde balkjes.
-     Getimede afspraken = gekleurd stipje + tijd + titel (transparant).
-   • "Vandaag" = goud rondje om het getal; dagen buiten de maand gedimd.
-   • Mobiel (≤900px) blijft een nette, natuurlijke scroll-lijst per dag.
+   Opbouw per weekrij (zie CalendarMonthView in CalendarPage.tsx):
+     .cm-week      weeknummer-kolom + .cm-week-body
+     .cm-cells     achtergrondlaag: 7 dagcellen met haarlijnen, klikbaar
+     .cm-dates     rij met de dagnummers (vandaag = goud rondje)
+     .cm-lanes     rasterlaag met balken/chips; kolom = dag, rij = lane
+
+   De lane-maten komen als custom properties uit de TSX, die daarmee ook
+   uitrekent hoeveel items er per dag passen voordat "+N meer" verschijnt.
    ═══════════════════════════════════════════════════════════════════════ */
 
-/* 1 ── Volledige paginavulling op desktop (zelfde flex-truc als dag/week) ── */
-@media(min-width:901px){
-  .content:has(.calendar-main-card-month){padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:0}
-  .calendar-agenda-page .calendar-main-card-month{flex:1 1 auto;min-height:0;height:auto;max-height:none;border:0;border-radius:0;padding:0;overflow:hidden;display:flex;flex-direction:column;background:var(--bg)}
-  .calendar-agenda-page .calendar-main-card-month .calendar-month-view{flex:1 1 auto;min-height:0;height:auto}
-  .calendar-agenda-page .calendar-main-card-month .calendar-month-grid{flex:1 1 auto;min-height:0;grid-auto-rows:minmax(0,1fr);overflow:hidden}
-}
+/* 1 ── Schermvulling: dezelfde flex-keten als dag/week ─────────────────── */
+.content:has(.calendar-main-card-month){padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+.calendar-agenda-page .calendar-main-card-month{flex:1 1 auto;min-height:0;height:auto;max-height:none;border:0;border-radius:0;padding:0;overflow:hidden;display:flex;flex-direction:column;background:var(--bg)}
+.cm-view{--cm-weekno:34px;flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
 
-/* 2 ── Layout: vlakke weekdagenkop + rand-tot-rand rooster ───────────────── */
-.calendar-agenda-page .calendar-month-view{--wkcol:30px;display:flex;flex-direction:column;gap:0;margin:0;min-height:0}
-.calendar-agenda-page .calendar-month-weekdays{
-  flex:0 0 auto;display:grid;grid-template-columns:var(--wkcol) repeat(7,minmax(0,1fr));gap:0;padding:0;margin:0;
-  border-left:1px solid transparent;
-  color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}
-.calendar-agenda-page .calendar-month-weekdays span{text-align:center;background:transparent;border:0;border-radius:0;padding:9px 6px}
-.calendar-agenda-page .calendar-weeknum-head{background:transparent;border:0}
-.calendar-agenda-page .calendar-month-grid{
-  display:grid;grid-template-columns:var(--wkcol) repeat(7,minmax(0,1fr));gap:0;padding:0;
-  border-top:1px solid var(--border);border-left:1px solid var(--border);background:var(--bg)}
+/* 2 ── Weekdagenkop ────────────────────────────────────────────────────── */
+.cm-head{flex:0 0 auto;display:grid;grid-template-columns:var(--cm-weekno) repeat(7,minmax(0,1fr));border-bottom:1px solid var(--border)}
+.cm-head-cell{padding:8px 4px 7px;text-align:center;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}
 
-/* Weeknummer-kolom (Google-stijl): smalle linkerkolom, één nummer per weekrij. */
-.calendar-agenda-page .calendar-week-number{
-  display:flex;align-items:flex-start;justify-content:center;overflow:hidden;
-  padding:6px 2px;border-right:1px solid var(--border);border-bottom:1px solid var(--border);
-  background:transparent;color:var(--muted);font-size:10px;font-weight:800;line-height:1}
-.calendar-agenda-page .calendar-week-number .cw-label{display:none}
-.calendar-agenda-page .calendar-week-number strong{font-weight:800}
+/* 3 ── Rooster: gelijke weekrijen, haarlijnen als scheiding ────────────── */
+.cm-grid{flex:1 1 auto;min-height:0;display:grid;grid-auto-rows:minmax(0,1fr);overflow:hidden}
+.cm-week{display:grid;grid-template-columns:var(--cm-weekno) minmax(0,1fr);min-height:0;border-top:1px solid var(--border)}
+.cm-week:first-child{border-top:0}
+.cm-weekno{display:flex;align-items:flex-start;justify-content:center;padding:7px 2px;border-right:1px solid var(--border);color:var(--muted);font-size:10px;font-weight:800;line-height:1;overflow:hidden}
+.cm-weekno-label{display:none}
+.cm-weekno.is-outside{opacity:.5}
+.cm-week-body{position:relative;min-width:0;display:flex;flex-direction:column;padding-bottom:var(--cm-pad,6px);overflow:hidden}
 
-/* 3 ── Cellen: plat, haarlijn-scheidingen, geen kaart/gradient/lift ──────── */
-.calendar-agenda-page .calendar-month-cell{
-  background:transparent;border:0;border-right:1px solid var(--border);border-bottom:1px solid var(--border);
-  border-radius:0;min-height:0;padding:5px 6px 4px;gap:3px;overflow:hidden;
-  display:flex;flex-direction:column;transition:background .12s}
-.calendar-agenda-page .calendar-month-cell:hover{transform:none;box-shadow:none;border-color:var(--border);background:rgba(255,255,255,.02)}
-.calendar-agenda-page .calendar-month-cell.is-outside-month{opacity:1;background:rgba(0,0,0,.24)}
-.calendar-agenda-page .calendar-month-cell.is-outside-month .calendar-month-date strong{color:var(--muted)}
-.calendar-agenda-page .calendar-month-cell.is-outside-month .month-chip{opacity:.62}
-.calendar-agenda-page .calendar-month-cell.is-today{background:rgba(255,217,102,.06)}
+/* Achtergrondlaag: de dagcellen zelf — klikken opent de dagweergave. */
+.cm-cells{position:absolute;inset:0;display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
+.cm-cell{border-left:1px solid var(--border);cursor:pointer;transition:background .12s}
+.cm-cell:first-child{border-left:0}
+.cm-cell:hover{background:rgba(255,255,255,.035)}
+.cm-cell.is-outside{background:rgba(0,0,0,.16)}
+.cm-cell.is-outside:hover{background:rgba(0,0,0,.1)}
+.cm-cell.is-today{background:rgba(255,217,102,.07)}
+.cm-cell.is-today:hover{background:rgba(255,217,102,.11)}
 
-/* Datumkop: enkel het getal (weekdag staat in de kop); vandaag = goud rondje */
-.calendar-agenda-page .calendar-month-date{justify-content:flex-start;gap:0;padding:1px}
-.calendar-agenda-page .calendar-month-date span{display:none}
-.calendar-agenda-page .calendar-month-date strong{width:24px;height:24px;background:transparent;color:var(--text);font-size:13px;font-weight:700}
-.calendar-agenda-page .calendar-month-cell.is-today .calendar-month-date strong{background:var(--accent);color:#1a1a1a;font-weight:800}
+/* Dagnummers: gecentreerd bovenin, "vandaag" in een gouden rondje. De laag
+   laat klikken door naar de cel eronder; alleen de knop zelf vangt ze af. */
+.cm-dates{position:relative;z-index:1;flex:0 0 auto;height:var(--cm-date-h,26px);display:grid;grid-template-columns:repeat(7,minmax(0,1fr));pointer-events:none}
+.cm-date{all:unset;box-sizing:border-box;display:flex;align-items:center;justify-content:center;padding-top:3px;cursor:pointer;pointer-events:auto}
+.cm-date.is-outside{opacity:.45}
+.cm-date-num{display:flex;align-items:center;justify-content:center;min-width:21px;height:21px;padding:0 6px;border-radius:999px;color:var(--text);font-size:12px;font-weight:650;line-height:1;white-space:nowrap;transition:background .12s}
+.cm-date:hover .cm-date-num:not(.is-today){background:rgba(255,255,255,.1)}
+.cm-date:focus-visible .cm-date-num{outline:2px solid var(--accent);outline-offset:1px}
+.cm-date-num.is-today{background:var(--accent);color:#1a1a1a;font-weight:800}
 
-/* 4 ── Items ─────────────────────────────────────────────────────────────── */
-.calendar-agenda-page .calendar-month-items{flex:0 1 auto;min-height:0;display:flex;flex-direction:column;gap:2px;overflow:hidden}
-.calendar-agenda-page .month-chip{
-  width:100%;min-width:0;border:0;border-radius:4px;background:transparent;color:var(--text);
-  font-family:inherit;text-align:left;cursor:pointer;padding:2px 5px;display:flex;align-items:center;gap:5px;
-  line-height:1.25;transition:background .1s,filter .1s}
-.calendar-agenda-page .month-chip:hover{transform:none;filter:none;background:rgba(255,255,255,.07);border-color:transparent}
-.calendar-agenda-page .month-chip strong{flex:1 1 auto;min-width:0;font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 4 ── Lanes: doorlopende balken en losse chips ────────────────────────── */
+.cm-lanes{position:relative;z-index:1;flex:1 1 auto;min-height:0;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));grid-auto-rows:var(--cm-lane,20px);row-gap:var(--cm-gap,2px);align-content:start;overflow:hidden;pointer-events:none}
+.cm-chip{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:5px;min-width:0;margin:0 3px;padding:0 6px;border-radius:5px;overflow:hidden;font-size:11.5px;line-height:1;cursor:pointer;pointer-events:auto;transition:background .1s,filter .1s}
+.cm-chip:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.cm-chip-title{flex:1 1 auto;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cm-chip-time{flex:0 0 auto;font-size:11px;font-weight:600;color:var(--muted2);white-space:nowrap}
+.cm-chip-dot{flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:var(--event-color,var(--accent))}
+.cm-chip-track{flex:0 0 auto;display:inline-flex;align-items:center;gap:2px;font-style:normal;font-size:9px;font-weight:800;opacity:.8}
+.cm-chip-cont{flex:0 0 auto;margin-left:-3px;opacity:.75}
+.cm-chip-cont-r{margin-left:0;margin-right:-3px}
+.cm-chip.is-outside{opacity:.55}
 
-/* Hele-dag / meerdaags: vol gevuld gekleurd balkje (titel, geen tijd). */
-.calendar-agenda-page .month-chip.all-day{
-  background:var(--event-solid,rgba(255,217,102,.96));color:var(--event-text,#1a1a1a);
-  border:1px solid var(--event-edge,rgba(0,0,0,.16));padding:2px 6px}
-.calendar-agenda-page .month-chip.all-day strong{color:var(--event-text,#1a1a1a);font-weight:700}
-.calendar-agenda-page .month-chip.all-day:hover{filter:brightness(1.05);background:var(--event-solid,rgba(255,217,102,.96))}
+/* Meerdaags of hele dag = vol gevulde, doorlopende balk. */
+.cm-chip.is-bar{background:var(--event-solid,rgba(255,217,102,.96));color:var(--event-text,#1a1a1a);border:1px solid var(--event-edge,rgba(0,0,0,.16))}
+.cm-chip.is-bar .cm-chip-title{color:var(--event-text,#1a1a1a);font-weight:650}
+.cm-chip.is-bar:hover{filter:brightness(1.06)}
+/* Loopt de balk door buiten deze week? Dan blijft die kant vierkant en loopt
+   hij tot tegen de rand — zo leest hij als één afspraak over de weken heen. */
+.cm-chip.cont-l{margin-left:0;border-left:0;border-top-left-radius:0;border-bottom-left-radius:0}
+.cm-chip.cont-r{margin-right:0;border-right:0;border-top-right-radius:0;border-bottom-right-radius:0}
 
-/* Getimed / taak: gekleurd stipje + tijd + titel op transparant. */
-.calendar-agenda-page .month-chip-dot{flex:0 0 auto;width:7px;height:7px;border-radius:50%;background:var(--event-color,var(--accent))}
-.calendar-agenda-page .month-chip.task .month-chip-dot{background:var(--accent)}
-.calendar-agenda-page .month-chip-time{flex:0 0 auto;font-size:10px;font-weight:700;color:var(--muted2);white-space:nowrap}
-.calendar-agenda-page .month-chip.private-event{filter:saturate(.72)}
-.calendar-agenda-page .month-chip-track{flex:0 0 auto;display:inline-flex;align-items:center;gap:2px;font-style:normal;font-size:9px;font-weight:800;color:var(--muted)}
+/* Eén dag mét tijd: gekleurd stipje + tijd + titel op transparant (Google). */
+.cm-chip.is-timed,.cm-chip.is-task{color:var(--text)}
+.cm-chip.is-timed:hover,.cm-chip.is-task:hover{background:rgba(255,255,255,.08)}
+.cm-chip.is-task .cm-chip-dot{background:var(--accent)}
+.cm-chip.is-private{filter:saturate(.7)}
 
-/* "+N meer": vlak gedimd tekstlinkje, direct onder de zichtbare items (Google). */
-.calendar-agenda-page .month-more{
-  flex:0 0 auto;border:0;background:transparent;color:var(--muted2);font-family:inherit;font-size:10px;font-weight:700;
-  text-align:left;cursor:pointer;padding:1px 5px 2px;border-radius:4px}
-.calendar-agenda-page .month-more:hover{background:rgba(255,255,255,.07);color:var(--text)}
+.cm-more{all:unset;box-sizing:border-box;display:flex;align-items:center;margin:0 3px;padding:0 6px;border-radius:5px;color:var(--muted2);font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;cursor:pointer;pointer-events:auto}
+.cm-more:hover{background:rgba(255,255,255,.08);color:var(--text)}
+.cm-more:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
-/* 5 ── Mobiel: geen paginavulling — nette natuurlijke scroll-lijst per dag ── */
+/* 5 ── Smallere schermen: hetzelfde rooster, compacter ─────────────────── */
 @media(max-width:900px){
-  .calendar-agenda-page .calendar-month-view{min-height:0;gap:0}
-  .calendar-agenda-page .calendar-month-weekdays{display:none}
-  .calendar-agenda-page .calendar-month-grid{grid-template-columns:1fr;overflow:visible;border-left:0}
-  .calendar-agenda-page .calendar-month-cell{min-height:52px;overflow:visible;border-right:0;padding:8px 12px;gap:4px}
-  .calendar-agenda-page .calendar-month-cell.is-outside-month{display:none}
-  .calendar-agenda-page .calendar-month-items{overflow:visible}
-  .calendar-agenda-page .calendar-month-date{justify-content:flex-start;gap:9px}
-  .calendar-agenda-page .calendar-month-date span{display:inline-block;font-size:10px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.08em}
-  /* Weeknummer = volledige-breedte sectiekop boven de dagen van die week. */
-  .calendar-agenda-page .calendar-week-number{
-    justify-content:flex-start;align-items:center;gap:6px;
-    padding:12px 12px 4px;border-right:0;border-bottom:0;border-top:1px solid var(--border);
-    color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;line-height:1.2}
-  .calendar-agenda-page .calendar-week-number:first-child{border-top:0}
-  .calendar-agenda-page .calendar-week-number .cw-label{display:inline}
-  .calendar-agenda-page .calendar-week-number.is-outside-week{display:none}
+  .cm-view{--cm-weekno:26px}
+  .cm-head-cell{padding:7px 2px 6px;font-size:9px;letter-spacing:.06em}
+  .cm-date-num{min-width:19px;height:19px;padding:0 5px;font-size:11.5px}
+  .cm-chip{gap:4px;margin:0 2px;padding:0 4px;font-size:10.5px}
+  .cm-chip-time{font-size:10px}
+  .cm-chip-dot{width:6px;height:6px}
+  .cm-more{margin:0 2px;padding:0 4px;font-size:9.5px}
+}
+@media(max-width:620px){
+  /* Weeknummers zijn hier luxe: alle breedte gaat naar de zeven dagen. */
+  .cm-view{--cm-weekno:0px}
+  .cm-head{grid-template-columns:repeat(7,minmax(0,1fr))}
+  .cm-head-weekno,.cm-weekno{display:none}
+  .cm-week{grid-template-columns:minmax(0,1fr)}
+  .cm-chip{padding:0 3px;border-radius:4px;font-size:10px}
+  .cm-chip-track{display:none}
+  /* In een kolom van ~54px past alleen het aantal, niet het woord erbij. */
+  .cm-more{font-size:9.5px}
+  .cm-more-label{display:none}
 }
 
 /* ── Gerrie Routines (geplande agents) ─────────────────────────────────────── */
@@ -4977,3 +4960,81 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .event-detail-head h3{font-size:19px}
 }
 @keyframes eventPanelSlideIn{from{transform:translateX(26px)}to{transform:translateX(0)}}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   AGENDA · LEESBARE KORTE BLOKKEN + DAGKOPPEN OP DE TELEFOON  (2026-08-07)
+   ───────────────────────────────────────────────────────────────────────
+   1) Een afspraak van een half uur is precies één roosterrij (~26px) hoog.
+      Twee tekstregels passen daar niet in — daarom zetten titel en starttijd
+      zich naast elkaar op één regel: "Ontwerpreview, 10:00", zoals Google.
+      De TSX kiest de trap op basis van de duur:
+        < 30 min   .tb-ev-tight    alleen de titel
+        30–45 min  .tb-ev-compact  titel + starttijd op één regel
+        45–75 min  .tb-ev-cozy     tijdregel bóven de titel
+        ≥ 75 min   .tb-ev-roomy    tijd + titel (2 regels) + locatie
+   2) Telefoon: de weekdagnaam staat weer boven élk dagnummer (ook in de
+      weekweergave) en de zeven kolommen passen samen op het scherm i.p.v.
+      horizontaal weg te scrollen — anders zie je maar drie van de zeven.
+   Bewust achteraan zodat deze regels de eerdere .tb-ev-*-groottes winnen.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* De vrije klikstrook rechts in elke dagkolom (voor overlappende afspraken):
+   als custom property zodat smalle telefoonkolommen hem kunnen verkleinen.
+   De inline `left`/`right` van een blok rekenen ermee (zie CalendarPage.tsx). */
+.tb-container{--tb-strip:12px}
+
+.calendar-agenda-page .tb-ev-start{display:none}
+
+/* < 30 min: alleen de titel, verticaal gecentreerd op één regel. */
+.calendar-agenda-page .tb-ev-tight{flex-direction:row;align-items:center;justify-content:flex-start;gap:0;padding:0 7px}
+.calendar-agenda-page .tb-ev-tight .tb-ev-time,
+.calendar-agenda-page .tb-ev-tight .tb-ev-start,
+.calendar-agenda-page .tb-ev-tight .tb-ev-src{display:none}
+.calendar-agenda-page .tb-ev-tight .tb-ev-title{flex:1 1 auto;min-width:0;font-size:11px;line-height:1.1}
+.calendar-agenda-page .tb-ev-tight.tb-ev-tracked{padding-right:22px}
+
+/* 30–45 min: titel + starttijd op één regel ("Titel, 10:00"). */
+.calendar-agenda-page .tb-ev-compact{flex-direction:row;align-items:center;justify-content:flex-start;gap:0;padding:0 8px}
+.calendar-agenda-page .tb-ev-compact .tb-ev-time,
+.calendar-agenda-page .tb-ev-compact .tb-ev-src,
+.calendar-agenda-page .tb-single-day .tb-ev-compact .tb-ev-src{display:none}
+.calendar-agenda-page .tb-ev-compact .tb-ev-title{flex:1 1 auto;min-width:0;font-size:11.5px;line-height:1.15}
+.calendar-agenda-page .tb-ev-compact .tb-ev-start{
+  flex:0 0 auto;display:block;font-size:11px;font-weight:600;line-height:1.15;
+  color:var(--event-text-soft,rgba(255,255,255,.86));white-space:nowrap}
+.calendar-agenda-page .tb-ev-compact .tb-ev-start::before{content:', '}
+.calendar-agenda-page .tb-ev-compact.tb-ev-tracked{padding-right:48px}
+.calendar-agenda-page .tb-single-day .tb-ev-compact .tb-ev-title{font-size:12.5px}
+
+/* Videobadge staat normaal absoluut linksboven; op één regel loopt hij dan
+   door de titel heen, dus zet hij zich hier gewoon vóór de tekst. */
+.calendar-agenda-page .tb-ev-tight .tb-ev-video,
+.calendar-agenda-page .tb-ev-compact .tb-ev-video{position:static;order:-1;margin-right:4px;padding:1px;border-radius:4px}
+
+/* 45–60 min: tijd bóven de titel — precies wat .tb-ev-compact hiervoor deed. */
+.calendar-agenda-page .tb-ev-cozy{padding:2px 8px;gap:0}
+.calendar-agenda-page .tb-ev-cozy .tb-ev-time{font-size:9.5px}
+.calendar-agenda-page .tb-ev-cozy .tb-ev-title{font-size:11.5px}
+.calendar-agenda-page .tb-ev-cozy .tb-ev-src{display:none}
+.calendar-agenda-page .tb-single-day .tb-ev-cozy .tb-ev-time{font-size:11px}
+.calendar-agenda-page .tb-single-day .tb-ev-cozy .tb-ev-title{font-size:13px}
+/* In de dagweergave is er breedte zat: daar mag de locatie er wél bij. */
+.calendar-agenda-page .tb-single-day .tb-ev-cozy .tb-ev-src{display:block;font-size:10.5px;opacity:.82}
+
+/* Telefoon: dagkoppen compleet + zeven kolommen die samen op het scherm passen. */
+@media(max-width:768px){
+  .calendar-agenda-page .tb-dh-name{display:block;font-size:9.5px;font-weight:800;letter-spacing:.04em}
+  .calendar-agenda-page .tb-dh{height:46px}
+  .calendar-agenda-page .tb-allday-row{top:46px}
+  .calendar-agenda-page .tb-dh-num{width:23px;height:23px;font-size:13px}
+  .calendar-agenda-page .tb-dh-hit{padding:1px 4px}
+  /* Geen minimumbreedte meer: alle zeven dagen naast elkaar in beeld. */
+  .calendar-agenda-page .tb-canvas,.calendar-agenda-page .tb-grid{min-width:0}
+  :root{--tb-gutter:38px}
+  .tb-container{--tb-strip:6px}
+  .calendar-agenda-page .tb-gutter-full span{font-size:9px}
+  /* In zeven smalle kolommen wint de titel het van de tijd. */
+  .calendar-agenda-page .tb-container:not(.tb-few-days) .tb-ev-compact .tb-ev-start{display:none}
+  .calendar-agenda-page .tb-container:not(.tb-few-days) .tb-ev{padding-left:3px;padding-right:3px}
+  .calendar-agenda-page .tb-container:not(.tb-few-days) .tb-ev-title{font-size:10px;letter-spacing:-.01em}
+}
