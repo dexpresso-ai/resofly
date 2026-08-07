@@ -1309,6 +1309,75 @@ export interface FiscalYearListRow {
   has_entries: boolean;
 }
 
+// ── Vennootschapsbelasting (fase 2) ────────────────────────────────────────
+// De berekening zelf staat in supabase/functions/_shared/vpb.ts; deze types
+// beschrijven wat de edge function heen en weer stuurt.
+
+export type CorporateTaxCorrectionCode =
+  | 'niet_aftrekbaar' | 'gemengde_kosten' | 'afschrijvingsbeperking'
+  | 'investeringsaftrek' | 'deelnemingsvrijstelling' | 'overig';
+
+export const CORPORATE_TAX_CORRECTION_LABELS: Record<CorporateTaxCorrectionCode, string> = {
+  niet_aftrekbaar: 'Niet-aftrekbare kosten',
+  gemengde_kosten: 'Beperkt aftrekbare kosten',
+  afschrijvingsbeperking: 'Afschrijvingsbeperking gebouwen',
+  investeringsaftrek: 'Investeringsaftrek',
+  deelnemingsvrijstelling: 'Deelnemingsvrijstelling',
+  overig: 'Overige correctie',
+};
+
+export interface CorporateTaxInputs {
+  fiscalYear: { id: UUID; label: string; periodStart: string; periodEnd: string; status: 'open' | 'closed' };
+  rules: {
+    year: number;
+    brackets: Array<{ lowerBoundCents: number; baseAmountCents: number; rateBasisPoints: number }>;
+    lossReliefThresholdCents: number;
+    lossReliefRateBasisPoints: number;
+  };
+  commercialResultCents: number;
+  prepaidCents: number;
+  corrections: Array<{ id: UUID; code: CorporateTaxCorrectionCode; label: string; amountCents: number }>;
+  lossesCarriedForward: Array<{ year: number; remainingCents: number; establishedByAssessment: boolean }>;
+}
+
+/** Uitkomst van computeVpb — één op één de vorm uit _shared/vpb.ts. */
+export interface CorporateTaxComputation {
+  commercialResultCents: number;
+  totalCorrectionsCents: number;
+  fiscalProfitCents: number;
+  lossReliefCapCents: number;
+  lossesUsed: Array<{ year: number; usedCents: number }>;
+  totalLossUsedCents: number;
+  taxableBeforeRoundingCents: number;
+  taxableAmountCents: number;
+  taxCents: number;
+  prepaidCents: number;
+  balanceDueCents: number;
+  lossesRemaining: Array<{ year: number; remainingCents: number }>;
+  effectiveRateBasisPoints: number;
+}
+
+export interface CorporateTaxReturn extends OrgScopedRow {
+  fiscal_year_id: UUID;
+  year: number;
+  commercial_result_cents: number;
+  corrections_cents: number;
+  fiscal_profit_cents: number;
+  loss_relief_cap_cents: number;
+  loss_used_cents: number;
+  taxable_amount_cents: number;
+  tax_cents: number;
+  prepaid_cents: number;
+  balance_due_cents: number;
+  computation: CorporateTaxComputation;
+  status: 'draft' | 'final' | 'reversed';
+  accrual_entry_id: UUID | null;
+  finalized_at: string | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /**
  * Rij uit de tabel result_appropriations, zoals appropriate_result en
  * reverse_result_appropriation die teruggeven.

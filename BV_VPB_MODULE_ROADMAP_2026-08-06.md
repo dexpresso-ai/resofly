@@ -218,7 +218,7 @@ wordt de IB-schatting daarin een Vpb-reservering.
 |---|---|---|---|
 | 0 | **KLAAR** — entiteiten-boom, `legal_form`, entitlement `business`, billing-root, seats uniek over de boom, entiteitswisselaar, 1225-monitor uit bij een BV | `20260807000000` + `20260807010000`, `Sidebar.tsx`, `main.tsx`, `SimplePages.tsx`, `TimeTracking.tsx`, `billing`-edge-function | gedaan |
 | 1 | **KLAAR (nog niet toegepast)** — BV-rekeningschema, `report_group`, ingedeelde balans + W&V met vergelijkende cijfers, resultaatbestemming in twee stappen | `20260807020000` + `20260807030000`, `ProfitLoss.tsx`, `FiscalYears.tsx`, `Bookkeeping.tsx`, `xaf.ts` | gedaan |
-| 2 | Vpb: tarieventabel, correcties, verliesverrekening, reservering, aanslagen, specificatie | `..._corporate_tax.sql`, `_shared/vpb.ts` | 1–1,5 week |
+| 2 | **GROTENDEELS KLAAR** — Vpb: tarieventabel (2021 t/m 2026, periodegedateerd), rekenhart met 18 tests, correcties, verliesverrekening, reservering op 9900/1540, edge function. **Rest: het scherm en de specificatie-export.** | `20260807050000`, `_shared/vpb.ts`, `corporate-tax`-edge-function | scherm nog open |
 | 3 | DGA: rekening-courant, rente + drempelsignaal, loonjournaalpost, gebruikelijk loon | `..._dga_payroll.sql` | 4–5 dagen |
 | 4 | Aandeelhoudersregister, uitkeringstoets, dividend + dividendbelasting | `..._shareholders_dividends.sql` | 3–4 dagen |
 | 5 | Jaarrekening, publicatiestukken, groottecriteria, deponeer-deadlines | `..._annual_accounts.sql` | 1 week |
