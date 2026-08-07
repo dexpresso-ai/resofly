@@ -1357,6 +1357,17 @@ export interface CorporateTaxComputation {
   effectiveRateBasisPoints: number;
 }
 
+/** Rij uit corporate_tax_corrections. */
+export interface CorporateTaxCorrectionRow extends OrgScopedRow {
+  fiscal_year_id: UUID;
+  code: CorporateTaxCorrectionCode;
+  label: string;
+  amount_cents: number;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CorporateTaxReturn extends OrgScopedRow {
   fiscal_year_id: UUID;
   year: number;

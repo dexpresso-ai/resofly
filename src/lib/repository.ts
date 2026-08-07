@@ -109,6 +109,8 @@ import type {
   QuoteApprovalEvent,
   QuoteEmailDelivery,
   QuoteVersion,
+  CorporateTaxCorrectionRow,
+  CorporateTaxReturn,
   ResultAppropriation,
   ResultAppropriationRow,
   SavedReport,
@@ -1793,6 +1795,65 @@ export async function reopenFiscalYear(organizationId: UUID, fiscalYearId: UUID)
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as FiscalYear;
+}
+
+// ── Vennootschapsbelasting ─────────────────────────────────────────────────
+// De berekening loopt via de edge function (corporateTaxService); dit zijn de
+// gewone lees- en schrijfacties eromheen.
+
+export async function listCorporateTaxReturns(organizationId: UUID): Promise<CorporateTaxReturn[]> {
+  const { data, error } = await supabase
+    .from('corporate_tax_returns')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .order('year', { ascending: false });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as CorporateTaxReturn[];
+}
+
+export async function listCorporateTaxCorrections(organizationId: UUID, fiscalYearId: UUID): Promise<CorporateTaxCorrectionRow[]> {
+  const { data, error } = await supabase
+    .from('corporate_tax_corrections')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('fiscal_year_id', fiscalYearId)
+    .order('created_at', { ascending: true });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as CorporateTaxCorrectionRow[];
+}
+
+export async function addCorporateTaxCorrection(
+  organizationId: UUID,
+  input: { fiscalYearId: UUID; code: string; label: string; amountCents: number; note?: string | null },
+): Promise<void> {
+  const { error } = await supabase.from('corporate_tax_corrections').insert({
+    organization_id: organizationId,
+    fiscal_year_id: input.fiscalYearId,
+    code: input.code,
+    label: input.label,
+    amount_cents: input.amountCents,
+    note: input.note ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+export async function deleteCorporateTaxCorrection(organizationId: UUID, id: UUID): Promise<void> {
+  const { error } = await supabase
+    .from('corporate_tax_corrections')
+    .delete()
+    .eq('id', id)
+    .eq('organization_id', organizationId);
+  if (error) throw bookkeepingError(error);
+}
+
+/** Draait een vastgestelde Vpb-berekening terug (alleen eigenaar/admin). */
+export async function reverseCorporateTaxReturn(organizationId: UUID, returnId: UUID): Promise<CorporateTaxReturn> {
+  const { data, error } = await supabase.rpc('reverse_corporate_tax_return', {
+    p_organization_id: organizationId,
+    p_return_id: returnId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as CorporateTaxReturn;
 }
 
 /**

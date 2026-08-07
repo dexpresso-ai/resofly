@@ -11,7 +11,7 @@ export const PAGE_TITLES: Record<string, string> = {
   'project-planning': 'Projectplanning', tickets: 'Tickets', chat: 'Teamchat',
   marketing: 'Marketing', quotes: 'Offertes', contracts: 'Contracten', invoices: 'Facturen',
   suppliers: 'Leveranciers', 'purchase-invoices': 'Inkoopfacturen', ledger: 'Grootboek',
-  bank: 'Bank', assets: 'Activa', pnl: 'Winst & verlies', 'vat-returns': 'Omzetbelasting',
+  bank: 'Bank', assets: 'Activa', pnl: 'Winst & verlies', 'vat-returns': 'Omzetbelasting', 'corporate-tax': 'Vennootschapsbelasting',
   'fiscal-years': 'Boekjaren', archive: 'Archief', settings: 'Instellingen', project: 'Project',
   gallery: 'Galerij',
 };

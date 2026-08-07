@@ -97,6 +97,7 @@ export const PAGE_MODULE: Record<string, ModuleKey> = {
   assets: 'finance',
   pnl: 'finance',
   'vat-returns': 'finance',
+  'corporate-tax': 'finance',
   'fiscal-years': 'finance',
 };
 
