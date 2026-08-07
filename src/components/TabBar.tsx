@@ -15,7 +15,7 @@ const PAGE_ICON: Record<string, typeof LayoutDashboard> = {
   documents: Files, clients: Users, client: Users, projects: FolderOpen, project: FolderOpen,
   'project-planning': Calendar, tickets: Ticket, chat: MessageSquare, marketing: Megaphone, quotes: FileText,
   contracts: FileSignature, invoices: Receipt, suppliers: Truck, 'purchase-invoices': FileText, ledger: BookOpen,
-  bank: Landmark, assets: Boxes, pnl: TrendingUp, 'vat-returns': Percent, 'corporate-tax': Landmark, 'fiscal-years': CalendarClock,
+  bank: Landmark, assets: Boxes, pnl: TrendingUp, 'vat-returns': Percent, 'corporate-tax': Landmark, dga: Users, 'fiscal-years': CalendarClock,
   archive: Archive, settings: Settings, gallery: Images,
 };
 

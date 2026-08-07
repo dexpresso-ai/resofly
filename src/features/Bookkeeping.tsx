@@ -874,7 +874,7 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
         // tegenboeken zou het boekjaar in een toestand achterlaten waar geen
         // van beide knoppen nog uit komt. De database weigert het ook.
         const canReverse = canWrite && entry.status === 'posted' && !isReversedPair
-          && !['year_close', 'result_appropriation', 'corporate_tax'].includes(entry.source_type);
+          && !['year_close', 'result_appropriation', 'corporate_tax', 'dga_interest'].includes(entry.source_type);
         return (
           <div key={entry.id} className={`bk-entry${entry.status === 'reversed' || isReversedPair ? ' is-reversed' : ''}`}>
             <div className="bk-entry-head">

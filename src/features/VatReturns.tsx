@@ -524,7 +524,7 @@ function SupplementModal({ data, organizationId, originalReturn, onClose, onCrea
         // Systeemboekstukken horen niet in een suppletie. Een resultaat-
         // bestemming raakt alleen eigen vermogen en schulden: btw-effect nul,
         // maar hem aanvinken sluit hem wél permanent uit de reguliere aangifte.
-        && !['year_close', 'vat_return', 'opening_balance', 'result_appropriation', 'corporate_tax'].includes(e.source_type)
+        && !['year_close', 'vat_return', 'opening_balance', 'result_appropriation', 'corporate_tax', 'dga_interest'].includes(e.source_type)
         && !attributed.has(e.id)
         && (!onlyAfterPeriod || e.date > originalReturn.period_end))
       .sort((a, b) => b.date.localeCompare(a.date));

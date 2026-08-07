@@ -111,6 +111,10 @@ import type {
   QuoteVersion,
   CorporateTaxCorrectionRow,
   CorporateTaxReturn,
+  DgaInterestComputation,
+  DgaInterestPosting,
+  DgaInterestRate,
+  DgaSignals,
   ResultAppropriation,
   ResultAppropriationRow,
   SavedReport,
@@ -1795,6 +1799,70 @@ export async function reopenFiscalYear(organizationId: UUID, fiscalYearId: UUID)
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as FiscalYear;
+}
+
+// ── DGA: rekening-courant en gebruikelijk loon ─────────────────────────────
+
+export async function loadDgaSignals(organizationId: UUID, year: number): Promise<DgaSignals> {
+  const { data, error } = await supabase.rpc('dga_signals', { p_organization_id: organizationId, p_year: year });
+  if (error) throw bookkeepingError(error);
+  return data as DgaSignals;
+}
+
+export async function computeDgaInterest(organizationId: UUID, year: number): Promise<DgaInterestComputation> {
+  const { data, error } = await supabase.rpc('compute_dga_interest', { p_organization_id: organizationId, p_year: year });
+  if (error) throw bookkeepingError(error);
+  return data as DgaInterestComputation;
+}
+
+export async function listDgaInterestRates(organizationId: UUID): Promise<DgaInterestRate[]> {
+  const { data, error } = await supabase
+    .from('dga_interest_rates').select('*')
+    .eq('organization_id', organizationId)
+    .order('valid_from', { ascending: false });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as DgaInterestRate[];
+}
+
+/** Het percentage is een bewuste invoer van de gebruiker; ResoFly kent geen standaard. */
+export async function addDgaInterestRate(
+  organizationId: UUID,
+  input: { validFrom: string; rateBasisPoints: number; basisNote?: string | null },
+): Promise<void> {
+  const { error } = await supabase.from('dga_interest_rates').insert({
+    organization_id: organizationId,
+    valid_from: input.validFrom,
+    rate_basis_points: input.rateBasisPoints,
+    basis_note: input.basisNote ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+export async function deleteDgaInterestRate(organizationId: UUID, id: UUID): Promise<void> {
+  const { error } = await supabase.from('dga_interest_rates').delete()
+    .eq('id', id).eq('organization_id', organizationId);
+  if (error) throw bookkeepingError(error);
+}
+
+export async function listDgaInterestPostings(organizationId: UUID): Promise<DgaInterestPosting[]> {
+  const { data, error } = await supabase
+    .from('dga_interest_postings').select('*')
+    .eq('organization_id', organizationId)
+    .order('year', { ascending: false });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as DgaInterestPosting[];
+}
+
+export async function bookDgaInterest(organizationId: UUID, year: number): Promise<DgaInterestPosting> {
+  const { data, error } = await supabase.rpc('book_dga_interest', { p_organization_id: organizationId, p_year: year });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as DgaInterestPosting;
+}
+
+export async function reverseDgaInterest(organizationId: UUID, postingId: UUID): Promise<DgaInterestPosting> {
+  const { data, error } = await supabase.rpc('reverse_dga_interest', { p_organization_id: organizationId, p_posting_id: postingId });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as DgaInterestPosting;
 }
 
 // ── Vennootschapsbelasting ─────────────────────────────────────────────────

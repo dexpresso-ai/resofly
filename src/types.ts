@@ -1122,7 +1122,7 @@ export type JournalEntryStatus = 'draft' | 'posted' | 'reversed';
 export type JournalSourceType =
   | 'sales_invoice' | 'purchase_invoice' | 'asset_depreciation' | 'asset_acquisition' | 'asset_disposal'
   | 'vat_return' | 'payment' | 'opening_balance' | 'manual' | 'year_close' | 'credit_note'
-  | 'result_appropriation' | 'corporate_tax';
+  | 'result_appropriation' | 'corporate_tax' | 'dga_interest';
 
 /**
  * Rubriek van een grootboekrekening in de balans of de winst- en verliesrekening.
@@ -1307,6 +1307,57 @@ export interface FiscalYearListRow {
   close_journal_entry_id: UUID | null;
   computed_result_cents: number;
   has_entries: boolean;
+}
+
+// ── DGA: rekening-courant en gebruikelijk loon (fase 3) ────────────────────
+
+/** Uitkomst van dga_signals(): kale feiten uit de eigen administratie. */
+export interface DgaSignals {
+  year: number;
+  /** Zijn er voor dit jaar normbedragen vastgelegd? Zo niet, dan geen signalen. */
+  normsKnown: boolean;
+  usualSalaryNormCents: number | null;
+  deMinimisCents: number | null;
+  comparableSalaryBasisPoints: number | null;
+  /** Null vóór 2023: de regeling excessief lenen bestond toen nog niet. */
+  excessiveLoanThresholdCents: number | null;
+  interestFreeLimitCents: number | null;
+  hasCurrentAccount: boolean;
+  /** Saldo op 31 december — de peildatum voor excessief lenen. */
+  currentAccountYearEndCents: number;
+  /** Hoogste stand van het jaar — de toets voor de renteloze grens. */
+  currentAccountPeakCents: number;
+  wagesBookedCents: number;
+  noWagesBooked: boolean;
+  aboveInterestFreeLimit: boolean;
+  aboveExcessiveLoanThreshold: boolean;
+}
+
+export interface DgaInterestComputation {
+  year: number;
+  daysInYear: number;
+  periods: Array<{ rateBasisPoints: number | null; days: number; averageBalanceCents: number; interestCents: number }>;
+  interestCents: number;
+  /** Dagen zonder vastgelegd percentage: dan kan er niet geboekt worden. */
+  hasDaysWithoutRate: boolean;
+}
+
+export interface DgaInterestRate extends OrgScopedRow {
+  valid_from: string;
+  rate_basis_points: number;
+  basis_note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DgaInterestPosting extends OrgScopedRow {
+  year: number;
+  interest_cents: number;
+  computation: DgaInterestComputation;
+  journal_entry_id: UUID | null;
+  status: 'posted' | 'reversed';
+  created_at: string;
+  updated_at: string;
 }
 
 // ── Vennootschapsbelasting (fase 2) ────────────────────────────────────────
