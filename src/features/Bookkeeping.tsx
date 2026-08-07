@@ -1176,12 +1176,46 @@ function describeAccountError(e: unknown): string {
 
 function AccountsView({ data, organizationId, canWrite, onChanged }: PageProps) {
   const [edit, setEdit] = useState<LedgerAccount | 'new' | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
+  /**
+   * Het standaardschema opnieuw langslopen. Nodig zodra de rechtsvorm verandert:
+   * een administratie die naar BV gaat heeft aandelenkapitaal, reserves en
+   * vennootschapsbelasting nodig, en die kwamen tot nu toe pas bij de volgende
+   * boeking binnen — zonder dat ergens te zien was. Bestaande rekeningen blijven
+   * onaangeroerd; de RPC voegt alleen toe wat ontbreekt.
+   */
+  async function syncChart() {
+    const before = data.ledgerAccounts.length;
+    setSyncing(true); setSyncError(null); setSyncMessage(null);
+    try {
+      await ensureDefaultLedgerAccounts(organizationId);
+      onChanged();
+      setSyncMessage(before === data.ledgerAccounts.length
+        ? 'Het rekeningschema was al compleet.'
+        : 'Het rekeningschema is bijgewerkt.');
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : 'Bijwerken mislukt');
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <div className="bk-accounts">
       <div className="bk-subhead">
         <p className="bk-muted">Eigen rekeningen kun je vrij aanmaken en aanpassen. Systeemrekeningen zijn nodig voor het automatisch boeken en daarom beperkt bewerkbaar.</p>
-        <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Nieuwe rekening</Button>
+        <div className="bk-head-actions">
+          <Button disabled={!canWrite || syncing} onClick={syncChart} title="Voegt de rekeningen toe die bij je rechtsvorm horen en nog ontbreken">
+            <RotateCcw size={14} /> {syncing ? 'Bezig…' : 'Schema bijwerken'}
+          </Button>
+          <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Nieuwe rekening</Button>
+        </div>
       </div>
+      {syncError && <div className="error">{syncError}</div>}
+      {syncMessage && <p className="bk-note">{syncMessage}</p>}
       <div className="bk-table-wrap"><table className="bk-table">
         <thead><tr><th>Code</th><th>Naam</th><th>Type</th><th>Rubriek</th><th>Standaard BTW</th><th>Actief</th><th></th></tr></thead>
         <tbody>{data.ledgerAccounts.map(a => (
@@ -1287,6 +1321,20 @@ function LedgerAccountForm({ data, organizationId, canWrite, account, onClose, o
             ))}
           </Select>
         </Field>
+      </div>
+      {/* De rubriek geldt met terugwerkende kracht: de balans groepeert op de
+          rubriek zoals die NU is, ook in de vergelijkende kolom. Dat is precies
+          de "stelselwijziging" die art. 2:363 lid 4/5 BW alleen om gegronde
+          redenen toestaat, mét toelichting. Wij kunnen dat niet afdwingen, maar
+          de gebruiker hoort het wel te weten op het moment dat hij het doet. */}
+      {account && (form.report_group || null) !== (account.report_group ?? null) && (
+        <div className="bk-note">
+          Let op: de balans en de W&amp;V groeperen op de rubriek zoals die nú is — óók de
+          vergelijkende cijfers van eerdere perioden. Een eerder uitgedraaid overzicht
+          kan er daardoor anders uitzien dan een nieuwe uitdraai van dezelfde periode.
+        </div>
+      )}
+      <div className="bk-grid2">
         <Field label="Standaard BTW-code" hint="Optioneel.">
           <Select value={form.default_vat_code || ''} onChange={e => set('default_vat_code', e.target.value)} disabled={!canWrite}>
             <option value="">— geen —</option>

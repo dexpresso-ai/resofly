@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit --pretty false",
+    "test": "node --test supabase/functions/_shared/*.test.ts",
     "lint:sql": "node -e \"console.log('SQL lint placeholder')\""
   },
   "dependencies": {

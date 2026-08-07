@@ -38,6 +38,13 @@ export type LegalForm =
   | 'bv' | 'nv' | 'cooperatie'
   | 'stichting' | 'vereniging';
 
+/**
+ * Rechtsvormen die zelfstandig Vpb-plichtig zijn en daarmee de zakelijke module
+ * vereisen. De database bewaakt dit ook (trigger op company_settings), maar de
+ * app hoort geen keuze te tonen die daarna geweigerd wordt.
+ */
+export const BUSINESS_LEGAL_FORMS: LegalForm[] = ['bv', 'nv', 'cooperatie'];
+
 export const LEGAL_FORM_LABELS: Record<LegalForm, string> = {
   eenmanszaak: 'Eenmanszaak',
   vof: 'VOF',

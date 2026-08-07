@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Bell, BookOpen, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, Users } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
-import { LEGAL_FORM_LABELS } from '../types';
+import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
@@ -1680,9 +1680,25 @@ export function Settings({
       <div className="settings-grid">
         <Input value={form.company_name ?? ''} onChange={e=>set('company_name', e.target.value)} placeholder="Bedrijfsnaam" />
         {/* Rechtsvorm stuurt het rekeningschema, de resultaatbestemming en welke
-            fiscale schermen zichtbaar zijn (urencriterium bij IB, Vpb bij een BV). */}
-        <select className="form-select" value={form.legal_form ?? 'eenmanszaak'} onChange={e=>set('legal_form', e.target.value as LegalForm)} title="Rechtsvorm — bepaalt het rekeningschema en welke fiscale schermen je ziet">
-          {(Object.keys(LEGAL_FORM_LABELS) as LegalForm[]).map(key => <option key={key} value={key}>{LEGAL_FORM_LABELS[key]}</option>)}
+            fiscale schermen zichtbaar zijn (urencriterium bij IB, Vpb bij een BV).
+            De Vpb-rechtsvormen hangen aan de zakelijke module: de database weigert
+            de overgang zonder die module, dus zetten we ze hier ook niet in de
+            lijst. Staat de rechtsvorm er al op en verloopt de module, dan blijft
+            de huidige waarde gewoon kiesbaar — anders kan de klant zijn eigen
+            bedrijfsgegevens niet meer opslaan. */}
+        <select
+          className="form-select"
+          value={form.legal_form ?? 'eenmanszaak'}
+          onChange={e=>set('legal_form', e.target.value as LegalForm)}
+          title={businessActive
+            ? 'Rechtsvorm — bepaalt het rekeningschema en welke fiscale schermen je ziet'
+            : 'BV, NV en coöperatie horen bij de zakelijke module (Instellingen → Abonnement)'}
+        >
+          {(Object.keys(LEGAL_FORM_LABELS) as LegalForm[])
+            .filter(key => businessActive
+              || !BUSINESS_LEGAL_FORMS.includes(key)
+              || key === (form.legal_form ?? 'eenmanszaak'))
+            .map(key => <option key={key} value={key}>{LEGAL_FORM_LABELS[key]}</option>)}
         </select>
         {/* Merknaam wordt bij Huisstijl beheerd; hier alleen tonen. */}
         <Input value={form.trade_name ?? ''} readOnly disabled placeholder="Merknaam — in te stellen bij Huisstijl" title="Je merknaam staat bij Instellingen → Huisstijl" />
