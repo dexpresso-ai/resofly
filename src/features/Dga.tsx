@@ -145,7 +145,9 @@ export function DgaPage({ data, organizationId, canWrite, canAdmin, businessActi
                     ? signal(`Het saldo op 31 december (${euroCents(signals.currentAccountYearEndCents)}) ligt boven de grens van ${euroCents(signals.excessiveLoanThresholdCents)} (art. 4.14a Wet IB 2001). Het meerdere kan als inkomen uit aanmerkelijk belang worden belast. Of dat werkelijk zo is hangt af van zaken die hier niet staan — een eigenwoningschuld met hypotheekrecht, schulden van een partner of verbonden personen, en eerder belaste bedragen. Bespreek dit met je adviseur.`, 'warn')
                     : signal(`Onder de grens van ${euroCents(signals.excessiveLoanThresholdCents)} (art. 4.14a Wet IB 2001). Let op: die grens wordt op 31 december gemeten, dus aflossen vóór het jaareinde telt.`, 'ok')
                 )}
-                {signals.aboveInterestFreeLimit
+                {signals.interestFreeLimitCents === null
+                  ? signal(`Voor ${year} is er geen renteloze grens vastgelegd.`)
+                  : signals.aboveInterestFreeLimit
                   ? signal(`De rekening-courant stond dit jaar boven ${euroCents(signals.interestFreeLimitCents)}. Dan moet er over het volle bedrag rente worden berekend, niet alleen over het meerdere.`, 'warn')
                   : signal(`Het saldo bleef dit jaar onder ${euroCents(signals.interestFreeLimitCents)}; dan hoeft er geen rente te worden berekend. Die toets geldt voor het hele jaar, niet alleen voor de einddatum.`, 'ok')}
               </>}
