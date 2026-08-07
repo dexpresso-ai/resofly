@@ -18,6 +18,7 @@ Alles staat op de branch `staging` en is toegepast op `enzghpduqwaojcxgwarr`:
 | `20260807040000` | vier losse eindjes uit fase 1 |
 | `20260807050000` | fase 2 — vennootschapsbelasting (tarieven, correcties, verliesverrekening, reservering) |
 | `20260807060000` | fase 3a — DGA-normen en signalen |
+| `20260807070000` | fase 3b — rente rekening-courant DGA |
 
 Daarnaast: edge function `corporate-tax`, het rekenhart `_shared/vpb.ts` met 18 tests
 (`npm test`), en de schermen `CorporateTax.tsx` en de uitbreidingen in `ProfitLoss.tsx`,
@@ -230,7 +231,7 @@ wordt de IB-schatting daarin een Vpb-reservering.
 | 0 | **KLAAR** — entiteiten-boom, `legal_form`, entitlement `business`, billing-root, seats uniek over de boom, entiteitswisselaar, 1225-monitor uit bij een BV | `20260807000000` + `20260807010000`, `Sidebar.tsx`, `main.tsx`, `SimplePages.tsx`, `TimeTracking.tsx`, `billing`-edge-function | gedaan |
 | 1 | **KLAAR (nog niet toegepast)** — BV-rekeningschema, `report_group`, ingedeelde balans + W&V met vergelijkende cijfers, resultaatbestemming in twee stappen | `20260807020000` + `20260807030000`, `ProfitLoss.tsx`, `FiscalYears.tsx`, `Bookkeeping.tsx`, `xaf.ts` | gedaan |
 | 2 | **GROTENDEELS KLAAR** — Vpb: tarieventabel (2021 t/m 2026, periodegedateerd), rekenhart met 18 tests, correcties, verliesverrekening, reservering op 9900/1540, edge function. **Rest: het scherm en de specificatie-export.** | `20260807050000`, `_shared/vpb.ts`, `corporate-tax`-edge-function | scherm nog open |
-| 3 | **DEELS KLAAR** — normen periodegedateerd (gebruikelijk loon 2021-2026, grens excessief lenen, € 17.500-regel) + signaalfunctie uit de eigen administratie. **Rest: het DGA-scherm, een eigen rentepercentage per periode met renteberekening, en de import van de loonjournaalpost.** | `20260807060000` | scherm nog open |
+| 3 | **BIJNA KLAAR** — normen periodegedateerd, signalen, rekening-courant met eigen rentepercentage en dagsaldo-berekening, DGA-scherm. **Rest: import van de loonjournaalpost.** | `20260807060000` + `070000`, `Dga.tsx` | loonimport nog open |
 | 4 | Aandeelhoudersregister, uitkeringstoets, dividend + dividendbelasting | `..._shareholders_dividends.sql` | 3–4 dagen |
 | 5 | Jaarrekening, publicatiestukken, groottecriteria, deponeer-deadlines | `..._annual_accounts.sql` | 1 week |
 | 6 | Intercompany-boekingen + afstemrapport, consolidatie over de boom, fiscale eenheid | later | apart traject |
