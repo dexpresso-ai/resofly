@@ -99,6 +99,7 @@ import { VatReturnsPage } from './features/VatReturns';
 import { FiscalYearsPage } from './features/FiscalYears';
 import { CorporateTaxPage } from './features/CorporateTax';
 import { DgaPage } from './features/Dga';
+import { ShareholdersPage } from './features/Shareholders';
 import { PublicQuotePage } from './features/PublicQuotePage';
 import { PublicInvoicePage } from './features/PublicInvoicePage';
 import { PublicContractPage } from './features/PublicContractPage';
@@ -126,7 +127,7 @@ import type {
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'fiscal-years'|'archive'|'settings'|'project'|'gallery';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'archive'|'settings'|'project'|'gallery';
 type EditMode =
   | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status'>> }
   | { kind: 'project'; item?: Project; defaults?: Partial<Pick<Project, 'name' | 'client_id' | 'description' | 'start_date' | 'end_date'>> }
@@ -1983,6 +1984,7 @@ function App() {
     if (page === 'vat-returns') return <VatReturnsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'dga') return <DgaPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'corporate-tax') return <CorporateTaxPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
+    if (page === 'shareholders') return <ShareholdersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} canWrite={canWrite} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onQuickAddTask={quickAddTask} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;

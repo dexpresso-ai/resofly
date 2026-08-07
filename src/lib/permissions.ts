@@ -99,6 +99,7 @@ export const PAGE_MODULE: Record<string, ModuleKey> = {
   'vat-returns': 'finance',
   'corporate-tax': 'finance',
   dga: 'finance',
+  shareholders: 'finance',
   'fiscal-years': 'finance',
 };
 

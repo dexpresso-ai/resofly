@@ -1491,6 +1491,152 @@ export interface ResultAppropriationRow {
   created_at: string;
 }
 
+// ── Aandeelhouders en dividend (fase 4) ────────────────────────────────────
+// Het register van art. 2:194 BW en de uitkeringen daarop. Zie migratie
+// 20260807100000.
+
+export type ShareholderKind = 'natural_person' | 'legal_entity';
+
+export const SHAREHOLDER_KIND_LABELS: Record<ShareholderKind, string> = {
+  natural_person: 'Natuurlijk persoon',
+  legal_entity: 'Rechtspersoon',
+};
+
+export interface Shareholder extends OrgScopedRow {
+  name: string;
+  kind: ShareholderKind;
+  address_line: string | null;
+  postal_code: string | null;
+  city: string | null;
+  country_code: string;
+  email: string | null;
+  is_dga: boolean;
+  /** Inhoudingsvrijstelling art. 4 Wet DB 1965 — bewuste keuze, met onderbouwing. */
+  withholding_exempt: boolean;
+  withholding_exempt_note: string | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ShareTransactionKind = 'issue' | 'transfer' | 'repurchase' | 'cancellation';
+
+export const SHARE_TRANSACTION_LABELS: Record<ShareTransactionKind, string> = {
+  issue: 'Uitgifte',
+  transfer: 'Overdracht',
+  repurchase: 'Inkoop door de vennootschap',
+  cancellation: 'Intrekking',
+};
+
+export interface ShareTransaction extends OrgScopedRow {
+  kind: ShareTransactionKind;
+  /** Datum van verkrijging (art. 2:194 lid 1 BW). */
+  event_date: string;
+  /** Datum van erkenning of betekening — valt niet altijd samen met de levering. */
+  acknowledged_on: string | null;
+  share_class: string;
+  quantity: number;
+  /** Nominale waarde en gestort bedrag PER AANDEEL. */
+  nominal_value_cents: number;
+  paid_up_cents: number;
+  from_shareholder_id: UUID | null;
+  to_shareholder_id: UUID | null;
+  deed_reference: string | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Rij uit shareholder_positions(): de stand van het register op een datum. */
+export interface ShareholderPosition {
+  shareholder_id: UUID;
+  name: string;
+  kind: ShareholderKind;
+  is_dga: boolean;
+  withholding_exempt: boolean;
+  share_class: string;
+  shares: number;
+  nominal_cents: number;
+  paid_up_cents: number;
+  first_acquired: string | null;
+  /** Belang in basispunten; ingekochte eigen aandelen tellen niet mee in de noemer. */
+  share_basis_points: number;
+}
+
+export type ShareEncumbranceKind = 'pledge' | 'usufruct';
+
+export const SHARE_ENCUMBRANCE_LABELS: Record<ShareEncumbranceKind, string> = {
+  pledge: 'Pandrecht',
+  usufruct: 'Vruchtgebruik',
+};
+
+export interface ShareEncumbrance extends OrgScopedRow {
+  shareholder_id: UUID;
+  kind: ShareEncumbranceKind;
+  holder_name: string;
+  holder_address: string | null;
+  share_class: string;
+  quantity: number;
+  established_on: string;
+  acknowledged_on: string | null;
+  ended_on: string | null;
+  has_voting_rights: boolean;
+  has_dividend_rights: boolean;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type DividendKind = 'final' | 'interim';
+
+/**
+ * Rij uit list_dividend_distributions(). Een uitkering kent twee momenten: het
+ * besluit (eigen vermogen wordt schuld) en de terbeschikkingstelling (op dát
+ * moment wordt de dividendbelasting ingehouden).
+ */
+export interface DividendDistributionRow {
+  id: UUID;
+  kind: DividendKind;
+  result_appropriation_id: UUID | null;
+  fiscal_year_label: string | null;
+  decision_date: string;
+  available_date: string;
+  gross_cents: number;
+  tax_cents: number;
+  net_cents: number;
+  tax_rate_basis_points: number;
+  /** Vrij uitkeerbaar vermogen waarop de balanstest is beoordeeld. */
+  distributable_cents: number | null;
+  board_approved: boolean;
+  source_account_code: string | null;
+  declaration_entry_id: UUID | null;
+  declaration_entry_number: string | null;
+  withholding_entry_id: UUID | null;
+  withholding_entry_number: string | null;
+  /** Uiterste afdrachtdatum: één maand na terbeschikkingstelling (art. 19 lid 3 AWR). */
+  filing_deadline: string | null;
+  status: 'posted' | 'reversed';
+  note: string | null;
+  created_at: string;
+}
+
+/** Rij uit dividend_distribution_detail(): per aandeelhouder, met adres voor de dividendnota. */
+export interface DividendDistributionLine {
+  shareholder_id: UUID;
+  name: string;
+  kind: ShareholderKind;
+  address_line: string | null;
+  postal_code: string | null;
+  city: string | null;
+  country_code: string;
+  shares: number;
+  gross_cents: number;
+  withholding_exempt: boolean;
+  exempt_note: string | null;
+  tax_cents: number;
+  net_cents: number;
+}
+
 export interface Supplier extends OrgScopedRow {
   name: string;
   supplier_code: string | null;

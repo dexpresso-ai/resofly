@@ -6,8 +6,7 @@ rekeningschema kent één `0500 Eigen vermogen`, het resultaat gaat rechtstreeks
 Deze roadmap maakt ResoFly geschikt voor klanten met een BV, tot en met een genereerbare
 jaarrekening en publicatiestukken.
 
-**Status per 2026-08-07: fase 0, 1 en 2 GEBOUWD en op staging toegepast; fase 3 deels.
-Fase 4 en 5 open.**
+**Status per 2026-08-07: fase 0 t/m 4 GEBOUWD en op staging toegepast. Fase 5 open.**
 
 Alles staat op de branch `staging` en is toegepast op `enzghpduqwaojcxgwarr`:
 
@@ -20,6 +19,8 @@ Alles staat op de branch `staging` en is toegepast op `enzghpduqwaojcxgwarr`:
 | `20260807060000` | fase 3a — DGA-normen en signalen |
 | `20260807070000` | fase 3b — rente rekening-courant DGA |
 | `20260807080000` | fase 3c — loonjournaalpost |
+| `20260807090000` | vier bevindingen uit de review op fase 3 |
+| `20260807100000` | fase 4 — aandeelhoudersregister, uitkeringstoets, dividend en dividendbelasting |
 
 Daarnaast: edge function `corporate-tax`, het rekenhart `_shared/vpb.ts` met 18 tests
 (`npm test`), en de schermen `CorporateTax.tsx` en de uitbreidingen in `ProfitLoss.tsx`,
@@ -233,7 +234,7 @@ wordt de IB-schatting daarin een Vpb-reservering.
 | 1 | **KLAAR (nog niet toegepast)** — BV-rekeningschema, `report_group`, ingedeelde balans + W&V met vergelijkende cijfers, resultaatbestemming in twee stappen | `20260807020000` + `20260807030000`, `ProfitLoss.tsx`, `FiscalYears.tsx`, `Bookkeeping.tsx`, `xaf.ts` | gedaan |
 | 2 | **GROTENDEELS KLAAR** — Vpb: tarieventabel (2021 t/m 2026, periodegedateerd), rekenhart met 18 tests, correcties, verliesverrekening, reservering op 9900/1540, edge function. **Rest: het scherm en de specificatie-export.** | `20260807050000`, `_shared/vpb.ts`, `corporate-tax`-edge-function | scherm nog open |
 | 3 | **KLAAR** — normen, signalen, rekening-courant met eigen rentepercentage en dagsaldo-berekening, DGA-scherm, loonjournaalpost-import | `20260807060000` t/m `080000`, `Dga.tsx`, `PayrollImport.tsx` | gedaan |
-| 4 | Aandeelhoudersregister, uitkeringstoets, dividend + dividendbelasting | `..._shareholders_dividends.sql` | 3–4 dagen |
+| 4 | **KLAAR** — aandeelhoudersregister (art. 2:194 BW) met mutaties en pand/vruchtgebruik, uitkeringstoets ook op het interim-dividend, dividendbelasting met inhoudingsvrijstelling per aandeelhouder | `20260807100000`, `Shareholders.tsx`, `Dividends.tsx` | gedaan |
 | 5 | Jaarrekening, publicatiestukken, groottecriteria, deponeer-deadlines | `..._annual_accounts.sql` | 1 week |
 | 6 | Intercompany-boekingen + afstemrapport, consolidatie over de boom, fiscale eenheid | later | apart traject |
 
@@ -353,6 +354,50 @@ Verder nagezocht en verwerkt in fase 1:
   mogelijk", plus de plicht om ze bij een stelselwijziging te herzien en de afwijking toe te lichten. Dat
   laatste zit nog niet in het product.
 
-Nog **niet** nagezocht en dus open voor fase 2 t/m 4: de Vpb-schijfgrens en -tarieven per jaar, de
-verliesverrekeningsdrempel, de gebruikelijkloonnorm, de leendrempel excessief lenen en het
-dividendbelastingtarief.
+Nagezocht en periodegedateerd vastgelegd bij fase 2 t/m 4: de Vpb-schijfgrenzen en -tarieven per jaar
+(`corporate_tax_rates`), de verliesverrekeningsdrempel, de gebruikelijkloonnorm en de leendrempel
+excessief lenen (`dga_norms`), de renteloze grens rekening-courant (`dga_current_account_limits`) en het
+dividendbelastingtarief (`dividend_tax_rates`). Voor fase 5 staan de groottecriteria hierboven al klaar.
+
+## Wat fase 4 precies geworden is
+
+- **Het register is afgeleid, niet bijgehouden.** `shareholders` bevat namen en adressen;
+  `share_transactions` bevat de gebeurtenissen (uitgifte, overdracht, inkoop, intrekking) met per
+  gebeurtenis de verkrijgingsdatum, de datum van erkenning of betekening, de soort aandelen en het op
+  ieder aandeel gestorte bedrag — precies wat art. 2:194 lid 1 BW opsomt. Een kolom "aantal aandelen"
+  op de aandeelhouder zou die geschiedenis platslaan en het register waardeloos maken als bewijs.
+  `shareholder_positions(org, peildatum)` telt het op en rekent het belang uit; door de vennootschap
+  ingekochte aandelen horen bij niemand en vallen daarmee vanzelf uit de noemer, zoals art. 2:228 lid 6
+  BW voor het stemrecht voorschrijft. `share_encumbrances` dekt lid 2 (pandrecht en vruchtgebruik, met
+  de rechten die de houder toekomen).
+- **De uitkeringstoets geldt nu ook tussentijds.** Fase 1 dekte alleen de weg via de vastgestelde
+  jaarrekening, maar art. 2:216 lid 1 BW spreekt van "bestemming van de winst ... en vaststelling van
+  uitkeringen". Een interim-dividend krijgt daarom dezelfde harde balanstest (met de strengere
+  NV-ondergrens van art. 2:105 lid 2 BW waar van toepassing) en dezelfde verplichte bestuursgoedkeuring.
+  Een wettelijke of statutaire reserve als bron wordt geweigerd: dat is nu juist het deel dat moet
+  worden aangehouden.
+- **Twee boekstukken, want twee momenten.** Het besluit maakt van eigen vermogen een schuld
+  (0520 → 1580, bruto; bij een dividend uit de vastgestelde winst deed `appropriate_result` dat al).
+  De terbeschikkingstelling is het moment van inhouden (art. 7 lid 3 Wet DB 1965): 1580 → 1560. Wat er
+  daarna op 1580 staat is exact het netto bedrag voor de aandeelhouder. Uitbetalen en afdragen zijn
+  gewone bankmutaties en lopen al via de bankmodule.
+- **Inhoudingsvrijstelling per aandeelhouder, met verplichte onderbouwing.** Bij een holdingstructuur is
+  dit meteen het normale geval: keert de werk-BV uit aan de holding, dan blijft de inhouding achterwege
+  als de deelnemingsvrijstelling van toepassing is (art. 4 Wet DB 1965). Of dat zo is hangt af van
+  belang, vestigingsplaats en misbruiktoets — dat leidt ResoFly niet af. De vlag wordt bij het boeken
+  op de uitkeringsregel vastgeklonken, zodat een latere wijziging de geschiedenis niet herschrijft.
+- **Geen BSN.** Voor de dividendnota van art. 9 Wet DB 1965 zijn naam en adres genoeg en de aangifte
+  vraagt totalen. Bijzonder gevoelige gegevens opslaan zonder dat er iets mee gebeurt, doen we niet.
+- **De aangifte blijft van de klant.** Het scherm toont wat er is ingehouden en tot wanneer het betaald
+  moet zijn — één maand na terbeschikkingstelling (art. 7 lid 4 Wet DB 1965 jo. art. 19 lid 3 AWR) — plus
+  een exporteerbare specificatie per ontvanger. Indienen doet de klant of de accountant, zoals bij de
+  btw en de Vpb.
+- **Nagezocht:** art. 5 Wet DB 1965 luidt "De belasting bedraagt 15% van de opbrengst"; verlaagd van 25%
+  naar 15% per 1-1-2007 door de Wet werken aan winst (Stb. 2006, 631) en sindsdien ongewijzigd.
+- **Getest tegen een echte BV.** Migratie plus een functionele test in één teruggedraaide transactie op
+  staging: rechtsvorm, rekeningschema, register (60/40), balanstest die € 200.000 tegenhoudt bij
+  € 150.000 vrij vermogen, weigering zonder bestuursgoedkeuring, weigering van 0530 als bron, het
+  interim-dividend met saldocontrole op 0520/1580/1560, de vrijstelling voor de holding, de
+  afdrachttermijn, los tegenboeken dat stuit, terugdraaien dat 0520 herstelt, en de hele weg via
+  `close_fiscal_year` → `appropriate_result` → `declare_dividend` inclusief de guard die de bestemming
+  vasthoudt zolang de uitkering staat.

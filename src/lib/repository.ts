@@ -115,8 +115,15 @@ import type {
   DgaInterestPosting,
   DgaInterestRate,
   DgaSignals,
+  DividendDistributionLine,
+  DividendDistributionRow,
+  DividendKind,
   ResultAppropriation,
   ResultAppropriationRow,
+  ShareEncumbrance,
+  Shareholder,
+  ShareholderPosition,
+  ShareTransaction,
   SavedReport,
   ContractProject,
   Task,
@@ -2021,6 +2028,265 @@ export async function reverseResultAppropriation(
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as ResultAppropriation;
+}
+
+// ── Aandeelhouders en dividend ─────────────────────────────────────────────
+// Het register van art. 2:194 BW is een gewone tabel: lezen en schrijven via
+// RLS. De uitkeringen niet — daar zitten de balanstest, de inhouding en twee
+// boekstukken aan vast, dus die lopen over RPC's.
+
+export async function listShareholders(organizationId: UUID): Promise<Shareholder[]> {
+  const { data, error } = await supabase
+    .from('shareholders').select('*')
+    .eq('organization_id', organizationId)
+    .order('name', { ascending: true });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as Shareholder[];
+}
+
+export type ShareholderInput = {
+  name: string;
+  kind: Shareholder['kind'];
+  addressLine?: string | null;
+  postalCode?: string | null;
+  city?: string | null;
+  countryCode?: string;
+  email?: string | null;
+  isDga?: boolean;
+  withholdingExempt?: boolean;
+  withholdingExemptNote?: string | null;
+  note?: string | null;
+};
+
+function shareholderPayload(input: ShareholderInput) {
+  return {
+    name: input.name.trim(),
+    kind: input.kind,
+    address_line: input.addressLine?.trim() || null,
+    postal_code: input.postalCode?.trim() || null,
+    city: input.city?.trim() || null,
+    country_code: (input.countryCode || 'NL').trim().toUpperCase(),
+    email: input.email?.trim() || null,
+    is_dga: input.isDga ?? false,
+    withholding_exempt: input.withholdingExempt ?? false,
+    withholding_exempt_note: input.withholdingExemptNote?.trim() || null,
+    note: input.note?.trim() || null,
+  };
+}
+
+export async function createShareholder(organizationId: UUID, input: ShareholderInput): Promise<Shareholder> {
+  const { data, error } = await supabase
+    .from('shareholders')
+    .insert({ organization_id: organizationId, ...shareholderPayload(input) })
+    .select('*').single();
+  if (error) throw bookkeepingError(error);
+  return data as Shareholder;
+}
+
+export async function updateShareholder(organizationId: UUID, id: UUID, input: ShareholderInput): Promise<void> {
+  const { error } = await supabase
+    .from('shareholders').update(shareholderPayload(input))
+    .eq('id', id).eq('organization_id', organizationId);
+  if (error) throw bookkeepingError(error);
+}
+
+/**
+ * Verwijderen kan alleen zolang er niets aan hangt: de mutaties en de
+ * dividendregels verwijzen met `on delete restrict`, want een aandeelhouder
+ * wissen zou het register en de onderbouwing van een uitkering laten verdampen.
+ */
+export async function deleteShareholder(organizationId: UUID, id: UUID): Promise<void> {
+  const { error } = await supabase
+    .from('shareholders').delete()
+    .eq('id', id).eq('organization_id', organizationId);
+  if (error) throw bookkeepingError(error);
+}
+
+export async function listShareTransactions(organizationId: UUID): Promise<ShareTransaction[]> {
+  const { data, error } = await supabase
+    .from('share_transactions').select('*')
+    .eq('organization_id', organizationId)
+    .order('event_date', { ascending: false })
+    .order('created_at', { ascending: false });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as ShareTransaction[];
+}
+
+export async function addShareTransaction(
+  organizationId: UUID,
+  input: {
+    kind: ShareTransaction['kind'];
+    eventDate: string;
+    acknowledgedOn?: string | null;
+    shareClass: string;
+    quantity: number;
+    nominalValueCents: number;
+    paidUpCents: number;
+    fromShareholderId?: UUID | null;
+    toShareholderId?: UUID | null;
+    deedReference?: string | null;
+    note?: string | null;
+  },
+): Promise<void> {
+  const { error } = await supabase.from('share_transactions').insert({
+    organization_id: organizationId,
+    kind: input.kind,
+    event_date: input.eventDate,
+    acknowledged_on: input.acknowledgedOn || null,
+    share_class: input.shareClass.trim() || 'gewoon',
+    quantity: input.quantity,
+    nominal_value_cents: input.nominalValueCents,
+    paid_up_cents: input.paidUpCents,
+    from_shareholder_id: input.fromShareholderId ?? null,
+    to_shareholder_id: input.toShareholderId ?? null,
+    deed_reference: input.deedReference?.trim() || null,
+    note: input.note?.trim() || null,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+export async function deleteShareTransaction(organizationId: UUID, id: UUID): Promise<void> {
+  const { error } = await supabase
+    .from('share_transactions').delete()
+    .eq('id', id).eq('organization_id', organizationId);
+  if (error) throw bookkeepingError(error);
+}
+
+/** De stand van het register op een peildatum, met het belang in basispunten. */
+export async function loadShareholderPositions(organizationId: UUID, asOf: string): Promise<ShareholderPosition[]> {
+  const { data, error } = await supabase.rpc('shareholder_positions', {
+    p_organization_id: organizationId,
+    p_as_of: asOf,
+  });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as ShareholderPosition[];
+}
+
+export async function listShareEncumbrances(organizationId: UUID): Promise<ShareEncumbrance[]> {
+  const { data, error } = await supabase
+    .from('share_encumbrances').select('*')
+    .eq('organization_id', organizationId)
+    .order('established_on', { ascending: false });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as ShareEncumbrance[];
+}
+
+export async function addShareEncumbrance(
+  organizationId: UUID,
+  input: {
+    shareholderId: UUID;
+    kind: ShareEncumbrance['kind'];
+    holderName: string;
+    holderAddress?: string | null;
+    shareClass: string;
+    quantity: number;
+    establishedOn: string;
+    acknowledgedOn?: string | null;
+    endedOn?: string | null;
+    hasVotingRights?: boolean;
+    hasDividendRights?: boolean;
+    note?: string | null;
+  },
+): Promise<void> {
+  const { error } = await supabase.from('share_encumbrances').insert({
+    organization_id: organizationId,
+    shareholder_id: input.shareholderId,
+    kind: input.kind,
+    holder_name: input.holderName.trim(),
+    holder_address: input.holderAddress?.trim() || null,
+    share_class: input.shareClass.trim() || 'gewoon',
+    quantity: input.quantity,
+    established_on: input.establishedOn,
+    acknowledged_on: input.acknowledgedOn || null,
+    ended_on: input.endedOn || null,
+    has_voting_rights: input.hasVotingRights ?? false,
+    has_dividend_rights: input.hasDividendRights ?? false,
+    note: input.note?.trim() || null,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+export async function deleteShareEncumbrance(organizationId: UUID, id: UUID): Promise<void> {
+  const { error } = await supabase
+    .from('share_encumbrances').delete()
+    .eq('id', id).eq('organization_id', organizationId);
+  if (error) throw bookkeepingError(error);
+}
+
+/**
+ * Het tarief dividendbelasting dat op een datum gold (art. 5 Wet DB 1965).
+ * Alleen om de gebruiker vooraf te laten zien wat er wordt ingehouden; de RPC
+ * zoekt het bij het boeken zelf opnieuw op.
+ */
+export async function dividendTaxRateOn(onDate: string): Promise<number | null> {
+  const { data, error } = await supabase.rpc('dividend_tax_rate_on', { p_date: onDate });
+  if (error) throw bookkeepingError(error);
+  return (data ?? null) as number | null;
+}
+
+export async function listDividendDistributions(organizationId: UUID): Promise<DividendDistributionRow[]> {
+  const { data, error } = await supabase.rpc('list_dividend_distributions', {
+    p_organization_id: organizationId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as DividendDistributionRow[];
+}
+
+/** De regels van één uitkering: onderbouwing van de aangifte en de dividendnota. */
+export async function loadDividendDistributionLines(
+  organizationId: UUID,
+  distributionId: UUID,
+): Promise<DividendDistributionLine[]> {
+  const { data, error } = await supabase.rpc('dividend_distribution_detail', {
+    p_organization_id: organizationId,
+    p_distribution_id: distributionId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as DividendDistributionLine[];
+}
+
+/**
+ * Legt een dividendbesluit vast, houdt de dividendbelasting in en boekt beide.
+ * Het bruto bedrag volgt uit de regels; per aandeelhouder wordt ingehouden
+ * tenzij de inhoudingsvrijstelling op hem van toepassing is (art. 4 Wet DB
+ * 1965). Bij `interim` toetst de RPC de balanstest en eist hij de
+ * bestuursgoedkeuring; bij `final` gebeurde dat al bij de resultaatbestemming.
+ */
+export async function declareDividend(
+  organizationId: UUID,
+  input: {
+    kind: DividendKind;
+    decisionDate: string;
+    availableDate: string;
+    lines: Array<{ shareholderId: UUID; grossCents: number }>;
+    resultAppropriationId?: UUID | null;
+    boardApproved?: boolean;
+    sourceAccountCode?: string;
+    note?: string | null;
+  },
+): Promise<{ id: UUID }> {
+  const { data, error } = await supabase.rpc('declare_dividend', {
+    p_organization_id: organizationId,
+    p_kind: input.kind,
+    p_decision_date: input.decisionDate,
+    p_available_date: input.availableDate,
+    p_lines: input.lines.map(l => ({ shareholder_id: l.shareholderId, gross_cents: l.grossCents })),
+    p_result_appropriation_id: input.resultAppropriationId ?? null,
+    p_board_approved: input.boardApproved ?? false,
+    p_source_account_code: input.sourceAccountCode ?? '0520',
+    p_note: input.note ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as { id: UUID };
+}
+
+/** Draait een uitkering terug (alleen eigenaar/admin): beide boekstukken op 'reversed'. */
+export async function reverseDividendDistribution(organizationId: UUID, distributionId: UUID): Promise<void> {
+  const { error } = await supabase.rpc('reverse_dividend_distribution', {
+    p_organization_id: organizationId,
+    p_distribution_id: distributionId,
+  });
+  if (error) throw bookkeepingError(error);
 }
 
 /** (Her)berekent het lineaire afschrijvingsschema van een activum. */

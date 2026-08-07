@@ -2459,7 +2459,16 @@ button.chat-member:hover{background:var(--bg3)}
 .bk-balance-bad{color:#f06b6b;font-weight:700}
 .bk-report-table .bk-report-section td{background:rgba(255,255,255,.03);font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted,rgba(245,245,245,.6));font-weight:700;padding-top:9px;padding-bottom:9px}
 .bk-report-table .bk-report-total td{border-top:1px solid var(--border);font-weight:700}
-.bk-report-table tfoot .bk-report-result td{border-top:2px solid var(--border);font-size:1.02rem;font-weight:800;padding-top:11px;padding-bottom:11px}
+.bk-report-table tfoot .bk-report-result td,.bk-table tfoot .bk-report-result td{border-top:2px solid var(--border);font-size:1.02rem;font-weight:800;padding-top:11px;padding-bottom:11px}
+
+/* ── Aandeelhouders en dividend ── */
+/* Een datum die als knop werkt: de tabelregel opent de specificatie, maar het
+   moet een echte button blijven voor toetsenbord en schermlezer. */
+.bk-linklike{background:none;border:none;padding:0;font:inherit;color:var(--accent);text-decoration:underline;cursor:pointer}
+.bk-dividend-form{display:flex;flex-direction:column;gap:12px;margin:14px 0;padding:15px;border:1px solid var(--border);border-radius:16px;background:rgba(255,255,255,.022)}
+/* De bedragkolom in het dividendformulier: invoer rechts uitgelijnd, zodat hij
+   onder de totaalregel staat. */
+.bk-dividend-form .bk-num .form-input{text-align:right;min-height:34px}
 .bk-balance-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
 @media (max-width:880px){.bk-balance-cols{grid-template-columns:1fr}}
 
