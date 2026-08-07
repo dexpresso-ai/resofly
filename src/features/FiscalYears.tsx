@@ -1,14 +1,25 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { CalendarClock, Lock, Plus, Unlock } from 'lucide-react';
-import type { AppData, FiscalYearListRow } from '../types';
+import { CalendarClock, Lock, Plus, Scale, Unlock } from 'lucide-react';
+import type { AppData, FiscalYearListRow, ResultAppropriationRow } from '../types';
 import { Button, Skeleton } from '../components/Ui';
 import { dateNL, euro } from '../lib/format';
-import { closeFiscalYear, ensureDefaultLedgerAccounts, listFiscalYears, openFiscalYear, reopenFiscalYear } from '../lib/repository';
+import {
+  appropriateResult, closeFiscalYear, ensureDefaultLedgerAccounts, listFiscalYears,
+  listResultAppropriations, openFiscalYear, reopenFiscalYear, reverseResultAppropriation,
+} from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const lastDay = (year: number, month: number) => new Date(year, month, 0).getDate();
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * Rechtsvormen waarbij de winst niet automatisch van de ondernemer is, maar door
+ * de algemene vergadering wordt bestemd. Bij een IB-onderneming bestaat die stap
+ * niet: het resultaat gaat rechtstreeks naar het eigen vermogen.
+ */
+const APPROPRIATION_LEGAL_FORMS = ['bv', 'nv', 'cooperatie'];
 
 /**
  * Einde van het boekjaar (uitgelijnd op de boekjaar-startmaand) dat de begindatum
@@ -57,16 +68,22 @@ function SetupBanner({ organizationId, onChanged }: { organizationId: string; on
   );
 }
 
-export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, onChanged }: {
-  data: AppData; organizationId: string; canWrite: boolean; canAdmin: boolean; onChanged: () => void;
+export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, businessActive, onChanged }: {
+  data: AppData; organizationId: string; canWrite: boolean; canAdmin: boolean;
+  /** Zakelijke module actief; zonder die module weigert appropriate_result. */
+  businessActive: boolean;
+  onChanged: () => void;
 }) {
   const [rows, setRows] = useState<FiscalYearListRow[]>([]);
+  const [appropriations, setAppropriations] = useState<ResultAppropriationRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmClose, setConfirmClose] = useState<FiscalYearListRow | null>(null);
   const [confirmReopen, setConfirmReopen] = useState<FiscalYearListRow | null>(null);
+  const [appropriate, setAppropriate] = useState<FiscalYearListRow | null>(null);
+  const [confirmUndo, setConfirmUndo] = useState<ResultAppropriationRow | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [newStart, setNewStart] = useState('');
   const [newEnd, setNewEnd] = useState('');
@@ -74,10 +91,29 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, onCh
   const startMonth = data.companySettings?.fiscal_year_start_month ?? 1;
   const resultCode = data.companySettings?.year_result_account_code ?? '0510';
   const resultLabel = resultCode === '0500' ? '0500 · Eigen vermogen' : '0510 · Onverdeeld resultaat';
+  // De rechtsvorm staat al in de bedrijfsgegevens; die hoeft niet nog eens als
+  // prop door de app te reizen. Zonder rechtsvorm: eenmanszaak, dus geen AvA.
+  const legalForm = data.companySettings?.legal_form ?? 'eenmanszaak';
+  // De rechtsvorm is los van het abonnement in te stellen, maar appropriate_result
+  // weigert zonder de zakelijke module. Beide moeten kloppen, anders staat er een
+  // knop die het nooit kan doen.
+  const usesAppropriation = businessActive && APPROPRIATION_LEGAL_FORMS.includes(legalForm);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
-    try { setRows(await listFiscalYears(organizationId)); }
+    try {
+      // Bestemmingen ALTIJD ophalen, ook bij een eenmanszaak. Wie de rechtsvorm
+      // na een bestemming terugzet, moet die nog kunnen terugdraaien — anders
+      // blijft het boekjaar geblokkeerd zonder knop om eruit te komen. Een
+      // aparte catch, zodat een lege of geweigerde lijst de boekjaren zelf niet
+      // meesleept.
+      const [years, appropriated] = await Promise.all([
+        listFiscalYears(organizationId),
+        listResultAppropriations(organizationId).catch(() => [] as ResultAppropriationRow[]),
+      ]);
+      setRows(years);
+      setAppropriations(appropriated);
+    }
     catch (e) { setError(e instanceof Error ? e.message : 'Boekjaren laden mislukt'); }
     finally { setLoading(false); }
   }, [organizationId]);
@@ -85,6 +121,11 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, onCh
   useEffect(() => { if (data.ledgerAccounts.length > 0) void load(); }, [load, data.ledgerAccounts.length]);
 
   const hasOpenYear = useMemo(() => rows.some(r => r.status === 'open'), [rows]);
+  /** De geldige (niet-teruggedraaide) bestemming per boekjaar. */
+  const activeAppropriations = useMemo(
+    () => new Map(appropriations.filter(a => a.status === 'posted').map(a => [a.fiscal_year_id, a])),
+    [appropriations],
+  );
 
   function startNewYear() {
     const s = nextRangeSuggestion(rows, startMonth, data.companySettings?.bookkeeping_start_date ?? null);
@@ -121,6 +162,36 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, onCh
     finally { setBusyId(null); }
   }
 
+  async function doAppropriate(row: FiscalYearListRow, input: { decisionDate: string; dividendCents: number; boardApproved: boolean; note: string }) {
+    const result = row.result_cents ?? 0;
+    setBusyId(row.id); setActionError(null);
+    try {
+      await appropriateResult(organizationId, {
+        fiscalYearId: row.id,
+        decisionDate: input.decisionDate,
+        // Wat niet wordt uitgekeerd, gaat naar de overige reserves. Bij een
+        // verlies is er niets uit te keren en gaat het volledige bedrag.
+        reservesCents: result - input.dividendCents,
+        dividendCents: input.dividendCents,
+        boardApproved: input.boardApproved,
+        note: input.note.trim() || null,
+      });
+      setAppropriate(null);
+      await load(); onChanged();
+    } catch (e) { setActionError(e instanceof Error ? e.message : 'Resultaatbestemming mislukt'); }
+    finally { setBusyId(null); }
+  }
+
+  async function doUndoAppropriation(row: ResultAppropriationRow) {
+    setBusyId(row.id); setActionError(null);
+    try {
+      await reverseResultAppropriation(organizationId, row.id);
+      setConfirmUndo(null);
+      await load(); onChanged();
+    } catch (e) { setActionError(e instanceof Error ? e.message : 'Terugdraaien mislukt'); }
+    finally { setBusyId(null); }
+  }
+
   if (data.ledgerAccounts.length === 0) {
     return <div className="bk-page"><SetupBanner organizationId={organizationId} onChanged={onChanged} /></div>;
   }
@@ -130,7 +201,10 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, onCh
       <div className="bk-head">
         <div>
           <h2>Boekjaren</h2>
-          <p>Open een nieuw boekjaar, sluit een lopend boekjaar af (resultaat naar {resultLabel}) en bekijk voorgaande jaren.</p>
+          <p>
+            Open een nieuw boekjaar, sluit een lopend boekjaar af (resultaat naar {resultLabel}) en bekijk voorgaande jaren.
+            {usesAppropriation && ' Daarna bestemt de algemene vergadering het resultaat: naar de reserves of als dividend.'}
+          </p>
         </div>
         {canWrite && <Button variant="primary" onClick={startNewYear}><Plus size={14} /> Nieuw boekjaar openen</Button>}
       </div>
@@ -161,6 +235,8 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, onCh
               {rows.length === 0 && <tr><td colSpan={5} className="bk-muted">Nog geen boekjaren. Open het eerste boekjaar om te beginnen.</td></tr>}
               {rows.map(r => {
                 const result = r.status === 'closed' ? (r.result_cents ?? 0) : r.computed_result_cents;
+                const appropriated = activeAppropriations.get(r.id) ?? null;
+                const canAppropriate = usesAppropriation && r.status === 'closed' && !appropriated && (r.result_cents ?? 0) !== 0;
                 return (
                   <tr key={r.id}>
                     <td><strong>{r.label}</strong></td>
@@ -169,6 +245,11 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, onCh
                       {r.status === 'closed'
                         ? <span className="bk-badge bk-badge-closed"><Lock size={12} /> Afgesloten</span>
                         : <span className="bk-badge bk-badge-open"><CalendarClock size={12} /> Open</span>}
+                      {appropriated && (
+                        <span className="bk-fy-hint bk-muted" title={`Besluit van ${dateNL(appropriated.decision_date)}${appropriated.entry_number ? ` · boekstuk ${appropriated.entry_number}` : ''}. Naar de reserves ${euroCents(appropriated.reserves_cents)}${appropriated.dividend_cents > 0 ? `, dividend ${euroCents(appropriated.dividend_cents)}` : ''}.`}>
+                          {' '}· bestemd{appropriated.dividend_cents > 0 ? ` (${euroCents(appropriated.dividend_cents)} dividend)` : ''}
+                        </span>
+                      )}
                     </td>
                     <td className={`bk-num ${result >= 0 ? 'bk-pos' : 'bk-neg'}`}>
                       {euroCents(result)}
@@ -181,8 +262,22 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, onCh
                       {r.status === 'open' && canWrite && (
                         <Button disabled={busyId === r.id} onClick={() => { setActionError(null); setConfirmClose(r); }}><Lock size={13} /> Afsluiten</Button>
                       )}
+                      {canAppropriate && canWrite && (
+                        <Button disabled={busyId === r.id} onClick={() => { setActionError(null); setAppropriate(r); }}><Scale size={13} /> Resultaat bestemmen</Button>
+                      )}
+                      {appropriated && canAdmin && (
+                        <Button variant="ghost" disabled={busyId === appropriated.id} onClick={() => { setActionError(null); setConfirmUndo(appropriated); }}>Bestemming terugdraaien</Button>
+                      )}
                       {r.status === 'closed' && canAdmin && (
-                        <Button variant="ghost" disabled={busyId === r.id} onClick={() => { setActionError(null); setConfirmReopen(r); }}><Unlock size={13} /> Heropenen</Button>
+                        <Button
+                          variant="ghost"
+                          // Heropenen weigert zolang er een geldige bestemming
+                          // ligt; dat hier al blokkeren scheelt een rauwe
+                          // databasefout en wijst meteen de goede volgorde aan.
+                          disabled={busyId === r.id || Boolean(appropriated)}
+                          title={appropriated ? 'Draai eerst de resultaatbestemming terug' : undefined}
+                          onClick={() => { setActionError(null); setConfirmReopen(r); }}
+                        ><Unlock size={13} /> Heropenen</Button>
                       )}
                     </td>
                   </tr>
@@ -217,10 +312,150 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, onCh
           onCancel={() => { setConfirmReopen(null); setActionError(null); }}
           onConfirm={() => doReopen(confirmReopen)}
         >
-          <p>De resultaatbestemming wordt teruggedraaid en de jaar-vergrendeling opgeheven, zodat je weer in dit boekjaar kunt boeken.</p>
-          <p className="bk-muted">Doe dit alleen om een fout te herstellen. Latere afgesloten boekjaren moeten eerst heropend worden.</p>
+          <p>Het jaarafsluitboekstuk vervalt en de jaar-vergrendeling wordt opgeheven, zodat je weer in dit boekjaar kunt boeken. Het resultaat staat daarna weer als lopend resultaat in de balans.</p>
+          <p className="bk-muted">Doe dit alleen om een fout te herstellen. Latere afgesloten boekjaren moeten eerst heropend worden{usesAppropriation ? ', en een resultaatbestemming van dit boekjaar moet eerst zijn teruggedraaid' : ''}.</p>
         </ConfirmDialog>
       )}
+
+      {appropriate && (
+        <AppropriationDialog
+          row={appropriate}
+          canDistribute={legalForm === 'bv' || legalForm === 'nv'}
+          busy={busyId === appropriate.id}
+          error={actionError}
+          resultLabel={resultLabel}
+          onCancel={() => { setAppropriate(null); setActionError(null); }}
+          onConfirm={input => doAppropriate(appropriate, input)}
+        />
+      )}
+
+      {confirmUndo && (
+        <ConfirmDialog
+          title={`Resultaatbestemming ${confirmUndo.fiscal_year_label} terugdraaien?`}
+          confirmLabel="Terugdraaien"
+          busy={busyId === confirmUndo.id}
+          error={actionError}
+          onCancel={() => { setConfirmUndo(null); setActionError(null); }}
+          onConfirm={() => doUndoAppropriation(confirmUndo)}
+        >
+          <p>Het boekstuk van {dateNL(confirmUndo.decision_date)} vervalt, zodat het resultaat weer onbestemd op {resultLabel} staat. Het blijft bewaard in het journaal, net als bij het heropenen van een boekjaar.</p>
+          {confirmUndo.dividend_cents > 0 && (
+            <p className="bk-muted">Let op: de dividendschuld van {euroCents(confirmUndo.dividend_cents)} vervalt hiermee. Is het dividend al uitbetaald, corrigeer die betaling dan apart.</p>
+          )}
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Het besluit van de algemene vergadering over de bestemming van het resultaat
+ * (art. 2:216 BW). Eén invoerveld: hoeveel gaat er als dividend naar de
+ * aandeelhouders. De rest gaat naar de overige reserves, want het besluit moet
+ * het hele resultaat bestemmen. Bij een verlies is er niets uit te keren.
+ *
+ * De balanstest (lid 1) rekent de database uit en blokkeert een te hoog
+ * dividend; de uitkeringstest (lid 2) is een oordeel van het bestuur over de
+ * toekomst en vraagt hier daarom om een expliciete bevestiging.
+ */
+function AppropriationDialog({ row, canDistribute, busy, error, resultLabel, onCancel, onConfirm }: {
+  row: FiscalYearListRow;
+  /** Kapitaalvennootschap: alleen een BV of NV keert dividend uit op aandelen. */
+  canDistribute: boolean;
+  busy: boolean;
+  error?: string | null;
+  resultLabel: string;
+  onCancel: () => void;
+  onConfirm: (input: { decisionDate: string; dividendCents: number; boardApproved: boolean; note: string }) => void;
+}) {
+  const result = row.result_cents ?? 0;
+  const isProfit = result > 0;
+  const showDividend = isProfit && canDistribute;
+  // De algemene vergadering besluit ná de balansdatum, dus de vroegst mogelijke
+  // besluitdatum is de dag erna — de datum van de balansdatum zelf zou de RPC
+  // meteen weigeren. Vandaag is de gebruikelijke keuze.
+  const earliest = useMemo(() => {
+    const d = new Date(`${row.period_end}T00:00:00`);
+    d.setDate(d.getDate() + 1);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  }, [row.period_end]);
+  const [decisionDate, setDecisionDate] = useState(() => {
+    const today = todayIso();
+    return today > earliest ? today : earliest;
+  });
+  const [dividendEuro, setDividendEuro] = useState('0');
+  const [boardApproved, setBoardApproved] = useState(false);
+  const [note, setNote] = useState('');
+
+  const dividendCents = showDividend ? Math.max(0, Math.round((Number(dividendEuro.replace(',', '.')) || 0) * 100)) : 0;
+  const reservesCents = result - dividendCents;
+  const dividendTooHigh = dividendCents > Math.max(0, result);
+  const dateTooEarly = decisionDate < earliest;
+  const blocked = busy || dateTooEarly || dividendTooHigh || (dividendCents > 0 && !boardApproved);
+
+  return (
+    <div className="bk-modal-backdrop" onClick={onCancel}>
+      <div className="bk-modal" onClick={e => e.stopPropagation()}>
+        <h3>Resultaat {row.label} bestemmen</h3>
+        <div className="bk-modal-body">
+          <p>Het resultaat van {euroCents(result)} staat nu onbestemd op {resultLabel}. Leg hier vast wat de algemene vergadering heeft besloten.</p>
+
+          <div className="bk-fy-new-fields">
+            <label>
+              <span>Datum van het besluit</span>
+              <input type="date" className="form-input" value={decisionDate} min={earliest} onChange={e => setDecisionDate(e.target.value)} />
+            </label>
+            {showDividend && (
+              <label>
+                <span>Dividend</span>
+                <input type="number" className="form-input" min="0" step="0.01" value={dividendEuro} onChange={e => setDividendEuro(e.target.value)} />
+              </label>
+            )}
+          </div>
+
+          {dateTooEarly && <p className="bk-neg">De vergadering besluit ná de balansdatum: kies een datum vanaf {dateNL(earliest)}.</p>}
+          {dividendTooHigh && <p className="bk-neg">Het dividend kan niet hoger zijn dan het resultaat van {euroCents(result)}.</p>}
+
+          <p className="bk-fy-result">
+            {isProfit
+              ? <>Naar de overige reserves: <strong>{euroCents(reservesCents)}</strong>{dividendCents > 0 && <> · dividend: <strong>{euroCents(dividendCents)}</strong></>}</>
+              : <>Het verlies van <strong className="bk-neg">{euroCents(result)}</strong> gaat volledig ten laste van de overige reserves. Uit een verlies wordt niets uitgekeerd.</>}
+          </p>
+          {isProfit && !canDistribute && (
+            <p className="bk-muted">Deze rechtsvorm kent geen dividend op aandelen; de hele winst gaat naar de reserves.</p>
+          )}
+
+          {dividendCents > 0 && (
+            <label className="bk-setting-check">
+              <input type="checkbox" checked={boardApproved} onChange={e => setBoardApproved(e.target.checked)} />
+              <span>
+                Het bestuur keurt de uitkering goed: het verwacht dat de vennootschap haar opeisbare schulden ook ná deze uitkering kan blijven betalen (uitkeringstoets, art. 2:216 lid 2 BW).
+                <small className="bk-muted"> Zonder die goedkeuring heeft het besluit geen gevolgen. Kan de vennootschap na de uitkering haar opeisbare schulden niet betalen, dan zijn de bestuurders die dat wisten of behoorden te voorzien hoofdelijk verbonden voor het tekort — en moet ook een ontvanger die dat wist of behoorde te voorzien zijn uitkering terugbetalen (lid 3).</small>
+              </span>
+            </label>
+          )}
+
+          <label className="bk-setting-field">
+            <span>Toelichting (optioneel)</span>
+            <input className="form-input" value={note} placeholder="Bijv. verwijzing naar de notulen van de AvA" onChange={e => setNote(e.target.value)} />
+          </label>
+
+          <p className="bk-muted">
+            Er komt één boekstuk op de besluitdatum: van {resultLabel} naar 0520 Overige reserves{dividendCents > 0 && ' en 1580 Te betalen dividend'}.
+            De balanstest van art. 2:216 lid 1 BW wordt bij het opslaan gecontroleerd op de balansdatum van dit boekjaar.
+          </p>
+
+          {error && <div className="error bk-modal-error">{error}</div>}
+        </div>
+        <div className="bk-modal-actions">
+          <Button variant="ghost" onClick={onCancel} disabled={busy}>Annuleren</Button>
+          <Button
+            variant="primary"
+            disabled={blocked}
+            onClick={() => onConfirm({ decisionDate, dividendCents, boardApproved, note })}
+          >{busy ? 'Bezig…' : 'Besluit vastleggen'}</Button>
+        </div>
+      </div>
     </div>
   );
 }

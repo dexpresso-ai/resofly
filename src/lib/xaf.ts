@@ -34,7 +34,11 @@ const JOURNALS: { jrnID: string; desc: string; jrnTp: string; sources: string[] 
   { jrnID: 'INK', desc: 'Inkoopboek', jrnTp: 'P', sources: ['purchase_invoice'] },
   { jrnID: 'BNK', desc: 'Bankboek', jrnTp: 'B', sources: ['payment'] },
   { jrnID: 'OPN', desc: 'Openingsbalans', jrnTp: 'O', sources: ['opening_balance'] },
-  { jrnID: 'MEM', desc: 'Memoriaal', jrnTp: 'M', sources: ['manual', 'asset_depreciation', 'asset_acquisition', 'vat_return', 'year_close'] },
+  // Elk brontype moet in precies één dagboek vallen: een boekstuk waarvan het
+  // brontype hier ontbreekt, verdwijnt geruisloos uit <transactions> én uit de
+  // totalen, terwijl het in de beginbalans van het volgende jaar wél meetelt —
+  // dan sluiten twee auditfiles onderling niet meer aan.
+  { jrnID: 'MEM', desc: 'Memoriaal', jrnTp: 'M', sources: ['manual', 'asset_depreciation', 'asset_acquisition', 'asset_disposal', 'vat_return', 'year_close', 'result_appropriation'] },
 ];
 
 export interface XafInput {

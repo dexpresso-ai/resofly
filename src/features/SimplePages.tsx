@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Bell, BookOpen, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, Users } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
-import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
+import { LEGAL_FORM_LABELS } from '../types';
+import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { BRAND_BODY_FONTS, BRAND_FONTS, GALLERY_BACKGROUNDS, brandFont, brandStyle, ensureBrandFontsLoaded } from '../lib/branding';
-import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
+import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setBusinessAddon, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
 import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity } from '../lib/repository';
 import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
@@ -26,6 +27,7 @@ const TEMPLATE_FIELD_LABELS = [
 
 const emptySettings: CompanySettingsInput = {
   company_name: '',
+  legal_form: 'eenmanszaak',
   trade_name: '',
   address_line1: '',
   address_line2: '',
@@ -931,6 +933,15 @@ export function Settings({
     : 0;
   // Creatieve module (galerij-oplevering): inbegrepen bij custom/vrijgesteld,
   // anders een losse post op het abonnementsbedrag.
+  // Zakelijke module: de status komt uit een eigen RPC (organization_business_status),
+  // niet uit het billingoverzicht, omdat ook niet-admins moeten weten of de
+  // fiscale schermen er horen te zijn.
+  const businessStatus = organizationContext.businessStatus;
+  const businessIncluded = businessStatus?.included_in_plan ?? false;
+  const businessEnabled = businessStatus?.enabled ?? false;
+  const businessActive = businessStatus?.active ?? false;
+  const businessGraceUntil = businessStatus?.grace_until ?? null;
+
   const creativeIncluded = billingOverview?.creative_included_in_plan ?? false;
   const creativeEnabled = billingOverview?.creative_enabled ?? false;
   const creativeActive = billingOverview?.creative_active ?? creativeIncluded;
@@ -938,11 +949,18 @@ export function Settings({
   const currentCreativeCents = billingOverview
     ? (billingOverview.billing_interval === 'year' ? (billingOverview.creative_addon_yearly_price_cents ?? 0) : (billingOverview.creative_addon_price_cents ?? 0))
     : 0;
+  const currentBusinessCents = businessStatus
+    ? (businessStatus.billing_interval === 'year' ? businessStatus.addon_yearly_price_cents : businessStatus.addon_price_cents)
+    : 0;
+  const currentEntityCents = businessStatus
+    ? (businessStatus.billing_interval === 'year' ? businessStatus.entity_addon_yearly_price_cents : businessStatus.entity_addon_price_cents)
+    : 0;
   const currentCostCents = billingOverview
     ? (billingOverview.billing_interval === 'year' ? billingOverview.yearly_price_cents : billingOverview.monthly_price_cents)
       + billingOverview.purchased_seats * currentSeatCents
       + currentStorageAddons * currentStorageCents
       + (creativeEnabled && !creativeIncluded ? currentCreativeCents : 0)
+      + (businessEnabled && !businessIncluded ? currentBusinessCents : 0)
     : 0;
   const storageUsedBytes = billingOverview?.storage_used_bytes ?? 0;
   const storageLimitGb = billingOverview?.storage_limit_gb ?? null;
@@ -1261,6 +1279,44 @@ export function Settings({
       intervalUnit: billingIntervalUnit,
       currency: billingOverview.currency,
       execute: () => toggleCreative(enabled),
+    });
+  }
+
+  async function toggleBusiness(enabled: boolean) {
+    if (!activeOrganization || !canAdminOrganization) return;
+    setBillingBusy('business');
+    setBillingError(null);
+    setBillingMessage(null);
+    try {
+      await setBusinessAddon(activeOrganization.id, enabled);
+      await refreshBilling();
+      // Ook de app-brede context verversen: de rechtsvorm-afhankelijke schermen
+      // en de knop "+ administratie" hangen aan organizationContext.businessStatus.
+      await onChanged();
+      setBillingMessage(enabled
+        ? 'Zakelijke module aangezet. Je kunt nu een rechtsvorm kiezen en extra administraties toevoegen.'
+        : 'Zakelijke module uitgezet. Bestaande administraties blijven nog 30 dagen leesbaar.');
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : 'Zakelijke module wijzigen mislukt.');
+    } finally {
+      setBillingBusy(null);
+    }
+  }
+
+  function requestToggleBusiness(enabled: boolean) {
+    if (!activeOrganization || !canAdminOrganization || !billingOverview) return;
+    setBillingError(null);
+    setBillingMessage(null);
+    setPendingChange({
+      title: enabled ? 'Zakelijke module aanzetten' : 'Zakelijke module uitzetten',
+      description: enabled
+        ? `Je voegt de zakelijke module toe aan het ${billingOverview.plan_name}-abonnement: boekhouden voor een BV met het bijbehorende rekeningschema, vennootschapsbelasting en jaarrekening, plus meerdere administraties naast elkaar (holding en werk-BV).`
+        : 'Je zet de zakelijke module uit. Bestaande administraties blijven nog 30 dagen leesbaar, maar je kunt er geen nieuwe meer aanmaken.',
+      currentCostCents,
+      newCostCents: enabled ? currentCostCents + currentBusinessCents : Math.max(0, currentCostCents - currentBusinessCents),
+      intervalUnit: billingIntervalUnit,
+      currency: billingOverview.currency,
+      execute: () => toggleBusiness(enabled),
     });
   }
 
@@ -1623,6 +1679,11 @@ export function Settings({
       <h3>Bedrijfsgegevens op factuur</h3>
       <div className="settings-grid">
         <Input value={form.company_name ?? ''} onChange={e=>set('company_name', e.target.value)} placeholder="Bedrijfsnaam" />
+        {/* Rechtsvorm stuurt het rekeningschema, de resultaatbestemming en welke
+            fiscale schermen zichtbaar zijn (urencriterium bij IB, Vpb bij een BV). */}
+        <select className="form-select" value={form.legal_form ?? 'eenmanszaak'} onChange={e=>set('legal_form', e.target.value as LegalForm)} title="Rechtsvorm — bepaalt het rekeningschema en welke fiscale schermen je ziet">
+          {(Object.keys(LEGAL_FORM_LABELS) as LegalForm[]).map(key => <option key={key} value={key}>{LEGAL_FORM_LABELS[key]}</option>)}
+        </select>
         {/* Merknaam wordt bij Huisstijl beheerd; hier alleen tonen. */}
         <Input value={form.trade_name ?? ''} readOnly disabled placeholder="Merknaam — in te stellen bij Huisstijl" title="Je merknaam staat bij Instellingen → Huisstijl" />
         <Input value={form.address_line1 ?? ''} onChange={e=>set('address_line1', e.target.value)} placeholder="Adresregel 1" />
@@ -1963,6 +2024,38 @@ export function Settings({
               title={!creativeEnabled && !hasMollieSubscription ? 'Start eerst een abonnement' : undefined}
             >
               {billingBusy === 'creative' ? 'Bezig…' : creativeEnabled ? 'Uitzetten' : 'Aanzetten'}
+            </Button>
+          )}
+        </div>
+
+        {/* ── Zakelijke module (BV-boekhouding, Vpb, jaarrekening) ── */}
+        <div className="billing-control-row">
+          <div>
+            <strong>Zakelijke module</strong>
+            <p className="settings-help">
+              Boekhouden voor een BV: rekeningschema met aandelenkapitaal en reserves, vennootschapsbelasting, jaarrekening en publicatiestukken. Inclusief meerdere administraties naast elkaar, zoals een holding met een werk-BV.
+              {businessIncluded
+                ? ' Inbegrepen bij dit abonnement.'
+                : businessEnabled
+                  ? ` Actief · ${formatEur(currentBusinessCents, billingOverview.currency)} per ${billingIntervalUnit}.`
+                  : ` ${formatEur(currentBusinessCents, billingOverview.currency)} per ${billingIntervalUnit}.`}
+              {businessActive && currentEntityCents > 0 && ` Extra administratie: ${formatEur(currentEntityCents, billingOverview.currency)} per ${billingIntervalUnit}.`}
+            </p>
+            {businessActive && businessStatus && <p className="settings-help">
+              {businessStatus.entity_count} administratie{businessStatus.entity_count === 1 ? '' : 's'} in gebruik{businessStatus.entity_allowance !== null ? ` van ${businessStatus.entity_allowance}` : ''}.
+            </p>}
+            {!businessActive && businessGraceUntil && new Date(businessGraceUntil) > new Date() && <p className="settings-help">
+              Uitgezet: bestaande administraties blijven leesbaar tot {new Date(businessGraceUntil).toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' })}.
+            </p>}
+          </div>
+          {canAdminOrganization && !businessIncluded && (
+            <Button
+              variant={businessEnabled ? undefined : 'primary'}
+              onClick={() => requestToggleBusiness(!businessEnabled)}
+              disabled={billingBusy === 'business' || (!businessEnabled && (!hasMollieSubscription || currentBusinessCents <= 0))}
+              title={!businessEnabled && !hasMollieSubscription ? 'Start eerst een abonnement' : undefined}
+            >
+              {billingBusy === 'business' ? 'Bezig…' : businessEnabled ? 'Uitzetten' : 'Aanzetten'}
             </Button>
           )}
         </div>
@@ -2403,6 +2496,7 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
   if (!settings) return emptySettings;
   return {
     company_name: settings.company_name ?? '',
+    legal_form: settings.legal_form ?? 'eenmanszaak',
     trade_name: settings.trade_name ?? '',
     address_line1: settings.address_line1 ?? '',
     address_line2: settings.address_line2 ?? '',

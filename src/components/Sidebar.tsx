@@ -6,7 +6,7 @@ import { SETTINGS_TABS, type SettingsTab } from '../features/SimplePages';
 import { Select } from './Ui';
 import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'fiscal-years'|'archive'|'settings'|'project';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'fiscal-years'|'archive'|'settings'|'project'|'gallery';
 
 const items = [
   ['dashboard', LayoutDashboard, 'Dashboard'],
@@ -37,6 +37,7 @@ export function Sidebar({
   activeRole,
   onOrganization,
   onNewOrganization,
+  onNewEntity,
   onPage,
   onSearchNavigate,
   userEmail = null,
@@ -58,6 +59,8 @@ export function Sidebar({
   activeRole: OrganizationRole | null;
   onOrganization: (id: string) => void;
   onNewOrganization: () => void;
+  /** Alleen gevuld met de zakelijke module: een administratie onder deze organisatie. */
+  onNewEntity?: (() => void) | null;
   onPage: (p: Page) => void;
   onSearchNavigate: (result: SearchResult) => void;
   userEmail?: string | null;
@@ -141,17 +144,39 @@ export function Sidebar({
     onPage(target);
   }
 
+  // Administraties onder hun moeder groeperen (holding + werk-BV). Een
+  // administratie waarvan de moeder niet zichtbaar is — je bent wel lid van de
+  // werk-BV maar niet van de holding — komt gewoon op het eerste niveau, anders
+  // zou hij helemaal uit de lijst vallen.
+  const visibleIds = new Set(organizations.map(org => org.id));
+  const organizationGroups = organizations
+    .filter(org => !org.parent_organization_id || !visibleIds.has(org.parent_organization_id))
+    .map(root => ({
+      root,
+      children: organizations.filter(org => org.parent_organization_id === root.id),
+    }));
+  const hasEntities = organizationGroups.some(group => group.children.length > 0);
+
   return <aside className={`sidebar${mobileOpen ? ' is-open' : ''}${userMenuOpen ? ' user-open' : ''}`}>
     <div className="sidebar-head">
       <button type="button" className="sidebar-close" onClick={onCloseMobile} aria-label="Menu sluiten"><X size={20}/></button>
       <button type="button" className="sidebar-pin" onClick={onTogglePin} aria-pressed={pinned} aria-label={pinned ? 'Menu losmaken' : 'Menu vastzetten'} title={pinned ? 'Menu losmaken' : 'Menu vastzetten'}>{pinned ? <PinOff size={15}/> : <Pin size={15}/>}</button>
       <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div>
       <div className="org-switcher">
-        <label>Organisatie</label>
+        <label>{hasEntities ? 'Administratie' : 'Organisatie'}</label>
         <Select value={activeOrganizationId ?? ''} onChange={event => onOrganization(event.target.value)}>
-          {organizations.map(org => <option key={org.id} value={org.id}>{org.name}</option>)}
+          {organizationGroups.map(group => group.children.length === 0
+            ? <option key={group.root.id} value={group.root.id}>{group.root.name}</option>
+            : <optgroup key={group.root.id} label={group.root.name}>
+                <option value={group.root.id}>{group.root.name}</option>
+                {group.children.map(child => <option key={child.id} value={child.id}>{child.name}</option>)}
+              </optgroup>)}
         </Select>
-        <div className="org-meta"><span>{activeRole ?? 'geen rol'}</span><button onClick={onNewOrganization}>+ organisatie</button></div>
+        <div className="org-meta">
+          <span>{activeRole ?? 'geen rol'}</span>
+          {onNewEntity && <button onClick={onNewEntity}>+ administratie</button>}
+          <button onClick={onNewOrganization}>+ organisatie</button>
+        </div>
       </div>
     </div>
     <nav className="sidebar-nav">

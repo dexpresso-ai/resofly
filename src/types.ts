@@ -29,10 +29,33 @@ export type InvitationStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
 export type LicenseStatus = 'trialing' | 'active' | 'past_due' | 'cancelled';
 export type AuditAction = 'created' | 'updated' | 'deleted' | 'invited' | 'accepted' | 'revoked' | 'role_changed' | 'disabled' | string;
 
+/**
+ * Rechtsvorm van een administratie. Stuurt het rekeningschema, de
+ * resultaatbestemming en welke fiscale schermen zichtbaar zijn.
+ */
+export type LegalForm =
+  | 'eenmanszaak' | 'vof' | 'maatschap' | 'cv'
+  | 'bv' | 'nv' | 'cooperatie'
+  | 'stichting' | 'vereniging';
+
+export const LEGAL_FORM_LABELS: Record<LegalForm, string> = {
+  eenmanszaak: 'Eenmanszaak',
+  vof: 'VOF',
+  maatschap: 'Maatschap',
+  cv: 'Commanditaire vennootschap',
+  bv: 'BV',
+  nv: 'NV',
+  cooperatie: 'Coöperatie',
+  stichting: 'Stichting',
+  vereniging: 'Vereniging',
+};
+
 export interface Organization {
   id: UUID;
   name: string;
   slug: string;
+  /** Moederorganisatie in de administratie-boom (holding). Null = zelfstandig. */
+  parent_organization_id: UUID | null;
   created_by: UUID | null;
   licensed_seats: number;
   license_status: LicenseStatus;
@@ -117,6 +140,7 @@ export interface OrganizationContext {
   billingOverview: OrganizationBillingOverview | null;
   /** Creatieve module: leesbaar voor elk teamlid, anders dan billingOverview. */
   creativeStatus: OrganizationCreativeStatus | null;
+  businessStatus: OrganizationBusinessStatus | null;
 }
 
 export interface OrgScopedRow {
@@ -1089,8 +1113,75 @@ export type VatCodeKind =
   | 'icp_goods' | 'icp_services' | 'eu_acquisition' | 'kor' | 'import_non_eu';
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed';
 export type JournalSourceType =
-  | 'sales_invoice' | 'purchase_invoice' | 'asset_depreciation' | 'asset_acquisition'
-  | 'vat_return' | 'payment' | 'opening_balance' | 'manual' | 'year_close' | 'credit_note';
+  | 'sales_invoice' | 'purchase_invoice' | 'asset_depreciation' | 'asset_acquisition' | 'asset_disposal'
+  | 'vat_return' | 'payment' | 'opening_balance' | 'manual' | 'year_close' | 'credit_note'
+  | 'result_appropriation';
+
+/**
+ * Rubriek van een grootboekrekening in de balans of de winst- en verliesrekening.
+ * Volgt de hoofdindeling van Titel 9 Boek 2 BW (art. 2:364 voor de balans,
+ * art. 2:377 voor de W&V) en Model A/E van het Besluit modellen jaarrekening.
+ * Zie migratie 20260807020000.
+ */
+export type LedgerReportGroup =
+  | 'immateriele_vaste_activa' | 'materiele_vaste_activa' | 'financiele_vaste_activa'
+  | 'voorraden' | 'vorderingen' | 'effecten' | 'liquide_middelen'
+  | 'eigen_vermogen' | 'voorzieningen' | 'langlopende_schulden' | 'kortlopende_schulden'
+  | 'netto_omzet' | 'overige_bedrijfsopbrengsten' | 'inkoopwaarde' | 'personeelskosten'
+  | 'afschrijvingen' | 'overige_bedrijfskosten'
+  | 'financiele_baten' | 'financiele_lasten' | 'belastingen' | 'resultaat_deelnemingen';
+
+export const REPORT_GROUP_LABELS: Record<LedgerReportGroup, string> = {
+  immateriele_vaste_activa: 'Immateriële vaste activa',
+  materiele_vaste_activa: 'Materiële vaste activa',
+  financiele_vaste_activa: 'Financiële vaste activa',
+  voorraden: 'Voorraden',
+  vorderingen: 'Vorderingen',
+  effecten: 'Effecten',
+  liquide_middelen: 'Liquide middelen',
+  eigen_vermogen: 'Eigen vermogen',
+  voorzieningen: 'Voorzieningen',
+  langlopende_schulden: 'Langlopende schulden',
+  kortlopende_schulden: 'Kortlopende schulden',
+  netto_omzet: 'Netto-omzet',
+  overige_bedrijfsopbrengsten: 'Overige bedrijfsopbrengsten',
+  inkoopwaarde: 'Kosten van grond- en hulpstoffen en uitbesteed werk',
+  personeelskosten: 'Lonen, sociale lasten en pensioenlasten',
+  afschrijvingen: 'Afschrijvingen',
+  overige_bedrijfskosten: 'Overige bedrijfskosten',
+  financiele_baten: 'Rentebaten en soortgelijke opbrengsten',
+  financiele_lasten: 'Rentelasten en soortgelijke kosten',
+  belastingen: 'Belastingen',
+  resultaat_deelnemingen: 'Aandeel in resultaat van deelnemingen',
+};
+
+/** Rubrieken die op de activazijde van de balans staan, in wettelijke volgorde. */
+export const ASSET_REPORT_GROUPS: LedgerReportGroup[] = [
+  'immateriele_vaste_activa', 'materiele_vaste_activa', 'financiele_vaste_activa',
+  'voorraden', 'vorderingen', 'effecten', 'liquide_middelen',
+];
+/** Rubrieken op de passivazijde, in wettelijke volgorde. */
+export const LIABILITY_REPORT_GROUPS: LedgerReportGroup[] = [
+  'eigen_vermogen', 'voorzieningen', 'langlopende_schulden', 'kortlopende_schulden',
+];
+/** Rubrieken die het bedrijfsresultaat vormen (alles vóór de financiële baten en lasten). */
+export const OPERATING_REPORT_GROUPS: LedgerReportGroup[] = [
+  'netto_omzet', 'overige_bedrijfsopbrengsten',
+  'inkoopwaarde', 'personeelskosten', 'afschrijvingen', 'overige_bedrijfskosten',
+];
+
+/**
+ * Welke rubrieken bij welk rekeningtype horen. Voorkomt dat een bankrekening
+ * per ongeluk als omzet wordt ingedeeld: de balans zou dan nog wel kloppen
+ * (de kant komt uit `type`), maar onder een onzinnige kop staan.
+ */
+export const REPORT_GROUPS_BY_TYPE: Record<LedgerAccountType, LedgerReportGroup[]> = {
+  asset: ASSET_REPORT_GROUPS,
+  liability: ['voorzieningen', 'langlopende_schulden', 'kortlopende_schulden'],
+  equity: ['eigen_vermogen'],
+  revenue: ['netto_omzet', 'overige_bedrijfsopbrengsten', 'financiele_baten', 'resultaat_deelnemingen'],
+  expense: ['inkoopwaarde', 'personeelskosten', 'afschrijvingen', 'overige_bedrijfskosten', 'financiele_lasten', 'belastingen', 'resultaat_deelnemingen'],
+};
 export type PurchaseInvoiceStatus = 'draft' | 'booked' | 'paid' | 'cancelled';
 export type PurchaseInvoicePaymentStatus = 'unpaid' | 'partially_paid' | 'paid';
 /** Herkomst van de inkoopfactuur: handmatig, door AI uitgelezen, bank of import. */
@@ -1103,6 +1194,10 @@ export interface LedgerAccount extends OrgScopedRow {
   type: LedgerAccountType;
   subtype: string | null;
   default_vat_code: string | null;
+  /** Rubriek in de balans of W&V. Null = nog niet ingedeeld (valt in de restgroep). */
+  report_group: LedgerReportGroup | null;
+  /** Wettelijke of statutaire reserve: telt niet mee als vrij uitkeerbaar (art. 2:216 lid 1 BW). */
+  is_restricted_reserve: boolean;
   is_system: boolean;
   is_active: boolean;
   created_at: string;
@@ -1205,6 +1300,57 @@ export interface FiscalYearListRow {
   close_journal_entry_id: UUID | null;
   computed_result_cents: number;
   has_entries: boolean;
+}
+
+/**
+ * Rij uit de tabel result_appropriations, zoals appropriate_result en
+ * reverse_result_appropriation die teruggeven.
+ */
+export interface ResultAppropriation extends OrgScopedRow {
+  fiscal_year_id: UUID;
+  decision_date: string;
+  result_cents: number;
+  reserves_cents: number;
+  dividend_cents: number;
+  reserves_account_code: string;
+  dividend_account_code: string | null;
+  distributable_cents: number | null;
+  board_approved: boolean;
+  board_approved_by: UUID | null;
+  board_approved_at: string | null;
+  journal_entry_id: UUID | null;
+  status: 'posted' | 'reversed';
+  reversed_at: string | null;
+  reversed_by: UUID | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Besluit van de algemene vergadering over de bestemming van het resultaat:
+ * naar de overige reserves en/of als dividend. De tweede stap na de
+ * jaarafsluiting; alleen bij een BV/NV/coöperatie. Zie migratie 20260807030000.
+ */
+export interface ResultAppropriationRow {
+  id: UUID;
+  fiscal_year_id: UUID;
+  fiscal_year_label: string;
+  decision_date: string;
+  result_cents: number;
+  reserves_cents: number;
+  dividend_cents: number;
+  reserves_account_code: string;
+  dividend_account_code: string | null;
+  /** Vrij uitkeerbaar eigen vermogen op de balansdatum (balanstest art. 2:216 lid 1 BW). */
+  distributable_cents: number | null;
+  /** Bestuursgoedkeuring van de uitkeringstest (art. 2:216 lid 2 BW). */
+  board_approved: boolean;
+  journal_entry_id: UUID | null;
+  entry_number: string | null;
+  status: 'posted' | 'reversed';
+  note: string | null;
+  created_at: string;
 }
 
 export interface Supplier extends OrgScopedRow {
@@ -1313,6 +1459,10 @@ export interface ProfitAndLossRow {
   code: string | null;
   name: string;
   account_type: 'revenue' | 'expense';
+  /** Rubriek volgens art. 2:377 BW; de RPC vult hem altijd (restgroep bij een lege rubriek). */
+  report_group: LedgerReportGroup;
+  /** Wettelijke volgorde van de rubriek; de RPC sorteert er al op. */
+  group_rank: number;
   amount_cents: number;
 }
 
@@ -1322,6 +1472,10 @@ export interface BalanceSheetRow {
   code: string | null;
   name: string;
   section: 'asset' | 'liability' | 'equity' | 'result';
+  /** Rubriek volgens art. 2:364 BW; de RPC vult hem altijd (restgroep bij een lege rubriek). */
+  report_group: LedgerReportGroup;
+  /** Wettelijke volgorde van de rubriek; de RPC sorteert er al op. */
+  group_rank: number;
   amount_cents: number;
 }
 
@@ -1752,6 +1906,7 @@ export interface MeetingRecording extends OrgScopedRow {
 }
 export interface CompanySettings extends OrgScopedRow {
   company_name: string;
+  legal_form: LegalForm;
   trade_name: string | null;
   address_line1: string | null;
   address_line2: string | null;
@@ -1990,6 +2145,10 @@ export interface BillingPlan {
   storage_addon_yearly_price_cents?: number;
   creative_addon_price_cents?: number;
   creative_addon_yearly_price_cents?: number;
+  business_addon_price_cents?: number;
+  business_addon_yearly_price_cents?: number;
+  entity_addon_price_cents?: number;
+  entity_addon_yearly_price_cents?: number;
   created_at: string;
   updated_at: string;
 }
@@ -2083,6 +2242,40 @@ export interface OrganizationCreativeStatus {
   grace_until: string | null;
   addon_price_cents: number;
   addon_yearly_price_cents: number;
+  billing_interval: 'month' | 'year';
+}
+
+/**
+ * Status van de zakelijke module (BV-boekhouding, vennootschapsbelasting,
+ * jaarrekening) plus de rechtsvorm en de administratie-boom van deze
+ * organisatie. Zie migratie 20260807000000.
+ */
+export interface OrganizationBusinessStatus {
+  /** Module actief: de fiscale schermen horen zichtbaar te zijn. */
+  active: boolean;
+  /** De losse add-on staat aan. */
+  enabled: boolean;
+  /** De module zit in het plan (custom-contract) of in een vrijstelling. */
+  included_in_plan: boolean;
+  /** Module uit, maar bestaande administraties blijven leesbaar tot grace_until. */
+  in_grace: boolean;
+  grace_until: string | null;
+  legal_form: LegalForm;
+  /** 'ib' = inkomstenbelasting, 'vpb' = vennootschapsbelasting, 'other' = stichting/vereniging. */
+  fiscal_regime: 'ib' | 'vpb' | 'other';
+  /** Kapitaalvennootschap (bv/nv): aandeelhouders, dividend, DGA. */
+  is_corporate: boolean;
+  /** Deze organisatie hangt onder een moeder. */
+  is_child: boolean;
+  /** Waar het abonnement bij hoort. */
+  root_organization_id: UUID;
+  entity_count: number;
+  /** null = onbeperkt (custom of vrijgesteld). */
+  entity_allowance: number | null;
+  addon_price_cents: number;
+  addon_yearly_price_cents: number;
+  entity_addon_price_cents: number;
+  entity_addon_yearly_price_cents: number;
   billing_interval: 'month' | 'year';
 }
 

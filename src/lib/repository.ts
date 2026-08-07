@@ -94,6 +94,8 @@ import type {
   OrganizationInvitation,
   OrganizationBillingOverview,
   OrganizationCreativeStatus,
+  OrganizationBusinessStatus,
+  LegalForm,
   OrganizationLicenseUsage,
   OrganizationMember,
   OrganizationMembershipView,
@@ -107,6 +109,8 @@ import type {
   QuoteApprovalEvent,
   QuoteEmailDelivery,
   QuoteVersion,
+  ResultAppropriation,
+  ResultAppropriationRow,
   SavedReport,
   ContractProject,
   Task,
@@ -216,8 +220,9 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
   let licenseUsage: OrganizationLicenseUsage | null = null;
   let billingOverview: OrganizationBillingOverview | null = null;
   let creativeStatus: OrganizationCreativeStatus | null = null;
+  let businessStatus: OrganizationBusinessStatus | null = null;
   if (activeOrganization) {
-    const [{ data: teamRows, error: teamError }, { data: orgInvitationRows, error: orgInvitationError }, { data: auditRows, error: auditError }, { data: licenseRows, error: licenseError }, { data: billingRows, error: billingError }, { data: creativeRows, error: creativeError }] = await Promise.all([
+    const [{ data: teamRows, error: teamError }, { data: orgInvitationRows, error: orgInvitationError }, { data: auditRows, error: auditError }, { data: licenseRows, error: licenseError }, { data: billingRows, error: billingError }, { data: creativeRows, error: creativeError }, { data: businessRows, error: businessError }] = await Promise.all([
       supabase
         .from('organization_members')
         .select('*')
@@ -240,6 +245,7 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
       supabase.rpc('organization_license_usage', { p_organization_id: activeOrganization.id }),
       supabase.rpc('organization_billing_overview', { p_organization_id: activeOrganization.id }),
       supabase.rpc('organization_creative_status', { p_organization_id: activeOrganization.id }),
+      supabase.rpc('organization_business_status', { p_organization_id: activeOrganization.id }),
     ]);
     if (teamError) throw teamError;
     if (orgInvitationError) throw orgInvitationError;
@@ -264,6 +270,13 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     }
     const firstCreativeRow = Array.isArray(creativeRows) ? creativeRows[0] : creativeRows;
     creativeStatus = creativeError ? null : (firstCreativeRow ?? null) as OrganizationCreativeStatus | null;
+    if (businessError) {
+      // Migratie 20260807000000 nog niet toegepast: geen rechtsvorm/entiteit-informatie.
+      // De app gedraagt zich dan als vóór de zakelijke module (alles IB-ondernemer).
+      console.warn('Status van de zakelijke module kon niet worden geladen.', businessError);
+    }
+    const firstBusinessRow = Array.isArray(businessRows) ? businessRows[0] : businessRows;
+    businessStatus = businessError ? null : (firstBusinessRow ?? null) as OrganizationBusinessStatus | null;
   }
 
   return {
@@ -278,7 +291,23 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     auditLogs,
     billingOverview,
     creativeStatus,
+    businessStatus,
   };
+}
+
+/**
+ * Een extra administratie (entiteit) toevoegen onder dezelfde organisatie —
+ * bijvoorbeeld een werk-BV naast de holding. Vereist de zakelijke module en
+ * owner-rechten op de hoofdorganisatie; de RPC bewaakt beide.
+ */
+export async function createChildOrganization(parentOrganizationId: UUID, name: string, legalForm: LegalForm): Promise<Organization> {
+  const { data, error } = await supabase.rpc('create_child_organization', {
+    p_parent_organization_id: parentOrganizationId,
+    p_name: name,
+    p_legal_form: legalForm,
+  });
+  if (error) throw error;
+  return data as Organization;
 }
 
 export async function ensureDefaultOrganization(): Promise<void> {
@@ -1764,6 +1793,67 @@ export async function reopenFiscalYear(organizationId: UUID, fiscalYearId: UUID)
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as FiscalYear;
+}
+
+/** Besluiten van de algemene vergadering over de bestemming van het resultaat. */
+export async function listResultAppropriations(organizationId: UUID): Promise<ResultAppropriationRow[]> {
+  const { data, error } = await supabase.rpc('list_result_appropriations', {
+    p_organization_id: organizationId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as ResultAppropriationRow[];
+}
+
+/**
+ * Legt het besluit van de algemene vergadering vast en boekt het: van de
+ * resultaatrekening naar de overige reserves en/of een dividendschuld.
+ * `boardApproved` is de bestuursgoedkeuring van de uitkeringstest
+ * (art. 2:216 lid 2 BW) en is verplicht zodra er dividend wordt uitgekeerd.
+ */
+export async function appropriateResult(
+  organizationId: UUID,
+  input: {
+    fiscalYearId: UUID;
+    decisionDate: string;
+    reservesCents: number;
+    dividendCents?: number;
+    boardApproved?: boolean;
+    reservesAccountCode?: string;
+    dividendAccountCode?: string;
+    note?: string | null;
+  },
+): Promise<ResultAppropriation> {
+  const { data, error } = await supabase.rpc('appropriate_result', {
+    p_organization_id: organizationId,
+    p_fiscal_year_id: input.fiscalYearId,
+    p_decision_date: input.decisionDate,
+    p_reserves_cents: input.reservesCents,
+    p_dividend_cents: input.dividendCents ?? 0,
+    p_board_approved: input.boardApproved ?? false,
+    p_reserves_account_code: input.reservesAccountCode ?? '0520',
+    p_dividend_account_code: input.dividendAccountCode ?? '1580',
+    p_note: input.note ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as ResultAppropriation;
+}
+
+/**
+ * Draait een resultaatbestemming terug (alleen eigenaar/admin): het boekstuk
+ * gaat op 'reversed' en telt daarmee nergens meer mee, net zoals bij het
+ * heropenen van een boekjaar. Geen spiegelpost — die zou op een datum vallen
+ * die inmiddels in een afgesloten aangifteperiode kan liggen.
+ */
+export async function reverseResultAppropriation(
+  organizationId: UUID,
+  appropriationId: UUID,
+): Promise<ResultAppropriation> {
+  const { data, error } = await supabase.rpc('reverse_result_appropriation', {
+    p_organization_id: organizationId,
+    p_appropriation_id: appropriationId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as ResultAppropriation;
 }
 
 /** (Her)berekent het lineaire afschrijvingsschema van een activum. */

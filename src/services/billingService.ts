@@ -46,6 +46,16 @@ export async function setCreativeAddon(organizationId: UUID, enabled: boolean): 
   });
 }
 
+// Zakelijke module (BV-boekhouding, vennootschapsbelasting, jaarrekening) aan-
+// of uitzetten. Uitzetten bevriest: bestaande administraties blijven de
+// respijtperiode leesbaar.
+export async function setBusinessAddon(organizationId: UUID, enabled: boolean): Promise<BillingCheckoutResult> {
+  return await invokeBillingFunction<BillingCheckoutResult>('setBusinessAddon', {
+    organizationId,
+    enabled,
+  });
+}
+
 // Extra gebruiker(s): past het abonnementsbedrag direct aan op een lopend mandaat.
 export async function createExtraSeatCheckout(organizationId: UUID, quantity = 1): Promise<BillingCheckoutResult> {
   return await invokeBillingFunction<BillingCheckoutResult>('createExtraSeatCheckout', {

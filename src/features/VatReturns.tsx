@@ -521,7 +521,10 @@ function SupplementModal({ data, organizationId, originalReturn, onClose, onCrea
     return data.journalEntries
       .filter(e => e.status === 'posted'
         && !e.reversed_by_entry_id
-        && !['year_close', 'vat_return', 'opening_balance'].includes(e.source_type)
+        // Systeemboekstukken horen niet in een suppletie. Een resultaat-
+        // bestemming raakt alleen eigen vermogen en schulden: btw-effect nul,
+        // maar hem aanvinken sluit hem wél permanent uit de reguliere aangifte.
+        && !['year_close', 'vat_return', 'opening_balance', 'result_appropriation'].includes(e.source_type)
         && !attributed.has(e.id)
         && (!onlyAfterPeriod || e.date > originalReturn.period_end))
       .sort((a, b) => b.date.localeCompare(a.date));

@@ -295,6 +295,14 @@ function TimerCard({ organizationId, data, storageKey, onSaved }: {
  * geregistreerde uren van de ingelogde gebruiker, ongeacht declarabel.
  */
 function HourCriterionCard({ data, currentUserId }: { data: AppData; currentUserId: UUID | null }) {
+  // Het urencriterium is een toets voor de INKOMSTENBELASTING (zelfstandigen-
+  // aftrek, startersaftrek, meewerkaftrek). Een BV of NV kent het niet: de DGA
+  // is werknemer, niet ondernemer voor de IB. Dan hoort deze kaart er niet te
+  // staan. Zonder rechtsvorm valt hij terug op eenmanszaak, dus bestaande
+  // administraties zien precies wat ze gewend zijn.
+  const legalForm = data.companySettings?.legal_form ?? 'eenmanszaak';
+  const appliesToHourCriterion = ['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(legalForm);
+
   const currentYear = new Date().getFullYear();
   const [year, setYear] = useState(currentYear);
 
@@ -335,6 +343,9 @@ function HourCriterionCard({ data, currentUserId }: { data: AppData; currentUser
     .sort((a, b) => b[1] - a[1])
     .map(([cat, mins]) => `${INDIRECT_CATEGORY_LABEL[cat]} ${formatMinutes(mins)}`)
     .join(' · ');
+
+  // Ná de hooks, zodat de hook-volgorde gelijk blijft ongeacht de rechtsvorm.
+  if (!appliesToHourCriterion) return null;
 
   return (
     <article className="tt-criterion">

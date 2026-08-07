@@ -3,6 +3,7 @@ import { BookOpen, Calculator, FileDown, FileText, Layers, PenSquare, Plus, Rota
 import type {
   AccountLedgerRow, AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PurchaseInvoice, PurchaseInvoiceLine, Supplier, TrialBalanceRow, UUID, VatCode,
 } from '../types';
+import { REPORT_GROUPS_BY_TYPE, REPORT_GROUP_LABELS } from '../types';
 import { Modal } from '../components/Modal';
 import { CsvImportModal } from '../components/CsvImportModal';
 import type { ImportColumn } from '../lib/csvImport';
@@ -866,7 +867,13 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
           : isReversedPair ? 'Tegengeboekt'
           : isReversalEntry ? 'Tegenboeking'
           : 'Geboekt';
-        const canReverse = canWrite && entry.status === 'posted' && !isReversedPair && entry.source_type !== 'year_close';
+        // Jaarafsluiting en resultaatbestemming zijn systeemboekstukken: die
+        // draai je terug via "Boekjaar heropenen" respectievelijk "Bestemming
+        // terugdraaien", zodat de bijbehorende administratie meebeweegt. Los
+        // tegenboeken zou het boekjaar in een toestand achterlaten waar geen
+        // van beide knoppen nog uit komt. De database weigert het ook.
+        const canReverse = canWrite && entry.status === 'posted' && !isReversedPair
+          && entry.source_type !== 'year_close' && entry.source_type !== 'result_appropriation';
         return (
           <div key={entry.id} className={`bk-entry${entry.status === 'reversed' || isReversedPair ? ' is-reversed' : ''}`}>
             <div className="bk-entry-head">
@@ -1176,12 +1183,13 @@ function AccountsView({ data, organizationId, canWrite, onChanged }: PageProps) 
         <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Nieuwe rekening</Button>
       </div>
       <div className="bk-table-wrap"><table className="bk-table">
-        <thead><tr><th>Code</th><th>Naam</th><th>Type</th><th>Standaard BTW</th><th>Actief</th><th></th></tr></thead>
+        <thead><tr><th>Code</th><th>Naam</th><th>Type</th><th>Rubriek</th><th>Standaard BTW</th><th>Actief</th><th></th></tr></thead>
         <tbody>{data.ledgerAccounts.map(a => (
           <tr key={a.id} className={canWrite ? 'bk-row' : ''} onClick={() => canWrite && setEdit(a)}>
             <td><strong>{a.code}</strong></td>
             <td>{a.name}{a.is_system && <small className="bk-muted"> · systeem</small>}</td>
             <td>{accountTypeLabel[a.type]}</td>
+            <td>{a.report_group ? REPORT_GROUP_LABELS[a.report_group] : <span className="bk-muted">—</span>}</td>
             <td>{a.default_vat_code || '—'}</td>
             <td>{a.is_active ? 'Ja' : <span className="bk-muted">Nee</span>}</td>
             <td className="bk-cell-action">{canWrite ? 'Bewerk' : ''}</td>
@@ -1200,12 +1208,14 @@ function LedgerAccountForm({ data, organizationId, canWrite, account, onClose, o
 }) {
   const isSystem = Boolean(account?.is_system);
   const [form, setForm] = useState<Record<string, any>>(() => account ? {
-    code: account.code, name: account.name, type: account.type,
+    code: account.code, name: account.name, type: account.type, report_group: account.report_group ?? '',
+    is_restricted_reserve: account.is_restricted_reserve ?? false,
     subtype: account.subtype ?? '', default_vat_code: account.default_vat_code ?? '', is_active: account.is_active,
-  } : { code: '', name: '', type: 'expense', subtype: '', default_vat_code: '', is_active: true });
+  } : { code: '', name: '', type: 'expense', report_group: 'overige_bedrijfskosten', is_restricted_reserve: false, subtype: '', default_vat_code: '', is_active: true });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = (k: string, v: unknown) => setForm(f => ({ ...f, [k]: v }));
+  const isEquity = form.type === 'equity';
 
   async function save() {
     if (!isSystem && !String(form.code || '').trim()) { setError('Code is verplicht.'); return; }
@@ -1213,17 +1223,19 @@ function LedgerAccountForm({ data, organizationId, canWrite, account, onClose, o
     setBusy(true); setError(null);
     try {
       if (account) {
-        // Systeemrekeningen: alleen naam en BTW-standaard mogen wijzigen. Code en type
-        // worden door de boekings-RPC's op code opgezocht en moeten stabiel blijven; de
+        // Systeemrekeningen: alleen naam, BTW-standaard en rubriek mogen wijzigen. Code en
+        // type worden door de boekings-RPC's op code opgezocht en moeten stabiel blijven; de
         // actief-status blijft óók vast, want anders zou een systeemrekening uit de
         // keuzelijsten verdwijnen terwijl automatische boekingen hem nog op code opzoeken.
+        // De rubriek mag wél: die stuurt alleen de indeling van de overzichten, geen boeking.
         const patch = isSystem
-          ? { name: form.name, default_vat_code: form.default_vat_code || null }
-          : { code: String(form.code).trim(), name: form.name, type: form.type, subtype: form.subtype || null, default_vat_code: form.default_vat_code || null, is_active: Boolean(form.is_active) };
+          ? { name: form.name, default_vat_code: form.default_vat_code || null, report_group: form.report_group || null, is_restricted_reserve: isEquity && Boolean(form.is_restricted_reserve) }
+          : { code: String(form.code).trim(), name: form.name, type: form.type, report_group: form.report_group || null, is_restricted_reserve: isEquity && Boolean(form.is_restricted_reserve), subtype: form.subtype || null, default_vat_code: form.default_vat_code || null, is_active: Boolean(form.is_active) };
         await updateRow<LedgerAccount>('ledger_accounts', account.id, patch, organizationId);
       } else {
         await insertRow<LedgerAccount>('ledger_accounts', organizationId, {
-          code: String(form.code).trim(), name: form.name, type: form.type,
+          code: String(form.code).trim(), name: form.name, type: form.type, report_group: form.report_group || null,
+          is_restricted_reserve: isEquity && Boolean(form.is_restricted_reserve),
           subtype: form.subtype || null, default_vat_code: form.default_vat_code || null, is_active: Boolean(form.is_active),
         });
       }
@@ -1248,13 +1260,31 @@ function LedgerAccountForm({ data, organizationId, canWrite, account, onClose, o
         {canWrite && <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Bezig…' : 'Opslaan'}</Button>}
       </div>}>
       {error && <div className="error">{error}</div>}
-      {isSystem && <div className="bk-note">Dit is een systeemrekening. De code, het type en de actief-status liggen vast omdat het automatisch boeken deze rekening op code opzoekt — je kunt wel de naam en standaard-BTW aanpassen.</div>}
+      {isSystem && <div className="bk-note">Dit is een systeemrekening. De code, het type en de actief-status liggen vast omdat het automatisch boeken deze rekening op code opzoekt — je kunt wel de naam, de standaard-BTW en de rubriek aanpassen.</div>}
       <div className="bk-grid2">
         <Field label="Code" hint="Bijv. 4600 of 8040"><Input value={form.code} onChange={e => set('code', e.target.value)} disabled={!canWrite || isSystem} /></Field>
         <Field label="Naam"><Input value={form.name} onChange={e => set('name', e.target.value)} disabled={!canWrite} /></Field>
         <Field label="Type" hint="Bepaalt of de rekening in de balans of de W&amp;V valt.">
-          <Select value={form.type} onChange={e => set('type', e.target.value)} disabled={!canWrite || isSystem}>
+          <Select
+            value={form.type}
+            onChange={e => {
+              const type = e.target.value as LedgerAccountType;
+              // Bij een ander type past de oude rubriek meestal niet meer; val
+              // dan terug op de eerste die er wél bij hoort.
+              const allowed = REPORT_GROUPS_BY_TYPE[type];
+              setForm(f => ({ ...f, type, report_group: allowed.includes(f.report_group) ? f.report_group : allowed[0] }));
+            }}
+            disabled={!canWrite || isSystem}
+          >
             {ACCOUNT_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </Select>
+        </Field>
+        <Field label="Rubriek" hint="Waar de rekening in de balans of de W&amp;V wordt opgeteld (Titel 9 Boek 2 BW).">
+          <Select value={form.report_group || ''} onChange={e => set('report_group', e.target.value)} disabled={!canWrite}>
+            <option value="">— nog niet ingedeeld —</option>
+            {(REPORT_GROUPS_BY_TYPE[form.type as LedgerAccountType] ?? []).map(g => (
+              <option key={g} value={g}>{REPORT_GROUP_LABELS[g]}</option>
+            ))}
           </Select>
         </Field>
         <Field label="Standaard BTW-code" hint="Optioneel.">
@@ -1264,6 +1294,20 @@ function LedgerAccountForm({ data, organizationId, canWrite, account, onClose, o
           </Select>
         </Field>
       </div>
+      {/* Alleen bij eigen vermogen: de balanstest voor een dividendbesluit
+          (art. 2:216 lid 1 BW) mag niets uitkeren boven het eigen vermogen
+          minus de reserves die de wet of de statuten verplicht aanhouden. Een
+          statutaire reserve staat in de statuten van deze BV — die kunnen wij
+          niet raden, dus die wijst de gebruiker hier aan. */}
+      {isEquity && (
+        <label className="bk-setting-check">
+          <input type="checkbox" checked={Boolean(form.is_restricted_reserve)} onChange={e => set('is_restricted_reserve', e.target.checked)} disabled={!canWrite} />
+          <span>
+            Wettelijke of statutaire reserve — niet uitkeerbaar
+            <small className="bk-muted"> · telt niet mee als vrij uitkeerbaar vermogen bij een dividendbesluit. Uitvinken verruimt de balanstest van art. 2:216 lid 1 BW; doe dat alleen als de reserve echt vrij is.</small>
+          </span>
+        </label>
+      )}
       <label className="bk-setting-check bk-account-active">
         <input type="checkbox" checked={Boolean(form.is_active)} onChange={e => set('is_active', e.target.checked)} disabled={!canWrite || isSystem} />
         <span>Actief (verschijnt in keuzelijsten bij het boeken){isSystem && <small className="bk-muted"> · systeemrekening blijft altijd actief</small>}</span>

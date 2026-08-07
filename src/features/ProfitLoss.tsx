@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronLeft, ChevronRight, Download, ListChecks, Scale, TrendingUp } from 'lucide-react';
-import type { AppData, BalanceSheetRow, OpenItemsReport, ProfitAndLossRow } from '../types';
+import type { AppData, BalanceSheetRow, LedgerReportGroup, OpenItemsReport, ProfitAndLossRow } from '../types';
+import { REPORT_GROUP_LABELS } from '../types';
 import { Button, Skeleton } from '../components/Ui';
 import { dateNL, euro } from '../lib/format';
 import { ensureDefaultLedgerAccounts, reportBalanceSheet, reportOpenItems, reportProfitAndLoss } from '../lib/repository';
@@ -105,6 +106,7 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
   const [pnlCurrent, setPnlCurrent] = useState<ProfitAndLossRow[]>([]);
   const [pnlPrevious, setPnlPrevious] = useState<ProfitAndLossRow[]>([]);
   const [balance, setBalance] = useState<BalanceSheetRow[]>([]);
+  const [balancePrevious, setBalancePrevious] = useState<BalanceSheetRow[]>([]);
   const [openItems, setOpenItems] = useState<OpenItemsReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -125,7 +127,14 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
         ]);
         setPnlCurrent(cur); setPnlPrevious(prev);
       } else if (view === 'balance') {
-        setBalance(await reportBalanceSheet(organizationId, period.current.to));
+        // Vergelijkende cijfers zijn in een jaarrekening verplicht (art. 2:363
+        // lid 5 BW): bij elke post ook het bedrag van het voorafgaande boekjaar.
+        // Twee peildata, twee aanroepen — de RPC kent er maar één.
+        const [cur, prev] = await Promise.all([
+          reportBalanceSheet(organizationId, period.current.to),
+          reportBalanceSheet(organizationId, period.previous.to),
+        ]);
+        setBalance(cur); setBalancePrevious(prev);
       } else {
         setOpenItems(await reportOpenItems(organizationId, period.current.to));
       }
@@ -183,7 +192,7 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
         : view === 'pnl'
           ? <PnlReport current={pnlCurrent} previous={pnlPrevious} period={period} />
           : view === 'balance'
-            ? <BalanceReport rows={balance} label={period.current.label} asOf={period.current.to} data={data} />
+            ? <BalanceReport rows={balance} previousRows={balancePrevious} period={period} data={data} />
             : openItems
               ? <OpenItemsView report={openItems} label={period.current.label} />
               : <div className="bk-muted bk-report-loading"><Skeleton lines={5} /></div>}
@@ -191,163 +200,413 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
   );
 }
 
-type MergedRow = { key: string; name: string; current: number; previous: number };
+// === Rubrieken =============================================================
+// De rapport-RPC's leveren per regel een rubriek (report_group) plus de
+// wettelijke volgorde (group_rank). Rubriceren gebeurt dus in de database; hier
+// wordt alleen gegroepeerd, opgeteld en getoond.
 
-function mergePnl(current: ProfitAndLossRow[], previous: ProfitAndLossRow[], type: 'revenue' | 'expense'): MergedRow[] {
-  const map = new Map<string, MergedRow>();
-  const keyOf = (r: ProfitAndLossRow) => r.account_id ?? r.code ?? r.name;
-  for (const r of current.filter(x => x.account_type === type)) {
-    map.set(keyOf(r), { key: keyOf(r), name: `${r.code ? r.code + ' · ' : ''}${r.name}`, current: r.amount_cents, previous: 0 });
+type MergedRow = { key: string; name: string; current: number; previous: number };
+type ReportGroupBlock = { group: LedgerReportGroup; rank: number; rows: MergedRow[]; current: number; previous: number };
+
+/** Rekeningen zonder rubriek (database van vóór migratie 20260807020000). */
+function fallbackGroup(row: BalanceSheetRow | ProfitAndLossRow): LedgerReportGroup {
+  if ('section' in row) {
+    return row.section === 'asset' ? 'vorderingen' : row.section === 'liability' ? 'kortlopende_schulden' : 'eigen_vermogen';
   }
-  for (const r of previous.filter(x => x.account_type === type)) {
-    const k = keyOf(r);
-    const ex = map.get(k);
-    if (ex) ex.previous = r.amount_cents;
-    else map.set(k, { key: k, name: `${r.code ? r.code + ' · ' : ''}${r.name}`, current: 0, previous: r.amount_cents });
-  }
-  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return row.account_type === 'revenue' ? 'overige_bedrijfsopbrengsten' : 'overige_bedrijfskosten';
 }
 
+/**
+ * Zet de regels van beide peilmomenten om in blokken per rubriek. Een rekening
+ * die alleen in het vergelijkende jaar voorkomt hoort er óók bij te staan — met
+ * nul in de huidige kolom — anders lijkt een gestopte post verdwenen.
+ */
+function groupRows<T extends BalanceSheetRow | ProfitAndLossRow>(
+  current: T[],
+  previous: T[],
+  sign: (row: T) => number,
+  keep: (row: T) => boolean = () => true,
+  groupFor: (row: T) => LedgerReportGroup = row => row.report_group ?? fallbackGroup(row),
+): ReportGroupBlock[] {
+  const blocks = new Map<LedgerReportGroup, ReportGroupBlock & { index: Map<string, MergedRow> }>();
+  const absorb = (rows: T[], field: 'current' | 'previous') => {
+    for (const row of rows) {
+      if (!keep(row)) continue;
+      const group = groupFor(row);
+      let block = blocks.get(group);
+      if (!block) {
+        // De rang uit de RPC hoort bij de rubriek van de rekening zelf; is die
+        // hier vervangen, val dan terug op de restgroep-rang.
+        const rank = group === row.report_group ? (row.group_rank ?? 999) : 999;
+        block = { group, rank, rows: [], current: 0, previous: 0, index: new Map() };
+        blocks.set(group, block);
+      }
+      const key = row.account_id ?? row.code ?? row.name;
+      let line = block.index.get(key);
+      if (!line) {
+        line = { key, name: `${row.code ? row.code + ' · ' : ''}${row.name}`, current: 0, previous: 0 };
+        block.index.set(key, line);
+        block.rows.push(line);
+      }
+      const amount = sign(row) * row.amount_cents;
+      line[field] += amount;
+      block[field] += amount;
+    }
+  };
+  absorb(current, 'current');
+  absorb(previous, 'previous');
+  return [...blocks.values()]
+    .map(({ index: _index, ...block }) => ({ ...block, rows: block.rows.sort((a, b) => a.name.localeCompare(b.name)) }))
+    .sort((a, b) => a.rank - b.rank || a.group.localeCompare(b.group));
+}
+
+const sumBlocks = (blocks: ReportGroupBlock[], field: 'current' | 'previous') =>
+  blocks.reduce((total, block) => total + block[field], 0);
+
+/**
+ * Winst- en verliesrekening in de secties van art. 2:377 BW / Model E:
+ * bedrijfsopbrengsten − bedrijfslasten → financiële baten en lasten →
+ * resultaat vóór belastingen → belastingen → resultaat na belastingen.
+ *
+ * Model E kent overigens geen regel "Bedrijfsresultaat" — het noemt alleen de
+ * som der bedrijfsopbrengsten en de som der bedrijfslasten. Wij tonen het
+ * subtotaal wél, omdat het in de praktijk (en in de Richtlijnen voor de
+ * jaarverslaggeving) de meest gelezen regel is.
+ *
+ * Bedragen komen positief georiënteerd binnen: opbrengst = credit − debet,
+ * kosten = debet − credit. In dit overzicht rekenen we per rubriek naar het
+ * EFFECT OP HET RESULTAAT (opbrengst +, kosten −), zodat elk subtotaal een
+ * gewone optelling is en er nooit een teken zoekraakt.
+ */
 function PnlReport({ current, previous, period }: { current: ProfitAndLossRow[]; previous: ProfitAndLossRow[]; period: { current: PeriodBounds; previous: PeriodBounds } }) {
-  const revenue = mergePnl(current, previous, 'revenue');
-  const expense = mergePnl(current, previous, 'expense');
-  const sum = (rows: MergedRow[], k: 'current' | 'previous') => rows.reduce((s, r) => s + r[k], 0);
-  const revCur = sum(revenue, 'current'), revPrev = sum(revenue, 'previous');
-  const expCur = sum(expense, 'current'), expPrev = sum(expense, 'previous');
-  const resCur = revCur - expCur, resPrev = revPrev - expPrev;
+  const effect = (row: ProfitAndLossRow) => (row.account_type === 'revenue' ? 1 : -1);
 
-  const exportCsv = () => downloadCsv(
-    `winst-verlies-${period.current.label.replace(/\s/g, '-')}.csv`,
-    ['Rubriek', 'Rekening', period.current.label, period.previous.label],
-    [
-      ...revenue.map(r => ['Opbrengsten', r.name, (r.current / 100).toFixed(2), (r.previous / 100).toFixed(2)]),
-      ['', 'Totaal opbrengsten', (revCur / 100).toFixed(2), (revPrev / 100).toFixed(2)],
-      ...expense.map(r => ['Kosten', r.name, (r.current / 100).toFixed(2), (r.previous / 100).toFixed(2)]),
-      ['', 'Totaal kosten', (expCur / 100).toFixed(2), (expPrev / 100).toFixed(2)],
-      ['', 'Resultaat', (resCur / 100).toFixed(2), (resPrev / 100).toFixed(2)],
-    ],
-  );
+  // De rubriek van een W&V-rekening hoort een W&V-rubriek te zijn, maar de
+  // database staat elke waarde op elke rekening toe. Een omzetrekening die per
+  // ongeluk op "Liquide middelen" staat, mag niet uit het overzicht vallen: dan
+  // telt het resultaat niet meer op tot omzet − kosten. Alles wat buiten de
+  // W&V-rubrieken valt, gaat daarom naar de restgroep van zijn eigen soort.
+  const PNL_GROUPS: LedgerReportGroup[] = [
+    'netto_omzet', 'overige_bedrijfsopbrengsten',
+    'inkoopwaarde', 'personeelskosten', 'afschrijvingen', 'overige_bedrijfskosten',
+    'financiele_baten', 'financiele_lasten', 'belastingen', 'resultaat_deelnemingen',
+  ];
+  const groupOf = (row: ProfitAndLossRow): LedgerReportGroup => {
+    const group = row.report_group;
+    return group && PNL_GROUPS.includes(group) ? group : fallbackGroup(row);
+  };
+  const inGroups = (...groups: LedgerReportGroup[]) =>
+    (row: ProfitAndLossRow) => groups.includes(groupOf(row));
 
-  const row = (name: string, cur: number, prev: number, cls = '') => (
-    <tr className={cls} key={name}>
-      <td>{name}</td><td className="bk-num">{euroCents(cur)}</td><td className="bk-num bk-muted">{euroCents(prev)}</td>
+  const income = groupRows(current, previous, effect, inGroups('netto_omzet', 'overige_bedrijfsopbrengsten'), groupOf);
+  const costs = groupRows(current, previous, effect, inGroups('inkoopwaarde', 'personeelskosten', 'afschrijvingen', 'overige_bedrijfskosten'), groupOf);
+  const financial = groupRows(current, previous, effect, inGroups('financiele_baten', 'financiele_lasten'), groupOf);
+  const taxes = groupRows(current, previous, effect, inGroups('belastingen'), groupOf);
+  const participations = groupRows(current, previous, effect, inGroups('resultaat_deelnemingen'), groupOf);
+
+  const totals = (field: 'current' | 'previous') => {
+    const revenue = sumBlocks(income, field);
+    // Kosten zijn negatief in de effect-oriëntatie; als "som der bedrijfslasten"
+    // hoort er een positief bedrag te staan.
+    const expense = -sumBlocks(costs, field);
+    const operating = revenue - expense;
+    const finance = sumBlocks(financial, field);
+    const beforeTax = operating + finance;
+    const tax = -sumBlocks(taxes, field);
+    const share = sumBlocks(participations, field);
+    return { revenue, expense, operating, finance, beforeTax, tax, share, afterTax: beforeTax - tax + share };
+  };
+  const cur = totals('current');
+  const prev = totals('previous');
+
+  // Een IB-onderneming heeft doorgaans geen financiële rubrieken en geen
+  // vennootschapsbelasting; die secties dan weglaten houdt het overzicht kort.
+  const hasFinancial = financial.length > 0;
+  const hasTaxes = taxes.length > 0;
+  const hasParticipations = participations.length > 0;
+  const hasBelowOperating = hasFinancial || hasTaxes || hasParticipations;
+
+  const exportCsv = () => {
+    const lines: (string | number)[][] = [];
+    const push = (section: string, name: string, c: number, p: number) =>
+      lines.push([section, name, (c / 100).toFixed(2), (p / 100).toFixed(2)]);
+    for (const block of income) {
+      for (const row of block.rows) push(REPORT_GROUP_LABELS[block.group], row.name, row.current, row.previous);
+      push(REPORT_GROUP_LABELS[block.group], `Totaal ${REPORT_GROUP_LABELS[block.group].toLowerCase()}`, block.current, block.previous);
+    }
+    push('', 'Som der bedrijfsopbrengsten', cur.revenue, prev.revenue);
+    for (const block of costs) {
+      for (const row of block.rows) push(REPORT_GROUP_LABELS[block.group], row.name, -row.current, -row.previous);
+      push(REPORT_GROUP_LABELS[block.group], `Totaal ${REPORT_GROUP_LABELS[block.group].toLowerCase()}`, -block.current, -block.previous);
+    }
+    push('', 'Som der bedrijfslasten', cur.expense, prev.expense);
+    push('', 'Bedrijfsresultaat', cur.operating, prev.operating);
+    if (hasFinancial) {
+      for (const block of financial) for (const row of block.rows) push('Financiële baten en lasten', row.name, row.current, row.previous);
+      push('', 'Saldo financiële baten en lasten', cur.finance, prev.finance);
+    }
+    if (hasBelowOperating) push('', 'Resultaat voor belastingen', cur.beforeTax, prev.beforeTax);
+    if (hasTaxes) push('', 'Belastingen', cur.tax, prev.tax);
+    if (hasParticipations) push('', 'Aandeel in resultaat van deelnemingen', cur.share, prev.share);
+    push('', hasBelowOperating ? 'Resultaat na belastingen' : 'Resultaat', cur.afterTax, prev.afterTax);
+    downloadCsv(
+      `winst-verlies-${period.current.label.replace(/\s/g, '-')}.csv`,
+      ['Rubriek', 'Omschrijving', period.current.label, period.previous.label],
+      lines,
+    );
+  };
+
+  const line = (key: string, name: string, c: number, p: number, cls = '') => (
+    <tr className={cls} key={key}>
+      <td>{name}</td><td className="bk-num">{euroCents(c)}</td><td className="bk-num bk-muted">{euroCents(p)}</td>
     </tr>
   );
+
+  /** Eén rubriek: kopregel met het subtotaal en de rekeningen eronder. */
+  const groupBlock = (block: ReportGroupBlock, flip: boolean) => {
+    const s = flip ? -1 : 1;
+    return (
+      <Fragment key={block.group}>
+        <tr className="bk-balance-group">
+          <td>{REPORT_GROUP_LABELS[block.group]}</td>
+          <td className="bk-num">{euroCents(s * block.current)}</td>
+          <td className="bk-num bk-muted">{euroCents(s * block.previous)}</td>
+        </tr>
+        {block.rows.map(row => (
+          <tr className="bk-balance-sub" key={row.key}>
+            <td>{row.name}</td>
+            <td className="bk-num">{euroCents(s * row.current)}</td>
+            <td className="bk-num bk-muted">{euroCents(s * row.previous)}</td>
+          </tr>
+        ))}
+      </Fragment>
+    );
+  };
 
   return (
     <div className="bk-report">
       <div className="bk-report-bar">
         <div className="bk-report-kpis">
-          <div><span>Resultaat {period.current.label}</span><strong className={resCur >= 0 ? 'bk-pos' : 'bk-neg'}>{euroCents(resCur)}</strong></div>
+          <div><span>Bedrijfsresultaat {period.current.label}</span><strong className={cur.operating >= 0 ? 'bk-pos' : 'bk-neg'}>{euroCents(cur.operating)}</strong></div>
+          {hasBelowOperating && <div><span>Resultaat na belastingen</span><strong className={cur.afterTax >= 0 ? 'bk-pos' : 'bk-neg'}>{euroCents(cur.afterTax)}</strong></div>}
         </div>
         <Button onClick={exportCsv}><Download size={14} /> Exporteer CSV</Button>
       </div>
       <div className="bk-table-wrap"><table className="bk-table bk-report-table">
         <thead><tr><th>Omschrijving</th><th className="bk-num">{period.current.label}</th><th className="bk-num">{period.previous.label}</th></tr></thead>
         <tbody>
-          <tr className="bk-report-section"><td colSpan={3}>Opbrengsten</td></tr>
-          {revenue.length ? revenue.map(r => row(r.name, r.current, r.previous)) : <tr><td colSpan={3} className="bk-muted">Geen opbrengsten in deze periode.</td></tr>}
-          {row('Totaal opbrengsten', revCur, revPrev, 'bk-report-total')}
-          <tr className="bk-report-section"><td colSpan={3}>Kosten</td></tr>
-          {expense.length ? expense.map(r => row(r.name, r.current, r.previous)) : <tr><td colSpan={3} className="bk-muted">Geen kosten in deze periode.</td></tr>}
-          {row('Totaal kosten', expCur, expPrev, 'bk-report-total')}
+          <tr className="bk-report-section"><td colSpan={3}>Bedrijfsopbrengsten</td></tr>
+          {income.length
+            ? income.map(block => groupBlock(block, false))
+            : <tr><td colSpan={3} className="bk-muted">Geen opbrengsten in deze periode.</td></tr>}
+          {line('som-opbrengsten', 'Som der bedrijfsopbrengsten', cur.revenue, prev.revenue, 'bk-report-total')}
+
+          <tr className="bk-report-section"><td colSpan={3}>Bedrijfslasten</td></tr>
+          {costs.length
+            ? costs.map(block => groupBlock(block, true))
+            : <tr><td colSpan={3} className="bk-muted">Geen kosten in deze periode.</td></tr>}
+          {line('som-lasten', 'Som der bedrijfslasten', cur.expense, prev.expense, 'bk-report-total')}
+          {line('bedrijfsresultaat', 'Bedrijfsresultaat', cur.operating, prev.operating, 'bk-report-total')}
+
+          {hasFinancial && <>
+            <tr className="bk-report-section"><td colSpan={3}>Financiële baten en lasten</td></tr>
+            {financial.map(block => block.rows.map(row => line(`${block.group}-${row.key}`, row.name, row.current, row.previous)))}
+            {line('saldo-financieel', 'Saldo financiële baten en lasten', cur.finance, prev.finance, 'bk-report-total')}
+          </>}
+
+          {hasBelowOperating && line('voor-belasting', 'Resultaat voor belastingen', cur.beforeTax, prev.beforeTax, 'bk-report-total')}
+          {hasTaxes && <>
+            <tr className="bk-report-section"><td colSpan={3}>Belastingen</td></tr>
+            {taxes.map(block => block.rows.map(row => line(`${block.group}-${row.key}`, row.name, -row.current, -row.previous)))}
+          </>}
+          {/* Model E zet het aandeel in het resultaat van deelnemingen ná de
+              belastingregel, vlak vóór het resultaat na belastingen. */}
+          {hasParticipations && participations.map(block => block.rows.map(row => line(`${block.group}-${row.key}`, row.name, row.current, row.previous)))}
         </tbody>
-        <tfoot><tr className="bk-report-result"><td>Resultaat</td><td className={`bk-num ${resCur >= 0 ? 'bk-pos' : 'bk-neg'}`}>{euroCents(resCur)}</td><td className="bk-num bk-muted">{euroCents(resPrev)}</td></tr></tfoot>
+        <tfoot>
+          <tr className="bk-report-result">
+            <td>{hasBelowOperating ? 'Resultaat na belastingen' : 'Resultaat'}</td>
+            <td className={`bk-num ${cur.afterTax >= 0 ? 'bk-pos' : 'bk-neg'}`}>{euroCents(cur.afterTax)}</td>
+            <td className="bk-num bk-muted">{euroCents(prev.afterTax)}</td>
+          </tr>
+        </tfoot>
       </table></div>
     </div>
   );
 }
 
-function BalanceReport({ rows, label, asOf, data }: { rows: BalanceSheetRow[]; label: string; asOf: string; data: AppData }) {
-  const [assetsExpanded, setAssetsExpanded] = useState(true);
-  const assets = rows.filter(r => r.section === 'asset');
-  const liabilities = rows.filter(r => r.section === 'liability');
-  const equityAccounts = rows.filter(r => r.section === 'equity');
-  const result = rows.find(r => r.section === 'result')?.amount_cents ?? 0;
-  const sum = (rs: BalanceSheetRow[]) => rs.reduce((s, r) => s + r.amount_cents, 0);
-
-  // De grootboekrekeningen die de activamodule gebruikt (activarekening +
-  // cumulatieve afschrijving) bundelen tot één boekwaarderegel = aanschaf − afschrijving.
-  const fixedAccountIds = new Set<string>();
-  for (const a of data.fixedAssets) {
-    if (a.asset_account_id) fixedAccountIds.add(a.asset_account_id);
-    if (a.accumulated_depreciation_account_id) fixedAccountIds.add(a.accumulated_depreciation_account_id);
+/**
+ * Boekwaarde per activum op een peildatum: alleen afschrijvingen t/m die datum,
+ * alleen activa aangeschaft t/m die datum en op die datum nog niet afgestoten —
+ * zodat de sub-regels aansluiten op de datumgefilterde groepsregel uit het
+ * grootboek.
+ */
+function bookValuesAt(data: AppData, asOf: string): Map<string, number> {
+  const posted = new Map<string, number>();
+  for (const d of data.assetDepreciations) {
+    if (d.status === 'posted' && d.date <= asOf) posted.set(d.asset_id, (posted.get(d.asset_id) ?? 0) + d.amount_cents);
   }
-  const fixedRows = assets.filter(r => r.account_id && fixedAccountIds.has(r.account_id));
-  const otherAssets = assets.filter(r => !(r.account_id && fixedAccountIds.has(r.account_id)));
-  const fixedNet = sum(fixedRows);
+  const values = new Map<string, number>();
+  for (const a of data.fixedAssets) {
+    if (a.acquisition_date > asOf) continue;
+    if (a.status === 'disposed' && a.disposal_date != null && a.disposal_date <= asOf) continue;
+    values.set(a.id, a.acquisition_cost_cents - (posted.get(a.id) ?? 0));
+  }
+  return values;
+}
 
-  // Per-activum boekwaarde op de PEILDATUM: alleen afschrijvingen t/m asOf, alleen
-  // activa aangeschaft t/m asOf en (nog) niet afgestoten op de peildatum — zodat de
-  // sub-regels aansluiten op de datumgefilterde groepsregel (fixedNet uit het grootboek).
-  const postedByAsset = new Map<string, number>();
-  for (const d of data.assetDepreciations) if (d.status === 'posted' && d.date <= asOf) postedByAsset.set(d.asset_id, (postedByAsset.get(d.asset_id) ?? 0) + d.amount_cents);
-  const perAsset = data.fixedAssets
-    .filter(a => a.acquisition_date <= asOf && !(a.status === 'disposed' && a.disposal_date != null && a.disposal_date <= asOf))
-    .map(a => ({ id: a.id, name: a.asset_number ? `${a.asset_number} · ${a.name}` : a.name, bookValue: a.acquisition_cost_cents - (postedByAsset.get(a.id) ?? 0) }))
-    .sort((x, y) => x.name.localeCompare(y.name));
+/**
+ * Balans ingedeeld volgens de hoofdindeling van art. 2:364 BW: per rubriek een
+ * subtotaal, met de vergelijkende cijfers van de vorige periode ernaast
+ * (art. 2:363 lid 5 BW).
+ *
+ * De KANT van de balans komt uit `section` en niet uit de rubriek: zo staat een
+ * verkeerd gerubriceerde rekening hooguit onder de verkeerde kop, maar nooit aan
+ * de verkeerde kant — en blijft het balanstotaal kloppen.
+ */
+function BalanceReport({ rows, previousRows, period, data }: {
+  rows: BalanceSheetRow[]; previousRows: BalanceSheetRow[]; period: { current: PeriodBounds; previous: PeriodBounds }; data: AppData;
+}) {
+  const [assetsExpanded, setAssetsExpanded] = useState(false);
+  const asOf = period.current.to;
+  const prevAsOf = period.previous.to;
 
-  const totalAssets = sum(assets);
-  const totalEquity = sum(equityAccounts) + result;
-  const totalPassiva = sum(liabilities) + totalEquity;
+  const onAssetSide = (row: BalanceSheetRow) => row.section === 'asset';
+  const onLiabilitySide = (row: BalanceSheetRow) => row.section !== 'asset';
+
+  const assetGroups = groupRows(rows, previousRows, () => 1, onAssetSide);
+  const passivaGroups = groupRows(rows, previousRows, () => 1, onLiabilitySide);
+
+  const totalAssets = sumBlocks(assetGroups, 'current');
+  const totalPassiva = sumBlocks(passivaGroups, 'current');
+  const totalAssetsPrev = sumBlocks(assetGroups, 'previous');
+  const totalPassivaPrev = sumBlocks(passivaGroups, 'previous');
   const balanced = totalAssets === totalPassiva;
 
-  const exportCsv = () => downloadCsv(
-    `balans-${label.replace(/\s/g, '-')}.csv`,
-    ['Sectie', 'Rekening', 'Bedrag'],
-    [
-      ...otherAssets.map(r => ['Activa', `${r.code ? r.code + ' · ' : ''}${r.name}`, (r.amount_cents / 100).toFixed(2)] as (string | number)[]),
-      ...(fixedRows.length ? [['Activa', 'Vaste activa (boekwaarde)', (fixedNet / 100).toFixed(2)] as (string | number)[]] : []),
-      ...(fixedRows.length ? perAsset.map(a => ['Activa · vaste activa', a.name, (a.bookValue / 100).toFixed(2)] as (string | number)[]) : []),
-      ['', 'Totaal activa', (totalAssets / 100).toFixed(2)],
-      ...liabilities.map(r => ['Vreemd vermogen', `${r.code ? r.code + ' · ' : ''}${r.name}`, (r.amount_cents / 100).toFixed(2)]),
-      ...equityAccounts.map(r => ['Eigen vermogen', `${r.code ? r.code + ' · ' : ''}${r.name}`, (r.amount_cents / 100).toFixed(2)]),
-      ['Eigen vermogen', 'Resultaat (onverdeeld)', (result / 100).toFixed(2)],
-      ['', 'Totaal passiva', (totalPassiva / 100).toFixed(2)],
-    ],
+  // De activamodule kent per activum een boekwaarde; die tonen we als
+  // uitklapbare toelichting onder de rubriek waar het activum ook echt staat.
+  // Software op 0020 hoort bij de immateriële vaste activa, een machine op 0100
+  // bij de materiële — ze allemaal onder één kop zetten zou sub-regels geven die
+  // niet optellen tot de rubriek erboven.
+  const bookValues = bookValuesAt(data, asOf);
+  const bookValuesPrev = bookValuesAt(data, prevAsOf);
+  const groupByAccount = new Map(data.ledgerAccounts.map(a => [a.id, a.report_group]));
+  const perAssetByGroup = new Map<LedgerReportGroup, { id: string; name: string; current: number; previous: number }[]>();
+  for (const a of data.fixedAssets) {
+    if (!bookValues.has(a.id) && !bookValuesPrev.has(a.id)) continue;
+    const group = (a.asset_account_id ? groupByAccount.get(a.asset_account_id) : null) ?? 'materiele_vaste_activa';
+    const list = perAssetByGroup.get(group) ?? [];
+    list.push({
+      id: a.id,
+      name: a.asset_number ? `${a.asset_number} · ${a.name}` : a.name,
+      current: bookValues.get(a.id) ?? 0,
+      previous: bookValuesPrev.get(a.id) ?? 0,
+    });
+    perAssetByGroup.set(group, list);
+  }
+  for (const list of perAssetByGroup.values()) list.sort((x, y) => x.name.localeCompare(y.name));
+
+  const exportCsv = () => {
+    const lines: (string | number)[][] = [];
+    const push = (side: string, group: string, name: string, c: number, p: number) =>
+      lines.push([side, group, name, (c / 100).toFixed(2), (p / 100).toFixed(2)]);
+    for (const block of assetGroups) {
+      for (const row of block.rows) push('Activa', REPORT_GROUP_LABELS[block.group], row.name, row.current, row.previous);
+      push('Activa', REPORT_GROUP_LABELS[block.group], `Totaal ${REPORT_GROUP_LABELS[block.group].toLowerCase()}`, block.current, block.previous);
+    }
+    push('Activa', '', 'Totaal activa', totalAssets, totalAssetsPrev);
+    for (const block of passivaGroups) {
+      for (const row of block.rows) push('Passiva', REPORT_GROUP_LABELS[block.group], row.name, row.current, row.previous);
+      push('Passiva', REPORT_GROUP_LABELS[block.group], `Totaal ${REPORT_GROUP_LABELS[block.group].toLowerCase()}`, block.current, block.previous);
+    }
+    push('Passiva', '', 'Totaal passiva', totalPassiva, totalPassivaPrev);
+    for (const [group, list] of perAssetByGroup) {
+      for (const a of list) push('Toelichting', `Boekwaarde per activum · ${REPORT_GROUP_LABELS[group]}`, a.name, a.current, a.previous);
+    }
+    downloadCsv(
+      `balans-${period.current.label.replace(/\s/g, '-')}.csv`,
+      ['Kant', 'Rubriek', 'Omschrijving', period.current.label, period.previous.label],
+      lines,
+    );
+  };
+
+  /** Eén rubriek met subtotaal in de kop en de rekeningen eronder. */
+  const groupBlock = (block: ReportGroupBlock, extra?: React.ReactNode) => (
+    <Fragment key={block.group}>
+      <tr className="bk-balance-group">
+        <td>{REPORT_GROUP_LABELS[block.group]}</td>
+        <td className="bk-num">{euroCents(block.current)}</td>
+        <td className="bk-num bk-muted">{euroCents(block.previous)}</td>
+      </tr>
+      {block.rows.map(row => (
+        <tr className="bk-balance-sub" key={row.key}>
+          <td>{row.name}</td>
+          <td className="bk-num">{euroCents(row.current)}</td>
+          <td className="bk-num bk-muted">{euroCents(row.previous)}</td>
+        </tr>
+      ))}
+      {extra}
+    </Fragment>
   );
 
-  const line = (name: string, amount: number, cls = '') => (
-    <tr className={cls} key={name}><td>{name}</td><td className="bk-num">{euroCents(amount)}</td></tr>
-  );
+  const assetDetail = (group: LedgerReportGroup) => {
+    const list = perAssetByGroup.get(group);
+    if (!list?.length) return null;
+    return (
+      <>
+        <tr className="bk-balance-sub bk-link" onClick={() => setAssetsExpanded(e => !e)} title="Boekwaarde per activum tonen">
+          <td>
+            <span className="bk-group-toggle">{assetsExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</span>
+            {' '}Boekwaarde per activum
+          </td>
+          <td colSpan={2}></td>
+        </tr>
+        {assetsExpanded && list.map(a => (
+          <tr className="bk-balance-sub" key={a.id}>
+            <td>{a.name}</td>
+            <td className="bk-num">{euroCents(a.current)}</td>
+            <td className="bk-num bk-muted">{euroCents(a.previous)}</td>
+          </tr>
+        ))}
+      </>
+    );
+  };
 
   return (
     <div className="bk-report">
       <div className="bk-report-bar">
         <div className="bk-report-kpis">
-          <div><span>Balanstotaal per {label}</span><strong>{euroCents(totalAssets)}</strong></div>
+          <div><span>Balanstotaal per {period.current.label}</span><strong>{euroCents(totalAssets)}</strong></div>
           <div className={balanced ? 'bk-balance-ok' : 'bk-balance-bad'}>{balanced ? '✓ In balans' : `⚠ Verschil ${euroCents(totalAssets - totalPassiva)}`}</div>
         </div>
         <Button onClick={exportCsv}><Download size={14} /> Exporteer CSV</Button>
       </div>
       <div className="bk-balance-cols">
         <div className="bk-table-wrap"><table className="bk-table bk-report-table">
-          <thead><tr><th>Activa</th><th className="bk-num">Bedrag</th></tr></thead>
+          <thead><tr><th>Activa</th><th className="bk-num">{dateNL(asOf)}</th><th className="bk-num">{dateNL(prevAsOf)}</th></tr></thead>
           <tbody>
-            {otherAssets.map(r => line(`${r.code ? r.code + ' · ' : ''}${r.name}`, r.amount_cents))}
-            {fixedRows.length > 0 && <>
-              <tr className="bk-balance-group" onClick={() => setAssetsExpanded(e => !e)} title="Klik om de afzonderlijke activa te tonen">
-                <td><span className="bk-group-toggle">{assetsExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</span> Vaste activa (boekwaarde)</td>
-                <td className="bk-num">{euroCents(fixedNet)}</td>
-              </tr>
-              {assetsExpanded && (perAsset.length
-                ? perAsset.map(a => <tr className="bk-balance-sub" key={a.id}><td>{a.name}</td><td className="bk-num">{euroCents(a.bookValue)}</td></tr>)
-                : <tr className="bk-balance-sub"><td colSpan={2} className="bk-muted">Geen activa geregistreerd.</td></tr>)}
-            </>}
-            {otherAssets.length === 0 && fixedRows.length === 0 && <tr><td colSpan={2} className="bk-muted">Geen activa.</td></tr>}
+            {assetGroups.length
+              ? assetGroups.map(block => groupBlock(block, assetDetail(block.group)))
+              : <tr><td colSpan={3} className="bk-muted">Geen activa.</td></tr>}
           </tbody>
-          <tfoot><tr className="bk-report-result"><td>Totaal activa</td><td className="bk-num">{euroCents(totalAssets)}</td></tr></tfoot>
+          <tfoot><tr className="bk-report-result">
+            <td>Totaal activa</td>
+            <td className="bk-num">{euroCents(totalAssets)}</td>
+            <td className="bk-num bk-muted">{euroCents(totalAssetsPrev)}</td>
+          </tr></tfoot>
         </table></div>
         <div className="bk-table-wrap"><table className="bk-table bk-report-table">
-          <thead><tr><th>Passiva</th><th className="bk-num">Bedrag</th></tr></thead>
+          <thead><tr><th>Passiva</th><th className="bk-num">{dateNL(asOf)}</th><th className="bk-num">{dateNL(prevAsOf)}</th></tr></thead>
           <tbody>
-            <tr className="bk-report-section"><td colSpan={2}>Vreemd vermogen</td></tr>
-            {liabilities.length ? liabilities.map(r => line(`${r.code ? r.code + ' · ' : ''}${r.name}`, r.amount_cents)) : <tr><td colSpan={2} className="bk-muted">Geen.</td></tr>}
-            <tr className="bk-report-section"><td colSpan={2}>Eigen vermogen</td></tr>
-            {equityAccounts.map(r => line(`${r.code ? r.code + ' · ' : ''}${r.name}`, r.amount_cents))}
-            {line('Resultaat (onverdeeld)', result)}
+            {passivaGroups.length
+              ? passivaGroups.map(block => groupBlock(block))
+              : <tr><td colSpan={3} className="bk-muted">Geen passiva.</td></tr>}
           </tbody>
-          <tfoot><tr className="bk-report-result"><td>Totaal passiva</td><td className="bk-num">{euroCents(totalPassiva)}</td></tr></tfoot>
+          <tfoot><tr className="bk-report-result">
+            <td>Totaal passiva</td>
+            <td className="bk-num">{euroCents(totalPassiva)}</td>
+            <td className="bk-num bk-muted">{euroCents(totalPassivaPrev)}</td>
+          </tr></tfoot>
         </table></div>
       </div>
     </div>
