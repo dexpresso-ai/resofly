@@ -142,6 +142,39 @@ function fileFitsFormat(format: GalleryFormat, file: File): boolean {
 }
 
 /**
+ * Sleept iemand echte bestanden, of een miniatuur uit de galerij zelf? Alleen
+ * het eerste is een upload; het tweede is het indelen in een categorie.
+ */
+function dragHasFiles(e: React.DragEvent): boolean {
+  return Array.from(e.dataTransfer.types ?? []).includes('Files');
+}
+
+/**
+ * Wat er van een sleep- of kiesactie overblijft nadat alles wat niet in dit
+ * galerij-formaat past is afgevallen (RAW-bestanden, sidecars, .DS_Store uit een
+ * gesleepte map). Blijft er niets over, dan is dat een fout in dezelfde
+ * bewoording — waar de gebruiker de bestanden ook loslaat.
+ */
+function usableForGallery(format: GalleryFormat, dropped: File[]): { usable: File[]; skipped: number } {
+  const usable = dropped.filter(file => fileFitsFormat(format, file));
+  if (usable.length === 0) {
+    throw new Error(dropped.length === 0
+      ? 'Er zaten geen bestanden in wat je losliet.'
+      : format === 'photo'
+        ? 'Geen bruikbare foto’s gevonden. Deze galerij accepteert JPEG, PNG of WebP.'
+        : format === 'video'
+          ? 'Geen bruikbare video’s gevonden in wat je losliet.'
+          : 'Geen bruikbare foto’s of video’s gevonden. Foto’s moeten JPEG, PNG of WebP zijn.');
+  }
+  return { usable, skipped: dropped.length - usable.length };
+}
+
+/** Overgeslagen bestanden worden één keer geteld gemeld, niet als losse fouten. */
+function skippedNotice(skipped: number): string {
+  return `${skipped} bestand${skipped === 1 ? '' : 'en'} overgeslagen — die passen niet in deze galerij.`;
+}
+
+/**
  * Bestanden uit een sleepactie halen. Beeldmakers slepen zelden losse foto's:
  * ze pakken de hele exportmap. `webkitGetAsEntry` laat ons daar doorheen lopen,
  * inclusief submappen. Waar die API ontbreekt (of bij een gewone bestandssleep)
@@ -486,7 +519,10 @@ export function GalleryTab({
     setQueue(prev => prev.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)));
   }
 
-  async function uploadOne(gallery: Gallery, file: File, sortOrder: number, onProgress: (detail: string) => void): Promise<GalleryItem> {
+  async function uploadOne(
+    gallery: Gallery, file: File, sortOrder: number, categoryId: string | null,
+    onProgress: (detail: string) => void,
+  ): Promise<GalleryItem> {
     const isPhoto = GALLERY_PHOTO_TYPES.has(file.type);
     const isVideo = file.type.startsWith('video/');
     if (!isPhoto && !isVideo) {
@@ -544,6 +580,7 @@ export function GalleryTab({
           width: derived.width,
           height: derived.height,
           sort_order: sortOrder,
+          category_id: categoryId,
         });
       } catch (e) {
         for (const key of [original.key, preview.key, thumb.key]) void deleteR2Object(key).catch(() => undefined);
@@ -606,6 +643,7 @@ export function GalleryTab({
         stream_uid: streamUid,
         stream_status: streamUid ? 'processing' : null,
         sort_order: sortOrder,
+        category_id: categoryId,
       });
       if (streamUid) pollStreamItem(inserted);
       return inserted;
@@ -617,7 +655,12 @@ export function GalleryTab({
     }
   }
 
-  async function handleFiles(fileList: FileList | File[] | null) {
+  /**
+   * De eigenlijke upload. `categoryId` is de categorie waarin de bestanden
+   * landen: vanuit het paneel geen (dan deelt de gebruiker later in), vanuit het
+   * venster "Bestanden" de categorie waarop hij losliet of die open staat.
+   */
+  async function handleFiles(fileList: FileList | File[] | null, categoryId: string | null = null) {
     // Ook wachten op `loading`: vóórdat de bestaande items binnen zijn zou
     // nextSort op 0 beginnen en zouden nieuwe uploads tussen de bestaande
     // volgorde in springen.
@@ -643,7 +686,7 @@ export function GalleryTab({
         if (index >= files.length) return;
         setQueueEntry(index, { status: 'bezig' });
         try {
-          const inserted = await uploadOne(openGallery, files[index], sortOrders[index], (detail) => setQueueEntry(index, { detail }));
+          const inserted = await uploadOne(openGallery, files[index], sortOrders[index], categoryId, (detail) => setQueueEntry(index, { detail }));
           // Alleen tonen als deze galerij nog open staat (anders zou een item
           // van galerij A in de lijst van galerij B belanden).
           if (openIdRef.current === galleryId) setItems(prev => [...prev, inserted]);
@@ -661,41 +704,48 @@ export function GalleryTab({
   }
 
   /**
-   * Bestanden die op het paneel worden losgelaten. Wat niet in dit galerij-
-   * formaat past (RAW-bestanden, sidecars, .DS_Store uit een gesleepte map)
-   * wordt overgeslagen en één keer geteld gemeld — niet als losse fouten in de
-   * wachtrij, want dan verdwijnt het echte werk uit beeld.
+   * Gesleepte bestanden uploaden — gedeeld door het paneel en het venster
+   * "Bestanden". Geeft terug hoeveel bestanden zijn overgeslagen en gooit een
+   * leesbare fout dóór, zodat elke aanroeper hem op zijn eigen plek toont: een
+   * melding van het paneel valt achter een openstaand venster en ziet niemand.
+   *
+   * LET OP: moet synchroon vanuit de drop-handler worden aangeroepen — daarna is
+   * de DataTransfer leeg.
    */
-  async function handleDrop(transfer: DataTransfer) {
-    if (!openGallery) return;
-    if (busy || loading) {
-      setError('Er loopt al een upload. Wacht tot die klaar is en sleep daarna opnieuw.');
-      return;
-    }
+  async function uploadFromTransfer(transfer: DataTransfer, categoryId: string | null): Promise<number> {
+    if (!openGallery) return 0;
+    if (busy || loading) throw new Error('Er loopt al een upload. Wacht tot die klaar is en sleep daarna opnieuw.');
     let dropped: File[] = [];
     try {
       dropped = await filesFromDataTransfer(transfer);
     } catch {
-      setError('Kon de gesleepte bestanden niet lezen. Gebruik anders de knop “Uploaden”.');
-      return;
+      throw new Error('Kon de gesleepte bestanden niet lezen. Gebruik anders de knop “Uploaden”.');
     }
-    const usable = dropped.filter(file => fileFitsFormat(openGallery.format, file));
-    const skipped = dropped.length - usable.length;
-    if (usable.length === 0) {
-      setError(dropped.length === 0
-        ? 'Er zaten geen bestanden in wat je losliet.'
-        : openGallery.format === 'photo'
-          ? 'Geen bruikbare foto’s gevonden. Deze galerij accepteert JPEG, PNG of WebP.'
-          : openGallery.format === 'video'
-            ? 'Geen bruikbare video’s gevonden in wat je losliet.'
-            : 'Geen bruikbare foto’s of video’s gevonden. Foto’s moeten JPEG, PNG of WebP zijn.');
-      return;
+    const { usable, skipped } = usableForGallery(openGallery.format, dropped);
+    await handleFiles(usable, categoryId);
+    return skipped;
+  }
+
+  /** Bestanden uit de bladerknop; zelfde filter en zelfde meldingen als een sleep. */
+  async function uploadPicked(picked: File[], categoryId: string | null): Promise<number> {
+    if (!openGallery || picked.length === 0) return 0;
+    if (busy || loading) throw new Error('Er loopt al een upload. Wacht tot die klaar is en probeer het daarna opnieuw.');
+    const { usable, skipped } = usableForGallery(openGallery.format, picked);
+    await handleFiles(usable, categoryId);
+    return skipped;
+  }
+
+  /** Bestanden die op het paneel worden losgelaten; de melding hoort dan hier. */
+  async function handleDrop(transfer: DataTransfer) {
+    try {
+      const skipped = await uploadFromTransfer(transfer, null);
+      if (skipped > 0) {
+        setMessage(skippedNotice(skipped));
+        window.setTimeout(() => setMessage(null), 6000);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Uploaden mislukt.');
     }
-    if (skipped > 0) {
-      setMessage(`${skipped} bestand${skipped === 1 ? '' : 'en'} overgeslagen — die passen niet in deze galerij.`);
-      window.setTimeout(() => setMessage(null), 6000);
-    }
-    await handleFiles(usable);
   }
 
   // ── Item-acties ──
@@ -1037,7 +1087,7 @@ export function GalleryTab({
    */
   function isFileDrag(e: React.DragEvent): boolean {
     if (!writable || settingsTab || showShare) return false;
-    return Array.from(e.dataTransfer.types ?? []).includes('Files');
+    return dragHasFiles(e);
   }
 
   return (
@@ -1199,21 +1249,7 @@ export function GalleryTab({
         onChange={(e) => void handleFiles(e.target.files)}
       />
 
-      {queue.length > 0 && (
-        <div className="gal-queue">
-          {queue.map((entry, i) => (
-            <div key={i} className={`gal-queue-row is-${entry.status}`}>
-              <span className="gal-queue-name">{entry.name}</span>
-              <span className="gal-queue-status">
-                {entry.status === 'wacht' && 'Wachten…'}
-                {entry.status === 'bezig' && (entry.detail || 'Bezig…')}
-                {entry.status === 'klaar' && 'Klaar'}
-                {entry.status === 'fout' && (entry.detail || 'Mislukt')}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+      <UploadQueue queue={queue} />
 
       {loading
         ? <div className="galv-empty">Galerij wordt geladen…</div>
@@ -1320,6 +1356,7 @@ export function GalleryTab({
           items={items}
           categories={categories}
           bundle={bundle}
+          queue={queue}
           onClose={() => setSettingsTab(null)}
           onSave={async (patch) => { await patchGallery(openGallery, patch); setSettingsTab(null); }}
           onDelete={writable ? () => { setSettingsTab(null); void removeGallery(openGallery); } : undefined}
@@ -1331,6 +1368,8 @@ export function GalleryTab({
             onRemoveCategory: removeCategory,
             onApplyPresets: applyPresets,
             onSaveAsPresets: saveAsPresets,
+            onUploadDrop: uploadFromTransfer,
+            onUploadPick: uploadPicked,
           }}
         />
       )}
@@ -1343,6 +1382,30 @@ export function GalleryTab({
         />
       )}
     </article>
+  );
+}
+
+/**
+ * De uploadwachtrij. Staat op twee plekken: in het paneel én in het venster
+ * "Bestanden" — wie daar sleept, moet de voortgang zien zonder het venster te
+ * hoeven sluiten.
+ */
+function UploadQueue({ queue }: { queue: QueueEntry[] }) {
+  if (queue.length === 0) return null;
+  return (
+    <div className="gal-queue">
+      {queue.map((entry, i) => (
+        <div key={i} className={`gal-queue-row is-${entry.status}`}>
+          <span className="gal-queue-name">{entry.name}</span>
+          <span className="gal-queue-status">
+            {entry.status === 'wacht' && 'Wachten…'}
+            {entry.status === 'bezig' && (entry.detail || 'Bezig…')}
+            {entry.status === 'klaar' && 'Klaar'}
+            {entry.status === 'fout' && (entry.detail || 'Mislukt')}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1361,9 +1424,13 @@ const gallerySettingsTabs: Array<{ key: GallerySettingsTab; label: string; Icon:
  * "openen" — dan navigeert hij weg van niet-opgeslagen werk. Interne sleepacties
  * (miniaturen naar een categorie) dragen geen 'Files' en gaan hier ongemoeid
  * doorheen.
+ *
+ * Heeft een plek binnen het venster de sleep al opgepakt (het tabblad
+ * "Bestanden" uploadt hem), dan blijft dit vangnet er vanaf: anders zou het de
+ * cursor alsnog op "niet toegestaan" zetten.
  */
 function swallowFileDrag(e: React.DragEvent) {
-  if (!Array.from(e.dataTransfer.types ?? []).includes('Files')) return;
+  if (e.defaultPrevented || !dragHasFiles(e)) return;
   e.preventDefault();
   e.dataTransfer.dropEffect = 'none';
 }
@@ -1377,6 +1444,9 @@ type GalleryFileActions = {
   onRemoveCategory: (category: GalleryCategory) => Promise<void>;
   onApplyPresets: () => Promise<void>;
   onSaveAsPresets: () => Promise<void>;
+  /** Uploaden vanuit dit venster; geeft terug hoeveel bestanden niet pasten. */
+  onUploadDrop: (transfer: DataTransfer, categoryId: string | null) => Promise<number>;
+  onUploadPick: (files: File[], categoryId: string | null) => Promise<number>;
 };
 
 /**
@@ -1388,7 +1458,7 @@ type GalleryFileActions = {
  * hero-keuze vandaan, zodat de indruk van "een hero per categorie" niet ontstaat.
  */
 function GallerySettingsModal({
-  gallery, tab, onTab, busy, items, categories, bundle, onClose, onSave, onDelete, files,
+  gallery, tab, onTab, busy, items, categories, bundle, queue, onClose, onSave, onDelete, files,
 }: {
   gallery: Gallery;
   tab: GallerySettingsTab;
@@ -1397,6 +1467,7 @@ function GallerySettingsModal({
   items: GalleryItem[];
   categories: GalleryCategory[];
   bundle: GalleryTokenBundle | null;
+  queue: QueueEntry[];
   onClose: () => void;
   onSave: (patch: Partial<Gallery>) => Promise<void>;
   onDelete?: () => void;
@@ -1573,8 +1644,10 @@ function GallerySettingsModal({
             <GalleryFileSettings
               items={items}
               categories={categories}
+              format={gallery.format}
               bundle={bundle}
               busy={busy}
+              queue={queue}
               actions={files}
             />
           )}
@@ -1586,7 +1659,7 @@ function GallerySettingsModal({
           {onDelete && <Button variant="danger" onClick={onDelete} disabled={busy}><Trash2 size={14} /> Verwijderen</Button>}
           <span className="gal-modal-spacer" />
           {tab === 'files' && !dirty
-            ? <span className="gal-field-help">Indelen wordt meteen bewaard.</span>
+            ? <span className="gal-field-help">Uploaden en indelen worden meteen bewaard.</span>
             : dirty && <span className="gal-unsaved">Nog niet opgeslagen</span>}
           <Button variant="ghost" onClick={onClose} disabled={busy}>{dirty ? 'Annuleren' : 'Sluiten'}</Button>
           <Button
@@ -1620,12 +1693,19 @@ const FILE_PAGE_SIZE = 120;
  * tegelijk neerzetplek zijn — rechts de miniaturen. Slepen is de snelle weg;
  * de keuzelijst “Verplaats naar…” is de weg die óók op een tablet werkt, want
  * HTML5-slepen bestaat niet op een aanraakscherm.
+ *
+ * Hier landen ook nieuwe bestanden: wie zijn galerij aan het indelen is, wil
+ * niet eerst het venster sluiten om te kunnen uploaden. Een sleep of een klik op
+ * “Uploaden” zet ze meteen in de categorie die je open hebt staan — of, als je
+ * op een categorie links loslaat, in díé categorie.
  */
-function GalleryFileSettings({ items, categories, bundle, busy, actions }: {
+function GalleryFileSettings({ items, categories, format, bundle, busy, queue, actions }: {
   items: GalleryItem[];
   categories: GalleryCategory[];
+  format: GalleryFormat;
   bundle: GalleryTokenBundle | null;
   busy: boolean;
+  queue: QueueEntry[];
   actions: GalleryFileActions;
 }) {
   const [bucket, setBucket] = useState<string>('all');
@@ -1637,6 +1717,11 @@ function GalleryFileSettings({ items, categories, bundle, busy, actions }: {
   const [overBucket, setOverBucket] = useState<string | null>(null);
   const [limit, setLimit] = useState(FILE_PAGE_SIZE);
   const [working, setWorking] = useState(false);
+  // Een bestandssleep over het tabblad; de teller vangt de dragenter/dragleave
+  // van elk onderliggend element op, zodat de aanwijzing niet knippert.
+  const [fileOver, setFileOver] = useState(false);
+  const fileDepth = useRef(0);
+  const uploadInput = useRef<HTMLInputElement | null>(null);
   const dragIds = useRef<string[]>([]);
   const statusRef = useRef<HTMLDivElement | null>(null);
   // Escape tijdens hernoemen mag de oude naam niet alsnog opslaan via onBlur.
@@ -1675,16 +1760,18 @@ function GalleryFileSettings({ items, categories, bundle, busy, actions }: {
     if (error || notice) statusRef.current?.scrollIntoView({ block: 'nearest' });
   }, [error, notice]);
 
+  function notify(text: string) {
+    setNotice(text);
+    window.setTimeout(() => setNotice(null), 3500);
+  }
+
   async function run(action: () => Promise<void>, done?: string) {
     if (working) return;
     setWorking(true);
     setError(null);
     try {
       await action();
-      if (done) {
-        setNotice(done);
-        window.setTimeout(() => setNotice(null), 3500);
-      }
+      if (done) notify(done);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Actie mislukt.');
     } finally {
@@ -1711,7 +1798,66 @@ function GalleryFileSettings({ items, categories, bundle, busy, actions }: {
 
   const locked = busy || working;
 
-  /** Eén rij in de linkerkolom: filter, neerzetplek en (bij categorieën) beheer. */
+  /** Waar een bucket-sleutel voor staat als bestemming van een upload. */
+  function categoryOf(key: string): string | null {
+    return key === 'all' || key === 'none' ? null : key;
+  }
+
+  function nameOf(key: string): string {
+    if (key === 'all') return 'deze galerij';
+    if (key === 'none') return 'Zonder categorie';
+    return categories.find(c => c.id === key)?.name ?? 'deze galerij';
+  }
+
+  // Zonder aanwijzing landt een upload in de categorie die je open hebt staan.
+  const targetKey = bucket;
+  const targetCategoryId = categoryOf(targetKey);
+
+  /**
+   * Uploaden vanuit dit venster. De bestemming staat vast vóór het uploaden
+   * begint: sleep je op een categorie, dan is dat die categorie — ook als je
+   * daarna een andere aanklikt terwijl de upload nog loopt.
+   */
+  function startUpload(key: string, source: (categoryId: string | null) => Promise<number>) {
+    if (locked) {
+      setError('Er loopt al iets. Wacht tot dat klaar is en probeer het daarna opnieuw.');
+      return;
+    }
+    const categoryId = categoryOf(key);
+    // De aanroep moet synchroon: een DataTransfer is na de drop-handler leeg.
+    const started = source(categoryId);
+    void run(async () => {
+      const skipped = await started;
+      if (skipped > 0) notify(skippedNotice(skipped));
+      else if (categoryId) notify(`Klaar — de nieuwe bestanden staan in “${nameOf(key)}”.`);
+    });
+  }
+
+  /** Alleen echte bestandsslepen; miniaturen verplaatsen is iets anders. */
+  function onFileDragEnter(e: React.DragEvent) {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    fileDepth.current += 1;
+    setFileOver(true);
+  }
+
+  function onFileDragLeave(e: React.DragEvent) {
+    if (!dragHasFiles(e)) return;
+    fileDepth.current = Math.max(0, fileDepth.current - 1);
+    if (fileDepth.current === 0) setFileOver(false);
+  }
+
+  function clearFileDrag() {
+    fileDepth.current = 0;
+    setFileOver(false);
+  }
+
+  /**
+   * Eén rij in de linkerkolom: filter, neerzetplek en (bij categorieën) beheer.
+   * Neerzetten kan tweeërlei: miniaturen uit de galerij (verplaatsen) of
+   * bestanden van de schijf (uploaden). “Alle bestanden” is geen doel om naar te
+   * verplaatsen — er is geen categorie “alle” — maar wél om in te uploaden.
+   */
   function bucketRow(key: string, label: string, count: number, category?: GalleryCategory, index = -1) {
     const droppable = key !== 'all';
     const isRenaming = renaming === key && category;
@@ -1719,17 +1865,31 @@ function GalleryFileSettings({ items, categories, bundle, busy, actions }: {
       <li
         key={key}
         className={`gal-bucket${bucket === key ? ' is-active' : ''}${overBucket === key ? ' is-over' : ''}`}
-        onDragOver={droppable ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setOverBucket(key); } : undefined}
-        onDragLeave={droppable ? (e) => { if (e.currentTarget === e.target) setOverBucket(null); } : undefined}
-        onDrop={droppable ? (e) => {
+        onDragOver={(e) => {
+          const files = dragHasFiles(e);
+          if (!files && !droppable) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = files ? 'copy' : 'move';
+          setOverBucket(key);
+        }}
+        onDragLeave={(e) => { if (e.currentTarget === e.target) setOverBucket(null); }}
+        onDrop={(e) => {
+          if (dragHasFiles(e)) {
+            // preventDefault vertelt het tabblad eronder dat deze rij hem heeft.
+            e.preventDefault();
+            setOverBucket(null);
+            startUpload(key, (categoryId) => actions.onUploadDrop(e.dataTransfer, categoryId));
+            return;
+          }
+          if (!droppable) return;
           e.preventDefault();
           setOverBucket(null);
           const ids = dragIds.current.length > 0
             ? dragIds.current
             : (e.dataTransfer.getData('text/plain') || '').split(',').filter(Boolean);
           dragIds.current = [];
-          moveTo(ids, key === 'none' ? null : key);
-        } : undefined}
+          moveTo(ids, categoryOf(key));
+        }}
       >
         {isRenaming ? (
           <Input
@@ -1773,13 +1933,53 @@ function GalleryFileSettings({ items, categories, bundle, busy, actions }: {
   }
 
   return (
-    <div className="gal-files-tab">
+    <div
+      className={`gal-files-tab${fileOver ? ' is-dropping' : ''}`}
+      onDragEnter={onFileDragEnter}
+      onDragOver={(e) => {
+        if (!dragHasFiles(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeave={onFileDragLeave}
+      onDrop={(e) => {
+        if (!dragHasFiles(e)) return;
+        clearFileDrag();
+        // Een categorie-rij die de sleep al heeft opgepakt, doet het werk.
+        if (e.defaultPrevented) return;
+        e.preventDefault();
+        startUpload(targetKey, (categoryId) => actions.onUploadDrop(e.dataTransfer, categoryId));
+      }}
+    >
       {/* Meldingen staan over de volle breedte bovenaan: ze kunnen bij beide
           kolommen horen, en zo staan ze nooit náást het bericht dat je zoekt. */}
       <div ref={statusRef}>
         {error && <div className="error">{error}</div>}
         {notice && <div className="gal-notice">{notice}</div>}
       </div>
+      {fileOver && (
+        <div className="gal-files-droptip">
+          <UploadCloud size={15} />
+          <span>
+            Laat los om te uploaden naar <strong>{nameOf(overBucket ?? targetKey)}</strong>
+            {' '}— of laat los op een categorie links.
+          </span>
+        </div>
+      )}
+      <UploadQueue queue={queue} />
+      <input
+        ref={uploadInput}
+        type="file"
+        multiple
+        accept={formatConfig(format).accept}
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const picked = Array.from(e.target.files ?? []);
+          e.target.value = '';
+          if (picked.length === 0) return;
+          startUpload(targetKey, (categoryId) => actions.onUploadPick(picked, categoryId));
+        }}
+      />
       <div className="gal-files">
       <div className="gal-files-side">
         <span className="gal-card-title">Categorieën</span>
@@ -1856,16 +2056,58 @@ function GalleryFileSettings({ items, categories, bundle, busy, actions }: {
             {categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
             <option value="__none__">Zonder categorie</option>
           </Select>
+          <Button
+            variant="primary"
+            disabled={locked}
+            onClick={() => uploadInput.current?.click()}
+            title={targetCategoryId ? `Uploaden naar “${nameOf(targetKey)}”` : 'Uploaden naar deze galerij'}
+          >
+            {busy ? <Loader2 size={14} className="gal-spin" /> : <Upload size={14} />} Uploaden
+          </Button>
         </div>
 
         {items.length === 0
-          ? <div className="client-empty-line">Nog geen bestanden in deze galerij. Sleep ze op de galerij om te uploaden.</div>
+          ? (
+            // Een lege galerij is precies het moment om te laten zien dát je
+            // hier kunt slepen; "nog geen bestanden" hielp daar niet bij.
+            <button
+              type="button"
+              className={`gal-dropzone${fileOver ? ' is-over' : ''}`}
+              onClick={() => uploadInput.current?.click()}
+              disabled={locked}
+            >
+              <span className="gal-dropzone-icon"><UploadCloud size={28} /></span>
+              <strong>{format === 'video' ? 'Sleep je video’s hierheen' : 'Sleep je foto’s hierheen'}</strong>
+              <span className="gal-dropzone-hint">
+                Of klik om te bladeren. Hele mappen mogen ook — submappen worden meegenomen.
+              </span>
+              <span className="gal-dropzone-meta">
+                {targetCategoryId ? `Ze komen in “${nameOf(targetKey)}”.` : 'Indelen in categorieën kan hierna.'}
+              </span>
+            </button>
+          )
           : visible.length === 0
-            ? <div className="client-empty-line">Geen bestanden in deze categorie.</div>
+            ? (
+              <button
+                type="button"
+                className={`gal-dropzone is-slim${fileOver ? ' is-over' : ''}`}
+                onClick={() => uploadInput.current?.click()}
+                disabled={locked}
+              >
+                <span className="gal-dropzone-icon"><UploadCloud size={22} /></span>
+                <strong>Geen bestanden in deze categorie</strong>
+                <span className="gal-dropzone-hint">
+                  {targetCategoryId
+                    ? `Sleep bestanden hierheen of klik om te bladeren — ze komen meteen in “${nameOf(targetKey)}”.`
+                    : 'Sleep bestanden hierheen of klik om te bladeren.'}
+                </span>
+              </button>
+            )
             : (
               <>
                 <p className="gal-field-help">
                   Klik om te selecteren en sleep de selectie naar een categorie links — of gebruik “Verplaats naar…”.
+                  Bestanden van je schijf hierheen slepen uploadt ze{targetCategoryId ? ` naar “${nameOf(targetKey)}”` : ''}.
                 </p>
                 <div className="gal-thumbs">
                   {visible.slice(0, limit).map(item => {
