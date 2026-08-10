@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import type { DragEvent } from 'react';
 import { ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import type { AppData, OrganizationMember, Priority, Task, TaskStatus, UUID } from '../types';
 import { Button, Input, Select } from '../components/Ui';
 import { AssigneeAvatars } from '../components/AssigneeAvatars';
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
+import { comparePlannedTasks } from '../lib/planning';
 import { priorityLabel } from '../lib/format';
 
 type StatusFilter = 'open' | 'all' | TaskStatus;
+type Scope = 'mine' | 'team';
+type Density = 'compact' | 'comfortable';
 
 type PlannerFilters = {
   query: string;
@@ -19,8 +21,19 @@ type PlannerFilters = {
 };
 
 type DropTarget =
-  | { type: 'day'; date: string; beforeTaskId?: UUID | null }
+  | { type: 'day'; date: string; beforeTaskId: UUID | null }
   | { type: 'unscheduled' };
+
+/** Een lopend sleepgebaar. `moved` blijft false zolang het nog een klik kan worden. */
+type DragState = {
+  taskId: UUID;
+  touch: boolean;
+  origin: { x: number; y: number };
+  pointer: { x: number; y: number };
+  width: number;
+  moved: boolean;
+  target: DropTarget | null;
+};
 
 type PlannerBucket = {
   tasks: Task[];
@@ -36,10 +49,43 @@ type ChecklistItem = {
 
 /** Filterwaarde voor "taken die (nog) geen project of klant hebben". */
 const NO_LINK = '__none__';
+/** Sleutel van de lade in de dropzone-registratie; geen datum, dus botst nooit. */
+const TRAY_KEY = '__unscheduled__';
 
 const DEFAULT_TASK_ESTIMATE_MINUTES = 60;
-const WEEKDAY_CAPACITY_MINUTES = 8 * 60;
-const WEEKEND_CAPACITY_MINUTES = 0;
+const PREFS_STORAGE_KEY = 'resofly-weekplanner-prefs';
+
+// Touch: vegen moet gewoon blijven scrollen, dus pakken we een sleep pas op nadat
+// de vinger ~⅓ seconde stil ligt — hetzelfde gebaar als in de agenda.
+const TOUCH_HOLD_MS = 320;
+const TOUCH_HOLD_TOLERANCE_PX = 10;
+// Met de muis is een paar pixels genoeg om een sleep van een klik te onderscheiden.
+const MOUSE_DRAG_THRESHOLD_PX = 4;
+
+/** Korte trilling als een sleepgebaar "pakt" (waar ondersteund). */
+function hapticTick() {
+  try { navigator.vibrate?.(12); } catch { /* niet ondersteund — puur cosmetisch */ }
+}
+
+type StoredPrefs = {
+  scope: Scope;
+  density: Density;
+  clientId: string;
+  projectId: string;
+  priority: PlannerFilters['priority'];
+  status: StatusFilter;
+};
+
+/** Weergavekeuzes overleven het wisselen van tabblad en het herladen van de app.
+ *  De zoektekst bewaren we bewust niet: die hoort bij één zoekactie. */
+function loadPrefs(): Partial<StoredPrefs> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PREFS_STORAGE_KEY) ?? '{}');
+    return raw && typeof raw === 'object' ? raw as Partial<StoredPrefs> : {};
+  } catch {
+    return {};
+  }
+}
 
 export function WeekPlanner({
   data,
@@ -58,14 +104,34 @@ export function WeekPlanner({
   onQuickAddTask: (plannedDate: string, title: string) => Promise<void>;
   onEditTask: (task: Task) => void;
 }) {
+  const storedPrefs = useRef(loadPrefs()).current;
+
   const [anchor, setAnchor] = useState<Date>(() => startOfWeek(new Date()));
-  const [filters, setFilters] = useState<PlannerFilters>({ query: '', clientId: '', projectId: '', priority: 'all', status: 'open' });
-  const [dragId, setDragId] = useState<string | null>(null);
-  const [dragOverKey, setDragOverKey] = useState<string | null>(null);
-  const [dragOverTaskId, setDragOverTaskId] = useState<string | null>(null);
+  const [scope, setScope] = useState<Scope>(storedPrefs.scope === 'team' ? 'team' : 'mine');
+  const [density, setDensity] = useState<Density>(storedPrefs.density === 'comfortable' ? 'comfortable' : 'compact');
+  const [filters, setFilters] = useState<PlannerFilters>({
+    query: '',
+    clientId: storedPrefs.clientId ?? '',
+    projectId: storedPrefs.projectId ?? '',
+    priority: storedPrefs.priority ?? 'all',
+    status: storedPrefs.status ?? 'open',
+  });
+  const [drag, setDrag] = useState<DragState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [quickAddDay, setQuickAddDay] = useState<string | null>(null);
   const [quickAddBusy, setQuickAddBusy] = useState(false);
+
+  useEffect(() => {
+    const prefs: StoredPrefs = {
+      scope,
+      density,
+      clientId: filters.clientId,
+      projectId: filters.projectId,
+      priority: filters.priority,
+      status: filters.status,
+    };
+    try { localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(prefs)); } catch { /* privémodus: niet erg */ }
+  }, [scope, density, filters.clientId, filters.projectId, filters.priority, filters.status]);
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(anchor, i)), [anchor]);
   const weekEnd = days[6];
@@ -91,6 +157,13 @@ export function WeekPlanner({
     const normalizedQuery = filters.query.trim().toLowerCase();
 
     return data.tasks.filter(task => {
+      // "Mijn week" toont wat aan mij is toegewezen én wat nog aan niemand hangt —
+      // anders zou een net toegevoegde losse taak meteen uit beeld verdwijnen.
+      if (scope === 'mine' && currentUserId) {
+        const assignees = assigneesByTask.get(task.id);
+        if (assignees && assignees.length > 0 && !assignees.includes(currentUserId)) return false;
+      }
+
       const project = task.project_id ? projectsById.get(task.project_id) ?? null : null;
       const clientId = project?.client_id ?? task.client_id ?? null;
       const client = clientId ? clientsById.get(clientId) ?? null : null;
@@ -114,9 +187,9 @@ export function WeekPlanner({
       ].join(' ').toLowerCase();
       return haystack.includes(normalizedQuery);
     });
-  }, [clientsById, data.tasks, filters, projectsById]);
+  }, [assigneesByTask, clientsById, currentUserId, data.tasks, filters, projectsById, scope]);
 
-  const { byDay, unscheduled, outsideThisWeek, weekBucket } = useMemo(() => {
+  const { byDay, unscheduled, outsideThisWeek, weekBucket, busiestMinutes } = useMemo(() => {
     const byDay = new Map<string, PlannerBucket>();
     const unscheduled: Task[] = [];
     const outsideThisWeek: Task[] = [];
@@ -137,7 +210,7 @@ export function WeekPlanner({
     }
 
     for (const bucket of byDay.values()) {
-      bucket.tasks.sort(sortPlannedTasks);
+      bucket.tasks.sort(comparePlannedTasks);
       bucket.count = bucket.tasks.length;
       bucket.minutes = bucket.tasks.reduce((sum, task) => sum + taskEstimateMinutes(task), 0);
     }
@@ -151,13 +224,22 @@ export function WeekPlanner({
       count: weekTasks.length,
       minutes: weekTasks.reduce((sum, task) => sum + taskEstimateMinutes(task), 0),
     };
+    // De balk per dag wordt geschaald op de volste dag van deze week: geen norm,
+    // alleen de onderlinge verhouding.
+    const busiestMinutes = Math.max(0, ...Array.from(byDay.values()).map(bucket => bucket.minutes));
 
-    return { byDay, unscheduled, outsideThisWeek, weekBucket };
+    return { byDay, unscheduled, outsideThisWeek, weekBucket, busiestMinutes };
   }, [dayKeys, days, filteredTasks]);
 
   const todayLocal = new Date();
   const weekLabel = `Week ${isoWeekNumber(anchor)} · ${anchor.toLocaleDateString('nl-NL', { day: '2-digit', month: 'short' })} – ${weekEnd.toLocaleDateString('nl-NL', { day: '2-digit', month: 'short', year: 'numeric' })}`;
-  const totalCapacity = days.reduce((sum, day) => sum + dayCapacityMinutes(day), 0);
+  const busiestKey = useMemo(() => {
+    let best: { key: string; minutes: number } | null = null;
+    for (const [key, bucket] of byDay) {
+      if (bucket.minutes > 0 && (!best || bucket.minutes > best.minutes)) best = { key, minutes: bucket.minutes };
+    }
+    return best?.key ?? null;
+  }, [byDay]);
 
   function updateFilter<K extends keyof PlannerFilters>(key: K, value: PlannerFilters[K]) {
     setFilters(prev => {
@@ -167,56 +249,215 @@ export function WeekPlanner({
     });
   }
 
-  function onDragStart(e: DragEvent, taskId: string) {
-    if (!canWrite) return;
-    setDragId(taskId);
-    setError(null);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', taskId);
-  }
+  // ── Slepen ────────────────────────────────────────────────────────────
+  // De dropzones melden zichzelf aan; het raken van een zone gebeurt op
+  // coördinaten, zodat muis en vinger exact dezelfde route volgen.
+  const zonesRef = useRef(new Map<string, HTMLElement>());
+  const registerZone = useCallback((key: string, el: HTMLElement | null) => {
+    if (el) zonesRef.current.set(key, el);
+    else zonesRef.current.delete(key);
+  }, []);
 
-  function onDragEnd() {
-    setDragId(null);
-    setDragOverKey(null);
-    setDragOverTaskId(null);
-  }
+  const dragRef = useRef<DragState | null>(null);
+  const pendingFocusRef = useRef<UUID | null>(null);
 
-  function onDragOver(e: DragEvent, key: string, beforeTaskId?: string | null) {
-    if (!canWrite) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    if (dragOverKey !== key) setDragOverKey(key);
-    setDragOverTaskId(beforeTaskId ?? null);
-  }
+  const resolveTarget = useCallback((x: number, y: number, taskId: UUID): DropTarget | null => {
+    for (const [key, el] of zonesRef.current) {
+      const rect = el.getBoundingClientRect();
+      if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
+      if (key === TRAY_KEY) return { type: 'unscheduled' };
+      const cards = Array.from(el.querySelectorAll<HTMLElement>('[data-task-id]'));
+      for (const card of cards) {
+        if (card.dataset.taskId === taskId) continue;
+        const cardRect = card.getBoundingClientRect();
+        if (y < cardRect.top + cardRect.height / 2) {
+          return { type: 'day', date: key, beforeTaskId: card.dataset.taskId as UUID };
+        }
+      }
+      return { type: 'day', date: key, beforeTaskId: null };
+    }
+    return null;
+  }, []);
 
-  async function onDrop(e: DragEvent, target: DropTarget) {
-    if (!canWrite) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const taskId = e.dataTransfer.getData('text/plain') || dragId;
-    setDragId(null);
-    setDragOverKey(null);
-    setDragOverTaskId(null);
-    if (!taskId) return;
-
+  const commitPlan = useCallback(async (taskId: UUID, target: DropTarget) => {
     const task = data.tasks.find(t => t.id === taskId);
     if (!task) return;
-
     const plannedDate = target.type === 'day' ? target.date : null;
-    const beforeTaskId = target.type === 'day' ? target.beforeTaskId ?? null : null;
+    const beforeTaskId = target.type === 'day' ? target.beforeTaskId : null;
     if (beforeTaskId === taskId) return;
+
+    // Al op deze plek? Dan hoeft er niets naar de server.
     if ((task.planned_date ?? null) === plannedDate && !beforeTaskId) {
       const bucket = plannedDate ? byDay.get(plannedDate) : null;
-      const isAlreadyLast = bucket ? bucket.tasks[bucket.tasks.length - 1]?.id === taskId : false;
-      if (isAlreadyLast) return;
+      if (bucket && bucket.tasks[bucket.tasks.length - 1]?.id === taskId) return;
+      if (!plannedDate) return;
     }
 
     setError(null);
+    pendingFocusRef.current = taskId;
     try {
       await onPlanTask(taskId, plannedDate, beforeTaskId);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Planning bijwerken mislukt');
     }
+  }, [byDay, data.tasks, onPlanTask]);
+
+  // Zet de focus terug op de kaart die zojuist verplaatst is, zodat je met het
+  // toetsenbord door kunt werken zonder opnieuw te hoeven zoeken.
+  useEffect(() => {
+    const taskId = pendingFocusRef.current;
+    if (!taskId) return;
+    pendingFocusRef.current = null;
+    const el = document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(taskId)}"]`);
+    el?.focus({ preventScroll: false });
+  }, [data.tasks]);
+
+  const holdCancelRef = useRef<(() => void) | null>(null);
+  const cancelHold = useCallback(() => { holdCancelRef.current?.(); }, []);
+  const startHold = useCallback((x: number, y: number, arm: () => void) => {
+    cancelHold();
+    let timer = 0;
+    function detach() {
+      window.clearTimeout(timer);
+      if (holdCancelRef.current === detach) holdCancelRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', detach);
+      window.removeEventListener('pointercancel', detach);
+    }
+    function onMove(ev: PointerEvent) {
+      if (Math.hypot(ev.clientX - x, ev.clientY - y) > TOUCH_HOLD_TOLERANCE_PX) detach();
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', detach);
+    window.addEventListener('pointercancel', detach);
+    timer = window.setTimeout(() => { detach(); hapticTick(); arm(); }, TOUCH_HOLD_MS);
+    holdCancelRef.current = detach;
+  }, [cancelHold]);
+  useEffect(() => cancelHold, [cancelHold]);
+
+  const armDrag = useCallback((taskId: UUID, x: number, y: number, touch: boolean, width: number) => {
+    const next: DragState = {
+      taskId, touch, origin: { x, y }, pointer: { x, y }, width,
+      moved: touch, // een lange druk ís al een sleepgebaar
+      target: null,
+    };
+    dragRef.current = next;
+    setDrag(next);
+  }, []);
+
+  function beginCardPointer(e: React.PointerEvent, task: Task) {
+    if (!canWrite) return;
+    const el = e.currentTarget as HTMLElement;
+    const width = el.getBoundingClientRect().width;
+    const startX = e.clientX;
+    const startY = e.clientY;
+
+    if (e.pointerType === 'mouse') {
+      if (e.button !== 0) return;
+      armDrag(task.id, startX, startY, false, width);
+      return;
+    }
+
+    // Touch/pen: tik opent de taak, lange druk begint het slepen.
+    let isTap = true;
+    function cleanup() {
+      window.removeEventListener('pointermove', onTapMove);
+      window.removeEventListener('pointerup', onTapUp);
+      window.removeEventListener('pointercancel', cleanup);
+    }
+    function onTapMove(ev: PointerEvent) {
+      if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > TOUCH_HOLD_TOLERANCE_PX) { isTap = false; cleanup(); }
+    }
+    function onTapUp() {
+      cleanup();
+      if (isTap && !dragRef.current) onEditTask(task);
+    }
+    window.addEventListener('pointermove', onTapMove);
+    window.addEventListener('pointerup', onTapUp);
+    window.addEventListener('pointercancel', cleanup);
+    startHold(startX, startY, () => { isTap = false; cleanup(); armDrag(task.id, startX, startY, true, width); });
+  }
+
+  const isDragging = drag !== null;
+  useEffect(() => {
+    if (!isDragging) return;
+
+    function onMove(e: PointerEvent) {
+      const state = dragRef.current;
+      if (!state) return;
+      const moved = state.moved || Math.hypot(e.clientX - state.origin.x, e.clientY - state.origin.y) > MOUSE_DRAG_THRESHOLD_PX;
+      const target = moved ? resolveTarget(e.clientX, e.clientY, state.taskId) : null;
+      const next: DragState = { ...state, pointer: { x: e.clientX, y: e.clientY }, moved, target };
+      dragRef.current = next;
+      setDrag(next);
+    }
+
+    function onUp() {
+      const state = dragRef.current;
+      dragRef.current = null;
+      setDrag(null);
+      if (!state) return;
+      // Muisklik zonder beweging opent gewoon de taak.
+      if (!state.moved) {
+        const task = data.tasks.find(t => t.id === state.taskId);
+        if (task) onEditTask(task);
+        return;
+      }
+      if (state.target) void commitPlan(state.taskId, state.target);
+    }
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [isDragging, commitPlan, data.tasks, onEditTask, resolveTarget]);
+
+  // Zolang een vinger sleept mag de pagina niet meescrollen — anders schuift het
+  // rooster onder je vinger vandaan.
+  const blockPageScroll = drag?.touch === true && drag.moved;
+  useEffect(() => {
+    if (!blockPageScroll) return;
+    const block = (e: TouchEvent) => { if (e.cancelable) e.preventDefault(); };
+    window.addEventListener('touchmove', block, { passive: false });
+    return () => window.removeEventListener('touchmove', block);
+  }, [blockPageScroll]);
+
+  // ── Toetsenbord ───────────────────────────────────────────────────────
+  function handleCardKey(e: React.KeyboardEvent, task: Task) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onEditTask(task); return; }
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      const card = e.currentTarget as HTMLElement;
+      const siblings = Array.from(card.parentElement?.querySelectorAll<HTMLElement>('[data-task-id]') ?? []);
+      const index = siblings.indexOf(card);
+      const next = siblings[index + (e.key === 'ArrowDown' ? 1 : -1)];
+      if (next) { e.preventDefault(); next.focus(); }
+      return;
+    }
+
+    if (!canWrite) return;
+    if (e.key >= '1' && e.key <= '7') {
+      e.preventDefault();
+      const day = days[Number(e.key) - 1];
+      void commitPlan(task.id, { type: 'day', date: formatISODate(day), beforeTaskId: null });
+      return;
+    }
+    if (e.key === '0') {
+      e.preventDefault();
+      void commitPlan(task.id, { type: 'unscheduled' });
+    }
+  }
+
+  function handleRootKey(e: React.KeyboardEvent) {
+    const target = e.target as HTMLElement;
+    if (target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (e.key === 'ArrowLeft' && e.shiftKey) { e.preventDefault(); setAnchor(prev => addDays(prev, -7)); }
+    else if (e.key === 'ArrowRight' && e.shiftKey) { e.preventDefault(); setAnchor(prev => addDays(prev, 7)); }
+    else if (e.key === 't' || e.key === 'T') { e.preventDefault(); setAnchor(startOfWeek(new Date())); }
   }
 
   async function quickAdd(dateKey: string, title: string): Promise<boolean> {
@@ -249,7 +490,12 @@ export function WeekPlanner({
     };
   };
 
-  const taskCard = (task: Task, options: { plannedDate?: string | null; showPlannedDate?: boolean } = {}) => (
+  const insertMarkerFor = (dateKey: string): string | null => {
+    if (!drag?.moved || !drag.target || drag.target.type !== 'day' || drag.target.date !== dateKey) return null;
+    return drag.target.beforeTaskId ?? '__end__';
+  };
+
+  const taskCard = (task: Task, options: { showPlannedDate?: boolean; insertBefore?: string | null } = {}) => (
     <TaskCard
       key={task.id}
       task={task}
@@ -257,36 +503,47 @@ export function WeekPlanner({
       assigneeIds={assigneesByTask.get(task.id) ?? []}
       teamMembers={teamMembers}
       currentUserId={currentUserId}
-      isDragging={dragId === task.id}
-      isInsertTarget={dragOverTaskId === task.id}
+      density={density}
+      isDragging={drag?.taskId === task.id && drag.moved}
+      isInsertTarget={options.insertBefore === task.id}
       canWrite={canWrite}
       showPlannedDate={options.showPlannedDate}
-      onDragStart={(event) => onDragStart(event, task.id)}
-      onDragEnd={onDragEnd}
-      onDragOver={options.plannedDate ? (event) => onDragOver(event, options.plannedDate!, task.id) : undefined}
-      onDrop={options.plannedDate ? (event) => onDrop(event, { type: 'day', date: options.plannedDate!, beforeTaskId: task.id }) : undefined}
-      onClick={() => onEditTask(task)}
+      onPointerDown={(event) => beginCardPointer(event, task)}
+      onKeyDown={(event) => handleCardKey(event, task)}
+      onOpen={() => onEditTask(task)}
     />
   );
 
-  return <div className="week-planner">
+  const draggedTask = drag ? data.tasks.find(t => t.id === drag.taskId) ?? null : null;
+
+  return <div className={`week-planner density-${density}`} onKeyDown={handleRootKey}>
     <div className="wp-toolbar">
-      <Button onClick={() => setAnchor(prev => addDays(prev, -7))} title="Vorige week"><ChevronLeft size={14}/> Vorige</Button>
-      <Button onClick={() => setAnchor(startOfWeek(new Date()))}>Vandaag</Button>
-      <Button onClick={() => setAnchor(prev => addDays(prev, 7))} title="Volgende week">Volgende <ChevronRight size={14}/></Button>
+      <Button onClick={() => setAnchor(prev => addDays(prev, -7))} title="Vorige week (shift + pijl links)"><ChevronLeft size={14}/> Vorige</Button>
+      <Button onClick={() => setAnchor(startOfWeek(new Date()))} title="Deze week (T)">Vandaag</Button>
+      <Button onClick={() => setAnchor(prev => addDays(prev, 7))} title="Volgende week (shift + pijl rechts)">Volgende <ChevronRight size={14}/></Button>
+
+      <div className="wp-seg" role="group" aria-label="Wiens taken">
+        <button type="button" className={scope === 'mine' ? 'is-on' : ''} aria-pressed={scope === 'mine'} onClick={() => setScope('mine')}>Mijn week</button>
+        <button type="button" className={scope === 'team' ? 'is-on' : ''} aria-pressed={scope === 'team'} onClick={() => setScope('team')}>Team</button>
+      </div>
+      <div className="wp-seg" role="group" aria-label="Hoeveel detail per kaart">
+        <button type="button" className={density === 'compact' ? 'is-on' : ''} aria-pressed={density === 'compact'} onClick={() => setDensity('compact')}>Compact</button>
+        <button type="button" className={density === 'comfortable' ? 'is-on' : ''} aria-pressed={density === 'comfortable'} onClick={() => setDensity('comfortable')}>Ruim</button>
+      </div>
+
       <div className="wp-week-label">{weekLabel}</div>
     </div>
 
-    <section className="wp-summary" aria-label="Weekcapaciteit">
+    <section className="wp-summary" aria-label="Deze week in uren">
       <div className="wp-summary-main">
-        <span>Weekcapaciteit</span>
-        <strong>{weekBucket.count} taken · {formatDuration(weekBucket.minutes)} gepland</strong>
+        <span>Deze week</span>
+        <strong>{weekBucket.count} {weekBucket.count === 1 ? 'taak' : 'taken'} · {formatDuration(weekBucket.minutes)} ingepland</strong>
       </div>
       <div className="wp-summary-meta">
-        <span>Richtlijn: {formatDuration(totalCapacity)}</span>
-        <span>{totalCapacity > 0 ? `${Math.round((weekBucket.minutes / totalCapacity) * 100)}% bezet` : 'Geen capaciteit ingesteld'}</span>
-        <span>{unscheduled.length} niet ingepland</span>
+        <span>{busiestKey ? `Volst: ${formatDayShort(busiestKey)} · ${formatDuration(busiestMinutes)}` : 'Nog niets ingepland'}</span>
+        <span>{unscheduled.length} in de lade</span>
         <span>{outsideThisWeek.length} buiten deze week</span>
+        <span>{scope === 'mine' ? 'Alleen mijn taken' : 'Alle taken van het team'}</span>
       </div>
     </section>
 
@@ -314,7 +571,8 @@ export function WeekPlanner({
       </Select>
     </section>
 
-    {!canWrite && <div className="readonly-note">Je hebt alleen-lezen toegang. Taken openen kan, maar slepen/plannen is uitgeschakeld.</div>}
+    {!canWrite && <div className="readonly-note">Je hebt alleen-lezen toegang. Taken openen kan, maar slepen en plannen is uitgeschakeld.</div>}
+    {canWrite && <p className="wp-keyhint">Sleep een kaart, of selecteer er een en druk <kbd>1</kbd>–<kbd>7</kbd> voor een weekdag, <kbd>0</kbd> voor de lade. Op touch: even vasthouden en dan slepen.</p>}
     {error && <div className="error">{error}</div>}
 
     <div className="wp-grid">
@@ -322,43 +580,43 @@ export function WeekPlanner({
         const key = formatISODate(day);
         const bucket = byDay.get(key) ?? { tasks: [], count: 0, minutes: 0 };
         const isToday = isSameDay(day, todayLocal);
-        const isDropTarget = dragOverKey === key && !dragOverTaskId;
-        const capacity = dayCapacityMinutes(day);
+        const marker = insertMarkerFor(key);
+        const loadFraction = busiestMinutes > 0 ? bucket.minutes / busiestMinutes : 0;
         return <div
           key={key}
-          className={`wp-day ${isToday ? 'is-today' : ''} ${isDropTarget ? 'is-drop' : ''} ${capacity > 0 && bucket.minutes > capacity ? 'is-over-capacity' : ''}`}
-          onDragOver={(e) => onDragOver(e, key, null)}
-          onDragLeave={() => { if (dragOverKey === key) { setDragOverKey(null); setDragOverTaskId(null); } }}
-          onDrop={(e) => onDrop(e, { type: 'day', date: key })}
+          className={`wp-day ${isToday ? 'is-today' : ''} ${marker !== null ? 'is-drop' : ''} ${key === busiestKey ? 'is-peak' : ''}`}
         >
           <div className="wp-day-head">
-            <span className="wp-day-name">{DAY_NAMES_NL[i]}</span>
-            <span className="wp-day-num">{day.getDate()}</span>
-            <span className="wp-day-count">{bucket.count} · {formatDuration(bucket.minutes)}</span>
-            {canWrite && <button
-              type="button"
-              className="wp-day-add"
-              onClick={() => setQuickAddDay(prev => prev === key ? null : key)}
-              aria-expanded={quickAddDay === key}
-              aria-label={`Taak toevoegen op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
-              title={`Taak toevoegen op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
-            >
-              <Plus size={13}/>
-            </button>}
+            <div className="wp-day-row">
+              <span className="wp-day-name">{DAY_NAMES_NL[i]}</span>
+              <span className="wp-day-num">{day.getDate()}</span>
+              <span className={`wp-day-total ${bucket.minutes === 0 ? 'is-empty' : ''} ${key === busiestKey ? 'is-peak' : ''}`}>
+                {bucket.minutes === 0 ? '—' : formatDuration(bucket.minutes)}
+              </span>
+              {canWrite && <button
+                type="button"
+                className="wp-day-add"
+                onClick={() => setQuickAddDay(prev => prev === key ? null : key)}
+                aria-expanded={quickAddDay === key}
+                aria-label={`Taak toevoegen op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
+                title={`Taak toevoegen op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
+              >
+                <Plus size={13}/>
+              </button>}
+            </div>
+            <div className="wp-day-load" aria-hidden="true">
+              <span className="wp-day-load-fill" style={{ transform: `scaleX(${loadFraction.toFixed(4)})` }}/>
+            </div>
           </div>
-          <div className="wp-day-capacity">
-            <span>{capacity ? `${Math.round((bucket.minutes / capacity) * 100)}% van dag` : 'Weekend'}</span>
-            <span>{bucket.count === 1 ? '1 taak' : `${bucket.count} taken`}</span>
-          </div>
-          <div className="wp-day-body">
+          <div className="wp-day-body" ref={el => registerZone(key, el)}>
             {quickAddDay === key && <QuickAddTask
               busy={quickAddBusy}
               onSubmit={title => quickAdd(key, title)}
               onCancel={() => setQuickAddDay(null)}
             />}
-            {bucket.tasks.map(task => taskCard(task, { plannedDate: key }))}
+            {bucket.tasks.map(task => taskCard(task, { insertBefore: marker }))}
+            {marker === '__end__' && <div className="wp-insert-line" aria-hidden="true"/>}
             {bucket.tasks.length === 0 && quickAddDay !== key && <div className="wp-day-empty">Sleep een taak hierheen of gebruik <strong>+</strong></div>}
-            {bucket.tasks.length > 0 && <div className="wp-drop-to-bottom">Sleep hierheen voor onderaan</div>}
           </div>
         </div>;
       })}
@@ -366,11 +624,9 @@ export function WeekPlanner({
 
     <div className="wp-bottom-row">
       <PlannerSection
-        title={`Niet ingepland (${unscheduled.length})`}
-        className={`wp-unscheduled ${dragOverKey === '__unscheduled__' ? 'is-drop' : ''}`}
-        onDragOver={(e) => onDragOver(e, '__unscheduled__')}
-        onDragLeave={() => dragOverKey === '__unscheduled__' && setDragOverKey(null)}
-        onDrop={(e) => onDrop(e, { type: 'unscheduled' })}
+        title={`Lade — nog geen dag (${unscheduled.length})`}
+        className={`wp-unscheduled ${drag?.moved && drag.target?.type === 'unscheduled' ? 'is-drop' : ''}`}
+        bodyRef={el => registerZone(TRAY_KEY, el)}
       >
         {unscheduled.map(task => taskCard(task))}
         {unscheduled.length === 0 && <div className="wp-day-empty">Geen taken zonder planning binnen deze filterselectie</div>}
@@ -383,6 +639,15 @@ export function WeekPlanner({
 
       <WeekChecklist weekKey={formatISODate(anchor)} />
     </div>
+
+    {drag?.moved && draggedTask && <div
+      className="wp-ghost"
+      style={{ left: drag.pointer.x, top: drag.pointer.y, width: drag.width }}
+      aria-hidden="true"
+    >
+      <span className="wp-ghost-dot" style={{ background: taskLinks(draggedTask).color }}/>
+      <span className="wp-ghost-title">{draggedTask.title}</span>
+    </div>}
   </div>;
 }
 
@@ -394,15 +659,14 @@ function TaskCard({
   assigneeIds,
   teamMembers,
   currentUserId,
+  density,
   isDragging,
   isInsertTarget,
   canWrite,
   showPlannedDate,
-  onDragStart,
-  onDragEnd,
-  onDragOver,
-  onDrop,
-  onClick,
+  onPointerDown,
+  onKeyDown,
+  onOpen,
 }: {
   task: Task;
   projectName: string | null;
@@ -411,42 +675,47 @@ function TaskCard({
   assigneeIds: string[];
   teamMembers: OrganizationMember[];
   currentUserId: string | null;
+  density: Density;
   isDragging: boolean;
   isInsertTarget: boolean;
   canWrite: boolean;
   showPlannedDate?: boolean;
-  onDragStart: (event: DragEvent) => void;
-  onDragEnd: () => void;
-  onDragOver?: (event: DragEvent) => void;
-  onDrop?: (event: DragEvent) => void;
-  onClick: () => void;
+  onPointerDown: (event: React.PointerEvent) => void;
+  onKeyDown: (event: React.KeyboardEvent) => void;
+  onOpen: () => void;
 }) {
+  const plannedAfterDeadline = !!task.end_date && !!task.planned_date && task.planned_date > task.end_date;
   return <article
     className={`wp-task ${isDragging ? 'is-dragging' : ''} ${isInsertTarget ? 'is-insert-target' : ''}`}
-    draggable={canWrite}
-    onDragStart={onDragStart}
-    onDragEnd={onDragEnd}
-    onDragOver={onDragOver}
-    onDrop={onDrop}
-    onClick={onClick}
+    data-task-id={task.id}
+    tabIndex={0}
+    role="button"
+    aria-label={`${task.title}${projectName ? `, project ${projectName}` : ''}`}
+    onPointerDown={onPointerDown}
+    onKeyDown={onKeyDown}
+    // Alleen-lezen kent geen sleepgebaar, dus daar opent een gewone klik de taak.
+    onClick={canWrite ? undefined : onOpen}
   >
     <span className="wp-task-dot" style={{ background: color }}/>
     <div className="wp-task-body">
       <div className="wp-task-title">{task.title}</div>
-      <div className="wp-task-meta">
-        <span className={`wp-task-project${projectName ? '' : ' is-unlinked'}`}>{projectName ?? 'Geen project'}</span>
+      <div className="wp-task-sub">
+        <span className={projectName ? '' : 'is-unlinked'}>{projectName ?? 'Geen project'}</span>
         {clientName && <span className="wp-task-client">{clientName}</span>}
+      </div>
+      {density === 'comfortable' && <div className="wp-task-meta">
         <span className={`pri-badge pri-${task.priority}`}>{priorityLabel(task.priority)}</span>
         <span className={`wp-task-status status-${task.status}`}>{statusLabel(task.status)}</span>
         <span className="wp-task-counts">☑ {task.subtasks?.filter(s => s.done).length ?? 0}/{task.subtasks?.length ?? 0} · 💬 {task.comments?.length ?? 0}</span>
-      </div>
-      <div className="wp-task-planning-meta">
-        <span>{formatDuration(taskEstimateMinutes(task))}</span>
-        {task.end_date && <span>Deadline {formatDateShort(task.end_date)}</span>}
+      </div>}
+      {(plannedAfterDeadline || showPlannedDate || density === 'comfortable') && <div className="wp-task-planning-meta">
+        {plannedAfterDeadline && <span className="wp-flag-clash">Gepland ná deadline {formatDateShort(task.end_date!)}</span>}
+        {density === 'comfortable' && task.end_date && !plannedAfterDeadline && <span>Deadline {formatDateShort(task.end_date)}</span>}
         {showPlannedDate && task.planned_date && <span>Gepland {formatDateShort(task.planned_date)}</span>}
-        <AssigneeAvatars userIds={assigneeIds} teamMembers={teamMembers} currentUserId={currentUserId} max={4} />
-      </div>
+        {density === 'comfortable' && <AssigneeAvatars userIds={assigneeIds} teamMembers={teamMembers} currentUserId={currentUserId} max={4} />}
+      </div>}
     </div>
+    <span className="wp-task-est">{formatDuration(taskEstimateMinutes(task))}</span>
   </article>;
 }
 
@@ -488,18 +757,16 @@ function QuickAddTask({ busy, onSubmit, onCancel }: {
   </div>;
 }
 
-function PlannerSection({ title, mutedText, className, children, onDragOver, onDragLeave, onDrop }: {
+function PlannerSection({ title, mutedText, className, children, bodyRef }: {
   title: string;
   mutedText?: string;
   className?: string;
   children: React.ReactNode;
-  onDragOver?: (event: DragEvent<HTMLDivElement>) => void;
-  onDragLeave?: (event: DragEvent<HTMLDivElement>) => void;
-  onDrop?: (event: DragEvent<HTMLDivElement>) => void;
+  bodyRef?: (el: HTMLDivElement | null) => void;
 }) {
-  return <section className={className ?? 'wp-unscheduled'} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+  return <section className={className ?? 'wp-unscheduled'}>
     <div className="wp-unscheduled-head">{title}{mutedText && <span className="wp-outside"> · {mutedText}</span>}</div>
-    <div className="wp-unscheduled-body">{children}</div>
+    <div className="wp-unscheduled-body" ref={bodyRef}>{children}</div>
   </section>;
 }
 
@@ -618,22 +885,10 @@ function taskEstimateMinutes(task: Task): number {
   return Math.max(0, Math.min(24 * 60, Math.round(raw)));
 }
 
-function dayCapacityMinutes(day: Date): number {
-  const dayNumber = day.getDay();
-  return dayNumber === 0 || dayNumber === 6 ? WEEKEND_CAPACITY_MINUTES : WEEKDAY_CAPACITY_MINUTES;
-}
-
-function sortPlannedTasks(a: Task, b: Task): number {
-  const orderA = Number.isFinite(Number(a.planned_order)) ? Number(a.planned_order) : Number.MAX_SAFE_INTEGER;
-  const orderB = Number.isFinite(Number(b.planned_order)) ? Number(b.planned_order) : Number.MAX_SAFE_INTEGER;
-  if (orderA !== orderB) return orderA - orderB;
-  return sortLooseTasks(a, b);
-}
-
 function sortOutsideTasks(a: Task, b: Task): number {
   const dateCompare = String(a.planned_date ?? '').localeCompare(String(b.planned_date ?? ''));
   if (dateCompare !== 0) return dateCompare;
-  return sortPlannedTasks(a, b);
+  return comparePlannedTasks(a, b);
 }
 
 function sortLooseTasks(a: Task, b: Task): number {
@@ -658,4 +913,8 @@ function formatDuration(minutes: number): string {
 
 function formatDateShort(date: string): string {
   return parseISODate(date).toLocaleDateString('nl-NL', { day: '2-digit', month: 'short' });
+}
+
+function formatDayShort(dateKey: string): string {
+  return parseISODate(dateKey).toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric' });
 }

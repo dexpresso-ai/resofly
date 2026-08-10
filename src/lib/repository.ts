@@ -2615,6 +2615,24 @@ export async function updateRow<T>(table: Table, id: UUID, values: Record<string
   return data as T;
 }
 
+/**
+ * Leest de taken van een handvol plandagen terug. `reorder_task_planning`
+ * hernummert naast de versleepte taak ook de bron- en doeldag, en dit is het
+ * goedkoopste manier om die waarheid op te halen: één query op hooguit twee
+ * datums, in plaats van de hele werkruimte opnieuw laden.
+ */
+export async function fetchTasksForPlannedDates(organizationId: UUID, dates: string[]): Promise<Task[]> {
+  const unique = [...new Set(dates.filter(Boolean))];
+  if (unique.length === 0) return [];
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .in('planned_date', unique);
+  if (error) throw error;
+  return (data ?? []) as Task[];
+}
+
 export async function planTaskInWeek(organizationId: UUID, taskId: UUID, plannedDate: string | null, beforeTaskId?: UUID | null): Promise<Task> {
   const { data, error } = await supabase.rpc('reorder_task_planning', {
     p_organization_id: organizationId,

@@ -39,6 +39,7 @@ import {
   loadOrganizationContext,
   previewNextClientCode,
   planTaskInWeek,
+  fetchTasksForPlannedDates,
   revokeOrganizationInvitation,
   submitQuoteForInternalApproval,
   approveQuoteInternal,
@@ -115,6 +116,7 @@ import type { ReportDefinition } from './lib/reporting';
 import { CalendarPage } from './features/CalendarPage';
 import { MeetingBookingManager } from './features/MeetingBookingManager';
 import { WeekPlanner, addWeekChecklistItem } from './features/WeekPlanner';
+import { applyPlanningLocally, mergeTaskRows } from './lib/planning';
 import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat } from './components/GerrieChat';
 import { GerrieCommandCenter } from './features/GerrieCommandCenter';
@@ -1120,11 +1122,33 @@ function App() {
     catch (e) { setError(e instanceof Error ? e.message : 'Status bijwerken mislukt'); }
   }
 
+  /**
+   * Verplaatst een taak in de weekplanner. De kaart staat meteen op zijn nieuwe
+   * plek (dezelfde hernummering als de database zou doen), daarna bevestigt de
+   * RPC en lezen we alleen de geraakte plandagen terug. Een volledige refresh
+   * zou bij elke sleepbeweging de hele werkruimte opnieuw ophalen.
+   */
   async function updateTaskPlanning(taskId: string, plannedDate: string | null, beforeTaskId?: string | null) {
     if (!ensureCanWrite()) return;
     setError(null);
-    await planTaskInWeek(activeOrg.id, taskId, plannedDate, beforeTaskId ?? null);
-    await refresh();
+    const previousTasks = data.tasks;
+    const moving = previousTasks.find(task => task.id === taskId);
+    if (!moving) return;
+    const fromDate = moving.planned_date ?? null;
+
+    setData(prev => ({ ...prev, tasks: applyPlanningLocally(prev.tasks, taskId, plannedDate, beforeTaskId ?? null) }));
+    try {
+      const moved = await planTaskInWeek(activeOrg.id, taskId, plannedDate, beforeTaskId ?? null);
+      const affected = await fetchTasksForPlannedDates(
+        activeOrg.id,
+        [fromDate, plannedDate].filter((date): date is string => !!date),
+      );
+      setData(prev => ({ ...prev, tasks: mergeTaskRows(prev.tasks, [moved, ...affected]) }));
+    } catch (e) {
+      // Terug naar de stand van vóór het slepen; de planner toont de melding.
+      setData(prev => ({ ...prev, tasks: previousTasks }));
+      throw e;
+    }
   }
 
   /** Snel een losse taak op een dag zetten vanuit de weekplanner. Project en klant
@@ -1132,8 +1156,8 @@ function App() {
   async function quickAddTask(plannedDate: string, title: string) {
     if (!ensureCanWrite()) return;
     setError(null);
-    await insertRow<Task>('tasks', activeOrg.id, { title, planned_date: plannedDate });
-    await refresh();
+    const created = await insertRow<Task>('tasks', activeOrg.id, { title, planned_date: plannedDate });
+    setData(prev => ({ ...prev, tasks: mergeTaskRows(prev.tasks, [created]) }));
   }
 
   async function convert(ticket: Ticket) {
