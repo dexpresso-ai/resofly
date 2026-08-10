@@ -1,4 +1,4 @@
-import type { Task, UUID } from '../types';
+import type { CalendarExternalEvent, Task, UUID } from '../types';
 
 /** Een taak die over meerdere dagen loopt, uitgerekend voor de zichtbare week. */
 export type WeekBar = {
@@ -179,6 +179,48 @@ export function layoutWeekBars(dayKeys: string[], tasks: Task[]): { bars: WeekBa
   }
 
   return { bars, laneCount: laneEnds.length };
+}
+
+export type DayAgenda = { minutes: number; items: CalendarExternalEvent[] };
+
+/**
+ * Wat staat er per dag in de agenda, en hoeveel tijd kost dat? Een afspraak die
+ * over middernacht loopt wordt per kalenderdag geknipt, zodat elke dag alleen
+ * zijn eigen minuten telt.
+ *
+ * Hele-dag-items tellen géén uren: ze claimen geen blok in je dag. Ze zouden
+ * anders in hun eentje elke dagbalk volzetten.
+ */
+export function groupEventMinutesByDay(dayKeys: string[], events: CalendarExternalEvent[]): Map<string, DayAgenda> {
+  const byDay = new Map<string, DayAgenda>();
+  for (const key of dayKeys) byDay.set(key, { minutes: 0, items: [] });
+
+  for (const event of events) {
+    if (event.all_day) continue;
+    const start = new Date(event.starts_at);
+    const end = new Date(event.ends_at);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) continue;
+
+    for (const key of dayKeys) {
+      const bucket = byDay.get(key);
+      if (!bucket) continue;
+      const [year, month, day] = key.split('-').map(Number);
+      // Lokale kalenderdag, gelijk aan hoe de gebruiker zijn agenda leest.
+      const dayStart = new Date(year, (month ?? 1) - 1, day ?? 1);
+      const dayEnd = new Date(year, (month ?? 1) - 1, (day ?? 1) + 1);
+      const overlapStart = start > dayStart ? start : dayStart;
+      const overlapEnd = end < dayEnd ? end : dayEnd;
+      const minutes = Math.round((overlapEnd.getTime() - overlapStart.getTime()) / 60000);
+      if (minutes <= 0) continue;
+      bucket.minutes += minutes;
+      bucket.items.push(event);
+    }
+  }
+
+  for (const bucket of byDay.values()) {
+    bucket.items.sort((a, b) => a.starts_at.localeCompare(b.starts_at));
+  }
+  return byDay;
 }
 
 /** Legt verse serverrijen over de lokale lijst heen; onbekende id's komen erbij. */

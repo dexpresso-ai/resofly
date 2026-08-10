@@ -356,7 +356,8 @@ const tasks = defineSource<AppData['tasks'][number]>({
     { key: 'project', label: 'Project', type: 'string', role: 'dimension', get: (r, lk) => lk.projectName(r.project_id) },
     { key: 'created', label: 'Aangemaakt', type: 'date', role: 'dimension', get: r => r.created_at },
     { key: 'deadline', label: 'Deadline', type: 'date', role: 'dimension', get: r => r.end_date ?? r.planned_date },
-    { key: 'minutes', label: 'Geschatte minuten', type: 'number', role: 'measure', get: r => r.estimated_minutes },
+    // Taken zonder schatting tellen als 0: een onbekende duur kun je niet optellen.
+    { key: 'minutes', label: 'Geschatte minuten', type: 'number', role: 'measure', get: r => r.estimated_minutes ?? 0 },
   ],
 });
 

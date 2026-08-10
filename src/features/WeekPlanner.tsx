@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
-import type { AppData, OrganizationMember, Priority, Task, TaskStatus, UUID } from '../types';
+import type { AppData, CalendarExternalEvent, OrganizationMember, PlannerNote, Priority, Task, TaskStatus, UUID } from '../types';
+import { getCachedCalendarEvents, listCalendarEventsCached } from '../lib/calendar-api';
+import { memberColor, memberInitials, memberShortName } from '../lib/members';
 import { Button, Input, Select } from '../components/Ui';
 import { AssigneeAvatars } from '../components/AssigneeAvatars';
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
-import { comparePlannedTasks, isSpanningTask, layoutWeekBars, shiftDateKey } from '../lib/planning';
+import { comparePlannedTasks, groupEventMinutesByDay, isSpanningTask, layoutWeekBars, shiftDateKey } from '../lib/planning';
 import type { WeekBar } from '../lib/planning';
 import { priorityLabel } from '../lib/format';
 
@@ -22,8 +24,15 @@ type PlannerFilters = {
 };
 
 type DropTarget =
-  | { type: 'day'; date: string; beforeTaskId: UUID | null }
+  /** `userId` is alleen gezet in de teamweergave: daar bepaalt de rij waar je
+   *  loslaat óók aan wie de taak wordt toegewezen. `null` = niemand. */
+  | { type: 'day'; date: string; beforeTaskId: UUID | null; userId?: string | null }
   | { type: 'unscheduled' };
+
+/** Sleutel voor de rij "nog aan niemand toegewezen" in de teamweergave. */
+const NO_MEMBER = '__nobody__';
+/** Scheidingsteken in een dropzone-sleutel: `<persoon>::<datum>`. */
+const ZONE_SEP = '::';
 
 /** Een lopend sleepgebaar. `moved` blijft false zolang het nog een klik kan worden. */
 type DragState = {
@@ -40,7 +49,13 @@ type PlannerBucket = {
   tasks: Task[];
   count: number;
   minutes: number;
+  /** Hoeveel taken op deze dag nog géén tijdschatting hebben. */
+  noEstimateCount: number;
+  /** Uit de agenda: hoeveel van deze dag al bezet is met afspraken. */
+  agendaMinutes: number;
 };
+
+const EMPTY_BUCKET: PlannerBucket = { tasks: [], count: 0, minutes: 0, noEstimateCount: 0, agendaMinutes: 0 };
 
 /** Een lopend gebaar op een strook: verschuiven of aan een van de randen trekken. */
 type BarDrag = {
@@ -65,7 +80,6 @@ const NO_LINK = '__none__';
 /** Sleutel van de lade in de dropzone-registratie; geen datum, dus botst nooit. */
 const TRAY_KEY = '__unscheduled__';
 
-const DEFAULT_TASK_ESTIMATE_MINUTES = 60;
 const PREFS_STORAGE_KEY = 'resofly-weekplanner-prefs';
 
 // Touch: vegen moet gewoon blijven scrollen, dus pakken we een sleep pas op nadat
@@ -102,21 +116,33 @@ function loadPrefs(): Partial<StoredPrefs> {
 
 export function WeekPlanner({
   data,
+  organizationId,
   canWrite,
   teamMembers,
   currentUserId,
   onPlanTask,
   onSetTaskPeriod,
   onQuickAddTask,
+  onCarryOver,
+  onAssignTask,
+  onAddNote,
+  onToggleNote,
+  onRemoveNote,
   onEditTask,
 }: {
   data: AppData;
+  organizationId: UUID;
   canWrite: boolean;
   teamMembers: OrganizationMember[];
   currentUserId: string | null;
   onPlanTask: (taskId: UUID, plannedDate: string | null, beforeTaskId?: UUID | null) => Promise<void>;
   onSetTaskPeriod: (taskId: UUID, plannedDate: string, plannedEndDate: string | null) => Promise<void>;
   onQuickAddTask: (plannedDate: string, title: string, plannedEndDate?: string | null) => Promise<void>;
+  onCarryOver: (taskIds: UUID[], toDate: string) => Promise<void>;
+  onAssignTask: (taskId: UUID, userId: string | null) => Promise<void>;
+  onAddNote: (weekStart: string, text: string) => Promise<void>;
+  onToggleNote: (id: UUID, done: boolean) => Promise<void>;
+  onRemoveNote: (id: UUID) => Promise<void>;
   onEditTask: (task: Task) => void;
 }) {
   const storedPrefs = useRef(loadPrefs()).current;
@@ -152,6 +178,29 @@ export function WeekPlanner({
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(anchor, i)), [anchor]);
   const weekEnd = days[6];
   const dayKeys = useMemo(() => new Set(days.map(formatISODate)), [days]);
+
+  // ── Agenda-afspraken van de zichtbare week ────────────────────────────
+  // De planner rekende met acht lege uren per dag; de agenda wist hij niets van.
+  // Nu telt de balk eerst je afspraken en dan pas je taken.
+  const windowStart = useMemo(() => new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate()).toISOString(), [anchor]);
+  const windowEnd = useMemo(() => addDays(weekEnd, 1).toISOString(), [weekEnd]);
+  const [events, setEvents] = useState<CalendarExternalEvent[]>(
+    () => getCachedCalendarEvents(organizationId, windowStart, windowEnd) ?? [],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    // Meteen tonen wat al in de cache zit, zodat bladeren niet flikkert.
+    setEvents(getCachedCalendarEvents(organizationId, windowStart, windowEnd) ?? []);
+    listCalendarEventsCached(organizationId, windowStart, windowEnd)
+      .then(fetched => { if (!cancelled) setEvents(fetched); })
+      // Geen agenda gekoppeld of even niet bereikbaar: de planner werkt dan
+      // gewoon door met alleen de taken. Dit mag de pagina nooit blokkeren.
+      .catch(() => { if (!cancelled) setEvents([]); });
+    return () => { cancelled = true; };
+  }, [organizationId, windowStart, windowEnd]);
+
+  const agendaByDay = useMemo(() => groupEventMinutesByDay(days.map(formatISODate), events), [events, days]);
 
   const projectsById = useMemo(() => new Map(data.projects.map(project => [project.id, project])), [data.projects]);
   const clientsById = useMemo(() => new Map(data.clients.map(client => [client.id, client])), [data.clients]);
@@ -213,7 +262,7 @@ export function WeekPlanner({
     const orderedKeys = days.map(formatISODate);
     const firstKey = orderedKeys[0];
     const lastKey = orderedKeys[orderedKeys.length - 1];
-    for (const key of orderedKeys) byDay.set(key, { tasks: [], count: 0, minutes: 0 });
+    for (const key of orderedKeys) byDay.set(key, { ...EMPTY_BUCKET, tasks: [] });
 
     for (const task of filteredTasks) {
       const plannedDate = task.planned_date ?? null;
@@ -236,38 +285,117 @@ export function WeekPlanner({
       }
     }
 
-    for (const bucket of byDay.values()) {
+    for (const [key, bucket] of byDay) {
       bucket.tasks.sort(comparePlannedTasks);
       bucket.count = bucket.tasks.length;
       bucket.minutes = bucket.tasks.reduce((sum, task) => sum + taskEstimateMinutes(task), 0);
+      bucket.noEstimateCount = bucket.tasks.filter(task => !hasEstimate(task)).length;
+      bucket.agendaMinutes = agendaByDay.get(key)?.minutes ?? 0;
     }
 
     unscheduled.sort(sortLooseTasks);
     outsideThisWeek.sort(sortOutsideTasks);
 
     const weekTasks = Array.from(byDay.values()).flatMap(bucket => bucket.tasks);
-    const weekBucket = {
+    const weekBucket: PlannerBucket = {
       tasks: weekTasks,
       count: weekTasks.length,
       minutes: weekTasks.reduce((sum, task) => sum + taskEstimateMinutes(task), 0),
+      noEstimateCount: [...weekTasks, ...spanningTasks].filter(task => !hasEstimate(task)).length,
+      agendaMinutes: Array.from(byDay.values()).reduce((sum, bucket) => sum + bucket.agendaMinutes, 0),
     };
     // De balk per dag wordt geschaald op de volste dag van deze week: geen norm,
     // alleen de onderlinge verhouding. Weekstroken tellen niet mee — hun uren
     // horen bij geen enkele dag in het bijzonder.
-    const busiestMinutes = Math.max(0, ...Array.from(byDay.values()).map(bucket => bucket.minutes));
+    const busiestMinutes = Math.max(0, ...Array.from(byDay.values()).map(bucket => bucket.minutes + bucket.agendaMinutes));
 
     return { byDay, unscheduled, outsideThisWeek, weekBucket, busiestMinutes, spanningTasks };
-  }, [dayKeys, days, filteredTasks]);
+  }, [agendaByDay, dayKeys, days, filteredTasks]);
 
   const todayLocal = new Date();
   const weekLabel = `Week ${isoWeekNumber(anchor)} · ${anchor.toLocaleDateString('nl-NL', { day: '2-digit', month: 'short' })} – ${weekEnd.toLocaleDateString('nl-NL', { day: '2-digit', month: 'short', year: 'numeric' })}`;
   const busiestKey = useMemo(() => {
     let best: { key: string; minutes: number } | null = null;
     for (const [key, bucket] of byDay) {
-      if (bucket.minutes > 0 && (!best || bucket.minutes > best.minutes)) best = { key, minutes: bucket.minutes };
+      const total = bucket.minutes + bucket.agendaMinutes;
+      if (total > 0 && (!best || total > best.minutes)) best = { key, minutes: total };
     }
     return best?.key ?? null;
   }, [byDay]);
+
+  // ── Blijven liggen werk ───────────────────────────────────────────────
+  // Open taken met een plandatum vóór vandaag. Niet automatisch verplaatsen:
+  // dat zou de geschiedenis herschrijven. Eén klik, en jij beslist.
+  const todayKey = formatISODate(todayLocal);
+  const overdueTasks = useMemo(() => filteredTasks.filter(task =>
+    task.status !== 'done'
+    && !!task.planned_date
+    && task.planned_date < todayKey
+    && !isSpanningTask(task)), [filteredTasks, todayKey]);
+  const [carryOverBusy, setCarryOverBusy] = useState(false);
+  const [carryOverDismissed, setCarryOverDismissed] = useState(false);
+
+  /** Taken met een deadline ín deze week — die verdienen een eigen tabblad in de lade. */
+  const deadlineThisWeek = useMemo(() => {
+    const first = formatISODate(days[0]);
+    const last = formatISODate(days[6]);
+    return filteredTasks
+      .filter(task => task.status !== 'done' && !!task.end_date && task.end_date >= first && task.end_date <= last)
+      .sort((a, b) => String(a.end_date).localeCompare(String(b.end_date)) || sortLooseTasks(a, b));
+  }, [days, filteredTasks]);
+
+  /** Actiepunten van de zichtbare week (persoonlijk, uit de database). */
+  const weekNotes = useMemo(() => {
+    const weekStart = formatISODate(anchor);
+    return data.plannerNotes
+      .filter(note => note.week_start === weekStart)
+      .sort((a, b) => (a.position - b.position) || a.created_at.localeCompare(b.created_at));
+  }, [anchor, data.plannerNotes]);
+
+  /** Eén rij per persoon in de teamweergave, plus een rij voor werk dat nog aan
+   *  niemand hangt. Een taak met meerdere toegewezenen staat in elke rij. */
+  const teamRows = useMemo(() => {
+    if (scope !== 'team') return [];
+    type Row = { key: string; name: string; color: string; initials: string; byDay: Map<string, Task[]>; total: number };
+    const rows = new Map<string, Row>();
+
+    const ensure = (key: string): Row => {
+      let row = rows.get(key);
+      if (!row) {
+        const isNobody = key === NO_MEMBER;
+        row = {
+          key,
+          name: isNobody ? 'Nog niet toegewezen' : memberShortName(key, teamMembers, currentUserId),
+          color: isNobody ? 'var(--bg5)' : memberColor(key),
+          initials: isNobody ? '?' : memberInitials(key, teamMembers),
+          byDay: new Map(days.map(day => [formatISODate(day), [] as Task[]])),
+          total: 0,
+        };
+        rows.set(key, row);
+      }
+      return row;
+    };
+
+    for (const [dateKey, bucket] of byDay) {
+      for (const task of bucket.tasks) {
+        const assignees = assigneesByTask.get(task.id) ?? [];
+        for (const memberKey of assignees.length > 0 ? assignees : [NO_MEMBER]) {
+          const row = ensure(memberKey);
+          row.byDay.get(dateKey)?.push(task);
+          row.total += 1;
+        }
+      }
+    }
+
+    // Jij bovenaan, daarna op naam, en het niet-toegewezen werk onderaan.
+    return [...rows.values()].sort((a, b) => {
+      if (a.key === NO_MEMBER) return 1;
+      if (b.key === NO_MEMBER) return -1;
+      if (currentUserId && a.key === currentUserId) return -1;
+      if (currentUserId && b.key === currentUserId) return 1;
+      return a.name.localeCompare(b.name, 'nl-NL');
+    });
+  }, [assigneesByTask, byDay, currentUserId, days, scope, teamMembers]);
 
   function updateFilter<K extends keyof PlannerFilters>(key: K, value: PlannerFilters[K]) {
     setFilters(prev => {
@@ -294,15 +422,22 @@ export function WeekPlanner({
       const rect = el.getBoundingClientRect();
       if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
       if (key === TRAY_KEY) return { type: 'unscheduled' };
+      // In de teamweergave heet een zone `<persoon>::<datum>`; de rij waar je
+      // loslaat bepaalt dan óók de toewijzing.
+      const separator = key.indexOf(ZONE_SEP);
+      const date = separator >= 0 ? key.slice(separator + ZONE_SEP.length) : key;
+      const member = separator >= 0 ? key.slice(0, separator) : null;
+      const userId = member === null ? undefined : (member === NO_MEMBER ? null : member);
+
       const cards = Array.from(el.querySelectorAll<HTMLElement>('[data-task-id]'));
       for (const card of cards) {
         if (card.dataset.taskId === taskId) continue;
         const cardRect = card.getBoundingClientRect();
         if (y < cardRect.top + cardRect.height / 2) {
-          return { type: 'day', date: key, beforeTaskId: card.dataset.taskId as UUID };
+          return { type: 'day', date, beforeTaskId: card.dataset.taskId as UUID, userId };
         }
       }
-      return { type: 'day', date: key, beforeTaskId: null };
+      return { type: 'day', date, beforeTaskId: null, userId };
     }
     return null;
   }, []);
@@ -314,8 +449,15 @@ export function WeekPlanner({
     const beforeTaskId = target.type === 'day' ? target.beforeTaskId : null;
     if (beforeTaskId === taskId) return;
 
-    // Al op deze plek? Dan hoeft er niets naar de server.
-    if ((task.planned_date ?? null) === plannedDate && !beforeTaskId) {
+    // In de teamweergave: losgelaten in de rij van een ander? Dan verhuist de
+    // taak mee naar die persoon.
+    const targetUser = target.type === 'day' ? target.userId : undefined;
+    const current = assigneesByTask.get(taskId) ?? [];
+    const reassign = targetUser !== undefined
+      && !(targetUser === null ? current.length === 0 : current.length === 1 && current[0] === targetUser);
+
+    // Al op deze plek, en niemand hoeft te verhuizen? Dan hoeft er niets naar de server.
+    if (!reassign && (task.planned_date ?? null) === plannedDate && !beforeTaskId) {
       const bucket = plannedDate ? byDay.get(plannedDate) : null;
       if (bucket && bucket.tasks[bucket.tasks.length - 1]?.id === taskId) return;
       if (!plannedDate) return;
@@ -325,10 +467,11 @@ export function WeekPlanner({
     pendingFocusRef.current = taskId;
     try {
       await onPlanTask(taskId, plannedDate, beforeTaskId);
+      if (reassign) await onAssignTask(taskId, targetUser ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Planning bijwerken mislukt');
     }
-  }, [byDay, data.tasks, onPlanTask]);
+  }, [assigneesByTask, byDay, data.tasks, onAssignTask, onPlanTask]);
 
   // Zet de focus terug op de kaart die zojuist verplaatst is, zodat je met het
   // toetsenbord door kunt werken zonder opnieuw te hoeven zoeken.
@@ -647,8 +790,15 @@ export function WeekPlanner({
     };
   };
 
-  const insertMarkerFor = (dateKey: string): string | null => {
-    if (!drag?.moved || !drag.target || drag.target.type !== 'day' || drag.target.date !== dateKey) return null;
+  /**
+   * Waar komt de invoeglijn in deze zone? In de teamweergave hoort daar ook de
+   * persoon bij: dezelfde dag in de rij van een collega is een ándere zone.
+   * `memberKey` weglaten betekent "de gewone dagkolom".
+   */
+  const insertMarkerFor = (dateKey: string, memberKey?: string | null): string | null => {
+    if (!drag?.moved || !drag.target || drag.target.type !== 'day') return null;
+    if (drag.target.date !== dateKey) return null;
+    if (memberKey !== undefined && drag.target.userId !== memberKey) return null;
     return drag.target.beforeTaskId ?? '__end__';
   };
 
@@ -735,6 +885,30 @@ export function WeekPlanner({
     {canWrite && <p className="wp-keyhint">Sleep een kaart, of selecteer er een en druk <kbd>1</kbd>–<kbd>7</kbd> voor een weekdag, <kbd>0</kbd> voor de lade. Op een weekstrook verschuiven <kbd>←</kbd> <kbd>→</kbd> de hele periode en verzet <kbd>shift</kbd> + pijl alleen het einde. Op touch: even vasthouden en dan slepen.</p>}
     {error && <div className="error">{error}</div>}
 
+    {canWrite && overdueTasks.length > 0 && !carryOverDismissed && <div className="wp-rollover">
+      <strong>{overdueTasks.length === 1 ? '1 taak' : `${overdueTasks.length} taken`} van eerder staan nog open.</strong>
+      <span className="wp-rollover-grow">Meenemen naar vandaag, of laten staan waar ze stonden?</span>
+      <button
+        type="button"
+        className="wp-rollover-btn"
+        disabled={carryOverBusy}
+        onClick={async () => {
+          setCarryOverBusy(true);
+          setError(null);
+          try {
+            await onCarryOver(overdueTasks.map(task => task.id), todayKey);
+          } catch (err) {
+            setError(err instanceof Error ? err.message : 'Meenemen mislukt');
+          } finally {
+            setCarryOverBusy(false);
+          }
+        }}
+      >
+        {carryOverBusy ? 'Bezig…' : 'Meenemen naar vandaag'}
+      </button>
+      <button type="button" className="wp-rollover-btn is-ghost" onClick={() => setCarryOverDismissed(true)}>Laat staan</button>
+    </div>}
+
     <section className="wp-band" aria-label="Weekstroken">
       <div className="wp-band-head">
         <span className="wp-band-label">Weekstroken</span>
@@ -800,69 +974,115 @@ export function WeekPlanner({
       </div>
     </section>
 
-    <div className="wp-grid">
-      {days.map((day, i) => {
-        const key = formatISODate(day);
-        const bucket = byDay.get(key) ?? { tasks: [], count: 0, minutes: 0 };
-        const isToday = isSameDay(day, todayLocal);
-        const marker = insertMarkerFor(key);
-        const loadFraction = busiestMinutes > 0 ? bucket.minutes / busiestMinutes : 0;
-        return <div
-          key={key}
-          className={`wp-day ${isToday ? 'is-today' : ''} ${marker !== null ? 'is-drop' : ''} ${key === busiestKey ? 'is-peak' : ''}`}
-        >
-          <div className="wp-day-head">
-            <div className="wp-day-row">
-              <span className="wp-day-name">{DAY_NAMES_NL[i]}</span>
-              <span className="wp-day-num">{day.getDate()}</span>
-              <span className={`wp-day-total ${bucket.minutes === 0 ? 'is-empty' : ''} ${key === busiestKey ? 'is-peak' : ''}`}>
-                {bucket.minutes === 0 ? '—' : formatDuration(bucket.minutes)}
-              </span>
-              {canWrite && <button
-                type="button"
-                className="wp-day-add"
-                onClick={() => setQuickAddDay(prev => prev === key ? null : key)}
-                aria-expanded={quickAddDay === key}
-                aria-label={`Taak toevoegen op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
-                title={`Taak toevoegen op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
-              >
-                <Plus size={13}/>
-              </button>}
+    <div className="wp-board">
+      <div className="wp-board-main">
+        <div className="wp-grid">
+          {days.map((day, i) => {
+            const key = formatISODate(day);
+            const bucket = byDay.get(key) ?? EMPTY_BUCKET;
+            const agenda = agendaByDay.get(key);
+            const isToday = isSameDay(day, todayLocal);
+            const marker = scope === 'mine' ? insertMarkerFor(key) : null;
+            const total = bucket.minutes + bucket.agendaMinutes;
+            const scale = busiestMinutes > 0 ? busiestMinutes : 1;
+            return <div
+              key={key}
+              className={`wp-day ${isToday ? 'is-today' : ''} ${marker !== null ? 'is-drop' : ''} ${key === busiestKey ? 'is-peak' : ''}`}
+            >
+              <div className="wp-day-head">
+                <div className="wp-day-row">
+                  <span className="wp-day-name">{DAY_NAMES_NL[i]}</span>
+                  <span className="wp-day-num">{day.getDate()}</span>
+                  <span className={`wp-day-total ${total === 0 ? 'is-empty' : ''} ${key === busiestKey ? 'is-peak' : ''}`}>
+                    {total === 0 ? '—' : formatDuration(total)}
+                  </span>
+                  {canWrite && <button
+                    type="button"
+                    className="wp-day-add"
+                    onClick={() => setQuickAddDay(prev => prev === key ? null : key)}
+                    aria-expanded={quickAddDay === key}
+                    aria-label={`Taak toevoegen op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
+                    title={`Taak toevoegen op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
+                  >
+                    <Plus size={13}/>
+                  </button>}
+                </div>
+                {/* Eerst je afspraken, dan je taken; de rest van de balk is vrij. */}
+                <div
+                  className="wp-day-load"
+                  role="img"
+                  aria-label={`${formatDuration(bucket.agendaMinutes)} afspraken en ${formatDuration(bucket.minutes)} taken`}
+                >
+                  <span className="wp-day-load-agenda" style={{ width: `${(bucket.agendaMinutes / scale) * 100}%` }}/>
+                  <span className="wp-day-load-fill" style={{ width: `${(bucket.minutes / scale) * 100}%` }}/>
+                </div>
+              </div>
+              <div className="wp-day-body" ref={scope === 'mine' ? (el => registerZone(key, el)) : undefined}>
+                {agenda?.items.map(event => <div key={`${event.source_id}-${event.provider_event_id}-${event.starts_at}`} className="wp-agenda-chip" title={event.title}>
+                  <span className="wp-agenda-time">{formatEventTime(event.starts_at)}</span>
+                  <span className="wp-agenda-name">{event.title}</span>
+                </div>)}
+                {quickAddDay === key && <QuickAddTask
+                  busy={quickAddBusy}
+                  onSubmit={title => quickAdd(key, title)}
+                  onCancel={() => setQuickAddDay(null)}
+                />}
+                {scope === 'mine' && bucket.tasks.map(task => taskCard(task, { insertBefore: marker }))}
+                {marker === '__end__' && <div className="wp-insert-line" aria-hidden="true"/>}
+                {scope === 'mine' && bucket.tasks.length === 0 && quickAddDay !== key && !agenda?.items.length
+                  && <div className="wp-day-empty">Sleep een taak hierheen of gebruik <strong>+</strong></div>}
+                {bucket.noEstimateCount > 0 && scope === 'mine' && <div className="wp-day-noestimate">
+                  {bucket.noEstimateCount === 1 ? '1 taak zonder schatting' : `${bucket.noEstimateCount} taken zonder schatting`}
+                </div>}
+              </div>
+            </div>;
+          })}
+        </div>
+
+        {scope === 'team' && <div className="wp-team">
+          {teamRows.map(row => <div className="wp-team-row" key={row.key}>
+            <div className="wp-team-head">
+              <span className="wp-team-avatar" style={{ background: row.color }}>{row.initials}</span>
+              <span className="wp-team-name">{row.name}</span>
+              <span className="wp-team-count">{row.total} {row.total === 1 ? 'taak' : 'taken'}</span>
             </div>
-            <div className="wp-day-load" aria-hidden="true">
-              <span className="wp-day-load-fill" style={{ transform: `scaleX(${loadFraction.toFixed(4)})` }}/>
+            <div className="wp-grid">
+              {days.map(day => {
+                const key = formatISODate(day);
+                const zoneKey = `${row.key}${ZONE_SEP}${key}`;
+                const cards = row.byDay.get(key) ?? [];
+                const marker = insertMarkerFor(key, row.key === NO_MEMBER ? null : row.key);
+                return <div
+                  key={key}
+                  className={`wp-team-cell ${marker !== null ? 'is-drop' : ''}`}
+                  ref={el => registerZone(zoneKey, el)}
+                >
+                  {cards.map(task => taskCard(task, { insertBefore: marker }))}
+                  {marker === '__end__' && <div className="wp-insert-line" aria-hidden="true"/>}
+                  {cards.length === 0 && <div className="wp-team-empty" aria-hidden="true"/>}
+                </div>;
+              })}
             </div>
-          </div>
-          <div className="wp-day-body" ref={el => registerZone(key, el)}>
-            {quickAddDay === key && <QuickAddTask
-              busy={quickAddBusy}
-              onSubmit={title => quickAdd(key, title)}
-              onCancel={() => setQuickAddDay(null)}
-            />}
-            {bucket.tasks.map(task => taskCard(task, { insertBefore: marker }))}
-            {marker === '__end__' && <div className="wp-insert-line" aria-hidden="true"/>}
-            {bucket.tasks.length === 0 && quickAddDay !== key && <div className="wp-day-empty">Sleep een taak hierheen of gebruik <strong>+</strong></div>}
-          </div>
-        </div>;
-      })}
-    </div>
+          </div>)}
+          {teamRows.length === 0 && <div className="wp-day-empty">Geen taken van het team in deze week binnen deze filterselectie</div>}
+        </div>}
+      </div>
 
-    <div className="wp-bottom-row">
-      <PlannerSection
-        title={`Lade — nog geen dag (${unscheduled.length})`}
-        className={`wp-unscheduled ${drag?.moved && drag.target?.type === 'unscheduled' ? 'is-drop' : ''}`}
-        bodyRef={el => registerZone(TRAY_KEY, el)}
-      >
-        {unscheduled.map(task => taskCard(task))}
-        {unscheduled.length === 0 && <div className="wp-day-empty">Geen taken zonder planning binnen deze filterselectie</div>}
-      </PlannerSection>
-
-      <PlannerSection title={`Buiten deze week (${outsideThisWeek.length})`} mutedText="Deze taken hebben wel een plandatum, maar vallen buiten de huidige week.">
-        {outsideThisWeek.map(task => taskCard(task, { showPlannedDate: true }))}
-        {outsideThisWeek.length === 0 && <div className="wp-day-empty">Geen geplande taken buiten deze week binnen deze filterselectie</div>}
-      </PlannerSection>
-
-      <WeekChecklist weekKey={formatISODate(anchor)} />
+      <PlannerTray
+        unscheduled={unscheduled}
+        outsideThisWeek={outsideThisWeek}
+        deadlineThisWeek={deadlineThisWeek}
+        renderTask={taskCard}
+        isDropTarget={drag?.moved === true && drag.target?.type === 'unscheduled'}
+        forceTray={drag?.moved === true}
+        trayRef={el => registerZone(TRAY_KEY, el)}
+        notes={weekNotes}
+        weekStart={formatISODate(anchor)}
+        canWrite={canWrite}
+        onAddNote={onAddNote}
+        onToggleNote={onToggleNote}
+        onRemoveNote={onRemoveNote}
+      />
     </div>
 
     {drag?.moved && draggedTask && <div
@@ -940,7 +1160,9 @@ function TaskCard({
         {density === 'comfortable' && <AssigneeAvatars userIds={assigneeIds} teamMembers={teamMembers} currentUserId={currentUserId} max={4} />}
       </div>}
     </div>
-    <span className="wp-task-est">{formatDuration(taskEstimateMinutes(task))}</span>
+    <span className={`wp-task-est ${hasEstimate(task) ? '' : 'is-unset'}`} title={hasEstimate(task) ? undefined : 'Nog geen tijdschatting'}>
+      {hasEstimate(task) ? formatDuration(taskEstimateMinutes(task)) : '—'}
+    </span>
   </article>;
 }
 
@@ -984,132 +1206,191 @@ function QuickAddTask({ busy, onSubmit, onCancel, placeholder, hint }: {
   </div>;
 }
 
-function PlannerSection({ title, mutedText, className, children, bodyRef }: {
-  title: string;
-  mutedText?: string;
-  className?: string;
-  children: React.ReactNode;
-  bodyRef?: (el: HTMLDivElement | null) => void;
+/**
+ * De lade rechts: alles wat nog een plek zoekt, plus je actiepunten. Vervangt de
+ * drie panelen die eerst onder het raster stonden, elk met hun eigen scrollbalk.
+ */
+function PlannerTray({
+  unscheduled, outsideThisWeek, deadlineThisWeek, renderTask, isDropTarget, forceTray, trayRef,
+  notes, weekStart, canWrite, onAddNote, onToggleNote, onRemoveNote,
+}: {
+  unscheduled: Task[];
+  outsideThisWeek: Task[];
+  deadlineThisWeek: Task[];
+  renderTask: (task: Task, options?: { showPlannedDate?: boolean; insertBefore?: string | null }) => React.ReactNode;
+  isDropTarget: boolean;
+  forceTray: boolean;
+  trayRef: (el: HTMLDivElement | null) => void;
+  notes: PlannerNote[];
+  weekStart: string;
+  canWrite: boolean;
+  onAddNote: (weekStart: string, text: string) => Promise<void>;
+  onToggleNote: (id: UUID, done: boolean) => Promise<void>;
+  onRemoveNote: (id: UUID) => Promise<void>;
 }) {
-  return <section className={className ?? 'wp-unscheduled'}>
-    <div className="wp-unscheduled-head">{title}{mutedText && <span className="wp-outside"> · {mutedText}</span>}</div>
-    <div className="wp-unscheduled-body" ref={bodyRef}>{children}</div>
+  const [tab, setTab] = useState<'tray' | 'deadline' | 'outside'>('tray');
+  // Tijdens het slepen altijd de lade tonen: daar kun je iets in loslaten.
+  const active = forceTray ? 'tray' : tab;
+
+  return <aside className={`wp-tray ${isDropTarget ? 'is-drop' : ''}`}>
+    <div className="wp-tray-tabs" role="tablist">
+      <button type="button" role="tab" aria-selected={active === 'tray'} className={active === 'tray' ? 'is-on' : ''} onClick={() => setTab('tray')}>
+        Lade {unscheduled.length}
+      </button>
+      <button type="button" role="tab" aria-selected={active === 'deadline'} className={active === 'deadline' ? 'is-on' : ''} onClick={() => setTab('deadline')}>
+        Deadline {deadlineThisWeek.length}
+      </button>
+      <button type="button" role="tab" aria-selected={active === 'outside'} className={active === 'outside' ? 'is-on' : ''} onClick={() => setTab('outside')}>
+        Buiten week {outsideThisWeek.length}
+      </button>
+    </div>
+
+    {/* De lade is de dropzone, dus die blijft altijd gemonteerd. */}
+    <div className="wp-tray-body" ref={trayRef} hidden={active !== 'tray'}>
+      <p className="wp-tray-hint">Sleep hierheen om een taak van de kalender te halen, of van hier naar een dag.</p>
+      {unscheduled.map(task => renderTask(task))}
+      {unscheduled.length === 0 && <div className="wp-day-empty">Geen taken zonder planning binnen deze filterselectie</div>}
+    </div>
+
+    {active === 'deadline' && <div className="wp-tray-body">
+      <p className="wp-tray-hint">Open taken met een deadline in deze week, ongeacht wanneer ze gepland staan.</p>
+      {deadlineThisWeek.map(task => renderTask(task, { showPlannedDate: true }))}
+      {deadlineThisWeek.length === 0 && <div className="wp-day-empty">Geen deadlines deze week binnen deze filterselectie</div>}
+    </div>}
+
+    {active === 'outside' && <div className="wp-tray-body">
+      <p className="wp-tray-hint">Deze taken hebben wel een plandatum, maar vallen buiten de huidige week.</p>
+      {outsideThisWeek.map(task => renderTask(task, { showPlannedDate: true }))}
+      {outsideThisWeek.length === 0 && <div className="wp-day-empty">Geen geplande taken buiten deze week binnen deze filterselectie</div>}
+    </div>}
+
+    <PlannerNotes
+      notes={notes}
+      weekStart={weekStart}
+      canWrite={canWrite}
+      onAdd={onAddNote}
+      onToggle={onToggleNote}
+      onRemove={onRemoveNote}
+    />
+  </aside>;
+}
+
+/** Leest een oude, in de browser bewaarde actiepuntenlijst van vóór de database. */
+function readLegacyChecklist(weekKey: string): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(`resofly-checklist-${weekKey}`) ?? '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw.map(item => String(item?.text ?? '').trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Actiepunten van de week: snel iets noteren zonder aan project, duur of dag te
+ * denken. Persoonlijk en in de database, dus ook op je telefoon en in de back-up.
+ */
+function PlannerNotes({ notes, weekStart, canWrite, onAdd, onToggle, onRemove }: {
+  notes: PlannerNote[];
+  weekStart: string;
+  canWrite: boolean;
+  onAdd: (weekStart: string, text: string) => Promise<void>;
+  onToggle: (id: UUID, done: boolean) => Promise<void>;
+  onRemove: (id: UUID) => Promise<void>;
+}) {
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [legacy, setLegacy] = useState<string[]>([]);
+
+  // Nog iets in de browser van vóór de verhuizing? Eén keer aanbieden.
+  useEffect(() => {
+    setLegacy(notes.length === 0 ? readLegacyChecklist(weekStart) : []);
+  }, [notes.length, weekStart]);
+
+  async function add() {
+    const text = input.trim();
+    if (!text || busy || !canWrite) return;
+    setBusy(true);
+    try { await onAdd(weekStart, text); setInput(''); }
+    finally { setBusy(false); }
+  }
+
+  async function importLegacy() {
+    setBusy(true);
+    try {
+      for (const text of legacy) await onAdd(weekStart, text);
+      localStorage.removeItem(`resofly-checklist-${weekStart}`);
+      setLegacy([]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const open = notes.filter(note => !note.done);
+  const done = notes.filter(note => note.done);
+
+  return <section className="wp-notes">
+    <div className="wp-notes-head">
+      <span>Actiepunten deze week</span>
+      {notes.length > 0 && <span className="wp-notes-count">{open.length} open</span>}
+    </div>
+
+    {legacy.length > 0 && canWrite && <div className="wp-notes-legacy">
+      <span>{legacy.length === 1 ? '1 actiepunt staat nog in deze browser.' : `${legacy.length} actiepunten staan nog in deze browser.`}</span>
+      <button type="button" onClick={() => void importLegacy()} disabled={busy}>Overzetten</button>
+    </div>}
+
+    {canWrite && <div className="wp-notes-input-row">
+      <input
+        className="wp-notes-input"
+        value={input}
+        disabled={busy}
+        placeholder="Noteer iets snel…"
+        aria-label="Nieuw actiepunt voor deze week"
+        onChange={e => setInput(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void add(); } }}
+      />
+      <button type="button" className="wp-notes-add" onClick={() => void add()} disabled={!input.trim() || busy} title="Toevoegen">
+        <Plus size={14}/>
+      </button>
+    </div>}
+
+    {notes.length === 0 && <div className="wp-notes-empty">Nog geen actiepunten voor deze week.</div>}
+    {notes.length > 0 && <ul className="wp-notes-list">
+      {[...open, ...done].map(note => <li key={note.id} className={`wp-notes-item ${note.done ? 'is-done' : ''}`}>
+        <input
+          type="checkbox"
+          className="wp-notes-checkbox"
+          id={`note-${note.id}`}
+          checked={note.done}
+          disabled={!canWrite}
+          onChange={() => void onToggle(note.id, !note.done)}
+        />
+        <label htmlFor={`note-${note.id}`} className="wp-notes-label">{note.text}</label>
+        {canWrite && <button type="button" className="wp-notes-delete" onClick={() => void onRemove(note.id)} title="Verwijderen">
+          <X size={11}/>
+        </button>}
+      </li>)}
+    </ul>}
   </section>;
 }
 
-/** Voegt (van buitenaf, bijv. door Gerrie) een actiepunt toe aan de checklist van de
- *  week waar `dateIso` in valt, en seint het paneel om te verversen. */
-export function addWeekChecklistItem(dateIso: string, text: string): void {
-  const trimmed = text.trim();
-  if (!trimmed) return;
-  const weekKey = formatISODate(startOfWeek(parseISODate(dateIso)));
-  const storageKey = `resofly-checklist-${weekKey}`;
-  let items: ChecklistItem[] = [];
-  try { items = JSON.parse(localStorage.getItem(storageKey) ?? '[]'); } catch { items = []; }
-  items.push({ id: crypto.randomUUID(), text: trimmed, done: false });
-  localStorage.setItem(storageKey, JSON.stringify(items));
-  window.dispatchEvent(new CustomEvent('resofly-checklist-changed', { detail: { weekKey } }));
+/** Heeft deze taak een ingevulde tijdschatting? */
+function hasEstimate(task: Task): boolean {
+  return task.estimated_minutes !== null
+    && task.estimated_minutes !== undefined
+    && Number.isFinite(Number(task.estimated_minutes));
 }
 
-function WeekChecklist({ weekKey }: { weekKey: string }) {
-  const storageKey = `resofly-checklist-${weekKey}`;
-
-  function load(): ChecklistItem[] {
-    try { return JSON.parse(localStorage.getItem(storageKey) ?? '[]'); } catch { return []; }
-  }
-
-  const [items, setItems] = useState<ChecklistItem[]>(load);
-  const [input, setInput] = useState('');
-  const prevKey = useRef(weekKey);
-
-  if (prevKey.current !== weekKey) {
-    prevKey.current = weekKey;
-    setItems(load());
-    setInput('');
-  }
-
-  // Ververs als een actiepunt van buitenaf (bijv. via Gerrie) aan deze week is toegevoegd.
-  useEffect(() => {
-    const onChange = (e: Event) => {
-      const detail = (e as CustomEvent).detail as { weekKey?: string } | undefined;
-      if (!detail || detail.weekKey === weekKey) setItems(load());
-    };
-    window.addEventListener('resofly-checklist-changed', onChange);
-    return () => window.removeEventListener('resofly-checklist-changed', onChange);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weekKey]);
-
-  function save(next: ChecklistItem[]) {
-    setItems(next);
-    localStorage.setItem(`resofly-checklist-${weekKey}`, JSON.stringify(next));
-  }
-
-  function addItem() {
-    const text = input.trim();
-    if (!text) return;
-    save([...items, { id: crypto.randomUUID(), text, done: false }]);
-    setInput('');
-  }
-
-  const openItems = items.filter(i => !i.done);
-  const doneItems = items.filter(i => i.done);
-
-  return (
-    <section className="wp-checklist">
-      <div className="wp-checklist-head">
-        <span>Actiepunten deze week</span>
-        {items.length > 0 && (
-          <span className="wp-checklist-count">{openItems.length} open · {doneItems.length} afgerond</span>
-        )}
-      </div>
-      <div className="wp-checklist-body">
-        <div className="wp-checklist-input-row">
-          <input
-            className="wp-checklist-input"
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') addItem(); }}
-            placeholder="Voeg een actiepunt toe…"
-          />
-          <button className="wp-checklist-add" onClick={addItem} disabled={!input.trim()} title="Toevoegen">
-            <Plus size={14} />
-          </button>
-        </div>
-        {items.length === 0 && (
-          <div className="wp-checklist-empty">Nog geen actiepunten voor deze week. Typ hierboven en druk op Enter.</div>
-        )}
-        {items.length > 0 && (
-          <ul className="wp-checklist-list">
-            {[...openItems, ...doneItems].map(item => (
-              <li key={item.id} className={`wp-checklist-item ${item.done ? 'is-done' : ''}`}>
-                <input
-                  type="checkbox"
-                  className="wp-checklist-checkbox"
-                  checked={item.done}
-                  id={`chk-${item.id}`}
-                  onChange={() => save(items.map(i => i.id === item.id ? { ...i, done: !i.done } : i))}
-                />
-                <label htmlFor={`chk-${item.id}`} className="wp-checklist-label">{item.text}</label>
-                <button
-                  className="wp-checklist-delete"
-                  onClick={() => save(items.filter(i => i.id !== item.id))}
-                  title="Verwijderen"
-                >
-                  <X size={11} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
-  );
-}
-
+/** Minuten die deze taak meetelt. Zonder schatting is dat niets: een onbekende
+ *  duur stil als een uur meetellen maakt elk totaal deels verzonnen. */
 function taskEstimateMinutes(task: Task): number {
-  const raw = Number(task.estimated_minutes ?? DEFAULT_TASK_ESTIMATE_MINUTES);
-  if (!Number.isFinite(raw)) return DEFAULT_TASK_ESTIMATE_MINUTES;
-  return Math.max(0, Math.min(24 * 60, Math.round(raw)));
+  if (!hasEstimate(task)) return 0;
+  return Math.max(0, Math.min(24 * 60, Math.round(Number(task.estimated_minutes))));
+}
+
+function formatEventTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
 }
 
 function barSpanLabel(bar: WeekBar): string {

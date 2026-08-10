@@ -9,12 +9,13 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { Task } from '../types.ts';
+import type { CalendarExternalEvent, Task } from '../types.ts';
 import {
   applyPeriodLocally,
   applyPlanningLocally,
   comparePlannedTasks,
   isSpanningTask,
+  groupEventMinutesByDay,
   layoutWeekBars,
   mergeTaskRows,
   shiftDateKey,
@@ -243,6 +244,54 @@ test('een strook in een dagkolom laten vallen wist zijn looptijd', () => {
   assert.equal(next.find(t => t.id === 'strook')!.planned_end_date, null);
   // De andere taken op die dag houden hun eigen looptijd.
   assert.equal(next.find(t => t.id === 'ander')!.planned_end_date, null);
+});
+
+// ── Agenda-uren per dag ─────────────────────────────────────────────────────
+
+function event(startsAt: string, endsAt: string, allDay = false): CalendarExternalEvent {
+  return {
+    id: `${startsAt}-${endsAt}`, provider: 'native', source_id: 'src', source_name: 'Agenda',
+    provider_event_id: 'p', title: 'Afspraak', description: null, location: null,
+    starts_at: startsAt, ends_at: endsAt, all_day: allDay, html_link: null, visibility: 'organization',
+  } as CalendarExternalEvent;
+}
+
+test('een afspraak telt zijn minuten op de dag waarop hij valt', () => {
+  const byDay = groupEventMinutesByDay(WEEK, [event('2026-08-11T09:30:00', '2026-08-11T11:00:00')]);
+  assert.equal(byDay.get('2026-08-11')!.minutes, 90);
+  assert.equal(byDay.get('2026-08-11')!.items.length, 1);
+  assert.equal(byDay.get('2026-08-10')!.minutes, 0);
+});
+
+test('een afspraak over middernacht wordt per kalenderdag geknipt', () => {
+  const byDay = groupEventMinutesByDay(WEEK, [event('2026-08-11T23:00:00', '2026-08-12T01:30:00')]);
+  assert.equal(byDay.get('2026-08-11')!.minutes, 60, 'het uur vóór middernacht hoort bij dinsdag');
+  assert.equal(byDay.get('2026-08-12')!.minutes, 90, 'de anderhalf uur erna bij woensdag');
+});
+
+test('hele-dag-items claimen geen uren', () => {
+  const byDay = groupEventMinutesByDay(WEEK, [event('2026-08-11T00:00:00', '2026-08-12T00:00:00', true)]);
+  assert.equal(byDay.get('2026-08-11')!.minutes, 0);
+  assert.equal(byDay.get('2026-08-11')!.items.length, 0);
+});
+
+test('afspraken buiten de week en lege afspraken tellen niet mee', () => {
+  const byDay = groupEventMinutesByDay(WEEK, [
+    event('2026-07-01T09:00:00', '2026-07-01T10:00:00'),
+    event('2026-08-11T09:00:00', '2026-08-11T09:00:00'),
+    event('2026-08-11T12:00:00', '2026-08-11T11:00:00'),
+  ]);
+  assert.equal([...byDay.values()].reduce((sum, bucket) => sum + bucket.minutes, 0), 0);
+});
+
+test('afspraken op dezelfde dag staan op tijd gesorteerd', () => {
+  const byDay = groupEventMinutesByDay(WEEK, [
+    event('2026-08-11T15:00:00', '2026-08-11T16:00:00'),
+    event('2026-08-11T09:00:00', '2026-08-11T10:00:00'),
+  ]);
+  const items = byDay.get('2026-08-11')!.items;
+  assert.deepEqual(items.map(i => i.starts_at), ['2026-08-11T09:00:00', '2026-08-11T15:00:00']);
+  assert.equal(byDay.get('2026-08-11')!.minutes, 120);
 });
 
 test('mergeTaskRows overschrijft op id en voegt onbekende rijen toe', () => {

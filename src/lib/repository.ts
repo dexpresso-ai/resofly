@@ -125,6 +125,7 @@ import type {
   ShareholderPosition,
   ShareTransaction,
   SavedReport,
+  PlannerNote,
   ContractProject,
   Task,
   TaskAssignee,
@@ -133,7 +134,7 @@ import type {
   UUID,
 } from '../types';
 
-const tables = ['clients', 'client_contacts', 'projects', 'project_templates', 'project_template_tasks', 'tasks', 'project_members', 'task_assignees', 'contract_projects', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'galleries', 'gallery_items', 'gallery_favorites', 'gallery_categories', 'gallery_category_presets', 'saved_reports', 'company_settings'] as const;
+const tables = ['clients', 'client_contacts', 'projects', 'project_templates', 'project_template_tasks', 'tasks', 'project_members', 'task_assignees', 'contract_projects', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'galleries', 'gallery_items', 'gallery_favorites', 'gallery_categories', 'gallery_category_presets', 'saved_reports', 'planner_notes', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -171,6 +172,7 @@ const tableToEntity: Record<Table, EntityType | null> = {
   gallery_categories: null,
   gallery_category_presets: null,
   saved_reports: null,
+  planner_notes: null,
   company_settings: null,
 };
 
@@ -499,6 +501,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     folders,
     galleries,
     savedReports,
+    plannerNotes,
     companySettings,
     projectMembers,
     taskAssignees,
@@ -516,6 +519,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectFolders(organizationId),
     selectGalleries(organizationId),
     selectSavedReports(organizationId),
+    selectPlannerNotes(organizationId),
     loadCompanySettings(organizationId),
     selectProjectMembers(organizationId),
     selectTaskAssignees(organizationId),
@@ -523,7 +527,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectProjectTemplateTasks(organizationId),
     selectContractProjects(organizationId),
   ]);
-  return { clients, clientContacts, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, galleries, savedReports, companySettings };
+  return { clients, clientContacts, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, galleries, savedReports, plannerNotes, companySettings };
 }
 
 const CONTRACT_PROJECTS_MIGRATION_HINT =
@@ -906,6 +910,30 @@ export async function selectSavedReports(organizationId: UUID): Promise<SavedRep
 
 export async function createSavedReport(organizationId: UUID, values: { name: string; definition: ReportDefinition; is_pinned?: boolean; position?: number }): Promise<SavedReport> {
   return insertRow<SavedReport>('saved_reports', organizationId, values as unknown as Record<string, unknown>);
+}
+
+// ── Actiepunten van de week (persoonlijk) ──────────────────────────────────
+
+const PLANNER_NOTES_MIGRATION_HINT =
+  'Voer de migratie 20260811000000_weekplanner_notes_and_estimates.sql uit in Supabase om de actiepunten van de weekplanner te activeren.';
+
+/** RLS beperkt dit al tot je eigen notities; er is dus geen user-filter nodig. */
+export async function selectPlannerNotes(organizationId: UUID): Promise<PlannerNote[]> {
+  return selectOptional<PlannerNote>('planner_notes', organizationId, {
+    orderBy: 'position', ascending: true, hint: PLANNER_NOTES_MIGRATION_HINT,
+  });
+}
+
+export async function createPlannerNote(organizationId: UUID, userId: UUID, weekStart: string, text: string, position: number): Promise<PlannerNote> {
+  return insertRow<PlannerNote>('planner_notes', organizationId, { user_id: userId, week_start: weekStart, text, position });
+}
+
+export async function updatePlannerNote(organizationId: UUID, id: UUID, changes: { text?: string; done?: boolean; position?: number }): Promise<PlannerNote> {
+  return updateRow<PlannerNote>('planner_notes', id, changes, organizationId);
+}
+
+export async function deletePlannerNote(organizationId: UUID, id: UUID): Promise<void> {
+  await deleteRow('planner_notes', id, organizationId);
 }
 
 export async function updateSavedReport(organizationId: UUID, id: UUID, patch: Partial<{ name: string; definition: ReportDefinition; is_pinned: boolean; position: number }>): Promise<SavedReport> {
