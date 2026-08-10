@@ -5180,3 +5180,52 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .wp-ghost-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
 .wp-ghost-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (prefers-reduced-motion: reduce){.wp-day-load-fill{transition:none}.wp-ghost{transform:translate(-50%,-50%)}}
+
+/* ══ Weekplanner — fase 2: weekstroken ═════════════════════════════════════
+   De band heeft géén zijranden of zijpadding: alleen dan valt een strook
+   precies boven zijn dagkolommen. */
+.wp-band{background:var(--bg2);border-radius:var(--r2);padding:9px 0 11px}
+.wp-band-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:0 0 8px}
+.wp-band-label{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+.wp-band-hint{font-size:10.5px;color:var(--muted)}
+.wp-band-head .wp-day-add{margin-left:auto}
+.wp-band-empty{font-size:11px;color:var(--muted);border:1px dashed var(--border);border-radius:8px;padding:7px 10px;line-height:1.45;align-self:center}
+/* De kolomruimte moet exact gelijk zijn aan die van .wp-grid, anders staat een
+   strook net naast zijn dagkolommen. */
+.wp-lanes{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px 10px}
+
+.wp-bar{position:relative;display:flex;align-items:center;gap:8px;min-width:0;height:26px;padding:0 10px;border-radius:7px;border:1px solid var(--bar);background:rgba(255,255,255,.055);background:color-mix(in srgb, var(--bar) 13%, transparent);font-size:11.5px;font-weight:700;color:var(--text);white-space:nowrap;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none}
+.wp-bar::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--bar);border-radius:7px 0 0 7px}
+.wp-bar:hover{background:color-mix(in srgb, var(--bar) 22%, transparent)}
+.wp-bar:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wp-bar.is-dragging{cursor:grabbing;box-shadow:0 10px 26px rgba(0,0,0,.45);z-index:3}
+.wp-bar.continues-left{border-left-style:dashed;border-top-left-radius:2px;border-bottom-left-radius:2px}
+.wp-bar.continues-left::before{display:none}
+.wp-bar.continues-right{border-right-style:dashed;border-top-right-radius:2px;border-bottom-right-radius:2px}
+.wp-bar-title{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.wp-bar-project{flex-shrink:0;font-size:10px;font-weight:600;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;max-width:120px}
+.wp-bar-span{margin-left:auto;flex-shrink:0;font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--bar)}
+/* Randgrepen: breed genoeg om met een vinger te pakken, zonder de titel te raken */
+.wp-bar-grip{position:absolute;top:0;bottom:0;width:12px;cursor:ew-resize;touch-action:none}
+.wp-bar-grip-start{left:0}
+.wp-bar-grip-end{right:0}
+.wp-bar-grip::after{content:"";position:absolute;top:6px;bottom:6px;width:3px;border-radius:99px;background:var(--bar);opacity:0;transition:opacity .12s}
+.wp-bar-grip-start::after{left:3px}
+.wp-bar-grip-end::after{right:3px}
+.wp-bar:hover .wp-bar-grip::after,.wp-bar:focus-visible .wp-bar-grip::after{opacity:.75}
+
+@media(max-width:900px){
+  /* De dagen staan onder elkaar, dus een balk over zeven kolommen zegt niets
+     meer. De stroken blijven wél staan — als lijst, met hun looptijd. */
+  .wp-lanes{grid-template-columns:1fr;gap:5px}
+  .wp-bar{grid-column:1/-1!important;grid-row:auto!important;height:auto;min-height:34px;padding:7px 10px}
+  .wp-bar.continues-left,.wp-bar.continues-right{border-radius:7px;border-style:solid}
+  .wp-bar.continues-left::before{display:block}
+}
+
+/* Zeven gelijke kolommen in het dagraster: met `1fr` kan een volle dag zijn
+   kolom breder duwen, en dan valt de strook erboven ernaast. Alleen op breed
+   scherm — onder 900px staan de dagen onder elkaar. */
+@media(min-width:901px){
+  .wp-grid{grid-template-columns:repeat(7,minmax(0,1fr))}
+}

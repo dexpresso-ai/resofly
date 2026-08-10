@@ -2633,6 +2633,36 @@ export async function fetchTasksForPlannedDates(organizationId: UUID, dates: str
   return (data ?? []) as Task[];
 }
 
+/**
+ * Zet of verschuift de looptijd van een weekstrook. Verplaatsen en herschalen
+ * lopen allebei hierlangs: de server bepaalt of het een strook blijft of weer
+ * een gewone dagtaak wordt.
+ */
+export async function setTaskPlanningPeriod(
+  organizationId: UUID,
+  taskId: UUID,
+  plannedDate: string | null,
+  plannedEndDate: string | null,
+): Promise<Task> {
+  const { data, error } = await supabase.rpc('set_task_planning_period', {
+    p_organization_id: organizationId,
+    p_task_id: taskId,
+    p_planned_date: plannedDate,
+    p_planned_end_date: plannedEndDate,
+  });
+
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (/set_task_planning_period|schema cache|does not exist|function/i.test(message)) {
+      throw new Error('Weekstroken-databasefunctie ontbreekt. Voer eerst de migratie 20260810000000_weekplanner_week_bars.sql uit in Supabase.');
+    }
+    throw error;
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return row as Task;
+}
+
 export async function planTaskInWeek(organizationId: UUID, taskId: UUID, plannedDate: string | null, beforeTaskId?: UUID | null): Promise<Task> {
   const { data, error } = await supabase.rpc('reorder_task_planning', {
     p_organization_id: organizationId,

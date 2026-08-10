@@ -1,5 +1,15 @@
 import type { Task, UUID } from '../types';
 
+/** Een taak die over meerdere dagen loopt, uitgerekend voor de zichtbare week. */
+export type WeekBar = {
+  task: Task;
+  startIdx: number;
+  span: number;
+  continuesLeft: boolean;
+  continuesRight: boolean;
+  lane: number;
+};
+
 /** Zelfde stapgrootte als `reorder_task_planning` in de database gebruikt. Door
  *  ruime stappen te bewaren blijft er plek tussen twee taken voor een latere
  *  invoeging zonder dat de hele dag hernummerd hoeft te worden. */
@@ -61,10 +71,17 @@ export function applyPlanningLocally(
     if (!inserted) ordered.push(moving);
 
     ordered.forEach((task, index) => {
-      patches.set(task.id, { ...task, planned_date: plannedDate, planned_order: (index + 1) * PLANNING_ORDER_STEP });
+      patches.set(task.id, {
+        ...task,
+        planned_date: plannedDate,
+        planned_order: (index + 1) * PLANNING_ORDER_STEP,
+        // In een dagkolom laten vallen maakt er een dagtaak van; alleen de
+        // versleepte taak verliest zijn looptijd, net als in de RPC.
+        planned_end_date: task.id === taskId ? null : task.planned_end_date,
+      });
     });
   } else {
-    patches.set(moving.id, { ...moving, planned_date: null, planned_order: null });
+    patches.set(moving.id, { ...moving, planned_date: null, planned_end_date: null, planned_order: null });
   }
 
   // De dag waar de taak vandaan komt houdt een gat; die nummeren we opnieuw.
@@ -79,6 +96,89 @@ export function applyPlanningLocally(
 
   if (patches.size === 0) return tasks;
   return tasks.map(task => patches.get(task.id) ?? task);
+}
+
+/**
+ * Spiegelt `set_task_planning_period`: zet begin en einde van een weekstrook.
+ * Vallen begin en einde op dezelfde dag, dan is het weer een dagtaak en krijgt
+ * de taak ook meteen een plek in de volgorde van die dag.
+ */
+export function applyPeriodLocally(
+  tasks: Task[],
+  taskId: UUID,
+  plannedDate: string,
+  plannedEndDate: string | null,
+): Task[] {
+  if (!tasks.some(task => task.id === taskId)) return tasks;
+  const end = plannedEndDate && plannedEndDate > plannedDate ? plannedEndDate : null;
+  const patched = tasks.map(task =>
+    task.id === taskId ? { ...task, planned_date: plannedDate, planned_end_date: end } : task,
+  );
+  return end ? patched : applyPlanningLocally(patched, taskId, plannedDate, null);
+}
+
+/** Loopt deze taak over meer dan één dag? Dan hoort hij in de strokenband. */
+export function isSpanningTask(task: Task): boolean {
+  const start = task.planned_date;
+  const end = task.planned_end_date;
+  return !!start && !!end && end > start;
+}
+
+/**
+ * Verschuift een datumsleutel (jjjj-mm-dd) een aantal dagen. Bewust met
+ * UTC-rekenwerk en zonder hulp uit `dates.ts`: dit bestand blijft daardoor vrij
+ * van imports en dus rechtstreeks te testen met de Node-testrunner. Een
+ * kalenderdatum kent geen tijdzone, dus UTC geeft hier nooit een dag verschil.
+ */
+export function shiftDateKey(key: string, days: number): string {
+  const [year, month, day] = key.split('-').map(Number);
+  const shifted = new Date(Date.UTC(year, (month ?? 1) - 1, (day ?? 1) + days));
+  const y = shifted.getUTCFullYear();
+  const m = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(shifted.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Verdeelt de stroken over rijen: de langste balk per startdag claimt de
+ * bovenste rij, kortere balken vullen de gaten eronder. Dezelfde inpaklogica
+ * als de hele-dag-rij van de agenda, zodat de twee schermen zich hetzelfde
+ * gedragen.
+ */
+export function layoutWeekBars(dayKeys: string[], tasks: Task[]): { bars: WeekBar[]; laneCount: number } {
+  const firstKey = dayKeys[0];
+  const lastKey = dayKeys[dayKeys.length - 1];
+  const bars: WeekBar[] = [];
+
+  for (const task of tasks) {
+    const start = task.planned_date;
+    const end = task.planned_end_date;
+    // Tijdens het herschalen mag een strook even één dag breed zijn.
+    if (!start || !end || end < start) continue;
+    if (end < firstKey || start > lastKey) continue;
+    const startIdx = dayKeys.indexOf(start < firstKey ? firstKey : start);
+    const endIdx = dayKeys.indexOf(end > lastKey ? lastKey : end);
+    if (startIdx < 0 || endIdx < 0) continue;
+    bars.push({
+      task, startIdx, span: endIdx - startIdx + 1,
+      continuesLeft: start < firstKey, continuesRight: end > lastKey, lane: 0,
+    });
+  }
+
+  bars.sort((a, b) =>
+    a.startIdx - b.startIdx
+    || b.span - a.span
+    || a.task.title.localeCompare(b.task.title, 'nl-NL'));
+
+  const laneEnds: number[] = [];
+  for (const bar of bars) {
+    let lane = laneEnds.findIndex(end => end <= bar.startIdx);
+    if (lane === -1) { lane = laneEnds.length; laneEnds.push(0); }
+    bar.lane = lane;
+    laneEnds[lane] = bar.startIdx + bar.span;
+  }
+
+  return { bars, laneCount: laneEnds.length };
 }
 
 /** Legt verse serverrijen over de lokale lijst heen; onbekende id's komen erbij. */

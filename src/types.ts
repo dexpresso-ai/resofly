@@ -354,7 +354,10 @@ export interface Subtask { id: UUID; label: string; done: boolean; }
 export interface Comment { id: UUID; text: string; author?: string; created_at: string; }
 export interface Task extends OrgScopedRow {
   /** Optioneel: een taak kan los bestaan (bijv. snel toegevoegd in de weekplanner) en pas later aan een project worden gekoppeld. */
-  project_id: UUID | null; client_id: UUID | null; title: string; description: string | null; status: TaskStatus; priority: Priority; tags: string[]; start_date: string | null; end_date: string | null; planned_date: string | null; planned_order: number | null; estimated_minutes: number; subtasks: Subtask[]; comments: Comment[]; created_at: string; updated_at: string;
+  project_id: UUID | null; client_id: UUID | null; title: string; description: string | null; status: TaskStatus; priority: Priority; tags: string[]; start_date: string | null; end_date: string | null; planned_date: string | null;
+  /** Laatste dag van een meerdaagse taak. Leeg = gewone dagtaak; gevuld = weekstrook. */
+  planned_end_date: string | null;
+  planned_order: number | null; estimated_minutes: number; subtasks: Subtask[]; comments: Comment[]; created_at: string; updated_at: string;
 }
 // ── Projectsjablonen ────────────────────────────────────────────────────────
 // Vaste werkwijze van een organisatie voor één soort project, één keer

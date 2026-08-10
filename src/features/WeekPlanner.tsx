@@ -5,7 +5,8 @@ import type { AppData, OrganizationMember, Priority, Task, TaskStatus, UUID } fr
 import { Button, Input, Select } from '../components/Ui';
 import { AssigneeAvatars } from '../components/AssigneeAvatars';
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
-import { comparePlannedTasks } from '../lib/planning';
+import { comparePlannedTasks, isSpanningTask, layoutWeekBars, shiftDateKey } from '../lib/planning';
+import type { WeekBar } from '../lib/planning';
 import { priorityLabel } from '../lib/format';
 
 type StatusFilter = 'open' | 'all' | TaskStatus;
@@ -39,6 +40,18 @@ type PlannerBucket = {
   tasks: Task[];
   count: number;
   minutes: number;
+};
+
+/** Een lopend gebaar op een strook: verschuiven of aan een van de randen trekken. */
+type BarDrag = {
+  taskId: UUID;
+  mode: 'move' | 'resize-start' | 'resize-end';
+  grabIdx: number;
+  startDate: string;
+  endDate: string;
+  previewStart: string;
+  previewEnd: string;
+  moved: boolean;
 };
 
 type ChecklistItem = {
@@ -93,6 +106,7 @@ export function WeekPlanner({
   teamMembers,
   currentUserId,
   onPlanTask,
+  onSetTaskPeriod,
   onQuickAddTask,
   onEditTask,
 }: {
@@ -101,7 +115,8 @@ export function WeekPlanner({
   teamMembers: OrganizationMember[];
   currentUserId: string | null;
   onPlanTask: (taskId: UUID, plannedDate: string | null, beforeTaskId?: UUID | null) => Promise<void>;
-  onQuickAddTask: (plannedDate: string, title: string) => Promise<void>;
+  onSetTaskPeriod: (taskId: UUID, plannedDate: string, plannedEndDate: string | null) => Promise<void>;
+  onQuickAddTask: (plannedDate: string, title: string, plannedEndDate?: string | null) => Promise<void>;
   onEditTask: (task: Task) => void;
 }) {
   const storedPrefs = useRef(loadPrefs()).current;
@@ -120,6 +135,7 @@ export function WeekPlanner({
   const [error, setError] = useState<string | null>(null);
   const [quickAddDay, setQuickAddDay] = useState<string | null>(null);
   const [quickAddBusy, setQuickAddBusy] = useState(false);
+  const [bandAddOpen, setBandAddOpen] = useState(false);
 
   useEffect(() => {
     const prefs: StoredPrefs = {
@@ -189,16 +205,27 @@ export function WeekPlanner({
     });
   }, [assigneesByTask, clientsById, currentUserId, data.tasks, filters, projectsById, scope]);
 
-  const { byDay, unscheduled, outsideThisWeek, weekBucket, busiestMinutes } = useMemo(() => {
+  const { byDay, unscheduled, outsideThisWeek, weekBucket, busiestMinutes, spanningTasks } = useMemo(() => {
     const byDay = new Map<string, PlannerBucket>();
     const unscheduled: Task[] = [];
     const outsideThisWeek: Task[] = [];
-    for (const day of days) byDay.set(formatISODate(day), { tasks: [], count: 0, minutes: 0 });
+    const spanningTasks: Task[] = [];
+    const orderedKeys = days.map(formatISODate);
+    const firstKey = orderedKeys[0];
+    const lastKey = orderedKeys[orderedKeys.length - 1];
+    for (const key of orderedKeys) byDay.set(key, { tasks: [], count: 0, minutes: 0 });
 
     for (const task of filteredTasks) {
       const plannedDate = task.planned_date ?? null;
       if (!plannedDate) {
         unscheduled.push(task);
+        continue;
+      }
+
+      // Werk over meerdere dagen hoort in de strokenband, niet in één dagkolom.
+      if (isSpanningTask(task)) {
+        if (task.planned_end_date! >= firstKey && plannedDate <= lastKey) spanningTasks.push(task);
+        else outsideThisWeek.push(task);
         continue;
       }
 
@@ -225,10 +252,11 @@ export function WeekPlanner({
       minutes: weekTasks.reduce((sum, task) => sum + taskEstimateMinutes(task), 0),
     };
     // De balk per dag wordt geschaald op de volste dag van deze week: geen norm,
-    // alleen de onderlinge verhouding.
+    // alleen de onderlinge verhouding. Weekstroken tellen niet mee — hun uren
+    // horen bij geen enkele dag in het bijzonder.
     const busiestMinutes = Math.max(0, ...Array.from(byDay.values()).map(bucket => bucket.minutes));
 
-    return { byDay, unscheduled, outsideThisWeek, weekBucket, busiestMinutes };
+    return { byDay, unscheduled, outsideThisWeek, weekBucket, busiestMinutes, spanningTasks };
   }, [dayKeys, days, filteredTasks]);
 
   const todayLocal = new Date();
@@ -311,6 +339,135 @@ export function WeekPlanner({
     const el = document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(taskId)}"]`);
     el?.focus({ preventScroll: false });
   }, [data.tasks]);
+
+  // ── Weekstroken ───────────────────────────────────────────────────────
+  const [barDrag, setBarDrag] = useState<BarDrag | null>(null);
+  const barDragRef = useRef<BarDrag | null>(null);
+  const bandRef = useRef<HTMLDivElement | null>(null);
+  const orderedDayKeys = useMemo(() => days.map(formatISODate), [days]);
+
+  /** Welke dagkolom ligt er onder deze x-positie? */
+  const dayIndexFromX = useCallback((x: number): number | null => {
+    const el = bandRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0) return null;
+    const index = Math.floor(((x - rect.left) / rect.width) * 7);
+    return Math.max(0, Math.min(6, index));
+  }, []);
+
+  /** Stroken tekenen we tijdens het slepen op hun voorbeeldpositie. */
+  const barTasks = useMemo(() => {
+    if (!barDrag?.moved) return spanningTasks;
+    return spanningTasks.map(task => task.id === barDrag.taskId
+      ? { ...task, planned_date: barDrag.previewStart, planned_end_date: barDrag.previewEnd }
+      : task);
+  }, [barDrag, spanningTasks]);
+
+  const { bars, laneCount } = useMemo(() => layoutWeekBars(orderedDayKeys, barTasks), [barTasks, orderedDayKeys]);
+
+  const commitPeriod = useCallback(async (taskId: UUID, start: string, end: string) => {
+    setError(null);
+    try {
+      await onSetTaskPeriod(taskId, start, end > start ? end : null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Weekstrook bijwerken mislukt');
+    }
+  }, [onSetTaskPeriod]);
+
+  function beginBarPointer(e: React.PointerEvent, bar: WeekBar, mode: BarDrag['mode']) {
+    if (!canWrite) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.stopPropagation();
+    const grabIdx = dayIndexFromX(e.clientX);
+    if (grabIdx === null) return;
+    const start = bar.task.planned_date!;
+    const end = bar.task.planned_end_date!;
+    const next: BarDrag = {
+      taskId: bar.task.id, mode, grabIdx,
+      startDate: start, endDate: end,
+      previewStart: start, previewEnd: end,
+      // Aan een rand trekken is meteen een gebaar; het lijf mag nog een klik worden.
+      moved: mode !== 'move',
+    };
+    barDragRef.current = next;
+    setBarDrag(next);
+  }
+
+  const isBarDragging = barDrag !== null;
+  useEffect(() => {
+    if (!isBarDragging) return;
+
+    function onMove(e: PointerEvent) {
+      const state = barDragRef.current;
+      if (!state) return;
+      const index = dayIndexFromX(e.clientX);
+      if (index === null) return;
+
+      let previewStart = state.startDate;
+      let previewEnd = state.endDate;
+      if (state.mode === 'move') {
+        const delta = index - state.grabIdx;
+        previewStart = shiftDateKey(state.startDate, delta);
+        previewEnd = shiftDateKey(state.endDate, delta);
+      } else if (state.mode === 'resize-start') {
+        const candidate = orderedDayKeys[index];
+        previewStart = candidate > state.endDate ? state.endDate : candidate;
+      } else {
+        const candidate = orderedDayKeys[index];
+        previewEnd = candidate < state.startDate ? state.startDate : candidate;
+      }
+
+      const moved = state.moved || previewStart !== state.startDate || previewEnd !== state.endDate;
+      if (moved === state.moved && previewStart === state.previewStart && previewEnd === state.previewEnd) return;
+      const next: BarDrag = { ...state, previewStart, previewEnd, moved };
+      barDragRef.current = next;
+      setBarDrag(next);
+    }
+
+    function onUp() {
+      const state = barDragRef.current;
+      barDragRef.current = null;
+      setBarDrag(null);
+      if (!state) return;
+      if (!state.moved) {
+        const task = data.tasks.find(t => t.id === state.taskId);
+        if (task) onEditTask(task);
+        return;
+      }
+      if (state.previewStart === state.startDate && state.previewEnd === state.endDate) return;
+      void commitPeriod(state.taskId, state.previewStart, state.previewEnd);
+    }
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [isBarDragging, commitPeriod, data.tasks, dayIndexFromX, onEditTask, orderedDayKeys]);
+
+  function handleBarKey(e: React.KeyboardEvent, bar: WeekBar) {
+    const task = bar.task;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onEditTask(task); return; }
+    if (!canWrite) return;
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+
+    e.preventDefault();
+    e.stopPropagation(); // niet ook nog een week vooruit bladeren
+    const step = e.key === 'ArrowRight' ? 1 : -1;
+    const start = task.planned_date!;
+    const end = task.planned_end_date!;
+    if (e.shiftKey) {
+      // Met shift verschuif je alleen het einde: korter of langer maken.
+      const nextEnd = shiftDateKey(end, step);
+      void commitPeriod(task.id, start, nextEnd < start ? start : nextEnd);
+    } else {
+      void commitPeriod(task.id, shiftDateKey(start, step), shiftDateKey(end, step));
+    }
+  }
 
   const holdCancelRef = useRef<(() => void) | null>(null);
   const cancelHold = useCallback(() => { holdCancelRef.current?.(); }, []);
@@ -460,13 +617,13 @@ export function WeekPlanner({
     else if (e.key === 't' || e.key === 'T') { e.preventDefault(); setAnchor(startOfWeek(new Date())); }
   }
 
-  async function quickAdd(dateKey: string, title: string): Promise<boolean> {
+  async function quickAdd(dateKey: string, title: string, endKey?: string): Promise<boolean> {
     const trimmed = title.trim();
     if (!trimmed || quickAddBusy) return false;
     setError(null);
     setQuickAddBusy(true);
     try {
-      await onQuickAddTask(dateKey, trimmed);
+      await onQuickAddTask(dateKey, trimmed, endKey ?? null);
       return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Taak aanmaken mislukt');
@@ -540,7 +697,10 @@ export function WeekPlanner({
         <strong>{weekBucket.count} {weekBucket.count === 1 ? 'taak' : 'taken'} · {formatDuration(weekBucket.minutes)} ingepland</strong>
       </div>
       <div className="wp-summary-meta">
-        <span>{busiestKey ? `Volst: ${formatDayShort(busiestKey)} · ${formatDuration(busiestMinutes)}` : 'Nog niets ingepland'}</span>
+        <span>{busiestKey ? `Volst: ${formatDayShort(busiestKey)} · ${formatDuration(busiestMinutes)}` : 'Nog niets op een dag'}</span>
+        {spanningTasks.length > 0 && <span>
+          {spanningTasks.length} {spanningTasks.length === 1 ? 'weekstrook' : 'weekstroken'} · {formatDuration(spanningTasks.reduce((sum, task) => sum + taskEstimateMinutes(task), 0))}
+        </span>}
         <span>{unscheduled.length} in de lade</span>
         <span>{outsideThisWeek.length} buiten deze week</span>
         <span>{scope === 'mine' ? 'Alleen mijn taken' : 'Alle taken van het team'}</span>
@@ -572,8 +732,73 @@ export function WeekPlanner({
     </section>
 
     {!canWrite && <div className="readonly-note">Je hebt alleen-lezen toegang. Taken openen kan, maar slepen en plannen is uitgeschakeld.</div>}
-    {canWrite && <p className="wp-keyhint">Sleep een kaart, of selecteer er een en druk <kbd>1</kbd>–<kbd>7</kbd> voor een weekdag, <kbd>0</kbd> voor de lade. Op touch: even vasthouden en dan slepen.</p>}
+    {canWrite && <p className="wp-keyhint">Sleep een kaart, of selecteer er een en druk <kbd>1</kbd>–<kbd>7</kbd> voor een weekdag, <kbd>0</kbd> voor de lade. Op een weekstrook verschuiven <kbd>←</kbd> <kbd>→</kbd> de hele periode en verzet <kbd>shift</kbd> + pijl alleen het einde. Op touch: even vasthouden en dan slepen.</p>}
     {error && <div className="error">{error}</div>}
+
+    <section className="wp-band" aria-label="Weekstroken">
+      <div className="wp-band-head">
+        <span className="wp-band-label">Weekstroken</span>
+        <span className="wp-band-hint">Werk dat over meerdere dagen loopt · sleep de randen om in te korten of te verlengen</span>
+        {canWrite && <button
+          type="button"
+          className="wp-day-add"
+          onClick={() => setBandAddOpen(open => !open)}
+          aria-expanded={bandAddOpen}
+          aria-label="Weekstrook toevoegen"
+          title="Weekstrook over deze hele week toevoegen"
+        >
+          <Plus size={13}/>
+        </button>}
+      </div>
+
+      {bandAddOpen && canWrite && <QuickAddTask
+        busy={quickAddBusy}
+        placeholder="Waar werk je deze week aan…"
+        hint="Enter maakt een strook over de hele week. Sleep daarna de randen om hem in te korten."
+        onSubmit={title => quickAdd(orderedDayKeys[0], title, orderedDayKeys[6])}
+        onCancel={() => setBandAddOpen(false)}
+      />}
+
+      <div
+        className="wp-lanes"
+        ref={bandRef}
+        style={{ gridTemplateRows: `repeat(${Math.max(1, laneCount)}, 26px)` }}
+      >
+        {bars.map(bar => {
+          const links = taskLinks(bar.task);
+          const dragging = barDrag?.taskId === bar.task.id && barDrag.moved;
+          return <div
+            key={bar.task.id}
+            className={`wp-bar ${dragging ? 'is-dragging' : ''} ${bar.continuesLeft ? 'continues-left' : ''} ${bar.continuesRight ? 'continues-right' : ''}`}
+            style={{ '--bar': links.color, gridColumn: `${bar.startIdx + 1} / span ${bar.span}`, gridRow: bar.lane + 1 } as React.CSSProperties}
+            data-bar-id={bar.task.id}
+            tabIndex={0}
+            role="button"
+            aria-label={`${bar.task.title}, van ${formatDateShort(bar.task.planned_date!)} tot en met ${formatDateShort(bar.task.planned_end_date!)}`}
+            onPointerDown={e => beginBarPointer(e, bar, 'move')}
+            onKeyDown={e => handleBarKey(e, bar)}
+            onClick={canWrite ? undefined : () => onEditTask(bar.task)}
+          >
+            {canWrite && !bar.continuesLeft && <span
+              className="wp-bar-grip wp-bar-grip-start"
+              onPointerDown={e => beginBarPointer(e, bar, 'resize-start')}
+              title="Sleep om eerder te laten beginnen"
+            />}
+            <span className="wp-bar-title">{bar.task.title}</span>
+            {links.projectName && <span className="wp-bar-project">{links.projectName}</span>}
+            <span className="wp-bar-span">{barSpanLabel(bar)}</span>
+            {canWrite && !bar.continuesRight && <span
+              className="wp-bar-grip wp-bar-grip-end"
+              onPointerDown={e => beginBarPointer(e, bar, 'resize-end')}
+              title="Sleep om later te laten eindigen"
+            />}
+          </div>;
+        })}
+        {bars.length === 0 && !bandAddOpen && <div className="wp-band-empty" style={{ gridColumn: '1 / -1', gridRow: 1 }}>
+          Nog geen werk dat over meerdere dagen loopt. Gebruik <strong>+</strong>, of zet bij een taak een datum bij &ldquo;Loopt door tot&rdquo;.
+        </div>}
+      </div>
+    </section>
 
     <div className="wp-grid">
       {days.map((day, i) => {
@@ -721,10 +946,12 @@ function TaskCard({
 
 /** Snelinvoer in een dagkolom: titel typen, Enter, en de taak staat op die dag.
  *  Bewust zonder project of klant — die koppel je daarna door de kaart te openen. */
-function QuickAddTask({ busy, onSubmit, onCancel }: {
+function QuickAddTask({ busy, onSubmit, onCancel, placeholder, hint }: {
   busy: boolean;
   onSubmit: (title: string) => Promise<boolean>;
   onCancel: () => void;
+  placeholder?: string;
+  hint?: string;
 }) {
   const [title, setTitle] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -744,8 +971,8 @@ function QuickAddTask({ busy, onSubmit, onCancel }: {
       className="wp-quick-add-input"
       value={title}
       disabled={busy}
-      placeholder="Taaktitel…"
-      aria-label="Nieuwe taak op deze dag"
+      placeholder={placeholder ?? 'Taaktitel…'}
+      aria-label={placeholder ?? 'Nieuwe taak op deze dag'}
       onChange={e => setTitle(e.target.value)}
       onKeyDown={e => {
         if (e.key === 'Enter') { e.preventDefault(); void submit(); }
@@ -753,7 +980,7 @@ function QuickAddTask({ busy, onSubmit, onCancel }: {
       }}
       onBlur={() => { if (!title.trim()) onCancel(); }}
     />
-    <div className="wp-quick-add-hint">Enter voegt toe · Esc sluit. Project en klant koppel je daarna in de taak.</div>
+    <div className="wp-quick-add-hint">{hint ?? 'Enter voegt toe · Esc sluit. Project en klant koppel je daarna in de taak.'}</div>
   </div>;
 }
 
@@ -883,6 +1110,13 @@ function taskEstimateMinutes(task: Task): number {
   const raw = Number(task.estimated_minutes ?? DEFAULT_TASK_ESTIMATE_MINUTES);
   if (!Number.isFinite(raw)) return DEFAULT_TASK_ESTIMATE_MINUTES;
   return Math.max(0, Math.min(24 * 60, Math.round(raw)));
+}
+
+function barSpanLabel(bar: WeekBar): string {
+  if (bar.continuesLeft && bar.continuesRight) return 'loopt door';
+  if (bar.span === 7) return 'hele week';
+  const days = bar.span;
+  return `${days} ${days === 1 ? 'dag' : 'dagen'}`;
 }
 
 function sortOutsideTasks(a: Task, b: Task): number {
