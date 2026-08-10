@@ -235,11 +235,38 @@ wordt de IB-schatting daarin een Vpb-reservering.
 | 2 | **GROTENDEELS KLAAR** — Vpb: tarieventabel (2021 t/m 2026, periodegedateerd), rekenhart met 18 tests, correcties, verliesverrekening, reservering op 9900/1540, edge function. **Rest: het scherm en de specificatie-export.** | `20260807050000`, `_shared/vpb.ts`, `corporate-tax`-edge-function | scherm nog open |
 | 3 | **KLAAR** — normen, signalen, rekening-courant met eigen rentepercentage en dagsaldo-berekening, DGA-scherm, loonjournaalpost-import | `20260807060000` t/m `080000`, `Dga.tsx`, `PayrollImport.tsx` | gedaan |
 | 4 | **KLAAR** — aandeelhoudersregister (art. 2:194 BW) met mutaties en pand/vruchtgebruik, uitkeringstoets ook op het interim-dividend, dividendbelasting met inhoudingsvrijstelling per aandeelhouder | `20260807100000`, `Shareholders.tsx`, `Dividends.tsx` | gedaan |
-| 5 | Jaarrekening, publicatiestukken, groottecriteria, deponeer-deadlines | `..._annual_accounts.sql` | 1 week |
+| 5 | **BROK A KLAAR** — groottecriteria (periodegedateerd, 2016 én 2024, met bron) + vergelijkende rapportage + balans ná resultaatbestemming. Brok B t/m E open: jaarrekening bevriezen, PDF, publicatiestukken, scherm, deponeer-deadlines | `20260812000000_company_size_and_comparative_reports.sql` | brok A gedaan |
 | 6 | Intercompany-boekingen + afstemrapport, consolidatie over de boom, fiscale eenheid | later | apart traject |
 
 Na fase 0+1 is er al een bruikbaar product: een BV-klant boekt met een correct
 rekeningschema en een correcte balans, en de accountant haalt de XAF-auditfile op.
+
+## Fase 5, brok A — wat er staat en wat er nog niet is nagelopen
+
+Migratie `20260812000000_company_size_and_comparative_reports.sql` is op staging toegepast
+(het nummer springt naar 12 augustus omdat er al weekplanner-migraties van 10 en 11 augustus
+op de remote stonden). De vier nieuwe RPC's antwoorden met `42501` op een anon-sleutel: ze
+bestaan en `anon` kan er niet bij.
+
+**De groottetoets is plakkerig, niet "de zwaarste van twee jaren".** De klasse blijft staan
+tot de rechtspersoon er twee opeenvolgende balansdata niet meer in valt en springt dán naar
+de rauwe klasse van dat jaar — symmetrisch, dus even goed bij groeien als bij krimpen
+(art. 2:395a/396/397 **lid 1** BW; lid 2 is de groepsmeetelregel). Een eerdere ronde
+implementeerde `rauw(k) = rauw(k-1)`; dat is fout en houdt een BV klein terwijl zij al twee
+jaar boven de grens zit. De zes verplichte testvectoren staan als commentaar bij de functie.
+
+Drempels: 2016-reeks (Stb. 2015, 349) en 2024-reeks (Stb. 2024, 52), beide met bron.
+Balanstotaal en omzet zijn "niet meer dan" (`<=`), werknemers "minder dan" (strikt `<`).
+Boekjaar 2023 kent een dubbel regime; de keuze staat per boekjaar op
+`fiscal_year_size_inputs.early_adopt_new_thresholds`.
+
+**Nog niet nagelopen — eerlijk te noemen:**
+- De zes testvectoren zijn nog door niemand door de code getraceerd; de verificatieronde viel
+  uit op een sessielimiet. Doe dat vóór brok D, of toets ze op een BV-administratie op staging.
+- De ketenlus roept per boekjaar `report_balance_sheet` en `report_profit_and_loss` aan. Nu
+  begrensd op twaalf boekjaren, maar het blijft lineair in het aantal jaren.
+- `is_first_fiscal_year_of_entity` kan verouderen als er later een ouder boekjaar wordt
+  ingevoerd; daar zit nog geen signaal op.
 
 ## Openstaand uit fase 0
 
