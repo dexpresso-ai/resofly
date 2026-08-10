@@ -4698,7 +4698,12 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    donker genoeg dat het witte icoon ook boven een spierwitte foto zichtbaar
    blijft (~3,6:1 — de drempel voor betekenisdragende iconen). */
 .galv{position:relative}
-.galv-menu{position:absolute;top:14px;right:14px;z-index:6}
+/* De zwevende bediening: grootbeeldknop + downloadhamburger naast elkaar. De
+   rij is de gepositioneerde laag; het menu eronder is alleen nog relatief, zodat
+   zijn uitklappaneel aan de knop hangt en niet aan de galerij. */
+.galv-actions{position:absolute;top:14px;right:14px;z-index:6;display:flex;align-items:center;gap:8px}
+.galv-actions:empty{display:none}
+.galv-menu{position:relative}
 .galv-menu-btn{display:flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:12px;border:1px solid rgba(255,255,255,.26);background:rgba(10,10,10,.62);color:#fff;cursor:pointer;padding:0;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);transition:background .18s ease,border-color .18s ease}
 .galv-menu-btn:hover{background:rgba(10,10,10,.84);border-color:rgba(255,255,255,.5)}
 .galv-menu-btn:focus-visible{outline:2px solid #fff;outline-offset:2px}
@@ -4707,7 +4712,7 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .galv-menu-item{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:9px;background:var(--gal-surface,var(--bg3));color:inherit;font-size:13px;font-weight:700;text-decoration:none;transition:background .15s ease}
 .galv-menu-item:hover{background:var(--gal-border,var(--bg4))}
 .galv-menu-note{margin:0;font-size:11.5px;line-height:1.55;color:var(--gal-muted,var(--muted))}
-@media(max-width:760px){.galv-menu{top:10px;right:10px}.galv-menu-btn{width:38px;height:38px}}
+@media(max-width:760px){.galv-actions{top:10px;right:10px}.galv-menu-btn{width:38px;height:38px}}
 
 /* ── Kopvideo: de filmische opening van een videogalerij ─────────────────────
    Eén video groot in beeld, stil meespelend, met de titel eroverheen. De
@@ -4844,6 +4849,73 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .gal-bucket-tools{opacity:1}
   .gal-dropzone{padding:32px 16px}
 }
+
+/* ── Grootbeeld: de galerij op een tv of beamer ──────────────────────────────
+   Aangezet met een knop, nooit gedetecteerd: vanuit de browser is een tv niet
+   van een monitor te onderscheiden (`hover:none` vangt tv's niet, en een
+   breedtegrens vangt elke brede monitor). Wat hier gebeurt is drieledig: de
+   randafstand groeit tot buiten de overscan-zone van een tv (doorgaans 5% per
+   zijde), de knoppen die alleen bij hover verschijnen worden zichtbaar, en de
+   vaste vh-plafonds gaan eraf — die zijn op een liggend scherm juist krap. */
+.galv.is-tv{
+  /* Deze stand dekt het scherm zélf af, en leunt niet op de Fullscreen API.
+     Dat is geen dubbelop: Safari op de iPhone kent geen element-fullscreen, en
+     de iPhone is nu juist hét apparaat waarmee mensen naar een tv spiegelen.
+     Lukt de API wel, dan doet de browser exact hetzelfde en botst er niets. */
+  position:fixed;inset:0;z-index:200;
+  /* Verplicht: .galv heeft zelf geen achtergrond (die staat op .pgal /
+     .portal-gallery / .gal-detail). Schermvullend zonder deze regel = een
+     doorzichtig element op de zwarte ::backdrop van de browser. */
+  background:var(--gal-bg,var(--bg));color:var(--gal-text,var(--text));
+  /* `contain`: aan het einde van de galerij mag het scrollen niet doorketenen
+     naar de pagina eronder — die staat er nog, en de kijker zou hem daarmee
+     ongemerkt verplaatsen. */
+  overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
+  padding:clamp(16px,3vh,48px) clamp(16px,3vw,64px);
+  gap:clamp(18px,2vh,34px);
+}
+/* .galv is een flex-kolom. Zolang hij meegroeit met zijn inhoud valt dat niet
+   op, maar zodra hij een vaste hoogte krijgt (inset:0) gaan flex-items krimpen:
+   dan wordt de hele galerij in één scherm geperst in plaats van te scrollen. */
+.galv.is-tv>*{flex:0 0 auto}
+/* .galv wordt in deze stand zelf de scrollcontainer; `fixed` lost binnen een
+   schermvullend element op naar dát kader, dus blijft de bediening staan. */
+.galv.is-tv .galv-actions{position:fixed;top:clamp(16px,3vh,48px);right:clamp(16px,3vw,64px)}
+/* Hover bestaat niet op een afstandsbediening. Let op de verschillende
+   mechanismen: het afspeelicoon staat op opacity:0, de bladerknoppen van een
+   videorij worden op aanraakschermen op `display:none` gezet — die moet je dus
+   allebéi terugzetten, anders verdwijnt de knop juist waar hij nodig is.
+   De knoppen per tegel (.galv-tile-tools) blijven hier bewust wél verborgen:
+   die vragen om een muis, en op een tv zou het een raster vol iconen worden.
+   In de lightbox staan ze gewoon aan, dus onbereikbaar zijn ze niet. */
+.galv.is-tv .galv-video-play{opacity:1}
+.galv.is-tv .galv-row-nav{display:flex;opacity:1}
+.galv.is-tv .galv-row-nav:disabled{display:none}
+/* De chipbalk plakt bovenaan en zou onder de zwevende knoppen doorschuiven. */
+.galv.is-tv .galv-chips{padding-right:112px}
+/* De vaste plafonds losmaken: `min(70vh,620px)` klemt vanaf 886px vensterhoogte
+   op 620px, wat op 1080p nog maar 57% van het scherm is en op 4K 29%. */
+/* Ook de ondergrens eraf: op een liggende telefoon (375px hoog) zou de opening
+   met haar min-height van 360px in haar eentje het scherm al vullen. */
+.galv.is-tv .galv-bb{height:78vh;max-height:none;min-height:0}
+/* 2560px is de lange zijde van de preview die we opslaan; verder oprekken maakt
+   de foto op een 4K-tv niet groter maar zachter. */
+.galv.is-tv .galv-lightbox-stage{max-width:min(2560px,96vw);max-height:96vh}
+/* De 52px is de balk onder de foto; die hoort bij dit plafond mee te bewegen. */
+.galv.is-tv .galv-lightbox-stage img{max-height:calc(96vh - 52px)}
+.galv.is-tv .galv-player-stage{width:min(1600px,92vw)}
+/* Leesbaar op drie meter: alleen de tekst die er dan toe doet. */
+.galv.is-tv .galv-chip{font-size:14px;padding:9px 15px}
+.galv.is-tv .galv-section-title,.galv.is-tv .galv-video-name{font-size:15px}
+.galv.is-tv .galv-lightbox-name{font-size:15px}
+.galv.is-tv .galv-lightbox-count{font-size:14px}
+.galv.is-tv .galv-lightbox-close{width:48px;height:48px}
+.galv.is-tv .galv-lightbox-nav{width:60px;height:60px}
+/* Zodra de focus in het Stream-iframe ligt, ziet geen enkele window-listener nog
+   een toets: Tab naar de sluitknop is dan de enige uitweg. Die knop moet je dus
+   kunnen zíen staan — de galerij had tot nu toe maar vier focus-stijlen. */
+.galv-lightbox-close:focus-visible,.galv-lightbox-nav:focus-visible,
+.galv-chip:focus-visible,.galv-menu-item:focus-visible{outline:2px solid #fff;outline-offset:2px}
 
 /* ── Portaal: Galerijen-tab ── */
 .portal-gallery-head{display:flex;align-items:center;gap:10px;min-width:0}

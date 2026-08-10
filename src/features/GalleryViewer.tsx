@@ -4,13 +4,14 @@
 // De component is puur presentationeel: media-URL's komen uit het meegegeven
 // tokenbundel, favorieten en downloads lopen via callbacks van de host.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, Film, Heart, Menu, Play, ThumbsUp, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Film, Heart, Maximize2, Menu, Minimize2, Play, ThumbsUp, X } from 'lucide-react';
 import {
   galleryFileUrl,
   streamIframeUrl,
   streamThumbnailUrl,
   type GalleryTokenBundle,
 } from '../lib/gallery';
+import { currentFullscreenElement, enterFullscreen, leaveFullscreen, onFullscreenChange } from '../lib/fullscreen';
 
 /** Minimale item-vorm — zowel de app (GalleryItem) als het portaal (gesanitiseerd) passen hierin. */
 export type GalleryViewerItem = {
@@ -128,6 +129,21 @@ type GallerySection = {
   photos: GalleryViewerItem[];
 };
 
+/**
+ * Het element dat de galerij daadwerkelijk scrolt. Dat verschilt per plek waar
+ * de kijker staat: `.content` in de app, `.portal-content` in het klantportaal,
+ * en het venster zelf op de publieke deellinkpagina.
+ */
+function scrollableAncestor(node: HTMLElement | null): HTMLElement | null {
+  let el = node?.parentElement ?? null;
+  while (el) {
+    const overflow = getComputedStyle(el).overflowY;
+    if ((overflow === 'auto' || overflow === 'scroll') && el.scrollHeight > el.clientHeight) return el;
+    el = el.parentElement;
+  }
+  return null;
+}
+
 export function GalleryViewer({
   items,
   bundle,
@@ -192,6 +208,16 @@ export function GalleryViewer({
   const [lightbox, setLightbox] = useState<{ index: number } | null>(null);
   const [playing, setPlaying] = useState<GalleryViewerItem | null>(null);
   const [activeChip, setActiveChip] = useState<string | null>(null);
+  /**
+   * Grootbeeld: de galerij zonder browserrand, met bediening die op drie meter
+   * afstand nog werkt. Bedoeld voor wie zijn scherm naar een tv spiegelt.
+   *
+   * Bewust een knop en geen automatische herkenning: er is vanuit de browser
+   * geen enkel signaal waarmee je een tv van een monitor onderscheidt —
+   * `hover:none` vangt tv's niet en een breedtegrens vangt elke brede monitor.
+   */
+  const [bigScreen, setBigScreen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef(new Map<string, HTMLElement>());
   const dragItemId = useRef<string | null>(null);
 
@@ -274,16 +300,156 @@ export function GalleryViewer({
     });
   }, [orderedPhotos.length]);
 
+  /**
+   * Eén toetsenafhandeling voor de hele kijker.
+   *
+   * Bewust in de CAPTURE-fase op window: de app heeft meerdere handlers op
+   * hetzelfde window liggen (de presenteerstand van de fotograaf, de zijbalk, en
+   * de agenda die ArrowLeft/Right afvangt óók als hij op een achtergrondtabblad
+   * staat). `stopPropagation` in de bubble-fase schakelt die níét uit — ze
+   * luisteren op hetzelfde doel, en dan bepaalt registratievolgorde de winnaar.
+   * In capture zijn we er eerder bij en bereikt het event ze nooit.
+   *
+   * En preventDefault, dat hier eerder ontbrak: zonder dat scrolt de pagina
+   * achter de open foto gewoon mee met de pijltjes.
+   */
   useEffect(() => {
-    if (!lightbox && !playing) return;
+    if (!lightbox && !playing && !bigScreen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeOverlays();
-      if (lightbox && e.key === 'ArrowLeft') stepLightbox(-1);
-      if (lightbox && e.key === 'ArrowRight') stepLightbox(1);
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+
+      if (e.key === 'Escape') {
+        // Alleen de bovenste laag sluiten. Staat er een foto open binnen de
+        // presenteerstand van de fotograaf, dan hoort de eerste Escape de foto
+        // te sluiten en pas de tweede die stand te verlaten.
+        if (lightbox || playing) {
+          e.preventDefault();
+          e.stopPropagation();
+          closeOverlays();
+          return;
+        }
+        // Zonder overlay verlaat Escape de grootbeeldstand — en niets anders.
+        // Bewust ook stoppen wanneer de browser zélf al uit volledig scherm
+        // stapt: anders bereikt dezelfde toets óók de presenteerstand van de
+        // fotograaf, en klappen er twee standen tegelijk dicht.
+        //
+        // Prijs hiervan: een openstaand downloadmenu blijft staan (dat luistert
+        // zelf op Escape en komt hier niet meer aan). Dat sluit bij de volgende
+        // klik; twee standen tegelijk verliezen is erger.
+        if (bigScreen) {
+          e.preventDefault();
+          e.stopPropagation();
+          void leaveFullscreen();
+          setBigScreen(false);
+        }
+        return;
+      }
+
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      const delta = e.key === 'ArrowRight' ? 1 : -1;
+      if (lightbox) {
+        e.preventDefault();
+        e.stopPropagation();
+        stepLightbox(delta);
+        return;
+      }
+      // In grootbeeld zonder open foto: begin bij de eerste (of de laatste, bij
+      // een pijltje naar links). Zo is de hele galerij met alleen de pijltjes te
+      // doorlopen — op een afstandsbediening is dat de enige bediening die er is.
+      if (bigScreen && !playing && orderedPhotos.length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        setLightbox({ index: delta > 0 ? 0 : orderedPhotos.length - 1 });
+      }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [lightbox, playing, closeOverlays, stepLightbox]);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [lightbox, playing, bigScreen, closeOverlays, stepLightbox, orderedPhotos.length]);
+
+  /**
+   * De browser kan volledig scherm buiten ons om verlaten (Escape, F11, of de
+   * eigen knop van de videospeler). Zonder deze synchronisatie blijft de
+   * grootbeeldstand aan terwijl het scherm er niet meer naar is.
+   */
+  useEffect(() => {
+    if (!bigScreen) return;
+    return onFullscreenChange(() => {
+      // Er is nog iets schermvullend: de Stream-speler pakt zíjn eigen iframe.
+      // Dat is een laag erbovenop, niet ons vertrek.
+      if (currentFullscreenElement()) return;
+      // En als die speler zijn volledig scherm teruggeeft, hoort de
+      // grootbeeldstand eronder gewoon te blijven staan.
+      if (playing) return;
+      setBigScreen(false);
+    });
+  }, [bigScreen, playing]);
+
+  const toggleBigScreen = useCallback(() => {
+    if (bigScreen) {
+      void leaveFullscreen();
+      setBigScreen(false);
+      return;
+    }
+    // De CSS-stand is leidend, niet de API: lukt echte fullscreen niet (iPhone
+    // kent geen element-fullscreen), dan werkt grootbeeld nog steeds — alleen
+    // met de browserbalk er nog omheen.
+    //
+    // Bewust het hele document en niet dit ene element: alles búiten het
+    // schermvullende element verdwijnt achter de zwarte ::backdrop van de
+    // browser, en de vensters van de gastheerpagina staan daar (de naamvraag op
+    // de deellinkpagina, de vensters in de app). Die zouden dan onzichtbaar
+    // openen terwijl ze wél de focus pakken. Met het document als doel blijft de
+    // stapeling gewoon werken en haalt de API alleen de browserbalk weg.
+    void enterFullscreen(document.documentElement);
+    setBigScreen(true);
+  }, [bigScreen]);
+
+  /**
+   * De gastheerpagina scrollt niet mee: in deze stand staat de galerij op
+   * `fixed` en is ze dus uit de flow, waardoor de pagina eronder dichtklapt en
+   * haar scrollpositie kwijtraakt. Zonder dit kom je na het verlaten van
+   * grootbeeld bovenaan terug in plaats van bij de foto waar je was.
+   */
+  useEffect(() => {
+    if (!bigScreen) return;
+    const host = scrollableAncestor(rootRef.current);
+    const top = host ? host.scrollTop : window.scrollY;
+    return () => {
+      // Ook het vertrek langs de achterdeur afdekken: bij unmount (tabblad weg,
+      // galerij gesloten) zou de browser anders schermvullend blijven staan.
+      void leaveFullscreen();
+      requestAnimationFrame(() => {
+        if (host) host.scrollTop = top;
+        else window.scrollTo(0, top);
+      });
+    };
+  }, [bigScreen]);
+
+  /**
+   * Grootbeeld mag nooit blijven hangen zonder uitweg. Raakt de galerij leeg
+   * (laatste foto verwijderd, favorietenfilter aan) dan rendert de kijker alleen
+   * nog een lege regel — zonder knop om de stand te verlaten, terwijl de
+   * toetsenafhandeling wél actief blijft. Datzelfde geldt voor de selectie- en
+   * sleepstand, waar de knop bewust verdwijnt.
+   */
+  useEffect(() => {
+    if (!bigScreen) return;
+    if (items.length > 0 && !selectable && !reorderable) return;
+    void leaveFullscreen();
+    setBigScreen(false);
+  }, [bigScreen, items.length, selectable, reorderable]);
+
+  /**
+   * Een lightbox-index die buiten de lijst valt toont niets (de render valt
+   * terug op null), maar houdt de toetsen wél bezet: je bladert dan door een
+   * onzichtbare overlay. Gebeurt zodra de lijst krimpt terwijl er een foto open
+   * staat — een verwijderd item, of het favorietenfilter dat aangaat.
+   */
+  useEffect(() => {
+    if (lightbox && !orderedPhotos[lightbox.index]) setLightbox(null);
+  }, [lightbox, orderedPhotos]);
 
   // Chip markeren op basis van welke sectie in beeld is.
   useEffect(() => {
@@ -458,6 +624,7 @@ export function GalleryViewer({
   const renderPhotos = (list: GalleryViewerItem[]) => (
     <JustifiedPhotos
       photos={list}
+      rowScale={bigScreen ? 1.35 : 1}
       renderTile={(item, style, displayWidth) => {
         const thumb = galleryItemThumbUrl(item, bundle);
         const isSelected = selected?.has(item.id) ?? false;
@@ -500,14 +667,34 @@ export function GalleryViewer({
   );
 
   return (
-    <div className="galv">
-      {allowDownload && zipUrl && (hasZippableItems(items) || items.some(i => i.media_type === 'video')) && (
-        <GalleryDownloadMenu
-          zipUrl={zipUrl}
-          zippable={hasZippableItems(items)}
-          videoCount={items.filter(i => i.media_type === 'video').length}
-        />
-      )}
+    <div className={`galv${bigScreen ? ' is-tv' : ''}`} ref={rootRef}>
+      {/* De zwevende bediening. De grootbeeldknop staat bewust búiten
+          GalleryDownloadMenu: dat menu sluit zichzelf op elke muisklik erbuiten,
+          dus een knop binnen zijn kader zou het menu blokkeren en een knop
+          erbuiten zou het bij elke klik dichtslaan. */}
+      <div className="galv-actions">
+        {/* In de sleep- en selectiestand opent een tegelklik geen foto, dus
+            heeft bladeren met de pijltjes daar geen betekenis. */}
+        {!selectable && !reorderable && (
+          <button
+            type="button"
+            className="galv-menu-btn"
+            onClick={toggleBigScreen}
+            aria-pressed={bigScreen}
+            aria-label={bigScreen ? 'Grootbeeld verlaten' : 'Grootbeeld voor tv of beamer'}
+            title={bigScreen ? 'Grootbeeld verlaten (Escape)' : 'Grootbeeld — voor op een tv of beamer, blader met de pijltjes'}
+          >
+            {bigScreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+          </button>
+        )}
+        {allowDownload && zipUrl && (hasZippableItems(items) || items.some(i => i.media_type === 'video')) && (
+          <GalleryDownloadMenu
+            zipUrl={zipUrl}
+            zippable={hasZippableItems(items)}
+            videoCount={items.filter(i => i.media_type === 'video').length}
+          />
+        )}
+      </div>
       {billboard && heroItem && hero && (
         <GalleryBillboard
           hero={hero}
@@ -915,9 +1102,9 @@ function targetRowHeight(width: number): number {
 
 type PhotoRow = { items: GalleryViewerItem[]; height: number };
 
-function buildPhotoRows(photos: GalleryViewerItem[], width: number): PhotoRow[] {
+function buildPhotoRows(photos: GalleryViewerItem[], width: number, scale = 1): PhotoRow[] {
   if (photos.length === 0 || width <= 0) return [];
-  const target = targetRowHeight(width);
+  const target = targetRowHeight(width) * scale;
   const heightOf = (list: GalleryViewerItem[]) => {
     const sum = list.reduce((total, item) => total + aspectRatio(item), 0);
     if (sum <= 0) return target;
@@ -954,10 +1141,18 @@ function buildPhotoRows(photos: GalleryViewerItem[], width: number): PhotoRow[] 
   return rows;
 }
 
-function JustifiedPhotos({ photos, renderTile }: {
+function JustifiedPhotos({ photos, renderTile, rowScale = 1 }: {
   photos: GalleryViewerItem[];
   /** `displayWidth` is de werkelijke breedte in CSS-pixels, voor een kloppende `sizes`. */
   renderTile: (item: GalleryViewerItem, style: React.CSSProperties, displayWidth: number) => React.ReactNode;
+  /**
+   * Vermenigvuldiger op de streefhoogte van een rij. Alleen grootbeeld gebruikt
+   * dit: de rijhoogte komt uit de code en niet uit CSS, dus zonder deze weg
+   * blijven de foto's op een tv net zo klein als op een laptop. Bewust géén
+   * extra breedtetrede in `targetRowHeight`, want dat zou ook elke brede
+   * monitor van indeling laten veranderen.
+   */
+  rowScale?: number;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Beginbreedte zodat de eerste paint al een zinnige indeling toont; de
@@ -977,7 +1172,7 @@ function JustifiedPhotos({ photos, renderTile }: {
     return () => observer.disconnect();
   }, []);
 
-  const rows = useMemo(() => buildPhotoRows(photos, width), [photos, width]);
+  const rows = useMemo(() => buildPhotoRows(photos, width, rowScale), [photos, width, rowScale]);
 
   return (
     <div className="galv-just" ref={containerRef}>

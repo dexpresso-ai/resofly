@@ -1148,7 +1148,11 @@ export function GalleryTab({
             variant={fullscreen ? 'primary' : undefined}
             title={fullscreen ? 'Terug naar de werkruimte (Escape)' : 'Alleen de galerij tonen'}
           >
-            {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />} {fullscreen ? 'Verlaten' : 'Volledig scherm'}
+            {/* Bewust niet "Volledig scherm": die knop bestaat nu ook in de
+                galerij zelf (grootbeeld, écht schermvullend) en twee knoppen met
+                hetzelfde woord naast elkaar leggen niets uit. Deze verbergt de
+                werkruimte eromheen — precies wat de tooltip al zei. */}
+            {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />} {fullscreen ? 'Verlaten' : 'Alleen de galerij'}
           </Button>
           {writable && (
             <>
