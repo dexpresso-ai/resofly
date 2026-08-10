@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import type { AppData, CalendarExternalEvent, OrganizationMember, PlannerNote, Priority, Task, TaskStatus, UUID } from '../types';
@@ -7,7 +7,7 @@ import { memberColor, memberInitials, memberShortName } from '../lib/members';
 import { Button, Input, Select } from '../components/Ui';
 import { AssigneeAvatars } from '../components/AssigneeAvatars';
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
-import { comparePlannedTasks, groupEventMinutesByDay, isSpanningTask, layoutWeekBars, shiftDateKey } from '../lib/planning';
+import { comparePlannedTasks, edgeScrollDelta, groupEventMinutesByDay, isSpanningTask, layoutWeekBars, shiftDateKey } from '../lib/planning';
 import type { WeekBar } from '../lib/planning';
 import { priorityLabel } from '../lib/format';
 
@@ -89,10 +89,48 @@ const TOUCH_HOLD_TOLERANCE_PX = 10;
 // Met de muis is een paar pixels genoeg om een sleep van een klik te onderscheiden.
 const MOUSE_DRAG_THRESHOLD_PX = 4;
 
+/** Onder deze breedte staan de dagen onder elkaar in plaats van naast elkaar. */
+const NARROW_QUERY = '(max-width: 900px)';
+
 /** Korte trilling als een sleepgebaar "pakt" (waar ondersteund). */
 function hapticTick() {
   try { navigator.vibrate?.(12); } catch { /* niet ondersteund — puur cosmetisch */ }
 }
+
+/** Volgt een media query, zodat de planner op smal scherm ander gedrag kan kiezen. */
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
+  useEffect(() => {
+    const list = window.matchMedia(query);
+    const onChange = () => setMatches(list.matches);
+    onChange();
+    list.addEventListener('change', onChange);
+    return () => list.removeEventListener('change', onChange);
+  }, [query]);
+  return matches;
+}
+
+/** Wijzen twee dropzones naar dezelfde plek? Voorkomt renders zonder verschil. */
+function sameTarget(a: DropTarget | null, b: DropTarget | null): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.type !== b.type) return false;
+  if (a.type !== 'day' || b.type !== 'day') return true;
+  return a.date === b.date && a.beforeTaskId === b.beforeTaskId && a.userId === b.userId;
+}
+
+/** Het dichtstbijzijnde element dat werkelijk kan scrollen, anders het venster. */
+function findScrollHost(start: HTMLElement | null): HTMLElement | null {
+  let node = start?.parentElement ?? null;
+  while (node) {
+    const style = getComputedStyle(node);
+    const scrollsY = /(auto|scroll|overlay)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1;
+    const scrollsX = /(auto|scroll|overlay)/.test(style.overflowX) && node.scrollWidth > node.clientWidth + 1;
+    if (scrollsY || scrollsX) return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
 
 type StoredPrefs = {
   scope: Scope;
@@ -162,6 +200,10 @@ export function WeekPlanner({
   const [quickAddDay, setQuickAddDay] = useState<string | null>(null);
   const [quickAddBusy, setQuickAddBusy] = useState(false);
   const [bandAddOpen, setBandAddOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // Op smal scherm staan de dagen onder elkaar; een strook over kolommen slepen
+  // heeft dan geen betekenis meer.
+  const isNarrow = useMediaQuery(NARROW_QUERY);
 
   useEffect(() => {
     const prefs: StoredPrefs = {
@@ -681,15 +723,60 @@ export function WeekPlanner({
   const isDragging = drag !== null;
   useEffect(() => {
     if (!isDragging) return;
+    const host = findScrollHost(rootRef.current);
+    let raf = 0;
 
-    function onMove(e: PointerEvent) {
+    /** Verwerkt een aanwijzerpositie: doelzone bepalen en het voorbeeld bijwerken. */
+    function applyPointer(x: number, y: number) {
       const state = dragRef.current;
       if (!state) return;
-      const moved = state.moved || Math.hypot(e.clientX - state.origin.x, e.clientY - state.origin.y) > MOUSE_DRAG_THRESHOLD_PX;
-      const target = moved ? resolveTarget(e.clientX, e.clientY, state.taskId) : null;
-      const next: DragState = { ...state, pointer: { x: e.clientX, y: e.clientY }, moved, target };
+      const moved = state.moved || Math.hypot(x - state.origin.x, y - state.origin.y) > MOUSE_DRAG_THRESHOLD_PX;
+      const target = moved ? resolveTarget(x, y, state.taskId) : null;
+      const same = moved === state.moved
+        && state.pointer.x === x && state.pointer.y === y
+        && sameTarget(state.target, target);
+      if (same) return;
+      const next: DragState = { ...state, pointer: { x, y }, moved, target };
       dragRef.current = next;
       setDrag(next);
+    }
+
+    /**
+     * Meescrollen bij de randen, en daarna opnieuw kijken wat er onder de
+     * aanwijzer ligt — de inhoud is immers verschoven. Dit draait zowel bij elke
+     * beweging (meteen reageren) als in een lus (doorscrollen terwijl de vinger
+     * stilligt tegen de rand).
+     */
+    function autoScroll() {
+      const state = dragRef.current;
+      if (!state || !state.moved) return;
+      const { x, y } = state.pointer;
+
+      let dx = 0;
+      let dy = 0;
+      if (host) {
+        const rect = host.getBoundingClientRect();
+        dy = edgeScrollDelta(y, rect.top, rect.bottom);
+        dx = edgeScrollDelta(x, rect.left, rect.right);
+        if (dy) host.scrollTop += dy;
+        if (dx) host.scrollLeft += dx;
+      } else {
+        dy = edgeScrollDelta(y, 0, window.innerHeight);
+        dx = edgeScrollDelta(x, 0, window.innerWidth);
+        if (dy || dx) window.scrollBy(dx, dy);
+      }
+      if (dy || dx) applyPointer(x, y);
+    }
+
+    function step() {
+      raf = requestAnimationFrame(step);
+      autoScroll();
+    }
+    raf = requestAnimationFrame(step);
+
+    function onMove(e: PointerEvent) {
+      applyPointer(e.clientX, e.clientY);
+      autoScroll();
     }
 
     function onUp() {
@@ -710,6 +797,7 @@ export function WeekPlanner({
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
     return () => {
+      cancelAnimationFrame(raf);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
@@ -823,7 +911,7 @@ export function WeekPlanner({
 
   const draggedTask = drag ? data.tasks.find(t => t.id === drag.taskId) ?? null : null;
 
-  return <div className={`week-planner density-${density}`} onKeyDown={handleRootKey}>
+  return <div className={`week-planner density-${density}`} ref={rootRef} onKeyDown={handleRootKey}>
     <div className="wp-toolbar">
       <Button onClick={() => setAnchor(prev => addDays(prev, -7))} title="Vorige week (shift + pijl links)"><ChevronLeft size={14}/> Vorige</Button>
       <Button onClick={() => setAnchor(startOfWeek(new Date()))} title="Deze week (T)">Vandaag</Button>
@@ -837,6 +925,16 @@ export function WeekPlanner({
         <button type="button" className={density === 'compact' ? 'is-on' : ''} aria-pressed={density === 'compact'} onClick={() => setDensity('compact')}>Compact</button>
         <button type="button" className={density === 'comfortable' ? 'is-on' : ''} aria-pressed={density === 'comfortable'} onClick={() => setDensity('comfortable')}>Ruim</button>
       </div>
+
+      {canWrite && <button
+        type="button"
+        className="tb-btn wp-strip-add"
+        aria-expanded={bandAddOpen}
+        onClick={() => setBandAddOpen(open => !open)}
+        title="Werk toevoegen dat over meerdere dagen loopt"
+      >
+        <Plus size={13}/> Weekstrook
+      </button>}
 
       <div className="wp-week-label">{weekLabel}</div>
     </div>
@@ -909,74 +1007,60 @@ export function WeekPlanner({
       <button type="button" className="wp-rollover-btn is-ghost" onClick={() => setCarryOverDismissed(true)}>Laat staan</button>
     </div>}
 
-    <section className="wp-band" aria-label="Weekstroken">
-      <div className="wp-band-head">
-        <span className="wp-band-label">Weekstroken</span>
-        <span className="wp-band-hint">Werk dat over meerdere dagen loopt · sleep de randen om in te korten of te verlengen</span>
-        {canWrite && <button
-          type="button"
-          className="wp-day-add"
-          onClick={() => setBandAddOpen(open => !open)}
-          aria-expanded={bandAddOpen}
-          aria-label="Weekstrook toevoegen"
-          title="Weekstrook over deze hele week toevoegen"
-        >
-          <Plus size={13}/>
-        </button>}
-      </div>
-
-      {bandAddOpen && canWrite && <QuickAddTask
-        busy={quickAddBusy}
-        placeholder="Waar werk je deze week aan…"
-        hint="Enter maakt een strook over de hele week. Sleep daarna de randen om hem in te korten."
-        onSubmit={title => quickAdd(orderedDayKeys[0], title, orderedDayKeys[6])}
-        onCancel={() => setBandAddOpen(false)}
-      />}
-
-      <div
-        className="wp-lanes"
-        ref={bandRef}
-        style={{ gridTemplateRows: `repeat(${Math.max(1, laneCount)}, 26px)` }}
-      >
-        {bars.map(bar => {
-          const links = taskLinks(bar.task);
-          const dragging = barDrag?.taskId === bar.task.id && barDrag.moved;
-          return <div
-            key={bar.task.id}
-            className={`wp-bar ${dragging ? 'is-dragging' : ''} ${bar.continuesLeft ? 'continues-left' : ''} ${bar.continuesRight ? 'continues-right' : ''}`}
-            style={{ '--bar': links.color, gridColumn: `${bar.startIdx + 1} / span ${bar.span}`, gridRow: bar.lane + 1 } as React.CSSProperties}
-            data-bar-id={bar.task.id}
-            tabIndex={0}
-            role="button"
-            aria-label={`${bar.task.title}, van ${formatDateShort(bar.task.planned_date!)} tot en met ${formatDateShort(bar.task.planned_end_date!)}`}
-            onPointerDown={e => beginBarPointer(e, bar, 'move')}
-            onKeyDown={e => handleBarKey(e, bar)}
-            onClick={canWrite ? undefined : () => onEditTask(bar.task)}
-          >
-            {canWrite && !bar.continuesLeft && <span
-              className="wp-bar-grip wp-bar-grip-start"
-              onPointerDown={e => beginBarPointer(e, bar, 'resize-start')}
-              title="Sleep om eerder te laten beginnen"
-            />}
-            <span className="wp-bar-title">{bar.task.title}</span>
-            {links.projectName && <span className="wp-bar-project">{links.projectName}</span>}
-            <span className="wp-bar-span">{barSpanLabel(bar)}</span>
-            {canWrite && !bar.continuesRight && <span
-              className="wp-bar-grip wp-bar-grip-end"
-              onPointerDown={e => beginBarPointer(e, bar, 'resize-end')}
-              title="Sleep om later te laten eindigen"
-            />}
-          </div>;
-        })}
-        {bars.length === 0 && !bandAddOpen && <div className="wp-band-empty" style={{ gridColumn: '1 / -1', gridRow: 1 }}>
-          Nog geen werk dat over meerdere dagen loopt. Gebruik <strong>+</strong>, of zet bij een taak een datum bij &ldquo;Loopt door tot&rdquo;.
-        </div>}
-      </div>
-    </section>
+    {bandAddOpen && canWrite && <QuickAddTask
+      busy={quickAddBusy}
+      placeholder="Waar werk je deze week aan…"
+      hint="Enter maakt een strook over de hele week. Sleep daarna de randen om hem in te korten."
+      onSubmit={title => quickAdd(orderedDayKeys[0], title, orderedDayKeys[6])}
+      onCancel={() => setBandAddOpen(false)}
+    />}
 
     <div className="wp-board">
       <div className="wp-board-main">
-        <div className="wp-grid">
+        {/*
+          Eén raster voor de hele week: dagkoppen bovenin, dan de rijen met
+          weekstroken, dan de dagkolommen. De stroken krijgen een kolombereik en
+          lopen daardoor dwars over de dagen heen in plaats van in een losse
+          balk erboven. De stroken staan bewust vooraan in de DOM: op een smal
+          scherm — waar het raster een kolom wordt — komen ze dan bovenaan.
+        */}
+        <div
+          className="wp-week"
+          ref={bandRef}
+          style={{ gridTemplateRows: `auto${laneCount > 0 ? ` repeat(${laneCount}, 26px)` : ''}${scope === 'mine' ? ' minmax(0, 1fr)' : ''}` }}
+        >
+          {bars.map(bar => {
+            const links = taskLinks(bar.task);
+            const dragging = barDrag?.taskId === bar.task.id && barDrag.moved;
+            const draggable = canWrite && !isNarrow;
+            return <div
+              key={bar.task.id}
+              className={`wp-bar ${dragging ? 'is-dragging' : ''} ${bar.continuesLeft ? 'continues-left' : ''} ${bar.continuesRight ? 'continues-right' : ''} ${draggable ? '' : 'is-static'}`}
+              style={{ '--bar': links.color, gridColumn: `${bar.startIdx + 1} / span ${bar.span}`, gridRow: bar.lane + 2 } as React.CSSProperties}
+              data-bar-id={bar.task.id}
+              tabIndex={0}
+              role="button"
+              aria-label={`${bar.task.title}, van ${formatDateShort(bar.task.planned_date!)} tot en met ${formatDateShort(bar.task.planned_end_date!)}`}
+              onPointerDown={draggable ? (e => beginBarPointer(e, bar, 'move')) : undefined}
+              onKeyDown={e => handleBarKey(e, bar)}
+              onClick={draggable ? undefined : () => onEditTask(bar.task)}
+            >
+              {draggable && !bar.continuesLeft && <span
+                className="wp-bar-grip wp-bar-grip-start"
+                onPointerDown={e => beginBarPointer(e, bar, 'resize-start')}
+                title="Sleep om eerder te laten beginnen"
+              />}
+              <span className="wp-bar-title">{bar.task.title}</span>
+              {links.projectName && <span className="wp-bar-project">{links.projectName}</span>}
+              <span className="wp-bar-span">{isNarrow ? barDateLabel(bar) : barSpanLabel(bar)}</span>
+              {draggable && !bar.continuesRight && <span
+                className="wp-bar-grip wp-bar-grip-end"
+                onPointerDown={e => beginBarPointer(e, bar, 'resize-end')}
+                title="Sleep om later te laten eindigen"
+              />}
+            </div>;
+          })}
+
           {days.map((day, i) => {
             const key = formatISODate(day);
             const bucket = byDay.get(key) ?? EMPTY_BUCKET;
@@ -985,11 +1069,13 @@ export function WeekPlanner({
             const marker = scope === 'mine' ? insertMarkerFor(key) : null;
             const total = bucket.minutes + bucket.agendaMinutes;
             const scale = busiestMinutes > 0 ? busiestMinutes : 1;
-            return <div
-              key={key}
-              className={`wp-day ${isToday ? 'is-today' : ''} ${marker !== null ? 'is-drop' : ''} ${key === busiestKey ? 'is-peak' : ''}`}
-            >
-              <div className="wp-day-head">
+            const state = `${isToday ? 'is-today ' : ''}${marker !== null ? 'is-drop ' : ''}${key === busiestKey ? 'is-peak' : ''}`;
+            return <Fragment key={key}>
+              {/* Het kolomvlak geeft de dag zijn kaartvorm en loopt van de kop
+                  tot onder de kolom door, zodat een strook er dwars overheen valt. */}
+              <div className={`wp-col ${state}`} style={{ gridColumn: i + 1, gridRow: '1 / -1' }} aria-hidden="true"/>
+
+              <div className={`wp-day-head ${state}`} style={{ gridColumn: i + 1, gridRow: 1 }}>
                 <div className="wp-day-row">
                   <span className="wp-day-name">{DAY_NAMES_NL[i]}</span>
                   <span className="wp-day-num">{day.getDate()}</span>
@@ -1017,7 +1103,12 @@ export function WeekPlanner({
                   <span className="wp-day-load-fill" style={{ width: `${(bucket.minutes / scale) * 100}%` }}/>
                 </div>
               </div>
-              <div className="wp-day-body" ref={scope === 'mine' ? (el => registerZone(key, el)) : undefined}>
+
+              {scope === 'mine' && <div
+                className={`wp-day-body ${state}`}
+                style={{ gridColumn: i + 1, gridRow: laneCount + 2 }}
+                ref={el => registerZone(key, el)}
+              >
                 {agenda?.items.map(event => <div key={`${event.source_id}-${event.provider_event_id}-${event.starts_at}`} className="wp-agenda-chip" title={event.title}>
                   <span className="wp-agenda-time">{formatEventTime(event.starts_at)}</span>
                   <span className="wp-agenda-name">{event.title}</span>
@@ -1027,15 +1118,15 @@ export function WeekPlanner({
                   onSubmit={title => quickAdd(key, title)}
                   onCancel={() => setQuickAddDay(null)}
                 />}
-                {scope === 'mine' && bucket.tasks.map(task => taskCard(task, { insertBefore: marker }))}
+                {bucket.tasks.map(task => taskCard(task, { insertBefore: marker }))}
                 {marker === '__end__' && <div className="wp-insert-line" aria-hidden="true"/>}
-                {scope === 'mine' && bucket.tasks.length === 0 && quickAddDay !== key && !agenda?.items.length
+                {bucket.tasks.length === 0 && quickAddDay !== key && !agenda?.items.length
                   && <div className="wp-day-empty">Sleep een taak hierheen of gebruik <strong>+</strong></div>}
-                {bucket.noEstimateCount > 0 && scope === 'mine' && <div className="wp-day-noestimate">
+                {bucket.noEstimateCount > 0 && <div className="wp-day-noestimate">
                   {bucket.noEstimateCount === 1 ? '1 taak zonder schatting' : `${bucket.noEstimateCount} taken zonder schatting`}
                 </div>}
-              </div>
-            </div>;
+              </div>}
+            </Fragment>;
           })}
         </div>
 
@@ -1398,6 +1489,12 @@ function barSpanLabel(bar: WeekBar): string {
   if (bar.span === 7) return 'hele week';
   const days = bar.span;
   return `${days} ${days === 1 ? 'dag' : 'dagen'}`;
+}
+
+/** Op smal scherm staan de dagen onder elkaar, dus zegt "3 dagen" niets over
+ *  wélke dagen. Daar noemen we de periode voluit. */
+function barDateLabel(bar: WeekBar): string {
+  return `${formatDateShort(bar.task.planned_date!)} – ${formatDateShort(bar.task.planned_end_date!)}`;
 }
 
 function sortOutsideTasks(a: Task, b: Task): number {

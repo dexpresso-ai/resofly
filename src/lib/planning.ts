@@ -181,6 +181,31 @@ export function layoutWeekBars(dayKeys: string[], tasks: Task[]): { bars: WeekBa
   return { bars, laneCount: laneEnds.length };
 }
 
+// Sleep je tegen een rand van het scrollgebied, dan scrollt het mee. Op een
+// telefoon staan de zeven dagen onder elkaar; zonder dit kun je een taak nooit
+// van maandag naar zondag brengen.
+export const EDGE_SCROLL_ZONE_PX = 84;
+export const EDGE_SCROLL_MAX_PX = 20;
+
+/**
+ * Hoeveel pixels moet er geschoven worden bij deze aanwijzerpositie? Negatief is
+ * terug, positief is vooruit, nul is buiten de randzones. Hoe dichter tegen de
+ * rand, hoe sneller — precies aan de rand is het volle tempo.
+ *
+ * Is het scrollgebied kleiner dan twee randzones, dan zou elke positie in een
+ * zone vallen en het gebied ongevraagd blijven schuiven; daar doen we niets.
+ */
+export function edgeScrollDelta(position: number, min: number, max: number): number {
+  if (max - min < EDGE_SCROLL_ZONE_PX * 2) return 0;
+  if (position < min + EDGE_SCROLL_ZONE_PX) {
+    return -Math.ceil(EDGE_SCROLL_MAX_PX * (1 - Math.max(0, position - min) / EDGE_SCROLL_ZONE_PX));
+  }
+  if (position > max - EDGE_SCROLL_ZONE_PX) {
+    return Math.ceil(EDGE_SCROLL_MAX_PX * (1 - Math.max(0, max - position) / EDGE_SCROLL_ZONE_PX));
+  }
+  return 0;
+}
+
 export type DayAgenda = { minutes: number; items: CalendarExternalEvent[] };
 
 /**

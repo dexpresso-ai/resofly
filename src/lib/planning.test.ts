@@ -14,6 +14,9 @@ import {
   applyPeriodLocally,
   applyPlanningLocally,
   comparePlannedTasks,
+  edgeScrollDelta,
+  EDGE_SCROLL_MAX_PX,
+  EDGE_SCROLL_ZONE_PX,
   isSpanningTask,
   groupEventMinutesByDay,
   layoutWeekBars,
@@ -292,6 +295,46 @@ test('afspraken op dezelfde dag staan op tijd gesorteerd', () => {
   const items = byDay.get('2026-08-11')!.items;
   assert.deepEqual(items.map(i => i.starts_at), ['2026-08-11T09:00:00', '2026-08-11T15:00:00']);
   assert.equal(byDay.get('2026-08-11')!.minutes, 120);
+});
+
+// ── Meescrollen bij de randen ───────────────────────────────────────────────
+// Op een telefoon staan de zeven dagen onder elkaar; zonder dit kun je een taak
+// nooit van maandag naar zondag slepen.
+
+test('midden in het scrollgebied wordt er niet gescrold', () => {
+  assert.equal(edgeScrollDelta(400, 0, 800), 0);
+});
+
+test('bij de onderrand scrolt het vooruit, bij de bovenrand terug', () => {
+  assert.ok(edgeScrollDelta(790, 0, 800) > 0, 'onderrand schuift vooruit');
+  assert.ok(edgeScrollDelta(10, 0, 800) < 0, 'bovenrand schuift terug');
+});
+
+test('hoe dichter bij de rand, hoe sneller — met het volle tempo aan de rand', () => {
+  const dichtbij = edgeScrollDelta(795, 0, 800);
+  const verderweg = edgeScrollDelta(730, 0, 800);
+  assert.ok(dichtbij > verderweg, 'dichter bij de rand gaat sneller');
+  assert.equal(edgeScrollDelta(800, 0, 800), EDGE_SCROLL_MAX_PX);
+  assert.equal(edgeScrollDelta(0, 0, 800), -EDGE_SCROLL_MAX_PX);
+});
+
+test('net buiten de randzone gebeurt er niets', () => {
+  assert.equal(edgeScrollDelta(EDGE_SCROLL_ZONE_PX, 0, 800), 0);
+  assert.equal(edgeScrollDelta(800 - EDGE_SCROLL_ZONE_PX, 0, 800), 0);
+});
+
+test('een gebied dat kleiner is dan twee randzones scrolt nooit vanzelf', () => {
+  // Anders zou élke positie in een randzone vallen en het gebied blijven schuiven.
+  const klein = EDGE_SCROLL_ZONE_PX * 2 - 1;
+  assert.equal(edgeScrollDelta(0, 0, klein), 0);
+  assert.equal(edgeScrollDelta(klein, 0, klein), 0);
+  assert.equal(edgeScrollDelta(klein / 2, 0, klein), 0);
+});
+
+test('de randzone rekent met de positie van het gebied, niet met nul', () => {
+  // Een scrollgebied dat lager op de pagina begint: 200 is dan de bovenrand.
+  assert.ok(edgeScrollDelta(210, 200, 1000) < 0);
+  assert.equal(edgeScrollDelta(400, 200, 1000), 0);
 });
 
 test('mergeTaskRows overschrijft op id en voegt onbekende rijen toe', () => {
