@@ -14,6 +14,8 @@ import { priorityLabel } from '../lib/format';
 type StatusFilter = 'open' | 'all' | TaskStatus;
 type Scope = 'mine' | 'team';
 type Density = 'compact' | 'comfortable';
+/** Maakt het plusje van een dag werk van één dag, of een strook over meer dagen? */
+type QuickAddMode = 'day' | 'week';
 
 type PlannerFilters = {
   query: string;
@@ -199,7 +201,6 @@ export function WeekPlanner({
   const [error, setError] = useState<string | null>(null);
   const [quickAddDay, setQuickAddDay] = useState<string | null>(null);
   const [quickAddBusy, setQuickAddBusy] = useState(false);
-  const [bandAddOpen, setBandAddOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   // Op smal scherm staan de dagen onder elkaar; een strook over kolommen slepen
   // heeft dan geen betekenis meer.
@@ -926,16 +927,6 @@ export function WeekPlanner({
         <button type="button" className={density === 'comfortable' ? 'is-on' : ''} aria-pressed={density === 'comfortable'} onClick={() => setDensity('comfortable')}>Ruim</button>
       </div>
 
-      {canWrite && <button
-        type="button"
-        className="tb-btn wp-strip-add"
-        aria-expanded={bandAddOpen}
-        onClick={() => setBandAddOpen(open => !open)}
-        title="Werk toevoegen dat over meerdere dagen loopt"
-      >
-        <Plus size={13}/> Weekstrook
-      </button>}
-
       <div className="wp-week-label">{weekLabel}</div>
     </div>
 
@@ -1006,14 +997,6 @@ export function WeekPlanner({
       </button>
       <button type="button" className="wp-rollover-btn is-ghost" onClick={() => setCarryOverDismissed(true)}>Laat staan</button>
     </div>}
-
-    {bandAddOpen && canWrite && <QuickAddTask
-      busy={quickAddBusy}
-      placeholder="Waar werk je deze week aan…"
-      hint="Enter maakt een strook over de hele week. Sleep daarna de randen om hem in te korten."
-      onSubmit={title => quickAdd(orderedDayKeys[0], title, orderedDayKeys[6])}
-      onCancel={() => setBandAddOpen(false)}
-    />}
 
     <div className="wp-board">
       <div className="wp-board-main">
@@ -1115,7 +1098,8 @@ export function WeekPlanner({
                 </div>)}
                 {quickAddDay === key && <QuickAddTask
                   busy={quickAddBusy}
-                  onSubmit={title => quickAdd(key, title)}
+                  weekHint={`van ${formatDateShort(key)} tot en met ${formatDateShort(weekStripEnd(key, orderedDayKeys[6]))}`}
+                  onSubmit={(title, mode) => quickAdd(key, title, mode === 'week' ? weekStripEnd(key, orderedDayKeys[6]) : undefined)}
                   onCancel={() => setQuickAddDay(null)}
                 />}
                 {bucket.tasks.map(task => taskCard(task, { insertBefore: marker }))}
@@ -1257,16 +1241,20 @@ function TaskCard({
   </article>;
 }
 
-/** Snelinvoer in een dagkolom: titel typen, Enter, en de taak staat op die dag.
- *  Bewust zonder project of klant — die koppel je daarna door de kaart te openen. */
-function QuickAddTask({ busy, onSubmit, onCancel, placeholder, hint }: {
+/**
+ * Snelinvoer in een dagkolom: titel typen, Enter, en de taak staat er. Je kiest
+ * er zelf bij of het werk van één dag is of over meerdere dagen loopt.
+ * Bewust zonder project of klant — die koppel je daarna door de kaart te openen.
+ */
+function QuickAddTask({ busy, onSubmit, onCancel, weekHint }: {
   busy: boolean;
-  onSubmit: (title: string) => Promise<boolean>;
+  onSubmit: (title: string, mode: QuickAddMode) => Promise<boolean>;
   onCancel: () => void;
-  placeholder?: string;
-  hint?: string;
+  /** Wat een weekstrook vanaf déze dag gaat beslaan, in gewone taal. */
+  weekHint: string;
 }) {
   const [title, setTitle] = useState('');
+  const [mode, setMode] = useState<QuickAddMode>('day');
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Focus bij openen én opnieuw zodra het opslaan klaar is: tijdens het opslaan staat
@@ -1275,17 +1263,41 @@ function QuickAddTask({ busy, onSubmit, onCancel, placeholder, hint }: {
 
   async function submit() {
     // Veld leegmaken zodat je meteen de volgende taak kunt typen.
-    if (await onSubmit(title)) setTitle('');
+    if (await onSubmit(title, mode)) setTitle('');
   }
 
+  /** De keuzeknoppen mogen de focus niet uit het invoerveld halen: dat veld
+   *  sluit zichzelf bij een leeg blur, en dan zou de keuze de invoer wegklappen. */
+  const keepFocus = (event: React.MouseEvent) => event.preventDefault();
+
   return <div className="wp-quick-add">
+    <div className="wp-quick-add-modes" role="group" aria-label="Wat voeg je toe?">
+      <button
+        type="button"
+        className={mode === 'day' ? 'is-on' : ''}
+        aria-pressed={mode === 'day'}
+        onMouseDown={keepFocus}
+        onClick={() => setMode('day')}
+      >
+        Dagtaak
+      </button>
+      <button
+        type="button"
+        className={mode === 'week' ? 'is-on' : ''}
+        aria-pressed={mode === 'week'}
+        onMouseDown={keepFocus}
+        onClick={() => setMode('week')}
+      >
+        Weekstrook
+      </button>
+    </div>
     <input
       ref={inputRef}
       className="wp-quick-add-input"
       value={title}
       disabled={busy}
-      placeholder={placeholder ?? 'Taaktitel…'}
-      aria-label={placeholder ?? 'Nieuwe taak op deze dag'}
+      placeholder={mode === 'week' ? 'Waar werk je aan…' : 'Taaktitel…'}
+      aria-label={mode === 'week' ? 'Nieuwe weekstrook vanaf deze dag' : 'Nieuwe taak op deze dag'}
       onChange={e => setTitle(e.target.value)}
       onKeyDown={e => {
         if (e.key === 'Enter') { e.preventDefault(); void submit(); }
@@ -1293,7 +1305,11 @@ function QuickAddTask({ busy, onSubmit, onCancel, placeholder, hint }: {
       }}
       onBlur={() => { if (!title.trim()) onCancel(); }}
     />
-    <div className="wp-quick-add-hint">{hint ?? 'Enter voegt toe · Esc sluit. Project en klant koppel je daarna in de taak.'}</div>
+    <div className="wp-quick-add-hint">
+      {mode === 'week'
+        ? `Enter maakt een strook ${weekHint}. De randen versleep je daarna.`
+        : 'Enter voegt toe · Esc sluit. Project en klant koppel je daarna in de taak.'}
+    </div>
   </div>;
 }
 
@@ -1489,6 +1505,16 @@ function barSpanLabel(bar: WeekBar): string {
   if (bar.span === 7) return 'hele week';
   const days = bar.span;
   return `${days} ${days === 1 ? 'dag' : 'dagen'}`;
+}
+
+/**
+ * Tot en met welke dag loopt een strook die op deze dag begint? Tot het einde
+ * van de zichtbare week — behalve op de laatste dag, want dan zou er niets te
+ * overspannen zijn en werd het stilzwijgend weer een dagtaak. Daar loopt hij
+ * één dag door in de volgende week.
+ */
+function weekStripEnd(dayKey: string, lastDayKey: string): string {
+  return dayKey < lastDayKey ? lastDayKey : shiftDateKey(dayKey, 1);
 }
 
 /** Op smal scherm staan de dagen onder elkaar, dus zegt "3 dagen" niets over
