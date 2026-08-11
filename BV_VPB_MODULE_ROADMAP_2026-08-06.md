@@ -235,7 +235,7 @@ wordt de IB-schatting daarin een Vpb-reservering.
 | 2 | **GROTENDEELS KLAAR** — Vpb: tarieventabel (2021 t/m 2026, periodegedateerd), rekenhart met 18 tests, correcties, verliesverrekening, reservering op 9900/1540, edge function. **Rest: het scherm en de specificatie-export.** | `20260807050000`, `_shared/vpb.ts`, `corporate-tax`-edge-function | scherm nog open |
 | 3 | **KLAAR** — normen, signalen, rekening-courant met eigen rentepercentage en dagsaldo-berekening, DGA-scherm, loonjournaalpost-import | `20260807060000` t/m `080000`, `Dga.tsx`, `PayrollImport.tsx` | gedaan |
 | 4 | **KLAAR** — aandeelhoudersregister (art. 2:194 BW) met mutaties en pand/vruchtgebruik, uitkeringstoets ook op het interim-dividend, dividendbelasting met inhoudingsvrijstelling per aandeelhouder | `20260807100000`, `Shareholders.tsx`, `Dividends.tsx` | gedaan |
-| 5 | **BROK A KLAAR** — groottecriteria (periodegedateerd, 2016 én 2024, met bron) + vergelijkende rapportage + balans ná resultaatbestemming. Brok B t/m E open: jaarrekening bevriezen, PDF, publicatiestukken, scherm, deponeer-deadlines | `20260812000000_company_size_and_comparative_reports.sql` | brok A gedaan |
+| 5 | **BROK A + B KLAAR** — groottecriteria (periodegedateerd, 2016 én 2024, met bron), vergelijkende rapportage, balans ná resultaatbestemming; jaarrekening bevriezen met de levenscyclus opmaken → tekenen → vaststellen → deponeren, deponering als gebeurtenis, opvolgend stuk bij herstel. Brok C t/m E open: PDF, publicatiestukken, scherm, deponeer-deadlines | `20260812000000` + `20260812010000` | A+B gedaan |
 | 6 | Intercompany-boekingen + afstemrapport, consolidatie over de boom, fiscale eenheid | later | apart traject |
 
 Na fase 0+1 is er al een bruikbaar product: een BV-klant boekt met een correct
@@ -267,6 +267,30 @@ Boekjaar 2023 kent een dubbel regime; de keuze staat per boekjaar op
   begrensd op twaalf boekjaren, maar het blijft lineair in het aantal jaren.
 - `is_first_fiscal_year_of_entity` kan verouderen als er later een ouder boekjaar wordt
   ingevoerd; daar zit nog geen signaal op.
+
+## Fase 5, brok B — de jaarrekening vastleggen
+
+Migratie `20260812010000_annual_accounts.sql` staat op staging (commit `650feda`). Alle acht
+RPC's antwoorden met `42501` op een anon-sleutel. Drie reviewrondes: 23 + 22 + 4 bevindingen,
+waarvan twee blockers.
+
+**Deponeren is een gebeurtenis, geen eindtoestand.** `annual_account_filings` houdt één rij per
+deponering bij, zodat de route van art. 2:394 lid 2 BW werkt: onvastgesteld deponeren, later
+alsnog vaststellen, en binnen acht dagen opnieuw deponeren. Een fout gedeponeerd stuk wordt niet
+ingetrokken maar vervangen (`supersedes_annual_account_id`); het boekjaar mag daarvoor weer open,
+want anders kan het opvolgende stuk alleen dezelfde cijfers herhalen.
+
+**Wat de reviewers eruit haalden en wat het had gekost:** de vaststellingsdatum bij art. 2:210
+lid 5 was vrij te kiezen terwijl de laatste handtekening hem bepaalt — dat schoof de
+deponeerdeadline van acht dagen even ver mee op. De verplichte opgave van reden bij een
+ontbrekende handtekening werd alleen bij vaststellen gecontroleerd, nooit bij deponeren, terwijl
+juist de lid-2-route nooit langs vaststellen komt. De bevroren snapshot kon uit de pas lopen met
+het grootboek zonder dat iets dat markeerde (nu `snapshot_stale`). En `attachment_module()` kende
+`annual_account` niet, waardoor de modulepoort op de bijlagen openviel.
+
+**Nog open uit brok B:** een verlenging van de opmaaktermijn die vóór het opmaken is besloten —
+de gewone volgorde — is nog niet vast te leggen, omdat `extend_preparation_term` op een bestaande
+jaarrekeningrij werkt. Doorgeschoven naar brok D/E.
 
 ## Openstaand uit fase 0
 
