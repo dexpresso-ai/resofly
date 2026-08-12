@@ -70,6 +70,40 @@ const DAY_MINUTES = (HOUR_END - HOUR_START) * 60;
 const SNAP_MIN = 15;
 const MIN_EVENT_MINUTES = 15;
 
+/* ── Zoomen (zoals Google Agenda op de telefoon) ────────────────────────────
+   De autofit-rijhoogte hierboven is de 1×-stand: die vult de werkdag netjes.
+   Knijpen (twee vingers), Ctrl/⌘ + wiel en +/− schalen daaromheen. De absolute
+   px-grenzen houden een rij leesbaar (boven) en het rooster hanteerbaar
+   (onder), ook op een klein of juist heel hoog scherm. */
+const ZOOM_MIN = 0.55;
+const ZOOM_MAX = 3.2;
+/** Eén toetsaanslag (+/−) of één wielklik met Ctrl ingedrukt. */
+const ZOOM_STEP = 1.18;
+const ROW_PX_MIN = 12;
+const ROW_PX_MAX = 132;
+const ZOOM_STORAGE_KEY = 'resofly.agenda.zoom';
+
+function clampZoom(zoom: number): number {
+  if (!Number.isFinite(zoom)) return 1;
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom));
+}
+
+/** Halve pixels: vloeiend genoeg om mee te knijpen, scherp genoeg voor de lijnen. */
+function zoomedRowHeight(baseRow: number, zoom: number): number {
+  const px = baseRow * clampZoom(zoom);
+  return Math.min(ROW_PX_MAX, Math.max(ROW_PX_MIN, Math.round(px * 2) / 2));
+}
+
+function readStoredZoom(): number {
+  try { return clampZoom(Number(window.localStorage.getItem(ZOOM_STORAGE_KEY) ?? '1')); }
+  catch { return 1; }
+}
+
+/** Systeemvoorkeur "minder beweging": dan schuiven we niets, maar wisselen direct. */
+function prefersReducedMotion(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 /** Bouwt een Google Maps-zoek-URL voor een vrije locatietekst. */
 function googleMapsSearchUrl(query: string): string {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
@@ -645,7 +679,7 @@ function eventIdentityKey(ev: CalendarExternalEvent): string {
  *  `removable` = een verwijderbaar blok (concept/eigen link); anders alleen-lezen (aangeboden optie). */
 export type BookingOverlaySlot = { id: string; starts_at: string; ends_at: string; status: string; removable?: boolean };
 
-export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent, onOpenDay, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false }: {
+export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent, onOpenDay, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false, zoom = 1, onZoomChange, autoScrollKey = 0 }: {
   days: Date[];
   events: CalendarExternalEvent[];
   tasks: Task[];
@@ -665,6 +699,12 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   onRemoveBookingSlot?: (slotId: string) => void;
   /** Toon agenda-items alleen als context (niet versleepbaar) — voor hergebruik in de Boekingslinks-pagina. */
   readOnlyEvents?: boolean;
+  /** Zoomfactor rond de autofit-rijhoogte. Knijpen/Ctrl+wiel melden een nieuwe waarde via `onZoomChange`. */
+  zoom?: number;
+  onZoomChange?: (zoom: number) => void;
+  /** Bump deze waarde om het rooster opnieuw naar "nu" (of de werkdagstart) te scrollen.
+   *  Bladeren naar een andere week doet dat bewust NIET: je blijft op dezelfde hoogte staan. */
+  autoScrollKey?: number;
 }) {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -673,6 +713,7 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   // Hele-dag-rij: standaard alles tonen (zoals Google); inklapbaar bij 3+ lanes.
   const [allDayExpanded, setAllDayExpanded] = useState(true);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const colRefs = useRef<(HTMLDivElement | null)[]>([]);
   const canSelect = canWrite && writeableSources.length > 0;
@@ -691,6 +732,9 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   const [interaction, setInteraction] = useState<EventInteraction | null>(null);
   const interactionRef = useRef<EventInteraction | null>(null);
   const draggedRef = useRef(false);
+  // Lopende tijdselectie (zie "Tijd selecteren door te slepen" verderop). Staat
+  // hier omdat het knijp-gebaar een half begonnen selectie moet kunnen afbreken.
+  const dragRef = useRef<DragState | null>(null);
 
   const writeableSourceIds = useMemo(() => new Set(writeableSources.map(s => s.id)), [writeableSources]);
   const canDragEvent = useCallback(
@@ -920,6 +964,152 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
     return () => ro.disconnect();
   }, [daysKey]);
 
+  // ── Zoomen: knijpen, Ctrl/⌘ + wiel ─────────────────────────────────────
+  // `rowHeight` is de 1×-stand (autofit); de zoomfactor schaalt daaromheen.
+  const effectiveRow = rowHeight != null ? zoomedRowHeight(rowHeight, zoom) : null;
+  const rowHeightRef = useRef<number | null>(null);
+  rowHeightRef.current = rowHeight;
+  // De prop is leidend zodra die écht verandert. Tussendoor rekenen we door op
+  // onze eigen laatste waarde: een trackpad vuurt meerdere wielstappen af binnen
+  // één render, en die zouden anders allemaal vanaf dezelfde beginstand rekenen
+  // (zoomen voelt dan traag en hakkelig).
+  const zoomRef = useRef(zoom);
+  const zoomPropRef = useRef(zoom);
+  if (zoomPropRef.current !== zoom) { zoomPropRef.current = zoom; zoomRef.current = zoom; }
+  const onZoomChangeRef = useRef(onZoomChange);
+  onZoomChangeRef.current = onZoomChange;
+
+  /** Waar het rooster begint binnen de scroller (dagkoppen + hele-dag-balk). */
+  const gridOffsetTop = useCallback(() => scrollRef.current?.querySelector<HTMLElement>('.tb-grid')?.offsetTop ?? 0, []);
+  /** Welk tijdstip (in rij-eenheden) staat er op `viewportY` binnen de scroller? */
+  const rowsAt = useCallback((viewportY: number, row: number): number => {
+    const el = scrollRef.current;
+    if (!el || row <= 0) return 0;
+    return (el.scrollTop + viewportY - gridOffsetTop()) / row;
+  }, [gridOffsetTop]);
+  /** Het punt dat onder de vingers/cursor stil moet blijven staan bij het zoomen.
+   *  `scrollTop` dient om te zien of het anker nog vers is (zie `holdZoomAnchor`). */
+  const zoomAnchorRef = useRef<{ rows: number; viewportY: number; scrollTop: number } | null>(null);
+  /** Houdt hetzelfde anker vast zolang een zoomreeks op dezelfde plek doorloopt. */
+  const holdZoomAnchor = useCallback((viewportY: number, row: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const current = zoomAnchorRef.current;
+    if (current && Math.abs(current.viewportY - viewportY) <= 4 && current.scrollTop === el.scrollTop) return;
+    zoomAnchorRef.current = { rows: rowsAt(viewportY, row), viewportY, scrollTop: el.scrollTop };
+  }, [rowsAt]);
+
+  // Na een zoomstap staat hetzelfde tijdstip weer onder de vingers (of, zonder
+  // aangewezen punt, in het midden van het scherm) — anders spring je bij elke
+  // stap naar een ander deel van de dag.
+  const prevRowRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const prev = prevRowRef.current;
+    prevRowRef.current = effectiveRow;
+    const anchor = zoomAnchorRef.current;
+    zoomAnchorRef.current = null;
+    if (!el || effectiveRow == null || prev == null || prev === effectiveRow) return;
+    const top = gridOffsetTop();
+    const viewportY = anchor?.viewportY ?? el.clientHeight / 2;
+    const rows = anchor?.rows ?? (el.scrollTop + viewportY - top) / prev;
+    const behavior = el.style.scrollBehavior;
+    el.style.scrollBehavior = 'auto';
+    el.scrollTop = Math.max(0, Math.round(top + rows * effectiveRow - viewportY));
+    el.style.scrollBehavior = behavior;
+  }, [effectiveRow, gridOffsetTop]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    const container = containerRef.current;
+    if (!el || !container || !onZoomChange) return;
+
+    // Ctrl/⌘ + wiel = zoomen (de universele afspraak op het bureaublad).
+    function onWheel(e: WheelEvent) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      const base = rowHeightRef.current;
+      if (base == null) return;
+      e.preventDefault();
+      const scroller = scrollRef.current!;
+      const viewportY = e.clientY - scroller.getBoundingClientRect().top;
+      holdZoomAnchor(viewportY, zoomedRowHeight(base, zoomRef.current));
+      const next = clampZoom(zoomRef.current * Math.exp(-e.deltaY * 0.0016));
+      zoomRef.current = next;
+      onZoomChangeRef.current?.(next);
+    }
+
+    // Knijpen met twee vingers (Google Agenda op de telefoon). Tijdens het
+    // gebaar schrijven we `--tb-h` rechtstreeks weg: dat loopt op 60fps mee
+    // zonder per beweging een hele render te doen. Bij loslaten leggen we de
+    // eindstand één keer in de state vast.
+    let pinch: { distance: number; zoom: number; rows: number; viewportY: number; last: number } | null = null;
+    const spread = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+
+    function onTouchStart(e: TouchEvent) {
+      if (e.touches.length !== 2) return;
+      const base = rowHeightRef.current;
+      if (base == null) return;
+      // Een tweede vinger betekent knijpen, geen selectie of sleep meer.
+      cancelHold();
+      dragRef.current = null;
+      setDrag(null); setIsDragging(false); setTouchSelecting(false);
+      interactionRef.current = null; setInteraction(null);
+      const scroller = scrollRef.current!;
+      const viewportY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - scroller.getBoundingClientRect().top;
+      const row = zoomedRowHeight(base, zoomRef.current);
+      pinch = { distance: Math.max(1, spread(e.touches)), zoom: zoomRef.current, rows: rowsAt(viewportY, row), viewportY, last: zoomRef.current };
+      scroller.style.scrollBehavior = 'auto';
+      container?.classList.add('tb-pinching');
+    }
+
+    function onTouchMove(e: TouchEvent) {
+      if (!pinch || e.touches.length !== 2) return;
+      const base = rowHeightRef.current;
+      if (base == null) return;
+      if (e.cancelable) e.preventDefault();
+      const next = clampZoom(pinch.zoom * (spread(e.touches) / pinch.distance));
+      const row = zoomedRowHeight(base, next);
+      pinch.last = next;
+      container!.style.setProperty('--tb-h', `${row}px`);
+      const scroller = scrollRef.current!;
+      scroller.scrollTop = Math.max(0, Math.round(gridOffsetTop() + pinch.rows * row - pinch.viewportY));
+    }
+
+    function endPinch() {
+      if (!pinch) return;
+      const { last, rows, viewportY } = pinch;
+      pinch = null;
+      const scroller = scrollRef.current;
+      if (scroller) scroller.style.scrollBehavior = '';
+      container?.classList.remove('tb-pinching');
+      // De scrollpositie staat al goed; het anker voorkomt dat de layout-effect
+      // hierboven hem alsnog naar het schermmidden trekt.
+      zoomAnchorRef.current = { rows, viewportY, scrollTop: scroller?.scrollTop ?? 0 };
+      zoomRef.current = last;
+      onZoomChangeRef.current?.(last);
+    }
+
+    function onTouchEnd(e: TouchEvent) { if (pinch && e.touches.length < 2) endPinch(); }
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd, { passive: true });
+    el.addEventListener('touchcancel', onTouchEnd, { passive: true });
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+      el.removeEventListener('touchcancel', onTouchEnd);
+      container?.classList.remove('tb-pinching');
+    };
+  }, [onZoomChange, cancelHold, rowsAt, gridOffsetTop, holdZoomAnchor]);
+
+  // Naar "nu" scrollen doen we bij het openen en bij het wisselen van weergave —
+  // en op verzoek van de pagina (knop "Vandaag") via `autoScrollKey`. Bewust NIET
+  // bij het bladeren naar een andere week: daar blijf je op dezelfde hoogte staan,
+  // zodat het bladeren als één doorlopende beweging voelt (net als Google).
   useEffect(() => {
     const scrollEl = scrollRef.current;
     if (!scrollEl) return;
@@ -942,13 +1132,12 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
     // Instant (niet smooth): de agenda opent direct op de juiste positie; de
     // CSS `scroll-behavior:smooth` op de scroller zou de sprong anders annuleren.
     scrollEl.scrollTo({ top: Math.max(0, Math.round(target)), behavior: 'instant' });
-  }, [daysKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [days.length, autoScrollKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Tijd selecteren door te slepen (muis, pen én vinger) ───────────────
   // Eén pointer-gebaar voor alle invoerapparaten. Op de muis begint de selectie
   // meteen; op touch maakt een korte tik een standaardblok en selecteert
   // ingedrukt-houden-en-slepen een eigen tijdvak (zoals Google Agenda).
-  const dragRef = useRef<DragState | null>(null);
   const slotFromClientY = useCallback((dayIndex: number, clientY: number): number | null => {
     const el = colRefs.current[dayIndex];
     if (!el) return null;
@@ -1105,7 +1294,7 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   const gridStyle = {
     '--tb-days': days.length,
     '--tb-slots': TOTAL_SLOTS,
-    ...(rowHeight ? { '--tb-h': `${rowHeight}px` } : {}),
+    ...(effectiveRow ? { '--tb-h': `${effectiveRow}px` } : {}),
   } as CSSProperties;
   const workdayOverlayStyle = {
     top: `${(((WORKDAY_START - HOUR_START) * 60) / ((HOUR_END - HOUR_START) * 60)) * 100}%`,
@@ -1113,7 +1302,7 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   } as CSSProperties;
 
   return (
-    <div className={`tb-container${days.length === 1 ? ' tb-single-day' : ''}${days.length <= THREE_DAY_COUNT ? ' tb-few-days' : ''}${isDragging || interaction ? ' tb-gesturing' : ''}${blockPageScroll ? ' tb-touch-gesture' : ''}`} style={gridStyle}>
+    <div ref={containerRef} className={`tb-container${days.length === 1 ? ' tb-single-day' : ''}${days.length <= THREE_DAY_COUNT ? ' tb-few-days' : ''}${isDragging || interaction ? ' tb-gesturing' : ''}${blockPageScroll ? ' tb-touch-gesture' : ''}`} style={gridStyle}>
       <div className="tb-scroll" ref={scrollRef}>
         <div className="tb-canvas">
           <div className="tb-day-headers">
@@ -1440,7 +1629,97 @@ function layoutMonthWeek(week: Date[], events: CalendarExternalEvent[], tasks: T
   return ordered;
 }
 
-export function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, trackedMinutesFor, onEditTask, onOpenDay, onOpenEvent }: {
+/* ── Maand: het dagkaartje achter "+N meer" ──────────────────────────────
+   Google kapt een volle dag af met "+3 meer" en laat de rest zien in een klein
+   zwevend kaartje bóven het rooster — je blijft in de maand staan. Alleen op de
+   telefoon is dat te krap; daar schuift de dag in het paneel onder het rooster. */
+function MonthDayCard({ day, rect, items, sourceColors, onOpenDay, onOpenEvent, onEditTask, onClose }: {
+  day: Date;
+  rect: { left: number; top: number; width: number; height: number };
+  items: MonthDayItem[];
+  sourceColors: Map<string, string>;
+  onOpenDay: (day: Date) => void;
+  onOpenEvent: (event: CalendarExternalEvent) => void;
+  onEditTask: (task: Task) => void;
+  onClose: () => void;
+}) {
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const { offsetWidth: w, offsetHeight: h } = el;
+    setPlaced({
+      left: Math.round(Math.min(Math.max(8, rect.left + rect.width / 2 - w / 2), window.innerWidth - w - 8)),
+      top: Math.round(Math.min(Math.max(8, rect.top - 6), window.innerHeight - h - 8)),
+    });
+  }, [rect]);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [onClose]);
+
+  return <>
+    <div className="cm-daycard-scrim" onClick={onClose} role="presentation" />
+    <div className="cm-daycard" ref={cardRef} role="dialog" aria-label={formatDateKey(formatISODate(day))}
+      style={{ left: placed?.left ?? rect.left, top: placed?.top ?? rect.top, visibility: placed ? 'visible' : 'hidden' }}>
+      <div className="cm-daycard-head">
+        <button type="button" className="cm-daycard-date" onClick={() => { onClose(); onOpenDay(day); }} title="Open dagweergave">
+          <span className="cm-daycard-name">{dayNameNl(day)}</span>
+          <span className="cm-daycard-num">{day.getDate()}</span>
+        </button>
+        <button type="button" className="cm-daycard-close" onClick={onClose} aria-label="Sluiten"><X size={15} /></button>
+      </div>
+      <MonthDayItemList items={items} sourceColors={sourceColors} onOpenEvent={ev => { onClose(); onOpenEvent(ev); }} onEditTask={task => { onClose(); onEditTask(task); }} />
+    </div>
+  </>;
+}
+
+/** Alles wat er op één dag staat, in de volgorde die Google aanhoudt. */
+type MonthDayItem = { key: string; event?: CalendarExternalEvent; task?: Task };
+
+function monthDayItems(day: Date, events: CalendarExternalEvent[], tasks: Task[]): MonthDayItem[] {
+  const dayEvents = events
+    .filter(ev => eventOverlapsDay(ev, day))
+    // Hele dag en meerdaags bovenaan, daarna op tijd — precies zoals in het rooster.
+    .sort((a, b) => Number(Boolean(b.all_day)) - Number(Boolean(a.all_day)) || a.starts_at.localeCompare(b.starts_at));
+  const dayTasks = tasks.filter(t => t.end_date && isSameDay(new Date(`${t.end_date}T12:00:00`), day));
+  return [
+    ...dayEvents.map(ev => ({ key: `ev-${ev.provider}-${ev.source_id}-${ev.provider_event_id}-${ev.starts_at}`, event: ev })),
+    ...dayTasks.map(t => ({ key: `task-${t.id}`, task: t })),
+  ];
+}
+
+function MonthDayItemList({ items, sourceColors, onOpenEvent, onEditTask }: {
+  items: MonthDayItem[];
+  sourceColors: Map<string, string>;
+  onOpenEvent: (event: CalendarExternalEvent) => void;
+  onEditTask: (task: Task) => void;
+}) {
+  if (items.length === 0) return <p className="cm-daylist-empty">Niets gepland.</p>;
+  return <div className="cm-daylist-items">
+    {items.map(item => item.event ? (
+      <button type="button" className={`cm-dayitem${item.event.visibility === 'private' ? ' is-private' : ''}`} key={item.key}
+        style={eventColorStyle(sourceColors.get(item.event.source_id))} onClick={() => onOpenEvent(item.event!)}>
+        <span className="cm-dayitem-dot" aria-hidden="true" />
+        <span className="cm-dayitem-time">{item.event.all_day ? 'Hele dag' : formatTime(item.event.starts_at)}</span>
+        <span className="cm-dayitem-title">{item.event.title}</span>
+        {item.event.meeting_url && <Video size={12} className="cm-dayitem-video" />}
+      </button>
+    ) : item.task ? (
+      <button type="button" className="cm-dayitem is-task" key={item.key} onClick={() => onEditTask(item.task!)}>
+        <span className="cm-dayitem-dot" aria-hidden="true" />
+        <span className="cm-dayitem-time">Taak</span>
+        <span className="cm-dayitem-title">{item.task.title}</span>
+      </button>
+    ) : null)}
+  </div>;
+}
+
+export function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, trackedMinutesFor, onEditTask, onOpenDay, onOpenEvent, isMobile = false, selectedDay = null, onSelectDay, onCreateOnDay }: {
   days: Date[];
   anchor: Date;
   events: CalendarExternalEvent[];
@@ -1451,10 +1730,34 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
   onEditTask: (task: Task) => void;
   onOpenDay: (day: Date) => void;
   onOpenEvent: (event: CalendarExternalEvent) => void;
+  /** Telefoon: tikken kiest een dag en toont die onder het rooster (Google-werkwijze). */
+  isMobile?: boolean;
+  selectedDay?: Date | null;
+  onSelectDay?: (day: Date) => void;
+  /** Bureaublad: klikken op een lege plek maakt een afspraak op die dag. */
+  onCreateOnDay?: (day: Date) => void;
 }) {
   function eventColor(ev: CalendarExternalEvent): string { return sourceColors.get(ev.source_id) ?? '#FFD966'; }
   const weeks = useMemo(() => weekChunks(days), [days]);
   const gridRef = useRef<HTMLDivElement | null>(null);
+  // Het "+N meer"-kaartje: welke dag, en waar stond de knop die erom vroeg.
+  const [moreDay, setMoreDay] = useState<{ day: Date; rect: { left: number; top: number; width: number; height: number } } | null>(null);
+  useEffect(() => { setMoreDay(null); }, [anchor]);
+
+  /** Klikken op een lege plek in een dag: telefoon kiest de dag, bureaublad maakt
+   *  er een afspraak op (en valt terug op de dagweergave zonder schrijfrecht). */
+  const pickDay = useCallback((day: Date) => {
+    if (isMobile && onSelectDay) { onSelectDay(startOfDay(day)); return; }
+    if (onCreateOnDay) { onCreateOnDay(startOfDay(day)); return; }
+    onOpenDay(day);
+  }, [isMobile, onSelectDay, onCreateOnDay, onOpenDay]);
+
+  /** "+N meer": bureaublad opent het dagkaartje, telefoon kiest de dag. */
+  const openDayCard = useCallback((day: Date, el: HTMLElement) => {
+    if (isMobile && onSelectDay) { onSelectDay(startOfDay(day)); return; }
+    const rect = el.getBoundingClientRect();
+    setMoreDay({ day: startOfDay(day), rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } });
+  }, [isMobile, onSelectDay]);
 
   // Hoeveel items er per dag passen volgt uit de werkelijke rijhoogte — net als
   // bij Google, dat in een maand met vijf weekrijen meer regels toont dan in een
@@ -1518,25 +1821,26 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
                 <div className="cm-cells">
                   {week.map(day => (
                     <div
-                      className={`cm-cell${isSameMonth(day, anchor) ? '' : ' is-outside'}${isSameDay(day, today) ? ' is-today' : ''}`}
+                      className={`cm-cell${isSameMonth(day, anchor) ? '' : ' is-outside'}${isSameDay(day, today) ? ' is-today' : ''}${selectedDay && isSameDay(day, selectedDay) ? ' is-selected' : ''}`}
                       key={formatISODate(day)}
                       role="presentation"
-                      onClick={() => onOpenDay(day)}
+                      onClick={() => pickDay(day)}
                     />
                   ))}
                 </div>
                 <div className="cm-dates">
                   {week.map(day => {
                     const isToday = isSameDay(day, today);
+                    const isPicked = Boolean(selectedDay && isSameDay(day, selectedDay));
                     return (
                       <button
                         type="button"
                         className={`cm-date${isSameMonth(day, anchor) ? '' : ' is-outside'}`}
                         key={formatISODate(day)}
-                        onClick={() => onOpenDay(day)}
-                        title={`${formatDateKey(formatISODate(day))} — open dagweergave`}
+                        onClick={() => (isMobile && onSelectDay ? onSelectDay(startOfDay(day)) : onOpenDay(day))}
+                        title={`${formatDateKey(formatISODate(day))}${isMobile ? '' : ' — open dagweergave'}`}
                       >
-                        <span className={`cm-date-num${isToday ? ' is-today' : ''}`}>
+                        <span className={`cm-date-num${isToday ? ' is-today' : ''}${isPicked && !isToday ? ' is-selected' : ''}`}>
                           {day.getDate() === 1 ? `${day.getDate()} ${shortMonthNl(day)}` : day.getDate()}
                         </span>
                       </button>
@@ -1591,7 +1895,8 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
                   {hiddenPerDay.map((count, i) => count > 0 ? (
                     <button type="button" className="cm-more" key={`more-${i}`}
                       style={{ gridColumn: `${i + 1} / span 1`, gridRow: cutoff[i] + 1 }}
-                      onClick={() => onOpenDay(week[i])}>
+                      onClick={e => openDayCard(week[i], e.currentTarget)}
+                      title={`Alles van ${formatDateKey(formatISODate(week[i]))} tonen`}>
                       +{count}<span className="cm-more-label"> meer</span>
                     </button>
                   ) : null)}
@@ -1601,6 +1906,27 @@ export function CalendarMonthView({ days, anchor, events, tasks, data, sourceCol
           );
         })}
       </div>
+
+      {/* Telefoon: de gekozen dag als lijstje onder het rooster (Google-werkwijze). */}
+      {isMobile && selectedDay && (
+        <section className="cm-daylist" aria-label={`Items op ${formatDateKey(formatISODate(selectedDay))}`}>
+          <header className="cm-daylist-head">
+            <div>
+              <span className="cm-daylist-name">{dayNameNl(selectedDay)}</span>
+              <strong className="cm-daylist-date">{formatDateKey(formatISODate(selectedDay))}</strong>
+            </div>
+            <Button onClick={() => onOpenDay(selectedDay)}>Open dag</Button>
+          </header>
+          <MonthDayItemList items={monthDayItems(selectedDay, events, tasks)} sourceColors={sourceColors}
+            onOpenEvent={onOpenEvent} onEditTask={onEditTask} />
+        </section>
+      )}
+
+      {moreDay && (
+        <MonthDayCard day={moreDay.day} rect={moreDay.rect} items={monthDayItems(moreDay.day, events, tasks)}
+          sourceColors={sourceColors} onOpenDay={onOpenDay} onOpenEvent={onOpenEvent} onEditTask={onEditTask}
+          onClose={() => setMoreDay(null)} />
+      )}
     </div>
   );
 }
@@ -2544,6 +2870,188 @@ const MOBILE_BREAKPOINT_PX = 768;
 /** Smalle daglabels ("M D W D V Z Z") voor de mobiele dagstrip, zoals Google. */
 const NARROW_DAY_FMT = new Intl.DateTimeFormat('nl-NL', { weekday: 'narrow' });
 
+/* ── Vloeiend bladeren tussen periodes ─────────────────────────────────────
+   Een sprong van week naar week vertelt je niets; een verschuiving wel. De
+   truc: vlak vóór de wissel maken we een stilstaande kopie (`cloneNode`) van
+   wat er staat. Die kopie schuift eruit terwijl het nieuwe beeld er tegelijk
+   in schuift — ze kruisen elkaar, dus er valt nooit een gat, en we hoeven de
+   zware roostercomponent geen tweede keer op te tuigen (met alle waarnemers
+   en scrolleffecten van dien).
+
+   Op de telefoon volgt het beeld eerst je vinger (met weerstand, zodat je
+   ziet dát je bladert) en neemt deze overgang het bij loslaten over vanaf de
+   plek waar je losliet. Bij de systeemvoorkeur "minder beweging" wisselt de
+   agenda gewoon direct. */
+type SlideDirection = -1 | 0 | 1;
+
+const SLIDE_MS = 300;
+const SLIDE_FADE_MS = 200;
+const SLIDE_EASE = 'cubic-bezier(.22,.61,.36,1)';
+/** Interne scrollers waarvan de kopie de positie moet overnemen. */
+const SLIDE_SCROLLERS = '.tb-scroll,.cm-grid,.cm-daylist';
+
+function useCalendarStage() {
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const liveRef = useRef<HTMLDivElement | null>(null);
+  const ghostRef = useRef<HTMLDivElement | null>(null);
+  const pendingRef = useRef<{ direction: SlideDirection; fromPx: number } | null>(null);
+  const runningRef = useRef<Animation[]>([]);
+  const [, setTick] = useState(0);
+
+  const clearSlide = useCallback(() => {
+    for (const animation of runningRef.current) animation.cancel();
+    runningRef.current = [];
+    ghostRef.current?.replaceChildren();
+    const live = liveRef.current;
+    if (live) { live.style.transform = ''; live.style.opacity = ''; }
+  }, []);
+
+  /** Wisselt van periode mét verschuiving. `fromPx` = waar een veeg ophield. */
+  const slide = useCallback((direction: SlideDirection, commit: () => void, fromPx = 0) => {
+    const live = liveRef.current;
+    const ghost = ghostRef.current;
+    if (!live || !ghost || prefersReducedMotion()) { clearSlide(); commit(); return; }
+    clearSlide();
+    const copy = live.cloneNode(true) as HTMLElement;
+    ghost.replaceChildren(copy);
+    // Een verse kopie staat bovenaan: zonder deze regel springt het
+    // vertrekkende beeld terug naar middernacht.
+    const source = live.querySelectorAll<HTMLElement>(SLIDE_SCROLLERS);
+    const target = copy.querySelectorAll<HTMLElement>(SLIDE_SCROLLERS);
+    for (let i = 0; i < target.length; i++) {
+      target[i].scrollTop = source[i]?.scrollTop ?? 0;
+      target[i].scrollLeft = source[i]?.scrollLeft ?? 0;
+    }
+    // Het nieuwe beeld wacht net buiten beeld tot React het heeft opgebouwd.
+    live.style.transform = direction === 0 ? '' : `translateX(${direction * 100}%)`;
+    live.style.opacity = direction === 0 ? '0' : '';
+    pendingRef.current = { direction, fromPx };
+    commit();
+    setTick(tick => tick + 1);
+  }, [clearSlide]);
+
+  useLayoutEffect(() => {
+    const pending = pendingRef.current;
+    if (!pending) return;
+    pendingRef.current = null;
+    const live = liveRef.current;
+    const ghost = ghostRef.current;
+    const copy = ghost?.firstElementChild as HTMLElement | null;
+    if (!live || !ghost || !copy) { clearSlide(); return; }
+    const { direction, fromPx } = pending;
+    const options: KeyframeAnimationOptions = { duration: SLIDE_MS, easing: SLIDE_EASE, fill: 'both' };
+    const fade: KeyframeAnimationOptions = { duration: SLIDE_FADE_MS, easing: 'ease-out', fill: 'both' };
+    // Wisselen van weergave (dag ↔ week ↔ maand) schuift niet opzij maar zoomt
+    // zachtjes in — dat leest als "dichterbij kijken", niet als "verderop".
+    const enter = direction === 0
+      ? live.animate([{ opacity: 0, transform: 'scale(1.015)' }, { opacity: 1, transform: 'scale(1)' }], fade)
+      : live.animate([{ transform: `translateX(${direction * 100}%)`, opacity: .55 }, { transform: 'translateX(0)', opacity: 1 }], options);
+    const leave = direction === 0
+      ? copy.animate([{ opacity: 1 }, { opacity: 0 }], fade)
+      : copy.animate([{ transform: `translateX(${fromPx}px)`, opacity: 1 }, { transform: `translateX(${-direction * 100}%)`, opacity: .3 }], options);
+    runningRef.current = [enter, leave];
+    void Promise.allSettled([enter.finished, leave.finished]).then(() => {
+      if (runningRef.current[0] !== enter) return; // een nieuwere overgang nam het over
+      clearSlide();
+    });
+  });
+
+  useEffect(() => clearSlide, [clearSlide]);
+  return { stageRef, liveRef, ghostRef, slide, clearSlide };
+}
+
+/* Vegen op een aanraakscherm: het beeld volgt je vinger — met weerstand, zodat
+   je ziet dát je bladert zonder het scherm helemaal leeg te trekken — en bij
+   loslaten neemt de verschuiving hierboven het over vanaf díe plek. Te kort
+   geveegd? Dan veert het terug. Een overwegend verticale veeg scrollt gewoon. */
+const SWIPE_DECIDE_PX = 12;
+const SWIPE_MIN_PX = 46;
+const SWIPE_DAMPING = .55;
+const SWIPE_MAX_FRACTION = .34;
+
+function useCalendarSwipe({ stageRef, liveRef, isBlocked, onNavigate }: {
+  stageRef: { current: HTMLDivElement | null };
+  liveRef: { current: HTMLDivElement | null };
+  /** Loopt er iets anders (paneel open, sleep- of knijpgebaar)? Dan niet bladeren. */
+  isBlocked: () => boolean;
+  onNavigate: (direction: -1 | 1, fromPx: number) => void;
+}) {
+  const isBlockedRef = useRef(isBlocked);
+  isBlockedRef.current = isBlocked;
+  const onNavigateRef = useRef(onNavigate);
+  onNavigateRef.current = onNavigate;
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    let startX = 0, startY = 0, offset = 0;
+    let tracking = false;
+    let axis: 'x' | 'y' | null = null;
+
+    function reset(animate: boolean) {
+      const el = liveRef.current;
+      if (el) {
+        if (animate && offset !== 0) el.animate([{ transform: `translateX(${offset}px)` }, { transform: 'translateX(0)' }], { duration: 200, easing: 'ease-out' });
+        el.style.transform = '';
+      }
+      offset = 0; tracking = false; axis = null;
+    }
+    function springBack() { reset(true); }
+
+    function onTouchStart(e: TouchEvent) {
+      if (e.touches.length !== 1 || isBlockedRef.current()) { reset(false); return; }
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      offset = 0; axis = null; tracking = true;
+    }
+    function onTouchMove(e: TouchEvent) {
+      if (!tracking) return;
+      if (e.touches.length !== 1 || isBlockedRef.current()) { springBack(); return; }
+      const dx = e.touches[0].clientX - startX;
+      const dy = e.touches[0].clientY - startY;
+      if (axis === null) {
+        if (Math.hypot(dx, dy) < SWIPE_DECIDE_PX) return;
+        axis = Math.abs(dx) > Math.abs(dy) * 1.25 ? 'x' : 'y';
+        if (axis === 'y') { tracking = false; return; }
+        // Kan het rooster zélf zijwaarts? Dan is dát het gebaar, niet bladeren.
+        const scroller = stage!.querySelector<HTMLElement>('.tb-scroll');
+        if (scroller && scroller.scrollWidth > scroller.clientWidth + 1) { tracking = false; axis = null; return; }
+      }
+      if (e.cancelable) e.preventDefault();
+      const max = stage!.clientWidth * SWIPE_MAX_FRACTION;
+      offset = Math.max(-max, Math.min(max, dx * SWIPE_DAMPING));
+      const el = liveRef.current;
+      if (el) el.style.transform = `translateX(${offset}px)`;
+    }
+    function onTouchEnd() {
+      if (!tracking || axis !== 'x') { springBack(); return; }
+      if (Math.abs(offset) / SWIPE_DAMPING < SWIPE_MIN_PX) { springBack(); return; }
+      const from = offset;
+      offset = 0; tracking = false; axis = null;
+      onNavigateRef.current(from < 0 ? 1 : -1, from);
+    }
+
+    stage.addEventListener('touchstart', onTouchStart, { passive: true });
+    stage.addEventListener('touchmove', onTouchMove, { passive: false });
+    stage.addEventListener('touchend', onTouchEnd, { passive: true });
+    stage.addEventListener('touchcancel', springBack, { passive: true });
+    return () => {
+      stage.removeEventListener('touchstart', onTouchStart);
+      stage.removeEventListener('touchmove', onTouchMove);
+      stage.removeEventListener('touchend', onTouchEnd);
+      stage.removeEventListener('touchcancel', springBack);
+    };
+  }, [stageRef, liveRef]);
+}
+
+/** Eén periode vooruit of achteruit, passend bij de gekozen weergave. */
+function shiftAnchorForView(view: CalendarView, anchor: Date, direction: -1 | 1): Date {
+  if (view === 'day') return addDays(anchor, direction);
+  if (view === '3day') return addDays(anchor, direction * THREE_DAY_COUNT);
+  if (view === 'month') return addMonths(anchor, direction);
+  return addDays(anchor, direction * 7);
+}
+
 /** Volgt of de viewport smal genoeg is voor de mobiele agenda-ergonomie. */
 function useIsMobile(): boolean {
   const query = `(max-width:${MOBILE_BREAKPOINT_PX}px)`;
@@ -2607,6 +3115,25 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   const [draftSlots, setDraftSlots] = useState<{ startsAt: string; endsAt: string }[]>([]);
   const [showBookingSend, setShowBookingSend] = useState(false);
   const [bookingCreated, setBookingCreated] = useState<{ url: string; token: string; linkId: string } | null>(null);
+  // Zoomstand van het tijdrooster (knijpen / Ctrl+wiel / +−). Wordt onthouden.
+  const [zoom, setZoom] = useState<number>(() => (typeof window === 'undefined' ? 1 : readStoredZoom()));
+  // Bump = "scroll het rooster opnieuw naar nu". Bladeren doet dat bewust niet.
+  const [autoScrollKey, setAutoScrollKey] = useState(0);
+  // In de maandweergave: de dag waarvan je de items bekijkt (Google-gedrag).
+  const [monthDay, setMonthDay] = useState<Date | null>(null);
+  const { stageRef, liveRef, ghostRef, slide, clearSlide } = useCalendarStage();
+
+  const applyZoom = useCallback((next: number) => {
+    const value = clampZoom(next);
+    setZoom(value);
+    try { window.localStorage.setItem(ZOOM_STORAGE_KEY, String(value)); } catch { /* privémodus: dan onthouden we het niet */ }
+  }, []);
+
+  // De toets-, wiel- en veeggebaren hangen aan langlopende listeners die `anchor`
+  // niet in hun dep-lijst hebben (anders koppelen ze bij élke navigatie opnieuw
+  // aan, midden in een gebaar). Ze lezen de huidige stand daarom via deze ref.
+  const anchorRef = useRef(anchor);
+  anchorRef.current = anchor;
 
   const days = useMemo(() => calendarDaysForView(view, anchor), [view, anchor]);
   // Mobiele dagstrip (Google): de week rond de gekozen dag; tikken = die dag openen.
@@ -2693,6 +3220,22 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
 
   useEffect(() => { void refreshAll(); }, [organizationId, mode]); // eslint-disable-line
   useEffect(() => { if (mode === 'agenda') void refreshEventsOnly(); }, [rangeStart, rangeEnd, mode]); // eslint-disable-line
+  // Vooruit inladen: staat de huidige periode er eenmaal, dan halen we stilletjes
+  // de vorige en de volgende op. Daardoor is bladeren meteen gevuld — geen
+  // "laden…" en geen leeg rooster dat halverwege de verschuiving nog volloopt.
+  useEffect(() => {
+    if (mode !== 'agenda') return;
+    const timer = window.setTimeout(() => {
+      for (const direction of [1, -1] as const) {
+        const neighbour = calendarDaysForView(view, shiftAnchorForView(view, anchor, direction));
+        const start = neighbour[0].toISOString();
+        const end = addDays(neighbour[neighbour.length - 1], 1).toISOString();
+        if (getCachedCalendarEvents(organizationId, start, end)) continue;
+        void listCalendarEventsCached(organizationId, start, end).catch(() => { /* stil: dit is alleen vooruitkijken */ });
+      }
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [organizationId, mode, view, anchor]);
   useEffect(() => { if (mode === 'settings') setShowConnections(true); }, [mode]);
   // Zakt het scherm naar telefoonbreedte terwijl je in de (brede) weekweergave zit?
   // Schakel dan naar de dagweergave, die wél op een telefoon past.
@@ -2837,6 +3380,20 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '', trackTime: true, editingEventId: '', meetingUrl: '', addConference: false }));
     setShowCreatePanel(true);
   }, [bookingMode]);
+
+  // Klikken op een lege plek in de maandweergave maakt een afspraak op die dag —
+  // net als Google, dat daar een snelinvoer opent. Standaardduur: het eerstvolgende
+  // hele uur (of 9:00 op een andere dag dan vandaag), één uur lang.
+  const startCreateOnDay = useCallback((day: Date) => {
+    const now = new Date();
+    const start = new Date(day);
+    if (isSameDay(day, now)) { start.setHours(now.getHours() + 1, 0, 0, 0); }
+    else { start.setHours(9, 0, 0, 0); }
+    const end = new Date(start); end.setHours(start.getHours() + 1);
+    setEditingOriginal(null);
+    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(start), endsAt: toInputDateTime(end), clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false }));
+    setShowCreatePanel(true);
+  }, []);
 
   // Concept-opties doorsturen: link aanmaken + blokken koppelen, daarna deel-URL tonen.
   const submitBookingSend = useCallback(async (p: { sourceId: string; clientId: string; title: string; maxTotalBookings: number; maxPerWeek: number; introText: string; inviteMessage: string; meetingUrl: string; autoConference: boolean }) => {
@@ -3114,30 +3671,49 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   function eventsForDay(day: Date) { return events.filter(ev => eventOverlapsDay(ev, day)).sort((a, b) => a.starts_at.localeCompare(b.starts_at)); }
 
   function changeView(nextView: CalendarView) {
-    setView(nextView);
-    setAnchor(prev => {
-      if (nextView === 'month') return startOfMonth(prev);
-      if (nextView === 'week' || nextView === 'list') return startOfWeek(prev);
-      return startOfDay(prev);
+    if (nextView === view) return;
+    slide(0, () => {
+      setView(nextView);
+      setMonthDay(nextView === 'month' && isMobile ? startOfDay(new Date()) : null);
+      setAutoScrollKey(key => key + 1);
+      setAnchor(prev => {
+        if (nextView === 'month') return startOfMonth(prev);
+        if (nextView === 'week' || nextView === 'list') return startOfWeek(prev);
+        return startOfDay(prev);
+      });
     });
   }
 
-  function movePeriod(direction: -1 | 1) {
-    setAnchor(prev => {
-      if (view === 'day') return addDays(prev, direction);
-      if (view === '3day') return addDays(prev, direction * THREE_DAY_COUNT);
-      if (view === 'month') return addMonths(prev, direction);
-      return addDays(prev, direction * 7);
-    });
+  /** `fromPx` = de plek waar een veeg ophield; van daar loopt de verschuiving door. */
+  function movePeriod(direction: -1 | 1, fromPx = 0) {
+    const next = shiftAnchorForView(view, anchorRef.current, direction);
+    slide(direction, () => {
+      setAnchor(next);
+      // Op de telefoon houdt de maand altijd een gekozen dag (met zijn lijstje
+      // eronder); anders zou het paneel bij elke maandwissel weg- en terugklappen.
+      setMonthDay(view === 'month' && isMobile ? startOfMonth(next) : null);
+    }, fromPx);
   }
 
   function openDay(day: Date) {
-    setAnchor(startOfDay(day));
-    setView('day');
+    slide(0, () => {
+      setAnchor(startOfDay(day));
+      setView('day');
+      setMonthDay(null);
+      setAutoScrollKey(key => key + 1);
+    });
   }
 
   function goToday() {
-    setAnchor(startOfDay(new Date()));
+    const today = startOfDay(new Date());
+    // Staat vandaag al in beeld? Dan hoeft er niets te schuiven.
+    const shown = calendarDaysForView(view, anchorRef.current);
+    const direction: SlideDirection = shown.some(d => isSameDay(d, today)) ? 0 : today.getTime() > shown[0].getTime() ? 1 : -1;
+    slide(direction, () => {
+      setAnchor(today);
+      setMonthDay(view === 'month' ? today : null);
+      setAutoScrollKey(key => key + 1);
+    });
   }
 
   // ↑/↓ zoomt in/uit langs dag → 3 dagen → week → maand (lijst blijft via 'l').
@@ -3178,12 +3754,16 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         case 'w': case 'W': e.preventDefault(); changeView('week'); break;
         case 'm': case 'M': e.preventDefault(); changeView('month'); break;
         case 'l': case 'L': e.preventDefault(); changeView('list'); break;
+        // In-/uitzoomen op het tijdrooster, zoals in een kaart of tekenprogramma.
+        case '+': case '=': if (isTimeGridView(view)) { e.preventDefault(); applyZoom(zoom * ZOOM_STEP); } break;
+        case '-': case '_': if (isTimeGridView(view)) { e.preventDefault(); applyZoom(zoom / ZOOM_STEP); } break;
+        case '0': if (isTimeGridView(view)) { e.preventDefault(); applyZoom(1); } break;
         default: break;
       }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [mode, view, showCreatePanel, selectedEvent, showBookingSend, bookingCreated, logTimeEvent]); // eslint-disable-line
+  }, [mode, view, zoom, isMobile, showCreatePanel, selectedEvent, showBookingSend, bookingCreated, logTimeEvent]); // eslint-disable-line
 
   // Muiswiel navigeert door periodes (net als de pijltjes). In dag/week scrollt het
   // wiel eerst het tijdrooster; pas aan de boven-/onderrand springt het naar de
@@ -3198,8 +3778,23 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     if (!el) return;
     function onWheel(e: WheelEvent) {
       if (showCreatePanel || selectedEvent || bookingMode) return;
+      // Ctrl/⌘ + wiel is zoomen; dat handelt het rooster zelf af.
+      if (e.ctrlKey || e.metaKey) return;
       if (view === 'list') return; // de lijst scrollt gewoon verticaal
-      if (e.deltaY === 0 || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return; // negeer horizontaal
+      // Horizontaal vegen op een trackpad bladert — maar alleen als het rooster
+      // zelf niet zijwaarts te scrollen valt (breed weekcanvas op een klein scherm).
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        const scroller = el!.querySelector<HTMLElement>('.tb-scroll');
+        if (scroller && scroller.scrollWidth > scroller.clientWidth + 1) return;
+        if (Math.abs(e.deltaX) < 8) return;
+        e.preventDefault();
+        const now = Date.now();
+        if (now < wheelLockRef.current) return;
+        wheelLockRef.current = now + 450;
+        movePeriod(e.deltaX > 0 ? 1 : -1);
+        return;
+      }
+      if (e.deltaY === 0) return;
       const dir: -1 | 1 = e.deltaY > 0 ? 1 : -1;
       // Maand op mobiel is een natuurlijke scroll-lijst — die niet kapen.
       if (view === 'month' && window.innerWidth <= 900) return;
@@ -3221,44 +3816,17 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     }
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [mode, view, showCreatePanel, selectedEvent, bookingMode]); // eslint-disable-line
+  }, [mode, view, isMobile, showCreatePanel, selectedEvent, bookingMode]); // eslint-disable-line
 
-  // Vegen op de telefoon (Google-werkwijze): veeg links/rechts over de dag-,
-  // 3-daagse of maandweergave om naar de volgende/vorige periode te gaan. Week en
-  // lijst scrollen zelf (horizontaal/verticaal) en blijven daarom buiten schot; een
-  // overwegend verticale veeg blijft gewoon scrollen.
-  useEffect(() => {
-    if (mode !== 'agenda' || !isMobile) return;
-    const el = mainCardRef.current;
-    if (!el) return;
-    let startX = 0;
-    let startY = 0;
-    let tracking = false;
-    function onTouchStart(e: TouchEvent) {
-      if (e.touches.length !== 1) { tracking = false; return; }
-      tracking = true;
-      startX = e.touches[0].clientX;
-      startY = e.touches[0].clientY;
-    }
-    function onTouchEnd(e: TouchEvent) {
-      if (!tracking) return;
-      tracking = false;
-      if (view !== 'day' && view !== '3day' && view !== 'month') return;
-      if (showCreatePanel || selectedEvent || bookingMode) return;
-      const t = e.changedTouches[0];
-      if (!t) return;
-      const dx = t.clientX - startX;
-      const dy = t.clientY - startY;
-      if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
-      movePeriod(dx < 0 ? 1 : -1);
-    }
-    el.addEventListener('touchstart', onTouchStart, { passive: true });
-    el.addEventListener('touchend', onTouchEnd, { passive: true });
-    return () => {
-      el.removeEventListener('touchstart', onTouchStart);
-      el.removeEventListener('touchend', onTouchEnd);
-    };
-  }, [mode, isMobile, view, showCreatePanel, selectedEvent, bookingMode]); // eslint-disable-line
+  // Vegen op een aanraakscherm bladert (zie `useCalendarSwipe`). Onthoud wannéér
+  // er geveegd is: de tik die de browser daarna nog kan afvuren mag geen dag
+  // openen of afspraak aanmaken.
+  const swipedAtRef = useRef(0);
+  useCalendarSwipe({
+    stageRef, liveRef,
+    isBlocked: () => Boolean(showCreatePanel || selectedEvent || bookingMode || stageRef.current?.querySelector('.tb-touch-gesture,.tb-pinching')),
+    onNavigate: (direction, fromPx) => { swipedAtRef.current = Date.now(); movePeriod(direction, fromPx); },
+  });
 
   const previousLabel = view === 'day' ? 'Vorige dag' : view === '3day' ? 'Vorige 3 dagen' : view === 'month' ? 'Vorige maand' : 'Vorige week';
   const nextLabel = view === 'day' ? 'Volgende dag' : view === '3day' ? 'Volgende 3 dagen' : view === 'month' ? 'Volgende maand' : 'Volgende week';
@@ -3519,37 +4087,51 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
         </div>
       )}
 
-      {isTimeGridView(view) ? (
-        <TimeBlockGrid days={days} events={events} tasks={data.tasks.filter(t => t.status !== 'done')}
-          sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} onMoveEvent={rescheduleEvent}
-          onOpenDay={view === 'day' ? undefined : openDay}
-          bookingMode={bookingMode} bookingSlots={bookingOverlay} onRemoveBookingSlot={handleRemoveBookingSlot} />
-      ) : view === 'month' ? (
-        <CalendarMonthView days={days} anchor={anchor} events={events} tasks={data.tasks.filter(t => t.status !== 'done')} data={data}
-          sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} onEditTask={onEditTask} onOpenDay={openDay} onOpenEvent={setSelectedEvent} />
-      ) : (
-        <div className="calendar-week-grid calendar-list-grid">
-          {days.map(day => {
-            const dt = tasksForDay(day); const de = eventsForDay(day);
-            return <div className="calendar-day" key={formatISODate(day)}>
-              <div className="calendar-day-head"><span>{dayNameNl(day)}</span><strong>{day.getDate()}</strong></div>
-              <div className="calendar-day-body">
-                {dt.map(t => <button className="calendar-item task" key={t.id} onClick={() => onEditTask(t)}>
-                  <span className="calendar-item-time">Taak</span><strong>{t.title}</strong>
-                  <small>{data.projects.find(p => p.id === t.project_id)?.name ?? 'Project'}</small>
-                </button>)}
-                {de.map(ev => <button type="button" className={`calendar-item external${ev.visibility === 'private' ? ' private-event' : ''}`}
-                  key={`${ev.provider}-${ev.provider_event_id}-${ev.starts_at}`} onClick={() => setSelectedEvent(ev)}
-                  style={eventColorStyle(sourceColors.get(ev.source_id))}>
-                  <span className="calendar-item-time">{formatTime(ev.starts_at, ev.all_day)}{!ev.all_day ? ` – ${formatTime(ev.ends_at)}` : ''}{ev.meeting_url ? <Video size={11} className="calendar-item-video" /> : null}</span><strong>{ev.title}</strong>
-                  <small>{providerLabel(ev.provider)} · {ev.source_name}{ev.visibility === 'private' ? ' · privé' : ' · team'}{trackedMinutesFor(ev) != null ? ` · ⏱ ${formatMinutes(trackedMinutesFor(ev)!)}` : ''}{ev.meeting_url ? ' · videocall' : ''}</small>
-                </button>)}
-                {dt.length === 0 && de.length === 0 && <div className="calendar-no-items">Geen items</div>}
-              </div>
-            </div>;
-          })}
+      {/* Het "podium": hierbinnen schuift de oude periode eruit terwijl de nieuwe
+          er inschuift. `.cal-stage-ghost` blijft leeg tot er een overgang loopt. */}
+      <div className="cal-stage" ref={stageRef}
+        onClickCapture={e => {
+          // Na een veeg mag de tik eronder geen dag openen of afspraak aanmaken.
+          if (Date.now() - swipedAtRef.current < 350) { e.preventDefault(); e.stopPropagation(); }
+        }}>
+        <div className="cal-stage-live" ref={liveRef}>
+          {isTimeGridView(view) ? (
+            <TimeBlockGrid days={days} events={events} tasks={data.tasks.filter(t => t.status !== 'done')}
+              sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} onMoveEvent={rescheduleEvent}
+              onOpenDay={view === 'day' ? undefined : openDay}
+              zoom={zoom} onZoomChange={applyZoom} autoScrollKey={autoScrollKey}
+              bookingMode={bookingMode} bookingSlots={bookingOverlay} onRemoveBookingSlot={handleRemoveBookingSlot} />
+          ) : view === 'month' ? (
+            <CalendarMonthView days={days} anchor={anchor} events={events} tasks={data.tasks.filter(t => t.status !== 'done')} data={data}
+              sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} onEditTask={onEditTask} onOpenDay={openDay} onOpenEvent={setSelectedEvent}
+              isMobile={isMobile} selectedDay={monthDay} onSelectDay={setMonthDay}
+              onCreateOnDay={canWrite && writeableSources.length > 0 ? startCreateOnDay : undefined} />
+          ) : (
+            <div className="calendar-week-grid calendar-list-grid">
+              {days.map(day => {
+                const dt = tasksForDay(day); const de = eventsForDay(day);
+                return <div className="calendar-day" key={formatISODate(day)}>
+                  <div className="calendar-day-head"><span>{dayNameNl(day)}</span><strong>{day.getDate()}</strong></div>
+                  <div className="calendar-day-body">
+                    {dt.map(t => <button className="calendar-item task" key={t.id} onClick={() => onEditTask(t)}>
+                      <span className="calendar-item-time">Taak</span><strong>{t.title}</strong>
+                      <small>{data.projects.find(p => p.id === t.project_id)?.name ?? 'Project'}</small>
+                    </button>)}
+                    {de.map(ev => <button type="button" className={`calendar-item external${ev.visibility === 'private' ? ' private-event' : ''}`}
+                      key={`${ev.provider}-${ev.provider_event_id}-${ev.starts_at}`} onClick={() => setSelectedEvent(ev)}
+                      style={eventColorStyle(sourceColors.get(ev.source_id))}>
+                      <span className="calendar-item-time">{formatTime(ev.starts_at, ev.all_day)}{!ev.all_day ? ` – ${formatTime(ev.ends_at)}` : ''}{ev.meeting_url ? <Video size={11} className="calendar-item-video" /> : null}</span><strong>{ev.title}</strong>
+                      <small>{providerLabel(ev.provider)} · {ev.source_name}{ev.visibility === 'private' ? ' · privé' : ' · team'}{trackedMinutesFor(ev) != null ? ` · ⏱ ${formatMinutes(trackedMinutesFor(ev)!)}` : ''}{ev.meeting_url ? ' · videocall' : ''}</small>
+                    </button>)}
+                    {dt.length === 0 && de.length === 0 && <div className="calendar-no-items">Geen items</div>}
+                  </div>
+                </div>;
+              })}
+            </div>
+          )}
         </div>
-      )}
+        <div className="cal-stage-ghost" ref={ghostRef} aria-hidden="true" />
+      </div>
     </div>
 
 

@@ -5363,3 +5363,112 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 @media(max-width:900px){
   .wp-quick-add-modes button{padding:8px 6px;font-size:11px}
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   AGENDA · VLOEIEND — bladeren, zoomen en de maand als Google  (2026-08-12)
+   ───────────────────────────────────────────────────────────────────────
+   Drie dingen, bewust helemaal achteraan zodat ze de cascade winnen van de
+   eerdere agendablokken ("Google Calendar-look", "· GOOGLE-PARITEIT",
+   "· MOBIEL", "· MAANDWEERGAVE", "· TABLET STAAND", "· LEESBAARHEID"):
+
+   1) HET PODIUM (.cal-stage). Bladeren is geen sprong meer: de oude periode
+      schuift eruit terwijl de nieuwe erin schuift. De vertrekkende helft is
+      een stilstaande kopie in .cal-stage-ghost (zie useCalendarStage in
+      CalendarPage.tsx) — die laag is leeg zolang er niets loopt. LET OP: de
+      flex-keten van blok "Google Calendar-look" loopt nu via deze twee extra
+      lagen; zonder `flex:1 1 auto;min-height:0` op allebei valt het rooster
+      terug op zijn eigen hoogte en krijg je een tweede scrollbalk.
+   2) ZOOMEN. Knijpen met twee vingers en Ctrl/⌘+wiel schalen `--tb-h`. Het
+      rooster schrijft die waarde tijdens het knijpen rechtstreeks weg, dus
+      hier alleen het uitzetten van het zachte scrollen (dat vecht anders met
+      het meebewegen van de scrollpositie onder je vingers).
+   3) MAAND ALS GOOGLE. "+N meer" opent een dagkaartje boven het rooster
+      i.p.v. weg te springen naar de dagweergave; op de telefoon kiest tikken
+      een dag en verschijnt die eronder als lijst.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* 1 ── Het podium ─────────────────────────────────────────────────────── */
+.cal-stage{position:relative;min-width:0;overflow:hidden}
+.cal-stage-live{min-width:0}
+/* De vertrekkende kopie: nooit klikbaar, en zonder zacht scrollen (anders
+   animeert het overnemen van de scrollpositie zichtbaar mee). */
+.cal-stage-ghost{position:absolute;inset:0;z-index:5;pointer-events:none;overflow:hidden}
+.cal-stage-ghost:empty{display:none}
+.cal-stage-ghost>*{position:absolute;left:0;right:0;top:0;bottom:0}
+.cal-stage-ghost .tb-scroll,.cal-stage-ghost .cm-grid,.cal-stage-ghost .cm-daylist{scroll-behavior:auto}
+/* De lijstweergave heeft een natuurlijke hoogte; daar mag de kopie niet
+   uitgerekt worden tot de (dan lege) staghoogte. */
+.calendar-main-card-list .cal-stage-ghost>*{bottom:auto}
+
+/* De flex-keten van dag/3 dagen/week/maand loopt dóór het podium heen. */
+.calendar-agenda-page .calendar-main-card-day .cal-stage,
+.calendar-agenda-page .calendar-main-card-3day .cal-stage,
+.calendar-agenda-page .calendar-main-card-week .cal-stage,
+.calendar-agenda-page .calendar-main-card-month .cal-stage,
+.calendar-agenda-page .calendar-main-card-day .cal-stage-live,
+.calendar-agenda-page .calendar-main-card-3day .cal-stage-live,
+.calendar-agenda-page .calendar-main-card-week .cal-stage-live,
+.calendar-agenda-page .calendar-main-card-month .cal-stage-live{
+  flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+
+/* 2 ── Zoomen ────────────────────────────────────────────────────────── */
+/* Zijwaarts vegen is bladeren, verticaal blijft scrollen, en knijpen is van
+   ons (niet van de browser). Alleen waar de zeven kolommen sowieso passen —
+   op een breed scherm mag een aanraakgebruiker het canvas nog zelf schuiven. */
+@media(max-width:1180px){
+  .calendar-main-card-day .cal-stage,
+  .calendar-main-card-3day .cal-stage,
+  .calendar-main-card-week .cal-stage{touch-action:pan-y}
+}
+/* Tijdens het knijpen loopt de scrollpositie mee met de vingers; zacht
+   scrollen zou daar een vertraagde naschok van maken. */
+.tb-pinching .tb-scroll{scroll-behavior:auto}
+.tb-pinching .tb-ev,.tb-pinching .tb-cell{transition:none}
+
+/* 3 ── Maand: dagkaartje achter "+N meer" ────────────────────────────── */
+.cm-daycard-scrim{position:fixed;inset:0;z-index:60}
+.cm-daycard{position:fixed;z-index:61;width:min(320px,calc(100vw - 16px));max-height:min(60vh,440px);
+  display:flex;flex-direction:column;gap:2px;padding:8px 8px 10px;
+  background:var(--bg2);border:1px solid var(--border2);border-radius:14px;
+  box-shadow:0 22px 56px rgba(0,0,0,.55);animation:cmDayCardIn .15s ease-out}
+@keyframes cmDayCardIn{from{opacity:0;transform:translateY(-4px) scale(.985)}to{opacity:1;transform:none}}
+.cm-daycard-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:2px 2px 4px}
+.cm-daycard-date{all:unset;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:2px;
+  padding:4px 8px 6px;border-radius:10px;cursor:pointer;transition:background .12s}
+.cm-daycard-date:hover{background:rgba(255,255,255,.07)}
+.cm-daycard-date:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.cm-daycard-name{font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.cm-daycard-num{font-size:21px;font-weight:700;line-height:1;color:var(--text)}
+.cm-daycard-close{all:unset;box-sizing:border-box;display:flex;align-items:center;justify-content:center;
+  width:28px;height:28px;border-radius:50%;color:var(--muted);cursor:pointer;transition:background .12s,color .12s}
+.cm-daycard-close:hover{background:rgba(255,255,255,.08);color:var(--text)}
+.cm-daycard-close:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+/* Eén regel per item — dezelfde taal als de chips in het rooster. */
+.cm-daylist-items{display:flex;flex-direction:column;gap:1px;overflow-y:auto;min-height:0}
+.cm-daylist-empty{margin:6px 4px 8px;color:var(--muted);font-size:12.5px}
+.cm-dayitem{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:8px;min-width:0;
+  padding:7px 9px;border-radius:9px;font-size:12.5px;line-height:1.25;cursor:pointer;transition:background .12s}
+.cm-dayitem:hover{background:rgba(255,255,255,.07)}
+.cm-dayitem:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.cm-dayitem-dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%;background:var(--event-color,var(--accent))}
+.cm-dayitem-time{flex:0 0 auto;min-width:54px;color:var(--muted2);font-weight:650;font-variant-numeric:tabular-nums}
+.cm-dayitem-title{flex:1 1 auto;min-width:0;color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cm-dayitem-video{flex:0 0 auto;color:var(--muted2)}
+.cm-dayitem.is-private{filter:saturate(.7)}
+.cm-dayitem.is-task .cm-dayitem-dot{background:var(--accent)}
+
+/* Telefoon: de gekozen dag als lijst ónder het rooster (Google-werkwijze). */
+.cm-daylist{flex:0 0 auto;max-height:40vh;overflow-y:auto;padding:10px 12px calc(12px + env(safe-area-inset-bottom));
+  border-top:1px solid var(--border);background:var(--bg2);
+  animation:cmDayListIn .18s ease-out}
+@keyframes cmDayListIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.cm-daylist-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
+.cm-daylist-name{display:block;font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.cm-daylist-date{display:block;font-size:14px;font-weight:700;color:var(--text)}
+.cm-daylist-head .btn{flex:0 0 auto;width:auto;min-height:32px;padding:6px 12px}
+
+/* De gekozen dag krijgt een ring; "vandaag" houdt zijn gouden rondje. */
+.cm-date-num.is-selected{background:rgba(255,217,102,.16);box-shadow:inset 0 0 0 1.5px var(--accent);color:var(--text)}
+.cm-cell.is-selected{background:rgba(255,217,102,.05)}
+.cm-cell.is-today.is-selected{background:rgba(255,217,102,.1)}
