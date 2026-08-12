@@ -36,9 +36,16 @@
 #   /contract/<token>, bestand-upload/-download, agenda-adres zoeken en
 #   meeting-opname. Wordt er iets geblokkeerd, dan staat het in de console als
 #   CSP-violation met de exact ontbrekende bron.
+#
+# LET OP — de sha256 in script-src hoort bij het inline thema-bootstrapscript in
+# index.html. Dat script moet inline blijven (een extern bestand laadt te laat en
+# geeft een themaflits bij elke pagelaad), en 'unsafe-inline' willen we niet.
+# Wijzig je ook maar één teken in dat script, dan MOET je de hash opnieuw
+# berekenen, anders weigert de browser het stilzwijgend en flitst de app weer:
+#   node -e "const h=require('crypto').createHash('sha256');const m=require('fs').readFileSync('index.html','utf8').match(/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/);h.update(m[1]);console.log(\"'sha256-\"+h.digest('base64')+\"'\")"
 
 /*
-  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self' https://resofly-office-server.gerjan.workers.dev; frame-src 'self' blob: https://resofly-office-server.gerjan.workers.dev https://*.cloudflarestream.com; worker-src 'self'; manifest-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob: https://*.workers.dev; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.workers.dev https://nominatim.openstreetmap.org https://upload.videodelivery.net https://*.cloudflarestream.com
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self' https://resofly-office-server.gerjan.workers.dev; frame-src 'self' blob: https://resofly-office-server.gerjan.workers.dev https://*.cloudflarestream.com; worker-src 'self'; manifest-src 'self'; script-src 'self' 'sha256-J1hYlItpY/IZO1nOM5PcgYYNKZq4Jj3enqytwYVoQVQ='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob: https://*.workers.dev; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.workers.dev https://nominatim.openstreetmap.org https://upload.videodelivery.net https://*.cloudflarestream.com
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   X-Frame-Options: DENY

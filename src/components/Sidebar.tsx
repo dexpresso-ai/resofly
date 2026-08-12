@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, LogOut, Megaphone, MessageSquare, Percent, Pin, PinOff, Receipt, Sparkles, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, Sparkles, StickyNote, Sun, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, type SettingsTab } from '../features/SimplePages';
 import { Select } from './Ui';
 import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
+import { useTheme } from '../lib/theme';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'archive'|'settings'|'project'|'gallery';
 
@@ -81,6 +82,7 @@ export function Sidebar({
   const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
   // Account-menu onderin: opent alle instellingen + uitloggen boven de avatar.
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [theme, setTheme] = useTheme();
   const userRef = useRef<HTMLDivElement>(null);
   const userTriggerRef = useRef<HTMLButtonElement>(null);
 
@@ -281,6 +283,26 @@ export function Sidebar({
             <tab.Icon size={15}/><span>{tab.label}</span>
           </button>
         ))}
+        <div className="user-menu-sep" aria-hidden="true" />
+        <div className="user-menu-section">Weergave</div>
+        <div className="theme-switch" role="group" aria-label="Thema">
+          <button
+            type="button"
+            className={theme === 'dark' ? 'is-on' : undefined}
+            aria-pressed={theme === 'dark'}
+            onClick={() => setTheme('dark')}
+          >
+            <Moon size={14}/><span>Donker</span>
+          </button>
+          <button
+            type="button"
+            className={theme === 'light' ? 'is-on' : undefined}
+            aria-pressed={theme === 'light'}
+            onClick={() => setTheme('light')}
+          >
+            <Sun size={14}/><span>Licht</span>
+          </button>
+        </div>
         <div className="user-menu-sep" aria-hidden="true" />
         <button
           type="button"
