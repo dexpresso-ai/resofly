@@ -2610,6 +2610,22 @@ button.chat-member:hover{background:var(--bg3)}
 .bk-balance-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
 @media (max-width:880px){.bk-balance-cols{grid-template-columns:1fr}}
 
+/* ── Fase 5: de wettelijke termijnen van de jaarrekening ──
+   De betwiste deponeerdatum staat bewust naast de harde grens (bk-deadline-pair);
+   ResoFly kiest niet tussen de KVK-lijn en art. 2:394 lid 3 BW. */
+.bk-deadline-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.bk-deadline{display:flex;flex-direction:column;gap:3px;padding:12px 14px;border:1px solid var(--border);border-radius:16px;background:rgba(var(--sheen-rgb),calc(.022 * var(--sheen-k)))}
+.bk-deadline>span{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted,rgba(var(--ink-rgb),.55))}
+.bk-deadline strong{font-size:1.05rem;font-variant-numeric:tabular-nums}
+.bk-deadline small{font-size:.75rem;color:var(--muted,rgba(var(--ink-rgb),.55));line-height:1.45}
+.bk-deadline.is-soon{border-color:rgba(var(--accent-rgb),.45)}
+.bk-deadline.is-late{border-color:rgba(var(--danger-rgb),.45);background:rgba(var(--danger-rgb),.07)}
+.bk-deadline-disputed{grid-column:span 2}
+@media (max-width:640px){.bk-deadline-disputed{grid-column:auto}}
+.bk-deadline-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.bk-deadline-pair>div{display:flex;flex-direction:column;gap:2px}
+.bk-deadline-note{margin-top:4px}
+
 /* ── Blok C/D: memoriaal, beginbalans, suppletie, openstaande posten ── */
 .bk-head-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .bk-lines-head-memorial,.bk-line-memorial{grid-template-columns:minmax(0,1.5fr) minmax(0,1.4fr) minmax(0,1.3fr) minmax(0,1.1fr) minmax(0,.8fr) minmax(0,.9fr) minmax(0,.9fr) 34px}
@@ -6355,4 +6371,85 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .rb-filters{display:grid;grid-template-columns:1fr 1fr;gap:8px}
   .rb-filters>*{min-width:0}
   .rb-toolbar{gap:10px}
+}
+
+/* 44 ── Inloggen op een liggende telefoon ─────────────────────────────────
+   `.login` is een raster van 100vh met `place-items:center`. Zodra de kaart
+   hóger is dan het venster — een liggende telefoon is 320-375px hoog en de
+   kaart is ~337px — loopt gecentreerde inhoud naar BEIDE kanten over. Alleen
+   de onderkant is scrollbaar, dus de bovenrand van de kaart (gemeten op
+   -9px) is niet meer te bereiken. Dat is precies de val waar het sleutel-
+   woord `safe` voor bestaat: bij overloop valt de uitlijning terug op
+   `start`, zodat alles wat overloopt aan de onderkant komt en scrollbaar is.
+
+   `100dvh` erbij omdat `vh` op een telefoon de gróte viewport is en de
+   adresbalk dus meerekent alsof hij weg is. */
+.login,.boot{
+  height:auto;min-height:100vh;min-height:100dvh;
+  place-items:safe center;
+  overflow-y:auto;
+  padding:18px 0;
+}
+
+/* 45 ── De publieke pagina's blijven donker, óók in het lichte thema ──────
+   De offerte-, factuur- en boekingspagina die een klant via een tokenlink
+   opent zijn bewust donker gemerkt: `.public-quote-page` zet zijn eigen
+   achtergrond (#050505) en tekstkleur (#f5f5f5) hard.
+
+   Maar het bootstrap-script in index.html zet `data-theme="light"` op ELKE
+   route zodra `resofly.theme` in localStorage op licht staat — ook op deze
+   publieke pagina's. De achtergrond bleef dan hardcoded zwart terwijl álle
+   tekst erbinnen wél omklapte: die is opgebouwd uit `rgba(var(--sheen-rgb),…)`
+   en dat kanaal gaat in het lichte thema van wit naar inkt. Resultaat:
+   donkere tekst op een zwarte pagina, gemeten op een contrast van 1.0-2.4
+   waar 4.5 de ondergrens is. Onleesbaar — en dit is precies de pagina die je
+   klant te zien krijgt.
+
+   Daarom: op deze pagina's staan de kanalen en vlakken weer op hun donkere
+   waarde, zodat de kaarten en teksten binnen de donkere merkkleur kloppen,
+   ongeacht wat de gebruiker in de app heeft ingesteld. Alleen de tokens die
+   `:root[data-theme="light"]` daadwerkelijk omzet staan hier terug. */
+.public-quote-page{
+  --sheen-rgb:255,255,255;
+  --shade-rgb:0,0,0;
+  --ink-rgb:246,244,239;
+  --sheen-k:1;
+  --shade-k:1;
+  --bg-rgb:18,17,14;
+  --bg-deep-rgb:10,9,7;
+  --surface-rgb:27,25,21;
+  --surface2-rgb:34,31,25;
+  --surface3-rgb:42,38,32;
+  --bg:#12110E;
+  --bg-deep:#0A0907;
+  --surface:#1B1915;
+  --surface-2:#221F19;
+  --surface-3:#2A2620;
+  --sidebar-bg:#171512;
+  --line:#2E2B25;
+  --line-2:#3D3930;
+  --ink:#F6F4EF;
+  --ink-2:#C9C3B7;
+  --ink-3:#9C9589;
+
+  /* De compat-laag moet mee. Een aangepaste eigenschap wordt uitgerekend op
+     het element waar hij STAAT: `--panel:var(--surface)` staat op `:root`,
+     dus die is daar al tot wit geworden en erft als kant-en-klare waarde
+     naar beneden. `--surface` hierboven terugzetten verandert daar niets
+     meer aan — de afgeleide tokens moeten er zelf ook staan. */
+  --bg2:#1B1915;
+  --bg3:rgba(255,255,255,.055);
+  --bg4:rgba(255,255,255,.085);
+  --bg5:rgba(255,255,255,.12);
+  --panel:#1B1915;
+  --panel-strong:#221F19;
+  --border:#2E2B25;
+  --border2:#3D3930;
+  --text:#F6F4EF;
+  --muted:#9C9589;
+  --muted2:#C9C3B7;
+  /* Het lichte thema maakt de accenttekst donkerder goud, want daar staat hij
+     op een licht vlak. Hier staat hij op zwart en moet hij het merkgoud zelf
+     zijn — anders zakt de bovenregel naar een contrast van 2,75. */
+  --accent-ink:var(--accent);
 }
