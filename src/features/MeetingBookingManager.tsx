@@ -100,24 +100,23 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
   const clientsById = useMemo(() => new Map(data.clients.map(c => [c.id, c])), [data.clients]);
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 320px) 1fr', gap: 20, alignItems: 'start' }}>
-      <div className="card" style={{ padding: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+    <div className="mbk-layout">
+      <div className="card mbk-aside">
+        <div className="mbk-aside-head">
           <strong>Boekingslinks</strong>
           {canWrite && <Button variant="primary" onClick={() => { setCreating(true); setSelectedId(null); }}>Nieuw</Button>}
         </div>
         {loading && <p className="muted">Laden…</p>}
         {!loading && links.length === 0 && <p className="muted">Nog geen boekingslinks. Maak er een aan om een klant zelf een moment te laten kiezen.</p>}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div className="mbk-linklist">
           {links.map(l => (
             <button
               key={l.id}
-              className={`nav-item ${selectedId === l.id && !creating ? 'active' : ''}`}
-              style={{ textAlign: 'left', padding: '8px 10px' }}
+              className={`nav-item mbk-link ${selectedId === l.id && !creating ? 'active' : ''}`}
               onClick={() => { setCreating(false); setSelectedId(l.id); }}
             >
-              <div style={{ fontWeight: 600 }}>{l.title}</div>
-              <div className="muted" style={{ fontSize: 12 }}>
+              <div className="mbk-link-title">{l.title}</div>
+              <div className="muted mbk-link-meta">
                 {l.client_name || 'Geen klant'} · {l.booking_count}/{l.max_total_bookings} geboekt
                 {l.status === 'closed' ? ' · gesloten' : ''}
                 {l.needs_reconnect ? ' · ⚠ koppeling' : ''}
@@ -127,7 +126,7 @@ export function MeetingBookingManager({ organizationId, data, canWrite }: { orga
         </div>
       </div>
 
-      <div>
+      <div className="mbk-main">
         {error && <div className="alert alert-danger" style={{ marginBottom: 12 }}>{error}</div>}
         {notice && <div className="alert" style={{ marginBottom: 12 }}>{notice}</div>}
 
@@ -268,10 +267,10 @@ function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }:
   };
 
   return (
-    <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div className="card mbk-form">
       <strong>{mode === 'create' ? 'Nieuwe boekingslink' : 'Instellingen'}</strong>
       <label>Titel<Input value={title} onChange={e => setTitle(e.target.value)} placeholder="Afspraak inplannen" /></label>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      <div className="mbk-form-grid">
         <label>Agenda
           <Select value={sourceId} onChange={e => setSourceId(e.target.value)} placeholder="Kies een agenda">
             {sources.map(s => <option key={s.id} value={s.id}>{s.name} ({PROVIDER_LABEL[s.provider] ?? s.provider})</option>)}
@@ -284,7 +283,7 @@ function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }:
           </Select>
         </label>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      <div className="mbk-form-grid">
         <label>Max. aantal boekingen totaal<Input type="number" min={1} value={maxTotal} onChange={e => setMaxTotal(e.target.value)} /></label>
         <label>Max. aantal per week<Input type="number" min={1} value={maxWeek} onChange={e => setMaxWeek(e.target.value)} /></label>
       </div>
@@ -300,7 +299,7 @@ function LinkForm({ mode, sources, clients, busy, onSubmit, onCancel, initial }:
       )}
       <label>Vaste videocall-link (optioneel)<Input value={meetingUrl} onChange={e => setMeetingUrl(e.target.value)} placeholder="https://meet.google.com/… of Teams/Zoom" /></label>
       {sources.length === 0 && <p className="muted">Er is nog geen schrijfbare agenda beschikbaar. Koppel of maak eerst een agenda.</p>}
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div className="mbk-form-actions">
         <Button variant="primary" onClick={submit} disabled={busy || !sourceId}>{mode === 'create' ? 'Aanmaken' : 'Opslaan'}</Button>
         <Button onClick={onCancel} disabled={busy}>Annuleren</Button>
       </div>
@@ -390,10 +389,10 @@ function LinkDetail({ detail, organizationId, sources, clients, clientEmail, tok
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div className="card" style={{ padding: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-          <div>
-            <h3 style={{ margin: '0 0 4px' }}>{link.title}</h3>
+      <div className="card mbk-detail-head-card">
+        <div className="mbk-detail-head">
+          <div className="mbk-detail-title">
+            <h3>{link.title}</h3>
             <div className="muted" style={{ fontSize: 13 }}>
               Agenda: {detail.source_name ?? '— (verwijderd)'}{detail.source_provider ? ` · ${PROVIDER_LABEL[detail.source_provider] ?? detail.source_provider}` : ''}
               {' · '}Max {link.max_total_bookings} totaal, {link.max_per_week}/week
@@ -402,7 +401,7 @@ function LinkDetail({ detail, organizationId, sources, clients, clientEmail, tok
             {detail.needs_reconnect && <div className="alert alert-danger" style={{ marginTop: 8 }}>De gekoppelde agenda-verbinding is niet meer actief. Koppel het account opnieuw voordat je boekingen laat plaatsvinden.</div>}
           </div>
           {canWrite && (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <div className="mbk-detail-actions">
               <Button onClick={() => setEditing(true)} disabled={busy}>Instellingen</Button>
               <Button variant={link.status === 'active' ? 'ghost' : 'primary'} disabled={busy}
                 onClick={() => onSavedPatch({ status: link.status === 'active' ? 'closed' : 'active' })}>
@@ -430,8 +429,8 @@ function LinkDetail({ detail, organizationId, sources, clients, clientEmail, tok
         <strong>Boekingslink delen</strong>
         {token ? (
           <>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <Input readOnly value={token.url} onFocus={e => e.currentTarget.select()} style={{ flex: 1 }} />
+            <div className="mbk-share-row">
+              <Input readOnly value={token.url} onFocus={e => e.currentTarget.select()} />
               <Button onClick={() => navigator.clipboard?.writeText(token.url)}>Kopieer</Button>
             </div>
             <p className="muted" style={{ fontSize: 12, margin: 0 }}>Bewaar of verstuur de link nu — om veiligheidsredenen tonen we hem hierna niet meer (alleen een versleutelde verwijzing wordt opgeslagen).</p>
@@ -467,7 +466,7 @@ function LinkDetail({ detail, organizationId, sources, clients, clientEmail, tok
           </div>
           <p className="muted" style={{ margin: 0, fontSize: 13 }}>Sleep over het rooster om een blok toe te voegen · klik een groen blok om het te verwijderen (🔒 = al geboekt). Je eigen afspraken staan als context in beeld.</p>
           {/* .calendar-agenda-page-scope zodat de gedeelde .tb-scroll-hoogte netjes binnen dit vak scrollt. */}
-          <div className="calendar-agenda-page" style={{ height: 460, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div className="calendar-agenda-page mbk-weekgrid">
             <TimeBlockGrid
               days={weekDays}
               events={weekEvents}
@@ -493,7 +492,7 @@ function LinkDetail({ detail, organizationId, sources, clients, clientEmail, tok
       <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <strong>Beschikbare blokken ({openCount} open)</strong>
         {canWrite && (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div className="mbk-slotform">
             <label>Van<Input type="datetime-local" value={start} onChange={e => setStart(e.target.value)} /></label>
             <label>Tot<Input type="datetime-local" value={end} onChange={e => setEnd(e.target.value)} /></label>
             <Button variant="primary" onClick={addSlot} disabled={busy || !start || !end}>Blok toevoegen</Button>

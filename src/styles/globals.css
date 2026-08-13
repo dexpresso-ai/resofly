@@ -5923,3 +5923,147 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 @media(max-width:900px){
   .odrv{height:auto;min-height:calc(100dvh - 110px - var(--bottomnav-h))}
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBIEL + TABLET · TWEEDE RONDE  (2026-08-13)
+   ───────────────────────────────────────────────────────────────────────
+   Wat er na de eerste ronde nog stuk was. Nieuw hier is de tablet: een
+   staande tablet is 768-1024px breed en viel tussen wal en schip — te smal
+   voor tweekoloms-indelingen die op 236-320px vaste zijkolommen rekenen, te
+   breed om onder de telefoonregels te vallen. Vandaar dat de indelingen
+   hieronder op ≤1024 omklappen en niet op ≤760.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* 15 ── Boekingsscherm ────────────────────────────────────────────────────
+   Dit scherm was volledig met inline-styles gebouwd, en een inline style
+   kun je niet met een media query overrulen. De indeling stond hard op
+   `minmax(240px,320px) 1fr`, dus op een telefoon bleef er ~40px over voor
+   de hoofdkolom en schoof de pagina zijwaarts. De structuurcontainers
+   hebben nu klassen (zie MeetingBookingManager.tsx) zodat het hier kan. */
+.mbk-layout{display:grid;grid-template-columns:minmax(240px,320px) minmax(0,1fr);gap:20px;align-items:start}
+.mbk-aside{padding:16px}
+.mbk-aside-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
+.mbk-main{min-width:0}
+.mbk-linklist{display:flex;flex-direction:column;gap:6px}
+.mbk-link{text-align:left;padding:8px 10px;height:auto}
+.mbk-link-title{font-weight:600}
+.mbk-link-meta{font-size:12px}
+.mbk-form{padding:16px;display:flex;flex-direction:column;gap:12px}
+.mbk-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.mbk-form-actions{display:flex;gap:8px}
+.mbk-detail-head-card{padding:16px}
+.mbk-detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.mbk-detail-title{min-width:0}
+.mbk-detail-title h3{margin:0 0 4px}
+.mbk-detail-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.mbk-share-row{display:flex;gap:8px;align-items:center}
+.mbk-share-row .form-input{flex:1;min-width:0}
+.mbk-slotform{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+/* Het weekrooster stond op een vaste 460px. Op een telefoon is dat meer dan
+   de halve zichtbare hoogte voor een rooster dat je met de vinger moet
+   raken; dvh laat het meebewegen met wat er echt te zien is. */
+.mbk-weekgrid{height:460px;display:flex;flex-direction:column;overflow:hidden}
+
+@media(max-width:1024px){
+  /* Eén kolom: de lijst met links bovenaan, het geopende item eronder. */
+  .mbk-layout{grid-template-columns:minmax(0,1fr);gap:14px}
+}
+@media(max-width:760px){
+  .mbk-form-grid{grid-template-columns:1fr}
+  .mbk-detail-head{flex-direction:column}
+  .mbk-detail-actions{justify-content:flex-start;width:100%}
+  .mbk-detail-actions .btn{flex:1 1 auto}
+  .mbk-form-actions .btn{flex:1}
+  .mbk-share-row{flex-wrap:wrap}
+  .mbk-share-row .form-input{flex:1 1 100%}
+  .mbk-share-row .btn{flex:1}
+  .mbk-slotform>label{flex:1 1 100%}
+  .mbk-slotform .btn{flex:1 1 100%}
+  .mbk-weekgrid{height:clamp(300px,52dvh,460px)}
+  .mbk-aside,.mbk-form,.mbk-detail-head-card{padding:13px}
+}
+
+/* 16 ── Meldingen boven de onderbalk ──────────────────────────────────────
+   `.toast-region` hangt op `bottom:20px` en dekt daarmee de vaste onderbalk
+   af; met `right:20px` en een breedte van 380px steekt hij op een telefoon
+   bovendien links buiten beeld. */
+@media(max-width:760px){
+  .toast-region{
+    right:10px;left:10px;max-width:none;
+    bottom:calc(var(--bottomnav-h) + 12px + env(safe-area-inset-bottom));
+  }
+}
+
+/* 17 ── Indelingen met een vaste zijkolom ─────────────────────────────────
+   Rapportbouwer (236px) en het projecttijdlijn-paneel rekenen op een
+   zijkolom naast de inhoud. Op een staande tablet blijft daar te weinig
+   voor de grafiek over, op een telefoon niets. */
+@media(max-width:1024px){
+  .rb-layout{grid-template-columns:minmax(0,1fr)}
+}
+
+/* 18 ── Filterrijen die de inhoud wegduwen ────────────────────────────────
+   Dezelfde kwaal als bij de weekplanner: vier of vijf keuzevelden die elk
+   een volle regel pakken, samen 240-500px vóór het eerste resultaat. Ook
+   hier: één veegbare regel in plaats van een stapel. */
+@media(max-width:760px){
+  .tt-filters,.projects-filterbar,.timeline-filter-buttons{
+    flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;
+    scrollbar-width:none;
+  }
+  .tt-filters::-webkit-scrollbar,
+  .projects-filterbar::-webkit-scrollbar,
+  .timeline-filter-buttons::-webkit-scrollbar{display:none}
+  .tt-filters>*,.projects-filterbar>*,.timeline-filter-buttons>*{flex:0 0 auto}
+  .tt-filters .select-control,
+  .projects-filterbar .select-control,
+  .projects-filter-select{min-width:150px;width:auto}
+  /* Zoeken blijft vooraan en krijgt de meeste ruimte. */
+  .projects-search{flex:0 0 62%;min-width:0}
+  /* Deze twee stonden op `width:100%` uit het ≤560-blok (regel 1704). */
+  .projects-filter-select,.projects-filter-reset{width:auto}
+}
+
+/* 19 ── Brede tabellen buiten de boekhouding ──────────────────────────────
+   De AI-gebruikstabel op de instellingenpagina duwt de hele pagina open:
+   een e-mailadres breekt niet en er is geen scrollende omhulling. */
+@media(max-width:900px){
+  .ai-usage-table{display:block;overflow-x:auto;overscroll-behavior-x:contain;white-space:nowrap}
+  .ai-usage-table td:first-child{max-width:190px;overflow:hidden;text-overflow:ellipsis}
+}
+
+/* 20 ── Werktabs: de balk moet passen, niet scrollen vanaf drie tabbladen ─
+   Op de telefoon toont een tab alleen nog zijn icoon, maar `min-width:118px`
+   bleef staan — de bijbehorende breedte van een tab mét tekst. Vanaf drie
+   tabbladen schoof de balk daardoor al opzij. */
+@media(max-width:760px){
+  .tab{min-width:0;max-width:none}
+  .tab.active{min-width:0}
+}
+
+/* 21 ── Kanban op de staande tablet ───────────────────────────────────────
+   Tussen 760 en 900 viel de kanban terug op twee kolommen van ~173px,
+   waarin de voetregel van een kaart (flex, zonder wrap) overloopt. Onder de
+   760 doet blok 6 het werk; hier houden we de kolommen op ware breedte en
+   laat het bord zelf schuiven. */
+@media(min-width:761px) and (max-width:900px){
+  .kanban{overflow-x:auto;scroll-snap-type:x mandatory}
+  .kan-col{min-width:264px;width:264px;scroll-snap-align:start}
+  .tc-footer{flex-wrap:wrap}
+}
+
+/* 22 ── Projecttijdlijn: laat een weekkolom over ──────────────────────────
+   De labelkolom staat op 220px (blok regel 1874). Op 390px blijft daar
+   ~120px van het scherm over, wat precies één weekkolom van 122px is —
+   en dan valt de scrollbalk er nog overheen. Smaller label, smallere
+   weken: zo staan er drie weken naast de projectnaam. */
+@media(max-width:560px){
+  .project-timeline-full .timeline-week-header{margin-left:132px}
+  .project-timeline-full .timeline-load-row{grid-template-columns:132px minmax(max-content,1fr)}
+  .project-timeline-full .timeline-load-label{width:132px}
+  .timeline-project-row-readable{grid-template-columns:132px minmax(max-content,1fr)}
+  .timeline-project-row-readable .timeline-project-label{width:132px;padding:8px 9px}
+  .timeline-project-label-rich strong{max-width:112px}
+  .project-timeline-full .timeline-week,
+  .project-timeline-full .timeline-load-cell{min-width:74px}
+}
