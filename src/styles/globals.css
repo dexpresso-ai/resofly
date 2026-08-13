@@ -6310,3 +6310,49 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .calendar-settings-metric small{font-size:11px;line-height:1.35}
   .calendar-settings-metric:last-child:nth-child(odd){grid-column:1/-1}
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBIEL + TABLET · ZESDE RONDE — de staart  (2026-08-13)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* 41 ── Maandrooster: de titel wint van de tijd ───────────────────────────
+   Een dagkolom is op ≤620 zo'n 54px breed. Daar gaat af: de stip (6px), twee
+   gaten (10px), de starttijd ("10:00" ≈ 30px) en wat padding — er blijft
+   ~2px over voor de titel. Je ziet dus een stip en een tijd, en niet WAT er
+   staat. De tijd is hier de minst nuttige helft: je kijkt in een maand naar
+   wát er is, niet naar het precieze uur. Google doet het net zo. */
+@media(max-width:620px){
+  .cm-chip .cm-chip-time{display:none}
+  .cm-chip{gap:3px;padding:0 4px}
+  .cm-chip-title{font-size:10px}
+}
+
+/* 42 ── De inhoud eindigt boven de zwevende knoppen ───────────────────────
+   `.main` reserveert onderaan alleen de hoogte van de onderbalk. De
+   zwevende knoppen stapelen daar nog eens ~118px bovenop (teamchat-knop
+   eindigt op onderbalk+118), dus de laatste kaart van elke lijst lag
+   eronder. Die ruimte hoort er ook bij.
+
+   Uitgezonderd: pagina's die zélf het scherm vullen en hun eigen hoogte
+   uitrekenen. Daar zou extra onderruimte een tweede scrollbalk maken met
+   126px leegte eronder. `:has()` als afstammeling, niet als direct kind —
+   dan blijft het werken als er ooit een wikkel tussen komt. */
+@media(max-width:760px){
+  .content{padding-bottom:126px}
+  .content:has(.calendar-agenda-page),
+  .content:has(.odrv),
+  .content:has(.chat-shell.chat-page){padding-bottom:16px}
+}
+
+/* 43 ── Nog wat duimwerk ──────────────────────────────────────────────────
+   De tabbladen van de weekplanner-lade (30px), de knoppen in het
+   uitschuifmenu en de filterkolom van de rapportbouwer. */
+@media(max-width:760px){
+  .wp-tray-tabs button{min-height:42px;font-size:10.5px}
+  .nav-submenu button{min-height:40px;font-size:12.5px}
+  /* De rapportbouwer stapelt zijn filters in een kolom; op een telefoon
+     passen ze twee-op-een-rij en scheelt dat de halve schermhoogte. */
+  .rb-filters{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .rb-filters>*{min-width:0}
+  .rb-toolbar{gap:10px}
+}
