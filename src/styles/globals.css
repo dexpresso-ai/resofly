@@ -5481,13 +5481,41 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .wp-col.is-drop{background:var(--bg3);border-color:var(--accent);border-style:dashed}
 
 .wp-week > .wp-day-head{position:relative;z-index:1;border-bottom:0}
-/* Niet per kolom scrollen: alle dagen delen dezelfde rij, dus ze groeien samen
-   mee en het scrollen doet de pagina. Dat is ook wat het meescrollen bij de
-   randen tijdens het slepen nodig heeft. */
-.wp-week > .wp-day-body{position:relative;z-index:1;min-height:180px;overflow:visible}
+/* De dag zelf groeit niet ongelimiteerd door: hij krijgt een dakhoogte en
+   binnenin scrollen de twee vakken apart (zie .wp-day-pane hieronder). Alle
+   dagen delen dezelfde rasterrij, dus ze houden dezelfde hoogte; is de drukste
+   dag korter dan het dak, dan blijft de hele week netjes laag. */
+.wp-week > .wp-day-body{position:relative;z-index:1;min-height:180px;max-height:var(--wp-day-max);overflow:hidden}
 .wp-week > .wp-bar{z-index:2}
 /* De kop krijgt zijn scheidingslijn van de strookrij eronder, of anders zelf. */
 .wp-week > .wp-day-head::after{content:"";position:absolute;left:10px;right:10px;bottom:-2px;height:1px;background:var(--border)}
+
+/* ── Twee vakken in een dag: afspraken boven, taken onder ──────────────────
+   Een dag heeft twee soorten inhoud die niet om dezelfde ruimte horen te
+   vechten: de agenda ligt vast, de taken schuif je zelf. Daarom krijgen ze elk
+   een eigen scrollvak.
+
+   De agenda krijgt precies wat hij nodig heeft, tot een dak van 42% van de
+   dag; wat daarboven komt scrollt. Hij krimpt dus níét mee met de taken —
+   anders wordt één afspraak naast een volle takenlijst tot een streepje
+   samengeknepen. De taken krijgen de rest, met een bodem eronder zodat er
+   altijd genoeg vlak overblijft om iets in los te laten. */
+.week-planner{--wp-day-max:clamp(320px,52vh,520px)}
+/* De randjes van 4px/3px met een even grote negatieve marge erbuiten: de
+   inhoud staat daardoor precies waar hij eerst stond, maar de invoegstreep
+   bóven de eerste kaart en de focusrand eromheen vallen nu binnen het vak in
+   plaats van erbuiten — anders knipt de scroll ze weg. */
+.wp-day-pane{display:flex;flex-direction:column;gap:6px;min-height:0;padding:4px 3px;margin:0 -3px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:rgba(var(--accent-rgb),.3) transparent}
+.wp-day-pane::-webkit-scrollbar{width:8px}
+.wp-day-pane::-webkit-scrollbar-thumb{background:rgba(var(--accent-rgb),.22);border-radius:999px;border:2px solid transparent;background-clip:padding-box}
+.wp-day-pane::-webkit-scrollbar-thumb:hover{background:rgba(var(--accent-rgb),.34);background-clip:padding-box}
+.wp-day-agenda{flex:0 0 auto;max-height:calc(var(--wp-day-max) * .42);padding-bottom:8px;border-bottom:1px solid var(--border)}
+.wp-day-tasks{flex:1 1 auto;min-height:88px}
+/* Het invoerveld tussen de twee vakken houdt altijd zijn volle hoogte. Het
+   vraagt wel ruimte, en op een laag scherm is die er niet zomaar: zolang je
+   typt zakt het dak van de agenda daarom een stuk. */
+.wp-day-body > .wp-quick-add{flex:0 0 auto}
+.wp-day-body:has(> .wp-quick-add) .wp-day-agenda{max-height:calc(var(--wp-day-max) * .24)}
 
 /* Strook zonder sleepgedrag (alleen-lezen of smal scherm) */
 .wp-bar.is-static{cursor:pointer}
@@ -5504,6 +5532,12 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .wp-week > .wp-day-head::after{display:none}
   .wp-week > .wp-day-head.is-today{border-color:rgba(var(--accent-rgb),.5)}
   .wp-week > .wp-day-body{background:var(--bg2);border:1px solid var(--border);border-top:0;border-radius:0 0 var(--r2) var(--r2);margin-bottom:10px;min-height:0;padding:8px}
+  /* Onder elkaar scrollt de pagina al. Een scrollvak ín een scrollende pagina
+     is op een telefoon alleen maar hinderlijk — en het zou het vasthouden-en-
+     slepen in de weg zitten. De scheiding tussen agenda en taken blijft; het
+     dak eraf. */
+  .wp-week > .wp-day-body{max-height:none;overflow:visible}
+  .wp-day-pane{overflow:visible;max-height:none}
   .wp-week > .wp-day-body.is-today{border-color:rgba(var(--accent-rgb),.5)}
   .wp-week > .wp-day-body.is-drop{background:var(--bg3);border-color:var(--accent);border-style:dashed}
   /* Grotere raakvlakken: een kaart pak je met je duim, niet met een muis. */

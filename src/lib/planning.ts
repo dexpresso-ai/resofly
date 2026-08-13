@@ -186,6 +186,12 @@ export function layoutWeekBars(dayKeys: string[], tasks: Task[]): { bars: WeekBa
 // van maandag naar zondag brengen.
 export const EDGE_SCROLL_ZONE_PX = 84;
 export const EDGE_SCROLL_MAX_PX = 20;
+/**
+ * Een vak binnen de pagina — een dagkolom, de lade — is veel kleiner dan het
+ * venster. Met de volle randzone zou daar bijna geen neutraal midden overblijven
+ * en zou het vak al schuiven zodra je erboven hangt.
+ */
+export const PANE_EDGE_SCROLL_ZONE_PX = 30;
 
 /**
  * Hoeveel pixels moet er geschoven worden bij deze aanwijzerpositie? Negatief is
@@ -195,13 +201,13 @@ export const EDGE_SCROLL_MAX_PX = 20;
  * Is het scrollgebied kleiner dan twee randzones, dan zou elke positie in een
  * zone vallen en het gebied ongevraagd blijven schuiven; daar doen we niets.
  */
-export function edgeScrollDelta(position: number, min: number, max: number): number {
-  if (max - min < EDGE_SCROLL_ZONE_PX * 2) return 0;
-  if (position < min + EDGE_SCROLL_ZONE_PX) {
-    return -Math.ceil(EDGE_SCROLL_MAX_PX * (1 - Math.max(0, position - min) / EDGE_SCROLL_ZONE_PX));
+export function edgeScrollDelta(position: number, min: number, max: number, zone = EDGE_SCROLL_ZONE_PX): number {
+  if (max - min < zone * 2) return 0;
+  if (position < min + zone) {
+    return -Math.ceil(EDGE_SCROLL_MAX_PX * (1 - Math.max(0, position - min) / zone));
   }
-  if (position > max - EDGE_SCROLL_ZONE_PX) {
-    return Math.ceil(EDGE_SCROLL_MAX_PX * (1 - Math.max(0, max - position) / EDGE_SCROLL_ZONE_PX));
+  if (position > max - zone) {
+    return Math.ceil(EDGE_SCROLL_MAX_PX * (1 - Math.max(0, max - position) / zone));
   }
   return 0;
 }

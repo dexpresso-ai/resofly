@@ -21,6 +21,7 @@ import {
   groupEventMinutesByDay,
   layoutWeekBars,
   mergeTaskRows,
+  PANE_EDGE_SCROLL_ZONE_PX,
   shiftDateKey,
   PLANNING_ORDER_STEP,
 } from './planning.ts';
@@ -335,6 +336,17 @@ test('de randzone rekent met de positie van het gebied, niet met nul', () => {
   // Een scrollgebied dat lager op de pagina begint: 200 is dan de bovenrand.
   assert.ok(edgeScrollDelta(210, 200, 1000) < 0);
   assert.equal(edgeScrollDelta(400, 200, 1000), 0);
+});
+
+test('een vak binnen de pagina krijgt een smallere randzone', () => {
+  // Een dagkolom van 300px hoog: met de volle randzone (84) zou er nauwelijks
+  // neutraal midden overblijven. Met de vakzone (30) wel.
+  const hoogte = 300;
+  assert.equal(edgeScrollDelta(150, 0, hoogte, PANE_EDGE_SCROLL_ZONE_PX), 0, 'het midden ligt stil');
+  assert.ok(edgeScrollDelta(hoogte - 5, 0, hoogte, PANE_EDGE_SCROLL_ZONE_PX) > 0, 'onderin schuift het vak vooruit');
+  assert.ok(edgeScrollDelta(5, 0, hoogte, PANE_EDGE_SCROLL_ZONE_PX) < 0, 'bovenin schuift het terug');
+  // Een vak dat kleiner is dan twee vakzones blijft ook hier stilstaan.
+  assert.equal(edgeScrollDelta(30, 0, PANE_EDGE_SCROLL_ZONE_PX * 2 - 1, PANE_EDGE_SCROLL_ZONE_PX), 0);
 });
 
 test('mergeTaskRows overschrijft op id en voegt onbekende rijen toe', () => {

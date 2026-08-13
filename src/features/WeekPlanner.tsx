@@ -7,7 +7,7 @@ import { memberColor, memberInitials, memberShortName } from '../lib/members';
 import { Button, Input, Select } from '../components/Ui';
 import { AssigneeAvatars } from '../components/AssigneeAvatars';
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
-import { comparePlannedTasks, edgeScrollDelta, groupEventMinutesByDay, isSpanningTask, layoutWeekBars, shiftDateKey } from '../lib/planning';
+import { comparePlannedTasks, edgeScrollDelta, groupEventMinutesByDay, isSpanningTask, layoutWeekBars, PANE_EDGE_SCROLL_ZONE_PX, shiftDateKey } from '../lib/planning';
 import type { WeekBar } from '../lib/planning';
 import { priorityLabel } from '../lib/format';
 
@@ -128,6 +128,23 @@ function findScrollHost(start: HTMLElement | null): HTMLElement | null {
     const scrollsY = /(auto|scroll|overlay)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1;
     const scrollsX = /(auto|scroll|overlay)/.test(style.overflowX) && node.scrollWidth > node.clientWidth + 1;
     if (scrollsY || scrollsX) return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
+/**
+ * Het scrollbare vak dat onder de aanwijzer ligt: een dagkolom of de lade. Die
+ * vakken scrollen apart van de pagina, dus tijdens het slepen moet ook dáár bij
+ * de rand meegescrold worden — anders is een taak onderin een dichtgeschoven
+ * lijst onbereikbaar. `stop` is het buitenste vak waar we nog in kijken; wat
+ * daarboven ligt is de pagina zelf en gaat via de gewone weg.
+ */
+function scrollablePaneAt(x: number, y: number, stop: HTMLElement | null): HTMLElement | null {
+  const hit = document.elementFromPoint(x, y);
+  let node = hit instanceof HTMLElement ? hit : null;
+  while (node && node !== stop) {
+    if (node.scrollHeight > node.clientHeight + 1 && /(auto|scroll|overlay)/.test(getComputedStyle(node).overflowY)) return node;
     node = node.parentElement;
   }
   return null;
@@ -753,6 +770,22 @@ export function WeekPlanner({
       if (!state || !state.moved) return;
       const { x, y } = state.pointer;
 
+      // Eerst het vak onder de aanwijzer zelf — een dagkolom of de lade heeft
+      // zijn eigen scroll. Daarna pas de pagina: hang je onderin het venster,
+      // dan schuiven ze allebei mee en houdt de pagina het over zodra het vak
+      // op is.
+      let paned = false;
+      const pane = scrollablePaneAt(x, y, host);
+      if (pane) {
+        const paneRect = pane.getBoundingClientRect();
+        const paneDy = edgeScrollDelta(y, paneRect.top, paneRect.bottom, PANE_EDGE_SCROLL_ZONE_PX);
+        if (paneDy) {
+          const before = pane.scrollTop;
+          pane.scrollTop += paneDy;
+          paned = pane.scrollTop !== before;
+        }
+      }
+
       let dx = 0;
       let dy = 0;
       if (host) {
@@ -766,7 +799,7 @@ export function WeekPlanner({
         dx = edgeScrollDelta(x, 0, window.innerWidth);
         if (dy || dx) window.scrollBy(dx, dy);
       }
-      if (dy || dx) applyPointer(x, y);
+      if (dy || dx || paned) applyPointer(x, y);
     }
 
     function step() {
@@ -1092,20 +1125,38 @@ export function WeekPlanner({
                 style={{ gridColumn: i + 1, gridRow: laneCount + 2 }}
                 ref={el => registerZone(key, el)}
               >
-                {agenda?.items.map(event => <div key={`${event.source_id}-${event.provider_event_id}-${event.starts_at}`} className="wp-agenda-chip" title={event.title}>
-                  <span className="wp-agenda-time">{formatEventTime(event.starts_at)}</span>
-                  <span className="wp-agenda-name">{event.title}</span>
-                </div>)}
+                {/* Twee eigen vakken onder elkaar: bovenin wat vastligt (de
+                    agenda), daaronder wat je kunt schuiven (de taken). Elk vak
+                    scrollt apart, zodat een volle agenda de taken niet wegduwt
+                    en een lange takenlijst de afspraken niet uit beeld drukt. */}
+                {!!agenda?.items.length && <div
+                  className="wp-day-pane wp-day-agenda"
+                  role="group"
+                  aria-label={`Afspraken op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
+                >
+                  {agenda.items.map(event => <div key={`${event.source_id}-${event.provider_event_id}-${event.starts_at}`} className="wp-agenda-chip" title={event.title}>
+                    <span className="wp-agenda-time">{formatEventTime(event.starts_at)}</span>
+                    <span className="wp-agenda-name">{event.title}</span>
+                  </div>)}
+                </div>}
+                {/* Het invoerveld blijft bewust búiten het scrollvak staan: het
+                    hoort bij de dag, niet bij een plek in de lijst. */}
                 {quickAddDay === key && <QuickAddTask
                   busy={quickAddBusy}
                   weekHint={`van ${formatDateShort(key)} tot en met ${formatDateShort(weekStripEnd(key, orderedDayKeys[6]))}`}
                   onSubmit={(title, mode) => quickAdd(key, title, mode === 'week' ? weekStripEnd(key, orderedDayKeys[6]) : undefined)}
                   onCancel={() => setQuickAddDay(null)}
                 />}
-                {bucket.tasks.map(task => taskCard(task, { insertBefore: marker }))}
-                {marker === '__end__' && <div className="wp-insert-line" aria-hidden="true"/>}
-                {bucket.tasks.length === 0 && quickAddDay !== key && !agenda?.items.length
-                  && <div className="wp-day-empty">Sleep een taak hierheen of gebruik <strong>+</strong></div>}
+                <div
+                  className="wp-day-pane wp-day-tasks"
+                  role="group"
+                  aria-label={`Taken op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
+                >
+                  {bucket.tasks.map(task => taskCard(task, { insertBefore: marker }))}
+                  {marker === '__end__' && <div className="wp-insert-line" aria-hidden="true"/>}
+                  {bucket.tasks.length === 0 && quickAddDay !== key
+                    && <div className="wp-day-empty">Sleep een taak hierheen of gebruik <strong>+</strong></div>}
+                </div>
                 {bucket.noEstimateCount > 0 && <div className="wp-day-noestimate">
                   {bucket.noEstimateCount === 1 ? '1 taak zonder schatting' : `${bucket.noEstimateCount} taken zonder schatting`}
                 </div>}
