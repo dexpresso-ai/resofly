@@ -376,17 +376,113 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .attention-empty{display:flex;align-items:center;gap:12px;padding:14px;border-radius:10px;background:rgba(var(--ok-rgb),.07);border:1px solid rgba(var(--ok-rgb),.22);color:var(--muted2);font-size:12px}
 .attention-empty strong{color:var(--text);font-size:13px;display:block;margin-bottom:2px}
 .attention-empty .attention-icon{color:var(--accent-g);background:rgba(var(--ok-rgb),.14)}
-.week-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px;display:flex;flex-direction:column;gap:10px}
-.week-card h3{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted2)}
-.week-list{display:flex;flex-direction:column;gap:7px}
-.week-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;appearance:none;font:inherit;color:inherit;cursor:pointer;background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:8px 10px;transition:border-color .15s,background .15s}
-.week-row:hover{border-color:var(--border2);background:var(--bg4)}
-.week-row-main{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
-.week-row-main strong{font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.week-row-main span{font-size:10px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.week-date{font-size:10px;color:var(--muted);white-space:nowrap}
-.week-row.is-overdue .week-date{color:var(--accent-r);font-weight:700}
-.week-empty{font-size:12px;color:var(--muted);line-height:1.5}
+/* ── Dashboard: acties van vandaag + weekacties ───────────────────────────
+   Het startscherm opent je dag in plaats van alleen je cijfers te tonen. Twee
+   blokken: "Vandaag" (eerst wat blijft liggen, dan wat je vandaag gepland hebt,
+   met de agenda van vandaag als strook eronder) en "Weekacties" (losse taken
+   náást projecttaken, allebei per dag). Het projectoverzicht staat daaronder op
+   volle breedte. De oude smalle "Deze week"-kaart in de zijkolom is hierin
+   opgegaan; die klassen (.week-card/.week-row/…) zijn daarmee vervallen. */
+.dash-stack{display:flex;flex-direction:column;gap:16px}
+/* Zonder taken- én agendarecht valt het Vandaag-blok weg; het aandachtspaneel
+   krijgt dan de volle breedte in plaats van een lege kolom naast zich. */
+.dash-layout-single{grid-template-columns:minmax(0,1fr)}
+/* Idem voor de staartrij zonder gepinde rapportages: dan is .dash-main leeg. */
+.dash-layout-tail:has(> .dash-main:empty){grid-template-columns:minmax(0,1fr)}
+
+.today-card,.weekactions-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:16px;display:flex;flex-direction:column;min-width:0}
+.dash-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
+.dash-card-head h2{font-size:15px;font-weight:700}
+.dash-card-head p{font-size:11px;color:var(--muted);margin-top:3px}
+.dash-head-tools{display:flex;align-items:center;gap:9px;flex-wrap:wrap;justify-content:flex-end}
+.dash-link{display:inline-flex;align-items:center;gap:3px;min-height:26px;padding:0 2px;background:transparent;border:0;color:var(--muted2);font:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+.dash-link:hover{color:var(--accent-ink)}
+
+/* Dezelfde keuzestrook als in de weekplanner, maar met een eigen klasse: de
+   mobiele regels van `.wp-seg` rekken die strook op tot halve rijbreedte, en
+   dat hoort niet in een kaartkop. */
+.dash-scope{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;flex-shrink:0}
+.dash-scope button{background:transparent;border:0;color:var(--muted);padding:5px 11px;font:inherit;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;transition:background .12s,color .12s}
+.dash-scope button:hover{color:var(--text);background:var(--bg3)}
+.dash-scope button.is-on{background:var(--accent);color:var(--on-accent)}
+.dash-scope button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+/* Kopregel boven een groepje acties. De streep loopt door tot de rand, zodat de
+   groepen los van elkaar lezen zonder dat er extra kaders bij komen. */
+.dash-group-label{display:flex;align-items:center;gap:9px;margin:14px 0 7px;font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.dash-card-head+.dash-group-label,.week-pane .week-day-block:first-of-type .dash-group-label{margin-top:0}
+.dash-group-label::after{content:'';flex:1;height:1px;background:var(--border)}
+.dash-group-label.is-today{color:var(--accent-ink)}
+.dash-group-late{color:var(--accent-r)}
+
+.dash-empty{font-size:12px;color:var(--muted);line-height:1.5;padding:2px 0 4px}
+.dash-more{display:inline-flex;align-items:center;gap:4px;align-self:flex-start;background:transparent;border:0;color:var(--muted2);font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;padding:2px 0}
+.dash-more:hover{color:var(--accent-ink)}
+
+/* Eén actieregel: afvinken links, de rest van de regel opent de taak. */
+.dash-task{display:flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:8px 10px;margin-bottom:6px;min-width:0;transition:border-color .15s}
+.dash-task:hover{border-color:var(--border2)}
+.dash-task-check{position:relative;flex-shrink:0;width:22px;height:22px;display:grid;place-items:center;border-radius:7px;border:1.5px solid var(--border2);background:var(--bg2);color:var(--on-accent);cursor:pointer;padding:0;transition:background .14s,border-color .14s}
+.dash-task-check:hover:not(:disabled){border-color:var(--accent)}
+.dash-task-check:disabled{cursor:default;opacity:.5}
+.dash-task-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;text-align:left;background:transparent;border:0;color:inherit;font:inherit;padding:0;cursor:pointer}
+.dash-task-main:disabled{cursor:default}
+/* De titel is de actie: die mag over twee regels, want een afgekapte taak
+   ("Rushes doorspitten en selectie maken voor de eer…") is geen actie meer. De
+   contextregel eronder blijft wél op één regel met puntjes. */
+.dash-task-main strong{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-size:12.5px;font-weight:600;line-height:1.35;color:var(--text);overflow:hidden}
+.dash-task-main span{font-size:10.5px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dash-task-main span em{font-style:normal;color:var(--muted)}
+.dash-task-main:hover:not(:disabled) strong{color:var(--accent-ink)}
+.dash-task-tags{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.dash-task-time{font-size:10.5px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+/* Pil met radius 999px: altijd nowrap en nooit flex:1 — anders groeit hij op een
+   smal scherm uit tot een ovale klodder (zie de mobiele opruimronde). */
+.dash-chip{font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:3px 8px;border-radius:999px;white-space:nowrap}
+.dash-chip-late{background:rgba(var(--danger-rgb),.14);color:var(--accent-r)}
+.dash-chip-high{background:rgba(var(--warn-rgb),.16);color:var(--accent-o)}
+.dash-task.is-late{border-color:rgba(var(--danger-rgb),.34)}
+.dash-task.is-done .dash-task-main strong{text-decoration:line-through;color:var(--muted)}
+.dash-task.is-done .dash-task-check{background:var(--accent-g);border-color:var(--accent-g);color:var(--bg)}
+
+/* Agenda van vandaag: één strook onder de acties, geen tweede lijst. */
+.today-agenda{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px;padding-top:11px;border-top:1px dashed var(--border)}
+.today-ag{display:inline-flex;align-items:center;gap:8px;max-width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:6px 10px;font:inherit;color:inherit;cursor:pointer;transition:border-color .15s,background .15s}
+.today-ag::before{content:'';width:6px;height:6px;border-radius:999px;background:var(--accent-b);flex-shrink:0}
+.today-ag:hover{border-color:var(--border2);background:var(--bg4)}
+.today-ag strong{font-size:11px;font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}
+.today-ag span{font-size:11px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Weekacties: losse taken naast projecttaken, allebei per dag gegroepeerd. */
+.weekactions-panes{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+.week-pane{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px;min-width:0}
+.week-pane-head{display:flex;align-items:center;gap:9px;margin-bottom:10px}
+.week-pane-head h3{flex:1;min-width:0;font-size:12.5px;font-weight:700}
+.week-pane-icon{display:grid;place-items:center;width:24px;height:24px;border-radius:8px;flex-shrink:0}
+.week-pane-count{font-size:11px;font-weight:700;min-width:22px;height:20px;padding:0 7px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;font-variant-numeric:tabular-nums}
+.week-pane-loose .week-pane-icon,.week-pane-loose .week-pane-count{background:rgba(var(--note-rgb),.15);color:var(--accent-v)}
+.week-pane-project .week-pane-icon,.week-pane-project .week-pane-count{background:rgba(var(--info-rgb),.14);color:var(--accent-b)}
+.week-pane .dash-task{background:var(--bg2)}
+
+/* Staande tablet: twee kolommen van ~340px worden te smal voor een taaktitel. */
+@media(max-width:1024px){.weekactions-panes{grid-template-columns:minmax(0,1fr)}}
+/* Touch: het vinkje blijft 20px groot (anders springt de regel), maar krijgt een
+   onzichtbaar raakvlak van 40px eromheen. */
+@media(pointer:coarse){.dash-task-check::after{content:'';position:absolute;inset:-10px}}
+@media(max-width:760px){
+  .today-card,.weekactions-card{padding:13px}
+  .dash-card-head{flex-direction:column;align-items:stretch;gap:9px}
+  .dash-head-tools{justify-content:space-between}
+  .dash-task{padding:10px;gap:11px}
+  /* Drie regels i.p.v. twee: op 375px past een echte taaktitel niet in twee. */
+  .dash-task-main strong{font-size:13px;-webkit-line-clamp:3}
+  /* Duimformaat voor alles wat je aantikt. */
+  .dash-scope button{min-height:40px;padding:9px 14px}
+  .dash-link,.today-ag{min-height:40px}
+  /* De agenda schuift opzij in plaats van te stapelen. */
+  .today-agenda{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;padding-bottom:4px}
+  .today-ag{flex-shrink:0}
+}
 
 /* Sprint 2 billing */
 .billing-card{gap:12px}.billing-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.billing-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.billing-summary>div{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:11px 12px;display:flex;flex-direction:column;gap:4px}.billing-summary span{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}.billing-summary strong{font-size:15px;color:var(--text)}.billing-summary small{font-size:10px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.billing-control-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:11px 12px}.billing-control-row strong{font-size:12px;color:var(--text)}.billing-control-row.mock-row{border-color:rgba(var(--ok-rgb),.25);background:rgba(var(--ok-rgb),.06)}.billing-control-row .form-select{min-width:170px}
@@ -1306,6 +1402,13 @@ body::before{
 .sidebar-head{position:relative;z-index:1;padding:22px 18px 16px;border-bottom:1px solid var(--border);background:rgba(var(--sheen-rgb),calc(.018 * var(--sheen-k)))}
 .app-brand{gap:11px;font-size:18px;letter-spacing:-.025em}.brand-icon{width:40px;height:40px;border-radius:14px;background:linear-gradient(135deg,rgba(var(--accent-rgb),.24),rgba(var(--accent-rgb),.05)),var(--surface);color:var(--accent-ink);border:1px solid var(--border-strong);box-shadow:0 0 34px rgba(var(--accent-rgb),.16);font-size:18px}.app-brand span{font-weight:700}.org-switcher{margin-top:18px;padding:13px;border:1px solid rgba(var(--sheen-rgb),calc(.09 * var(--sheen-k)));border-radius:18px;background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)));box-shadow:inset 0 1px 0 rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)))}.org-switcher label{display:block;margin-bottom:7px;color:var(--accent-ink);font-size:10px;font-weight:700;letter-spacing:.13em;text-transform:uppercase}.org-switcher select{width:100%;border:1px solid var(--border);border-radius:12px;padding:9px 11px;background:rgba(var(--shade-rgb),calc(.28 * var(--shade-k)));color:var(--text);font-family:inherit;font-weight:600;outline:none}.org-switcher select:focus{border-color:var(--border-strong);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.08)}.org-meta{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:9px}.org-meta span{font-size:11px;color:var(--muted2);text-transform:capitalize}.org-meta button{border:0;background:transparent;color:var(--accent-ink);font-family:inherit;font-size:11px;font-weight:700;cursor:pointer}
 .sidebar-nav{position:relative;z-index:1;padding:14px 12px;font-family:'Poppins',Inter,sans-serif}.nav-section{padding:12px 10px 8px;color:var(--muted);font-size:10px}.nav-item{position:relative;min-height:44px;margin:2px 0;padding:10px 12px;border-radius:15px;color:var(--muted2);font-weight:600;gap:11px}.nav-item svg{color:var(--muted);transition:color .18s ease,transform .18s ease}.nav-item:hover{background:rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)));color:var(--text);transform:translateX(2px)}.nav-item:hover svg{color:var(--accent-ink)}.nav-item.active{background:linear-gradient(135deg,rgba(var(--accent-rgb),.16),rgba(var(--sheen-rgb),calc(.045 * var(--sheen-k))));border:1px solid rgba(var(--accent-rgb),.22);color:var(--text);box-shadow:0 14px 36px rgba(var(--shade-rgb),calc(.22 * var(--shade-k))),inset 0 1px 0 rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)))}.nav-item.active::before{content:'';position:absolute;left:9px;top:50%;width:6px;height:6px;border-radius:999px;background:var(--accent);box-shadow:none;transform:translateY(-50%)}.nav-item.active svg{color:var(--accent-ink);transform:scale(1.04)}.nav-item.active .ni-label{padding-left:6px}.nav-chevron{display:inline-flex;color:var(--muted)}.nav-submenu{margin:5px 0 9px 32px;padding-left:12px;border-left:1px solid rgba(var(--accent-rgb),.2)}.nav-submenu button{min-height:32px;padding:7px 9px;border-radius:12px;color:var(--muted2);font-size:12px}.nav-submenu button:hover,.nav-submenu button.active{background:rgba(var(--accent-rgb),.1);color:var(--text)}
+
+/* Categorie-kopje in het menu ("Overzicht", "Plannen", …). Het label krijgt een
+   fijne streep tot de rechterrand: dat scheidt de groepen zonder extra kaders,
+   en in de smalle iconenbalk blijft alleen die streep over. */
+.nav-group{gap:8px;padding:10px 10px 4px}
+.nav-group span{flex:0 0 auto}
+.nav-group::after{content:'';flex:1;height:1px;background:var(--border)}
 
 .topbar{height:72px;padding:0 30px;border-bottom:1px solid var(--border);background:rgba(var(--bg-deep-rgb),.72);backdrop-filter:blur(18px);box-shadow:0 10px 34px rgba(var(--shade-rgb),calc(.2 * var(--shade-k)))}.topbar-title{font-size:22px;font-weight:700;letter-spacing:-.03em;line-height:1}.topbar-eyebrow{margin-bottom:5px;color:var(--accent-ink);font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}.topbar-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
 
@@ -3114,6 +3217,10 @@ button.chat-member:hover{background:var(--bg3)}
   .app:not(.sidebar-pinned) .sidebar .app-brand span,
   .app:not(.sidebar-pinned) .sidebar .nav-chevron{opacity:0;transition:opacity .12s ease}
   .app:not(.sidebar-pinned) .sidebar .nav-submenu{display:none}
+  /* Het categorie-kopje verliest zijn tekst maar houdt zijn hoogte én zijn
+     streepje: in de smalle balk scheidt die streep de groepen iconen, en omdat
+     alleen de opacity wisselt springt er niets als je erover zweeft. */
+  .app:not(.sidebar-pinned) .sidebar .nav-group span{opacity:0;transition:opacity .12s ease}
 
   /* Ongelezen-teller wordt een klein stipje op het icoon zolang de balk smal is. */
   .app:not(.sidebar-pinned) .sidebar:not(:hover):not(:focus-within) .nav-item .nav-badge{

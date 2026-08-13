@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, CheckCircle2, ChevronRight, Clock, FileText, Landmark, ListChecks, Percent, Pin, Ticket as TicketIcon, Users } from 'lucide-react';
-import type { AppData, Invoice, OrganizationContext, SavedReport, Task } from '../types';
-import { euro, total } from '../lib/format';
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, CheckCircle2, ChevronRight, Clock, FileText, FolderOpen, Landmark, ListTodo, Percent, Pin, Ticket as TicketIcon } from 'lucide-react';
+import type { AppData, CalendarExternalEvent, Invoice, OrganizationContext, SavedReport, Task, TaskStatus, UUID } from '../types';
+import { euro, formatMinutes, total } from '../lib/format';
+import { addDays, formatISODate, isoWeekNumber, startOfWeek } from '../lib/dates';
+import { getCachedCalendarEvents, listCalendarEventsCached } from '../lib/calendar-api';
 import { Button } from '../components/Ui';
 import { BarChart, LineChart, PieChart, Sparkline } from '../components/Charts';
 import { REPORT_SOURCES, formatMeasure, runReport } from '../lib/reporting';
@@ -9,15 +11,16 @@ import { ProjectTimeline } from './ProjectTimeline';
 import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
 
 export type DashboardNavPage =
-  | 'clients' | 'projects' | 'tickets' | 'quotes' | 'invoices' | 'bank' | 'vat-returns' | 'weekplanner' | 'settings' | 'stats';
+  | 'clients' | 'projects' | 'tickets' | 'quotes' | 'invoices' | 'bank' | 'vat-returns' | 'weekplanner' | 'settings' | 'stats' | 'calendar';
 
 type StatTone = 'default' | 'accent' | 'danger';
 type AttentionItem = { key: string; tone: 'default' | 'danger'; icon: ReactNode; label: string; meta?: string; count: number; onClick: () => void };
+/** "Mijn" = aan mij toegewezen én wat nog aan niemand hangt; gelijk aan de weekplanner. */
+type Scope = 'mine' | 'team';
+
+const SCOPE_STORAGE_KEY = 'resofly-dashboard-scope';
 
 const pl = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-
-/** Formatter voor statwaarden die geen bedrag zijn (aantallen). */
-const countValue = (n: number) => String(Math.round(n));
 
 /** Telt bij binnenkomst op naar `target`, zodat het belangrijkste cijfer op het
  *  dashboard even de aandacht pakt. Respecteert prefers-reduced-motion (dan
@@ -61,14 +64,24 @@ function useCountUp(target: number | undefined): number | null {
 export function Dashboard({
   data,
   organizationContext,
+  organizationId,
+  currentUserId = null,
+  canWriteTasks = false,
   openProject,
   openSettings,
   openPage,
   openReport,
+  openTask,
+  onSetTaskStatus,
   permissions = FULL_PERMISSIONS,
 }: {
   data: AppData;
   organizationContext: OrganizationContext;
+  organizationId: string;
+  /** Ingelogde gebruiker; bepaalt wat "Mijn" in de acties-blokken betekent. */
+  currentUserId?: string | null;
+  /** Mag dit lid taken afvinken? (organisatiebreed schrijfrecht én module 'projects'). */
+  canWriteTasks?: boolean;
   openProject: (id: string) => void;
   openSettings: () => void;
   /** Modulerechten: kaarten van een dichtgezette module tonen we niet — anders
@@ -76,9 +89,31 @@ export function Dashboard({
   permissions?: Permissions;
   openPage: (page: DashboardNavPage) => void;
   openReport: (id: string) => void;
+  /** Opent het taakvenster; zonder deze prop is een taakregel niet klikbaar. */
+  openTask?: (task: Task) => void;
+  onSetTaskStatus?: (task: Task, status: TaskStatus) => void | Promise<void>;
 }) {
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayKey = formatISODate(startOfToday);
+
+  // ── Modulerechten van dit teamlid ───────────────────────────────────────
+  const showFinance = permissions.canRead('finance');
+  const showProjects = permissions.canRead('projects');
+  const showCalendar = permissions.canRead('calendar');
+
+  // ── Mijn / team ─────────────────────────────────────────────────────────
+  // Alleen zinvol zodra je niet alleen bent; in je eentje is elke taak de jouwe.
+  const teamMembers = organizationContext.teamMembers;
+  const canSwitchScope = Boolean(currentUserId) && teamMembers.length > 1;
+  const [scope, setScope] = useState<Scope>(() => {
+    if (typeof window === 'undefined') return 'mine';
+    return window.localStorage.getItem(SCOPE_STORAGE_KEY) === 'team' ? 'team' : 'mine';
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem(SCOPE_STORAGE_KEY, scope); } catch { /* privémodus: voorkeur is niet essentieel */ }
+  }, [scope]);
+  const effectiveScope: Scope = canSwitchScope ? scope : 'team';
 
   // ── Financieel ──────────────────────────────────────────────────────────
   const paidInvoices = data.invoices.filter(i => i.status === 'paid');
@@ -105,8 +140,8 @@ export function Dashboard({
   const bankToReconcile = (data.bankTransactions ?? []).filter(t => t.status === 'unmatched' || t.status === 'suggested').length;
   const vatToFile = (data.vatReturns ?? []).filter(v => v.status === 'finalized').length;
 
-  const openTasks = data.tasks.filter(t => t.status !== 'done').length;
-  const overdueTasks = data.tasks.filter(t => t.status !== 'done' && t.end_date && new Date(`${t.end_date}T23:59:59`) < now).length;
+  const openTaskCount = data.tasks.filter(t => t.status !== 'done').length;
+  const overdueTaskCount = data.tasks.filter(t => t.status !== 'done' && isOverdue(t, todayKey)).length;
 
   const activeClients = data.clients.filter(c => c.status === 'active').length;
 
@@ -115,20 +150,77 @@ export function Dashboard({
     .filter(r => r.is_pinned && Boolean(REPORT_SOURCES[r.definition?.source]))
     .sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at));
 
-  // ── Deze week (taken met planning/deadline binnen 7 dagen of te laat) ────
-  const horizon = new Date(startOfToday);
-  horizon.setDate(horizon.getDate() + 7);
-  horizon.setHours(23, 59, 59, 999);
-  const weekTasks = data.tasks
-    .filter(t => t.status !== 'done')
-    .map(t => ({ task: t, date: taskDate(t) }))
-    .filter((x): x is { task: Task; date: Date } => x.date != null && x.date <= horizon)
-    .sort((a, b) => a.date.getTime() - b.date.getTime())
-    .slice(0, 6);
+  // ── Taken binnen mijn blikveld ──────────────────────────────────────────
+  const assigneesByTask = useMemo(() => {
+    const map = new Map<string, UUID[]>();
+    for (const link of data.taskAssignees) {
+      const list = map.get(link.task_id);
+      if (list) list.push(link.user_id); else map.set(link.task_id, [link.user_id]);
+    }
+    return map;
+  }, [data.taskAssignees]);
 
-  // ── Modulerechten van dit teamlid ───────────────────────────────────────
-  const showFinance = permissions.canRead('finance');
-  const showProjects = permissions.canRead('projects');
+  const scopedTasks = useMemo(() => {
+    if (effectiveScope === 'team' || !currentUserId) return data.tasks;
+    // Zoals in de weekplanner: van mij, óf (nog) van niemand. Een net toegevoegde
+    // losse taak verdwijnt daardoor niet meteen uit beeld.
+    return data.tasks.filter(task => {
+      const assignees = assigneesByTask.get(task.id);
+      return !assignees || assignees.length === 0 || assignees.includes(currentUserId);
+    });
+  }, [assigneesByTask, currentUserId, data.tasks, effectiveScope]);
+
+  // ── Vandaag ─────────────────────────────────────────────────────────────
+  // Twee groepen, in deze volgorde: eerst wat is blijven liggen, dan wat je
+  // voor vandaag hebt gepland. Een afgeronde dagtaak blijft staan (doorgestreept),
+  // zodat afvinken geen regel onder je muis vandaan laat verdwijnen.
+  const lingering = scopedTasks
+    .filter(task => task.status !== 'done' && isOverdue(task, todayKey))
+    .sort((a, b) => (taskLastDayKey(a) ?? '').localeCompare(taskLastDayKey(b) ?? '') || a.title.localeCompare(b.title));
+
+  const todaysTasks = scopedTasks
+    .filter(task => coversDay(task, todayKey) || task.end_date === todayKey)
+    .sort((a, b) => Number(a.status === 'done') - Number(b.status === 'done')
+      || priorityRank(b) - priorityRank(a)
+      || a.title.localeCompare(b.title));
+
+  const todayOpenCount = todaysTasks.filter(task => task.status !== 'done').length + lingering.length;
+
+  // ── Agenda van vandaag ──────────────────────────────────────────────────
+  const dayStartIso = startOfToday.toISOString();
+  const dayEndIso = addDays(startOfToday, 1).toISOString();
+  const [events, setEvents] = useState<CalendarExternalEvent[]>(
+    () => (showCalendar ? getCachedCalendarEvents(organizationId, dayStartIso, dayEndIso) ?? [] : []),
+  );
+  useEffect(() => {
+    if (!showCalendar) { setEvents([]); return; }
+    let cancelled = false;
+    setEvents(getCachedCalendarEvents(organizationId, dayStartIso, dayEndIso) ?? []);
+    listCalendarEventsCached(organizationId, dayStartIso, dayEndIso)
+      .then(fetched => { if (!cancelled) setEvents(fetched); })
+      // Geen agenda gekoppeld of even niet bereikbaar: het dashboard werkt dan
+      // gewoon door met alleen de taken. Dit mag de pagina nooit blokkeren.
+      .catch(() => { if (!cancelled) setEvents([]); });
+    return () => { cancelled = true; };
+  }, [organizationId, dayStartIso, dayEndIso, showCalendar]);
+
+  const todaysEvents = useMemo(() => events
+    .filter(event => event.starts_at < dayEndIso && event.ends_at > dayStartIso)
+    .sort((a, b) => Number(b.all_day) - Number(a.all_day) || a.starts_at.localeCompare(b.starts_at)),
+  [dayEndIso, dayStartIso, events]);
+
+  // ── Weekacties ──────────────────────────────────────────────────────────
+  const weekStart = startOfWeek(startOfToday);
+  const weekDayKeys = Array.from({ length: 7 }, (_, index) => formatISODate(addDays(weekStart, index)));
+  const weekStartKey = weekDayKeys[0];
+  const weekEndKey = weekDayKeys[6];
+  const weekTasks = scopedTasks.filter(task => {
+    if (task.status === 'done') return false;
+    const key = taskDayKey(task);
+    return key != null && key >= weekStartKey && key <= weekEndKey;
+  });
+  const looseWeekTasks = weekTasks.filter(task => !task.project_id);
+  const projectWeekTasks = weekTasks.filter(task => Boolean(task.project_id));
 
   // ── Vereist je aandacht ─────────────────────────────────────────────────
   // Elke regel hangt aan een module; staat die dicht, dan hoort de regel er
@@ -138,7 +230,7 @@ export function Dashboard({
   if (showFinance && bankToReconcile) attention.push({ key: 'bank', tone: 'default', icon: <Landmark size={16} />, label: pl(bankToReconcile, 'banktransactie af te letteren', 'banktransacties af te letteren'), count: bankToReconcile, onClick: () => openPage('bank') });
   if (showFinance && openQuotes) attention.push({ key: 'quotes', tone: 'default', icon: <FileText size={16} />, label: pl(openQuotes, 'offerte open bij klanten', 'offertes open bij klanten'), count: openQuotes, onClick: () => openPage('quotes') });
   if (permissions.canRead('tickets') && newTickets) attention.push({ key: 'tickets', tone: 'default', icon: <TicketIcon size={16} />, label: pl(newTickets, 'ticket onbehandeld', 'tickets onbehandeld'), count: newTickets, onClick: () => openPage('tickets') });
-  if (showProjects && overdueTasks) attention.push({ key: 'tasks', tone: 'default', icon: <Clock size={16} />, label: pl(overdueTasks, 'taak over de deadline', 'taken over de deadline'), count: overdueTasks, onClick: () => openPage('weekplanner') });
+  if (showProjects && overdueTaskCount) attention.push({ key: 'tasks', tone: 'default', icon: <Clock size={16} />, label: pl(overdueTaskCount, 'taak over de deadline', 'taken over de deadline'), count: overdueTaskCount, onClick: () => openPage('weekplanner') });
   if (showFinance && vatToFile) attention.push({ key: 'vat', tone: 'default', icon: <Percent size={16} />, label: pl(vatToFile, 'btw-aangifte klaar om in te dienen', 'btw-aangiftes klaar om in te dienen'), count: vatToFile, onClick: () => openPage('vat-returns') });
 
   // ── Onboarding ──────────────────────────────────────────────────────────
@@ -155,17 +247,27 @@ export function Dashboard({
   const onboardingPct = Math.round((onboardingDone / onboardingItems.length) * 100);
   const showOnboarding = onboardingPct < 100;
 
+  const showToday = showProjects || showCalendar;
+  const scopeToggle = canSwitchScope
+    ? <span className="dash-scope" role="group" aria-label="Wiens acties">
+        <button type="button" className={effectiveScope === 'mine' ? 'is-on' : ''} aria-pressed={effectiveScope === 'mine'} onClick={() => setScope('mine')}>Mijn</button>
+        <button type="button" className={effectiveScope === 'team' ? 'is-on' : ''} aria-pressed={effectiveScope === 'team'} onClick={() => setScope('team')}>Team</button>
+      </span>
+    : null;
+
+  const taskRowProps = { data, todayKey, canWrite: canWriteTasks, openTask, onSetTaskStatus };
+
   return <>
     <section className="workspace-hero">
       <div>
         <span className="eyebrow">ResoFly cockpit</span>
         <h1>{activeOrganization?.name ?? 'ResoFly'}</h1>
-        <p>Direct overzicht over klanten, projecten, tickets, offertes, facturen en teamtoegang — ontworpen als één strakke flow in plaats van losse schermen.</p>
+        <p>Vandaag, deze week en je projecten — in één beeld, in de volgorde waarin je ze nodig hebt.</p>
       </div>
       <div className="workspace-meta-card">
         <span>Jouw rol</span>
         <strong>{activeRole}</strong>
-        <small>{organizationContext.teamMembers.length} actief teamlid{organizationContext.teamMembers.length === 1 ? '' : 'en'}</small>
+        <small>{teamMembers.length} actief teamlid{teamMembers.length === 1 ? '' : 'en'}</small>
       </div>
     </section>
 
@@ -174,12 +276,50 @@ export function Dashboard({
       {showFinance && <Stat label="Openstaand" value={euro(outstandingTotal)} sub={pl(outstandingInvoices.length, 'openstaande factuur', 'openstaande facturen')} onClick={() => openPage('invoices')} />}
       {showFinance && <Stat label="Te laat betaald" value={euro(overdueTotal)} tone={overdueInvoices.length ? 'danger' : 'default'} sub={pl(overdueInvoices.length, 'factuur', 'facturen')} onClick={() => openPage('invoices')} />}
       {permissions.canRead('tickets') && <Stat label="Open tickets" value={openTickets} sub={newTickets ? `${newTickets} nieuw` : undefined} onClick={() => openPage('tickets')} />}
-      {showProjects && <Stat label="Open taken" value={openTasks} tone={overdueTasks ? 'danger' : 'default'} sub={overdueTasks ? `${overdueTasks} te laat` : undefined} onClick={() => openPage('weekplanner')} />}
+      {showProjects && <Stat label="Open taken" value={openTaskCount} tone={overdueTaskCount ? 'danger' : 'default'} sub={overdueTaskCount ? `${overdueTaskCount} te laat` : undefined} onClick={() => openPage('weekplanner')} />}
       {permissions.canRead('clients') && <Stat label="Actieve klanten" value={activeClients} onClick={() => openPage('clients')} />}
     </div>
 
-    <section className="dashboard-layout">
-      <div className="dash-main">
+    <div className="dash-stack">
+      <section className={`dashboard-layout${showToday ? '' : ' dash-layout-single'}`}>
+        {showToday && <div className="today-card">
+          <header className="dash-card-head">
+            <div>
+              <h2>Vandaag</h2>
+              <p>{capitalize(formatLongDay(startOfToday))}{showProjects ? ` · ${pl(todayOpenCount, 'actie', 'acties')}` : ''}</p>
+            </div>
+            {showProjects && scopeToggle}
+          </header>
+
+          {showProjects && <>
+            {lingering.length > 0 && <>
+              <div className="dash-group-label dash-group-late"><span>Blijft liggen</span></div>
+              {lingering.slice(0, 6).map(task => <TaskRow key={task.id} task={task} {...taskRowProps} />)}
+              {lingering.length > 6 && <button type="button" className="dash-more" onClick={() => openPage('weekplanner')}>
+                Nog {lingering.length - 6} in de weekplanner <ChevronRight size={13} />
+              </button>}
+            </>}
+
+            <div className="dash-group-label"><span>{lingering.length > 0 ? 'Gepland voor vandaag' : 'Vandaag'}</span></div>
+            {todaysTasks.length === 0
+              ? <p className="dash-empty">Niets gepland voor vandaag. Plan werk in de weekplanner of pak iets uit deze week op.</p>
+              : todaysTasks.map(task => <TaskRow key={task.id} task={task} {...taskRowProps} />)}
+          </>}
+
+          {todaysEvents.length > 0 && <div className="today-agenda">
+            {todaysEvents.slice(0, 6).map(event => <button
+              key={`${event.source_id}:${event.id}`}
+              type="button"
+              className="today-ag"
+              onClick={() => openPage('calendar')}
+              title={`${event.title}${event.location ? ` · ${event.location}` : ''}`}
+            >
+              <strong>{event.all_day ? 'Hele dag' : formatTime(event.starts_at)}</strong>
+              <span>{event.title || 'Afspraak'}</span>
+            </button>)}
+          </div>}
+        </div>}
+
         <div className="attention-card">
           <header>
             <h2>Vereist je aandacht</h2>
@@ -199,65 +339,186 @@ export function Dashboard({
                 </button>)}
               </div>}
         </div>
+      </section>
 
-        {showProjects && <ProjectTimeline data={data} openProject={openProject} />}
-
-        {permissions.canRead('stats') && pinnedReports.length > 0 && <div className="dash-reports">
-          <header className="dash-reports-head">
-            <h2><BarChart3 size={16} /> Mijn rapportages</h2>
-            <button type="button" onClick={() => openPage('stats')}>Rapportbouwer <ChevronRight size={14} /></button>
-          </header>
-          <div className="dash-reports-grid">
-            {pinnedReports.map(report => <PinnedReportCard key={report.id} report={report} data={data} onOpen={() => openReport(report.id)} />)}
+      {showProjects && <div className="weekactions-card">
+        <header className="dash-card-head">
+          <div>
+            <h2>Weekacties</h2>
+            <p>Week {isoWeekNumber(weekStart)} · {formatDayShort(weekStart)} t/m {formatDayShort(addDays(weekStart, 6))} · {pl(weekTasks.length, 'actie', 'acties')}</p>
           </div>
-        </div>}
-      </div>
-
-      <aside className="dash-side">
-        {showProjects && <div className="week-card">
-          <h3>Deze week</h3>
-          {weekTasks.length === 0
-            ? <p className="week-empty">Geen taken met een planning of deadline in de komende 7 dagen.</p>
-            : <div className="week-list">
-                {weekTasks.map(({ task, date }) => {
-                  const project = task.project_id ? data.projects.find(p => p.id === task.project_id) : null;
-                  const client = task.client_id ? data.clients.find(c => c.id === task.client_id) : null;
-                  const overdue = date < startOfToday;
-                  // Een taak zonder project heeft geen projectpagina: dan naar de weekplanner.
-                  return <button type="button" key={task.id} className={`week-row ${overdue ? 'is-overdue' : ''}`} onClick={() => task.project_id ? openProject(task.project_id) : openPage('weekplanner')}>
-                    <span className="week-row-main">
-                      <strong>{task.title}</strong>
-                      <span>{project?.name ?? client?.name ?? 'Geen project'}</span>
-                    </span>
-                    <span className="week-date">{overdue ? 'te laat · ' : ''}{formatDayShort(date)}</span>
-                  </button>;
-                })}
-              </div>}
-        </div>}
-
-        {showOnboarding && <div className="onboarding-card">
-          <div className="onboarding-head">
-            <div><h3>Workspace setup</h3><p>{onboardingDone}/{onboardingItems.length} stappen afgerond</p></div>
-            <strong>{onboardingPct}%</strong>
+          <div className="dash-head-tools">
+            {scopeToggle}
+            <button type="button" className="dash-link" onClick={() => openPage('weekplanner')}>Weekplanner <ChevronRight size={14} /></button>
           </div>
-          <div className="prog-bar setup"><div className="prog-fill" style={{ width: `${onboardingPct}%` }} /></div>
-          <div className="onboarding-list">
-            {onboardingItems.map(item => <div className={`onboarding-row ${item.done ? 'done' : ''}`} key={item.label}><span>{item.done ? '✓' : '•'}</span>{item.label}</div>)}
-          </div>
-          <Button onClick={openSettings}>Organisatie instellen</Button>
-        </div>}
-
-        <div className="activity-card compact-activity">
-          <h3>Laatste activiteit</h3>
-          {organizationContext.auditLogs.slice(0, 5).map(log => <div className="activity-row" key={log.id}>
-            <div><strong>{auditLabel(log.action)}</strong><span>{log.entity_label || log.entity_type}</span></div>
-            <time>{formatRelativeTime(log.created_at)}</time>
-          </div>)}
-          {organizationContext.auditLogs.length === 0 && <p className="settings-help">Nog geen audit-events. Nieuwe wijzigingen worden hier zichtbaar zodra de database-migratie is uitgevoerd.</p>}
+        </header>
+        <div className="weekactions-panes">
+          <WeekPane
+            title="Losse taken"
+            tone="loose"
+            icon={<ListTodo size={14} />}
+            tasks={looseWeekTasks}
+            dayKeys={weekDayKeys}
+            emptyText="Geen losse taken deze week."
+            {...taskRowProps}
+          />
+          <WeekPane
+            title="Projecttaken"
+            tone="project"
+            icon={<FolderOpen size={14} />}
+            tasks={projectWeekTasks}
+            dayKeys={weekDayKeys}
+            emptyText="Geen projecttaken deze week."
+            {...taskRowProps}
+          />
         </div>
-      </aside>
-    </section>
+      </div>}
+
+      {showProjects && <ProjectTimeline data={data} openProject={openProject} />}
+
+      <section className="dashboard-layout dash-layout-tail">
+        <div className="dash-main">
+          {permissions.canRead('stats') && pinnedReports.length > 0 && <div className="dash-reports">
+            <header className="dash-reports-head">
+              <h2><BarChart3 size={16} /> Mijn rapportages</h2>
+              <button type="button" onClick={() => openPage('stats')}>Rapportbouwer <ChevronRight size={14} /></button>
+            </header>
+            <div className="dash-reports-grid">
+              {pinnedReports.map(report => <PinnedReportCard key={report.id} report={report} data={data} onOpen={() => openReport(report.id)} />)}
+            </div>
+          </div>}
+        </div>
+
+        <aside className="dash-side">
+          {showOnboarding && <div className="onboarding-card">
+            <div className="onboarding-head">
+              <div><h3>Workspace setup</h3><p>{onboardingDone}/{onboardingItems.length} stappen afgerond</p></div>
+              <strong>{onboardingPct}%</strong>
+            </div>
+            <div className="prog-bar setup"><div className="prog-fill" style={{ width: `${onboardingPct}%` }} /></div>
+            <div className="onboarding-list">
+              {onboardingItems.map(item => <div className={`onboarding-row ${item.done ? 'done' : ''}`} key={item.label}><span>{item.done ? '✓' : '•'}</span>{item.label}</div>)}
+            </div>
+            <Button onClick={openSettings}>Organisatie instellen</Button>
+          </div>}
+
+          <div className="activity-card compact-activity">
+            <h3>Laatste activiteit</h3>
+            {organizationContext.auditLogs.slice(0, 5).map(log => <div className="activity-row" key={log.id}>
+              <div><strong>{auditLabel(log.action)}</strong><span>{log.entity_label || log.entity_type}</span></div>
+              <time>{formatRelativeTime(log.created_at)}</time>
+            </div>)}
+            {organizationContext.auditLogs.length === 0 && <p className="settings-help">Nog geen audit-events. Nieuwe wijzigingen worden hier zichtbaar zodra de database-migratie is uitgevoerd.</p>}
+          </div>
+        </aside>
+      </section>
+    </div>
   </>;
+}
+
+/** Eén kolom van het weekblok: taken per dag, met de dag als kopregel. */
+function WeekPane({ title, tone, icon, tasks, dayKeys, emptyText, data, todayKey, canWrite, openTask, onSetTaskStatus }: {
+  title: string;
+  tone: 'loose' | 'project';
+  icon: ReactNode;
+  tasks: Task[];
+  dayKeys: string[];
+  emptyText: string;
+  data: AppData;
+  todayKey: string;
+  canWrite: boolean;
+  openTask?: (task: Task) => void;
+  onSetTaskStatus?: (task: Task, status: TaskStatus) => void | Promise<void>;
+}) {
+  const byDay = new Map<string, Task[]>();
+  for (const task of tasks) {
+    const key = taskDayKey(task);
+    if (!key) continue;
+    const list = byDay.get(key);
+    if (list) list.push(task); else byDay.set(key, [task]);
+  }
+  for (const list of byDay.values()) {
+    list.sort((a, b) => priorityRank(b) - priorityRank(a) || a.title.localeCompare(b.title));
+  }
+
+  return <section className={`week-pane week-pane-${tone}`}>
+    <header className="week-pane-head">
+      <span className="week-pane-icon">{icon}</span>
+      <h3>{title}</h3>
+      <span className="week-pane-count">{tasks.length}</span>
+    </header>
+    {tasks.length === 0
+      ? <p className="dash-empty">{emptyText}</p>
+      : dayKeys.map(dayKey => {
+          const dayTasks = byDay.get(dayKey);
+          if (!dayTasks || dayTasks.length === 0) return null;
+          const isToday = dayKey === todayKey;
+          return <div className="week-day-block" key={dayKey}>
+            <div className={`dash-group-label${isToday ? ' is-today' : ''}`}>
+              <span>{formatDayLabel(dayKey)}{isToday ? ' · vandaag' : ''}</span>
+            </div>
+            {dayTasks.map(task => <TaskRow
+              key={task.id}
+              task={task}
+              data={data}
+              todayKey={todayKey}
+              canWrite={canWrite}
+              openTask={openTask}
+              onSetTaskStatus={onSetTaskStatus}
+            />)}
+          </div>;
+        })}
+  </section>;
+}
+
+/** Eén actieregel: afvinken links, taak openen door op de regel te klikken. */
+function TaskRow({ task, data, todayKey, canWrite, openTask, onSetTaskStatus }: {
+  task: Task;
+  data: AppData;
+  todayKey: string;
+  canWrite: boolean;
+  openTask?: (task: Task) => void;
+  onSetTaskStatus?: (task: Task, status: TaskStatus) => void | Promise<void>;
+}) {
+  const project = task.project_id ? data.projects.find(p => p.id === task.project_id) ?? null : null;
+  const clientId = project?.client_id ?? task.client_id ?? null;
+  const client = clientId ? data.clients.find(c => c.id === clientId) ?? null : null;
+  const done = task.status === 'done';
+  const late = !done && isOverdue(task, todayKey);
+  const lastDay = taskLastDayKey(task);
+  const canToggle = canWrite && Boolean(onSetTaskStatus);
+
+  // Zonder project is "Losse taak" de context; de klant staat er als tweede bij
+  // wanneer die er is — een losse taak mag namelijk wél aan een klant hangen.
+  const context = project?.name ?? 'Losse taak';
+  const secondary = client?.name ?? null;
+  const spanning = Boolean(task.planned_date && task.planned_end_date && task.planned_end_date > task.planned_date);
+
+  return <div className={`dash-task${late ? ' is-late' : ''}${done ? ' is-done' : ''}`}>
+    <button
+      type="button"
+      className="dash-task-check"
+      aria-pressed={done}
+      aria-label={done ? `${task.title} weer openzetten` : `${task.title} afvinken`}
+      disabled={!canToggle}
+      onClick={() => onSetTaskStatus?.(task, done ? 'todo' : 'done')}
+    >
+      {done && <CheckCircle2 size={13} aria-hidden="true" />}
+    </button>
+    <button type="button" className="dash-task-main" onClick={() => openTask?.(task)} disabled={!openTask}>
+      <strong>{task.title}</strong>
+      <span>
+        {context}
+        {secondary && <em> · {secondary}</em>}
+        {spanning && <em> · t/m {formatDayLabel(task.planned_end_date!)}</em>}
+      </span>
+    </button>
+    <span className="dash-task-tags">
+      {late && lastDay && <span className="dash-chip dash-chip-late">{lateLabel(lastDay, todayKey)}</span>}
+      {!done && task.priority === 'high' && <span className="dash-chip dash-chip-high">Hoog</span>}
+      {task.estimated_minutes != null && task.estimated_minutes > 0 && <span className="dash-task-time">{formatMinutes(task.estimated_minutes)}</span>}
+    </span>
+  </div>;
 }
 
 function PinnedReportCard({ report, data, onOpen }: { report: SavedReport; data: AppData; onOpen: () => void }) {
@@ -338,15 +599,68 @@ function invoiceOverdue(invoice: Invoice): boolean {
   return !Number.isNaN(due.getTime()) && due.getTime() < Date.now();
 }
 
-function taskDate(task: Task): Date | null {
-  const value = task.planned_date ?? task.end_date;
-  if (!value) return null;
-  const date = new Date(`${value}T00:00:00`);
-  return Number.isNaN(date.getTime()) ? null : date;
+/** De dag waarop een taak in een daglijst thuishoort: de plandatum, anders de deadline. */
+function taskDayKey(task: Task): string | null {
+  return task.planned_date ?? task.end_date ?? null;
+}
+
+/** Laatste dag waarop deze taak nog op tijd is; bij een weekstrook de einddag. */
+function taskLastDayKey(task: Task): string | null {
+  if (task.planned_date) {
+    return task.planned_end_date && task.planned_end_date > task.planned_date ? task.planned_end_date : task.planned_date;
+  }
+  return task.end_date ?? null;
+}
+
+/** Loopt deze taak op de opgegeven dag? Houdt rekening met meerdaagse stroken. */
+function coversDay(task: Task, dayKey: string): boolean {
+  if (!task.planned_date) return false;
+  const end = task.planned_end_date && task.planned_end_date > task.planned_date ? task.planned_end_date : task.planned_date;
+  return task.planned_date <= dayKey && dayKey <= end;
+}
+
+function isOverdue(task: Task, todayKey: string): boolean {
+  const last = taskLastDayKey(task);
+  return last != null && last < todayKey;
+}
+
+function priorityRank(task: Task): number {
+  return task.priority === 'high' ? 2 : task.priority === 'med' ? 1 : 0;
+}
+
+/** "gisteren" / "3 dagen te laat" — concreter dan alleen een datum. */
+function lateLabel(lastDayKey: string, todayKey: string): string {
+  const days = Math.round((Date.parse(`${todayKey}T00:00:00Z`) - Date.parse(`${lastDayKey}T00:00:00Z`)) / 86400000);
+  if (!Number.isFinite(days) || days <= 0) return 'te laat';
+  if (days === 1) return 'gisteren';
+  return `${days} dagen te laat`;
 }
 
 function formatDayShort(date: Date) {
   return new Intl.DateTimeFormat('nl-NL', { day: '2-digit', month: 'short' }).format(date).replace('.', '');
+}
+
+/** "Do 14" voor een ISO-datumsleutel. */
+function formatDayLabel(dayKey: string) {
+  const [year, month, day] = dayKey.split('-').map(Number);
+  const date = new Date(year, (month ?? 1) - 1, day ?? 1);
+  if (Number.isNaN(date.getTime())) return dayKey;
+  const weekday = new Intl.DateTimeFormat('nl-NL', { weekday: 'short' }).format(date).replace('.', '');
+  return `${capitalize(weekday)} ${date.getDate()}`;
+}
+
+function formatLongDay(date: Date) {
+  return new Intl.DateTimeFormat('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' }).format(date);
+}
+
+function formatTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('nl-NL', { hour: '2-digit', minute: '2-digit' }).format(date);
+}
+
+function capitalize(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function auditLabel(action: string) {

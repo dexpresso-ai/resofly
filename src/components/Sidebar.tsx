@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, Scale, Sparkles, StickyNote, Sun, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, Scale, Sparkles, StickyNote, Sun, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, type SettingsTab } from '../features/SimplePages';
@@ -9,20 +9,43 @@ import { useTheme } from '../lib/theme';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 
-const items = [
-  ['dashboard', LayoutDashboard, 'Dashboard'],
-  ['gerrie', Sparkles, 'Gerrie'],
-  ['chat', MessageSquare, 'Chat'],
-  ['weekplanner', Calendar, 'Weekplanner'],
-  ['calendar', Calendar, 'Agenda'],
-  ['time', Clock, 'Uren'],
-  ['stats', BarChart3, 'Statistieken'],
-  ['content', Library, 'Inhoud'],
-  ['clients', Users, 'Klanten'],
-  ['projects', FolderOpen, 'Projecten'],
-  ['tickets', Ticket, 'Tickets'],
-  ['marketing', Megaphone, 'Marketing'],
-  ['finance', Receipt, 'Financiën'],
+/**
+ * Het menu in categorieën in plaats van dertien regels onder elkaar. Een groep
+ * van twee of drie scan je in één oogopslag; de koppen zijn puur label — ze
+ * klappen niets in en kosten dus geen extra klik. Projecten en Financiën houden
+ * hun eigen uitklapbare submenu. Een groep waarvan élk item dichtstaat voor dit
+ * teamlid verdwijnt helemaal, kop en al.
+ *
+ * Weekplanner en Agenda deelden hetzelfde `Calendar`-icoon; in de smalle
+ * iconenbalk zijn dat twee ononderscheidbare regels. Weekplanner krijgt daarom
+ * `CalendarRange`, gelijk aan de werktabs (TabBar `PAGE_ICON`).
+ */
+const navGroups = [
+  { id: 'overzicht', label: 'Overzicht', items: [
+    ['dashboard', LayoutDashboard, 'Dashboard'],
+    ['gerrie', Sparkles, 'Gerrie'],
+  ] },
+  { id: 'plannen', label: 'Plannen', items: [
+    ['weekplanner', CalendarRange, 'Weekplanner'],
+    ['calendar', Calendar, 'Agenda'],
+    ['time', Clock, 'Uren'],
+  ] },
+  { id: 'werk', label: 'Werk', items: [
+    ['clients', Users, 'Klanten'],
+    ['projects', FolderOpen, 'Projecten'],
+    ['tickets', Ticket, 'Tickets'],
+  ] },
+  { id: 'financien', label: 'Financiën', items: [
+    ['finance', Receipt, 'Financiën'],
+  ] },
+  { id: 'communicatie', label: 'Communicatie', items: [
+    ['chat', MessageSquare, 'Chat'],
+    ['marketing', Megaphone, 'Marketing'],
+  ] },
+  { id: 'kennis', label: 'Kennis & inzicht', items: [
+    ['content', Library, 'Inhoud'],
+    ['stats', BarChart3, 'Statistieken'],
+  ] },
 ] as const;
 
 const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'pnl', 'vat-returns', 'corporate-tax', 'dga', 'shareholders', 'fiscal-years', 'annual-accounts'];
@@ -183,8 +206,13 @@ export function Sidebar({
     </div>
     <nav className="sidebar-nav">
       <GlobalSearch data={data} onNavigate={onSearchNavigate} />
-      <div className="nav-section"><span>Menu</span></div>
-      {items.filter(([key]) => permissions.canOpenPage(key === 'finance' ? 'quotes' : key)).map(([key, Icon, label]) => {
+      {navGroups.map(group => {
+        const visibleItems = group.items.filter(([key]) => permissions.canOpenPage(key === 'finance' ? 'quotes' : key));
+        if (visibleItems.length === 0) return null;
+
+        return <Fragment key={group.id}>
+        <div className="nav-section nav-group"><span>{group.label}</span></div>
+        {visibleItems.map(([key, Icon, label]) => {
         const calendarHash = window.location.hash;
         const isProjectsActive = key === 'projects' && projectPages.includes(page);
         const isCalendarActive = key === 'calendar' && calendarPages.includes(page);
@@ -267,6 +295,8 @@ export function Sidebar({
             <button type="button" className={page === 'documents' ? 'active' : ''} onClick={() => onPage('documents')}><Files size={13}/><span>Documenten</span></button>
           </div>}
         </div>;
+        })}
+        </Fragment>;
       })}
     </nav>
 
