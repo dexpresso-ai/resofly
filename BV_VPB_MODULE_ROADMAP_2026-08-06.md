@@ -6,7 +6,7 @@ rekeningschema kent één `0500 Eigen vermogen`, het resultaat gaat rechtstreeks
 Deze roadmap maakt ResoFly geschikt voor klanten met een BV, tot en met een genereerbare
 jaarrekening en publicatiestukken.
 
-**Status per 2026-08-07: fase 0 t/m 4 GEBOUWD en op staging toegepast. Fase 5 open.**
+**Status per 2026-08-13: fase 0 t/m 4 GEBOUWD, en van fase 5 zijn brok A t/m D af en op staging. Alleen brok E (deadlines + cron) staat nog open. De module is nog nooit met een ingelogde gebruiker doorlopen.**
 
 Alles staat op de branch `staging` en is toegepast op `enzghpduqwaojcxgwarr`:
 
@@ -235,7 +235,7 @@ wordt de IB-schatting daarin een Vpb-reservering.
 | 2 | **GROTENDEELS KLAAR** — Vpb: tarieventabel (2021 t/m 2026, periodegedateerd), rekenhart met 18 tests, correcties, verliesverrekening, reservering op 9900/1540, edge function. **Rest: het scherm en de specificatie-export.** | `20260807050000`, `_shared/vpb.ts`, `corporate-tax`-edge-function | scherm nog open |
 | 3 | **KLAAR** — normen, signalen, rekening-courant met eigen rentepercentage en dagsaldo-berekening, DGA-scherm, loonjournaalpost-import | `20260807060000` t/m `080000`, `Dga.tsx`, `PayrollImport.tsx` | gedaan |
 | 4 | **KLAAR** — aandeelhoudersregister (art. 2:194 BW) met mutaties en pand/vruchtgebruik, uitkeringstoets ook op het interim-dividend, dividendbelasting met inhoudingsvrijstelling per aandeelhouder | `20260807100000`, `Shareholders.tsx`, `Dividends.tsx` | gedaan |
-| 5 | **BROK A + B + C KLAAR** — groottecriteria, vergelijkende rapportage, balans ná resultaatbestemming; jaarrekening bevriezen met de levenscyclus opmaken → tekenen → vaststellen → deponeren; PDF-laag, jaarrekening-PDF en publicatiestukken per groottecategorie. **Brok D (scherm) en E (deadlines + cron) open** | `20260812000000` + `20260812010000`, `_shared/reportPdf.ts`, `_shared/annualAccountsLayout.ts`, edge fn `annual-accounts` | A+B+C gedaan |
+| 5 | **BROK A t/m D KLAAR** — groottecriteria, vergelijkende rapportage, balans ná resultaatbestemming; jaarrekening bevriezen met de levenscyclus opmaken → tekenen → vaststellen → deponeren; PDF-laag, jaarrekening-PDF en publicatiestukken per groottecategorie. **Alleen brok E (deadlines + cron) open** | `20260812000000` + `20260812010000`, `_shared/reportPdf.ts`, `_shared/annualAccountsLayout.ts`, edge fn `annual-accounts` | A+B+C gedaan |
 | 6 | Intercompany-boekingen + afstemrapport, consolidatie over de boom, fiscale eenheid | later | apart traject |
 
 Na fase 0+1 is er al een bruikbaar product: een BV-klant boekt met een correct
@@ -316,6 +316,33 @@ wél terug); naam en woonplaats van de consoliderende moeder (art. 2:396 lid 5 B
 snapshot en vragen een migratiewijziging; de statutaire zetel wordt afgeleid uit het bezoekadres; en
 "verkorte balans" is bij ons aggregatie op rubriek, niet de postenindeling van het Besluit modellen
 jaarrekening — dat staat als voorbehoud in het stuk zelf.
+
+## Fase 5, brok D — het scherm
+
+`src/features/AnnualAccounts.tsx` plus servicelaag, 13 repository-wrappers, types en de Page-key
+`annual-accounts` op alle registratieplekken. Commit `e012be6`; typecheck en build groen.
+Publicatiestukken zijn een sectie in ditzelfde scherm, geen eigen Page-key.
+
+21 bevindingen, waarvan één blocker en drie zware, allemaal verwerkt:
+- **De overzichtstabel toonde na vaststelling alleen de twaalfmaandsgrens**, terwijl de werkelijke
+  plicht dan acht dagen na vaststelling is (art. 2:394 lid 1 BW). Wie op 1 maart vaststelde las
+  "uiterlijk 31-12" terwijl de grens 9 maart was.
+- **Het detail van het vorige boekjaar bleef staan bij een wissel** en de knoppen gaven dat oude id
+  door — je kon boekjaar A vaststellen terwijl je dacht B te doen. De database weigert dat niet.
+- **Dialoogfouten waren onzichtbaar**: de overlay dekt de paginabrede foutbalk af, dus juist de
+  uitvoerige weigeringen uit de database bereikten niemand. De foutbalk staat nu in de modal zelf.
+- **De décharge-waarschuwing stond pas bij Vaststellen**, terwijl art. 2:210 lid 5 BW van rechtswege
+  intreedt bij de laatste handtekening. Die waarschuwing staat nu bij het tekenen.
+
+**Nog open uit brok D:** de uploadvakken voor bestuursverslag, accountantsverklaring en overige
+gegevens (alleen de checklist is er; `attachments.entity_type='annual_account'` bestaat al), het
+deadline-paneel toont niets voor een boekjaar zónder opgemaakte jaarrekening — juist het geval waarin
+een herinnering het nuttigst is, en dat is precies wat brok E moet rechtzetten. Plus 17 midden- en
+laag-bevindingen.
+
+**De module is nog nooit geklikt.** Fase 0 t/m 5 staat op staging zonder dat er ooit een
+BV-administratie is aangemaakt. De e2e-ronde — rechtsvorm, rekeningschema, btw, Vpb, afsluiten,
+bestemmen, opmaken, tekenen, vaststellen, deponeren — is de eerstvolgende stap die telt.
 
 ## Openstaand uit fase 0
 
