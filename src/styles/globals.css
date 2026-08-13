@@ -6244,3 +6244,69 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 @media(max-width:520px){
   .finance-search-grid{grid-template-columns:1fr 1fr;gap:8px}
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBIEL + TABLET · VIJFDE RONDE  (2026-08-13)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* 37 ── Galerij-werkbalk ──────────────────────────────────────────────────
+   `.gal-detail-tools` bevat tot acht knoppen (openen, delen, categorieën,
+   instellingen, uploaden…). Op 343px met ~110px per knop wordt dat vier à
+   vijf rijen werkbalk vóór de eerste foto — op een pagina die juist over
+   de foto's gaat. Eén veegbare regel houdt alle acties bereikbaar. */
+@media(max-width:760px){
+  .gal-detail-tools{
+    flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;
+    width:100%;padding-bottom:2px;scrollbar-width:none;
+  }
+  .gal-detail-tools::-webkit-scrollbar{display:none}
+  .gal-detail-tools>*{flex:0 0 auto}
+  .gal-detail-tools .btn{white-space:nowrap}
+}
+
+/* 38 ── Lijstweergave van de agenda ───────────────────────────────────────
+   Elke dagkaart staat op `min-height:360px`, óók een lege. Zeven dagen zijn
+   dan ruim 2.500px scrollen waarvan het meeste leeg is. Op een telefoon
+   groeit een dag mee met wat erin staat; de ondergrens houdt alleen de
+   dagkop plus een regel vast. */
+@media(max-width:760px){
+  .calendar-list-grid .calendar-day{min-height:96px}
+  .calendar-list-grid .calendar-day-body{overflow:visible}
+}
+
+/* 39 ── Kop van de Inhoud-pagina ──────────────────────────────────────────
+   Broodkruimels op 16px die wrappen, een zoekveld op een eigen volle regel
+   en een commandobalk die óók wrapt: samen ~210px vóór het eerste bestand.
+   De commandobalk wordt een veegbare regel en de broodkruimels blijven op
+   één regel met de laatste map in beeld. */
+@media(max-width:760px){
+  .odrv-cmdbar{
+    flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;
+    scrollbar-width:none;
+  }
+  .odrv-cmdbar::-webkit-scrollbar{display:none}
+  .odrv-cmdbar>*{flex:0 0 auto}
+  /* Eén regel die opzij schuift in plaats van drie regels die wrappen.
+     Bewust GEEN row-reverse om rechts te beginnen: dat draait ook de
+     leesvolgorde van het pad om ("Offertes / Klanten / ResoFly"). */
+  .odrv-crumbs{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  .odrv-crumbs::-webkit-scrollbar{display:none}
+  .odrv-crumbs>*{flex:0 0 auto}
+  /* De ingebedde variant (klantdossier) staat op regel 4223 specifieker;
+     die moet mee, anders houdt die 17px terwijl de rest op 13px staat. */
+  .odrv-crumbs button,.odrv-crumb-current,
+  .odrv-embed .odrv-crumbs button,.odrv-embed .odrv-crumb-current{font-size:13px;white-space:nowrap}
+  .odrv-head{padding-bottom:6px}
+}
+
+/* 40 ── Agenda-instellingen: eerst de instelling, dan de cijfers ──────────
+   Drie metriekkaarten met getallen van 30px vallen op ≤1200 onder elkaar
+   en vullen samen met de kop ~650px voordat de eerste échte instelling in
+   beeld komt. Twee naast elkaar met kleinere cijfers halveert dat. */
+@media(max-width:760px){
+  .calendar-settings-overview{grid-template-columns:1fr 1fr;gap:8px}
+  .calendar-settings-metric{padding:11px}
+  .calendar-settings-metric strong{font-size:21px}
+  .calendar-settings-metric small{font-size:11px;line-height:1.35}
+  .calendar-settings-metric:last-child:nth-child(odd){grid-column:1/-1}
+}
