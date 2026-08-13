@@ -1,4 +1,4 @@
-import { Archive, BarChart3, Images, BookOpen, Boxes, Calendar, CalendarClock, CalendarCog, CalendarRange, Clock, FileSignature, FileText, Files, FolderOpen, GanttChart, Landmark, LayoutDashboard, Library, Megaphone, MessageSquare, Percent, Plus, Receipt, Settings, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { Archive, BarChart3, Images, BookOpen, Boxes, Calendar, CalendarClock, CalendarCog, CalendarRange, Clock, FileSignature, FileText, Files, FolderOpen, GanttChart, Landmark, LayoutDashboard, Library, Megaphone, MessageSquare, Percent, Plus, Receipt, Scale, Settings, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData } from '../types';
 import { viewTitle } from '../lib/workspaceTabs';
 
@@ -19,6 +19,7 @@ const PAGE_ICON: Record<string, typeof LayoutDashboard> = {
   'project-planning': GanttChart, tickets: Ticket, chat: MessageSquare, marketing: Megaphone, quotes: FileText,
   contracts: FileSignature, invoices: Receipt, suppliers: Truck, 'purchase-invoices': FileText, ledger: BookOpen,
   bank: Landmark, assets: Boxes, pnl: TrendingUp, 'vat-returns': Percent, 'corporate-tax': Landmark, dga: Users, shareholders: Users, 'fiscal-years': CalendarClock,
+  'annual-accounts': Scale,
   archive: Archive, settings: Settings, gallery: Images,
 };
 

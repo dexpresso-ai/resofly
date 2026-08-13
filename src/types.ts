@@ -1655,6 +1655,347 @@ export interface DividendDistributionLine {
   net_cents: number;
 }
 
+// ── Jaarrekening, groottecriteria en publicatiestukken (fase 5) ────────────
+// Migraties 20260812000000 (groottetoets + vergelijkende rapportage) en
+// 20260812010000 (de jaarrekening als bevroren stuk met haar levenscyclus).
+
+export type SizeClass = 'micro' | 'klein' | 'middelgroot' | 'groot';
+
+export const SIZE_CLASS_LABELS: Record<SizeClass, string> = {
+  micro: 'Micro',
+  klein: 'Klein',
+  middelgroot: 'Middelgroot',
+  groot: 'Groot',
+};
+
+/** Het artikel dat de klasse omschrijft. Groot is de restcategorie. */
+export const SIZE_CLASS_ARTICLES: Record<SizeClass, string> = {
+  micro: 'art. 2:395a lid 1 BW',
+  klein: 'art. 2:396 lid 1 BW',
+  middelgroot: 'art. 2:397 lid 1 BW',
+  groot: 'restcategorie — geen vrijstellingsartikel',
+};
+
+export type AnnualAccountStatus = 'prepared' | 'adopted' | 'filed' | 'reversed';
+
+/** 'ava' = besluit van de algemene vergadering; 'signature_210_5' = ondertekening. */
+export type AnnualAccountAdoptionMethod = 'ava' | 'signature_210_5';
+
+export type AnnualAccountSignatureRole = 'bestuurder' | 'commissaris';
+
+export type AccountingBasis = 'commercieel' | 'fiscaal';
+
+/** Rij uit fiscal_year_size_inputs: wat de groottetoets niet uit het grootboek haalt. */
+export interface FiscalYearSizeInputs extends OrgScopedRow {
+  fiscal_year_id: UUID;
+  /** Art. 2:395a/396/397 lid 1 onder c BW — nergens uit af te leiden. */
+  average_employees: number;
+  total_assets_cents: number | null;
+  net_turnover_cents: number | null;
+  override_reason: string | null;
+  early_adopt_new_thresholds: boolean;
+  /** Startpunt van de plakkerige tweejaarstoets op het oudste boekjaar. */
+  is_first_fiscal_year_of_entity: boolean;
+  /** De klasse op de balansdatum vóór dit boekjaar (overstapper). */
+  opening_size_class: SizeClass | null;
+  consolidating_parent_name: string | null;
+  consolidating_parent_city: string | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Eén jaar in de keten van determine_company_size(). */
+export interface CompanySizeChainLink {
+  fiscalYearId: UUID | null;
+  fiscalYearLabel: string | null;
+  year: number | null;
+  periodEnd: string | null;
+  rawClass: SizeClass | null;
+  effectiveClass: SizeClass | null;
+  [key: string]: unknown;
+}
+
+export interface CompanySizeYearFigures {
+  fiscalYearId?: UUID | null;
+  fiscalYearLabel?: string | null;
+  year?: number | null;
+  periodEnd?: string | null;
+  assetsCents: number | null;
+  turnoverCents: number | null;
+  employees: number | null;
+  assetsSource: string | null;
+  turnoverSource: string | null;
+  employeesSource: string | null;
+  days?: number | null;
+  earlyAdoptNewThresholds?: boolean;
+}
+
+/**
+ * Uitkomst van determine_company_size(): de klasse mét onderbouwing. De
+ * tweejaarstoets is PLAKKERIG — de klasse blijft staan tot de rechtspersoon er
+ * twee opeenvolgende balansdata niet meer in valt. `blockingReason` vertelt
+ * letterlijk wat er ontbreekt; zolang die er staat weigert prepare.
+ */
+export interface CompanySizeResult {
+  fiscalYearId: UUID;
+  fiscalYearLabel: string | null;
+  year: number | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  periodDays: number | null;
+  current: CompanySizeYearFigures;
+  previous: CompanySizeYearFigures | null;
+  /** Zonder tweejaarsregel; sizeClass is de uitkomst mét. */
+  rawClass: SizeClass | null;
+  currentClass: SizeClass | null;
+  previousClass: SizeClass | null;
+  previousRawClass: SizeClass | null;
+  carriedForwardFrom: Record<string, unknown> | null;
+  sizeClass: SizeClass | null;
+  criteriaMet: Record<string, string[]>;
+  previousCriteriaMet: Record<string, string[]> | null;
+  thresholdsUsed: Record<string, unknown> | null;
+  thresholdsLookupYear: number | null;
+  chain: CompanySizeChainLink[];
+  firstYear: boolean;
+  firstFiscalYearConfirmed: boolean;
+  previousUnknown: boolean;
+  inGroup: boolean;
+  publicationSet: SizeClass | null;
+  /** Null = ResoFly doet er bewust geen uitspraak over (art. 2:393 lid 1 BW). */
+  auditRequired: boolean | null;
+  blockingReason: string | null;
+  warnings: string[];
+}
+
+/** Eén ondertekenaar (art. 2:210 lid 2 BW), zoals get_annual_account hem geeft. */
+export interface AnnualAccountSignature {
+  id: UUID;
+  personName: string;
+  role: AnnualAccountSignatureRole;
+  shareholderId: UUID | null;
+  signed: boolean;
+  signedOn: string | null;
+  /** Verplicht zodra er wordt vastgesteld of gedeponeerd zonder handtekening. */
+  missingReason: string | null;
+  sortOrder: number;
+}
+
+/** Eén deponering (art. 2:394 BW). Deponeren kan zich herhalen. */
+export interface AnnualAccountFiling {
+  id: UUID;
+  filingDate: string;
+  filingReference: string | null;
+  unadopted: boolean;
+  note: string | null;
+  createdAt: string;
+}
+
+/** Uitkomst van annual_account_statutory_deadlines(). */
+export interface AnnualAccountDeadlines {
+  prepareDeadline: string | null;
+  prepareDeadlineExtended: string | null;
+  adoptDeadline: string | null;
+  fileDeadlineAfterAdoption: string | null;
+  /** De betwiste KVK-lijn; alleen zolang er nog niet is vastgesteld. */
+  fileDeadlineSafe: string | null;
+  fileDeadlineSafeDisputed: boolean;
+  fileDeadlineHard: string | null;
+  disputeNote: string | null;
+}
+
+/**
+ * Rij uit list_annual_accounts(). Beide deponeerdeadlines komen mee: ResoFly
+ * kiest niet tussen de KVK-lijn en Hof 's-Hertogenbosch 13-9-2022
+ * (ECLI:NL:GHSHE:2022:3141) — het scherm toont ze naast elkaar.
+ */
+export interface AnnualAccountListRow {
+  id: UUID;
+  fiscal_year_id: UUID;
+  fiscal_year_label: string;
+  period_start: string;
+  period_end: string;
+  status: AnnualAccountStatus;
+  size_class: SizeClass;
+  size_class_override: SizeClass | null;
+  effective_size_class: SizeClass;
+  accounting_basis: AccountingBasis;
+  audit_required: boolean;
+  auditor_opinion_received: boolean;
+  prepared_on: string;
+  prepare_deadline: string;
+  extension_months: number;
+  prepare_deadline_effective: string | null;
+  adopt_deadline: string | null;
+  adoption_date: string | null;
+  adoption_method: AnnualAccountAdoptionMethod | null;
+  discharge_granted: boolean;
+  filing_date: string | null;
+  filing_reference: string | null;
+  filed_unadopted: boolean;
+  filings_count: number;
+  /** Onvastgesteld gedeponeerd én daarna vastgesteld → binnen 8 dagen opnieuw. */
+  refiling_required: boolean;
+  file_deadline_after_adoption: string | null;
+  file_deadline_safe: string | null;
+  file_deadline_safe_disputed: boolean;
+  file_deadline_hard: string | null;
+  signatures_total: number;
+  signatures_signed: number;
+  signatures_missing_without_reason: number;
+  snapshot_hash: string;
+  snapshot_version: number;
+  /** De bevroren cijfers passen niet meer bij de administratie. */
+  snapshot_stale: boolean;
+  supersedes_annual_account_id: UUID | null;
+  supersede_reason: string | null;
+  pdf_attachment_id: UUID | null;
+  publication_attachment_id: UUID | null;
+  note: string | null;
+  created_at: string;
+}
+
+/** Uitkomst van get_annual_account(): het stuk mét bevroren onderbouwing. */
+export interface AnnualAccount {
+  id: UUID;
+  fiscalYearId: UUID;
+  fiscalYearLabel: string;
+  periodStart: string;
+  periodEnd: string;
+  status: AnnualAccountStatus;
+  preparedOn: string;
+  prepareDeadline: string;
+  extensionMonths: number;
+  extensionReason: string | null;
+  extensionDecidedOn: string | null;
+  adoptionDate: string | null;
+  adoptionMethod: AnnualAccountAdoptionMethod | null;
+  dischargeGranted: boolean;
+  allShareholdersAreDirectors: boolean;
+  otherMeetingRightsInformed: boolean;
+  articlesAllow2105: boolean;
+  filingDate: string | null;
+  filingReference: string | null;
+  filedUnadopted: boolean;
+  filings: AnnualAccountFiling[];
+  refilingRequired: boolean;
+  supersedesAnnualAccountId: UUID | null;
+  supersedeReason: string | null;
+  sizeClass: SizeClass;
+  sizeClassOverride: SizeClass | null;
+  effectiveSizeClass: SizeClass;
+  sizeOverrideReason: string | null;
+  sizeBasis: Record<string, unknown> | null;
+  accountingBasis: AccountingBasis;
+  policyChangeNote: string | null;
+  offBalanceCommitments: string | null;
+  auditRequired: boolean;
+  auditorOpinionReceived: boolean;
+  auditorName: string | null;
+  auditorMissingGround: string | null;
+  /** De bevroren cijfers; de PDF komt hier vandaan en nooit uit een live query. */
+  snapshot: AnnualAccountSnapshot | null;
+  snapshotHash: string;
+  snapshotVersion: number;
+  snapshotStale: boolean;
+  pdfAttachmentId: UUID | null;
+  publicationAttachmentId: UUID | null;
+  reversedAt: string | null;
+  reverseReason: string | null;
+  note: string | null;
+  createdAt: string;
+  signatures: AnnualAccountSignature[];
+  deadlines: AnnualAccountDeadlines;
+}
+
+/** Eén balansregel uit de bevroren snapshot. */
+export interface AnnualAccountBalanceRow {
+  accountId: UUID | null;
+  code: string;
+  name: string;
+  section: string;
+  reportGroup: string | null;
+  groupRank: number;
+  amountCents: number;
+  amountPrevCents: number;
+  appropriationDeltaCents: number;
+  isRestrictedReserve: boolean;
+  subtype: string | null;
+}
+
+/** Eén W&V-regel uit de bevroren snapshot. */
+export interface AnnualAccountProfitLossRow {
+  accountId: UUID | null;
+  code: string;
+  name: string;
+  accountType: string;
+  reportGroup: string | null;
+  groupRank: number;
+  amountCents: number;
+  amountPrevCents: number;
+}
+
+/**
+ * De bevroren onderbouwing van build_annual_accounts_snapshot(). Alleen de
+ * velden die het scherm gebruikt zijn hier uitgeschreven; de PDF-generator in
+ * Deno leest hetzelfde object volledig.
+ */
+export interface AnnualAccountSnapshot {
+  version: number;
+  generatedAt: string;
+  entity: {
+    organizationName: string | null;
+    companyName: string | null;
+    legalForm: string | null;
+    kvkNumber: string | null;
+    city: string | null;
+    [key: string]: unknown;
+  };
+  fiscalYear: {
+    id: UUID; label: string; periodStart: string; periodEnd: string;
+    status: 'open' | 'closed'; resultCents: number | null; resultAccountCode: string | null;
+  };
+  previousFiscalYear: { id: UUID; label: string; periodStart: string; periodEnd: string } | null;
+  balanceSheetAfterAppropriation: {
+    rows: AnnualAccountBalanceRow[];
+    totalAssetsCents: number;
+    totalEquityAndLiabilitiesCents: number;
+    differenceCents: number;
+    balances: boolean;
+  };
+  equityMovement: Array<{
+    accountId: UUID | null; code: string; name: string;
+    openingCents: number; movementCents: number; closingCents: number;
+    appropriationDeltaCents: number; isRestrictedReserve: boolean; subtype: string | null;
+  }>;
+  profitAndLossComparative: { rows: AnnualAccountProfitLossRow[] };
+  /** Rauwe groottetoets, aangevuld met appliedSizeClass door prepare. */
+  size: (CompanySizeResult & {
+    appliedSizeClass?: SizeClass;
+    manualOverride?: SizeClass | null;
+    manualOverrideReason?: string | null;
+  }) | null;
+  resultAppropriation: {
+    id: UUID; decisionDate: string; resultCents: number; reservesCents: number;
+    dividendCents: number; distributableCents: number | null; boardApproved: boolean;
+  } | null;
+  corporateTax: {
+    id: UUID; year: number; status: string; taxableAmountCents: number; taxCents: number;
+  } | null;
+  reconciliation: {
+    trialBalanceDifferenceCents: number;
+    trialBalanceBalances: boolean;
+    balanceSheetDifferenceCents: number;
+    balanceSheetBalances: boolean;
+    balances: boolean;
+  };
+  /** Telt uitsluitend EQUITY-rekeningen: NIET het volledige vrij uitkeerbare vermogen. */
+  distributableEquityCents: number | null;
+  shareholders: Array<Record<string, unknown>>;
+  disclaimer: string;
+}
+
 export interface Supplier extends OrgScopedRow {
   name: string;
   supplier_code: string | null;

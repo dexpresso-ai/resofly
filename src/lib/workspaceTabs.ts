@@ -12,7 +12,8 @@ export const PAGE_TITLES: Record<string, string> = {
   marketing: 'Marketing', quotes: 'Offertes', contracts: 'Contracten', invoices: 'Facturen',
   suppliers: 'Leveranciers', 'purchase-invoices': 'Inkoopfacturen', ledger: 'Grootboek',
   bank: 'Bank', assets: 'Activa', pnl: 'Winst & verlies', 'vat-returns': 'Omzetbelasting', 'corporate-tax': 'Vennootschapsbelasting', dga: 'DGA', shareholders: 'Aandeelhouders',
-  'fiscal-years': 'Boekjaren', archive: 'Archief', settings: 'Instellingen', project: 'Project',
+  'fiscal-years': 'Boekjaren', 'annual-accounts': 'Jaarrekening',
+  archive: 'Archief', settings: 'Instellingen', project: 'Project',
   gallery: 'Galerij',
 };
 

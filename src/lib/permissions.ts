@@ -101,6 +101,10 @@ export const PAGE_MODULE: Record<string, ModuleKey> = {
   dga: 'finance',
   shareholders: 'finance',
   'fiscal-years': 'finance',
+  // VERPLICHT: canOpenPage laat een pagina zonder module voor iedereen open.
+  // Zonder deze regel zou de jaarrekening zichtbaar zijn voor een teamlid met
+  // finance = 'none', terwijl de tabellen eronder wél zijn afgeschermd.
+  'annual-accounts': 'finance',
 };
 
 /**

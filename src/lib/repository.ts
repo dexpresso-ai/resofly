@@ -112,6 +112,16 @@ import type {
   CorporateTaxCorrectionRow,
   CorporateTaxReturn,
   DgaInterestComputation,
+  AnnualAccount,
+  AnnualAccountSnapshot,
+  AnnualAccountAdoptionMethod,
+  AnnualAccountListRow,
+  AnnualAccountSignature,
+  AnnualAccountSignatureRole,
+  AccountingBasis,
+  CompanySizeResult,
+  FiscalYearSizeInputs,
+  SizeClass,
   DgaInterestPosting,
   DgaInterestRate,
   DgaSignals,
@@ -2315,6 +2325,299 @@ export async function reverseDividendDistribution(organizationId: UUID, distribu
     p_distribution_id: distributionId,
   });
   if (error) throw bookkeepingError(error);
+}
+
+// ── Jaarrekening en groottecriteria (fase 5) ───────────────────────────────
+// De PDF's lopen via de edge function (annualAccountsService); dit zijn de
+// lees- en schrijfacties op de database. Alle mutaties gaan via SECURITY
+// DEFINER-RPC's: de tabellen zelf zijn alleen leesbaar.
+
+/**
+ * De gegevens die de groottetoets niet uit het grootboek kan halen. Null als
+ * er voor dit boekjaar nog niets is vastgelegd — dan geeft
+ * determine_company_size een blokkerende reden in plaats van een klasse.
+ */
+export async function loadFiscalYearSizeInputs(
+  organizationId: UUID,
+  fiscalYearId: UUID,
+): Promise<FiscalYearSizeInputs | null> {
+  const { data, error } = await supabase
+    .from('fiscal_year_size_inputs')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('fiscal_year_id', fiscalYearId)
+    .maybeSingle();
+  if (error) throw bookkeepingError(error);
+  return (data ?? null) as FiscalYearSizeInputs | null;
+}
+
+/**
+ * Legt het gemiddeld aantal werknemers en de overige groottegegevens vast
+ * (art. 2:395a/396/397 lid 1 BW). `isFirstFiscalYearOfEntity` en
+ * `openingSizeClass` zijn het startpunt van de plakkerige tweejaarstoets:
+ * zonder een van beide draagt de keten niet.
+ */
+export async function saveFiscalYearSizeInputs(
+  organizationId: UUID,
+  input: {
+    fiscalYearId: UUID;
+    averageEmployees: number;
+    totalAssetsCents?: number | null;
+    netTurnoverCents?: number | null;
+    overrideReason?: string | null;
+    earlyAdoptNewThresholds?: boolean;
+    consolidatingParentName?: string | null;
+    consolidatingParentCity?: string | null;
+    note?: string | null;
+    isFirstFiscalYearOfEntity?: boolean;
+    openingSizeClass?: SizeClass | null;
+  },
+): Promise<FiscalYearSizeInputs> {
+  const { data, error } = await supabase.rpc('save_fiscal_year_size_inputs', {
+    p_organization_id: organizationId,
+    p_fiscal_year_id: input.fiscalYearId,
+    p_average_employees: input.averageEmployees,
+    p_total_assets_cents: input.totalAssetsCents ?? null,
+    p_net_turnover_cents: input.netTurnoverCents ?? null,
+    p_override_reason: input.overrideReason ?? null,
+    p_early_adopt_new_thresholds: input.earlyAdoptNewThresholds ?? false,
+    p_consolidating_parent_name: input.consolidatingParentName ?? null,
+    p_consolidating_parent_city: input.consolidatingParentCity ?? null,
+    p_note: input.note ?? null,
+    p_is_first_fiscal_year_of_entity: input.isFirstFiscalYearOfEntity ?? false,
+    p_opening_size_class: input.openingSizeClass ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as FiscalYearSizeInputs;
+}
+
+/**
+ * De grootteklasse van een boekjaar met haar volledige onderbouwing. De
+ * tweejaarstoets is plakkerig: de klasse blijft staan tot de rechtspersoon er
+ * twee opeenvolgende balansdata niet meer in valt.
+ */
+export async function determineCompanySize(
+  organizationId: UUID,
+  fiscalYearId: UUID,
+): Promise<CompanySizeResult> {
+  const { data, error } = await supabase.rpc('determine_company_size', {
+    p_organization_id: organizationId,
+    p_fiscal_year_id: fiscalYearId,
+  });
+  if (error) throw bookkeepingError(error);
+  return data as CompanySizeResult;
+}
+
+/**
+ * De cijfers zoals ze bij het opmaken bevroren zouden worden — het concept.
+ * Exact hetzelfde beeld als de jaarrekening, alleen ongehashed en niet
+ * vastgelegd.
+ */
+export async function buildAnnualAccountsSnapshot(
+  organizationId: UUID,
+  fiscalYearId: UUID,
+): Promise<AnnualAccountSnapshot> {
+  const { data, error } = await supabase.rpc('build_annual_accounts_snapshot', {
+    p_organization_id: organizationId,
+    p_fiscal_year_id: fiscalYearId,
+  });
+  if (error) throw bookkeepingError(error);
+  return data as AnnualAccountSnapshot;
+}
+
+export async function listAnnualAccounts(organizationId: UUID): Promise<AnnualAccountListRow[]> {
+  const { data, error } = await supabase.rpc('list_annual_accounts', {
+    p_organization_id: organizationId,
+  });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as AnnualAccountListRow[];
+}
+
+/** Eén jaarrekening met haar bevroren snapshot, ondertekenaars en termijnen. */
+export async function getAnnualAccount(organizationId: UUID, annualAccountId: UUID): Promise<AnnualAccount> {
+  const { data, error } = await supabase.rpc('get_annual_account', {
+    p_organization_id: organizationId,
+    p_annual_account_id: annualAccountId,
+  });
+  if (error) throw bookkeepingError(error);
+  return data as AnnualAccount;
+}
+
+/**
+ * Maakt de jaarrekening op (art. 2:210 lid 1 BW): bevriest de cijfers met een
+ * sha256-hash en klinkt de opmaaktermijn van vijf maanden vast. Ligt er voor
+ * dit boekjaar al een gedeponeerde jaarrekening, dan zijn
+ * `supersedesAnnualAccountId` en `supersedeReason` verplicht — die deponering
+ * blijft immers staan (art. 2:394 BW).
+ */
+export async function prepareAnnualAccounts(
+  organizationId: UUID,
+  input: {
+    fiscalYearId: UUID;
+    preparedOn: string;
+    accountingBasis?: AccountingBasis;
+    signatories: Array<{ name: string; role: AnnualAccountSignatureRole; shareholderId?: UUID | null }>;
+    offBalanceCommitments?: string | null;
+    policyChangeNote?: string | null;
+    sizeClassOverride?: SizeClass | null;
+    sizeOverrideReason?: string | null;
+    note?: string | null;
+    allShareholdersAreDirectors?: boolean;
+    supersedesAnnualAccountId?: UUID | null;
+    supersedeReason?: string | null;
+  },
+): Promise<{ id: UUID }> {
+  const { data, error } = await supabase.rpc('prepare_annual_accounts', {
+    p_organization_id: organizationId,
+    p_fiscal_year_id: input.fiscalYearId,
+    p_prepared_on: input.preparedOn,
+    p_accounting_basis: input.accountingBasis ?? 'commercieel',
+    p_signatories: input.signatories.map(s => ({
+      name: s.name,
+      role: s.role,
+      shareholderId: s.shareholderId ?? null,
+    })),
+    p_off_balance_commitments: input.offBalanceCommitments ?? null,
+    p_policy_change_note: input.policyChangeNote ?? null,
+    p_size_class_override: input.sizeClassOverride ?? null,
+    p_size_override_reason: input.sizeOverrideReason ?? null,
+    p_note: input.note ?? null,
+    p_all_shareholders_are_directors: input.allShareholdersAreDirectors ?? false,
+    p_supersedes_annual_account_id: input.supersedesAnnualAccountId ?? null,
+    p_supersede_reason: input.supersedeReason ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as { id: UUID };
+}
+
+/**
+ * Verlenging van de opmaaktermijn door de algemene vergadering: ten hoogste
+ * vijf maanden en alleen op grond van bijzondere omstandigheden (art. 2:210
+ * lid 1 BW). Grond én besluitdatum zijn dus verplicht.
+ */
+export async function extendPreparationTerm(
+  organizationId: UUID,
+  annualAccountId: UUID,
+  input: { months: number; reason: string; decidedOn: string },
+): Promise<{ id: UUID }> {
+  const { data, error } = await supabase.rpc('extend_preparation_term', {
+    p_organization_id: organizationId,
+    p_annual_account_id: annualAccountId,
+    p_months: input.months,
+    p_reason: input.reason,
+    p_decided_on: input.decidedOn,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as { id: UUID };
+}
+
+/**
+ * Zet één handtekening (art. 2:210 lid 2 BW), of legt vast waaróm zij
+ * ontbreekt — die reden wordt in het gedrukte stuk vermeld.
+ */
+export async function signAnnualAccounts(
+  organizationId: UUID,
+  signatureId: UUID,
+  input: { signed: boolean; signedOn?: string | null; missingReason?: string | null },
+): Promise<AnnualAccountSignature> {
+  const { data, error } = await supabase.rpc('sign_annual_accounts', {
+    p_organization_id: organizationId,
+    p_signature_id: signatureId,
+    p_signed: input.signed,
+    p_signed_on: input.signedOn ?? null,
+    p_missing_reason: input.missingReason ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as AnnualAccountSignature;
+}
+
+/**
+ * Stelt de jaarrekening vast. Bij `signature_210_5` dwingt de database de
+ * kwijting af (art. 2:210 lid 5 BW) en moet de vaststellingsdatum gelijk zijn
+ * aan de dag van de laatste handtekening.
+ */
+export async function adoptAnnualAccounts(
+  organizationId: UUID,
+  annualAccountId: UUID,
+  input: {
+    adoptionDate: string;
+    method: AnnualAccountAdoptionMethod;
+    dischargeGranted?: boolean;
+    allShareholdersAreDirectors?: boolean | null;
+    otherMeetingRightsInformed?: boolean | null;
+    articlesAllow2105?: boolean | null;
+    auditorOpinionReceived?: boolean | null;
+    auditorName?: string | null;
+    auditorMissingGround?: string | null;
+  },
+): Promise<{ id: UUID }> {
+  const { data, error } = await supabase.rpc('adopt_annual_accounts', {
+    p_organization_id: organizationId,
+    p_annual_account_id: annualAccountId,
+    p_adoption_date: input.adoptionDate,
+    p_method: input.method,
+    p_discharge_granted: input.dischargeGranted ?? false,
+    p_all_shareholders_are_directors: input.allShareholdersAreDirectors ?? null,
+    p_other_meeting_rights_informed: input.otherMeetingRightsInformed ?? null,
+    p_articles_allow_210_5: input.articlesAllow2105 ?? null,
+    p_auditor_opinion_received: input.auditorOpinionReceived ?? null,
+    p_auditor_name: input.auditorName ?? null,
+    p_auditor_missing_ground: input.auditorMissingGround ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as { id: UUID };
+}
+
+/**
+ * Legt vast dát en wannéér er is gedeponeerd (art. 2:394 BW). ResoFly
+ * deponeert niet zelf: micro, kleine en middelgrote rechtspersonen deponeren
+ * digitaal in SBR/XBRL en dat bestand levert ResoFly niet.
+ */
+export async function fileAnnualAccounts(
+  organizationId: UUID,
+  annualAccountId: UUID,
+  input: {
+    filingDate: string;
+    filingReference?: string | null;
+    unadopted?: boolean;
+    note?: string | null;
+    auditorOpinionReceived?: boolean | null;
+    auditorName?: string | null;
+    auditorMissingGround?: string | null;
+  },
+): Promise<{ id: UUID }> {
+  const { data, error } = await supabase.rpc('file_annual_accounts', {
+    p_organization_id: organizationId,
+    p_annual_account_id: annualAccountId,
+    p_filing_date: input.filingDate,
+    p_filing_reference: input.filingReference ?? null,
+    p_unadopted: input.unadopted ?? false,
+    p_note: input.note ?? null,
+    p_auditor_opinion_received: input.auditorOpinionReceived ?? null,
+    p_auditor_name: input.auditorName ?? null,
+    p_auditor_missing_ground: input.auditorMissingGround ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as { id: UUID };
+}
+
+/**
+ * Trekt een opgemaakte of vastgestelde jaarrekening in (alleen eigenaar of
+ * beheerder). Een gedeponeerd stuk kan niet worden ingetrokken; dat wordt
+ * hersteld met een opvolgend stuk.
+ */
+export async function reverseAnnualAccounts(
+  organizationId: UUID,
+  annualAccountId: UUID,
+  reason: string,
+): Promise<{ id: UUID }> {
+  const { data, error } = await supabase.rpc('reverse_annual_accounts', {
+    p_organization_id: organizationId,
+    p_annual_account_id: annualAccountId,
+    p_reason: reason,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as { id: UUID };
 }
 
 /** (Her)berekent het lineaire afschrijvingsschema van een activum. */

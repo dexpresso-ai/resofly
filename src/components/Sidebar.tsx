@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, Sparkles, StickyNote, Sun, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, Scale, Sparkles, StickyNote, Sun, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, type SettingsTab } from '../features/SimplePages';
@@ -7,7 +7,7 @@ import { Select } from './Ui';
 import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
 import { useTheme } from '../lib/theme';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'archive'|'settings'|'project'|'gallery';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 
 const items = [
   ['dashboard', LayoutDashboard, 'Dashboard'],
@@ -25,7 +25,7 @@ const items = [
   ['finance', Receipt, 'Financiën'],
 ] as const;
 
-const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'pnl', 'vat-returns', 'corporate-tax', 'dga', 'shareholders', 'fiscal-years'];
+const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'pnl', 'vat-returns', 'corporate-tax', 'dga', 'shareholders', 'fiscal-years', 'annual-accounts'];
 const calendarPages: Page[] = ['calendar', 'calendar-settings', 'meeting-booking'];
 const projectPages: Page[] = ['projects', 'project', 'project-planning', 'archive'];
 const contentPages: Page[] = ['content', 'notes', 'documents'];
@@ -136,7 +136,7 @@ export function Sidebar({
     }, 80);
   }
 
-  function openFinancePage(target: 'quotes' | 'contracts' | 'invoices' | 'suppliers' | 'purchase-invoices' | 'ledger' | 'bank' | 'assets' | 'pnl' | 'vat-returns' | 'corporate-tax' | 'dga' | 'shareholders' | 'fiscal-years') {
+  function openFinancePage(target: 'quotes' | 'contracts' | 'invoices' | 'suppliers' | 'purchase-invoices' | 'ledger' | 'bank' | 'assets' | 'pnl' | 'vat-returns' | 'corporate-tax' | 'dga' | 'shareholders' | 'fiscal-years' | 'annual-accounts') {
     setFinanceOpen(true);
     onPage(target);
   }
@@ -254,6 +254,11 @@ export function Sidebar({
               <button type="button" className={page === 'shareholders' ? 'active' : ''} onClick={() => openFinancePage('shareholders')}><BookUser size={13}/><span>Aandeelhouders</span></button>
             </>)}
             <button type="button" className={page === 'fiscal-years' ? 'active' : ''} onClick={() => openFinancePage('fiscal-years')}><CalendarClock size={13}/><span>Boekjaren</span></button>
+            {/* Een jaarrekening volgens Titel 9 Boek 2 BW hoort bij een BV, NV of
+                coöperatie; een eenmanszaak maakt er geen op en deponeert niets. */}
+            {['bv', 'nv', 'cooperatie'].includes(data.companySettings?.legal_form ?? 'eenmanszaak') && (
+              <button type="button" className={page === 'annual-accounts' ? 'active' : ''} onClick={() => openFinancePage('annual-accounts')}><Scale size={13}/><span>Jaarrekening</span></button>
+            )}
           </div>}
 
           {key === 'content' && contentPages.includes(page) && <div className="nav-submenu nav-submenu-finance">
