@@ -5618,3 +5618,308 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .cm-date-num.is-selected{background:rgba(var(--accent-rgb),.16);box-shadow:inset 0 0 0 1.5px var(--accent);color:var(--text)}
 .cm-cell.is-selected{background:rgba(var(--accent-rgb),.05)}
 .cm-cell.is-today.is-selected{background:rgba(var(--accent-rgb),.1)}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBIELE SCHERMEN OPGERUIMD  (2026-08-13)
+   ───────────────────────────────────────────────────────────────────────
+   De shell (compacte bovenbalk, icoon-tabs, duim-onderbalk) staat er sinds
+   2026-07-13; wat daarbinnen gebeurt was nog bureaubladwerk dat toevallig
+   ook smal kon. Dit blok pakt de schermen zelf aan.
+
+   Bewust helemaal achteraan: bijna alles hieronder overschrijft een eerdere
+   mobiele regel (vooral uit de @media-blokken op regel 33, 124, 1443/1444 en
+   1823). Op gelijke specificiteit wint de laatste — verplaats dit blok dus
+   niet naar voren.
+
+   Twee breekpunten, met opzet uit elkaar gehouden:
+     ≤900px  alléén waar de fóut al bij 900 begint (de regel die we
+             overschrijven staat daar zelf ook), zodat de staande tablet
+             meeprofiteert.
+     ≤760px  telefoonwerk. Dit is hetzelfde punt als de shell, dus binnen
+             dit blok geldt: onderbalk zichtbaar, titels verborgen,
+             werktabs als icoon.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* 1 ── Pillen die tot ovalen wrappen ──────────────────────────────────────
+   `.wp-summary-meta span` is een pil met border-radius:999px. Het blok op
+   regel 1823 geeft hem op ≤900 `flex:1`, waardoor vijf pillen de breedte
+   delen: ~65px per stuk op een telefoon. De tekst ("Volst: do 13 · 28u 30m")
+   breekt dan over drie à vier regels en de pil groeit mee tot een ovale
+   klodder van 61px hoog — precies wat er op de telefoon te zien was.
+
+   Een pil hóórt niet te breken. Dus: nooit afbreken, en de rij mag opzij
+   schuiven wanneer hij niet past. Dat is meteen ook de compactste vorm —
+   één regel van 30px in plaats van drie rijen van 61px. De weekcijfers zijn
+   bijzaak naast de kop erboven; opzij vegen hoort daarbij. */
+@media(max-width:900px){
+  .wp-summary{gap:10px;padding:12px 13px}
+  .wp-summary-meta{
+    display:flex;flex-wrap:nowrap;gap:6px;
+    overflow-x:auto;overscroll-behavior-x:contain;
+    /* Het randje aflopen i.p.v. abrupt afkappen: laat zien dat er meer is. */
+    padding-right:12px;margin-right:-4px;
+    scrollbar-width:none;
+  }
+  .wp-summary-meta::-webkit-scrollbar{display:none}
+  .wp-summary-meta span{flex:0 0 auto;text-align:left;white-space:nowrap}
+}
+
+/* 2 ── Weekplanner: minder chrome vóór de planning ────────────────────────
+   Op de telefoon stond er drie rijen knoppen, een samenvatting van drie
+   rijen en vijf volle-breedte filtervelden boven de eerste taak: ruim 730px
+   — meer dan een heel scherm. De planning zelf, waar de pagina om draait,
+   begon pas daaronder.
+
+   Ingrepen: het weeklabel wordt de kop (de paginatitel is op mobiel toch
+   verborgen, dus die plek was vrij), de drie periodeknoppen delen één rij,
+   de twee keuzestroken de rij eronder, en de filters worden één veegbare
+   rij i.p.v. vijf gestapelde velden. */
+@media(max-width:760px){
+  .wp-toolbar{gap:6px}
+  /* Het weeklabel naar voren: het vervangt de verborgen paginatitel. */
+  .wp-week-label{order:-1;width:100%;margin:0;font-size:15px;color:var(--text);letter-spacing:-.01em}
+  /* De basissen dwingen de regelval af: 3×28% past samen, een 4e item niet. */
+  .wp-toolbar>.btn{flex:1 1 28%;min-width:0;padding:9px 6px}
+  .wp-seg{flex:1 1 46%;min-width:0}
+  .wp-seg button{flex:1;min-width:0;min-height:40px;padding:9px 4px}
+
+  /* Filters als veegbare rij. Zoeken staat vooraan, want daar begin je. */
+  .wp-filters{
+    display:flex;flex-wrap:nowrap;gap:7px;padding:8px;
+    overflow-x:auto;overscroll-behavior-x:contain;
+    scrollbar-width:none;
+  }
+  .wp-filters::-webkit-scrollbar{display:none}
+  .wp-filters>*{flex:0 0 auto;width:auto}
+  .wp-filters>:first-child{flex:0 0 62%}          /* het zoekveld */
+  .wp-filters .select-control{min-width:148px}
+
+  /* De sneltoetsuitleg gaat over een toetsenbord dat er niet is. */
+  .wp-keyhint{display:none}
+
+  /* "DEZE WEEK" staat als opschrift bóven het weeklabel dat nu de kop is —
+     twee keer dezelfde mededeling. De regel eronder ("3 taken · 1u
+     ingepland") spreekt voor zich. */
+  .wp-summary{padding:10px 12px}
+  .wp-summary-main>span{display:none}
+  .wp-summary-main strong{font-size:15px}
+}
+
+/* 3 ── Raakvlakken: wat je met je duim raakt is minstens 44px ─────────────
+   Een aantal knoppen bleef op muismaat staan (28-30px). Ze mogen visueel
+   klein blijven — een ::after zonder inhoud rekt alleen het raakvlak op,
+   dus de indeling verschuift niet. */
+@media(max-width:760px){
+  .att-btn,.wp-day-add,.modal-close,.tab-close,.wp-notes-delete,.wp-checklist-delete{position:relative}
+  .att-btn::after,.wp-day-add::after,.modal-close::after,.tab-close::after,
+  .wp-notes-delete::after,.wp-checklist-delete::after{content:"";position:absolute;inset:-7px}
+
+  .att-btn,.quote-row-actions .att-btn{width:34px;height:34px;border-radius:9px}
+  .wp-day-add{width:32px;height:32px}
+  /* De wisknop in een taakregel is op touch niet te "hoveren" — altijd tonen. */
+  .wp-notes-delete,.wp-checklist-delete{opacity:.65}
+
+  /* Keuzevelden en knoppen op duimhoogte. */
+  .btn{min-height:40px}
+  .select-control .select-trigger,.form-input,.form-select{min-height:44px}
+  .select-option{min-height:42px;display:flex;align-items:center}
+}
+
+/* 4 ── Invoervelden op 16px: geen zoomsprong op iOS ───────────────────────
+   Safari en Chrome op iOS zoomen het hele scherm in zodra je een veld met
+   een lettergrootte onder 16px aanraakt, en zoomen daarna niet terug. De
+   app stond op 13px, dus élk formulier sprong. 16px is de drempel, niet
+   een smaakkeuze — daaronder gebeurt het altijd. */
+@media(max-width:760px){
+  .form-input,.form-textarea,.form-select,.select-control .select-trigger,
+  .lines-editor input,.line input{font-size:16px}
+  /* Het label boven een veld hoeft niet mee te groeien. */
+  .field>span{font-size:11px}
+}
+
+/* 5 ── Lijsten als kaart: alleen waarop je scant ──────────────────────────
+   De financiële lijsten zijn tabellen van elf kolommen die op mobiel al tot
+   kaarten omgeklapt werden (regel 1443). Maar op ≤520 werd elke cel óók nog
+   twee regels (label boven waarde), waardoor één factuur 667px hoog werd:
+   bijna een heel scherm per regel. Twee ingrepen: het label blijft naast de
+   waarde staan, en de kolommen die je alleen in het detail nodig hebt gaan
+   uit. De hele rij is aanklikbaar, dus die gegevens zijn één tik weg. */
+@media(max-width:760px){
+  .quote-table td{grid-template-columns:104px minmax(0,1fr);gap:10px;padding:9px 13px}
+  .quote-table td::before{font-size:9.5px;align-self:center}
+}
+@media(max-width:520px){
+  /* Wint van regel 1444, dat hier `1fr` (label bóven waarde) zette. */
+  .quote-table td{grid-template-columns:96px minmax(0,1fr);gap:9px}
+  .quote-table td::before{font-size:9px}
+}
+@media(max-width:620px){
+  /* Deze labels bestaan alleen in de offerte- en factuurtabel; de tickets-
+     en marketingtabellen hebben ze niet, dus die blijven ongemoeid. */
+  .quote-table td[data-label="Project"],
+  .quote-table td[data-label="Bedrag ex."],
+  .quote-table td[data-label="BTW"],
+  .invoice-table td[data-label="Offerte"]{display:none}
+}
+
+/* 6 ── Kanban: één kolom per veeg ─────────────────────────────────────────
+   De kolommen zijn 272px bij een inhoudsbreedte van ~343px, dus je scrolde
+   altijd tussen twee kolommen in te stranden. Met scroll-snap klikt elke
+   veeg netjes op een kolom vast, en een smalle strook van de volgende laat
+   zien dat er meer is. `min-height` op 100vh-basis reserveerde bovendien
+   ruimte die er op een telefoon niet is. */
+@media(max-width:760px){
+  .kanban{
+    min-height:0;gap:10px;padding-bottom:10px;
+    scroll-snap-type:x mandatory;overscroll-behavior-x:contain;
+  }
+  .kan-col{
+    min-width:min(84vw,300px);width:min(84vw,300px);
+    scroll-snap-align:start;
+  }
+}
+
+/* 7 ── Hoogtes in dvh, niet vh ────────────────────────────────────────────
+   `100vh` is op een telefoon de gróte viewport: de adresbalk wordt meege-
+   rekend alsof hij weg is. Een paneel van `100vh - 120px` steekt daardoor
+   onder de zichtbare rand door, en met de vaste onderbalk erbij valt de
+   onderste regel helemaal weg. `dvh` volgt wat je echt ziet. */
+@media(max-width:760px){
+  .chat-shell.chat-page{height:calc(100dvh - 120px - var(--bottomnav-h))}
+  .portal-app{height:100dvh}
+}
+
+/* 8 ── De zwevende knoppen kleiner ────────────────────────────────────────
+   Gerrie (58px) en de teamchat (54px) dekken samen een strook van ~180px
+   hoog langs de rechterrand af, precies over de formuliervelden heen die
+   daar op volle breedte staan. Kleiner maken haalt daar ruim een derde van
+   weg; de stapelafstanden schuiven mee zodat ze elkaar niet raken.
+   Hoogtes: 14 → 14+48+12=74 → 74+44+12=130. */
+@media(max-width:760px){
+  .gerrie-fab{width:48px;height:48px}
+  .team-chat-fab{width:44px;height:44px}
+  .gerrie-root{right:12px;bottom:calc(var(--bottomnav-h) + 14px + env(safe-area-inset-bottom))}
+  .team-chat-dock-root{right:14px;bottom:calc(var(--bottomnav-h) + 74px + env(safe-area-inset-bottom))}
+  .tb-fab{right:15px;bottom:calc(var(--bottomnav-h) + 130px + env(safe-area-inset-bottom))}
+  /* Zolang een chatpaneel schermvullend openstaat hoort er niets overheen te
+     zweven. Via `.app` en niet via een broertjes-selector: de agenda-"+" zit
+     diep in `.content` en is dus géén broertje van de zwevende wortels. */
+  .app:has(.gerrie-panel) .team-chat-dock-root,
+  .app:has(.gerrie-panel) .tb-fab,
+  .app:has(.team-chat-dock) .tb-fab{display:none}
+}
+
+/* 9 ── Vensters: bereikbare knoppen, en niet ónder de telefoon ────────────
+   Drie dingen gingen mis bij elk venster op de telefoon.
+   a) `max-height:92vh` op een bottom-sheet die aan de ónderkant hangt: vh is
+      de grote viewport, dus het venster wordt hoger dan er te zien is en de
+      koptekst mét sluitkruisje schuift boven de bovenrand weg.
+   b) De voetbalk (Annuleren/Opslaan) staat strak op de onderrand, dus op een
+      toestel met een home-indicator ligt de primaire knop onder die balk.
+   c) `justify-content:flex-end` zonder wrap: past het niet, dan schuift juist
+      de belangrijkste knop het beeld uit.
+   Het sluitkruisje was bovendien een raakvlak van ±13×26px. */
+@media(max-width:760px){
+  .modal{max-height:92dvh}
+  .modal-foot{
+    flex-wrap:wrap;
+    padding-bottom:calc(14px + env(safe-area-inset-bottom));
+  }
+  .modal-foot .btn{flex:1 1 auto;min-height:44px}
+  .modal-close{
+    display:flex;align-items:center;justify-content:center;
+    width:40px;height:40px;margin:-6px -8px -6px 0;border-radius:10px;
+  }
+
+  /* Het boekhoudvenster is geen `.modal`: het had helemaal geen hoogtegrens,
+     waardoor een lange invoer gewoon doorliep en "Opslaan" buiten beeld viel. */
+  .bk-modal{
+    max-height:88dvh;overflow-y:auto;padding:18px;
+    padding-bottom:calc(18px + env(safe-area-inset-bottom));
+  }
+}
+
+/* 10 ── Tabstroken schuiven opzij, ze stapelen niet ───────────────────────
+   Een balk met tabbladen die `flex-wrap:wrap` krijgt wordt op een telefoon
+   vier rijen hoog en duwt de inhoud van het scherm. Opzij kunnen schuiven is
+   hier het juiste gedrag: de balk blijft één regel en je veegt naar de rest.
+   `.bk-tabs` kon zelfs helemaal niet wrappen én niet scrollen — die duwde de
+   hele pagina zijwaarts open. */
+@media(max-width:900px){
+  .bk-tabs,.client-tabs-bar,.settings-tabs{
+    flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;
+    scrollbar-width:none;
+  }
+  .bk-tabs::-webkit-scrollbar,
+  .client-tabs-bar::-webkit-scrollbar,
+  .settings-tabs::-webkit-scrollbar{display:none}
+  .bk-tabs button,.client-tab-btn,.settings-tabs button{
+    flex:0 0 auto;white-space:nowrap;min-height:42px;
+  }
+}
+
+/* 11 ── Brede tabellen mogen schuiven, niet afgeknipt worden ──────────────
+   `.bk-table-wrap` heeft `overflow:hidden` (voor de afgeronde hoek). Een
+   boekhoudtabel van acht kolommen met onbreekbare bedragen wordt breder dan
+   een telefoon — en werd dus letterlijk afgesneden: de statuskolom en de
+   knop rechts waren onbereikbaar. Een ondergrens op de tabel houdt de
+   kolommen leesbaar; de wrap schuift mee. */
+@media(max-width:900px){
+  .bk-table-wrap{overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain}
+  .bk-table{min-width:560px}
+  .bk-table th,.bk-table td{padding:10px 11px}
+}
+
+/* 12 ── Vaste kolomrasters die niet inklappen ─────────────────────────────
+   Vijf kolommen in 343px geeft invoervelden van 22 tot 37px breed. Deze
+   rasters volgen nu hetzelfde patroon als de factuurregels: de kopregel met
+   kolomnamen verdwijnt en de velden gaan twee-op-een-rij, met het brede veld
+   (omschrijving) over de volle breedte. */
+@media(max-width:760px){
+  .bk-lines-head{display:none}
+  .bk-line{grid-template-columns:1fr 1fr;align-items:start;gap:7px;padding:10px}
+  .bk-line>:first-child{grid-column:1/-1}
+  .bk-line>:last-child{grid-column:1/-1;width:100%}
+
+  /* Ticketlijst: titel, status en datum stonden in drie kolommen naast
+     elkaar, waardoor de titel tot min-content ineenschrompelde. */
+  .ticket-item{grid-template-columns:1fr;gap:8px;align-items:start}
+
+  /* Bedragen in een rapportkop moeten kunnen afbreken naar een nieuwe regel
+     in plaats van uit de kaart te lopen. */
+  .bk-report-kpis{flex-wrap:wrap}
+  .bk-fy-actions{white-space:normal;text-align:left}
+}
+@media(max-width:900px){
+  /* Commandocentrum: een vaste zijkolom van 320px naast een 1fr-kolom laat
+     op een telefoon ~20px over voor de hoofdkolom. */
+  .cc-body{grid-template-columns:minmax(0,1fr)}
+  .cc-top{flex-wrap:wrap;gap:10px}
+  .bk-grid2{grid-template-columns:1fr}
+}
+
+/* 13 ── Teamchat schermvullend, net als Gerrie ────────────────────────────
+   Het chatvenster is 600px hoog met `max-height:calc(100vh - 130px)` en hangt
+   130px boven de onderrand. Omdat vh de gróte viewport is, wordt het venster
+   hoger dan de zichtbare ruimte: de koptekst — met het sluitkruisje — komt
+   boven de bovenrand te liggen en je kunt de chat niet meer dichtdoen.
+   Gerrie kreeg hier al een schermvullende variant (regel 2264); de teamchat
+   krijgt nu dezelfde behandeling. */
+@media(max-width:600px){
+  .team-chat-dock{
+    position:fixed;inset:0;width:100%;max-width:100%;
+    height:100dvh;max-height:none;border-radius:0;border:none;
+  }
+  .team-chat-dock .chat-composer,
+  .team-chat-dock .chat-foot{padding-bottom:calc(12px + env(safe-area-inset-bottom))}
+  /* De open-knop zou over zijn eigen paneel zweven. */
+  .team-chat-fab.is-open{display:none}
+}
+
+/* 14 ── Inhoud-verkenner: hoogte volgt het scherm ─────────────────────────
+   `min-height:calc(100vh - 110px)` op een verkenner die zelf een scrollende
+   lijst bevat, geeft op een telefoon een dubbele scroller waarvan de
+   binnenste zijn onderkant onder de vaste onderbalk verstopt. */
+@media(max-width:900px){
+  .odrv{height:auto;min-height:calc(100dvh - 110px - var(--bottomnav-h))}
+}
