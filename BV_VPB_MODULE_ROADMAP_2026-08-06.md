@@ -235,7 +235,7 @@ wordt de IB-schatting daarin een Vpb-reservering.
 | 2 | **GROTENDEELS KLAAR** — Vpb: tarieventabel (2021 t/m 2026, periodegedateerd), rekenhart met 18 tests, correcties, verliesverrekening, reservering op 9900/1540, edge function. **Rest: het scherm en de specificatie-export.** | `20260807050000`, `_shared/vpb.ts`, `corporate-tax`-edge-function | scherm nog open |
 | 3 | **KLAAR** — normen, signalen, rekening-courant met eigen rentepercentage en dagsaldo-berekening, DGA-scherm, loonjournaalpost-import | `20260807060000` t/m `080000`, `Dga.tsx`, `PayrollImport.tsx` | gedaan |
 | 4 | **KLAAR** — aandeelhoudersregister (art. 2:194 BW) met mutaties en pand/vruchtgebruik, uitkeringstoets ook op het interim-dividend, dividendbelasting met inhoudingsvrijstelling per aandeelhouder | `20260807100000`, `Shareholders.tsx`, `Dividends.tsx` | gedaan |
-| 5 | **BROK A + B KLAAR** — groottecriteria (periodegedateerd, 2016 én 2024, met bron), vergelijkende rapportage, balans ná resultaatbestemming; jaarrekening bevriezen met de levenscyclus opmaken → tekenen → vaststellen → deponeren, deponering als gebeurtenis, opvolgend stuk bij herstel. Brok C t/m E open: PDF, publicatiestukken, scherm, deponeer-deadlines | `20260812000000` + `20260812010000` | A+B gedaan |
+| 5 | **BROK A + B + C KLAAR** — groottecriteria, vergelijkende rapportage, balans ná resultaatbestemming; jaarrekening bevriezen met de levenscyclus opmaken → tekenen → vaststellen → deponeren; PDF-laag, jaarrekening-PDF en publicatiestukken per groottecategorie. **Brok D (scherm) en E (deadlines + cron) open** | `20260812000000` + `20260812010000`, `_shared/reportPdf.ts`, `_shared/annualAccountsLayout.ts`, edge fn `annual-accounts` | A+B+C gedaan |
 | 6 | Intercompany-boekingen + afstemrapport, consolidatie over de boom, fiscale eenheid | later | apart traject |
 
 Na fase 0+1 is er al een bruikbaar product: een BV-klant boekt met een correct
@@ -291,6 +291,31 @@ het grootboek zonder dat iets dat markeerde (nu `snapshot_stale`). En `attachmen
 **Nog open uit brok B:** een verlenging van de opmaaktermijn die vóór het opmaken is besloten —
 de gewone volgorde — is nog niet vast te leggen, omdat `extend_preparation_term` op een bestaande
 jaarrekeningrij werkt. Doorgeschoven naar brok D/E.
+
+## Fase 5, brok C — de PDF's
+
+Drie bestanden, gedeployed als edge function `annual-accounts` (v1, boot-health 401):
+`_shared/reportPdf.ts` (tabelhelper, pagina-engine, paginanummering), `_shared/annualAccountsLayout.ts`
+(de stukken als data; `PUBLICATION_SETS` is één rij per groottecategorie) en `annual-accounts/index.ts`.
+Commit `7964548`. `deno check` schoon, rooktest rendert alle acht varianten.
+
+Reviewronde: 31 bevindingen, 3 blockers, 7 hoog — alle blockers en zware punten verwerkt.
+Het scherpst: het Bruto-bedrijfsresultaat van art. 2:397 lid 4 BW trok een rubriek te veel samen
+waardoor middelgroot te weinig publiceerde; de grondslagenparagraaf verklaarde naleving van Titel 9
+(dat kan ResoFly niet weten en is nu constaterend); en de melding van art. 2:210 lid 2 bij een
+ontbrekende handtekening ontbrak in het publicatiestuk. Micro, klein en middelgroot kregen bovendien
+exact dezelfde balans; die verschillen nu in detailniveau.
+
+De PDF is byte-reproduceerbaar gemaakt (pdf-lib stempelde de kloktijd in de metadata, waardoor de
+sha256 van een herdruk nooit gelijk kon zijn aan die van het archiefexemplaar).
+
+**Bewust blijven liggen — 21 midden/laag-bevindingen**, o.a.: elke her-render laat het vorige R2-object
+en de vorige `attachments`-rij verweesd achter; de R2-route `/internal/annual-account-snapshot` bestaat
+nog niet in `cloudflare-worker/worker.ts` (archiveren geeft dan `stored: false` mét reden, de PDF komt
+wél terug); naam en woonplaats van de consoliderende moeder (art. 2:396 lid 5 BW) zitten niet in de
+snapshot en vragen een migratiewijziging; de statutaire zetel wordt afgeleid uit het bezoekadres; en
+"verkorte balans" is bij ons aggregatie op rubriek, niet de postenindeling van het Besluit modellen
+jaarrekening — dat staat als voorbehoud in het stuk zelf.
 
 ## Openstaand uit fase 0
 
