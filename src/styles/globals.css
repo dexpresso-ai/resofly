@@ -5846,14 +5846,14 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    `.bk-tabs` kon zelfs helemaal niet wrappen én niet scrollen — die duwde de
    hele pagina zijwaarts open. */
 @media(max-width:900px){
-  .bk-tabs,.client-tabs-bar,.settings-tabs{
+  .bk-tabs,.client-tabs-bar,.settings-tabs-bar{
     flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;
     scrollbar-width:none;
   }
   .bk-tabs::-webkit-scrollbar,
   .client-tabs-bar::-webkit-scrollbar,
-  .settings-tabs::-webkit-scrollbar{display:none}
-  .bk-tabs button,.client-tab-btn,.settings-tabs button{
+  .settings-tabs-bar::-webkit-scrollbar{display:none}
+  .bk-tabs button,.client-tab-btn,.settings-tabs-bar button{
     flex:0 0 auto;white-space:nowrap;min-height:42px;
   }
 }
@@ -6066,4 +6066,95 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .timeline-project-label-rich strong{max-width:112px}
   .project-timeline-full .timeline-week,
   .project-timeline-full .timeline-load-cell{min-width:74px}
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBIEL + TABLET · DERDE RONDE  (2026-08-13)
+   ───────────────────────────────────────────────────────────────────────
+   De staart van de audit: onderdelen met een vaste zijkolom die nergens
+   omklapt, koprijen zonder wrap, en een reeks knopjes van 18-30px die op
+   een muis zijn ontworpen. Zelfde afspraak als hierboven: indelingen op
+   ≤1024 (staande tablet), duimwerk op ≤760.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* 23 ── Tickettijdlijn: de feed kreeg ~90px ───────────────────────────────
+   `.ticket-timeline-grid` staat op `minmax(240px,330px) 1fr` zonder enige
+   mobiele regel. Op 343px eist de invoerkolom haar 240px op en houdt de
+   feed — waar het gesprek staat — ~90px over. De alleen-lezen variant klapt
+   al om naar één kolom; de schrijfbare variant doet dat nu ook. */
+@media(max-width:1024px){
+  .ticket-timeline-grid{grid-template-columns:minmax(0,1fr)}
+  /* Plakken heeft geen zin meer als het boven de feed staat i.p.v. ernaast. */
+  .ticket-timeline-compose-col{position:static}
+}
+
+/* 24 ── Koprijen die niet mogen wrappen ───────────────────────────────────
+   Een `justify-content:space-between` zonder `flex-wrap` legt de rechter-
+   helft over de linker zodra ze samen niet passen. Dat gebeurde in de
+   galerij-detailkop (titel + telpil over de knoppenbalk) en in de
+   boekhoudsubkop (een uitleg van zeven regels naast een datumveld). */
+@media(max-width:900px){
+  .client-panel-head,.bk-subhead,.gal-modal-actions{flex-wrap:wrap}
+  .bk-subhead>p{flex:1 1 100%;margin-top:4px}
+  .gal-modal-actions{justify-content:flex-end}
+}
+
+/* 25 ── Bestandslijst: de naam is het belangrijkste ───────────────────────
+   Op ≤900 blijft er naast een datumkolom van 118px zo'n 100px over voor de
+   bestandsnaam — te weinig om iets terug te vinden. Onder de 620 gaat de
+   datum eruit (hij staat in het detailpaneel) en krijgt de naam de rest. */
+@media(max-width:620px){
+  .odrv-tr{grid-template-columns:30px minmax(0,1fr) 44px}
+  .odrv-td-date{display:none}
+  /* Sorteren met de duim: de kop was een tekstregel van 18px hoog. */
+  .odrv-th{min-height:40px;padding:0 2px}
+  .odrv-tiles{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+}
+
+/* 26 ── Knopjes op muismaat ───────────────────────────────────────────────
+   Een reeks knoppen bleef tussen 18 en 30px steken. Waar de maat zelf niet
+   omhoog kan (ze zitten in een dichte rij of op een fototegel) rekt een
+   lege ::after alleen het raakvlak op — de indeling blijft zoals hij is. */
+@media(max-width:760px){
+  .bk-step,.drive-kebab,.tb-allday-toggle,.odrv-th,
+  .galv-like,.galv-heart,.galv-dl,.galv-tool{position:relative}
+  .bk-step::after,.drive-kebab::after,.tb-allday-toggle::after,
+  .galv-like::after,.galv-heart::after,.galv-dl::after,.galv-tool::after{
+    content:"";position:absolute;inset:-8px;
+  }
+  .bk-step{padding:9px}
+  .drive-kebab{width:34px;height:34px}
+  /* Actieknoppen op een fototegel liggen midden op het klikdoel van de
+     tegel zelf; iets meer lucht ertussen scheelt misgrepen. */
+  .galv-like,.galv-heart,.galv-dl,.galv-tool{padding:7px 9px;min-width:26px;justify-content:center}
+  .client-contact-actions .btn,.client-contact-actions .att-btn{min-height:38px}
+}
+
+/* 27 ── Vensters op volle breedte ─────────────────────────────────────────
+   `.modal{max-width:96vw}` uit het basisblok houdt elke bottom-sheet 4%
+   smal — op 375px zijn dat twee randen van 7px waar de sheet juist tegen de
+   zijkanten hoort te sluiten. De radius bovenaan houdt de vorm. */
+@media(max-width:760px){
+  .modal{max-width:100vw;border-radius:20px 20px 0 0}
+  .quote-detail-modal{width:100%;max-width:100vw}
+}
+
+/* 27b ─ "Editor openen…" boven de onderbalk ──────────────────────────────
+   Stond als inline style op `bottom:16px` en lag daarmee bovenop de vaste
+   onderbalk. Nu een klasse, zodat de onderbalkhoogte meetelt. */
+.drive-opening-toast{position:fixed;right:16px;bottom:16px;z-index:1500}
+@media(max-width:760px){
+  .drive-opening-toast{
+    right:12px;
+    bottom:calc(var(--bottomnav-h) + 12px + env(safe-area-inset-bottom));
+  }
+}
+
+/* 28 ── Weergavetabs van de agenda ────────────────────────────────────────
+   "3 dagen" viel over twee regels zodra de Opties-schakelaar meedeed,
+   waardoor de hele tabstrook een regel hoger werd. */
+@media(max-width:760px){
+  .tb-vbtn{white-space:nowrap;min-height:40px}
+  .calendar-view-tabs{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  .calendar-view-tabs::-webkit-scrollbar{display:none}
 }

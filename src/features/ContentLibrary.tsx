@@ -813,7 +813,7 @@ export function ContentLibrary({
           </div>}
     </main>
 
-    {opening && <span className="drive-uploading" style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 1500 }}><UploadCloud size={14} /> Editor openen…</span>}
+    {opening && <span className="drive-uploading drive-opening-toast"><UploadCloud size={14} /> Editor openen…</span>}
     {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeAtt(null); onChanged(); }} onDownload={officeAtt ? () => handleDownload(officeAtt) : undefined} />}
   </div>;
 }
