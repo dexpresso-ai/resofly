@@ -3506,14 +3506,22 @@ export async function loadClientEmailThreads(organizationId: UUID, clientId: UUI
   return (data ?? []) as ClientEmailThread[];
 }
 
-/** Laad alle e-mailberichten van een klant (uitgaand + inkomend), oplopend op tijd. */
+/**
+ * Laad alle e-mailberichten van een klant (uitgaand + inkomend), **nieuwste
+ * eerst** — binnen een gesprek staat het laatste antwoord dus bovenaan.
+ *
+ * Bewust hier en niet in de weergave: een lang gesprek stond anders met het
+ * verse antwoord onderaan, en dan scrol je een heel gesprek door voor het enige
+ * bericht dat je nog niet had gelezen. De gesprekkenlijst zelf sorteert al op
+ * dezelfde manier (`last_message_at` aflopend).
+ */
 export async function loadClientEmails(organizationId: UUID, clientId: UUID): Promise<ClientEmail[]> {
   const { data, error } = await supabase
     .from('client_emails')
     .select(CLIENT_EMAIL_COLUMNS)
     .eq('organization_id', organizationId)
     .eq('client_id', clientId)
-    .order('created_at', { ascending: true });
+    .order('created_at', { ascending: false });
   if (error) throw error;
   return (data ?? []) as ClientEmail[];
 }
