@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, BookOpen, CalendarCog, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, Users } from 'lucide-react';
+import { Bell, BookOpen, CalendarCog, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
@@ -12,6 +12,7 @@ import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, 
 import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
 import { ProjectTemplatesManager } from './ProjectTemplates';
+import { ClientFieldsManager } from './ClientFields';
 import { LEVEL_LABELS, MODULES, parseModuleAccess, type ModuleAccess, type ModuleLevel } from '../lib/permissions';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
@@ -73,7 +74,7 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   viewer: 'Viewer',
 };
 
-export type SettingsTab = 'organisatie' | 'sjablonen' | 'huisstijl' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'email';
+export type SettingsTab = 'organisatie' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'email';
 
 /**
  * Rechtenraster: per module kiezen tussen geen toegang, alleen lezen en
@@ -126,6 +127,7 @@ function moduleAccessSummary(role: OrganizationRole, raw: unknown): string {
 export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof Users; description: string }> = [
   { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen, en bekijk de recente activiteit.' },
   { id: 'sjablonen', label: 'Projectsjablonen', Icon: ListChecks, description: 'Leg je vaste werkwijze vast als standaardtaken en subtaken, en rol die bij elk nieuw project in één klik uit.' },
+  { id: 'klantvelden', label: 'Eigen klantvelden', Icon: SlidersHorizontal, description: 'Verzin je eigen velden bij een klant — en gebruik ze als variabele in je campagnes en mailings.' },
   { id: 'huisstijl', label: 'Huisstijl', Icon: Palette, description: 'Je logo, accentkleur en afsluiting op klantgerichte pagina\'s zoals de galerij — zodat een oplevering van jou is, niet van ResoFly.' },
   { id: 'meldingen', label: 'Meldingen', Icon: Bell, description: 'Ontvang OS-meldingen op je apparaat bij nieuwe tickets, chatberichten, e-mails en boekingen — ook als ResoFly dicht is.' },
   { id: 'agenda', label: 'Agenda', Icon: CalendarCog, description: 'Koppel Google Calendar of Microsoft Outlook, maak eigen ResoFly-agenda\'s, abonneer op een agenda via een link en zet de sync met je telefoon aan.' },
@@ -1673,6 +1675,10 @@ export function Settings({
 
     {activeTab === 'sjablonen' && <div className="settings-tab-panel">
       <ProjectTemplatesManager data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />
+    </div>}
+
+    {activeTab === 'klantvelden' && <div className="settings-tab-panel">
+      <ClientFieldsManager data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />
     </div>}
 
     {activeTab === 'meldingen' && <div className="settings-tab-panel">

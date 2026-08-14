@@ -6804,3 +6804,57 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
      zijn — anders zakt de bovenregel naar een contrast van 2,75. */
   --accent-ink:var(--accent);
 }
+
+/* ── Vrije klantvelden + variabelen in mailings ───────────────────────────── */
+
+/* Invoer op het klantformulier */
+.custom-fields-section{grid-column:1/-1;display:flex;flex-direction:column;gap:10px;padding-top:14px;border-top:1px solid var(--border)}
+.custom-fields-section h4{font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.custom-field-multi{gap:7px}
+.custom-field-options{display:flex;flex-wrap:wrap;gap:7px}
+.custom-field-check span em{color:var(--muted);font-style:normal;font-size:12px}
+
+/* Beheer van de velddefinities (Instellingen → Eigen klantvelden) */
+.cf-manager{display:flex;flex-direction:column;gap:14px}
+.cf-manager code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:var(--bg4);border-radius:5px;padding:1px 5px;color:var(--muted2)}
+.cf-list{display:flex;flex-direction:column;gap:8px}
+.cf-list-archived{opacity:.62}
+.cf-archived-title{font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-top:6px}
+.cf-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 14px;align-items:center;padding:12px 14px;background:var(--bg3);border:1px solid var(--border);border-radius:10px}
+.cf-row-main{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.cf-row-main strong{font-size:14px}
+.cf-token{white-space:nowrap}
+.cf-row-meta{grid-column:1;display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted)}
+.cf-row-actions{grid-row:1/span 2;display:flex;gap:6px}
+.cf-editor{display:flex;flex-direction:column;gap:14px}
+.cf-editor small{color:var(--muted);font-size:12px;line-height:1.5}
+.cf-editor small code{font-size:11.5px}
+
+/* Variabele-chips in de campagne- en stroom-editor */
+.mk-tokens{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--bg-deep)}
+.mk-tokens-intro{font-size:12.5px;color:var(--muted);line-height:1.55}
+.mk-tokens-intro code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;background:var(--bg4);border-radius:5px;padding:1px 5px;color:var(--muted2)}
+.mk-token-group{display:flex;flex-direction:column;gap:6px}
+.mk-token-group-title{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.mk-token-chips{display:flex;flex-wrap:wrap;gap:6px}
+.mk-token-chip{display:inline-block;user-select:none;-webkit-user-select:none;border:1px solid var(--border);background:var(--bg3);color:var(--muted2);border-radius:999px;padding:4px 11px;font-size:12.5px;cursor:grab}
+.mk-token-chip:hover{background:var(--bg4);color:var(--text);border-color:var(--border2)}
+.mk-token-chip:active{cursor:grabbing}
+.mk-token-chip.copied{background:rgba(var(--ok-rgb),.14);border-color:rgba(var(--ok-rgb),.34);color:var(--accent-g)}
+.mk-token-warning{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-radius:10px;font-size:12.5px;line-height:1.55;background:rgba(var(--warn-rgb),.1);border:1px solid rgba(var(--warn-rgb),.3);color:var(--accent-o)}
+.mk-token-warning svg{flex-shrink:0;margin-top:2px}
+.mk-token-warning code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;background:rgba(var(--warn-rgb),.16);border-radius:5px;padding:1px 5px}
+
+/* Doelgroepvoorwaarden op vrije velden */
+.mk-filter-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto) minmax(0,1fr) auto;gap:6px;align-items:center}
+.mk-filter-row .form-input{min-width:0}
+.mk-filter-add{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;background:transparent;border:1px dashed var(--border2);color:var(--muted2);border-radius:999px;padding:5px 12px;font-size:12.5px;cursor:pointer}
+.mk-filter-add:hover:not(:disabled){background:var(--bg3);color:var(--text);border-color:var(--accent)}
+.mk-filter-add:disabled{opacity:.5;cursor:not-allowed}
+
+@media(max-width:900px){
+  .cf-row{grid-template-columns:minmax(0,1fr)}
+  .cf-row-actions{grid-row:auto;grid-column:1;justify-content:flex-start}
+  .mk-filter-row{grid-template-columns:minmax(0,1fr) auto}
+  .mk-filter-row .form-input{grid-column:1/-1}
+}

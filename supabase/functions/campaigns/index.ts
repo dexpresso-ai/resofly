@@ -13,6 +13,15 @@ import {
   htmlToText,
 } from '../_shared/resend.ts';
 import { makeUnsubscribeToken } from '../_shared/unsubscribe.ts';
+import {
+  buildMergeTokens,
+  buildMergeFallbacks,
+  fillMergeTokens,
+  customFieldToken,
+  STANDARD_MERGE_TOKENS,
+  type MergeCompany,
+  type MergeFieldDefinition,
+} from '../_shared/mergeTokens.ts';
 
 // ============================================================================
 // ResoFly — Campagnes / e-mailmarketing (Edge Function)
@@ -202,7 +211,22 @@ serve(async (req) => {
 
 // ── Doelgroep-resolutie ─────────────────────────────────────────────────────
 
-type Candidate = { clientId: string | null; contactId: string | null; email: string; name: string | null };
+type Candidate = {
+  clientId: string | null;
+  contactId: string | null;
+  email: string;
+  name: string | null;
+  /** Momentopname van de variabelewaarden voor deze ontvanger ({{token}} → waarde). */
+  mergeData: Record<string, string>;
+};
+
+/** Eén voorwaarde op een vrij klantveld, bv. "Pakket is Premium". */
+type CustomFieldFilter = {
+  fieldKey: string;
+  /** 'is'/'not' vergelijken op waarde; 'filled'/'empty' kijken alleen of het veld gevuld is. */
+  operator: 'is' | 'not' | 'filled' | 'empty';
+  value: string;
+};
 
 type AudienceSpec = {
   mode: 'filter' | 'manual';
@@ -210,7 +234,10 @@ type AudienceSpec = {
   tags: string[];
   includeContacts: boolean;
   manualClientIds: string[];
+  customFilters: CustomFieldFilter[];
 };
+
+const CUSTOM_FILTER_OPERATORS = new Set(['is', 'not', 'filled', 'empty']);
 
 function parseAudience(raw: Record<string, unknown>): AudienceSpec {
   const mode = raw.mode === 'manual' ? 'manual' : 'filter';
@@ -220,14 +247,87 @@ function parseAudience(raw: Record<string, unknown>): AudienceSpec {
     ? raw.manualClientIds.map((v) => String(v)).filter((v) => isUuid(v))
     : [];
   const includeContacts = raw.includeContacts === true;
-  return { mode, statuses, tags, includeContacts, manualClientIds };
+  const customFilters = Array.isArray(raw.customFilters)
+    ? (raw.customFilters as unknown[])
+        .map((entry) => {
+          const row = (entry ?? {}) as Record<string, unknown>;
+          const fieldKey = String(row.fieldKey || '').trim();
+          const operator = String(row.operator || 'is');
+          return {
+            fieldKey,
+            operator: (CUSTOM_FILTER_OPERATORS.has(operator) ? operator : 'is') as CustomFieldFilter['operator'],
+            value: String(row.value ?? '').trim(),
+          };
+        })
+        .filter((f) => f.fieldKey !== '')
+    : [];
+  return { mode, statuses, tags, includeContacts, manualClientIds, customFilters };
 }
 
-type ClientRow = { id: string; name: string; contact_name: string | null; email: string | null; status: string; tags: string[] | null };
+/**
+ * Toetst één klant aan de voorwaarden op vrije velden. Alle voorwaarden moeten
+ * kloppen (EN). Meerdere keuzes (multiselect) tellen als "bevat".
+ */
+function matchesCustomFilters(client: ClientRow, filters: CustomFieldFilter[]): boolean {
+  if (filters.length === 0) return true;
+  const values = (client.custom_fields ?? {}) as Record<string, unknown>;
 
+  for (const filter of filters) {
+    const raw = values[filter.fieldKey];
+    const present = raw !== null && raw !== undefined && !(Array.isArray(raw) && raw.length === 0) && String(raw) !== '';
+
+    if (filter.operator === 'filled') {
+      if (!present) return false;
+      continue;
+    }
+    if (filter.operator === 'empty') {
+      if (present) return false;
+      continue;
+    }
+
+    const needle = filter.value.toLowerCase();
+    const hit = Array.isArray(raw)
+      ? raw.some((v) => String(v).trim().toLowerCase() === needle)
+      : present && String(raw).trim().toLowerCase() === needle;
+
+    if (filter.operator === 'is' && !hit) return false;
+    if (filter.operator === 'not' && hit) return false;
+  }
+  return true;
+}
+
+type ClientRow = {
+  id: string;
+  name: string;
+  contact_name: string | null;
+  email: string | null;
+  status: string;
+  tags: string[] | null;
+  client_code: string | null;
+  phone: string | null;
+  address_line1: string | null;
+  address_line2: string | null;
+  postal_code: string | null;
+  city: string | null;
+  country: string | null;
+  vat_number: string | null;
+  kvk_number: string | null;
+  custom_fields: Record<string, unknown> | null;
+};
+
+type ContactRow = { id: string; name: string | null; email: string; phone: string | null; role: string | null };
+
+/**
+ * @param withMergeData Variabelewaarden per kandidaat opbouwen. Alleen nodig bij
+ *   materialiseren en de testmail. De doelgroep-TELLING draait bij elke
+ *   toetsaanslag in de editor (debounced) en heeft de waarden niet nodig — voor
+ *   een organisatie met duizenden klanten zou dat per keer duizenden
+ *   Intl-formatteringen kosten die daarna worden weggegooid.
+ */
 async function resolveAudience(
   organizationId: string,
   audienceRaw: Record<string, unknown>,
+  withMergeData = false,
 ): Promise<{ candidates: Candidate[]; matchedClients: number; clientsWithoutEmail: number; suppressed: Set<string> }> {
   const audience = parseAudience(audienceRaw);
 
@@ -240,25 +340,40 @@ async function resolveAudience(
     const tagsOk =
       audience.tags.length === 0 ||
       (Array.isArray(c.tags) && c.tags.some((t) => audience.tags.includes(t)));
-    return statusOk && tagsOk;
+    return statusOk && tagsOk && matchesCustomFilters(c, audience.customFilters);
   });
+
+  // Eenmalig per doelgroepberekening: de velddefinities en het eigen bedrijf.
+  // Beide zijn organisatiebreed, dus buiten de kandidatenlus.
+  const [definitions, company] = withMergeData
+    ? await Promise.all([loadFieldDefinitions(organizationId), loadCompanyForTokens(organizationId)])
+    : [[] as MergeFieldDefinition[], null as MergeCompany | null];
+
+  // Eén datumnotatie voor de hele doelgroep: {{datum}} is voor iedereen gelijk,
+  // en Intl per ontvanger aanroepen is bij duizenden klanten merkbaar traag.
+  const today = new Date();
+  const mergeFor = (client: ClientRow, contact: ContactRow | null, email: string, name: string | null) =>
+    withMergeData
+      ? buildMergeTokens({ client, contact, company, toEmail: email, toName: name, today }, definitions)
+      : {};
 
   const matchedIds = matched.map((c) => c.id);
 
-  // Contactpersonen ophalen (optioneel).
-  const contactsByClient = new Map<string, { id: string; name: string | null; email: string }[]>();
+  // Contactpersonen ophalen (optioneel). Telefoon en functie horen erbij: die
+  // voeden {{telefoon}} en {{functie}} voor de contactpersoon zelf.
+  const contactsByClient = new Map<string, ContactRow[]>();
   if (audience.includeContacts && matchedIds.length > 0) {
     for (const idChunk of chunk(matchedIds, 200)) {
       const { data: contacts, error: contactError } = await supabaseAdmin
         .from('client_contacts')
-        .select('id,client_id,name,email')
+        .select('id,client_id,name,email,phone,role')
         .eq('organization_id', organizationId)
         .eq('is_active', true)
         .in('client_id', idChunk);
       if (contactError) throw contactError;
-      for (const row of (contacts || []) as { id: string; client_id: string; name: string | null; email: string }[]) {
+      for (const row of (contacts || []) as (ContactRow & { client_id: string })[]) {
         const list = contactsByClient.get(row.client_id) || [];
-        list.push({ id: row.id, name: row.name, email: row.email });
+        list.push({ id: row.id, name: row.name, email: row.email, phone: row.phone, role: row.role });
         contactsByClient.set(row.client_id, list);
       }
     }
@@ -276,7 +391,13 @@ async function resolveAudience(
       reachable = true;
       if (!seen.has(ownEmail)) {
         seen.add(ownEmail);
-        candidates.push({ clientId: c.id, contactId: null, email: ownEmail, name: c.contact_name || c.name || null });
+        candidates.push({
+          clientId: c.id,
+          contactId: null,
+          email: ownEmail,
+          name: c.contact_name || c.name || null,
+          mergeData: mergeFor(c, null, ownEmail, c.contact_name),
+        });
       }
     }
     for (const contact of contactsByClient.get(c.id) || []) {
@@ -285,7 +406,13 @@ async function resolveAudience(
       reachable = true;
       if (!seen.has(email)) {
         seen.add(email);
-        candidates.push({ clientId: c.id, contactId: contact.id, email, name: contact.name || c.name || null });
+        candidates.push({
+          clientId: c.id,
+          contactId: contact.id,
+          email,
+          name: contact.name || c.name || null,
+          mergeData: mergeFor(c, contact, email, contact.name),
+        });
       }
     }
     if (!reachable) clientsWithoutEmail += 1;
@@ -305,7 +432,9 @@ async function loadAllClients(organizationId: string): Promise<ClientRow[]> {
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await supabaseAdmin
       .from('clients')
-      .select('id,name,contact_name,email,status,tags')
+      .select(
+        'id,name,contact_name,email,status,tags,client_code,phone,address_line1,address_line2,postal_code,city,country,vat_number,kvk_number,custom_fields',
+      )
       .eq('organization_id', organizationId)
       .order('id', { ascending: true })
       .range(from, from + pageSize - 1);
@@ -331,6 +460,28 @@ async function loadSuppressedFor(organizationId: string, emails: string[]): Prom
     for (const row of (data || []) as { email: string }[]) suppressed.add(normalizeEmail(row.email));
   }
   return suppressed;
+}
+
+/** De vrije klantvelden van deze organisatie — voeden de {{veld.x}}-tokens. */
+async function loadFieldDefinitions(organizationId: string): Promise<MergeFieldDefinition[]> {
+  const { data, error } = await supabaseAdmin
+    .from('client_field_definitions')
+    .select('field_key,label,field_type,default_fallback')
+    .eq('organization_id', organizationId)
+    .order('position', { ascending: true });
+  if (error) throw error;
+  return (data || []) as MergeFieldDefinition[];
+}
+
+/** Eigen bedrijfsgegevens voor {{bedrijfsnaam}}, {{bedrijfsadres}}, {{website}}, … */
+async function loadCompanyForTokens(organizationId: string): Promise<MergeCompany | null> {
+  const { data, error } = await supabaseAdmin
+    .from('company_settings')
+    .select('company_name,trade_name,address_line1,address_line2,postal_code,city,country,email,phone,website')
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data || null) as MergeCompany | null;
 }
 
 async function previewAudience(
@@ -385,7 +536,7 @@ async function loadCampaign(organizationId: string, campaignId: string): Promise
 async function sendTestCampaign(
   organizationId: string,
   body: Record<string, unknown>,
-): Promise<{ providerEmailId: string; recipientEmail: string }> {
+): Promise<{ providerEmailId: string; recipientEmail: string; previewClientId: string | null }> {
   requireResendConfigured();
   requireUnsubscribeConfigured();
   const campaign = await loadCampaign(organizationId, String(body.campaignId || ''));
@@ -397,9 +548,23 @@ async function sendTestCampaign(
   const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO, campaign.created_by);
   if (!sender.from) throw new CampaignHttpError('Er is nog geen afzenderadres geconfigureerd (verzenddomein of RESEND_FROM_EMAIL).', 422);
 
+  // Een testmail met lege variabelen zegt niets. We vullen daarom met een ECHTE
+  // ontvanger uit de doelgroep — standaard de eerste, of een zelfgekozen klant.
+  // Bestaat die niet (lege doelgroep), dan vullen we zichtbare voorbeeldwaarden
+  // in plaats van niets, zodat je meteen ziet waar een variabele landt.
+  const definitions = await loadFieldDefinitions(organizationId);
+  const previewClientId = String(body.previewClientId || '');
+  const { candidates } = await resolveAudience(organizationId, campaign.audience || {}, true);
+  const sample = previewClientId
+    ? candidates.find((c) => c.clientId === previewClientId) ?? candidates[0]
+    : candidates[0];
+  const tokens = sample ? sample.mergeData : placeholderMergeData(definitions);
+
+  const personalized = personalizeCampaign(campaign, tokens, buildMergeFallbacks(definitions));
+
   const unsubToken = await makeUnsubscribeToken(UNSUBSCRIBE_SECRET, organizationId, recipientEmail);
-  const html = buildCampaignHtml(campaign, brandName, unsubToken);
-  const text = campaign.body_text || htmlToText(campaign.body_html);
+  const html = buildCampaignHtml(personalized, brandName, unsubToken);
+  const text = personalized.body_text || htmlToText(personalized.body_html);
 
   const payload = await sendViaResend(
     RESEND_API_KEY,
@@ -407,13 +572,25 @@ async function sendTestCampaign(
       from: sender.from,
       to: [recipientEmail],
       reply_to: sender.replyTo,
-      subject: `[TEST] ${campaign.subject}`,
+      subject: `[TEST] ${personalized.subject}`,
       html,
       text,
     },
     `campaign-test-${sanitizeIdempotencyPart(campaign.id)}-${crypto.randomUUID()}`,
   );
-  return { providerEmailId: resendEmailId(payload), recipientEmail };
+  return { providerEmailId: resendEmailId(payload), recipientEmail, previewClientId: sample?.clientId ?? null };
+}
+
+/**
+ * Zichtbare voorbeeldwaarden ("[Klantnaam]") voor een testmail zonder doelgroep.
+ * Bewust géén lege strings: dan zou de terugvalwaarde inspringen en zie je niet
+ * dát er een variabele stond.
+ */
+function placeholderMergeData(definitions: MergeFieldDefinition[]): Record<string, string> {
+  const tokens: Record<string, string> = {};
+  for (const entry of STANDARD_MERGE_TOKENS) tokens[entry.token] = `[${entry.label}]`;
+  for (const def of definitions) tokens[customFieldToken(def.field_key)] = `[${def.label}]`;
+  return tokens;
 }
 
 async function scheduleCampaign(
@@ -514,7 +691,7 @@ async function sendCampaign(
 }
 
 async function materializeRecipients(campaign: CampaignRow): Promise<number> {
-  const { candidates, suppressed } = await resolveAudience(campaign.organization_id, campaign.audience || {});
+  const { candidates, suppressed } = await resolveAudience(campaign.organization_id, campaign.audience || {}, true);
   const rows = candidates
     .filter((c) => !suppressed.has(c.email))
     .map((c) => ({
@@ -524,6 +701,9 @@ async function materializeRecipients(campaign: CampaignRow): Promise<number> {
       contact_id: c.contactId,
       to_email: c.email,
       to_name: c.name,
+      // Momentopname: hierna kan de klant hernoemd of verwijderd worden zonder
+      // dat de tweede helft van de lijst een andere aanhef krijgt dan de eerste.
+      merge_data: c.mergeData,
       status: 'pending',
     }));
 
@@ -557,6 +737,8 @@ type RecipientRow = {
   contact_id: string | null;
   to_email: string;
   to_name: string | null;
+  /** Bij het materialiseren vastgelegde variabelewaarden; leeg bij oudere rijen. */
+  merge_data: Record<string, string> | null;
 };
 
 async function dispatchCampaign(campaign: CampaignRow, limit: number): Promise<{ sent: number; failed: number }> {
@@ -598,12 +780,16 @@ async function dispatchCampaign(campaign: CampaignRow, limit: number): Promise<{
   const brandName = await loadOrgBrand(campaign.organization_id);
   const fromEmailForRow = sender.fromEmail || extractEmailAddress(sender.from);
   const fromNameForRow = extractDisplayName(sender.from);
+  // Standaardterugvalwaarden uit de velddefinities, eenmalig per batch. Ze staan
+  // bewust NIET in merge_data: zo houdt een inline {{veld.x|iets anders}} in de
+  // tekst altijd voorrang op de standaard uit de instellingen.
+  const fallbacks = buildMergeFallbacks(await loadFieldDefinitions(campaign.organization_id));
 
   let sent = 0;
   let failed = 0;
   for (const recipient of recipients) {
     try {
-      await sendToRecipient(campaign, recipient, sender.from, sender.replyTo, fromEmailForRow, fromNameForRow, brandName);
+      await sendToRecipient(campaign, recipient, sender.from, sender.replyTo, fromEmailForRow, fromNameForRow, brandName, fallbacks);
       sent += 1;
     } catch (sendError) {
       failed += 1;
@@ -628,11 +814,18 @@ async function sendToRecipient(
   fromEmailForRow: string,
   fromNameForRow: string | null,
   brandName: string,
+  fallbacks: Record<string, string> = {},
 ): Promise<void> {
   const unsubToken = await makeUnsubscribeToken(UNSUBSCRIBE_SECRET, campaign.organization_id, recipient.to_email);
   const unsubscribeUrl = `${UNSUBSCRIBE_BASE_URL}?token=${encodeURIComponent(unsubToken)}`;
-  const html = buildCampaignHtml(campaign, brandName, unsubToken);
-  const text = `${campaign.body_text || htmlToText(campaign.body_html)}\n\nAfmelden: ${unsubscribeUrl}`;
+
+  // Variabelen invullen voor DEZE ontvanger. Het onderwerp en de preheader gaan
+  // mee: personalisatie in de onderwerpregel is waar de meeste winst zit. Body =
+  // HTML dus escapen; onderwerp/preheader/platte tekst zijn geen HTML.
+  const personalized = personalizeCampaign(campaign, recipient.merge_data ?? {}, fallbacks);
+
+  const html = buildCampaignHtml(personalized, brandName, unsubToken);
+  const text = `${personalized.body_text || htmlToText(personalized.body_html)}\n\nAfmelden: ${unsubscribeUrl}`;
 
   let threadId: string | null = null;
   let clientEmailId: string | null = null;
@@ -645,7 +838,7 @@ async function sendToRecipient(
       .insert({
         organization_id: campaign.organization_id,
         client_id: recipient.client_id,
-        subject: campaign.subject,
+        subject: personalized.subject,
         last_direction: 'outbound',
         last_message_at: new Date().toISOString(),
       })
@@ -666,8 +859,10 @@ async function sendToRecipient(
         from_email: fromEmailForRow,
         from_name: fromNameForRow,
         to_email: recipient.to_email,
-        subject: campaign.subject,
-        body_html: campaign.body_html || null,
+        subject: personalized.subject,
+        // De INGEVULDE body bewaren: de mailgeschiedenis bij de klant hoort te
+        // tonen wat die klant werkelijk ontving, niet het sjabloon met tokens.
+        body_html: personalized.body_html || null,
         body_text: text,
         status: 'queued',
         metadata: { source: 'campaign', campaign_id: campaign.id, campaign_recipient_id: recipient.id },
@@ -690,7 +885,7 @@ async function sendToRecipient(
         from,
         to: [recipient.to_email],
         reply_to: replyTo,
-        subject: campaign.subject,
+        subject: personalized.subject,
         html,
         text,
         headers: {
@@ -739,8 +934,49 @@ async function sendToRecipient(
 
 type EmailContent = { subject: string; preheader: string | null; body_html: string; accent_color: string | null };
 
-function buildCampaignHtml(campaign: CampaignRow, brandName: string, unsubToken: string): string {
-  return buildEmailHtml(campaign, brandName, unsubToken);
+/** EmailContent + de platte-tekstversie, na het invullen van de variabelen. */
+type PersonalizedContent = EmailContent & { body_text: string | null };
+
+/**
+ * Vult de variabelen in voor één ontvanger. De body is HTML en wordt dus
+ * ge-escaped; onderwerp, preheader en platte tekst zijn geen HTML en zouden
+ * met escaping "Jan & Zoon" als "Jan &amp; Zoon" in de inbox tonen.
+ */
+function personalizeContent(
+  content: PersonalizedContent,
+  tokens: Record<string, string>,
+  fallbacks: Record<string, string>,
+): PersonalizedContent {
+  const plain = { escape: false, fallbacks };
+  return {
+    subject: fillMergeTokens(content.subject, tokens, plain),
+    preheader: content.preheader ? fillMergeTokens(content.preheader, tokens, plain) : content.preheader,
+    body_html: fillMergeTokens(content.body_html, tokens, { escape: true, fallbacks }),
+    body_text: content.body_text ? fillMergeTokens(content.body_text, tokens, plain) : content.body_text,
+    accent_color: content.accent_color,
+  };
+}
+
+function personalizeCampaign(
+  campaign: CampaignRow,
+  tokens: Record<string, string>,
+  fallbacks: Record<string, string>,
+): PersonalizedContent {
+  return personalizeContent(
+    {
+      subject: campaign.subject,
+      preheader: campaign.preheader,
+      body_html: campaign.body_html,
+      body_text: campaign.body_text,
+      accent_color: campaign.accent_color,
+    },
+    tokens,
+    fallbacks,
+  );
+}
+
+function buildCampaignHtml(content: EmailContent, brandName: string, unsubToken: string): string {
+  return buildEmailHtml(content, brandName, unsubToken);
 }
 
 function buildEmailHtml(content: EmailContent, brandName: string, unsubToken: string): string {
@@ -827,6 +1063,8 @@ type EnrollmentRow = {
   id: string; organization_id: string; flow_id: string; client_id: string | null; contact_id: string | null;
   to_email: string; to_name: string | null; thread_id: string | null; status: string;
   current_step_index: number; next_step_due_at: string | null; last_reply_at: string | null;
+  /** Bij het inschrijven vastgelegde variabelewaarden; leeg bij oudere rijen. */
+  merge_data: Record<string, string> | null;
 };
 
 const FLOW_COLUMNS = 'id,organization_id,created_by,name,status,audience,stop_condition';
@@ -906,7 +1144,7 @@ async function activateFlow(organizationId: string, flowId: string): Promise<{ f
   }
 
   // Inschrijvingen materialiseren uit de doelgroep (suppressie eraf).
-  const { candidates, suppressed } = await resolveAudience(organizationId, flow.audience || {});
+  const { candidates, suppressed } = await resolveAudience(organizationId, flow.audience || {}, true);
   const step0Due = new Date(Date.now() + Math.max(0, steps[0].delay_days) * 86400000).toISOString();
   const rows = candidates
     .filter((c) => !suppressed.has(c.email))
@@ -917,6 +1155,10 @@ async function activateFlow(organizationId: string, flowId: string): Promise<{ f
       contact_id: c.contactId,
       to_email: c.email,
       to_name: c.name,
+      // Eén momentopname per inschrijving: alle stappen van de reeks spreken de
+      // ontvanger daarna consequent op dezelfde manier aan, ook als de klant
+      // tussen stap 1 en stap 3 hernoemd wordt.
+      merge_data: c.mergeData,
       status: 'active',
       current_step_index: -1,
       next_step_due_at: step0Due,
@@ -982,10 +1224,14 @@ async function handleFlowTick(): Promise<{ claimed: number; sent: number; stoppe
 
   const suppressedByOrg = new Map<string, Set<string>>();
   const brandByOrg = new Map<string, string>();
+  // Standaardterugvalwaarden per organisatie; de tick kan stromen van meerdere
+  // organisaties tegelijk verwerken.
+  const fallbacksByOrg = new Map<string, Record<string, string>>();
   for (const orgId of orgIds) {
     const emails = enrollments.filter((e) => e.organization_id === orgId).map((e) => e.to_email);
     suppressedByOrg.set(orgId, await loadSuppressedFor(orgId, emails));
     brandByOrg.set(orgId, await loadOrgBrand(orgId));
+    fallbacksByOrg.set(orgId, buildMergeFallbacks(await loadFieldDefinitions(orgId)));
   }
   // Afzender per STROOM (niet per org): de persoonlijke afzender van de maker
   // (created_by) bepaalt mede de From, en die verschilt per stroom.
@@ -1037,7 +1283,8 @@ async function handleFlowTick(): Promise<{ claimed: number; sent: number; stoppe
       const brandName = brandByOrg.get(enrollment.organization_id) || 'ResoFly';
       const sender = senderByFlow.get(enrollment.flow_id);
       if (!sender || !sender.from) continue; // geen afzender geconfigureerd → overslaan (lease retryt later)
-      const threadId = await sendFlowStep(enrollment, flow, step, sender, brandName);
+      const fallbacks = fallbacksByOrg.get(enrollment.organization_id) || {};
+      const threadId = await sendFlowStep(enrollment, flow, step, sender, brandName, fallbacks);
 
       const following = steps[nextIndex + 1];
       const advance = following
@@ -1096,7 +1343,22 @@ async function sendFlowStep(
   step: FlowStepRow,
   sender: { from: string; replyTo?: string; fromEmail: string | null },
   brandName: string,
+  fallbacks: Record<string, string> = {},
 ): Promise<string | null> {
+  // Variabelen invullen met de momentopname van deze inschrijving, zodat elke
+  // stap van de reeks dezelfde aanspreekvorm gebruikt.
+  const personalized = personalizeContent(
+    {
+      subject: step.subject,
+      preheader: step.preheader,
+      body_html: step.body_html,
+      body_text: step.body_text,
+      accent_color: step.accent_color,
+    },
+    enrollment.merge_data ?? {},
+    fallbacks,
+  );
+
   // Create-or-get de send-rij (uniek per enrollment+step) voor idempotentie.
   await supabaseAdmin
     .from('email_flow_sends')
@@ -1140,7 +1402,7 @@ async function sendFlowStep(
         .insert({
           organization_id: enrollment.organization_id,
           client_id: enrollment.client_id,
-          subject: step.subject,
+          subject: personalized.subject,
           last_direction: 'outbound',
           last_message_at: new Date().toISOString(),
         })
@@ -1166,9 +1428,11 @@ async function sendFlowStep(
           from_email: fromEmailForRow,
           from_name: fromNameForRow,
           to_email: enrollment.to_email,
-          subject: step.subject,
-          body_html: step.body_html || null,
-          body_text: step.body_text || htmlToText(step.body_html),
+          subject: personalized.subject,
+          // De ingevulde versie bewaren: de mailgeschiedenis bij de klant hoort
+          // te tonen wat die klant werkelijk ontving.
+          body_html: personalized.body_html || null,
+          body_text: personalized.body_text || htmlToText(personalized.body_html),
           status: 'queued',
           metadata: { source: 'flow', flow_id: flow.id, flow_send_id: flowSendId, enrollment_id: enrollment.id },
         })
@@ -1182,8 +1446,8 @@ async function sendFlowStep(
 
   const unsubToken = await makeUnsubscribeToken(UNSUBSCRIBE_SECRET, enrollment.organization_id, enrollment.to_email);
   const unsubscribeUrl = `${UNSUBSCRIBE_BASE_URL}?token=${encodeURIComponent(unsubToken)}`;
-  const html = buildEmailHtml(step, brandName, unsubToken);
-  const text = `${step.body_text || htmlToText(step.body_html)}\n\nAfmelden: ${unsubscribeUrl}`;
+  const html = buildEmailHtml(personalized, brandName, unsubToken);
+  const text = `${personalized.body_text || htmlToText(personalized.body_html)}\n\nAfmelden: ${unsubscribeUrl}`;
   const replyTo = MAIL_INBOUND_DOMAIN && clientEmailId
     ? `reply+${clientEmailId}@${MAIL_INBOUND_DOMAIN}`
     : (sender.replyTo || fromEmailForRow || undefined);
@@ -1195,7 +1459,7 @@ async function sendFlowStep(
         from: sender.from,
         to: [enrollment.to_email],
         reply_to: replyTo,
-        subject: step.subject,
+        subject: personalized.subject,
         html,
         text,
         headers: {

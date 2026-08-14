@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, RotateCcw, Upload, ChevronDown, ChevronRight, Mail } from 'lucide-react';
-import type { AppData, Client, ClientEmail, ClientEmailStatus, ClientEmailThread, ClientStatus, Contract, InternalDocument, Invoice, Note, Project, Quote } from '../types';
+import type { AppData, Client, ClientEmail, ClientEmailStatus, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, InternalDocument, Invoice, Note, Project, Quote } from '../types';
+import { activeFieldDefinitions, customFieldsSearchText, formatCustomFieldValue } from '../components/CustomFields';
 import { dateNL, euro, formatMinutes, minutesToHours, total } from '../lib/format';
 import { sanitizeEmailHtml } from '../lib/sanitizeHtml';
 import { Button, Input, Select } from '../components/Ui';
@@ -106,6 +107,13 @@ export function Clients({
     };
   }), [data]);
 
+  // Alleen de vrije velden die als kolom gemarkeerd zijn; de rest zou de tabel
+  // onleesbaar breed maken.
+  const listFields = useMemo(
+    () => activeFieldDefinitions(data.clientFieldDefinitions).filter(d => d.show_in_list),
+    [data.clientFieldDefinitions],
+  );
+
   const changeViewMode = (nextViewMode: ClientViewMode) => {
     setViewMode(nextViewMode);
     try {
@@ -149,7 +157,7 @@ export function Clients({
     </div>}
 
     {rows.length > 0 && viewMode === 'cards' && <ClientCardGrid rows={rows} onOpen={onOpen} unreadByClient={unreadByClient} />}
-    {rows.length > 0 && viewMode === 'table' && <ClientTable rows={rows} onOpen={onOpen} unreadByClient={unreadByClient} />}
+    {rows.length > 0 && viewMode === 'table' && <ClientTable rows={rows} onOpen={onOpen} unreadByClient={unreadByClient} listFields={listFields} />}
   </div>;
 }
 
@@ -180,7 +188,12 @@ function ClientCardGrid({ rows, onOpen, unreadByClient }: { rows: ClientOverview
   </div>;
 }
 
-function ClientTable({ rows, onOpen, unreadByClient }: { rows: ClientOverviewRow[]; onOpen: (client: Client) => void; unreadByClient: Record<string, number> }) {
+function ClientTable({ rows, onOpen, unreadByClient, listFields }: {
+  rows: ClientOverviewRow[];
+  onOpen: (client: Client) => void;
+  unreadByClient: Record<string, number>;
+  listFields: ClientFieldDefinition[];
+}) {
   return <section className="clients-table-card" aria-label="Klanten tabelweergave">
     <div className="clients-table-scroll">
       <table className="clients-table">
@@ -194,6 +207,7 @@ function ClientTable({ rows, onOpen, unreadByClient }: { rows: ClientOverviewRow
             <th className="number">Facturen</th>
             <th className="money">Openstaand</th>
             <th className="money">Waarde</th>
+            {listFields.map(def => <th key={def.id}>{def.label}</th>)}
             <th>Bijgewerkt</th>
           </tr>
         </thead>
@@ -230,6 +244,9 @@ function ClientTable({ rows, onOpen, unreadByClient }: { rows: ClientOverviewRow
               </td>
               <td className="money">{euro(row.openInvoiceTotal)}</td>
               <td className="money">{euro(client.value_eur)}</td>
+              {listFields.map(def => (
+                <td key={def.id}>{formatCustomFieldValue((client.custom_fields ?? {})[def.field_key], def) || '—'}</td>
+              ))}
               <td>{dateNL(client.updated_at)}</td>
             </tr>;
           })}
@@ -449,6 +466,12 @@ export function ClientDetailPage({
             <div><dt>Btw-nummer</dt><dd>{client.vat_number || '—'}</dd></div>
             <div><dt>KVK</dt><dd>{client.kvk_number || '—'}</dd></div>
             <div><dt>Waarde</dt><dd>{euro(client.value_eur)}</dd></div>
+            {activeFieldDefinitions(data.clientFieldDefinitions).map(def => (
+              <div key={def.id}>
+                <dt>{def.label}</dt>
+                <dd>{formatCustomFieldValue((client.custom_fields ?? {})[def.field_key], def) || '—'}</dd>
+              </div>
+            ))}
             <div><dt>Aangemaakt</dt><dd>{dateNL(client.created_at)}</dd></div>
             <div><dt>Bijgewerkt</dt><dd>{dateNL(client.updated_at)}</dd></div>
             <div><dt>Klantportaal</dt><dd>{client.email

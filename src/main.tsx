@@ -131,8 +131,9 @@ import type { GerrieActionHandlers } from './lib/gerrie-api';
 import { exportFinancePDF } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
 import type {
-  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, CompanySettingsInput, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, Quote, Task, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
+  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, Quote, Task, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
 } from './types';
+import { CustomFieldsSection, normalizeCustomFieldValues } from './components/CustomFields';
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
 
@@ -148,7 +149,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id' | 'notes' | 'due_date' | 'lines'>> }
   | null;
 
-const emptyData: AppData = { clients: [], clientContacts: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], galleries: [], savedReports: [], plannerNotes: [], companySettings: null };
+const emptyData: AppData = { clients: [], clientContacts: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], galleries: [], savedReports: [], plannerNotes: [], companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null, creativeStatus: null, businessStatus: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
@@ -2407,7 +2408,7 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
     edit.kind === 'task' || edit.kind === 'ticket' || edit.kind === 'project' ? 'modal-task-editor' : '',
   ].filter(Boolean).join(' ');
 
-  return <Modal title={title} className={modalClassName} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{effectiveReadOnly ? 'Sluiten' : 'Annuleren'}</Button>{!effectiveReadOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!effectiveReadOnly && edit.kind === 'document' && item && !(item as InternalDocument).storage_key && <Button variant="ghost" onClick={() => { onClose(); onConvertToWord(item as InternalDocument); }}>Bewerk als Word</Button>}{!effectiveReadOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form))} disabled={saveBlockedByDuplicate}>Opslaan</Button>}</>}>
+  return <Modal title={title} className={modalClassName} onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>{effectiveReadOnly ? 'Sluiten' : 'Annuleren'}</Button>{!effectiveReadOnly && item && <Button variant="danger" onClick={onDelete}>Verwijderen</Button>}{!effectiveReadOnly && edit.kind === 'document' && item && !(item as InternalDocument).storage_key && <Button variant="ghost" onClick={() => { onClose(); onConvertToWord(item as InternalDocument); }}>Bewerk als Word</Button>}{!effectiveReadOnly && <Button variant="primary" onClick={() => onSave(cleanForm(edit.kind, form, data.clientFieldDefinitions))} disabled={saveBlockedByDuplicate}>Opslaan</Button>}</>}>
     {readOnly && <div className="readonly-note">Je bekijkt dit item met alleen-lezen rechten. Wijzigen, verwijderen en uploaden zijn uitgeschakeld.</div>}
     {quoteWorkflowLocked && <div className="readonly-note">Deze offerte zit al in de goedkeuringsflow. Inhoudelijke velden zijn vergrendeld zodat een goedgekeurde of verzonden offerte niet ongemerkt kan wijzigen.</div>}
     {edit.kind === 'client' && <FormGrid className="client-form-grid">
@@ -2474,6 +2475,12 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
       <Field label="Notities">
         <Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne klantnotities" disabled={disabled}/>
       </Field>
+      <CustomFieldsSection
+        definitions={data.clientFieldDefinitions}
+        values={(form.custom_fields ?? {}) as Record<string, unknown>}
+        disabled={disabled}
+        onChange={(fieldKey, value) => set('custom_fields', { ...(form.custom_fields ?? {}), [fieldKey]: value })}
+      />
       {!item && <label className="check-row client-welcome-toggle">
         <input type="checkbox" checked={Boolean(form._sendWelcomeEmail)} onChange={e=>set('_sendWelcomeEmail', e.target.checked)} disabled={disabled || !String(form.email || '').trim()}/>
         <span>Welkomstmail met portaaltoegang sturen naar de klant{!String(form.email || '').trim() && <em className="client-welcome-hint"> — vul eerst een e-mailadres in</em>}</span>
@@ -3157,7 +3164,7 @@ function sanitizeTicketValues(values: Record<string, unknown>, existingTicket?: 
 function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string, any> {
   if (edit.kind === "client") {
     const item = edit.item;
-    return { name: item?.name ?? edit.defaults?.name ?? "", client_code: item?.client_code ?? "", contact_name: item?.contact_name ?? edit.defaults?.contact_name ?? "", email: item?.email ?? edit.defaults?.email ?? "", phone: item?.phone ?? edit.defaults?.phone ?? "", status: item?.status ?? edit.defaults?.status ?? "active", client_kind: item?.client_kind ?? "business", value_eur: item?.value_eur ?? 0, tags: item?.tags?.join(", ") ?? "", notes: item?.notes ?? edit.defaults?.notes ?? "", color: item?.color ?? "#FFD966", address_line1: item?.address_line1 ?? "", address_line2: item?.address_line2 ?? "", postal_code: item?.postal_code ?? "", city: item?.city ?? "", country: item?.country ?? (item ? "" : "Nederland"), vat_number: item?.vat_number ?? "", kvk_number: item?.kvk_number ?? "", _sendWelcomeEmail: !item };
+    return { name: item?.name ?? edit.defaults?.name ?? "", client_code: item?.client_code ?? "", contact_name: item?.contact_name ?? edit.defaults?.contact_name ?? "", email: item?.email ?? edit.defaults?.email ?? "", phone: item?.phone ?? edit.defaults?.phone ?? "", status: item?.status ?? edit.defaults?.status ?? "active", client_kind: item?.client_kind ?? "business", value_eur: item?.value_eur ?? 0, tags: item?.tags?.join(", ") ?? "", notes: item?.notes ?? edit.defaults?.notes ?? "", color: item?.color ?? "#FFD966", address_line1: item?.address_line1 ?? "", address_line2: item?.address_line2 ?? "", postal_code: item?.postal_code ?? "", city: item?.city ?? "", country: item?.country ?? (item ? "" : "Nederland"), vat_number: item?.vat_number ?? "", kvk_number: item?.kvk_number ?? "", custom_fields: { ...(item?.custom_fields ?? {}) }, _sendWelcomeEmail: !item };
   }
   if (edit.kind === "project") {
     const item = edit.item;
@@ -3188,9 +3195,12 @@ function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string,
   return { number: item?.number ?? createNextFinanceNumber('invoice', data), client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", date: item?.date ?? today, due_date: item?.due_date ?? edit.defaults?.due_date ?? "", status: item?.status ?? "draft", notes: item?.notes ?? edit.defaults?.notes ?? "", lines: item?.lines ?? edit.defaults?.lines ?? [{ id: uid(), description: "", quantity: 1, unit_price: 0, vat: 21 }] };
 }
 
-function cleanForm(kind: string, form: Record<string, any>) {
+function cleanForm(kind: string, form: Record<string, any>, clientFieldDefinitions: ClientFieldDefinition[] = []) {
   const cleaned: Record<string, any> = { ...form };
   if (kind === 'client') {
+    // De vrije velden komen als formulierstrings binnen; de databasetrigger
+    // verwacht getallen, booleans en arrays. Normaliseren is dus verplicht.
+    cleaned.custom_fields = normalizeCustomFieldValues(cleaned.custom_fields, clientFieldDefinitions);
     cleaned.name = String(cleaned.name ?? '').trim();
     cleaned.client_code = normalizeOptionalText(cleaned.client_code);
     cleaned.contact_name = normalizeOptionalText(cleaned.contact_name);

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { CheckSquare, ChevronRight, FileText, FolderOpen, Receipt, Search, SearchX, StickyNote, Ticket, Truck, Users, X, type LucideIcon } from 'lucide-react';
 import type { AppData, Client, InternalDocument, Invoice, Note, Project, Quote, Supplier, Task, Ticket as TicketType } from '../types';
 import { euro, total } from '../lib/format';
+import { customFieldsSearchText } from './CustomFields';
 
 export type SearchResultKind = 'client' | 'project' | 'task' | 'ticket' | 'note' | 'document' | 'quote' | 'invoice' | 'supplier';
 
@@ -65,6 +66,8 @@ export function GlobalSearch({ data, onNavigate }: { data: AppData; onNavigate: 
   const listRef = useRef<HTMLDivElement>(null);
 
   const clientById = useMemo(() => new Map(data.clients.map(c => [c.id, c])), [data.clients]);
+  // Ook gearchiveerde velden blijven doorzoekbaar: de waarden staan er nog.
+  const searchableFields = data.clientFieldDefinitions;
   const projectById = useMemo(() => new Map(data.projects.map(p => [p.id, p])), [data.projects]);
 
   const term = query.trim().toLowerCase();
@@ -74,7 +77,9 @@ export function GlobalSearch({ data, onNavigate }: { data: AppData; onNavigate: 
     const out: SearchResult[] = [];
 
     for (const c of data.clients) {
-      if (matches(term, c.name, c.client_code, c.contact_name, c.email, c.phone, plain(c.notes), c.tags?.join(' '))) {
+      // De vrije velden tellen mee: wie een klant op zijn pakket of dossiernummer
+      // zoekt, hoort hem te vinden zonder eerst de klantkaart te openen.
+      if (matches(term, c.name, c.client_code, c.contact_name, c.email, c.phone, plain(c.notes), c.tags?.join(' '), customFieldsSearchText(c.custom_fields, searchableFields))) {
         out.push({ kind: 'client', id: c.id, title: c.name, subtitle: [c.client_code, c.email].filter(Boolean).join(' · ') || 'Klant', item: c });
       }
     }

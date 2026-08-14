@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Ban, CheckCircle2, Clock, Copy, Mail, MailWarning, Megaphone, Pause, Play, Plus, Send, Trash2, Users, Workflow, X } from 'lucide-react';
 import type {
-  AppData, CampaignAudience, CampaignAudiencePreview, EmailCampaign, EmailCampaignRecipient, EmailCampaignStats, EmailSuppression, UUID,
+  AppData, CampaignAudience, CampaignCustomFilter, CampaignCustomFilterOperator, CampaignAudiencePreview,
+  ClientFieldDefinition, EmailCampaign, EmailCampaignRecipient, EmailCampaignStats, EmailSuppression, UUID,
   EmailFlow, EmailFlowStep, EmailFlowStats, EmailFlowStepStats, FlowStopCondition, FlowStepInput,
 } from '../types';
 import { Button, Input, Select, ColorPicker } from '../components/Ui';
+import { STANDARD_MERGE_TOKENS, customFieldToken, unknownMergeTokens, type MergeFieldDefinition } from '../lib/mergeTokens';
+import { activeFieldDefinitions, distinctFieldValues } from '../components/CustomFields';
 import { RichTextEditor } from '../components/RichTextEditor';
 import {
   loadCampaigns, loadCampaignStats, loadCampaignRecipients, loadSuppressions,
@@ -32,7 +35,7 @@ const STOP_CONDITION_LABEL: Record<FlowStopCondition, string> = {
 };
 
 function emptyAudience(): CampaignAudience {
-  return { mode: 'filter', statuses: [], tags: [], includeContacts: false, manualClientIds: [] };
+  return { mode: 'filter', statuses: [], tags: [], includeContacts: false, manualClientIds: [], customFilters: [] };
 }
 
 function fmtDate(value: string | null | undefined): string {
@@ -318,6 +321,103 @@ function CampaignList({ campaigns, stats, canWrite, onOpen, onDuplicate, onDelet
   );
 }
 
+// ── Variabelen ({{token}}) ──────────────────────────────────────────────────
+
+/** De velddefinities in de vorm die de gedeelde tokenmodule verwacht. */
+function toMergeDefinitions(definitions: ClientFieldDefinition[]): MergeFieldDefinition[] {
+  return activeFieldDefinitions(definitions).map(d => ({
+    field_key: d.field_key,
+    label: d.label,
+    field_type: d.field_type,
+    default_fallback: d.default_fallback,
+  }));
+}
+
+/**
+ * Sleepbare/klikbare chips waarmee je een variabele in de tekst zet. Bewust
+ * dezelfde bediening als bij contracten: slepen zet hem op de cursorpositie,
+ * klikken kopieert naar het klembord.
+ */
+function MergeTokenChips({ definitions }: { definitions: ClientFieldDefinition[] }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const custom = activeFieldDefinitions(definitions);
+
+  const groups: Array<{ title: string; items: Array<{ token: string; label: string }> }> = [
+    ...['Klant', 'Eigen bedrijf', 'Overig'].map(group => ({
+      title: group,
+      items: STANDARD_MERGE_TOKENS.filter(t => t.group === group).map(t => ({ token: t.token, label: t.label })),
+    })),
+    ...(custom.length > 0
+      ? [{ title: 'Eigen velden', items: custom.map(d => ({ token: customFieldToken(d.field_key), label: d.label })) }]
+      : []),
+  ];
+
+  function copy(token: string) {
+    try { void navigator.clipboard?.writeText(`{{${token}}}`); } catch { /* klembord kan geweigerd zijn */ }
+    setCopied(token);
+    window.setTimeout(() => setCopied(c => (c === token ? null : c)), 1200);
+  }
+
+  return (
+    <div className="mk-tokens">
+      <div className="mk-tokens-intro">
+        Sleep een variabele in je tekst, of klik om te kopiëren. Is het veld bij een klant leeg, geef dan een terugval mee:
+        <code>{'{{voornaam|klant}}'}</code>.
+      </div>
+      {groups.map(group => (
+        <div key={group.title} className="mk-token-group">
+          <span className="mk-token-group-title">{group.title}</span>
+          <div className="mk-token-chips">
+            {group.items.map(item => (
+              <span
+                key={item.token}
+                role="button"
+                tabIndex={0}
+                draggable
+                className={`mk-token-chip${copied === item.token ? ' copied' : ''}`}
+                onDragStart={e => { e.dataTransfer.setData('text/plain', `{{${item.token}}}`); e.dataTransfer.effectAllowed = 'copy'; }}
+                onClick={() => copy(item.token)}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); copy(item.token); } }}
+                title={`${item.label} — {{${item.token}}}`}
+              >
+                {copied === item.token ? '✓ gekopieerd' : item.label}
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Waarschuwt over variabelen die nergens op slaan: een typefout, of een veld dat
+ * inmiddels verwijderd is. Zo'n token wordt bij het versturen weggelaten (het
+ * hoort nooit als "{{voornam}}" bij de klant te belanden), dus zonder deze
+ * melding zou je het gat pas ná verzending zien.
+ */
+function UnknownTokenWarning({ texts, definitions }: { texts: Array<string | null | undefined>; definitions: ClientFieldDefinition[] }) {
+  const unknown = useMemo(() => {
+    const merge = toMergeDefinitions(definitions);
+    return [...new Set(texts.flatMap(text => unknownMergeTokens(text, merge)))];
+  }, [texts, definitions]);
+
+  if (unknown.length === 0) return null;
+  return (
+    <div className="mk-token-warning">
+      <MailWarning size={15} />
+      <span>
+        {unknown.length === 1
+          ? 'Deze variabele bestaat niet en blijft leeg bij het versturen:'
+          : 'Deze variabelen bestaan niet en blijven leeg bij het versturen:'}{' '}
+        {unknown.map((token, i) => (
+          <span key={token}>{i > 0 && ', '}<code>{`{{${token}}}`}</code></span>
+        ))}
+      </span>
+    </div>
+  );
+}
+
 // ── Campagne-editor ─────────────────────────────────────────────────────────
 
 function CampaignEditor({ data, organizationId, canWrite, campaign, onBack, onSaved, onSent, onDelete, onError }: {
@@ -447,6 +547,8 @@ function CampaignEditor({ data, organizationId, canWrite, campaign, onBack, onSa
           <div className="mk-field"><span>Bericht</span>
             <RichTextEditor value={bodyHtml} onChange={setBodyHtml} disabled={readOnly} placeholder="Schrijf je bericht…" />
           </div>
+          {!readOnly && <MergeTokenChips definitions={data.clientFieldDefinitions} />}
+          <UnknownTokenWarning texts={[subject, preheader, bodyHtml]} definitions={data.clientFieldDefinitions} />
           <div className="mk-field"><span>Accentkleur</span>
             <ColorPicker value={accent} onChange={setAccent} disabled={readOnly} />
           </div>
@@ -570,6 +672,12 @@ function AudienceSelector({ data, organizationId, value, onChange, disabled }: {
               </div>
             </div>
           )}
+          <CustomFieldFilters
+            data={data}
+            filters={value.customFilters ?? []}
+            disabled={disabled}
+            onChange={customFilters => patch({ customFilters })}
+          />
         </>
       ) : (
         <div className="mk-audience-block">
@@ -602,6 +710,99 @@ function AudienceSelector({ data, organizationId, value, onChange, disabled }: {
           </>
         ) : <span className="mk-muted">Nog geen telling.</span>}
       </div>
+    </div>
+  );
+}
+
+const CUSTOM_FILTER_OPERATOR_LABEL: Record<CampaignCustomFilterOperator, string> = {
+  is: 'is',
+  not: 'is niet',
+  filled: 'is ingevuld',
+  empty: 'is leeg',
+};
+
+/**
+ * Voorwaarden op de vrije klantvelden, bv. "Pakket is Premium". Alle
+ * voorwaarden moeten kloppen (EN) — dat is voorspelbaarder dan een mengeling
+ * van EN en OF, en dekt in de praktijk wat je met een mailing wilt.
+ */
+function CustomFieldFilters({ data, filters, disabled, onChange }: {
+  data: AppData;
+  filters: CampaignCustomFilter[];
+  disabled: boolean;
+  onChange: (filters: CampaignCustomFilter[]) => void;
+}) {
+  const definitions = useMemo(() => activeFieldDefinitions(data.clientFieldDefinitions), [data.clientFieldDefinitions]);
+  const allValues = useMemo(() => data.clients.map(c => c.custom_fields), [data.clients]);
+  if (definitions.length === 0) return null;
+
+  const patchAt = (index: number, patch: Partial<CampaignCustomFilter>) =>
+    onChange(filters.map((f, i) => (i === index ? { ...f, ...patch } : f)));
+
+  return (
+    <div className="mk-audience-block">
+      <span className="mk-audience-label">Eigen velden <em>(alle voorwaarden moeten kloppen)</em></span>
+
+      {filters.map((filter, index) => {
+        const def = definitions.find(d => d.field_key === filter.fieldKey);
+        const needsValue = filter.operator === 'is' || filter.operator === 'not';
+        const suggestions = def ? distinctFieldValues(def, allValues) : [];
+        const listId = `cf-values-${index}-${filter.fieldKey}`;
+
+        return (
+          <div key={index} className="mk-filter-row">
+            <Select value={filter.fieldKey} disabled={disabled} onChange={e => patchAt(index, { fieldKey: e.target.value, value: '' })}>
+              {definitions.map(d => <option key={d.field_key} value={d.field_key}>{d.label}</option>)}
+            </Select>
+
+            <Select
+              value={filter.operator}
+              disabled={disabled}
+              onChange={e => patchAt(index, { operator: e.target.value as CampaignCustomFilterOperator })}
+            >
+              {(Object.keys(CUSTOM_FILTER_OPERATOR_LABEL) as CampaignCustomFilterOperator[]).map(op => (
+                <option key={op} value={op}>{CUSTOM_FILTER_OPERATOR_LABEL[op]}</option>
+              ))}
+            </Select>
+
+            {needsValue && (
+              <>
+                <Input
+                  value={filter.value}
+                  disabled={disabled}
+                  list={suggestions.length > 0 ? listId : undefined}
+                  placeholder="Waarde"
+                  onChange={e => patchAt(index, { value: e.target.value })}
+                />
+                {suggestions.length > 0 && (
+                  <datalist id={listId}>
+                    {suggestions.map(v => <option key={v} value={v} />)}
+                  </datalist>
+                )}
+              </>
+            )}
+
+            <button
+              type="button"
+              className="mk-icon danger"
+              title="Voorwaarde verwijderen"
+              disabled={disabled}
+              onClick={() => onChange(filters.filter((_, i) => i !== index))}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        );
+      })}
+
+      <button
+        type="button"
+        className="mk-filter-add"
+        disabled={disabled}
+        onClick={() => onChange([...filters, { fieldKey: definitions[0].field_key, operator: 'is', value: '' }])}
+      >
+        <Plus size={14} /> Voorwaarde toevoegen
+      </button>
     </div>
   );
 }
@@ -983,8 +1184,10 @@ function FlowEditor({ data, organizationId, canWrite, flow, onBack, onSaved, onA
                   </div>
                   <Input value={step.subject} onChange={e => updateStep(i, { subject: e.target.value })} disabled={readOnly} placeholder="Onderwerp van deze mail" />
                   <RichTextEditor value={step.body_html} onChange={html => updateStep(i, { body_html: html })} disabled={readOnly} placeholder="Bericht van deze stap…" />
+                  <UnknownTokenWarning texts={[step.subject, step.body_html]} definitions={data.clientFieldDefinitions} />
                 </div>
               ))}
+              {!readOnly && <MergeTokenChips definitions={data.clientFieldDefinitions} />}
               {!readOnly && <Button onClick={addStep}><Plus size={15} /> Stap toevoegen</Button>}
             </div>
           )}

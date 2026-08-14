@@ -284,7 +284,50 @@ export interface ContractVersion {
 }
 
 export interface Client extends OrgScopedRow {
-  name: string; client_code: string | null; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; color: string; status: ClientStatus; client_kind: ClientKind; tags: string[]; follow_up: string | null; value_eur: number; vat_number: string | null; kvk_number: string | null; address_line1: string | null; address_line2: string | null; postal_code: string | null; city: string | null; country: string | null; created_at: string; updated_at: string;
+  name: string; client_code: string | null; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; color: string; status: ClientStatus; client_kind: ClientKind; tags: string[]; follow_up: string | null; value_eur: number; vat_number: string | null; kvk_number: string | null; address_line1: string | null; address_line2: string | null; postal_code: string | null; city: string | null; country: string | null;
+  /** Waarden van de zelf gedefinieerde vrije velden, als {field_key: waarde}. */
+  custom_fields: Record<string, CustomFieldValue>;
+  created_at: string; updated_at: string;
+}
+
+// ── Vrije klantvelden ───────────────────────────────────────────────────────
+export type CustomFieldType =
+  | 'text' | 'textarea' | 'number' | 'amount' | 'date'
+  | 'select' | 'multiselect' | 'boolean' | 'url' | 'email' | 'phone';
+
+export type CustomFieldValue = string | number | boolean | string[] | null;
+
+export const CUSTOM_FIELD_TYPE_LABELS: Record<CustomFieldType, string> = {
+  text: 'Tekst',
+  textarea: 'Tekst (meerdere regels)',
+  number: 'Getal',
+  amount: 'Bedrag (€)',
+  date: 'Datum',
+  select: 'Keuzelijst (één keuze)',
+  multiselect: 'Keuzelijst (meerdere keuzes)',
+  boolean: 'Ja / nee',
+  url: 'Website',
+  email: 'E-mailadres',
+  phone: 'Telefoonnummer',
+};
+
+/**
+ * Eén zelf gedefinieerd klantveld. `field_key` is tegelijk de sleutel in
+ * Client.custom_fields én de naam van de variabele in mailings: {{veld.<key>}}.
+ */
+export interface ClientFieldDefinition extends OrgScopedRow {
+  field_key: string;
+  label: string;
+  field_type: CustomFieldType;
+  options: string[];
+  help_text: string | null;
+  /** Terugvalwaarde in campagnes wanneer de klant dit veld leeg heeft. */
+  default_fallback: string | null;
+  position: number;
+  show_in_list: boolean;
+  is_archived: boolean;
+  created_at: string;
+  updated_at: string;
 }
 export interface ClientContact extends OrgScopedRow {
   client_id: UUID; name: string; email: string; phone: string | null; role: string | null; gives_portal_access: boolean; is_active: boolean; created_at: string; updated_at: string;
@@ -292,13 +335,23 @@ export interface ClientContact extends OrgScopedRow {
 
 // ── E-mailmarketing / campagnes ─────────────────────────────────────────────
 export type CampaignStatus = 'draft' | 'scheduled' | 'sending' | 'sent' | 'paused' | 'cancelled';
+/** Eén voorwaarde op een vrij klantveld, bv. "Pakket is Premium". */
+export type CampaignCustomFilterOperator = 'is' | 'not' | 'filled' | 'empty';
+export interface CampaignCustomFilter {
+  fieldKey: string;
+  operator: CampaignCustomFilterOperator;
+  value: string;
+}
+
 export interface CampaignAudience {
-  /** 'filter' = op status/tags (leeg = alle klanten); 'manual' = handmatig gekozen klanten. */
+  /** 'filter' = op status/tags/vrije velden (leeg = alle klanten); 'manual' = handmatig gekozen klanten. */
   mode: 'filter' | 'manual';
   statuses: ClientStatus[];
   tags: string[];
   includeContacts: boolean;
   manualClientIds: UUID[];
+  /** Voorwaarden op vrije klantvelden; alle voorwaarden moeten kloppen (EN). */
+  customFilters: CampaignCustomFilter[];
 }
 export interface EmailCampaign extends OrgScopedRow {
   name: string; subject: string; preheader: string | null; body_html: string; body_text: string | null; accent_color: string | null; audience: CampaignAudience; status: CampaignStatus; scheduled_at: string | null; started_at: string | null; sent_at: string | null; created_at: string; updated_at: string;
@@ -2650,7 +2703,7 @@ export interface SavedReport extends OrgScopedRow {
   updated_at: string;
 }
 
-export interface AppData { clients: Client[]; clientContacts: ClientContact[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft' | 'native' | 'ics';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';

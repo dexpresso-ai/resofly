@@ -10,6 +10,7 @@ import type {
   Attachment,
   Client,
   ClientContact,
+  ClientFieldDefinition,
   CompanySettings,
   CompanySettingsInput,
   EmailTemplate,
@@ -144,7 +145,7 @@ import type {
   UUID,
 } from '../types';
 
-const tables = ['clients', 'client_contacts', 'projects', 'project_templates', 'project_template_tasks', 'tasks', 'project_members', 'task_assignees', 'contract_projects', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'galleries', 'gallery_items', 'gallery_favorites', 'gallery_categories', 'gallery_category_presets', 'saved_reports', 'planner_notes', 'company_settings'] as const;
+const tables = ['clients', 'client_contacts', 'client_field_definitions', 'projects', 'project_templates', 'project_template_tasks', 'tasks', 'project_members', 'task_assignees', 'contract_projects', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'galleries', 'gallery_items', 'gallery_favorites', 'gallery_categories', 'gallery_category_presets', 'saved_reports', 'planner_notes', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -154,6 +155,7 @@ type MembershipRow = OrganizationMember & { organization: Organization | Organiz
 const tableToEntity: Record<Table, EntityType | null> = {
   clients: 'client',
   client_contacts: null,
+  client_field_definitions: null,
   projects: 'project',
   project_templates: null,
   project_template_tasks: null,
@@ -469,6 +471,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
   const [
     clients,
     clientContacts,
+    clientFieldDefinitions,
     projects,
     tasks,
     tickets,
@@ -519,7 +522,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     projectTemplateTasks,
     contractProjects,
   ] = await Promise.all([
-    select<Client>('clients', organizationId), selectClientContacts(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
+    select<Client>('clients', organizationId), selectClientContacts(organizationId), selectClientFieldDefinitions(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
     selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectCalendarEventLinks(organizationId), selectTimeEntries(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId), selectDunningNotices(organizationId),
@@ -537,7 +540,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectProjectTemplateTasks(organizationId),
     selectContractProjects(organizationId),
   ]);
-  return { clients, clientContacts, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, galleries, savedReports, plannerNotes, companySettings };
+  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, galleries, savedReports, plannerNotes, companySettings };
 }
 
 const CONTRACT_PROJECTS_MIGRATION_HINT =
@@ -1513,6 +1516,9 @@ const FISCAL_YEAR_MIGRATION_HINT =
 const CLIENT_CONTACTS_MIGRATION_HINT =
   'Voer de migratie 20260707000000_client_contacts.sql uit in Supabase om contactpersonen per klant te activeren.';
 
+const CLIENT_FIELD_DEFINITIONS_MIGRATION_HINT =
+  'Voer de migratie 20260814000000_client_custom_fields.sql uit in Supabase om vrije klantvelden en variabelen in mailings te activeren.';
+
 /**
  * Leest een nog-jonge tabel en degradeert gracieus: ontbreekt de tabel (migratie
  * nog niet uitgevoerd), dan een waarschuwing + lege lijst i.p.v. een harde fout.
@@ -1543,6 +1549,8 @@ async function selectOptional<T>(
 
 export const selectClientContacts = (organizationId: UUID) =>
   selectOptional<ClientContact>('client_contacts', organizationId, { orderBy: 'name', ascending: true, hint: CLIENT_CONTACTS_MIGRATION_HINT });
+export const selectClientFieldDefinitions = (organizationId: UUID) =>
+  selectOptional<ClientFieldDefinition>('client_field_definitions', organizationId, { orderBy: 'position', ascending: true, hint: CLIENT_FIELD_DEFINITIONS_MIGRATION_HINT });
 export const selectLedgerAccounts = (organizationId: UUID) =>
   selectOptional<LedgerAccount>('ledger_accounts', organizationId, { orderBy: 'code', ascending: true, hint: BOOKKEEPING_MIGRATION_HINT });
 export const selectVatCodes = (organizationId: UUID) =>
