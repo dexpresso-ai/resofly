@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { Bell, BookOpen, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, Users } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Bell, BookOpen, CalendarCog, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, Users } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
@@ -73,7 +73,7 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   viewer: 'Viewer',
 };
 
-export type SettingsTab = 'organisatie' | 'sjablonen' | 'huisstijl' | 'meldingen' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'email';
+export type SettingsTab = 'organisatie' | 'sjablonen' | 'huisstijl' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'email';
 
 /**
  * Rechtenraster: per module kiezen tussen geen toegang, alleen lezen en
@@ -128,6 +128,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'sjablonen', label: 'Projectsjablonen', Icon: ListChecks, description: 'Leg je vaste werkwijze vast als standaardtaken en subtaken, en rol die bij elk nieuw project in één klik uit.' },
   { id: 'huisstijl', label: 'Huisstijl', Icon: Palette, description: 'Je logo, accentkleur en afsluiting op klantgerichte pagina\'s zoals de galerij — zodat een oplevering van jou is, niet van ResoFly.' },
   { id: 'meldingen', label: 'Meldingen', Icon: Bell, description: 'Ontvang OS-meldingen op je apparaat bij nieuwe tickets, chatberichten, e-mails en boekingen — ook als ResoFly dicht is.' },
+  { id: 'agenda', label: 'Agenda', Icon: CalendarCog, description: 'Koppel Google Calendar of Microsoft Outlook, maak eigen ResoFly-agenda\'s, abonneer op een agenda via een link en zet de sync met je telefoon aan.' },
   { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens, factuurtemplate en betaalteksten die op je facturen en offertes verschijnen.' },
   { id: 'boekhouding', label: 'Boekhouding', Icon: BookOpen, description: 'De boekhoud-startdatum (knipdatum) en de KOR-regeling voor je grootboek en BTW-aangifte.' },
   { id: 'betalen', label: 'Online betalen', Icon: CreditCard, description: 'Koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
@@ -831,6 +832,7 @@ export function Settings({
   currentUserId,
   push,
   settingsNav = null,
+  calendarSettings = null,
   onCreateOrganization,
   onSwitchOrganization,
   onInviteMember,
@@ -850,6 +852,11 @@ export function Settings({
   currentUserId: string | null;
   push: PushApi;
   settingsNav?: { tab: SettingsTab; key: number } | null;
+  /** De agenda-instellingen (koppelingen, eigen agenda's, telefoon-sync) wonen
+   *  hier als tabblad in plaats van als eigen pagina onder Agenda. De pagina
+   *  zelf komt uit CalendarPage; is dit leeg, dan staat de agenda-module dicht
+   *  voor dit teamlid en verdwijnt het tabblad. */
+  calendarSettings?: ReactNode;
   onCreateOrganization: () => void;
   onSwitchOrganization: (organizationId: string) => void;
   onInviteMember: (email: string, role: OrganizationRole, moduleAccess: ModuleAccess) => Promise<{ emailSent: boolean; emailError?: string }>;
@@ -907,6 +914,20 @@ export function Settings({
   const activeOrganization = organizationContext.activeOrganization;
   const activeMembership = organizationContext.activeMembership;
   const canAdminOrganization = activeMembership ? ['owner', 'admin'].includes(activeMembership.role) : false;
+  // AI-gebruik is er alleen voor owners/admins, het agenda-tabblad alleen als de
+  // agenda-module openstaat. Landt iemand toch op een tabblad dat er voor hem
+  // niet is (onthouden keuze, wissel van organisatie), dan valt hij terug op het
+  // eerste tabblad in plaats van op een lege pagina te staren.
+  const hasCalendarSettings = Boolean(calendarSettings);
+  const visibleTabs = SETTINGS_TABS.filter(tab => {
+    if (tab.id === 'ai') return canAdminOrganization;
+    if (tab.id === 'agenda') return hasCalendarSettings;
+    return true;
+  });
+  useEffect(() => {
+    if (activeTab === 'ai' && !canAdminOrganization) setActiveTab('organisatie');
+    if (activeTab === 'agenda' && !hasCalendarSettings) setActiveTab('organisatie');
+  }, [activeTab, canAdminOrganization, hasCalendarSettings]);
   const canManageRoles = activeMembership?.role === 'owner';
   const activeOwnerCount = organizationContext.teamMembers.filter(member => member.role === 'owner' && member.status === 'active').length;
   const licenseUsage = organizationContext.licenseUsage;
@@ -1504,7 +1525,7 @@ export function Settings({
     </div>
 
     <div className="client-tabs-bar settings-tabs-bar" role="tablist">
-      {SETTINGS_TABS.filter(tab => tab.id !== 'ai' || canAdminOrganization).map(tab => (
+      {visibleTabs.map(tab => (
         <button
           key={tab.id}
           type="button"
@@ -1656,6 +1677,10 @@ export function Settings({
 
     {activeTab === 'meldingen' && <div className="settings-tab-panel">
       <PushNotificationsCard api={push} />
+    </div>}
+
+    {activeTab === 'agenda' && hasCalendarSettings && <div className="settings-tab-panel settings-tab-panel-calendar">
+      {calendarSettings}
     </div>}
 
     {activeTab === 'huisstijl' && <div className="settings-tab-panel">

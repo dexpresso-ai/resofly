@@ -76,7 +76,6 @@ export const PAGE_MODULE: Record<string, ModuleKey> = {
   'project-planning': 'projects',
   archive: 'projects',
   calendar: 'calendar',
-  'calendar-settings': 'calendar',
   'meeting-booking': 'calendar',
   time: 'time',
   stats: 'stats',

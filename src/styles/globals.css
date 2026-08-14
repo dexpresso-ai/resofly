@@ -279,6 +279,9 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .calendar-hero,.calendar-section,.calendar-main-card,.calendar-create-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:16px}
 .calendar-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
 .calendar-hero h2{font-size:22px;font-weight:700;margin-bottom:6px}
+/* De agenda-instellingen hangen onder Instellingen; die pagina draagt de h2, dus
+   de kop van dit blok is een h3 — wel dezelfde koptoon als een pagina-hero. */
+.calendar-hero h3{font-size:19px;font-weight:700;letter-spacing:-.02em;margin-bottom:6px}
 .calendar-hero p,.calendar-section-head p,.calendar-create-head p,.calendar-help{color:var(--muted2);line-height:1.55;font-size:12px}
 .calendar-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .calendar-section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}

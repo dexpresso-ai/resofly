@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Archive, BarChart3, Images, BookOpen, Boxes, Calendar, CalendarClock, CalendarCog, CalendarRange, Clock, FileSignature, FileText, Files, FolderOpen, GanttChart, Landmark, LayoutDashboard, Library, Megaphone, MessageSquare, Percent, Plus, Receipt, Scale, Settings, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { Archive, BarChart3, Images, BookOpen, Boxes, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, Files, FolderOpen, GanttChart, Landmark, LayoutDashboard, Library, Megaphone, MessageSquare, Percent, Plus, Receipt, Scale, Settings, StickyNote, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData } from '../types';
 import { viewTitle } from '../lib/workspaceTabs';
 
@@ -12,10 +12,10 @@ type TabLike = { id: string; page: string; projectId: string | null; clientId: s
 // is helemaal alleen (zie globals.css ≤760px), op desktop staat het vóór het
 // tekstlabel.
 const PAGE_ICON: Record<string, typeof LayoutDashboard> = {
-  // Vier pagina's deelden hier hetzelfde Calendar-icoon. Op de telefoon toont
-  // een werktab alléén het icoon, dus die vier waren onderling niet te
+  // Drie pagina's deelden hier hetzelfde Calendar-icoon. Op de telefoon toont
+  // een werktab alléén het icoon, dus die waren onderling niet te
   // onderscheiden. Nu elk een eigen vorm.
-  dashboard: LayoutDashboard, weekplanner: CalendarRange, calendar: Calendar, 'calendar-settings': CalendarCog,
+  dashboard: LayoutDashboard, weekplanner: CalendarRange, calendar: Calendar,
   'meeting-booking': CalendarClock, time: Clock, stats: BarChart3, content: Library, notes: StickyNote,
   documents: Files, clients: Users, client: Users, projects: FolderOpen, project: FolderOpen,
   'project-planning': GanttChart, tickets: Ticket, chat: MessageSquare, marketing: Megaphone, quotes: FileText,

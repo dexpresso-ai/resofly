@@ -5,7 +5,7 @@ import type { AppData } from '../types';
  *  te importeren (voorkomt een circulaire import met main.tsx). */
 export const PAGE_TITLES: Record<string, string> = {
   dashboard: 'Dashboard', gerrie: 'Gerrie', weekplanner: 'Weekplanner', calendar: 'Agenda',
-  'calendar-settings': 'Agenda-instellingen', 'meeting-booking': 'Boekingslinks',
+  'meeting-booking': 'Boekingslinks',
   time: 'Uren', stats: 'Statistieken', content: 'Inhoud', notes: 'Notities',
   documents: 'Documenten', clients: 'Klanten', client: 'Klant', projects: 'Projecten',
   'project-planning': 'Projectplanning', tickets: 'Tickets', chat: 'Teamchat',

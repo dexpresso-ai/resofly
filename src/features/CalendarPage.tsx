@@ -3973,8 +3973,10 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
     return <div className="calendar-page calendar-settings-page">
       <section className="calendar-hero calendar-settings-hero" id="calendar-settings">
         <div>
-          <h2>Agenda-instellingen</h2>
-          <p>Maak eigen ResoFly-agenda's, of koppel Google Calendar en Microsoft Outlook. Agenda's blijven standaard privé en worden alleen gedeeld als je dat expliciet aanzet.</p>
+          {/* Deze pagina hangt onder Instellingen (tabblad Agenda); die pagina
+              draagt de h2 en de uitleg, dus hier een h3 zonder herhaling. */}
+          <h3>Agenda's en koppelingen</h3>
+          <p>Agenda's blijven standaard privé en worden alleen gedeeld als je dat expliciet aanzet.</p>
           {!canWrite && <p className="calendar-help">Je hebt alleen-lezen toegang.</p>}
         </div>
         <div className="calendar-actions">

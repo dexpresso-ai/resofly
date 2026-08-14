@@ -136,7 +136,7 @@ import type {
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 type EditMode =
   | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status'>> }
   | { kind: 'project'; item?: Project; defaults?: Partial<Pick<Project, 'name' | 'client_id' | 'description' | 'start_date' | 'end_date'>> }
@@ -191,7 +191,10 @@ function applyUpdater<T>(value: React.SetStateAction<T>, prev: T): T {
  *  naar niet langer bestaande projecten/klanten vallen terug op de lijstpagina. */
 function rebuildTabs(persisted: PersistedTab[], data: AppData): WorkspaceTab[] {
   return persisted.map(p => {
-    let page = (PAGE_TITLES[p.page] ? p.page : 'dashboard') as Page;
+    // De agenda-instellingen zijn verhuisd naar Instellingen → tabblad Agenda.
+    // Een tabblad dat nog op de oude pagina stond komt daar netjes uit.
+    const legacyCalendarSettings = p.page === 'calendar-settings';
+    let page = (legacyCalendarSettings ? 'settings' : PAGE_TITLES[p.page] ? p.page : 'dashboard') as Page;
     let projectId = p.projectId;
     let clientId = p.clientId;
     let galleryId = p.galleryId;
@@ -204,7 +207,7 @@ function rebuildTabs(persisted: PersistedTab[], data: AppData): WorkspaceTab[] {
       page = data.projects.some(x => x.id === projectId) ? 'project' : 'projects';
       if (page === 'projects') projectId = null;
     }
-    return { id: uid(), page, projectId, clientId, statsReportId: p.statsReportId, galleryId, settingsNav: null, pendingReport: null, edit: null };
+    return { id: uid(), page, projectId, clientId, statsReportId: p.statsReportId, galleryId, settingsNav: legacyCalendarSettings ? { tab: 'agenda', key: 0 } : null, pendingReport: null, edit: null };
   });
 }
 
@@ -2119,12 +2122,21 @@ function App() {
     if (page === 'annual-accounts') return <AnnualAccountsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
-    if (page === 'calendar-settings') return <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'meeting-booking') return <MeetingBookingManager organizationId={activeOrg.id} currentUserId={currentUserId ?? ''} data={data} canWrite={canWrite}/>;
     if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;
     if (page === 'stats') return <Statistics data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} openReportId={statsReportId} pendingReport={pendingReport}/>;
     if (page === 'archive') return <Archive data={data} onOpen={(id) => { setProjectId(id); setPage('project'); }} onRestore={async (project) => { if (!ensureCanWrite()) return; setError(null); try { await updateRow<Project>('projects', project.id, { archived: false }, activeOrg.id); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Herstellen mislukt'); } }}/>;
-    if (page === 'settings') return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
+    if (page === 'settings') {
+      // De agenda-instellingen zijn geen eigen pagina meer maar het tabblad
+      // "Agenda" binnen Instellingen. Het element wordt hier gemaakt maar pas
+      // gemount als dat tabblad openstaat; staat de agenda-module dicht voor dit
+      // teamlid, dan geven we niets mee en verdwijnt het tabblad. Schrijfrecht
+      // komt hier uit de agenda-module, niet uit de instellingenpagina.
+      const calendarSettings = permissions.canRead('calendar')
+        ? <CalendarPage mode="settings" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={orgCanWrite && permissions.canWrite('calendar')} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>
+        : null;
+      return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} calendarSettings={calendarSettings} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings}/>;
+    }
     return <div className="empty"><div className="e-big">Geen project geselecteerd</div></div>;
   }
 }

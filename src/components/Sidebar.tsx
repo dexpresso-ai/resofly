@@ -7,18 +7,18 @@ import { Select } from './Ui';
 import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
 import { useTheme } from '../lib/theme';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'calendar-settings'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 
 /**
  * Het menu in categorieën in plaats van dertien regels onder elkaar. Een groep
  * van twee of drie scan je in één oogopslag; de koppen zijn puur label — ze
- * klappen niets in en kosten dus geen extra klik. Projecten en Financiën houden
- * hun eigen uitklapbare submenu. Een groep waarvan élk item dichtstaat voor dit
- * teamlid verdwijnt helemaal, kop en al.
+ * klappen niets in en kosten dus geen extra klik. Agenda, Projecten en
+ * Financiën houden hun eigen uitklapbare submenu. Een groep waarvan élk item
+ * dichtstaat voor dit teamlid verdwijnt helemaal, kop en al.
  *
- * Weekplanner en Agenda deelden hetzelfde `Calendar`-icoon; in de smalle
- * iconenbalk zijn dat twee ononderscheidbare regels. Weekplanner krijgt daarom
- * `CalendarRange`, gelijk aan de werktabs (TabBar `PAGE_ICON`).
+ * Agenda is de kop boven alles wat op de kalender staat: de agendaweergave, de
+ * weekplanner en de boekingslinks. De agenda-instellingen zijn hier weg — die
+ * wonen bij de rest van de instellingen (accountmenu → Instellingen → Agenda).
  */
 const navGroups = [
   { id: 'overzicht', label: 'Overzicht', items: [
@@ -26,7 +26,6 @@ const navGroups = [
     ['gerrie', Sparkles, 'Gerrie'],
   ] },
   { id: 'plannen', label: 'Plannen', items: [
-    ['weekplanner', CalendarRange, 'Weekplanner'],
     ['calendar', Calendar, 'Agenda'],
     ['time', Clock, 'Uren'],
   ] },
@@ -48,8 +47,19 @@ const navGroups = [
   ] },
 ] as const;
 
+/**
+ * Mag deze menuregel er staan? Een kop met een submenu leeft zolang één van zijn
+ * kinderen open is: Financiën hangt aan de offertes, en onder Agenda valt ook de
+ * weekplanner — die hoort bij de module Projecten, niet bij Agenda.
+ */
+function canOpenNavItem(key: string, permissions: Permissions): boolean {
+  if (key === 'finance') return permissions.canOpenPage('quotes');
+  if (key === 'calendar') return permissions.canOpenPage('calendar') || permissions.canOpenPage('weekplanner');
+  return permissions.canOpenPage(key);
+}
+
 const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'pnl', 'vat-returns', 'corporate-tax', 'dga', 'shareholders', 'fiscal-years', 'annual-accounts'];
-const calendarPages: Page[] = ['calendar', 'calendar-settings', 'meeting-booking'];
+const calendarPages: Page[] = ['calendar', 'weekplanner', 'meeting-booking'];
 const projectPages: Page[] = ['projects', 'project', 'project-planning', 'archive'];
 const contentPages: Page[] = ['content', 'notes', 'documents'];
 
@@ -103,6 +113,7 @@ export function Sidebar({
 }) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
   const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
+  const [calendarOpen, setCalendarOpen] = useState(() => calendarPages.includes(page));
   // Account-menu onderin: opent alle instellingen + uitloggen boven de avatar.
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [theme, setTheme] = useTheme();
@@ -112,6 +123,7 @@ export function Sidebar({
   useEffect(() => {
     if (financePages.includes(page)) setFinanceOpen(true);
     if (projectPages.includes(page)) setProjectsOpen(true);
+    if (calendarPages.includes(page)) setCalendarOpen(true);
   }, [page]);
 
   // Sluit het account-menu bij een klik erbuiten of met Escape.
@@ -128,9 +140,15 @@ export function Sidebar({
     return () => { document.removeEventListener('mousedown', onPointer); document.removeEventListener('keydown', onKey); };
   }, [userMenuOpen]);
 
-  // AI-gebruik is alleen zichtbaar voor owners/admins — zelfde regel als op de instellingenpagina.
+  // AI-gebruik is alleen zichtbaar voor owners/admins, en de agenda-instellingen
+  // alleen als de agenda-module openstaat — zelfde regels als op de
+  // instellingenpagina zelf.
   const canAdmin = activeRole === 'owner' || activeRole === 'admin';
-  const settingsTabs = SETTINGS_TABS.filter(tab => tab.id !== 'ai' || canAdmin);
+  const settingsTabs = SETTINGS_TABS.filter(tab => {
+    if (tab.id === 'ai') return canAdmin;
+    if (tab.id === 'agenda') return permissions.canRead('calendar');
+    return true;
+  });
   const emailLocalPart = (userEmail ?? '').split('@')[0] ?? '';
   const accountName = emailLocalPart || 'Account';
   const accountInitials = (() => {
@@ -141,22 +159,19 @@ export function Sidebar({
     return letters.toUpperCase();
   })();
 
-  function openCalendarSubPage(target: 'agenda' | 'connections' | 'settings') {
-    if (target === 'agenda') {
-      onPage('calendar');
-      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#calendar-agenda`);
-      window.setTimeout(() => {
-        window.dispatchEvent(new CustomEvent('brandcore:calendar-anchor', { detail: { anchor: 'agenda' } }));
-      }, 80);
-      return;
-    }
-
-    onPage('calendar-settings');
-    const hash = target === 'connections' ? '#calendar-connections' : '#calendar-settings';
-    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${hash}`);
+  /** De agendaweergave zelf: navigeren én naar het rooster scrollen. */
+  function openCalendarView() {
+    setCalendarOpen(true);
+    onPage('calendar');
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#calendar-agenda`);
     window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('brandcore:calendar-anchor', { detail: { anchor: target } }));
+      window.dispatchEvent(new CustomEvent('brandcore:calendar-anchor', { detail: { anchor: 'agenda' } }));
     }, 80);
+  }
+
+  function openCalendarPage(target: 'weekplanner' | 'meeting-booking') {
+    setCalendarOpen(true);
+    onPage(target);
   }
 
   function openFinancePage(target: 'quotes' | 'contracts' | 'invoices' | 'suppliers' | 'purchase-invoices' | 'ledger' | 'bank' | 'assets' | 'pnl' | 'vat-returns' | 'corporate-tax' | 'dga' | 'shareholders' | 'fiscal-years' | 'annual-accounts') {
@@ -207,13 +222,12 @@ export function Sidebar({
     <nav className="sidebar-nav">
       <GlobalSearch data={data} onNavigate={onSearchNavigate} />
       {navGroups.map(group => {
-        const visibleItems = group.items.filter(([key]) => permissions.canOpenPage(key === 'finance' ? 'quotes' : key));
+        const visibleItems = group.items.filter(([key]) => canOpenNavItem(key, permissions));
         if (visibleItems.length === 0) return null;
 
         return <Fragment key={group.id}>
         <div className="nav-section nav-group"><span>{group.label}</span></div>
         {visibleItems.map(([key, Icon, label]) => {
-        const calendarHash = window.location.hash;
         const isProjectsActive = key === 'projects' && projectPages.includes(page);
         const isCalendarActive = key === 'calendar' && calendarPages.includes(page);
         const isFinanceActive = key === 'finance' && financePages.includes(page);
@@ -243,13 +257,23 @@ export function Sidebar({
                   <span className="ni-label">{label}</span>
                   <span className="nav-chevron" aria-hidden="true">{projectsOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}</span>
                 </button>
+            : key === 'calendar'
+              ? <button
+                  type="button"
+                  className={`nav-item nav-item-parent ${isActive ? 'active' : ''}`}
+                  aria-expanded={calendarOpen}
+                  onClick={() => setCalendarOpen(open => !open)}
+                >
+                  <Icon size={16}/>
+                  <span className="ni-label">{label}</span>
+                  <span className="nav-chevron" aria-hidden="true">{calendarOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}</span>
+                </button>
               : <button className={`nav-item ${isActive ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span>{key === 'clients' && clientEmailUnread > 0 && <span className="nav-badge" title={`${clientEmailUnread} ongelezen bericht${clientEmailUnread === 1 ? '' : 'en'}`}>{clientEmailUnread > 99 ? '99+' : clientEmailUnread}</span>}{key === 'tickets' && ticketUnread > 0 && <span className="nav-badge" title={`${ticketUnread} ticket${ticketUnread === 1 ? '' : 's'} met nieuwe klant-activiteit`}>{ticketUnread > 99 ? '99+' : ticketUnread}</span>}{key === 'chat' && chatUnread > 0 && <span className="nav-badge" title={`${chatUnread} ongelezen chatbericht${chatUnread === 1 ? '' : 'en'}`}>{chatUnread > 99 ? '99+' : chatUnread}</span>}</button>}
 
-          {key === 'calendar' && calendarPages.includes(page) && <div className="nav-submenu">
-            <button type="button" className={page === 'calendar' ? 'active' : ''} onClick={() => openCalendarSubPage('agenda')}>Agendaweergave</button>
-            <button type="button" className={page === 'calendar-settings' && calendarHash === '#calendar-connections' ? 'active' : ''} onClick={() => openCalendarSubPage('connections')}>Gekoppelde accounts</button>
-            <button type="button" className={page === 'calendar-settings' && calendarHash !== '#calendar-connections' ? 'active' : ''} onClick={() => openCalendarSubPage('settings')}>Agenda-instellingen</button>
-            <button type="button" className={page === 'meeting-booking' ? 'active' : ''} onClick={() => onPage('meeting-booking')}>Boekingslinks</button>
+          {key === 'calendar' && calendarOpen && <div className="nav-submenu nav-submenu-projects">
+            {permissions.canOpenPage('calendar') && <button type="button" className={page === 'calendar' ? 'active' : ''} onClick={openCalendarView}><Calendar size={13}/><span>Agendaweergave</span></button>}
+            {permissions.canOpenPage('weekplanner') && <button type="button" className={page === 'weekplanner' ? 'active' : ''} onClick={() => openCalendarPage('weekplanner')}><CalendarRange size={13}/><span>Weekplanner</span></button>}
+            {permissions.canOpenPage('meeting-booking') && <button type="button" className={page === 'meeting-booking' ? 'active' : ''} onClick={() => openCalendarPage('meeting-booking')}><CalendarClock size={13}/><span>Boekingslinks</span></button>}
           </div>}
 
           {key === 'projects' && projectsOpen && <div className="nav-submenu nav-submenu-projects">
