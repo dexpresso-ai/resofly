@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Maximize2, Minimize2 } from 'lucide-react';
 import type { AppData, CalendarExternalEvent, CalendarSource, MeetingBooking, MeetingBookingLinkListItem, MeetingBookingSlot, UUID } from '../types';
 import { Button, Input, Textarea, Select, normalizeColor } from '../components/Ui';
 import { listExternalCalendarEvents, loadCalendarIntegrations } from '../lib/calendar-api';
 import { addDays, startOfWeek } from '../lib/dates';
+import { currentFullscreenElement, enterFullscreen, leaveFullscreen, onFullscreenChange } from '../lib/fullscreen';
 import { TimeBlockGrid, slotSelectionToIso, type BookingOverlaySlot } from './CalendarPage';
 import {
   addBookingSlots,
@@ -336,6 +338,13 @@ function LinkDetail({ detail, organizationId, sources, clients, clientEmail, tok
   const activeBookingCount = bookings.filter(b => b.status === 'pending' || b.status === 'confirmed').length;
 
   // ── Visueel week-rooster (hergebruik TimeBlockGrid) ──────────────────────────
+  //
+  // Tekenen gebeurt schermvullend. In de kaart paste het rooster op 460px hoog:
+  // dat is een derde van een werkdag, dus je scrolde blind op zoek naar het uur
+  // waar het blok moest komen — precies de handeling waarbij je juist overzicht
+  // wilt. Nu opent het rooster over de hele pagina en klapt het na "Klaar"
+  // (of Escape) weer terug naar de gewone weergave.
+  const [drawing, setDrawing] = useState(false);
   const [weekAnchor, setWeekAnchor] = useState<Date>(() => startOfWeek(new Date()));
   const [weekEvents, setWeekEvents] = useState<CalendarExternalEvent[]>([]);
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekAnchor, i)), [weekAnchor]);
@@ -357,6 +366,50 @@ function LinkDetail({ detail, organizationId, sources, clients, clientEmail, tok
   }, [organizationId, link.source_id, weekDays]);
 
   const weekLabel = `${new Intl.DateTimeFormat('nl-NL', { day: 'numeric', month: 'short' }).format(weekDays[0])} – ${new Intl.DateTimeFormat('nl-NL', { day: 'numeric', month: 'short' }).format(weekDays[6])}`;
+
+  // De CSS-stand is leidend, niet de Fullscreen API: op de iPhone bestaat
+  // element-fullscreen niet, en dan hoort het rooster nog steeds paginavullend
+  // te openen — alleen met de browserbalk er nog omheen.
+  const openDrawing = useCallback(() => {
+    void enterFullscreen(document.documentElement);
+    setDrawing(true);
+  }, []);
+  const closeDrawing = useCallback(() => {
+    void leaveFullscreen();
+    setDrawing(false);
+  }, []);
+
+  // Escape sluit het rooster. Bewust in de capture-fase: de agenda-component
+  // die dit rooster levert luistert zelf op window en zou de toets anders eerst
+  // opeten.
+  useEffect(() => {
+    if (!drawing) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeDrawing();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [drawing, closeDrawing]);
+
+  // De browser kan volledig scherm buiten ons om verlaten (F11, de eigen knop
+  // van de browser). Zonder deze synchronisatie blijft het rooster paginavullend
+  // staan terwijl het scherm er niet meer naar is. En bij unmount (ander
+  // tabblad, link verwijderd) mag de browser niet schermvullend blijven hangen.
+  useEffect(() => {
+    if (!drawing) return;
+    const off = onFullscreenChange(() => {
+      if (!currentFullscreenElement()) setDrawing(false);
+    });
+    return () => {
+      off();
+      void leaveFullscreen();
+    };
+  }, [drawing]);
 
   const expired = link.public_token_expires_at ? new Date(link.public_token_expires_at).getTime() < Date.now() : true;
 
@@ -453,20 +506,49 @@ function LinkDetail({ detail, organizationId, sources, clients, clientEmail, tok
         )}
       </div>
 
-      {/* Visueel week-rooster: sleep om blokken te maken */}
+      {/* Visueel week-rooster: sleep om blokken te maken — schermvullend */}
       {canWrite && link.source_id && (
-        <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <div className="card mbk-drawcard">
+          <div className="mbk-drawcard-text">
             <strong>Blokken tekenen</strong>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <Button onClick={() => setWeekAnchor(addDays(weekAnchor, -7))} disabled={busy}>← Vorige</Button>
-              <span className="muted" style={{ fontSize: 13 }}>{weekLabel}</span>
-              <Button onClick={() => setWeekAnchor(addDays(weekAnchor, 7))} disabled={busy}>Volgende →</Button>
-            </div>
+            <p className="muted">
+              Het weekrooster opent schermvullend. Sleep de momenten waarop deze klant mag boeken;
+              je eigen afspraken staan als context in beeld. Met <em>Klaar</em> (of Escape) kom je hier terug.
+            </p>
           </div>
-          <p className="muted" style={{ margin: 0, fontSize: 13 }}>Sleep over het rooster om een blok toe te voegen · klik een groen blok om het te verwijderen (🔒 = al geboekt). Je eigen afspraken staan als context in beeld.</p>
-          {/* .calendar-agenda-page-scope zodat de gedeelde .tb-scroll-hoogte netjes binnen dit vak scrollt. */}
-          <div className="calendar-agenda-page mbk-weekgrid">
+          <div className="mbk-drawcard-side">
+            <span className="mbk-drawcard-count"><strong>{openCount}</strong> open blok{openCount === 1 ? '' : 'ken'}</span>
+            <Button variant="primary" onClick={openDrawing} disabled={busy}>
+              <Maximize2 size={15} /> Rooster openen
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {canWrite && link.source_id && drawing && (
+        <div className="mbk-draw" role="dialog" aria-modal="true" aria-label="Blokken tekenen">
+          <header className="mbk-draw-bar">
+            <div className="mbk-draw-title">
+              <strong>Blokken tekenen</strong>
+              <span className="muted">{link.title}</span>
+            </div>
+            <div className="mbk-draw-week">
+              <Button onClick={() => setWeekAnchor(addDays(weekAnchor, -7))} disabled={busy}>← Vorige</Button>
+              <span className="mbk-draw-weeklabel">{weekLabel}</span>
+              <Button onClick={() => setWeekAnchor(addDays(weekAnchor, 7))} disabled={busy}>Volgende →</Button>
+              <Button onClick={() => setWeekAnchor(startOfWeek(new Date()))} disabled={busy}>Deze week</Button>
+            </div>
+            <div className="mbk-draw-done">
+              <span className="mbk-draw-count"><strong>{openCount}</strong> open</span>
+              <Button variant="primary" onClick={closeDrawing}><Minimize2 size={15} /> Klaar</Button>
+            </div>
+          </header>
+          <p className="mbk-draw-hint">
+            Sleep over het rooster om een blok toe te voegen · klik een groen blok om het te verwijderen (🔒 = al geboekt).
+          </p>
+          {/* .calendar-agenda-page-scope zodat de gedeelde .tb-scroll-hoogte de vaste
+              agenda-opmaak meekrijgt; de overlay zelf zet hem daarna op vullend. */}
+          <div className="calendar-agenda-page mbk-draw-grid">
             <TimeBlockGrid
               days={weekDays}
               events={weekEvents}
@@ -498,7 +580,7 @@ function LinkDetail({ detail, organizationId, sources, clients, clientEmail, tok
             <Button variant="primary" onClick={addSlot} disabled={busy || !start || !end}>Blok toevoegen</Button>
           </div>
         )}
-        {slots.length === 0 && <p className="muted">Nog geen blokken. Teken hierboven op het rooster of voeg handmatig tijden toe waaruit de klant kan kiezen.</p>}
+        {slots.length === 0 && <p className="muted">Nog geen blokken. Open hierboven het rooster en teken ze, of voeg handmatig tijden toe waaruit de klant kan kiezen.</p>}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {slots.map(s => (
             <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,.06)' }}>

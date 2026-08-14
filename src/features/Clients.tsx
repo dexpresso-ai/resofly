@@ -7,8 +7,8 @@ import { Button, Input, Select } from '../components/Ui';
 import { CsvImportModal } from '../components/CsvImportModal';
 import type { ImportColumn } from '../lib/csvImport';
 import { RichTextEditor } from '../components/RichTextEditor';
-import { createClientWithServerCode, loadClientEmails, loadClientEmailThreads, loadClientEmailReadIds, markClientEmailsRead } from '../lib/repository';
-import { sendClientEmail } from '../services/mailService';
+import { createClientWithServerCode, loadClientEmails, loadClientEmailThreads, loadClientEmailReadIds, loadMySenderIdentity, loadSendingDomains, markClientEmailsRead } from '../lib/repository';
+import { resolveEffectiveSender, sendClientEmail, type EffectiveSender } from '../services/mailService';
 import { supabase } from '../lib/supabase';
 import { ClientFolders } from './ClientFolders';
 import { ClientContacts } from './ClientContacts';
@@ -658,6 +658,8 @@ function ClientCommunication({ client, organizationId, canWrite, onUnreadChanged
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendMessage, setSendMessage] = useState<string | null>(null);
+  /** Wie er straks als afzender komt te staan; null zolang we het nog niet weten. */
+  const [sender, setSender] = useState<EffectiveSender | null>(null);
 
   const recipient = (client.email ?? '').trim();
   const hasRecipient = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient);
@@ -677,6 +679,17 @@ function ClientCommunication({ client, organizationId, canWrite, onUnreadChanged
       .catch(err => { if (!cancelled) { setLoadError(err instanceof Error ? err.message : 'Communicatie laden mislukt.'); setLoaded(true); } });
     return () => { cancelled = true; };
   }, [organizationId, client.id]);
+
+  // Het afzenderadres hangt aan de organisatie, niet aan de klant — één keer
+  // ophalen per organisatie volstaat. Mislukt het, dan tonen we simpelweg niets:
+  // het is toelichting bij het formulier, geen voorwaarde om te kunnen mailen.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([loadSendingDomains(organizationId), loadMySenderIdentity(organizationId)])
+      .then(([domains, identity]) => { if (!cancelled) setSender(resolveEffectiveSender(domains, identity)); })
+      .catch(() => { if (!cancelled) setSender(null); });
+    return () => { cancelled = true; };
+  }, [organizationId]);
 
   async function reload() {
     const [loadedThreads, loadedEmails, loadedReadIds] = await Promise.all([
@@ -746,6 +759,15 @@ function ClientCommunication({ client, organizationId, canWrite, onUnreadChanged
         ? <div className="client-empty-line">Deze klant heeft geen e-mailadres. Vul er een in bij de klantgegevens om te kunnen mailen.</div>
         : <>
           <p className="client-comm-to">Aan: <strong>{recipient}</strong></p>
+          {sender && (sender.fallback
+            ? <p className="client-comm-from is-fallback">
+                Afzender: het algemene ResoFly-adres. Wil je dat de klant <em>jouw</em> naam en adres ziet?
+                Voeg je eigen domein toe onder <strong>Instellingen → E-mail &amp; domeinen</strong> en zet de
+                DNS-records klaar; daarna vertrekt deze mail vanaf je eigen adres.
+              </p>
+            : <p className="client-comm-from">
+                Van: <strong>{sender.name ? `${sender.name} <${sender.email}>` : sender.email}</strong>
+              </p>)}
           <label className="client-comm-field">Onderwerp
             <Input value={subject} onChange={e => { setSubject(e.target.value); setSendError(null); setSendMessage(null); }} placeholder="Onderwerp van je e-mail" disabled={!canWrite || sending} />
           </label>

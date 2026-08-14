@@ -2799,7 +2799,11 @@ button.chat-member:hover{background:var(--bg3)}
 
 /* ── Klant-communicatie (e-mail) ─────────────────────────────────────── */
 .client-comm{display:flex;flex-direction:column;gap:16px}
-.client-comm-compose .client-comm-to{margin:0 0 12px;font-size:13px;color:var(--muted2)}
+.client-comm-compose .client-comm-to{margin:0 0 6px;font-size:13px;color:var(--muted2)}
+/* Wie de klant straks als afzender ziet. Stond nergens, terwijl het antwoord
+   ("ResoFly" of je eigen bedrijf) per organisatie verschilt. */
+.client-comm-compose .client-comm-from{margin:0 0 12px;font-size:12.5px;line-height:1.55;color:var(--muted2)}
+.client-comm-compose .client-comm-from.is-fallback{padding:9px 11px;border:1px solid var(--border);border-radius:12px;background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)));color:var(--muted)}
 .client-comm-field{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:var(--muted2);margin-bottom:12px}
 .client-comm-actions{display:flex;justify-content:flex-end;gap:8px}
 .client-comm-threads{display:flex;flex-direction:column;gap:14px;margin-top:6px}
@@ -3522,18 +3526,29 @@ button.chat-member:hover{background:var(--bg3)}
 .project-team-add-icon{color:var(--muted);flex-shrink:0}
 .project-team-allset{font-size:11px;color:var(--muted);margin-top:2px}
 
-/* === Actieve tabbladen — browser-achtige tabbalk boven de werkruimte ===== */
-.tabbar{flex:0 0 auto;display:flex;align-items:center;gap:4px;height:42px;padding:0 10px;border-bottom:1px solid var(--border);background:rgba(var(--bg-deep-rgb),.72);backdrop-filter:blur(18px);overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
-.tabbar::-webkit-scrollbar{height:0;width:0}
-.tab{display:inline-flex;align-items:center;gap:8px;flex:0 1 auto;min-width:118px;max-width:220px;height:30px;padding:0 6px 0 13px;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--muted2);font-size:13px;line-height:1;cursor:pointer;user-select:none;white-space:nowrap;transition:background .13s,color .13s,border-color .13s}
+/* === Actieve tabbladen — browser-achtige tabbalk boven de werkruimte =====
+   De hoogte staat in een variabele omdat de content-overlays er precies onder
+   moeten beginnen (zie `top:var(--tabbar-h)` verderop). Op de telefoon wordt
+   de balk hoger; zonder variabele liep die offset uit de pas. */
+.app{--tabbar-h:42px}
+.tabbar{flex:0 0 auto;display:flex;align-items:center;gap:6px;height:var(--tabbar-h);padding:0 10px;border-bottom:1px solid var(--border);background:rgba(var(--bg-deep-rgb),.72);backdrop-filter:blur(18px)}
+/* Alleen de strook met tabbladen schuift; "+" blijft staan waar hij staat. */
+.tabbar-strip{display:flex;align-items:center;gap:4px;flex:1 1 auto;min-width:0;height:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;scroll-padding-inline:14px}
+.tabbar-strip::-webkit-scrollbar{height:0;width:0}
+.tab{position:relative;display:inline-flex;align-items:center;gap:8px;flex:0 1 auto;min-width:118px;max-width:220px;height:30px;padding:0 6px 0 13px;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--muted2);font-size:13px;line-height:1;cursor:pointer;user-select:none;white-space:nowrap;transition:background .15s ease,color .15s ease,border-color .15s ease,box-shadow .15s ease}
 .tab:hover{background:var(--bg3);color:var(--text)}
 .tab.active{background:var(--bg2);border-color:var(--border);color:var(--text);box-shadow:0 6px 18px rgba(var(--shade-rgb),calc(.22 * var(--shade-k)))}
+/* Haarlijntje in merkgoud bovenlangs het actieve tabblad: genoeg om hem aan te
+   wijzen zonder er een tweede kleurvlak bij te zetten. */
+.tab.active::after{content:'';position:absolute;left:13px;right:13px;top:-1px;height:2px;border-radius:0 0 2px 2px;background:var(--accent);opacity:.85}
+.tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .tab-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .tab-close{display:flex;align-items:center;justify-content:center;width:19px;height:19px;flex-shrink:0;border:none;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;opacity:.55;transition:opacity .12s,background .12s,color .12s}
 .tab:hover .tab-close{opacity:.85}
 .tab-close:hover{opacity:1;background:rgba(var(--sheen-rgb),calc(.09 * var(--sheen-k)));color:var(--text)}
-.tab-new{display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;margin-left:2px;border:1px solid var(--border);border-radius:9px;background:var(--bg3);color:var(--muted2);cursor:pointer;transition:background .12s,color .12s,border-color .12s}
+.tab-new{display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border:1px solid var(--border);border-radius:10px;background:var(--bg3);color:var(--muted2);cursor:pointer;transition:background .12s,color .12s,border-color .12s}
 .tab-new:hover{background:var(--bg2);color:var(--text);border-color:var(--muted)}
+.tab-new:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 /* Elk tabblad is een eigen .content-scrollcontainer; alleen het actieve is zichtbaar. */
 .content[hidden]{display:none}
 /* Houd de tabbalk zichtbaar/klikbaar wanneer er een popup openstaat: elke
@@ -3541,8 +3556,16 @@ button.chat-member:hover{background:var(--bg3)}
    z-index nodig, dus de mobiele navigatie-drawer (z-index 90) blijft de tabbalk
    gewoon afdekken wanneer die opengeschoven is. De .send-overlay (verzendblokker)
    valt hier bewust buiten en blijft alles afdekken. */
-.app .modal-bg,.app .tb-overlay,.app .chat-modal-bg,.app .bk-modal-backdrop,.app .event-detail-overlay,.app .gs-backdrop{top:42px}
-@media(max-width:760px){.tabbar{padding-left:66px}}
+.app .modal-bg,.app .tb-overlay,.app .chat-modal-bg,.app .bk-modal-backdrop,.app .event-detail-overlay,.app .gs-backdrop{top:var(--tabbar-h,42px)}
+/* De zwevende hamburger ligt over de linkerbovenhoek van de werkruimte. Staat
+   er een titelbalk boven de tabbalk, dan valt hij dáárin en heeft de tabbalk
+   die ruimte niet nodig — dat scheelde 58 van de 360 pixels schermbreedte, op
+   precies de pagina's (agenda, Gerrie) waar de balk toch al het krapst zat.
+   Zonder `:has()` blijft het oude gedrag staan: ruimte vrijhouden. */
+@media(max-width:760px){
+  .tabbar{padding-left:58px}
+  .main:has(>.topbar) .tabbar{padding-left:10px}
+}
 
 /* ── Mobiele dagweergave: één kolom over de volle breedte ────────────────
    In dagweergave (tb-single-day) is er ruimte zat, dus ruimere, beter leesbare
@@ -3594,14 +3617,37 @@ button.chat-member:hover{background:var(--bg3)}
   /* Hamburger: kleiner en netjes in de titelbalk (was groot en los bovenaan). */
   .mobile-nav-toggle{ top:8px; left:12px; width:38px; height:38px; border-radius:11px; }
 
-  /* ---------- Icoon-werktabs ---------- */
-  .tabbar{ order:1; padding-left:58px; gap:2px; height:40px; }
-  .tab{ padding:6px 9px; }
+  /* ---------- Werktabs als pillen ----------
+     Vroeger was élk tabblad een kaal icoontje van 15px in een rechthoekje:
+     zeven grijze vlekjes op een rij waarvan er één nét iets lichter was. Je
+     zag niet waar je stond en je raakte ze met je duim amper.
+
+     Nu draagt het actieve tabblad zijn naam — dat is het enige tabblad
+     waarvan je die hoeft te lezen — en zijn de andere ronde icoonpillen met
+     een fatsoenlijk raakvlak. */
+  .app{ --tabbar-h:48px; }
+  .tabbar{ order:1; gap:6px; }
+  .tabbar-strip{ gap:6px; }
+  .tab{
+    min-width:0; max-width:none; gap:0; height:36px; padding:0 11px;
+    border-radius:999px; border-color:var(--border);
+    background:rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)));
+  }
   .tab-ico{ display:inline-flex; margin-right:0; }
   .tab-label{ display:none; }
-  .tab-close{ margin-left:5px; }
+  .tab.active{
+    padding:0 5px 0 12px;
+    border-color:rgba(var(--accent-rgb),.42);
+    background:linear-gradient(135deg,rgba(var(--accent-rgb),.16),rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)))),var(--bg2);
+    box-shadow:0 4px 14px rgba(var(--shade-rgb),calc(.28 * var(--shade-k)));
+  }
+  /* Het haarlijntje is een bureaubladdetail; op een pil zou het los liggen. */
+  .tab.active::after{ display:none; }
+  .tab.active .tab-label{ display:block; flex:0 1 auto; max-width:9.5rem; margin-left:8px; font-weight:600; }
   /* Sluiten alleen op het actieve tabblad; de rest is puur een icoon. */
+  .tab-close{ margin-left:6px; width:26px; height:26px; border-radius:999px; opacity:.9; }
   .tab:not(.active) .tab-close{ display:none; }
+  .tab-new{ width:36px; height:36px; border-radius:999px; }
 
   .content{ order:2; }
 
@@ -5077,6 +5123,70 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .galv-lightbox-close:hover{background:rgba(255,255,255,.2)}
 .galv-lightbox-nav{position:absolute;top:50%;transform:translateY(-50%);z-index:2;display:flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:#fff;cursor:pointer}
 .galv-lightbox-nav:hover{background:rgba(255,255,255,.18)}
+
+/* ── Diavoorstelling ──────────────────────────────────────────────────────
+   De open foto speelt zichzelf af. Alles hier is optioneel gedrag dat de
+   kijker zelf aanzet; zonder diavoorstelling ziet de lightbox eruit als
+   voorheen. */
+
+/* Voortgang van het huidige beeld. scaleX i.p.v. width: dat is één laag op de
+   compositor in plaats van een layout-berekening per frame. */
+.galv-ss-progress{position:absolute;top:0;left:0;right:0;height:3px;z-index:5;background:var(--accent);transform:scaleX(0);transform-origin:left center;animation:galv-ss-run linear forwards;box-shadow:0 0 14px rgba(var(--accent-rgb),.5)}
+@keyframes galv-ss-run{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+
+/* Kader om de foto: knipt de zoom-overgang af. */
+.galv-ss-frame{position:relative;display:flex;align-items:center;justify-content:center;min-height:0;overflow:hidden;border-radius:10px}
+.galv-tr-fade{animation:galv-ss-fade .5s ease both}
+.galv-tr-slide{animation:galv-ss-slide .45s cubic-bezier(.22,.61,.36,1) both}
+.galv-tr-zoom{animation:galv-ss-zoom linear both}
+@keyframes galv-ss-fade{from{opacity:0}to{opacity:1}}
+@keyframes galv-ss-slide{from{opacity:0;transform:translateX(4.5%)}to{opacity:1;transform:none}}
+@keyframes galv-ss-zoom{from{transform:scale(1.001)}to{transform:scale(1.085)}}
+
+/* Beeldvullend: de foto neemt het hele scherm, het bijschrift legt zich er
+   overheen in plaats van eronder. */
+.galv-lightbox.is-fill{padding:0}
+.galv-lightbox.is-fill .galv-lightbox-stage{width:100vw;height:100dvh;max-width:none;max-height:none}
+.galv-lightbox.is-fill .galv-ss-frame{flex:1 1 auto;border-radius:0}
+.galv-lightbox.is-fill .galv-lightbox-stage img{width:100%;height:100%;max-width:none;max-height:none;object-fit:cover;border-radius:0}
+.galv-lightbox.is-fill .galv-lightbox-bar{position:absolute;left:0;right:0;bottom:0;padding:26px 20px 14px;background:linear-gradient(to top,rgba(0,0,0,.78),transparent)}
+
+/* Bijschrift uit: de knoppen blijven, alleen naam en teller gaan weg. */
+.galv-lightbox.is-uncaptioned .galv-lightbox-name,
+.galv-lightbox.is-uncaptioned .galv-lightbox-count{display:none}
+
+/* Niets aangeraakt tijdens het spelen: de bediening trekt zich terug. Elke
+   beweging haalt haar meteen terug (zie de idle-timer in GalleryViewer). */
+.galv-lightbox-close,.galv-lightbox-nav,.galv-lightbox-bar{transition:opacity .22s ease}
+.galv-lightbox.is-idle .galv-lightbox-close,
+.galv-lightbox.is-idle .galv-lightbox-nav,
+.galv-lightbox.is-idle .galv-lightbox-bar{opacity:0;pointer-events:none;transition:opacity .6s ease}
+.galv-lightbox.is-idle{cursor:none}
+
+/* Afspelen/pauzeren en het tandwiel in de balk onder de foto. */
+.galv-ss-btn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;padding:0;border:0;border-radius:9px;background:rgba(255,255,255,.09);color:#fff;cursor:pointer;transition:background .15s ease,color .15s ease}
+.galv-ss-btn:hover{background:rgba(255,255,255,.2)}
+.galv-ss-btn.is-on{background:var(--accent);color:#151515}
+.galv-ss-btn:focus-visible{outline:2px solid #fff;outline-offset:2px}
+.galv-ss-menu{position:relative;display:inline-flex}
+.galv-ss-panel{position:absolute;bottom:calc(100% + 10px);right:0;z-index:7;width:min(330px,calc(100vw - 32px));display:flex;flex-direction:column;gap:13px;padding:14px;border-radius:15px;border:1px solid var(--gal-border,var(--border));background:var(--gal-bg,var(--panel-strong,#121212));color:var(--gal-text,var(--text));box-shadow:0 22px 58px rgba(0,0,0,.55);text-align:left}
+.galv-ss-row{display:flex;flex-direction:column;gap:7px}
+.galv-ss-label{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--gal-muted,var(--muted))}
+.galv-ss-seg{display:flex;flex-wrap:wrap;gap:6px}
+.galv-ss-chip{padding:7px 12px;border-radius:999px;border:1px solid var(--gal-border,var(--border));background:var(--gal-surface,var(--bg3));color:inherit;font-family:inherit;font-size:12px;font-weight:600;line-height:1;cursor:pointer;transition:background .14s ease,border-color .14s ease,color .14s ease}
+.galv-ss-chip:hover{border-color:var(--muted)}
+.galv-ss-chip.is-on{background:var(--accent);border-color:var(--accent);color:#151515}
+.galv-ss-toggles{display:flex;flex-wrap:wrap;gap:6px}
+.galv-ss-toggle{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:11px;border:1px solid var(--gal-border,var(--border));background:var(--gal-surface,var(--bg3));color:var(--gal-muted,var(--muted2));font-family:inherit;font-size:12px;font-weight:600;line-height:1;cursor:pointer;transition:background .14s ease,border-color .14s ease,color .14s ease}
+.galv-ss-toggle:hover{border-color:var(--muted)}
+.galv-ss-toggle.is-on{background:rgba(var(--accent-rgb),.16);border-color:rgba(var(--accent-rgb),.5);color:var(--accent-ink)}
+.galv-ss-chip:focus-visible,.galv-ss-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* Op de telefoon vult het paneel de onderkant van het scherm; een popover van
+   330px naast een knop van 30px valt daar half buiten beeld. */
+@media(max-width:560px){
+  .galv-ss-panel{position:fixed;left:10px;right:10px;bottom:10px;width:auto}
+}
 .galv-prev{left:14px}
 .galv-next{right:14px}
 .galv-player-stage{width:min(1200px,94vw);display:flex;flex-direction:column}
@@ -6116,10 +6226,44 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .mbk-share-row{display:flex;gap:8px;align-items:center}
 .mbk-share-row .form-input{flex:1;min-width:0}
 .mbk-slotform{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
-/* Het weekrooster stond op een vaste 460px. Op een telefoon is dat meer dan
-   de halve zichtbare hoogte voor een rooster dat je met de vinger moet
-   raken; dvh laat het meebewegen met wat er echt te zien is. */
-.mbk-weekgrid{height:460px;display:flex;flex-direction:column;overflow:hidden}
+
+/* ── Blokken tekenen: uitnodiging in de kaart, rooster schermvullend ────────
+   Het rooster stond ingeklemd in een vak van 460px — een derde werkdag, dus
+   je scrolde blind naar het uur waar het blok moest komen. De kaart nodigt nu
+   alleen nog uit; het tekenen zelf gebeurt over de volle pagina. */
+.mbk-drawcard{padding:16px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.mbk-drawcard-text{min-width:min(100%,260px);flex:1 1 320px}
+.mbk-drawcard-text p{margin:4px 0 0;font-size:13px;line-height:1.5;max-width:62ch}
+.mbk-drawcard-side{display:flex;align-items:center;gap:12px;flex-shrink:0}
+.mbk-drawcard-count{font-size:13px;color:var(--muted2);white-space:nowrap}
+.mbk-drawcard-count strong{color:var(--accent-ink);font-size:15px}
+
+/* De schermvullende tekenlaag. z-index boven de tabbalk en de mobiele drawer:
+   dit ís het scherm zolang je blokken zet. */
+.mbk-draw{
+  position:fixed;inset:0;z-index:240;
+  display:flex;flex-direction:column;gap:8px;
+  padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+  background:var(--bg-deep,var(--bg));
+  -webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);
+}
+.mbk-draw-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;flex:0 0 auto}
+.mbk-draw-title{display:flex;align-items:baseline;gap:10px;min-width:0}
+.mbk-draw-title strong{font-size:16px}
+.mbk-draw-title .muted{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mbk-draw-week{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.mbk-draw-weeklabel{font-size:13px;color:var(--muted2);white-space:nowrap;font-variant-numeric:tabular-nums}
+.mbk-draw-done{display:flex;align-items:center;gap:10px;margin-left:auto}
+.mbk-draw-count{font-size:13px;color:var(--muted2);white-space:nowrap}
+.mbk-draw-count strong{color:var(--accent-ink)}
+.mbk-draw-hint{margin:0;font-size:12.5px;color:var(--muted);flex:0 0 auto}
+/* Het rooster krijgt alle overgebleven hoogte; de agenda-opmaak rekent zelf met
+   100vh-formules die hier niet kloppen, dus die zetten we uit. */
+.mbk-draw-grid{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.mbk-draw-grid .tb-scroll{flex:1 1 auto;height:auto;min-height:0;max-height:none}
+/* De agenda schuift haar eigen overlays 42px omlaag voor de tabbalk; die staat
+   hier niet in beeld. */
+.mbk-draw .tb-overlay{top:0}
 
 @media(max-width:1024px){
   /* Eén kolom: de lijst met links bovenaan, het geopende item eronder. */

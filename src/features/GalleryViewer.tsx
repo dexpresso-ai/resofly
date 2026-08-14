@@ -4,7 +4,7 @@
 // De component is puur presentationeel: media-URL's komen uit het meegegeven
 // tokenbundel, favorieten en downloads lopen via callbacks van de host.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, Film, Heart, Maximize2, Menu, Minimize2, Play, ThumbsUp, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Film, Heart, Maximize2, Menu, Minimize2, Pause, Play, Repeat, Shuffle, SlidersHorizontal, ThumbsUp, X } from 'lucide-react';
 import {
   galleryFileUrl,
   streamIframeUrl,
@@ -129,6 +129,83 @@ type GallerySection = {
   photos: GalleryViewerItem[];
 };
 
+// ── Diavoorstelling: instellingen ───────────────────────────────────────────
+//
+// De kijker bladerde alleen handmatig. Een galerij op een tv of tijdens een
+// nabespreking wil je juist lóspelen: beeld na beeld, zonder pijltje. Deze
+// voorkeuren zijn van de kijker (niet van de galerij) en blijven daarom in zijn
+// eigen browser staan — de fotograaf bepaalt de inhoud, de kijker de vertoning.
+
+export type SlideshowTransition = 'none' | 'fade' | 'slide' | 'zoom';
+export type SlideshowFit = 'contain' | 'cover';
+
+export type SlideshowSettings = {
+  /** Seconden per beeld. */
+  interval: number;
+  /** Aan het eind opnieuw beginnen; uit = stoppen op de laatste foto. */
+  loop: boolean;
+  /** Willekeurige volgorde (elke foto één keer per ronde). */
+  shuffle: boolean;
+  transition: SlideshowTransition;
+  /** 'contain' = hele foto in beeld, 'cover' = beeldvullend bijgesneden. */
+  fit: SlideshowFit;
+  /** Bestandsnaam en teller onder de foto tonen. */
+  showCaption: boolean;
+};
+
+export const SLIDESHOW_INTERVALS = [2, 3, 5, 8, 12, 20] as const;
+
+const SLIDESHOW_DEFAULTS: SlideshowSettings = {
+  interval: 5,
+  loop: true,
+  shuffle: false,
+  transition: 'fade',
+  fit: 'contain',
+  showCaption: true,
+};
+
+const SLIDESHOW_STORAGE_KEY = 'resofly.gallery.slideshow';
+
+/** Leest de bewaarde voorkeuren; elke onbekende of kapotte waarde valt terug op de standaard. */
+export function loadSlideshowSettings(): SlideshowSettings {
+  try {
+    const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(SLIDESHOW_STORAGE_KEY);
+    if (!raw) return SLIDESHOW_DEFAULTS;
+    const parsed = JSON.parse(raw) as Partial<SlideshowSettings>;
+    const interval = Number(parsed.interval);
+    return {
+      interval: SLIDESHOW_INTERVALS.includes(interval as typeof SLIDESHOW_INTERVALS[number]) ? interval : SLIDESHOW_DEFAULTS.interval,
+      loop: typeof parsed.loop === 'boolean' ? parsed.loop : SLIDESHOW_DEFAULTS.loop,
+      shuffle: typeof parsed.shuffle === 'boolean' ? parsed.shuffle : SLIDESHOW_DEFAULTS.shuffle,
+      transition: (['none', 'fade', 'slide', 'zoom'] as string[]).includes(String(parsed.transition))
+        ? parsed.transition as SlideshowTransition
+        : SLIDESHOW_DEFAULTS.transition,
+      fit: parsed.fit === 'cover' ? 'cover' : 'contain',
+      showCaption: typeof parsed.showCaption === 'boolean' ? parsed.showCaption : SLIDESHOW_DEFAULTS.showCaption,
+    };
+  } catch {
+    return SLIDESHOW_DEFAULTS;
+  }
+}
+
+function saveSlideshowSettings(settings: SlideshowSettings): void {
+  try {
+    localStorage.setItem(SLIDESHOW_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    /* private mode / storage geweigerd — dan simpelweg niet onthouden */
+  }
+}
+
+/** Een willekeurige volgorde van 0…n-1 (Fisher-Yates). */
+function shuffledIndexes(count: number): number[] {
+  const order = Array.from({ length: count }, (_, i) => i);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return order;
+}
+
 /**
  * Het element dat de galerij daadwerkelijk scrolt. Dat verschilt per plek waar
  * de kijker staat: `.content` in de app, `.portal-content` in het klantportaal,
@@ -217,6 +294,13 @@ export function GalleryViewer({
    * `hover:none` vangt tv's niet en een breedtegrens vangt elke brede monitor.
    */
   const [bigScreen, setBigScreen] = useState(false);
+  /** Diavoorstelling: speelt hij, met welke voorkeuren, en staat het paneel open. */
+  const [slideshow, setSlideshow] = useState(false);
+  const [slideSettings, setSlideSettings] = useState<SlideshowSettings>(loadSlideshowSettings);
+  const [slideOptions, setSlideOptions] = useState(false);
+  const [shuffleOrder, setShuffleOrder] = useState<number[]>([]);
+  /** Muis/vinger al even stil: dan verdwijnt de bediening tijdens het spelen. */
+  const [idle, setIdle] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef(new Map<string, HTMLElement>());
   const dragItemId = useRef<string | null>(null);
@@ -291,14 +375,117 @@ export function GalleryViewer({
 
   const chipSections = sections.filter(s => s.title);
 
-  const closeOverlays = useCallback(() => { setLightbox(null); setPlaying(null); }, []);
+  const closeOverlays = useCallback(() => { setLightbox(null); setPlaying(null); setSlideshow(false); }, []);
+
+  const patchSlideSettings = useCallback((patch: Partial<SlideshowSettings>) => {
+    setSlideSettings(prev => ({ ...prev, ...patch }));
+  }, []);
+
+  // Bewaren als los effect en niet in de updater hierboven: die mag React
+  // meerdere keren aanroepen, en dan schrijft hij ook meerdere keren weg.
+  useEffect(() => { saveSlideshowSettings(slideSettings); }, [slideSettings]);
+
+  // De willekeurige volgorde wordt één keer per ronde getrokken, niet per stap:
+  // anders zie je dezelfde foto drie keer voordat een andere aan de beurt is.
+  useEffect(() => {
+    if (!slideSettings.shuffle) { setShuffleOrder([]); return; }
+    setShuffleOrder(shuffledIndexes(orderedPhotos.length));
+  }, [slideSettings.shuffle, orderedPhotos.length]);
+
+  /**
+   * De volgende foto vanaf `from`. `wrap` = doorlopen voorbij het einde; zonder
+   * dat geeft hij `null` terug en is de reeks uit. Bij willekeurige volgorde
+   * telt de positie in `shuffleOrder`, niet de positie in de galerij.
+   */
+  const advanceIndex = useCallback((from: number, delta: number, wrap: boolean): number | null => {
+    const count = orderedPhotos.length;
+    if (count === 0) return null;
+    const sequence = slideSettings.shuffle && shuffleOrder.length === count ? shuffleOrder : null;
+    if (!sequence) {
+      const next = from + delta;
+      if (next < 0 || next >= count) return wrap ? (next + count) % count : null;
+      return next;
+    }
+    const position = sequence.indexOf(from);
+    const nextPosition = (position < 0 ? 0 : position) + delta;
+    if (nextPosition < 0 || nextPosition >= count) return wrap ? sequence[(nextPosition + count) % count] : null;
+    return sequence[nextPosition];
+  }, [orderedPhotos.length, slideSettings.shuffle, shuffleOrder]);
 
   const stepLightbox = useCallback((delta: number) => {
     setLightbox(prev => {
-      if (!prev || orderedPhotos.length === 0) return prev;
-      return { index: (prev.index + delta + orderedPhotos.length) % orderedPhotos.length };
+      if (!prev) return prev;
+      const next = advanceIndex(prev.index, delta, true);
+      return next == null ? prev : { index: next };
     });
-  }, [orderedPhotos.length]);
+  }, [advanceIndex]);
+
+  /**
+   * Start bij de foto die openstaat, of — vanuit het raster — bij het begin van
+   * de (eventueel geschudde) reeks. Pauzeren laat de foto gewoon staan.
+   */
+  const toggleSlideshow = useCallback(() => {
+    if (slideshow) { setSlideshow(false); return; }
+    if (orderedPhotos.length === 0) return;
+    if (!lightbox) {
+      const order = slideSettings.shuffle && shuffleOrder.length === orderedPhotos.length ? shuffleOrder : null;
+      setLightbox({ index: order ? order[0] : 0 });
+    }
+    setSlideshow(true);
+  }, [slideshow, lightbox, orderedPhotos.length, slideSettings.shuffle, shuffleOrder]);
+
+  /**
+   * De klok van de diavoorstelling. Bewust een timeout per beeld en geen
+   * CSS-animatie die zichzelf doortelt: onder `prefers-reduced-motion` zet de
+   * app álle animaties uit (globals.css), en dan zou de voorstelling in één
+   * klap door de hele galerij razen.
+   *
+   * Staat er een video open, dan wacht de voorstelling — die video kijk je uit.
+   */
+  useEffect(() => {
+    if (!slideshow || !lightbox || playing) return;
+    const timer = window.setTimeout(() => {
+      const next = advanceIndex(lightbox.index, 1, slideSettings.loop);
+      if (next == null) { setSlideshow(false); return; }
+      setLightbox({ index: next });
+    }, Math.max(1000, slideSettings.interval * 1000));
+    return () => window.clearTimeout(timer);
+  }, [slideshow, lightbox, playing, slideSettings.interval, slideSettings.loop, advanceIndex]);
+
+  // Zonder open foto valt er niets te spelen (foto verwijderd, filter aan).
+  useEffect(() => {
+    if (slideshow && !lightbox) setSlideshow(false);
+  }, [slideshow, lightbox]);
+
+  // In de selectie- en sleepstand van de fotograaf opent een tegelklik geen
+  // foto meer; een voorstelling die dan nog doorloopt hoort daar niet.
+  useEffect(() => {
+    if (selectable || reorderable) setSlideshow(false);
+  }, [selectable, reorderable]);
+
+  /**
+   * Tijdens het spelen verdwijnt de bediening als je niets doet — anders staan
+   * er drie knoppen over elke foto heen, en juist bij het lospelen kijk je naar
+   * het beeld en niet naar de knoppen. Elke beweging haalt ze terug.
+   */
+  useEffect(() => {
+    if (!slideshow || slideOptions) { setIdle(false); return; }
+    let timer = window.setTimeout(() => setIdle(true), 2600);
+    const wake = () => {
+      setIdle(false);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setIdle(true), 2600);
+    };
+    window.addEventListener('mousemove', wake, { passive: true });
+    window.addEventListener('touchstart', wake, { passive: true });
+    window.addEventListener('keydown', wake);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('mousemove', wake);
+      window.removeEventListener('touchstart', wake);
+      window.removeEventListener('keydown', wake);
+    };
+  }, [slideshow, slideOptions]);
 
   /**
    * Eén toetsenafhandeling voor de hele kijker.
@@ -320,10 +507,29 @@ export function GalleryViewer({
       const target = e.target as HTMLElement | null;
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
 
+      // Spatie speelt en pauzeert de diavoorstelling — de toets die elke speler
+      // daarvoor heeft. Zonder preventDefault scrolt hij ook de pagina eronder.
+      if (e.key === ' ' || e.key === 'Spacebar') {
+        if (!lightbox && !bigScreen) return;
+        if (playing) return; // de videospeler krijgt zijn eigen spatie
+        e.preventDefault();
+        e.stopPropagation();
+        toggleSlideshow();
+        return;
+      }
+
       if (e.key === 'Escape') {
-        // Alleen de bovenste laag sluiten. Staat er een foto open binnen de
-        // presenteerstand van de fotograaf, dan hoort de eerste Escape de foto
-        // te sluiten en pas de tweede die stand te verlaten.
+        // Alleen de bovenste laag sluiten. Staat het optiepaneel open, dan gaat
+        // dat als eerste dicht.
+        if (slideOptions) {
+          e.preventDefault();
+          e.stopPropagation();
+          setSlideOptions(false);
+          return;
+        }
+        // Staat er een foto open binnen de presenteerstand van de fotograaf,
+        // dan hoort de eerste Escape de foto te sluiten en pas de tweede die
+        // stand te verlaten.
         if (lightbox || playing) {
           e.preventDefault();
           e.stopPropagation();
@@ -366,7 +572,7 @@ export function GalleryViewer({
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [lightbox, playing, bigScreen, closeOverlays, stepLightbox, orderedPhotos.length]);
+  }, [lightbox, playing, bigScreen, closeOverlays, stepLightbox, orderedPhotos.length, slideOptions, toggleSlideshow]);
 
   /**
    * De browser kan volledig scherm buiten ons om verlaten (Escape, F11, of de
@@ -675,6 +881,18 @@ export function GalleryViewer({
       <div className="galv-actions">
         {/* In de sleep- en selectiestand opent een tegelklik geen foto, dus
             heeft bladeren met de pijltjes daar geen betekenis. */}
+        {!selectable && !reorderable && orderedPhotos.length > 1 && (
+          <button
+            type="button"
+            className="galv-menu-btn"
+            onClick={toggleSlideshow}
+            aria-pressed={slideshow}
+            aria-label={slideshow ? 'Diavoorstelling pauzeren' : 'Diavoorstelling afspelen'}
+            title={slideshow ? 'Diavoorstelling pauzeren (spatie)' : 'Diavoorstelling — speelt de foto’s vanzelf af (spatie)'}
+          >
+            {slideshow ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
+          </button>
+        )}
         {!selectable && !reorderable && (
           <button
             type="button"
@@ -776,18 +994,74 @@ export function GalleryViewer({
         </section>
       ))}
 
-      {/* ── Lightbox (foto's) ── */}
+      {/* ── Lightbox (foto's) + diavoorstelling ── */}
       {lightbox && orderedPhotos[lightbox.index] && (
-        <div className="galv-lightbox" role="dialog" aria-modal="true" onClick={closeOverlays}>
+        <div
+          className={[
+            'galv-lightbox',
+            slideshow ? 'is-slideshow' : '',
+            slideshow && idle ? 'is-idle' : '',
+            slideSettings.fit === 'cover' ? 'is-fill' : '',
+            slideSettings.showCaption ? '' : 'is-uncaptioned',
+          ].filter(Boolean).join(' ')}
+          role="dialog"
+          aria-modal="true"
+          onClick={closeOverlays}
+        >
+          {/* Voortgang van het huidige beeld. Puur sier: de klok is de timeout
+              hierboven. Remonteert bij elke wissel (key), zodat de balk telkens
+              opnieuw begint — ook als je met de pijltjes vooruit springt. */}
+          {slideshow && (
+            <span
+              key={lightbox.index}
+              className="galv-ss-progress"
+              style={{ animationDuration: `${Math.max(1, slideSettings.interval)}s` }}
+              aria-hidden="true"
+            />
+          )}
           <button type="button" className="galv-lightbox-close" onClick={closeOverlays} aria-label="Sluiten"><X size={20} /></button>
           {orderedPhotos.length > 1 && (
             <button type="button" className="galv-lightbox-nav galv-prev" onClick={(e) => { e.stopPropagation(); stepLightbox(-1); }} aria-label="Vorige"><ChevronLeft size={26} /></button>
           )}
           <div className="galv-lightbox-stage" onClick={(e) => e.stopPropagation()}>
-            <img src={itemPreviewUrl(orderedPhotos[lightbox.index], bundle) ?? undefined} alt={orderedPhotos[lightbox.index].file_name} />
+            {/* Het kader knipt de langzame zoom af; zonder dit groeit de foto
+                buiten haar vak en schuift ze over de balk eronder. */}
+            <div className="galv-ss-frame">
+              <img
+                // De key remonteert het beeld, zodat de overgangsanimatie bij elke
+                // foto opnieuw afspeelt in plaats van één keer bij het openen.
+                key={orderedPhotos[lightbox.index].id}
+                className={`galv-ss-img galv-tr-${slideSettings.transition}`}
+                style={slideSettings.transition === 'zoom'
+                  ? { animationDuration: `${Math.max(1, slideSettings.interval)}s` }
+                  : undefined}
+                src={itemPreviewUrl(orderedPhotos[lightbox.index], bundle) ?? undefined}
+                alt={orderedPhotos[lightbox.index].file_name}
+              />
+            </div>
             <div className="galv-lightbox-bar">
               <span className="galv-lightbox-name">{orderedPhotos[lightbox.index].file_name}</span>
               <span className="galv-lightbox-tools">
+                {orderedPhotos.length > 1 && (
+                  <button
+                    type="button"
+                    className={`galv-ss-btn${slideshow ? ' is-on' : ''}`}
+                    onClick={(e) => { e.stopPropagation(); toggleSlideshow(); }}
+                    aria-pressed={slideshow}
+                    title={slideshow ? 'Diavoorstelling pauzeren (spatie)' : 'Diavoorstelling afspelen (spatie)'}
+                    aria-label={slideshow ? 'Diavoorstelling pauzeren' : 'Diavoorstelling afspelen'}
+                  >
+                    {slideshow ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}
+                  </button>
+                )}
+                {orderedPhotos.length > 1 && (
+                  <SlideshowOptions
+                    open={slideOptions}
+                    settings={slideSettings}
+                    onToggle={() => setSlideOptions(v => !v)}
+                    onChange={patchSlideSettings}
+                  />
+                )}
                 {likeBtn(orderedPhotos[lightbox.index])}
                 {heart(orderedPhotos[lightbox.index])}
                 {downloadBtn(orderedPhotos[lightbox.index])}
@@ -907,6 +1181,150 @@ function GalleryDownloadMenu({ zipUrl, zippable, videoCount }: {
               in de originele resolutie, met de knop op de video zelf.
             </p>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Instellingen van de diavoorstelling ─────────────────────────────────────
+//
+// Eén paneel onder een tandwiel in de balk van de open foto. Bewust dáár en
+// niet in de galerij-instellingen van de fotograaf: dit gaat over hoe jíj kijkt,
+// niet over hoe de galerij is samengesteld. De keuzes blijven in je eigen
+// browser staan, dus de volgende galerij opent zoals je hem gewend bent.
+
+const SLIDESHOW_TRANSITION_LABELS: Array<{ value: SlideshowTransition; label: string; hint: string }> = [
+  { value: 'none', label: 'Geen', hint: 'Direct het volgende beeld' },
+  { value: 'fade', label: 'Vervagen', hint: 'Zacht in beeld' },
+  { value: 'slide', label: 'Schuiven', hint: 'Van rechts in beeld' },
+  { value: 'zoom', label: 'Inzoomen', hint: 'Langzame zoom over het hele beeld' },
+];
+
+function SlideshowOptions({ open, settings, onToggle, onChange }: {
+  open: boolean;
+  settings: SlideshowSettings;
+  onToggle: () => void;
+  onChange: (patch: Partial<SlideshowSettings>) => void;
+}) {
+  const boxRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    // mousedown i.p.v. click: anders sluit het paneel pas ná de klik en vangt
+    // een element eronder die klik alsnog op.
+    const onDown = (event: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(event.target as Node)) onToggle();
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [open, onToggle]);
+
+  return (
+    <div className="galv-ss-menu" ref={boxRef}>
+      <button
+        type="button"
+        className={`galv-ss-btn${open ? ' is-on' : ''}`}
+        onClick={(e) => { e.stopPropagation(); onToggle(); }}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label="Instellingen diavoorstelling"
+        title="Instellingen diavoorstelling"
+      >
+        <SlidersHorizontal size={15} />
+      </button>
+      {open && (
+        <div className="galv-ss-panel" role="dialog" aria-label="Instellingen diavoorstelling" onClick={(e) => e.stopPropagation()}>
+          <span className="galv-menu-title">Diavoorstelling</span>
+
+          <div className="galv-ss-row">
+            <span className="galv-ss-label">Seconden per foto</span>
+            <div className="galv-ss-seg" role="group" aria-label="Seconden per foto">
+              {SLIDESHOW_INTERVALS.map(seconds => (
+                <button
+                  key={seconds}
+                  type="button"
+                  className={`galv-ss-chip${settings.interval === seconds ? ' is-on' : ''}`}
+                  aria-pressed={settings.interval === seconds}
+                  onClick={() => onChange({ interval: seconds })}
+                >
+                  {seconds}s
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="galv-ss-row">
+            <span className="galv-ss-label">Overgang</span>
+            <div className="galv-ss-seg" role="group" aria-label="Overgang">
+              {SLIDESHOW_TRANSITION_LABELS.map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`galv-ss-chip${settings.transition === option.value ? ' is-on' : ''}`}
+                  aria-pressed={settings.transition === option.value}
+                  title={option.hint}
+                  onClick={() => onChange({ transition: option.value })}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="galv-ss-row">
+            <span className="galv-ss-label">Beeldvulling</span>
+            <div className="galv-ss-seg" role="group" aria-label="Beeldvulling">
+              <button
+                type="button"
+                className={`galv-ss-chip${settings.fit === 'contain' ? ' is-on' : ''}`}
+                aria-pressed={settings.fit === 'contain'}
+                title="De hele foto past in beeld"
+                onClick={() => onChange({ fit: 'contain' })}
+              >
+                Passend
+              </button>
+              <button
+                type="button"
+                className={`galv-ss-chip${settings.fit === 'cover' ? ' is-on' : ''}`}
+                aria-pressed={settings.fit === 'cover'}
+                title="Beeldvullend — de randen worden bijgesneden"
+                onClick={() => onChange({ fit: 'cover' })}
+              >
+                Vullend
+              </button>
+            </div>
+          </div>
+
+          <div className="galv-ss-toggles">
+            <button
+              type="button"
+              className={`galv-ss-toggle${settings.loop ? ' is-on' : ''}`}
+              aria-pressed={settings.loop}
+              title={settings.loop ? 'Begint na de laatste foto opnieuw' : 'Stopt op de laatste foto'}
+              onClick={() => onChange({ loop: !settings.loop })}
+            >
+              <Repeat size={14} /> Herhalen
+            </button>
+            <button
+              type="button"
+              className={`galv-ss-toggle${settings.shuffle ? ' is-on' : ''}`}
+              aria-pressed={settings.shuffle}
+              title="Willekeurige volgorde — elke foto één keer per ronde"
+              onClick={() => onChange({ shuffle: !settings.shuffle })}
+            >
+              <Shuffle size={14} /> Willekeurig
+            </button>
+            <button
+              type="button"
+              className={`galv-ss-toggle${settings.showCaption ? ' is-on' : ''}`}
+              aria-pressed={settings.showCaption}
+              title="Bestandsnaam en teller onder de foto"
+              onClick={() => onChange({ showCaption: !settings.showCaption })}
+            >
+              Bijschrift
+            </button>
+          </div>
         </div>
       )}
     </div>
