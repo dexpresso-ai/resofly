@@ -162,14 +162,20 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .ticket-timeline-head strong{font-size:12px;text-transform:uppercase;letter-spacing:.08em}
 .ticket-timeline-head span{display:block;font-size:11px;color:var(--muted);margin-top:2px}
 .ticket-timeline-hint{font-size:11px;color:var(--muted);border:1px dashed var(--border);border-radius:7px;padding:10px;text-align:center}
-.ticket-timeline-grid{display:grid;grid-template-columns:minmax(240px,330px) 1fr;gap:18px;align-items:start}
-.ticket-timeline-grid.is-readonly{grid-template-columns:1fr}
-.ticket-timeline-compose-col{display:flex;flex-direction:column;gap:8px;position:sticky;top:4px}
+/* Invoervak bovenaan, tijdlijn eronder — allebei over de volle breedte.
+   Stond eerst naast elkaar: een kolom van 240-330px voor het schrijfvak en de
+   rest voor de feed. Bij één notitie las dat als een gat, want de kolom eindigt
+   waar het schrijfvak ophoudt en de tijdlijn loopt daar links langs de leegte.
+   De feed is bovendien het onderdeel dat breedte nodig heeft (auteur, badge en
+   tijdstip staan op één regel), niet het schrijfvak. */
+.ticket-timeline-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+.ticket-timeline-compose-col{display:flex;flex-direction:column;gap:8px;min-width:0}
 .ticket-timeline-feed-col{min-width:0}
 .ticket-timeline-composer{display:flex;flex-direction:column;gap:9px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;padding:11px}
 .ticket-timeline-composer .form-textarea{min-height:70px}
-.ticket-timeline-composer-actions{display:flex;flex-direction:column;align-items:stretch;gap:10px}
-.ticket-timeline-composer-actions .btn{width:100%}
+/* Over de volle breedte hoeven het vinkje en de knop niet meer onder elkaar. */
+.ticket-timeline-composer-actions{display:flex;flex-direction:row;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+.ticket-timeline-composer-actions .btn{width:auto;min-width:160px}
 .ticket-visibility-toggle{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--accent-g);cursor:pointer;user-select:none}
 .ticket-visibility-toggle input{width:15px;height:15px;accent-color:var(--accent-o)}
 .ticket-visibility-toggle.is-internal{color:var(--accent-o)}
@@ -6379,14 +6385,15 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* 23 ── Tickettijdlijn: de feed kreeg ~90px ───────────────────────────────
-   `.ticket-timeline-grid` staat op `minmax(240px,330px) 1fr` zonder enige
-   mobiele regel. Op 343px eist de invoerkolom haar 240px op en houdt de
-   feed — waar het gesprek staat — ~90px over. De alleen-lezen variant klapt
-   al om naar één kolom; de schrijfbare variant doet dat nu ook. */
-@media(max-width:1024px){
-  .ticket-timeline-grid{grid-template-columns:minmax(0,1fr)}
-  /* Plakken heeft geen zin meer als het boven de feed staat i.p.v. ernaast. */
-  .ticket-timeline-compose-col{position:static}
+   Was hier een mobiele uitzondering op de zijkolom van `.ticket-timeline-grid`
+   (op 343px hield de feed er ~90px van over). Die zijkolom is inmiddels
+   helemaal weg — één kolom is nu de basisregel op elke breedte — dus hier
+   blijft alleen het duimwerk over. */
+@media(max-width:760px){
+  /* Op deze breedte past het vinkje niet meer naast de knop; dan liever een
+     knop over de volle breedte dan twee halve. */
+  .ticket-timeline-composer-actions{flex-direction:column;align-items:stretch}
+  .ticket-timeline-composer-actions .btn{width:100%}
 }
 
 /* 24 ── Koprijen die niet mogen wrappen ───────────────────────────────────

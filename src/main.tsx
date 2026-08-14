@@ -2687,7 +2687,8 @@ function TicketNotesTimeline({ ticketId, organizationId, currentUserId, notes, c
       </div>
     </div>
 
-    <div className={`ticket-timeline-grid${canWrite ? '' : ' is-readonly'}`}>
+    {/* Eén kolom: schrijfvak boven, tijdlijn eronder — allebei op volle breedte. */}
+    <div className="ticket-timeline-grid">
       {canWrite && <div className="ticket-timeline-compose-col">
         <div className="ticket-timeline-composer">
           <Textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Schrijf een update voor de klant of een interne notitie…" rows={4} disabled={busy} />
