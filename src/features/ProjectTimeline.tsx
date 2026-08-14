@@ -1,10 +1,10 @@
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { AppData, Project, Task } from '../types';
-import { Button, Input, Select } from '../components/Ui';
-import { dateNL } from '../lib/format';
+import { Input, Select } from '../components/Ui';
 
 type ProjectPhase = 'planning' | 'active' | 'review' | 'overdue' | 'completed';
 type TimelineVariant = 'dashboard' | 'full';
+type Scale = 'week' | 'month' | 'quarter';
 
 type TimelineProject = {
   project: Project;
@@ -14,7 +14,20 @@ type TimelineProject = {
   end: Date;
   hasExactPlanning: boolean;
   tasks: Task[];
+  doneTasks: number;
   progress: number;
+};
+
+/** Eén kolom op de tijdbalk. `label` staat groot, `sub` klein eronder en
+ *  `groupLabel` bundelt opeenvolgende kolommen in de band erboven. */
+type Column = {
+  key: string;
+  start: Date;
+  end: Date;
+  label: string;
+  sub: string;
+  groupKey: string;
+  groupLabel: string;
 };
 
 const projectPhaseOptions: { key: ProjectPhase; label: string; description: string }[] = [
@@ -25,6 +38,12 @@ const projectPhaseOptions: { key: ProjectPhase; label: string; description: stri
   { key: 'completed', label: 'Afgerond', description: 'Gearchiveerd of alle taken afgerond' },
 ];
 
+const scaleOptions: { key: Scale; label: string }[] = [
+  { key: 'week', label: 'Week' },
+  { key: 'month', label: 'Maand' },
+  { key: 'quarter', label: 'Kwartaal' },
+];
+
 const defaultPhaseFilters: Record<ProjectPhase, boolean> = {
   planning: true,
   active: true,
@@ -32,6 +51,8 @@ const defaultPhaseFilters: Record<ProjectPhase, boolean> = {
   overdue: true,
   completed: false,
 };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function ProjectTimeline({
   data,
@@ -46,7 +67,13 @@ export function ProjectTimeline({
   const [query, setQuery] = useState('');
   const [clientId, setClientId] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  /** `null` = schaal volgt de lengte van de planning; een keuze zet hem vast. */
+  const [pickedScale, setPickedScale] = useState<Scale | null>(null);
   const isFull = variant === 'full';
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const todayRef = useRef<HTMLDivElement>(null);
+  const centeredOnce = useRef(false);
 
   const timelineProjects = useMemo<TimelineProject[]>(() => {
     return data.projects.map(project => {
@@ -58,15 +85,16 @@ export function ProjectTimeline({
 
       return {
         project,
-        clientName: client?.name ?? 'Geen klant gekoppeld',
+        clientName: client?.name ?? 'Geen klant',
         phase: deriveProjectPhase(project, tasks),
         start: dates.start,
         end: dates.end,
         hasExactPlanning: dates.hasExactPlanning,
         tasks,
+        doneTasks,
         progress,
       };
-    }).sort((a, b) => a.start.getTime() - b.start.getTime());
+    }).sort((a, b) => a.start.getTime() - b.start.getTime() || a.project.name.localeCompare(b.project.name, 'nl'));
   }, [data.clients, data.projects, data.tasks]);
 
   const baseProjects = useMemo(() => {
@@ -95,141 +123,238 @@ export function ProjectTimeline({
   }, [baseProjects]);
 
   const activePhaseKeys = projectPhaseOptions.filter(option => phaseFilters[option.key]).map(option => option.key);
-  const filteredProjects = baseProjects.filter(item => phaseFilters[item.phase]);
-  const timelineRange = useMemo(() => getTimelineRange(filteredProjects), [filteredProjects]);
-  const weeks = useMemo(() => getWeeks(timelineRange.start, timelineRange.end), [timelineRange.start, timelineRange.end]);
-  const gridTemplateColumns = `repeat(${Math.max(weeks.length, 1)}, minmax(${isFull ? '136px' : '112px'}, 1fr))`;
-  const weekLoads = weeks.map(week => filteredProjects.filter(item => rangesOverlap(item.start, item.end, week.start, week.end)).length);
-  const peakLoad = Math.max(0, ...weekLoads);
+  const filteredProjects = useMemo(() => baseProjects.filter(item => phaseFilters[item.phase]), [baseProjects, phaseFilters]);
+
+  /** De ruwe periode: alles wat getoond wordt én vandaag, zodat de "nu"-lijn
+   *  altijd in beeld te brengen is. */
+  const span = useMemo(() => {
+    const today = new Date();
+    const stamps = [today.getTime(), ...filteredProjects.flatMap(item => [item.start.getTime(), item.end.getTime()])];
+    return { from: new Date(Math.min(...stamps)), to: new Date(Math.max(...stamps)) };
+  }, [filteredProjects]);
+
+  const autoScale = useMemo<Scale>(() => {
+    const days = Math.max(1, (span.to.getTime() - span.from.getTime()) / DAY_MS);
+    if (days <= 190) return 'week';
+    if (days <= 900) return 'month';
+    return 'quarter';
+  }, [span.from, span.to]);
+
+  const scale = pickedScale ?? autoScale;
+  const columns = useMemo(() => buildColumns(span.from, span.to, scale), [scale, span.from, span.to]);
+  const groups = useMemo(() => groupColumns(columns), [columns]);
+
+  const rangeStart = columns[0].start.getTime();
+  const rangeEnd = columns[columns.length - 1].end.getTime() + 1;
+  const rangeMs = Math.max(1, rangeEnd - rangeStart);
+
+  const columnLoads = useMemo(
+    () => columns.map(column => filteredProjects.filter(item => rangesOverlap(item.start, item.end, column.start, column.end)).length),
+    [columns, filteredProjects],
+  );
+  const peakLoad = Math.max(0, ...columnLoads);
   const missingExactPlanning = filteredProjects.filter(item => !item.hasExactPlanning).length;
   const openTasks = filteredProjects.reduce((sum, item) => sum + item.tasks.filter(task => task.status !== 'done').length, 0);
+
+  const now = Date.now();
+  const todayFraction = clamp((now - rangeStart) / rangeMs, 0, 1);
+  const todayInRange = now >= rangeStart && now <= rangeEnd;
+
+  /** Springt direct (niet `smooth`): een vloeiende scroll wordt door de
+   *  compositor gedreven en blijft halverwege steken zodra het tabblad niet
+   *  tekent — dan zou de knop soms wél en soms niets doen. */
+  function scrollToToday() {
+    const scroller = scrollRef.current;
+    const marker = todayRef.current;
+    if (!scroller || !marker) return;
+    scroller.scrollLeft = Math.max(0, marker.offsetLeft - scroller.clientWidth / 2);
+  }
+
+  /** Bij het openen staat de tijdbalk op vandaag; daarna bepaalt de gebruiker
+   *  zelf waar hij kijkt. */
+  useEffect(() => {
+    if (centeredOnce.current) return;
+    const scroller = scrollRef.current;
+    const marker = todayRef.current;
+    if (!scroller || !marker) return;
+    centeredOnce.current = true;
+    scroller.scrollLeft = Math.max(0, marker.offsetLeft - scroller.clientWidth / 2);
+  }, [columns.length, filteredProjects.length]);
 
   function togglePhase(phase: ProjectPhase) {
     setPhaseFilters(current => ({ ...current, [phase]: !current[phase] }));
   }
 
-  function showAllPhases() {
-    setPhaseFilters({ planning: true, active: true, review: true, overdue: true, completed: true });
-  }
+  /** Alleen gegevens staan hier: een inline `--ptl-col-w` zou de media queries
+   *  overrulen, dus de kolombreedte hangt aan de klasse `ptl-scale-*`. */
+  const boardStyle = {
+    '--ptl-cols': columns.length,
+    '--ptl-today': todayFraction,
+  } as CSSProperties;
 
-  return <section className={`project-timeline-card project-timeline-${variant}`}>
-    <div className="project-timeline-head">
-      <div>
-        <span className="eyebrow">Projectplanning</span>
-        <h2>{isFull ? 'Planningstimeline per project' : 'Visuele timeline per project'}</h2>
+  return <section className={`ptl ptl-${variant} ptl-scale-${scale}`}>
+    <header className="ptl-head">
+      <div className="ptl-heading">
+        <h2>Projectplanning</h2>
         <p>{isFull
-          ? 'Een ruimere projectplanning met beter leesbare labels, vaste projectkolom, duidelijke weekblokken en snelle filters op fase, klant en zoekterm.'
-          : 'Projecten worden per week getoond op basis van start- en einddatum. De gekleurde balken maken overlap en werkdruk direct zichtbaar.'}</p>
+          ? 'Alle projecten op één tijdbalk — sleep horizontaal om verder vooruit of terug te kijken.'
+          : 'Wie loopt er wanneer? De balken tonen looptijd en voortgang per project.'}</p>
       </div>
-      <div className="timeline-insights" aria-label="Projectplanning samenvatting">
+      <div className="ptl-stats">
         <div><span>Getoond</span><strong>{filteredProjects.length}</strong></div>
         <div><span>Piek overlap</span><strong>{peakLoad}</strong></div>
-        <div><span>{isFull ? 'Open taken' : 'Zonder planning'}</span><strong>{isFull ? openTasks : missingExactPlanning}</strong></div>
+        <div><span>Open taken</span><strong>{openTasks}</strong></div>
+        <div><span>Zonder planning</span><strong>{missingExactPlanning}</strong></div>
       </div>
-    </div>
+    </header>
 
-    {isFull && <div className="timeline-search-panel" aria-label="Projectplanning zoeken en verfijnen">
-      <Input value={query} onChange={event => setQuery(event.target.value)} placeholder="Zoek op project, klant, taak of tag" />
-      <Select value={clientId} onChange={event => setClientId(event.target.value)}>
-        <option value="">Alle klanten</option>
-        {data.clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
-      </Select>
-      <button type="button" className={`timeline-archive-toggle ${showArchived ? 'is-selected' : ''}`} onClick={() => setShowArchived(value => !value)} aria-pressed={showArchived}>
-        {showArchived ? 'Inclusief archief' : 'Alleen actief'}
-      </button>
-    </div>}
+    <div className="ptl-toolbar">
+      {isFull && <div className="ptl-search">
+        <Input value={query} onChange={event => setQuery(event.target.value)} placeholder="Zoek op project, klant, taak of tag" />
+      </div>}
+      {isFull && <div className="ptl-client">
+        <Select value={clientId} onChange={event => setClientId(event.target.value)}>
+          <option value="">Alle klanten</option>
+          {data.clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
+        </Select>
+      </div>}
+      {isFull && <button
+        type="button"
+        className={`ptl-toggle ${showArchived ? 'is-on' : ''}`}
+        onClick={() => setShowArchived(value => !value)}
+        aria-pressed={showArchived}
+      >{showArchived ? 'Inclusief archief' : 'Alleen actief'}</button>}
 
-    <div className="timeline-filter-panel" aria-label="Projectfase filters">
-      <div className="timeline-filter-copy">
-        <strong>Fasefilters</strong>
-        <span>Klik fases aan of uit om je focus te bepalen.</span>
-      </div>
-      <div className="timeline-filter-buttons">
-        {projectPhaseOptions.map(option => <button
-          key={option.key}
-          type="button"
-          className={`timeline-filter phase-filter-${option.key} ${phaseFilters[option.key] ? 'is-selected' : ''}`}
-          onClick={() => togglePhase(option.key)}
-          title={option.description}
-          aria-pressed={phaseFilters[option.key]}
-        >
-          <span className="timeline-filter-dot" />
-          {option.label}
-          <strong>{phaseCounts[option.key]}</strong>
-        </button>)}
-        {activePhaseKeys.length === 0 && <Button onClick={showAllPhases}>Alles tonen</Button>}
-      </div>
-    </div>
-
-    {filteredProjects.length === 0 ? <div className="empty inline-empty timeline-empty"><div className="e-big">Geen projecten binnen deze filters</div><p>Zet één of meerdere fases aan of pas je zoekopdracht aan.</p></div> : <div className="timeline-scroll" role="region" aria-label="Projecttimeline" tabIndex={0}>
-      <div className="timeline-week-header" style={{ gridTemplateColumns }}>
-        {weeks.map(week => <div className={`timeline-week ${isCurrentWeek(week.start) ? 'is-current-week' : ''}`} key={week.key}>
-          <strong>W{week.isoWeek}</strong>
-          <span>{formatShortDate(week.start)} – {formatShortDate(week.end)}</span>
-        </div>)}
-      </div>
-
-      <div className="timeline-load-row">
-        <div className="timeline-load-label">Overlap per week</div>
-        <div className="timeline-load-grid" style={{ gridTemplateColumns }}>
-          {weeks.map((week, index) => {
-            const intensity = peakLoad > 0 ? weekLoads[index] / peakLoad : 0;
-            return <div
-              key={week.key}
-              className={`timeline-load-cell ${isCurrentWeek(week.start) ? 'is-current-week' : ''}`}
-              style={{ '--load-opacity': String(0.14 + intensity * 0.66) } as CSSProperties}
-              title={`${weekLoads[index]} project${weekLoads[index] === 1 ? '' : 'en'} in week ${week.isoWeek}`}
-            ><span>{weekLoads[index] || ''}</span></div>;
-          })}
+      <div className="ptl-toolbar-end">
+        <div className="ptl-scaleswitch" role="group" aria-label="Schaal van de tijdbalk">
+          {scaleOptions.map(option => <button
+            key={option.key}
+            type="button"
+            className={scale === option.key ? 'is-on' : ''}
+            onClick={() => setPickedScale(option.key)}
+            aria-pressed={scale === option.key}
+          >{option.label}</button>)}
         </div>
+        <button type="button" className="ptl-toggle" onClick={scrollToToday} disabled={!todayInRange}>Vandaag</button>
       </div>
+    </div>
 
-      <div className="timeline-project-list">
-        {filteredProjects.map(item => {
-          const startIndex = clamp(getWeekIndex(timelineRange.start, item.start), 0, weeks.length - 1);
-          const endIndex = clamp(getWeekIndex(timelineRange.start, item.end), startIndex, weeks.length - 1);
-          const span = Math.max(1, endIndex - startIndex + 1);
-          const openProjectTasks = item.tasks.filter(task => task.status !== 'done').length;
-          const dateRangeLabel = `${item.project.start_date ? dateNL(item.project.start_date) : 'Geen start'} → ${item.project.end_date ? dateNL(item.project.end_date) : 'Geen einde'}`;
+    <div className="ptl-chips" role="group" aria-label="Projectfase filters">
+      <span className="ptl-chips-label">Fase</span>
+      {projectPhaseOptions.map(option => <button
+        key={option.key}
+        type="button"
+        className={`ptl-chip phase-${option.key} ${phaseFilters[option.key] ? 'is-on' : ''}`}
+        onClick={() => togglePhase(option.key)}
+        title={option.description}
+        aria-pressed={phaseFilters[option.key]}
+      >
+        <span className="ptl-chip-dot" aria-hidden="true" />
+        {option.label}
+        <span className="ptl-chip-count">{phaseCounts[option.key]}</span>
+      </button>)}
+      {activePhaseKeys.length === 0 && <button
+        type="button"
+        className="ptl-chip-reset"
+        onClick={() => setPhaseFilters({ planning: true, active: true, review: true, overdue: true, completed: true })}
+      >Alles tonen</button>}
+    </div>
 
-          return <article className={`timeline-project-row timeline-project-row-readable phase-${item.phase}`} key={item.project.id}>
-            <div className="timeline-project-label timeline-project-label-rich">
-              <span className="project-color-dot" style={{ background: item.project.color }} />
-              <div>
-                <strong>{item.project.name}</strong>
-                <span>{item.clientName}</span>
-                <div className="timeline-label-meta">
-                  <span>{dateRangeLabel}</span>
-                  <span>{phaseLabel(item.phase)}</span>
-                  <span>{openProjectTasks} open</span>
-                  {!item.hasExactPlanning && <em>Planning geschat</em>}
-                </div>
+    {filteredProjects.length === 0
+      ? <div className="ptl-empty">
+        <strong>Geen projecten binnen deze filters</strong>
+        <span>Zet één of meerdere fases aan of pas je zoekopdracht aan.</span>
+      </div>
+      : <div className="ptl-scroll" ref={scrollRef} role="region" aria-label="Projecttijdbalk" tabIndex={0}>
+        <div className="ptl-board" style={boardStyle}>
+          <div className="ptl-headband">
+            <div className="ptl-row ptl-row-group">
+              <div className="ptl-label ptl-label-head" />
+              <div className="ptl-cells">
+                {groups.map(group => <div className="ptl-group" key={group.key} style={{ gridColumn: `span ${group.span}` }}>
+                  <span>{group.label}</span>
+                </div>)}
               </div>
             </div>
-            <div className="timeline-track" style={{ gridTemplateColumns }}>
-              {weeks.map(week => <div className={`timeline-grid-cell ${isCurrentWeek(week.start) ? 'is-current-week' : ''}`} key={week.key} />)}
-              <button
-                type="button"
-                className="timeline-bar"
-                onClick={() => openProject(item.project.id)}
-                style={{
-                  gridColumn: `${startIndex + 1} / span ${span}`,
-                  '--project-color': item.project.color,
-                } as CSSProperties}
-                title={`Open ${item.project.name}`}
-                aria-label={`Open project ${item.project.name}`}
-              >
-                <span className="timeline-bar-main">
-                  <span className="timeline-bar-title">{item.project.name}</span>
-                  <span className="timeline-bar-meta">{phaseLabel(item.phase)} · {item.progress}% · {openProjectTasks} open · {dateRangeLabel}</span>
-                </span>
-                <span className="timeline-bar-progress" aria-hidden="true"><span style={{ width: `${item.progress}%` }} /></span>
-              </button>
+
+            <div className="ptl-row ptl-row-cols">
+              <div className="ptl-label ptl-label-head"><span>Project</span></div>
+              <div className="ptl-cells">
+                {columns.map(column => <div
+                  className={`ptl-col ${isNowColumn(column, now) ? 'is-now' : ''}`}
+                  key={column.key}
+                >
+                  <strong>{column.label}</strong>
+                  {column.sub && <span>{column.sub}</span>}
+                </div>)}
+              </div>
             </div>
-          </article>;
-        })}
-      </div>
-    </div>}
+
+            <div className="ptl-row ptl-row-load">
+              <div className="ptl-label ptl-label-head"><span>Bezetting</span></div>
+              <div className="ptl-cells">
+                {columns.map((column, index) => <div
+                  className="ptl-load"
+                  key={column.key}
+                  title={`${columnLoads[index]} project${columnLoads[index] === 1 ? '' : 'en'} in ${column.label}`}
+                >
+                  <span className="ptl-load-bar" style={{ height: `${peakLoad ? (columnLoads[index] / peakLoad) * 100 : 0}%` }} aria-hidden="true" />
+                  <b>{columnLoads[index] || ''}</b>
+                </div>)}
+              </div>
+            </div>
+
+            {todayInRange && <div className="ptl-todaycap" aria-hidden="true"><span>vandaag</span></div>}
+          </div>
+
+          <div className="ptl-rows">
+            {filteredProjects.map(item => {
+              const left = clamp((item.start.getTime() - rangeStart) / rangeMs, 0, 1) * 100;
+              const right = clamp((item.end.getTime() + 1 - rangeStart) / rangeMs, 0, 1) * 100;
+              const width = Math.max(right - left, 0.4);
+              const openProjectTasks = item.tasks.length - item.doneTasks;
+              const dateLabel = item.hasExactPlanning
+                ? formatRange(item.start, item.end)
+                : `${formatRange(item.start, item.end)} · geschat`;
+              const barTitle = `${item.project.name} — ${phaseLabel(item.phase)} · ${dateLabel} · ${item.progress}% klaar · ${openProjectTasks} open taken`;
+
+              return <article className={`ptl-row ptl-project phase-${item.phase}`} key={item.project.id}>
+                <div className="ptl-label">
+                  <button type="button" className="ptl-label-btn" onClick={() => openProject(item.project.id)} title={barTitle}>
+                    <span className="ptl-dot" style={{ background: item.project.color }} aria-hidden="true" />
+                    <span className="ptl-label-text">
+                      <strong>{item.project.name}</strong>
+                      <span className="ptl-label-sub">
+                        {item.clientName}
+                        <em className={`ptl-phase phase-${item.phase}`}>{phaseLabel(item.phase)}</em>
+                      </span>
+                    </span>
+                    <span className="ptl-label-count">{item.tasks.length ? `${item.doneTasks}/${item.tasks.length}` : '—'}</span>
+                  </button>
+                </div>
+                <div className="ptl-track">
+                  <button
+                    type="button"
+                    className={`ptl-bar ${item.hasExactPlanning ? '' : 'is-estimated'}`}
+                    onClick={() => openProject(item.project.id)}
+                    style={{ left: `${left}%`, width: `${width}%`, '--pc': item.project.color } as CSSProperties}
+                    title={barTitle}
+                    aria-label={barTitle}
+                  >
+                    <span className="ptl-bar-fill" style={{ width: `${item.progress}%` }} aria-hidden="true" />
+                    <span className="ptl-bar-text">
+                      <strong>{item.project.name}</strong>
+                      <span>{dateLabel}</span>
+                    </span>
+                  </button>
+                </div>
+              </article>;
+            })}
+          </div>
+
+          {todayInRange && <div className="ptl-todayline" ref={todayRef} aria-hidden="true" />}
+        </div>
+      </div>}
   </section>;
 }
 
@@ -258,7 +383,11 @@ function normalizeProjectDates(project: Project): { start: Date; end: Date; hasE
   const base = Number.isNaN(createdAt.getTime()) ? new Date() : createdAt;
 
   if (start && end) {
-    return { start: startOfDay(start), end: endOfDay(end), hasExactPlanning: true };
+    // Een omgedraaide invoer (einde vóór start) zou een balk met negatieve
+    // breedte geven; die draaien we hier recht.
+    const from = start <= end ? start : end;
+    const to = start <= end ? end : start;
+    return { start: startOfDay(from), end: endOfDay(to), hasExactPlanning: true };
   }
   if (start) {
     return { start: startOfDay(start), end: endOfDay(addDays(start, 14)), hasExactPlanning: false };
@@ -269,33 +398,62 @@ function normalizeProjectDates(project: Project): { start: Date; end: Date; hasE
   return { start: startOfDay(base), end: endOfDay(addDays(base, 7)), hasExactPlanning: false };
 }
 
-function getTimelineRange(projects: TimelineProject[]) {
-  if (projects.length === 0) {
-    const now = new Date();
-    return { start: startOfWeek(now), end: endOfWeek(addDays(now, 28)) };
+/** Bouwt de kolommen zó dat ze de héle periode dekken — inclusief een lege
+ *  kolom marge aan beide kanten, zodat een balk nooit tegen de rand plakt. */
+function buildColumns(from: Date, to: Date, scale: Scale): Column[] {
+  const columns: Column[] = [];
+  const startOfUnit = scale === 'week' ? startOfWeek : scale === 'month' ? startOfMonth : startOfQuarter;
+
+  let cursor = shiftUnit(startOfUnit(from), scale, -1);
+  const final = shiftUnit(startOfUnit(to), scale, 1);
+  let guard = 0;
+
+  while (cursor <= final && guard < 600) {
+    guard += 1;
+    const next = shiftUnit(cursor, scale, 1);
+    const end = endOfDay(addDays(next, -1));
+    columns.push({
+      key: cursor.toISOString(),
+      start: cursor,
+      end,
+      label: scale === 'week' ? `W${getIsoWeek(cursor)}` : scale === 'month' ? monthShort(cursor) : `Q${Math.floor(cursor.getMonth() / 3) + 1}`,
+      sub: scale === 'week' ? `${dayMonth(cursor)} – ${dayMonth(end)}` : '',
+      groupKey: scale === 'week' ? `${cursor.getFullYear()}-${cursor.getMonth()}` : String(cursor.getFullYear()),
+      groupLabel: scale === 'week' ? `${monthLong(cursor)} ${cursor.getFullYear()}` : String(cursor.getFullYear()),
+    });
+    cursor = next;
   }
-  const minStart = new Date(Math.min(...projects.map(item => item.start.getTime())));
-  const maxEnd = new Date(Math.max(...projects.map(item => item.end.getTime())));
-  return { start: startOfWeek(minStart), end: endOfWeek(maxEnd) };
+
+  return columns.length ? columns : [{
+    key: 'leeg',
+    start: startOfWeek(from),
+    end: endOfWeek(from),
+    label: `W${getIsoWeek(from)}`,
+    sub: '',
+    groupKey: 'leeg',
+    groupLabel: `${monthLong(from)} ${from.getFullYear()}`,
+  }];
 }
 
-function getWeeks(start: Date, end: Date) {
-  const weeks: { key: string; start: Date; end: Date; isoWeek: number }[] = [];
-  let cursor = startOfWeek(start);
-  const final = endOfWeek(end);
-
-  while (cursor <= final) {
-    const weekStart = new Date(cursor);
-    const weekEnd = endOfWeek(weekStart);
-    weeks.push({ key: weekStart.toISOString(), start: weekStart, end: weekEnd, isoWeek: getIsoWeek(weekStart) });
-    cursor = addDays(cursor, 7);
-  }
-  return weeks;
+function shiftUnit(date: Date, scale: Scale, amount: number) {
+  if (scale === 'week') return addDays(date, 7 * amount);
+  const copy = startOfDay(date);
+  copy.setMonth(copy.getMonth() + amount * (scale === 'month' ? 1 : 3), 1);
+  return copy;
 }
 
-function getWeekIndex(rangeStart: Date, date: Date) {
-  const msPerWeek = 7 * 24 * 60 * 60 * 1000;
-  return Math.floor((startOfWeek(date).getTime() - startOfWeek(rangeStart).getTime()) / msPerWeek);
+function groupColumns(columns: Column[]) {
+  const groups: { key: string; group: string; label: string; span: number }[] = [];
+  columns.forEach((column, index) => {
+    const last = groups[groups.length - 1];
+    if (last && last.group === column.groupKey) last.span += 1;
+    else groups.push({ key: `${column.groupKey}-${index}`, group: column.groupKey, label: column.groupLabel, span: 1 });
+  });
+  return groups;
+}
+
+function isNowColumn(column: Column, now: number) {
+  return now >= column.start.getTime() && now <= column.end.getTime();
 }
 
 function rangesOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
@@ -332,6 +490,18 @@ function endOfWeek(date: Date) {
   return endOfDay(addDays(startOfWeek(date), 6));
 }
 
+function startOfMonth(date: Date) {
+  const copy = startOfDay(date);
+  copy.setDate(1);
+  return copy;
+}
+
+function startOfQuarter(date: Date) {
+  const copy = startOfMonth(date);
+  copy.setMonth(Math.floor(copy.getMonth() / 3) * 3, 1);
+  return copy;
+}
+
 function addDays(date: Date, days: number) {
   const copy = new Date(date);
   copy.setDate(copy.getDate() + days);
@@ -345,13 +515,30 @@ function getIsoWeek(date: Date) {
   return 1 + Math.round(((copy.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
 }
 
-function formatShortDate(date: Date) {
-  return new Intl.DateTimeFormat('nl-NL', { day: '2-digit', month: 'short' }).format(date).replace('.', '');
+const dayMonthFormat = new Intl.DateTimeFormat('nl-NL', { day: 'numeric', month: 'short' });
+const monthShortFormat = new Intl.DateTimeFormat('nl-NL', { month: 'short' });
+const monthLongFormat = new Intl.DateTimeFormat('nl-NL', { month: 'long' });
+
+function dayMonth(date: Date) {
+  return dayMonthFormat.format(date).replace('.', '');
 }
 
-function isCurrentWeek(weekStart: Date) {
-  const today = new Date();
-  return startOfWeek(today).getTime() === startOfWeek(weekStart).getTime();
+function monthShort(date: Date) {
+  return monthShortFormat.format(date).replace('.', '');
+}
+
+function monthLong(date: Date) {
+  return monthLongFormat.format(date);
+}
+
+/** "22 jun – 6 jul", met jaartal zodra de planning buiten dit jaar valt. */
+function formatRange(start: Date, end: Date) {
+  const thisYear = new Date().getFullYear();
+  const suffix = start.getFullYear() !== thisYear || end.getFullYear() !== thisYear
+    ? ` ${end.getFullYear()}`
+    : '';
+  const startLabel = start.getFullYear() !== end.getFullYear() ? `${dayMonth(start)} ${start.getFullYear()}` : dayMonth(start);
+  return `${startLabel} – ${dayMonth(end)}${suffix}`;
 }
 
 function clamp(value: number, min: number, max: number) {
