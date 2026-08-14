@@ -234,15 +234,56 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote 
   );
 }
 
-function statusLabel(status: MeetingRecording['status']): { text: string; spinning: boolean; error?: boolean } {
+interface StatusView {
+  text: string;
+  /** 'listening' = spraak wordt uitgelezen, 'thinking' = de AI schrijft de notulen. */
+  working?: 'listening' | 'thinking';
+  error?: boolean;
+  /** Uitleg onder de badge zolang het op de achtergrond doorloopt. */
+  hint?: string;
+}
+
+function statusLabel(status: MeetingRecording['status']): StatusView {
   switch (status) {
-    case 'uploaded': return { text: 'Geüpload', spinning: false };
-    case 'transcribing': return { text: 'Transcriberen…', spinning: true };
-    case 'transcribed': return { text: 'Transcript klaar', spinning: false };
-    case 'summarizing': return { text: 'Notulen maken…', spinning: true };
-    case 'done': return { text: 'Klaar', spinning: false };
-    case 'error': return { text: 'Mislukt', spinning: false, error: true };
+    case 'uploaded': return { text: 'Geüpload' };
+    case 'transcribing': return { text: 'Transcriberen…', working: 'listening', hint: 'De AI luistert de opname uit. Dit loopt op de achtergrond door — je kunt rustig verder werken, het transcript verschijnt vanzelf bij deze afspraak.' };
+    case 'transcribed': return { text: 'Transcript klaar' };
+    case 'summarizing': return { text: 'Notulen maken…', working: 'thinking', hint: 'De AI schrijft de notulen. Dit loopt op de achtergrond door — je kunt rustig verder werken.' };
+    case 'done': return { text: 'Klaar' };
+    case 'error': return { text: 'Mislukt', error: true };
   }
+}
+
+/**
+ * Levend AI-icoon dat laat zien dat de verwerking op de achtergrond loopt.
+ * 'listening' toont een meebewegende geluidsgolf (spraak → tekst), 'thinking'
+ * een fonkelende AI-ster (Claude schrijft de notulen). Puur decoratief: de
+ * status staat er in tekst naast.
+ */
+function AiWorkingIcon({ mode }: { mode: 'listening' | 'thinking' }) {
+  return (
+    <span className={`mr-ai-icon mr-ai-${mode}`} aria-hidden="true">
+      {mode === 'listening' ? (
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+          <g className="mr-ai-bars">
+            <rect x="2.4" y="9.5" width="2.6" height="5" rx="1.3" />
+            <rect x="7" y="6.5" width="2.6" height="11" rx="1.3" />
+            <rect x="11.6" y="3.5" width="2.6" height="17" rx="1.3" />
+            <rect x="16.2" y="7" width="2.6" height="10" rx="1.3" />
+            <rect x="20.8" y="10" width="2.6" height="4" rx="1.3" />
+          </g>
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+          <path className="mr-ai-star"
+            d="M10.8 3.6c.62 4.4 2.4 6.18 6.8 6.8-4.4.62-6.18 2.4-6.8 6.8-.62-4.4-2.4-6.18-6.8-6.8 4.4-.62 6.18-2.4 6.8-6.8z" />
+          <path className="mr-ai-spark one"
+            d="M19.4 13.4c.26 1.84 1 2.58 2.84 2.84-1.84.26-2.58 1-2.84 2.84-.26-1.84-1-2.58-2.84-2.84 1.84-.26 2.58-1 2.84-2.84z" />
+          <circle className="mr-ai-spark two" cx="19.9" cy="4.6" r="1.5" />
+        </svg>
+      )}
+    </span>
+  );
 }
 
 function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch, onDelete, onRetrySummary, onSaveAsNote }: {
@@ -306,8 +347,8 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch
   return (
     <div className="mr-card">
       <div className="mr-card-head">
-        <span className={`mr-status${label.error ? ' err' : label.spinning ? '' : ' ok'}`}>
-          {label.spinning ? <Loader2 size={14} className="spin" /> : label.error ? <AlertTriangle size={14} /> : <Check size={14} />}
+        <span className={`mr-status${label.error ? ' err' : label.working ? ' is-working' : ' ok'}`} role="status">
+          {label.working ? <AiWorkingIcon mode={label.working} /> : label.error ? <AlertTriangle size={14} /> : <Check size={14} />}
           {label.text}
         </span>
         <span className="mr-meta">· {created}{rec.duration_seconds ? ` · ${fmtClock(rec.duration_seconds)}` : ''}</span>
@@ -316,6 +357,8 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch
           <button type="button" className="mr-del" onClick={onDelete} disabled={busy} title="Opname verwijderen"><Trash2 size={15} /></button>
         )}
       </div>
+
+      {label.hint && <p className="mr-bg-hint">{label.hint}</p>}
 
       {rec.error_message && <p className="mr-card-note">{rec.error_message}</p>}
 

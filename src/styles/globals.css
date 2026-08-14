@@ -2317,6 +2317,62 @@ button.chat-member:hover{background:var(--bg3)}
 .mr-status.ok{color:var(--ok)}
 .mr-status.ok svg{color:var(--ok)}
 .mr-status.err{color:var(--danger)}
+
+/* ── "AI is bezig"-badge ──────────────────────────────────────────────
+ * Transcriberen en notulen maken lopen server-side door; deze gouden pil
+ * met levend icoon maakt zichtbaar dát er op de achtergrond gewerkt wordt.
+ * 'listening' = geluidsgolf (spraak -> tekst), 'thinking' = AI-ster. */
+.mr-status.is-working{
+  color:var(--accent-ink);
+  padding:3px 11px 3px 5px;border-radius:999px;
+  border:1px solid rgba(var(--accent-rgb),.3);
+  background:rgba(var(--accent-rgb),.1);
+  position:relative;overflow:hidden;isolation:isolate;
+}
+/* Zachte lichtveeg over de pil — subtiel teken van leven. */
+.mr-status.is-working::after{
+  content:'';position:absolute;inset:0;z-index:-1;
+  background:linear-gradient(100deg,transparent 20%,rgba(var(--accent-rgb),.28) 50%,transparent 80%);
+  transform:translateX(-100%);animation:mr-ai-sweep 2.4s ease-in-out infinite;
+}
+@keyframes mr-ai-sweep{0%{transform:translateX(-100%)}60%,100%{transform:translateX(100%)}}
+
+.mr-ai-icon{position:relative;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;flex-shrink:0}
+.mr-ai-icon svg{position:relative;z-index:1;color:var(--accent-ink)}
+/* Ademende halo achter het icoon. */
+.mr-ai-icon::before{
+  content:'';position:absolute;inset:-2px;border-radius:50%;
+  background:radial-gradient(circle,rgba(var(--accent-rgb),.42) 0%,rgba(var(--accent-rgb),0) 70%);
+  animation:mr-ai-halo 2.2s ease-in-out infinite;
+}
+@keyframes mr-ai-halo{0%,100%{transform:scale(.7);opacity:.45}50%{transform:scale(1.15);opacity:1}}
+
+/* Geluidsgolf: staafjes die om beurten uitslaan. */
+.mr-ai-bars rect{transform-box:fill-box;transform-origin:center;animation:mr-ai-bar 1.05s ease-in-out infinite}
+.mr-ai-bars rect:nth-child(1){animation-delay:-.15s}
+.mr-ai-bars rect:nth-child(2){animation-delay:-.55s}
+.mr-ai-bars rect:nth-child(3){animation-delay:-.35s}
+.mr-ai-bars rect:nth-child(4){animation-delay:-.75s}
+.mr-ai-bars rect:nth-child(5){animation-delay:-.05s}
+@keyframes mr-ai-bar{0%,100%{transform:scaleY(.3)}50%{transform:scaleY(1)}}
+
+/* AI-ster: draait traag mee en fonkelt; de vonkjes knipperen versprongen. */
+.mr-ai-star,.mr-ai-spark{transform-box:fill-box;transform-origin:center}
+.mr-ai-star{animation:mr-ai-star 2.8s ease-in-out infinite}
+@keyframes mr-ai-star{0%,100%{transform:rotate(0) scale(.88);opacity:.8}50%{transform:rotate(45deg) scale(1);opacity:1}}
+.mr-ai-spark{animation:mr-ai-twinkle 1.9s ease-in-out infinite}
+.mr-ai-spark.one{animation-delay:-.2s}
+.mr-ai-spark.two{animation-delay:-1.1s}
+@keyframes mr-ai-twinkle{0%,100%{transform:scale(.35);opacity:.25}50%{transform:scale(1);opacity:.95}}
+
+.mr-bg-hint{margin:8px 0 0;font-size:12px;line-height:1.5;color:var(--muted2)}
+
+@media(prefers-reduced-motion:reduce){
+  .mr-status.is-working::after,.mr-ai-icon::before,
+  .mr-ai-bars rect,.mr-ai-star,.mr-ai-spark{animation:none}
+  .mr-ai-bars rect{transform:scaleY(.75)}
+  .mr-ai-spark{opacity:.8}
+}
 .mr-meta{color:var(--muted)}
 .mr-spacer{flex:1}
 .mr-del{background:none;border:0;cursor:pointer;color:var(--muted2);padding:4px;border-radius:7px;transition:color .12s,background .12s}
