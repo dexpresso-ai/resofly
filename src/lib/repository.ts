@@ -30,6 +30,9 @@ import type {
   ClientEmail,
   ClientEmailThread,
   ClientEmailUnreadCounts,
+  OrganizationInboundAlias,
+  InboundMessage,
+  InboundMessageCategory,
   EmailCampaign,
   EmailCampaignRecipient,
   EmailCampaignStats,
@@ -3497,7 +3500,7 @@ export async function loadSendingDomains(organizationId: UUID): Promise<SendingD
 }
 
 const CLIENT_EMAIL_THREAD_COLUMNS = 'id,organization_id,created_by,client_id,subject,last_message_at,last_direction,created_at,updated_at';
-const CLIENT_EMAIL_COLUMNS = 'id,organization_id,created_by,thread_id,client_id,direction,provider,provider_email_id,from_email,from_name,to_email,subject,body_html,body_text,status,sent_at,delivered_at,opened_at,clicked_at,bounced_at,failed_at,complained_at,received_at,last_event_at,error_message,created_at,updated_at';
+const CLIENT_EMAIL_COLUMNS = 'id,organization_id,created_by,thread_id,client_id,direction,provider,provider_email_id,from_email,from_name,to_email,subject,body_html,body_text,status,sent_at,delivered_at,opened_at,clicked_at,bounced_at,failed_at,complained_at,received_at,last_event_at,error_message,link_source,link_confidence,rfc_message_id,metadata,created_at,updated_at';
 
 /**
  * Laad de e-mail-conversaties (threads) van een klant, nieuwste eerst. Alleen-lezen;
@@ -3569,6 +3572,132 @@ export async function loadClientEmailUnreadCounts(organizationId: UUID): Promise
   const byClient: Record<UUID, number> = {};
   for (const row of rows) byClient[row.client_id] = (byClient[row.client_id] ?? 0) + 1;
   return { total: rows.length, byClient };
+}
+
+// ── Doorstuuradres + opvangbak voor inkomende mail ──────────────────────────
+//
+// Alle schrijfacties lopen via RPC's: die zijn `security definer` met een eigen
+// rechtencontrole, net als set_bank_transaction_status. Rechtstreeks schrijven
+// op deze tabellen kan niet — er is bewust geen insert/update-policy.
+
+const INBOUND_ALIAS_COLUMNS = 'id,organization_id,created_by,local_part,label,forward_from_email,status,retires_at,blocked_senders,last_received_at,received_total,pending_confirmation_code,pending_confirmation_at,created_at,updated_at';
+const INBOUND_MESSAGE_COLUMNS = 'id,organization_id,created_by,alias_id,route,recipient,sender_email,sender_name,sender_source,sender_confidence,forwarding_evidence,subject,body_text,body_html,rfc_message_id,attachment_names,truncated,received_at,status,reason,category,candidates,suggested_client_id,linked_client_id,client_email_id,handled_at,purge_after,created_at,updated_at';
+
+/** Het actieve doorstuuradres van de organisatie, of null als er nog geen is. */
+export async function loadInboundAlias(organizationId: UUID): Promise<OrganizationInboundAlias | null> {
+  const { data, error } = await supabase
+    .from('organization_inbound_aliases')
+    .select(INBOUND_ALIAS_COLUMNS)
+    .eq('organization_id', organizationId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return (data ?? null) as OrganizationInboundAlias | null;
+}
+
+/** Maak het doorstuuradres aan als het nog niet bestaat (owner/admin). */
+export async function ensureInboundAlias(organizationId: UUID): Promise<OrganizationInboundAlias> {
+  const { data, error } = await supabase.rpc('ensure_organization_inbound_alias', { p_organization_id: organizationId });
+  if (error) throw error;
+  return data as OrganizationInboundAlias;
+}
+
+/**
+ * Vervang het doorstuuradres. Het oude blijft 30 dagen werken maar koppelt niets
+ * meer automatisch — mail die al onderweg is landt in de opvangbak in plaats van
+ * te verdwijnen.
+ */
+export async function rotateInboundAlias(organizationId: UUID): Promise<OrganizationInboundAlias> {
+  const { data, error } = await supabase.rpc('rotate_organization_inbound_alias', { p_organization_id: organizationId });
+  if (error) throw error;
+  return data as OrganizationInboundAlias;
+}
+
+/** Leg vast wélk eigen adres wordt doorgestuurd (info@…), voor herkenning. */
+export async function setInboundAliasForwardFrom(organizationId: UUID, aliasId: UUID, email: string): Promise<OrganizationInboundAlias> {
+  const { data, error } = await supabase.rpc('set_inbound_alias_forward_from', {
+    p_organization_id: organizationId, p_alias_id: aliasId, p_email: email,
+  });
+  if (error) throw error;
+  return data as OrganizationInboundAlias;
+}
+
+/** Berichten in de opvangbak: nog niet aan een klant gekoppeld. */
+export async function loadInboundMessages(organizationId: UUID, category: InboundMessageCategory = 'human'): Promise<InboundMessage[]> {
+  const { data, error } = await supabase
+    .from('inbound_messages')
+    .select(INBOUND_MESSAGE_COLUMNS)
+    .eq('organization_id', organizationId)
+    .eq('category', category)
+    .in('status', ['unmatched', 'conflict'])
+    .order('received_at', { ascending: false })
+    .limit(200);
+  if (error) throw error;
+  return (data ?? []) as InboundMessage[];
+}
+
+/** Aantal openstaande berichten in de opvangbak (voor het tabblad-badge). */
+export async function loadInboundOpenCount(organizationId: UUID): Promise<number> {
+  const { count, error } = await supabase
+    .from('inbound_messages')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', organizationId)
+    .eq('category', 'human')
+    .in('status', ['unmatched', 'conflict']);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+/**
+ * Koppel een binnengekomen bericht alsnog aan een klant. Levert het id op van de
+ * aangemaakte `client_emails`-rij. `rememberSender` staat bewust standaard uit:
+ * het maakt een contactpersoon aan en dat is een permanente route.
+ */
+export async function linkInboundMessage(
+  organizationId: UUID, inboundMessageId: UUID, clientId: UUID, rememberSender = false,
+): Promise<UUID> {
+  const { data, error } = await supabase.rpc('link_inbound_message', {
+    p_organization_id: organizationId,
+    p_inbound_message_id: inboundMessageId,
+    p_client_id: clientId,
+    p_remember_sender: rememberSender,
+  });
+  if (error) throw error;
+  return data as UUID;
+}
+
+/** Negeren ('dropped') of terugzetten in de opvangbak ('unmatched'). */
+export async function setInboundMessageStatus(
+  organizationId: UUID, inboundMessageId: UUID, status: 'unmatched' | 'dropped',
+): Promise<InboundMessage> {
+  const { data, error } = await supabase.rpc('set_inbound_message_status', {
+    p_organization_id: organizationId, p_inbound_message_id: inboundMessageId, p_status: status,
+  });
+  if (error) throw error;
+  return data as InboundMessage;
+}
+
+/**
+ * "Altijd negeren". Weigert bewust adressen die bij een bekende klant horen:
+ * de afzender bepaalt zelf welke naam er in beeld staat, en anders kun je een
+ * gebruiker laten blokkeren op het échte adres van zijn eigen klant.
+ */
+export async function blockInboundSender(organizationId: UUID, aliasId: UUID, value: string): Promise<OrganizationInboundAlias> {
+  const { data, error } = await supabase.rpc('block_inbound_sender', {
+    p_organization_id: organizationId, p_alias_id: aliasId, p_value: value,
+  });
+  if (error) throw error;
+  return data as OrganizationInboundAlias;
+}
+
+/** Verwijder een bericht uit het klantdossier (soft delete, blijft in de RLS verborgen). */
+export async function deleteClientEmail(organizationId: UUID, clientEmailId: UUID): Promise<void> {
+  const { error } = await supabase.rpc('delete_client_email', {
+    p_organization_id: organizationId, p_client_email_id: clientEmailId,
+  });
+  if (error) throw error;
 }
 
 // ── E-mailmarketing / campagnes ─────────────────────────────────────────────

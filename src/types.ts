@@ -992,6 +992,72 @@ export interface ClientEmail extends OrgScopedRow {
   received_at: string | null;
   last_event_at: string | null;
   error_message: string | null;
+  // Waarom dit bericht in dit dossier staat. Leeg bij oude rijen.
+  link_source: ClientEmailLinkSource | null;
+  link_confidence: string | null;
+  rfc_message_id: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ── Doorstuuradres: mail die de klant naar je eigen adres stuurt ────────────
+
+export type ClientEmailLinkSource =
+  | 'reply_token' | 'header_thread' | 'client_email' | 'client_contact' | 'manual';
+
+export type InboundAliasStatus = 'active' | 'retiring' | 'revoked';
+
+export interface OrganizationInboundAlias extends OrgScopedRow {
+  local_part: string;
+  label: string;
+  forward_from_email: string | null;
+  status: InboundAliasStatus;
+  retires_at: string | null;
+  blocked_senders: string[];
+  last_received_at: string | null;
+  received_total: number;
+  pending_confirmation_code: string | null;
+  pending_confirmation_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type InboundMessageStatus = 'linked' | 'unmatched' | 'duplicate' | 'dropped' | 'conflict';
+export type InboundMessageCategory = 'human' | 'automated';
+
+/** Kandidaat-klant bij een niet-eenduidig gematcht bericht. */
+export interface InboundMessageCandidate {
+  client_id: UUID;
+  label: string;
+  matched_on: string;
+}
+
+export interface InboundMessage extends OrgScopedRow {
+  alias_id: UUID | null;
+  route: 'alias' | 'reply_token' | 'organizer_token';
+  recipient: string;
+  sender_email: string | null;
+  sender_name: string | null;
+  sender_source: string | null;
+  sender_confidence: 'high' | 'medium' | 'low';
+  forwarding_evidence: string | null;
+  subject: string;
+  body_text: string | null;
+  body_html: string | null;
+  rfc_message_id: string | null;
+  attachment_names: string[];
+  truncated: boolean;
+  received_at: string;
+  status: InboundMessageStatus;
+  reason: string | null;
+  category: InboundMessageCategory;
+  candidates: InboundMessageCandidate[];
+  suggested_client_id: UUID | null;
+  linked_client_id: UUID | null;
+  client_email_id: UUID | null;
+  handled_at: string | null;
+  purge_after: string | null;
   created_at: string;
   updated_at: string;
 }

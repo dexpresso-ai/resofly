@@ -2,13 +2,13 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Bell, BookOpen, CalendarCog, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
-import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
+import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { BRAND_BODY_FONTS, BRAND_FONTS, GALLERY_BACKGROUNDS, brandFont, brandStyle, ensureBrandFontsLoaded } from '../lib/branding';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setBusinessAddon, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity } from '../lib/repository';
+import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom } from '../lib/repository';
 import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
 import { ProjectTemplatesManager } from './ProjectTemplates';
@@ -342,6 +342,196 @@ const SENDING_DOMAIN_STATUS_LABELS: Record<SendingDomainStatus, string> = {
   failed: 'Verificatie mislukt',
   temporary_failure: 'Tijdelijke fout — probeer later opnieuw',
 };
+
+// Klikpad per provider. Voor Microsoft staat er bewust "Omleiden", niet
+// "Doorsturen": bij Doorsturen word jíj de afzender en is de klant achteraf niet
+// meer te herkennen.
+const FORWARDING_PROVIDERS: { id: string; label: string; steps: string[] }[] = [
+  {
+    id: 'gmail',
+    label: 'Gmail / Google Workspace',
+    steps: [
+      'Open Gmail op je computer en klik rechtsboven op het tandwiel → “Alle instellingen bekijken”.',
+      'Ga naar het tabblad “Doorsturen en POP/IMAP”.',
+      'Klik op “Een doorstuuradres toevoegen” en plak het adres hierboven.',
+      'Google stuurt een bevestigingscode. Die verschijnt hieronder zodra hij binnen is.',
+      'Kies daarna “Een kopie van binnenkomende e-mail doorsturen” en bewaar de wijzigingen.',
+    ],
+  },
+  {
+    id: 'microsoft',
+    label: 'Microsoft 365 / Outlook.com',
+    steps: [
+      'Open Outlook op het web en klik rechtsboven op het tandwiel.',
+      'Ga naar “E-mail” → “Regels” en kies “Nieuwe regel toevoegen”.',
+      'Voorwaarde: “Toegepast op alle berichten”.',
+      'Actie: kies “Omleiden naar” — níét “Doorsturen naar”. Bij Doorsturen word jij de afzender en kunnen we de klant niet meer herkennen.',
+      'Vul het adres hierboven in en bewaar de regel.',
+    ],
+  },
+  {
+    id: 'hosting',
+    label: 'Eigen hosting (cPanel, Plesk, DirectAdmin)',
+    steps: [
+      'Log in op het beheerpaneel van je hostingpartij.',
+      'Zoek naar “E-mail” → “Forwarders” of “Doorstuuradressen”.',
+      'Maak een forwarder aan vanaf je eigen adres (bijvoorbeeld info@jouwdomein.nl).',
+      'Zet als bestemming het adres hierboven.',
+      'Kies, als je hosting die keuze biedt, “kopie bewaren in het postvak” zodat je zelf niets kwijtraakt.',
+    ],
+  },
+];
+
+function InboundForwardingCard({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
+  const [alias, setAlias] = useState<OrganizationInboundAlias | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [provider, setProvider] = useState('gmail');
+  const [forwardFrom, setForwardFrom] = useState('');
+
+  const domain = 'inbound.resofly.com';
+  const address = alias ? `${alias.local_part}@${domain}` : '';
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    loadInboundAlias(organizationId)
+      .then(row => { if (!cancelled) { setAlias(row); setForwardFrom(row?.forward_from_email ?? ''); setLoaded(true); } })
+      .catch(err => { if (!cancelled) { setError(err instanceof Error ? err.message : 'Doorstuuradres laden mislukt.'); setLoaded(true); } });
+    return () => { cancelled = true; };
+  }, [organizationId]);
+
+  async function run(fn: () => Promise<OrganizationInboundAlias>, okMessage: string) {
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      const row = await fn();
+      setAlias(row);
+      setForwardFrom(row.forward_from_email ?? '');
+      setMessage(okMessage);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Actie mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError('Kopiëren lukte niet. Selecteer het adres en kopieer het handmatig.');
+    }
+  }
+
+  // Drie toestanden. Groen slaat om naar een waarschuwing na 14 dagen stilte:
+  // providers zetten doorsturen uit na herhaalde afleverfouten, en dat merk je
+  // anders pas als je een klant kwijt bent.
+  const lastAgeDays = alias?.last_received_at
+    ? (Date.now() - new Date(alias.last_received_at).getTime()) / 86400000
+    : null;
+  const status: 'none' | 'confirm' | 'ok' | 'stale' =
+    alias?.pending_confirmation_code ? 'confirm'
+    : lastAgeDays == null ? 'none'
+    : lastAgeDays > 14 ? 'stale' : 'ok';
+
+  const steps = FORWARDING_PROVIDERS.find(p => p.id === provider)?.steps ?? [];
+
+  return <section className="settings-card organization-card inbound-alias-card">
+    <div className="settings-card-head">
+      <div>
+        <h3>Mail aan je eigen adres opvangen</h3>
+        <p className="settings-help">
+          Stuurt een klant een mail rechtstreeks naar je eigen adres (bijvoorbeeld <code>info@jouwdomein.nl</code>)
+          in plaats van te antwoorden op een bericht uit ResoFly? Stel dan bij je mailprovider een doorstuurregel
+          in naar het adres hieronder. Die berichten komen dan vanzelf onder de juiste klant te staan.
+          <strong> Je blijft alles gewoon in je eigen postvak ontvangen — er verdwijnt niets.</strong>
+        </p>
+      </div>
+    </div>
+
+    {message && <div className="success">{message}</div>}
+    {error && <div className="error">{error}</div>}
+
+    {!canAdmin ? <p className="settings-help">Alleen owners en admins beheren het doorstuuradres.</p>
+      : !loaded ? <p className="settings-help">Doorstuuradres laden…</p>
+      : !alias ? <>
+          <p className="settings-help">Er is nog geen doorstuuradres aangemaakt voor deze organisatie.</p>
+          <Button variant="primary" disabled={busy} onClick={() => run(() => ensureInboundAlias(organizationId), 'Doorstuuradres aangemaakt.')}>
+            {busy ? 'Bezig…' : 'Maak mijn doorstuuradres aan'}
+          </Button>
+        </>
+      : <>
+        <div className="dns-record inbound-alias-address">
+          <div className="dns-record-field grow">
+            <span className="dns-record-label">Jouw doorstuuradres</span>
+            <code className="dns-record-value">{address}</code>
+          </div>
+          <Button onClick={copy}>{copied ? 'Gekopieerd' : 'Kopieer'}</Button>
+        </div>
+
+        <div className={`inbound-status inbound-status-${status}`}>
+          {status === 'none' && <>Nog niets binnengekomen op dit adres. Zet de doorstuurregel hieronder klaar en stuur daarna vanaf je telefoon een mailtje naar je eigen adres om het te testen.</>}
+          {status === 'confirm' && <>
+            Je provider vraagt eerst om een bevestiging. De code is <strong>{alias.pending_confirmation_code}</strong>.
+            <span className="inbound-status-note">
+              Deze code komt uit een binnengekomen e-mail. Controleer hem in je eigen postvak voordat je hem gebruikt —
+              wij tonen bewust geen klikbare link.
+            </span>
+          </>}
+          {status === 'ok' && <>Werkt. Laatste bericht binnengekomen op {new Date(alias.last_received_at!).toLocaleString('nl-NL')} ({alias.received_total} in totaal).</>}
+          {status === 'stale' && <>Er kwam al ruim twee weken niets binnen op dit adres. Controleer of de doorstuurregel nog aanstaat — providers zetten die uit na herhaalde afleverfouten.</>}
+        </div>
+
+        <div className="settings-grid compact">
+          <label>Welk adres stuur je door?
+            <Input
+              type="email"
+              value={forwardFrom}
+              onChange={e => { setForwardFrom(e.target.value); setError(null); setMessage(null); }}
+              onBlur={() => {
+                const value = forwardFrom.trim();
+                if (!value || value === (alias.forward_from_email ?? '')) return;
+                void run(() => setInboundAliasForwardFrom(organizationId, alias.id, value), 'Opgeslagen.');
+              }}
+              placeholder="info@jouwdomein.nl"
+              disabled={busy}
+            />
+          </label>
+          <label>Waar staat je mail?
+            <Select value={provider} onChange={e => setProvider(e.target.value)}>
+              {FORWARDING_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+            </Select>
+          </label>
+        </div>
+        <p className="settings-help">
+          We gebruiken je eigen adres om te herkennen dat een bericht via de doorstuurregel binnenkomt,
+          en om te voorkomen dat je eigen post als klantmail wordt aangezien.
+        </p>
+
+        <ol className="inbound-steps">
+          {steps.map((step, i) => <li key={i}>{step}</li>)}
+        </ol>
+
+        <div className="inbound-alias-actions">
+          <Button
+            variant="danger"
+            disabled={busy}
+            onClick={() => {
+              if (!window.confirm('Een nieuw adres aanmaken? Je oude adres blijft nog 30 dagen werken, maar die berichten komen in de opvangbak in plaats van direct bij de klant. Vergeet niet je doorstuurregel aan te passen.')) return;
+              void run(() => rotateInboundAlias(organizationId), 'Nieuw doorstuuradres aangemaakt. Pas je doorstuurregel aan.');
+            }}
+          >
+            Nieuw adres aanmaken
+          </Button>
+        </div>
+      </>}
+  </section>;
+}
 
 function SendingDomainCard({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
   const [domains, setDomains] = useState<SendingDomain[]>([]);
@@ -2202,6 +2392,7 @@ export function Settings({
     </div>}
 
     {activeTab === 'email' && <div className="settings-tab-panel">
+    {activeOrganization && <InboundForwardingCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <SendingDomainCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <PersonalSenderCard organizationId={activeOrganization.id} />}
     {activeOrganization && <EmailTemplatesCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}

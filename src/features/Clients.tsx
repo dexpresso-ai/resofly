@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, RotateCcw, Upload, ChevronDown, ChevronRight, Mail } from 'lucide-react';
-import type { AppData, Client, ClientEmail, ClientEmailStatus, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, InternalDocument, Invoice, Note, Project, Quote } from '../types';
+import type { AppData, Client, ClientEmail, ClientEmailStatus, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, InboundMessage, InboundMessageCategory, InternalDocument, Invoice, Note, Project, Quote } from '../types';
 import { activeFieldDefinitions, customFieldsSearchText, formatCustomFieldValue } from '../components/CustomFields';
 import { dateNL, euro, formatMinutes, minutesToHours, total } from '../lib/format';
 import { sanitizeEmailHtml } from '../lib/sanitizeHtml';
@@ -8,7 +8,7 @@ import { Button, Input, Select } from '../components/Ui';
 import { CsvImportModal } from '../components/CsvImportModal';
 import type { ImportColumn } from '../lib/csvImport';
 import { RichTextEditor } from '../components/RichTextEditor';
-import { createClientWithServerCode, loadClientEmails, loadClientEmailThreads, loadClientEmailReadIds, loadMySenderIdentity, loadSendingDomains, markClientEmailsRead } from '../lib/repository';
+import { blockInboundSender, createClientWithServerCode, deleteClientEmail, linkInboundMessage, loadClientEmails, loadClientEmailThreads, loadClientEmailReadIds, loadInboundAlias, loadInboundMessages, loadInboundOpenCount, loadMySenderIdentity, loadSendingDomains, markClientEmailsRead, setInboundMessageStatus } from '../lib/repository';
 import { resolveEffectiveSender, sendClientEmail, type EffectiveSender } from '../services/mailService';
 import { supabase } from '../lib/supabase';
 import { ClientFolders } from './ClientFolders';
@@ -90,6 +90,15 @@ export function Clients({
 }) {
   const [viewMode, setViewMode] = useState<ClientViewMode>(readClientViewMode);
   const [importing, setImporting] = useState(false);
+  const [listTab, setListTab] = useState<'clients' | 'inbox'>('clients');
+  const [inboxCount, setInboxCount] = useState(0);
+
+  // Telling van de opvangbak. Faalt dit (bijv. geen leesrecht op de module),
+  // dan blijft de teller op 0 en verdwijnt het tabblad simpelweg uit beeld.
+  const refreshInboxCount = () => {
+    loadInboundOpenCount(organizationId).then(setInboxCount).catch(() => setInboxCount(0));
+  };
+  useEffect(refreshInboxCount, [organizationId]);
 
   const rows = useMemo<ClientOverviewRow[]>(() => data.clients.map(client => {
     const invoices = getClientInvoices(data, client.id);
@@ -150,15 +159,249 @@ export function Clients({
       onDone={onChanged}
     />}
 
-    {rows.length === 0 && <div className="client-empty-state">
-      <strong>Nog geen klanten</strong>
-      <span>Maak je eerste klant aan om offertes, facturen, projecten en notities netjes te bundelen.</span>
-      <Button variant="primary" onClick={onNew}>+ Nieuwe klant</Button>
+    <div className="client-tabs-bar" role="tablist">
+      <button type="button" role="tab" aria-selected={listTab === 'clients'} className={listTab === 'clients' ? 'active' : ''} onClick={() => setListTab('clients')}>
+        Klanten
+      </button>
+      <button type="button" role="tab" aria-selected={listTab === 'inbox'} className={listTab === 'inbox' ? 'active' : ''} onClick={() => setListTab('inbox')}>
+        Niet gekoppeld
+        {inboxCount > 0 && <span className="client-comm-unread-badge">{inboxCount}</span>}
+      </button>
+    </div>
+
+    {listTab === 'inbox' && <InboundInboxTab
+      organizationId={organizationId}
+      clients={data.clients}
+      canWrite={canWrite}
+      onChanged={() => { refreshInboxCount(); onChanged(); }}
+    />}
+
+    {listTab === 'clients' && <>
+      {rows.length === 0 && <div className="client-empty-state">
+        <strong>Nog geen klanten</strong>
+        <span>Maak je eerste klant aan om offertes, facturen, projecten en notities netjes te bundelen.</span>
+        <Button variant="primary" onClick={onNew}>+ Nieuwe klant</Button>
+      </div>}
+
+      {rows.length > 0 && viewMode === 'cards' && <ClientCardGrid rows={rows} onOpen={onOpen} unreadByClient={unreadByClient} />}
+      {rows.length > 0 && viewMode === 'table' && <ClientTable rows={rows} onOpen={onOpen} unreadByClient={unreadByClient} listFields={listFields} />}
+    </>}
+  </div>;
+}
+
+// Waarom een bericht niet vanzelf bij een klant belandde, in gewone taal.
+const INBOUND_REASON_LABELS: Record<string, string> = {
+  no_match: 'Afzender hoort niet bij een bekende klant',
+  ambiguous: 'Meerdere klanten hebben dit e-mailadres',
+  blocked: 'Afzender staat op je negeerlijst',
+  alias_retiring: 'Binnengekomen op je oude doorstuuradres',
+  no_forwarding_evidence: 'Rechtstreeks gestuurd, niet via je doorstuurregel',
+  rate_limited: 'Ongewoon veel post tegelijk — even apart gezet',
+  token_sender_mismatch: 'Antwoord kwam van iemand anders dan de klant',
+  token_org_mismatch: 'Tegenstrijdige adressering',
+  messageid_conflict: 'Zelfde kenmerk als een bericht dat er al staat',
+  auto_generated: 'Automatisch gegenereerd bericht',
+  autoresponder: 'Automatisch antwoord (afwezigheid)',
+  bulk: 'Nieuwsbrief of bulkbericht',
+  noreply_sender: 'Afzender is een no-reply-adres',
+  tnef: 'Bijlage in Outlook-formaat (winmail.dat)',
+  oversized: 'Bericht te groot om volledig te lezen',
+  parse_error: 'Bericht kon niet gelezen worden',
+};
+
+/**
+ * De opvangbak: post die binnenkwam maar niet eenduidig aan een klant te
+ * koppelen was. Bewust géén eigen pagina in het zijmenu — meestal is deze lijst
+ * leeg, en een lege pagina in het menu is alleen maar ruis.
+ */
+function InboundInboxTab({ organizationId, clients, canWrite, onChanged }: {
+  organizationId: string;
+  clients: Client[];
+  canWrite: boolean;
+  onChanged: () => void;
+}) {
+  const [category, setCategory] = useState<InboundMessageCategory>('human');
+  const [messages, setMessages] = useState<InboundMessage[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [aliasId, setAliasId] = useState<string | null>(null);
+  const [hasAlias, setHasAlias] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    setLoadError(null);
+    Promise.all([loadInboundMessages(organizationId, category), loadInboundAlias(organizationId)])
+      .then(([rows, alias]) => {
+        if (cancelled) return;
+        setMessages(rows);
+        setAliasId(alias?.id ?? null);
+        setHasAlias(Boolean(alias));
+        setLoaded(true);
+      })
+      .catch(err => { if (!cancelled) { setLoadError(err instanceof Error ? err.message : 'Opvangbak laden mislukt.'); setLoaded(true); } });
+    return () => { cancelled = true; };
+  }, [organizationId, category]);
+
+  function removeRow(id: string) {
+    setMessages(prev => prev.filter(m => m.id !== id));
+    onChanged();
+  }
+
+  return <div className="inbound-inbox">
+    <div className="inbound-inbox-head">
+      <div>
+        <h3>Niet gekoppelde berichten</h3>
+        <p className="settings-help">
+          Post die op je doorstuuradres binnenkwam maar niet vanzelf bij een klant te plaatsen was.
+          Koppel hem hier alsnog, of leg hem weg.
+        </p>
+      </div>
+      <div className="client-view-toggle" role="group" aria-label="Soort berichten">
+        <button type="button" className={category === 'human' ? 'active' : ''} onClick={() => setCategory('human')} aria-pressed={category === 'human'}>Persoonlijk</button>
+        <button type="button" className={category === 'automated' ? 'active' : ''} onClick={() => setCategory('automated')} aria-pressed={category === 'automated'}>Automatisch</button>
+      </div>
+    </div>
+
+    {!loaded && <div className="client-empty-line">Opvangbak laden…</div>}
+    {loaded && loadError && <div className="error">{loadError}</div>}
+
+    {loaded && !loadError && hasAlias === false && <div className="client-empty-state">
+      <strong>Je hebt nog geen doorstuuradres</strong>
+      <span>
+        Stel er een in onder Instellingen → E-mail &amp; domeinen. Daarna komt mail die een klant rechtstreeks
+        naar je eigen adres stuurt hier binnen als hij niet vanzelf te plaatsen is.
+      </span>
     </div>}
 
-    {rows.length > 0 && viewMode === 'cards' && <ClientCardGrid rows={rows} onOpen={onOpen} unreadByClient={unreadByClient} />}
-    {rows.length > 0 && viewMode === 'table' && <ClientTable rows={rows} onOpen={onOpen} unreadByClient={unreadByClient} listFields={listFields} />}
+    {loaded && !loadError && hasAlias !== false && messages.length === 0 && <div className="client-empty-state">
+      <strong>Niets te doen</strong>
+      <span>{category === 'human'
+        ? 'Alle binnengekomen post is aan een klant gekoppeld.'
+        : 'Geen automatische berichten in de wacht.'}</span>
+    </div>}
+
+    <div className="inbound-inbox-list">
+      {messages.map(message => (
+        <InboundInboxRow
+          key={message.id}
+          message={message}
+          clients={clients}
+          organizationId={organizationId}
+          aliasId={aliasId}
+          canWrite={canWrite}
+          onDone={() => removeRow(message.id)}
+        />
+      ))}
+    </div>
   </div>;
+}
+
+function InboundInboxRow({ message, clients, organizationId, aliasId, canWrite, onDone }: {
+  message: InboundMessage;
+  clients: Client[];
+  organizationId: string;
+  aliasId: string | null;
+  canWrite: boolean;
+  onDone: () => void;
+}) {
+  const [clientId, setClientId] = useState<string>(message.suggested_client_id ?? '');
+  const [remember, setRemember] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const sorted = useMemo(() => [...clients].sort((a, b) => a.name.localeCompare(b.name, 'nl')), [clients]);
+  const snippet = (message.body_text ?? '').replace(/\s+/g, ' ').trim().slice(0, 240);
+  // Weergavenaam afkappen: die is vrij te kiezen door de afzender en een lange
+  // naam kan het echte adres uit beeld duwen.
+  const senderName = (message.sender_name ?? '').slice(0, 80);
+
+  const daysLeft = message.purge_after
+    ? Math.ceil((new Date(message.purge_after).getTime() - Date.now()) / 86400000)
+    : null;
+
+  async function act(fn: () => Promise<unknown>) {
+    setBusy(true); setError(null);
+    try {
+      await fn();
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Actie mislukt.');
+      setBusy(false);
+    }
+  }
+
+  return <article className="inbound-row">
+    <div className="inbound-row-head">
+      <div className="inbound-row-sender">
+        <strong>{senderName || message.sender_email || 'Onbekende afzender'}</strong>
+        {senderName && message.sender_email && <span className="inbound-row-address">{message.sender_email}</span>}
+      </div>
+      <time>{formatEmailDateTime(message.received_at)}</time>
+    </div>
+
+    <div className="inbound-row-subject">{message.subject || '(geen onderwerp)'}</div>
+    {snippet && <p className="inbound-row-snippet">{snippet}{snippet.length === 240 ? '…' : ''}</p>}
+
+    {message.attachment_names.length > 0 && <p className="inbound-row-note">
+      {message.attachment_names.length} bijlage{message.attachment_names.length === 1 ? '' : 'n'}: {message.attachment_names.join(', ')}
+      {' — '}niet opgeslagen, die staan nog in je eigen postvak.
+    </p>}
+
+    {message.reason && <p className="inbound-row-reason">
+      {INBOUND_REASON_LABELS[message.reason] ?? message.reason}
+    </p>}
+
+    {message.candidates.length > 1 && <div className="inbound-row-candidates">
+      <span>Bedoelde je:</span>
+      {message.candidates.map(candidate => (
+        <Button key={candidate.client_id} onClick={() => setClientId(candidate.client_id)} disabled={busy}>
+          {candidate.label}
+        </Button>
+      ))}
+    </div>}
+
+    {daysLeft != null && daysLeft <= 14 && <p className="inbound-row-note">
+      Wordt over {daysLeft} dag{daysLeft === 1 ? '' : 'en'} automatisch opgeruimd.
+    </p>}
+
+    {error && <div className="error">{error}</div>}
+
+    <div className="inbound-row-actions">
+      <Select value={clientId} onChange={e => { setClientId(e.target.value); setError(null); }} disabled={!canWrite || busy}>
+        <option value="">Kies een klant…</option>
+        {sorted.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
+      </Select>
+      <Button
+        variant="primary"
+        disabled={!canWrite || busy || !clientId}
+        onClick={() => act(() => linkInboundMessage(organizationId, message.id, clientId, remember))}
+      >
+        {busy ? 'Bezig…' : 'Koppelen'}
+      </Button>
+      <Button disabled={!canWrite || busy} onClick={() => act(() => setInboundMessageStatus(organizationId, message.id, 'dropped'))}>
+        Negeren
+      </Button>
+      {aliasId && message.sender_email && <Button
+        variant="danger"
+        disabled={!canWrite || busy}
+        onClick={() => {
+          if (!window.confirm(`Post van ${message.sender_email} voortaan altijd negeren?`)) return;
+          void act(async () => {
+            await blockInboundSender(organizationId, aliasId, message.sender_email!);
+            await setInboundMessageStatus(organizationId, message.id, 'dropped');
+          });
+        }}
+      >
+        Altijd negeren
+      </Button>}
+    </div>
+
+    <label className="inbound-row-remember">
+      <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} disabled={!canWrite || busy} />
+      Onthoud dit adres bij deze klant, zodat volgende berichten vanzelf goed komen
+    </label>
+  </article>;
 }
 
 function ClientCardGrid({ rows, onOpen, unreadByClient }: { rows: ClientOverviewRow[]; onOpen: (client: Client) => void; unreadByClient: Record<string, number> }) {
@@ -668,6 +911,23 @@ function formatEmailDateTime(value: string | null | undefined): string {
   return new Intl.DateTimeFormat('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 
+/**
+ * Waarom staat dit binnengekomen bericht in dít dossier? Bij mail die via het
+ * doorstuuradres komt is dat een gok van het systeem, en dan hoor je te zien
+ * waaróp die gok gebaseerd is.
+ */
+function inboundOriginLabel(msg: ClientEmail): string | null {
+  const viaAlias = (msg.metadata as { inbound_route?: string } | null)?.inbound_route === 'alias';
+  switch (msg.link_source) {
+    case 'client_email': return viaAlias ? 'Binnengekomen via je doorstuuradres, herkend op het e-mailadres' : 'Automatisch gekoppeld op e-mailadres';
+    case 'client_contact': return viaAlias ? 'Binnengekomen via je doorstuuradres, herkend op een contactpersoon' : 'Automatisch gekoppeld op een contactpersoon';
+    case 'manual': return 'Handmatig gekoppeld vanuit de opvangbak';
+    case 'header_thread': return 'Gekoppeld aan een lopend gesprek';
+    case 'reply_token': return null; // antwoord op onze eigen mail: vanzelfsprekend
+    default: return viaAlias ? 'Binnengekomen via je doorstuuradres' : null;
+  }
+}
+
 function ClientCommunication({ client, organizationId, canWrite, onUnreadChanged }: { client: Client; organizationId: string; canWrite: boolean; onUnreadChanged?: () => void }) {
   const [threads, setThreads] = useState<ClientEmailThread[]>([]);
   const [emails, setEmails] = useState<ClientEmail[]>([]);
@@ -723,6 +983,20 @@ function ClientCommunication({ client, organizationId, canWrite, onUnreadChanged
     setThreads(loadedThreads);
     setEmails(loadedEmails);
     setReadIds(loadedReadIds);
+  }
+
+  // Optie A brengt post van niet-klanten binnen; zonder wisrecht zou een fout
+  // gekoppeld bericht voorgoed in het dossier blijven staan. Soft delete: de
+  // rij blijft bestaan maar valt buiten de RLS-policy.
+  async function removeMessage(clientEmailId: string) {
+    if (!window.confirm('Dit bericht uit het klantdossier halen? Het verdwijnt uit het gesprek.')) return;
+    try {
+      await deleteClientEmail(organizationId, clientEmailId);
+      await reload();
+      onUnreadChanged?.();
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Verwijderen mislukt.');
+    }
   }
 
   async function send() {
@@ -835,11 +1109,29 @@ function ClientCommunication({ client, organizationId, canWrite, onUnreadChanged
                     <span className={`client-comm-status ${clientEmailStatusTone(msg.status)}`}>{CLIENT_EMAIL_STATUS_LABELS[msg.status] ?? msg.status}</span>
                     <time>{formatEmailDateTime(msg.created_at)}</time>
                   </div>
-                  <div className="client-comm-message-from">{msg.direction === 'outbound' ? `${msg.from_email} → ${msg.to_email}` : `Van ${msg.from_email}`}</div>
+                  <div className="client-comm-message-from">
+                    {msg.direction === 'outbound'
+                      ? `${msg.from_email} → ${msg.to_email}`
+                      /* Weergavenaam afgekapt: die is vrij te kiezen door de afzender. */
+                      : `Van ${(msg.from_name ?? '').slice(0, 80) ? `${(msg.from_name ?? '').slice(0, 80)} <${msg.from_email}>` : msg.from_email}`}
+                  </div>
+                  {msg.direction === 'inbound' && inboundOriginLabel(msg) && (
+                    <div className="client-comm-origin">{inboundOriginLabel(msg)}</div>
+                  )}
                   {msg.body_html
                     ? <div className="client-comm-body" dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(msg.body_html) }} />
                     : <div className="client-comm-body client-comm-body-plain">{msg.body_text}</div>}
                   {msg.error_message && <div className="client-comm-error">{msg.error_message}</div>}
+                  {canWrite && msg.direction === 'inbound' && <div className="client-comm-message-actions">
+                    <button
+                      type="button"
+                      className="client-comm-remove"
+                      onClick={() => void removeMessage(msg.id)}
+                      title="Haal dit bericht uit het klantdossier"
+                    >
+                      Verwijderen
+                    </button>
+                  </div>}
                 </div>;
               })}
             </div>}
