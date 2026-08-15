@@ -157,12 +157,17 @@ export interface PortalGallery {
   description: string | null;
   /** 'photo' | 'video' | 'hybrid' — bepaalt de weergave bij de klant. */
   format: string;
-  /** 'full' | 'split' | 'collage' | 'minimal' — de opening van de galerij. */
+  /** De opening van de galerij; zie GalleryHeroTemplate in src/types.ts. */
   hero_template: string;
   published_at: string | null;
   allow_downloads: boolean;
   download_quality: string;
   cover_item_id: string | null;
+  /** Eigen coverbeeld dat niet in de galerij zit; wint van `cover_item_id`. */
+  cover_preview_key: string | null;
+  /** Focuspunt van de uitsnede in procenten (0–100). */
+  cover_focus_x: number;
+  cover_focus_y: number;
   expires_at: string | null;
 }
 

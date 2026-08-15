@@ -435,6 +435,9 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
           title: detail.gallery.title,
           description: detail.gallery.description,
           itemId: detail.gallery.cover_item_id,
+          coverPreviewKey: detail.gallery.cover_preview_key,
+          focusX: detail.gallery.cover_focus_x,
+          focusY: detail.gallery.cover_focus_y,
         }}
         favorites={favoriteIds}
         canFavorite

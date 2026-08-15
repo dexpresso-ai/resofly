@@ -40,6 +40,10 @@ type PublicGallery = {
   allow_downloads: boolean;
   download_quality: string;
   cover_item_id: string | null;
+  /** Eigen coverbeeld dat niet in de galerij zit; wint van `cover_item_id`. */
+  cover_preview_key: string | null;
+  cover_focus_x: number;
+  cover_focus_y: number;
   expires_at: string | null;
 };
 
@@ -401,6 +405,9 @@ export function PublicGalleryPage({ token }: { token: string }) {
             title: payload.gallery.title,
             description: payload.gallery.description,
             itemId: payload.gallery.cover_item_id,
+            coverPreviewKey: payload.gallery.cover_preview_key,
+            focusX: payload.gallery.cover_focus_x,
+            focusY: payload.gallery.cover_focus_y,
           }}
           favorites={favoriteIds}
           canFavorite

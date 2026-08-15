@@ -74,6 +74,7 @@ const heroGroups: Array<{ group: string; options: Array<{ key: GalleryHeroTempla
     options: [
       { key: 'full', label: 'Volledig beeld', hint: 'Beeldvullend met de titel eroverheen.' },
       { key: 'minimal', label: 'Alleen tekst', hint: 'Geen hero-foto; direct de galerij.' },
+      { key: 'fade', label: 'Vervloeiend', hint: 'Het beeld lost onderaan op in de achtergrond; geen harde rand.' },
     ],
   },
   {
@@ -82,6 +83,8 @@ const heroGroups: Array<{ group: string; options: Array<{ key: GalleryHeroTempla
       { key: 'editorial', label: 'Editorial', hint: 'Asymmetrisch; grote titel valt over het beeld.' },
       { key: 'frame', label: 'Kader', hint: 'Beeld in een ruim kader, titel in kapitalen.' },
       { key: 'split', label: 'Beeld naast tekst', hint: 'Half beeld, half tekst.' },
+      { key: 'cutout', label: 'Uitgesneden titel', hint: 'Het beeld is te zien dóór de letters van de titel heen.' },
+      { key: 'duotone', label: 'Duotoon', hint: 'Het beeld in jouw accentkleur, met een grote titel.' },
     ],
   },
   {
@@ -89,6 +92,8 @@ const heroGroups: Array<{ group: string; options: Array<{ key: GalleryHeroTempla
     options: [
       { key: 'classic', label: 'Klassiek', hint: 'Serif-titel tussen dunne lijnen, veel rust.' },
       { key: 'collage', label: 'Collage', hint: 'Eén groot beeld met twee kleinere.' },
+      { key: 'arch', label: 'Boog', hint: 'Een staand beeld in een boog, titel eronder in kapitalen.' },
+      { key: 'stack', label: 'Stapel afdrukken', hint: 'Drie afdrukken schuin over elkaar, als op tafel.' },
     ],
   },
   {
@@ -97,9 +102,34 @@ const heroGroups: Array<{ group: string; options: Array<{ key: GalleryHeroTempla
       { key: 'netflix', label: 'Kopvideo', hint: 'Eén video groot in beeld die stil meespeelt; de rest in rijen eronder.' },
       { key: 'cinematic', label: 'Cinematisch', hint: 'Trage zoom op het beeld, titel zweeft in.' },
       { key: 'mosaic', label: 'Mozaïek', hint: 'Negen beelden achter een gecentreerde titel.' },
+      { key: 'slideshow', label: 'Wisselende cover', hint: 'De cover wisselt langzaam met de volgende beelden.' },
     ],
   },
 ];
+
+/**
+ * De beeldverhouding waarin een opening het coverbeeld bijsnijdt. De kiezer
+ * toont het voorbeeld precies zo, zodat je vóórdat je publiceert ziet wat er
+ * wegvalt — en met het focuspunt kunt bijsturen.
+ *
+ * `null` = deze opening toont geen coverbeeld.
+ */
+function heroCropRatio(template: GalleryHeroTemplate): string | null {
+  switch (template) {
+    case 'minimal': return null;
+    case 'arch': return '3 / 4';
+    case 'stack': return '4 / 3';
+    case 'split': return '4 / 3';
+    case 'classic': return '3 / 2';
+    case 'collage': return '10 / 13';
+    case 'editorial': return '16 / 10';
+    case 'frame': case 'netflix': return '16 / 9';
+    case 'fade': return '16 / 8';
+    case 'cutout': return '24 / 5';
+    case 'cinematic': case 'mosaic': case 'slideshow': return '2 / 1';
+    default: return '21 / 9';
+  }
+}
 
 function fmtBytesShort(bytes: number): string {
   if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
@@ -504,6 +534,11 @@ export function GalleryTab({
         }
         if (item.stream_uid) void deleteGalleryStreamVideo(organizationId, item.stream_uid).catch(() => undefined);
       }
+      // Een eigen coverbeeld hangt niet aan een item en gaat dus niet mee in de
+      // cascade; zonder deze regel blijft het als wees in R2 achter.
+      for (const key of [gallery.cover_preview_key, gallery.cover_thumb_key]) {
+        if (key) void deleteR2Object(key).catch(() => undefined);
+      }
       if (openId === gallery.id) setOpenId(null);
       await onChanged();
       await refreshStorage();
@@ -766,13 +801,82 @@ export function GalleryTab({
     }
   }
 
-  async function setCover(item: GalleryItem) {
+  // ── Cover ──
+  // Er zijn twee bronnen voor het coverbeeld en ze sluiten elkaar uit: een item
+  // uit de galerij (`cover_item_id`) of een eigen beeld dat er niet in zit
+  // (`cover_preview_key`). Elke keuze zet daarom de andere uit — anders zou de
+  // beeldmaker een cover aanwijzen en er een ándere zien verschijnen.
+
+  /** Ruimt een vervangen of weggehaald eigen coverbeeld op in R2. */
+  function discardCoverFiles(gallery: Gallery) {
+    for (const key of [gallery.cover_preview_key, gallery.cover_thumb_key]) {
+      if (key) void deleteR2Object(key).catch(() => undefined);
+    }
+  }
+
+  /** Wijst een beeld uit de galerij aan; `null` = terug naar automatisch. */
+  async function pickCoverItem(itemId: UUID | null) {
     if (!openGallery) return;
+    const previous = openGallery;
+    await patchGallery(previous, {
+      cover_item_id: itemId,
+      cover_preview_key: null,
+      cover_thumb_key: null,
+      cover_bytes: 0,
+    });
+    discardCoverFiles(previous);
+    if (previous.cover_preview_key) await refreshStorage();
+  }
+
+  /**
+   * Een eigen coverbeeld: een ontworpen titelkaart of een foto die niet wordt
+   * meegeleverd. Alleen de weergavevarianten gaan naar R2 — een cover wordt
+   * nooit gedownload, dus het origineel bewaren zou pure opslag kosten.
+   */
+  async function uploadCover(file: File) {
+    if (!openGallery) return;
+    if (!GALLERY_PHOTO_TYPES.has(file.type)) {
+      throw new Error('Kies een JPEG-, PNG- of WebP-bestand als coverbeeld.');
+    }
+    const previous = openGallery;
+    const coverId = crypto.randomUUID();
+    const base = file.name.replace(/\.[^.]+$/, '') || 'cover';
+    const { preview, thumb } = await generateImageDerivatives(file);
+    const [uploadedPreview, uploadedThumb] = await Promise.all([
+      uploadGalleryFileVariant(preview, `${base}.jpg`, 'image/jpeg', organizationId, previous.id, coverId, 'preview'),
+      uploadGalleryFileVariant(thumb, `${base}.jpg`, 'image/jpeg', organizationId, previous.id, coverId, 'thumb'),
+    ]);
+    await patchGallery(previous, {
+      cover_item_id: null,
+      cover_preview_key: uploadedPreview.key,
+      cover_thumb_key: uploadedThumb.key,
+      cover_bytes: uploadedPreview.size + uploadedThumb.size,
+    });
+    discardCoverFiles(previous);
+    await refreshStorage();
+  }
+
+  /** Haalt het eigen coverbeeld weg; de opening pakt dan weer de galerij. */
+  async function clearCover() {
+    if (!openGallery) return;
+    const previous = openGallery;
+    await patchGallery(previous, { cover_preview_key: null, cover_thumb_key: null, cover_bytes: 0 });
+    discardCoverFiles(previous);
+    await refreshStorage();
+  }
+
+  /** Het punt dat in beeld moet blijven als de opening bijsnijdt (0–100%). */
+  async function setCoverFocus(x: number, y: number) {
+    if (!openGallery) return;
+    await patchGallery(openGallery, { cover_focus_x: x, cover_focus_y: y });
+  }
+
+  /** Het sterretje in de lightbox — dezelfde keuze, één klik dichterbij. */
+  async function setCover(item: GalleryItem) {
     try {
-      await updateRow<Gallery>('galleries', openGallery.id, { cover_item_id: item.id }, organizationId);
-      await onChanged();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Cover instellen mislukt.');
+      await pickCoverItem(item.id);
+    } catch {
+      // patchGallery heeft de melding al gezet.
     }
   }
 
@@ -1297,6 +1401,9 @@ export function GalleryTab({
               title: openGallery.title,
               description: openGallery.description,
               itemId: openGallery.cover_item_id,
+              coverPreviewKey: openGallery.cover_preview_key,
+              focusX: openGallery.cover_focus_x,
+              focusY: openGallery.cover_focus_y,
             }}
             favoriteCounts={favoriteCounts}
             canFavorite={false}
@@ -1374,6 +1481,12 @@ export function GalleryTab({
             onSaveAsPresets: saveAsPresets,
             onUploadDrop: uploadFromTransfer,
             onUploadPick: uploadPicked,
+          }}
+          cover={{
+            onPickItem: pickCoverItem,
+            onUploadCover: uploadCover,
+            onClearCover: clearCover,
+            onFocus: setCoverFocus,
           }}
         />
       )}
@@ -1454,6 +1567,23 @@ type GalleryFileActions = {
 };
 
 /**
+ * De coverkeuze wordt meteen bewaard, net als het uploaden en indelen in het
+ * tabblad "Bestanden". Dat moet ook wel: een eigen coverbeeld staat na het
+ * kiezen al in R2, en die twee uit elkaar laten lopen tot iemand op "Opslaan"
+ * drukt levert alleen weesbestanden op. Fouten komen als exception terug.
+ */
+type GalleryCoverActions = {
+  /** Een beeld uit de galerij; `null` = automatisch (het eerste beeld). */
+  onPickItem: (itemId: UUID | null) => Promise<void>;
+  /** Een eigen beeld dat niet in de galerij zit. */
+  onUploadCover: (file: File) => Promise<void>;
+  /** Het eigen beeld weghalen; de opening pakt weer de galerij. */
+  onClearCover: () => Promise<void>;
+  /** Het punt dat in beeld blijft als de opening bijsnijdt (0–100%). */
+  onFocus: (x: number, y: number) => Promise<void>;
+};
+
+/**
  * Eén venster voor alles wat je aan een galerij instelt, in drie tabbladen.
  *
  * De opening (hero) hoort bij de galerij als geheel: hij verschijnt precies één
@@ -1462,7 +1592,7 @@ type GalleryFileActions = {
  * hero-keuze vandaan, zodat de indruk van "een hero per categorie" niet ontstaat.
  */
 function GallerySettingsModal({
-  gallery, tab, onTab, busy, items, categories, bundle, queue, onClose, onSave, onDelete, files,
+  gallery, tab, onTab, busy, items, categories, bundle, queue, onClose, onSave, onDelete, files, cover,
 }: {
   gallery: Gallery;
   tab: GallerySettingsTab;
@@ -1476,6 +1606,7 @@ function GallerySettingsModal({
   onSave: (patch: Partial<Gallery>) => Promise<void>;
   onDelete?: () => void;
   files: GalleryFileActions;
+  cover: GalleryCoverActions;
 }) {
   const [title, setTitle] = useState(gallery.title);
   const [description, setDescription] = useState(gallery.description ?? '');
@@ -1610,38 +1741,44 @@ function GallerySettingsModal({
           )}
 
           {tab === 'opening' && (
-            <section className="gal-card">
-              <span className="gal-card-title">De opening van de galerij</span>
-              <p className="gal-field-help">
-                Dit is het eerste wat de klant ziet, bovenaan de pagina — één keer voor de hele galerij.
-                Categorieën zijn alleen een indeling van de bestanden en krijgen geen eigen opening.
-              </p>
-              {heroGroups.map(({ group, options }) => (
-                <div key={group} className="gal-hero-group">
-                  <span className="gal-hero-group-label">{group}</span>
-                  <div className="gal-format-options is-compact gal-hero-options">
-                    {options.map(({ key, label, hint }) => (
-                      <button
-                        key={key}
-                        type="button"
-                        className={`gal-format-card${heroTemplate === key ? ' is-active' : ''}`}
-                        onClick={() => setHeroTemplate(key)}
-                        aria-pressed={heroTemplate === key}
-                        title={hint}
-                      >
-                        <span className={`gal-hero-thumb gal-hero-thumb-${key}`} aria-hidden="true" />
-                        <span className="gal-format-label">{label}</span>
-                      </button>
-                    ))}
+            <>
+              <section className="gal-card">
+                <span className="gal-card-title">De opening van de galerij</span>
+                <p className="gal-field-help">
+                  Dit is het eerste wat de klant ziet, bovenaan de pagina — één keer voor de hele galerij.
+                  Categorieën zijn alleen een indeling van de bestanden en krijgen geen eigen opening.
+                </p>
+                {heroGroups.map(({ group, options }) => (
+                  <div key={group} className="gal-hero-group">
+                    <span className="gal-hero-group-label">{group}</span>
+                    <div className="gal-format-options is-compact gal-hero-options">
+                      {options.map(({ key, label, hint }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          className={`gal-format-card${heroTemplate === key ? ' is-active' : ''}`}
+                          onClick={() => setHeroTemplate(key)}
+                          aria-pressed={heroTemplate === key}
+                          title={hint}
+                        >
+                          <span className={`gal-hero-thumb gal-hero-thumb-${key}`} aria-hidden="true" />
+                          <span className="gal-format-label">{label}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
-              <p className="gal-field-help">
-                Welk beeld de opening vult, kies je met het sterretje in de galerij: bij “Kopvideo”
-                is dat de video die bovenaan meespeelt, bij de andere openingen de coverfoto.
-                Kies je niets, dan pakt de galerij het eerste item.
-              </p>
-            </section>
+                ))}
+              </section>
+
+              <GalleryCoverSettings
+                gallery={gallery}
+                heroTemplate={heroTemplate}
+                items={items}
+                bundle={bundle}
+                busy={busy}
+                actions={cover}
+              />
+            </>
           )}
 
           {tab === 'files' && (
@@ -1684,6 +1821,247 @@ function GallerySettingsModal({
         </div>
       </div>
     </div>
+  );
+}
+
+// ── Cover: welk beeld de opening vult ───────────────────────────────────────
+
+/** Houdt een percentage binnen 0–100 en maakt er een heel getal van. */
+function clampPercent(value: number): number {
+  return Math.round(Math.min(100, Math.max(0, value)));
+}
+
+/**
+ * Het coverbeeld van de galerij. Twee vragen, één plek: wélk beeld de opening
+ * vult, en wélk deel daarvan in beeld blijft.
+ *
+ * Het beeld mag uit de galerij komen, maar hoeft dat niet: een ontworpen
+ * titelkaart of een sfeerbeeld dat je niet meelevert kan net zo goed de cover
+ * zijn. Daarom staat "Eigen beeld uploaden" naast "Kies uit de galerij".
+ *
+ * Het voorbeeld heeft de beeldverhouding van de gekozen opening, want elke
+ * opening snijdt anders bij — een boog is staand, een cinematische kop bijna
+ * panoramisch. Klikken of slepen in het voorbeeld verzet het focuspunt, zodat
+ * een hoofd niet net buiten de uitsnede valt.
+ */
+function GalleryCoverSettings({ gallery, heroTemplate, items, bundle, busy, actions }: {
+  gallery: Gallery;
+  heroTemplate: GalleryHeroTemplate;
+  items: GalleryItem[];
+  bundle: GalleryTokenBundle | null;
+  busy: boolean;
+  actions: GalleryCoverActions;
+}) {
+  const [picking, setPicking] = useState(false);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [focus, setFocus] = useState({ x: gallery.cover_focus_x, y: gallery.cover_focus_y });
+  const dragging = useRef(false);
+  const commitTimer = useRef<number | null>(null);
+  const uploadInput = useRef<HTMLInputElement | null>(null);
+
+  // Na het opslaan komt de rij vernieuwd terug; dán is de database de waarheid.
+  useEffect(() => {
+    setFocus({ x: gallery.cover_focus_x, y: gallery.cover_focus_y });
+  }, [gallery.cover_focus_x, gallery.cover_focus_y]);
+
+  useEffect(() => () => { if (commitTimer.current) window.clearTimeout(commitTimer.current); }, []);
+
+  const custom = Boolean(gallery.cover_preview_key);
+  const ratio = heroCropRatio(heroTemplate);
+  const chosenItem = gallery.cover_item_id ? items.find(i => i.id === gallery.cover_item_id) ?? null : null;
+  // Waar de opening zelf op terugvalt: een video bij de kopvideo, anders een foto.
+  const autoItem = items.find(i => i.media_type === (heroTemplate === 'netflix' ? 'video' : 'photo')) ?? items[0] ?? null;
+  const shownItem = chosenItem ?? autoItem;
+  const previewUrl = custom && gallery.cover_thumb_key && bundle
+    ? galleryFileUrl(gallery.cover_thumb_key, bundle.mediaToken)
+    : shownItem && bundle ? galleryItemThumbUrl(shownItem, bundle) : null;
+
+  const sourceLabel = custom
+    ? 'Een eigen beeld — het staat niet in de galerij'
+    : chosenItem
+      ? `Uit de galerij — ${chosenItem.file_name}`
+      : shownItem
+        ? `Automatisch — nu ${shownItem.file_name}`
+        : 'Er staat nog geen beeld in deze galerij';
+
+  async function run(action: () => Promise<void>) {
+    setWorking(true);
+    setError(null);
+    try {
+      await action();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Het coverbeeld bijwerken is mislukt.');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  function commitFocus(point: { x: number; y: number }) {
+    if (commitTimer.current) window.clearTimeout(commitTimer.current);
+    commitTimer.current = null;
+    void run(() => actions.onFocus(point.x, point.y));
+  }
+
+  /** Pijltjestoetsen komen in salvo's binnen; pas na de laatste opslaan. */
+  function scheduleFocus(point: { x: number; y: number }) {
+    if (commitTimer.current) window.clearTimeout(commitTimer.current);
+    commitTimer.current = window.setTimeout(() => commitFocus(point), 400);
+  }
+
+  function pointFrom(e: React.PointerEvent<HTMLButtonElement>) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return {
+      x: clampPercent(((e.clientX - rect.left) / Math.max(1, rect.width)) * 100),
+      y: clampPercent(((e.clientY - rect.top) / Math.max(1, rect.height)) * 100),
+    };
+  }
+
+  function nudge(dx: number, dy: number) {
+    const next = { x: clampPercent(focus.x + dx), y: clampPercent(focus.y + dy) };
+    setFocus(next);
+    scheduleFocus(next);
+  }
+
+  return (
+    <section className="gal-card">
+      <span className="gal-card-title">Het coverbeeld</span>
+      <p className="gal-field-help">
+        Dit beeld vult de opening. Kies er een uit de galerij, of upload een eigen beeld — een
+        titelkaart bijvoorbeeld — dat verder nergens in de galerij staat. Kies je niets, dan pakt
+        de galerij vanzelf het eerste beeld. Wat je hier kiest wordt meteen bewaard.
+      </p>
+
+      <div className="gal-cover">
+        <div className="gal-cover-preview">
+          {previewUrl ? (
+            <button
+              type="button"
+              className="gal-cover-frame"
+              style={{ aspectRatio: ratio ?? '16 / 9' }}
+              aria-label="Focuspunt van de uitsnede: klik of sleep in het beeld, of verplaats het met de pijltjestoetsen"
+              onPointerDown={(e) => {
+                e.currentTarget.setPointerCapture(e.pointerId);
+                dragging.current = true;
+                setFocus(pointFrom(e));
+              }}
+              onPointerMove={(e) => { if (dragging.current) setFocus(pointFrom(e)); }}
+              onPointerUp={(e) => {
+                if (!dragging.current) return;
+                dragging.current = false;
+                const point = pointFrom(e);
+                setFocus(point);
+                commitFocus(point);
+              }}
+              onPointerCancel={() => { dragging.current = false; }}
+              onKeyDown={(e) => {
+                const step = e.shiftKey ? 10 : 2;
+                if (e.key === 'ArrowLeft') { e.preventDefault(); nudge(-step, 0); }
+                else if (e.key === 'ArrowRight') { e.preventDefault(); nudge(step, 0); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); nudge(0, -step); }
+                else if (e.key === 'ArrowDown') { e.preventDefault(); nudge(0, step); }
+              }}
+            >
+              <img src={previewUrl} alt="" style={{ objectPosition: `${focus.x}% ${focus.y}%` }} />
+              <span className="gal-cover-dot" style={{ left: `${focus.x}%`, top: `${focus.y}%` }} aria-hidden="true" />
+            </button>
+          ) : (
+            <div className="gal-cover-frame is-empty" style={{ aspectRatio: ratio ?? '16 / 9' }}>
+              <ImageIcon size={22} />
+              <span>Nog geen coverbeeld</span>
+            </div>
+          )}
+          {previewUrl && (
+            <p className="gal-cover-hint">
+              Klik of sleep in het beeld om te bepalen wat er in beeld blijft — de opening snijdt
+              de rest weg. Nu op {focus.x}% / {focus.y}%.
+            </p>
+          )}
+        </div>
+
+        <div className="gal-cover-side">
+          <span className="gal-cover-source">{sourceLabel}</span>
+          {ratio === null && (
+            <p className="gal-field-help">
+              “Alleen tekst” toont geen beeld. Je keuze blijft staan voor als je straks een andere
+              opening kiest.
+            </p>
+          )}
+          <div className="gal-cover-actions">
+            <Button
+              variant="ghost"
+              onClick={() => setPicking(v => !v)}
+              disabled={busy || working || items.length === 0}
+            >
+              <ImageIcon size={14} /> {picking ? 'Kiezen sluiten' : 'Kies uit de galerij'}
+            </Button>
+            <Button variant="ghost" onClick={() => uploadInput.current?.click()} disabled={busy || working}>
+              {working ? <Loader2 size={14} className="spin" /> : <UploadCloud size={14} />} Eigen beeld uploaden
+            </Button>
+            {custom && (
+              <Button variant="ghost" onClick={() => void run(actions.onClearCover)} disabled={busy || working}>
+                <X size={14} /> Eigen beeld weghalen
+              </Button>
+            )}
+            {!custom && gallery.cover_item_id && (
+              <Button variant="ghost" onClick={() => void run(() => actions.onPickItem(null))} disabled={busy || working}>
+                <Sparkles size={14} /> Terug naar automatisch
+              </Button>
+            )}
+          </div>
+          <input
+            ref={uploadInput}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            hidden
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              // Meteen leegmaken: hetzelfde bestand nóg eens kiezen moet werken.
+              e.target.value = '';
+              if (file) void run(() => actions.onUploadCover(file));
+            }}
+          />
+        </div>
+      </div>
+
+      {picking && (
+        <div className="gal-cover-grid">
+          <button
+            type="button"
+            className={`gal-cover-pick is-auto${!custom && !gallery.cover_item_id ? ' is-active' : ''}`}
+            onClick={() => void run(async () => { await actions.onPickItem(null); setPicking(false); })}
+            disabled={busy || working}
+          >
+            <Sparkles size={15} />
+            <span>Automatisch</span>
+          </button>
+          {items.map(item => {
+            const url = bundle ? galleryItemThumbUrl(item, bundle) : null;
+            const active = !custom && gallery.cover_item_id === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                className={`gal-cover-pick${active ? ' is-active' : ''}`}
+                onClick={() => void run(async () => { await actions.onPickItem(item.id); setPicking(false); })}
+                disabled={busy || working}
+                title={item.file_name}
+                aria-pressed={active}
+                aria-label={coverLabel(item, active)}
+              >
+                {url
+                  ? <img src={url} alt="" loading="lazy" />
+                  : <span className="gal-cover-pick-blank"><ImageIcon size={16} /></span>}
+                {item.media_type === 'video' && <span className="gal-cover-pick-badge"><Film size={11} /></span>}
+                {active && <span className="gal-cover-pick-mark"><Star size={12} fill="currentColor" /></span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {error && <div className="error">{error}</div>}
+    </section>
   );
 }
 

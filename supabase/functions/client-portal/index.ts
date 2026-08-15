@@ -725,8 +725,20 @@ function sanitizeGallery(row: Record<string, unknown>) {
     allow_downloads: Boolean(row.allow_downloads),
     download_quality: row.download_quality ?? 'original',
     cover_item_id: row.cover_item_id ?? null,
+    // Een eigen coverbeeld ligt onder de galerij-prefix in R2, dus het kijk-token
+    // van de galerij dekt hem al; alleen de weergavevariant gaat mee naar buiten.
+    cover_preview_key: row.cover_preview_key ?? null,
+    cover_focus_x: clampFocus(row.cover_focus_x),
+    cover_focus_y: clampFocus(row.cover_focus_y),
     expires_at: row.expires_at ?? null,
   };
+}
+
+/** Het focuspunt gaat rechtstreeks een CSS-waarde in; hou het binnen 0–100. */
+function clampFocus(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(Math.min(100, Math.max(0, value)))
+    : 50;
 }
 
 function sanitizeGalleryItem(row: Record<string, unknown>) {

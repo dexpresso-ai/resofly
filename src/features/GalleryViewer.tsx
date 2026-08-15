@@ -32,13 +32,33 @@ export type GalleryViewerItem = {
 
 export type GalleryViewerCategory = { id: string; name: string };
 
-/** Opening van de galerij; `itemId` is de gekozen coverfoto (mag ontbreken). */
+/**
+ * Opening van de galerij. Het coverbeeld komt uit één van twee bronnen:
+ * `coverPreviewKey` — een eigen beeld dat niet in de galerij zit — of anders
+ * `itemId`, een beeld uit de galerij zelf. Ontbreken ze allebei, dan pakt de
+ * opening het eerste bruikbare item.
+ */
 export type GalleryViewerHero = {
   template: string;
   title: string;
   description?: string | null;
   itemId?: string | null;
+  /** Eigen coverbeeld (R2-key onder de galerij-prefix); wint van `itemId`. */
+  coverPreviewKey?: string | null;
+  /** Focuspunt van de uitsnede in procenten (0–100); standaard het midden. */
+  focusX?: number | null;
+  focusY?: number | null;
 };
+
+/**
+ * De uitsnede van het coverbeeld. Elke opening snijdt bij — 21:9, 2:1, een
+ * boog — en zonder focuspunt valt een hoofd net buiten beeld.
+ */
+function coverPosition(hero: GalleryViewerHero): string {
+  const clamp = (value: number | null | undefined) =>
+    Math.min(100, Math.max(0, typeof value === 'number' && Number.isFinite(value) ? value : 50));
+  return `${clamp(hero.focusX)}% ${clamp(hero.focusY)}%`;
+}
 
 export function formatDuration(seconds: number | null): string {
   if (!seconds || !Number.isFinite(seconds) || seconds <= 0) return '';
@@ -1382,7 +1402,9 @@ function GalleryBillboard({ hero, item, bundle, allowDownload, onPlay, onDownloa
   return (
     <header className="galv-bb">
       <div className="galv-bb-media" aria-hidden="true">
-        {poster && <img className="galv-bb-poster" src={poster} alt="" />}
+        {poster && (
+          <img className="galv-bb-poster" src={poster} alt="" style={{ objectPosition: coverPosition(hero) }} />
+        )}
         {previewOn && item.stream_playback_base && streamToken && (
           <iframe
             className="galv-bb-video"
@@ -1607,11 +1629,19 @@ function JustifiedPhotos({ photos, renderTile, rowScale = 1 }: {
   );
 }
 
+/** Hoe lang één beeld blijft staan in de wisselende opening. */
+const HERO_SLIDE_MS = 5200;
+
 /**
- * De opening van de galerij. `full` vult het beeld met de coverfoto, `split`
- * zet beeld en tekst naast elkaar, `collage` toont drie beelden. Ontbreekt er
- * een bruikbare foto, dan valt de hero terug op de ingetogen tekstvariant —
- * beter een rustige titel dan een gat.
+ * De opening van de galerij. Zestien varianten, van een kale titel tot een
+ * beeld dat door de letters heen te zien is. Ontbreekt er een bruikbaar beeld,
+ * dan valt de hero terug op de ingetogen tekstvariant — beter een rustige titel
+ * dan een gat.
+ *
+ * Het coverbeeld komt uit één van twee bronnen. Heeft de beeldmaker een eigen
+ * cover geüpload, dan wint die: hij is bewust gekozen en zit niet in de reeks,
+ * dus hij is ook niet aan te klikken. Anders is het een item uit de galerij, en
+ * opent een klik het gewoon in de lightbox.
  */
 function GalleryHero({ hero, items, bundle, onOpenPhoto }: {
   hero: GalleryViewerHero;
@@ -1619,11 +1649,49 @@ function GalleryHero({ hero, items, bundle, onOpenPhoto }: {
   bundle: GalleryTokenBundle;
   onOpenPhoto: (item: GalleryViewerItem) => void;
 }) {
-  const photos = items.filter(i => i.media_type === 'photo');
-  const cover = (hero.itemId ? items.find(i => i.id === hero.itemId) : null) ?? photos[0] ?? items[0] ?? null;
-  const coverUrl = cover ? itemPreviewUrl(cover, bundle) : null;
+  const photos = useMemo(() => items.filter(i => i.media_type === 'photo'), [items]);
+  const coverItem = (hero.itemId ? items.find(i => i.id === hero.itemId) : null) ?? photos[0] ?? items[0] ?? null;
+  const customCoverUrl = hero.coverPreviewKey ? galleryFileUrl(hero.coverPreviewKey, bundle.mediaToken) : null;
+  const coverUrl = customCoverUrl ?? (coverItem ? itemPreviewUrl(coverItem, bundle) : null);
+  const position = coverPosition(hero);
 
-  if (!cover || !coverUrl) {
+  /**
+   * De beelden náást de cover, voor de openingen die er meerdere tonen. Bij een
+   * eigen cover doet de hele galerij mee; anders slaan we het coverbeeld over,
+   * want dat staat al vooraan.
+   */
+  const extras = useMemo(
+    () => (customCoverUrl ? photos : photos.filter(p => p.id !== coverItem?.id)),
+    [customCoverUrl, photos, coverItem?.id],
+  );
+
+  /** De reeks van de wisselende opening: de cover voorop, dan de rest. */
+  const slides = useMemo(() => {
+    const urls = coverUrl ? [coverUrl] : [];
+    for (const photo of extras) {
+      if (urls.length >= 5) break;
+      const url = itemPreviewUrl(photo, bundle);
+      if (url) urls.push(url);
+    }
+    return urls;
+  }, [coverUrl, extras, bundle]);
+
+  const [slide, setSlide] = useState(0);
+  const rotating = hero.template === 'slideshow' && slides.length > 1;
+
+  useEffect(() => {
+    // Terug naar de cover zodra de reeks verandert: een oude index kan buiten
+    // de nieuwe lijst vallen, en dan staat er even helemaal geen beeld.
+    setSlide(0);
+    if (!rotating) return;
+    // Wie "minder beweging" heeft aangezet krijgt gewoon de cover; een
+    // CSS-overgang stilzetten helpt niet als de bron zelf blijft wisselen.
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    const timer = window.setInterval(() => setSlide(i => (i + 1) % slides.length), HERO_SLIDE_MS);
+    return () => window.clearInterval(timer);
+  }, [rotating, slides.length]);
+
+  if (!coverUrl) {
     return (
       <header className="galv-hero galv-hero-minimal">
         <h2>{hero.title}</h2>
@@ -1632,20 +1700,38 @@ function GalleryHero({ hero, items, bundle, onOpenPhoto }: {
     );
   }
 
-  const openCover = () => { if (cover.media_type === 'photo') onOpenPhoto(cover); };
+  // Een eigen cover zit niet in de galerij; daar valt niets op te openen.
+  const zoomable = !customCoverUrl && coverItem?.media_type === 'photo';
+  const openCover = () => { if (zoomable && coverItem) onOpenPhoto(coverItem); };
+  const shell = (name: string) => `galv-hero galv-hero-${name}${zoomable ? '' : ' is-static'}`;
   const text = (
     <div className="galv-hero-text">
       <h2>{hero.title}</h2>
       {hero.description && <p>{hero.description}</p>}
     </div>
   );
+  const coverImage = (className?: string) => (
+    <img className={className} src={coverUrl} alt={hero.title} style={{ objectPosition: position }} />
+  );
+
+  // ── Basis: het beeld lost onderaan op in de achtergrond, titel eronder ──
+  if (hero.template === 'fade') {
+    return (
+      <header className={shell('fade')}>
+        <div className="galv-hero-media" onClick={openCover}>
+          {coverImage()}
+        </div>
+        {text}
+      </header>
+    );
+  }
 
   // ── Modern: asymmetrisch, de titel valt over het beeld heen ──
   if (hero.template === 'editorial') {
     return (
-      <header className="galv-hero galv-hero-editorial">
+      <header className={shell('editorial')}>
         <div className="galv-hero-media" onClick={openCover}>
-          <img src={coverUrl} alt={hero.title} />
+          {coverImage()}
         </div>
         {text}
       </header>
@@ -1655,10 +1741,43 @@ function GalleryHero({ hero, items, bundle, onOpenPhoto }: {
   // ── Modern: beeld in een ruim kader, titel eronder in kapitalen ──
   if (hero.template === 'frame') {
     return (
-      <header className="galv-hero galv-hero-frame">
+      <header className={shell('frame')}>
         <div className="galv-hero-media" onClick={openCover}>
-          <img src={coverUrl} alt={hero.title} />
+          {coverImage()}
         </div>
+        {text}
+      </header>
+    );
+  }
+
+  // ── Modern: het beeld is te zien dóór de letters van de titel heen ──
+  if (hero.template === 'cutout') {
+    return (
+      <header className={shell('cutout')}>
+        {/* De titel blijft echte tekst: alleen de vulling is het beeld, dus
+            selecteren en voorlezen werken gewoon. Browsers zonder
+            background-clip krijgen via @supports de gewone tekstkleur. */}
+        <h2
+          className="galv-hero-cut"
+          style={{ backgroundImage: `url("${coverUrl}")`, backgroundPosition: position }}
+        >
+          {hero.title}
+        </h2>
+        <div className="galv-hero-media galv-hero-band" onClick={openCover}>
+          {coverImage()}
+        </div>
+        {hero.description && <p className="galv-hero-cut-sub">{hero.description}</p>}
+      </header>
+    );
+  }
+
+  // ── Modern: het beeld in de accentkleur van de beeldmaker ──
+  if (hero.template === 'duotone') {
+    return (
+      <header className={shell('duotone')} onClick={openCover}>
+        {coverImage('galv-hero-bg')}
+        <span className="galv-hero-tint" aria-hidden="true" />
+        <span className="galv-hero-veil" aria-hidden="true" />
         {text}
       </header>
     );
@@ -1667,11 +1786,51 @@ function GalleryHero({ hero, items, bundle, onOpenPhoto }: {
   // ── Klassiek: gecentreerde titel tussen dunne lijnen, beeld eronder ──
   if (hero.template === 'classic') {
     return (
-      <header className="galv-hero galv-hero-classic">
+      <header className={shell('classic')}>
         {text}
         <div className="galv-hero-media" onClick={openCover}>
-          <img src={coverUrl} alt={hero.title} />
+          {coverImage()}
         </div>
+      </header>
+    );
+  }
+
+  // ── Klassiek: het beeld in een staande boog, titel eronder ──
+  if (hero.template === 'arch') {
+    return (
+      <header className={shell('arch')}>
+        <div className="galv-hero-media" onClick={openCover}>
+          {coverImage()}
+        </div>
+        {text}
+      </header>
+    );
+  }
+
+  // ── Klassiek: drie afdrukken schuin over elkaar, als op tafel ──
+  if (hero.template === 'stack') {
+    const prints = extras.slice(0, 2);
+    return (
+      <header className={shell('stack')}>
+        <div className="galv-hero-stack-pile">
+          {/* Achterste eerst, zodat de cover er bovenop komt te liggen. */}
+          {prints.slice().reverse().map((print, index) => {
+            const url = itemPreviewUrl(print, bundle);
+            return url ? (
+              <div
+                key={print.id}
+                className={`galv-hero-print galv-hero-print-${prints.length - index}`}
+                onClick={() => onOpenPhoto(print)}
+              >
+                <img src={url} alt={print.file_name} loading="lazy" />
+              </div>
+            ) : null;
+          })}
+          <div className="galv-hero-print galv-hero-print-0" onClick={openCover}>
+            {coverImage()}
+          </div>
+        </div>
+        {text}
       </header>
     );
   }
@@ -1679,8 +1838,28 @@ function GalleryHero({ hero, items, bundle, onOpenPhoto }: {
   // ── Spectaculair: langzame zoom op het beeld, titel zweeft in ──
   if (hero.template === 'cinematic') {
     return (
-      <header className="galv-hero galv-hero-cinematic" onClick={openCover}>
-        <img className="galv-hero-bg" src={coverUrl} alt={hero.title} />
+      <header className={shell('cinematic')} onClick={openCover}>
+        {coverImage('galv-hero-bg')}
+        <span className="galv-hero-veil" aria-hidden="true" />
+        {text}
+      </header>
+    );
+  }
+
+  // ── Spectaculair: de cover wisselt langzaam met de volgende beelden ──
+  if (hero.template === 'slideshow') {
+    return (
+      <header className={shell('slideshow')} onClick={openCover}>
+        {slides.map((url, index) => (
+          <img
+            key={url}
+            className={`galv-hero-bg galv-hero-slide${index === slide ? ' is-active' : ''}`}
+            src={url}
+            alt={index === 0 ? hero.title : ''}
+            aria-hidden={index === 0 ? undefined : true}
+            style={{ objectPosition: index === 0 ? position : undefined }}
+          />
+        ))}
         <span className="galv-hero-veil" aria-hidden="true" />
         {text}
       </header>
@@ -1689,20 +1868,21 @@ function GalleryHero({ hero, items, bundle, onOpenPhoto }: {
 
   // ── Spectaculair: mozaïek van meerdere beelden achter de titel ──
   if (hero.template === 'mosaic') {
-    const tiles = [cover, ...photos.filter(p => p.id !== cover.id)].slice(0, 9);
+    const tiles = [coverUrl, ...extras.map(p => itemPreviewUrl(p, bundle))]
+      .filter((url): url is string => Boolean(url))
+      .slice(0, 9);
     return (
-      <header className="galv-hero galv-hero-mosaic">
+      // Het mozaïek is een achtergrond, geen bladerbare tegels; er valt hier
+      // niets te openen, ook niet als de cover een gewone foto is.
+      <header className="galv-hero galv-hero-mosaic is-static">
         <div className="galv-hero-mosaic-grid" aria-hidden="true">
-          {tiles.map((tile, index) => {
-            const url = itemPreviewUrl(tile, bundle);
-            return url ? (
-              // Elke tegel drijft met een eigen vertraging; bij "minder beweging"
-              // zet de globale reduced-motion-regel dit stil.
-              <span key={tile.id} className="galv-hero-mosaic-cell" style={{ animationDelay: `${index * 0.35}s` }}>
-                <img src={url} alt="" loading="lazy" />
-              </span>
-            ) : null;
-          })}
+          {tiles.map((url, index) => (
+            // Elke tegel drijft met een eigen vertraging; bij "minder beweging"
+            // zet de globale reduced-motion-regel dit stil.
+            <span key={url} className="galv-hero-mosaic-cell" style={{ animationDelay: `${index * 0.35}s` }}>
+              <img src={url} alt="" loading="lazy" />
+            </span>
+          ))}
         </div>
         <span className="galv-hero-veil" aria-hidden="true" />
         {text}
@@ -1712,27 +1892,24 @@ function GalleryHero({ hero, items, bundle, onOpenPhoto }: {
 
   if (hero.template === 'split') {
     return (
-      <header className="galv-hero galv-hero-split">
+      <header className={shell('split')}>
         <div className="galv-hero-media" onClick={openCover}>
-          <img src={coverUrl} alt={hero.title} />
+          {coverImage()}
         </div>
-        <div className="galv-hero-text">
-          <h2>{hero.title}</h2>
-          {hero.description && <p>{hero.description}</p>}
-        </div>
+        {text}
       </header>
     );
   }
 
   if (hero.template === 'collage') {
-    const extras = photos.filter(p => p.id !== cover.id).slice(0, 2);
+    const side = extras.slice(0, 2);
     return (
-      <header className="galv-hero galv-hero-collage">
+      <header className={shell('collage')}>
         <div className="galv-hero-collage-grid">
           <div className="galv-hero-media galv-hero-lead" onClick={openCover}>
-            <img src={coverUrl} alt={hero.title} />
+            {coverImage()}
           </div>
-          {extras.map(extra => {
+          {side.map(extra => {
             const url = itemPreviewUrl(extra, bundle);
             return url ? (
               <div key={extra.id} className="galv-hero-media" onClick={() => onOpenPhoto(extra)}>
@@ -1741,23 +1918,17 @@ function GalleryHero({ hero, items, bundle, onOpenPhoto }: {
             ) : null;
           })}
         </div>
-        <div className="galv-hero-text">
-          <h2>{hero.title}</h2>
-          {hero.description && <p>{hero.description}</p>}
-        </div>
+        {text}
       </header>
     );
   }
 
   // 'full' — schermvullend beeld met de titel eroverheen.
   return (
-    <header className="galv-hero galv-hero-full" onClick={openCover}>
-      <img className="galv-hero-bg" src={coverUrl} alt={hero.title} />
+    <header className={shell('full')} onClick={openCover}>
+      {coverImage('galv-hero-bg')}
       <span className="galv-hero-veil" aria-hidden="true" />
-      <div className="galv-hero-text">
-        <h2>{hero.title}</h2>
-        {hero.description && <p>{hero.description}</p>}
-      </div>
+      {text}
     </header>
   );
 }

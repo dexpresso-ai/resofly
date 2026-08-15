@@ -4711,8 +4711,66 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .gal-hero-thumb-netflix::before{left:5px;top:11px;width:44%;height:6px;background:rgba(var(--sheen-rgb),calc(.78 * var(--sheen-k)))}
 .gal-hero-thumb-netflix::after{left:5px;right:5px;bottom:4px;height:8px;border-radius:2px;background:
   repeating-linear-gradient(90deg,rgba(var(--sheen-rgb),calc(.42 * var(--sheen-k))) 0 16px,transparent 16px 20px)}
+/* Vervloeiend: een vlak dat naar onderen wegvalt, titel eronder. */
+.gal-hero-thumb-fade::before{left:4px;right:4px;top:0;height:22px;border-radius:0;background:linear-gradient(180deg,rgba(var(--sheen-rgb),calc(.34 * var(--sheen-k))),transparent)}
+.gal-hero-thumb-fade::after{left:50%;transform:translateX(-50%);bottom:5px;width:44%;height:4px;background:rgba(var(--sheen-rgb),calc(.5 * var(--sheen-k)))}
+/* Uitgesneden titel: dikke letterbalken met het beeld erdoorheen, band eronder. */
+.gal-hero-thumb-cutout::before{left:5px;right:5px;top:6px;height:12px;background:
+  repeating-linear-gradient(90deg,rgba(var(--sheen-rgb),calc(.62 * var(--sheen-k))) 0 7px,transparent 7px 11px)}
+.gal-hero-thumb-cutout::after{left:5px;right:5px;bottom:5px;height:7px;background:rgba(var(--sheen-rgb),calc(.26 * var(--sheen-k)))}
+/* Duotoon: één vlak in de accentkleur, titel linksonder. */
+.gal-hero-thumb-duotone{background:linear-gradient(140deg,rgba(var(--accent-rgb),.55),rgba(var(--accent-rgb),.16))}
+.gal-hero-thumb-duotone::before{display:none}
+.gal-hero-thumb-duotone::after{left:5px;bottom:6px;width:52%;height:5px;background:rgba(var(--sheen-rgb),calc(.75 * var(--sheen-k)))}
+/* Boog: een staand vlak met ronde bovenkant, titel eronder. */
+.gal-hero-thumb-arch::before{left:50%;transform:translateX(-50%);top:3px;width:34%;height:20px;border-radius:999px 999px 2px 2px;background:rgba(var(--sheen-rgb),calc(.32 * var(--sheen-k)))}
+.gal-hero-thumb-arch::after{left:50%;transform:translateX(-50%);bottom:5px;width:46%;height:4px;background:rgba(var(--sheen-rgb),calc(.5 * var(--sheen-k)))}
+/* Stapel: twee schuine afdrukken achter een rechte. */
+.gal-hero-thumb-stack::before{left:9px;top:7px;width:36%;height:20px;transform:rotate(-8deg);background:rgba(var(--sheen-rgb),calc(.2 * var(--sheen-k)))}
+.gal-hero-thumb-stack::after{left:14px;top:6px;width:36%;height:21px;transform:rotate(3deg);background:rgba(var(--sheen-rgb),calc(.42 * var(--sheen-k)))}
+/* Wisselende cover: één vlak met drie standjes eronder. */
+.gal-hero-thumb-slideshow{background:linear-gradient(180deg,rgba(var(--sheen-rgb),calc(.32 * var(--sheen-k))),rgba(var(--sheen-rgb),calc(.1 * var(--sheen-k))))}
+.gal-hero-thumb-slideshow::before{left:5px;bottom:11px;width:50%;height:5px;background:rgba(var(--sheen-rgb),calc(.72 * var(--sheen-k)))}
+.gal-hero-thumb-slideshow::after{left:50%;transform:translateX(-50%);bottom:4px;width:26px;height:3px;border-radius:999px;background:
+  repeating-linear-gradient(90deg,rgba(var(--sheen-rgb),calc(.6 * var(--sheen-k))) 0 3px,transparent 3px 8px)}
 .gal-hero-group{display:flex;flex-direction:column;gap:5px;margin-bottom:9px}
 .gal-hero-group-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+
+/* ── Het coverbeeld kiezen ───────────────────────────────────────────────────
+   Links het voorbeeld in de beeldverhouding van de gekozen opening — dus wat
+   de klant écht te zien krijgt — rechts waar het beeld vandaan komt en de
+   knoppen om dat te veranderen. */
+.gal-cover{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px;align-items:start}
+.gal-cover-preview{display:flex;flex-direction:column;gap:7px;min-width:0}
+.gal-cover-frame{position:relative;display:block;width:100%;padding:0;border:1px solid var(--border);border-radius:12px;background:var(--bg4);overflow:hidden;cursor:crosshair;touch-action:none}
+.gal-cover-frame:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.gal-cover-frame img{display:block;width:100%;height:100%;object-fit:cover}
+.gal-cover-frame.is-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;cursor:default;color:var(--muted);font-size:12px}
+/* Het focuspunt: een ring die op elke foto zichtbaar blijft, licht én donker. */
+.gal-cover-dot{position:absolute;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1.5px rgba(0,0,0,.5),0 2px 8px rgba(0,0,0,.45);pointer-events:none}
+.gal-cover-dot::after{content:'';position:absolute;inset:6px;border-radius:50%;background:#fff}
+.gal-cover-hint{margin:0;font-size:11.5px;line-height:1.5;color:var(--muted)}
+.gal-cover-side{display:flex;flex-direction:column;gap:10px;min-width:0}
+.gal-cover-source{font-size:12.5px;font-weight:600;color:var(--text);overflow-wrap:anywhere}
+.gal-cover-actions{display:flex;flex-direction:column;align-items:stretch;gap:7px}
+.gal-cover-actions .btn{justify-content:flex-start}
+
+/* De keuzestrook: alle beelden uit de galerij, plus "Automatisch". */
+.gal-cover-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:7px;margin-top:12px;max-height:260px;overflow-y:auto;padding:2px}
+.gal-cover-pick{position:relative;aspect-ratio:1;padding:0;border:1px solid var(--border);border-radius:9px;background:var(--bg4);overflow:hidden;cursor:pointer}
+.gal-cover-pick img{display:block;width:100%;height:100%;object-fit:cover}
+.gal-cover-pick:hover:not(:disabled){border-color:var(--border2)}
+.gal-cover-pick:disabled{opacity:.5;cursor:default}
+.gal-cover-pick.is-active{border-color:var(--accent);box-shadow:0 0 0 2px rgba(var(--accent-rgb),.28)}
+.gal-cover-pick.is-auto{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;color:var(--muted2);font-size:10.5px;font-weight:600;text-align:center;padding:4px}
+.gal-cover-pick.is-active.is-auto{color:var(--accent-ink)}
+.gal-cover-pick-blank{display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:var(--muted)}
+.gal-cover-pick-badge{position:absolute;left:4px;bottom:4px;display:flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:6px;background:rgba(10,10,10,.62);color:#fff}
+.gal-cover-pick-mark{position:absolute;right:4px;top:4px;display:flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:999px;background:var(--accent);color:var(--on-accent)}
+
+@media(max-width:760px){
+  .gal-cover{grid-template-columns:1fr}
+}
 
 /* Formaat-aanduiding in de lijst en de detailkop. */
 .gal-format-tag{display:inline-flex;align-items:center;border-radius:999px;padding:2px 8px;font-size:10px;font-weight:700;letter-spacing:.03em;background:var(--bg4);color:var(--muted2);white-space:nowrap}
@@ -4887,12 +4945,19 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .pgal-foot-own,.pgal-meta{color:var(--gal-muted,var(--muted))}
 .pgal-desc{color:var(--gal-muted,var(--muted2))}
 
-/* ── Hero: de opening van de galerij (negen templates) ── */
+/* ── Hero: de opening van de galerij (zestien templates) ── */
 .galv-hero{position:relative;border-radius:var(--radius-lg,18px);overflow:hidden}
 .galv-hero-text h2{margin:0;font-size:clamp(20px,3.2vw,34px);letter-spacing:-.02em;line-height:1.15}
 .galv-hero-text p{margin:8px 0 0;color:var(--muted2);font-size:13.5px;line-height:1.65;max-width:60ch}
 .galv-hero-media{overflow:hidden;border-radius:var(--radius-md,14px);background:var(--bg3);cursor:zoom-in}
 .galv-hero-media img{display:block;width:100%;height:100%;object-fit:cover}
+/* Een eigen coverbeeld zit niet in de galerij: er valt niets te openen, dus
+   hoort de vergrootcursor er ook niet te staan. Alleen het coverbeeld zelf —
+   de nevenbeelden in een collage of stapel blijven wél aanklikbaar. */
+.galv-hero.is-static,
+.galv-hero.is-static > .galv-hero-media,
+.galv-hero.is-static .galv-hero-lead,
+.galv-hero.is-static .galv-hero-print-0{cursor:default}
 
 /* full — schermvullend beeld met de titel eroverheen */
 .galv-hero-full{cursor:zoom-in;aspect-ratio:21/9;min-height:240px}
@@ -4958,7 +5023,83 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .galv-hero-mosaic .galv-hero-text p{color:rgba(255,255,255,.88);margin-inline:auto}
 @keyframes galvDrift{from{transform:scale(1.06)}to{transform:scale(1.16)}}
 
+/* fade (basis) — het beeld lost op in de achtergrond; geen enkele harde rand,
+   dus de opening werkt op elke gekozen achtergrondkleur. Het masker vervangt
+   de rand: daarom staat overflow hier open en is er geen border-radius. */
+.galv-hero-fade{display:flex;flex-direction:column;align-items:center;gap:12px;background:none;border-radius:0;overflow:visible}
+.galv-hero-fade .galv-hero-media{width:100%;aspect-ratio:16/8;background:none;border-radius:0;
+  -webkit-mask-image:radial-gradient(128% 112% at 50% 0%,#000 50%,rgba(0,0,0,.4) 78%,transparent 100%);
+  mask-image:radial-gradient(128% 112% at 50% 0%,#000 50%,rgba(0,0,0,.4) 78%,transparent 100%)}
+/* De titel schuift het vervaagde onderrandje in; anders staat er een gat. */
+.galv-hero-fade .galv-hero-text{position:relative;z-index:1;margin-top:-44px;text-align:center}
+.galv-hero-fade .galv-hero-text h2{font-size:clamp(24px,4vw,44px)}
+.galv-hero-fade .galv-hero-text p{margin-inline:auto;text-align:center}
+
+/* cutout (modern) — het beeld is te zien dóór de letters van de titel heen.
+   De titel blijft echte tekst; alleen de vulling is het beeld. */
+.galv-hero-cutout{display:flex;flex-direction:column;gap:12px;background:none;border-radius:0;overflow:visible}
+.galv-hero-cut{margin:0;font-family:var(--brand-heading,inherit);font-size:clamp(38px,12.5vw,144px);font-weight:800;line-height:.92;
+  letter-spacing:-.04em;text-transform:uppercase;text-align:center;overflow-wrap:anywhere;
+  background-size:cover;background-repeat:no-repeat;
+  -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent}
+/* Zonder background-clip zou de titel onzichtbaar zijn; dan gewoon tekst. */
+@supports not ((background-clip:text) or (-webkit-background-clip:text)){
+  .galv-hero-cut{background-image:none!important;color:var(--gal-text,var(--text));-webkit-text-fill-color:currentColor}
+}
+.galv-hero-band{aspect-ratio:24/5}
+.galv-hero-cut-sub{margin:2px auto 0;text-align:center;max-width:60ch;color:var(--gal-muted,var(--muted2));font-size:13.5px;line-height:1.65}
+
+/* duotone (modern) — het beeld in de accentkleur van de beeldmaker. De
+   isolatie is nodig: zonder eigen stapelcontext zou het multiply-vlak met de
+   pagina eronder mengen in plaats van met de foto. */
+.galv-hero-duotone{cursor:zoom-in;aspect-ratio:21/9;min-height:240px;background:#0b0b0b;isolation:isolate}
+.galv-hero-duotone .galv-hero-bg{filter:grayscale(1) contrast(1.18) brightness(.92)}
+.galv-hero-tint{position:absolute;inset:0;background:var(--accent);mix-blend-mode:multiply;opacity:.78}
+.galv-hero-duotone .galv-hero-veil{background:linear-gradient(180deg,rgba(0,0,0,0) 32%,rgba(0,0,0,.72) 100%)}
+.galv-hero-duotone .galv-hero-text{position:absolute;left:0;right:0;bottom:0;padding:26px 28px}
+.galv-hero-duotone .galv-hero-text h2{color:#fff;font-size:clamp(24px,4.4vw,52px);font-weight:700;letter-spacing:-.03em;text-shadow:0 2px 18px rgba(0,0,0,.55)}
+.galv-hero-duotone .galv-hero-text p{color:rgba(255,255,255,.9)}
+
+/* arch (klassiek) — het beeld in een staande boog, titel eronder */
+.galv-hero-arch{display:flex;flex-direction:column;align-items:center;gap:20px;padding:6px 0 0;background:none;border-radius:0;overflow:visible}
+.galv-hero-arch .galv-hero-media{width:min(100%,430px);aspect-ratio:3/4;border-radius:999px 999px var(--radius-md,14px) var(--radius-md,14px);box-shadow:0 24px 60px rgba(0,0,0,.26)}
+.galv-hero-arch .galv-hero-text{max-width:56ch;text-align:center}
+.galv-hero-arch .galv-hero-text::before{content:'';display:block;width:46px;height:1px;margin:0 auto 14px;background:currentColor;opacity:.28}
+.galv-hero-arch .galv-hero-text h2{font-family:var(--brand-heading,Poppins,system-ui,sans-serif);font-weight:400;font-size:clamp(20px,3vw,34px);letter-spacing:.12em;text-transform:uppercase}
+.galv-hero-arch .galv-hero-text p{margin-inline:auto;text-align:center;font-style:italic}
+
+/* stack (klassiek) — drie afdrukken schuin over elkaar, als op tafel */
+.galv-hero-stack{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:28px;align-items:center;padding:18px 0;background:none;border-radius:0;overflow:visible}
+.galv-hero-stack-pile{position:relative;aspect-ratio:4/3}
+.galv-hero-print{position:absolute;inset:0;padding:10px 10px 34px;border:1px solid rgba(0,0,0,.08);border-radius:3px;background:#fff;box-shadow:0 14px 34px rgba(0,0,0,.3);overflow:hidden;cursor:zoom-in;transition:transform .35s cubic-bezier(.2,.7,.2,1)}
+.galv-hero-print img{display:block;width:100%;height:100%;object-fit:cover}
+.galv-hero-print-2{transform:rotate(-7deg) translate(-5%,3%) scale(.92)}
+.galv-hero-print-1{transform:rotate(5deg) translate(5%,-2%) scale(.95)}
+.galv-hero-print-0{transform:rotate(-1.5deg)}
+/* Bij hover waaieren de onderste afdrukken uit, zodat zichtbaar wordt dát je
+   ze kunt openen. */
+.galv-hero-stack:hover .galv-hero-print-2{transform:rotate(-11deg) translate(-9%,4%) scale(.92)}
+.galv-hero-stack:hover .galv-hero-print-1{transform:rotate(9deg) translate(9%,-3%) scale(.95)}
+
+/* slideshow (spectaculair) — de cover wisselt langzaam met de volgende beelden */
+.galv-hero-slideshow{cursor:zoom-in;aspect-ratio:2/1;min-height:280px;background:#0b0b0b}
+.galv-hero-slide{opacity:0;transition:opacity 1.6s ease-in-out;animation:galvKenBurns 24s ease-in-out infinite alternate}
+.galv-hero-slide.is-active{opacity:1}
+.galv-hero-slideshow .galv-hero-veil{background:linear-gradient(180deg,rgba(0,0,0,.18) 30%,rgba(0,0,0,.84) 100%)}
+.galv-hero-slideshow .galv-hero-text{position:absolute;left:0;right:0;bottom:0;padding:30px}
+.galv-hero-slideshow .galv-hero-text h2{color:#fff;font-size:clamp(24px,4.4vw,50px);font-weight:700;letter-spacing:-.03em;text-shadow:0 3px 22px rgba(0,0,0,.6)}
+.galv-hero-slideshow .galv-hero-text p{color:rgba(255,255,255,.88)}
+
 @media(max-width:760px){
+  .galv-hero-fade .galv-hero-media{aspect-ratio:4/3}
+  .galv-hero-fade .galv-hero-text{margin-top:-26px}
+  .galv-hero-cut{font-size:clamp(32px,15vw,74px)}
+  .galv-hero-band{aspect-ratio:16/6}
+  .galv-hero-duotone{aspect-ratio:4/3}
+  .galv-hero-slideshow{aspect-ratio:3/4;min-height:0}
+  .galv-hero-duotone .galv-hero-text,.galv-hero-slideshow .galv-hero-text{padding:18px}
+  .galv-hero-arch .galv-hero-media{width:min(100%,320px)}
+  .galv-hero-stack{grid-template-columns:1fr;gap:18px}
   .galv-hero-split{grid-template-columns:1fr;gap:14px}
   .galv-hero-editorial .galv-hero-media{width:100%}
   .galv-hero-editorial .galv-hero-text{max-width:none;padding:0 0 16px 4px}

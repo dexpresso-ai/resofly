@@ -491,15 +491,16 @@ export type GalleryStatus = 'draft' | 'published' | 'archived';
 /** Bepaalt de weergave bij de klant én welke media er in de galerij mogen. */
 export type GalleryFormat = 'photo' | 'video' | 'hybrid';
 /**
- * Opening van de galerij. De hero-foto is `cover_item_id`.
- * Basis: full/minimal · Modern: editorial/frame/split ·
- * Klassiek: classic/collage · Spectaculair: cinematic/mosaic.
+ * Opening van de galerij. Het coverbeeld is `cover_item_id`, of — als de
+ * beeldmaker een eigen cover heeft geüpload — `cover_preview_key`.
+ * Basis: full/minimal/fade · Modern: editorial/frame/split/cutout/duotone ·
+ * Klassiek: classic/collage/arch/stack · Spectaculair: cinematic/mosaic/slideshow/netflix.
  */
 export type GalleryHeroTemplate =
-  | 'full' | 'minimal'
-  | 'editorial' | 'frame' | 'split'
-  | 'classic' | 'collage'
-  | 'cinematic' | 'mosaic' | 'netflix';
+  | 'full' | 'minimal' | 'fade'
+  | 'editorial' | 'frame' | 'split' | 'cutout' | 'duotone'
+  | 'classic' | 'collage' | 'arch' | 'stack'
+  | 'cinematic' | 'mosaic' | 'slideshow' | 'netflix';
 
 /** Huisstijl van de organisatie, zoals de klant de galerij ziet. */
 export interface GalleryBranding {
@@ -542,6 +543,19 @@ export interface Gallery extends OrgScopedRow {
   status: GalleryStatus;
   published_at: string | null;
   cover_item_id: UUID | null;
+  /**
+   * Eigen coverbeeld dat níét in de galerij zit (een ontworpen titelkaart, of
+   * een foto die je niet meelevert). Gevuld = deze wint van `cover_item_id`.
+   * De key ligt onder de galerij-prefix in R2, zodat het kijk-token van de
+   * galerij hem dekt; een trigger bewaakt dat.
+   */
+  cover_preview_key: string | null;
+  cover_thumb_key: string | null;
+  /** Bytes van het eigen coverbeeld; telt mee in de opslagmeter. */
+  cover_bytes: number;
+  /** Focuspunt van de uitsnede in procenten; wordt `object-position`. */
+  cover_focus_x: number;
+  cover_focus_y: number;
   allow_downloads: boolean;
   download_quality: GalleryDownloadQuality;
   share_enabled: boolean;

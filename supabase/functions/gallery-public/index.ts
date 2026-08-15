@@ -65,6 +65,9 @@ type GalleryRow = {
   status: string;
   published_at: string | null;
   cover_item_id: string | null;
+  cover_preview_key: string | null;
+  cover_focus_x: number | null;
+  cover_focus_y: number | null;
   allow_downloads: boolean;
   download_quality: string;
   share_enabled: boolean;
@@ -329,8 +332,20 @@ function sanitizeGallery(row: GalleryRow) {
     allow_downloads: Boolean(row.allow_downloads),
     download_quality: row.download_quality ?? 'original',
     cover_item_id: row.cover_item_id ?? null,
+    // Alleen de weergavevariant van een eigen coverbeeld; het kijk-token van de
+    // galerij dekt die key, want hij ligt onder dezelfde prefix.
+    cover_preview_key: row.cover_preview_key ?? null,
+    cover_focus_x: clampFocus(row.cover_focus_x),
+    cover_focus_y: clampFocus(row.cover_focus_y),
     expires_at: row.expires_at ?? null,
   };
+}
+
+/** Het focuspunt gaat rechtstreeks een CSS-waarde in; hou het binnen 0–100. */
+function clampFocus(value: number | null): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(Math.min(100, Math.max(0, value)))
+    : 50;
 }
 
 function sanitizeGalleryItem(row: Record<string, unknown>) {
