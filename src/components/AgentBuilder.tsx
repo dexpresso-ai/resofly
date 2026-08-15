@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ArrowUp, Clock, Eye, Loader2, Pencil, Sparkles, Wand2, X } from 'lucide-react';
 import {
-  designGerrieAgent, ROUTINE_PROPOSE_TOOLS, ROUTINE_READ_TOOLS,
+  designGerrieAgent, routineToolLabel,
   type GerrieAgentProposal,
 } from '../lib/gerrie-api';
 import { AgentGlyph } from './AgentGlyph';
@@ -30,9 +30,7 @@ const STARTERS = [
   'Klanten met een afgerond project een bedankje sturen',
 ];
 
-const READ_LABELS = new Map(ROUTINE_READ_TOOLS.map((t) => [t.name, t.label]));
-const PROPOSE_LABELS = new Map(ROUTINE_PROPOSE_TOOLS.map((t) => [t.name, t.label]));
-const DOW = ['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag', 'zondag'];
+const DOW =['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag', 'zondag'];
 
 function scheduleText(a: GerrieAgentProposal): string {
   const time = `${String(a.hour).padStart(2, '0')}:00`;
@@ -160,12 +158,12 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
               <dl className="abx-facts">
                 <div>
                   <dt><Eye size={12} /> Mag inzien</dt>
-                  <dd>{readTools.length ? readTools.map((t) => READ_LABELS.get(t) ?? t).join(', ') : 'de standaard leesset'}</dd>
+                  <dd>{readTools.length ? readTools.map(routineToolLabel).join(', ') : 'de standaard leesset'}</dd>
                 </div>
                 {agent.mode === 'propose' && (
                   <div>
                     <dt><Wand2 size={12} /> Mag klaarzetten</dt>
-                    <dd>{proposeTools.length ? proposeTools.map((t) => PROPOSE_LABELS.get(t) ?? t).join(', ') : 'niets'}</dd>
+                    <dd>{proposeTools.length ? proposeTools.map(routineToolLabel).join(', ') : 'niets'}</dd>
                   </div>
                 )}
                 {agent.enabled_tools.includes('propose_send_client_email') && (

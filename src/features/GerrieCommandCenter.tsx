@@ -3,10 +3,10 @@ import { Sparkles, Send, Check, X, AlertTriangle, Square, ListChecks, Wand2, Clo
 import {
   streamGerrieReply, planGerrieMission, loadGerrieBudget, confirmGerrieAction,
   listRoutines, listRoutineRuns, saveRoutine, setRoutineStatus, archiveRoutine, restoreRoutine, runRoutineNow, listRunProposals,
-  loadRunTranscript, listRunEvents, listRunDecisions, replyToRun, listPendingAgentApprovals, ROUTINE_READ_TOOLS, ROUTINE_PROPOSE_TOOLS,
+  loadRunTranscript, listRunEvents, listRunDecisions, replyToRun, listPendingAgentApprovals, listRoutineToolsSafe, routineToolLabel,
   type GerrieActionHandlers, type GerrieProposal, type GerrieMissionSubtask,
   type GerrieRoutine, type GerrieRoutineRun, type GerrieRoutineInput, type GerrieRunMessage, type GerrieAgentProposal,
-  type GerrieRunEvent, type GerrieRunDecision,
+  type GerrieRunEvent, type GerrieRunDecision, type RoutineTool,
   type RoutineMode, type RoutineScheduleKind, type RoutineStatus, type RoutineRunStatus, type AgentEmailMode,
 } from '../lib/gerrie-api';
 import { STANDARD_MERGE_TOKENS } from '../lib/mergeTokens';
@@ -450,7 +450,7 @@ function fmtTime(iso: string): string {
 
 /** De afloop van een voorstel in gewone taal: wát, en hoe het is afgelopen. */
 function decisionLabel(d: GerrieRunDecision): string {
-  const what = PROPOSE_TOOL_LABELS.get(d.action) ?? d.action.replace(/^propose_/, '').replace(/_/g, ' ');
+  const what = routineToolLabel(d.action);
   if (d.status === 'executed' || d.status === 'auto_executed') return `${what} — uitgevoerd`;
   if (d.status === 'cancelled') return `${what} — geannuleerd`;
   if (d.status === 'failed') return `${what} — afgewezen of mislukt`;
@@ -515,8 +515,6 @@ function shortSchedule(r: { schedule_kind: RoutineScheduleKind; hour: number; da
 }
 function capitalize(s: string): string { return s.charAt(0).toUpperCase() + s.slice(1); }
 
-const READ_TOOL_LABELS = new Map(ROUTINE_READ_TOOLS.map((t) => [t.name, t.label]));
-const PROPOSE_TOOL_LABELS = new Map(ROUTINE_PROPOSE_TOOLS.map((t) => [t.name, t.label]));
 
 /** Zet een door Gerrie voorgestelde agent om in een concept voor de editor. */
 function proposalToRoutine(p: GerrieAgentProposal): GerrieRoutine {
@@ -872,13 +870,13 @@ function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey
         <Capability icon={<Eye size={14} />} title="Mag inzien">
           {readTools.length === 0
             ? <span className="ag-cap-plain">De standaard leesset (klanten, facturen, herinneringen).</span>
-            : <div className="ag-cap-chips">{readTools.map((n) => <span key={n} className="ag-cap-chip">{READ_TOOL_LABELS.get(n) ?? n}</span>)}</div>}
+            : <div className="ag-cap-chips">{readTools.map((n) => <span key={n} className="ag-cap-chip">{routineToolLabel(n)}</span>)}</div>}
         </Capability>
 
         <Capability icon={<ClipboardCheck size={14} />} title="Mag voorstellen">
           {routine.mode !== 'propose' || proposeTools.length === 0
             ? <span className="ag-cap-plain">Niets — deze agent rapporteert alleen en raakt nooit iets aan.</span>
-            : <div className="ag-cap-chips">{proposeTools.map((n) => <span key={n} className="ag-cap-chip is-write">{PROPOSE_TOOL_LABELS.get(n) ?? n}</span>)}</div>}
+            : <div className="ag-cap-chips">{proposeTools.map((n) => <span key={n} className="ag-cap-chip is-write">{routineToolLabel(n)}</span>)}</div>}
         </Capability>
 
         <Capability icon={<Clock size={14} />} title="Ritme">
@@ -991,6 +989,23 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
   const isNew = !routine || !routine.id;
   const mailsClients = f.tools.includes(MAIL_TOOL);
+
+  // Alles wat een agent kán, opgehaald bij de bron in plaats van uit een lijst hier.
+  // Zo krijgt een agent elke nieuwe Gerrie-capability automatisch, en zie je alleen
+  // wat jouw modulerechten toestaan.
+  const [catalog, setCatalog] = useState<RoutineTool[]>([]);
+  const [catalogFallback, setCatalogFallback] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    listRoutineToolsSafe(organizationId).then(({ tools, fallback }) => {
+      if (!alive) return;
+      setCatalog(tools);
+      setCatalogFallback(fallback);
+    });
+    return () => { alive = false; };
+  }, [organizationId]);
+  const readTools = catalog.filter((t) => t.kind === 'read');
+  const proposeTools = catalog.filter((t) => t.kind === 'propose');
 
   /** Plakt een variabele op de cursorpositie in de vaste tekst. */
   function insertToken(token: string) {
@@ -1160,24 +1175,13 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
         </div>
 
         <div className="cc-field"><span>Welke gegevens mag de agent gebruiken?</span>
-          <div className="cc-tool-grid">
-            {ROUTINE_READ_TOOLS.map((t) => (
-              <label key={t.name} className={`cc-tool${f.tools.includes(t.name) ? ' on' : ''}`}>
-                <input type="checkbox" checked={f.tools.includes(t.name)} onChange={() => toggleTool(t.name)} /> {t.label}
-              </label>
-            ))}
-          </div>
+          <ToolPicker tools={readTools} chosen={f.tools} onToggle={toggleTool} />
+          {catalogFallback && <p className="cc-note">De volledige lijst was even niet op te halen; je ziet een beperkte set. Herlaad de pagina om alles te zien.</p>}
         </div>
         {f.mode === 'propose' && (
           <div className="cc-field"><span>Acties die de agent mag vóórstellen</span>
-            <div className="cc-tool-grid">
-              {ROUTINE_PROPOSE_TOOLS.map((t) => (
-                <label key={t.name} className={`cc-tool${f.tools.includes(t.name) ? ' on' : ''}`}>
-                  <input type="checkbox" checked={f.tools.includes(t.name)} onChange={() => toggleTool(t.name)} /> {t.label}
-                </label>
-              ))}
-            </div>
-            <p className="cc-note">De agent <b>stelt deze acties alleen voor</b>. Jij keurt ze daarna goed in de run-historie — en dán worden ze <b>écht uitgevoerd</b> (verstuurd/aangemaakt), via dezelfde weg als in de chat. Zonder jouw akkoord gebeurt er niets.</p>
+            <ToolPicker tools={proposeTools} chosen={f.tools} onToggle={toggleTool} />
+            <p className="cc-note">De agent <b>stelt deze acties alleen voor</b>. Jij keurt ze daarna goed — per regel, met een vinkje — en dán worden ze <b>écht uitgevoerd</b> (verstuurd/aangemaakt), via dezelfde weg als in de chat. Zonder jouw akkoord gebeurt er niets.</p>
           </div>
         )}
 
@@ -1237,6 +1241,43 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
           <button className="cc-btn primary" onClick={() => void save()} disabled={saving}>{saving ? 'Opslaan…' : isNew ? 'Aanmaken' : 'Opslaan'}</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * De capability-kiezer. Groepeert per module (Klanten, Financiën, Projecten…),
+ * want de catalogus groeit mee met de app en een ongesorteerde lijst van dertig
+ * vinkjes is geen keuze meer maar een muur.
+ */
+function ToolPicker({ tools, chosen, onToggle }: { tools: RoutineTool[]; chosen: string[]; onToggle: (name: string) => void }) {
+  if (tools.length === 0) return <p className="cc-note">Laden…</p>;
+
+  // Volgorde van eerste voorkomen aanhouden: die volgt de tooldefinities, en die
+  // staan al in een logische vololgorde (klanten → geld → werk → agenda).
+  const groups: Array<{ key: string; label: string; tools: RoutineTool[] }> = [];
+  for (const t of tools) {
+    const key = t.module ?? 'overig';
+    const label = t.moduleLabel ?? 'Overig';
+    let group = groups.find((g) => g.key === key);
+    if (!group) { group = { key, label, tools: [] }; groups.push(group); }
+    group.tools.push(t);
+  }
+
+  return (
+    <div className="cc-tool-groups">
+      {groups.map((g) => (
+        <section key={g.key} className="cc-tool-group">
+          <h5>{g.label}</h5>
+          <div className="cc-tool-grid">
+            {g.tools.map((t) => (
+              <label key={t.name} className={`cc-tool${chosen.includes(t.name) ? ' on' : ''}`}>
+                <input type="checkbox" checked={chosen.includes(t.name)} onChange={() => onToggle(t.name)} /> {t.label}
+              </label>
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }

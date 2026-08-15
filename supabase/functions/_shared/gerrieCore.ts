@@ -1381,6 +1381,93 @@ const TOOL_MODULE: Record<string, string> = {
   propose_report: 'stats',
 };
 
+/**
+ * Menselijk label per tool — wat de gebruiker in de agent-bouwer aanvinkt.
+ *
+ * Dit hoort HIER en niet in de frontend. De agent-bouwer had zijn eigen handgeschreven
+ * lijstje, en dat liep achter: twaalf dingen die Gerrie in de chat allang kon (klant
+ * aanmaken, project/taak, rapportage, agenda's lezen) waren aan een agent simpelweg
+ * niet te geven, omdat ze in dat lijstje ontbraken. Eén bron, afgeleid uit
+ * TOOL_DEFINITIONS, maakt die drift onmogelijk: een nieuwe tool is meteen aan een
+ * agent te geven. Ontbreekt er een label, dan valt hij terug op de tool-naam — zichtbaar
+ * lelijk, dus je ziet het meteen.
+ */
+const TOOL_LABELS: Record<string, string> = {
+  // Lezen
+  search_clients: 'Klanten opzoeken',
+  list_invoices: 'Facturen bekijken',
+  list_quotes: 'Offertes bekijken',
+  get_financial_summary: 'Financieel overzicht',
+  list_projects: 'Projecten bekijken',
+  list_tasks: 'Taken bekijken',
+  list_tickets: 'Tickets bekijken',
+  list_due_reminders: 'Openstaande herinneringen',
+  list_calendars: "Agenda's bekijken",
+  suggest_meeting_slots: 'Vrije momenten zoeken',
+  // Klaarzetten (altijd achter jouw akkoord)
+  propose_client: 'Nieuwe klant klaarzetten',
+  propose_edit_client: 'Klantgegevens wijzigen',
+  propose_invoice: 'Conceptfactuur klaarzetten',
+  propose_edit_invoice: 'Conceptfactuur wijzigen',
+  propose_quote: 'Conceptofferte klaarzetten',
+  propose_edit_quote: 'Conceptofferte wijzigen',
+  propose_send_invoices: 'Facturen versturen (afvinklijst)',
+  propose_send_quotes: 'Offertes versturen (afvinklijst)',
+  propose_send_invoice: 'Eén losse factuur versturen',
+  propose_send_quote: 'Eén losse offerte versturen',
+  propose_send_client_email: 'Mailtjes naar klanten sturen',
+  propose_send_reminders: 'Betalingsherinneringen versturen',
+  propose_convert_quote: 'Offerte omzetten naar factuur',
+  propose_project: 'Project aanmaken',
+  propose_edit_project: 'Project wijzigen',
+  propose_task: 'Taak aanmaken',
+  propose_edit_task: 'Taak wijzigen',
+  propose_week_action: 'Actiepunten in de weekplanner',
+  propose_calendar_event: 'Agenda-afspraak aanmaken',
+  propose_time_entry: 'Uren registreren',
+  propose_report: 'Rapportage klaarzetten',
+  propose_create_agent: 'Een nieuwe agent klaarzetten',
+};
+
+/**
+ * Tools die een GEPLANDE agent nooit mag, ongeacht wat iemand aanvinkt.
+ * Een onbewaakte agent hoort geen nieuwe agents te laten maken — dat is een
+ * chat-handeling waar een mens bij zit.
+ */
+const AGENT_FORBIDDEN_TOOLS = ['propose_create_agent'];
+
+export interface ToolCatalogEntry {
+  name: string;
+  label: string;
+  /** Modulesleutel (clients/finance/…) of null als de tool niet module-gebonden is. */
+  module: string | null;
+  moduleLabel: string | null;
+  kind: 'read' | 'propose';
+}
+
+/**
+ * De volledige toolcatalogus die aan een agent gegeven KÁN worden, afgeleid uit
+ * TOOL_DEFINITIONS. Optioneel gefilterd op de modulerechten van dit teamlid, zodat
+ * de bouwer geen agent in elkaar zet die op zijn eerste run stukloopt.
+ */
+function toolCatalog(ctx?: GerrieContext): ToolCatalogEntry[] {
+  const permitted = ctx ? new Set(allowedToolNamesFor(ctx)) : null;
+  return (TOOL_DEFINITIONS as Array<{ name: string }>)
+    .map((t) => String(t.name))
+    .filter((name) => !AGENT_FORBIDDEN_TOOLS.includes(name))
+    .filter((name) => !permitted || permitted.has(name))
+    .map((name) => {
+      const module = TOOL_MODULE[name] ?? null;
+      return {
+        name,
+        label: TOOL_LABELS[name] ?? name,
+        module,
+        moduleLabel: module ? (MODULE_LABEL[module] ?? module) : null,
+        kind: name.startsWith('propose_') ? 'propose' as const : 'read' as const,
+      };
+    });
+}
+
 /** Menselijke naam van een module, voor de foutmelding die de gebruiker leest. */
 const MODULE_LABEL: Record<string, string> = {
   clients: 'Klanten', projects: 'Projecten', time: 'Uren', calendar: 'Agenda',
@@ -2863,7 +2950,7 @@ function requiredEnv(name: string): string { const value = Deno.env.get(name); i
 // voor geplande agents (gerrie-agent-runner). Niets hieronder is HTTP-specifiek.
 export {
   supabaseAdmin, HttpError, ANTHROPIC_API_KEY, MISSION_MAX_SUBTASKS, USD_TO_EUR, MODELS,
-  TOOL_DEFINITIONS, resolveModelKind, runAgent, planMission, estimateMission,
+  TOOL_DEFINITIONS, toolCatalog, AGENT_FORBIDDEN_TOOLS, resolveModelKind, runAgent, planMission, estimateMission,
   buildContext, buildSystemPrompt, createConversation, loadHistory, insertMessage,
   recordUsage, costUsd, checkUserBudget, remainingFraction,
   confirmAction, getUsageSummary, requireUser, requireOrganizationAccess,
@@ -2873,3 +2960,4 @@ export type {
   GerrieContext, Emit, Proposal, ModelKind, Usage, AgentOutcome, AgentStep, BudgetCheck,
   OrganizationRole, HttpStatus, MissionSubtask,
 };
+// ToolCatalogEntry wordt hierboven al als interface geëxporteerd.

@@ -810,32 +810,81 @@ export async function replyToRun(organizationId: UUID, runId: UUID, message: str
   return { text: String(payload?.text ?? ''), proposalCreated: Number(payload?.proposalCreated ?? 0) };
 }
 
-/** De echte, org-scoped tool-namen die een Routine mag gebruiken (voor de UI-selectie). */
-export const ROUTINE_READ_TOOLS: Array<{ name: string; label: string }> = [
-  { name: 'list_invoices', label: 'Facturen bekijken' },
-  { name: 'list_due_reminders', label: 'Openstaande herinneringen' },
-  { name: 'get_financial_summary', label: 'Financieel overzicht' },
-  { name: 'list_quotes', label: 'Offertes bekijken' },
-  { name: 'search_clients', label: 'Klanten opzoeken' },
-  { name: 'list_projects', label: 'Projecten bekijken' },
-  { name: 'list_tasks', label: 'Taken bekijken' },
-  { name: 'list_tickets', label: 'Tickets bekijken' },
+/**
+ * Eén capability die je aan een agent kunt geven.
+ *
+ * `kind: 'read'` = meekijken; `kind: 'propose'` = klaarzetten, altijd achter jouw
+ * akkoord. `module` bepaalt de groep in de bouwer én of dit teamlid hem überhaupt
+ * te zien krijgt.
+ */
+export interface RoutineTool { name: string; label: string; module: string | null; moduleLabel: string | null; kind: 'read' | 'propose' }
+
+/**
+ * Alles wat een agent kan, afgeleid uit de échte tooldefinities in gerrieCore en
+ * gefilterd op jouw modulerechten.
+ *
+ * Bewust een server-call en geen lijst in deze file: die lijst was handgeschreven en
+ * liep achter — twaalf dingen die Gerrie in de chat allang kon waren aan een agent
+ * niet te geven, puur omdat ze hier ontbraken. Wat de assistent kan, kan een agent nu
+ * automatisch ook.
+ */
+export async function listRoutineTools(organizationId: UUID): Promise<RoutineTool[]> {
+  const payload = await postRunner({ action: 'tools', organizationId });
+  const rows = Array.isArray(payload?.tools) ? (payload.tools as unknown[]) : [];
+  const tools = rows
+    .map((r) => r as Record<string, unknown>)
+    .filter((r) => typeof r.name === 'string')
+    .map((r) => ({
+      name: String(r.name),
+      label: String(r.label ?? r.name),
+      module: r.module != null ? String(r.module) : null,
+      moduleLabel: r.moduleLabel != null ? String(r.moduleLabel) : null,
+      kind: r.kind === 'propose' ? 'propose' as const : 'read' as const,
+    }));
+  for (const t of tools) toolLabels.set(t.name, t.label);
+  return tools;
+}
+
+/**
+ * Labels van de laatst opgehaalde catalogus, zodat schermen die alleen een naam in
+ * handen hebben (een chip op de agentkaart, een regel in het logboek) er geen eigen
+ * lijstje voor hoeven bij te houden. Begint gevuld met de terugval hieronder.
+ */
+const toolLabels = new Map<string, string>();
+
+/** Menselijk label bij een tool-naam; valt netjes terug op de naam zelf. */
+export function routineToolLabel(name: string): string {
+  const known = toolLabels.get(name);
+  if (known) return known;
+  // Ook een audit-actie ('propose_send_reminders') komt hier langs.
+  return name.replace(/^propose_/, '').replace(/_/g, ' ');
+}
+
+/**
+ * Terugval als de catalogus niet op te halen is (offline, module dicht, oude
+ * functie-versie). Bewust kort: hij dient om de bouwer bruikbaar te houden, niet om
+ * de echte lijst te dupliceren.
+ */
+const ROUTINE_FALLBACK_TOOLS: RoutineTool[] = [
+  { name: 'search_clients', label: 'Klanten opzoeken', module: 'clients', moduleLabel: 'Klanten', kind: 'read' },
+  { name: 'list_invoices', label: 'Facturen bekijken', module: 'finance', moduleLabel: 'Financiën', kind: 'read' },
+  { name: 'list_quotes', label: 'Offertes bekijken', module: 'finance', moduleLabel: 'Financiën', kind: 'read' },
+  { name: 'list_due_reminders', label: 'Openstaande herinneringen', module: 'finance', moduleLabel: 'Financiën', kind: 'read' },
+  { name: 'get_financial_summary', label: 'Financieel overzicht', module: 'finance', moduleLabel: 'Financiën', kind: 'read' },
+  { name: 'list_projects', label: 'Projecten bekijken', module: 'projects', moduleLabel: 'Projecten', kind: 'read' },
+  { name: 'list_tasks', label: 'Taken bekijken', module: 'projects', moduleLabel: 'Projecten', kind: 'read' },
+  { name: 'list_tickets', label: 'Tickets bekijken', module: 'tickets', moduleLabel: 'Tickets', kind: 'read' },
 ];
-// Acties die een propose-routine mag VÓÓRSTELLEN. Na jouw goedkeuring in de
-// run-historie worden ze écht uitgevoerd (via dezelfde apply-laag als de chat).
-export const ROUTINE_PROPOSE_TOOLS: Array<{ name: string; label: string }> = [
-  { name: 'propose_send_client_email', label: 'Mailtjes naar klanten sturen' },
-  { name: 'propose_send_reminders', label: 'Betalingsherinneringen versturen' },
-  { name: 'propose_send_invoices', label: 'Facturen versturen (afvinklijst)' },
-  { name: 'propose_send_quotes', label: 'Offertes versturen (afvinklijst)' },
-  { name: 'propose_send_invoice', label: 'Eén losse factuur versturen' },
-  { name: 'propose_send_quote', label: 'Eén losse offerte versturen' },
-  { name: 'propose_convert_quote', label: 'Offerte omzetten naar factuur' },
-  { name: 'propose_invoice', label: 'Conceptfactuur klaarzetten' },
-  { name: 'propose_quote', label: 'Conceptofferte klaarzetten' },
-  { name: 'propose_calendar_event', label: 'Agenda-afspraak aanmaken' },
-  { name: 'propose_time_entry', label: 'Uren registreren' },
-];
+for (const t of ROUTINE_FALLBACK_TOOLS) toolLabels.set(t.name, t.label);
+
+/** De catalogus, of de terugval als de server hem niet kon leveren. */
+export async function listRoutineToolsSafe(organizationId: UUID): Promise<{ tools: RoutineTool[]; fallback: boolean }> {
+  try {
+    const tools = await listRoutineTools(organizationId);
+    if (tools.length > 0) return { tools, fallback: false };
+  } catch { /* val terug */ }
+  return { tools: ROUTINE_FALLBACK_TOOLS, fallback: true };
+}
 
 function parseSseBlock(block: string): { event: string; data: unknown } | null {
   let event = 'message';

@@ -21,7 +21,7 @@
 // ============================================================
 
 import {
-  supabaseAdmin, HttpError, ANTHROPIC_API_KEY, TOOL_DEFINITIONS,
+  supabaseAdmin, HttpError, ANTHROPIC_API_KEY, TOOL_DEFINITIONS, toolCatalog, AGENT_FORBIDDEN_TOOLS,
   resolveModelKind, runAgent, buildContext, createConversation, insertMessage,
   recordUsage, costUsd, checkUserBudget, requireUser, requireOrganizationAccess,
   describeError, isUuid, todayIso, tzOffsetMs, parseAllowedOrigins, loadHistory,
@@ -136,6 +136,10 @@ Deno.serve(async (req) => {
       case 'restore': return json(req, await restoreAgent(organizationId, String(body.id || '')));
       case 'run_now': return json(req, await runNow(organizationId, String(body.id || '')));
       case 'reply': return json(req, await replyToRun(organizationId, user.id, role, body));
+      // Alles wat een agent MAG kunnen, afgeleid uit de echte tooldefinities en
+      // gefilterd op de modulerechten van dit teamlid. De bouwer hoeft dus geen
+      // eigen lijst bij te houden — zie de opmerking bij TOOL_LABELS in gerrieCore.
+      case 'tools': return json(req, { tools: await listAgentTools(organizationId, user.id, role) });
       default: throw new HttpError('Onbekende actie.', 400);
     }
   } catch (error) {
@@ -356,18 +360,27 @@ function clientEmailSettings(agent: Record<string, unknown>): { mode: 'compose' 
   };
 }
 
+/**
+ * Welke tools de gebruiker aan een agent kan geven. Draait langs `buildContext`
+ * zodat modules die voor dít teamlid dichtstaan er niet eens in staan.
+ */
+async function listAgentTools(orgId: string, userId: string, role: OrganizationRole) {
+  const ctx = await buildContext(orgId, role, { id: userId });
+  return toolCatalog(ctx);
+}
+
 function resolveAllowedTools(agent: Record<string, unknown>, mode: 'report' | 'propose'): string[] {
   const raw = Array.isArray(agent.enabled_tools) ? (agent.enabled_tools as unknown[]).map(String) : [];
   // Een onbewaakte agent mag nooit zelf nieuwe agents laten klaarzetten: dat is
   // een chat-handeling waar een mens bij zit. Ook niet als iemand hem aanvinkt.
-  const enabled = raw.filter((n) => ALL_TOOL_NAMES.includes(n) && n !== 'propose_create_agent');
+  const enabled = raw.filter((n) => ALL_TOOL_NAMES.includes(n) && !AGENT_FORBIDDEN_TOOLS.includes(n));
   if (mode === 'report') {
     // Alleen lezen — strip elke propose_-tool, ook als hij per ongeluk is geconfigureerd.
     return enabled.length ? enabled.filter((n) => READ_TOOL_NAMES.includes(n)) : READ_TOOL_NAMES;
   }
   // propose: altijd de lees-tools + de gekozen (propose-)tools erbij.
   const chosen = enabled.length ? enabled : READ_TOOL_NAMES;
-  return Array.from(new Set([...READ_TOOL_NAMES, ...chosen])).filter((n) => n !== 'propose_create_agent');
+  return Array.from(new Set([...READ_TOOL_NAMES, ...chosen])).filter((n) => !AGENT_FORBIDDEN_TOOLS.includes(n));
 }
 
 async function finishRun(runId: string, fields: Record<string, unknown>): Promise<void> {
