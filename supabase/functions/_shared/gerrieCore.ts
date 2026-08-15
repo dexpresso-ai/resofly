@@ -209,6 +209,16 @@ interface EditTimeEntryProposal {
   current: { date: string; minutes: number; description: string | null; billable: boolean; project_name: string | null; client_name: string | null };
   changes: { entry_date?: string; minutes?: number; description?: string | null; billable?: boolean };
 }
+interface ContentProposal {
+  type: 'content';
+  kind: 'note' | 'document';
+  title: string;
+  content: string;
+  client_id: string | null;
+  client_name: string | null;
+  project_id: string | null;
+  project_name: string | null;
+}
 interface TicketProposal { type: 'ticket'; title: string; description: string | null; client_id: string | null; client_name: string | null; priority: string; status: string }
 interface EditTicketProposal { type: 'edit_ticket'; id: string; title: string; changes: { title?: string; description?: string | null; status?: string; priority?: string; notes?: string | null } }
 /** Een reactie op een ticket. `is_internal` bepaalt of de klant hem in het portaal ziet. */
@@ -265,7 +275,7 @@ interface AgentProposal {
   email_subject: string | null;
   email_body: string | null;
 }
-type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | SendInvoicesProposal | SendQuotesProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | EditCalendarEventProposal | CancelCalendarEventProposal | ClientContactProposal | EditClientContactProposal | ProjectTeamProposal | TaskAssignProposal | WeekActionProposal | TimeEntryProposal | EditTimeEntryProposal | TicketProposal | EditTicketProposal | TicketNoteProposal | ReportProposal | SendClientEmailProposal | AgentProposal;
+type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | SendInvoicesProposal | SendQuotesProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | EditCalendarEventProposal | CancelCalendarEventProposal | ClientContactProposal | EditClientContactProposal | ProjectTeamProposal | TaskAssignProposal | WeekActionProposal | TimeEntryProposal | EditTimeEntryProposal | ContentProposal | TicketProposal | EditTicketProposal | TicketNoteProposal | ReportProposal | SendClientEmailProposal | AgentProposal;
 
 /**
  * Eén stap uit de loop, voor het LOGBOEK van een geplande agent.
@@ -379,6 +389,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
         : proposal.type === 'calendar_event' ? `Wil je dat ik dit agenda-item aanmaak in "${proposal.source_name}"? Bevestig hieronder.`
         : proposal.type === 'week_action' ? `Wil je dat ik deze ${proposal.total} actiepunt${proposal.total === 1 ? '' : 'en'} toevoeg? Bevestig hieronder.`
         : proposal.type === 'report' ? `Ik heb de rapportage "${proposal.name}" voor je klaargezet op de Statistieken-pagina. Controleer de grafiek en sla hem op:`
+        : proposal.type === 'content' ? `Ik heb ${proposal.kind === 'note' ? 'de notitie' : 'het document'} "${proposal.title}" klaargezet. Controleer en sla op:`
         : proposal.type === 'ticket' ? `Ik heb het ticket "${proposal.title}" voor je klaargezet. Controleer het en sla op:`
         : proposal.type === 'edit_ticket' ? `Ik heb de wijziging van ticket "${proposal.title}" klaargezet. Controleer en sla op:`
         : proposal.type === 'ticket_note' ? `Wil je dat ik deze ${proposal.is_internal ? 'interne notitie' : 'reactie (zichtbaar voor de klant)'} bij "${proposal.ticket_title}" plaats? Bevestig hieronder.`
@@ -461,6 +472,7 @@ function describeProposal(p: Proposal): string {
     case 'edit_time_entry': return `correctie op een urenregistratie van ${p.current.date}`;
     case 'ticket': return `ticket ${p.title}`;
     case 'edit_ticket': return `wijziging van ticket ${p.title}`;
+    case 'content': return `${p.kind === 'note' ? 'notitie' : 'document'} ${p.title}`;
     case 'edit_calendar_event': return `wijziging van agenda-item ${p.title}`;
     case 'cancel_calendar_event': return `afzegging van agenda-item ${p.title}`;
     case 'client_contact': return `contactpersoon ${p.name} bij ${p.client_name}`;
@@ -622,6 +634,10 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_task` / `propose_edit_task` — een taak binnen een project aanmaken of wijzigen, inclusief subtaken, status/prioriteit en een geplande datum (`planned_date`) om de taak als actiepunt in de WEEKPLANNER te zetten. Zoek het project met `list_projects`, bestaande taken met `list_tasks`.',
           '- `propose_week_action` — ÉÉN OF MEER ACTIEPUNTEN op de "Actiepunten deze week"-checklist van de weekplanner (los van projecten en taken). Vraagt de gebruiker meerdere punten, geef ze dan ALLEMAAL in één keer mee via `items` (niet één voor één). Geef per item een datum binnen de gewenste week. Voor een echte taak binnen een project gebruik je `propose_task`.',
           '- `propose_calendar_event` — een agenda-item aanmaken in een gekoppelde agenda (Google/Microsoft). Tijden zijn lokaal (Europe/Amsterdam); reken relatieve datums om op basis van vandaag. Bij meerdere schrijfbare agenda\'s: vraag welke (`list_calendars`).',
+          '- CONTRACTEN — `list_contracts` (met `awaiting_signature_only` voor wat op een handtekening wacht) en `list_contract_templates`, alleen lezen. Contracten opstellen, versturen ter ondertekening en tekenen doet de gebruiker zelf.',
+          '- CAMPAGNES — `list_campaigns`, alleen lezen. Een campagne opstellen, versturen, inplannen of starten kun je NIET: daar gaat in één klik post naar een heel segment. Moet het naar een paar klanten die de gebruiker stuk voor stuk wil nalezen, gebruik dan `propose_send_client_email`.',
+          '- INHOUD — `list_content`, `propose_note` en `propose_document` voor notities en interne documenten. Verwijderen kan niet.',
+          '- GALERIJEN en BOEKINGEN — `list_galleries` en `list_bookings`, alleen lezen. Publiceren, delen en afspraken bevestigen blijft handwerk.',
           '- `propose_ticket` / `propose_edit_ticket` — een ticket (melding/supportvraag) aanmaken of wijzigen (titel, omschrijving, status, prioriteit). Zoek bestaande tickets met `list_tickets`.',
           '- `propose_ticket_note` — REAGEREN op een ticket. Let op `is_internal`: op false leest de KLANT je tekst in het portaal, op true is het een interne notitie. Standaard intern; zeg in je antwoord expliciet welke van de twee je hebt klaargezet.',
           '- `propose_edit_time_entry` — een bestaande urenregistratie corrigeren (datum, duur, omschrijving, declarabel). Zoek hem eerst met `list_time_entries`.',
@@ -1115,6 +1131,94 @@ const TOOL_DEFINITIONS = [
       type: 'object',
       properties: { id: { type: 'string', description: 'Het exacte id van de offerte (uit list_quotes).' } },
       required: ['id'],
+    },
+  },
+  {
+    name: 'list_contracts',
+    description: 'Bekijk contracten: titel, klant, status, bedrag en wie er nog moet tekenen. Filter op status of klant. Gebruik `awaiting_signature_only` om te zien waar een handtekening op zich laat wachten.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'string' },
+        status: { type: 'string', description: 'Bijv. draft, sent of signed.' },
+        awaiting_signature_only: { type: 'boolean', description: 'Alleen contracten waar nog iemand moet tekenen.' },
+        limit: { type: 'integer' },
+      },
+    },
+  },
+  {
+    name: 'list_contract_templates',
+    description: 'Bekijk de beschikbare contractsjablonen (naam en id), zodat je er een kunt kiezen voor `propose_contract`.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'list_campaigns',
+    description: 'Bekijk e-mailcampagnes en automatische e-mailstromen: naam, onderwerp, doelgroep, status en wanneer ze zijn verstuurd. Alleen lezen.',
+    input_schema: {
+      type: 'object',
+      properties: { status: { type: 'string', description: 'Bijv. draft, scheduled of sent.' }, limit: { type: 'integer' } },
+    },
+  },
+  {
+    name: 'list_galleries',
+    description: 'Bekijk de opgeleverde galerijen per project: titel, status, of de deellink aanstaat en wanneer hij is gepubliceerd. Alleen lezen — publiceren en delen doe jij.',
+    input_schema: {
+      type: 'object',
+      properties: { project_id: { type: 'string' }, status: { type: 'string', description: 'draft, published of archived.' }, limit: { type: 'integer' } },
+    },
+  },
+  {
+    name: 'list_content',
+    description: 'Bekijk notities en interne documenten: titel, soort, bij welke klant of welk project ze horen en wanneer ze zijn bijgewerkt. Zoek op titel met `query`.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['notes', 'documents', 'all'], description: "Wat je wilt zien (standaard 'all')." },
+        client_id: { type: 'string' },
+        project_id: { type: 'string' },
+        query: { type: 'string', description: 'Zoek in de titel.' },
+        limit: { type: 'integer' },
+      },
+    },
+  },
+  {
+    name: 'propose_note',
+    description: 'Zet een NOTITIE klaar. Die opent vooringevuld in het notitieformulier; de gebruiker controleert en slaat zelf op. Koppel hem aan een klant en/of project als dat past.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        content: { type: 'string', description: 'De inhoud van de notitie.' },
+        client_id: { type: 'string' },
+        project_id: { type: 'string' },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'propose_document',
+    description: 'Zet een INTERN DOCUMENT klaar. Het opent vooringevuld in het documentformulier; de gebruiker controleert en slaat zelf op.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        content: { type: 'string', description: 'De inhoud van het document.' },
+        client_id: { type: 'string' },
+        project_id: { type: 'string' },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'list_bookings',
+    description: 'Bekijk de boekingslinks en de afspraken die klanten daarmee hebben geboekt: wie, wanneer en met welke status. Alleen lezen.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Vanaf datum YYYY-MM-DD (op boekingsmoment).' },
+        to: { type: 'string', description: 'Tot en met datum YYYY-MM-DD.' },
+        limit: { type: 'integer' },
+      },
     },
   },
   {
@@ -1681,6 +1785,12 @@ function toolLabel(name: string): string {
     case 'list_tickets': return 'Tickets ophalen…';
     case 'list_due_reminders': return 'Openstaande herinneringen ophalen…';
     case 'list_tasks': return 'Taken ophalen…';
+    case 'list_contracts':
+    case 'list_contract_templates': return 'Contracten ophalen…';
+    case 'list_campaigns': return 'Campagnes ophalen…';
+    case 'list_galleries': return 'Galerijen ophalen…';
+    case 'list_content': return 'Notities en documenten ophalen…';
+    case 'list_bookings': return 'Boekingen ophalen…';
     case 'list_suppliers': return 'Leveranciers ophalen…';
     case 'list_purchase_invoices': return 'Inkoopfacturen ophalen…';
     case 'list_ledger_accounts': return 'Rekeningschema ophalen…';
@@ -1710,6 +1820,14 @@ const TOOL_MODULE: Record<string, string> = {
   list_calendars: 'calendar',
   suggest_meeting_slots: 'calendar',
   list_time_entries: 'time',
+  list_contracts: 'finance',
+  list_contract_templates: 'finance',
+  list_campaigns: 'marketing',
+  list_galleries: 'projects',
+  list_content: 'content',
+  propose_note: 'content',
+  propose_document: 'content',
+  list_bookings: 'calendar',
   list_suppliers: 'finance',
   list_purchase_invoices: 'finance',
   list_ledger_accounts: 'finance',
@@ -1781,6 +1899,12 @@ const TOOL_LABELS: Record<string, string> = {
   list_calendars: "Agenda's bekijken",
   suggest_meeting_slots: 'Vrije momenten zoeken',
   list_time_entries: 'Geregistreerde uren bekijken',
+  list_contracts: 'Contracten bekijken',
+  list_contract_templates: 'Contractsjablonen bekijken',
+  list_campaigns: 'Campagnes bekijken',
+  list_galleries: 'Galerijen bekijken',
+  list_content: 'Notities en documenten bekijken',
+  list_bookings: 'Boekingen bekijken',
   list_suppliers: 'Leveranciers bekijken',
   list_purchase_invoices: 'Inkoopfacturen bekijken',
   list_ledger_accounts: 'Rekeningschema bekijken',
@@ -1819,6 +1943,8 @@ const TOOL_LABELS: Record<string, string> = {
   propose_edit_client_contact: 'Contactpersoon wijzigen',
   propose_project_team: 'Projectteam samenstellen',
   propose_task_assign: 'Taak toewijzen',
+  propose_note: 'Notitie klaarzetten',
+  propose_document: 'Document klaarzetten',
   propose_ticket: 'Ticket aanmaken',
   propose_edit_ticket: 'Ticket wijzigen',
   propose_ticket_note: 'Reageren op een ticket',
@@ -1908,6 +2034,12 @@ async function runTool(ctx: GerrieContext, name: string, input: Record<string, u
     case 'list_projects': return listProjects(orgId, input, limit);
     case 'list_tickets': return listTickets(orgId, input, limit);
     case 'list_time_entries': return listTimeEntries(ctx, input, limit);
+    case 'list_contracts': return listContracts(orgId, input, limit);
+    case 'list_contract_templates': return listContractTemplates(orgId);
+    case 'list_campaigns': return listCampaigns(orgId, input, limit);
+    case 'list_galleries': return listGalleries(orgId, input, limit);
+    case 'list_content': return listContent(orgId, input, limit);
+    case 'list_bookings': return listBookings(orgId, input, limit);
     case 'list_suppliers': return listSuppliers(orgId, input, limit);
     case 'list_purchase_invoices': return listPurchaseInvoices(orgId, input, limit);
     case 'list_ledger_accounts': return listLedgerAccounts(orgId, input, limit);
@@ -2102,6 +2234,8 @@ function proposeLabel(toolName: string): string {
     case 'propose_calendar_event': return 'Agenda-item klaarzetten…';
     case 'propose_week_action': return 'Weekactiepunt klaarzetten…';
     case 'propose_time_entry': return 'Urenregistratie klaarzetten…';
+    case 'propose_note': return 'Notitie klaarzetten…';
+    case 'propose_document': return 'Document klaarzetten…';
     case 'propose_edit_time_entry': return 'Urencorrectie klaarzetten…';
     case 'propose_edit_calendar_event': return 'Wijziging in de agenda klaarzetten…';
     case 'propose_cancel_calendar_event': return 'Afzegging klaarzetten…';
@@ -2149,6 +2283,8 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
     case 'propose_calendar_event': return buildCalendarEventProposal(ctx, input);
     case 'propose_week_action': return buildWeekActionProposal(input);
     case 'propose_time_entry': return buildTimeEntryProposal(ctx, input);
+    case 'propose_note': return buildContentProposal(ctx, 'note', input);
+    case 'propose_document': return buildContentProposal(ctx, 'document', input);
     case 'propose_edit_time_entry': return buildEditTimeEntryProposal(ctx, input);
     case 'propose_edit_calendar_event': return buildEditCalendarEventProposal(ctx, input);
     case 'propose_cancel_calendar_event': return buildCancelCalendarEventProposal(ctx, input);
@@ -3233,6 +3369,192 @@ async function buildEditTimeEntryProposal(ctx: GerrieContext, input: Record<stri
 
 // 'converted' staat er bewust NIET bij: die status zet de app zelf als een ticket
 // naar een project wordt omgezet, en is geen handmatige keuze.
+// ── Contracten, campagnes, galerijen, inhoud en boekingen ────────────────────
+
+async function listContracts(orgId: string, input: Record<string, unknown>, limit: number) {
+  let query = orgTable('contracts', orgId).order('date', { ascending: false }).limit(limit);
+  if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.status) query = query.eq('status', String(input.status));
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  if (rows.length === 0) return { count: 0, contracts: [] };
+
+  // Ondertekenaars erbij: "waar wacht dit op?" is de vraag die je hier stelt.
+  const { data: signers } = await supabaseAdmin.from('contract_signers')
+    .select('contract_id, name, email, status, signing_order, signed_at')
+    .eq('organization_id', orgId).in('contract_id', rows.map((r) => String(r.id))).order('signing_order');
+  const byContract = new Map<string, Array<Record<string, unknown>>>();
+  for (const sg of (signers ?? []) as Array<Record<string, unknown>>) {
+    const key = String(sg.contract_id);
+    if (!byContract.has(key)) byContract.set(key, []);
+    byContract.get(key)!.push(sg);
+  }
+
+  const clientIds = [...new Set(rows.map((r) => (r.client_id ? String(r.client_id) : '')).filter(Boolean))];
+  const clients = new Map<string, string>();
+  if (clientIds.length) {
+    const { data: cs } = await supabaseAdmin.from('clients').select('id, name').eq('organization_id', orgId).in('id', clientIds);
+    for (const c of (cs ?? []) as Array<Record<string, unknown>>) clients.set(String(c.id), String(c.name));
+  }
+
+  let out = rows.map((r) => {
+    const sg = byContract.get(String(r.id)) ?? [];
+    const pending = sg.filter((x) => String(x.status ?? '') !== 'signed');
+    return {
+      id: r.id, number: r.number, title: r.title,
+      client_id: r.client_id, client_name: r.client_id ? clients.get(String(r.client_id)) ?? null : null,
+      date: r.date, valid_until: r.valid_until, status: r.status,
+      amount_eur: euros(r.amount_cents),
+      sent_at: r.sent_at, signed_at: r.signed_at,
+      signers: sg.map((x) => ({ name: x.name, email: x.email, status: x.status, signed_at: x.signed_at })),
+      awaiting_signature_from: pending.map((x) => String(x.name ?? x.email ?? '')),
+    };
+  });
+  if (input.awaiting_signature_only === true) {
+    out = out.filter((c) => c.awaiting_signature_from.length > 0 && String(c.status) !== 'draft');
+  }
+  return { count: out.length, contracts: out };
+}
+
+async function listContractTemplates(orgId: string) {
+  const { data, error } = await orgTable('contract_templates', orgId).order('name');
+  if (error) throw new Error(error.message);
+  return {
+    count: data?.length ?? 0,
+    templates: (data ?? []).map((r: Record<string, unknown>) => ({ id: r.id, name: r.name })),
+  };
+}
+
+async function listCampaigns(orgId: string, input: Record<string, unknown>, limit: number) {
+  let query = orgTable('email_campaigns', orgId).order('created_at', { ascending: false }).limit(limit);
+  if (input.status) query = query.eq('status', String(input.status));
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  const { data: flows } = await orgTable('email_flows', orgId).order('created_at', { ascending: false });
+  return {
+    count: data?.length ?? 0,
+    campaigns: (data ?? []).map((r: Record<string, unknown>) => ({
+      id: r.id, name: r.name, subject: r.subject, audience: r.audience,
+      status: r.status, scheduled_at: r.scheduled_at, sent_at: r.sent_at,
+    })),
+    flows: (flows ?? []).map((r: Record<string, unknown>) => ({
+      id: r.id, name: r.name, status: r.status, audience: r.audience,
+    })),
+  };
+}
+
+async function listGalleries(orgId: string, input: Record<string, unknown>, limit: number) {
+  let query = orgTable('galleries', orgId).order('created_at', { ascending: false }).limit(limit);
+  if (input.project_id) query = query.eq('project_id', String(input.project_id));
+  if (input.status) query = query.eq('status', String(input.status));
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  const names = await namesFor(orgId, rows);
+  return {
+    count: rows.length,
+    galleries: rows.map((r) => ({
+      id: r.id, title: r.title, status: r.status, format: r.format,
+      project_id: r.project_id, project_name: r.project_id ? names.projects.get(String(r.project_id)) ?? null : null,
+      published_at: r.published_at, expires_at: r.expires_at,
+      // Bewust geen token of pincode — die horen nergens in een modelantwoord.
+      share_enabled: r.share_enabled === true,
+      allow_downloads: r.allow_downloads === true,
+    })),
+  };
+}
+
+async function listContent(orgId: string, input: Record<string, unknown>, limit: number) {
+  const kind = ['notes', 'documents', 'all'].includes(String(input.kind)) ? String(input.kind) : 'all';
+  const needle = String(input.query ?? '').trim();
+
+  async function fetchFrom(table: 'notes' | 'documents') {
+    let query = orgTable(table, orgId).order('updated_at', { ascending: false }).limit(limit);
+    if (input.client_id) query = query.eq('client_id', String(input.client_id));
+    if (input.project_id) query = query.eq('project_id', String(input.project_id));
+    if (needle) query = query.ilike('title', `%${escapeLike(needle)}%`);
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return (data ?? []) as Array<Record<string, unknown>>;
+  }
+
+  const notes = kind === 'documents' ? [] : await fetchFrom('notes');
+  const documents = kind === 'notes' ? [] : await fetchFrom('documents');
+  const rows = [...notes, ...documents];
+  const names = await namesFor(orgId, rows);
+  const shape = (r: Record<string, unknown>, itemKind: 'note' | 'document') => ({
+    id: r.id, kind: itemKind, title: r.title,
+    type: itemKind === 'note' ? r.note_type : r.document_type,
+    client_name: r.client_id ? names.clients.get(String(r.client_id)) ?? null : null,
+    project_name: r.project_id ? names.projects.get(String(r.project_id)) ?? null : null,
+    updated_at: r.updated_at,
+  });
+  return {
+    count: rows.length,
+    items: [...notes.map((r) => shape(r, 'note')), ...documents.map((r) => shape(r, 'document'))],
+  };
+}
+
+async function listBookings(orgId: string, input: Record<string, unknown>, limit: number) {
+  const { data: links, error: linkErr } = await orgTable('meeting_booking_links', orgId).order('created_at', { ascending: false });
+  if (linkErr) throw new Error(linkErr.message);
+
+  let query = orgTable('meeting_bookings', orgId).order('created_at', { ascending: false }).limit(limit);
+  const from = isoDate(input.from);
+  const to = isoDate(input.to);
+  if (from) query = query.gte('created_at', `${from}T00:00:00Z`);
+  if (to) query = query.lte('created_at', `${to}T23:59:59Z`);
+  const { data: bookings, error } = await query;
+  if (error) throw new Error(error.message);
+
+  const linkNames = new Map<string, string>();
+  for (const l of (links ?? []) as Array<Record<string, unknown>>) linkNames.set(String(l.id), String(l.title ?? ''));
+
+  return {
+    links: (links ?? []).map((l: Record<string, unknown>) => ({
+      id: l.id, title: l.title, status: l.status, max_total_bookings: l.max_total_bookings,
+    })),
+    count: bookings?.length ?? 0,
+    bookings: (bookings ?? []).map((b: Record<string, unknown>) => ({
+      id: b.id, link_title: linkNames.get(String(b.booking_link_id)) ?? null,
+      booked_name: b.booked_name, booked_email: b.booked_email,
+      status: b.status, created_at: b.created_at, confirmed_at: b.confirmed_at, cancelled_at: b.cancelled_at,
+    })),
+  };
+}
+
+async function buildContentProposal(ctx: GerrieContext, kind: 'note' | 'document', input: Record<string, unknown>): Promise<ProposalResult> {
+  const title = String(input.title || '').trim();
+  if (!title) return { ok: false, error: `Geef een titel voor ${kind === 'note' ? 'de notitie' : 'het document'}.` };
+
+  let clientId: string | null = null;
+  let clientName: string | null = null;
+  if (input.client_id) {
+    const c = await resolveClient(ctx, input.client_id);
+    if (!c.ok) return c;
+    clientId = c.id; clientName = c.name;
+  }
+  let projectId: string | null = null;
+  let projectName: string | null = null;
+  if (input.project_id) {
+    const pr = await resolveProject(ctx, input.project_id);
+    if (!pr.ok) return pr;
+    projectId = pr.id; projectName = pr.name;
+  }
+
+  return {
+    ok: true,
+    proposal: {
+      type: 'content', kind,
+      title: title.slice(0, 300),
+      content: String(input.content || '').slice(0, 20000),
+      client_id: clientId, client_name: clientName,
+      project_id: projectId, project_name: projectName,
+    },
+  };
+}
+
 // ── Boekhouding: uitsluitend LEZEN ───────────────────────────────────────────
 //
 // De agent mag de hele administratie inzien en erover rapporteren, maar boekt

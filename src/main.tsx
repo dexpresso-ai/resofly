@@ -2128,6 +2128,19 @@ function App() {
       await updateTimeEntry(activeOrg.id, p.id, p.changes);
       scheduleRefresh();
     },
+    // Notities en documenten hebben allebei al een formulier dat `defaults` aanneemt,
+    // dus dit is dezelfde weg als "Nieuwe notitie" op de klantenkaart.
+    onCreateContent: (p) => {
+      if (!ensureCanWrite()) return;
+      setPage(p.kind === 'note' ? 'notes' : 'documents'); setProjectId(null); setClientId(null);
+      const defaults = {
+        title: p.title, content: p.content,
+        client_id: p.client_id ?? undefined, project_id: p.project_id ?? undefined,
+      };
+      setEdit(p.kind === 'note'
+        ? { kind: 'note', item: undefined, defaults }
+        : { kind: 'document', item: undefined, defaults });
+    },
     onCreateTicket: (p) => {
       if (!ensureCanWrite()) return;
       setPage('tickets'); setProjectId(null); setClientId(null);

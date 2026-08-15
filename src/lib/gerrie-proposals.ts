@@ -82,6 +82,11 @@ export function proposalLabel(p: GerrieProposal): ProposalInfo {
       sub: p.assignees.length ? p.assignees.map((a) => a.name).join(', ') : 'niemand meer toegewezen',
       write: true, kind: 'work',
     };
+    case 'content': return {
+      title: `${p.kind === 'note' ? 'Notitie' : 'Document'} openen: ${p.title}`,
+      sub: [p.client_name, p.project_name].filter(Boolean).join(' · '),
+      write: false, kind: 'work',
+    };
     case 'ticket': return { title: 'Ticket openen', sub: [p.title, p.client_name].filter(Boolean).join(' · '), write: false, kind: 'work' };
     case 'edit_ticket': return { title: `Wijziging ticket openen`, sub: p.title, write: false, kind: 'work' };
     case 'ticket_note': return {
@@ -137,6 +142,7 @@ export async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers
     case 'report': h.onCreateReport?.(p); return;
     case 'ticket': h.onCreateTicket?.(p); return;
     case 'edit_ticket': h.onEditTicket?.(p); return;
+    case 'content': h.onCreateContent?.(p); return;
     case 'agent': await need(h.onCreateAgent ? () => h.onCreateAgent!(p) : undefined); return;
     // De hele reeks in één keer. De wachtrij gebruikt deze weg alleen als je "alles
     // versturen" kiest; vink je ze los af, dan roept hij onSendClientEmail per mail

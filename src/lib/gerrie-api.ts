@@ -284,6 +284,16 @@ export interface GerrieTaskAssignProposal {
   /** De VOLLEDIGE nieuwe set; leeg = niemand meer toegewezen. */
   assignees: Array<{ user_id: UUID; name: string }>;
 }
+export interface GerrieContentProposal {
+  type: 'content';
+  kind: 'note' | 'document';
+  title: string;
+  content: string;
+  client_id: UUID | null;
+  client_name: string | null;
+  project_id: UUID | null;
+  project_name: string | null;
+}
 /** Correctie op een bestaande urenregistratie; `current` toont waar hij nu op staat. */
 export interface GerrieEditTimeEntryProposal {
   type: 'edit_time_entry';
@@ -314,7 +324,7 @@ export interface GerrieTicketNoteProposal {
   body: string;
   is_internal: boolean;
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieEditCalendarEventProposal | GerrieCancelCalendarEventProposal | GerrieClientContactProposal | GerrieEditClientContactProposal | GerrieProjectTeamProposal | GerrieTaskAssignProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieEditTimeEntryProposal | GerrieTicketProposal | GerrieEditTicketProposal | GerrieTicketNoteProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieEditCalendarEventProposal | GerrieCancelCalendarEventProposal | GerrieClientContactProposal | GerrieEditClientContactProposal | GerrieProjectTeamProposal | GerrieTaskAssignProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieEditTimeEntryProposal | GerrieTicketProposal | GerrieEditTicketProposal | GerrieTicketNoteProposal | GerrieContentProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
 
 /**
  * De uitvoer-handlers voor een door Gerrie voorgestelde actie. Draft-types openen een
@@ -361,6 +371,8 @@ export interface GerrieActionHandlers {
   onEditTicket?: (proposal: GerrieEditTicketProposal) => void;
   /** Plaatst een reactie op een ticket (voert uit). Bij is_internal=false leest de klant hem. */
   onAddTicketNote?: (proposal: GerrieTicketNoteProposal) => Promise<void>;
+  /** Opent het notitie- of documentformulier vooringevuld. */
+  onCreateContent?: (proposal: GerrieContentProposal) => void;
   onCreateReport?: (proposal: GerrieReportProposal) => void;
   /** Verstuurt ÉÉN klantmail. De wachtrij roept hem per aangevinkte mail aan, zodat
    *  een mislukte mail de rest niet meesleept en je per regel ziet wat er misging. */

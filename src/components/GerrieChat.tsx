@@ -101,7 +101,7 @@ const SpeechRecognitionImpl: SpeechRecognitionCtor | undefined =
       ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionCtor }).webkitSpeechRecognition;
 const speechSupported = Boolean(SpeechRecognitionImpl);
 
-export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onCreateReport, onSendClientEmail, onCreateAgent, onCreateTicket, onEditTicket, onAddTicketNote, onEditTimeEntry, onEditCalendarEvent, onCancelCalendarEvent, onCreateClientContact, onEditClientContact, onSetProjectTeam, onAssignTask }: { organizationId: UUID } & GerrieActionHandlers) {
+export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onCreateReport, onSendClientEmail, onCreateAgent, onCreateTicket, onEditTicket, onAddTicketNote, onEditTimeEntry, onEditCalendarEvent, onCancelCalendarEvent, onCreateClientContact, onEditClientContact, onSetProjectTeam, onAssignTask, onCreateContent }: { organizationId: UUID } & GerrieActionHandlers) {
   const [open, setOpen] = useState(false);
   const [firstName, setFirstName] = useState<string | null>(null);
   const firstNameRef = useRef<string | null>(null);
@@ -363,6 +363,7 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
         confirmLabel="Toewijzen" pendingLabel="Toewijzen…" doneLabel={`"${p.task_title}" toegewezen`}
         onConfirm={() => runConfirmed(auditId, () => onAssignTask ? onAssignTask(p) : Promise.reject(new Error('Toewijzen is hier niet beschikbaar.')))} />;
     }
+    if (p.type === 'content') return <ProposalCard title={`${p.kind === 'note' ? 'Notitie' : 'Document'} openen & controleren`} sub={[p.title, p.client_name, p.project_name].filter(Boolean).join(' · ')} onClick={() => onCreateContent?.(p)} />;
     if (p.type === 'ticket') return <ProposalCard title="Ticket openen & controleren" sub={[p.title, p.client_name].filter(Boolean).join(' · ')} onClick={() => onCreateTicket?.(p)} />;
     if (p.type === 'edit_ticket') return <ProposalCard title="Wijziging ticket openen & controleren" sub={p.title} onClick={() => onEditTicket?.(p)} />;
     if (p.type === 'ticket_note') {
