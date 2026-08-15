@@ -52,6 +52,36 @@ export function proposalLabel(p: GerrieProposal): ProposalInfo {
       ].filter(Boolean).join(' → '),
       write: true, kind: 'work',
     };
+    case 'edit_calendar_event': return {
+      title: `Agenda-item aanpassen: ${p.title}`,
+      sub: `${p.current.date} ${p.current.start_time}–${p.current.end_time} · ${p.source_name}`,
+      write: true, kind: 'agenda',
+    };
+    case 'cancel_calendar_event': return {
+      title: `Agenda-item afzeggen: ${p.title}`,
+      sub: `${p.date} ${p.start_time}${p.has_attendees ? ' · genodigden krijgen een afzegging' : ''}`,
+      write: true, kind: 'agenda',
+    };
+    case 'client_contact': return {
+      title: `Contactpersoon toevoegen: ${p.name}`,
+      sub: [p.client_name, p.role, p.gives_portal_access ? 'mét portaaltoegang' : ''].filter(Boolean).join(' · '),
+      write: true, kind: 'work',
+    };
+    case 'edit_client_contact': return {
+      title: `Contactpersoon wijzigen: ${p.name}`,
+      sub: [p.client_name, p.changes.gives_portal_access === true ? 'krijgt portaaltoegang' : p.changes.gives_portal_access === false ? 'verliest portaaltoegang' : ''].filter(Boolean).join(' · '),
+      write: true, kind: 'work',
+    };
+    case 'project_team': return {
+      title: `Projectteam bijwerken: ${p.project_name}`,
+      sub: [p.add.length ? `erbij: ${p.add.map((m) => m.name).join(', ')}` : '', p.remove.length ? `eraf: ${p.remove.map((m) => m.name).join(', ')}` : ''].filter(Boolean).join(' · '),
+      write: true, kind: 'work',
+    };
+    case 'task_assign': return {
+      title: `Taak toewijzen: ${p.task_title}`,
+      sub: p.assignees.length ? p.assignees.map((a) => a.name).join(', ') : 'niemand meer toegewezen',
+      write: true, kind: 'work',
+    };
     case 'ticket': return { title: 'Ticket openen', sub: [p.title, p.client_name].filter(Boolean).join(' · '), write: false, kind: 'work' };
     case 'edit_ticket': return { title: `Wijziging ticket openen`, sub: p.title, write: false, kind: 'work' };
     case 'ticket_note': return {
@@ -152,6 +182,12 @@ export async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers
     case 'week_action': await need(h.onCreateWeekAction ? () => h.onCreateWeekAction!(p) : undefined); return;
     case 'time_entry': await need(h.onLogTimeEntry ? () => h.onLogTimeEntry!(p) : undefined); return;
     case 'edit_time_entry': await need(h.onEditTimeEntry ? () => h.onEditTimeEntry!(p) : undefined); return;
+    case 'edit_calendar_event': await need(h.onEditCalendarEvent ? () => h.onEditCalendarEvent!(p) : undefined); return;
+    case 'cancel_calendar_event': await need(h.onCancelCalendarEvent ? () => h.onCancelCalendarEvent!(p) : undefined); return;
+    case 'client_contact': await need(h.onCreateClientContact ? () => h.onCreateClientContact!(p) : undefined); return;
+    case 'edit_client_contact': await need(h.onEditClientContact ? () => h.onEditClientContact!(p) : undefined); return;
+    case 'project_team': await need(h.onSetProjectTeam ? () => h.onSetProjectTeam!(p) : undefined); return;
+    case 'task_assign': await need(h.onAssignTask ? () => h.onAssignTask!(p) : undefined); return;
     case 'ticket_note': await need(h.onAddTicketNote ? () => h.onAddTicketNote!(p) : undefined); return;
   }
 }

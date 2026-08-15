@@ -74,11 +74,15 @@ import {
   upsertCompanySettings,
   markTicketRead,
   setTaskAssignees,
+  addProjectMember,
+  removeProjectMember,
+  createClientContact,
+  updateClientContact,
   type Table,
 } from './lib/repository';
 import { memberShortName, memberColor, memberInitials } from './lib/members';
 import { uploadToR2 } from './lib/r2';
-import { listExternalCalendarEvents, createExternalCalendarEvent } from './lib/calendar-api';
+import { listExternalCalendarEvents, createExternalCalendarEvent, updateCalendarEvent, deleteCalendarEvent } from './lib/calendar-api';
 import { buildDocumentPdfBlob, buildDocumentDocxBlob, downloadBlob, documentFileBaseName, type DocumentExportMeta } from './lib/documentExport';
 import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumentFile, createBlankOfficeDocument, downloadOfficeDocument, officeFileNameForDocument, warmupOfficeEditor, OFFICE_UPLOAD_ACCEPT, NEW_OFFICE_LABEL, type OfficeSession, type NewOfficeType } from './lib/office';
 import { deleteR2Object } from './lib/r2-api';
@@ -2055,6 +2059,67 @@ function App() {
         billable: p.billable, hourly_rate_cents: p.hourly_rate_cents,
       });
       await refresh();
+    },
+    // De agenda is multi-provider: native items hebben een eigen id, Google/Microsoft
+    // alleen een provider-id binnen hun bron. De `ref` draagt beide mee en de
+    // agenda-functie kiest — precies zoals slepen/herschalen in de agenda zelf werkt.
+    onEditCalendarEvent: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      const date = p.changes.date ?? p.current.date;
+      const startTime = p.changes.start_time ?? p.current.start_time;
+      const endTime = p.changes.end_time ?? p.current.end_time;
+      await updateCalendarEvent(
+        activeOrg.id,
+        { eventId: p.ref.event_id ?? undefined, sourceId: p.ref.source_id, providerEventId: p.ref.provider_event_id ?? undefined },
+        {
+          sourceId: p.ref.source_id,
+          title: p.changes.title ?? p.title,
+          startsAt: new Date(`${date}T${startTime}:00`).toISOString(),
+          endsAt: new Date(`${date}T${endTime}:00`).toISOString(),
+          description: p.changes.description ?? undefined,
+          location: p.changes.location ?? undefined,
+        },
+      );
+      scheduleRefresh();
+    },
+    onCancelCalendarEvent: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      await deleteCalendarEvent(activeOrg.id, {
+        eventId: p.ref.event_id ?? undefined, sourceId: p.ref.source_id, providerEventId: p.ref.provider_event_id ?? undefined,
+      });
+      scheduleRefresh();
+    },
+    onCreateClientContact: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      await createClientContact(activeOrg.id, {
+        client_id: p.client_id, name: p.name, email: p.email, phone: p.phone,
+        role: p.role, gives_portal_access: p.gives_portal_access,
+      });
+      scheduleRefresh();
+    },
+    onEditClientContact: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      await updateClientContact(p.id, p.changes, activeOrg.id);
+      scheduleRefresh();
+    },
+    // Toevoegen en verwijderen apart: `project_members` heeft een eigen rij-id, dus
+    // eraf halen vraagt om die rij, niet om de user_id.
+    onSetProjectTeam: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      for (const m of p.add) {
+        if (data.projectMembers.some((row) => row.project_id === p.project_id && row.user_id === m.user_id)) continue;
+        await addProjectMember(activeOrg.id, p.project_id, m.user_id);
+      }
+      for (const m of p.remove) {
+        const row = data.projectMembers.find((x) => x.project_id === p.project_id && x.user_id === m.user_id);
+        if (row) await removeProjectMember(activeOrg.id, row.id);
+      }
+      scheduleRefresh();
+    },
+    onAssignTask: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      await setTaskAssignees(activeOrg.id, p.task_id, p.assignees.map((a) => a.user_id));
+      scheduleRefresh();
     },
     // Een correctie op geboekte uren voert direct uit: er is geen los urenformulier
     // om te openen, en de wijziging is één regel die je in de kaart al hebt gelezen.

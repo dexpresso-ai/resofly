@@ -101,7 +101,7 @@ const SpeechRecognitionImpl: SpeechRecognitionCtor | undefined =
       ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionCtor }).webkitSpeechRecognition;
 const speechSupported = Boolean(SpeechRecognitionImpl);
 
-export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onCreateReport, onSendClientEmail, onCreateAgent, onCreateTicket, onEditTicket, onAddTicketNote, onEditTimeEntry }: { organizationId: UUID } & GerrieActionHandlers) {
+export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onCreateReport, onSendClientEmail, onCreateAgent, onCreateTicket, onEditTicket, onAddTicketNote, onEditTimeEntry, onEditCalendarEvent, onCancelCalendarEvent, onCreateClientContact, onEditClientContact, onSetProjectTeam, onAssignTask }: { organizationId: UUID } & GerrieActionHandlers) {
   const [open, setOpen] = useState(false);
   const [firstName, setFirstName] = useState<string | null>(null);
   const firstNameRef = useRef<string | null>(null);
@@ -321,6 +321,48 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
       return <ConfirmActionCard icon={<ClockIcon />} title={`${formatMinutes(p.minutes)} registreren?`} sub={`${target} · ${p.date} · ${p.billable ? 'declarabel' : 'niet-declarabel'}`} confirmLabel="Registreren" pendingLabel="Registreren…" doneLabel={`${formatMinutes(p.minutes)} geregistreerd${p.project_name ? ` op ${p.project_name}` : ''}`} onConfirm={() => runConfirmed(auditId, () => onLogTimeEntry ? onLogTimeEntry(p) : Promise.reject(new Error('Registreren is hier niet beschikbaar.')))} />;
     }
     if (p.type === 'report') return <ProposalCard icon={<ChartIcon />} title={`Rapportage openen & controleren: ${p.name}`} sub={describeReportDefinition(p.definition)} onClick={() => onCreateReport?.(p)} />;
+    if (p.type === 'edit_calendar_event') {
+      const wordt = `${p.changes.date ?? p.current.date} ${p.changes.start_time ?? p.current.start_time}–${p.changes.end_time ?? p.current.end_time}`;
+      return <ConfirmActionCard icon={<CalendarIcon />} title={`Agenda-item "${p.title}" aanpassen?`}
+        sub={`${p.current.date} ${p.current.start_time}–${p.current.end_time}  →  ${wordt} · ${p.source_name}`}
+        confirmLabel="Aanpassen" pendingLabel="Aanpassen…" doneLabel={`"${p.title}" aangepast`}
+        onConfirm={() => runConfirmed(auditId, () => onEditCalendarEvent ? onEditCalendarEvent(p) : Promise.reject(new Error('Aanpassen is hier niet beschikbaar.')))} />;
+    }
+    if (p.type === 'cancel_calendar_event') {
+      return <ConfirmActionCard icon={<CalendarIcon />} title={`Agenda-item "${p.title}" afzeggen?`}
+        sub={`${p.date} ${p.start_time} · ${p.source_name}${p.has_attendees ? ' — genodigden krijgen een afzegging' : ''}`}
+        confirmLabel="Afzeggen" pendingLabel="Afzeggen…" doneLabel={`"${p.title}" afgezegd`}
+        onConfirm={() => runConfirmed(auditId, () => onCancelCalendarEvent ? onCancelCalendarEvent(p) : Promise.reject(new Error('Afzeggen is hier niet beschikbaar.')))} />;
+    }
+    if (p.type === 'client_contact') {
+      return <ConfirmActionCard icon={<UserIcon />} title={`Contactpersoon ${p.name} toevoegen bij ${p.client_name}?`}
+        sub={[p.role, p.email, p.gives_portal_access ? 'krijgt toegang tot het klantportaal' : 'geen portaaltoegang'].filter(Boolean).join(' · ')}
+        confirmLabel="Toevoegen" pendingLabel="Toevoegen…" doneLabel={`${p.name} toegevoegd bij ${p.client_name}`}
+        onConfirm={() => runConfirmed(auditId, () => onCreateClientContact ? onCreateClientContact(p) : Promise.reject(new Error('Toevoegen is hier niet beschikbaar.')))} />;
+    }
+    if (p.type === 'edit_client_contact') {
+      const portaal = p.changes.gives_portal_access === true ? 'krijgt portaaltoegang'
+        : p.changes.gives_portal_access === false ? 'verliest portaaltoegang' : '';
+      return <ConfirmActionCard icon={<UserIcon />} title={`Contactpersoon ${p.name} wijzigen?`}
+        sub={[p.client_name, portaal].filter(Boolean).join(' · ')}
+        confirmLabel="Wijzigen" pendingLabel="Wijzigen…" doneLabel={`${p.name} bijgewerkt`}
+        onConfirm={() => runConfirmed(auditId, () => onEditClientContact ? onEditClientContact(p) : Promise.reject(new Error('Wijzigen is hier niet beschikbaar.')))} />;
+    }
+    if (p.type === 'project_team') {
+      const sub = [
+        p.add.length ? `erbij: ${p.add.map((m) => m.name).join(', ')}` : '',
+        p.remove.length ? `eraf: ${p.remove.map((m) => m.name).join(', ')}` : '',
+      ].filter(Boolean).join(' · ');
+      return <ConfirmActionCard icon={<UserIcon />} title={`Projectteam van "${p.project_name}" bijwerken?`} sub={sub}
+        confirmLabel="Bijwerken" pendingLabel="Bijwerken…" doneLabel={`Projectteam van "${p.project_name}" bijgewerkt`}
+        onConfirm={() => runConfirmed(auditId, () => onSetProjectTeam ? onSetProjectTeam(p) : Promise.reject(new Error('Bijwerken is hier niet beschikbaar.')))} />;
+    }
+    if (p.type === 'task_assign') {
+      return <ConfirmActionCard icon={<UserIcon />} title={`Taak "${p.task_title}" toewijzen?`}
+        sub={p.assignees.length ? p.assignees.map((a) => a.name).join(', ') : 'niemand meer toegewezen'}
+        confirmLabel="Toewijzen" pendingLabel="Toewijzen…" doneLabel={`"${p.task_title}" toegewezen`}
+        onConfirm={() => runConfirmed(auditId, () => onAssignTask ? onAssignTask(p) : Promise.reject(new Error('Toewijzen is hier niet beschikbaar.')))} />;
+    }
     if (p.type === 'ticket') return <ProposalCard title="Ticket openen & controleren" sub={[p.title, p.client_name].filter(Boolean).join(' · ')} onClick={() => onCreateTicket?.(p)} />;
     if (p.type === 'edit_ticket') return <ProposalCard title="Wijziging ticket openen & controleren" sub={p.title} onClick={() => onEditTicket?.(p)} />;
     if (p.type === 'ticket_note') {

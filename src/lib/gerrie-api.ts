@@ -229,6 +229,61 @@ export interface GerrieTimeEntryProposal {
   billable: boolean;
   hourly_rate_cents: number | null;
 }
+/**
+ * Verwijzing naar een bestaand agenda-item. De agenda is multi-provider, dus alle
+ * drie de velden gaan mee; de agenda-functie kiest welke hij nodig heeft.
+ */
+export interface GerrieCalendarEventRef { event_id: UUID | null; source_id: UUID; provider_event_id: string | null }
+export interface GerrieEditCalendarEventProposal {
+  type: 'edit_calendar_event';
+  ref: GerrieCalendarEventRef;
+  title: string;
+  source_name: string;
+  current: { date: string; start_time: string; end_time: string; location: string | null };
+  changes: { title?: string; date?: string; start_time?: string; end_time?: string; description?: string | null; location?: string | null };
+}
+export interface GerrieCancelCalendarEventProposal {
+  type: 'cancel_calendar_event';
+  ref: GerrieCalendarEventRef;
+  title: string;
+  source_name: string;
+  date: string;
+  start_time: string;
+  /** Genodigden krijgen een afzegging — dat hoort op de kaart te staan. */
+  has_attendees: boolean;
+}
+export interface GerrieClientContactProposal {
+  type: 'client_contact';
+  client_id: UUID;
+  client_name: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  role: string | null;
+  gives_portal_access: boolean;
+}
+export interface GerrieEditClientContactProposal {
+  type: 'edit_client_contact';
+  id: UUID;
+  name: string;
+  client_name: string;
+  changes: { name?: string; email?: string | null; phone?: string | null; role?: string | null; gives_portal_access?: boolean };
+}
+export interface GerrieProjectTeamProposal {
+  type: 'project_team';
+  project_id: UUID;
+  project_name: string;
+  add: Array<{ user_id: UUID; name: string }>;
+  remove: Array<{ user_id: UUID; name: string }>;
+}
+export interface GerrieTaskAssignProposal {
+  type: 'task_assign';
+  task_id: UUID;
+  task_title: string;
+  project_name: string | null;
+  /** De VOLLEDIGE nieuwe set; leeg = niemand meer toegewezen. */
+  assignees: Array<{ user_id: UUID; name: string }>;
+}
 /** Correctie op een bestaande urenregistratie; `current` toont waar hij nu op staat. */
 export interface GerrieEditTimeEntryProposal {
   type: 'edit_time_entry';
@@ -259,7 +314,7 @@ export interface GerrieTicketNoteProposal {
   body: string;
   is_internal: boolean;
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieEditTimeEntryProposal | GerrieTicketProposal | GerrieEditTicketProposal | GerrieTicketNoteProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieEditCalendarEventProposal | GerrieCancelCalendarEventProposal | GerrieClientContactProposal | GerrieEditClientContactProposal | GerrieProjectTeamProposal | GerrieTaskAssignProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieEditTimeEntryProposal | GerrieTicketProposal | GerrieEditTicketProposal | GerrieTicketNoteProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
 
 /**
  * De uitvoer-handlers voor een door Gerrie voorgestelde actie. Draft-types openen een
@@ -285,6 +340,17 @@ export interface GerrieActionHandlers {
   onCreateTask?: (proposal: GerrieTaskProposal) => void;
   onEditTask?: (proposal: GerrieEditTaskProposal) => void;
   onCreateCalendarEvent?: (proposal: GerrieCalendarEventProposal) => Promise<void>;
+  /** Wijzigt een bestaand agenda-item (native of Google/Microsoft). */
+  onEditCalendarEvent?: (proposal: GerrieEditCalendarEventProposal) => Promise<void>;
+  /** Zegt een agenda-item af; genodigden krijgen bericht. */
+  onCancelCalendarEvent?: (proposal: GerrieCancelCalendarEventProposal) => Promise<void>;
+  /** Voegt een contactpersoon toe bij een klant. */
+  onCreateClientContact?: (proposal: GerrieClientContactProposal) => Promise<void>;
+  onEditClientContact?: (proposal: GerrieEditClientContactProposal) => Promise<void>;
+  /** Zet teamleden op een project of haalt ze eraf. */
+  onSetProjectTeam?: (proposal: GerrieProjectTeamProposal) => Promise<void>;
+  /** Vervangt de toewijzing van een taak door de opgegeven set. */
+  onAssignTask?: (proposal: GerrieTaskAssignProposal) => Promise<void>;
   onCreateWeekAction?: (proposal: GerrieWeekActionProposal) => Promise<void>;
   onLogTimeEntry?: (proposal: GerrieTimeEntryProposal) => Promise<void>;
   /** Past een bestaande urenregistratie aan (voert uit; geen formulier). */

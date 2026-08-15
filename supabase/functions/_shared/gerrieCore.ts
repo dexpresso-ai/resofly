@@ -142,6 +142,63 @@ interface EditProjectProposal { type: 'edit_project'; id: string; name: string; 
 interface TaskProposal { type: 'task'; project_id: string; project_name: string; title: string; description: string | null; status: string; priority: string; planned_date: string | null; start_date: string | null; end_date: string | null; estimated_minutes: number; tags: string[]; subtasks: ProposalSubtask[] }
 interface EditTaskProposal { type: 'edit_task'; id: string; title: string; project_id: string | null; changes: { title?: string; description?: string | null; status?: string; priority?: string; planned_date?: string | null; start_date?: string | null; end_date?: string | null; estimated_minutes?: number; tags?: string[]; subtasks?: ProposalSubtask[] } }
 interface CalendarEventProposal { type: 'calendar_event'; source_id: string; source_name: string; title: string; date: string; start_time: string; end_time: string; description: string | null; location: string | null }
+/**
+ * Verwijzing naar een BESTAAND agenda-item. De agenda is multi-provider, dus een
+ * item is niet met één id te vinden: native items hebben een eigen rij-id, externe
+ * (Google/Microsoft) alleen een provider-id binnen hun bron. We dragen alle drie
+ * mee en laten de agenda-functie kiezen — zelfde `ref` als de app zelf gebruikt.
+ */
+interface CalendarEventRef { event_id: string | null; source_id: string; provider_event_id: string | null }
+interface EditCalendarEventProposal {
+  type: 'edit_calendar_event';
+  ref: CalendarEventRef;
+  title: string;
+  source_name: string;
+  current: { date: string; start_time: string; end_time: string; location: string | null };
+  changes: { title?: string; date?: string; start_time?: string; end_time?: string; description?: string | null; location?: string | null };
+}
+interface CancelCalendarEventProposal {
+  type: 'cancel_calendar_event';
+  ref: CalendarEventRef;
+  title: string;
+  source_name: string;
+  date: string;
+  start_time: string;
+  /** Zijn er genodigden, dan krijgen die een afzegging — dat mag je niet verrassen. */
+  has_attendees: boolean;
+}
+interface ClientContactProposal {
+  type: 'client_contact';
+  client_id: string;
+  client_name: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  role: string | null;
+  gives_portal_access: boolean;
+}
+interface EditClientContactProposal {
+  type: 'edit_client_contact';
+  id: string;
+  name: string;
+  client_name: string;
+  changes: { name?: string; email?: string | null; phone?: string | null; role?: string | null; gives_portal_access?: boolean };
+}
+/** Wie er aan een project of taak gekoppeld wordt; namen zodat je ziet wie je toevoegt. */
+interface ProjectTeamProposal {
+  type: 'project_team';
+  project_id: string;
+  project_name: string;
+  add: Array<{ user_id: string; name: string }>;
+  remove: Array<{ user_id: string; name: string }>;
+}
+interface TaskAssignProposal {
+  type: 'task_assign';
+  task_id: string;
+  task_title: string;
+  project_name: string | null;
+  assignees: Array<{ user_id: string; name: string }>;
+}
 interface WeekActionProposal { type: 'week_action'; items: Array<{ title: string; planned_date: string }>; total: number }
 interface TimeEntryProposal { type: 'time_entry'; project_id: string | null; project_name: string | null; client_id: string | null; client_name: string | null; date: string; minutes: number; description: string | null; billable: boolean; hourly_rate_cents: number | null }
 /** Correctie op een BESTAANDE urenregistratie; alleen wat verandert zit in `changes`. */
@@ -208,7 +265,7 @@ interface AgentProposal {
   email_subject: string | null;
   email_body: string | null;
 }
-type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | SendInvoicesProposal | SendQuotesProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | WeekActionProposal | TimeEntryProposal | EditTimeEntryProposal | TicketProposal | EditTicketProposal | TicketNoteProposal | ReportProposal | SendClientEmailProposal | AgentProposal;
+type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | SendInvoicesProposal | SendQuotesProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | EditCalendarEventProposal | CancelCalendarEventProposal | ClientContactProposal | EditClientContactProposal | ProjectTeamProposal | TaskAssignProposal | WeekActionProposal | TimeEntryProposal | EditTimeEntryProposal | TicketProposal | EditTicketProposal | TicketNoteProposal | ReportProposal | SendClientEmailProposal | AgentProposal;
 
 /**
  * Eén stap uit de loop, voor het LOGBOEK van een geplande agent.
@@ -404,6 +461,12 @@ function describeProposal(p: Proposal): string {
     case 'edit_time_entry': return `correctie op een urenregistratie van ${p.current.date}`;
     case 'ticket': return `ticket ${p.title}`;
     case 'edit_ticket': return `wijziging van ticket ${p.title}`;
+    case 'edit_calendar_event': return `wijziging van agenda-item ${p.title}`;
+    case 'cancel_calendar_event': return `afzegging van agenda-item ${p.title}`;
+    case 'client_contact': return `contactpersoon ${p.name} bij ${p.client_name}`;
+    case 'edit_client_contact': return `wijziging van contactpersoon ${p.name}`;
+    case 'project_team': return `teamwijziging op project ${p.project_name}`;
+    case 'task_assign': return `toewijzing van taak ${p.task_title}`;
     case 'ticket_note': return `${p.is_internal ? 'interne notitie' : 'reactie'} op ticket ${p.ticket_title}`;
   }
 }
@@ -1054,6 +1117,119 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'list_calendar_events',
+    description: "Bekijk agenda-items in een periode, over alle gekoppelde agenda's heen (ResoFly, Google, Microsoft, ICS-abonnementen). Geeft per item de titel, tijden, locatie en de verwijzing die je nodig hebt om hem te wijzigen of af te zeggen. Gebruik dit vóór `propose_edit_calendar_event` of `propose_cancel_calendar_event`.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Begin van de periode (YYYY-MM-DD).' },
+        to: { type: 'string', description: 'Einde van de periode (YYYY-MM-DD, tot en met).' },
+        query: { type: 'string', description: 'Optioneel: alleen items waarvan de titel dit bevat.' },
+      },
+      required: ['from', 'to'],
+    },
+  },
+  {
+    name: 'propose_edit_calendar_event',
+    description: 'Wijzig een BESTAAND agenda-item: titel, datum, tijden, locatie of omschrijving. Zoek het item eerst met `list_calendar_events` en geef `event_id`, `source_id` en `provider_event_id` exact door zoals je ze daar kreeg. Geef alleen de velden die veranderen. Tijden zijn lokaal (Europe/Amsterdam). Je wijzigt niets zelf: de gebruiker bevestigt.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        event_id: { type: 'string', description: 'Uit list_calendar_events (kan leeg zijn bij een extern item).' },
+        source_id: { type: 'string', description: 'Uit list_calendar_events; verplicht.' },
+        provider_event_id: { type: 'string', description: 'Uit list_calendar_events (bij Google/Microsoft-items).' },
+        title: { type: 'string' },
+        date: { type: 'string', description: 'Nieuwe datum YYYY-MM-DD.' },
+        start_time: { type: 'string', description: 'Nieuwe begintijd HH:MM.' },
+        end_time: { type: 'string', description: 'Nieuwe eindtijd HH:MM.' },
+        description: { type: 'string' },
+        location: { type: 'string' },
+      },
+      required: ['source_id'],
+    },
+  },
+  {
+    name: 'propose_cancel_calendar_event',
+    description: 'Zeg een BESTAAND agenda-item af (verwijderen uit de agenda). Zoek het item eerst met `list_calendar_events`. Zijn er genodigden, dan krijgen die een afzegging — benoem dat in je antwoord. Je verwijdert niets zelf: de gebruiker bevestigt.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        event_id: { type: 'string', description: 'Uit list_calendar_events.' },
+        source_id: { type: 'string', description: 'Uit list_calendar_events; verplicht.' },
+        provider_event_id: { type: 'string', description: 'Uit list_calendar_events.' },
+      },
+      required: ['source_id'],
+    },
+  },
+  {
+    name: 'list_client_contacts',
+    description: 'Bekijk de contactpersonen van een klant: naam, rol, e-mail, telefoon en of ze toegang hebben tot het klantportaal. Zoek de klant eerst met `search_clients`.',
+    input_schema: {
+      type: 'object',
+      properties: { client_id: { type: 'string', description: 'Het exacte id van de klant (uit search_clients).' } },
+      required: ['client_id'],
+    },
+  },
+  {
+    name: 'propose_client_contact',
+    description: 'Zet een NIEUWE contactpersoon bij een klant klaar. Zoek de klant eerst met `search_clients`. Let op `portal_access`: op true kan deze persoon inloggen op het klantportaal en daar offertes, facturen en tickets zien — zet hem alleen aan als daar expliciet om gevraagd is.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'string', description: 'Het exacte id van de klant.' },
+        name: { type: 'string', description: 'Naam van de contactpersoon.' },
+        email: { type: 'string' },
+        phone: { type: 'string' },
+        role: { type: 'string', description: 'Functie of rol, bijv. "inkoop".' },
+        portal_access: { type: 'boolean', description: 'Toegang tot het klantportaal. Standaard false.' },
+      },
+      required: ['client_id', 'name'],
+    },
+  },
+  {
+    name: 'propose_edit_client_contact',
+    description: 'Wijzig een bestaande contactpersoon. Zoek hem eerst met `list_client_contacts` en gebruik het exacte id. Geef alleen de velden die veranderen. `portal_access` bepaalt of deze persoon op het klantportaal kan.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Het exacte id van de contactpersoon.' },
+        name: { type: 'string' }, email: { type: 'string' }, phone: { type: 'string' }, role: { type: 'string' },
+        portal_access: { type: 'boolean' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'list_team_members',
+    description: 'Bekijk de teamleden van deze organisatie: naam, e-mail en rol. Gebruik dit om de juiste user_id te vinden voor `propose_project_team` of `propose_task_assign`.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'propose_project_team',
+    description: 'Zet teamleden op een project of haal ze eraf. Zoek het project met `list_projects` en de teamleden met `list_team_members`. Geef alleen wie erbij komt (`add`) en/of wie eraf gaat (`remove`).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'Het exacte id van het project.' },
+        add: { type: 'array', items: { type: 'string' }, description: "user_id's die aan het projectteam worden toegevoegd." },
+        remove: { type: 'array', items: { type: 'string' }, description: "user_id's die van het projectteam af gaan." },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'propose_task_assign',
+    description: 'Bepaal wie een taak toegewezen krijgt. Zoek de taak met `list_tasks` en de teamleden met `list_team_members`. De opgegeven lijst VERVANGT de huidige toewijzing; een lege lijst haalt iedereen eraf.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Het exacte id van de taak (uit list_tasks).' },
+        user_ids: { type: 'array', items: { type: 'string' }, description: "De volledige nieuwe set user_id's." },
+      },
+      required: ['task_id', 'user_ids'],
+    },
+  },
+  {
     name: 'list_time_entries',
     description: 'Bekijk geregistreerde uren. Filter op periode (from/to, YYYY-MM-DD), project of klant, en optioneel alleen declarabele uren. Geeft per registratie datum, duur, omschrijving en waar hij op geboekt staat, plus het totaal. Gebruik dit vóór `propose_edit_time_entry` om het exacte id te vinden.',
     input_schema: {
@@ -1451,6 +1627,14 @@ const TOOL_MODULE: Record<string, string> = {
   list_calendars: 'calendar',
   suggest_meeting_slots: 'calendar',
   list_time_entries: 'time',
+  list_calendar_events: 'calendar',
+  propose_edit_calendar_event: 'calendar',
+  propose_cancel_calendar_event: 'calendar',
+  list_client_contacts: 'clients',
+  propose_client_contact: 'clients',
+  propose_edit_client_contact: 'clients',
+  propose_project_team: 'projects',
+  propose_task_assign: 'projects',
   propose_edit_time_entry: 'time',
   propose_ticket: 'tickets',
   propose_edit_ticket: 'tickets',
@@ -1507,6 +1691,9 @@ const TOOL_LABELS: Record<string, string> = {
   list_calendars: "Agenda's bekijken",
   suggest_meeting_slots: 'Vrije momenten zoeken',
   list_time_entries: 'Geregistreerde uren bekijken',
+  list_calendar_events: 'Agenda-items bekijken',
+  list_client_contacts: 'Contactpersonen bekijken',
+  list_team_members: 'Teamleden bekijken',
   // Klaarzetten (altijd achter jouw akkoord)
   propose_client: 'Nieuwe klant klaarzetten',
   propose_edit_client: 'Klantgegevens wijzigen',
@@ -1529,6 +1716,12 @@ const TOOL_LABELS: Record<string, string> = {
   propose_calendar_event: 'Agenda-afspraak aanmaken',
   propose_time_entry: 'Uren registreren',
   propose_edit_time_entry: 'Urenregistratie corrigeren',
+  propose_edit_calendar_event: 'Agenda-afspraak wijzigen',
+  propose_cancel_calendar_event: 'Agenda-afspraak afzeggen',
+  propose_client_contact: 'Contactpersoon toevoegen',
+  propose_edit_client_contact: 'Contactpersoon wijzigen',
+  propose_project_team: 'Projectteam samenstellen',
+  propose_task_assign: 'Taak toewijzen',
   propose_ticket: 'Ticket aanmaken',
   propose_edit_ticket: 'Ticket wijzigen',
   propose_ticket_note: 'Reageren op een ticket',
@@ -1618,6 +1811,9 @@ async function runTool(ctx: GerrieContext, name: string, input: Record<string, u
     case 'list_projects': return listProjects(orgId, input, limit);
     case 'list_tickets': return listTickets(orgId, input, limit);
     case 'list_time_entries': return listTimeEntries(ctx, input, limit);
+    case 'list_calendar_events': return listCalendarEvents(ctx, input);
+    case 'list_client_contacts': return listClientContacts(ctx, input);
+    case 'list_team_members': return listTeamMembers(ctx);
     case 'list_due_reminders': return listDueReminders(ctx, input);
     case 'list_tasks': return listTasks(orgId, input, limit);
     case 'list_calendars': return listCalendars(ctx);
@@ -1803,6 +1999,12 @@ function proposeLabel(toolName: string): string {
     case 'propose_week_action': return 'Weekactiepunt klaarzetten…';
     case 'propose_time_entry': return 'Urenregistratie klaarzetten…';
     case 'propose_edit_time_entry': return 'Urencorrectie klaarzetten…';
+    case 'propose_edit_calendar_event': return 'Wijziging in de agenda klaarzetten…';
+    case 'propose_cancel_calendar_event': return 'Afzegging klaarzetten…';
+    case 'propose_client_contact':
+    case 'propose_edit_client_contact': return 'Contactpersoon klaarzetten…';
+    case 'propose_project_team': return 'Projectteam klaarzetten…';
+    case 'propose_task_assign': return 'Toewijzing klaarzetten…';
     case 'propose_ticket':
     case 'propose_edit_ticket': return 'Ticket klaarzetten…';
     case 'propose_ticket_note': return 'Reactie op het ticket opstellen…';
@@ -1844,6 +2046,12 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
     case 'propose_week_action': return buildWeekActionProposal(input);
     case 'propose_time_entry': return buildTimeEntryProposal(ctx, input);
     case 'propose_edit_time_entry': return buildEditTimeEntryProposal(ctx, input);
+    case 'propose_edit_calendar_event': return buildEditCalendarEventProposal(ctx, input);
+    case 'propose_cancel_calendar_event': return buildCancelCalendarEventProposal(ctx, input);
+    case 'propose_client_contact': return buildClientContactProposal(ctx, input);
+    case 'propose_edit_client_contact': return buildEditClientContactProposal(ctx, input);
+    case 'propose_project_team': return buildProjectTeamProposal(ctx, input);
+    case 'propose_task_assign': return buildTaskAssignProposal(ctx, input);
     case 'propose_ticket': return buildTicketProposal(ctx, input);
     case 'propose_edit_ticket': return buildEditTicketProposal(ctx, input);
     case 'propose_ticket_note': return buildTicketNoteProposal(ctx, input);
@@ -2921,6 +3129,320 @@ async function buildEditTimeEntryProposal(ctx: GerrieContext, input: Record<stri
 
 // 'converted' staat er bewust NIET bij: die status zet de app zelf als een ticket
 // naar een project wordt omgezet, en is geen handmatige keuze.
+// ── Agenda: bestaande items lezen, wijzigen en afzeggen ──────────────────────
+
+/** Lokale wandkloktijd (Europe/Amsterdam) uit een UTC-instant, als YYYY-MM-DD + HH:MM. */
+function localDateTime(iso: string): { date: string; time: string } {
+  const at = new Date(iso);
+  const date = at.toLocaleDateString('en-CA', { timeZone: 'Europe/Amsterdam' });
+  const time = at.toLocaleTimeString('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit', hour12: false });
+  return { date, time };
+}
+
+/** Wandkloktijd in Europe/Amsterdam → UTC-ISO (DST-bewust, zoals de agenda zelf). */
+function amsWallToUtcIso(date: string, time: string): string {
+  const [y, m, d] = date.split('-').map(Number);
+  const [hh, mm] = time.split(':').map(Number);
+  const guess = Date.UTC(y, m - 1, d, hh, mm);
+  return new Date(guess - tzOffsetMs('Europe/Amsterdam', new Date(guess))).toISOString();
+}
+
+async function listCalendarEvents(ctx: GerrieContext, input: Record<string, unknown>) {
+  const from = isoDate(input.from);
+  const to = isoDate(input.to);
+  if (!from || !to) throw new HttpError('Geef een periode met from en to (YYYY-MM-DD).', 400);
+  const startIso = amsWallToUtcIso(from, '00:00');
+  const endIso = amsWallToUtcIso(to, '23:59');
+
+  const events = await listEvents(ctx.organizationId, ctx.userId, startIso, endIso);
+  const needle = String(input.query ?? '').trim().toLowerCase();
+  const rows = needle ? events.filter((e) => String(e.title ?? '').toLowerCase().includes(needle)) : events;
+
+  return {
+    count: rows.length,
+    events: rows.slice(0, 100).map((e) => {
+      const start = localDateTime(String(e.starts_at));
+      const end = localDateTime(String(e.ends_at));
+      return {
+        // Precies de drie velden die propose_edit/cancel weer nodig hebben.
+        event_id: e.native_event_id ?? null,
+        source_id: e.source_id,
+        provider_event_id: e.provider_event_id ?? null,
+        source_name: e.source_name,
+        provider: e.provider,
+        title: e.title,
+        date: start.date,
+        start_time: start.time,
+        end_time: end.time,
+        all_day: e.all_day === true,
+        location: e.location ?? null,
+        // Een ICS-abonnement is read-only; zeg dat erbij zodat het model het niet probeert.
+        editable: e.provider !== 'ics',
+      };
+    }),
+  };
+}
+
+/** De verwijzing uit de tool-invoer, met de controle dat de bron bestaat in deze org. */
+async function resolveEventRef(ctx: GerrieContext, input: Record<string, unknown>): Promise<{ ok: true; ref: CalendarEventRef; sourceName: string } | { ok: false; error: string }> {
+  const sourceId = String(input.source_id || '').trim();
+  if (!isUuid(sourceId)) return { ok: false, error: 'Ongeldig source_id. Zoek het item eerst met list_calendar_events.' };
+  const { data: source, error } = await supabaseAdmin.from('calendar_sources')
+    .select('id, name, provider').eq('organization_id', ctx.organizationId).eq('id', sourceId).maybeSingle();
+  if (error) return { ok: false, error: `Agenda ophalen mislukt: ${error.message}` };
+  if (!source) return { ok: false, error: 'Deze agenda bestaat niet in deze organisatie.' };
+  if (String(source.provider) === 'ics') return { ok: false, error: `"${String(source.name)}" is een abonnement via een link en kan niet gewijzigd worden.` };
+
+  const eventId = String(input.event_id || '').trim();
+  const providerEventId = String(input.provider_event_id || '').trim();
+  if (!eventId && !providerEventId) return { ok: false, error: 'Geef event_id of provider_event_id mee, precies zoals je ze van list_calendar_events kreeg.' };
+  return {
+    ok: true,
+    ref: { event_id: eventId && isUuid(eventId) ? eventId : null, source_id: sourceId, provider_event_id: providerEventId || null },
+    sourceName: String(source.name ?? ''),
+  };
+}
+
+/** Het item terugvinden in een ruime periode rond nu, zodat we het "was" kunnen tonen. */
+async function findEvent(ctx: GerrieContext, ref: CalendarEventRef): Promise<Record<string, unknown> | null> {
+  const now = new Date();
+  const from = new Date(now.getTime() - 120 * 86400000).toISOString();
+  const to = new Date(now.getTime() + 365 * 86400000).toISOString();
+  try {
+    const events = await listEvents(ctx.organizationId, ctx.userId, from, to);
+    return events.find((e) => {
+      if (String(e.source_id) !== ref.source_id) return false;
+      if (ref.event_id && e.native_event_id) return String(e.native_event_id) === ref.event_id;
+      if (ref.provider_event_id) return String(e.provider_event_id) === ref.provider_event_id;
+      return false;
+    }) ?? null;
+  } catch { return null; }
+}
+
+async function buildEditCalendarEventProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const resolved = await resolveEventRef(ctx, input);
+  if (!resolved.ok) return resolved;
+
+  const changes: Record<string, unknown> = {};
+  if (input.title !== undefined) {
+    const t = String(input.title).trim();
+    if (!t) return { ok: false, error: 'De titel mag niet leeg zijn.' };
+    changes.title = t.slice(0, 300);
+  }
+  if (input.date !== undefined) {
+    const d = isoDate(input.date);
+    if (!d) return { ok: false, error: 'Ongeldige datum; gebruik YYYY-MM-DD.' };
+    changes.date = d;
+  }
+  for (const key of ['start_time', 'end_time'] as const) {
+    if (input[key] === undefined) continue;
+    const v = String(input[key]).trim();
+    if (!/^\d{2}:\d{2}$/.test(v)) return { ok: false, error: `Ongeldige tijd bij ${key}; gebruik HH:MM.` };
+    changes[key] = v;
+  }
+  if (input.description !== undefined) changes.description = input.description ? String(input.description).slice(0, 4000) : null;
+  if (input.location !== undefined) changes.location = input.location ? String(input.location).slice(0, 300) : null;
+  if (Object.keys(changes).length === 0) return { ok: false, error: 'Geef minstens één veld dat moet veranderen.' };
+
+  const found = await findEvent(ctx, resolved.ref);
+  if (!found) return { ok: false, error: 'Ik kan dit agenda-item niet meer terugvinden. Zoek het opnieuw met list_calendar_events.' };
+  const start = localDateTime(String(found.starts_at));
+  const end = localDateTime(String(found.ends_at));
+
+  // De agenda-functie wil altijd een volledige set tijden; vul aan met wat er stond.
+  if (changes.date || changes.start_time || changes.end_time) {
+    changes.date = changes.date ?? start.date;
+    changes.start_time = changes.start_time ?? start.time;
+    changes.end_time = changes.end_time ?? end.time;
+  }
+
+  return {
+    ok: true,
+    proposal: {
+      type: 'edit_calendar_event',
+      ref: resolved.ref,
+      title: String(found.title ?? '(geen titel)'),
+      source_name: resolved.sourceName,
+      current: { date: start.date, start_time: start.time, end_time: end.time, location: found.location ? String(found.location) : null },
+      changes,
+    },
+  };
+}
+
+async function buildCancelCalendarEventProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const resolved = await resolveEventRef(ctx, input);
+  if (!resolved.ok) return resolved;
+  const found = await findEvent(ctx, resolved.ref);
+  if (!found) return { ok: false, error: 'Ik kan dit agenda-item niet meer terugvinden. Zoek het opnieuw met list_calendar_events.' };
+
+  // Genodigden krijgen een afzegging; dat hoort de gebruiker te weten vóór hij ja zegt.
+  let hasAttendees = false;
+  if (resolved.ref.event_id) {
+    const { count } = await supabaseAdmin.from('calendar_event_attendees')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', ctx.organizationId).eq('event_id', resolved.ref.event_id);
+    hasAttendees = (count ?? 0) > 0;
+  }
+
+  const start = localDateTime(String(found.starts_at));
+  return {
+    ok: true,
+    proposal: {
+      type: 'cancel_calendar_event',
+      ref: resolved.ref,
+      title: String(found.title ?? '(geen titel)'),
+      source_name: resolved.sourceName,
+      date: start.date,
+      start_time: start.time,
+      has_attendees: hasAttendees,
+    },
+  };
+}
+
+// ── Contactpersonen ──────────────────────────────────────────────────────────
+
+async function listClientContacts(ctx: GerrieContext, input: Record<string, unknown>) {
+  const client = await resolveClient(ctx, input.client_id);
+  if (!client.ok) throw new HttpError(client.error, 400);
+  const { data, error } = await supabaseAdmin.from('client_contacts')
+    .select('id, name, email, phone, role, gives_portal_access, is_active')
+    .eq('organization_id', ctx.organizationId).eq('client_id', client.id).order('name');
+  if (error) throw new Error(error.message);
+  return { client_id: client.id, client_name: client.name, count: data?.length ?? 0, contacts: data ?? [] };
+}
+
+async function buildClientContactProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const client = await resolveClient(ctx, input.client_id);
+  if (!client.ok) return client;
+  const name = String(input.name || '').trim();
+  if (!name) return { ok: false, error: 'Geef de naam van de contactpersoon.' };
+  const opt = (v: unknown) => { const s = String(v ?? '').trim(); return s ? s.slice(0, 300) : null; };
+  return {
+    ok: true,
+    proposal: {
+      type: 'client_contact',
+      client_id: client.id, client_name: client.name,
+      name: name.slice(0, 300), email: opt(input.email), phone: opt(input.phone), role: opt(input.role),
+      // Portaaltoegang is een deur naar buiten: alleen aan als er expliciet om gevraagd is.
+      gives_portal_access: input.portal_access === true,
+    },
+  };
+}
+
+async function buildEditClientContactProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const id = String(input.id || '').trim();
+  if (!isUuid(id)) return { ok: false, error: 'Ongeldig id. Zoek de contactpersoon eerst met list_client_contacts.' };
+  const { data: contact, error } = await supabaseAdmin.from('client_contacts')
+    .select('id, name, client_id').eq('organization_id', ctx.organizationId).eq('id', id).maybeSingle();
+  if (error) return { ok: false, error: `Contactpersoon ophalen mislukt: ${error.message}` };
+  if (!contact) return { ok: false, error: 'Contactpersoon niet gevonden in deze organisatie.' };
+
+  const opt = (v: unknown) => { const s = String(v ?? '').trim(); return s ? s.slice(0, 300) : null; };
+  const changes: Record<string, unknown> = {};
+  if (input.name !== undefined) {
+    const n = String(input.name).trim();
+    if (!n) return { ok: false, error: 'De naam mag niet leeg zijn.' };
+    changes.name = n.slice(0, 300);
+  }
+  if (input.email !== undefined) changes.email = opt(input.email);
+  if (input.phone !== undefined) changes.phone = opt(input.phone);
+  if (input.role !== undefined) changes.role = opt(input.role);
+  if (typeof input.portal_access === 'boolean') changes.gives_portal_access = input.portal_access;
+  if (Object.keys(changes).length === 0) return { ok: false, error: 'Geef minstens één veld dat moet veranderen.' };
+
+  const { data: client } = await supabaseAdmin.from('clients')
+    .select('name').eq('organization_id', ctx.organizationId).eq('id', contact.client_id).maybeSingle();
+  return {
+    ok: true,
+    proposal: { type: 'edit_client_contact', id: String(contact.id), name: String(contact.name), client_name: String(client?.name ?? ''), changes },
+  };
+}
+
+// ── Team: wie werkt waaraan ──────────────────────────────────────────────────
+
+/**
+ * Actieve teamleden, met hun e-mailadres als naam. `organization_members` draagt
+ * bewust geen weergavenaam — die leeft in auth — en het adres is voor dit doel
+ * (kiezen wie je toewijst) eenduidiger dan een half ingevulde naam.
+ */
+async function teamMemberNames(orgId: string): Promise<Map<string, string>> {
+  const { data } = await supabaseAdmin.from('organization_members')
+    .select('user_id, email').eq('organization_id', orgId).eq('status', 'active');
+  const map = new Map<string, string>();
+  for (const m of (data ?? []) as Array<Record<string, unknown>>) {
+    map.set(String(m.user_id), String(m.email ?? '').trim() || String(m.user_id));
+  }
+  return map;
+}
+
+async function listTeamMembers(ctx: GerrieContext) {
+  const { data, error } = await supabaseAdmin.from('organization_members')
+    .select('user_id, email, role').eq('organization_id', ctx.organizationId).eq('status', 'active');
+  if (error) throw new Error(error.message);
+  return {
+    count: data?.length ?? 0,
+    members: (data ?? []).map((m: Record<string, unknown>) => ({
+      user_id: m.user_id,
+      name: String(m.email ?? ''),
+      email: m.email,
+      role: m.role,
+    })),
+  };
+}
+
+async function buildProjectTeamProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const project = await resolveProject(ctx, input.project_id);
+  if (!project.ok) return project;
+
+  const names = await teamMemberNames(ctx.organizationId);
+  const pick = (raw: unknown) => (Array.isArray(raw) ? [...new Set(raw.map(String))] : []);
+  const addIds = pick(input.add);
+  const removeIds = pick(input.remove);
+  if (addIds.length === 0 && removeIds.length === 0) return { ok: false, error: 'Geef wie erbij komt (add) en/of wie eraf gaat (remove).' };
+
+  const unknownIds = [...addIds, ...removeIds].filter((id) => !names.has(id));
+  if (unknownIds.length) return { ok: false, error: `Deze user_id's zijn geen actief teamlid: ${unknownIds.join(', ')}. Zoek ze met list_team_members.` };
+
+  return {
+    ok: true,
+    proposal: {
+      type: 'project_team',
+      project_id: project.id, project_name: project.name,
+      add: addIds.map((id) => ({ user_id: id, name: names.get(id) as string })),
+      remove: removeIds.map((id) => ({ user_id: id, name: names.get(id) as string })),
+    },
+  };
+}
+
+async function buildTaskAssignProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const id = String(input.task_id || '').trim();
+  if (!isUuid(id)) return { ok: false, error: 'Ongeldig task_id. Zoek de taak eerst met list_tasks.' };
+  const { data: task, error } = await supabaseAdmin.from('tasks')
+    .select('id, title, project_id').eq('organization_id', ctx.organizationId).eq('id', id).maybeSingle();
+  if (error) return { ok: false, error: `Taak ophalen mislukt: ${error.message}` };
+  if (!task) return { ok: false, error: 'Taak niet gevonden in deze organisatie.' };
+
+  const names = await teamMemberNames(ctx.organizationId);
+  const userIds = Array.isArray(input.user_ids) ? [...new Set((input.user_ids as unknown[]).map(String))] : [];
+  const unknownIds = userIds.filter((uid) => !names.has(uid));
+  if (unknownIds.length) return { ok: false, error: `Deze user_id's zijn geen actief teamlid: ${unknownIds.join(', ')}. Zoek ze met list_team_members.` };
+
+  let projectName: string | null = null;
+  if (task.project_id) {
+    const { data: p } = await supabaseAdmin.from('projects').select('name').eq('organization_id', ctx.organizationId).eq('id', task.project_id).maybeSingle();
+    projectName = p?.name ? String(p.name) : null;
+  }
+
+  return {
+    ok: true,
+    proposal: {
+      type: 'task_assign',
+      task_id: String(task.id), task_title: String(task.title), project_name: projectName,
+      assignees: userIds.map((uid) => ({ user_id: uid, name: names.get(uid) as string })),
+    },
+  };
+}
+
 const TICKET_STATUSES = ['new', 'review', 'approved', 'rejected'];
 const TICKET_PRIORITIES = ['low', 'med', 'high'];
 
