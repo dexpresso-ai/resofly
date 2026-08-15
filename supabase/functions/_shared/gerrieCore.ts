@@ -602,6 +602,7 @@ function buildSystemPrompt(ctx: GerrieContext): string {
     '',
     'Wat je nu kunt:',
     '- Je kunt MEELEZEN in de workspace via de beschikbare tools (klanten, facturen, offertes, projecten, taken incl. weekplanner, tickets, financiële cijfers, gekoppelde agenda\'s, en welke betalingsherinneringen vandaag aan de beurt zijn).',
+    '- BOEKHOUDING — je kunt de hele administratie MEELEZEN: `list_suppliers`, `list_purchase_invoices` (inkoop; je eigen verkoopfacturen zitten in `list_invoices`), `list_ledger_accounts`, `list_journal_entries`, `list_bank_transactions`, `list_vat_returns` en `list_fiscal_years`. Je BOEKT NOOIT: journaalposten maken, banktransacties afletteren, een boekjaar afsluiten en een btw-aangifte opstellen of indienen kan alleen handmatig. Vraagt iemand daarom, leg dat uit en bied aan om het overzicht te geven waarmee hij het zelf kan doen.',
     '- `suggest_meeting_slots` — stelt zelf een paar vrije tijdstippen voor voor een afspraak, op basis van de agenda van de gebruiker (native + Google + Microsoft). Voor een FYSIEKE afspraak (met locatie) houd je standaard 60 minuten reistijd vrij rond bestaande afspraken die een locatie hebben; vermeld die aanname kort. Presenteer de voorstellen als een kort genummerd lijstje. Kiest de gebruiker er één, dan zet je die met `propose_calendar_event` klaar (jij plant niets zelf in).',
     '- Gebruik altijd een tool om echte gegevens op te halen; verzin nooit cijfers, namen of bedragen.',
     '- Bedragen zijn in euro\'s. Toon ze netjes (bijv. € 1.250,00). Rapporteer beknopt en zakelijk.',
@@ -1117,6 +1118,81 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'list_suppliers',
+    description: 'Bekijk de leveranciers (crediteuren): naam, code, contactpersoon, e-mail, btw-nummer en IBAN. Zoek op naam met `query`.',
+    input_schema: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'Zoek op (deel van) de naam.' }, limit: { type: 'integer' } },
+    },
+  },
+  {
+    name: 'list_purchase_invoices',
+    description: 'Bekijk INKOOPfacturen (wat jij aan leveranciers moet betalen — niet je eigen verkoopfacturen, die zitten in list_invoices). Filter op status, betaalstatus, leverancier of periode. Gebruik `unpaid_only` voor wat er nog openstaat.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        supplier_id: { type: 'string' },
+        status: { type: 'string', description: 'Bijv. draft of booked.' },
+        unpaid_only: { type: 'boolean', description: 'Alleen facturen die nog niet betaald zijn.' },
+        from: { type: 'string', description: 'Vanaf factuurdatum YYYY-MM-DD.' },
+        to: { type: 'string', description: 'Tot en met factuurdatum YYYY-MM-DD.' },
+        limit: { type: 'integer' },
+      },
+    },
+  },
+  {
+    name: 'list_ledger_accounts',
+    description: 'Bekijk het rekeningschema (grootboekrekeningen): code, naam, soort en het standaard btw-code. Handig om een boeking te duiden of een rekeningcode op te zoeken.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Zoek op code of naam.' },
+        type: { type: 'string', description: 'Beperk tot een soort, bijv. expense, revenue, asset, liability, equity.' },
+        limit: { type: 'integer' },
+      },
+    },
+  },
+  {
+    name: 'list_journal_entries',
+    description: 'Bekijk journaalposten (boekingen) met hun regels: datum, omschrijving, status en per regel de rekening, debet en credit. Filter op periode of status. Alleen lezen — een agent boekt nooit.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Vanaf boekdatum YYYY-MM-DD.' },
+        to: { type: 'string', description: 'Tot en met boekdatum YYYY-MM-DD.' },
+        status: { type: 'string', description: 'Bijv. draft of posted.' },
+        limit: { type: 'integer' },
+      },
+    },
+  },
+  {
+    name: 'list_bank_transactions',
+    description: 'Bekijk banktransacties: datum, bedrag, tegenpartij, omschrijving en of ze al zijn afgeletterd. Gebruik `unreconciled_only` om te zien wat er nog open staat om te verwerken. Alleen lezen — afletteren en boeken doe jij.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Vanaf boekingsdatum YYYY-MM-DD.' },
+        to: { type: 'string', description: 'Tot en met boekingsdatum YYYY-MM-DD.' },
+        unreconciled_only: { type: 'boolean', description: 'Alleen transacties die nog niet geboekt/afgeletterd zijn.' },
+        query: { type: 'string', description: 'Zoek in tegenpartij of omschrijving.' },
+        limit: { type: 'integer' },
+      },
+    },
+  },
+  {
+    name: 'list_vat_returns',
+    description: 'Bekijk btw-aangiftes: periode, status en de rubrieken. UITSLUITEND LEZEN — een agent kan een aangifte niet opstellen, wijzigen, definitief maken of indienen. Vraagt iemand daarom, leg uit dat dat bewust alleen handmatig kan.',
+    input_schema: {
+      type: 'object',
+      properties: { year: { type: 'integer', description: 'Beperk tot een jaar.' }, limit: { type: 'integer' } },
+    },
+  },
+  {
+    name: 'list_fiscal_years',
+    description: 'Bekijk de boekjaren: label, periode, status (open/afgesloten) en het resultaat. Alleen lezen — afsluiten en heropenen blijft handwerk.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
     name: 'list_calendar_events',
     description: "Bekijk agenda-items in een periode, over alle gekoppelde agenda's heen (ResoFly, Google, Microsoft, ICS-abonnementen). Geeft per item de titel, tijden, locatie en de verwijzing die je nodig hebt om hem te wijzigen of af te zeggen. Gebruik dit vóór `propose_edit_calendar_event` of `propose_cancel_calendar_event`.",
     input_schema: {
@@ -1605,6 +1681,13 @@ function toolLabel(name: string): string {
     case 'list_tickets': return 'Tickets ophalen…';
     case 'list_due_reminders': return 'Openstaande herinneringen ophalen…';
     case 'list_tasks': return 'Taken ophalen…';
+    case 'list_suppliers': return 'Leveranciers ophalen…';
+    case 'list_purchase_invoices': return 'Inkoopfacturen ophalen…';
+    case 'list_ledger_accounts': return 'Rekeningschema ophalen…';
+    case 'list_journal_entries': return 'Journaalposten ophalen…';
+    case 'list_bank_transactions': return 'Banktransacties ophalen…';
+    case 'list_vat_returns': return 'Btw-aangiftes ophalen…';
+    case 'list_fiscal_years': return 'Boekjaren ophalen…';
     case 'list_calendars': return "Agenda's ophalen…";
     case 'suggest_meeting_slots': return 'Vrije momenten zoeken…';
     default: return 'Gegevens ophalen…';
@@ -1627,6 +1710,13 @@ const TOOL_MODULE: Record<string, string> = {
   list_calendars: 'calendar',
   suggest_meeting_slots: 'calendar',
   list_time_entries: 'time',
+  list_suppliers: 'finance',
+  list_purchase_invoices: 'finance',
+  list_ledger_accounts: 'finance',
+  list_journal_entries: 'finance',
+  list_bank_transactions: 'finance',
+  list_vat_returns: 'finance',
+  list_fiscal_years: 'finance',
   list_calendar_events: 'calendar',
   propose_edit_calendar_event: 'calendar',
   propose_cancel_calendar_event: 'calendar',
@@ -1691,6 +1781,13 @@ const TOOL_LABELS: Record<string, string> = {
   list_calendars: "Agenda's bekijken",
   suggest_meeting_slots: 'Vrije momenten zoeken',
   list_time_entries: 'Geregistreerde uren bekijken',
+  list_suppliers: 'Leveranciers bekijken',
+  list_purchase_invoices: 'Inkoopfacturen bekijken',
+  list_ledger_accounts: 'Rekeningschema bekijken',
+  list_journal_entries: 'Journaalposten bekijken',
+  list_bank_transactions: 'Banktransacties bekijken',
+  list_vat_returns: 'Btw-aangiftes bekijken',
+  list_fiscal_years: 'Boekjaren bekijken',
   list_calendar_events: 'Agenda-items bekijken',
   list_client_contacts: 'Contactpersonen bekijken',
   list_team_members: 'Teamleden bekijken',
@@ -1811,6 +1908,13 @@ async function runTool(ctx: GerrieContext, name: string, input: Record<string, u
     case 'list_projects': return listProjects(orgId, input, limit);
     case 'list_tickets': return listTickets(orgId, input, limit);
     case 'list_time_entries': return listTimeEntries(ctx, input, limit);
+    case 'list_suppliers': return listSuppliers(orgId, input, limit);
+    case 'list_purchase_invoices': return listPurchaseInvoices(orgId, input, limit);
+    case 'list_ledger_accounts': return listLedgerAccounts(orgId, input, limit);
+    case 'list_journal_entries': return listJournalEntries(orgId, input, limit);
+    case 'list_bank_transactions': return listBankTransactions(orgId, input, limit);
+    case 'list_vat_returns': return listVatReturns(orgId, input, limit);
+    case 'list_fiscal_years': return listFiscalYears(orgId);
     case 'list_calendar_events': return listCalendarEvents(ctx, input);
     case 'list_client_contacts': return listClientContacts(ctx, input);
     case 'list_team_members': return listTeamMembers(ctx);
@@ -3129,6 +3233,193 @@ async function buildEditTimeEntryProposal(ctx: GerrieContext, input: Record<stri
 
 // 'converted' staat er bewust NIET bij: die status zet de app zelf als een ticket
 // naar een project wordt omgezet, en is geen handmatige keuze.
+// ── Boekhouding: uitsluitend LEZEN ───────────────────────────────────────────
+//
+// De agent mag de hele administratie inzien en erover rapporteren, maar boekt
+// niets. Een goedgekeurde journaalpost is een fiscaal feit en een ingediende
+// btw-aangifte is niet met een vinkje terug te draaien; daarom is er voor dit
+// deel bewust GEEN propose_-tool. Wat een agent hier oplevert is een overzicht
+// waarmee de gebruiker het zelf doet.
+
+/** Centen → euro's, want een model rekent slechter met centen dan het denkt. */
+function euros(cents: unknown): number {
+  return Math.round(Number(cents || 0)) / 100;
+}
+
+async function listSuppliers(orgId: string, input: Record<string, unknown>, limit: number) {
+  let query = orgTable('suppliers', orgId).order('name').limit(limit);
+  const needle = String(input.query ?? '').trim();
+  if (needle) query = query.ilike('name', `%${escapeLike(needle)}%`);
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  return {
+    count: data?.length ?? 0,
+    suppliers: (data ?? []).map((r: Record<string, unknown>) => ({
+      id: r.id, name: r.name, supplier_code: r.supplier_code, contact_name: r.contact_name,
+      email: r.email, phone: r.phone, vat_number: r.vat_number, iban: r.iban, status: r.status,
+    })),
+  };
+}
+
+async function listPurchaseInvoices(orgId: string, input: Record<string, unknown>, limit: number) {
+  let query = orgTable('purchase_invoices', orgId).order('date', { ascending: false }).limit(limit);
+  if (input.supplier_id) query = query.eq('supplier_id', String(input.supplier_id));
+  if (input.status) query = query.eq('status', String(input.status));
+  const from = isoDate(input.from);
+  const to = isoDate(input.to);
+  if (from) query = query.gte('date', from);
+  if (to) query = query.lte('date', to);
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+
+  let rows = (data ?? []) as Array<Record<string, unknown>>;
+  if (input.unpaid_only === true) rows = rows.filter((r) => String(r.payment_status ?? '') !== 'paid');
+
+  const supplierIds = [...new Set(rows.map((r) => (r.supplier_id ? String(r.supplier_id) : '')).filter(Boolean))];
+  const names = new Map<string, string>();
+  if (supplierIds.length) {
+    const { data: sup } = await supabaseAdmin.from('suppliers').select('id, name').eq('organization_id', orgId).in('id', supplierIds);
+    for (const x of (sup ?? []) as Array<Record<string, unknown>>) names.set(String(x.id), String(x.name));
+  }
+
+  const today = todayIso();
+  return {
+    count: rows.length,
+    total_open_eur: rows.filter((r) => String(r.payment_status ?? '') !== 'paid').reduce((sum, r) => sum + euros(r.total_cents), 0),
+    purchase_invoices: rows.map((r) => ({
+      id: r.id,
+      supplier_id: r.supplier_id,
+      supplier_name: r.supplier_id ? names.get(String(r.supplier_id)) ?? null : null,
+      supplier_invoice_number: r.supplier_invoice_number,
+      internal_number: r.internal_number,
+      date: r.date, due_date: r.due_date,
+      subtotal_eur: euros(r.subtotal_cents), vat_eur: euros(r.vat_cents), total_eur: euros(r.total_cents),
+      status: r.status, payment_status: r.payment_status,
+      is_overdue: String(r.payment_status ?? '') !== 'paid' && !!r.due_date && String(r.due_date) < today,
+    })),
+  };
+}
+
+async function listLedgerAccounts(orgId: string, input: Record<string, unknown>, limit: number) {
+  let query = orgTable('ledger_accounts', orgId).eq('is_active', true).order('code').limit(limit);
+  if (input.type) query = query.eq('type', String(input.type));
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  const needle = String(input.query ?? '').trim().toLowerCase();
+  const rows = (data ?? []).filter((r: Record<string, unknown>) =>
+    !needle || String(r.code).toLowerCase().includes(needle) || String(r.name).toLowerCase().includes(needle));
+  return {
+    count: rows.length,
+    accounts: rows.map((r: Record<string, unknown>) => ({
+      id: r.id, code: r.code, name: r.name, type: r.type, subtype: r.subtype, default_vat_code: r.default_vat_code,
+    })),
+  };
+}
+
+async function listJournalEntries(orgId: string, input: Record<string, unknown>, limit: number) {
+  let query = orgTable('journal_entries', orgId).order('date', { ascending: false }).limit(limit);
+  if (input.status) query = query.eq('status', String(input.status));
+  const from = isoDate(input.from);
+  const to = isoDate(input.to);
+  if (from) query = query.gte('date', from);
+  if (to) query = query.lte('date', to);
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+
+  const entries = (data ?? []) as Array<Record<string, unknown>>;
+  if (entries.length === 0) return { count: 0, entries: [] };
+
+  // Regels erbij: een journaalpost zonder regels zegt niets.
+  const { data: lines } = await supabaseAdmin.from('journal_lines')
+    .select('entry_id, account_id, description, debit_cents, credit_cents, vat_code')
+    .eq('organization_id', orgId).in('entry_id', entries.map((e) => String(e.id))).order('line_index');
+  const accountIds = [...new Set((lines ?? []).map((l: Record<string, unknown>) => String(l.account_id)).filter(Boolean))];
+  const accounts = new Map<string, string>();
+  if (accountIds.length) {
+    const { data: accs } = await supabaseAdmin.from('ledger_accounts').select('id, code, name').eq('organization_id', orgId).in('id', accountIds);
+    for (const a of (accs ?? []) as Array<Record<string, unknown>>) accounts.set(String(a.id), `${String(a.code)} ${String(a.name)}`);
+  }
+  const byEntry = new Map<string, Array<Record<string, unknown>>>();
+  for (const l of (lines ?? []) as Array<Record<string, unknown>>) {
+    const key = String(l.entry_id);
+    if (!byEntry.has(key)) byEntry.set(key, []);
+    byEntry.get(key)!.push({
+      account: accounts.get(String(l.account_id)) ?? null,
+      description: l.description,
+      debit_eur: euros(l.debit_cents), credit_eur: euros(l.credit_cents), vat_code: l.vat_code,
+    });
+  }
+
+  return {
+    count: entries.length,
+    entries: entries.map((e) => ({
+      id: e.id, entry_number: e.entry_number, date: e.date, description: e.description,
+      status: e.status, source_type: e.source_type,
+      lines: byEntry.get(String(e.id)) ?? [],
+    })),
+  };
+}
+
+async function listBankTransactions(orgId: string, input: Record<string, unknown>, limit: number) {
+  let query = orgTable('bank_transactions', orgId).order('booking_date', { ascending: false }).limit(limit);
+  const from = isoDate(input.from);
+  const to = isoDate(input.to);
+  if (from) query = query.gte('booking_date', from);
+  if (to) query = query.lte('booking_date', to);
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+
+  let rows = (data ?? []) as Array<Record<string, unknown>>;
+  // "Nog niet verwerkt" = er hangt geen journaalpost aan; dat is de enige harde
+  // maatstaf, los van hoe de statuswaarden in de tijd zijn gaan heten.
+  if (input.unreconciled_only === true) rows = rows.filter((r) => !r.journal_entry_id);
+  const needle = String(input.query ?? '').trim().toLowerCase();
+  if (needle) {
+    rows = rows.filter((r) =>
+      String(r.counterparty_name ?? '').toLowerCase().includes(needle)
+      || String(r.description ?? '').toLowerCase().includes(needle));
+  }
+
+  return {
+    count: rows.length,
+    total_eur: rows.reduce((sum, r) => sum + euros(r.amount_cents), 0),
+    transactions: rows.map((r) => ({
+      id: r.id, booking_date: r.booking_date, amount_eur: euros(r.amount_cents),
+      counterparty_name: r.counterparty_name, counterparty_iban: r.counterparty_iban,
+      description: r.description, status: r.status,
+      is_booked: Boolean(r.journal_entry_id),
+    })),
+  };
+}
+
+async function listVatReturns(orgId: string, input: Record<string, unknown>, limit: number) {
+  let query = orgTable('vat_returns', orgId).order('period_start', { ascending: false }).limit(limit);
+  const year = Math.floor(num(input.year));
+  if (Number.isFinite(year) && year > 1900) query = query.eq('year', year);
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  return {
+    count: data?.length ?? 0,
+    vat_returns: (data ?? []).map((r: Record<string, unknown>) => ({
+      id: r.id, period_type: r.period_type, year: r.year, period_index: r.period_index,
+      period_start: r.period_start, period_end: r.period_end,
+      status: r.status, filed_at: r.filed_at, rubrieken: r.rubrieken,
+    })),
+  };
+}
+
+async function listFiscalYears(orgId: string) {
+  const { data, error } = await orgTable('fiscal_years', orgId).order('period_start', { ascending: false });
+  if (error) throw new Error(error.message);
+  return {
+    count: data?.length ?? 0,
+    fiscal_years: (data ?? []).map((r: Record<string, unknown>) => ({
+      id: r.id, label: r.label, period_start: r.period_start, period_end: r.period_end,
+      status: r.status, result_eur: euros(r.result_cents), closed_at: r.closed_at,
+    })),
+  };
+}
+
 // ── Agenda: bestaande items lezen, wijzigen en afzeggen ──────────────────────
 
 /** Lokale wandkloktijd (Europe/Amsterdam) uit een UTC-instant, als YYYY-MM-DD + HH:MM. */
