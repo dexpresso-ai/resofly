@@ -144,6 +144,18 @@ interface EditTaskProposal { type: 'edit_task'; id: string; title: string; proje
 interface CalendarEventProposal { type: 'calendar_event'; source_id: string; source_name: string; title: string; date: string; start_time: string; end_time: string; description: string | null; location: string | null }
 interface WeekActionProposal { type: 'week_action'; items: Array<{ title: string; planned_date: string }>; total: number }
 interface TimeEntryProposal { type: 'time_entry'; project_id: string | null; project_name: string | null; client_id: string | null; client_name: string | null; date: string; minutes: number; description: string | null; billable: boolean; hourly_rate_cents: number | null }
+/** Correctie op een BESTAANDE urenregistratie; alleen wat verandert zit in `changes`. */
+interface EditTimeEntryProposal {
+  type: 'edit_time_entry';
+  id: string;
+  /** Waar de registratie nu op staat, zodat de gebruiker ziet wat hij bijstelt. */
+  current: { date: string; minutes: number; description: string | null; billable: boolean; project_name: string | null; client_name: string | null };
+  changes: { entry_date?: string; minutes?: number; description?: string | null; billable?: boolean };
+}
+interface TicketProposal { type: 'ticket'; title: string; description: string | null; client_id: string | null; client_name: string | null; priority: string; status: string }
+interface EditTicketProposal { type: 'edit_ticket'; id: string; title: string; changes: { title?: string; description?: string | null; status?: string; priority?: string; notes?: string | null } }
+/** Een reactie op een ticket. `is_internal` bepaalt of de klant hem in het portaal ziet. */
+interface TicketNoteProposal { type: 'ticket_note'; ticket_id: string; ticket_title: string; body: string; is_internal: boolean }
 // Rapportage: een pure JSON-definitie (matcht de client-side ReportDefinition). Gerrie
 // stelt hem voor; de gebruiker controleert + slaat hem zelf op op de Statistieken-pagina.
 interface ReportDefinitionLite {
@@ -196,7 +208,7 @@ interface AgentProposal {
   email_subject: string | null;
   email_body: string | null;
 }
-type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | SendInvoicesProposal | SendQuotesProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | WeekActionProposal | TimeEntryProposal | ReportProposal | SendClientEmailProposal | AgentProposal;
+type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | SendInvoicesProposal | SendQuotesProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | WeekActionProposal | TimeEntryProposal | EditTimeEntryProposal | TicketProposal | EditTicketProposal | TicketNoteProposal | ReportProposal | SendClientEmailProposal | AgentProposal;
 
 /**
  * Eén stap uit de loop, voor het LOGBOEK van een geplande agent.
@@ -310,6 +322,10 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
         : proposal.type === 'calendar_event' ? `Wil je dat ik dit agenda-item aanmaak in "${proposal.source_name}"? Bevestig hieronder.`
         : proposal.type === 'week_action' ? `Wil je dat ik deze ${proposal.total} actiepunt${proposal.total === 1 ? '' : 'en'} toevoeg? Bevestig hieronder.`
         : proposal.type === 'report' ? `Ik heb de rapportage "${proposal.name}" voor je klaargezet op de Statistieken-pagina. Controleer de grafiek en sla hem op:`
+        : proposal.type === 'ticket' ? `Ik heb het ticket "${proposal.title}" voor je klaargezet. Controleer het en sla op:`
+        : proposal.type === 'edit_ticket' ? `Ik heb de wijziging van ticket "${proposal.title}" klaargezet. Controleer en sla op:`
+        : proposal.type === 'ticket_note' ? `Wil je dat ik deze ${proposal.is_internal ? 'interne notitie' : 'reactie (zichtbaar voor de klant)'} bij "${proposal.ticket_title}" plaats? Bevestig hieronder.`
+        : proposal.type === 'edit_time_entry' ? 'Wil je dat ik deze urenregistratie aanpas? Bevestig hieronder.'
         : 'Ik heb een conceptfactuur voor je klaargezet. Controleer hem en sla op:';
       return { text: answerChunks.join('') || fallback, toolCalls, usage, proposal, steps };
     }
@@ -385,6 +401,10 @@ function describeProposal(p: Proposal): string {
     case 'time_entry': return `${p.minutes} minuten urenregistratie`;
     case 'report': return `rapportage ${p.name}`;
     case 'agent': return `agent ${p.name}`;
+    case 'edit_time_entry': return `correctie op een urenregistratie van ${p.current.date}`;
+    case 'ticket': return `ticket ${p.title}`;
+    case 'edit_ticket': return `wijziging van ticket ${p.title}`;
+    case 'ticket_note': return `${p.is_internal ? 'interne notitie' : 'reactie'} op ticket ${p.ticket_title}`;
   }
 }
 
@@ -538,6 +558,9 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_task` / `propose_edit_task` — een taak binnen een project aanmaken of wijzigen, inclusief subtaken, status/prioriteit en een geplande datum (`planned_date`) om de taak als actiepunt in de WEEKPLANNER te zetten. Zoek het project met `list_projects`, bestaande taken met `list_tasks`.',
           '- `propose_week_action` — ÉÉN OF MEER ACTIEPUNTEN op de "Actiepunten deze week"-checklist van de weekplanner (los van projecten en taken). Vraagt de gebruiker meerdere punten, geef ze dan ALLEMAAL in één keer mee via `items` (niet één voor één). Geef per item een datum binnen de gewenste week. Voor een echte taak binnen een project gebruik je `propose_task`.',
           '- `propose_calendar_event` — een agenda-item aanmaken in een gekoppelde agenda (Google/Microsoft). Tijden zijn lokaal (Europe/Amsterdam); reken relatieve datums om op basis van vandaag. Bij meerdere schrijfbare agenda\'s: vraag welke (`list_calendars`).',
+          '- `propose_ticket` / `propose_edit_ticket` — een ticket (melding/supportvraag) aanmaken of wijzigen (titel, omschrijving, status, prioriteit). Zoek bestaande tickets met `list_tickets`.',
+          '- `propose_ticket_note` — REAGEREN op een ticket. Let op `is_internal`: op false leest de KLANT je tekst in het portaal, op true is het een interne notitie. Standaard intern; zeg in je antwoord expliciet welke van de twee je hebt klaargezet.',
+          '- `propose_edit_time_entry` — een bestaande urenregistratie corrigeren (datum, duur, omschrijving, declarabel). Zoek hem eerst met `list_time_entries`.',
           '- `propose_time_entry` — GEWERKTE UREN registreren op een project of klant (urenregistratie). Zoek het project met `list_projects` (project_id) of de klant met `search_clients` (client_id); minstens één is verplicht. Duur in uren/minuten, datum standaard vandaag (reken relatieve datums om). Declarabel volgt automatisch het projecttype (urenbasis = wél declarabel, aangenomen prijs = niet), tenzij de gebruiker iets anders zegt.',
           '- `propose_report` — een RAPPORTAGE klaarzetten op de Statistieken-pagina (telt/berekent over één bron, optioneel gegroepeerd en gefilterd). De bouwer opent vooringevuld met een live grafiek die de gebruiker zelf controleert en opslaat. Gebruik exact de bron-/veldsleutels uit de tooluitleg; gis geen veldnamen. Geef de rapportage altijd een korte, duidelijke naam.',
           '- `propose_convert_quote` — een GEACCEPTEERDE offerte omzetten naar een factuur. Zoek de offerte met `list_quotes`; alleen status "accepted" kan omgezet worden.',
@@ -1031,6 +1054,80 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'list_time_entries',
+    description: 'Bekijk geregistreerde uren. Filter op periode (from/to, YYYY-MM-DD), project of klant, en optioneel alleen declarabele uren. Geeft per registratie datum, duur, omschrijving en waar hij op geboekt staat, plus het totaal. Gebruik dit vóór `propose_edit_time_entry` om het exacte id te vinden.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Vanaf welke datum (YYYY-MM-DD).' },
+        to: { type: 'string', description: 'Tot en met welke datum (YYYY-MM-DD).' },
+        project_id: { type: 'string', description: 'Alleen uren op dit project (uit list_projects).' },
+        client_id: { type: 'string', description: 'Alleen uren op deze klant (uit search_clients).' },
+        billable_only: { type: 'boolean', description: 'Alleen declarabele uren.' },
+      },
+    },
+  },
+  {
+    name: 'propose_edit_time_entry',
+    description: 'Corrigeer een BESTAANDE urenregistratie: de datum, de duur, de omschrijving of of hij declarabel is. Zoek de registratie eerst met `list_time_entries` en gebruik het exacte id. Geef alleen de velden die veranderen. Je voert niets uit: de gebruiker bevestigt de correctie.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Het exacte id van de urenregistratie (uit list_time_entries).' },
+        date: { type: 'string', description: 'Nieuwe datum YYYY-MM-DD.' },
+        hours: { type: 'number', description: 'Nieuwe duur in uren (mag samen met minutes).' },
+        minutes: { type: 'number', description: 'Nieuwe duur in minuten (mag samen met hours).' },
+        description: { type: 'string', description: 'Nieuwe omschrijving.' },
+        billable: { type: 'boolean', description: 'Declarabel ja/nee.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'propose_ticket',
+    description: 'Zet een NIEUW ticket klaar (een melding of supportvraag). Je maakt het niet aan: het opent vooringevuld in het ticketformulier dat de gebruiker controleert en opslaat. Een titel is verplicht. Hoort het ticket bij een klant, zoek die dan eerst met `search_clients` en gebruik het exacte id.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Korte, concrete titel van de melding.' },
+        description: { type: 'string', description: 'Wat er aan de hand is.' },
+        client_id: { type: 'string', description: 'Optioneel: het exacte id van de klant.' },
+        priority: { type: 'string', enum: ['low', 'med', 'high'], description: "Prioriteit (standaard 'med')." },
+        status: { type: 'string', enum: ['new', 'review', 'approved', 'rejected'], description: "Status (standaard 'new'). 'converted' kan niet: die zet de app zelf bij het omzetten naar een project." },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'propose_edit_ticket',
+    description: 'Wijzig een BESTAAND ticket: titel, omschrijving, status of prioriteit. Zoek het ticket eerst met `list_tickets` en gebruik het exacte id. Geef alleen de velden die veranderen. De wijziging opent vooringevuld in het ticketformulier; de gebruiker slaat zelf op. Wil je alleen reageren, gebruik dan `propose_ticket_note`.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Het exacte id van het ticket (uit list_tickets).' },
+        title: { type: 'string' },
+        description: { type: 'string' },
+        status: { type: 'string', enum: ['new', 'review', 'approved', 'rejected'] },
+        priority: { type: 'string', enum: ['low', 'med', 'high'] },
+        notes: { type: 'string', description: 'Interne opmerking bij het ticket.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'propose_ticket_note',
+    description: 'Zet een REACTIE op een ticket klaar. Zoek het ticket eerst met `list_tickets`. Let goed op `is_internal`: staat die op false, dan ziet de KLANT deze tekst in het portaal — schrijf dan netjes en volledig. Op true is het een interne notitie voor je collega\'s. Je plaatst niets zelf: de gebruiker leest de tekst en bevestigt.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ticket_id: { type: 'string', description: 'Het exacte id van het ticket (uit list_tickets).' },
+        body: { type: 'string', description: 'De tekst van de reactie, als platte tekst.' },
+        is_internal: { type: 'boolean', description: 'true = interne notitie; false = zichtbaar voor de klant in het portaal. Standaard true.' },
+      },
+      required: ['ticket_id', 'body'],
+    },
+  },
+  {
     name: 'propose_send_invoices',
     description: 'Stel voor om MEERDERE bestaande facturen per e-mail naar hun klant te versturen. Gebruik dit zodra het om meer dan één factuur gaat — de gebruiker krijgt dan één lijst waarin hij per factuur een vinkje zet, in plaats van los voorstel na los voorstel. Je verstuurt NIETS zelf. Zoek de facturen eerst met list_invoices en geef de exacte id\'s. Facturen zonder klant-e-mailadres of met een status die niet verstuurd mag worden vallen automatisch af; die krijgt de gebruiker apart te zien.',
     input_schema: {
@@ -1353,6 +1450,11 @@ const TOOL_MODULE: Record<string, string> = {
   list_tickets: 'tickets',
   list_calendars: 'calendar',
   suggest_meeting_slots: 'calendar',
+  list_time_entries: 'time',
+  propose_edit_time_entry: 'time',
+  propose_ticket: 'tickets',
+  propose_edit_ticket: 'tickets',
+  propose_ticket_note: 'tickets',
   propose_invoice: 'finance',
   propose_quote: 'finance',
   propose_send_invoice: 'finance',
@@ -1404,6 +1506,7 @@ const TOOL_LABELS: Record<string, string> = {
   list_due_reminders: 'Openstaande herinneringen',
   list_calendars: "Agenda's bekijken",
   suggest_meeting_slots: 'Vrije momenten zoeken',
+  list_time_entries: 'Geregistreerde uren bekijken',
   // Klaarzetten (altijd achter jouw akkoord)
   propose_client: 'Nieuwe klant klaarzetten',
   propose_edit_client: 'Klantgegevens wijzigen',
@@ -1425,6 +1528,10 @@ const TOOL_LABELS: Record<string, string> = {
   propose_week_action: 'Actiepunten in de weekplanner',
   propose_calendar_event: 'Agenda-afspraak aanmaken',
   propose_time_entry: 'Uren registreren',
+  propose_edit_time_entry: 'Urenregistratie corrigeren',
+  propose_ticket: 'Ticket aanmaken',
+  propose_edit_ticket: 'Ticket wijzigen',
+  propose_ticket_note: 'Reageren op een ticket',
   propose_report: 'Rapportage klaarzetten',
   propose_create_agent: 'Een nieuwe agent klaarzetten',
 };
@@ -1510,6 +1617,7 @@ async function runTool(ctx: GerrieContext, name: string, input: Record<string, u
     case 'get_financial_summary': return getFinancialSummary(ctx, input);
     case 'list_projects': return listProjects(orgId, input, limit);
     case 'list_tickets': return listTickets(orgId, input, limit);
+    case 'list_time_entries': return listTimeEntries(ctx, input, limit);
     case 'list_due_reminders': return listDueReminders(ctx, input);
     case 'list_tasks': return listTasks(orgId, input, limit);
     case 'list_calendars': return listCalendars(ctx);
@@ -1694,6 +1802,10 @@ function proposeLabel(toolName: string): string {
     case 'propose_calendar_event': return 'Agenda-item klaarzetten…';
     case 'propose_week_action': return 'Weekactiepunt klaarzetten…';
     case 'propose_time_entry': return 'Urenregistratie klaarzetten…';
+    case 'propose_edit_time_entry': return 'Urencorrectie klaarzetten…';
+    case 'propose_ticket':
+    case 'propose_edit_ticket': return 'Ticket klaarzetten…';
+    case 'propose_ticket_note': return 'Reactie op het ticket opstellen…';
     case 'propose_report': return 'Rapportage klaarzetten…';
     default: return 'Voorstel klaarzetten…';
   }
@@ -1731,6 +1843,10 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
     case 'propose_calendar_event': return buildCalendarEventProposal(ctx, input);
     case 'propose_week_action': return buildWeekActionProposal(input);
     case 'propose_time_entry': return buildTimeEntryProposal(ctx, input);
+    case 'propose_edit_time_entry': return buildEditTimeEntryProposal(ctx, input);
+    case 'propose_ticket': return buildTicketProposal(ctx, input);
+    case 'propose_edit_ticket': return buildEditTicketProposal(ctx, input);
+    case 'propose_ticket_note': return buildTicketNoteProposal(ctx, input);
     case 'propose_report': return buildReportProposal(input);
     default: return { ok: false, error: `Onbekende actie: ${toolName}` };
   }
@@ -2699,6 +2815,196 @@ async function listTickets(orgId: string, input: Record<string, unknown>, limit:
     tickets: (data ?? []).map((r: Record<string, unknown>) => ({
       id: r.id, title: r.title, status: r.status, priority: r.priority, client_id: r.client_id, created_at: r.created_at,
     })),
+  };
+}
+
+/**
+ * Geregistreerde uren lezen — dit ontbrak: een agent kon wél uren boeken maar ze
+ * daarna niet terugzien, dus ook niet controleren of corrigeren.
+ *
+ * Org-scoped, en bewust ZONDER filter op gebruiker: de agent draait namens iemand
+ * met leesrecht op de urenmodule, en die ziet in de app ook de uren van het team.
+ */
+async function listTimeEntries(ctx: GerrieContext, input: Record<string, unknown>, limit: number) {
+  let query = orgTable('time_entries', ctx.organizationId).order('entry_date', { ascending: false }).limit(limit);
+  const from = isoDate(input.from);
+  const to = isoDate(input.to);
+  if (from) query = query.gte('entry_date', from);
+  if (to) query = query.lte('entry_date', to);
+  if (input.project_id) query = query.eq('project_id', String(input.project_id));
+  if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.billable_only === true) query = query.eq('billable', true);
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  const names = await namesFor(ctx.organizationId, rows);
+  return {
+    count: rows.length,
+    total_minutes: rows.reduce((sum, r) => sum + Number(r.minutes || 0), 0),
+    billable_minutes: rows.reduce((sum, r) => sum + (r.billable ? Number(r.minutes || 0) : 0), 0),
+    entries: rows.map((r) => ({
+      id: r.id,
+      date: r.entry_date,
+      minutes: Number(r.minutes || 0),
+      description: r.description,
+      billable: r.billable === true,
+      project_id: r.project_id,
+      project_name: r.project_id ? names.projects.get(String(r.project_id)) ?? null : null,
+      client_id: r.client_id,
+      client_name: r.client_id ? names.clients.get(String(r.client_id)) ?? null : null,
+    })),
+  };
+}
+
+/** Project- en klantnamen bij een set rijen, in twee queries in plaats van N. */
+async function namesFor(orgId: string, rows: Array<Record<string, unknown>>) {
+  const projectIds = [...new Set(rows.map((r) => (r.project_id ? String(r.project_id) : '')).filter(Boolean))];
+  const clientIds = [...new Set(rows.map((r) => (r.client_id ? String(r.client_id) : '')).filter(Boolean))];
+  const projects = new Map<string, string>();
+  const clients = new Map<string, string>();
+  if (projectIds.length) {
+    const { data } = await supabaseAdmin.from('projects').select('id, name').eq('organization_id', orgId).in('id', projectIds);
+    for (const p of (data ?? []) as Array<Record<string, unknown>>) projects.set(String(p.id), String(p.name));
+  }
+  if (clientIds.length) {
+    const { data } = await supabaseAdmin.from('clients').select('id, name').eq('organization_id', orgId).in('id', clientIds);
+    for (const c of (data ?? []) as Array<Record<string, unknown>>) clients.set(String(c.id), String(c.name));
+  }
+  return { projects, clients };
+}
+
+/** Correctie op een bestaande urenregistratie. Alleen wat echt verandert. */
+async function buildEditTimeEntryProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const id = String(input.id || '').trim();
+  if (!isUuid(id)) return { ok: false, error: 'Ongeldig id. Zoek de registratie eerst met list_time_entries en gebruik het exacte id.' };
+
+  const { data: entry, error } = await supabaseAdmin.from('time_entries')
+    .select('id, entry_date, minutes, description, billable, project_id, client_id')
+    .eq('organization_id', ctx.organizationId).eq('id', id).maybeSingle();
+  if (error) return { ok: false, error: `Urenregistratie ophalen mislukt: ${error.message}` };
+  if (!entry) return { ok: false, error: 'Urenregistratie niet gevonden in deze organisatie.' };
+
+  const changes: Record<string, unknown> = {};
+  if (input.date !== undefined) {
+    const d = isoDate(input.date);
+    if (!d) return { ok: false, error: 'Ongeldige datum; gebruik YYYY-MM-DD.' };
+    changes.entry_date = d;
+  }
+  if (input.hours !== undefined || input.minutes !== undefined) {
+    const total = Math.round(num(input.hours) * 60 + num(input.minutes));
+    if (!Number.isFinite(total) || total <= 0) return { ok: false, error: 'Geef een geldige duur — bijvoorbeeld 90 minuten of 1,5 uur.' };
+    changes.minutes = total;
+  }
+  if (input.description !== undefined) changes.description = input.description ? String(input.description).slice(0, 2000) : null;
+  if (typeof input.billable === 'boolean') changes.billable = input.billable;
+  if (Object.keys(changes).length === 0) return { ok: false, error: 'Geef minstens één veld dat moet veranderen (datum, duur, omschrijving of declarabel).' };
+
+  const names = await namesFor(ctx.organizationId, [entry as Record<string, unknown>]);
+  return {
+    ok: true,
+    proposal: {
+      type: 'edit_time_entry',
+      id: String(entry.id),
+      current: {
+        date: String(entry.entry_date).slice(0, 10),
+        minutes: Number(entry.minutes || 0),
+        description: entry.description ? String(entry.description) : null,
+        billable: entry.billable === true,
+        project_name: entry.project_id ? names.projects.get(String(entry.project_id)) ?? null : null,
+        client_name: entry.client_id ? names.clients.get(String(entry.client_id)) ?? null : null,
+      },
+      changes,
+    },
+  };
+}
+
+// 'converted' staat er bewust NIET bij: die status zet de app zelf als een ticket
+// naar een project wordt omgezet, en is geen handmatige keuze.
+const TICKET_STATUSES = ['new', 'review', 'approved', 'rejected'];
+const TICKET_PRIORITIES = ['low', 'med', 'high'];
+
+async function buildTicketProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const title = String(input.title || '').trim();
+  if (!title) return { ok: false, error: 'Geef een titel voor het ticket.' };
+
+  let clientId: string | null = null;
+  let clientName = '';
+  if (input.client_id) {
+    const c = await resolveClient(ctx, input.client_id);
+    if (!c.ok) return c;
+    clientId = c.id; clientName = c.name;
+  }
+
+  return {
+    ok: true,
+    proposal: {
+      type: 'ticket',
+      title: title.slice(0, 300),
+      description: input.description ? String(input.description).slice(0, 4000) : null,
+      client_id: clientId,
+      client_name: clientName,
+      priority: TICKET_PRIORITIES.includes(String(input.priority)) ? String(input.priority) : 'med',
+      status: TICKET_STATUSES.includes(String(input.status)) ? String(input.status) : 'new',
+    },
+  };
+}
+
+async function buildEditTicketProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const id = String(input.id || '').trim();
+  if (!isUuid(id)) return { ok: false, error: 'Ongeldig id. Zoek het ticket eerst met list_tickets en gebruik het exacte id.' };
+
+  const { data: ticket, error } = await supabaseAdmin.from('tickets')
+    .select('id, title').eq('organization_id', ctx.organizationId).eq('id', id).maybeSingle();
+  if (error) return { ok: false, error: `Ticket ophalen mislukt: ${error.message}` };
+  if (!ticket) return { ok: false, error: 'Ticket niet gevonden in deze organisatie.' };
+
+  const changes: Record<string, unknown> = {};
+  if (input.title !== undefined) {
+    const t = String(input.title).trim();
+    if (!t) return { ok: false, error: 'De titel mag niet leeg zijn.' };
+    changes.title = t.slice(0, 300);
+  }
+  if (input.description !== undefined) changes.description = input.description ? String(input.description).slice(0, 4000) : null;
+  if (input.notes !== undefined) changes.notes = input.notes ? String(input.notes).slice(0, 4000) : null;
+  if (input.status !== undefined) {
+    if (!TICKET_STATUSES.includes(String(input.status))) return { ok: false, error: `Onbekende status. Kies uit: ${TICKET_STATUSES.join(', ')}.` };
+    changes.status = String(input.status);
+  }
+  if (input.priority !== undefined) {
+    if (!TICKET_PRIORITIES.includes(String(input.priority))) return { ok: false, error: `Onbekende prioriteit. Kies uit: ${TICKET_PRIORITIES.join(', ')}.` };
+    changes.priority = String(input.priority);
+  }
+  if (Object.keys(changes).length === 0) return { ok: false, error: 'Geef minstens één veld dat moet veranderen.' };
+
+  return { ok: true, proposal: { type: 'edit_ticket', id: String(ticket.id), title: String(ticket.title), changes } };
+}
+
+/**
+ * Een reactie op een ticket. Let op `is_internal`: staat die op false, dan leest de
+ * KLANT de tekst in het portaal. Daarom standaard true — per ongeluk intern is
+ * hersteltbaar, per ongeluk naar de klant niet.
+ */
+async function buildTicketNoteProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const ticketId = String(input.ticket_id || '').trim();
+  if (!isUuid(ticketId)) return { ok: false, error: 'Ongeldig ticket_id. Zoek het ticket eerst met list_tickets.' };
+  const body = String(input.body || '').trim();
+  if (!body) return { ok: false, error: 'Geef de tekst van de reactie.' };
+
+  const { data: ticket, error } = await supabaseAdmin.from('tickets')
+    .select('id, title').eq('organization_id', ctx.organizationId).eq('id', ticketId).maybeSingle();
+  if (error) return { ok: false, error: `Ticket ophalen mislukt: ${error.message}` };
+  if (!ticket) return { ok: false, error: 'Ticket niet gevonden in deze organisatie.' };
+
+  return {
+    ok: true,
+    proposal: {
+      type: 'ticket_note',
+      ticket_id: String(ticket.id),
+      ticket_title: String(ticket.title),
+      body: body.slice(0, 8000),
+      is_internal: input.is_internal === false ? false : true,
+    },
   };
 }
 

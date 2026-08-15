@@ -43,6 +43,22 @@ export function proposalLabel(p: GerrieProposal): ProposalInfo {
     case 'calendar_event': return { title: `Agenda-item: ${p.title}`, sub: `${p.date} ${p.start_time}–${p.end_time}`, write: true, kind: 'agenda' };
     case 'week_action': return { title: `${p.total} actiepunt${p.total === 1 ? '' : 'en'} toevoegen`, sub: p.items.map((i) => i.title).join(' · ').slice(0, 80), write: true, kind: 'work' };
     case 'time_entry': return { title: `${formatMinutes(p.minutes)} registreren`, sub: [p.client_name, p.project_name].filter(Boolean).join(' · ') || 'geen koppeling', write: true, kind: 'work' };
+    case 'edit_time_entry': return {
+      title: 'Urenregistratie aanpassen',
+      sub: [
+        `${p.current.date} · ${formatMinutes(p.current.minutes)}`,
+        p.changes.minutes !== undefined ? `wordt ${formatMinutes(p.changes.minutes)}` : '',
+        p.changes.entry_date ? `wordt ${p.changes.entry_date}` : '',
+      ].filter(Boolean).join(' → '),
+      write: true, kind: 'work',
+    };
+    case 'ticket': return { title: 'Ticket openen', sub: [p.title, p.client_name].filter(Boolean).join(' · '), write: false, kind: 'work' };
+    case 'edit_ticket': return { title: `Wijziging ticket openen`, sub: p.title, write: false, kind: 'work' };
+    case 'ticket_note': return {
+      title: p.is_internal ? 'Interne notitie plaatsen' : 'Reactie naar de klant plaatsen',
+      sub: `${p.ticket_title} — ${p.body.slice(0, 60)}${p.body.length > 60 ? '…' : ''}`,
+      write: true, kind: 'work',
+    };
     case 'invoice': return { title: 'Conceptfactuur openen', sub: `${p.client_name} · ${euro(p.total_eur)}`, write: false, kind: 'money' };
     case 'quote': return { title: 'Conceptofferte openen', sub: `${p.client_name} · ${euro(p.total_eur)}`, write: false, kind: 'money' };
     case 'client': return { title: 'Nieuwe klant openen', sub: p.name, write: false, kind: 'work' };
@@ -89,6 +105,8 @@ export async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers
     case 'task': h.onCreateTask?.(p); return;
     case 'edit_task': h.onEditTask?.(p); return;
     case 'report': h.onCreateReport?.(p); return;
+    case 'ticket': h.onCreateTicket?.(p); return;
+    case 'edit_ticket': h.onEditTicket?.(p); return;
     case 'agent': await need(h.onCreateAgent ? () => h.onCreateAgent!(p) : undefined); return;
     // De hele reeks in één keer. De wachtrij gebruikt deze weg alleen als je "alles
     // versturen" kiest; vink je ze los af, dan roept hij onSendClientEmail per mail
@@ -133,5 +151,7 @@ export async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers
     case 'calendar_event': await need(h.onCreateCalendarEvent ? () => h.onCreateCalendarEvent!(p) : undefined); return;
     case 'week_action': await need(h.onCreateWeekAction ? () => h.onCreateWeekAction!(p) : undefined); return;
     case 'time_entry': await need(h.onLogTimeEntry ? () => h.onLogTimeEntry!(p) : undefined); return;
+    case 'edit_time_entry': await need(h.onEditTimeEntry ? () => h.onEditTimeEntry!(p) : undefined); return;
+    case 'ticket_note': await need(h.onAddTicketNote ? () => h.onAddTicketNote!(p) : undefined); return;
   }
 }

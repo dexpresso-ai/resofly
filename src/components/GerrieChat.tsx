@@ -101,7 +101,7 @@ const SpeechRecognitionImpl: SpeechRecognitionCtor | undefined =
       ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionCtor }).webkitSpeechRecognition;
 const speechSupported = Boolean(SpeechRecognitionImpl);
 
-export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onCreateReport, onSendClientEmail, onCreateAgent }: { organizationId: UUID } & GerrieActionHandlers) {
+export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onCreateReport, onSendClientEmail, onCreateAgent, onCreateTicket, onEditTicket, onAddTicketNote, onEditTimeEntry }: { organizationId: UUID } & GerrieActionHandlers) {
   const [open, setOpen] = useState(false);
   const [firstName, setFirstName] = useState<string | null>(null);
   const firstNameRef = useRef<string | null>(null);
@@ -321,6 +321,31 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
       return <ConfirmActionCard icon={<ClockIcon />} title={`${formatMinutes(p.minutes)} registreren?`} sub={`${target} · ${p.date} · ${p.billable ? 'declarabel' : 'niet-declarabel'}`} confirmLabel="Registreren" pendingLabel="Registreren…" doneLabel={`${formatMinutes(p.minutes)} geregistreerd${p.project_name ? ` op ${p.project_name}` : ''}`} onConfirm={() => runConfirmed(auditId, () => onLogTimeEntry ? onLogTimeEntry(p) : Promise.reject(new Error('Registreren is hier niet beschikbaar.')))} />;
     }
     if (p.type === 'report') return <ProposalCard icon={<ChartIcon />} title={`Rapportage openen & controleren: ${p.name}`} sub={describeReportDefinition(p.definition)} onClick={() => onCreateReport?.(p)} />;
+    if (p.type === 'ticket') return <ProposalCard title="Ticket openen & controleren" sub={[p.title, p.client_name].filter(Boolean).join(' · ')} onClick={() => onCreateTicket?.(p)} />;
+    if (p.type === 'edit_ticket') return <ProposalCard title="Wijziging ticket openen & controleren" sub={p.title} onClick={() => onEditTicket?.(p)} />;
+    if (p.type === 'ticket_note') {
+      // De klant-zichtbare variant krijgt bewust een ander woord in de knop: dit is
+      // het verschil tussen een memo voor jezelf en post naar buiten.
+      const naarKlant = !p.is_internal;
+      return <ConfirmActionCard
+        icon={<MailIcon />}
+        title={naarKlant ? `Reactie naar de klant plaatsen op "${p.ticket_title}"?` : `Interne notitie plaatsen op "${p.ticket_title}"?`}
+        sub={naarKlant ? `De klant leest dit in het portaal — ${p.body}` : p.body}
+        confirmLabel={naarKlant ? 'Plaatsen voor de klant' : 'Plaatsen'} pendingLabel="Plaatsen…"
+        doneLabel={naarKlant ? 'Reactie geplaatst; de klant kan hem lezen' : 'Interne notitie geplaatst'}
+        onConfirm={() => runConfirmed(auditId, () => onAddTicketNote ? onAddTicketNote(p) : Promise.reject(new Error('Reageren is hier niet beschikbaar.')))}
+      />;
+    }
+    if (p.type === 'edit_time_entry') {
+      const was = `${p.current.date} · ${formatMinutes(p.current.minutes)}`;
+      const wordt = [
+        p.changes.entry_date ?? p.current.date,
+        formatMinutes(p.changes.minutes ?? p.current.minutes),
+      ].join(' · ');
+      return <ConfirmActionCard icon={<ClockIcon />} title="Urenregistratie aanpassen?" sub={`${was}  →  ${wordt}`}
+        confirmLabel="Aanpassen" pendingLabel="Aanpassen…" doneLabel="Urenregistratie aangepast"
+        onConfirm={() => runConfirmed(auditId, () => onEditTimeEntry ? onEditTimeEntry(p) : Promise.reject(new Error('Aanpassen is hier niet beschikbaar.')))} />;
+    }
     // Reeksen (mail, facturen, offertes, herinneringen) krijgen ook in de chat het
     // afvinkbord: je leest elke regel en vinkt hem los af. Eén knop "versturen"
     // onder een stapel post zou hier net zo min kloppen als in de wachtrij.

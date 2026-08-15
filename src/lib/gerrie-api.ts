@@ -229,7 +229,37 @@ export interface GerrieTimeEntryProposal {
   billable: boolean;
   hourly_rate_cents: number | null;
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
+/** Correctie op een bestaande urenregistratie; `current` toont waar hij nu op staat. */
+export interface GerrieEditTimeEntryProposal {
+  type: 'edit_time_entry';
+  id: UUID;
+  current: { date: string; minutes: number; description: string | null; billable: boolean; project_name: string | null; client_name: string | null };
+  changes: { entry_date?: string; minutes?: number; description?: string | null; billable?: boolean };
+}
+export interface GerrieTicketProposal {
+  type: 'ticket';
+  title: string;
+  description: string | null;
+  client_id: UUID | null;
+  client_name: string;
+  priority: string;
+  status: string;
+}
+export interface GerrieEditTicketProposal {
+  type: 'edit_ticket';
+  id: UUID;
+  title: string;
+  changes: { title?: string; description?: string | null; status?: string; priority?: string; notes?: string | null };
+}
+/** Een reactie op een ticket. `is_internal: false` = de klant leest hem in het portaal. */
+export interface GerrieTicketNoteProposal {
+  type: 'ticket_note';
+  ticket_id: UUID;
+  ticket_title: string;
+  body: string;
+  is_internal: boolean;
+}
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieEditTimeEntryProposal | GerrieTicketProposal | GerrieEditTicketProposal | GerrieTicketNoteProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
 
 /**
  * De uitvoer-handlers voor een door Gerrie voorgestelde actie. Draft-types openen een
@@ -257,6 +287,14 @@ export interface GerrieActionHandlers {
   onCreateCalendarEvent?: (proposal: GerrieCalendarEventProposal) => Promise<void>;
   onCreateWeekAction?: (proposal: GerrieWeekActionProposal) => Promise<void>;
   onLogTimeEntry?: (proposal: GerrieTimeEntryProposal) => Promise<void>;
+  /** Past een bestaande urenregistratie aan (voert uit; geen formulier). */
+  onEditTimeEntry?: (proposal: GerrieEditTimeEntryProposal) => Promise<void>;
+  /** Opent het ticketformulier vooringevuld met een nieuw ticket. */
+  onCreateTicket?: (proposal: GerrieTicketProposal) => void;
+  /** Opent een bestaand ticket met de voorgestelde wijziging erin. */
+  onEditTicket?: (proposal: GerrieEditTicketProposal) => void;
+  /** Plaatst een reactie op een ticket (voert uit). Bij is_internal=false leest de klant hem. */
+  onAddTicketNote?: (proposal: GerrieTicketNoteProposal) => Promise<void>;
   onCreateReport?: (proposal: GerrieReportProposal) => void;
   /** Verstuurt ÉÉN klantmail. De wachtrij roept hem per aangevinkte mail aan, zodat
    *  een mislukte mail de rest niet meesleept en je per regel ziet wat er misging. */

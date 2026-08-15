@@ -31,6 +31,7 @@ import {
   upsertCalendarEventLink,
   deleteCalendarEventLink,
   createTimeEntry,
+  updateTimeEntry,
   disableOrganizationMember,
   insertRow,
   inviteOrganizationMember,
@@ -144,7 +145,7 @@ type EditMode =
   | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status'>> }
   | { kind: 'project'; item?: Project; defaults?: Partial<Pick<Project, 'name' | 'client_id' | 'description' | 'start_date' | 'end_date'>> }
   | { kind: 'task'; item?: Task; projectId?: string | null; defaults?: Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'tags' | 'start_date' | 'end_date' | 'planned_date' | 'estimated_minutes' | 'subtasks' | 'project_id' | 'client_id'>> }
-  | { kind: 'ticket'; item?: Ticket }
+  | { kind: 'ticket'; item?: Ticket; defaults?: Partial<Pick<Ticket, 'title' | 'description' | 'client_id' | 'priority' | 'status' | 'notes'>> }
   | { kind: 'note'; item?: Note; defaults?: Partial<Pick<Note, 'client_id' | 'project_id' | 'folder_id' | 'title' | 'content' | 'note_type' | 'tags'>>; calendarLink?: CalendarNoteLinkInput }
   | { kind: 'document'; item?: InternalDocument; defaults?: Partial<Pick<InternalDocument, 'client_id' | 'project_id' | 'folder_id' | 'title' | 'content' | 'document_type'>> }
   | { kind: 'quote'; item?: Quote; defaults?: Partial<Pick<Quote, 'client_id' | 'project_id' | 'notes' | 'valid_until' | 'lines'>> }
@@ -2055,6 +2056,43 @@ function App() {
       });
       await refresh();
     },
+    // Een correctie op geboekte uren voert direct uit: er is geen los urenformulier
+    // om te openen, en de wijziging is één regel die je in de kaart al hebt gelezen.
+    onEditTimeEntry: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      await updateTimeEntry(activeOrg.id, p.id, p.changes);
+      scheduleRefresh();
+    },
+    onCreateTicket: (p) => {
+      if (!ensureCanWrite()) return;
+      setPage('tickets'); setProjectId(null); setClientId(null);
+      setEdit({ kind: 'ticket', item: undefined, defaults: {
+        title: p.title, description: p.description ?? undefined, client_id: p.client_id ?? undefined,
+        priority: p.priority as Ticket['priority'], status: p.status as Ticket['status'],
+      } });
+    },
+    onEditTicket: (p) => {
+      if (!ensureCanWrite()) return;
+      const existing = data.tickets.find((t) => t.id === p.id);
+      if (!existing) { setError('Ticket niet gevonden.'); return; }
+      const merged: Ticket = { ...existing };
+      if (p.changes.title !== undefined) merged.title = p.changes.title;
+      if (p.changes.description !== undefined) merged.description = p.changes.description;
+      if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
+      if (p.changes.status !== undefined) merged.status = p.changes.status as Ticket['status'];
+      if (p.changes.priority !== undefined) merged.priority = p.changes.priority as Ticket['priority'];
+      setPage('tickets'); setProjectId(null); setClientId(null);
+      setEdit({ kind: 'ticket', item: merged });
+    },
+    // Een reactie op een ticket gaat direct de tijdlijn in — langs dezelfde weg als
+    // de knop op het ticket zelf, dus met jouw naam eronder. Staat `is_internal` op
+    // false, dan leest de klant hem in het portaal; dat staat op de kaart die je
+    // goedkeurt.
+    onAddTicketNote: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      await createTicketNote(activeOrg.id, { ticketId: p.ticket_id, body: p.body, isInternal: p.is_internal });
+      scheduleRefresh();
+    },
     onCreateReport: (p) => {
       if (!ensureCanWrite()) return;
       // Open de rapportbouwer vooringevuld (nog niet opgeslagen); de gebruiker
@@ -3253,7 +3291,7 @@ function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string,
   }
   if (edit.kind === "ticket") {
     const item = edit.item;
-    return { title: item?.title ?? "", description: item?.description ?? "", client_id: item?.client_id ?? "", priority: item?.priority ?? "med", status: item?.status ?? "new", notes: item?.notes ?? "" };
+    return { title: item?.title ?? edit.defaults?.title ?? "", description: item?.description ?? edit.defaults?.description ?? "", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", priority: item?.priority ?? edit.defaults?.priority ?? "med", status: item?.status ?? edit.defaults?.status ?? "new", notes: item?.notes ?? edit.defaults?.notes ?? "" };
   }
   if (edit.kind === "note") {
     const item = edit.item;
