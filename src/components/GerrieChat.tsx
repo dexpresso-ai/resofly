@@ -3,6 +3,7 @@ import { streamGerrieReply, confirmGerrieAction, loadGerrieBudget, type GerrieSt
 import { euro, formatMinutes } from '../lib/format';
 import { describeReportDefinition } from '../lib/reporting';
 import { supabase } from '../lib/supabase';
+import { ClientEmailBatch } from './ClientEmailBatch';
 import type { UUID } from '../types';
 
 /**
@@ -100,7 +101,7 @@ const SpeechRecognitionImpl: SpeechRecognitionCtor | undefined =
       ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionCtor }).webkitSpeechRecognition;
 const speechSupported = Boolean(SpeechRecognitionImpl);
 
-export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onCreateReport }: { organizationId: UUID } & GerrieActionHandlers) {
+export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onCreateReport, onSendClientEmail, onCreateAgent }: { organizationId: UUID } & GerrieActionHandlers) {
   const [open, setOpen] = useState(false);
   const [firstName, setFirstName] = useState<string | null>(null);
   const firstNameRef = useRef<string | null>(null);
@@ -323,6 +324,26 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
     if (p.type === 'send_reminders') {
       const byLevel = [1, 2, 3].map((l) => p.invoices.filter((i) => i.level === l).length);
       return <ConfirmActionCard icon={<MailIcon />} title={`${p.total} herinnering${p.total === 1 ? '' : 'en'} versturen?`} sub={`1e: ${byLevel[0]} · 2e: ${byLevel[1]} · 3e: ${byLevel[2]}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`${p.total} herinnering${p.total === 1 ? '' : 'en'} verstuurd`} onConfirm={() => runConfirmed(auditId, () => onSendReminders ? onSendReminders(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.')))} />;
+    }
+    // Klantmail krijgt ook in de chat het mailbord: je leest elke mail en vinkt
+    // hem los af. Eén knop "versturen" onder een stapel post zou hier net zo min
+    // kloppen als in de wachtrij.
+    if (p.type === 'send_client_email') {
+      return <ClientEmailBatch
+        proposal={p}
+        canWrite
+        onSendOne={(mail) => onSendClientEmail ? onSendClientEmail(mail) : Promise.reject(new Error('Mailen is hier niet beschikbaar.'))}
+        onResolved={({ sent, skipped }) => {
+          if (auditId) void confirmGerrieAction(organizationId, auditId, sent > 0 ? 'executed' : 'failed', `${sent} verstuurd, ${skipped} overgeslagen.`);
+        }}
+      />;
+    }
+    if (p.type === 'agent') {
+      const days = ['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag', 'zondag'];
+      const when = p.schedule_kind === 'daily' ? `elke dag om ${String(p.hour).padStart(2, '0')}:00`
+        : p.schedule_kind === 'weekly' ? `elke ${days[(p.day_of_week ?? 1) - 1]} om ${String(p.hour).padStart(2, '0')}:00`
+        : `maandelijks op dag ${p.day_of_month ?? 1} om ${String(p.hour).padStart(2, '0')}:00`;
+      return <ProposalCard icon={<RobotIcon />} title={`Agent klaarzetten: ${p.name}`} sub={when} onClick={() => onCreateAgent?.(p)} />;
     }
     return <ProposalCard title="Nieuwe klant openen & controleren" sub={[p.name, p.email].filter(Boolean).join(' · ')} onClick={() => onCreateClientDraft?.(p)} />;
   }

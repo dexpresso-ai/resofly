@@ -1,5 +1,9 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { listEvents } from '../_shared/calendarAvailability.ts';
+import {
+  buildMergeFallbacks, buildMergeTokens, fillMergeTokens,
+  type MergeClient, type MergeCompany, type MergeFieldDefinition,
+} from '../_shared/mergeTokens.ts';
 
 // ============================================================
 // gerrie-agent — Gerrie, de AI-assistent, gekoppeld aan Claude (Anthropic).
@@ -93,7 +97,17 @@ type Emit = (event: string, data: unknown) => Promise<void>;
 
 // ── Agentische loop ──────────────────────────────────────────────────────────
 
-interface GerrieContext { organizationId: string; role: OrganizationRole; userId: string; userLabel: string; orgName: string; today: string; moduleAccess: Record<string, string> }
+/**
+ * Mailinstellingen van de geplande agent die op dit moment draait.
+ *
+ * Afwezig = het chat-pad; daar schrijft Gerrie de tekst altijd zelf en geldt een
+ * bescheiden plafond. Bij `mode: 'template'` zijn onderwerp en tekst van de
+ * GEBRUIKER: het model levert dan alleen nog wie de mail krijgt, en de tekst
+ * wordt hier ingevuld — het model kan er niet meer bij.
+ */
+interface ClientEmailSettings { mode: 'compose' | 'template'; subject: string | null; body: string | null; max: number }
+
+interface GerrieContext { organizationId: string; role: OrganizationRole; userId: string; userLabel: string; orgName: string; today: string; moduleAccess: Record<string, string>; clientEmail?: ClientEmailSettings }
 interface Usage { input: number; output: number; cacheRead: number; cacheWrite: number }
 interface ProposalLine { description: string; quantity: number; unit_price: number; vat: number }
 interface InvoiceProposal { type: 'invoice'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; due_date: string | null; total_eur: number }
@@ -126,7 +140,33 @@ interface ReportDefinitionLite {
   chart: string;
 }
 interface ReportProposal { type: 'report'; name: string; definition: ReportDefinitionLite }
-type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | WeekActionProposal | TimeEntryProposal | ReportProposal;
+/** Eén klantmail binnen een voorstel; de gebruiker vinkt ze in de app stuk voor stuk af. */
+interface ClientEmailItem { client_id: string; client_name: string; recipient_email: string; subject: string; body: string }
+interface SendClientEmailProposal {
+  type: 'send_client_email';
+  items: ClientEmailItem[];
+  total: number;
+  /** 'template' = jouw vaste tekst met variabelen ingevuld; 'compose' = door de agent geschreven. */
+  origin: 'compose' | 'template';
+  /** Klanten die de agent wilde mailen maar die (nog) geen e-mailadres hebben. */
+  skipped: string[];
+}
+/** Een door Gerrie klaargezette agent; goedkeuren opent de agent-editor vooringevuld. */
+interface AgentProposal {
+  type: 'agent';
+  name: string;
+  instruction: string;
+  mode: 'report' | 'propose';
+  enabled_tools: string[];
+  schedule_kind: 'daily' | 'weekly' | 'monthly';
+  hour: number;
+  day_of_week: number | null;
+  day_of_month: number | null;
+  email_mode: 'compose' | 'template';
+  email_subject: string | null;
+  email_body: string | null;
+}
+type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | WeekActionProposal | TimeEntryProposal | ReportProposal | SendClientEmailProposal | AgentProposal;
 interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: unknown }>; usage: Usage; proposal?: Proposal }
 
 async function runAgent(ctx: GerrieContext, history: Array<{ role: string; content: string }>, message: string, emit: Emit, modelKind: ModelKind = 'strong', allowedToolNames?: string[]): Promise<AgentOutcome> {
@@ -368,6 +408,8 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_client` — nieuwe klant klaarzetten. Controleer eerst met `search_clients` of de klant al bestaat (voorkom dubbelen). Naam is verplicht; contactpersoon/e-mail/telefoon optioneel.',
           '- `propose_send_invoice` / `propose_send_quote` — een BESTAANDE factuur/offerte per e-mail naar de klant versturen. Zoek het document eerst met `list_invoices`/`list_quotes` en gebruik het exacte id. Het gaat naar het e-mailadres van de gekoppelde klant; benoem dat adres in je antwoord zodat de gebruiker het kan controleren vóór hij bevestigt.',
           '- `propose_send_reminders` — alle betalingsherinneringen versturen die vandaag aan de beurt zijn (per factuur het volgende niveau: 1e/2e/3e), of beperkt tot één niveau. Met `list_due_reminders` kun je eerst tonen wat er klaarstaat (groepeer in je antwoord per niveau).',
+          '- `propose_send_client_email` — een VRIJE e-mail naar één of meer klanten, zoals vanaf de klantenkaart. Zoek de klanten met `search_clients`. Schrijf per klant een kort, persoonlijk bericht en noem in je antwoord wie hem krijgt, zodat de gebruiker het kan nalezen vóór hij afvinkt. Klanten zonder e-mailadres vallen automatisch af.',
+          '- `propose_create_agent` — een terugkerende agent klaarzetten ("elke maandag…"). Het scherm opent vooringevuld; de gebruiker slaat hem zelf op en activeert hem.',
           '- `propose_project` / `propose_edit_project` — een project aanmaken of wijzigen (open het projectformulier vooringevuld).',
           '- `propose_task` / `propose_edit_task` — een taak binnen een project aanmaken of wijzigen, inclusief subtaken, status/prioriteit en een geplande datum (`planned_date`) om de taak als actiepunt in de WEEKPLANNER te zetten. Zoek het project met `list_projects`, bestaande taken met `list_tasks`.',
           '- `propose_week_action` — ÉÉN OF MEER ACTIEPUNTEN op de "Actiepunten deze week"-checklist van de weekplanner (los van projecten en taken). Vraagt de gebruiker meerdere punten, geef ze dan ALLEMAAL in één keer mee via `items` (niet één voor één). Geef per item een datum binnen de gewenste week. Voor een echte taak binnen een project gebruik je `propose_task`.',
@@ -715,6 +757,50 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'propose_send_client_email',
+    description: 'Stel voor om een VRIJE e-mail naar één of meer klanten te sturen — dezelfde soort mail als vanaf de klantenkaart, vanaf het eigen verzenddomein. Je verstuurt NIETS zelf: de gebruiker ziet elke mail volledig en vinkt ze stuk voor stuk af. Zoek de klanten eerst met search_clients en gebruik hun exacte id. Schrijf per klant een persoonlijk, zakelijk-vriendelijk bericht in het Nederlands: een concreet onderwerp, een aanhef met de contactpersoon, en een korte alinea die verwijst naar wat je in de gegevens ziet. Zet er GEEN afsluiting met een verzonnen naam onder — de handtekening van de organisatie wordt automatisch toegevoegd. Werkt de agent met een vaste tekst, dan hoef je alleen client_id per klant te geven; onderwerp en tekst worden dan genegeerd.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        recipients: {
+          type: 'array',
+          description: 'De klanten die een mail krijgen, met per klant het onderwerp en de tekst.',
+          items: {
+            type: 'object',
+            properties: {
+              client_id: { type: 'string', description: 'Het exacte id van de klant (uit search_clients).' },
+              subject: { type: 'string', description: 'Onderwerpregel voor deze klant.' },
+              body: { type: 'string', description: 'De volledige tekst van de mail, als platte tekst met witregels tussen de alinea\'s.' },
+            },
+            required: ['client_id'],
+          },
+        },
+      },
+      required: ['recipients'],
+    },
+  },
+  {
+    name: 'propose_create_agent',
+    description: 'Zet een nieuwe geplande agent (routine) klaar: een terugkerende opdracht die vanzelf draait. Je maakt hem NIET aan — het voorstel opent het agent-scherm vooringevuld, waar de gebruiker hem controleert, opslaat en activeert. Gebruik dit als iemand vraagt om iets "elke week/maand automatisch" te laten doen. Kies `mode: "report"` als de agent alleen hoeft te kijken en samen te vatten, en `mode: "propose"` als hij iets moet klaarzetten (mail, herinnering, factuur) — dat blijft altijd achter een akkoord van de gebruiker. Zet in `enabled_tools` alleen wat de agent echt nodig heeft.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Korte, herkenbare naam, bv. "Wekelijks factuuroverzicht".' },
+        instruction: { type: 'string', description: 'De opdracht in gewone taal, zoals je hem aan Gerrie zou typen.' },
+        mode: { type: 'string', enum: ['report', 'propose'], description: 'report = alleen lezen en rapporteren; propose = mag acties klaarzetten.' },
+        enabled_tools: { type: 'array', items: { type: 'string' }, description: 'Namen van de tools die de agent mag gebruiken (bv. list_invoices, propose_send_client_email).' },
+        schedule_kind: { type: 'string', enum: ['daily', 'weekly', 'monthly'], description: 'Hoe vaak hij draait.' },
+        hour: { type: 'number', description: 'Uur van de dag, 0-23.' },
+        day_of_week: { type: 'number', description: 'Bij wekelijks: 1=maandag t/m 7=zondag.' },
+        day_of_month: { type: 'number', description: 'Bij maandelijks: dag van de maand, 1-31.' },
+        email_mode: { type: 'string', enum: ['compose', 'template'], description: 'Alleen relevant als de agent klantmail mag sturen. compose = de agent schrijft zelf; template = onderstaande vaste tekst.' },
+        email_subject: { type: 'string', description: 'Bij template: het vaste onderwerp. Mag variabelen bevatten, bv. {{klantnaam}}.' },
+        email_body: { type: 'string', description: 'Bij template: de vaste tekst. Mag variabelen bevatten, bv. {{voornaam|klant}}.' },
+      },
+      required: ['name', 'instruction', 'mode', 'schedule_kind'],
+    },
+  },
+  {
     name: 'propose_convert_quote',
     description: 'Stel voor om een GEACCEPTEERDE offerte om te zetten naar een factuur. Je voert NIETS uit: de gebruiker bevestigt in de chat. Zoek de offerte eerst met list_quotes en gebruik het exacte id. Alleen offertes met status "accepted" kunnen worden omgezet.',
     input_schema: {
@@ -973,6 +1059,12 @@ const TOOL_MODULE: Record<string, string> = {
   propose_send_reminders: 'finance',
   propose_client: 'clients',
   propose_edit_client: 'clients',
+  // Een vrije klantmail hoort bij de klantmodule — dezelfde poort als de mail
+  // die je vanaf de klantenkaart stuurt (de mail-functie eist daar `clients`-schrijfrecht).
+  propose_send_client_email: 'clients',
+  // Een agent bouwen is een Gerrie-handeling; wie de Gerrie-module dicht heeft
+  // staan hoort er ook geen te kunnen laten klaarzetten.
+  propose_create_agent: 'gerrie',
   propose_project: 'projects',
   propose_edit_project: 'projects',
   propose_task: 'projects',
@@ -1193,6 +1285,8 @@ function proposeLabel(toolName: string): string {
     case 'propose_client': return 'Klantgegevens klaarzetten…';
     case 'propose_send_invoice':
     case 'propose_send_quote': return 'Verzending voorbereiden…';
+    case 'propose_send_client_email': return 'Mail aan de klant opstellen…';
+    case 'propose_create_agent': return 'Agent klaarzetten…';
     case 'propose_convert_quote': return 'Omzetting voorbereiden…';
     case 'propose_edit_invoice':
     case 'propose_edit_quote':
@@ -1226,6 +1320,8 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
     case 'propose_client': return buildClientProposal(input);
     case 'propose_send_invoice': return buildSendProposal(ctx, 'invoice', input);
     case 'propose_send_quote': return buildSendProposal(ctx, 'quote', input);
+    case 'propose_send_client_email': return buildClientEmailProposal(ctx, input);
+    case 'propose_create_agent': return buildAgentProposal(input);
     case 'propose_convert_quote': return buildConvertQuoteProposal(ctx, input);
     case 'propose_edit_invoice': return buildEditFinanceProposal(ctx, 'invoice', input);
     case 'propose_edit_quote': return buildEditFinanceProposal(ctx, 'quote', input);
@@ -1766,6 +1862,165 @@ async function buildSendProposal(ctx: GerrieContext, kind: 'invoice' | 'quote', 
       client_name: String(client?.name ?? ''),
       recipient_email: email,
       recipient_name: client?.contact_name ? String(client.contact_name) : (client?.name ? String(client.name) : null),
+    },
+  };
+}
+
+/**
+ * Vrije klantmail(s) klaarzetten — dezelfde soort mail als vanaf de klantenkaart.
+ *
+ * Twee schrijfwijzen, bepaald door de agent (ctx.clientEmail) en NIET door het model:
+ *   template — onderwerp en tekst komen van de gebruiker en worden hier met
+ *              {{variabelen}} ingevuld. Wat het model als subject/body meestuurt
+ *              wordt weggegooid; anders zou een agent met een vastgelegde tekst
+ *              alsnog zijn eigen woorden kunnen versturen.
+ *   compose  — het model schrijft per klant; onderwerp én tekst zijn verplicht.
+ *
+ * Klanten zonder e-mailadres worden niet stilzwijgend overgeslagen maar apart
+ * teruggegeven, zodat de gebruiker in de wachtrij ziet wie er buiten viel.
+ */
+async function buildClientEmailProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const settings = ctx.clientEmail;
+  const mode: 'compose' | 'template' = settings?.mode === 'template' ? 'template' : 'compose';
+  // Zonder agent-instellingen draaien we in de chat; daar mag Gerrie er een paar
+  // tegelijk klaarzetten, niet een halve klantenbestand.
+  const max = Math.max(1, Math.min(25, settings?.max ?? 3));
+
+  const rawList = Array.isArray(input.recipients) ? (input.recipients as Record<string, unknown>[]) : [];
+  if (rawList.length === 0) return { ok: false, error: 'Geef minstens één ontvanger (client_id). Zoek de klanten eerst met search_clients.' };
+
+  if (mode === 'template' && !String(settings?.body || '').trim()) {
+    return { ok: false, error: 'Deze agent staat op een vaste tekst, maar die tekst is nog niet ingevuld. Vul hem in bij de agent-instellingen.' };
+  }
+
+  // Ontdubbelen: twee keer dezelfde klant in één voorstel levert dubbele post op.
+  const seen = new Set<string>();
+  const wanted: Array<{ id: string; subject: string; body: string }> = [];
+  for (const raw of rawList) {
+    const id = String(raw.client_id || '').trim();
+    if (!isUuid(id)) return { ok: false, error: 'Ongeldig client_id. Zoek de klant eerst met search_clients en gebruik het exacte id.' };
+    if (seen.has(id)) continue;
+    seen.add(id);
+    wanted.push({ id, subject: String(raw.subject || '').trim(), body: String(raw.body || '').trim() });
+    if (wanted.length >= max) break;
+  }
+
+  const { data: clients, error } = await supabaseAdmin.from('clients')
+    .select('id,name,contact_name,email,phone,city,postal_code,address_line1,address_line2,country,vat_number,kvk_number,client_code,custom_fields')
+    .eq('organization_id', ctx.organizationId).in('id', wanted.map((w) => w.id));
+  if (error) return { ok: false, error: `Klanten ophalen mislukt: ${error.message}` };
+
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const c of (clients ?? []) as Array<Record<string, unknown>>) byId.set(String(c.id), c);
+
+  // Variabelen alleen ophalen als er echt een sjabloon ingevuld moet worden.
+  let definitions: MergeFieldDefinition[] = [];
+  let company: MergeCompany | null = null;
+  if (mode === 'template') {
+    const [defs, comp] = await Promise.all([
+      supabaseAdmin.from('client_field_definitions')
+        .select('field_key,label,field_type,default_fallback').eq('organization_id', ctx.organizationId).order('position', { ascending: true }),
+      supabaseAdmin.from('company_settings')
+        .select('company_name,trade_name,address_line1,address_line2,postal_code,city,country,email,phone,website')
+        .eq('organization_id', ctx.organizationId).maybeSingle(),
+    ]);
+    definitions = (defs.data ?? []) as MergeFieldDefinition[];
+    company = (comp.data ?? null) as MergeCompany | null;
+  }
+  const fallbacks = buildMergeFallbacks(definitions);
+
+  const items: ClientEmailItem[] = [];
+  const skipped: string[] = [];
+  for (const w of wanted) {
+    const client = byId.get(w.id);
+    if (!client) return { ok: false, error: `Klant ${w.id} bestaat niet in deze organisatie.` };
+    const clientName = String(client.name ?? '');
+    const email = String(client.email ?? '').trim().toLowerCase();
+    if (!email || !email.includes('@')) { skipped.push(clientName || w.id); continue; }
+
+    let subject = w.subject;
+    let body = w.body;
+    if (mode === 'template') {
+      const tokens = buildMergeTokens(
+        { client: client as MergeClient, company, toEmail: email, toName: String(client.contact_name ?? '') },
+        definitions,
+      );
+      // escape uit: dit is platte tekst, geen HTML — de app maakt er bij het
+      // versturen alinea's van en ontsnapt dan pas.
+      subject = fillMergeTokens(settings?.subject ?? '', tokens, { escape: false, fallbacks }).trim();
+      body = fillMergeTokens(settings?.body ?? '', tokens, { escape: false, fallbacks }).trim();
+    }
+    if (!subject) return { ok: false, error: `Geef een onderwerp voor de mail aan ${clientName || 'de klant'}.` };
+    if (!body) return { ok: false, error: `Geef de tekst van de mail aan ${clientName || 'de klant'}.` };
+
+    items.push({
+      client_id: w.id,
+      client_name: clientName,
+      recipient_email: email,
+      subject: subject.slice(0, 300),
+      body: body.slice(0, 8000),
+    });
+  }
+
+  if (items.length === 0) {
+    return {
+      ok: false,
+      error: skipped.length
+        ? `Geen van deze klanten heeft een e-mailadres (${skipped.join(', ')}). Vul dat eerst in op de klantenkaart.`
+        : 'Er bleef geen enkele mail over om klaar te zetten.',
+    };
+  }
+
+  return { ok: true, proposal: { type: 'send_client_email', items, total: items.length, origin: mode, skipped } };
+}
+
+/**
+ * Een nieuwe geplande agent klaarzetten vanuit de chat. Bewust een OPEN-voorstel:
+ * goedkeuren maakt niets aan maar opent het agent-scherm vooringevuld, waar de
+ * gebruiker hem nog controleert, opslaat en zelf activeert. Een agent die zichzelf
+ * agents laat aanmaken is precies het soort onbewaakte groei dat v1 niet wil.
+ */
+function buildAgentProposal(input: Record<string, unknown>): ProposalResult {
+  const name = String(input.name || '').trim();
+  const instruction = String(input.instruction || '').trim();
+  if (!name) return { ok: false, error: 'Geef de agent een naam.' };
+  if (!instruction) return { ok: false, error: 'Geef de agent een opdracht in gewone taal.' };
+
+  const mode: 'report' | 'propose' = String(input.mode) === 'propose' ? 'propose' : 'report';
+  const scheduleKind = ['daily', 'weekly', 'monthly'].includes(String(input.schedule_kind))
+    ? (String(input.schedule_kind) as 'daily' | 'weekly' | 'monthly') : 'weekly';
+
+  const tools = Array.isArray(input.enabled_tools)
+    ? [...new Set((input.enabled_tools as unknown[]).map(String).filter((t) => TOOL_DEFINITIONS.some((d) => d.name === t)))]
+    : [];
+  // Een report-agent mag per definitie niets voorstellen; laat propose_-tools dan
+  // niet meelekken naar het formulier, anders lijkt hij meer te mogen dan hij mag.
+  const enabled_tools = mode === 'report' ? tools.filter((t) => !t.startsWith('propose_')) : tools;
+
+  const hourRaw = Math.floor(num(input.hour));
+  const hour = Number.isFinite(hourRaw) && hourRaw >= 0 && hourRaw <= 23 ? hourRaw : 8;
+  const dowRaw = Math.floor(num(input.day_of_week));
+  const domRaw = Math.floor(num(input.day_of_month));
+
+  const emailMode: 'compose' | 'template' = String(input.email_mode) === 'template' ? 'template' : 'compose';
+  const emailSubject = String(input.email_subject || '').trim();
+  const emailBody = String(input.email_body || '').trim();
+
+  return {
+    ok: true,
+    proposal: {
+      type: 'agent',
+      name: name.slice(0, 120),
+      instruction: instruction.slice(0, 4000),
+      mode,
+      enabled_tools,
+      schedule_kind: scheduleKind,
+      hour,
+      day_of_week: scheduleKind === 'weekly' ? (dowRaw >= 1 && dowRaw <= 7 ? dowRaw : 1) : null,
+      day_of_month: scheduleKind === 'monthly' ? (domRaw >= 1 && domRaw <= 31 ? domRaw : 1) : null,
+      email_mode: emailMode,
+      email_subject: emailSubject ? emailSubject.slice(0, 300) : null,
+      email_body: emailBody ? emailBody.slice(0, 8000) : null,
     },
   };
 }

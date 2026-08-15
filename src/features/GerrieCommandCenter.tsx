@@ -5,11 +5,13 @@ import {
   listRoutines, listRoutineRuns, saveRoutine, setRoutineStatus, deleteRoutine, runRoutineNow, listRunProposals,
   loadRunTranscript, replyToRun, listPendingAgentApprovals, ROUTINE_READ_TOOLS, ROUTINE_PROPOSE_TOOLS,
   type GerrieActionHandlers, type GerrieProposal, type GerrieMissionSubtask,
-  type GerrieRoutine, type GerrieRoutineRun, type GerrieRoutineInput, type GerrieRunMessage,
-  type RoutineMode, type RoutineScheduleKind, type RoutineStatus, type RoutineRunStatus,
+  type GerrieRoutine, type GerrieRoutineRun, type GerrieRoutineInput, type GerrieRunMessage, type GerrieAgentProposal,
+  type RoutineMode, type RoutineScheduleKind, type RoutineStatus, type RoutineRunStatus, type AgentEmailMode,
 } from '../lib/gerrie-api';
+import { STANDARD_MERGE_TOKENS } from '../lib/mergeTokens';
 import { executeProposal, proposalLabel } from '../lib/gerrie-proposals';
 import { AgentApprovals } from '../components/AgentApprovals';
+import { ClientEmailBatch } from '../components/ClientEmailBatch';
 import { AGENT_HUES, AGENT_ICONS, AgentGlyph, agentHue, agentIconKey, type AgentIconKey } from '../components/AgentGlyph';
 import type { UUID } from '../types';
 
@@ -58,8 +60,14 @@ function newId(): string {
   try { return crypto.randomUUID(); } catch { return `lane-${Date.now()}-${++laneSeq}`; }
 }
 
-export function GerrieCommandCenter({ organizationId, canWrite, ...handlers }: { organizationId: UUID; canWrite: boolean } & GerrieActionHandlers) {
-  const [tab, setTab] = useState<'live' | 'agents' | 'queue'>('live');
+export function GerrieCommandCenter({ organizationId, canWrite, pendingAgent = null, onPendingAgentConsumed, ...handlers }: {
+  organizationId: UUID;
+  canWrite: boolean;
+  /** Door Gerrie in de chat klaargezette agent; opent hier vooringevuld in de editor. */
+  pendingAgent?: GerrieAgentProposal | null;
+  onPendingAgentConsumed?: () => void;
+} & GerrieActionHandlers) {
+  const [tab, setTab] = useState<'live' | 'agents' | 'queue'>(pendingAgent ? 'agents' : 'live');
   const [draft, setDraft] = useState('');
   const [lanes, setLanes] = useState<Lane[]>([]);
   const [pendingPlan, setPendingPlan] = useState<PendingPlan | null>(null);
@@ -231,7 +239,8 @@ export function GerrieCommandCenter({ organizationId, canWrite, ...handlers }: {
 
       {tab === 'agents' ? (
         <RoutinesPanel organizationId={organizationId} canWrite={canWrite} handlers={handlers}
-          pendingByAgent={pendingByAgent} onApprovalsChanged={reloadPending} />
+          pendingByAgent={pendingByAgent} onApprovalsChanged={reloadPending}
+          pendingAgent={pendingAgent} onPendingAgentConsumed={onPendingAgentConsumed} />
       ) : tab === 'queue' ? (
         <div className="ag-page">
           <AgentApprovals organizationId={organizationId} canWrite={canWrite} handlers={handlers}
@@ -446,6 +455,7 @@ function runStatusLabel(s: RoutineRunStatus): string {
 function templateToRoutine(t: RoutineTemplate): GerrieRoutine {
   return {
     id: '' as UUID, name: t.name, description: null, icon: t.icon, hue: t.hue, instruction: t.instruction,
+    email_mode: 'compose', email_subject: null, email_body: null, max_emails_per_run: 5,
     model_kind: 'cheap', mode: t.mode, enabled_tools: t.tools,
     schedule_kind: t.schedule_kind, hour: t.hour, day_of_week: t.day_of_week ?? null, day_of_month: t.day_of_month ?? null,
     timezone: 'Europe/Amsterdam', status: 'draft', next_run_at: null, last_run_at: null,
@@ -466,13 +476,28 @@ function capitalize(s: string): string { return s.charAt(0).toUpperCase() + s.sl
 const READ_TOOL_LABELS = new Map(ROUTINE_READ_TOOLS.map((t) => [t.name, t.label]));
 const PROPOSE_TOOL_LABELS = new Map(ROUTINE_PROPOSE_TOOLS.map((t) => [t.name, t.label]));
 
-function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onApprovalsChanged }: {
+/** Zet een door Gerrie voorgestelde agent om in een concept voor de editor. */
+function proposalToRoutine(p: GerrieAgentProposal): GerrieRoutine {
+  return {
+    id: '' as UUID, name: p.name, description: null, icon: null, hue: null, instruction: p.instruction,
+    email_mode: p.email_mode, email_subject: p.email_subject, email_body: p.email_body, max_emails_per_run: 5,
+    model_kind: 'cheap', mode: p.mode, enabled_tools: p.enabled_tools,
+    schedule_kind: p.schedule_kind, hour: p.hour, day_of_week: p.day_of_week, day_of_month: p.day_of_month,
+    timezone: 'Europe/Amsterdam', status: 'draft', next_run_at: null, last_run_at: null,
+    max_cost_eur_per_run: 0.25, monthly_budget_eur: null, max_runs_per_day: 4, consecutive_failures: 0,
+    delivery: { channels: ['inapp'], recipient_user_ids: [] }, created_at: '', updated_at: '',
+  };
+}
+
+function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onApprovalsChanged, pendingAgent, onPendingAgentConsumed }: {
   organizationId: UUID;
   canWrite: boolean;
   handlers: GerrieActionHandlers;
   /** Aantal openstaande voorstellen per agent — het belletje op de tegel. */
   pendingByAgent: Record<string, number>;
   onApprovalsChanged: () => void;
+  pendingAgent?: GerrieAgentProposal | null;
+  onPendingAgentConsumed?: () => void;
 }) {
   const [routines, setRoutines] = useState<GerrieRoutine[]>([]);
   const [loading, setLoading] = useState(true);
@@ -525,6 +550,14 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
     } catch (e) { notify(e instanceof Error ? e.message : 'Draaien mislukt.', 'error'); }
     finally { setBusyId(null); }
   }
+
+  // Kwam er een agent uit de chat? Dan opent de editor daar meteen mee, en melden
+  // we hem als verbruikt zodat een terugkeer naar dit tabblad hem niet opnieuw opent.
+  useEffect(() => {
+    if (!pendingAgent) return;
+    setEditing(proposalToRoutine(pendingAgent));
+    onPendingAgentConsumed?.();
+  }, [pendingAgent, onPendingAgentConsumed]);
 
   // Een geopende agent hoort in beeld te komen; op een lang scherm staat het
   // paneel anders onder de vouw en lijkt de klik niets te doen.
@@ -749,7 +782,11 @@ interface EditorFields {
   schedule_kind: RoutineScheduleKind; hour: number; day_of_week: number; day_of_month: number; tools: string[]; email: boolean;
   /** null = laat de app het embleem afleiden uit naam + opdracht + tools. */
   icon: AgentIconKey | null; hue: number | null;
+  /** Klantmail: wie schrijft, welke vaste tekst, en hoeveel mails per run. */
+  email_mode: AgentEmailMode; email_subject: string; email_body: string; max_emails: number;
 }
+
+const MAIL_TOOL = 'propose_send_client_email';
 
 function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organizationId: UUID; routine: GerrieRoutine | null; onDone: () => void; onCancel: () => void }) {
   const [f, setF] = useState<EditorFields>(() => ({
@@ -765,10 +802,31 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
     email: Array.isArray(routine?.delivery?.channels) ? routine!.delivery.channels.includes('email') : false,
     icon: (routine?.icon as AgentIconKey | null) ?? null,
     hue: routine?.hue ?? null,
+    email_mode: routine?.email_mode ?? 'compose',
+    email_subject: routine?.email_subject ?? '',
+    email_body: routine?.email_body ?? '',
+    max_emails: routine?.max_emails_per_run ?? 5,
   }));
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
   const isNew = !routine || !routine.id;
+  const mailsClients = f.tools.includes(MAIL_TOOL);
+
+  /** Plakt een variabele op de cursorpositie in de vaste tekst. */
+  function insertToken(token: string) {
+    const el = bodyRef.current;
+    const snippet = `{{${token}}}`;
+    if (!el) { setF((p) => ({ ...p, email_body: `${p.email_body}${snippet}` })); return; }
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? start;
+    setF((p) => ({ ...p, email_body: `${p.email_body.slice(0, start)}${snippet}${p.email_body.slice(end)}` }));
+    requestAnimationFrame(() => {
+      el.focus();
+      const caret = start + snippet.length;
+      el.setSelectionRange(caret, caret);
+    });
+  }
 
   // Het embleem in de kop is een levend voorbeeld: typ je "facturen", dan verandert
   // het icoon mee zolang je zelf niets gekozen hebt.
@@ -782,11 +840,23 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
 
   async function save() {
     if (!f.instruction.trim()) { setErr('Geef een opdracht voor de agent.'); return; }
+    // Een vaste tekst zonder tekst levert een agent op die elke run stukloopt;
+    // dat hoor je hier te horen, niet pas bij de eerste run.
+    if (mailsClients && f.email_mode === 'template' && !f.email_body.trim()) {
+      setErr('Je hebt gekozen voor een vaste mailtekst — vul die dan ook in.'); return;
+    }
+    if (mailsClients && f.email_mode === 'template' && !f.email_subject.trim()) {
+      setErr('Geef een onderwerp voor de vaste mailtekst.'); return;
+    }
     setSaving(true); setErr(null);
     const input: GerrieRoutineInput = {
       name: f.name.trim() || 'Naamloze agent',
       instruction: f.instruction.trim(),
       icon: f.icon, hue: f.hue,
+      email_mode: f.email_mode,
+      email_subject: f.email_subject.trim() || null,
+      email_body: f.email_body.trim() || null,
+      max_emails_per_run: f.max_emails,
       model_kind: f.model_kind, mode: f.mode, enabled_tools: f.tools,
       schedule_kind: f.schedule_kind, hour: f.hour,
       day_of_week: f.schedule_kind === 'weekly' ? f.day_of_week : null,
@@ -932,6 +1002,54 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
           </div>
         )}
 
+        {f.mode === 'propose' && mailsClients && (
+          <div className="cc-field ag-mailbox">
+            <span>Het mailtje naar de klant</span>
+            <div className="ag-mailmode">
+              <label className={`ag-mailmode-opt${f.email_mode === 'compose' ? ' on' : ''}`}>
+                <input type="radio" name="ag-email-mode" checked={f.email_mode === 'compose'}
+                  onChange={() => setF((p) => ({ ...p, email_mode: 'compose' }))} />
+                <b>Gerrie schrijft hem</b>
+                <em>Per klant een eigen tekst, passend bij wat hij ziet. Jij leest elke mail vóór hij weggaat.</em>
+              </label>
+              <label className={`ag-mailmode-opt${f.email_mode === 'template' ? ' on' : ''}`}>
+                <input type="radio" name="ag-email-mode" checked={f.email_mode === 'template'}
+                  onChange={() => setF((p) => ({ ...p, email_mode: 'template' }))} />
+                <b>Jouw vaste tekst</b>
+                <em>Altijd hetzelfde bericht, met variabelen ingevuld. De agent kiest alleen wie hem krijgt.</em>
+              </label>
+            </div>
+
+            {f.email_mode === 'template' && <>
+              <label className="cc-field"><span>Onderwerp</span>
+                <input className="cc-text" value={f.email_subject} maxLength={300}
+                  onChange={(e) => setF((p) => ({ ...p, email_subject: e.target.value }))}
+                  placeholder="Bijv. Even bijpraten over je project" />
+              </label>
+              <label className="cc-field"><span>Tekst</span>
+                <textarea ref={bodyRef} className="cc-input" rows={7} value={f.email_body} maxLength={8000}
+                  onChange={(e) => setF((p) => ({ ...p, email_body: e.target.value }))}
+                  placeholder={'Beste {{voornaam|klant}},\n\n…\n\nMet vriendelijke groet'} />
+              </label>
+              <div className="ag-tokens">
+                <span className="ag-tokens-label">Variabelen — klik om in te voegen</span>
+                <div className="ag-tokens-chips">
+                  {STANDARD_MERGE_TOKENS.map((t) => (
+                    <button key={t.token} type="button" className="cc-chip" title={`${t.label} (${t.group})`}
+                      onClick={() => insertToken(t.token)}>{t.label}</button>
+                  ))}
+                </div>
+              </div>
+            </>}
+
+            <label className="cc-field"><span>Hoogstens zoveel mails per run</span>
+              <input className="cc-text ag-num" type="number" min={1} max={25} value={f.max_emails}
+                onChange={(e) => setF((p) => ({ ...p, max_emails: Math.max(1, Math.min(25, Number(e.target.value) || 1)) }))} />
+            </label>
+            <p className="cc-note">Het plafond geldt <b>per run</b>: meer klanten dan dit worden niet stilzwijgend gemaild maar gewoon niet klaargezet. Klanten zonder e-mailadres vallen sowieso af.</p>
+          </div>
+        )}
+
         <label className="cc-tool cc-tool-wide"><input type="checkbox" checked={f.email} onChange={(e) => setF((p) => ({ ...p, email: e.target.checked }))} /> Stuur me ook een e-mail met het resultaat</label>
 
         {err && <div className="cc-plan-error">{err}</div>}
@@ -1066,6 +1184,8 @@ function RunDetail({ run, organizationId, canWrite, handlers, onApprovalsChanged
           {proposals.map(({ auditId, proposal }) => {
             const info = proposalLabel(proposal);
             const st = pstate[auditId] ?? 'idle';
+            // Een reeks klantmails beslis je hier net zo als in de wachtrij: per mail.
+            const mailBatch = proposal.type === 'send_client_email' ? proposal : null;
             return (
               <div key={auditId} className="cc-approve">
                 <div className="cc-approve-t">{info.title}</div>
@@ -1073,7 +1193,20 @@ function RunDetail({ run, organizationId, canWrite, handlers, onApprovalsChanged
                 {st === 'error' && pmsg[auditId] && <div className="cc-approve-err">{pmsg[auditId]}</div>}
                 {st === 'done' ? <div className="cc-lane-ok"><Check size={13} /> Uitgevoerd</div>
                   : st === 'rejected' ? <div className="cc-lane-cancel">Afgewezen.</div>
-                  : (
+                  : mailBatch ? (
+                    <ClientEmailBatch
+                      proposal={mailBatch}
+                      canWrite={canWrite}
+                      onSendOne={(mail) => handlers.onSendClientEmail
+                        ? handlers.onSendClientEmail(mail)
+                        : Promise.reject(new Error('Mailen is hier niet beschikbaar.'))}
+                      onResolved={({ sent, skipped }) => {
+                        void confirmGerrieAction(organizationId, auditId, sent > 0 ? 'executed' : 'failed', `${sent} verstuurd, ${skipped} overgeslagen.`);
+                        setPstate((s) => ({ ...s, [auditId]: sent > 0 ? 'done' : 'rejected' }));
+                        onApprovalsChanged?.();
+                      }}
+                    />
+                  ) : (
                     <div className="cc-approve-actions">
                       <button className="cc-btn tiny ghost" disabled={st === 'busy'} onClick={() => reject(auditId)}>Afwijzen</button>
                       <button className="cc-btn tiny primary" disabled={st === 'busy' || (info.write && !canWrite)} onClick={() => void approve(auditId, proposal)}>

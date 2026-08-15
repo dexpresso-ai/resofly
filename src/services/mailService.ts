@@ -158,6 +158,26 @@ export async function removeSendingDomain(
 
 // ── Vrije klant-mail versturen ──────────────────────────────────────────────
 
+/**
+ * Zet platte tekst om in de eenvoudige HTML die de mailfunctie verwacht.
+ *
+ * De klantenkaart levert al HTML uit zijn editor, maar een agent schrijft platte
+ * tekst met witregels. Zonder deze omzetting komt zijn mail als één ononderbroken
+ * blok aan. Alles wordt eerst ontsnapt: de tekst komt uit een taalmodel en mag
+ * nooit als opmaak in de mailbox van een klant belanden.
+ */
+export function plainTextToEmailHtml(text: string): string {
+  const escaped = String(text ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  return escaped
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => `<p>${block.replace(/\n/g, '<br />')}</p>`)
+    .join('\n');
+}
+
 export interface SendClientEmailResult {
   threadId: UUID;
   clientEmailId: UUID;

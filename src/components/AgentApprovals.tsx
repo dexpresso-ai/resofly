@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowRight, CalendarClock, Check, ChevronRight, ClipboardCheck, Coins, ListChecks, Loader2, Mail, RefreshCw, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bot, CalendarClock, Check, ChevronRight, ClipboardCheck, Coins, ListChecks, Loader2, Mail, RefreshCw, Sparkles, X } from 'lucide-react';
 import { confirmGerrieAction, listPendingAgentApprovals, type AgentApproval } from '../lib/gerrie-api';
 import type { GerrieActionHandlers } from '../lib/gerrie-api';
 import { executeProposal, proposalLabel, type ProposalKind } from '../lib/gerrie-proposals';
 import { AgentGlyph } from './AgentGlyph';
+import { ClientEmailBatch } from './ClientEmailBatch';
 import type { UUID } from '../types';
 
 /**
@@ -29,6 +30,7 @@ const KIND_ICON: Record<ProposalKind, typeof Mail> = {
   agenda: CalendarClock,
   work: ListChecks,
   insight: Sparkles,
+  agent: Bot,
 };
 
 export function AgentApprovals({
@@ -145,8 +147,11 @@ export function AgentApprovals({
                 const state = rowState[item.auditId] ?? 'idle';
                 const KindIcon = KIND_ICON[info.kind];
                 const blocked = info.write && !canWrite;
+                // Een reeks klantmails krijgt geen enkele akkoordknop maar het
+                // uitklapbare mailbord: je beslist per mail, niet per stapel.
+                const mailBatch = item.proposal.type === 'send_client_email' ? item.proposal : null;
                 return (
-                  <li key={item.auditId} className={`ag-queue-row${state === 'error' ? ' is-error' : ''}`}>
+                  <li key={item.auditId} className={`ag-queue-row${state === 'error' ? ' is-error' : ''}${mailBatch ? ' is-batch' : ''}`}>
                     <AgentGlyph
                       agent={{ id: item.agentId ?? undefined, name: item.agentName, icon: item.agentIcon, hue: item.agentHue }}
                       size="md"
@@ -165,9 +170,26 @@ export function AgentApprovals({
                       {state === 'error' && rowError[item.auditId] && (
                         <p className="ag-queue-rowerr"><AlertTriangle size={12} /> {rowError[item.auditId]}</p>
                       )}
-                      {blocked && <p className="ag-queue-rowhint">Je hebt geen schrijfrechten voor deze actie — vraag een owner of admin.</p>}
+                      {blocked && !mailBatch && <p className="ag-queue-rowhint">Je hebt geen schrijfrechten voor deze actie — vraag een owner of admin.</p>}
+                      {mailBatch && (
+                        <ClientEmailBatch
+                          proposal={mailBatch}
+                          canWrite={canWrite}
+                          onSendOne={(mail) => handlers.onSendClientEmail
+                            ? handlers.onSendClientEmail(mail)
+                            : Promise.reject(new Error('Mailen is hier niet beschikbaar.'))}
+                          onResolved={({ sent, skipped }) => {
+                            void confirmGerrieAction(
+                              organizationId, item.auditId,
+                              sent > 0 ? 'executed' : 'failed',
+                              `${sent} verstuurd, ${skipped} overgeslagen.`,
+                            );
+                            drop(item.auditId);
+                          }}
+                        />
+                      )}
                     </div>
-                    <div className="ag-queue-actions">
+                    {!mailBatch && <div className="ag-queue-actions">
                       <button type="button" className="ag-btn ag-btn-ghost" disabled={state === 'busy'} onClick={() => reject(item)}>
                         <X size={13} /> Afwijzen
                       </button>
@@ -176,7 +198,7 @@ export function AgentApprovals({
                           ? <><Loader2 size={13} className="ag-spin" /> Bezig…</>
                           : info.write ? <><Check size={13} /> Akkoord</> : <><ArrowRight size={13} /> Openen</>}
                       </button>
-                    </div>
+                    </div>}
                   </li>
                 );
               })}

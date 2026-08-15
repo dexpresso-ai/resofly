@@ -190,6 +190,7 @@ async function executeAgentRun(
   const { data: actor } = await supabaseAdmin.auth.admin.getUserById(runAsUserId);
   const actorEmail = actor?.user?.email || undefined;
   const ctx = await buildContext(orgId, role, { id: runAsUserId, email: actorEmail });
+  ctx.clientEmail = clientEmailSettings(agent);
 
   // 6) Tool-allowlist bepalen (report = alleen lezen).
   const allowedToolNames = resolveAllowedTools(agent, mode);
@@ -246,16 +247,33 @@ async function executeAgentRun(
   }
 }
 
+/**
+ * Mailinstellingen van deze agent voor het brein. Bepaalt of de agent zijn eigen
+ * tekst schrijft of jouw vaste tekst gebruikt — en hoeveel mails één run hoogstens
+ * mag klaarzetten.
+ */
+function clientEmailSettings(agent: Record<string, unknown>): { mode: 'compose' | 'template'; subject: string | null; body: string | null; max: number } {
+  const max = Math.floor(Number(agent.max_emails_per_run));
+  return {
+    mode: String(agent.email_mode || 'compose') === 'template' ? 'template' : 'compose',
+    subject: agent.email_subject ? String(agent.email_subject) : null,
+    body: agent.email_body ? String(agent.email_body) : null,
+    max: Number.isFinite(max) && max >= 1 && max <= 25 ? max : 5,
+  };
+}
+
 function resolveAllowedTools(agent: Record<string, unknown>, mode: 'report' | 'propose'): string[] {
   const raw = Array.isArray(agent.enabled_tools) ? (agent.enabled_tools as unknown[]).map(String) : [];
-  const enabled = raw.filter((n) => ALL_TOOL_NAMES.includes(n));
+  // Een onbewaakte agent mag nooit zelf nieuwe agents laten klaarzetten: dat is
+  // een chat-handeling waar een mens bij zit. Ook niet als iemand hem aanvinkt.
+  const enabled = raw.filter((n) => ALL_TOOL_NAMES.includes(n) && n !== 'propose_create_agent');
   if (mode === 'report') {
     // Alleen lezen — strip elke propose_-tool, ook als hij per ongeluk is geconfigureerd.
     return enabled.length ? enabled.filter((n) => READ_TOOL_NAMES.includes(n)) : READ_TOOL_NAMES;
   }
   // propose: altijd de lees-tools + de gekozen (propose-)tools erbij.
   const chosen = enabled.length ? enabled : READ_TOOL_NAMES;
-  return Array.from(new Set([...READ_TOOL_NAMES, ...chosen]));
+  return Array.from(new Set([...READ_TOOL_NAMES, ...chosen])).filter((n) => n !== 'propose_create_agent');
 }
 
 async function agentMonthlyBudgetOk(agent: Record<string, unknown>): Promise<boolean> {
@@ -396,6 +414,12 @@ function sanitizeAgentFields(body: Record<string, unknown>): Record<string, unkn
   const hueRaw = Math.floor(Number(body.hue));
   const hue = Number.isFinite(hueRaw) && hueRaw >= 0 && hueRaw <= 359 ? hueRaw : null;
 
+  // Klantmail: schrijfwijze + eventuele vaste tekst. Bij 'compose' bewaren we de
+  // sjabloontekst gewoon; wisselt iemand terug, dan staat hij er nog.
+  const emailMode = String(body.email_mode || 'compose') === 'template' ? 'template' : 'compose';
+  const emailSubject = body.email_subject != null ? String(body.email_subject).slice(0, 300) : null;
+  const emailBody = body.email_body != null ? String(body.email_body).slice(0, 8000) : null;
+
   return {
     name: String(body.name || '').slice(0, 120),
     description: body.description != null ? String(body.description).slice(0, 500) : null,
@@ -414,6 +438,10 @@ function sanitizeAgentFields(body: Record<string, unknown>): Record<string, unkn
     delivery: { channels, recipient_user_ids: [] },
     icon,
     hue,
+    email_mode: emailMode,
+    email_subject: emailSubject,
+    email_body: emailBody,
+    max_emails_per_run: clampInt(body.max_emails_per_run, 5, 1, 25),
   };
 }
 
@@ -529,6 +557,9 @@ async function replyToRun(orgId: string, userId: string, role: OrganizationRole,
   await insertMessage(convId, orgId, userId, 'user', message, []);
 
   const ctx = await buildContext(orgId, role, { id: userId });
+  // Antwoorden op een run gebruikt dezelfde schrijfwijze en hetzelfde mailplafond
+  // als de geplande run zelf; anders zou "ja, stuur maar" ineens andere post opleveren.
+  ctx.clientEmail = clientEmailSettings(agent);
   const allowedToolNames = resolveAllowedTools(agent, mode);
   const outcome = await runAgent(ctx, history, message, noopEmit, modelKind, allowedToolNames);
 

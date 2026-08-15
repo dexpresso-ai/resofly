@@ -13,7 +13,7 @@ import type { GerrieActionHandlers, GerrieProposal } from './gerrie-api';
  */
 
 /** Grove soort van een voorstel; bepaalt alleen het icoontje in de wachtrij. */
-export type ProposalKind = 'money' | 'mail' | 'agenda' | 'work' | 'insight';
+export type ProposalKind = 'money' | 'mail' | 'agenda' | 'work' | 'insight' | 'agent';
 
 export interface ProposalInfo {
   title: string;
@@ -44,7 +44,22 @@ export function proposalLabel(p: GerrieProposal): ProposalInfo {
     case 'task': return { title: 'Taak openen', sub: `${p.title} · ${p.project_name}`, write: false, kind: 'work' };
     case 'edit_task': return { title: 'Wijziging taak openen', sub: p.title, write: false, kind: 'work' };
     case 'report': return { title: `Rapportage openen: ${p.name}`, sub: '', write: false, kind: 'insight' };
+    case 'send_client_email': return {
+      title: p.total === 1 ? `Mail aan ${p.items[0].client_name || 'de klant'}` : `${p.total} mailtjes naar klanten`,
+      sub: p.total === 1 ? p.items[0].subject : p.items.map((i) => i.client_name).filter(Boolean).join(', ').slice(0, 80),
+      write: true, kind: 'mail',
+    };
+    case 'agent': return { title: `Agent klaarzetten: ${p.name}`, sub: scheduleSummary(p), write: false, kind: 'agent' };
   }
+}
+
+/** "Elke maandag om 08:00" — voor het onderschrift van een agent-voorstel. */
+function scheduleSummary(p: { schedule_kind: string; hour: number; day_of_week: number | null; day_of_month: number | null }): string {
+  const days = ['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag', 'zondag'];
+  const time = `${String(p.hour).padStart(2, '0')}:00`;
+  if (p.schedule_kind === 'daily') return `elke dag om ${time}`;
+  if (p.schedule_kind === 'weekly') return `elke ${days[(p.day_of_week ?? 1) - 1]} om ${time}`;
+  return `maandelijks op dag ${p.day_of_month ?? 1} om ${time}`;
 }
 
 /** Voert een goedgekeurd voorstel uit via de gedeelde handlers (zelfde als de chat-dock). */
@@ -62,6 +77,22 @@ export async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers
     case 'task': h.onCreateTask?.(p); return;
     case 'edit_task': h.onEditTask?.(p); return;
     case 'report': h.onCreateReport?.(p); return;
+    case 'agent': h.onCreateAgent?.(p); return;
+    // De hele reeks in één keer. De wachtrij gebruikt deze weg alleen als je "alles
+    // versturen" kiest; vink je ze los af, dan roept hij onSendClientEmail per mail
+    // aan en komt hij hier niet langs. Eén mislukte mail stopt de rest, zodat je
+    // niet half-verstuurd achterblijft zonder te weten waar het misging.
+    case 'send_client_email': {
+      if (!h.onSendClientEmail) throw new Error('Deze actie is hier niet beschikbaar.');
+      const failed: string[] = [];
+      let sent = 0;
+      for (const item of p.items) {
+        try { await h.onSendClientEmail(item); sent += 1; }
+        catch { failed.push(item.client_name || item.recipient_email); }
+      }
+      if (failed.length) throw new Error(`${sent} verstuurd, ${failed.length} mislukt (${failed.join(', ')}).`);
+      return;
+    }
     case 'send_invoice': await need(h.onSendInvoice ? () => h.onSendInvoice!(p) : undefined); return;
     case 'send_quote': await need(h.onSendQuote ? () => h.onSendQuote!(p) : undefined); return;
     case 'convert_quote': await need(h.onConvertQuote ? () => h.onConvertQuote!(p) : undefined); return;

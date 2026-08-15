@@ -148,6 +148,39 @@ export interface GerrieWeekActionProposal {
   items: Array<{ title: string; planned_date: string }>;
   total: number;
 }
+/** Eén klantmail binnen een voorstel; in de wachtrij vink je ze stuk voor stuk af. */
+export interface GerrieClientEmailItem {
+  client_id: UUID;
+  client_name: string;
+  recipient_email: string;
+  subject: string;
+  /** Platte tekst met witregels tussen de alinea's; de app maakt er bij verzending HTML van. */
+  body: string;
+}
+export interface GerrieSendClientEmailProposal {
+  type: 'send_client_email';
+  items: GerrieClientEmailItem[];
+  total: number;
+  /** 'template' = de vaste tekst van de agent met variabelen ingevuld. */
+  origin: 'compose' | 'template';
+  /** Klanten die de agent wilde mailen maar (nog) geen e-mailadres hebben. */
+  skipped: string[];
+}
+/** Een door Gerrie klaargezette agent; goedkeuren opent de agent-editor vooringevuld. */
+export interface GerrieAgentProposal {
+  type: 'agent';
+  name: string;
+  instruction: string;
+  mode: RoutineMode;
+  enabled_tools: string[];
+  schedule_kind: RoutineScheduleKind;
+  hour: number;
+  day_of_week: number | null;
+  day_of_month: number | null;
+  email_mode: AgentEmailMode;
+  email_subject: string | null;
+  email_body: string | null;
+}
 export interface GerrieReportProposal {
   type: 'report';
   name: string;
@@ -167,7 +200,7 @@ export interface GerrieTimeEntryProposal {
   billable: boolean;
   hourly_rate_cents: number | null;
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieReportProposal;
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
 
 /**
  * De uitvoer-handlers voor een door Gerrie voorgestelde actie. Draft-types openen een
@@ -194,6 +227,11 @@ export interface GerrieActionHandlers {
   onCreateWeekAction?: (proposal: GerrieWeekActionProposal) => Promise<void>;
   onLogTimeEntry?: (proposal: GerrieTimeEntryProposal) => Promise<void>;
   onCreateReport?: (proposal: GerrieReportProposal) => void;
+  /** Verstuurt ÉÉN klantmail. De wachtrij roept hem per aangevinkte mail aan, zodat
+   *  een mislukte mail de rest niet meesleept en je per regel ziet wat er misging. */
+  onSendClientEmail?: (item: GerrieClientEmailItem) => Promise<void>;
+  /** Opent het agent-scherm vooringevuld met een door Gerrie klaargezette agent. */
+  onCreateAgent?: (proposal: GerrieAgentProposal) => void;
 }
 
 export interface GerrieResult {
@@ -392,6 +430,8 @@ export async function loadGerrieUsage(organizationId: UUID): Promise<GerrieUsage
 export type RoutineScheduleKind = 'daily' | 'weekly' | 'monthly';
 export type RoutineMode = 'report' | 'propose';
 export type RoutineStatus = 'draft' | 'active' | 'paused' | 'archived';
+/** Wie schrijft de klantmail: de agent zelf, of jouw vastgelegde tekst met variabelen. */
+export type AgentEmailMode = 'compose' | 'template';
 export type RoutineRunStatus = 'claimed' | 'running' | 'succeeded' | 'failed' | 'partial' | 'skipped_budget' | 'cancelled';
 
 export interface GerrieRoutine {
@@ -402,6 +442,12 @@ export interface GerrieRoutine {
   icon: string | null;
   /** Zelfgekozen kleurtint 0..359; null = afgeleid uit het agent-id. */
   hue: number | null;
+  /** Klantmail: schrijft de agent zelf, of gebruikt hij de vaste tekst hieronder? */
+  email_mode: AgentEmailMode;
+  email_subject: string | null;
+  email_body: string | null;
+  /** Hard plafond op het aantal klantmails dat één run mag klaarzetten. */
+  max_emails_per_run: number;
   instruction: string;
   model_kind: 'cheap' | 'strong';
   mode: RoutineMode;
@@ -445,6 +491,10 @@ export interface GerrieRoutineInput {
   description?: string | null;
   icon?: string | null;
   hue?: number | null;
+  email_mode?: AgentEmailMode;
+  email_subject?: string | null;
+  email_body?: string | null;
+  max_emails_per_run?: number;
   instruction: string;
   model_kind: 'cheap' | 'strong';
   mode: RoutineMode;
@@ -632,6 +682,7 @@ export const ROUTINE_READ_TOOLS: Array<{ name: string; label: string }> = [
 // Acties die een propose-routine mag VÓÓRSTELLEN. Na jouw goedkeuring in de
 // run-historie worden ze écht uitgevoerd (via dezelfde apply-laag als de chat).
 export const ROUTINE_PROPOSE_TOOLS: Array<{ name: string; label: string }> = [
+  { name: 'propose_send_client_email', label: 'Een mailtje naar klanten sturen' },
   { name: 'propose_send_reminders', label: 'Betalingsherinneringen versturen' },
   { name: 'propose_send_invoice', label: 'Een factuur versturen' },
   { name: 'propose_send_quote', label: 'Een offerte versturen' },
