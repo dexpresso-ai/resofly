@@ -4,7 +4,7 @@ import { confirmGerrieAction, listPendingAgentApprovals, type AgentApproval } fr
 import type { GerrieActionHandlers } from '../lib/gerrie-api';
 import { executeProposal, proposalLabel, type ProposalKind } from '../lib/gerrie-proposals';
 import { AgentGlyph } from './AgentGlyph';
-import { ClientEmailBatch } from './ClientEmailBatch';
+import { AgentBatchBoard, asBatchProposal } from './AgentBatchBoard';
 import type { UUID } from '../types';
 
 /**
@@ -147,11 +147,12 @@ export function AgentApprovals({
                 const state = rowState[item.auditId] ?? 'idle';
                 const KindIcon = KIND_ICON[info.kind];
                 const blocked = info.write && !canWrite;
-                // Een reeks klantmails krijgt geen enkele akkoordknop maar het
-                // uitklapbare mailbord: je beslist per mail, niet per stapel.
-                const mailBatch = item.proposal.type === 'send_client_email' ? item.proposal : null;
+                // Een reeks mails, facturen, offertes of herinneringen krijgt geen
+                // enkele akkoordknop maar het afvinkbord: je beslist per regel,
+                // niet per stapel.
+                const batch = asBatchProposal(item.proposal);
                 return (
-                  <li key={item.auditId} className={`ag-queue-row${state === 'error' ? ' is-error' : ''}${mailBatch ? ' is-batch' : ''}`}>
+                  <li key={item.auditId} className={`ag-queue-row${state === 'error' ? ' is-error' : ''}${batch ? ' is-batch' : ''}`}>
                     <AgentGlyph
                       agent={{ id: item.agentId ?? undefined, name: item.agentName, icon: item.agentIcon, hue: item.agentHue }}
                       size="md"
@@ -170,14 +171,12 @@ export function AgentApprovals({
                       {state === 'error' && rowError[item.auditId] && (
                         <p className="ag-queue-rowerr"><AlertTriangle size={12} /> {rowError[item.auditId]}</p>
                       )}
-                      {blocked && !mailBatch && <p className="ag-queue-rowhint">Je hebt geen schrijfrechten voor deze actie — vraag een owner of admin.</p>}
-                      {mailBatch && (
-                        <ClientEmailBatch
-                          proposal={mailBatch}
+                      {blocked && !batch && <p className="ag-queue-rowhint">Je hebt geen schrijfrechten voor deze actie — vraag een owner of admin.</p>}
+                      {batch && (
+                        <AgentBatchBoard
+                          proposal={batch}
                           canWrite={canWrite}
-                          onSendOne={(mail) => handlers.onSendClientEmail
-                            ? handlers.onSendClientEmail(mail)
-                            : Promise.reject(new Error('Mailen is hier niet beschikbaar.'))}
+                          handlers={handlers}
                           onResolved={({ sent, skipped }) => {
                             void confirmGerrieAction(
                               organizationId, item.auditId,
@@ -189,7 +188,7 @@ export function AgentApprovals({
                         />
                       )}
                     </div>
-                    {!mailBatch && <div className="ag-queue-actions">
+                    {!batch && <div className="ag-queue-actions">
                       <button type="button" className="ag-btn ag-btn-ghost" disabled={state === 'busy'} onClick={() => reject(item)}>
                         <X size={13} /> Afwijzen
                       </button>

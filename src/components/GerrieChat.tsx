@@ -3,7 +3,7 @@ import { streamGerrieReply, confirmGerrieAction, loadGerrieBudget, type GerrieSt
 import { euro, formatMinutes } from '../lib/format';
 import { describeReportDefinition } from '../lib/reporting';
 import { supabase } from '../lib/supabase';
-import { ClientEmailBatch } from './ClientEmailBatch';
+import { AgentBatchBoard, asBatchProposal } from './AgentBatchBoard';
 import type { UUID } from '../types';
 
 /**
@@ -321,18 +321,15 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
       return <ConfirmActionCard icon={<ClockIcon />} title={`${formatMinutes(p.minutes)} registreren?`} sub={`${target} · ${p.date} · ${p.billable ? 'declarabel' : 'niet-declarabel'}`} confirmLabel="Registreren" pendingLabel="Registreren…" doneLabel={`${formatMinutes(p.minutes)} geregistreerd${p.project_name ? ` op ${p.project_name}` : ''}`} onConfirm={() => runConfirmed(auditId, () => onLogTimeEntry ? onLogTimeEntry(p) : Promise.reject(new Error('Registreren is hier niet beschikbaar.')))} />;
     }
     if (p.type === 'report') return <ProposalCard icon={<ChartIcon />} title={`Rapportage openen & controleren: ${p.name}`} sub={describeReportDefinition(p.definition)} onClick={() => onCreateReport?.(p)} />;
-    if (p.type === 'send_reminders') {
-      const byLevel = [1, 2, 3].map((l) => p.invoices.filter((i) => i.level === l).length);
-      return <ConfirmActionCard icon={<MailIcon />} title={`${p.total} herinnering${p.total === 1 ? '' : 'en'} versturen?`} sub={`1e: ${byLevel[0]} · 2e: ${byLevel[1]} · 3e: ${byLevel[2]}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`${p.total} herinnering${p.total === 1 ? '' : 'en'} verstuurd`} onConfirm={() => runConfirmed(auditId, () => onSendReminders ? onSendReminders(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.')))} />;
-    }
-    // Klantmail krijgt ook in de chat het mailbord: je leest elke mail en vinkt
-    // hem los af. Eén knop "versturen" onder een stapel post zou hier net zo min
-    // kloppen als in de wachtrij.
-    if (p.type === 'send_client_email') {
-      return <ClientEmailBatch
-        proposal={p}
+    // Reeksen (mail, facturen, offertes, herinneringen) krijgen ook in de chat het
+    // afvinkbord: je leest elke regel en vinkt hem los af. Eén knop "versturen"
+    // onder een stapel post zou hier net zo min kloppen als in de wachtrij.
+    const batch = asBatchProposal(p);
+    if (batch) {
+      return <AgentBatchBoard
+        proposal={batch}
         canWrite
-        onSendOne={(mail) => onSendClientEmail ? onSendClientEmail(mail) : Promise.reject(new Error('Mailen is hier niet beschikbaar.'))}
+        handlers={{ onSendClientEmail, onSendInvoice, onSendQuote, onSendReminders }}
         onResolved={({ sent, skipped }) => {
           if (auditId) void confirmGerrieAction(organizationId, auditId, sent > 0 ? 'executed' : 'failed', `${sent} verstuurd, ${skipped} overgeslagen.`);
         }}
@@ -343,9 +340,20 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
       const when = p.schedule_kind === 'daily' ? `elke dag om ${String(p.hour).padStart(2, '0')}:00`
         : p.schedule_kind === 'weekly' ? `elke ${days[(p.day_of_week ?? 1) - 1]} om ${String(p.hour).padStart(2, '0')}:00`
         : `maandelijks op dag ${p.day_of_month ?? 1} om ${String(p.hour).padStart(2, '0')}:00`;
-      return <ProposalCard icon={<RobotIcon />} title={`Agent klaarzetten: ${p.name}`} sub={when} onClick={() => onCreateAgent?.(p)} />;
+      // Akkoord = de agent bestaat, staat aan en draait meteen zijn eerste ronde.
+      // Wat hij daarna wil versturen komt gewoon weer als afvinklijst terug.
+      return <ConfirmActionCard
+        icon={<RobotIcon />}
+        title={`Agent "${p.name}" aanmaken en aanzetten?`}
+        sub={`${when} · ${p.mode === 'propose' ? 'zet acties klaar die jij afvinkt' : 'kijkt alleen mee'}`}
+        confirmLabel="Aanmaken en starten" pendingLabel="Aanmaken…" doneLabel={`Agent "${p.name}" staat aan en draait zijn eerste ronde`}
+        onConfirm={() => runConfirmed(auditId, () => onCreateAgent ? onCreateAgent(p) : Promise.reject(new Error('Agents aanmaken is hier niet beschikbaar.')))}
+      />;
     }
-    return <ProposalCard title="Nieuwe klant openen & controleren" sub={[p.name, p.email].filter(Boolean).join(' · ')} onClick={() => onCreateClientDraft?.(p)} />;
+    if (p.type === 'client') return <ProposalCard title="Nieuwe klant openen & controleren" sub={[p.name, p.email].filter(Boolean).join(' · ')} onClick={() => onCreateClientDraft?.(p)} />;
+    // Onbekend voorstel (nieuwer type dan deze build kent): liever niets tonen dan
+    // een knop die het verkeerde doet.
+    return null;
   }
 
   return (

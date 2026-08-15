@@ -28,8 +28,18 @@ export function proposalLabel(p: GerrieProposal): ProposalInfo {
   switch (p.type) {
     case 'send_invoice': return { title: `Factuur ${p.number} versturen`, sub: `naar ${p.recipient_email}`, write: true, kind: 'mail' };
     case 'send_quote': return { title: `Offerte ${p.number} versturen`, sub: `naar ${p.recipient_email}`, write: true, kind: 'mail' };
+    case 'send_invoices': return {
+      title: p.total === 1 ? `Factuur ${p.items[0].number} versturen` : `${p.total} facturen versturen`,
+      sub: p.items.map((i) => i.number).join(', ').slice(0, 80),
+      write: true, kind: 'money',
+    };
+    case 'send_quotes': return {
+      title: p.total === 1 ? `Offerte ${p.items[0].number} versturen` : `${p.total} offertes versturen`,
+      sub: p.items.map((i) => i.number).join(', ').slice(0, 80),
+      write: true, kind: 'money',
+    };
     case 'convert_quote': return { title: `Offerte ${p.number} omzetten naar factuur`, sub: p.client_name, write: true, kind: 'money' };
-    case 'send_reminders': return { title: `${p.total} herinnering${p.total === 1 ? '' : 'en'} versturen`, sub: '1e / 2e / 3e niveau', write: true, kind: 'mail' };
+    case 'send_reminders': return { title: `${p.total} herinnering${p.total === 1 ? '' : 'en'} versturen`, sub: p.invoices.map((i) => i.number).join(', ').slice(0, 80) || '1e / 2e / 3e niveau', write: true, kind: 'mail' };
     case 'calendar_event': return { title: `Agenda-item: ${p.title}`, sub: `${p.date} ${p.start_time}–${p.end_time}`, write: true, kind: 'agenda' };
     case 'week_action': return { title: `${p.total} actiepunt${p.total === 1 ? '' : 'en'} toevoegen`, sub: p.items.map((i) => i.title).join(' · ').slice(0, 80), write: true, kind: 'work' };
     case 'time_entry': return { title: `${formatMinutes(p.minutes)} registreren`, sub: [p.client_name, p.project_name].filter(Boolean).join(' · ') || 'geen koppeling', write: true, kind: 'work' };
@@ -49,7 +59,9 @@ export function proposalLabel(p: GerrieProposal): ProposalInfo {
       sub: p.total === 1 ? p.items[0].subject : p.items.map((i) => i.client_name).filter(Boolean).join(', ').slice(0, 80),
       write: true, kind: 'mail',
     };
-    case 'agent': return { title: `Agent klaarzetten: ${p.name}`, sub: scheduleSummary(p), write: false, kind: 'agent' };
+    // Akkoord maakt de agent écht aan én zet hem aan — dus een schrijfactie, geen
+    // "openen". Zie onCreateAgent in main.tsx.
+    case 'agent': return { title: `Agent aanmaken en aanzetten: ${p.name}`, sub: scheduleSummary(p), write: true, kind: 'agent' };
   }
 }
 
@@ -77,7 +89,7 @@ export async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers
     case 'task': h.onCreateTask?.(p); return;
     case 'edit_task': h.onEditTask?.(p); return;
     case 'report': h.onCreateReport?.(p); return;
-    case 'agent': h.onCreateAgent?.(p); return;
+    case 'agent': await need(h.onCreateAgent ? () => h.onCreateAgent!(p) : undefined); return;
     // De hele reeks in één keer. De wachtrij gebruikt deze weg alleen als je "alles
     // versturen" kiest; vink je ze los af, dan roept hij onSendClientEmail per mail
     // aan en komt hij hier niet langs. Eén mislukte mail stopt de rest, zodat je
@@ -89,6 +101,27 @@ export async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers
       for (const item of p.items) {
         try { await h.onSendClientEmail(item); sent += 1; }
         catch { failed.push(item.client_name || item.recipient_email); }
+      }
+      if (failed.length) throw new Error(`${sent} verstuurd, ${failed.length} mislukt (${failed.join(', ')}).`);
+      return;
+    }
+    // Idem voor een reeks facturen/offertes: normaal vink je ze los af, maar wie
+    // in één keer akkoord geeft loopt hier langs. Per document een eigen mail,
+    // zodat je precies weet welke wél en welke niet gelukt is.
+    case 'send_invoices':
+    case 'send_quotes': {
+      const isInvoice = p.type === 'send_invoices';
+      const send = isInvoice ? h.onSendInvoice : h.onSendQuote;
+      if (!send) throw new Error('Deze actie is hier niet beschikbaar.');
+      const failed: string[] = [];
+      let sent = 0;
+      for (const doc of p.items) {
+        const one = { id: doc.id, number: doc.number, client_name: doc.client_name, recipient_email: doc.recipient_email, recipient_name: doc.recipient_name };
+        try {
+          if (isInvoice) await h.onSendInvoice!({ type: 'send_invoice', ...one });
+          else await h.onSendQuote!({ type: 'send_quote', ...one });
+          sent += 1;
+        } catch { failed.push(doc.number); }
       }
       if (failed.length) throw new Error(`${sent} verstuurd, ${failed.length} mislukt (${failed.join(', ')}).`);
       return;

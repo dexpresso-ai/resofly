@@ -115,11 +115,27 @@ interface QuoteProposal { type: 'quote'; client_id: string; client_name: string;
 interface ClientProposal { type: 'client'; name: string; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; status: string }
 interface SendInvoiceProposal { type: 'send_invoice'; id: string; number: string; client_name: string; recipient_email: string; recipient_name: string | null }
 interface SendQuoteProposal { type: 'send_quote'; id: string; number: string; client_name: string; recipient_email: string; recipient_name: string | null }
+/**
+ * Eén factuur/offerte binnen een REEKS die de gebruiker regel voor regel afvinkt.
+ * Draagt bewust het bedrag en de status mee: je vinkt hier post af die geld
+ * betreft, en dan hoor je te zien wát je verstuurt zonder eerst weg te klikken.
+ */
+interface SendDocumentItem {
+  id: string; number: string; client_name: string;
+  recipient_email: string; recipient_name: string | null;
+  total_eur: number; status: string; date: string | null;
+}
+/** Documenten die de agent wilde versturen maar die afvielen (met de reden). */
+interface SkippedDocument { number: string; reason: string }
+interface SendInvoicesProposal { type: 'send_invoices'; items: SendDocumentItem[]; total: number; skipped: SkippedDocument[] }
+interface SendQuotesProposal { type: 'send_quotes'; items: SendDocumentItem[]; total: number; skipped: SkippedDocument[] }
 interface ConvertQuoteProposal { type: 'convert_quote'; id: string; number: string; client_name: string; total_eur: number }
 interface EditInvoiceProposal { type: 'edit_invoice'; id: string; number: string; client_name: string; changes: { lines?: ProposalLine[]; notes?: string | null; due_date?: string | null } }
 interface EditQuoteProposal { type: 'edit_quote'; id: string; number: string; client_name: string; changes: { lines?: ProposalLine[]; notes?: string | null; valid_until?: string | null } }
 interface EditClientProposal { type: 'edit_client'; id: string; name: string; changes: { name?: string; contact_name?: string | null; email?: string | null; phone?: string | null; notes?: string | null; status?: string } }
-interface SendRemindersProposal { type: 'send_reminders'; invoices: Array<{ id: string; number: string; client_name: string; level: number }>; total: number }
+// Herinneringen zijn óók een reeks die je regel voor regel afvinkt; bedrag en
+// dagen-te-laat staan erbij zodat je per factuur kunt besluiten, niet per stapel.
+interface SendRemindersProposal { type: 'send_reminders'; invoices: Array<{ id: string; number: string; client_name: string; level: number; total_eur: number; days_overdue: number }>; total: number }
 interface ProposalSubtask { label: string; done: boolean }
 interface ProjectProposal { type: 'project'; name: string; client_id: string | null; client_name: string; description: string | null; start_date: string | null; end_date: string | null }
 interface EditProjectProposal { type: 'edit_project'; id: string; name: string; changes: { name?: string; client_id?: string | null; description?: string | null; start_date?: string | null; end_date?: string | null; archived?: boolean } }
@@ -180,8 +196,27 @@ interface AgentProposal {
   email_subject: string | null;
   email_body: string | null;
 }
-type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | WeekActionProposal | TimeEntryProposal | ReportProposal | SendClientEmailProposal | AgentProposal;
-interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: unknown }>; usage: Usage; proposal?: Proposal }
+type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | SendInvoicesProposal | SendQuotesProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | WeekActionProposal | TimeEntryProposal | ReportProposal | SendClientEmailProposal | AgentProposal;
+
+/**
+ * Eén stap uit de loop, voor het LOGBOEK van een geplande agent.
+ *
+ * De chat toont zijn stappen live via `emit`; een geplande agent draait terwijl
+ * niemand kijkt, dus daar moet het achteraf na te lezen zijn. `runAgent` verzamelt
+ * ze altijd (goedkoop: het is een array in het geheugen); alleen de runner schrijft
+ * ze weg naar `ai_agent_run_events`.
+ */
+interface AgentStep {
+  at: string;
+  kind: 'tool' | 'proposal' | 'error';
+  name: string;
+  /** Eén regel gewone taal — dit is wat de gebruiker in het logboek leest. */
+  label: string;
+  ok: boolean;
+  /** Machineleesbaar: de tool-invoer, hoeveel er gevonden is, of de foutmelding. */
+  detail: Record<string, unknown>;
+}
+interface AgentOutcome { text: string; toolCalls: Array<{ name: string; input: unknown }>; usage: Usage; proposal?: Proposal; steps: AgentStep[] }
 
 async function runAgent(ctx: GerrieContext, history: Array<{ role: string; content: string }>, message: string, emit: Emit, modelKind: ModelKind = 'strong', allowedToolNames?: string[]): Promise<AgentOutcome> {
   const system = buildSystemPrompt(ctx);
@@ -200,6 +235,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
 
   const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const toolCalls: Array<{ name: string; input: unknown }> = [];
+  const steps: AgentStep[] = []; // het logboek: wat de agent onderweg deed
   const answerChunks: string[] = []; // tekst over alle iteraties — matcht exact de gestreamde deltas
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i += 1) {
@@ -215,7 +251,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
 
     const toolUses = response.content.filter((b: AnthropicBlock) => b.type === 'tool_use');
     if (response.stop_reason !== 'tool_use' || toolUses.length === 0) {
-      return { text: answerChunks.join('') || 'Sorry, dat begrijp ik niet helemaal. Kun je het anders verwoorden of iets specifieker maken?', toolCalls, usage };
+      return { text: answerChunks.join('') || 'Sorry, dat begrijp ik niet helemaal. Kun je het anders verwoorden of iets specifieker maken?', toolCalls, usage, steps };
     }
 
     // Voer elke gevraagde tool uit (strikt org-scoped). Een schrijf-tool (propose_*)
@@ -232,8 +268,13 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
       if (toolName.startsWith('propose_')) {
         await emit('status', { kind: 'tool', label: proposeLabel(toolName) });
         const built = await buildProposal(ctx, toolName, toolInput);
-        if (built.ok) { proposal = built.proposal; break; }
+        if (built.ok) {
+          steps.push(logStep('proposal', toolName, `Klaargezet: ${describeProposal(built.proposal)}`, true, { input: trimForLog(toolInput) }));
+          proposal = built.proposal;
+          break;
+        }
         // Ongeldig voorstel -> stuur de fout terug zodat het model het kan corrigeren.
+        steps.push(logStep('proposal', toolName, `Kon dit niet klaarzetten: ${built.error}`, false, { input: trimForLog(toolInput), error: built.error }));
         toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: `Kan dit nog niet klaarzetten: ${built.error}`, is_error: true });
         continue;
       }
@@ -241,8 +282,11 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
       await emit('status', { kind: 'tool', label: toolLabel(toolName) });
       try {
         const result = await runTool(ctx, toolName, toolInput);
+        const found = countResult(result);
+        steps.push(logStep('tool', toolName, `${toolLogLabel(toolName)}${found === null ? '' : ` — ${found} gevonden`}`, true, { input: trimForLog(toolInput), found }));
         toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: JSON.stringify(result) });
       } catch (error) {
+        steps.push(logStep('error', toolName, `${toolLogLabel(toolName)} mislukte: ${describeError(error)}`, false, { input: trimForLog(toolInput) }));
         toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: `Fout: ${describeError(error)}`, is_error: true });
       }
     }
@@ -252,11 +296,13 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
         : proposal.type === 'client' ? 'Ik heb de nieuwe klant voor je klaargezet. Controleer de gegevens en sla op:'
         : proposal.type === 'send_invoice' ? `Wil je dat ik factuur ${proposal.number} naar ${proposal.recipient_email} verstuur? Bevestig hieronder.`
         : proposal.type === 'send_quote' ? `Wil je dat ik offerte ${proposal.number} naar ${proposal.recipient_email} verstuur? Bevestig hieronder.`
+        : proposal.type === 'send_invoices' ? `Ik heb ${proposal.total} factu${proposal.total === 1 ? 'ur' : 'ren'} klaargezet om te versturen. Vink hieronder aan welke er weg mogen.`
+        : proposal.type === 'send_quotes' ? `Ik heb ${proposal.total} offerte${proposal.total === 1 ? '' : 's'} klaargezet om te versturen. Vink hieronder aan welke er weg mogen.`
         : proposal.type === 'convert_quote' ? `Wil je dat ik offerte ${proposal.number} omzet naar een factuur? Bevestig hieronder.`
         : proposal.type === 'edit_invoice' ? `Ik heb de wijziging van concept-factuur ${proposal.number} klaargezet. Controleer hem en sla op:`
         : proposal.type === 'edit_quote' ? `Ik heb de wijziging van concept-offerte ${proposal.number} klaargezet. Controleer hem en sla op:`
         : proposal.type === 'edit_client' ? `Ik heb de wijziging van klant ${proposal.name} klaargezet. Controleer de gegevens en sla op:`
-        : proposal.type === 'send_reminders' ? `Wil je dat ik ${proposal.total} herinnering${proposal.total === 1 ? '' : 'en'} verstuur? Bevestig hieronder.`
+        : proposal.type === 'send_reminders' ? `Ik heb ${proposal.total} herinnering${proposal.total === 1 ? '' : 'en'} klaargezet. Vink hieronder aan welke er weg mogen.`
         : proposal.type === 'project' ? `Ik heb het project "${proposal.name}" voor je klaargezet. Controleer en sla op:`
         : proposal.type === 'edit_project' ? `Ik heb de wijziging van project "${proposal.name}" klaargezet. Controleer en sla op:`
         : proposal.type === 'task' ? `Ik heb de taak "${proposal.title}" voor je klaargezet. Controleer en sla op:`
@@ -265,7 +311,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
         : proposal.type === 'week_action' ? `Wil je dat ik deze ${proposal.total} actiepunt${proposal.total === 1 ? '' : 'en'} toevoeg? Bevestig hieronder.`
         : proposal.type === 'report' ? `Ik heb de rapportage "${proposal.name}" voor je klaargezet op de Statistieken-pagina. Controleer de grafiek en sla hem op:`
         : 'Ik heb een conceptfactuur voor je klaargezet. Controleer hem en sla op:';
-      return { text: answerChunks.join('') || fallback, toolCalls, usage, proposal };
+      return { text: answerChunks.join('') || fallback, toolCalls, usage, proposal, steps };
     }
     messages.push({ role: 'user', content: toolResults });
   }
@@ -276,7 +322,70 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
   accumulateUsage(usage, final.usage);
   const finalText = extractText(final.content);
   if (finalText) answerChunks.push(finalText);
-  return { text: answerChunks.join('') || 'Ik kon dit niet helemaal afronden — kun je je vraag iets specifieker stellen?', toolCalls, usage };
+  return { text: answerChunks.join('') || 'Ik kon dit niet helemaal afronden — kun je je vraag iets specifieker stellen?', toolCalls, usage, steps };
+}
+
+// ── Logboek-hulpjes ──────────────────────────────────────────────────────────
+
+function logStep(kind: AgentStep['kind'], name: string, label: string, ok: boolean, detail: Record<string, unknown>): AgentStep {
+  return { at: new Date().toISOString(), kind, name, label: label.slice(0, 400), ok, detail };
+}
+
+/** Label zonder puntjes: "Facturen ophalen…" leest live goed, in een logboek niet. */
+function toolLogLabel(name: string): string {
+  return toolLabel(name).replace(/…$/, '');
+}
+
+/** Hoeveel records leverde een tool op? Null als het geen telbaar resultaat is. */
+function countResult(result: unknown): number | null {
+  if (Array.isArray(result)) return result.length;
+  if (result && typeof result === 'object') {
+    for (const key of ['clients', 'invoices', 'quotes', 'projects', 'tasks', 'tickets', 'reminders', 'items', 'rows', 'slots', 'calendars']) {
+      const v = (result as Record<string, unknown>)[key];
+      if (Array.isArray(v)) return v.length;
+    }
+  }
+  return null;
+}
+
+/** De tool-invoer klein en leesbaar houden; een logboek is geen datadump. */
+function trimForLog(input: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input)) {
+    if (v === null || v === undefined || v === '') continue;
+    if (Array.isArray(v)) { out[k] = v.length <= 12 ? v.map((x) => (typeof x === 'object' ? '…' : x)) : `${v.length} stuks`; continue; }
+    if (typeof v === 'object') { out[k] = '…'; continue; }
+    out[k] = typeof v === 'string' ? v.slice(0, 200) : v;
+  }
+  return out;
+}
+
+/** Eén regel over wat er is klaargezet — het hart van "wat heeft hij gedaan?". */
+function describeProposal(p: Proposal): string {
+  switch (p.type) {
+    case 'send_client_email': return `${p.total} klantmail${p.total === 1 ? '' : 'tjes'} (${p.items.map((i) => i.client_name).filter(Boolean).slice(0, 5).join(', ')})`;
+    case 'send_invoices': return `${p.total} factu${p.total === 1 ? 'ur' : 'ren'} om te versturen (${p.items.map((i) => i.number).slice(0, 5).join(', ')})`;
+    case 'send_quotes': return `${p.total} offerte${p.total === 1 ? '' : 's'} om te versturen (${p.items.map((i) => i.number).slice(0, 5).join(', ')})`;
+    case 'send_reminders': return `${p.total} betalingsherinnering${p.total === 1 ? '' : 'en'}`;
+    case 'send_invoice': return `factuur ${p.number} naar ${p.recipient_email}`;
+    case 'send_quote': return `offerte ${p.number} naar ${p.recipient_email}`;
+    case 'convert_quote': return `offerte ${p.number} omzetten naar een factuur`;
+    case 'invoice': return `conceptfactuur voor ${p.client_name}`;
+    case 'quote': return `conceptofferte voor ${p.client_name}`;
+    case 'client': return `nieuwe klant ${p.name}`;
+    case 'edit_invoice': return `wijziging van factuur ${p.number}`;
+    case 'edit_quote': return `wijziging van offerte ${p.number}`;
+    case 'edit_client': return `wijziging van klant ${p.name}`;
+    case 'project': return `project ${p.name}`;
+    case 'edit_project': return `wijziging van project ${p.name}`;
+    case 'task': return `taak ${p.title}`;
+    case 'edit_task': return `wijziging van taak ${p.title}`;
+    case 'calendar_event': return `agenda-item ${p.title} op ${p.date}`;
+    case 'week_action': return `${p.total} actiepunt${p.total === 1 ? '' : 'en'}`;
+    case 'time_entry': return `${p.minutes} minuten urenregistratie`;
+    case 'report': return `rapportage ${p.name}`;
+    case 'agent': return `agent ${p.name}`;
+  }
 }
 
 // ── Claude Messages API (raw HTTP) ───────────────────────────────────────────
@@ -420,10 +529,11 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_invoice` — conceptfactuur klaarzetten. Zoek eerst de klant met `search_clients` (gebruik diens exacte id) en bepaal de regels (omschrijving, aantal, prijs per stuk EXCL. btw, btw% — meestal 21).',
           '- `propose_quote` — conceptofferte klaarzetten. Net als de factuur, met een optionele geldig-tot-datum.',
           '- `propose_client` — nieuwe klant klaarzetten. Controleer eerst met `search_clients` of de klant al bestaat (voorkom dubbelen). Naam is verplicht; contactpersoon/e-mail/telefoon optioneel.',
-          '- `propose_send_invoice` / `propose_send_quote` — een BESTAANDE factuur/offerte per e-mail naar de klant versturen. Zoek het document eerst met `list_invoices`/`list_quotes` en gebruik het exacte id. Het gaat naar het e-mailadres van de gekoppelde klant; benoem dat adres in je antwoord zodat de gebruiker het kan controleren vóór hij bevestigt.',
-          '- `propose_send_reminders` — alle betalingsherinneringen versturen die vandaag aan de beurt zijn (per factuur het volgende niveau: 1e/2e/3e), of beperkt tot één niveau. Met `list_due_reminders` kun je eerst tonen wat er klaarstaat (groepeer in je antwoord per niveau).',
-          '- `propose_send_client_email` — een VRIJE e-mail naar één of meer klanten, zoals vanaf de klantenkaart. Zoek de klanten met `search_clients`. Schrijf per klant een kort, persoonlijk bericht en noem in je antwoord wie hem krijgt, zodat de gebruiker het kan nalezen vóór hij afvinkt. Klanten zonder e-mailadres vallen automatisch af.',
-          '- `propose_create_agent` — een terugkerende agent klaarzetten ("elke maandag…"). Het scherm opent vooringevuld; de gebruiker slaat hem zelf op en activeert hem.',
+          '- `propose_send_invoice` / `propose_send_quote` — ÉÉN BESTAANDE factuur/offerte per e-mail naar de klant versturen. Zoek het document eerst met `list_invoices`/`list_quotes` en gebruik het exacte id. Het gaat naar het e-mailadres van de gekoppelde klant; benoem dat adres in je antwoord zodat de gebruiker het kan controleren vóór hij bevestigt.',
+          '- `propose_send_invoices` / `propose_send_quotes` — MEERDERE facturen/offertes tegelijk. Gaat het om meer dan één document, gebruik dan ALTIJD deze en geef alle id\'s in één aanroep mee: de gebruiker krijgt dan één lijst waarin hij per regel een vinkje zet (of in één klik alles aan- of uitzet). Zet nooit meerdere losse voorstellen achter elkaar.',
+          '- `propose_send_reminders` — de betalingsherinneringen die vandaag aan de beurt zijn (per factuur het volgende niveau: 1e/2e/3e), of beperkt tot één niveau. Ook dit wordt een afvinklijst: de gebruiker beslist per factuur. Met `list_due_reminders` kun je eerst tonen wat er klaarstaat (groepeer in je antwoord per niveau).',
+          '- `propose_send_client_email` — een VRIJE e-mail naar één of meer klanten, zoals vanaf de klantenkaart. Zoek de klanten met `search_clients` en geef ze in ÉÉN aanroep mee. Schrijf per klant een kort, persoonlijk bericht en noem in je antwoord wie hem krijgt, zodat de gebruiker het kan nalezen vóór hij afvinkt. Klanten zonder e-mailadres vallen automatisch af.',
+          '- `propose_create_agent` — een terugkerende agent klaarzetten ("elke maandag…"). Zeg er in je antwoord bij WAT hij mag en WANNEER hij draait: geeft de gebruiker akkoord, dan wordt de agent meteen aangemaakt, aangezet en één keer gedraaid. Alles wat die agent daarna wil versturen komt gewoon weer als afvinklijst terug.',
           '- `propose_project` / `propose_edit_project` — een project aanmaken of wijzigen (open het projectformulier vooringevuld).',
           '- `propose_task` / `propose_edit_task` — een taak binnen een project aanmaken of wijzigen, inclusief subtaken, status/prioriteit en een geplande datum (`planned_date`) om de taak als actiepunt in de WEEKPLANNER te zetten. Zoek het project met `list_projects`, bestaande taken met `list_tasks`.',
           '- `propose_week_action` — ÉÉN OF MEER ACTIEPUNTEN op de "Actiepunten deze week"-checklist van de weekplanner (los van projecten en taken). Vraagt de gebruiker meerdere punten, geef ze dan ALLEMAAL in één keer mee via `items` (niet één voor één). Geef per item een datum binnen de gewenste week. Voor een echte taak binnen een project gebruik je `propose_task`.',
@@ -571,6 +681,8 @@ export async function designAgent(
     '- Zodra je genoeg weet: `emit_agent`. Vul álles in, ook naam en embleem.',
     '- `instruction` schrijf je in de je-vorm, alsof de gebruiker het rechtstreeks aan Gerrie vraagt, en zo concreet dat de agent er zonder verdere uitleg mee vooruit kan. Benoem wat hij moet opzoeken en wat er in het resultaat hoort te staan.',
     '- Mag de agent klantmail sturen, zet dan `propose_send_client_email` in `enabled_tools`. Wil de gebruiker altijd dezelfde tekst, kies `email_mode: "template"` en schrijf onderwerp + tekst met variabelen zoals {{voornaam|klant}} en {{klantnaam}}. Wil hij een persoonlijk bericht per klant, kies `email_mode: "compose"`.',
+    '- Moet de agent FACTUREN of OFFERTES versturen, geef hem dan `propose_send_invoices` respectievelijk `propose_send_quotes` (de meervoudsvorm). Die leveren één lijst op die de gebruiker regel voor regel afvinkt; de enkelvoudige varianten zijn alleen voor een los document in de chat.',
+    '- De agent gaat na het aanmaken METEEN aan en draait direct één keer. Vraag daar dus niet om toestemming: kies de tools zorgvuldig en houd het bij wat de gebruiker echt vroeg.',
     '- `summary`: twee of drie zinnen in gewone taal over wat deze agent gaat doen en wanneer. Geen opsomming van tool-namen.',
     '',
     `Embleem-sleutels: ${AGENT_ICON_KEYS.join(', ')}.`,
@@ -919,6 +1031,36 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'propose_send_invoices',
+    description: 'Stel voor om MEERDERE bestaande facturen per e-mail naar hun klant te versturen. Gebruik dit zodra het om meer dan één factuur gaat — de gebruiker krijgt dan één lijst waarin hij per factuur een vinkje zet, in plaats van los voorstel na los voorstel. Je verstuurt NIETS zelf. Zoek de facturen eerst met list_invoices en geef de exacte id\'s. Facturen zonder klant-e-mailadres of met een status die niet verstuurd mag worden vallen automatisch af; die krijgt de gebruiker apart te zien.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ids: {
+          type: 'array',
+          description: "De exacte id's van de facturen (uit list_invoices), hoogstens 25.",
+          items: { type: 'string' },
+        },
+      },
+      required: ['ids'],
+    },
+  },
+  {
+    name: 'propose_send_quotes',
+    description: 'Stel voor om MEERDERE bestaande offertes per e-mail naar hun klant te versturen. Gebruik dit zodra het om meer dan één offerte gaat — de gebruiker krijgt dan één lijst waarin hij per offerte een vinkje zet. Je verstuurt NIETS zelf. Zoek de offertes eerst met list_quotes en geef de exacte id\'s. Offertes zonder klant-e-mailadres of met status "cancelled" vallen automatisch af; die krijgt de gebruiker apart te zien.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ids: {
+          type: 'array',
+          description: "De exacte id's van de offertes (uit list_quotes), hoogstens 25.",
+          items: { type: 'string' },
+        },
+      },
+      required: ['ids'],
+    },
+  },
+  {
     name: 'propose_send_client_email',
     description: 'Stel voor om een VRIJE e-mail naar één of meer klanten te sturen — dezelfde soort mail als vanaf de klantenkaart, vanaf het eigen verzenddomein. Je verstuurt NIETS zelf: de gebruiker ziet elke mail volledig en vinkt ze stuk voor stuk af. Zoek de klanten eerst met search_clients en gebruik hun exacte id. Schrijf per klant een persoonlijk, zakelijk-vriendelijk bericht in het Nederlands: een concreet onderwerp, een aanhef met de contactpersoon, en een korte alinea die verwijst naar wat je in de gegevens ziet. Zet er GEEN afsluiting met een verzonnen naam onder — de handtekening van de organisatie wordt automatisch toegevoegd. Werkt de agent met een vaste tekst, dan hoef je alleen client_id per klant te geven; onderwerp en tekst worden dan genegeerd.',
     input_schema: {
@@ -943,7 +1085,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'propose_create_agent',
-    description: 'Zet een nieuwe geplande agent (routine) klaar: een terugkerende opdracht die vanzelf draait. Je maakt hem NIET aan — het voorstel opent het agent-scherm vooringevuld, waar de gebruiker hem controleert, opslaat en activeert. Gebruik dit als iemand vraagt om iets "elke week/maand automatisch" te laten doen. Kies `mode: "report"` als de agent alleen hoeft te kijken en samen te vatten, en `mode: "propose"` als hij iets moet klaarzetten (mail, herinnering, factuur) — dat blijft altijd achter een akkoord van de gebruiker. Zet in `enabled_tools` alleen wat de agent echt nodig heeft.',
+    description: 'Zet een nieuwe geplande agent (routine) klaar: een terugkerende opdracht die vanzelf draait. Je maakt hem NIET zelf aan — de gebruiker geeft in de chat akkoord op jouw voorstel, en pas dán wordt de agent aangemaakt, aangezet en meteen één keer gedraaid. Beschrijf daarom in je antwoord duidelijk wat hij gaat doen, hoe vaak, en wat hij mag klaarzetten. Gebruik dit als iemand vraagt om iets "elke week/maand automatisch" te laten doen. Kies `mode: "report"` als de agent alleen hoeft te kijken en samen te vatten, en `mode: "propose"` als hij iets moet klaarzetten (mail, herinnering, factuur) — dat blijft altijd achter een akkoord van de gebruiker. Zet in `enabled_tools` alleen wat de agent echt nodig heeft.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1215,6 +1357,8 @@ const TOOL_MODULE: Record<string, string> = {
   propose_quote: 'finance',
   propose_send_invoice: 'finance',
   propose_send_quote: 'finance',
+  propose_send_invoices: 'finance',
+  propose_send_quotes: 'finance',
   propose_convert_quote: 'finance',
   propose_edit_invoice: 'finance',
   propose_edit_quote: 'finance',
@@ -1447,6 +1591,8 @@ function proposeLabel(toolName: string): string {
     case 'propose_client': return 'Klantgegevens klaarzetten…';
     case 'propose_send_invoice':
     case 'propose_send_quote': return 'Verzending voorbereiden…';
+    case 'propose_send_invoices': return 'Facturenlijst klaarzetten…';
+    case 'propose_send_quotes': return 'Offertelijst klaarzetten…';
     case 'propose_send_client_email': return 'Mail aan de klant opstellen…';
     case 'propose_create_agent': return 'Agent klaarzetten…';
     case 'propose_convert_quote': return 'Omzetting voorbereiden…';
@@ -1482,6 +1628,8 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
     case 'propose_client': return buildClientProposal(input);
     case 'propose_send_invoice': return buildSendProposal(ctx, 'invoice', input);
     case 'propose_send_quote': return buildSendProposal(ctx, 'quote', input);
+    case 'propose_send_invoices': return buildSendBatchProposal(ctx, 'invoice', input);
+    case 'propose_send_quotes': return buildSendBatchProposal(ctx, 'quote', input);
     case 'propose_send_client_email': return buildClientEmailProposal(ctx, input);
     case 'propose_create_agent': return buildAgentProposal(input);
     case 'propose_convert_quote': return buildConvertQuoteProposal(ctx, input);
@@ -1905,7 +2053,9 @@ async function buildSendRemindersProposal(ctx: GerrieContext, input: Record<stri
     ok: true,
     proposal: {
       type: 'send_reminders',
-      invoices: due.map((d) => ({ id: d.id, number: d.number, client_name: d.client_name, level: d.next_level })),
+      // Bedrag en dagen-te-laat gaan mee: de gebruiker vinkt per factuur af en
+      // hoort dan te zien waar het over gaat zonder eerst weg te klikken.
+      invoices: due.map((d) => ({ id: d.id, number: d.number, client_name: d.client_name, level: d.next_level, total_eur: d.total_eur, days_overdue: d.days_overdue })),
       total: due.length,
     },
   };
@@ -2024,6 +2174,92 @@ async function buildSendProposal(ctx: GerrieContext, kind: 'invoice' | 'quote', 
       client_name: String(client?.name ?? ''),
       recipient_email: email,
       recipient_name: client?.contact_name ? String(client.contact_name) : (client?.name ? String(client.name) : null),
+    },
+  };
+}
+
+/**
+ * Een REEKS facturen of offertes klaarzetten om te versturen.
+ *
+ * Het verschil met `buildSendProposal` is niet alleen het aantal: hier valt een
+ * document dat niet verstuurd kán worden (geen klant, geen e-mailadres, verkeerde
+ * status) NIET de hele batch om. Het schuift naar `skipped` mét reden, zodat de
+ * gebruiker in de lijst ziet wie er buiten viel en waarom — stilzwijgend overslaan
+ * zou een lijst opleveren die "compleet" oogt maar het niet is.
+ *
+ * Er wordt niets verstuurd. De gebruiker vinkt in de app regel voor regel af.
+ */
+async function buildSendBatchProposal(ctx: GerrieContext, kind: 'invoice' | 'quote', input: Record<string, unknown>): Promise<ProposalResult> {
+  const table = kind === 'invoice' ? 'invoices' : 'quotes';
+  const label = kind === 'invoice' ? 'factuur' : 'offerte';
+  const plural = kind === 'invoice' ? 'facturen' : 'offertes';
+  const listTool = kind === 'invoice' ? 'list_invoices' : 'list_quotes';
+
+  const raw = Array.isArray(input.ids) ? (input.ids as unknown[]).map((v) => String(v).trim()) : [];
+  const ids = [...new Set(raw)].slice(0, 25);
+  if (ids.length === 0) return { ok: false, error: `Geef minstens één id. Zoek de ${plural} eerst met ${listTool}.` };
+  if (ids.some((id) => !isUuid(id))) return { ok: false, error: `Ongeldig id. Zoek de ${plural} eerst met ${listTool} en gebruik de exacte id's.` };
+
+  // Als losse `string` (niet als literal): supabase-js probeert een select-literal
+  // te ontleden en struikelt over een ternary, wat een ParserError-type oplevert.
+  const columns: string = kind === 'invoice'
+    ? 'id, number, client_id, status, lines, total_amount, date, due_date'
+    : 'id, number, client_id, status, lines, date, valid_until';
+  const { data: docs, error } = await supabaseAdmin.from(table)
+    .select(columns).eq('organization_id', ctx.organizationId).in('id', ids);
+  if (error) return { ok: false, error: `${plural} ophalen mislukt: ${error.message}` };
+
+  const rows = (docs ?? []) as unknown as Array<Record<string, unknown>>;
+  const byId = new Map<string, Record<string, unknown>>(rows.map((r) => [String(r.id), r]));
+
+  const clientIds = [...new Set(rows.map((r) => (r.client_id ? String(r.client_id) : '')).filter(Boolean))];
+  const clientById = new Map<string, Record<string, unknown>>();
+  if (clientIds.length) {
+    const { data: clients } = await supabaseAdmin.from('clients')
+      .select('id, name, contact_name, email').eq('organization_id', ctx.organizationId).in('id', clientIds);
+    for (const c of (clients ?? []) as Array<Record<string, unknown>>) clientById.set(String(c.id), c);
+  }
+
+  const blocked = kind === 'invoice' ? ['cancelled', 'void', 'written_off'] : ['cancelled'];
+  const items: SendDocumentItem[] = [];
+  const skipped: SkippedDocument[] = [];
+
+  // De volgorde van het model aanhouden: die matcht wat hij in zijn antwoord noemt.
+  for (const id of ids) {
+    const doc = byId.get(id);
+    if (!doc) { skipped.push({ number: id.slice(0, 8), reason: `bestaat niet in deze organisatie` }); continue; }
+    const number = String(doc.number ?? '');
+    const status = String(doc.status ?? '');
+    if (blocked.includes(status)) { skipped.push({ number, reason: `status "${status}" — mag niet verstuurd worden` }); continue; }
+    if (!doc.client_id) { skipped.push({ number, reason: 'geen klant gekoppeld' }); continue; }
+    const client = clientById.get(String(doc.client_id));
+    const email = client?.email ? String(client.email).trim() : '';
+    if (!email) { skipped.push({ number, reason: `${String(client?.name ?? 'de klant')} heeft geen e-mailadres` }); continue; }
+
+    items.push({
+      id, number, status,
+      client_name: String(client?.name ?? ''),
+      recipient_email: email,
+      recipient_name: client?.contact_name ? String(client.contact_name) : (client?.name ? String(client.name) : null),
+      total_eur: kind === 'invoice' ? invoiceTotal(doc) : round2(lineTotal(doc.lines)),
+      date: doc.date ? String(doc.date).slice(0, 10) : null,
+    });
+  }
+
+  if (items.length === 0) {
+    return {
+      ok: false,
+      error: skipped.length
+        ? `Geen van deze ${plural} kan verstuurd worden: ${skipped.map((s) => `${s.number} (${s.reason})`).join('; ')}.`
+        : `Er bleef geen enkele ${label} over om klaar te zetten.`,
+    };
+  }
+
+  return {
+    ok: true,
+    proposal: {
+      type: kind === 'invoice' ? 'send_invoices' : 'send_quotes',
+      items, total: items.length, skipped,
     },
   };
 }
@@ -2634,6 +2870,6 @@ export {
   describeError, requiredEnv, parseAllowedOrigins, isUuid, todayIso, tzOffsetMs,
 };
 export type {
-  GerrieContext, Emit, Proposal, ModelKind, Usage, AgentOutcome, BudgetCheck,
+  GerrieContext, Emit, Proposal, ModelKind, Usage, AgentOutcome, AgentStep, BudgetCheck,
   OrganizationRole, HttpStatus, MissionSubtask,
 };

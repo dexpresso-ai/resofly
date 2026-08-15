@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { Sparkles, Send, Check, X, AlertTriangle, Square, ListChecks, Wand2, Clock, Plus, Play, Pause, Trash2, Pencil, RotateCw, Loader2, ChevronDown, ChevronRight, ChevronUp, CornerDownLeft, ClipboardCheck, Eye, Mailbox, Users2, Gauge, BookOpen } from 'lucide-react';
+import { Sparkles, Send, Check, X, AlertTriangle, Square, ListChecks, Wand2, Clock, Plus, Play, Pause, Archive, ArchiveRestore, Pencil, RotateCw, Loader2, ChevronDown, ChevronRight, ChevronUp, CornerDownLeft, ClipboardCheck, Eye, Mailbox, Users2, Gauge, BookOpen, ScrollText } from 'lucide-react';
 import {
   streamGerrieReply, planGerrieMission, loadGerrieBudget, confirmGerrieAction,
-  listRoutines, listRoutineRuns, saveRoutine, setRoutineStatus, deleteRoutine, runRoutineNow, listRunProposals,
-  loadRunTranscript, replyToRun, listPendingAgentApprovals, ROUTINE_READ_TOOLS, ROUTINE_PROPOSE_TOOLS,
+  listRoutines, listRoutineRuns, saveRoutine, setRoutineStatus, archiveRoutine, restoreRoutine, runRoutineNow, listRunProposals,
+  loadRunTranscript, listRunEvents, listRunDecisions, replyToRun, listPendingAgentApprovals, ROUTINE_READ_TOOLS, ROUTINE_PROPOSE_TOOLS,
   type GerrieActionHandlers, type GerrieProposal, type GerrieMissionSubtask,
   type GerrieRoutine, type GerrieRoutineRun, type GerrieRoutineInput, type GerrieRunMessage, type GerrieAgentProposal,
+  type GerrieRunEvent, type GerrieRunDecision,
   type RoutineMode, type RoutineScheduleKind, type RoutineStatus, type RoutineRunStatus, type AgentEmailMode,
 } from '../lib/gerrie-api';
 import { STANDARD_MERGE_TOKENS } from '../lib/mergeTokens';
 import { executeProposal, proposalLabel } from '../lib/gerrie-proposals';
 import { AgentApprovals } from '../components/AgentApprovals';
 import { AgentBuilder } from '../components/AgentBuilder';
-import { ClientEmailBatch } from '../components/ClientEmailBatch';
+import { AgentBatchBoard, asBatchProposal } from '../components/AgentBatchBoard';
 import { AGENT_HUES, AGENT_ICONS, AgentGlyph, agentHue, agentIconKey, type AgentIconKey } from '../components/AgentGlyph';
 import type { UUID } from '../types';
 
@@ -61,14 +62,14 @@ function newId(): string {
   try { return crypto.randomUUID(); } catch { return `lane-${Date.now()}-${++laneSeq}`; }
 }
 
-export function GerrieCommandCenter({ organizationId, canWrite, pendingAgent = null, onPendingAgentConsumed, ...handlers }: {
+export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = null, onOpenAgentConsumed, ...handlers }: {
   organizationId: UUID;
   canWrite: boolean;
-  /** Door Gerrie in de chat klaargezette agent; opent hier vooringevuld in de editor. */
-  pendingAgent?: GerrieAgentProposal | null;
-  onPendingAgentConsumed?: () => void;
+  /** Net vanuit de chat aangemaakte agent; die klapt hier meteen open. */
+  openAgentId?: string | null;
+  onOpenAgentConsumed?: () => void;
 } & GerrieActionHandlers) {
-  const [tab, setTab] = useState<'live' | 'agents' | 'queue'>(pendingAgent ? 'agents' : 'live');
+  const [tab, setTab] = useState<'live' | 'agents' | 'queue'>(openAgentId ? 'agents' : 'live');
   const [draft, setDraft] = useState('');
   const [lanes, setLanes] = useState<Lane[]>([]);
   const [pendingPlan, setPendingPlan] = useState<PendingPlan | null>(null);
@@ -241,7 +242,7 @@ export function GerrieCommandCenter({ organizationId, canWrite, pendingAgent = n
       {tab === 'agents' ? (
         <RoutinesPanel organizationId={organizationId} canWrite={canWrite} handlers={handlers}
           pendingByAgent={pendingByAgent} onApprovalsChanged={reloadPending}
-          pendingAgent={pendingAgent} onPendingAgentConsumed={onPendingAgentConsumed} />
+          openAgentId={openAgentId} onOpenAgentConsumed={onOpenAgentConsumed} />
       ) : tab === 'queue' ? (
         <div className="ag-page">
           <AgentApprovals organizationId={organizationId} canWrite={canWrite} handlers={handlers}
@@ -442,6 +443,46 @@ function fmtWhen(iso: string | null): string {
   if (!iso) return '—';
   try { return new Date(iso).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); } catch { return '—'; }
 }
+/** Alleen de klok — binnen één run staat de datum al bovenaan. */
+function fmtTime(iso: string): string {
+  try { return new Date(iso).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); } catch { return ''; }
+}
+
+/** De afloop van een voorstel in gewone taal: wát, en hoe het is afgelopen. */
+function decisionLabel(d: GerrieRunDecision): string {
+  const what = PROPOSE_TOOL_LABELS.get(d.action) ?? d.action.replace(/^propose_/, '').replace(/_/g, ' ');
+  if (d.status === 'executed' || d.status === 'auto_executed') return `${what} — uitgevoerd`;
+  if (d.status === 'cancelled') return `${what} — geannuleerd`;
+  if (d.status === 'failed') return `${what} — afgewezen of mislukt`;
+  return `${what} — ${d.status}`;
+}
+
+/**
+ * Eén regel extra bij een logboekstap: het filter waarmee hij zocht, hoeveel hij
+ * vond, wat de run kostte. Bewust compact — het logboek moet te scannen zijn.
+ */
+function logDetail(ev: GerrieRunEvent): string {
+  const d = ev.detail ?? {};
+  const parts: string[] = [];
+  if (ev.kind === 'start') {
+    parts.push(d.mode === 'propose' ? 'mag voorstellen doen' : 'alleen lezen');
+    if (Array.isArray(d.tools)) parts.push(`${(d.tools as unknown[]).length} tools`);
+  } else if (ev.kind === 'finish') {
+    if (typeof d.tokens === 'number') parts.push(`${d.tokens.toLocaleString('nl-NL')} tokens`);
+    if (typeof d.cost_usd === 'number' && d.cost_usd > 0) parts.push(`$ ${Number(d.cost_usd).toFixed(4)}`);
+  } else if (ev.kind === 'delivery') {
+    if (typeof d.note === 'string') parts.push(d.note);
+  } else {
+    const input = d.input && typeof d.input === 'object' ? (d.input as Record<string, unknown>) : null;
+    if (input) {
+      for (const [k, v] of Object.entries(input)) {
+        if (parts.length >= 3) break;
+        parts.push(`${k}: ${Array.isArray(v) ? `${v.length}` : String(v).slice(0, 40)}`);
+      }
+    }
+  }
+  return parts.join(' · ');
+}
 function runStatusLabel(s: RoutineRunStatus): string {
   switch (s) {
     case 'succeeded': return 'Gelukt';
@@ -459,7 +500,7 @@ function templateToRoutine(t: RoutineTemplate): GerrieRoutine {
     email_mode: 'compose', email_subject: null, email_body: null, max_emails_per_run: 5,
     model_kind: 'cheap', mode: t.mode, enabled_tools: t.tools,
     schedule_kind: t.schedule_kind, hour: t.hour, day_of_week: t.day_of_week ?? null, day_of_month: t.day_of_month ?? null,
-    timezone: 'Europe/Amsterdam', status: 'draft', next_run_at: null, last_run_at: null,
+    timezone: 'Europe/Amsterdam', status: 'draft', archived_at: null, next_run_at: null, last_run_at: null,
     max_cost_eur_per_run: 0.25, monthly_budget_eur: null, max_runs_per_day: 4, consecutive_failures: 0,
     delivery: { channels: ['inapp'], recipient_user_ids: [] }, created_at: '', updated_at: '',
   };
@@ -484,21 +525,22 @@ function proposalToRoutine(p: GerrieAgentProposal): GerrieRoutine {
     email_mode: p.email_mode, email_subject: p.email_subject, email_body: p.email_body, max_emails_per_run: 5,
     model_kind: 'cheap', mode: p.mode, enabled_tools: p.enabled_tools,
     schedule_kind: p.schedule_kind, hour: p.hour, day_of_week: p.day_of_week, day_of_month: p.day_of_month,
-    timezone: 'Europe/Amsterdam', status: 'draft', next_run_at: null, last_run_at: null,
+    timezone: 'Europe/Amsterdam', status: 'draft', archived_at: null, next_run_at: null, last_run_at: null,
     max_cost_eur_per_run: 0.25, monthly_budget_eur: null, max_runs_per_day: 4, consecutive_failures: 0,
     delivery: { channels: ['inapp'], recipient_user_ids: [] }, created_at: '', updated_at: '',
   };
 }
 
-function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onApprovalsChanged, pendingAgent, onPendingAgentConsumed }: {
+function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onApprovalsChanged, openAgentId, onOpenAgentConsumed }: {
   organizationId: UUID;
   canWrite: boolean;
   handlers: GerrieActionHandlers;
   /** Aantal openstaande voorstellen per agent — het belletje op de tegel. */
   pendingByAgent: Record<string, number>;
   onApprovalsChanged: () => void;
-  pendingAgent?: GerrieAgentProposal | null;
-  onPendingAgentConsumed?: () => void;
+  /** Net vanuit de chat aangemaakte agent; klapt hier meteen open. */
+  openAgentId?: string | null;
+  onOpenAgentConsumed?: () => void;
 }) {
   const [routines, setRoutines] = useState<GerrieRoutine[]>([]);
   const [loading, setLoading] = useState(true);
@@ -509,6 +551,7 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
   const [editing, setEditing] = useState<GerrieRoutine | 'new' | 'build' | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [showArchive, setShowArchive] = useState(false);
   const [runsKey, setRunsKey] = useState(0);
   const sheetRef = useRef<HTMLDivElement | null>(null);
   const [toast, setToast] = useState<{ text: string; kind: 'info' | 'success' | 'error' } | null>(null);
@@ -536,11 +579,19 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
     catch (e) { notify(e instanceof Error ? e.message : 'Mislukt.', 'error'); }
     finally { setBusyId(null); }
   }
-  async function doDelete(r: GerrieRoutine) {
-    if (!confirm(`Agent "${r.name || 'naamloos'}" verwijderen?`)) return;
+  // "Verwijderen" is archiveren: de agent gaat uit en verdwijnt uit de galerij,
+  // maar zijn runs en logboek blijven — daar staat wat er namens jou is gebeurd.
+  async function doArchive(r: GerrieRoutine) {
+    if (!confirm(`Agent "${r.name || 'naamloos'}" archiveren?\n\nHij stopt met draaien en verdwijnt uit je galerij. Alles wat hij heeft gedaan blijft bewaard onder "Archief".`)) return;
     setBusyId(r.id);
-    try { await deleteRoutine(organizationId, r.id); setOpenId(null); reload(); notify('Agent verwijderd.', 'success'); }
-    catch (e) { notify(e instanceof Error ? e.message : 'Verwijderen mislukt.', 'error'); }
+    try { await archiveRoutine(organizationId, r.id); setOpenId(null); reload(); notify('Agent gearchiveerd — zijn historie blijft bewaard.', 'success'); }
+    catch (e) { notify(e instanceof Error ? e.message : 'Archiveren mislukt.', 'error'); }
+    finally { setBusyId(null); }
+  }
+  async function doRestore(r: GerrieRoutine) {
+    setBusyId(r.id);
+    try { await restoreRoutine(organizationId, r.id); reload(); notify('Agent teruggezet — hij staat gepauzeerd klaar.', 'success'); }
+    catch (e) { notify(e instanceof Error ? e.message : 'Terugzetten mislukt.', 'error'); }
     finally { setBusyId(null); }
   }
   async function doRunNow(r: GerrieRoutine) {
@@ -554,13 +605,14 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
     finally { setBusyId(null); }
   }
 
-  // Kwam er een agent uit de chat? Dan opent de editor daar meteen mee, en melden
-  // we hem als verbruikt zodat een terugkeer naar dit tabblad hem niet opnieuw opent.
+  // Is er net vanuit de chat een agent aangemaakt? Dan klapt hij hier meteen open,
+  // zodat je zijn eerste run ziet binnenkomen. Daarna melden we hem als verbruikt,
+  // zodat een terugkeer naar dit tabblad hem niet opnieuw opendwingt.
   useEffect(() => {
-    if (!pendingAgent) return;
-    setEditing(proposalToRoutine(pendingAgent));
-    onPendingAgentConsumed?.();
-  }, [pendingAgent, onPendingAgentConsumed]);
+    if (!openAgentId) return;
+    setOpenId(openAgentId);
+    onOpenAgentConsumed?.();
+  }, [openAgentId, onOpenAgentConsumed]);
 
   // Een geopende agent hoort in beeld te komen; op een lang scherm staat het
   // paneel anders onder de vouw en lijkt de klik niets te doen.
@@ -570,8 +622,16 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
     sheetRef.current.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
   }, [openId]);
 
-  /** Bouwt de agent uit het gesprek en zet hem, als je dat wilt, meteen aan. */
-  async function createFromBuilder(p: GerrieAgentProposal, activate: boolean) {
+  /**
+   * Bouwt de agent uit het gesprek en laat hem meteen beginnen.
+   *
+   * `startNow` staat standaard aan: je hebt zojuist verteld wat hij mag en wanneer
+   * hij draait, dus een agent die daarna nog als slapend concept blijft liggen is
+   * gewoon een extra klik. Hij gaat aan én draait direct één ronde, zodat je binnen
+   * een minuut ziet wat hij oplevert. De eerste run wachten we niet af — die duurt
+   * tientallen seconden en hoort thuis in de historie hieronder.
+   */
+  async function createFromBuilder(p: GerrieAgentProposal, startNow: boolean) {
     const routine = proposalToRoutine(p);
     const saved = await saveRoutine(organizationId, {
       name: routine.name, instruction: routine.instruction,
@@ -582,17 +642,29 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
       schedule_kind: routine.schedule_kind, hour: routine.hour,
       day_of_week: routine.day_of_week, day_of_month: routine.day_of_month,
       timezone: 'Europe/Amsterdam', delivery: { channels: ['inapp'] },
-    });
-    if (activate && saved.id) {
-      // Mislukt het activeren, dan blijft de agent als concept staan — dat is een
-      // eerlijke uitkomst, en de tegel toont het meteen.
-      try { await setRoutineStatus(organizationId, saved.id as UUID, 'active'); }
-      catch { notify('Agent aangemaakt, maar activeren lukte niet. Zet hem zelf aan.', 'error'); }
-    }
+    }, undefined, startNow);
     setEditing(null);
     setOpenId(saved.id ?? null);
+    if (startNow && saved.id) {
+      // Activeren zat al in het aanmaken; is dat toch niet gelukt, dan zeggen we dat
+      // eerlijk in plaats van te doen alsof hij draait.
+      if (saved.status !== 'active') {
+        try { await setRoutineStatus(organizationId, saved.id as UUID, 'active'); }
+        catch { notify('Agent aangemaakt, maar aanzetten lukte niet. Zet hem zelf aan.', 'error'); reload(); return; }
+      }
+      notify('Agent staat aan en draait zijn eerste ronde…', 'info', true);
+      runRoutineNow(organizationId, saved.id as UUID)
+        .then((res) => {
+          notify(res.proposalsCreated
+            ? `Eerste ronde klaar — ${res.proposalsCreated} voorstel${res.proposalsCreated === 1 ? '' : 'len'} om af te vinken.`
+            : 'Eerste ronde klaar — bekijk het resultaat hieronder.', 'success');
+          setRunsKey((k) => k + 1); onApprovalsChanged();
+        })
+        .catch((e) => notify(e instanceof Error ? e.message : 'De eerste ronde mislukte; kijk in de historie.', 'error'));
+    } else {
+      notify('Agent aangemaakt als concept.', 'success');
+    }
     reload();
-    notify(activate ? 'Agent aangemaakt en aangezet.' : 'Agent aangemaakt als concept.', 'success');
   }
 
   if (editing === 'build') {
@@ -609,13 +681,16 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
   }
 
   const open = routines.find((r) => r.id === openId) ?? null;
+  // Gearchiveerde agents staan apart: ze werken niet meer, maar hun logboek blijft.
+  const live = routines.filter((r) => r.status !== 'archived');
+  const archived = routines.filter((r) => r.status === 'archived');
 
   return (
     <div className="ag-page">
       <header className="ag-page-head">
         <div>
           <h2>Je agents</h2>
-          <p>Elk embleem is een agent die vanzelf op zijn eigen moment draait. <b>Hij stelt voor, jij beslist</b> — er gaat niets de deur uit zonder jouw akkoord.</p>
+          <p>Elk embleem is een agent die vanzelf op zijn eigen moment draait. <b>Hij stelt voor, jij vinkt af</b> — er gaat niets de deur uit zonder jouw akkoord.</p>
         </div>
         <button className="cc-btn primary" onClick={() => setEditing('build')}><Plus size={15} /> Nieuwe agent</button>
       </header>
@@ -629,7 +704,7 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
       {error && <div className="cc-plan-error">{error}</div>}
 
       {loading ? <p className="ag-loading"><Loader2 size={14} className="cc-spin" /> Agents laden…</p> : <>
-        {routines.length === 0 ? (
+        {live.length === 0 ? (
           <div className="ag-starters">
             <p className="ag-starters-lead">Je hebt nog geen agents. Kies een startpunt — je kunt daarna alles nog aanpassen.</p>
             <div className="ag-starter-grid">
@@ -649,7 +724,7 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
           </div>
         ) : (
           <div className="ag-grid">
-            {routines.map((r) => {
+            {live.map((r) => {
               const waiting = pendingByAgent[r.id] ?? 0;
               const isOpen = openId === r.id;
               return (
@@ -690,11 +765,47 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
               onRunNow={() => void doRunNow(open)}
               onStatus={(s) => void doStatus(open, s)}
               onEdit={() => setEditing(open)}
-              onDelete={() => void doDelete(open)}
+              onArchive={() => void doArchive(open)}
+              onRestore={() => void doRestore(open)}
               onClose={() => setOpenId(null)}
               onApprovalsChanged={onApprovalsChanged}
             />
           </div>
+        )}
+
+        {/* Het archief: agents die niet meer draaien maar wél verantwoording dragen.
+            Standaard dicht, want dit is naslag — geen dagelijks werk. */}
+        {archived.length > 0 && (
+          <section className="ag-archive">
+            <button type="button" className="ag-archive-head" aria-expanded={showArchive} onClick={() => setShowArchive((v) => !v)}>
+              {showArchive ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              <Archive size={14} />
+              <strong>Archief</strong>
+              <span>{archived.length} gearchiveerde agent{archived.length === 1 ? '' : 's'} — hun logboek blijft raadpleegbaar</span>
+            </button>
+            {showArchive && (
+              <div className="ag-grid ag-grid-archive">
+                {archived.map((r) => {
+                  const isOpen = openId === r.id;
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      className={`ag-tile is-archived${isOpen ? ' is-open' : ''}`}
+                      aria-expanded={isOpen}
+                      onClick={() => setOpenId(isOpen ? null : r.id)}
+                    >
+                      <AgentGlyph agent={r} size="lg" state="archived" />
+                      <strong className="ag-tile-name">{r.name || 'Naamloze agent'}</strong>
+                      <span className="ag-tile-rhythm"><Archive size={11} /> {r.archived_at ? fmtWhen(r.archived_at) : 'gearchiveerd'}</span>
+                      <span className="ag-tile-state is-archived">Gearchiveerd</span>
+                      <span className="ag-tile-hint">{isOpen ? <>Sluiten <ChevronUp size={12} /></> : <>Logboek <ChevronDown size={12} /></>}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
         )}
       </>}
     </div>
@@ -706,7 +817,7 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
  * lezen, voorstellen, wanneer, waar het heen gaat en binnen welke grenzen — dan
  * zijn opdracht, dan de knoppen, en onderaan wat hij tot nu toe gedaan heeft.
  */
-function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey, waiting, onRunNow, onStatus, onEdit, onDelete, onClose, onApprovalsChanged }: {
+function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey, waiting, onRunNow, onStatus, onEdit, onArchive, onRestore, onClose, onApprovalsChanged }: {
   routine: GerrieRoutine;
   organizationId: UUID;
   canWrite: boolean;
@@ -717,13 +828,15 @@ function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey
   onRunNow: () => void;
   onStatus: (status: RoutineStatus) => void;
   onEdit: () => void;
-  onDelete: () => void;
+  onArchive: () => void;
+  onRestore: () => void;
   onClose: () => void;
   onApprovalsChanged: () => void;
 }) {
   const readTools = routine.enabled_tools.filter((n) => !n.startsWith('propose_'));
   const proposeTools = routine.enabled_tools.filter((n) => n.startsWith('propose_'));
   const emailToo = Array.isArray(routine.delivery?.channels) && routine.delivery.channels.includes('email');
+  const isArchived = routine.status === 'archived';
 
   return (
     <>
@@ -739,6 +852,16 @@ function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey
         </div>
         <button type="button" className="ag-sheet-close" onClick={onClose} aria-label="Sluiten"><X size={16} /></button>
       </header>
+
+      {isArchived && (
+        <p className="ag-archived-note">
+          <Archive size={13} />
+          <span>
+            Deze agent is gearchiveerd{routine.archived_at ? ` op ${fmtWhen(routine.archived_at)}` : ''} en draait niet meer.
+            Zijn volledige logboek staat hieronder; zet hem terug als je hem weer wilt gebruiken.
+          </span>
+        </p>
+      )}
 
       <div className="ag-caps">
         <Capability icon={<Eye size={14} />} title="Mag inzien">
@@ -783,15 +906,24 @@ function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey
       )}
 
       <div className="ag-sheet-actions">
-        <button className="cc-btn tiny ghost" disabled={busy} onClick={onRunNow}>
-          {busy ? <><Loader2 size={13} className="cc-spin" /> Draait…</> : <><Play size={13} /> Nu draaien</>}
-        </button>
-        {routine.status === 'active'
-          ? <button className="cc-btn tiny ghost" disabled={busy} onClick={() => onStatus('paused')}><Pause size={13} /> Pauzeren</button>
-          : <button className="cc-btn tiny primary" disabled={busy} onClick={() => onStatus('active')}><Play size={13} /> Activeren</button>}
-        <button className="cc-btn tiny ghost" onClick={onEdit}><Pencil size={13} /> Bewerken</button>
-        <span className="ag-sheet-spacer" />
-        <button className="cc-btn tiny ghost danger" disabled={busy} onClick={onDelete}><Trash2 size={13} /> Verwijderen</button>
+        {isArchived ? (
+          <button className="cc-btn tiny primary" disabled={busy} onClick={onRestore}>
+            {busy ? <><Loader2 size={13} className="cc-spin" /> Bezig…</> : <><ArchiveRestore size={13} /> Terugzetten</>}
+          </button>
+        ) : <>
+          <button className="cc-btn tiny ghost" disabled={busy} onClick={onRunNow}>
+            {busy ? <><Loader2 size={13} className="cc-spin" /> Draait…</> : <><Play size={13} /> Nu draaien</>}
+          </button>
+          {routine.status === 'active'
+            ? <button className="cc-btn tiny ghost" disabled={busy} onClick={() => onStatus('paused')}><Pause size={13} /> Pauzeren</button>
+            : <button className="cc-btn tiny primary" disabled={busy} onClick={() => onStatus('active')}><Play size={13} /> Activeren</button>}
+          <button className="cc-btn tiny ghost" onClick={onEdit}><Pencil size={13} /> Bewerken</button>
+          <span className="ag-sheet-spacer" />
+          {/* Geen "verwijderen": wat hij namens jou deed gooien we niet weg. */}
+          <button className="cc-btn tiny ghost danger" disabled={busy} onClick={onArchive} title="De agent stopt; zijn logboek blijft bewaard">
+            <Archive size={13} /> Archiveren
+          </button>
+        </>}
       </div>
 
       <div className="ag-history">
@@ -1155,6 +1287,9 @@ type PropState = 'idle' | 'busy' | 'done' | 'rejected' | 'error';
 function RunDetail({ run, organizationId, canWrite, handlers, onApprovalsChanged }: { run: GerrieRoutineRun; organizationId: UUID; canWrite: boolean; handlers: GerrieActionHandlers; onApprovalsChanged?: () => void }) {
   const [transcript, setTranscript] = useState<GerrieRunMessage[]>([]);
   const [proposals, setProposals] = useState<Array<{ auditId: string; proposal: GerrieProposal }>>([]);
+  const [events, setEvents] = useState<GerrieRunEvent[]>([]);
+  const [decisions, setDecisions] = useState<GerrieRunDecision[]>([]);
+  const [showLog, setShowLog] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refresh, setRefresh] = useState(0);
   const [reply, setReply] = useState('');
@@ -1170,12 +1305,19 @@ function RunDetail({ run, organizationId, canWrite, handlers, onApprovalsChanged
     Promise.all([
       convId ? loadRunTranscript(organizationId, convId) : Promise.resolve([] as GerrieRunMessage[]),
       listRunProposals(organizationId, run.id),
+      // Het logboek en de afloop van de voorstellen: samen "wat heeft hij gedaan,
+      // en wat is daar vervolgens mee gebeurd?".
+      listRunEvents(organizationId, run.id).catch(() => [] as GerrieRunEvent[]),
+      listRunDecisions(organizationId, run.id).catch(() => [] as GerrieRunDecision[]),
     ])
-      .then(([t, p]) => { if (alive) { setTranscript(t); setProposals(p); } })
+      .then(([t, p, e, d]) => { if (alive) { setTranscript(t); setProposals(p); setEvents(e); setDecisions(d); } })
       .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : 'Laden mislukt.'); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [organizationId, run.id, run.conversation_id, refresh]);
+
+  // Alleen de afgehandelde beslissingen; wat nog openstaat toont het bord hieronder.
+  const settled = decisions.filter((d) => d.status !== 'proposed');
 
   async function sendReply() {
     const m = reply.trim();
@@ -1220,8 +1362,9 @@ function RunDetail({ run, organizationId, canWrite, handlers, onApprovalsChanged
           {proposals.map(({ auditId, proposal }) => {
             const info = proposalLabel(proposal);
             const st = pstate[auditId] ?? 'idle';
-            // Een reeks klantmails beslis je hier net zo als in de wachtrij: per mail.
-            const mailBatch = proposal.type === 'send_client_email' ? proposal : null;
+            // Een reeks (mail, facturen, offertes, herinneringen) beslis je hier net
+            // zoals in de wachtrij: per regel, met een vinkje.
+            const batch = asBatchProposal(proposal);
             return (
               <div key={auditId} className="cc-approve">
                 <div className="cc-approve-t">{info.title}</div>
@@ -1229,13 +1372,11 @@ function RunDetail({ run, organizationId, canWrite, handlers, onApprovalsChanged
                 {st === 'error' && pmsg[auditId] && <div className="cc-approve-err">{pmsg[auditId]}</div>}
                 {st === 'done' ? <div className="cc-lane-ok"><Check size={13} /> Uitgevoerd</div>
                   : st === 'rejected' ? <div className="cc-lane-cancel">Afgewezen.</div>
-                  : mailBatch ? (
-                    <ClientEmailBatch
-                      proposal={mailBatch}
+                  : batch ? (
+                    <AgentBatchBoard
+                      proposal={batch}
                       canWrite={canWrite}
-                      onSendOne={(mail) => handlers.onSendClientEmail
-                        ? handlers.onSendClientEmail(mail)
-                        : Promise.reject(new Error('Mailen is hier niet beschikbaar.'))}
+                      handlers={handlers}
                       onResolved={({ sent, skipped }) => {
                         void confirmGerrieAction(organizationId, auditId, sent > 0 ? 'executed' : 'failed', `${sent} verstuurd, ${skipped} overgeslagen.`);
                         setPstate((s) => ({ ...s, [auditId]: sent > 0 ? 'done' : 'rejected' }));
@@ -1254,6 +1395,23 @@ function RunDetail({ run, organizationId, canWrite, handlers, onApprovalsChanged
             );
           })}
 
+          {/* Wat er met eerdere voorstellen van deze run is gebeurd. Dit is de
+              verantwoording: goedgekeurd, afgewezen of mislukt — met de reden. */}
+          {settled.length > 0 && (
+            <ul className="cc-decisions">
+              {settled.map((d) => (
+                <li key={d.auditId} className={`cc-decision is-${d.status}`}>
+                  <span className="cc-decision-mark" aria-hidden="true">
+                    {d.status === 'executed' || d.status === 'auto_executed' ? <Check size={12} /> : <X size={12} />}
+                  </span>
+                  <span className="cc-decision-what">{decisionLabel(d)}</span>
+                  {d.detail && <span className="cc-decision-detail">{d.detail}</span>}
+                  <span className="cc-decision-when">{fmtWhen(d.createdAt)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
           <div className="cc-reply">
             <input
               className="cc-text" value={reply} disabled={replying}
@@ -1266,6 +1424,29 @@ function RunDetail({ run, organizationId, canWrite, handlers, onApprovalsChanged
             </button>
           </div>
           {err && <div className="cc-approve-err">{err}</div>}
+
+          {/* Het logboek: elke stap die de agent zette, in volgorde. Dicht by
+              default — je wilt eerst het resultaat, en pas daarna het bewijs. */}
+          {events.length > 0 && (
+            <div className="cc-log">
+              <button type="button" className="cc-log-head" aria-expanded={showLog} onClick={() => setShowLog((v) => !v)}>
+                {showLog ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                <ScrollText size={13} />
+                Logboek — {events.length} stap{events.length === 1 ? '' : 'pen'}
+              </button>
+              {showLog && (
+                <ol className="cc-log-list">
+                  {events.map((ev) => (
+                    <li key={ev.id} className={`cc-log-row is-${ev.kind}`}>
+                      <span className="cc-log-time">{fmtTime(ev.created_at)}</span>
+                      <span className="cc-log-label">{ev.label}</span>
+                      {logDetail(ev) && <span className="cc-log-detail">{logDetail(ev)}</span>}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>

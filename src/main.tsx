@@ -127,7 +127,8 @@ import { formatISODate, parseISODate, startOfWeek } from './lib/dates';
 import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat } from './components/GerrieChat';
 import { GerrieCommandCenter } from './features/GerrieCommandCenter';
-import type { GerrieActionHandlers, GerrieAgentProposal } from './lib/gerrie-api';
+import type { GerrieActionHandlers } from './lib/gerrie-api';
+import { saveRoutine, setRoutineStatus, runRoutineNow } from './lib/gerrie-api';
 import { plainTextToEmailHtml, sendClientEmail } from './services/mailService';
 import { exportFinancePDF } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
@@ -167,15 +168,16 @@ type ViewState = {
   galleryId: string | null;
   settingsNav: { tab: SettingsTab; key: number } | null;
   pendingReport: { key: string; name: string; definition: ReportDefinition } | null;
-  /** Door Gerrie in de chat klaargezette agent; opent vooringevuld op de Gerrie-pagina. */
-  pendingAgent: GerrieAgentProposal | null;
+  /** Net aangemaakte agent; de Gerrie-pagina klapt hem meteen open zodat je ziet
+   *  wie er nu voor je aan het werk is. */
+  openAgentId: string | null;
   edit: EditMode;
 };
 type WorkspaceTab = ViewState & { id: string };
 
 /** Nieuw, leeg tabblad op een gegeven pagina (standaard het dashboard). */
 function freshTab(page: Page = 'dashboard'): WorkspaceTab {
-  return { id: uid(), page, projectId: null, clientId: null, statsReportId: null, galleryId: null, settingsNav: null, pendingReport: null, pendingAgent: null, edit: null };
+  return { id: uid(), page, projectId: null, clientId: null, statsReportId: null, galleryId: null, settingsNav: null, pendingReport: null, openAgentId: null, edit: null };
 }
 
 /** Terugkomst van de directe bankkoppeling (PSD2, ?code=&state=…): dan opent het
@@ -211,7 +213,7 @@ function rebuildTabs(persisted: PersistedTab[], data: AppData): WorkspaceTab[] {
       page = data.projects.some(x => x.id === projectId) ? 'project' : 'projects';
       if (page === 'projects') projectId = null;
     }
-    return { id: uid(), page, projectId, clientId, statsReportId: p.statsReportId, galleryId, settingsNav: legacyCalendarSettings ? { tab: 'agenda', key: 0 } : null, pendingReport: null, pendingAgent: null, edit: null };
+    return { id: uid(), page, projectId, clientId, statsReportId: p.statsReportId, galleryId, settingsNav: legacyCalendarSettings ? { tab: 'agenda', key: 0 } : null, pendingReport: null, openAgentId: null, edit: null };
   });
 }
 
@@ -391,7 +393,7 @@ function App() {
   const galleryId = activeTab.galleryId;
   const setSettingsNav = (v: React.SetStateAction<{ tab: SettingsTab; key: number } | null>) => patchActiveTab(t => ({ settingsNav: applyUpdater(v, t.settingsNav) }));
   const setPendingReport = (v: React.SetStateAction<{ key: string; name: string; definition: ReportDefinition } | null>) => patchActiveTab(t => ({ pendingReport: applyUpdater(v, t.pendingReport) }));
-  const setPendingAgent = (v: React.SetStateAction<GerrieAgentProposal | null>) => patchActiveTab(t => ({ pendingAgent: applyUpdater(v, t.pendingAgent) }));
+  const setOpenAgentId = (v: React.SetStateAction<string | null>) => patchActiveTab(t => ({ openAgentId: applyUpdater(v, t.openAgentId) }));
   const setEdit = (v: React.SetStateAction<EditMode>) => patchActiveTab(t => ({ edit: applyUpdater(v, t.edit) }));
   // Word-modus voor interne Documents: de Collabora-editor leeft op app-niveau, zodat een
   // Word-document vanuit elke pagina (project/klant/Inhoud) geopend kan worden.
@@ -542,6 +544,33 @@ function App() {
 
   async function refresh() {
     await loadWorkspace(activeOrganizationId);
+  }
+
+  /**
+   * Herlaadt de werkruimte, maar hoogstens één keer per reeks.
+   *
+   * Een afvinklijst verstuurt regel voor regel: vink je twintig facturen aan, dan
+   * zou een volledige herlaadslag per factuur de lijst tot stilstand brengen.
+   * Deze bundelt ze tot één slag kort nadat de laatste regel klaar is — de
+   * verzending zelf is dan al bevestigd, alleen het beeld loopt een tel achter.
+   */
+  const refreshTimer = useRef<number | null>(null);
+  function scheduleRefresh() {
+    if (refreshTimer.current) window.clearTimeout(refreshTimer.current);
+    refreshTimer.current = window.setTimeout(() => { refreshTimer.current = null; void refresh(); }, 400);
+  }
+  useEffect(() => () => { if (refreshTimer.current) window.clearTimeout(refreshTimer.current); }, []);
+
+  /** Staat de Mollie-koppeling aan? Kort gecachet per organisatie (30 s), zodat een
+   *  reeks facturen niet per regel dezelfde vraag stelt. */
+  const mollieCache = useRef<{ orgId: string; at: number; connected: boolean } | null>(null);
+  async function mollieConnected(orgId: string): Promise<boolean> {
+    const cached = mollieCache.current;
+    if (cached && cached.orgId === orgId && Date.now() - cached.at < 30_000) return cached.connected;
+    const mollie = await loadInvoiceMollieStatus(orgId);
+    const connected = mollie.status === 'connected';
+    mollieCache.current = { orgId, at: Date.now(), connected };
+    return connected;
   }
 
   async function switchOrganization(organizationId: string) {
@@ -1847,15 +1876,17 @@ function App() {
       const invoice = data.invoices.find((i) => i.id === p.id);
       let includePaymentLink = false;
       if (invoice && !['paid', 'cancelled', 'void', 'written_off'].includes(invoice.status)) {
-        try { const mollie = await loadInvoiceMollieStatus(activeOrg.id); includePaymentLink = mollie.status === 'connected'; } catch { /* PDF-only als de status niet op te halen is */ }
+        // Kort gecachet: bij een afvinklijst van twintig facturen is de
+        // Mollie-koppeling niet twintig keer opnieuw op te halen.
+        try { includePaymentLink = await mollieConnected(activeOrg.id); } catch { /* PDF-only als de status niet op te halen is */ }
       }
       await sendInvoiceEmailViaResend(activeOrg.id, p.id, { recipientEmail: p.recipient_email, recipientName: p.recipient_name ?? undefined, includePaymentLink });
-      await refresh();
+      scheduleRefresh();
     },
     onSendQuote: async (p) => {
       if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
       await sendQuoteEmailViaResend(activeOrg.id, p.id, { recipientEmail: p.recipient_email, recipientName: p.recipient_name ?? undefined });
-      await refresh();
+      scheduleRefresh();
     },
     onConvertQuote: async (p) => {
       if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
@@ -1908,7 +1939,7 @@ function App() {
         try { await sendInvoiceReminderEmail(activeOrg.id, inv.id); sent += 1; }
         catch { failed.push(inv.number); }
       }
-      await refresh();
+      scheduleRefresh();
       if (failed.length) throw new Error(`${sent} verstuurd, ${failed.length} mislukt (${failed.join(', ')}).`);
     },
     // Eén klantmail, langs precies dezelfde weg als de knop op de klantenkaart:
@@ -1924,11 +1955,34 @@ function App() {
       });
       await refreshClientEmailUnread();
     },
-    // Een door Gerrie bedachte agent maakt zichzelf niet aan: we openen het
-    // agent-scherm vooringevuld, waar de gebruiker hem nakijkt en activeert.
-    onCreateAgent: (p) => {
+    // Een door Gerrie bedachte agent gaat na jouw akkoord METEEN aan de slag.
+    // De kaart in de chat liet al zien wat hij mag en wanneer hij draait, dus een
+    // tweede ronde langs het formulier zou alleen maar vertraging zijn. De grens
+    // blijft waar hij hoort: alles wat deze agent daarna wil versturen komt als
+    // afvinklijst bij je terug.
+    //
+    // De eerste run starten we bewust ZONDER erop te wachten — die duurt tientallen
+    // seconden en het resultaat hoort thuis in de run-historie, niet in een
+    // spinnende chatkaart. Mislukt hij, dan staat dat daar met reden en logboek.
+    onCreateAgent: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      const saved = await saveRoutine(activeOrg.id, {
+        name: p.name, instruction: p.instruction, icon: p.icon, hue: null,
+        email_mode: p.email_mode, email_subject: p.email_subject, email_body: p.email_body,
+        max_emails_per_run: p.max_emails_per_run,
+        model_kind: 'cheap', mode: p.mode, enabled_tools: p.enabled_tools,
+        schedule_kind: p.schedule_kind, hour: p.hour,
+        day_of_week: p.day_of_week, day_of_month: p.day_of_month,
+        timezone: 'Europe/Amsterdam', delivery: { channels: ['inapp'] },
+      }, undefined, true);
+      if (!saved.id) throw new Error('De agent is niet aangemaakt.');
+      const agentId = saved.id;
+      // Activeren zat al in het aanmaken; loopt dat toch mis, dan is een gepauzeerde
+      // agent een eerlijker uitkomst dan doen alsof hij draait.
+      if (saved.status !== 'active') await setRoutineStatus(activeOrg.id, agentId, 'active');
+      void runRoutineNow(activeOrg.id, agentId).catch(() => { /* staat in de run-historie */ });
       setPage('gerrie'); setProjectId(null); setClientId(null);
-      setPendingAgent(p);
+      setOpenAgentId(agentId);
     },
     onCreateProject: (p) => {
       if (!ensureCanWrite()) return;
@@ -2126,7 +2180,7 @@ function App() {
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} unreadTicketIds={ticketUnreadIds}/>;
     if (page === 'chat') return <TeamChatPage api={teamChat} />;
-    if (page === 'gerrie') return <GerrieCommandCenter organizationId={activeOrg.id} canWrite={canWrite} pendingAgent={view.pendingAgent} onPendingAgentConsumed={() => setPendingAgent(null)} {...gerrieActions} />;
+    if (page === 'gerrie') return <GerrieCommandCenter organizationId={activeOrg.id} canWrite={canWrite} openAgentId={view.openAgentId} onOpenAgentConsumed={() => setOpenAgentId(null)} {...gerrieActions} />;
     if (page === 'marketing') return <Marketing data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;

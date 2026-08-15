@@ -61,6 +61,31 @@ export interface GerrieSendQuoteProposal {
   recipient_email: string;
   recipient_name: string | null;
 }
+/** Eén factuur/offerte binnen een reeks die je regel voor regel afvinkt. */
+export interface GerrieSendDocumentItem {
+  id: UUID;
+  number: string;
+  client_name: string;
+  recipient_email: string;
+  recipient_name: string | null;
+  total_eur: number;
+  status: string;
+  date: string | null;
+}
+/** Documenten die de agent wilde versturen maar die afvielen, met de reden. */
+export interface GerrieSkippedDocument { number: string; reason: string }
+export interface GerrieSendInvoicesProposal {
+  type: 'send_invoices';
+  items: GerrieSendDocumentItem[];
+  total: number;
+  skipped: GerrieSkippedDocument[];
+}
+export interface GerrieSendQuotesProposal {
+  type: 'send_quotes';
+  items: GerrieSendDocumentItem[];
+  total: number;
+  skipped: GerrieSkippedDocument[];
+}
 export interface GerrieConvertQuoteProposal {
   type: 'convert_quote';
   id: UUID;
@@ -90,7 +115,9 @@ export interface GerrieEditClientProposal {
 }
 export interface GerrieSendRemindersProposal {
   type: 'send_reminders';
-  invoices: Array<{ id: UUID; number: string; client_name: string; level: number }>;
+  /** Bedrag en dagen-te-laat zijn later toegevoegd; voorstellen van vóór die
+   *  wijziging staan nog in de wachtrij, vandaar optioneel. */
+  invoices: Array<{ id: UUID; number: string; client_name: string; level: number; total_eur?: number; days_overdue?: number }>;
   total: number;
 }
 export interface GerrieProposalSubtask { label: string; done: boolean }
@@ -202,7 +229,7 @@ export interface GerrieTimeEntryProposal {
   billable: boolean;
   hourly_rate_cents: number | null;
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
 
 /**
  * De uitvoer-handlers voor een door Gerrie voorgestelde actie. Draft-types openen een
@@ -214,6 +241,8 @@ export interface GerrieActionHandlers {
   onCreateInvoiceDraft?: (proposal: GerrieInvoiceProposal) => void;
   onCreateQuoteDraft?: (proposal: GerrieQuoteProposal) => void;
   onCreateClientDraft?: (proposal: GerrieClientProposal) => void;
+  /** Verstuurt ÉÉN factuur. Een reeks facturen loopt hier per aangevinkte regel
+   *  langs, zodat een mislukte verzending de rest niet meesleept. */
   onSendInvoice?: (proposal: GerrieSendInvoiceProposal) => Promise<void>;
   onSendQuote?: (proposal: GerrieSendQuoteProposal) => Promise<void>;
   onConvertQuote?: (proposal: GerrieConvertQuoteProposal) => Promise<void>;
@@ -232,8 +261,13 @@ export interface GerrieActionHandlers {
   /** Verstuurt ÉÉN klantmail. De wachtrij roept hem per aangevinkte mail aan, zodat
    *  een mislukte mail de rest niet meesleept en je per regel ziet wat er misging. */
   onSendClientEmail?: (item: GerrieClientEmailItem) => Promise<void>;
-  /** Opent het agent-scherm vooringevuld met een door Gerrie klaargezette agent. */
-  onCreateAgent?: (proposal: GerrieAgentProposal) => void;
+  /**
+   * Maakt de door Gerrie samengestelde agent écht aan, zet hem aan en laat hem
+   * meteen één keer draaien. Bewust geen tussenstap meer in een formulier: de
+   * kaart in de chat laat al zien wat hij mag, en alles wat hij daarna wil
+   * versturen komt gewoon als afvinklijst terug.
+   */
+  onCreateAgent?: (proposal: GerrieAgentProposal) => Promise<void>;
 }
 
 export interface GerrieResult {
@@ -492,6 +526,8 @@ export interface GerrieRoutine {
   day_of_month: number | null;
   timezone: string;
   status: RoutineStatus;
+  /** Wanneer de agent gearchiveerd is ("verwijderd"). Null = gewoon in gebruik. */
+  archived_at: string | null;
   next_run_at: string | null;
   last_run_at: string | null;
   max_cost_eur_per_run: number;
@@ -571,29 +607,46 @@ export async function listRoutines(organizationId: UUID): Promise<GerrieRoutine[
   return (data ?? []) as GerrieRoutine[];
 }
 
-/** De laatste runs van één Routine (nieuwste eerst). */
-export async function listRoutineRuns(organizationId: UUID, agentId: UUID): Promise<GerrieRoutineRun[]> {
+/** De runs van één Routine (nieuwste eerst) — de historie op zijn detailpagina. */
+export async function listRoutineRuns(organizationId: UUID, agentId: UUID, limit = 100): Promise<GerrieRoutineRun[]> {
   const { data, error } = await supabase.from('ai_agent_runs')
     .select('*').eq('organization_id', organizationId).eq('agent_id', agentId)
-    .order('created_at', { ascending: false }).limit(25);
+    .order('created_at', { ascending: false }).limit(limit);
   if (error) throw new Error(error.message);
   return (data ?? []) as GerrieRoutineRun[];
 }
 
-/** Maakt een nieuwe Routine aan (concept) of werkt een bestaande bij. */
-export async function saveRoutine(organizationId: UUID, input: GerrieRoutineInput, id?: UUID): Promise<{ id?: string }> {
-  const payload = await postRunner({ action: id ? 'update' : 'create', organizationId, id, ...input });
-  return { id: typeof payload?.id === 'string' ? payload.id : id };
+/**
+ * Maakt een nieuwe Routine aan of werkt een bestaande bij.
+ *
+ * `activate` zet een nieuwe agent in dezelfde aanroep aan — een net samengestelde
+ * agent hoort niet als slapend concept te blijven liggen.
+ */
+export async function saveRoutine(organizationId: UUID, input: GerrieRoutineInput, id?: UUID, activate = false): Promise<{ id?: string; status?: string }> {
+  const payload = await postRunner({ action: id ? 'update' : 'create', organizationId, id, activate: !id && activate, ...input });
+  return { id: typeof payload?.id === 'string' ? payload.id : id, status: typeof payload?.status === 'string' ? payload.status : undefined };
 }
 
-/** Activeer/pauzeer/archiveer een Routine. */
+/** Activeer/pauzeer een Routine. */
 export async function setRoutineStatus(organizationId: UUID, id: UUID, status: RoutineStatus): Promise<{ next_run_at: string | null }> {
   const payload = await postRunner({ action: 'set_status', organizationId, id, status });
   return { next_run_at: typeof payload?.next_run_at === 'string' ? payload.next_run_at : null };
 }
 
-export async function deleteRoutine(organizationId: UUID, id: UUID): Promise<void> {
-  await postRunner({ action: 'delete', organizationId, id });
+/**
+ * "Verwijdert" een Routine — dat wil zeggen: archiveert hem.
+ *
+ * Een agent heeft namens jou gewerkt; die historie gooien we niet weg. Hij gaat
+ * uit en verdwijnt uit de galerij, maar zijn runs en logboek blijven raadpleegbaar
+ * onder "Archief".
+ */
+export async function archiveRoutine(organizationId: UUID, id: UUID): Promise<void> {
+  await postRunner({ action: 'archive', organizationId, id });
+}
+
+/** Haalt een gearchiveerde Routine terug; hij komt gepauzeerd terug. */
+export async function restoreRoutine(organizationId: UUID, id: UUID): Promise<void> {
+  await postRunner({ action: 'restore', organizationId, id });
 }
 
 /** Draait een Routine direct (handmatig; verandert het schema niet). Wacht op het resultaat. */
@@ -681,6 +734,64 @@ export async function listPendingAgentApprovals(organizationId: UUID, limit = 30
   });
 }
 
+// ── Het logboek van een run ──────────────────────────────────────────────────
+
+export type RunEventKind = 'start' | 'tool' | 'proposal' | 'answer' | 'delivery' | 'reply' | 'error' | 'finish';
+
+/** Eén stap uit het logboek: wat de agent op dat moment deed. */
+export interface GerrieRunEvent {
+  id: UUID;
+  seq: number;
+  kind: RunEventKind;
+  label: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+
+/** Het volledige logboek van één run, in de volgorde waarin het gebeurde. */
+export async function listRunEvents(organizationId: UUID, runId: UUID): Promise<GerrieRunEvent[]> {
+  const { data, error } = await supabase.from('ai_agent_run_events')
+    .select('id, seq, kind, label, detail, created_at')
+    .eq('organization_id', organizationId).eq('run_id', runId)
+    .order('seq', { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((r: { id: string; seq: number; kind: string; label: string; detail: unknown; created_at: string }) => ({
+    id: r.id as UUID,
+    seq: Number(r.seq),
+    kind: r.kind as RunEventKind,
+    label: String(r.label ?? ''),
+    detail: (r.detail && typeof r.detail === 'object' ? r.detail : {}) as Record<string, unknown>,
+    created_at: r.created_at,
+  }));
+}
+
+/** Wat er met de voorstellen van een run is gebeurd — óók de afgehandelde. */
+export interface GerrieRunDecision {
+  auditId: string;
+  action: string;
+  status: 'proposed' | 'confirmed' | 'executed' | 'failed' | 'cancelled' | 'auto_executed' | string;
+  detail: string | null;
+  createdAt: string;
+}
+
+export async function listRunDecisions(organizationId: UUID, runId: UUID): Promise<GerrieRunDecision[]> {
+  const { data, error } = await supabase.from('ai_action_audit')
+    .select('id, action, status, result, created_at')
+    .eq('organization_id', organizationId).eq('agent_run_id', runId)
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((r: { id: string; action: string; status: string; result: unknown; created_at: string }) => {
+    const res = (r.result && typeof r.result === 'object' ? r.result : {}) as { detail?: unknown };
+    return {
+      auditId: String(r.id),
+      action: String(r.action ?? ''),
+      status: String(r.status ?? 'proposed'),
+      detail: res.detail != null ? String(res.detail) : null,
+      createdAt: r.created_at,
+    };
+  });
+}
+
 /** Eén beurt in het gesprek/transcript van een run. */
 export interface GerrieRunMessage { role: 'user' | 'assistant'; content: string; created_at: string }
 
@@ -716,10 +827,12 @@ export const ROUTINE_READ_TOOLS: Array<{ name: string; label: string }> = [
 // Acties die een propose-routine mag VÓÓRSTELLEN. Na jouw goedkeuring in de
 // run-historie worden ze écht uitgevoerd (via dezelfde apply-laag als de chat).
 export const ROUTINE_PROPOSE_TOOLS: Array<{ name: string; label: string }> = [
-  { name: 'propose_send_client_email', label: 'Een mailtje naar klanten sturen' },
+  { name: 'propose_send_client_email', label: 'Mailtjes naar klanten sturen' },
   { name: 'propose_send_reminders', label: 'Betalingsherinneringen versturen' },
-  { name: 'propose_send_invoice', label: 'Een factuur versturen' },
-  { name: 'propose_send_quote', label: 'Een offerte versturen' },
+  { name: 'propose_send_invoices', label: 'Facturen versturen (afvinklijst)' },
+  { name: 'propose_send_quotes', label: 'Offertes versturen (afvinklijst)' },
+  { name: 'propose_send_invoice', label: 'Eén losse factuur versturen' },
+  { name: 'propose_send_quote', label: 'Eén losse offerte versturen' },
   { name: 'propose_convert_quote', label: 'Offerte omzetten naar factuur' },
   { name: 'propose_invoice', label: 'Conceptfactuur klaarzetten' },
   { name: 'propose_quote', label: 'Conceptofferte klaarzetten' },

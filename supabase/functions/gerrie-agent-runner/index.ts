@@ -27,7 +27,7 @@ import {
   describeError, isUuid, todayIso, tzOffsetMs, parseAllowedOrigins, loadHistory,
   AGENT_ICON_KEYS,
 } from '../_shared/gerrieCore.ts';
-import type { Emit, OrganizationRole } from '../_shared/gerrieCore.ts';
+import type { AgentStep, Emit, OrganizationRole } from '../_shared/gerrieCore.ts';
 import { sendViaResend } from '../_shared/resend.ts';
 
 const AGENTS_CRON_SECRET = Deno.env.get('AGENTS_CRON_SECRET') || '';
@@ -48,6 +48,51 @@ const READ_TOOL_NAMES: string[] = ALL_TOOL_NAMES.filter((n) => !n.startsWith('pr
 
 // De embleem-allowlist staat in gerrieCore, zodat de bouwer en deze schrijfpoort
 // niet uit elkaar kunnen lopen.
+
+// ── Het logboek ──────────────────────────────────────────────────────────────
+
+/**
+ * Schrijft de stappen van één run weg naar `ai_agent_run_events`.
+ *
+ * Een geplande agent draait terwijl niemand kijkt; wat hij deed moet daarna dus
+ * na te lezen zijn, ook als de agent later gearchiveerd wordt. De regels worden
+ * in het geheugen verzameld en in blokjes weggeschreven: één insert per stap zou
+ * de edge-wallclock opeten die we voor het echte werk nodig hebben.
+ *
+ * Bewust BEST-EFFORT: een logboek dat de run laat mislukken is erger dan een
+ * ontbrekende logregel. Een fout gaat naar de console (en dus naar de functie-logs).
+ */
+function runLogger(orgId: string, agentId: string, runId: string, startSeq = 0) {
+  let seq = startSeq;
+  let pending: Array<Record<string, unknown>> = [];
+  return {
+    add(kind: string, label: string, detail: Record<string, unknown> = {}): void {
+      pending.push({
+        organization_id: orgId, agent_id: agentId, run_id: runId,
+        seq: seq, kind, label: String(label).slice(0, 400), detail,
+      });
+      seq += 1;
+    },
+    /** Een stap uit de agent-loop (tool/voorstel/fout) één-op-één overnemen. */
+    addStep(step: AgentStep): void {
+      this.add(step.kind, step.label, { tool: step.name, ok: step.ok, ...step.detail });
+    },
+    async flush(): Promise<void> {
+      if (pending.length === 0) return;
+      const batch = pending;
+      pending = [];
+      const { error } = await supabaseAdmin.from('ai_agent_run_events').insert(batch);
+      if (error) console.error('gerrie-agent-runner logboek schrijven mislukt', runId, error.message);
+    },
+  };
+}
+
+/** Waar het logboek van deze run gebleven was (voor een antwoordbeurt erna). */
+async function nextLogSeq(runId: string): Promise<number> {
+  const { data } = await supabaseAdmin.from('ai_agent_run_events')
+    .select('seq').eq('run_id', runId).order('seq', { ascending: false }).limit(1).maybeSingle();
+  return Number(data?.seq ?? -1) + 1;
+}
 
 // ── Entry ────────────────────────────────────────────────────────────────────
 
@@ -84,7 +129,11 @@ Deno.serve(async (req) => {
       case 'create': return json(req, await createAgent(organizationId, user.id, body));
       case 'update': return json(req, await updateAgent(organizationId, body));
       case 'set_status': return json(req, await setStatus(organizationId, String(body.id || ''), String(body.status || '')));
-      case 'delete': return json(req, await deleteAgent(organizationId, String(body.id || '')));
+      // 'delete' bestaat alleen nog als oude naam voor archiveren: een agent met
+      // historie gooien we niet weg (zie archiveAgent).
+      case 'delete':
+      case 'archive': return json(req, await archiveAgent(organizationId, String(body.id || '')));
+      case 'restore': return json(req, await restoreAgent(organizationId, String(body.id || '')));
       case 'run_now': return json(req, await runNow(organizationId, String(body.id || '')));
       case 'reply': return json(req, await replyToRun(organizationId, user.id, role, body));
       default: throw new HttpError('Onbekende actie.', 400);
@@ -133,10 +182,16 @@ async function executeAgentRun(
 ): Promise<Record<string, unknown>> {
   const agentId = String(agent.id);
   const orgId = String(agent.organization_id);
-  const runAsUserId = String(agent.run_as_user_id);
+  const runAsUserId = agent.run_as_user_id ? String(agent.run_as_user_id) : '';
   const name = String(agent.name || 'Naamloze routine');
   const mode = String(agent.mode || 'report') === 'propose' ? 'propose' : 'report';
   const modelKind = resolveModelKind(agent.model_kind);
+
+  // Gearchiveerd = met pensioen. Hij bestaat nog voor de historie, maar draait niet.
+  if (String(agent.status) === 'archived') {
+    await supabaseAdmin.from('ai_agents').update({ next_run_at: null, lease_until: null }).eq('id', agentId);
+    return { agentId, status: 'skipped', reason: 'archived' };
+  }
 
   // 1) Idempotente run-rij. Bestaat het slot al → dubbele tik, sla over.
   const { data: runRow, error: runErr } = await supabaseAdmin.from('ai_agent_runs').insert({
@@ -155,13 +210,32 @@ async function executeAgentRun(
   }
   const runId = String(runRow.id);
 
+  // 1b) Logboek openen. Vanaf hier is elke stap na te lezen op de agentpagina.
+  const allowedToolNames = resolveAllowedTools(agent, mode);
+  const log = runLogger(orgId, agentId, runId);
+  log.add('start', triggeredBy === 'manual' ? 'Handmatig gestart' : 'Gestart volgens schema', {
+    mode,
+    model: modelKind,
+    instruction: String(agent.instruction || '').slice(0, 2000),
+    tools: allowedToolNames,
+    scheduled_for: agent.next_run_at ?? null,
+  });
+  await log.flush();
+
   // 2) Identiteit herleiden (geen live sessie). Geen actief lid meer → pauzeer.
   let role: OrganizationRole;
   try {
+    if (!runAsUserId) throw new Error('Geen actor meer aan deze agent gekoppeld.');
     role = await requireOrganizationAccess(runAsUserId, orgId);
   } catch {
-    await finishRun(runId, { status: 'cancelled', error: 'Actor is geen actief lid meer.' });
-    await supabaseAdmin.from('ai_agents').update({ status: 'paused', lease_until: null }).eq('id', agentId);
+    const reason = runAsUserId
+      ? 'De medewerker namens wie deze agent draait, is geen actief lid meer. Agent gepauzeerd.'
+      : 'De medewerker namens wie deze agent draaide, bestaat niet meer. Agent gepauzeerd; de historie blijft bewaard.';
+    log.add('error', reason, {});
+    log.add('finish', 'Afgebroken', { status: 'cancelled' });
+    await log.flush();
+    await finishRun(runId, { status: 'cancelled', error: reason });
+    await supabaseAdmin.from('ai_agents').update({ status: 'paused', next_run_at: null, lease_until: null }).eq('id', agentId);
     return { agentId, status: 'cancelled', reason: 'actor_inactive' };
   }
 
@@ -169,6 +243,9 @@ async function executeAgentRun(
   const userBudget = await checkUserBudget(runAsUserId);
   const agentOk = await agentMonthlyBudgetOk(agent);
   if (!userBudget.allowed || !agentOk) {
+    log.add('error', agentOk ? 'Het AI-tegoed van deze maand is op — run overgeslagen.' : 'Het maandbudget van deze agent is op — run overgeslagen.', {});
+    log.add('finish', 'Overgeslagen', { status: 'skipped_budget' });
+    await log.flush();
     await finishRun(runId, { status: 'skipped_budget', error: 'Budget bereikt.' });
     if (opts.reschedule) await rescheduleAgent(agent, {});
     return { agentId, status: 'skipped_budget' };
@@ -185,8 +262,8 @@ async function executeAgentRun(
   const ctx = await buildContext(orgId, role, { id: runAsUserId, email: actorEmail });
   ctx.clientEmail = clientEmailSettings(agent);
 
-  // 6) Tool-allowlist bepalen (report = alleen lezen).
-  const allowedToolNames = resolveAllowedTools(agent, mode);
+  // 6) De tool-allowlist is hierboven al bepaald (report = alleen lezen) en staat
+  //    in het logboek, zodat achteraf vaststaat wat deze run mócht.
 
   // 7) De opdracht als bericht + een korte autonome-run-notitie.
   const instruction = String(agent.instruction || '').trim();
@@ -197,8 +274,14 @@ async function executeAgentRun(
     // 8) Het brein draaien (headless, no-op emit).
     const outcome = await runAgent(ctx, [], runMessage, noopEmit, modelKind, allowedToolNames);
 
+    // 8b) Elke stap uit de loop het logboek in — dít is "wat heeft hij gedaan?".
+    for (const step of outcome.steps) log.addStep(step);
+
     const assistantId = await insertMessage(convId, orgId, runAsUserId, 'assistant', outcome.text, outcome.toolCalls);
     await recordUsage(orgId, convId, assistantId, runAsUserId, outcome.usage, modelKind, agentId, runId);
+
+    // De VOLLEDIGE eindtekst; `summary` op de run is een afgekapte digest.
+    log.add('answer', 'Zijn antwoord', { text: outcome.text });
 
     // 9) Voorstel (propose-modus) → goedkeurwachtrij, NIET uitvoeren.
     let proposalsCreated = 0;
@@ -211,6 +294,10 @@ async function executeAgentRun(
       }).select('id').single();
       auditId = (auditRow?.id as string) ?? null;
       proposalsCreated = 1;
+      log.add('proposal', 'Wacht op jouw akkoord', { auditId, type: outcome.proposal.type });
+    } else if (outcome.proposal) {
+      // Kan alleen als iemand de modus terugzet terwijl er al een run liep.
+      log.add('proposal', 'Voorstel niet klaargezet: deze agent mag alleen rapporteren.', { type: outcome.proposal.type });
     }
 
     const costUsdVal = costUsd(outcome.usage, modelKind);
@@ -225,7 +312,16 @@ async function executeAgentRun(
     });
 
     // 10) Bezorgen (in-app = de run-rij zelf; e-mail best-effort).
-    await deliver(agent, runId, name, outcome.text, proposalsCreated, actorEmail);
+    const delivered = await deliver(agent, runId, name, outcome.text, proposalsCreated, actorEmail);
+    log.add('delivery', delivered.emailed ? `Bezorgd in de app en per e-mail (${delivered.to})` : 'Bezorgd in de app', delivered);
+
+    log.add('finish', 'Klaar', {
+      status: 'succeeded',
+      tokens: outcome.usage.input + outcome.usage.cacheRead + outcome.usage.cacheWrite + outcome.usage.output,
+      cost_usd: costUsdVal,
+      proposals_created: proposalsCreated,
+    });
+    await log.flush();
 
     // 11) Succes: circuit-breaker resetten + herplannen.
     if (opts.reschedule) await rescheduleAgent(agent, { resetFailures: true });
@@ -233,6 +329,10 @@ async function executeAgentRun(
 
     return { agentId, runId, status: 'succeeded', proposalsCreated };
   } catch (err) {
+    // Ook een mislukte run hoort in het logboek: juist die wil je terugzoeken.
+    log.add('error', describeError(err), {});
+    log.add('finish', 'Mislukt', { status: 'failed' });
+    await log.flush();
     await finishRun(runId, { status: 'failed', error: describeError(err) });
     if (opts.reschedule) await rescheduleAgent(agent, { failure: true });
     else await supabaseAdmin.from('ai_agents').update({ lease_until: null }).eq('id', agentId);
@@ -308,26 +408,30 @@ async function failAndReschedule(agent: Record<string, unknown>, _error: string)
 
 // ── Bezorging ────────────────────────────────────────────────────────────────
 
-async function deliver(agent: Record<string, unknown>, runId: string, name: string, summary: string, proposals: number, actorEmail?: string): Promise<void> {
+async function deliver(agent: Record<string, unknown>, runId: string, name: string, summary: string, proposals: number, actorEmail?: string): Promise<{ emailed: boolean; to: string | null; note?: string }> {
   const delivery = (agent.delivery ?? {}) as { channels?: unknown };
   const channels = Array.isArray(delivery.channels) ? delivery.channels.map(String) : ['inapp'];
   // in-app = de ai_agent_runs-rij; niets extra's nodig.
-  if (channels.includes('email')) {
-    const apiKey = Deno.env.get('RESEND_API_KEY') || '';
-    const from = Deno.env.get('GERRIE_ROUTINES_FROM') || Deno.env.get('RESEND_FROM') || '';
-    if (!apiKey || !from || !actorEmail) return; // best-effort: stil overslaan als niet geconfigureerd
-    const extra = proposals > 0 ? ` (${proposals} voorstel${proposals === 1 ? '' : 'len'} klaargezet om goed te keuren)` : '';
-    const safe = summary.slice(0, 4000);
-    try {
-      await sendViaResend(apiKey, {
-        from, to: [actorEmail],
-        subject: `Gerrie Routine: ${name}${extra}`,
-        text: safe,
-        html: `<div style="font-family:system-ui,sans-serif;max-width:640px"><h2 style="margin:0 0 8px">${escapeHtml(name)}</h2>${extra ? `<p style="color:#b8860b"><strong>${escapeHtml(extra.trim())}</strong></p>` : ''}<div style="white-space:pre-wrap;line-height:1.5">${escapeHtml(safe)}</div><p style="color:#888;font-size:12px;margin-top:16px">Automatisch gegenereerd door je Gerrie Routine.</p></div>`,
-      }, `agent-run-${runId}`);
-    } catch (e) {
-      console.warn('gerrie-agent-runner e-mailbezorging mislukt', describeError(e));
-    }
+  if (!channels.includes('email')) return { emailed: false, to: null };
+
+  const apiKey = Deno.env.get('RESEND_API_KEY') || '';
+  const from = Deno.env.get('GERRIE_ROUTINES_FROM') || Deno.env.get('RESEND_FROM') || '';
+  if (!apiKey || !from || !actorEmail) {
+    return { emailed: false, to: actorEmail ?? null, note: 'e-mailbezorging staat aan maar is niet geconfigureerd' };
+  }
+  const extra = proposals > 0 ? ` (${proposals} voorstel${proposals === 1 ? '' : 'len'} klaargezet om goed te keuren)` : '';
+  const safe = summary.slice(0, 4000);
+  try {
+    await sendViaResend(apiKey, {
+      from, to: [actorEmail],
+      subject: `Gerrie Routine: ${name}${extra}`,
+      text: safe,
+      html: `<div style="font-family:system-ui,sans-serif;max-width:640px"><h2 style="margin:0 0 8px">${escapeHtml(name)}</h2>${extra ? `<p style="color:#b8860b"><strong>${escapeHtml(extra.trim())}</strong></p>` : ''}<div style="white-space:pre-wrap;line-height:1.5">${escapeHtml(safe)}</div><p style="color:#888;font-size:12px;margin-top:16px">Automatisch gegenereerd door je Gerrie Routine.</p></div>`,
+    }, `agent-run-${runId}`);
+    return { emailed: true, to: actorEmail };
+  } catch (e) {
+    console.warn('gerrie-agent-runner e-mailbezorging mislukt', describeError(e));
+    return { emailed: false, to: actorEmail, note: `e-mail mislukt: ${describeError(e)}` };
   }
 }
 
@@ -444,14 +548,25 @@ function clampNum(v: unknown, def: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.round(n * 100) / 100));
 }
 
-async function createAgent(orgId: string, userId: string, body: Record<string, unknown>): Promise<{ id: string }> {
+/**
+ * Maakt een agent aan. Met `activate` gaat hij in DEZELFDE aanroep aan.
+ *
+ * Dat is bewust één stap: een agent die je net hebt samengesteld hoort niet als
+ * slapend concept te blijven liggen tot je hem nog eens apart aanzet. De grens
+ * blijft waar hij hoort — alles wat hij vervolgens wil versturen komt als
+ * afvinklijst bij jou terug.
+ */
+async function createAgent(orgId: string, userId: string, body: Record<string, unknown>): Promise<{ id: string; status: string; next_run_at: string | null }> {
   const fields = sanitizeAgentFields(body);
   if (!fields.instruction) throw new HttpError('Geef een opdracht voor de agent.', 400);
+  const activate = body.activate === true;
+  const nextRunAt = activate ? computeNextRunAt(fields, new Date()).toISOString() : null;
   const { data, error } = await supabaseAdmin.from('ai_agents').insert({
-    organization_id: orgId, created_by: userId, run_as_user_id: userId, status: 'draft', ...fields,
+    organization_id: orgId, created_by: userId, run_as_user_id: userId,
+    status: activate ? 'active' : 'draft', next_run_at: nextRunAt, ...fields,
   }).select('id').single();
   if (error) throw new HttpError(`Agent aanmaken mislukt: ${error.message}`, 500);
-  return { id: data.id as string };
+  return { id: data.id as string, status: activate ? 'active' : 'draft', next_run_at: nextRunAt };
 }
 
 async function updateAgent(orgId: string, body: Record<string, unknown>): Promise<{ ok: true }> {
@@ -483,6 +598,9 @@ async function setStatus(orgId: string, id: string, status: string): Promise<{ o
   if (!existing) throw new HttpError('Agent niet gevonden.', 404);
 
   const patch: Record<string, unknown> = { status, lease_until: null };
+  // Het archief-moment loopt mee met de status, zodat "gearchiveerd zonder datum"
+  // niet kan bestaan — de galerij sorteert het archief op dat moment.
+  patch.archived_at = status === 'archived' ? (existing.archived_at ?? new Date().toISOString()) : null;
   if (status === 'active') {
     if (!String(existing.instruction || '').trim()) throw new HttpError('Geef eerst een opdracht voordat je de agent activeert.', 400);
     patch.next_run_at = computeNextRunAt(existing, new Date()).toISOString();
@@ -495,10 +613,32 @@ async function setStatus(orgId: string, id: string, status: string): Promise<{ o
   return { ok: true, next_run_at: (patch.next_run_at as string | null) ?? null };
 }
 
-async function deleteAgent(orgId: string, id: string): Promise<{ ok: true }> {
+/**
+ * "Verwijderen" van een agent = ARCHIVEREN.
+ *
+ * Een agent heeft namens de organisatie gewerkt: mail klaargezet, facturen
+ * voorgesteld, cijfers gelezen. Dat weggooien betekent dat je achteraf niet meer
+ * kunt verantwoorden wat er is gebeurd. Hij gaat dus uit (geen schema, geen lease)
+ * maar blijft met zijn volledige logboek bestaan. Er is bewust géén hard-delete-pad.
+ */
+async function archiveAgent(orgId: string, id: string): Promise<{ ok: true; archived: true }> {
   if (!isUuid(id)) throw new HttpError('Ongeldig id.', 400);
-  const { error } = await supabaseAdmin.from('ai_agents').delete().eq('id', id).eq('organization_id', orgId);
-  if (error) throw new HttpError(`Agent verwijderen mislukt: ${error.message}`, 500);
+  const { data, error } = await supabaseAdmin.from('ai_agents')
+    .update({ status: 'archived', archived_at: new Date().toISOString(), next_run_at: null, lease_until: null })
+    .eq('id', id).eq('organization_id', orgId).select('id').maybeSingle();
+  if (error) throw new HttpError(`Agent archiveren mislukt: ${error.message}`, 500);
+  if (!data) throw new HttpError('Agent niet gevonden.', 404);
+  return { ok: true, archived: true };
+}
+
+/** Terug uit het archief: hij komt gepauzeerd terug, jij zet hem zelf weer aan. */
+async function restoreAgent(orgId: string, id: string): Promise<{ ok: true }> {
+  if (!isUuid(id)) throw new HttpError('Ongeldig id.', 400);
+  const { data, error } = await supabaseAdmin.from('ai_agents')
+    .update({ status: 'paused', archived_at: null, next_run_at: null, lease_until: null })
+    .eq('id', id).eq('organization_id', orgId).select('id').maybeSingle();
+  if (error) throw new HttpError(`Agent terugzetten mislukt: ${error.message}`, 500);
+  if (!data) throw new HttpError('Agent niet gevonden.', 404);
   return { ok: true };
 }
 
@@ -508,6 +648,7 @@ async function runNow(orgId: string, id: string): Promise<Record<string, unknown
   const { data: agent, error } = await supabaseAdmin.from('ai_agents').select('*').eq('id', id).eq('organization_id', orgId).maybeSingle();
   if (error) throw new HttpError(`Agent ophalen mislukt: ${error.message}`, 500);
   if (!agent) throw new HttpError('Agent niet gevonden.', 404);
+  if (String(agent.status) === 'archived') throw new HttpError('Deze agent is gearchiveerd. Zet hem eerst terug als je hem weer wilt laten draaien.', 400);
   if (!String(agent.instruction || '').trim()) throw new HttpError('Deze agent heeft nog geen opdracht.', 400);
   // Handmatige run: eigen occurrence-key, verandert het schema NIET.
   const occurrenceKey = `manual:${new Date().toISOString()}`;
@@ -549,28 +690,37 @@ async function replyToRun(orgId: string, userId: string, role: OrganizationRole,
   const history = await loadHistory(convId, orgId);
   await insertMessage(convId, orgId, userId, 'user', message, []);
 
+  // Het logboek loopt door waar de run gebleven was: een antwoordbeurt hoort bij
+  // dezelfde run, en wat de agent daarna deed hoort er net zo goed in.
+  const log = runLogger(orgId, String(agent.id), runId, await nextLogSeq(runId));
+  log.add('reply', 'Jij antwoordde de agent', { message: message.slice(0, 2000) });
+
   const ctx = await buildContext(orgId, role, { id: userId });
   // Antwoorden op een run gebruikt dezelfde schrijfwijze en hetzelfde mailplafond
   // als de geplande run zelf; anders zou "ja, stuur maar" ineens andere post opleveren.
   ctx.clientEmail = clientEmailSettings(agent);
   const allowedToolNames = resolveAllowedTools(agent, mode);
   const outcome = await runAgent(ctx, history, message, noopEmit, modelKind, allowedToolNames);
+  for (const step of outcome.steps) log.addStep(step);
 
   const assistantId = await insertMessage(convId, orgId, userId, 'assistant', outcome.text, outcome.toolCalls);
   await recordUsage(orgId, convId, assistantId, userId, outcome.usage, modelKind, String(agent.id), runId);
+  log.add('answer', 'Zijn antwoord', { text: outcome.text });
 
   let proposalCreated = 0;
   if (outcome.proposal && mode === 'propose') {
-    await supabaseAdmin.from('ai_action_audit').insert({
+    const { data: auditRow } = await supabaseAdmin.from('ai_action_audit').insert({
       organization_id: orgId, conversation_id: convId, message_id: assistantId, user_id: userId,
       action: `propose_${outcome.proposal.type}`, params: outcome.proposal, status: 'proposed',
       agent_id: String(agent.id), agent_run_id: runId,
-    });
+    }).select('id').single();
     proposalCreated = 1;
+    log.add('proposal', 'Wacht op jouw akkoord', { auditId: auditRow?.id ?? null, type: outcome.proposal.type });
     // Houd de teller op de run bij (voor de UI-badge).
     const { data: cur } = await supabaseAdmin.from('ai_agent_runs').select('proposals_created').eq('id', runId).maybeSingle();
     await supabaseAdmin.from('ai_agent_runs').update({ proposals_created: Number(cur?.proposals_created || 0) + 1 }).eq('id', runId);
   }
+  await log.flush();
 
   return { text: outcome.text, proposalCreated };
 }

@@ -185,16 +185,22 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
               <footer>
                 <label className="abx-activate">
                   <input type="checkbox" checked={activate} onChange={(e) => setActivate(e.target.checked)} />
-                  Meteen aanzetten
+                  Meteen aanzetten en nu draaien
                 </label>
                 <button type="button" className="cc-btn ghost" disabled={saving} onClick={() => onOpenForm(agent)}>
                   <Pencil size={13} /> Zelf bijschaven
                 </button>
                 <button type="button" className="cc-btn primary" disabled={saving} onClick={() => void create()}>
-                  {saving ? <><Loader2 size={14} className="ag-spin" /> Aanmaken…</> : <>Aanmaken</>}
+                  {saving
+                    ? <><Loader2 size={14} className="ag-spin" /> Aanmaken…</>
+                    : activate ? <>Aanmaken en starten</> : <>Aanmaken als concept</>}
                 </button>
               </footer>
-              <p className="abx-hint">Niet helemaal goed? Zeg het gewoon hieronder — bijvoorbeeld “maak hem maandelijks” of “laat hem ook de offertes meenemen”.</p>
+              <p className="abx-hint">
+                {activate
+                  ? <>Hij gaat meteen aan en draait direct één ronde, zodat je vandaag al ziet wat hij oplevert. {agent.mode === 'propose' ? <>Alles wat hij wil versturen komt als <b>afvinklijst</b> bij je terug.</> : 'Hij leest alleen mee en verandert niets.'}</>
+                  : <>Niet helemaal goed? Zeg het gewoon hieronder — bijvoorbeeld “maak hem maandelijks” of “laat hem ook de offertes meenemen”.</>}
+              </p>
             </article>
           )}
 

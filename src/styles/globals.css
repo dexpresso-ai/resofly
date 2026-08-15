@@ -7410,16 +7410,18 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   KLANTMAIL VAN EEN AGENT — het mailbord en de instellingen  (2026-08-17)
+   DE AFVINKLIJST VAN EEN AGENT — mail, facturen, offertes  (2026-08-17)
    ───────────────────────────────────────────────────────────────────────
    Hier gaat echte post naar echte klanten, dus de vorm volgt de
-   verantwoordelijkheid: per mail zie je de ontvanger, het onderwerp en de
-   volledige tekst, met een eigen vinkje. Een verstuurde regel kleurt groen en
-   valt stil; een overgeslagen regel vervaagt maar blijft staan, zodat je kunt
-   nalezen wat je hebt laten liggen.
+   verantwoordelijkheid: per regel zie je de ontvanger, waar het over gaat en
+   (bij mail) de volledige tekst, met een eigen vinkje. Een verstuurde regel
+   kleurt groen en valt stil; een overgeslagen regel vervaagt maar blijft staan,
+   zodat je kunt nalezen wat je hebt laten liggen.
 
-   .cem-*  het mailbord (ClientEmailBatch) — draait in de wachtrij, in de
+   .cem-*  de afvinklijst (ApprovalChecklist) — draait in de wachtrij, in de
            run-historie én in de chat-dock, dus het leunt alleen op app-tokens.
+           Dezelfde vorm voor mailtjes, facturen, offertes en herinneringen:
+           hoe je beslist hoort niet per soort te verschillen.
    .ag-mailbox / .ag-mailmode / .ag-tokens  de instellingen in de agent-editor.
    ═══════════════════════════════════════════════════════════════════════ */
 
@@ -7457,6 +7459,20 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .cem-tally{ flex:1 1 120px; font-size:11.5px; color:var(--muted); }
 .cem-nowrite{ margin:0; font-size:11.5px; color:var(--muted); }
 
+/* "Alles aan/uit" — verschijnt pas vanaf twee open regels, want bij één regel is
+   een knop die "alles" belooft misleidend. Staat vlak boven de lijst zodat de
+   werking meteen zichtbaar is in de vinkjes eronder. */
+.cem-all{ display:flex; align-items:center; gap:10px; }
+.cem-allbtn{ all:unset; cursor:pointer; display:inline-flex; align-items:center; gap:6px; padding:4px 9px; border:1px solid var(--border2); border-radius:8px; font-size:11.5px; font-weight:600; color:var(--muted2); transition:border-color .15s,color .15s,background .15s; }
+.cem-allbtn:hover:not(:disabled){ border-color:var(--border-strong); color:var(--accent-ink); background:var(--accent-soft); }
+.cem-allbtn:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.cem-allbtn:disabled{ opacity:.5; cursor:default; }
+.cem-allcount{ font-size:11px; color:var(--muted); }
+
+/* Het bedrag / het niveau: waar je feitelijk op beslist, dus rechts uitgelijnd
+   en in tabelcijfers zodat een kolom bedragen te vergelijken is. */
+.cem-badge{ margin-left:auto; white-space:nowrap; font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; color:var(--text); }
+
 /* In de wachtrij vult het bord de hele rij; de losse akkoordknoppen vervallen. */
 .ag-queue-row.is-batch{ align-items:flex-start; }
 .ag-queue-row.is-batch .ag-queue-body{ flex:1 1 100%; }
@@ -7486,7 +7502,68 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .cem-toggle{ min-height:36px; }
   .cem-pick input{ width:20px; height:20px; }
   .cem-error-actions{ margin-left:0; width:100%; }
+  .cem-badge{ margin-left:0; }
+  .cem-allbtn{ min-height:36px; }
   .ag-mailmode{ grid-template-columns:1fr; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   HET LOGBOEK EN HET ARCHIEF VAN EEN AGENT  (2026-08-19)
+   ───────────────────────────────────────────────────────────────────────
+   Een agent werkt terwijl niemand kijkt. Wat hij deed moet daarom achteraf
+   na te lezen zijn — en dat mag niet verdwijnen als je hem "verwijdert".
+   Verwijderen is archiveren geworden; het archief staat onderaan de galerij,
+   dicht, want dit is naslag en geen dagelijks werk.
+
+   Toon: het logboek is bewijsmateriaal, geen blikvanger. Dus klein, monospace
+   tijdstempels, geen kleurvlakken — alleen een fout krijgt aandacht.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Het archief in de galerij ──────────────────────────────────────────── */
+.ag-archive{ margin-top:22px; border-top:1px solid var(--border); padding-top:16px; display:flex; flex-direction:column; gap:14px; }
+.ag-archive-head{ all:unset; cursor:pointer; display:flex; align-items:center; gap:9px; font-size:13px; color:var(--muted2); }
+.ag-archive-head:hover{ color:var(--text); }
+.ag-archive-head:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; border-radius:8px; }
+.ag-archive-head strong{ font-weight:600; }
+.ag-archive-head span{ font-size:11.5px; color:var(--muted); }
+.ag-grid-archive .ag-tile{ opacity:.72; }
+.ag-grid-archive .ag-tile:hover,.ag-grid-archive .ag-tile.is-open{ opacity:1; }
+.ag-tile.is-archived{ border-style:dashed; }
+.ag-tile-state.is-archived{ color:var(--muted); border-color:var(--border2); }
+
+/* De strook boven een gearchiveerde agent: waarom je hier geen knoppen ziet. */
+.ag-archived-note{ display:flex; align-items:flex-start; gap:8px; margin:0; padding:10px 12px; border:1px dashed var(--border2); border-radius:10px; font-size:12px; line-height:1.5; color:var(--muted2); }
+.ag-archived-note svg{ flex:none; margin-top:2px; color:var(--muted); }
+
+/* ── De afloop van de voorstellen van een run ───────────────────────────── */
+.cc-decisions{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:5px; }
+.cc-decision{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:12px; color:var(--muted2); }
+.cc-decision-mark{ display:inline-flex; flex:none; }
+.cc-decision.is-executed .cc-decision-mark,.cc-decision.is-auto_executed .cc-decision-mark{ color:var(--accent-g); }
+.cc-decision.is-failed .cc-decision-mark,.cc-decision.is-cancelled .cc-decision-mark{ color:var(--muted); }
+.cc-decision-what{ font-weight:600; color:var(--text); }
+.cc-decision-detail{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cc-decision-when{ margin-left:auto; font-size:11px; color:var(--muted); }
+
+/* ── Het logboek zelf ───────────────────────────────────────────────────── */
+.cc-log{ border-top:1px solid var(--border); padding-top:9px; display:flex; flex-direction:column; gap:8px; }
+.cc-log-head{ all:unset; cursor:pointer; display:inline-flex; align-items:center; gap:7px; font-size:11.5px; font-weight:600; letter-spacing:.02em; color:var(--muted); }
+.cc-log-head:hover{ color:var(--accent-ink); }
+.cc-log-head:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; border-radius:6px; }
+.cc-log-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:2px; }
+.cc-log-row{ display:flex; align-items:baseline; gap:10px; padding:4px 8px; border-radius:7px; font-size:12px; line-height:1.45; color:var(--muted2); }
+.cc-log-row:nth-child(odd){ background:rgba(var(--sheen-rgb),calc(.025 * var(--sheen-k))); }
+.cc-log-time{ flex:none; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; color:var(--muted); }
+.cc-log-label{ flex:1 1 auto; min-width:0; color:var(--text); overflow-wrap:anywhere; }
+.cc-log-detail{ flex:none; max-width:44%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--muted); }
+.cc-log-row.is-error .cc-log-label{ color:var(--accent-r); }
+.cc-log-row.is-proposal .cc-log-label{ color:var(--accent-ink); }
+.cc-log-row.is-finish .cc-log-label,.cc-log-row.is-start .cc-log-label{ font-weight:600; }
+
+@media(max-width:760px){
+  .cc-log-row{ flex-wrap:wrap; }
+  .cc-log-detail{ max-width:100%; flex:1 1 100%; padding-left:calc(10px + 5ch); }
+  .cc-decision-when{ margin-left:0; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
