@@ -25,6 +25,7 @@ import {
   resolveModelKind, runAgent, buildContext, createConversation, insertMessage,
   recordUsage, costUsd, checkUserBudget, requireUser, requireOrganizationAccess,
   describeError, isUuid, todayIso, tzOffsetMs, parseAllowedOrigins, loadHistory,
+  AGENT_ICON_KEYS,
 } from '../_shared/gerrieCore.ts';
 import type { Emit, OrganizationRole } from '../_shared/gerrieCore.ts';
 import { sendViaResend } from '../_shared/resend.ts';
@@ -45,16 +46,8 @@ const noopEmit: Emit = async () => {};
 const ALL_TOOL_NAMES: string[] = (TOOL_DEFINITIONS as Array<{ name: string }>).map((t) => t.name);
 const READ_TOOL_NAMES: string[] = ALL_TOOL_NAMES.filter((n) => !n.startsWith('propose_'));
 
-// Embleem-sleutels die een gebruiker mag kiezen. Puur cosmetisch (kolom ai_agents.icon),
-// maar wél een allowlist: de waarde komt uit de browser en belandt in de database.
-// MOET gelijk lopen met AGENT_ICONS in src/components/AgentGlyph.tsx — een sleutel die
-// hier ontbreekt wordt stil op null gezet en de app valt terug op het afgeleide embleem.
-const AGENT_ICON_KEYS: string[] = [
-  'receipt', 'bell', 'trending', 'wallet', 'coins', 'piggy', 'scale',
-  'calendar', 'clock', 'users', 'folder', 'checks', 'lifebuoy', 'inbox',
-  'mail', 'megaphone', 'chart', 'shield', 'radar', 'telescope', 'compass',
-  'rocket', 'brain', 'bot', 'zap', 'flame', 'gem', 'sparkles',
-];
+// De embleem-allowlist staat in gerrieCore, zodat de bouwer en deze schrijfpoort
+// niet uit elkaar kunnen lopen.
 
 // ── Entry ────────────────────────────────────────────────────────────────────
 

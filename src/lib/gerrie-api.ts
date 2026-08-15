@@ -170,6 +170,8 @@ export interface GerrieSendClientEmailProposal {
 export interface GerrieAgentProposal {
   type: 'agent';
   name: string;
+  icon: string | null;
+  max_emails_per_run: number;
   instruction: string;
   mode: RoutineMode;
   enabled_tools: string[];
@@ -398,6 +400,38 @@ export async function estimateGerrieMission(organizationId: UUID, subtaskCount: 
   } catch {
     return { estimatePct: null, remainingFraction: null };
   }
+}
+
+/**
+ * Eén beurt van de agent-bouwer: óf een vervolgvraag, óf de complete agent.
+ * Het model moet altijd één van beide leveren, dus de gebruiker loopt nooit vast
+ * op een vaag tekstantwoord.
+ */
+export type AgentDesignStep =
+  | { kind: 'question'; question: string; suggestions: string[] }
+  | { kind: 'agent'; summary: string; agent: GerrieAgentProposal }
+  | { kind: 'budget' };
+
+/**
+ * Laat Gerrie uit een gesprekje een complete agent bouwen. Stuurt het hele
+ * gesprek mee (laatste 12 beurten), zodat "maak hem maandelijks" ook nog werkt
+ * nadat er al een agent lag.
+ */
+export async function designGerrieAgent(
+  organizationId: UUID,
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+): Promise<AgentDesignStep> {
+  const payload = await postGerrie({ action: 'design_agent', organizationId, messages });
+  const kind = String(payload?.kind ?? '');
+  if (kind === 'budget') return { kind: 'budget' };
+  if (kind === 'agent' && payload?.agent) {
+    return { kind: 'agent', summary: String(payload.summary ?? ''), agent: payload.agent as GerrieAgentProposal };
+  }
+  return {
+    kind: 'question',
+    question: String(payload?.question ?? 'Kun je dat iets concreter maken?'),
+    suggestions: Array.isArray(payload?.suggestions) ? (payload.suggestions as unknown[]).map(String) : [],
+  };
 }
 
 export interface GerrieUsageRow { user_id: UUID; messages: number; tokens: number; cost_usd: number }

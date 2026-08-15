@@ -151,10 +151,24 @@ interface SendClientEmailProposal {
   /** Klanten die de agent wilde mailen maar die (nog) geen e-mailadres hebben. */
   skipped: string[];
 }
+/**
+ * Embleem-sleutels die een agent mag dragen. Puur cosmetisch, maar wél een
+ * allowlist: de waarde komt uit een model of uit de browser en belandt in de
+ * database. MOET gelijk lopen met AGENT_ICONS in src/components/AgentGlyph.tsx.
+ */
+export const AGENT_ICON_KEYS: string[] = [
+  'receipt', 'bell', 'trending', 'wallet', 'coins', 'piggy', 'scale',
+  'calendar', 'clock', 'users', 'folder', 'checks', 'lifebuoy', 'inbox',
+  'mail', 'megaphone', 'chart', 'shield', 'radar', 'telescope', 'compass',
+  'rocket', 'brain', 'bot', 'zap', 'flame', 'gem', 'sparkles',
+];
+
 /** Een door Gerrie klaargezette agent; goedkeuren opent de agent-editor vooringevuld. */
 interface AgentProposal {
   type: 'agent';
   name: string;
+  icon: string | null;
+  max_emails_per_run: number;
   instruction: string;
   mode: 'report' | 'propose';
   enabled_tools: string[];
@@ -512,6 +526,154 @@ async function planMission(ctx: GerrieContext, userId: string, goal: string): Pr
 }
 
 /** Eén niet-streamende Claude-call met geforceerde tool → gestructureerde planuitvoer. */
+/**
+ * De agent-bouwer: een kort gesprek waarin de gebruiker vertelt wat hij nodig
+ * heeft, en dat eindigt in een compleet ingevulde agent.
+ *
+ * Het model MOET één van twee tools kiezen (`tool_choice: any`): doorvragen als
+ * er iets essentieels ontbreekt, of de agent opleveren. Zo krijg je nooit een
+ * los tekstantwoord waar de app niets mee kan — het gesprek loopt altijd vooruit.
+ *
+ * Er wordt hier niets aangemaakt. De uitkomst is een VOORSTEL dat in het
+ * agent-formulier landt, waar de gebruiker het nakijkt, bijschaaft en opslaat.
+ */
+export async function designAgent(
+  ctx: GerrieContext,
+  userId: string,
+  messages: Array<{ role: string; content: string }>,
+): Promise<{ kind: 'question'; question: string; suggestions: string[] } | { kind: 'agent'; summary: string; agent: AgentProposal } | { kind: 'budget' }> {
+  const budget = await checkUserBudget(userId);
+  if (!budget.allowed) return { kind: 'budget' };
+
+  // Alleen de tools die dit teamlid ook echt mág; anders bouwt de bouwer een
+  // agent die op zijn eerste run stukloopt op de modulerechten.
+  const usable = allowedToolNamesFor(ctx).filter((n) => n !== 'propose_create_agent');
+  const toolMenu = TOOL_DEFINITIONS
+    .filter((t) => usable.includes(t.name))
+    .map((t) => `- \`${t.name}\` — ${String(t.description).split('.')[0]}.`)
+    .join('\n');
+
+  const system = [
+    buildSystemPrompt(ctx),
+    '',
+    'JE BENT NU DE AGENT-BOUWER. De gebruiker vertelt in gewone taal wat hij terugkerend gedaan wil hebben; jij zet daar een geplande agent van in elkaar.',
+    '',
+    'Een agent is een opdracht die vanzelf op een vast moment draait. Twee soorten:',
+    '- `report` — kijkt alleen mee en vat samen. Raakt niets aan.',
+    '- `propose` — mag daarnaast iets KLAARZETTEN (mail, herinnering, factuur, afspraak). Er gaat nooit iets weg zonder dat de gebruiker het in de app afvinkt.',
+    '',
+    'Deze tools kun je aan de agent geven:',
+    toolMenu,
+    '',
+    'Werkwijze:',
+    '- Ontbreekt er iets ESSENTIEELS (hoe vaak, of er iets verstuurd mag worden, welke klanten), gebruik dan `ask_user`. Stel één korte vraag tegelijk en geef 2 tot 4 concrete keuzes mee. Vraag hoogstens twee keer iets; kun je het redelijk invullen, doe dat dan gewoon.',
+    '- Vraag NOOIT naar zaken die je zelf goed kunt kiezen: naam, embleem, tijdstip, de precieze tool-set, het maximum aantal mails.',
+    '- Zodra je genoeg weet: `emit_agent`. Vul álles in, ook naam en embleem.',
+    '- `instruction` schrijf je in de je-vorm, alsof de gebruiker het rechtstreeks aan Gerrie vraagt, en zo concreet dat de agent er zonder verdere uitleg mee vooruit kan. Benoem wat hij moet opzoeken en wat er in het resultaat hoort te staan.',
+    '- Mag de agent klantmail sturen, zet dan `propose_send_client_email` in `enabled_tools`. Wil de gebruiker altijd dezelfde tekst, kies `email_mode: "template"` en schrijf onderwerp + tekst met variabelen zoals {{voornaam|klant}} en {{klantnaam}}. Wil hij een persoonlijk bericht per klant, kies `email_mode: "compose"`.',
+    '- `summary`: twee of drie zinnen in gewone taal over wat deze agent gaat doen en wanneer. Geen opsomming van tool-namen.',
+    '',
+    `Embleem-sleutels: ${AGENT_ICON_KEYS.join(', ')}.`,
+  ].join('\n');
+
+  const askTool = {
+    name: 'ask_user',
+    description: 'Stel één korte vervolgvraag omdat er iets essentieels ontbreekt.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'Eén korte vraag in gewone taal.' },
+        suggestions: { type: 'array', items: { type: 'string' }, description: '2 tot 4 korte antwoorden waar de gebruiker op kan tikken.' },
+      },
+      required: ['question'],
+    },
+  };
+  const emitTool = {
+    name: 'emit_agent',
+    description: 'Lever de complete agent op.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: 'Twee à drie zinnen: wat deze agent doet en wanneer.' },
+        name: { type: 'string', description: 'Korte, herkenbare naam.' },
+        icon: { type: 'string', description: 'Embleem-sleutel uit de lijst.' },
+        instruction: { type: 'string', description: 'De opdracht in de je-vorm.' },
+        mode: { type: 'string', enum: ['report', 'propose'] },
+        enabled_tools: { type: 'array', items: { type: 'string' } },
+        schedule_kind: { type: 'string', enum: ['daily', 'weekly', 'monthly'] },
+        hour: { type: 'number', description: 'Uur van de dag, 0-23.' },
+        day_of_week: { type: 'number', description: 'Bij wekelijks: 1=maandag t/m 7=zondag.' },
+        day_of_month: { type: 'number', description: 'Bij maandelijks: 1-31.' },
+        email_mode: { type: 'string', enum: ['compose', 'template'] },
+        email_subject: { type: 'string' },
+        email_body: { type: 'string' },
+        max_emails_per_run: { type: 'number', description: '1-25.' },
+      },
+      required: ['summary', 'name', 'instruction', 'mode', 'schedule_kind'],
+    },
+  };
+
+  const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const chosen = await callAnthropicChoice(system, messages, [askTool, emitTool], usage);
+
+  // Verbruik boeken op een los gesprek, net als de missie-planner.
+  const first = messages.find((m) => m.role === 'user')?.content ?? 'Agent bouwen';
+  const convId = await createConversation(ctx.organizationId, userId, `Agent bouwen: ${first.slice(0, 60)}`);
+  const msgId = await insertMessage(convId, ctx.organizationId, userId, 'assistant', String(chosen.input?.summary || chosen.input?.question || ''), [{ name: chosen.name, input: chosen.input }]);
+  await recordUsage(ctx.organizationId, convId, msgId, userId, usage, 'strong');
+
+  if (chosen.name === 'ask_user') {
+    const suggestions = Array.isArray(chosen.input?.suggestions)
+      ? (chosen.input.suggestions as unknown[]).map((s) => String(s).slice(0, 60)).slice(0, 4)
+      : [];
+    return { kind: 'question', question: String(chosen.input?.question || 'Kun je dat iets concreter maken?').slice(0, 400), suggestions };
+  }
+
+  const built = buildAgentProposal(chosen.input as Record<string, unknown>);
+  if (!built.ok) return { kind: 'question', question: `Ik kreeg het nog niet rond: ${built.error} Kun je het iets concreter maken?`, suggestions: [] };
+  return {
+    kind: 'agent',
+    summary: String(chosen.input?.summary || '').slice(0, 600),
+    agent: built.proposal as AgentProposal,
+  };
+}
+
+/**
+ * Eén beurt met een geforceerde toolkeuze (`tool_choice: any`): het model MOET
+ * één van de aangeboden tools aanroepen. Geeft terug welke, plus de invoer.
+ */
+async function callAnthropicChoice(
+  system: string,
+  messages: Array<{ role: string; content: string }>,
+  tools: Array<Record<string, unknown>>,
+  usage: Usage,
+): Promise<{ name: string; input: Record<string, unknown> }> {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 3072,
+      system: [{ type: 'text', text: system }],
+      tools,
+      tool_choice: { type: 'any' },
+      messages: messages.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    let detail = text.slice(0, 300);
+    try { detail = (JSON.parse(text)?.error?.message as string) || detail; } catch { /* niet-JSON */ }
+    throw new HttpError(`Claude-fout (${res.status}): ${detail || 'onbekend'}`, res.status === 429 ? 429 : 502);
+  }
+  const data = await res.json();
+  accumulateUsage(usage, (data?.usage ?? {}) as Record<string, number>);
+  const blocks = Array.isArray(data?.content) ? (data.content as Record<string, unknown>[]) : [];
+  const block = blocks.find((b) => b?.type === 'tool_use');
+  if (!block) throw new HttpError('Gerrie gaf geen bruikbaar antwoord. Probeer het opnieuw.', 502);
+  return { name: String(block.name), input: (block.input ?? {}) as Record<string, unknown> };
+}
+
 async function callAnthropicPlan(system: string, goal: string, tool: Record<string, unknown>, usage: Usage): Promise<Record<string, unknown>> {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -2006,11 +2168,15 @@ function buildAgentProposal(input: Record<string, unknown>): ProposalResult {
   const emailSubject = String(input.email_subject || '').trim();
   const emailBody = String(input.email_body || '').trim();
 
+  const maxEmails = Math.floor(num(input.max_emails_per_run));
+
   return {
     ok: true,
     proposal: {
       type: 'agent',
       name: name.slice(0, 120),
+      icon: AGENT_ICON_KEYS.includes(String(input.icon)) ? String(input.icon) : null,
+      max_emails_per_run: Number.isFinite(maxEmails) && maxEmails >= 1 && maxEmails <= 25 ? maxEmails : 5,
       instruction: instruction.slice(0, 4000),
       mode,
       enabled_tools,

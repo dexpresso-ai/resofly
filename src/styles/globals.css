@@ -7347,3 +7347,76 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .cem-error-actions{ margin-left:0; width:100%; }
   .ag-mailmode{ grid-template-columns:1fr; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   DE AGENT-BOUWER — je vertelt het, Gerrie zet hem in elkaar  (2026-08-18)
+   ───────────────────────────────────────────────────────────────────────
+   Dit is de voordeur van "Nieuwe agent" geworden; het formulier zit erachter
+   voor wie liever zelf invult. Vorm: een rustig gesprek met de opbouw van een
+   chat — beurten in een scroller, de invoer eronder vastgeplakt — en daartussen
+   één kaart die laat zien wát er gebouwd is, in gewone taal.
+
+   Bewust GEEN tweede chatlook: de dock (.gerrie-*) is de assistent, dit is een
+   formulier dat toevallig praat. Daarom geen avatars, geen bellen met staartjes,
+   maar dezelfde vlakken en randen als de rest van de agent-pagina.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.abx{ display:flex; flex-direction:column; min-height:0; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--panel); overflow:hidden; }
+.abx-stream{ flex:1 1 auto; min-height:180px; max-height:min(52vh,520px); overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:14px; }
+
+.abx-starters{ display:flex; flex-direction:column; gap:9px; }
+.abx-starter-list{ display:flex; flex-direction:column; align-items:flex-start; gap:7px; }
+.abx-starter-list .cc-chip{ text-align:left; }
+
+.abx-turn{ display:flex; gap:9px; align-items:flex-start; max-width:min(56ch,88%); }
+.abx-turn p{ margin:0; font-size:13.5px; line-height:1.6; }
+.abx-turn.user{ align-self:flex-end; }
+.abx-turn.user p{ padding:10px 13px; border-radius:14px 14px 4px 14px; background:var(--accent-soft); border:1px solid var(--border-strong); color:var(--text); }
+.abx-turn.assistant p{ padding:2px 0; color:var(--muted2); }
+.abx-mark{ display:grid; place-items:center; width:24px; height:24px; flex:none; border-radius:8px; color:var(--on-accent); background:linear-gradient(135deg,#ffe08f,var(--accent)); }
+.abx-thinking{ display:inline-flex; align-items:center; gap:7px; color:var(--muted); }
+
+/* De opgeleverde agent: wat er gebouwd is, in mensentaal. */
+.abx-card{ border:1px solid var(--border-strong); border-radius:14px; background:var(--bg-deep); padding:15px; display:flex; flex-direction:column; gap:13px; box-shadow:0 0 0 1px var(--accent-soft); }
+.abx-card>header{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.abx-card>header>div{ flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+.abx-card>header strong{ font-size:15px; font-weight:600; letter-spacing:-.01em; }
+.abx-card>header span{ display:inline-flex; align-items:center; gap:5px; font-size:11.5px; color:var(--muted); }
+
+.abx-facts{ margin:0; display:flex; flex-direction:column; gap:9px; }
+.abx-facts>div{ display:grid; grid-template-columns:minmax(120px,150px) 1fr; gap:4px 14px; align-items:baseline; }
+.abx-facts dt{ display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+.abx-facts dd{ margin:0; font-size:13px; line-height:1.5; color:var(--text); }
+.abx-facts dd em{ font-style:normal; color:var(--muted2); }
+.abx-instruction{ white-space:pre-wrap; }
+
+.abx-card>footer{ display:flex; flex-wrap:wrap; align-items:center; gap:9px; padding-top:3px; border-top:1px solid var(--border); margin-top:2px; padding-top:13px; }
+.abx-activate{ display:inline-flex; align-items:center; gap:7px; margin-right:auto; font-size:12.5px; color:var(--muted2); cursor:pointer; }
+.abx-activate input{ width:16px; height:16px; accent-color:var(--accent); cursor:pointer; }
+.abx-hint{ margin:0; font-size:11.5px; line-height:1.5; color:var(--muted); }
+.abx-error{ display:flex; align-items:center; gap:6px; margin:0; font-size:12.5px; color:var(--accent-r); }
+
+/* Invoer: vastgeplakt onder de scroller, met de knop in het veld. */
+.abx-composer{ flex:0 0 auto; display:flex; flex-direction:column; gap:9px; padding:13px 18px 15px; border-top:1px solid var(--border); background:var(--panel-strong); }
+.abx-suggestions{ display:flex; flex-wrap:wrap; gap:7px; }
+.abx-input-row{ display:flex; align-items:flex-end; gap:9px; }
+.abx-input-row .cc-input{ flex:1; min-height:46px; }
+.abx-send{ all:unset; box-sizing:border-box; cursor:pointer; flex:none; display:grid; place-items:center; width:40px; height:40px; border-radius:12px; color:var(--on-accent); background:linear-gradient(135deg,#ffe08f,var(--accent)); transition:filter .15s,opacity .15s; }
+.abx-send:not(:disabled):hover{ filter:brightness(1.05); }
+.abx-send:disabled{ opacity:.45; cursor:default; }
+.abx-send:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.abx-manual{ all:unset; cursor:pointer; align-self:flex-start; font-size:12px; font-weight:600; color:var(--muted); }
+.abx-manual:hover{ color:var(--accent-ink); text-decoration:underline; }
+.abx-manual:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:6px; }
+
+@media(max-width:760px){
+  .abx-stream{ padding:14px; max-height:none; }
+  .abx-composer{ padding:11px 14px 13px; }
+  .abx-turn{ max-width:100%; }
+  .abx-facts>div{ grid-template-columns:1fr; gap:2px; }
+  /* stretch houdt de twee knoppen even hoog wanneer één label afbreekt. */
+  .abx-card>footer{ gap:8px; align-items:stretch; }
+  .abx-activate{ width:100%; margin-right:0; }
+  .abx-card>footer .cc-btn{ flex:1; justify-content:center; min-height:42px; text-align:center; }
+  .abx-send{ width:44px; height:44px; }
+}

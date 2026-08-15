@@ -14,7 +14,7 @@
 
 import {
   supabaseAdmin, HttpError, ANTHROPIC_API_KEY, MISSION_MAX_SUBTASKS, USD_TO_EUR,
-  resolveModelKind, runAgent, planMission, estimateMission, buildContext,
+  resolveModelKind, runAgent, planMission, designAgent, estimateMission, buildContext,
   createConversation, loadHistory, insertMessage, recordUsage, costUsd,
   checkUserBudget, remainingFraction, confirmAction, getUsageSummary,
   requireUser, requireOrganizationAccess, describeError, parseAllowedOrigins,
@@ -63,6 +63,20 @@ Deno.serve(async (req) => {
       if (goal.length > 4000) throw new HttpError('Doel is te lang.', 400);
       const ctx = await buildContext(organizationId, role, user);
       return json(req, await planMission(ctx, user.id, goal));
+    }
+    // Agent-bouwer: een kort gesprek waarin de gebruiker vertelt wat hij nodig heeft
+    // en dat eindigt in een compleet ingevulde agent. Maakt zelf niets aan — het
+    // resultaat landt in het agent-formulier, waar de gebruiker het opslaat.
+    if (String(body.action || '') === 'design_agent') {
+      if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
+      const raw = Array.isArray(body.messages) ? (body.messages as Array<Record<string, unknown>>) : [];
+      const messages = raw
+        .map((m) => ({ role: String(m.role) === 'assistant' ? 'assistant' : 'user', content: String(m.content || '').slice(0, 4000) }))
+        .filter((m) => m.content.trim().length > 0)
+        .slice(-12);
+      if (messages.length === 0) throw new HttpError('Vertel eerst wat de agent moet doen.', 400);
+      const ctx = await buildContext(organizationId, role, user);
+      return json(req, await designAgent(ctx, user.id, messages));
     }
     // Commandocentrum — kosteninschatting vooraf (fractie van het maandtegoed) voor een missie.
     if (String(body.action || '') === 'estimate') {

@@ -11,6 +11,7 @@ import {
 import { STANDARD_MERGE_TOKENS } from '../lib/mergeTokens';
 import { executeProposal, proposalLabel } from '../lib/gerrie-proposals';
 import { AgentApprovals } from '../components/AgentApprovals';
+import { AgentBuilder } from '../components/AgentBuilder';
 import { ClientEmailBatch } from '../components/ClientEmailBatch';
 import { AGENT_HUES, AGENT_ICONS, AgentGlyph, agentHue, agentIconKey, type AgentIconKey } from '../components/AgentGlyph';
 import type { UUID } from '../types';
@@ -503,7 +504,9 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const [editing, setEditing] = useState<GerrieRoutine | 'new' | null>(null);
+  // 'build' = het gesprek waarin Gerrie de agent voor je in elkaar zet (de voordeur);
+  // 'new' = het lege formulier voor wie het liever zelf invult.
+  const [editing, setEditing] = useState<GerrieRoutine | 'new' | 'build' | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [runsKey, setRunsKey] = useState(0);
@@ -567,6 +570,39 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
     sheetRef.current.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
   }, [openId]);
 
+  /** Bouwt de agent uit het gesprek en zet hem, als je dat wilt, meteen aan. */
+  async function createFromBuilder(p: GerrieAgentProposal, activate: boolean) {
+    const routine = proposalToRoutine(p);
+    const saved = await saveRoutine(organizationId, {
+      name: routine.name, instruction: routine.instruction,
+      icon: p.icon, hue: null,
+      email_mode: routine.email_mode, email_subject: routine.email_subject, email_body: routine.email_body,
+      max_emails_per_run: routine.max_emails_per_run,
+      model_kind: 'cheap', mode: routine.mode, enabled_tools: routine.enabled_tools,
+      schedule_kind: routine.schedule_kind, hour: routine.hour,
+      day_of_week: routine.day_of_week, day_of_month: routine.day_of_month,
+      timezone: 'Europe/Amsterdam', delivery: { channels: ['inapp'] },
+    });
+    if (activate && saved.id) {
+      // Mislukt het activeren, dan blijft de agent als concept staan — dat is een
+      // eerlijke uitkomst, en de tegel toont het meteen.
+      try { await setRoutineStatus(organizationId, saved.id as UUID, 'active'); }
+      catch { notify('Agent aangemaakt, maar activeren lukte niet. Zet hem zelf aan.', 'error'); }
+    }
+    setEditing(null);
+    setOpenId(saved.id ?? null);
+    reload();
+    notify(activate ? 'Agent aangemaakt en aangezet.' : 'Agent aangemaakt als concept.', 'success');
+  }
+
+  if (editing === 'build') {
+    return <AgentBuilder
+      organizationId={organizationId}
+      onCreate={createFromBuilder}
+      onOpenForm={(p) => setEditing(p ? proposalToRoutine(p) : 'new')}
+      onCancel={() => setEditing(null)}
+    />;
+  }
   if (editing) {
     return <RoutineEditor organizationId={organizationId} routine={editing === 'new' ? null : editing}
       onDone={() => { setEditing(null); reload(); }} onCancel={() => setEditing(null)} />;
@@ -581,7 +617,7 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
           <h2>Je agents</h2>
           <p>Elk embleem is een agent die vanzelf op zijn eigen moment draait. <b>Hij stelt voor, jij beslist</b> — er gaat niets de deur uit zonder jouw akkoord.</p>
         </div>
-        <button className="cc-btn primary" onClick={() => setEditing('new')}><Plus size={15} /> Nieuwe agent</button>
+        <button className="cc-btn primary" onClick={() => setEditing('build')}><Plus size={15} /> Nieuwe agent</button>
       </header>
 
       {toast && (
@@ -604,10 +640,10 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
                   <span>{t.blurb}</span>
                 </button>
               ))}
-              <button type="button" className="ag-starter ag-starter-blank" onClick={() => setEditing('new')}>
-                <span className="ag-tile-plus" aria-hidden="true"><Plus size={26} /></span>
-                <strong>Zelf verzinnen</strong>
-                <span>Beschrijf in gewone taal wat hij moet doen.</span>
+              <button type="button" className="ag-starter ag-starter-blank" onClick={() => setEditing('build')}>
+                <span className="ag-tile-plus" aria-hidden="true"><Wand2 size={24} /></span>
+                <strong>Vertel het Gerrie</strong>
+                <span>Zeg in je eigen woorden wat je nodig hebt; hij bouwt de agent.</span>
               </button>
             </div>
           </div>
@@ -633,10 +669,10 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
                 </button>
               );
             })}
-            <button type="button" className="ag-tile ag-tile-new" onClick={() => setEditing('new')}>
-              <span className="ag-tile-plus" aria-hidden="true"><Plus size={26} /></span>
+            <button type="button" className="ag-tile ag-tile-new" onClick={() => setEditing('build')}>
+              <span className="ag-tile-plus" aria-hidden="true"><Wand2 size={24} /></span>
               <strong className="ag-tile-name">Nieuwe agent</strong>
-              <span className="ag-tile-rhythm">Zet er zelf een aan het werk</span>
+              <span className="ag-tile-rhythm">Vertel wat je nodig hebt</span>
             </button>
           </div>
         )}
