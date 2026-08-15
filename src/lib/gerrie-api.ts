@@ -530,9 +530,6 @@ export interface GerrieRoutine {
   archived_at: string | null;
   next_run_at: string | null;
   last_run_at: string | null;
-  max_cost_eur_per_run: number;
-  monthly_budget_eur: number | null;
-  max_runs_per_day: number;
   consecutive_failures: number;
   delivery: { channels: string[]; recipient_user_ids: string[] };
   created_at: string;
@@ -574,9 +571,9 @@ export interface GerrieRoutineInput {
   day_of_week?: number | null;
   day_of_month?: number | null;
   timezone: string;
-  max_cost_eur_per_run?: number;
-  monthly_budget_eur?: number | null;
-  max_runs_per_day?: number;
+  // Bewust géén budget-velden: kosten lopen via het maandtegoed van het account
+  // (secret GERRIE_MONTHLY_USER_COST_EUR). `max_emails_per_run` is geen budget maar
+  // een grens op hoeveel post één run mag klaarzetten, en wordt wél afgedwongen.
   delivery: { channels: string[] };
 }
 

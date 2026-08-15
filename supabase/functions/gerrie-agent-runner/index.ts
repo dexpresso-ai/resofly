@@ -21,7 +21,7 @@
 // ============================================================
 
 import {
-  supabaseAdmin, HttpError, ANTHROPIC_API_KEY, USD_TO_EUR, TOOL_DEFINITIONS,
+  supabaseAdmin, HttpError, ANTHROPIC_API_KEY, TOOL_DEFINITIONS,
   resolveModelKind, runAgent, buildContext, createConversation, insertMessage,
   recordUsage, costUsd, checkUserBudget, requireUser, requireOrganizationAccess,
   describeError, isUuid, todayIso, tzOffsetMs, parseAllowedOrigins, loadHistory,
@@ -239,11 +239,12 @@ async function executeAgentRun(
     return { agentId, status: 'cancelled', reason: 'actor_inactive' };
   }
 
-  // 3) Budget — FAIL-CLOSED op dit onbewaakte pad.
+  // 3) Budget — FAIL-CLOSED op dit onbewaakte pad. Er is één grens: het maandtegoed
+  //    van het account. Wat een agent verbruikt telt daar gewoon in mee, want het
+  //    verbruik wordt geboekt op de gebruiker namens wie hij draait.
   const userBudget = await checkUserBudget(runAsUserId);
-  const agentOk = await agentMonthlyBudgetOk(agent);
-  if (!userBudget.allowed || !agentOk) {
-    log.add('error', agentOk ? 'Het AI-tegoed van deze maand is op — run overgeslagen.' : 'Het maandbudget van deze agent is op — run overgeslagen.', {});
+  if (!userBudget.allowed) {
+    log.add('error', 'Het maandtegoed van dit account is op — run overgeslagen.', {});
     log.add('finish', 'Overgeslagen', { status: 'skipped_budget' });
     await log.flush();
     await finishRun(runId, { status: 'skipped_budget', error: 'Budget bereikt.' });
@@ -367,16 +368,6 @@ function resolveAllowedTools(agent: Record<string, unknown>, mode: 'report' | 'p
   // propose: altijd de lees-tools + de gekozen (propose-)tools erbij.
   const chosen = enabled.length ? enabled : READ_TOOL_NAMES;
   return Array.from(new Set([...READ_TOOL_NAMES, ...chosen])).filter((n) => n !== 'propose_create_agent');
-}
-
-async function agentMonthlyBudgetOk(agent: Record<string, unknown>): Promise<boolean> {
-  const cap = agent.monthly_budget_eur;
-  if (cap === null || cap === undefined) return true;
-  const monthStart = `${todayIso().slice(0, 7)}-01T00:00:00Z`;
-  const { data, error } = await supabaseAdmin.from('ai_usage').select('cost_usd').eq('agent_id', String(agent.id)).gte('created_at', monthStart);
-  if (error) return false; // fail-closed
-  const usd = (data ?? []).reduce((s: number, r: Record<string, unknown>) => s + Number(r.cost_usd || 0), 0);
-  return usd * USD_TO_EUR < Number(cap);
 }
 
 async function finishRun(runId: string, fields: Record<string, unknown>): Promise<void> {
@@ -529,9 +520,8 @@ function sanitizeAgentFields(body: Record<string, unknown>): Record<string, unkn
     day_of_week: scheduleKind === 'weekly' ? clampInt(body.day_of_week, 1, 1, 7) : null,
     day_of_month: scheduleKind === 'monthly' ? clampInt(body.day_of_month, 1, 1, 31) : null,
     timezone: String(body.timezone || 'Europe/Amsterdam').slice(0, 64),
-    max_cost_eur_per_run: clampNum(body.max_cost_eur_per_run, 0.25, 0, 100),
-    monthly_budget_eur: body.monthly_budget_eur == null ? null : clampNum(body.monthly_budget_eur, 5, 0, 1000),
-    max_runs_per_day: clampInt(body.max_runs_per_day, 4, 1, 48),
+    // Geen budget-velden meer: kosten worden begrensd door het maandtegoed van het
+    // account (checkUserBudget). Zie migratie 20260820000000.
     delivery: { channels, recipient_user_ids: [] },
     icon,
     hue,
@@ -540,12 +530,6 @@ function sanitizeAgentFields(body: Record<string, unknown>): Record<string, unkn
     email_body: emailBody,
     max_emails_per_run: clampInt(body.max_emails_per_run, 5, 1, 25),
   };
-}
-
-function clampNum(v: unknown, def: number, min: number, max: number): number {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return def;
-  return Math.max(min, Math.min(max, Math.round(n * 100) / 100));
 }
 
 /**

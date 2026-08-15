@@ -241,7 +241,7 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
 
       {tab === 'agents' ? (
         <RoutinesPanel organizationId={organizationId} canWrite={canWrite} handlers={handlers}
-          pendingByAgent={pendingByAgent} onApprovalsChanged={reloadPending}
+          pendingByAgent={pendingByAgent} onApprovalsChanged={reloadPending} budget={budget}
           openAgentId={openAgentId} onOpenAgentConsumed={onOpenAgentConsumed} />
       ) : tab === 'queue' ? (
         <div className="ag-page">
@@ -501,7 +501,7 @@ function templateToRoutine(t: RoutineTemplate): GerrieRoutine {
     model_kind: 'cheap', mode: t.mode, enabled_tools: t.tools,
     schedule_kind: t.schedule_kind, hour: t.hour, day_of_week: t.day_of_week ?? null, day_of_month: t.day_of_month ?? null,
     timezone: 'Europe/Amsterdam', status: 'draft', archived_at: null, next_run_at: null, last_run_at: null,
-    max_cost_eur_per_run: 0.25, monthly_budget_eur: null, max_runs_per_day: 4, consecutive_failures: 0,
+    consecutive_failures: 0,
     delivery: { channels: ['inapp'], recipient_user_ids: [] }, created_at: '', updated_at: '',
   };
 }
@@ -526,18 +526,20 @@ function proposalToRoutine(p: GerrieAgentProposal): GerrieRoutine {
     model_kind: 'cheap', mode: p.mode, enabled_tools: p.enabled_tools,
     schedule_kind: p.schedule_kind, hour: p.hour, day_of_week: p.day_of_week, day_of_month: p.day_of_month,
     timezone: 'Europe/Amsterdam', status: 'draft', archived_at: null, next_run_at: null, last_run_at: null,
-    max_cost_eur_per_run: 0.25, monthly_budget_eur: null, max_runs_per_day: 4, consecutive_failures: 0,
+    consecutive_failures: 0,
     delivery: { channels: ['inapp'], recipient_user_ids: [] }, created_at: '', updated_at: '',
   };
 }
 
-function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onApprovalsChanged, openAgentId, onOpenAgentConsumed }: {
+function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onApprovalsChanged, budget, openAgentId, onOpenAgentConsumed }: {
   organizationId: UUID;
   canWrite: boolean;
   handlers: GerrieActionHandlers;
   /** Aantal openstaande voorstellen per agent — het belletje op de tegel. */
   pendingByAgent: Record<string, number>;
   onApprovalsChanged: () => void;
+  /** Resterend maandtegoed van het account als fractie 0..1; null = geen limiet. */
+  budget: number | null;
   /** Net vanuit de chat aangemaakte agent; klapt hier meteen open. */
   openAgentId?: string | null;
   onOpenAgentConsumed?: () => void;
@@ -761,6 +763,7 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
               handlers={handlers}
               busy={busyId === open.id}
               runsKey={runsKey}
+              budget={budget}
               waiting={pendingByAgent[open.id] ?? 0}
               onRunNow={() => void doRunNow(open)}
               onStatus={(s) => void doStatus(open, s)}
@@ -817,13 +820,15 @@ function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onA
  * lezen, voorstellen, wanneer, waar het heen gaat en binnen welke grenzen — dan
  * zijn opdracht, dan de knoppen, en onderaan wat hij tot nu toe gedaan heeft.
  */
-function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey, waiting, onRunNow, onStatus, onEdit, onArchive, onRestore, onClose, onApprovalsChanged }: {
+function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey, budget, waiting, onRunNow, onStatus, onEdit, onArchive, onRestore, onClose, onApprovalsChanged }: {
   routine: GerrieRoutine;
   organizationId: UUID;
   canWrite: boolean;
   handlers: GerrieActionHandlers;
   busy: boolean;
   runsKey: number;
+  /** Resterend maandtegoed van het account als fractie 0..1; null = geen limiet. */
+  budget: number | null;
   waiting: number;
   onRunNow: () => void;
   onStatus: (status: RoutineStatus) => void;
@@ -885,11 +890,17 @@ function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey
           <span className="ag-cap-plain">In de app{emailToo ? ' én per e-mail' : ''}</span>
         </Capability>
 
-        <Capability icon={<Gauge size={14} />} title="Grenzen">
+        {/* Eén budget: het maandtegoed van het account. Hier stond eerder "max € per
+            run · hoogstens N× per dag" — twee grenzen die nergens werden afgedwongen.
+            Een scherm dat een grens belooft die de code niet kent is erger dan geen
+            grens tonen, dus staat er nu alleen wat écht geldt. */}
+        <Capability icon={<Gauge size={14} />} title="Kosten">
           <span className="ag-cap-plain">{routine.model_kind === 'strong' ? 'Sterk model (Sonnet)' : 'Zuinig model (Haiku)'}</span>
-          {/* numeric-kolommen kunnen als string terugkomen; Number() eromheen voorkomt
-              dat één tekst-waarde het hele paneel laat crashen op .toFixed. */}
-          <span className="ag-cap-note">Max. € {(Number(routine.max_cost_eur_per_run) || 0).toFixed(2)} per run · hoogstens {routine.max_runs_per_day}× per dag</span>
+          <span className="ag-cap-note">
+            Wat hij verbruikt gaat van het maandtegoed van je account
+            {budget !== null ? ` — daarvan is nog ${Math.round(budget * 100)}% over` : ''}.
+            {budget !== null && budget <= 0 ? ' Hij slaat runs over tot volgende maand.' : ''}
+          </span>
         </Capability>
 
         <Capability icon={<Users2 size={14} />} title="Bevoegdheid">
