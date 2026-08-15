@@ -2786,8 +2786,70 @@ button.chat-member:hover{background:var(--bg3)}
 .dns-record code{font-size:12px;color:var(--text);word-break:break-all}
 .dns-record-value{user-select:all}
 
+/* ── Doorstuuradres: mail aan je eigen adres opvangen ─────────────────── */
+/* Leunt bewust op .dns-record en .settings-card, zodat deze kaart aanvoelt als
+   onderdeel van dezelfde instellingenpagina en niet als een los eiland. */
+.inbound-alias-card{display:flex;flex-direction:column;gap:14px}
+.inbound-alias-address{align-items:center;margin-top:2px}
+.inbound-alias-address .btn{flex-shrink:0}
+.inbound-alias-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
+
+/* Drie toestanden in kleur én in taal — kleur alleen zou voor een deel van de
+   gebruikers geen verschil maken. */
+.inbound-status{display:flex;flex-direction:column;gap:5px;border-radius:12px;border:1px solid var(--border);padding:11px 13px;font-size:13px;line-height:1.55}
+.inbound-status strong{font-family:ui-monospace,"Cascadia Code",Consolas,monospace;font-size:15px;font-weight:700;letter-spacing:.08em;background:rgba(var(--shade-rgb),calc(.3 * var(--shade-k)));border-radius:6px;padding:1px 8px;user-select:all}
+.inbound-status-none{color:var(--muted2);background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)))}
+.inbound-status-confirm{color:var(--accent-ink);background:rgba(var(--accent-rgb),.12);border-color:rgba(var(--accent-rgb),.32)}
+.inbound-status-ok{color:var(--accent-g);background:rgba(var(--ok-rgb),.11);border-color:rgba(var(--ok-rgb),.28)}
+.inbound-status-stale{color:var(--accent-r);background:rgba(var(--danger-rgb),.11);border-color:rgba(var(--danger-rgb),.28)}
+.inbound-status-note{font-size:11.6px;line-height:1.5;opacity:.85}
+
+/* Genummerd klikpad. Eigen teller i.p.v. list-style, zodat het nummer een
+   bolletje kan zijn dat uitlijnt met de tekst ernaast. */
+.inbound-steps{display:flex;flex-direction:column;gap:9px;margin:2px 0 0;padding:0;list-style:none;counter-reset:inbound-step}
+.inbound-steps li{counter-increment:inbound-step;position:relative;padding-left:31px;font-size:13px;line-height:1.55;color:var(--muted2)}
+.inbound-steps li::before{content:counter(inbound-step);position:absolute;left:0;top:1px;display:grid;place-items:center;width:21px;height:21px;border-radius:999px;font-size:11px;font-weight:700;color:var(--accent-ink);background:rgba(var(--accent-rgb),.14);border:1px solid rgba(var(--accent-rgb),.3)}
+
+/* ── Opvangbak: binnengekomen post zonder klant ───────────────────────── */
+.inbound-inbox{display:flex;flex-direction:column;gap:14px;margin-top:14px}
+.inbound-inbox-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.inbound-inbox-head h3{margin:0 0 4px;font-size:1.02rem}
+.inbound-inbox-list{display:flex;flex-direction:column;gap:12px}
+.inbound-row{display:flex;flex-direction:column;gap:8px;background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+.inbound-row-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.inbound-row-sender{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;min-width:0}
+.inbound-row-sender strong{font-size:.96rem;font-weight:600;word-break:break-word}
+.inbound-row-address{font-size:12px;color:var(--muted);word-break:break-all}
+.inbound-row-head time{font-size:11.5px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.inbound-row-subject{font-size:13.5px;font-weight:600;color:var(--text);word-break:break-word}
+.inbound-row-snippet{margin:0;font-size:12.8px;line-height:1.55;color:var(--muted2)}
+.inbound-row-note{margin:0;font-size:11.6px;line-height:1.5;color:var(--muted)}
+/* Waaróm dit bericht bleef liggen. Een chip i.p.v. een zin: je scant deze lijst. */
+.inbound-row-reason{margin:0;align-self:flex-start;font-size:11px;font-weight:600;border-radius:999px;padding:3px 10px;color:var(--accent-ink);background:rgba(var(--accent-rgb),.12);border:1px solid rgba(var(--accent-rgb),.28)}
+.inbound-row-candidates{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.4px;color:var(--muted2)}
+.inbound-row-actions{display:flex;gap:9px;flex-wrap:wrap;align-items:center;padding-top:2px}
+.inbound-row-actions select{flex:0 1 240px;min-width:180px}
+.inbound-row-remember{display:flex;align-items:flex-start;gap:8px;font-size:12.2px;line-height:1.45;color:var(--muted);cursor:pointer}
+.inbound-row-remember input{margin-top:2px;width:15px;height:15px;flex-shrink:0;accent-color:var(--accent)}
+
+@media(max-width:700px){
+  /* Op een telefoon moeten de knoppen onder elkaar en op volle breedte: naast
+     elkaar worden ze smaller dan een duim. */
+  .inbound-alias-address{align-items:stretch}
+  .inbound-alias-address .btn{width:100%}
+  .inbound-row-actions{flex-direction:column;align-items:stretch}
+  .inbound-row-actions select,.inbound-row-actions .btn{width:100%;flex:none}
+  .inbound-inbox-head{flex-direction:column}
+}
+
 /* ── Klant-communicatie (e-mail) ─────────────────────────────────────── */
 .client-comm{display:flex;flex-direction:column;gap:16px}
+/* Waarom dit bericht in dít dossier staat. Bij mail via het doorstuuradres is de
+   koppeling een gok van het systeem; dan hoor je te zien waarop die gok rust. */
+.client-comm-origin{font-size:11.4px;font-style:italic;color:var(--muted);margin-bottom:8px}
+.client-comm-message-actions{display:flex;justify-content:flex-end;margin-top:6px}
+.client-comm-remove{border:0;background:none;padding:0;font:inherit;font-size:11.4px;color:var(--muted);text-decoration:underline;cursor:pointer}
+.client-comm-remove:hover{color:var(--accent-r)}
 .client-comm-compose .client-comm-to{margin:0 0 6px;font-size:13px;color:var(--muted2)}
 /* Wie de klant straks als afzender ziet. Stond nergens, terwijl het antwoord
    ("ResoFly" of je eigen bedrijf) per organisatie verschilt. */
