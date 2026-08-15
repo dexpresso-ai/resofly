@@ -45,6 +45,17 @@ const noopEmit: Emit = async () => {};
 const ALL_TOOL_NAMES: string[] = (TOOL_DEFINITIONS as Array<{ name: string }>).map((t) => t.name);
 const READ_TOOL_NAMES: string[] = ALL_TOOL_NAMES.filter((n) => !n.startsWith('propose_'));
 
+// Embleem-sleutels die een gebruiker mag kiezen. Puur cosmetisch (kolom ai_agents.icon),
+// maar wél een allowlist: de waarde komt uit de browser en belandt in de database.
+// MOET gelijk lopen met AGENT_ICONS in src/components/AgentGlyph.tsx — een sleutel die
+// hier ontbreekt wordt stil op null gezet en de app valt terug op het afgeleide embleem.
+const AGENT_ICON_KEYS: string[] = [
+  'receipt', 'bell', 'trending', 'wallet', 'coins', 'piggy', 'scale',
+  'calendar', 'clock', 'users', 'folder', 'checks', 'lifebuoy', 'inbox',
+  'mail', 'megaphone', 'chart', 'shield', 'radar', 'telescope', 'compass',
+  'rocket', 'brain', 'bot', 'zap', 'flame', 'gem', 'sparkles',
+];
+
 // ── Entry ────────────────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
@@ -379,6 +390,12 @@ function sanitizeAgentFields(body: Record<string, unknown>): Record<string, unkn
     : ['inapp'];
   const channels = channelsRaw.length ? [...new Set(channelsRaw)] : ['inapp'];
 
+  // Embleem: alleen een bekende sleutel en een geldige tint komen erdoor. Alles
+  // anders wordt null — de app leidt het embleem dan zelf af uit de opdracht.
+  const icon = AGENT_ICON_KEYS.includes(String(body.icon)) ? String(body.icon) : null;
+  const hueRaw = Math.floor(Number(body.hue));
+  const hue = Number.isFinite(hueRaw) && hueRaw >= 0 && hueRaw <= 359 ? hueRaw : null;
+
   return {
     name: String(body.name || '').slice(0, 120),
     description: body.description != null ? String(body.description).slice(0, 500) : null,
@@ -395,6 +412,8 @@ function sanitizeAgentFields(body: Record<string, unknown>): Record<string, unkn
     monthly_budget_eur: body.monthly_budget_eur == null ? null : clampNum(body.monthly_budget_eur, 5, 0, 1000),
     max_runs_per_day: clampInt(body.max_runs_per_day, 4, 1, 48),
     delivery: { channels, recipient_user_ids: [] },
+    icon,
+    hue,
   };
 }
 

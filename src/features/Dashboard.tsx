@@ -8,10 +8,12 @@ import { Button } from '../components/Ui';
 import { BarChart, LineChart, PieChart, Sparkline } from '../components/Charts';
 import { REPORT_SOURCES, formatMeasure, runReport } from '../lib/reporting';
 import { ProjectTimeline } from './ProjectTimeline';
+import { AgentApprovals } from '../components/AgentApprovals';
+import type { GerrieActionHandlers } from '../lib/gerrie-api';
 import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
 
 export type DashboardNavPage =
-  | 'clients' | 'projects' | 'tickets' | 'quotes' | 'invoices' | 'bank' | 'vat-returns' | 'weekplanner' | 'settings' | 'stats' | 'calendar';
+  | 'clients' | 'projects' | 'tickets' | 'quotes' | 'invoices' | 'bank' | 'vat-returns' | 'weekplanner' | 'settings' | 'stats' | 'calendar' | 'gerrie';
 
 type StatTone = 'default' | 'accent' | 'danger';
 type AttentionItem = { key: string; tone: 'default' | 'danger'; icon: ReactNode; label: string; meta?: string; count: number; onClick: () => void };
@@ -74,10 +76,17 @@ export function Dashboard({
   openTask,
   onSetTaskStatus,
   permissions = FULL_PERMISSIONS,
+  gerrieActions,
+  canWriteGerrie = false,
 }: {
   data: AppData;
   organizationContext: OrganizationContext;
   organizationId: string;
+  /** Uitvoer-handlers voor een goedgekeurd Gerrie-voorstel; zonder deze prop
+   *  verdwijnt de goedkeurwachtrij van het startscherm. */
+  gerrieActions?: GerrieActionHandlers;
+  /** Mag dit teamlid een voorstel écht laten uitvoeren (versturen/aanmaken)? */
+  canWriteGerrie?: boolean;
   /** Ingelogde gebruiker; bepaalt wat "Mijn" in de acties-blokken betekent. */
   currentUserId?: string | null;
   /** Mag dit lid taken afvinken? (organisatiebreed schrijfrecht én module 'projects'). */
@@ -281,6 +290,17 @@ export function Dashboard({
     </div>
 
     <div className="dash-stack">
+      {/* Wat je agents hebben klaargezet staat vóór al het andere: het is het enige
+          blok op dit scherm waar iets op JOU wacht in plaats van andersom. De kaart
+          verbergt zichzelf zodra de wachtrij leeg is. */}
+      {gerrieActions && permissions.canRead('gerrie') && <AgentApprovals
+        organizationId={organizationId}
+        canWrite={canWriteGerrie}
+        handlers={gerrieActions}
+        variant="dashboard"
+        onOpenCommandCenter={() => openPage('gerrie')}
+      />}
+
       <section className={`dashboard-layout${showToday ? '' : ' dash-layout-single'}`}>
         {showToday && <div className="today-card">
           <header className="dash-card-head">

@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
-import { Sparkles, Send, Check, X, AlertTriangle, Square, ListChecks, Wand2, Clock, Plus, Play, Pause, Trash2, Pencil, RotateCw, Loader2, ChevronDown, ChevronRight, CornerDownLeft } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Sparkles, Send, Check, X, AlertTriangle, Square, ListChecks, Wand2, Clock, Plus, Play, Pause, Trash2, Pencil, RotateCw, Loader2, ChevronDown, ChevronRight, ChevronUp, CornerDownLeft, ClipboardCheck, Eye, Mailbox, Users2, Gauge, BookOpen } from 'lucide-react';
 import {
   streamGerrieReply, planGerrieMission, loadGerrieBudget, confirmGerrieAction,
   listRoutines, listRoutineRuns, saveRoutine, setRoutineStatus, deleteRoutine, runRoutineNow, listRunProposals,
-  loadRunTranscript, replyToRun, ROUTINE_READ_TOOLS, ROUTINE_PROPOSE_TOOLS,
+  loadRunTranscript, replyToRun, listPendingAgentApprovals, ROUTINE_READ_TOOLS, ROUTINE_PROPOSE_TOOLS,
   type GerrieActionHandlers, type GerrieProposal, type GerrieMissionSubtask,
   type GerrieRoutine, type GerrieRoutineRun, type GerrieRoutineInput, type GerrieRunMessage,
   type RoutineMode, type RoutineScheduleKind, type RoutineStatus, type RoutineRunStatus,
 } from '../lib/gerrie-api';
-import { euro, formatMinutes } from '../lib/format';
+import { executeProposal, proposalLabel } from '../lib/gerrie-proposals';
+import { AgentApprovals } from '../components/AgentApprovals';
+import { AGENT_HUES, AGENT_ICONS, AgentGlyph, agentHue, agentIconKey, type AgentIconKey } from '../components/AgentGlyph';
 import type { UUID } from '../types';
 
 /**
@@ -57,7 +59,7 @@ function newId(): string {
 }
 
 export function GerrieCommandCenter({ organizationId, canWrite, ...handlers }: { organizationId: UUID; canWrite: boolean } & GerrieActionHandlers) {
-  const [tab, setTab] = useState<'live' | 'routines'>('live');
+  const [tab, setTab] = useState<'live' | 'agents' | 'queue'>('live');
   const [draft, setDraft] = useState('');
   const [lanes, setLanes] = useState<Lane[]>([]);
   const [pendingPlan, setPendingPlan] = useState<PendingPlan | null>(null);
@@ -67,11 +69,29 @@ export function GerrieCommandCenter({ organizationId, canWrite, ...handlers }: {
   const [estimatePct, setEstimatePct] = useState<number | null>(null);
   const controllers = useRef<Map<string, AbortController>>(new Map());
 
+  // Openstaande voorstellen van geplande agents: voedt de badge op het tabblad én
+  // het belletje op elke agent-tegel. Los van de wachtrij-component zelf, want die
+  // is alleen gemount als je op dat tabblad staat.
+  const [pendingByAgent, setPendingByAgent] = useState<Record<string, number>>({});
+  const [pendingTotal, setPendingTotal] = useState(0);
+  const reloadPending = useCallback(() => {
+    listPendingAgentApprovals(organizationId)
+      .then((rows) => {
+        const map: Record<string, number> = {};
+        for (const r of rows) if (r.agentId) map[r.agentId] = (map[r.agentId] ?? 0) + 1;
+        setPendingByAgent(map);
+        setPendingTotal(rows.length);
+      })
+      // Geen wachtrij te lezen (module dicht, sessie verlopen): dan gewoon geen badge.
+      .catch(() => { setPendingByAgent({}); setPendingTotal(0); });
+  }, [organizationId]);
+
   useEffect(() => {
     let cancelled = false;
     loadGerrieBudget(organizationId).then((f) => { if (!cancelled && f !== null) setBudget(f); });
+    reloadPending();
     return () => { cancelled = true; };
-  }, [organizationId]);
+  }, [organizationId, reloadPending]);
 
   // Bij het verlaten van de pagina/orgwissel: alle lopende agents netjes afbreken.
   useEffect(() => () => { controllers.current.forEach((c) => c.abort()); controllers.current.clear(); }, [organizationId]);
@@ -192,7 +212,11 @@ export function GerrieCommandCenter({ organizationId, canWrite, ...handlers }: {
         <div className="cc-brand"><span className="cc-spark" aria-hidden="true"><Sparkles size={18} /></span><b>Gerrie</b><span className="cc-sub">Commandocentrum</span></div>
         <nav className="cc-tabs" aria-label="Gerrie-weergave">
           <button className={`cc-tab${tab === 'live' ? ' on' : ''}`} onClick={() => setTab('live')}><Sparkles size={14} /> Live</button>
-          <button className={`cc-tab${tab === 'routines' ? ' on' : ''}`} onClick={() => setTab('routines')}><Clock size={14} /> Routines</button>
+          <button className={`cc-tab${tab === 'agents' ? ' on' : ''}`} onClick={() => setTab('agents')}><Clock size={14} /> Agents</button>
+          <button className={`cc-tab${tab === 'queue' ? ' on' : ''}`} onClick={() => { setTab('queue'); reloadPending(); }}>
+            <ClipboardCheck size={14} /> Jouw akkoord
+            {pendingTotal > 0 && <span className="cc-tab-badge">{pendingTotal}</span>}
+          </button>
         </nav>
         <div className="cc-top-spacer" />
         {activeCount > 0 && <span className="cc-live" role="status"><span className="cc-live-dot" />{activeCount} agent{activeCount === 1 ? '' : 's'} aan het werk</span>}
@@ -205,8 +229,14 @@ export function GerrieCommandCenter({ organizationId, canWrite, ...handlers }: {
         )}
       </header>
 
-      {tab === 'routines' ? (
-        <RoutinesPanel organizationId={organizationId} canWrite={canWrite} handlers={handlers} />
+      {tab === 'agents' ? (
+        <RoutinesPanel organizationId={organizationId} canWrite={canWrite} handlers={handlers}
+          pendingByAgent={pendingByAgent} onApprovalsChanged={reloadPending} />
+      ) : tab === 'queue' ? (
+        <div className="ag-page">
+          <AgentApprovals organizationId={organizationId} canWrite={canWrite} handlers={handlers}
+            variant="page" onChanged={reloadPending} onCountChange={setPendingTotal} />
+        </div>
       ) : (
       <div className="cc-body">
         <main className="cc-main">
@@ -372,67 +402,21 @@ function statusPill(s: LaneStatus): { cls: string; label: string } {
   }
 }
 
-/** Kort label voor een voorstel in de goedkeuringswachtrij. `write` = echte actie (versturen/aanmaken), anders opent een formulier. */
-function proposalLabel(p: GerrieProposal): { title: string; sub: string; write: boolean } {
-  switch (p.type) {
-    case 'send_invoice': return { title: `Factuur ${p.number} versturen`, sub: `naar ${p.recipient_email}`, write: true };
-    case 'send_quote': return { title: `Offerte ${p.number} versturen`, sub: `naar ${p.recipient_email}`, write: true };
-    case 'convert_quote': return { title: `Offerte ${p.number} omzetten naar factuur`, sub: p.client_name, write: true };
-    case 'send_reminders': return { title: `${p.total} herinnering${p.total === 1 ? '' : 'en'} versturen`, sub: '1e / 2e / 3e niveau', write: true };
-    case 'calendar_event': return { title: `Agenda-item: ${p.title}`, sub: `${p.date} ${p.start_time}–${p.end_time}`, write: true };
-    case 'week_action': return { title: `${p.total} actiepunt${p.total === 1 ? '' : 'en'} toevoegen`, sub: p.items.map((i) => i.title).join(' · ').slice(0, 80), write: true };
-    case 'time_entry': return { title: `${formatMinutes(p.minutes)} registreren`, sub: [p.client_name, p.project_name].filter(Boolean).join(' · ') || 'geen koppeling', write: true };
-    case 'invoice': return { title: 'Conceptfactuur openen', sub: `${p.client_name} · ${euro(p.total_eur)}`, write: false };
-    case 'quote': return { title: 'Conceptofferte openen', sub: `${p.client_name} · ${euro(p.total_eur)}`, write: false };
-    case 'client': return { title: 'Nieuwe klant openen', sub: p.name, write: false };
-    case 'edit_invoice': return { title: `Wijziging factuur ${p.number} openen`, sub: p.client_name, write: false };
-    case 'edit_quote': return { title: `Wijziging offerte ${p.number} openen`, sub: p.client_name, write: false };
-    case 'edit_client': return { title: 'Wijziging klant openen', sub: p.name, write: false };
-    case 'project': return { title: 'Project openen', sub: p.name, write: false };
-    case 'edit_project': return { title: 'Wijziging project openen', sub: p.name, write: false };
-    case 'task': return { title: 'Taak openen', sub: `${p.title} · ${p.project_name}`, write: false };
-    case 'edit_task': return { title: 'Wijziging taak openen', sub: p.title, write: false };
-    case 'report': return { title: `Rapportage openen: ${p.name}`, sub: '', write: false };
-  }
-}
-
-/** Voert een goedgekeurd voorstel uit via de gedeelde handlers (zelfde als de chat-dock). */
-async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers): Promise<void> {
-  const need = (fn: (() => Promise<void>) | undefined) => fn ? fn() : Promise.reject(new Error('Deze actie is hier niet beschikbaar.'));
-  switch (p.type) {
-    case 'invoice': h.onCreateInvoiceDraft?.(p); return;
-    case 'quote': h.onCreateQuoteDraft?.(p); return;
-    case 'client': h.onCreateClientDraft?.(p); return;
-    case 'edit_invoice': h.onEditInvoice?.(p); return;
-    case 'edit_quote': h.onEditQuote?.(p); return;
-    case 'edit_client': h.onEditClient?.(p); return;
-    case 'project': h.onCreateProject?.(p); return;
-    case 'edit_project': h.onEditProject?.(p); return;
-    case 'task': h.onCreateTask?.(p); return;
-    case 'edit_task': h.onEditTask?.(p); return;
-    case 'report': h.onCreateReport?.(p); return;
-    case 'send_invoice': await need(h.onSendInvoice ? () => h.onSendInvoice!(p) : undefined); return;
-    case 'send_quote': await need(h.onSendQuote ? () => h.onSendQuote!(p) : undefined); return;
-    case 'convert_quote': await need(h.onConvertQuote ? () => h.onConvertQuote!(p) : undefined); return;
-    case 'send_reminders': await need(h.onSendReminders ? () => h.onSendReminders!(p) : undefined); return;
-    case 'calendar_event': await need(h.onCreateCalendarEvent ? () => h.onCreateCalendarEvent!(p) : undefined); return;
-    case 'week_action': await need(h.onCreateWeekAction ? () => h.onCreateWeekAction!(p) : undefined); return;
-    case 'time_entry': await need(h.onLogTimeEntry ? () => h.onLogTimeEntry!(p) : undefined); return;
-  }
-}
-
-// ── Routines (geplande agents) ───────────────────────────────────────────────
+// ── Agents (geplande routines) ───────────────────────────────────────────────
 
 const DOW_NAMES = ['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag', 'zondag'];
 
 interface RoutineTemplate {
-  name: string; instruction: string; mode: RoutineMode;
+  name: string; blurb: string; instruction: string; mode: RoutineMode;
   schedule_kind: RoutineScheduleKind; hour: number; day_of_week?: number; day_of_month?: number; tools: string[];
+  icon: AgentIconKey; hue: number;
 }
 const ROUTINE_TEMPLATES: RoutineTemplate[] = [
-  { name: 'Wekelijks factuuroverzicht', instruction: 'Geef een overzicht van alle openstaande facturen ouder dan 30 dagen: klantnaam, bedrag en aantal dagen te laat. Sluit af met het totaalbedrag.', mode: 'report', schedule_kind: 'weekly', day_of_week: 1, hour: 8, tools: ['list_invoices', 'list_due_reminders'] },
-  { name: 'Wekelijkse betalingsherinneringen', instruction: 'Bekijk welke betalingsherinneringen vandaag aan de beurt zijn en zet ze klaar om te versturen. Groepeer per niveau (1e/2e/3e).', mode: 'propose', schedule_kind: 'weekly', day_of_week: 1, hour: 9, tools: ['list_due_reminders', 'propose_send_reminders'] },
-  { name: 'Maandelijkse omzetsamenvatting', instruction: 'Vat de omzet van de afgelopen maand samen: totaalomzet, grootste klanten en het totaal openstaande bedrag.', mode: 'report', schedule_kind: 'monthly', day_of_month: 1, hour: 8, tools: ['get_financial_summary', 'list_invoices'] },
+  { name: 'Wekelijks factuuroverzicht', blurb: 'Leest je facturen en meldt wat te lang openstaat.', instruction: 'Geef een overzicht van alle openstaande facturen ouder dan 30 dagen: klantnaam, bedrag en aantal dagen te laat. Sluit af met het totaalbedrag.', mode: 'report', schedule_kind: 'weekly', day_of_week: 1, hour: 8, tools: ['list_invoices', 'list_due_reminders'], icon: 'receipt', hue: 208 },
+  { name: 'Wekelijkse betalingsherinneringen', blurb: 'Zet herinneringen klaar; jij drukt op versturen.', instruction: 'Bekijk welke betalingsherinneringen vandaag aan de beurt zijn en zet ze klaar om te versturen. Groepeer per niveau (1e/2e/3e).', mode: 'propose', schedule_kind: 'weekly', day_of_week: 1, hour: 9, tools: ['list_due_reminders', 'propose_send_reminders'], icon: 'bell', hue: 20 },
+  { name: 'Maandelijkse omzetsamenvatting', blurb: 'Vat je maand samen: omzet, klanten, openstaand.', instruction: 'Vat de omzet van de afgelopen maand samen: totaalomzet, grootste klanten en het totaal openstaande bedrag.', mode: 'report', schedule_kind: 'monthly', day_of_month: 1, hour: 8, tools: ['get_financial_summary', 'list_invoices'], icon: 'trending', hue: 140 },
+  { name: 'Offertes die stilliggen', blurb: 'Signaleert verstuurde offertes zonder antwoord.', instruction: 'Welke offertes staan al langer dan twee weken op "verstuurd" zonder reactie? Noem klant, bedrag en hoe lang het stil is, met de oudste bovenaan.', mode: 'report', schedule_kind: 'weekly', day_of_week: 4, hour: 8, tools: ['list_quotes', 'search_clients'], icon: 'rocket', hue: 284 },
+  { name: 'Maandagoverzicht van je week', blurb: 'Start je week met projecten, taken en tickets.', instruction: 'Geef een kort weekoverzicht: welke taken staan deze week gepland, welke projecten lopen en welke tickets zijn nog onbehandeld. Maximaal tien regels.', mode: 'report', schedule_kind: 'weekly', day_of_week: 1, hour: 7, tools: ['list_tasks', 'list_projects', 'list_tickets'], icon: 'checks', hue: 190 },
 ];
 
 function scheduleLabel(r: { schedule_kind: RoutineScheduleKind; hour: number; day_of_week: number | null; day_of_month: number | null }): string {
@@ -461,7 +445,7 @@ function runStatusLabel(s: RoutineRunStatus): string {
 }
 function templateToRoutine(t: RoutineTemplate): GerrieRoutine {
   return {
-    id: '' as UUID, name: t.name, description: null, instruction: t.instruction,
+    id: '' as UUID, name: t.name, description: null, icon: t.icon, hue: t.hue, instruction: t.instruction,
     model_kind: 'cheap', mode: t.mode, enabled_tools: t.tools,
     schedule_kind: t.schedule_kind, hour: t.hour, day_of_week: t.day_of_week ?? null, day_of_month: t.day_of_month ?? null,
     timezone: 'Europe/Amsterdam', status: 'draft', next_run_at: null, last_run_at: null,
@@ -470,15 +454,35 @@ function templateToRoutine(t: RoutineTemplate): GerrieRoutine {
   };
 }
 
-function RoutinesPanel({ organizationId, canWrite, handlers }: { organizationId: UUID; canWrite: boolean; handlers: GerrieActionHandlers }) {
+/** Kort ritme-label voor op de tegel: "Ma 08:00" leest sneller dan een volzin. */
+function shortSchedule(r: { schedule_kind: RoutineScheduleKind; hour: number; day_of_week: number | null; day_of_month: number | null }): string {
+  const t = `${String(r.hour).padStart(2, '0')}:00`;
+  if (r.schedule_kind === 'daily') return `Elke dag · ${t}`;
+  if (r.schedule_kind === 'weekly') return `${capitalize(DOW_NAMES[(r.day_of_week ?? 1) - 1].slice(0, 2))} · ${t}`;
+  return `Dag ${r.day_of_month ?? 1} · ${t}`;
+}
+function capitalize(s: string): string { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+const READ_TOOL_LABELS = new Map(ROUTINE_READ_TOOLS.map((t) => [t.name, t.label]));
+const PROPOSE_TOOL_LABELS = new Map(ROUTINE_PROPOSE_TOOLS.map((t) => [t.name, t.label]));
+
+function RoutinesPanel({ organizationId, canWrite, handlers, pendingByAgent, onApprovalsChanged }: {
+  organizationId: UUID;
+  canWrite: boolean;
+  handlers: GerrieActionHandlers;
+  /** Aantal openstaande voorstellen per agent — het belletje op de tegel. */
+  pendingByAgent: Record<string, number>;
+  onApprovalsChanged: () => void;
+}) {
   const [routines, setRoutines] = useState<GerrieRoutine[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [editing, setEditing] = useState<GerrieRoutine | 'new' | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [openRuns, setOpenRuns] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [runsKey, setRunsKey] = useState(0);
+  const sheetRef = useRef<HTMLDivElement | null>(null);
   const [toast, setToast] = useState<{ text: string; kind: 'info' | 'success' | 'error' } | null>(null);
   const toastTimer = useRef<number | null>(null);
   const reload = () => setReloadKey((k) => k + 1);
@@ -500,42 +504,52 @@ function RoutinesPanel({ organizationId, canWrite, handlers }: { organizationId:
 
   async function doStatus(r: GerrieRoutine, status: RoutineStatus) {
     setBusyId(r.id);
-    try { await setRoutineStatus(organizationId, r.id, status); reload(); notify(status === 'active' ? 'Routine geactiveerd.' : status === 'paused' ? 'Routine gepauzeerd.' : 'Bijgewerkt.', 'success'); }
+    try { await setRoutineStatus(organizationId, r.id, status); reload(); notify(status === 'active' ? 'Agent geactiveerd.' : status === 'paused' ? 'Agent gepauzeerd.' : 'Bijgewerkt.', 'success'); }
     catch (e) { notify(e instanceof Error ? e.message : 'Mislukt.', 'error'); }
     finally { setBusyId(null); }
   }
   async function doDelete(r: GerrieRoutine) {
-    if (!confirm(`Routine "${r.name || 'naamloos'}" verwijderen?`)) return;
+    if (!confirm(`Agent "${r.name || 'naamloos'}" verwijderen?`)) return;
     setBusyId(r.id);
-    try { await deleteRoutine(organizationId, r.id); reload(); notify('Routine verwijderd.', 'success'); }
+    try { await deleteRoutine(organizationId, r.id); setOpenId(null); reload(); notify('Agent verwijderd.', 'success'); }
     catch (e) { notify(e instanceof Error ? e.message : 'Verwijderen mislukt.', 'error'); }
     finally { setBusyId(null); }
   }
   async function doRunNow(r: GerrieRoutine) {
-    setBusyId(r.id); setOpenRuns(r.id);
-    notify(`"${r.name || 'Routine'}" draait…`, 'info', true);
+    setBusyId(r.id); setOpenId(r.id);
+    notify(`"${r.name || 'Agent'}" draait…`, 'info', true);
     try {
       const res = await runRoutineNow(organizationId, r.id);
       notify(res.proposalsCreated ? `Klaar — ${res.proposalsCreated} voorstel${res.proposalsCreated === 1 ? '' : 'len'} klaargezet om goed te keuren.` : 'Klaar — bekijk de run hieronder.', 'success');
-      setRunsKey((k) => k + 1); reload();
+      setRunsKey((k) => k + 1); reload(); onApprovalsChanged();
     } catch (e) { notify(e instanceof Error ? e.message : 'Draaien mislukt.', 'error'); }
     finally { setBusyId(null); }
   }
+
+  // Een geopende agent hoort in beeld te komen; op een lang scherm staat het
+  // paneel anders onder de vouw en lijkt de klik niets te doen.
+  useEffect(() => {
+    if (!openId || !sheetRef.current) return;
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+    sheetRef.current.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
+  }, [openId]);
 
   if (editing) {
     return <RoutineEditor organizationId={organizationId} routine={editing === 'new' ? null : editing}
       onDone={() => { setEditing(null); reload(); }} onCancel={() => setEditing(null)} />;
   }
 
+  const open = routines.find((r) => r.id === openId) ?? null;
+
   return (
-    <div className="cc-routines">
-      <div className="cc-routines-head">
+    <div className="ag-page">
+      <header className="ag-page-head">
         <div>
-          <h2 className="cc-routines-title">Routines</h2>
-          <p className="cc-routines-lead">Geplande agents die vanzelf terugkeren. <b>De agent stelt voor, jij keurt goed</b> — er wordt niets verstuurd zonder jouw akkoord.</p>
+          <h2>Je agents</h2>
+          <p>Elk embleem is een agent die vanzelf op zijn eigen moment draait. <b>Hij stelt voor, jij beslist</b> — er gaat niets de deur uit zonder jouw akkoord.</p>
         </div>
-        <button className="cc-btn primary" onClick={() => setEditing('new')}><Plus size={15} /> Nieuwe routine</button>
-      </div>
+        <button className="cc-btn primary" onClick={() => setEditing('new')}><Plus size={15} /> Nieuwe agent</button>
+      </header>
 
       {toast && (
         <div className={`cc-routines-toast ${toast.kind}`} role="status" onClick={() => setToast(null)}>
@@ -545,55 +559,196 @@ function RoutinesPanel({ organizationId, canWrite, handlers }: { organizationId:
       )}
       {error && <div className="cc-plan-error">{error}</div>}
 
-      {routines.length === 0 && !loading && (
-        <div className="cc-routines-templates">
-          <span className="cc-quick-label">Begin met een sjabloon</span>
-          <div className="cc-quick-chips">
-            {ROUTINE_TEMPLATES.map((t) => (
-              <button key={t.name} className="cc-chip" onClick={() => setEditing(templateToRoutine(t))}>{t.name}</button>
-            ))}
+      {loading ? <p className="ag-loading"><Loader2 size={14} className="cc-spin" /> Agents laden…</p> : <>
+        {routines.length === 0 ? (
+          <div className="ag-starters">
+            <p className="ag-starters-lead">Je hebt nog geen agents. Kies een startpunt — je kunt daarna alles nog aanpassen.</p>
+            <div className="ag-starter-grid">
+              {ROUTINE_TEMPLATES.map((t) => (
+                <button key={t.name} type="button" className="ag-starter" onClick={() => setEditing(templateToRoutine(t))}>
+                  <AgentGlyph agent={{ id: t.name, name: t.name, icon: t.icon, hue: t.hue }} size="lg" />
+                  <strong>{t.name}</strong>
+                  <span>{t.blurb}</span>
+                </button>
+              ))}
+              <button type="button" className="ag-starter ag-starter-blank" onClick={() => setEditing('new')}>
+                <span className="ag-tile-plus" aria-hidden="true"><Plus size={26} /></span>
+                <strong>Zelf verzinnen</strong>
+                <span>Beschrijf in gewone taal wat hij moet doen.</span>
+              </button>
+            </div>
           </div>
+        ) : (
+          <div className="ag-grid">
+            {routines.map((r) => {
+              const waiting = pendingByAgent[r.id] ?? 0;
+              const isOpen = openId === r.id;
+              return (
+                <button
+                  key={r.id}
+                  type="button"
+                  className={`ag-tile${isOpen ? ' is-open' : ''}`}
+                  aria-expanded={isOpen}
+                  onClick={() => setOpenId(isOpen ? null : r.id)}
+                >
+                  {waiting > 0 && <span className="ag-tile-badge" title={`${waiting} wacht op jouw akkoord`}>{waiting}</span>}
+                  <AgentGlyph agent={r} size="lg" state={busyId === r.id ? 'running' : r.status} />
+                  <strong className="ag-tile-name">{r.name || 'Naamloze agent'}</strong>
+                  <span className="ag-tile-rhythm"><Clock size={11} /> {shortSchedule(r)}</span>
+                  <span className={`ag-tile-state is-${r.status}`}>{routineStatusLabel(r.status)}</span>
+                  <span className="ag-tile-hint">{isOpen ? <>Sluiten <ChevronUp size={12} /></> : <>Wat kan hij? <ChevronDown size={12} /></>}</span>
+                </button>
+              );
+            })}
+            <button type="button" className="ag-tile ag-tile-new" onClick={() => setEditing('new')}>
+              <span className="ag-tile-plus" aria-hidden="true"><Plus size={26} /></span>
+              <strong className="ag-tile-name">Nieuwe agent</strong>
+              <span className="ag-tile-rhythm">Zet er zelf een aan het werk</span>
+            </button>
+          </div>
+        )}
+
+        {open && (
+          <div className="ag-sheet" ref={sheetRef}>
+            <AgentSheet
+              routine={open}
+              organizationId={organizationId}
+              canWrite={canWrite}
+              handlers={handlers}
+              busy={busyId === open.id}
+              runsKey={runsKey}
+              waiting={pendingByAgent[open.id] ?? 0}
+              onRunNow={() => void doRunNow(open)}
+              onStatus={(s) => void doStatus(open, s)}
+              onEdit={() => setEditing(open)}
+              onDelete={() => void doDelete(open)}
+              onClose={() => setOpenId(null)}
+              onApprovalsChanged={onApprovalsChanged}
+            />
+          </div>
+        )}
+      </>}
+    </div>
+  );
+}
+
+/**
+ * Wat de tegel bewust NIET laat zien: hier staat het. Eerst wat de agent mag —
+ * lezen, voorstellen, wanneer, waar het heen gaat en binnen welke grenzen — dan
+ * zijn opdracht, dan de knoppen, en onderaan wat hij tot nu toe gedaan heeft.
+ */
+function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey, waiting, onRunNow, onStatus, onEdit, onDelete, onClose, onApprovalsChanged }: {
+  routine: GerrieRoutine;
+  organizationId: UUID;
+  canWrite: boolean;
+  handlers: GerrieActionHandlers;
+  busy: boolean;
+  runsKey: number;
+  waiting: number;
+  onRunNow: () => void;
+  onStatus: (status: RoutineStatus) => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+  onApprovalsChanged: () => void;
+}) {
+  const readTools = routine.enabled_tools.filter((n) => !n.startsWith('propose_'));
+  const proposeTools = routine.enabled_tools.filter((n) => n.startsWith('propose_'));
+  const emailToo = Array.isArray(routine.delivery?.channels) && routine.delivery.channels.includes('email');
+
+  return (
+    <>
+      <header className="ag-sheet-head">
+        <AgentGlyph agent={routine} size="lg" state={busy ? 'running' : routine.status} />
+        <div className="ag-sheet-ident">
+          <h3>{routine.name || 'Naamloze agent'}</h3>
+          <div className="ag-sheet-pills">
+            <span className={`cc-pill ${routine.status === 'active' ? 'run' : routine.status === 'paused' ? 'wait' : 'cancel'}`}><span className="cc-dot" />{routineStatusLabel(routine.status)}</span>
+            <span className={`cc-kind ${routine.mode === 'propose' ? 'write' : 'read'}`}>{routine.mode === 'propose' ? 'stelt acties voor' : 'alleen lezen'}</span>
+            {waiting > 0 && <span className="ag-sheet-waiting"><ClipboardCheck size={12} /> {waiting} wacht op jou</span>}
+          </div>
+        </div>
+        <button type="button" className="ag-sheet-close" onClick={onClose} aria-label="Sluiten"><X size={16} /></button>
+      </header>
+
+      <div className="ag-caps">
+        <Capability icon={<Eye size={14} />} title="Mag inzien">
+          {readTools.length === 0
+            ? <span className="ag-cap-plain">De standaard leesset (klanten, facturen, herinneringen).</span>
+            : <div className="ag-cap-chips">{readTools.map((n) => <span key={n} className="ag-cap-chip">{READ_TOOL_LABELS.get(n) ?? n}</span>)}</div>}
+        </Capability>
+
+        <Capability icon={<ClipboardCheck size={14} />} title="Mag voorstellen">
+          {routine.mode !== 'propose' || proposeTools.length === 0
+            ? <span className="ag-cap-plain">Niets — deze agent rapporteert alleen en raakt nooit iets aan.</span>
+            : <div className="ag-cap-chips">{proposeTools.map((n) => <span key={n} className="ag-cap-chip is-write">{PROPOSE_TOOL_LABELS.get(n) ?? n}</span>)}</div>}
+        </Capability>
+
+        <Capability icon={<Clock size={14} />} title="Ritme">
+          <span className="ag-cap-plain">{scheduleLabel(routine)}</span>
+          <span className="ag-cap-note">Volgende: {fmtWhen(routine.next_run_at)}{routine.last_run_at ? ` · laatste: ${fmtWhen(routine.last_run_at)}` : ''}</span>
+        </Capability>
+
+        <Capability icon={<Mailbox size={14} />} title="Bezorging">
+          <span className="ag-cap-plain">In de app{emailToo ? ' én per e-mail' : ''}</span>
+        </Capability>
+
+        <Capability icon={<Gauge size={14} />} title="Grenzen">
+          <span className="ag-cap-plain">{routine.model_kind === 'strong' ? 'Sterk model (Sonnet)' : 'Zuinig model (Haiku)'}</span>
+          {/* numeric-kolommen kunnen als string terugkomen; Number() eromheen voorkomt
+              dat één tekst-waarde het hele paneel laat crashen op .toFixed. */}
+          <span className="ag-cap-note">Max. € {(Number(routine.max_cost_eur_per_run) || 0).toFixed(2)} per run · hoogstens {routine.max_runs_per_day}× per dag</span>
+        </Capability>
+
+        <Capability icon={<Users2 size={14} />} title="Bevoegdheid">
+          <span className="ag-cap-plain">{routine.mode === 'propose' ? 'Zet klaar, verstuurt nooit zelf' : 'Kijkt mee, verandert niets'}</span>
+          {routine.consecutive_failures > 0 && <span className="ag-cap-note">{routine.consecutive_failures}× achter elkaar mislukt</span>}
+        </Capability>
+      </div>
+
+      {routine.instruction && (
+        <div className="ag-brief">
+          <span className="ag-brief-label"><BookOpen size={13} /> Zijn opdracht</span>
+          <p>{routine.instruction}</p>
         </div>
       )}
 
-      {loading ? <div className="cc-routines-empty">Laden…</div> : (
-        <div className="cc-routines-list">
-          {routines.map((r) => (
-            <article key={r.id} className="cc-card cc-routine">
-              <div className="cc-routine-top">
-                <span className={`cc-pill ${r.status === 'active' ? 'run' : r.status === 'paused' ? 'wait' : 'cancel'}`}><span className="cc-dot" />{routineStatusLabel(r.status)}</span>
-                <b className="cc-routine-name">{r.name || 'Naamloze routine'}</b>
-                <span className={`cc-kind ${r.mode === 'propose' ? 'write' : 'read'}`}>{r.mode === 'propose' ? 'stelt voor' : 'alleen lezen'}</span>
-              </div>
-              <div className="cc-routine-meta">
-                <span><Clock size={12} /> {scheduleLabel(r)}</span>
-                <span>Volgende: {fmtWhen(r.next_run_at)}</span>
-                {r.last_run_at && <span>Laatste: {fmtWhen(r.last_run_at)}</span>}
-              </div>
-              {r.instruction && <p className="cc-routine-instr">{r.instruction}</p>}
-              <div className="cc-routine-actions">
-                <button className="cc-btn tiny ghost" disabled={busyId === r.id} onClick={() => void doRunNow(r)}>
-                  {busyId === r.id ? <><Loader2 size={13} className="cc-spin" /> Draait…</> : <><Play size={13} /> Nu draaien</>}
-                </button>
-                {r.status === 'active'
-                  ? <button className="cc-btn tiny ghost" disabled={busyId === r.id} onClick={() => void doStatus(r, 'paused')}><Pause size={13} /> Pauzeren</button>
-                  : <button className="cc-btn tiny primary" disabled={busyId === r.id} onClick={() => void doStatus(r, 'active')}><Play size={13} /> Activeren</button>}
-                <button className="cc-btn tiny ghost" onClick={() => setEditing(r)}><Pencil size={13} /> Bewerken</button>
-                <button className="cc-btn tiny ghost" onClick={() => setOpenRuns(openRuns === r.id ? null : r.id)}><RotateCw size={13} /> Runs</button>
-                <button className="cc-btn tiny ghost danger" disabled={busyId === r.id} onClick={() => void doDelete(r)} title="Verwijderen"><Trash2 size={13} /></button>
-              </div>
-              {openRuns === r.id && <RoutineRuns organizationId={organizationId} agentId={r.id} canWrite={canWrite} handlers={handlers} refreshKey={runsKey} />}
-            </article>
-          ))}
-        </div>
-      )}
-    </div>
+      <div className="ag-sheet-actions">
+        <button className="cc-btn tiny ghost" disabled={busy} onClick={onRunNow}>
+          {busy ? <><Loader2 size={13} className="cc-spin" /> Draait…</> : <><Play size={13} /> Nu draaien</>}
+        </button>
+        {routine.status === 'active'
+          ? <button className="cc-btn tiny ghost" disabled={busy} onClick={() => onStatus('paused')}><Pause size={13} /> Pauzeren</button>
+          : <button className="cc-btn tiny primary" disabled={busy} onClick={() => onStatus('active')}><Play size={13} /> Activeren</button>}
+        <button className="cc-btn tiny ghost" onClick={onEdit}><Pencil size={13} /> Bewerken</button>
+        <span className="ag-sheet-spacer" />
+        <button className="cc-btn tiny ghost danger" disabled={busy} onClick={onDelete}><Trash2 size={13} /> Verwijderen</button>
+      </div>
+
+      <div className="ag-history">
+        <span className="ag-history-label"><RotateCw size={13} /> Wat heeft hij gedaan?</span>
+        <RoutineRuns organizationId={organizationId} agentId={routine.id} canWrite={canWrite} handlers={handlers}
+          refreshKey={runsKey} onApprovalsChanged={onApprovalsChanged} />
+      </div>
+    </>
+  );
+}
+
+function Capability({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
+  return (
+    <section className="ag-cap">
+      <span className="ag-cap-icon" aria-hidden="true">{icon}</span>
+      <h4>{title}</h4>
+      {children}
+    </section>
   );
 }
 
 interface EditorFields {
   name: string; instruction: string; mode: RoutineMode; model_kind: 'cheap' | 'strong';
   schedule_kind: RoutineScheduleKind; hour: number; day_of_week: number; day_of_month: number; tools: string[]; email: boolean;
+  /** null = laat de app het embleem afleiden uit naam + opdracht + tools. */
+  icon: AgentIconKey | null; hue: number | null;
 }
 
 function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organizationId: UUID; routine: GerrieRoutine | null; onDone: () => void; onCancel: () => void }) {
@@ -608,10 +763,18 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
     day_of_month: routine?.day_of_month ?? 1,
     tools: routine?.enabled_tools ?? [],
     email: Array.isArray(routine?.delivery?.channels) ? routine!.delivery.channels.includes('email') : false,
+    icon: (routine?.icon as AgentIconKey | null) ?? null,
+    hue: routine?.hue ?? null,
   }));
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const isNew = !routine || !routine.id;
+
+  // Het embleem in de kop is een levend voorbeeld: typ je "facturen", dan verandert
+  // het icoon mee zolang je zelf niets gekozen hebt.
+  const preview = { id: routine?.id || 'nieuw', name: f.name, instruction: f.instruction, enabled_tools: f.tools, icon: f.icon, hue: f.hue };
+  const derivedIcon = agentIconKey({ ...preview, icon: null });
+  const derivedHue = agentHue({ ...preview, hue: null });
 
   function toggleTool(name: string) {
     setF((p) => ({ ...p, tools: p.tools.includes(name) ? p.tools.filter((t) => t !== name) : [...p.tools, name] }));
@@ -621,8 +784,9 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
     if (!f.instruction.trim()) { setErr('Geef een opdracht voor de agent.'); return; }
     setSaving(true); setErr(null);
     const input: GerrieRoutineInput = {
-      name: f.name.trim() || 'Naamloze routine',
+      name: f.name.trim() || 'Naamloze agent',
       instruction: f.instruction.trim(),
+      icon: f.icon, hue: f.hue,
       model_kind: f.model_kind, mode: f.mode, enabled_tools: f.tools,
       schedule_kind: f.schedule_kind, hour: f.hour,
       day_of_week: f.schedule_kind === 'weekly' ? f.day_of_week : null,
@@ -637,11 +801,17 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
   }
 
   return (
-    <div className="cc-routines">
-      <div className="cc-routines-head">
-        <h2 className="cc-routines-title">{isNew ? 'Nieuwe routine' : 'Routine bewerken'}</h2>
+    <div className="ag-page">
+      <header className="ag-page-head">
+        <div className="ag-editor-ident">
+          <AgentGlyph agent={preview} size="lg" />
+          <div>
+            <h2>{isNew ? 'Nieuwe agent' : 'Agent bewerken'}</h2>
+            <p>{f.name.trim() || 'Geef hem een naam, een opdracht en een moment.'}</p>
+          </div>
+        </div>
         <button className="cc-btn ghost" onClick={onCancel}><X size={14} /> Sluiten</button>
-      </div>
+      </header>
       <div className="cc-card cc-routine-form">
         <label className="cc-field"><span>Naam</span>
           <input className="cc-text" value={f.name} onChange={(e) => setF((p) => ({ ...p, name: e.target.value }))} placeholder="Bijv. Wekelijks factuuroverzicht" />
@@ -649,6 +819,57 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
         <label className="cc-field"><span>Opdracht (in gewone taal)</span>
           <textarea className="cc-input" rows={3} value={f.instruction} onChange={(e) => setF((p) => ({ ...p, instruction: e.target.value }))} placeholder="Bijv. Geef een overzicht van openstaande facturen ouder dan 30 dagen." />
         </label>
+
+        <div className="cc-field"><span>Zijn gezicht</span>
+          <div className="ag-picker">
+            <button
+              type="button"
+              className={`ag-pick-icon${f.icon === null ? ' on' : ''}`}
+              onClick={() => setF((p) => ({ ...p, icon: null }))}
+              title="Laat Gerrie het icoon kiezen op basis van de opdracht"
+            >
+              <AgentGlyph agent={{ ...preview, icon: null }} size="sm" />
+              <span className="ag-pick-auto">Automatisch</span>
+            </button>
+            {AGENT_ICONS.map((d) => (
+              <button
+                key={d.key}
+                type="button"
+                className={`ag-pick-icon${f.icon === d.key ? ' on' : ''}`}
+                onClick={() => setF((p) => ({ ...p, icon: d.key }))}
+                title={d.label}
+                aria-label={d.label}
+                aria-pressed={f.icon === d.key}
+              >
+                <AgentGlyph agent={{ ...preview, icon: d.key, hue: f.hue ?? derivedHue }} size="sm" />
+              </button>
+            ))}
+          </div>
+          <div className="ag-picker ag-picker-hues">
+            <button
+              type="button"
+              className={`ag-pick-hue${f.hue === null ? ' on' : ''}`}
+              onClick={() => setF((p) => ({ ...p, hue: null }))}
+              style={{ '--ag-h': derivedHue } as CSSProperties}
+              title="Automatische kleur"
+              aria-label="Automatische kleur"
+              aria-pressed={f.hue === null}
+            />
+            {AGENT_HUES.map((h) => (
+              <button
+                key={h}
+                type="button"
+                className={`ag-pick-hue${f.hue === h ? ' on' : ''}`}
+                onClick={() => setF((p) => ({ ...p, hue: h }))}
+                style={{ '--ag-h': h } as CSSProperties}
+                title={`Kleurtint ${h}`}
+                aria-label={`Kleurtint ${h}`}
+                aria-pressed={f.hue === h}
+              />
+            ))}
+          </div>
+          <p className="cc-note">Kies je niets, dan leidt Gerrie het embleem af uit de opdracht — nu <b>{AGENT_ICONS.find((d) => d.key === derivedIcon)?.label ?? 'Robot'}</b>.</p>
+        </div>
         <div className="cc-field-row">
           <label className="cc-field"><span>Wat mag de agent?</span>
             <select className="cc-text" value={f.mode} onChange={(e) => setF((p) => ({ ...p, mode: e.target.value as RoutineMode }))}>
@@ -729,7 +950,7 @@ function runPillClass(s: RoutineRunStatus): string {
   return s === 'succeeded' ? 'done' : s === 'failed' ? 'fail' : (s === 'running' || s === 'claimed') ? 'run' : s === 'partial' ? 'wait' : 'cancel';
 }
 
-function RoutineRuns({ organizationId, agentId, canWrite, handlers, refreshKey }: { organizationId: UUID; agentId: UUID; canWrite: boolean; handlers: GerrieActionHandlers; refreshKey: number }) {
+function RoutineRuns({ organizationId, agentId, canWrite, handlers, refreshKey, onApprovalsChanged }: { organizationId: UUID; agentId: UUID; canWrite: boolean; handlers: GerrieActionHandlers; refreshKey: number; onApprovalsChanged?: () => void }) {
   const [runs, setRuns] = useState<GerrieRoutineRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -751,13 +972,13 @@ function RoutineRuns({ organizationId, agentId, canWrite, handlers, refreshKey }
   return (
     <div className="cc-runs">
       {runs.map((run, i) => (
-        <RunItem key={run.id} run={run} organizationId={organizationId} canWrite={canWrite} handlers={handlers} defaultOpen={i === 0} />
+        <RunItem key={run.id} run={run} organizationId={organizationId} canWrite={canWrite} handlers={handlers} defaultOpen={i === 0} onApprovalsChanged={onApprovalsChanged} />
       ))}
     </div>
   );
 }
 
-function RunItem({ run, organizationId, canWrite, handlers, defaultOpen }: { run: GerrieRoutineRun; organizationId: UUID; canWrite: boolean; handlers: GerrieActionHandlers; defaultOpen: boolean }) {
+function RunItem({ run, organizationId, canWrite, handlers, defaultOpen, onApprovalsChanged }: { run: GerrieRoutineRun; organizationId: UUID; canWrite: boolean; handlers: GerrieActionHandlers; defaultOpen: boolean; onApprovalsChanged?: () => void }) {
   const [open, setOpen] = useState(defaultOpen);
   const running = run.status === 'running' || run.status === 'claimed';
   return (
@@ -770,14 +991,14 @@ function RunItem({ run, organizationId, canWrite, handlers, defaultOpen }: { run
         {run.proposals_created > 0 && <span className="cc-run-badge">{run.proposals_created} voorstel{run.proposals_created === 1 ? '' : 'len'}</span>}
         {!open && run.summary && <span className="cc-run-peek">{run.summary}</span>}
       </button>
-      {open && <RunDetail run={run} organizationId={organizationId} canWrite={canWrite} handlers={handlers} />}
+      {open && <RunDetail run={run} organizationId={organizationId} canWrite={canWrite} handlers={handlers} onApprovalsChanged={onApprovalsChanged} />}
     </div>
   );
 }
 
 type PropState = 'idle' | 'busy' | 'done' | 'rejected' | 'error';
 
-function RunDetail({ run, organizationId, canWrite, handlers }: { run: GerrieRoutineRun; organizationId: UUID; canWrite: boolean; handlers: GerrieActionHandlers }) {
+function RunDetail({ run, organizationId, canWrite, handlers, onApprovalsChanged }: { run: GerrieRoutineRun; organizationId: UUID; canWrite: boolean; handlers: GerrieActionHandlers; onApprovalsChanged?: () => void }) {
   const [transcript, setTranscript] = useState<GerrieRunMessage[]>([]);
   const [proposals, setProposals] = useState<Array<{ auditId: string; proposal: GerrieProposal }>>([]);
   const [loading, setLoading] = useState(true);
@@ -806,7 +1027,8 @@ function RunDetail({ run, organizationId, canWrite, handlers }: { run: GerrieRou
     const m = reply.trim();
     if (!m || replying) return;
     setReplying(true); setErr(null);
-    try { await replyToRun(organizationId, run.id, m); setReply(''); setRefresh((x) => x + 1); }
+    // Een antwoord kan alsnog een voorstel opleveren; de tellers moeten dat zien.
+    try { await replyToRun(organizationId, run.id, m); setReply(''); setRefresh((x) => x + 1); onApprovalsChanged?.(); }
     catch (e) { setErr(e instanceof Error ? e.message : 'Antwoord mislukt.'); }
     finally { setReplying(false); }
   }
@@ -816,15 +1038,18 @@ function RunDetail({ run, organizationId, canWrite, handlers }: { run: GerrieRou
       await executeProposal(p, handlers);
       void confirmGerrieAction(organizationId, auditId, 'executed');
       setPstate((s) => ({ ...s, [auditId]: 'done' }));
+      onApprovalsChanged?.();
     } catch (e) {
       const m = e instanceof Error ? e.message : 'Uitvoeren mislukt.';
       void confirmGerrieAction(organizationId, auditId, 'failed', m);
       setPstate((s) => ({ ...s, [auditId]: 'error' })); setPmsg((x) => ({ ...x, [auditId]: m }));
+      onApprovalsChanged?.();
     }
   }
   function reject(auditId: string) {
     void confirmGerrieAction(organizationId, auditId, 'failed', 'Afgewezen door gebruiker.');
     setPstate((s) => ({ ...s, [auditId]: 'rejected' }));
+    onApprovalsChanged?.();
   }
 
   return (

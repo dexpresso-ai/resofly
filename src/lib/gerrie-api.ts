@@ -398,6 +398,10 @@ export interface GerrieRoutine {
   id: UUID;
   name: string;
   description: string | null;
+  /** Zelfgekozen embleem-sleutel; null = de app leidt hem af uit opdracht + tools. */
+  icon: string | null;
+  /** Zelfgekozen kleurtint 0..359; null = afgeleid uit het agent-id. */
+  hue: number | null;
   instruction: string;
   model_kind: 'cheap' | 'strong';
   mode: RoutineMode;
@@ -439,6 +443,8 @@ export interface GerrieRoutineRun {
 export interface GerrieRoutineInput {
   name: string;
   description?: string | null;
+  icon?: string | null;
+  hue?: number | null;
   instruction: string;
   model_kind: 'cheap' | 'strong';
   mode: RoutineMode;
@@ -520,6 +526,75 @@ export async function listRunProposals(organizationId: UUID, runId: UUID): Promi
   return (data ?? [])
     .map((r: { id: string; params: unknown }) => ({ auditId: String(r.id), proposal: r.params as GerrieProposal }))
     .filter((r) => r.proposal && typeof r.proposal.type === 'string');
+}
+
+/**
+ * Eén openstaande beslissing in de goedkeurwachtrij: een agent heeft iets
+ * klaargezet en wacht op een mens.
+ */
+export interface AgentApproval {
+  auditId: string;
+  proposal: GerrieProposal;
+  createdAt: string;
+  runId: UUID | null;
+  agentId: UUID | null;
+  /** Naam van de agent; valt terug op "Gerrie-agent" als de naam niet leesbaar is. */
+  agentName: string;
+  agentIcon: string | null;
+  agentHue: number | null;
+}
+
+/**
+ * Alles wat op dit moment op jouw akkoord wacht — over álle agents heen.
+ *
+ * Bewust alleen voorstellen mét `agent_run_id`: dat zijn de voorstellen die
+ * ONBEWAAKT zijn ontstaan (een geplande agent draaide terwijl niemand keek) en
+ * dus nergens anders getoond worden. Voorstellen uit de chat of uit een live
+ * missie in het commandocentrum kregen hun akkoord-knop al op het scherm waar ze
+ * ontstonden; die hier nóg een keer tonen zou elke genegeerde chat-suggestie voor
+ * altijd op het startscherm plakken.
+ *
+ * De agentnamen zijn best-effort: `ai_agents` is owner/admin-only, dus een gewoon
+ * teamlid ziet de wachtrij wél maar de naam niet. Dan valt hij terug op een
+ * neutraal label in plaats van de hele kaart te laten mislukken.
+ */
+export async function listPendingAgentApprovals(organizationId: UUID, limit = 30): Promise<AgentApproval[]> {
+  const { data, error } = await supabase.from('ai_action_audit')
+    .select('id, params, created_at, agent_id, agent_run_id')
+    .eq('organization_id', organizationId)
+    .eq('status', 'proposed')
+    .not('agent_run_id', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(error.message);
+
+  const rows = (data ?? []) as Array<{ id: string; params: unknown; created_at: string; agent_id: string | null; agent_run_id: string | null }>;
+  const valid = rows.filter((r) => r.params && typeof (r.params as GerrieProposal).type === 'string');
+  if (valid.length === 0) return [];
+
+  const agentIds = [...new Set(valid.map((r) => r.agent_id).filter((id): id is string => Boolean(id)))];
+  const names = new Map<string, { name: string; icon: string | null; hue: number | null }>();
+  if (agentIds.length > 0) {
+    const { data: agents } = await supabase.from('ai_agents')
+      .select('id, name, icon, hue').eq('organization_id', organizationId).in('id', agentIds);
+    for (const a of (agents ?? []) as Array<{ id: string; name: string | null; icon: string | null; hue: number | null }>) {
+      names.set(a.id, { name: a.name?.trim() || 'Naamloze agent', icon: a.icon ?? null, hue: a.hue ?? null });
+    }
+  }
+
+  return valid.map((r) => {
+    const meta = r.agent_id ? names.get(r.agent_id) : undefined;
+    return {
+      auditId: String(r.id),
+      proposal: r.params as GerrieProposal,
+      createdAt: r.created_at,
+      runId: (r.agent_run_id as UUID | null) ?? null,
+      agentId: (r.agent_id as UUID | null) ?? null,
+      agentName: meta?.name ?? 'Gerrie-agent',
+      agentIcon: meta?.icon ?? null,
+      agentHue: meta?.hue ?? null,
+    };
+  });
 }
 
 /** Eén beurt in het gesprek/transcript van een run. */
