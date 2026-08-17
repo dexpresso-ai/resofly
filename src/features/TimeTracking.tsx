@@ -362,7 +362,7 @@ function HourCriterionCard({ data, currentUserId }: { data: AppData; currentUser
         <span className="tt-criterion-pct">{Math.floor(pct)}%</span>
       </div>
       <div className="tt-criterion-bar" role="progressbar" aria-valuemin={0} aria-valuemax={1225} aria-valuenow={Math.round(minutesToHours(stats.total))}>
-        <div className={`tt-criterion-fill${reached ? ' reached' : ''}`} style={{ width: `${pct}%` }} />
+        <div className={`tt-criterion-fill${reached ? ' reached' : ''}`} style={{ '--fill': pct / 100 } as React.CSSProperties} />
       </div>
       <div className="tt-criterion-split">
         <span className="pill">Direct {formatMinutes(stats.direct)}</span>

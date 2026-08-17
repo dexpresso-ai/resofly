@@ -517,7 +517,7 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
             <div className="gerrie-budget" role="status" aria-label="Resterend AI-tegoed deze maand">
               <span className="gerrie-budget-label">AI-tegoed</span>
               <span className="gerrie-budget-track">
-                <span className="gerrie-budget-fill" data-low={budget <= 0.2 ? 'true' : 'false'} style={{ width: `${Math.round(budget * 100)}%` }} />
+                <span className="gerrie-budget-fill" data-low={budget <= 0.2 ? 'true' : 'false'} style={{ '--fill': Math.round(budget * 100) / 100 } as React.CSSProperties} />
               </span>
               <span className="gerrie-budget-pct">{Math.round(budget * 100)}%</span>
             </div>

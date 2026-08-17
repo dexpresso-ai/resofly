@@ -930,7 +930,7 @@ function PortalProjectDetail({ projectId, onBack }: { projectId: string; onBack:
 
       <div className="portal-progress">
         <div className="portal-progress-head"><span>Voortgang</span><strong>{progress}%</strong></div>
-        <div className="portal-progress-bar"><span style={{ width: `${progress}%` }} /></div>
+        <div className="portal-progress-bar"><span style={{ '--fill': progress / 100 } as React.CSSProperties} /></div>
         <span className="portal-muted">{doneCount} van {tasks.length} {tasks.length === 1 ? 'taak' : 'taken'} afgerond</span>
       </div>
 

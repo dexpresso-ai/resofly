@@ -27,7 +27,7 @@ export function BarChart({ rows, format }: ChartProps) {
         return (
           <div className="rb-bar-row" key={r.key}>
             <span className="rb-bar-label" title={r.label}>{r.label}</span>
-            <span className="rb-bar-track"><span className="rb-bar-fill" style={{ width: `${pct}%` }} /></span>
+            <span className="rb-bar-track"><span className="rb-bar-fill" style={{ '--fill': pct / 100 } as React.CSSProperties} /></span>
             <span className="rb-bar-val">{format(r.value)}</span>
           </div>
         );

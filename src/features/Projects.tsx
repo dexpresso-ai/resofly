@@ -945,7 +945,7 @@ export function ProjectPage({
           </button>
           <div className="proj-dash-stat proj-dash-stat-progress">
             <div className="proj-dash-progress-bar">
-              <div className="proj-dash-progress-fill" style={{ width: `${progress}%`, background: project.color ?? 'var(--accent)' }} />
+              <div className="proj-dash-progress-fill" style={{ '--fill': progress / 100, background: project.color ?? 'var(--accent)' } as React.CSSProperties} />
             </div>
             <span className="proj-dash-stat-lbl">{progress}% klaar</span>
           </div>
@@ -984,7 +984,7 @@ export function ProjectPage({
             </dl>
             <div className="proj-overview-progress">
               <div className="proj-overview-progress-bar">
-                <div className="proj-overview-progress-fill" style={{ width: `${progress}%`, background: project.color ?? 'var(--accent)' }} />
+                <div className="proj-overview-progress-fill" style={{ '--fill': progress / 100, background: project.color ?? 'var(--accent)' } as React.CSSProperties} />
               </div>
               <span className="proj-overview-progress-pct">{progress}% klaar · {doneTasks}/{tasks.length} taken</span>
             </div>
