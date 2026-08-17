@@ -3820,6 +3820,9 @@ button.chat-member:hover{background:var(--bg3)}
 .cc-plan-buttons{ display:flex; gap:8px; margin-left:auto; }
 
 .cc-lanes{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px; }
+/* "Nu uitvoeren" toont één opdracht tegelijk, en daar kan een afvinklijst met
+   bewerkbare mailtekst in zitten. Twee kolommen maakt dat onwerkbaar smal. */
+.cc-lanes-single{ grid-template-columns:1fr; }
 .cc-lane{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius-md); padding:14px; display:flex; flex-direction:column; gap:10px; min-width:0; }
 .cc-lane.attn{ border-color:var(--border-strong); box-shadow:0 0 0 1px var(--accent-soft),0 10px 30px -20px var(--accent-glow); }
 .cc-lane-top{ display:flex; align-items:center; gap:9px; }

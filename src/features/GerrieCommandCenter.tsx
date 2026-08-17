@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { Sparkles, Send, Check, X, AlertTriangle, Square, ListChecks, Wand2, Clock, Plus, Play, Pause, Archive, ArchiveRestore, Pencil, RotateCw, Loader2, ChevronDown, ChevronRight, ChevronUp, CornerDownLeft, ClipboardCheck, Eye, Mailbox, Users2, Gauge, BookOpen, ScrollText } from 'lucide-react';
+import { Sparkles, Send, Check, X, AlertTriangle, Wand2, Clock, Plus, Play, Pause, Archive, ArchiveRestore, Pencil, RotateCw, Loader2, ChevronDown, ChevronRight, ChevronUp, CornerDownLeft, ClipboardCheck, Eye, Mailbox, Users2, Gauge, BookOpen, ScrollText } from 'lucide-react';
 import {
-  streamGerrieReply, planGerrieMission, loadGerrieBudget, confirmGerrieAction,
+  streamGerrieReply, loadGerrieBudget, confirmGerrieAction,
   listRoutines, listRoutineRuns, saveRoutine, setRoutineStatus, archiveRoutine, restoreRoutine, runRoutineNow, listRunProposals,
   loadRunTranscript, listRunEvents, listRunDecisions, replyToRun, listPendingAgentApprovals, listRoutineToolsSafe, routineToolLabel,
-  type GerrieActionHandlers, type GerrieProposal, type GerrieMissionSubtask,
+  type GerrieActionHandlers, type GerrieProposal,
   type GerrieRoutine, type GerrieRoutineRun, type GerrieRoutineInput, type GerrieRunMessage, type GerrieAgentProposal,
   type GerrieRunEvent, type GerrieRunDecision, type RoutineTool,
   type RoutineMode, type RoutineScheduleKind, type RoutineStatus, type RoutineRunStatus, type AgentEmailMode,
@@ -31,36 +31,36 @@ import type { UUID } from '../types';
  * op de achtergrond (durable queue + cron) is een latere fase.
  */
 
-type LaneStatus = 'running' | 'waiting' | 'done' | 'failed' | 'cancelled';
-interface Lane {
+let runSeq = 0;
+function newId(): string {
+  try { return crypto.randomUUID(); } catch { return `run-${Date.now()}-${++runSeq}`; }
+}
+
+/**
+ * Eén losse opdracht die je nu laat uitvoeren. Bewust géén "missie" meer met
+ * parallelle deel-agents: dat draaide alleen zolang dit tabblad openstond, was de
+ * duurste weg, en had zijn eigen tweede goedkeurpad naast de wachtrij. Wat overbleef
+ * is de bruikbare helft — één opdracht, één keer, en wat hij klaarzet beslis je hier.
+ */
+interface RunResult {
   id: string;
-  title: string;
-  role: string;
-  kind: 'read' | 'write' | 'unknown';
-  status: LaneStatus;
+  instruction: string;
+  status: 'running' | 'done' | 'failed' | 'cancelled';
+  /** Waar hij nu mee bezig is ("Klanten zoeken…"); alleen tijdens het draaien. */
   statusLabel: string | null;
   text: string;
   proposal?: GerrieProposal;
   auditId?: string;
-  /** Resolutie van een voorstel in de goedkeuringswachtrij. */
   resolution?: 'executing' | 'executed' | 'rejected' | 'error';
   error?: string;
 }
 
-/** Een klaargezet plan (grote opdracht) dat wacht op akkoord vóór het uitwaaiert. */
-interface PendingPlan { goal: string; summary: string; subtasks: GerrieMissionSubtask[]; estimatePct: number | null }
-
-const QUICK_MISSIONS = [
-  'Verstuur alle herinneringen die vandaag aan de beurt zijn',
-  'Analyseer mijn openstaande facturen en vat de risico\'s samen',
-  'Welke offertes lopen nog en wat is de status per klant?',
+const QUICK_TASKS = [
+  'Welke facturen staan langer dan 30 dagen open?',
+  'Zet de betalingsherinneringen klaar die vandaag aan de beurt zijn',
+  'Welke offertes liggen stil en wat is de status per klant?',
   'Geef een overzicht van mijn omzet en grootste klanten dit jaar',
 ];
-
-let laneSeq = 0;
-function newId(): string {
-  try { return crypto.randomUUID(); } catch { return `lane-${Date.now()}-${++laneSeq}`; }
-}
 
 export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = null, onOpenAgentConsumed, ...handlers }: {
   organizationId: UUID;
@@ -69,14 +69,11 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
   openAgentId?: string | null;
   onOpenAgentConsumed?: () => void;
 } & GerrieActionHandlers) {
-  const [tab, setTab] = useState<'live' | 'agents' | 'queue'>(openAgentId ? 'agents' : 'live');
+  // Agents is de voordeur: daar zit het werk. "Nu uitvoeren" is voor het losse geval.
+  const [tab, setTab] = useState<'agents' | 'run' | 'queue'>('agents');
   const [draft, setDraft] = useState('');
-  const [lanes, setLanes] = useState<Lane[]>([]);
-  const [pendingPlan, setPendingPlan] = useState<PendingPlan | null>(null);
-  const [planning, setPlanning] = useState(false);
-  const [planError, setPlanError] = useState<string | null>(null);
+  const [runs, setRuns] = useState<RunResult[]>([]);
   const [budget, setBudget] = useState<number | null>(null);
-  const [estimatePct, setEstimatePct] = useState<number | null>(null);
   const controllers = useRef<Map<string, AbortController>>(new Map());
 
   // Openstaande voorstellen van geplande agents: voedt de badge op het tabblad én
@@ -103,133 +100,88 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
     return () => { cancelled = true; };
   }, [organizationId, reloadPending]);
 
-  // Bij het verlaten van de pagina/orgwissel: alle lopende agents netjes afbreken.
+  // Bij het verlaten van de pagina/orgwissel: lopende opdrachten netjes afbreken.
   useEffect(() => () => { controllers.current.forEach((c) => c.abort()); controllers.current.clear(); }, [organizationId]);
 
-  function patchLane(id: string, patch: Partial<Lane>) {
-    setLanes((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  function patchRun(id: string, patch: Partial<RunResult>) {
+    setRuns((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   }
 
-  /** Start één deel-agent (aparte SSE-stream, zuinig model). */
-  function runLane(lane: Lane, instruction: string) {
+  /**
+   * Voert één opdracht uit via hetzelfde brein als de chat. Bewust dezelfde weg:
+   * dan gedraagt een losse opdracht zich precies als een vraag in de chat-dock, en
+   * loopt de goedkeuring langs dezelfde gedeelde handlers.
+   */
+  function startRun(text: string) {
+    const instruction = text.trim();
+    if (!instruction) return;
+    setDraft('');
+    const run: RunResult = { id: newId(), instruction, status: 'running', statusLabel: 'Gerrie start…', text: '' };
+    setRuns((prev) => [run, ...prev]);
+
     const ctrl = new AbortController();
-    controllers.current.set(lane.id, ctrl);
+    controllers.current.set(run.id, ctrl);
     let streamed = '';
     streamGerrieReply({
       organizationId,
       conversationId: null,
       message: instruction,
-      modelKind: 'cheap',
       signal: ctrl.signal,
-      onStatus: (s) => patchLane(lane.id, { statusLabel: s.label }),
-      onDelta: (d) => { streamed += d; patchLane(lane.id, { text: streamed, statusLabel: null }); },
+      onStatus: (st) => patchRun(run.id, { statusLabel: st.label }),
+      onDelta: (d) => { streamed += d; patchRun(run.id, { text: streamed, statusLabel: null }); },
     })
       .then((result) => {
         if (result.budget) setBudget(result.budget.remainingFraction);
-        patchLane(lane.id, {
-          status: result.proposal ? 'waiting' : 'done',
-          statusLabel: null,
+        patchRun(run.id, {
+          status: 'done', statusLabel: null,
           text: result.text || streamed,
           proposal: result.proposal,
           auditId: result.auditId,
         });
       })
       .catch((err) => {
-        if (ctrl.signal.aborted) { patchLane(lane.id, { status: 'cancelled', statusLabel: null }); return; }
-        patchLane(lane.id, { status: 'failed', statusLabel: null, error: err instanceof Error ? err.message : 'Er ging iets mis.' });
+        if (ctrl.signal.aborted) { patchRun(run.id, { status: 'cancelled', statusLabel: null }); return; }
+        patchRun(run.id, { status: 'failed', statusLabel: null, error: err instanceof Error ? err.message : 'Er ging iets mis.' });
       })
-      .finally(() => { controllers.current.delete(lane.id); });
+      .finally(() => { controllers.current.delete(run.id); });
   }
 
-  /** Losse missie: één taak, meteen als één baan. */
-  function startLosseMissie(text: string) {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    setDraft('');
-    setPendingPlan(null);
-    const lane: Lane = { id: newId(), title: trimmed.slice(0, 70), role: 'Losse missie', kind: 'unknown', status: 'running', statusLabel: 'Gerrie start…', text: '' };
-    setLanes((prev) => [lane, ...prev]);
-    runLane(lane, trimmed);
-  }
+  function stopRun(id: string) { controllers.current.get(id)?.abort(); }
 
-  /** Grote opdracht: Gerrie (sterk model) maakt eerst een plan; jij bevestigt vóór het uitwaaiert. */
-  async function planGroteOpdracht(text: string) {
-    const trimmed = text.trim();
-    if (!trimmed || planning) return;
-    setPlanning(true);
-    setPlanError(null);
+  async function approve(run: RunResult) {
+    if (!run.proposal) return;
+    patchRun(run.id, { resolution: 'executing' });
     try {
-      const plan = await planGerrieMission(organizationId, trimmed);
-      if (plan.budget.remainingFraction !== null) setBudget(plan.budget.remainingFraction);
-      if (!plan.subtasks.length) { setPlanError(plan.summary || 'Gerrie kon hier geen deeltaken van maken. Formuleer het iets concreter.'); return; }
-      setPendingPlan({ goal: trimmed, summary: plan.summary, subtasks: plan.subtasks, estimatePct: plan.estimatePct });
-    } catch (e) {
-      setPlanError(e instanceof Error ? e.message : 'Plannen mislukt.');
-    } finally {
-      setPlanning(false);
-    }
-  }
-
-  /** Bevestig een klaargezet plan: waaier uit naar parallelle deel-agents. */
-  function launchPlan(plan: PendingPlan) {
-    setDraft('');
-    setEstimatePct(plan.estimatePct);
-    const created: Lane[] = plan.subtasks.map((s) => ({
-      id: newId(), title: s.title, role: s.role, kind: s.kind, status: 'running' as const, statusLabel: 'In de wachtrij…', text: '',
-    }));
-    setLanes((prev) => [...created, ...prev]);
-    setPendingPlan(null);
-    created.forEach((lane, i) => runLane(lane, plan.subtasks[i].instruction));
-  }
-
-  function stopLane(id: string) {
-    controllers.current.get(id)?.abort();
-  }
-  function stopAll() {
-    controllers.current.forEach((c) => c.abort());
-  }
-  function clearFinished() {
-    setLanes((prev) => prev.filter((l) => l.status === 'running' || l.status === 'waiting'));
-  }
-
-  // ── Goedkeuringen: voer een voorgestelde actie uit via de gedeelde handlers ──
-  async function approve(lane: Lane) {
-    if (!lane.proposal) return;
-    const p = lane.proposal;
-    patchLane(lane.id, { resolution: 'executing' });
-    try {
-      await executeProposal(p, handlers);
-      if (lane.auditId) void confirmGerrieAction(organizationId, lane.auditId, 'executed');
-      patchLane(lane.id, { status: 'done', resolution: 'executed' });
+      await executeProposal(run.proposal, handlers);
+      if (run.auditId) void confirmGerrieAction(organizationId, run.auditId, 'executed');
+      patchRun(run.id, { resolution: 'executed' });
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Uitvoeren mislukt.';
-      if (lane.auditId) void confirmGerrieAction(organizationId, lane.auditId, 'failed', msg);
-      patchLane(lane.id, { resolution: 'error', error: msg });
+      if (run.auditId) void confirmGerrieAction(organizationId, run.auditId, 'failed', msg);
+      patchRun(run.id, { resolution: 'error', error: msg });
     }
   }
-  function reject(lane: Lane) {
-    if (lane.auditId) void confirmGerrieAction(organizationId, lane.auditId, 'failed', 'Afgewezen door gebruiker.');
-    patchLane(lane.id, { status: 'cancelled', resolution: 'rejected' });
+  function reject(run: RunResult) {
+    if (run.auditId) void confirmGerrieAction(organizationId, run.auditId, 'failed', 'Afgewezen door gebruiker.');
+    patchRun(run.id, { resolution: 'rejected' });
   }
 
-  const activeCount = lanes.filter((l) => l.status === 'running').length;
-  const approvals = lanes.filter((l) => l.proposal && l.status === 'waiting' && l.resolution !== 'executed' && l.resolution !== 'rejected');
-  const busy = activeCount > 0 || planning;
+  const activeCount = runs.filter((r) => r.status === 'running').length;
 
   return (
     <div className="cc-root">
       <header className="cc-top">
         <div className="cc-brand"><span className="cc-spark" aria-hidden="true"><Sparkles size={18} /></span><b>Gerrie</b><span className="cc-sub">Commandocentrum</span></div>
         <nav className="cc-tabs" aria-label="Gerrie-weergave">
-          <button className={`cc-tab${tab === 'live' ? ' on' : ''}`} onClick={() => setTab('live')}><Sparkles size={14} /> Live</button>
           <button className={`cc-tab${tab === 'agents' ? ' on' : ''}`} onClick={() => setTab('agents')}><Clock size={14} /> Agents</button>
+          <button className={`cc-tab${tab === 'run' ? ' on' : ''}`} onClick={() => setTab('run')}><Sparkles size={14} /> Nu uitvoeren</button>
           <button className={`cc-tab${tab === 'queue' ? ' on' : ''}`} onClick={() => { setTab('queue'); reloadPending(); }}>
             <ClipboardCheck size={14} /> Jouw akkoord
             {pendingTotal > 0 && <span className="cc-tab-badge">{pendingTotal}</span>}
           </button>
         </nav>
         <div className="cc-top-spacer" />
-        {activeCount > 0 && <span className="cc-live" role="status"><span className="cc-live-dot" />{activeCount} agent{activeCount === 1 ? '' : 's'} aan het werk</span>}
+        {activeCount > 0 && <span className="cc-live" role="status"><span className="cc-live-dot" />bezig</span>}
         {budget !== null && (
           <div className="cc-budget" title="Resterend AI-tegoed deze maand">
             <span className="cc-budget-label">AI-tegoed</span>
@@ -249,168 +201,138 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
             variant="page" onChanged={reloadPending} onCountChange={setPendingTotal} />
         </div>
       ) : (
-      <div className="cc-body">
-        <main className="cc-main">
-          {/* Composer */}
+        <div className="ag-page">
+          <header className="ag-page-head">
+            <div>
+              <h2>Nu uitvoeren</h2>
+              <p>Eén opdracht, één keer. Handig als het te eenmalig is voor een agent. <b>Lezen doet hij zelf</b>; alles wat verstuurt of aanmaakt vink jij hieronder af.</p>
+            </div>
+          </header>
+
           <section className="cc-composer">
             <label className="cc-composer-label" htmlFor="cc-input">Wat moet er gebeuren?</label>
             <textarea
               id="cc-input"
               className="cc-input"
               rows={2}
-              placeholder="Bijv. “Bereid de maandafsluiting voor” — Gerrie splitst dit op in parallelle taken."
+              placeholder="Bijv. “Welke facturen staan langer dan 30 dagen open?”"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void planGroteOpdracht(draft); } }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); startRun(draft); } }}
             />
             <div className="cc-composer-actions">
-              <button className="cc-btn primary" disabled={!draft.trim() || planning} onClick={() => void planGroteOpdracht(draft)}>
-                <Wand2 size={15} /> {planning ? 'Gerrie plant…' : 'Gerrie splitst dit op'}
-              </button>
-              <button className="cc-btn ghost" disabled={!draft.trim() || busy} onClick={() => startLosseMissie(draft)}>
-                <Send size={14} /> Als één taak
+              <button className="cc-btn primary" disabled={!draft.trim()} onClick={() => startRun(draft)}>
+                <Send size={14} /> Uitvoeren
               </button>
             </div>
-            {planError && <div className="cc-plan-error">{planError}</div>}
-            {lanes.length === 0 && !pendingPlan && (
+            {runs.length === 0 && (
               <div className="cc-quick">
                 <span className="cc-quick-label">Snel starten</span>
                 <div className="cc-quick-chips">
-                  {QUICK_MISSIONS.map((q) => (
-                    <button key={q} className="cc-chip" onClick={() => setDraft(q)}>{q}</button>
+                  {QUICK_TASKS.map((q) => (
+                    <button key={q} className="cc-chip" onClick={() => startRun(q)}>{q}</button>
                   ))}
                 </div>
               </div>
             )}
           </section>
 
-          {/* Klaargezet plan — wacht op akkoord */}
-          {pendingPlan && (
-            <section className="cc-plan">
-              <div className="cc-plan-head">
-                <span className="cc-plan-eyebrow">Plan · {pendingPlan.subtasks.length} deel-agent{pendingPlan.subtasks.length === 1 ? '' : 's'}</span>
-                <span className="cc-chip-model gold">Zuinig ingesteld</span>
-              </div>
-              <p className="cc-plan-summary">{pendingPlan.summary}</p>
-              <ul className="cc-plan-list">
-                {pendingPlan.subtasks.map((s, i) => (
-                  <li key={i}><span className={`cc-kind ${s.kind}`}>{s.kind === 'write' ? 'actie' : 'lezen'}</span><b>{s.role}</b> — {s.title}</li>
-                ))}
-              </ul>
-              <div className="cc-plan-foot">
-                {pendingPlan.estimatePct !== null && <span className="cc-est">Geschat ±{Math.max(1, Math.round(pendingPlan.estimatePct * 100))}% van je maandtegoed</span>}
-                <div className="cc-plan-buttons">
-                  <button className="cc-btn ghost" onClick={() => setPendingPlan(null)}>Annuleren</button>
-                  <button className="cc-btn primary" onClick={() => launchPlan(pendingPlan)}>Start missie</button>
-                </div>
-              </div>
-            </section>
-          )}
-
-          {/* Agent-banen */}
-          {lanes.length > 0 ? (
-            <section className="cc-lanes" aria-label="Agents">
-              {lanes.map((lane) => <LaneCard key={lane.id} lane={lane} onStop={() => stopLane(lane.id)} />)}
-            </section>
-          ) : !pendingPlan && (
+          {runs.length === 0 ? (
             <div className="cc-empty">
               <span className="cc-empty-icon" aria-hidden="true"><Sparkles size={26} /></span>
-              <h2>Zet Gerrie als team aan het werk</h2>
-              <p>Geef een grote opdracht en Gerrie splitst hem op in taken die tegelijk draaien — of start losse taken naast elkaar. Lezen doet hij automatisch; alles wat verstuurt of aanmaakt vink jij rechts af.</p>
+              <h2>Vraag het gewoon</h2>
+              <p>Moet het elke week vanzelf gebeuren? Maak er dan een agent van op het tabblad hiernaast.</p>
             </div>
+          ) : (
+            <section className="cc-lanes cc-lanes-single" aria-label="Uitgevoerde opdrachten">
+              {runs.map((run) => (
+                <RunCard
+                  key={run.id}
+                  run={run}
+                  canWrite={canWrite}
+                  handlers={handlers}
+                  organizationId={organizationId}
+                  onStop={() => stopRun(run.id)}
+                  onApprove={() => void approve(run)}
+                  onReject={() => reject(run)}
+                  onResolved={() => patchRun(run.id, { resolution: 'executed' })}
+                />
+              ))}
+            </section>
           )}
-        </main>
-
-        {/* Rechter rail: goedkeuringen + kosten + besturing */}
-        <aside className="cc-rail">
-          <div className="cc-card">
-            <h3 className="cc-card-title"><ListChecks size={14} /> Goedkeuringen {approvals.length > 0 && <span className="cc-count">{approvals.length}</span>}</h3>
-            {approvals.length === 0 ? (
-              <p className="cc-rail-empty">Nog niets te bevestigen. Lezen/analyseren doet Gerrie zelf; acties verschijnen hier.</p>
-            ) : (
-              <div className="cc-approvals">
-                {approvals.map((lane) => {
-                  const info = proposalLabel(lane.proposal!);
-                  return (
-                    <div key={lane.id} className="cc-approve">
-                      <div className="cc-approve-t">{info.title}</div>
-                      <div className="cc-approve-s">{lane.role}{info.sub ? ` · ${info.sub}` : ''}</div>
-                      {lane.resolution === 'error' && lane.error && <div className="cc-approve-err">{lane.error}</div>}
-                      <div className="cc-approve-actions">
-                        <button className="cc-btn tiny ghost" disabled={lane.resolution === 'executing'} onClick={() => reject(lane)}>Afwijzen</button>
-                        <button className="cc-btn tiny primary" disabled={lane.resolution === 'executing' || (info.write && !canWrite)} onClick={() => void approve(lane)}>
-                          {lane.resolution === 'executing' ? 'Bezig…' : info.write ? 'Akkoord' : 'Openen'}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div className="cc-card">
-            <h3 className="cc-card-title">Kosten &amp; tegoed</h3>
-            {estimatePct !== null && (
-              <div className="cc-meter">
-                <div className="cc-meter-row"><span>Laatste missie (schatting)</span><span className="cc-mono">±{Math.max(1, Math.round(estimatePct * 100))}%</span></div>
-              </div>
-            )}
-            {budget !== null ? (
-              <div className="cc-meter">
-                <div className="cc-meter-row"><span>AI-tegoed deze maand</span><span className="cc-mono">{Math.round(budget * 100)}% over</span></div>
-                <div className="cc-track"><span className="cc-track-fill" data-low={budget <= 0.2 ? 'true' : 'false'} style={{ width: `${Math.round(budget * 100)}%` }} /></div>
-              </div>
-            ) : <p className="cc-rail-empty">Geen maandlimiet ingesteld.</p>}
-            <p className="cc-note"><b>Zuinig ingesteld:</b> maximaal 4 agents tegelijk per missie, elk geoptimaliseerd voor snelheid.</p>
-          </div>
-
-          {(busy || lanes.some((l) => l.status !== 'running')) && (
-            <div className="cc-controls">
-              {activeCount > 0 && <button className="cc-btn ghost danger" onClick={stopAll}><Square size={13} /> Stop alles</button>}
-              {lanes.some((l) => l.status !== 'running' && l.status !== 'waiting') && <button className="cc-btn ghost" onClick={clearFinished}>Klaar opruimen</button>}
-            </div>
-          )}
-        </aside>
-      </div>
+        </div>
       )}
     </div>
   );
 }
 
-function LaneCard({ lane, onStop }: { lane: Lane; onStop: () => void }) {
-  const pill = statusPill(lane.status);
+/** Eén uitgevoerde opdracht: wat hij zei, en wat hij eventueel klaarzette. */
+function RunCard({ run, canWrite, handlers, organizationId, onStop, onApprove, onReject, onResolved }: {
+  run: RunResult;
+  canWrite: boolean;
+  handlers: GerrieActionHandlers;
+  organizationId: UUID;
+  onStop: () => void;
+  onApprove: () => void;
+  onReject: () => void;
+  onResolved: () => void;
+}) {
+  const info = run.proposal ? proposalLabel(run.proposal) : null;
+  // Een reeks (mail, facturen, offertes, herinneringen) beslis je hier net zoals in
+  // de wachtrij: per regel, met een vinkje.
+  const batch = run.proposal ? asBatchProposal(run.proposal) : null;
+  const beslist = run.resolution === 'executed' || run.resolution === 'rejected';
+
   return (
-    <article className={`cc-lane${lane.status === 'waiting' ? ' attn' : ''}`}>
+    <article className={`cc-lane${run.proposal && !beslist ? ' attn' : ''}`}>
       <div className="cc-lane-top">
-        <span className="cc-lane-name">{lane.role}</span>
+        <span className="cc-lane-name">Opdracht</span>
         <span className="cc-lane-push" />
-        <span className={`cc-pill ${pill.cls}`}><span className="cc-dot" />{pill.label}</span>
-        {lane.status === 'running' && <button className="cc-lane-stop" title="Stop deze agent" onClick={onStop}><X size={13} /></button>}
+        <span className={`cc-pill ${run.status === 'running' ? 'run' : run.status === 'failed' ? 'fail' : run.status === 'cancelled' ? 'cancel' : run.proposal && !beslist ? 'wait' : 'done'}`}>
+          <span className="cc-dot" />
+          {run.status === 'running' ? 'Bezig' : run.status === 'failed' ? 'Mislukt' : run.status === 'cancelled' ? 'Gestopt' : run.proposal && !beslist ? 'Wacht op akkoord' : 'Klaar'}
+        </span>
+        {run.status === 'running' && <button className="cc-lane-stop" title="Stoppen" onClick={onStop}><X size={13} /></button>}
       </div>
-      <div className="cc-lane-title">{lane.title}</div>
+      <div className="cc-lane-title">{run.instruction}</div>
       <div className="cc-lane-log">
-        {lane.statusLabel && lane.status === 'running' && <div className="cc-lane-status">{lane.statusLabel}</div>}
-        {lane.text ? <div className="cc-lane-text">{lane.text}{lane.status === 'running' && <span className="cc-caret" aria-hidden="true"> </span>}</div>
-          : lane.status === 'running' && !lane.statusLabel ? <div className="cc-lane-typing" aria-label="bezig"><span /><span /><span /></div>
+        {run.statusLabel && run.status === 'running' && <div className="cc-lane-status">{run.statusLabel}</div>}
+        {run.text ? <div className="cc-lane-text">{run.text}</div>
+          : run.status === 'running' && !run.statusLabel ? <div className="cc-lane-typing" aria-label="bezig"><span /><span /><span /></div>
           : null}
-        {lane.status === 'failed' && lane.error && <div className="cc-lane-err"><AlertTriangle size={13} /> {lane.error}</div>}
-        {lane.status === 'done' && lane.resolution === 'executed' && <div className="cc-lane-ok"><Check size={13} /> Uitgevoerd</div>}
-        {lane.status === 'waiting' && <div className="cc-lane-wait">→ klaargezet voor goedkeuring (rechts)</div>}
-        {lane.status === 'cancelled' && <div className="cc-lane-cancel">Gestopt.</div>}
+        {run.status === 'failed' && run.error && <div className="cc-lane-err"><AlertTriangle size={13} /> {run.error}</div>}
+        {run.status === 'cancelled' && <div className="cc-lane-cancel">Gestopt.</div>}
+        {run.resolution === 'error' && run.error && <div className="cc-approve-err">{run.error}</div>}
       </div>
+
+      {run.proposal && info && (
+        run.resolution === 'executed' ? <div className="cc-lane-ok"><Check size={13} /> Uitgevoerd</div>
+        : run.resolution === 'rejected' ? <div className="cc-lane-cancel">Afgewezen.</div>
+        : batch ? (
+          <AgentBatchBoard
+            proposal={batch}
+            canWrite={canWrite}
+            handlers={handlers}
+            onResolved={({ sent, skipped }) => {
+              if (run.auditId) void confirmGerrieAction(organizationId, run.auditId, sent > 0 ? 'executed' : 'failed', `${sent} verstuurd, ${skipped} overgeslagen.`);
+              onResolved();
+            }}
+          />
+        ) : (
+          <div className="cc-approve">
+            <div className="cc-approve-t">{info.title}</div>
+            {info.sub && <div className="cc-approve-s">{info.sub}</div>}
+            <div className="cc-approve-actions">
+              <button className="cc-btn tiny ghost" disabled={run.resolution === 'executing'} onClick={onReject}>Afwijzen</button>
+              <button className="cc-btn tiny primary" disabled={run.resolution === 'executing' || (info.write && !canWrite)} onClick={onApprove}>
+                {run.resolution === 'executing' ? 'Bezig…' : info.write ? 'Akkoord' : 'Openen'}
+              </button>
+            </div>
+          </div>
+        )
+      )}
     </article>
   );
-}
-
-function statusPill(s: LaneStatus): { cls: string; label: string } {
-  switch (s) {
-    case 'running': return { cls: 'run', label: 'Bezig' };
-    case 'waiting': return { cls: 'wait', label: 'Wacht op akkoord' };
-    case 'done': return { cls: 'done', label: 'Klaar' };
-    case 'failed': return { cls: 'fail', label: 'Mislukt' };
-    case 'cancelled': return { cls: 'cancel', label: 'Gestopt' };
-  }
 }
 
 // ── Agents (geplande routines) ───────────────────────────────────────────────
