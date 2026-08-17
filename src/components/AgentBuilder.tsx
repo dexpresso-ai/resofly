@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ArrowUp, Clock, Eye, Loader2, Pencil, Sparkles, Wand2, X } from 'lucide-react';
 import {
-  designGerrieAgent, routineToolLabel,
-  type GerrieAgentProposal,
+  designGerrieAgent, routineToolLabel, previewRoutine,
+  type GerrieAgentProposal, type RoutinePreview,
 } from '../lib/gerrie-api';
 import { AgentGlyph } from './AgentGlyph';
 import type { UUID } from '../types';
@@ -55,6 +55,9 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
   const [built, setBuilt] = useState<{ agent: GerrieAgentProposal; summary: string } | null>(null);
   const [activate, setActivate] = useState(true);
   const [saving, setSaving] = useState(false);
+  // Proefrun: het antwoord én de stappen die hij zette.
+  const [trying, setTrying] = useState(false);
+  const [preview, setPreview] = useState<RoutinePreview | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -82,11 +85,31 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
         return;
       }
       setBuilt({ agent: step.agent, summary: step.summary });
+      setPreview(null);
       setTurns([...next, { role: 'assistant', content: step.summary }]);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Gerrie kon deze agent even niet bouwen.');
     } finally {
       setThinking(false);
+    }
+  }
+
+  /** Draait de voorgestelde agent één keer proef, zodat je hem kunt beoordelen op
+   *  wat hij vindt in plaats van op wat hij zegt te kunnen. */
+  async function tryOut() {
+    if (!built || trying) return;
+    setTrying(true);
+    setError(null);
+    try {
+      setPreview(await previewRoutine(organizationId, {
+        instruction: built.agent.instruction,
+        enabled_tools: built.agent.enabled_tools,
+        model_kind: 'cheap',
+      }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Proefdraaien lukte niet.');
+    } finally {
+      setTrying(false);
     }
   }
 
@@ -179,6 +202,36 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
                   <dd className="abx-instruction">{agent.instruction}</dd>
                 </div>
               </dl>
+
+              {/* Proefdraaien vóór aanmaken. Dit is er omdat een agent kon beloven
+                  wat hij daarna niet waarmaakte: je zag pas bij de eerste échte run
+                  dat de opdracht iets vroeg wat de tools niet kunnen. */}
+              <div className="abx-try">
+                <button type="button" className="cc-btn ghost" disabled={saving || trying} onClick={() => void tryOut()}>
+                  {trying ? <><Loader2 size={13} className="ag-spin" /> Hij kijkt…</> : <><Eye size={13} /> Laat zien wat hij vindt</>}
+                </button>
+                <span>Draait hem één keer proef — alleen kijken, hij zet niets klaar en verstuurt niets.</span>
+              </div>
+
+              {preview && (
+                <div className={`abx-preview${preview.ok ? '' : ' is-empty'}`}>
+                  {preview.budget
+                    ? <p className="abx-preview-note">Je maandtegoed is op, dus proefdraaien kan nu niet.</p>
+                    : <>
+                        <p className="abx-preview-text">{preview.text || 'Hij kwam niet met een antwoord terug.'}</p>
+                        {preview.steps.length > 0 && (
+                          <ul className="abx-preview-steps">
+                            {preview.steps.map((st, i) => (
+                              <li key={i} className={st.ok ? undefined : 'is-fail'}>{st.label}</li>
+                            ))}
+                          </ul>
+                        )}
+                        <p className="abx-preview-note">
+                          Klopt dit niet? Zeg hieronder wat er anders moet — bijvoorbeeld “alleen facturen boven €500” of “ook offertes die nog niet verstuurd zijn”.
+                        </p>
+                      </>}
+                </div>
+              )}
 
               <footer>
                 <label className="abx-activate">

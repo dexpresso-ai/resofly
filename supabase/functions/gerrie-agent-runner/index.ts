@@ -140,6 +140,7 @@ Deno.serve(async (req) => {
       // gefilterd op de modulerechten van dit teamlid. De bouwer hoeft dus geen
       // eigen lijst bij te houden — zie de opmerking bij TOOL_LABELS in gerrieCore.
       case 'tools': return json(req, { tools: await listAgentTools(organizationId, user.id, role) });
+      case 'preview': return json(req, await previewAgent(organizationId, user.id, role, body));
       default: throw new HttpError('Onbekende actie.', 400);
     }
   } catch (error) {
@@ -367,6 +368,51 @@ function clientEmailSettings(agent: Record<string, unknown>): { mode: 'compose' 
 async function listAgentTools(orgId: string, userId: string, role: OrganizationRole) {
   const ctx = await buildContext(orgId, role, { id: userId });
   return toolCatalog(ctx);
+}
+
+/**
+ * Proefdraaien: laat vóór het aanmaken zien wat deze agent écht vindt.
+ *
+ * Dit bestaat omdat een agent kon beloven wat hij daarna niet waarmaakte. Je bouwde
+ * hem in een gesprek, zette hem aan, en pas bij de eerste run bleek dat de opdracht
+ * iets vroeg wat de tools niet kunnen. Nu draait hij één keer vóór hij bestaat.
+ *
+ * Twee harde grenzen: er wordt NIETS aangemaakt (geen agent, geen run, geen gesprek)
+ * en er worden ALLEEN lees-tools meegegeven — ook als de agent straks in
+ * propose-modus komt. Een proefrun hoort niets klaar te zetten dat op je akkoord
+ * gaat wachten. Het verbruik telt wel mee met je maandtegoed; het is een echte run.
+ */
+async function previewAgent(orgId: string, userId: string, role: OrganizationRole, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
+  const instruction = String(body.instruction || '').trim();
+  if (!instruction) throw new HttpError('Geef een opdracht om te proefdraaien.', 400);
+
+  const budget = await checkUserBudget(userId);
+  if (!budget.allowed) return { ok: false, budget: true, text: '', steps: [] };
+
+  const fields = sanitizeAgentFields({ ...body, mode: 'report' });
+  const ctx = await buildContext(orgId, role, { id: userId });
+  ctx.clientEmail = clientEmailSettings(fields);
+  const allowedToolNames = resolveAllowedTools(fields, 'report');
+  const modelKind = resolveModelKind(fields.model_kind);
+
+  const message = `${instruction}\n\n(PROEFRUN — laat zien wat je met de beschikbare gegevens vindt. Zet niets klaar en verstuur niets; je mag alleen kijken. Kun je iets niet met de tools die je hebt, zeg dat dan expliciet in plaats van het te benaderen.)`;
+  const outcome = await runAgent(ctx, [], message, noopEmit, modelKind, allowedToolNames);
+
+  // Verbruik boeken op een los gesprek: een proefrun kost tegoed, dus die mag niet
+  // buiten de telling vallen.
+  const convId = await createConversation(orgId, userId, `Proefrun: ${instruction.slice(0, 50)}`);
+  const msgId = await insertMessage(convId, orgId, userId, 'assistant', outcome.text, outcome.toolCalls);
+  await recordUsage(orgId, convId, msgId, userId, outcome.usage, modelKind);
+
+  return {
+    ok: true,
+    text: outcome.text,
+    // De stappen zijn het bewijs: hiermee zie je of hij echt heeft gekeken, waarmee
+    // hij filterde en hoeveel hij vond — of dat hij het antwoord heeft verzonnen.
+    steps: outcome.steps.map((s) => ({ kind: s.kind, label: s.label, ok: s.ok, detail: s.detail })),
+    tools: allowedToolNames,
+  };
 }
 
 function resolveAllowedTools(agent: Record<string, unknown>, mode: 'report' | 'propose'): string[] {

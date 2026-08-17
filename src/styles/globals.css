@@ -7585,6 +7585,19 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    maar dezelfde vlakken en randen als de rest van de agent-pagina.
    ═══════════════════════════════════════════════════════════════════════ */
 
+/* Proefdraaien: het antwoord dat hij ophaalde, plus de stappen die hij zette. Die
+   stappen zijn het bewijs — daaraan zie je of hij écht gekeken heeft en waarmee hij
+   filterde, in plaats van dat je moet geloven wat de kaart belooft. */
+.abx-try{ display:flex; flex-wrap:wrap; align-items:center; gap:9px; margin-top:10px; }
+.abx-try span{ flex:1 1 200px; font-size:11.5px; color:var(--muted); }
+.abx-preview{ margin-top:10px; padding:12px 13px; border:1px solid var(--border); border-radius:11px; background:var(--bg-deep); display:flex; flex-direction:column; gap:9px; }
+.abx-preview-text{ margin:0; font-size:12.5px; line-height:1.6; color:var(--text); white-space:pre-wrap; overflow-wrap:anywhere; }
+.abx-preview-steps{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:3px; }
+.abx-preview-steps li{ font-size:11.5px; color:var(--muted); padding-left:14px; position:relative; }
+.abx-preview-steps li::before{ content:"·"; position:absolute; left:4px; color:var(--muted); }
+.abx-preview-steps li.is-fail{ color:var(--accent-r); }
+.abx-preview-note{ margin:0; font-size:11.5px; line-height:1.5; color:var(--muted); }
+
 .abx{ display:flex; flex-direction:column; min-height:0; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--panel); overflow:hidden; }
 .abx-stream{ flex:1 1 auto; min-height:180px; max-height:min(52vh,520px); overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:14px; }
 

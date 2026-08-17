@@ -400,7 +400,7 @@ export interface GerrieRequest {
   organizationId: UUID;
   conversationId: UUID | null;
   message: string;
-  /** 'cheap' = zuinig model (Haiku) voor parallelle deel-agents; laat weg voor de gewone chat ('strong'). */
+  /** 'cheap' = het zuinige model voor parallelle deel-agents; laat weg voor de gewone chat ('strong'). */
   modelKind?: 'strong' | 'cheap';
   onStatus?: (status: GerrieStatus) => void;
   onDelta?: (text: string) => void;
@@ -992,6 +992,47 @@ const ROUTINE_FALLBACK_TOOLS: RoutineTool[] = [
   { name: 'list_tickets', label: 'Tickets bekijken', module: 'tickets', moduleLabel: 'Tickets', kind: 'read' },
 ];
 for (const t of ROUTINE_FALLBACK_TOOLS) toolLabels.set(t.name, t.label);
+
+/** Eén stap uit een proefrun: waarmee hij zocht en wat hij vond. */
+export interface RoutinePreviewStep { kind: string; label: string; ok: boolean; detail: Record<string, unknown> }
+export interface RoutinePreview {
+  ok: boolean;
+  /** true = je maandtegoed is op; er is niets gedraaid. */
+  budget?: boolean;
+  text: string;
+  steps: RoutinePreviewStep[];
+  tools: string[];
+}
+
+/**
+ * Draait de agent één keer proef, vóór hij bestaat.
+ *
+ * Bewust alleen met lees-tools: een proefrun hoort niets klaar te zetten dat op je
+ * akkoord gaat wachten. Er wordt ook geen agent, run of gesprek aangemaakt — je ziet
+ * alleen wat hij vindt, plus de stappen die hij zette, zodat je kunt zien óf hij echt
+ * gekeken heeft en waarmee hij filterde.
+ */
+export async function previewRoutine(organizationId: UUID, input: {
+  instruction: string; enabled_tools: string[]; model_kind: 'cheap' | 'strong';
+}): Promise<RoutinePreview> {
+  const payload = await postRunner({ action: 'preview', organizationId, ...input });
+  const steps = Array.isArray(payload?.steps) ? (payload.steps as unknown[]) : [];
+  return {
+    ok: payload?.ok === true,
+    budget: payload?.budget === true,
+    text: String(payload?.text ?? ''),
+    steps: steps.map((r) => {
+      const row = r as Record<string, unknown>;
+      return {
+        kind: String(row.kind ?? ''),
+        label: String(row.label ?? ''),
+        ok: row.ok !== false,
+        detail: (row.detail && typeof row.detail === 'object' ? row.detail : {}) as Record<string, unknown>,
+      };
+    }),
+    tools: Array.isArray(payload?.tools) ? (payload.tools as unknown[]).map(String) : [],
+  };
+}
 
 /** De catalogus, of de terugval als de server hem niet kon leveren. */
 export async function listRoutineToolsSafe(organizationId: UUID): Promise<{ tools: RoutineTool[]; fallback: boolean }> {

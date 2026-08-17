@@ -22,7 +22,7 @@ import type { UUID } from '../types';
  *
  * Gerrie werkt hier als een team van agents die MEERDERE taken tegelijk oppakken. De
  * BROWSER is de dirigent: hij vuurt per deeltaak een aparte `streamGerrieReply` af
- * (zuinig model = Haiku) en toont elke agent als een live "baan". Alles wat iets
+ * (zuinig model) en toont elke agent als een live "baan". Alles wat iets
  * VERSTUURT/AANMAAKT/WIJZIGT komt als voorstel in de centrale goedkeuringswachtrij;
  * lezen/analyseren loopt automatisch. Goedgekeurde acties worden uitgevoerd via
  * dezelfde handlers (gerrieActions) als de gewone Gerrie-chat.
@@ -893,7 +893,7 @@ function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey
             Een scherm dat een grens belooft die de code niet kent is erger dan geen
             grens tonen, dus staat er nu alleen wat écht geldt. */}
         <Capability icon={<Gauge size={14} />} title="Kosten">
-          <span className="ag-cap-plain">{routine.model_kind === 'strong' ? 'Sterk model (Sonnet)' : 'Zuinig model (Haiku)'}</span>
+          <span className="ag-cap-plain">{routine.model_kind === 'strong' ? 'Krachtig model' : 'Zuinig model'}</span>
           <span className="ag-cap-note">
             Wat hij verbruikt gaat van het maandtegoed van je account
             {budget !== null ? ` — daarvan is nog ${Math.round(budget * 100)}% over` : ''}.
@@ -1143,8 +1143,8 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
           </label>
           <label className="cc-field"><span>Model</span>
             <select className="cc-text" value={f.model_kind} onChange={(e) => setF((p) => ({ ...p, model_kind: e.target.value === 'strong' ? 'strong' : 'cheap' }))}>
-              <option value="cheap">Zuinig (Haiku)</option>
-              <option value="strong">Sterk (Sonnet)</option>
+              <option value="cheap">Zuinig</option>
+              <option value="strong">Krachtig</option>
             </select>
           </label>
         </div>

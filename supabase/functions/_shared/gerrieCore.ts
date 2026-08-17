@@ -761,9 +761,18 @@ export async function designAgent(
   // Alleen de tools die dit teamlid ook echt mág; anders bouwt de bouwer een
   // agent die op zijn eerste run stukloopt op de modulerechten.
   const usable = allowedToolNamesFor(ctx).filter((n) => n !== 'propose_create_agent');
+  // Mét de filternamen erbij. Zonder die lijst beloofde de bouwer dingen die de
+  // tools niet kunnen ("facturen boven €500 die nog niet gemaild zijn"), en liep de
+  // gebruiker daar pas tegenaan bij de eerste échte run. Nu ziet hij vooraf waar hij
+  // op kán filteren.
   const toolMenu = TOOL_DEFINITIONS
     .filter((t) => usable.includes(t.name))
-    .map((t) => `- \`${t.name}\` — ${String(t.description).split('.')[0]}.`)
+    .map((t) => {
+      const schema = (t as { input_schema?: { properties?: Record<string, unknown> } }).input_schema;
+      const filters = Object.keys(schema?.properties ?? {}).filter((k) => k !== 'limit');
+      const suffix = filters.length ? ` (filters: ${filters.join(', ')})` : '';
+      return `- \`${t.name}\` — ${String(t.description).split('.')[0]}.${suffix}`;
+    })
     .join('\n');
 
   const system = [
@@ -786,6 +795,11 @@ export async function designAgent(
     '- Mag de agent klantmail sturen, zet dan `propose_send_client_email` in `enabled_tools`. Wil de gebruiker altijd dezelfde tekst, kies `email_mode: "template"` en schrijf onderwerp + tekst met variabelen zoals {{voornaam|klant}} en {{klantnaam}}. Wil hij een persoonlijk bericht per klant, kies `email_mode: "compose"`.',
     '- Moet de agent FACTUREN of OFFERTES versturen, geef hem dan `propose_send_invoices` respectievelijk `propose_send_quotes` (de meervoudsvorm). Die leveren één lijst op die de gebruiker regel voor regel afvinkt; de enkelvoudige varianten zijn alleen voor een los document in de chat.',
     '- De agent gaat na het aanmaken METEEN aan en draait direct één keer. Vraag daar dus niet om toestemming: kies de tools zorgvuldig en houd het bij wat de gebruiker echt vroeg.',
+    '',
+    'BELOOF NOOIT MEER DAN DE TOOLS KUNNEN — dit is de belangrijkste regel bij het schrijven van `instruction`:',
+    '- Achter elke tool hierboven staan de filters die hij écht heeft. Schrijf de opdracht in díé termen. Vraagt iemand "facturen boven €500 die nog niet gemaild zijn", kijk dan of `list_invoices` `min_amount_eur` en `sent` heeft — heeft hij die, gebruik ze; heeft hij ze niet, beloof het dan niet.',
+    '- Kan een wens NIET met de beschikbare filters, zeg dat dan eerlijk in `summary` en bouw de agent zonder dat stuk. Een agent die belooft wat hij bij zijn eerste run niet waarmaakt is erger dan een agent die minder doet.',
+    '- Zet in `enabled_tools` élke tool die de opdracht nodig heeft. Noemt de opdracht klantnamen, dan hoort `search_clients` erbij; gaat het over bedragen op offertes, dan `list_quotes`. Een ontbrekende tool is de meest voorkomende reden dat een agent zijn opdracht niet af krijgt.',
     '- `summary`: twee of drie zinnen in gewone taal over wat deze agent gaat doen en wanneer. Geen opsomming van tool-namen.',
     '',
     `Embleem-sleutels: ${AGENT_ICON_KEYS.join(', ')}.`,
@@ -932,37 +946,55 @@ function estimateMission(budget: BudgetCheck, subtaskCount: number, withPlanner:
 const TOOL_DEFINITIONS = [
   {
     name: 'search_clients',
-    description: 'Zoek klanten op naam, contactpersoon of e-mail, of filter op status. Gebruik dit als de gebruiker een klant noemt of een klantenlijst wil.',
+    description: 'Zoek klanten op naam, contactpersoon of e-mail, of filter op status, type, plaats, of ze een e-mailadres hebben en wanneer ze voor het laatst gemaild zijn.',
     input_schema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Zoektekst (naam, contactpersoon of e-mail). Laat leeg voor alle klanten.' },
         status: { type: 'string', enum: ['active', 'prospect', 'inactive'], description: 'Optioneel statusfilter.' },
+        client_kind: { type: 'string', enum: ['business', 'consumer'], description: 'Zakelijk of consument.' },
+        has_email: { type: 'boolean', description: 'true = alleen klanten mét e-mailadres (check dit vóór je iets wilt mailen); false = juist zonder.' },
+        city: { type: 'string', description: 'Alleen klanten in deze plaats.' },
+        not_emailed_since: { type: 'string', description: 'Alleen klanten die sinds deze datum (YYYY-MM-DD) GEEN mail van je kregen — klanten die nog nooit gemaild zijn tellen mee.' },
+        emailed_since: { type: 'string', description: 'Juist alleen klanten die sinds deze datum (YYYY-MM-DD) wél mail kregen.' },
         limit: { type: 'integer', description: 'Maximaal aantal resultaten (standaard 25, max 100).' },
       },
     },
   },
   {
     name: 'list_invoices',
-    description: 'Toon facturen, optioneel gefilterd op status, klant of alleen te late facturen. Gebruik dit voor vragen over openstaande/betaalde/verlopen facturen.',
+    description: 'Toon facturen, te filteren op status, klant, periode, bedrag, of ze verstuurd zijn en of ze te laat zijn.',
     input_schema: {
       type: 'object',
       properties: {
         status: { type: 'string', enum: ['draft', 'sent', 'overdue', 'paid', 'cancelled', 'void', 'written_off', 'refunded'] },
         client_id: { type: 'string', description: 'Optioneel: filter op klant-id (uit search_clients).' },
         overdue_only: { type: 'boolean', description: 'Alleen facturen die te laat zijn (vervaldatum verstreken en nog niet betaald).' },
+        unpaid_only: { type: 'boolean', description: 'Alleen facturen die nog niet betaald zijn, ook als ze nog niet te laat zijn.' },
+        sent: { type: 'boolean', description: 'true = alleen verstuurde facturen; false = alleen facturen die nog NIET naar de klant zijn gemaild.' },
+        from: { type: 'string', description: 'Vanaf factuurdatum YYYY-MM-DD.' },
+        to: { type: 'string', description: 'Tot en met factuurdatum YYYY-MM-DD.' },
+        min_amount_eur: { type: 'number', description: 'Alleen facturen vanaf dit totaalbedrag (incl. btw).' },
+        max_amount_eur: { type: 'number', description: 'Alleen facturen tot en met dit totaalbedrag (incl. btw).' },
         limit: { type: 'integer', description: 'Maximaal aantal (standaard 25, max 100).' },
       },
     },
   },
   {
     name: 'list_quotes',
-    description: 'Toon offertes, optioneel gefilterd op status of klant. Gebruik dit voor vragen over (openstaande/geaccepteerde) offertes.',
+    description: 'Toon offertes, te filteren op status, klant, periode, bedrag, of ze verstuurd zijn, of de klant nog moet reageren en of ze verlopen zijn.',
     input_schema: {
       type: 'object',
       properties: {
         status: { type: 'string', enum: ['draft', 'pending_internal_approval', 'internally_approved', 'sent', 'accepted', 'rejected', 'expired', 'cancelled'] },
         client_id: { type: 'string' },
+        sent: { type: 'boolean', description: 'true = alleen verstuurde offertes; false = alleen offertes die nog niet de deur uit zijn.' },
+        awaiting_response_only: { type: 'boolean', description: 'Alleen verstuurde offertes waar de klant nog niet op heeft gereageerd.' },
+        expired_only: { type: 'boolean', description: 'Alleen offertes waarvan de geldigheidsdatum verstreken is.' },
+        from: { type: 'string', description: 'Vanaf offertedatum YYYY-MM-DD.' },
+        to: { type: 'string', description: 'Tot en met offertedatum YYYY-MM-DD.' },
+        min_amount_eur: { type: 'number', description: 'Alleen offertes vanaf dit totaalbedrag.' },
+        max_amount_eur: { type: 'number', description: 'Alleen offertes tot en met dit totaalbedrag.' },
         limit: { type: 'integer' },
       },
     },
@@ -992,12 +1024,16 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_tickets',
-    description: 'Toon tickets/supportverzoeken, optioneel op status of klant. Gebruik dit voor vragen over open tickets.',
+    description: 'Toon tickets/supportverzoeken, te filteren op status, klant, prioriteit, periode en of er al door het team op gereageerd is.',
     input_schema: {
       type: 'object',
       properties: {
         status: { type: 'string', enum: ['new', 'review', 'approved', 'rejected', 'converted'] },
         client_id: { type: 'string' },
+        priority: { type: 'string', enum: ['low', 'med', 'high'] },
+        unanswered_only: { type: 'boolean', description: 'Alleen tickets waar nog niemand van het team op heeft gereageerd.' },
+        from: { type: 'string', description: 'Vanaf aanmaakdatum YYYY-MM-DD.' },
+        to: { type: 'string', description: 'Tot en met aanmaakdatum YYYY-MM-DD.' },
         limit: { type: 'integer' },
       },
     },
@@ -3154,18 +3190,50 @@ function orgTable(table: string, orgId: string) {
   return supabaseAdmin.from(table).select('*').eq('organization_id', orgId);
 }
 
+/**
+ * Klanten zoeken met dezelfde filters die een gebruiker in de app heeft.
+ *
+ * `not_emailed_since` / `emailed_since` kijken in `client_emails` naar UITGAANDE
+ * post. "Nog nooit gemaild" telt bewust mee bij not_emailed_since: wie je nooit
+ * schreef, schreef je ook niet ná die datum — dat is precies de groep die je zoekt
+ * als je vraagt wie je al een tijd niet hebt gesproken.
+ */
 async function searchClients(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('clients', orgId).order('name', { ascending: true }).limit(limit);
   if (input.status) query = query.eq('status', String(input.status));
+  if (input.client_kind) query = query.eq('client_kind', String(input.client_kind));
+  if (input.city) query = query.ilike('city', `%${escapeLike(String(input.city))}%`);
   const q = String(input.query || '').trim();
   if (q) query = query.or(`name.ilike.%${escapeLike(q)}%,contact_name.ilike.%${escapeLike(q)}%,email.ilike.%${escapeLike(q)}%`);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
+
+  let rows = (data ?? []) as Array<Record<string, unknown>>;
+  if (typeof input.has_email === 'boolean') {
+    rows = rows.filter((c) => {
+      const mail = String(c.email ?? '').trim();
+      return input.has_email ? mail.includes('@') : !mail.includes('@');
+    });
+  }
+
+  const since = isoDate(input.not_emailed_since) || isoDate(input.emailed_since);
+  if (since && rows.length) {
+    const { data: mails } = await supabaseAdmin.from('client_emails')
+      .select('client_id')
+      .eq('organization_id', orgId).eq('direction', 'outbound')
+      .gte('created_at', `${since}T00:00:00Z`)
+      .in('client_id', rows.map((c) => String(c.id)));
+    const mailed = new Set((mails ?? []).map((m: Record<string, unknown>) => String(m.client_id)));
+    const wantMailed = isoDate(input.emailed_since) !== null && isoDate(input.not_emailed_since) === null;
+    rows = rows.filter((c) => (wantMailed ? mailed.has(String(c.id)) : !mailed.has(String(c.id))));
+  }
+
   return {
-    count: data?.length ?? 0,
-    clients: (data ?? []).map((c: Record<string, unknown>) => ({
+    count: rows.length,
+    clients: rows.map((c) => ({
       id: c.id, name: c.name, client_code: c.client_code, contact_name: c.contact_name,
-      email: c.email, phone: c.phone, status: c.status, value_eur: c.value_eur, tags: c.tags,
+      email: c.email, phone: c.phone, city: c.city, client_kind: c.client_kind,
+      status: c.status, value_eur: c.value_eur, tags: c.tags,
     })),
   };
 }
@@ -3174,19 +3242,34 @@ async function listInvoices(orgId: string, input: Record<string, unknown>, limit
   let query = orgTable('invoices', orgId).order('date', { ascending: false }).limit(limit);
   if (input.status) query = query.eq('status', String(input.status));
   if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  const from = isoDate(input.from);
+  const to = isoDate(input.to);
+  if (from) query = query.gte('date', from);
+  if (to) query = query.lte('date', to);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
   const today = todayIso();
   let rows = (data ?? []) as Record<string, unknown>[];
-  if (input.overdue_only) {
-    rows = rows.filter((r) => !['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(String(r.status)) && r.due_date && String(r.due_date) < today);
-  }
+
+  const openStatuses = (r: Record<string, unknown>) => !['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(String(r.status));
+  if (input.overdue_only) rows = rows.filter((r) => openStatuses(r) && r.due_date && String(r.due_date) < today);
+  if (input.unpaid_only === true) rows = rows.filter(openStatuses);
+  // `sent_at` is de enige harde maatstaf voor "is hij de deur uit"; de status kan
+  // ook op 'overdue' staan zonder dat er ooit iets gemaild is.
+  if (typeof input.sent === 'boolean') rows = rows.filter((r) => Boolean(r.sent_at) === input.sent);
+  const min = input.min_amount_eur === undefined ? null : num(input.min_amount_eur);
+  const max = input.max_amount_eur === undefined ? null : num(input.max_amount_eur);
+  if (min !== null) rows = rows.filter((r) => invoiceTotal(r) >= min);
+  if (max !== null) rows = rows.filter((r) => invoiceTotal(r) <= max);
+
   return {
     count: rows.length,
+    total_eur: round2(rows.reduce((sum, r) => sum + invoiceTotal(r), 0)),
     invoices: rows.map((r) => ({
       id: r.id, number: r.number, status: r.status, date: r.date, due_date: r.due_date,
       total_eur: invoiceTotal(r), client_id: r.client_id, paid_at: r.paid_at,
-      is_overdue: !['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(String(r.status)) && !!r.due_date && String(r.due_date) < today,
+      sent_at: r.sent_at, is_sent: Boolean(r.sent_at),
+      is_overdue: openStatuses(r) && !!r.due_date && String(r.due_date) < today,
     })),
   };
 }
@@ -3195,13 +3278,35 @@ async function listQuotes(orgId: string, input: Record<string, unknown>, limit: 
   let query = orgTable('quotes', orgId).order('date', { ascending: false }).limit(limit);
   if (input.status) query = query.eq('status', String(input.status));
   if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  const from = isoDate(input.from);
+  const to = isoDate(input.to);
+  if (from) query = query.gte('date', from);
+  if (to) query = query.lte('date', to);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
+
+  const today = todayIso();
+  let rows = (data ?? []) as Record<string, unknown>[];
+  if (typeof input.sent === 'boolean') rows = rows.filter((r) => Boolean(r.sent_at) === input.sent);
+  if (input.awaiting_response_only === true) {
+    rows = rows.filter((r) => Boolean(r.sent_at) && !r.accepted_at && !['accepted', 'rejected', 'cancelled', 'expired'].includes(String(r.status)));
+  }
+  if (input.expired_only === true) {
+    rows = rows.filter((r) => r.valid_until && String(r.valid_until) < today && !['accepted', 'cancelled'].includes(String(r.status)));
+  }
+  const min = input.min_amount_eur === undefined ? null : num(input.min_amount_eur);
+  const max = input.max_amount_eur === undefined ? null : num(input.max_amount_eur);
+  if (min !== null) rows = rows.filter((r) => lineTotal(r.lines) >= min);
+  if (max !== null) rows = rows.filter((r) => lineTotal(r.lines) <= max);
+
   return {
-    count: data?.length ?? 0,
-    quotes: (data ?? []).map((r: Record<string, unknown>) => ({
+    count: rows.length,
+    total_eur: round2(rows.reduce((sum, r) => sum + lineTotal(r.lines), 0)),
+    quotes: rows.map((r) => ({
       id: r.id, number: r.number, status: r.status, date: r.date, valid_until: r.valid_until,
-      total_eur: lineTotal(r.lines), client_id: r.client_id, accepted_at: r.accepted_at,
+      total_eur: round2(lineTotal(r.lines)), client_id: r.client_id, accepted_at: r.accepted_at,
+      sent_at: r.sent_at, is_sent: Boolean(r.sent_at),
+      is_expired: !!r.valid_until && String(r.valid_until) < today && !['accepted', 'cancelled'].includes(String(r.status)),
     })),
   };
 }
@@ -3256,12 +3361,30 @@ async function listTickets(orgId: string, input: Record<string, unknown>, limit:
   let query = orgTable('tickets', orgId).order('created_at', { ascending: false }).limit(limit);
   if (input.status) query = query.eq('status', String(input.status));
   if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.priority) query = query.eq('priority', String(input.priority));
+  const from = isoDate(input.from);
+  const to = isoDate(input.to);
+  if (from) query = query.gte('created_at', `${from}T00:00:00Z`);
+  if (to) query = query.lte('created_at', `${to}T23:59:59Z`);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
+
+  let rows = (data ?? []) as Record<string, unknown>[];
+  // "Onbeantwoord" = geen enkele notitie van het TEAM. Een bericht van de klant zelf
+  // maakt een ticket niet beantwoord; dat is juist waarom het er nog ligt.
+  if (input.unanswered_only === true && rows.length) {
+    const { data: notes } = await supabaseAdmin.from('ticket_notes')
+      .select('ticket_id').eq('organization_id', orgId).eq('author_type', 'user')
+      .in('ticket_id', rows.map((r) => String(r.id)));
+    const answered = new Set((notes ?? []).map((n: Record<string, unknown>) => String(n.ticket_id)));
+    rows = rows.filter((r) => !answered.has(String(r.id)));
+  }
+
   return {
-    count: data?.length ?? 0,
-    tickets: (data ?? []).map((r: Record<string, unknown>) => ({
-      id: r.id, title: r.title, status: r.status, priority: r.priority, client_id: r.client_id, created_at: r.created_at,
+    count: rows.length,
+    tickets: rows.map((r) => ({
+      id: r.id, title: r.title, status: r.status, priority: r.priority,
+      client_id: r.client_id, created_at: r.created_at,
     })),
   };
 }
