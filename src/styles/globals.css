@@ -7161,13 +7161,18 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* 1 ── Het embleem ─────────────────────────────────────────────────────── */
+/* Alle emblemen dragen het merkgoud (#FFD966 ≈ 45°). Onderscheid tussen agents komt
+   van het icoon en de sigil, niet meer van de kleur.
+
+   Het goud is een VULLING, dus de inkt erop moet donker zijn: wit op goud haalt
+   nergens genoeg contrast. Daarom `--ag-ink`, een diepe warme tint die zowel op de
+   lichte als op de donkere stop van het verloop leesbaar blijft. */
 .ag-glyph{
-  --ag-h:210;
-  --ag-l1:60%; --ag-l2:42%;
-  /* De donkere stop draait maar 12° door. Groter (bv. +30) laat een oranje agent
-     in de gele band belanden — en dan lijkt hij op de merkgouden knoppen. */
-  --ag-c1:hsl(var(--ag-h) 78% var(--ag-l1));
-  --ag-c2:hsl(calc(var(--ag-h) + 12) 68% var(--ag-l2));
+  --ag-h:45;
+  --ag-l1:66%; --ag-l2:52%;
+  --ag-c1:hsl(var(--ag-h) 92% var(--ag-l1));
+  --ag-c2:hsl(calc(var(--ag-h) - 5) 82% var(--ag-l2));
+  --ag-ink:hsl(42 68% 15%);
   --ag-size:46px;
   position:relative; display:inline-grid; place-items:center; flex:0 0 auto;
   width:var(--ag-size); height:var(--ag-size);
@@ -7175,17 +7180,18 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .ag-glyph-sm{ --ag-size:34px; }
 .ag-glyph-md{ --ag-size:46px; }
 .ag-glyph-lg{ --ag-size:68px; }
-:root[data-theme="light"] .ag-glyph{ --ag-l1:52%; --ag-l2:34%; }
+/* In het lichte thema mag de tegel iets dieper, anders vervaagt goud op wit. */
+:root[data-theme="light"] .ag-glyph{ --ag-l1:62%; --ag-l2:47%; }
 
 .ag-glyph-tile{
   position:relative; display:grid; place-items:center; overflow:hidden; isolation:isolate;
   width:100%; height:100%;
   border-radius:calc(var(--ag-size) * .32);
   background:linear-gradient(145deg,var(--ag-c1),var(--ag-c2));
-  color:#fff;
+  color:var(--ag-ink);
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.34),
-    inset 0 -1px 0 rgba(0,0,0,.2),
+    inset 0 1px 0 rgba(255,255,255,.4),
+    inset 0 -1px 0 rgba(0,0,0,.14),
     0 8px 18px -12px hsl(var(--ag-h) 55% 25% / .85);
   transition:transform .22s cubic-bezier(.16,1,.3,1);
 }
@@ -7194,8 +7200,10 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   content:""; position:absolute; inset:0; pointer-events:none;
   background:linear-gradient(155deg,rgba(255,255,255,.28),rgba(255,255,255,0) 48%);
 }
-.ag-sigil{ position:absolute; inset:0; width:100%; height:100%; color:#fff; opacity:.38; }
-.ag-glyph-icon{ position:relative; display:grid; place-items:center; filter:drop-shadow(0 1px 2px rgba(0,0,0,.32)); }
+/* Sigil en icoon in dezelfde donkere inkt; de sigil blijft een achtergrondpatroon,
+   dus die staat laag in dekking. */
+.ag-sigil{ position:absolute; inset:0; width:100%; height:100%; color:var(--ag-ink); opacity:.2; }
+.ag-glyph-icon{ position:relative; display:grid; place-items:center; }
 
 /* Statusring: staat búiten de tegel, zodat het embleem zelf nooit verandert. */
 .ag-glyph::after{
@@ -7308,7 +7316,6 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
 /* 6 ── Gezicht kiezen in de editor ─────────────────────────────────────── */
 .ag-picker{ display:flex; flex-wrap:wrap; gap:7px; align-items:center; }
-.ag-picker-hues{ margin-top:9px; }
 .ag-pick-icon{
   all:unset; box-sizing:border-box; cursor:pointer;
   display:inline-flex; align-items:center; gap:7px; padding:5px;
@@ -7318,20 +7325,9 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .ag-pick-icon.on{ border-color:var(--border-strong); background:var(--accent-soft); }
 .ag-pick-icon:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
 .ag-pick-auto{ padding-right:6px; font-size:12px; font-weight:600; color:var(--muted2); }
-.ag-pick-hue{
-  all:unset; box-sizing:border-box; cursor:pointer; position:relative; display:inline-block;
-  width:26px; height:26px; border-radius:50%;
-  background:linear-gradient(145deg,hsl(var(--ag-h) 78% 58%),hsl(calc(var(--ag-h) + 12) 68% 40%));
-  box-shadow:0 0 0 1px var(--border); transition:box-shadow .15s,transform .12s;
-}
-.ag-pick-hue:hover{ transform:scale(1.12); }
-.ag-pick-hue.on{ box-shadow:0 0 0 2px var(--accent),0 0 0 4px var(--panel); }
-.ag-pick-hue:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
-/* De eerste bol is "automatisch" — de A onderscheidt hem van een echte keuze. */
-.ag-picker-hues .ag-pick-hue:first-child::after{
-  content:"A"; position:absolute; inset:0; display:grid; place-items:center;
-  font-size:10px; font-weight:700; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.45);
-}
+/* Hier stond ook een kleurkiezer (12 tinten). Die is weg: elk embleem draagt nu het
+   merkgoud, dus een rij bolletjes die allemaal dezelfde kleur opleveren zou een
+   keuze suggereren die er niet is. Het icoon maakt het verschil. */
 
 /* 7 ── De goedkeurwachtrij ─────────────────────────────────────────────── */
 .ag-queue{ display:flex; flex-direction:column; gap:12px; padding:16px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--panel); }
@@ -7389,7 +7385,7 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 @keyframes ag-ping{ 0%{ opacity:.75; transform:scale(1); } 70%,100%{ opacity:0; transform:scale(1.7); } }
 @media(prefers-reduced-motion:reduce){
   .ag-spin,.ag-sheet,.ag-tile-badge::after,.ag-glyph.is-running::after,.ag-glyph.is-running .ag-sigil{ animation:none; }
-  .ag-tile:hover,.ag-starter:hover,.ag-pick-hue:hover{ transform:none; }
+  .ag-tile:hover,.ag-starter:hover{ transform:none; }
   .ag-tile:hover .ag-glyph-tile{ transform:none; }
 }
 
@@ -7412,7 +7408,6 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .ag-queue-actions{ width:100%; justify-content:flex-end; }
   .ag-btn{ min-height:40px; padding:8px 14px; }
   .ag-queue-sub{ max-width:100%; }
-  .ag-pick-hue{ width:30px; height:30px; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════

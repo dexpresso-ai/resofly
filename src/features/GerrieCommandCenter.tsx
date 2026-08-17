@@ -14,7 +14,7 @@ import { executeProposal, proposalLabel } from '../lib/gerrie-proposals';
 import { AgentApprovals } from '../components/AgentApprovals';
 import { AgentBuilder } from '../components/AgentBuilder';
 import { AgentBatchBoard, asBatchProposal } from '../components/AgentBatchBoard';
-import { AGENT_HUES, AGENT_ICONS, AgentGlyph, agentHue, agentIconKey, type AgentIconKey } from '../components/AgentGlyph';
+import { AGENT_ICONS, AgentGlyph, agentIconKey, type AgentIconKey } from '../components/AgentGlyph';
 import type { UUID } from '../types';
 
 /**
@@ -1026,7 +1026,6 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
   // het icoon mee zolang je zelf niets gekozen hebt.
   const preview = { id: routine?.id || 'nieuw', name: f.name, instruction: f.instruction, enabled_tools: f.tools, icon: f.icon, hue: f.hue };
   const derivedIcon = agentIconKey({ ...preview, icon: null });
-  const derivedHue = agentHue({ ...preview, hue: null });
 
   function toggleTool(name: string) {
     setF((p) => ({ ...p, tools: p.tools.includes(name) ? p.tools.filter((t) => t !== name) : [...p.tools, name] }));
@@ -1105,34 +1104,14 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
                 aria-label={d.label}
                 aria-pressed={f.icon === d.key}
               >
-                <AgentGlyph agent={{ ...preview, icon: d.key, hue: f.hue ?? derivedHue }} size="sm" />
+                <AgentGlyph agent={{ ...preview, icon: d.key }} size="sm" />
               </button>
             ))}
           </div>
-          <div className="ag-picker ag-picker-hues">
-            <button
-              type="button"
-              className={`ag-pick-hue${f.hue === null ? ' on' : ''}`}
-              onClick={() => setF((p) => ({ ...p, hue: null }))}
-              style={{ '--ag-h': derivedHue } as CSSProperties}
-              title="Automatische kleur"
-              aria-label="Automatische kleur"
-              aria-pressed={f.hue === null}
-            />
-            {AGENT_HUES.map((h) => (
-              <button
-                key={h}
-                type="button"
-                className={`ag-pick-hue${f.hue === h ? ' on' : ''}`}
-                onClick={() => setF((p) => ({ ...p, hue: h }))}
-                style={{ '--ag-h': h } as CSSProperties}
-                title={`Kleurtint ${h}`}
-                aria-label={`Kleurtint ${h}`}
-                aria-pressed={f.hue === h}
-              />
-            ))}
-          </div>
-          <p className="cc-note">Kies je niets, dan leidt Gerrie het embleem af uit de opdracht — nu <b>{AGENT_ICONS.find((d) => d.key === derivedIcon)?.label ?? 'Robot'}</b>.</p>
+          {/* Geen kleurkiezer meer: elk embleem draagt het merkgoud. Een kiezer die
+              twaalf tinten aanbiedt die allemaal hetzelfde opleveren, zou een keuze
+              suggereren die er niet is. */}
+          <p className="cc-note">Alle emblemen dragen de merkkleur; het <b>icoon</b> maakt het verschil. Kies je niets, dan leidt Gerrie het af uit de opdracht — nu <b>{AGENT_ICONS.find((d) => d.key === derivedIcon)?.label ?? 'Robot'}</b>.</p>
         </div>
         <div className="cc-field-row">
           <label className="cc-field"><span>Wat mag de agent?</span>

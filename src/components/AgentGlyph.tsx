@@ -120,20 +120,22 @@ export function agentIconKey(agent: AgentLike): AgentIconKey {
 }
 
 /**
- * Kleurtint 0..359. Eigen keuze wint; anders uit het id — maar niet zomaar
- * `hash % 360`: de gele band (45–70°) botst met het merkgoud en zou elke agent op
- * een gouden knop laten lijken. We kiezen daarom uit een vaste reeks tinten die
- * náást het goud staan in plaats van erop.
+ * Eén tint voor alle emblemen: het merkgoud (#FFD966 ≈ 45°).
+ *
+ * Hier stond een wiel van twaalf tinten, zodat elke agent zijn eigen kleur kreeg.
+ * Dat gaf herkenning per agent, maar het maakte de app bont: twaalf willekeurige
+ * kleuren náást een merk dat maar één kleur heeft. De PO koos voor één merkkleur.
+ *
+ * Onderscheid tússen agents komt daarmee volledig van het ICOON en de sigil — die
+ * blijven wél per agent afgeleid, dus twee agents zien er nog steeds anders uit.
+ * Een eerder opgeslagen eigen tint wordt bewust genegeerd in plaats van gewist: dan
+ * blijft de kolom bruikbaar als je ooit terug wilt.
  */
-const HUE_WHEEL = [4, 20, 96, 140, 168, 190, 208, 226, 258, 284, 312, 338];
+export const BRAND_HUE = 45;
 
-export function agentHue(agent: AgentLike): number {
-  if (typeof agent.hue === 'number' && agent.hue >= 0 && agent.hue <= 359) return agent.hue;
-  return HUE_WHEEL[hash(`${agent.id || ''}|${agent.name || ''}`) % HUE_WHEEL.length];
+export function agentHue(_agent: AgentLike): number {
+  return BRAND_HUE;
 }
-
-/** De tinten die de kiezer aanbiedt — dezelfde reeks als de automatische afleiding. */
-export const AGENT_HUES = HUE_WHEEL;
 
 export type AgentGlyphSize = 'sm' | 'md' | 'lg';
 export type AgentGlyphState = 'active' | 'paused' | 'draft' | 'archived' | 'running';
