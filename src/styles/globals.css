@@ -7592,8 +7592,13 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    ───────────────────────────────────────────────────────────────────────
    Dit is de voordeur van "Nieuwe agent" geworden; het formulier zit erachter
    voor wie liever zelf invult. Vorm: een rustig gesprek met de opbouw van een
-   chat — beurten in een scroller, de invoer eronder vastgeplakt — en daartussen
-   één kaart die laat zien wát er gebouwd is, in gewone taal.
+   chat — beurten in een scroller, de invoer eronder vastgeplakt — en daar
+   wéér onder de kaart die laat zien wát er gebouwd is, in gewone taal.
+
+   Die drie liggen in die volgorde omdat de kaart eerst tússen het gesprek en
+   het invoerveld zat: elke ronde dat hij groeide, zakte het veld waarin je moest
+   antwoorden verder buiten beeld. Het antwoord hoort vlak onder de vraag; wat de
+   agent kan blijft onderin staan.
 
    Bewust GEEN tweede chatlook: de dock (.gerrie-*) is de assistent, dit is een
    formulier dat toevallig praat. Daarom geen avatars, geen bellen met staartjes,
@@ -7615,6 +7620,9 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
 .abx{ display:flex; flex-direction:column; min-height:0; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--panel); overflow:hidden; }
 .abx-stream{ flex:1 1 auto; min-height:180px; max-height:min(52vh,520px); overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:14px; }
+/* Zodra de kaart onderin staat krijgt het gesprek minder hoogte, zodat gesprek +
+   antwoordveld + kaart samen op één scherm blijven passen. */
+.abx.has-dock .abx-stream{ max-height:min(34vh,340px); }
 
 .abx-starters{ display:flex; flex-direction:column; gap:9px; }
 .abx-starter-list{ display:flex; flex-direction:column; align-items:flex-start; gap:7px; }
@@ -7661,8 +7669,33 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .abx-manual:hover{ color:var(--accent-ink); text-decoration:underline; }
 .abx-manual:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:6px; }
 
+/* ── De opgeleverde agent als DOCK, onder het invoerveld ────────────────────
+   Deze kaart stond eerst midden in de scroller, tussen Gerrie's vraag en het
+   antwoordveld in. Elke ronde schoof het veld waarin je moest antwoorden dan
+   een half scherm naar beneden. Nu: gesprek — antwoord — en onderin blijft
+   staan wat de agent kan. Geen losse kaart meer maar een vlak dat aan de
+   onderrand vastzit; in te klappen tot naam + knoppen. */
+.abx-dock{ flex:0 0 auto; max-height:min(46vh,440px); overflow-y:auto; overscroll-behavior:contain;
+  border:0; border-top:1px solid var(--border-strong); border-radius:0; box-shadow:none;
+  padding:14px 18px 0; gap:12px; animation:abx-dock-in .22s ease-out; }
+@keyframes abx-dock-in{ from{ opacity:0; transform:translateY(10px); } to{ opacity:1; transform:none; } }
+
+/* Sticky voet: Aanmaken blijft bereikbaar ook als de kaart zelf scrolt. */
+.abx-dock>footer{ position:sticky; bottom:0; z-index:1; background:var(--bg-deep); padding-bottom:14px; }
+.abx-dock.is-folded{ max-height:none; overflow:visible; }
+.abx-dock.is-folded>footer{ position:static; border-top:0; margin-top:0; padding-top:0; }
+
+.abx-fold{ all:unset; box-sizing:border-box; cursor:pointer; display:inline-flex; align-items:center; gap:5px;
+  padding:5px 10px; border:1px solid var(--border); border-radius:9px;
+  font-size:11.5px; font-weight:600; color:var(--muted2); transition:color .15s,border-color .15s; }
+.abx-fold:hover{ color:var(--accent-ink); border-color:var(--border-strong); }
+.abx-fold:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+
 @media(max-width:760px){
   .abx-stream{ padding:14px; max-height:none; }
+  .abx.has-dock .abx-stream{ max-height:34vh; }
+  .abx-dock{ padding:12px 14px 0; max-height:46vh; }
+  .abx-dock>footer{ padding-bottom:12px; }
   .abx-composer{ padding:11px 14px 13px; }
   .abx-turn{ max-width:100%; }
   .abx-facts>div{ grid-template-columns:1fr; gap:2px; }

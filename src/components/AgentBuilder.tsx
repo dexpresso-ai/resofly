@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowUp, Clock, Eye, Loader2, Pencil, Sparkles, Wand2, X } from 'lucide-react';
+import { AlertTriangle, ArrowUp, ChevronDown, ChevronUp, Clock, Eye, Loader2, Pencil, Sparkles, Wand2, X } from 'lucide-react';
 import {
   designGerrieAgent, routineToolLabel, previewRoutine,
   type GerrieAgentProposal, type RoutinePreview,
@@ -19,6 +19,12 @@ import type { UUID } from '../types';
  * Wat eruit komt is een VOORSTEL. Je ziet in gewone taal wat de agent gaat doen,
  * je kunt blijven bijsturen in hetzelfde gesprek ("maak hem maandelijks"), en
  * pas als je op Aanmaken drukt bestaat hij. Bijschaven in het formulier kan altijd.
+ *
+ * VOLGORDE OP HET SCHERM: gesprek — jouw antwoord — pas daaronder de kaart met
+ * wat hij kan. Die kaart stond eerst middenin de stroom, tussen de vraag en het
+ * invoerveld in, waardoor het veld waar je moest antwoorden telkens een half
+ * scherm naar beneden zakte. Nu zit het antwoord vlak onder het gesprek en blijft
+ * de kaart onderin staan (in te klappen tot een balkje als hij in de weg zit).
  */
 
 interface Turn { role: 'user' | 'assistant'; content: string }
@@ -58,6 +64,9 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
   // Proefrun: het antwoord én de stappen die hij zette.
   const [trying, setTrying] = useState(false);
   const [preview, setPreview] = useState<RoutinePreview | null>(null);
+  // De kaart onderin staat open zodra hij gebouwd is; inklappen laat alleen de
+  // naam en de knoppen staan, zodat het gesprek meer lucht krijgt.
+  const [showDetails, setShowDetails] = useState(true);
   const streamRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -86,6 +95,7 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
       }
       setBuilt({ agent: step.agent, summary: step.summary });
       setPreview(null);
+      setShowDetails(true);
       setTurns([...next, { role: 'assistant', content: step.summary }]);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Gerrie kon deze agent even niet bouwen.');
@@ -138,7 +148,7 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
         <button className="cc-btn ghost" onClick={onCancel}><X size={14} /> Sluiten</button>
       </header>
 
-      <div className="abx">
+      <div className={`abx${agent ? ' has-dock' : ''}`}>
         <div className="abx-stream" ref={streamRef}>
           {turns.length === 0 && !thinking && (
             <div className="abx-starters">
@@ -165,19 +175,64 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
             </div>
           )}
 
-          {agent && (
-            <article className="abx-card">
-              <header>
-                <AgentGlyph agent={{ id: agent.name, name: agent.name, instruction: agent.instruction, enabled_tools: agent.enabled_tools, icon: agent.icon }} size="md" state="active" />
-                <div>
-                  <strong>{agent.name}</strong>
-                  <span><Clock size={11} /> {scheduleText(agent)}</span>
-                </div>
-                <span className={`cc-kind ${agent.mode === 'propose' ? 'write' : 'read'}`}>
-                  {agent.mode === 'propose' ? 'stelt acties voor' : 'alleen lezen'}
-                </span>
-              </header>
+          {error && <p className="abx-error"><AlertTriangle size={13} /> {error}</p>}
+        </div>
 
+        <form
+          className="abx-composer"
+          onSubmit={(e) => { e.preventDefault(); void send(draft); }}
+        >
+          {suggestions.length > 0 && (
+            <div className="abx-suggestions">
+              {suggestions.map((s) => (
+                <button key={s} type="button" className="cc-chip" onClick={() => void send(s)}>{s}</button>
+              ))}
+            </div>
+          )}
+          <div className="abx-input-row">
+            <textarea
+              className="cc-input"
+              rows={2}
+              value={draft}
+              disabled={thinking}
+              placeholder={built ? 'Nog iets aanpassen?' : 'Bijv. elke maandag kijken wie er nog niet betaald heeft'}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(draft); } }}
+            />
+            <button type="submit" className="abx-send" disabled={!draft.trim() || thinking} aria-label="Versturen">
+              <ArrowUp size={16} />
+            </button>
+          </div>
+          <button type="button" className="abx-manual" onClick={() => onOpenForm(built?.agent ?? null)}>
+            Liever zelf invullen
+          </button>
+        </form>
+
+        {agent && (
+          <article className={`abx-card abx-dock${showDetails ? '' : ' is-folded'}`}>
+            <header>
+              <AgentGlyph agent={{ id: agent.name, name: agent.name, instruction: agent.instruction, enabled_tools: agent.enabled_tools, icon: agent.icon }} size="md" state="active" />
+              <div>
+                <strong>{agent.name}</strong>
+                <span><Clock size={11} /> {scheduleText(agent)}</span>
+              </div>
+              <span className={`cc-kind ${agent.mode === 'propose' ? 'write' : 'read'}`}>
+                {agent.mode === 'propose' ? 'stelt acties voor' : 'alleen lezen'}
+              </span>
+              <button
+                type="button"
+                className="abx-fold"
+                aria-expanded={showDetails}
+                onClick={() => setShowDetails((v) => !v)}
+              >
+                {showDetails
+                  ? <><ChevronDown size={13} /> Inklappen</>
+                  : <><ChevronUp size={13} /> Wat hij kan</>}
+              </button>
+            </header>
+
+            {/* Ingeklapt blijven alleen de naam, het tijdstip en de knoppen over. */}
+            {showDetails && <>
               <dl className="abx-facts">
                 <div>
                   <dt><Eye size={12} /> Mag inzien</dt>
@@ -227,66 +282,39 @@ export function AgentBuilder({ organizationId, onCreate, onOpenForm, onCancel }:
                           </ul>
                         )}
                         <p className="abx-preview-note">
-                          Klopt dit niet? Zeg hieronder wat er anders moet — bijvoorbeeld “alleen facturen boven €500” of “ook offertes die nog niet verstuurd zijn”.
+                          Klopt dit niet? Zeg het hierboven in het gesprek — bijvoorbeeld “alleen facturen boven €500” of “ook offertes die nog niet verstuurd zijn”.
                         </p>
                       </>}
                 </div>
               )}
+            </>}
 
-              <footer>
-                <label className="abx-activate">
-                  <input type="checkbox" checked={activate} onChange={(e) => setActivate(e.target.checked)} />
-                  Meteen aanzetten en nu draaien
-                </label>
-                <button type="button" className="cc-btn ghost" disabled={saving} onClick={() => onOpenForm(agent)}>
-                  <Pencil size={13} /> Zelf bijschaven
-                </button>
-                <button type="button" className="cc-btn primary" disabled={saving} onClick={() => void create()}>
-                  {saving
-                    ? <><Loader2 size={14} className="ag-spin" /> Aanmaken…</>
-                    : activate ? <>Aanmaken en starten</> : <>Aanmaken als concept</>}
-                </button>
-              </footer>
+            {showDetails && (
               <p className="abx-hint">
                 {activate
                   ? <>Hij gaat meteen aan en draait direct één ronde, zodat je vandaag al ziet wat hij oplevert. {agent.mode === 'propose' ? <>Alles wat hij wil versturen komt als <b>afvinklijst</b> bij je terug.</> : 'Hij leest alleen mee en verandert niets.'}</>
-                  : <>Niet helemaal goed? Zeg het gewoon hieronder — bijvoorbeeld “maak hem maandelijks” of “laat hem ook de offertes meenemen”.</>}
+                  : <>Niet helemaal goed? Zeg het gewoon hierboven in het gesprek — bijvoorbeeld “maak hem maandelijks” of “laat hem ook de offertes meenemen”.</>}
               </p>
-            </article>
-          )}
+            )}
 
-          {error && <p className="abx-error"><AlertTriangle size={13} /> {error}</p>}
-        </div>
-
-        <form
-          className="abx-composer"
-          onSubmit={(e) => { e.preventDefault(); void send(draft); }}
-        >
-          {suggestions.length > 0 && (
-            <div className="abx-suggestions">
-              {suggestions.map((s) => (
-                <button key={s} type="button" className="cc-chip" onClick={() => void send(s)}>{s}</button>
-              ))}
-            </div>
-          )}
-          <div className="abx-input-row">
-            <textarea
-              className="cc-input"
-              rows={2}
-              value={draft}
-              disabled={thinking}
-              placeholder={built ? 'Nog iets aanpassen?' : 'Bijv. elke maandag kijken wie er nog niet betaald heeft'}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(draft); } }}
-            />
-            <button type="submit" className="abx-send" disabled={!draft.trim() || thinking} aria-label="Versturen">
-              <ArrowUp size={16} />
-            </button>
-          </div>
-          <button type="button" className="abx-manual" onClick={() => onOpenForm(built?.agent ?? null)}>
-            Liever zelf invullen
-          </button>
-        </form>
+            {/* De knoppen staan als laatste en blijven plakken als de kaart
+                scrolt, zodat Aanmaken altijd binnen bereik is. */}
+            <footer>
+              <label className="abx-activate">
+                <input type="checkbox" checked={activate} onChange={(e) => setActivate(e.target.checked)} />
+                Meteen aanzetten en nu draaien
+              </label>
+              <button type="button" className="cc-btn ghost" disabled={saving} onClick={() => onOpenForm(agent)}>
+                <Pencil size={13} /> Zelf bijschaven
+              </button>
+              <button type="button" className="cc-btn primary" disabled={saving} onClick={() => void create()}>
+                {saving
+                  ? <><Loader2 size={14} className="ag-spin" /> Aanmaken…</>
+                  : activate ? <>Aanmaken en starten</> : <>Aanmaken als concept</>}
+              </button>
+            </footer>
+          </article>
+        )}
       </div>
     </div>
   );
