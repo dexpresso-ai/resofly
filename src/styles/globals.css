@@ -7450,8 +7450,25 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .cem-toggle:hover{ text-decoration:underline; }
 .cem-toggle:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:6px; }
 
-/* De tekst zelf: pre-wrap, want de agent schrijft met witregels tussen alinea's. */
-.cem-body{ margin-top:9px; padding:11px 12px; border:1px solid var(--border); border-radius:9px; background:var(--bg-deep); font-size:12.5px; line-height:1.6; color:var(--text); white-space:pre-wrap; overflow-wrap:anywhere; }
+/* De uitgeklapte inhoud. Is het platte tekst (facturenlijst), dan houdt pre-wrap de
+   witregels intact; bij een mail staat hier het bewerkveld. Als <fieldset> zonder
+   eigen randopmaak, zodat een afgehandelde regel in één keer vergrendeld kan worden. */
+.cem-body{ margin-top:9px; padding:11px 12px; border:1px solid var(--border); border-radius:9px; background:var(--bg-deep); font-size:12.5px; line-height:1.6; color:var(--text); white-space:pre-wrap; overflow-wrap:anywhere; min-inline-size:0; }
+.cem-body:disabled{ opacity:.6; }
+
+/* Mail aanpassen vlak voordat hij weggaat: wat hier staat is wat er verstuurd wordt. */
+.cem-edit{ display:flex; flex-direction:column; gap:9px; white-space:normal; }
+.cem-edit-field{ display:flex; flex-direction:column; gap:4px; }
+.cem-edit-field>span{ font-size:10.5px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); }
+.cem-edit-input{
+  width:100%; box-sizing:border-box; padding:8px 10px;
+  border:1px solid var(--border2); border-radius:8px; background:var(--panel);
+  color:var(--text); font:inherit; font-size:12.5px; line-height:1.55;
+}
+.cem-edit-input:focus-visible{ outline:2px solid var(--accent); outline-offset:-1px; border-color:var(--border-strong); }
+.cem-edit-body{ resize:vertical; min-height:120px; }
+.cem-edit-foot{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.cem-edit-foot>span{ flex:1 1 180px; font-size:11px; color:var(--muted); }
 .cem-error{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:8px; font-size:12px; color:var(--accent-r); }
 .cem-error>span:first-child{ display:inline-flex; align-items:center; gap:5px; }
 .cem-error-actions{ display:flex; gap:6px; margin-left:auto; }

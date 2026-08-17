@@ -203,7 +203,13 @@ export function ApprovalChecklist({
                 )}
               </div>
 
-              {showDetail && item.detail && <div className="cem-body">{item.detail}</div>}
+              {/* Een afgehandelde regel mag je niet meer bewerken: de mail is weg of
+                  bewust overgeslagen, en een invulveld zou suggereren dat het nog
+                  ergens toe leidt. Een uitgeschakelde fieldset vergrendelt in één
+                  keer alles wat erin staat. */}
+              {showDetail && item.detail && (
+                <fieldset className="cem-body" disabled={done || running}>{item.detail}</fieldset>
+              )}
               {s === 'error' && errors[i] && (
                 <div className="cem-error">
                   <span><AlertTriangle size={12} /> {errors[i]}</span>
