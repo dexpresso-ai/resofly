@@ -82,6 +82,26 @@ export function proposalLabel(p: GerrieProposal): ProposalInfo {
       sub: p.assignees.length ? p.assignees.map((a) => a.name).join(', ') : 'niemand meer toegewezen',
       write: true, kind: 'work',
     };
+    case 'supplier': return {
+      title: `Leverancier openen: ${p.name}`,
+      sub: [p.city, p.email].filter(Boolean).join(' · '),
+      write: false, kind: 'money',
+    };
+    case 'purchase_invoice': return {
+      title: 'Concept-inkoopfactuur openen',
+      sub: [p.supplier_name, p.supplier_invoice_number, euro(p.total_eur)].filter(Boolean).join(' · '),
+      write: false, kind: 'money',
+    };
+    case 'contract': return {
+      title: `Concept-contract openen: ${p.title}`,
+      sub: [p.client_name, p.amount_eur != null ? euro(p.amount_eur) : ''].filter(Boolean).join(' · '),
+      write: false, kind: 'work',
+    };
+    case 'campaign': return {
+      title: `Concept-campagne aanmaken: ${p.name}`,
+      sub: [p.subject, p.audience_note].filter(Boolean).join(' · '),
+      write: true, kind: 'mail',
+    };
     case 'content': return {
       title: `${p.kind === 'note' ? 'Notitie' : 'Document'} openen: ${p.title}`,
       sub: [p.client_name, p.project_name].filter(Boolean).join(' · '),
@@ -143,6 +163,12 @@ export async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers
     case 'ticket': h.onCreateTicket?.(p); return;
     case 'edit_ticket': h.onEditTicket?.(p); return;
     case 'content': h.onCreateContent?.(p); return;
+    case 'supplier': h.onCreateSupplier?.(p); return;
+    case 'purchase_invoice': h.onCreatePurchaseInvoice?.(p); return;
+    case 'contract': h.onCreateContract?.(p); return;
+    // Een concept-campagne wordt écht aangemaakt (als draft) voordat de editor hem
+    // kan openen; daarom een await-pad en geen los formulier.
+    case 'campaign': await need(h.onCreateCampaign ? () => h.onCreateCampaign!(p) : undefined); return;
     case 'agent': await need(h.onCreateAgent ? () => h.onCreateAgent!(p) : undefined); return;
     // De hele reeks in één keer. De wachtrij gebruikt deze weg alleen als je "alles
     // versturen" kiest; vink je ze los af, dan roept hij onSendClientEmail per mail

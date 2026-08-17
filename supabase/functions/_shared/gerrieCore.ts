@@ -209,6 +209,52 @@ interface EditTimeEntryProposal {
   current: { date: string; minutes: number; description: string | null; billable: boolean; project_name: string | null; client_name: string | null };
   changes: { entry_date?: string; minutes?: number; description?: string | null; billable?: boolean };
 }
+interface SupplierProposal {
+  type: 'supplier';
+  name: string;
+  contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  iban: string | null;
+  vat_number: string | null;
+  kvk_number: string | null;
+  city: string | null;
+}
+interface PurchaseInvoiceLineDraft { description: string; amount_eur: number; vat_rate: number }
+interface PurchaseInvoiceProposal {
+  type: 'purchase_invoice';
+  supplier_id: string | null;
+  supplier_name: string | null;
+  supplier_invoice_number: string;
+  date: string;
+  due_date: string | null;
+  notes: string | null;
+  lines: PurchaseInvoiceLineDraft[];
+  total_eur: number;
+}
+interface ContractProposal {
+  type: 'contract';
+  client_id: string;
+  client_name: string;
+  title: string;
+  body: string;
+  amount_eur: number | null;
+  valid_until: string | null;
+}
+/**
+ * Een campagne blijft ALTIJD een concept. Er zit bewust geen veld in waarmee hij
+ * verstuurd of ingepland kan worden: bij een campagne gaat er in één klik post naar
+ * een heel segment dat de gebruiker niet regel voor regel heeft gezien. De doelgroep
+ * blijft daarom óók buiten het voorstel — die stelt hij zelf samen in Marketing.
+ */
+interface CampaignProposal {
+  type: 'campaign';
+  name: string;
+  subject: string;
+  preheader: string | null;
+  body_text: string;
+  audience_note: string | null;
+}
 interface ContentProposal {
   type: 'content';
   kind: 'note' | 'document';
@@ -275,7 +321,7 @@ interface AgentProposal {
   email_subject: string | null;
   email_body: string | null;
 }
-type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | SendInvoicesProposal | SendQuotesProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | EditCalendarEventProposal | CancelCalendarEventProposal | ClientContactProposal | EditClientContactProposal | ProjectTeamProposal | TaskAssignProposal | WeekActionProposal | TimeEntryProposal | EditTimeEntryProposal | ContentProposal | TicketProposal | EditTicketProposal | TicketNoteProposal | ReportProposal | SendClientEmailProposal | AgentProposal;
+type Proposal = InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | SendInvoicesProposal | SendQuotesProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | EditCalendarEventProposal | CancelCalendarEventProposal | ClientContactProposal | EditClientContactProposal | ProjectTeamProposal | TaskAssignProposal | WeekActionProposal | TimeEntryProposal | EditTimeEntryProposal | SupplierProposal | PurchaseInvoiceProposal | ContractProposal | CampaignProposal | ContentProposal | TicketProposal | EditTicketProposal | TicketNoteProposal | ReportProposal | SendClientEmailProposal | AgentProposal;
 
 /**
  * Eén stap uit de loop, voor het LOGBOEK van een geplande agent.
@@ -389,6 +435,10 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
         : proposal.type === 'calendar_event' ? `Wil je dat ik dit agenda-item aanmaak in "${proposal.source_name}"? Bevestig hieronder.`
         : proposal.type === 'week_action' ? `Wil je dat ik deze ${proposal.total} actiepunt${proposal.total === 1 ? '' : 'en'} toevoeg? Bevestig hieronder.`
         : proposal.type === 'report' ? `Ik heb de rapportage "${proposal.name}" voor je klaargezet op de Statistieken-pagina. Controleer de grafiek en sla hem op:`
+        : proposal.type === 'supplier' ? `Ik heb de leverancier "${proposal.name}" klaargezet. Controleer de gegevens en sla op:`
+        : proposal.type === 'purchase_invoice' ? 'Ik heb een concept-inkoopfactuur klaargezet. Controleer de regels en boek hem zelf:'
+        : proposal.type === 'contract' ? `Ik heb een concept-contract "${proposal.title}" klaargezet. Controleer de tekst en sla op:`
+        : proposal.type === 'campaign' ? `Ik heb een concept-campagne "${proposal.name}" klaargezet. Er gaat niets weg — jij bepaalt de doelgroep en drukt zelf op verzenden:`
         : proposal.type === 'content' ? `Ik heb ${proposal.kind === 'note' ? 'de notitie' : 'het document'} "${proposal.title}" klaargezet. Controleer en sla op:`
         : proposal.type === 'ticket' ? `Ik heb het ticket "${proposal.title}" voor je klaargezet. Controleer het en sla op:`
         : proposal.type === 'edit_ticket' ? `Ik heb de wijziging van ticket "${proposal.title}" klaargezet. Controleer en sla op:`
@@ -472,6 +522,10 @@ function describeProposal(p: Proposal): string {
     case 'edit_time_entry': return `correctie op een urenregistratie van ${p.current.date}`;
     case 'ticket': return `ticket ${p.title}`;
     case 'edit_ticket': return `wijziging van ticket ${p.title}`;
+    case 'supplier': return `leverancier ${p.name}`;
+    case 'purchase_invoice': return `inkoopfactuur ${p.supplier_invoice_number || '(zonder nummer)'} van ${p.supplier_name ?? 'onbekende leverancier'}`;
+    case 'contract': return `concept-contract ${p.title} voor ${p.client_name}`;
+    case 'campaign': return `concept-campagne ${p.name}`;
     case 'content': return `${p.kind === 'note' ? 'notitie' : 'document'} ${p.title}`;
     case 'edit_calendar_event': return `wijziging van agenda-item ${p.title}`;
     case 'cancel_calendar_event': return `afzegging van agenda-item ${p.title}`;
@@ -635,6 +689,8 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_task` / `propose_edit_task` — een taak binnen een project aanmaken of wijzigen, inclusief subtaken, status/prioriteit en een geplande datum (`planned_date`) om de taak als actiepunt in de WEEKPLANNER te zetten. Zoek het project met `list_projects`, bestaande taken met `list_tasks`.',
           '- `propose_week_action` — ÉÉN OF MEER ACTIEPUNTEN op de "Actiepunten deze week"-checklist van de weekplanner (los van projecten en taken). Vraagt de gebruiker meerdere punten, geef ze dan ALLEMAAL in één keer mee via `items` (niet één voor één). Geef per item een datum binnen de gewenste week. Voor een echte taak binnen een project gebruik je `propose_task`.',
           '- `propose_calendar_event` — een agenda-item aanmaken in een gekoppelde agenda (Google/Microsoft). Tijden zijn lokaal (Europe/Amsterdam); reken relatieve datums om op basis van vandaag. Bij meerdere schrijfbare agenda\'s: vraag welke (`list_calendars`).',
+          '- LEVERANCIERS en INKOOPFACTUREN — `propose_supplier` en `propose_purchase_invoice` zetten een CONCEPT klaar dat vooringevuld opengaat; de gebruiker kiest de grootboekrekeningen en boekt zelf. Jij boekt nooit.',
+          '- CAMPAGNES — `propose_campaign` levert een CONCEPT in Marketing. Versturen, inplannen en de doelgroep bepalen doet de gebruiker; jij kunt dat niet en moet dat ook zo zeggen.',
           '- CONTRACTEN — `list_contracts` (met `awaiting_signature_only` voor wat op een handtekening wacht) en `list_contract_templates`, alleen lezen. Contracten opstellen, versturen ter ondertekening en tekenen doet de gebruiker zelf.',
           '- CAMPAGNES — `list_campaigns`, alleen lezen. Een campagne opstellen, versturen, inplannen of starten kun je NIET: daar gaat in één klik post naar een heel segment. Moet het naar een paar klanten die de gebruiker stuk voor stuk wil nalezen, gebruik dan `propose_send_client_email`.',
           '- INHOUD — `list_content`, `propose_note` en `propose_document` voor notities en interne documenten. Verwijderen kan niet.',
@@ -1168,6 +1224,77 @@ const TOOL_DEFINITIONS = [
       type: 'object',
       properties: { id: { type: 'string', description: 'Het exacte id van de offerte (uit list_quotes).' } },
       required: ['id'],
+    },
+  },
+  {
+    name: 'propose_supplier',
+    description: 'Zet een NIEUWE leverancier (crediteur) klaar. Die opent vooringevuld in het leveranciersformulier; de gebruiker controleert en slaat zelf op. Controleer eerst met `list_suppliers` of hij al bestaat.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Bedrijfsnaam van de leverancier.' },
+        contact_name: { type: 'string' }, email: { type: 'string' }, phone: { type: 'string' },
+        iban: { type: 'string' }, vat_number: { type: 'string' }, kvk_number: { type: 'string' }, city: { type: 'string' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'propose_purchase_invoice',
+    description: 'Zet een CONCEPT-inkoopfactuur klaar (een factuur die JIJ moet betalen). Die opent vooringevuld in het inkoopfactuurformulier; de gebruiker controleert de regels, kiest de grootboekrekeningen en boekt hem zelf. Je boekt niets. Zoek de leverancier met `list_suppliers`.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        supplier_id: { type: 'string', description: 'Het exacte id van de leverancier (uit list_suppliers).' },
+        supplier_invoice_number: { type: 'string', description: 'Het factuurnummer van de leverancier.' },
+        date: { type: 'string', description: 'Factuurdatum YYYY-MM-DD.' },
+        due_date: { type: 'string', description: 'Vervaldatum YYYY-MM-DD.' },
+        notes: { type: 'string' },
+        lines: {
+          type: 'array',
+          description: 'De factuurregels.',
+          items: {
+            type: 'object',
+            properties: {
+              description: { type: 'string' },
+              amount_eur: { type: 'number', description: 'Bedrag EXCL. btw.' },
+              vat_rate: { type: 'number', description: 'Btw-percentage, meestal 21 of 9.' },
+            },
+            required: ['description', 'amount_eur'],
+          },
+        },
+      },
+      required: ['supplier_id'],
+    },
+  },
+  {
+    name: 'propose_contract',
+    description: 'Zet een CONCEPT-contract klaar. Het opent vooringevuld in de contracteditor; de gebruiker controleert de tekst, laat het intern goedkeuren en verstuurt het zelf ter ondertekening. Je verstuurt en tekent nooit iets. Zoek de klant met `search_clients`.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'string', description: 'Het exacte id van de klant.' },
+        title: { type: 'string', description: 'Titel van het contract.' },
+        body: { type: 'string', description: 'De tekst van het contract, als platte tekst of eenvoudige HTML.' },
+        amount_eur: { type: 'number', description: 'Optioneel: contractwaarde in euro.' },
+        valid_until: { type: 'string', description: 'Optioneel: geldig tot YYYY-MM-DD.' },
+      },
+      required: ['client_id', 'title'],
+    },
+  },
+  {
+    name: 'propose_campaign',
+    description: 'Zet een CONCEPT-campagne klaar: naam, onderwerp en tekst. Hij opent als concept in Marketing. Je kunt een campagne NIET versturen, inplannen of starten, en je bepaalt de doelgroep niet — bij een campagne gaat er in één klik post naar een heel segment dat de gebruiker niet regel voor regel heeft gezien, dus die knop hoort bij een mens. Moet het naar een paar klanten die hij stuk voor stuk wil nalezen, gebruik dan `propose_send_client_email`.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Interne naam van de campagne.' },
+        subject: { type: 'string', description: 'De onderwerpregel die de ontvanger ziet.' },
+        preheader: { type: 'string', description: 'Kort voorbeeldtekstje onder het onderwerp.' },
+        body_text: { type: 'string', description: 'De tekst van de mail, als platte tekst met witregels tussen de alinea\'s.' },
+        audience_note: { type: 'string', description: 'In gewone taal wie deze campagne zou moeten krijgen; de gebruiker stelt de doelgroep zelf samen.' },
+      },
+      required: ['name', 'subject', 'body_text'],
     },
   },
   {
@@ -1857,6 +1984,10 @@ const TOOL_MODULE: Record<string, string> = {
   list_calendars: 'calendar',
   suggest_meeting_slots: 'calendar',
   list_time_entries: 'time',
+  propose_supplier: 'finance',
+  propose_purchase_invoice: 'finance',
+  propose_contract: 'finance',
+  propose_campaign: 'marketing',
   list_contracts: 'finance',
   list_contract_templates: 'finance',
   list_campaigns: 'marketing',
@@ -1980,6 +2111,10 @@ const TOOL_LABELS: Record<string, string> = {
   propose_edit_client_contact: 'Contactpersoon wijzigen',
   propose_project_team: 'Projectteam samenstellen',
   propose_task_assign: 'Taak toewijzen',
+  propose_supplier: 'Leverancier klaarzetten',
+  propose_purchase_invoice: 'Concept-inkoopfactuur klaarzetten',
+  propose_contract: 'Concept-contract klaarzetten',
+  propose_campaign: 'Concept-campagne klaarzetten',
   propose_note: 'Notitie klaarzetten',
   propose_document: 'Document klaarzetten',
   propose_ticket: 'Ticket aanmaken',
@@ -2271,6 +2406,10 @@ function proposeLabel(toolName: string): string {
     case 'propose_calendar_event': return 'Agenda-item klaarzetten…';
     case 'propose_week_action': return 'Weekactiepunt klaarzetten…';
     case 'propose_time_entry': return 'Urenregistratie klaarzetten…';
+    case 'propose_supplier': return 'Leverancier klaarzetten…';
+    case 'propose_purchase_invoice': return 'Inkoopfactuur klaarzetten…';
+    case 'propose_contract': return 'Concept-contract opstellen…';
+    case 'propose_campaign': return 'Concept-campagne opstellen…';
     case 'propose_note': return 'Notitie klaarzetten…';
     case 'propose_document': return 'Document klaarzetten…';
     case 'propose_edit_time_entry': return 'Urencorrectie klaarzetten…';
@@ -2320,6 +2459,10 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
     case 'propose_calendar_event': return buildCalendarEventProposal(ctx, input);
     case 'propose_week_action': return buildWeekActionProposal(input);
     case 'propose_time_entry': return buildTimeEntryProposal(ctx, input);
+    case 'propose_supplier': return buildSupplierProposal(ctx, input);
+    case 'propose_purchase_invoice': return buildPurchaseInvoiceProposal(ctx, input);
+    case 'propose_contract': return buildContractProposal(ctx, input);
+    case 'propose_campaign': return buildCampaignProposal(input);
     case 'propose_note': return buildContentProposal(ctx, 'note', input);
     case 'propose_document': return buildContentProposal(ctx, 'document', input);
     case 'propose_edit_time_entry': return buildEditTimeEntryProposal(ctx, input);
@@ -3493,6 +3636,104 @@ async function buildEditTimeEntryProposal(ctx: GerrieContext, input: Record<stri
 
 // 'converted' staat er bewust NIET bij: die status zet de app zelf als een ticket
 // naar een project wordt omgezet, en is geen handmatige keuze.
+// ── Concepten voor de zwaardere modules ──────────────────────────────────────
+//
+// Alle vier leveren een VOORINGEVULD FORMULIER op, geen uitgevoerde actie. Dat is
+// het afgesproken model voor alles wat met geld, verplichtingen of bulkpost te maken
+// heeft: de agent doet het typewerk, de mens drukt op opslaan.
+
+async function buildSupplierProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const name = String(input.name || '').trim();
+  if (!name) return { ok: false, error: 'Geef de naam van de leverancier.' };
+  const opt = (v: unknown) => { const t = String(v ?? '').trim(); return t ? t.slice(0, 200) : null; };
+
+  // Dubbele crediteuren zijn een gedoe in de boekhouding; waarschuw vóór het formulier.
+  const { data: bestaand } = await supabaseAdmin.from('suppliers')
+    .select('name').eq('organization_id', ctx.organizationId).ilike('name', name).limit(1);
+  if (bestaand && bestaand.length) {
+    return { ok: false, error: `Er bestaat al een leverancier "${String(bestaand[0].name)}". Controleer met list_suppliers of je die bedoelt.` };
+  }
+
+  return {
+    ok: true,
+    proposal: {
+      type: 'supplier', name: name.slice(0, 200),
+      contact_name: opt(input.contact_name), email: opt(input.email), phone: opt(input.phone),
+      iban: opt(input.iban), vat_number: opt(input.vat_number), kvk_number: opt(input.kvk_number), city: opt(input.city),
+    },
+  };
+}
+
+async function buildPurchaseInvoiceProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const supplierId = String(input.supplier_id || '').trim();
+  if (!isUuid(supplierId)) return { ok: false, error: 'Ongeldig supplier_id. Zoek de leverancier eerst met list_suppliers.' };
+  const { data: supplier, error } = await supabaseAdmin.from('suppliers')
+    .select('id, name').eq('organization_id', ctx.organizationId).eq('id', supplierId).maybeSingle();
+  if (error) return { ok: false, error: `Leverancier ophalen mislukt: ${error.message}` };
+  if (!supplier) return { ok: false, error: 'Leverancier niet gevonden in deze organisatie.' };
+
+  const rawLines = Array.isArray(input.lines) ? (input.lines as Record<string, unknown>[]) : [];
+  const lines = rawLines.map((l) => ({
+    description: String(l.description ?? '').trim().slice(0, 300),
+    amount_eur: round2(num(l.amount_eur)),
+    // 21% is het gangbare tarief; een fout tarief is in het formulier één klik.
+    vat_rate: [0, 9, 21].includes(num(l.vat_rate)) ? num(l.vat_rate) : 21,
+  })).filter((l) => l.description && Number.isFinite(l.amount_eur));
+  if (lines.length === 0) return { ok: false, error: 'Geef minstens één factuurregel met omschrijving en bedrag (excl. btw).' };
+
+  const total = round2(lines.reduce((sum, l) => sum + l.amount_eur * (1 + l.vat_rate / 100), 0));
+  return {
+    ok: true,
+    proposal: {
+      type: 'purchase_invoice',
+      supplier_id: String(supplier.id), supplier_name: String(supplier.name),
+      supplier_invoice_number: String(input.supplier_invoice_number ?? '').trim().slice(0, 100),
+      date: isoDate(input.date) || ctx.today,
+      due_date: isoDate(input.due_date),
+      notes: input.notes ? String(input.notes).slice(0, 2000) : null,
+      lines, total_eur: total,
+    },
+  };
+}
+
+async function buildContractProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const client = await resolveClient(ctx, input.client_id);
+  if (!client.ok) return client;
+  const title = String(input.title || '').trim();
+  if (!title) return { ok: false, error: 'Geef een titel voor het contract.' };
+  const amount = input.amount_eur === undefined ? null : round2(num(input.amount_eur));
+  return {
+    ok: true,
+    proposal: {
+      type: 'contract',
+      client_id: client.id, client_name: client.name,
+      title: title.slice(0, 300),
+      body: String(input.body || '').slice(0, 20000),
+      amount_eur: amount !== null && Number.isFinite(amount) ? amount : null,
+      valid_until: isoDate(input.valid_until),
+    },
+  };
+}
+
+function buildCampaignProposal(input: Record<string, unknown>): ProposalResult {
+  const name = String(input.name || '').trim();
+  const subject = String(input.subject || '').trim();
+  const body = String(input.body_text || '').trim();
+  if (!name) return { ok: false, error: 'Geef een interne naam voor de campagne.' };
+  if (!subject) return { ok: false, error: 'Geef een onderwerpregel.' };
+  if (!body) return { ok: false, error: 'Geef de tekst van de mail.' };
+  return {
+    ok: true,
+    proposal: {
+      type: 'campaign',
+      name: name.slice(0, 200), subject: subject.slice(0, 300),
+      preheader: input.preheader ? String(input.preheader).slice(0, 300) : null,
+      body_text: body.slice(0, 20000),
+      audience_note: input.audience_note ? String(input.audience_note).slice(0, 500) : null,
+    },
+  };
+}
+
 // ── Contracten, campagnes, galerijen, inhoud en boekingen ────────────────────
 
 async function listContracts(orgId: string, input: Record<string, unknown>, limit: number) {

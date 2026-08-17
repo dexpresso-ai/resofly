@@ -36,8 +36,13 @@ export function ContractStatusBadge({ status }: { status: ContractStatus }) {
   return <span style={{ background: meta.bg, color: meta.fg, padding: '3px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>{meta.label}</span>;
 }
 
-export function Contracts({ data, organizationId, canWrite, onChanged }: PageProps) {
+export function Contracts({ data, organizationId, canWrite, onChanged, draft, onDraftConsumed }: PageProps & {
+  /** Door een agent klaargezet concept-contract; opent hier vooringevuld. */
+  draft?: Partial<Contract> | null;
+  onDraftConsumed?: () => void;
+}) {
   const [contracts, setContracts] = useState<Contract[]>([]);
+  const [seed, setSeed] = useState<Partial<Contract> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<Contract | 'new' | null>(null);
@@ -108,6 +113,7 @@ export function Contracts({ data, organizationId, canWrite, onChanged }: PagePro
             </table></div>}
 
       {edit && <ContractForm
+        seed={edit === 'new' ? seed : null}
         data={data} organizationId={organizationId} canWrite={canWrite}
         contract={edit === 'new' ? null : edit}
         officeBusy={officeBusy}
@@ -228,19 +234,24 @@ function ContractTemplatesManager({ organizationId, canWrite, onClose }: { organ
 
 // ───────────────────────────── Opstellen / bewerken ─────────────────────────────
 
-function ContractForm({ data, organizationId, canWrite, contract, officeBusy, onOpenInWord, onClose, onSaved }: {
+function ContractForm({ data, organizationId, canWrite, contract, seed, officeBusy, onOpenInWord, onClose, onSaved }: {
   data: AppData; organizationId: string; canWrite: boolean; contract: Contract | null;
+  /** Vooringevuld concept voor een NIEUW contract (van een agent). */
+  seed?: Partial<Contract> | null;
   officeBusy: boolean;
   onOpenInWord: (contract: Contract) => void | Promise<void>;
   onClose: () => void; onSaved: (id?: string, createdContract?: Contract) => void;
 }) {
-  const [clientId, setClientId] = useState(contract?.client_id ?? '');
-  const [title, setTitle] = useState(contract?.title ?? '');
-  const [bodyHtml, setBodyHtml] = useState(contract?.body ?? '');
+  const [clientId, setClientId] = useState(contract?.client_id ?? seed?.client_id ?? '');
+  const [title, setTitle] = useState(contract?.title ?? seed?.title ?? '');
+  const [bodyHtml, setBodyHtml] = useState(contract?.body ?? seed?.body ?? '');
   const [date, setDate] = useState(contract?.date ?? new Date().toISOString().slice(0, 10));
-  const [validUntil, setValidUntil] = useState(contract?.valid_until ?? '');
+  const [validUntil, setValidUntil] = useState(contract?.valid_until ?? seed?.valid_until ?? '');
   const [quoteId, setQuoteId] = useState(contract?.quote_id ?? '');
-  const [amount, setAmount] = useState(contract?.amount_cents != null ? (contract.amount_cents / 100).toFixed(2) : '');
+  const [amount, setAmount] = useState(
+    contract?.amount_cents != null ? (contract.amount_cents / 100).toFixed(2)
+      : seed?.amount_cents != null ? (seed.amount_cents / 100).toFixed(2) : '',
+  );
   const [currency, setCurrency] = useState(contract?.currency ?? 'EUR');
   const [templates, setTemplates] = useState<ContractTemplate[]>([]);
   const [showPreview, setShowPreview] = useState(false);

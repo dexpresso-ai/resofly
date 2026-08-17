@@ -16,6 +16,7 @@ import {
   convertAcceptedQuoteToInvoice,
   convertTicketToProject,
   createClientWithServerCode,
+  createCampaign,
   createTicketNote,
   setTicketNoteInternal,
   deleteTicketNote,
@@ -103,6 +104,7 @@ import { ContentLibrary } from './features/ContentLibrary';
 import { clientFolderOptions } from './lib/folders';
 import { Invoices, Quotes, type RefundInput } from './features/Finance';
 import { LedgerPage, PurchaseInvoicesPage, SuppliersPage } from './features/Bookkeeping';
+import type { InvoiceFormSeed } from './features/Bookkeeping';
 import { BankPage } from './features/Bank';
 import { AssetsPage } from './features/Assets';
 import { ProfitLossPage } from './features/ProfitLoss';
@@ -138,7 +140,7 @@ import { plainTextToEmailHtml, sendClientEmail } from './services/mailService';
 import { exportFinancePDF } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
 import type {
-  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, Quote, Task, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
+  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, Quote, Supplier, Task, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
 } from './types';
 import { CustomFieldsSection, normalizeCustomFieldValues } from './components/CustomFields';
 import { euro, total, uid, lineGross } from './lib/format';
@@ -176,13 +178,21 @@ type ViewState = {
   /** Net aangemaakte agent; de Gerrie-pagina klapt hem meteen open zodat je ziet
    *  wie er nu voor je aan het werk is. */
   openAgentId: string | null;
+  /**
+   * Door een agent klaargezet concept dat in het formulier van een ándere pagina
+   * moet openen (leverancier, inkoopfactuur, contract, campagne). Eén veld voor
+   * alle vier: het patroon is telkens hetzelfde en vier losse velden zou vier keer
+   * dezelfde plumbing zijn. `key` maakt hem uniek, zodat twee keer hetzelfde
+   * concept ook twee keer opent.
+   */
+  pendingDraft: { key: string; kind: 'supplier' | 'purchase_invoice' | 'contract' | 'campaign'; payload: Record<string, unknown> } | null;
   edit: EditMode;
 };
 type WorkspaceTab = ViewState & { id: string };
 
 /** Nieuw, leeg tabblad op een gegeven pagina (standaard het dashboard). */
 function freshTab(page: Page = 'dashboard'): WorkspaceTab {
-  return { id: uid(), page, projectId: null, clientId: null, statsReportId: null, galleryId: null, settingsNav: null, pendingReport: null, openAgentId: null, edit: null };
+  return { id: uid(), page, projectId: null, clientId: null, statsReportId: null, galleryId: null, settingsNav: null, pendingReport: null, openAgentId: null, pendingDraft: null, edit: null };
 }
 
 /** Terugkomst van de directe bankkoppeling (PSD2, ?code=&state=…): dan opent het
@@ -218,8 +228,56 @@ function rebuildTabs(persisted: PersistedTab[], data: AppData): WorkspaceTab[] {
       page = data.projects.some(x => x.id === projectId) ? 'project' : 'projects';
       if (page === 'projects') projectId = null;
     }
-    return { id: uid(), page, projectId, clientId, statsReportId: p.statsReportId, galleryId, settingsNav: legacyCalendarSettings ? { tab: 'agenda', key: 0 } : null, pendingReport: null, openAgentId: null, edit: null };
+    return { id: uid(), page, projectId, clientId, statsReportId: p.statsReportId, galleryId, settingsNav: legacyCalendarSettings ? { tab: 'agenda', key: 0 } : null, pendingReport: null, openAgentId: null, pendingDraft: null, edit: null };
   });
+}
+
+/**
+ * Vertaalt een concept-contract naar de vorm die `ContractForm` verwacht. De editor
+ * denkt in centen; het voorstel praat in euro's, omdat een model daar minder mee
+ * mis rekent.
+ */
+function contractDraftFrom(payload: Record<string, unknown>): Partial<Contract> {
+  const amount = typeof payload.amount_eur === 'number' ? Math.round(payload.amount_eur * 100) : null;
+  return {
+    client_id: (payload.client_id as string | null) ?? null,
+    title: String(payload.title ?? ''),
+    body: String(payload.body ?? ''),
+    valid_until: (payload.valid_until as string | null) ?? null,
+    amount_cents: amount,
+  };
+}
+
+/**
+ * Vertaalt een concept-inkoopfactuur naar de `InvoiceFormSeed` die het formulier al
+ * kende van de AI-factuurscan. Bedragen gaan naar centen; de grootboekrekening laten
+ * we bewust leeg — die kiest de gebruiker, dat is precies het stuk dat een mens hoort
+ * te doen.
+ */
+function purchaseInvoiceSeedFrom(payload: Record<string, unknown>): InvoiceFormSeed {
+  const rawLines = Array.isArray(payload.lines) ? (payload.lines as Array<Record<string, unknown>>) : [];
+  return {
+    supplierId: (payload.supplierId as string | null) ?? null,
+    newSupplier: null,
+    source: 'ai_scan',
+    form: {
+      supplier_invoice_number: String(payload.supplier_invoice_number ?? ''),
+      date: String(payload.date ?? ''),
+      due_date: String(payload.due_date ?? ''),
+      notes: String(payload.notes ?? ''),
+    },
+    lines: rawLines.map((l) => ({
+      id: uid(),
+      description: String(l.description ?? ''),
+      amount_cents: Math.round(Number(l.amount_eur ?? 0) * 100),
+      vat_code: Number(l.vat_rate) === 9 ? 'LAAG' : Number(l.vat_rate) === 0 ? 'GEEN' : 'HOOG',
+      vat_rate: Number(l.vat_rate ?? 21),
+      account_id: null,
+    })),
+    pendingFile: null,
+    extractionMeta: { source: 'gerrie_agent' },
+    ai: { confidence: 'medium', warnings: ['Door een agent opgesteld — controleer de regels en kies de grootboekrekeningen.'] },
+  };
 }
 
 const editKindToTable: Record<NonNullable<EditMode>['kind'], Table> = {
@@ -399,6 +457,7 @@ function App() {
   const setSettingsNav = (v: React.SetStateAction<{ tab: SettingsTab; key: number } | null>) => patchActiveTab(t => ({ settingsNav: applyUpdater(v, t.settingsNav) }));
   const setPendingReport = (v: React.SetStateAction<{ key: string; name: string; definition: ReportDefinition } | null>) => patchActiveTab(t => ({ pendingReport: applyUpdater(v, t.pendingReport) }));
   const setOpenAgentId = (v: React.SetStateAction<string | null>) => patchActiveTab(t => ({ openAgentId: applyUpdater(v, t.openAgentId) }));
+  const setPendingDraft = (v: ViewState['pendingDraft']) => patchActiveTab(() => ({ pendingDraft: v }));
   const setEdit = (v: React.SetStateAction<EditMode>) => patchActiveTab(t => ({ edit: applyUpdater(v, t.edit) }));
   // Word-modus voor interne Documents: de Collabora-editor leeft op app-niveau, zodat een
   // Word-document vanuit elke pagina (project/klant/Inhoud) geopend kan worden.
@@ -2130,6 +2189,48 @@ function App() {
     },
     // Notities en documenten hebben allebei al een formulier dat `defaults` aanneemt,
     // dus dit is dezelfde weg als "Nieuwe notitie" op de klantenkaart.
+    // De vier concepten gaan langs dezelfde weg: navigeren naar de pagina en het
+    // concept meegeven, waarna dat scherm zijn eigen formulier vooringevuld opent.
+    // Er wordt niets geboekt of verstuurd; de mens drukt op opslaan.
+    onCreateSupplier: (p) => {
+      if (!ensureCanWrite()) return;
+      setPage('suppliers'); setProjectId(null); setClientId(null);
+      setPendingDraft({ key: uid(), kind: 'supplier', payload: {
+        name: p.name, contact_name: p.contact_name, email: p.email, phone: p.phone,
+        iban: p.iban, vat_number: p.vat_number, kvk_number: p.kvk_number, city: p.city,
+      } });
+    },
+    onCreatePurchaseInvoice: (p) => {
+      if (!ensureCanWrite()) return;
+      setPage('purchase-invoices'); setProjectId(null); setClientId(null);
+      setPendingDraft({ key: uid(), kind: 'purchase_invoice', payload: {
+        supplierId: p.supplier_id,
+        supplier_invoice_number: p.supplier_invoice_number,
+        date: p.date, due_date: p.due_date ?? '', notes: p.notes ?? '',
+        lines: p.lines.map((l) => ({ description: l.description, amount_eur: l.amount_eur, vat_rate: l.vat_rate })),
+      } });
+    },
+    onCreateContract: (p) => {
+      if (!ensureCanWrite()) return;
+      setPage('contracts'); setProjectId(null); setClientId(null);
+      setPendingDraft({ key: uid(), kind: 'contract', payload: {
+        client_id: p.client_id, title: p.title, body: p.body,
+        valid_until: p.valid_until, amount_eur: p.amount_eur,
+      } });
+    },
+    // Een campagne moet als échte (concept)rij bestaan voordat de editor hem kan
+    // openen. Aanmaken met status 'draft' verstuurt niets: een concept is inert tot
+    // iemand op verzenden drukt, en de doelgroep is bewust leeg gelaten.
+    onCreateCampaign: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      const created = await createCampaign(activeOrg.id, {
+        name: p.name, subject: p.subject, preheader: p.preheader ?? undefined,
+        body_html: plainTextToEmailHtml(p.body_text), body_text: p.body_text,
+        audience: { mode: 'filter', statuses: [], tags: [], includeContacts: false, manualClientIds: [], customFilters: [] },
+      });
+      setPage('marketing'); setProjectId(null); setClientId(null);
+      setPendingDraft({ key: uid(), kind: 'campaign', payload: { id: created.id } });
+    },
     onCreateContent: (p) => {
       if (!ensureCanWrite()) return;
       setPage(p.kind === 'note' ? 'notes' : 'documents'); setProjectId(null); setClientId(null);
@@ -2297,13 +2398,17 @@ function App() {
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} unreadTicketIds={ticketUnreadIds}/>;
     if (page === 'chat') return <TeamChatPage api={teamChat} />;
     if (page === 'gerrie') return <GerrieCommandCenter organizationId={activeOrg.id} canWrite={canWrite} openAgentId={view.openAgentId} onOpenAgentConsumed={() => setOpenAgentId(null)} {...gerrieActions} />;
-    if (page === 'marketing') return <Marketing data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
+    if (page === 'marketing') return <Marketing data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
+      openCampaignId={view.pendingDraft?.kind === 'campaign' ? String(view.pendingDraft.payload.id ?? '') : null} onCampaignOpened={() => setPendingDraft(null)}/>;
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
-    if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
+    if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
+      draft={view.pendingDraft?.kind === 'contract' ? contractDraftFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
     if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostCreditNote={postCreditNoteLedger} onPostToLedger={postInvoiceToLedger} onBookAllUnbooked={bookAllUnbookedInvoices} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning}/>;
-    if (page === 'suppliers') return <SuppliersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
-    if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
+    if (page === 'suppliers') return <SuppliersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
+      draft={view.pendingDraft?.kind === 'supplier' ? (view.pendingDraft.payload as Partial<Supplier>) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
+    if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
+      draft={view.pendingDraft?.kind === 'purchase_invoice' ? purchaseInvoiceSeedFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
     if (page === 'ledger') return <LedgerPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'bank') return <BankPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'assets') return <AssetsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;

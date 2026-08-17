@@ -44,11 +44,14 @@ function fmtDate(value: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('nl-NL', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-export function Marketing({ data, organizationId, canWrite, onChanged }: {
+export function Marketing({ data, organizationId, canWrite, onChanged, openCampaignId, onCampaignOpened }: {
   data: AppData;
   organizationId: UUID;
   canWrite: boolean;
   onChanged: () => void;
+  /** Net als concept aangemaakte campagne; die klapt hier meteen open in de editor. */
+  openCampaignId?: UUID | null;
+  onCampaignOpened?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>('campaigns');
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([]);
@@ -58,6 +61,15 @@ export function Marketing({ data, organizationId, canWrite, onChanged }: {
   const [flowStats, setFlowStats] = useState<Record<UUID, EmailFlowStats>>({});
   const [flowStepStats, setFlowStepStats] = useState<Record<UUID, EmailFlowStepStats[]>>({});
   const [view, setView] = useState<View>({ mode: 'list' });
+
+  // Een net als concept aangemaakte campagne gaat meteen open in de editor. De
+  // campagne bestaat op dat moment al als rij met status 'draft' — CampaignEditor
+  // werkt op een echte campagne, en een concept is inert tot iemand verstuurt.
+  useEffect(() => {
+    if (!openCampaignId) return;
+    setView({ mode: 'edit', id: openCampaignId });
+    onCampaignOpened?.();
+  }, [openCampaignId, onCampaignOpened]);
   const [flowView, setFlowView] = useState<View>({ mode: 'list' });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

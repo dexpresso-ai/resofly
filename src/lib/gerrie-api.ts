@@ -284,6 +284,51 @@ export interface GerrieTaskAssignProposal {
   /** De VOLLEDIGE nieuwe set; leeg = niemand meer toegewezen. */
   assignees: Array<{ user_id: UUID; name: string }>;
 }
+export interface GerrieSupplierProposal {
+  type: 'supplier';
+  name: string;
+  contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  iban: string | null;
+  vat_number: string | null;
+  kvk_number: string | null;
+  city: string | null;
+}
+export interface GerriePurchaseInvoiceLine { description: string; amount_eur: number; vat_rate: number }
+export interface GerriePurchaseInvoiceProposal {
+  type: 'purchase_invoice';
+  supplier_id: UUID | null;
+  supplier_name: string | null;
+  supplier_invoice_number: string;
+  date: string;
+  due_date: string | null;
+  notes: string | null;
+  lines: GerriePurchaseInvoiceLine[];
+  total_eur: number;
+}
+export interface GerrieContractProposal {
+  type: 'contract';
+  client_id: UUID;
+  client_name: string;
+  title: string;
+  body: string;
+  amount_eur: number | null;
+  valid_until: string | null;
+}
+/**
+ * Een campagne blijft ALTIJD een concept: er is geen veld waarmee hij verstuurd of
+ * ingepland kan worden, en de doelgroep zit er bewust niet in. Bij een campagne gaat
+ * er in één klik post naar een heel segment dat je niet regel voor regel hebt gezien.
+ */
+export interface GerrieCampaignProposal {
+  type: 'campaign';
+  name: string;
+  subject: string;
+  preheader: string | null;
+  body_text: string;
+  audience_note: string | null;
+}
 export interface GerrieContentProposal {
   type: 'content';
   kind: 'note' | 'document';
@@ -324,7 +369,7 @@ export interface GerrieTicketNoteProposal {
   body: string;
   is_internal: boolean;
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieEditCalendarEventProposal | GerrieCancelCalendarEventProposal | GerrieClientContactProposal | GerrieEditClientContactProposal | GerrieProjectTeamProposal | GerrieTaskAssignProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieEditTimeEntryProposal | GerrieTicketProposal | GerrieEditTicketProposal | GerrieTicketNoteProposal | GerrieContentProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
+export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieEditCalendarEventProposal | GerrieCancelCalendarEventProposal | GerrieClientContactProposal | GerrieEditClientContactProposal | GerrieProjectTeamProposal | GerrieTaskAssignProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieEditTimeEntryProposal | GerrieTicketProposal | GerrieEditTicketProposal | GerrieTicketNoteProposal | GerrieSupplierProposal | GerriePurchaseInvoiceProposal | GerrieContractProposal | GerrieCampaignProposal | GerrieContentProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
 
 /**
  * De uitvoer-handlers voor een door Gerrie voorgestelde actie. Draft-types openen een
@@ -371,6 +416,14 @@ export interface GerrieActionHandlers {
   onEditTicket?: (proposal: GerrieEditTicketProposal) => void;
   /** Plaatst een reactie op een ticket (voert uit). Bij is_internal=false leest de klant hem. */
   onAddTicketNote?: (proposal: GerrieTicketNoteProposal) => Promise<void>;
+  /** Opent het leveranciersformulier vooringevuld met een concept. */
+  onCreateSupplier?: (proposal: GerrieSupplierProposal) => void;
+  /** Opent het inkoopfactuurformulier vooringevuld; boekt niets. */
+  onCreatePurchaseInvoice?: (proposal: GerriePurchaseInvoiceProposal) => void;
+  /** Opent de contracteditor met een concept-contract. */
+  onCreateContract?: (proposal: GerrieContractProposal) => void;
+  /** Maakt een CONCEPT-campagne aan en opent hem in Marketing. Verstuurt niets. */
+  onCreateCampaign?: (proposal: GerrieCampaignProposal) => Promise<void>;
   /** Opent het notitie- of documentformulier vooringevuld. */
   onCreateContent?: (proposal: GerrieContentProposal) => void;
   onCreateReport?: (proposal: GerrieReportProposal) => void;

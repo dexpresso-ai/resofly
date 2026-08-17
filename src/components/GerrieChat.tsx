@@ -101,7 +101,7 @@ const SpeechRecognitionImpl: SpeechRecognitionCtor | undefined =
       ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionCtor }).webkitSpeechRecognition;
 const speechSupported = Boolean(SpeechRecognitionImpl);
 
-export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onCreateReport, onSendClientEmail, onCreateAgent, onCreateTicket, onEditTicket, onAddTicketNote, onEditTimeEntry, onEditCalendarEvent, onCancelCalendarEvent, onCreateClientContact, onEditClientContact, onSetProjectTeam, onAssignTask, onCreateContent }: { organizationId: UUID } & GerrieActionHandlers) {
+export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onCreateReport, onSendClientEmail, onCreateAgent, onCreateTicket, onEditTicket, onAddTicketNote, onEditTimeEntry, onEditCalendarEvent, onCancelCalendarEvent, onCreateClientContact, onEditClientContact, onSetProjectTeam, onAssignTask, onCreateContent, onCreateSupplier, onCreatePurchaseInvoice, onCreateContract, onCreateCampaign }: { organizationId: UUID } & GerrieActionHandlers) {
   const [open, setOpen] = useState(false);
   const [firstName, setFirstName] = useState<string | null>(null);
   const firstNameRef = useRef<string | null>(null);
@@ -362,6 +362,19 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
         sub={p.assignees.length ? p.assignees.map((a) => a.name).join(', ') : 'niemand meer toegewezen'}
         confirmLabel="Toewijzen" pendingLabel="Toewijzen…" doneLabel={`"${p.task_title}" toegewezen`}
         onConfirm={() => runConfirmed(auditId, () => onAssignTask ? onAssignTask(p) : Promise.reject(new Error('Toewijzen is hier niet beschikbaar.')))} />;
+    }
+    if (p.type === 'supplier') return <ProposalCard title="Leverancier openen & controleren" sub={[p.name, p.city, p.email].filter(Boolean).join(' · ')} onClick={() => onCreateSupplier?.(p)} />;
+    if (p.type === 'purchase_invoice') return <ProposalCard icon={<DocIcon />} title="Concept-inkoopfactuur openen & controleren" sub={[p.supplier_name, p.supplier_invoice_number, euro(p.total_eur)].filter(Boolean).join(' · ')} onClick={() => onCreatePurchaseInvoice?.(p)} />;
+    if (p.type === 'contract') return <ProposalCard icon={<DocIcon />} title={`Concept-contract openen & controleren: ${p.title}`} sub={[p.client_name, p.amount_eur != null ? euro(p.amount_eur) : ''].filter(Boolean).join(' · ')} onClick={() => onCreateContract?.(p)} />;
+    if (p.type === 'campaign') {
+      return <ConfirmActionCard
+        icon={<MailIcon />}
+        title={`Concept-campagne "${p.name}" aanmaken?`}
+        sub={`${p.subject} — hij blijft een concept; jij kiest de doelgroep en verstuurt zelf`}
+        confirmLabel="Concept aanmaken" pendingLabel="Aanmaken…"
+        doneLabel={`Concept-campagne "${p.name}" staat klaar in Marketing`}
+        onConfirm={() => runConfirmed(auditId, () => onCreateCampaign ? onCreateCampaign(p) : Promise.reject(new Error('Campagnes zijn hier niet beschikbaar.')))}
+      />;
     }
     if (p.type === 'content') return <ProposalCard title={`${p.kind === 'note' ? 'Notitie' : 'Document'} openen & controleren`} sub={[p.title, p.client_name, p.project_name].filter(Boolean).join(' · ')} onClick={() => onCreateContent?.(p)} />;
     if (p.type === 'ticket') return <ProposalCard title="Ticket openen & controleren" sub={[p.title, p.client_name].filter(Boolean).join(' · ')} onClick={() => onCreateTicket?.(p)} />;

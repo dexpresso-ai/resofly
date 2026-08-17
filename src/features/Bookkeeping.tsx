@@ -82,8 +82,22 @@ const emptySupplier = () => ({
   vat_number: '', kvk_number: '', iban: '', default_expense_account_id: '', default_vat_code: '', notes: '', status: 'active',
 });
 
-export function SuppliersPage({ data, organizationId, canWrite, onChanged }: PageProps) {
+export function SuppliersPage({ data, organizationId, canWrite, onChanged, draft, onDraftConsumed }: PageProps & {
+  /** Door een agent klaargezette leverancier; opent hier vooringevuld. */
+  draft?: Partial<Supplier> | null;
+  onDraftConsumed?: () => void;
+}) {
   const [edit, setEdit] = useState<Supplier | 'new' | null>(null);
+  const [seed, setSeed] = useState<Partial<Supplier> | null>(null);
+
+  // Komt er een concept binnen, dan gaat het formulier meteen open. Daarna melden we
+  // hem als verbruikt, zodat terugkeren naar deze pagina hem niet opnieuw opent.
+  useEffect(() => {
+    if (!draft) return;
+    setSeed(draft);
+    setEdit('new');
+    onDraftConsumed?.();
+  }, [draft, onDraftConsumed]);
   const [importing, setImporting] = useState(false);
   const expenseAccounts = data.ledgerAccounts.filter(a => a.type === 'expense' || a.type === 'asset');
 
@@ -120,16 +134,18 @@ export function SuppliersPage({ data, organizationId, canWrite, onChanged }: Pag
               </tr>
             ))}</tbody>
           </table></div>}
-      {edit && <SupplierForm data={data} organizationId={organizationId} canWrite={canWrite} supplier={edit === 'new' ? null : edit} expenseAccounts={expenseAccounts} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); onChanged(); }} />}
+      {edit && <SupplierForm data={data} organizationId={organizationId} canWrite={canWrite} supplier={edit === 'new' ? null : edit} seed={edit === 'new' ? seed : null} expenseAccounts={expenseAccounts} onClose={() => { setEdit(null); setSeed(null); }} onSaved={() => { setEdit(null); setSeed(null); onChanged(); }} />}
     </div>
   );
 }
 
-function SupplierForm({ data, organizationId, canWrite, supplier, expenseAccounts, onClose, onSaved }: {
+function SupplierForm({ data, organizationId, canWrite, supplier, seed, expenseAccounts, onClose, onSaved }: {
   data: AppData; organizationId: string; canWrite: boolean; supplier: Supplier | null;
+  /** Vooringevuld concept voor een NIEUWE leverancier (van een agent). */
+  seed?: Partial<Supplier> | null;
   expenseAccounts: LedgerAccount[]; onClose: () => void; onSaved: () => void;
 }) {
-  const [form, setForm] = useState<Record<string, any>>(() => supplier ? { ...supplier } : emptySupplier());
+  const [form, setForm] = useState<Record<string, any>>(() => supplier ? { ...supplier } : { ...emptySupplier(), ...(seed ?? {}) });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = (k: string, v: unknown) => setForm(f => ({ ...f, [k]: v }));
@@ -241,9 +257,21 @@ const purchaseStatusLabel: Record<PurchaseInvoice['status'], string> = {
   draft: 'Concept', booked: 'Geboekt', paid: 'Betaald', cancelled: 'Geannuleerd',
 };
 
-export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged }: PageProps) {
+export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged, draft, onDraftConsumed }: PageProps & {
+  /** Door een agent klaargezette inkoopfactuur; gebruikt hetzelfde seed-pad als de
+   *  AI-factuurscan, dus het formulier hoefde er niets voor te leren. */
+  draft?: InvoiceFormSeed | null;
+  onDraftConsumed?: () => void;
+}) {
   const [edit, setEdit] = useState<PurchaseInvoice | 'new' | null>(null);
   const [seed, setSeed] = useState<InvoiceFormSeed | null>(null);
+
+  useEffect(() => {
+    if (!draft) return;
+    setSeed(draft);
+    setEdit('new');
+    onDraftConsumed?.();
+  }, [draft, onDraftConsumed]);
   const [scan, setScan] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -312,7 +340,7 @@ interface NewSupplierPayload {
 }
 
 /** Vooringevuld voorstel dat de scan (AI of UBL) doorgeeft aan het inkoopfactuurformulier. */
-interface InvoiceFormSeed {
+export interface InvoiceFormSeed {
   supplierId: UUID | null;
   newSupplier: NewSupplierPayload | null;
   /** Herkomst van het concept: 'ai_scan' (Claude) of 'import' (UBL-e-factuur). */
