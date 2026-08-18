@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
-import { AlertTriangle, Bell, BookOpen, CreditCard, Download, Eye, FileText, Mail, Pause, Play, RotateCcw, Search, ShieldCheck, SlidersHorizontal, Send, XCircle } from 'lucide-react';
+import { AlertTriangle, Bell, BookOpen, CreditCard, Download, Eye, FileText, Mail, Pause, Play, RotateCcw, ShieldCheck, Send, XCircle } from 'lucide-react';
 import type { AppData, CreditNote, DunningNotice, FinanceLine, FinanceStatus, Invoice, InvoiceChargeback, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceRefund, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
 import { Modal } from '../components/Modal';
 import { FinanceDocPreview } from '../components/FinanceDocPreview';
 import { Button, Select } from '../components/Ui';
+import { SearchFilterPanel } from '../components/SearchFilterPanel';
+import type { FilterField } from '../components/SearchFilterPanel';
 import { dateNL, euro, total, lineGross } from '../lib/format';
 import { exportFinancePDF } from '../lib/pdf';
 
@@ -164,6 +166,36 @@ function FinanceList<T extends Quote | Invoice>({
 
 type FinanceKind = 'quote' | 'invoice';
 
+/* ── Snelfilters op offertes en facturen ──────────────────────────────────
+ * Bewust géén herhaling van de statuslijst die er als dropdown al staat: dit
+ * zijn de vragen die je stelt en die géén enkele status beantwoordt — "moet ik
+ * hier nog achteraan?", "wat loopt er dit jaar?", "wat hangt nergens aan?" */
+type FinanceQuickKey = 'open' | 'overdue' | 'thisYear' | 'noProject';
+
+/** Nog niet afgerond: de deur uit, maar nog geen beslissing of betaling.
+ *  Concepten tellen niet mee — die zijn nog van jou. */
+function isFinanceOutstanding(doc: Quote | Invoice): boolean {
+  return !['paid', 'cancelled', 'draft', 'void', 'written_off', 'refunded'].includes(doc.status);
+}
+
+/** Over de datum = nog openstaand én de uiterste datum is voorbij. Op de status
+ *  alleen kun je niet afgaan: die springt pas op 'overdue'/'expired' als er iets
+ *  langsgekomen is dat hem bijwerkt. Voor een factuur is dat de vervaldatum,
+ *  voor een offerte de geldigheidsdatum. */
+function isFinanceOverdue(doc: Quote | Invoice): boolean {
+  if (!isFinanceOutstanding(doc)) return false;
+  if (doc.status === 'overdue' || doc.status === 'expired') return true;
+  const deadline = 'due_date' in doc ? doc.due_date : (doc as Quote).valid_until;
+  return Boolean(deadline) && (deadline as string) < new Date().toISOString().slice(0, 10);
+}
+
+const FINANCE_QUICK_FILTERS: Array<{ key: FinanceQuickKey; label: string; title: string; match: (doc: Quote | Invoice) => boolean }> = [
+  { key: 'open', label: 'Openstaand', title: 'De deur uit, maar nog geen beslissing of betaling', match: isFinanceOutstanding },
+  { key: 'overdue', label: 'Over de datum', title: 'Openstaand terwijl de uiterste datum al voorbij is', match: isFinanceOverdue },
+  { key: 'thisYear', label: 'Dit jaar', title: 'Alleen stukken met een datum in het lopende kalenderjaar', match: doc => (doc.date ?? '').slice(0, 4) === String(new Date().getFullYear()) },
+  { key: 'noProject', label: 'Zonder project', title: 'Nog aan geen enkel project gekoppeld', match: doc => !doc.project_id },
+];
+
 type FinanceSearchFilters = {
   query: string;
   clientId: string;
@@ -173,6 +205,7 @@ type FinanceSearchFilters = {
   dateTo: string;
   amountMin: string;
   amountMax: string;
+  quick: FinanceQuickKey[];
 };
 
 const emptyFinanceSearchFilters: FinanceSearchFilters = {
@@ -184,6 +217,7 @@ const emptyFinanceSearchFilters: FinanceSearchFilters = {
   dateTo: '',
   amountMin: '',
   amountMax: '',
+  quick: [],
 };
 
 function createDefaultFinanceSearchFilters(): FinanceSearchFilters {
@@ -208,7 +242,6 @@ function FinanceSearchPanel<T extends Quote | Invoice>({
   onChange: (filters: FinanceSearchFilters) => void;
 }) {
   const isQuote = kind === 'quote';
-  const activeFilterCount = countActiveFinanceFilters(filters);
   const clientOptions = useMemo(() => {
     const clientIds = new Set(docs.map(doc => doc.client_id).filter(Boolean));
     return data.clients
@@ -222,45 +255,48 @@ function FinanceSearchPanel<T extends Quote | Invoice>({
       .sort((a, b) => a.name.localeCompare(b.name, 'nl-NL'));
   }, [data.projects, docs]);
   const statusOptions = useMemo(() => buildFinanceStatusOptions(kind, docs), [docs, kind]);
+  // De tellers staan op de volledige lijst: een chip zegt "hoeveel zijn er zo?",
+  // niet "hoeveel blijven er over als je hem aanzet".
+  const chips = useMemo(
+    () => FINANCE_QUICK_FILTERS.map(def => ({
+      key: def.key,
+      label: def.label,
+      title: def.title,
+      count: docs.filter(doc => def.match(doc)).length,
+    })),
+    [docs],
+  );
 
   const updateFilters = (patch: Partial<FinanceSearchFilters>) => onChange({ ...filters, ...patch });
-  const resetFilters = () => onChange(createDefaultFinanceSearchFilters());
-  const label = isQuote ? 'offertes' : 'facturen';
+  const fields: FilterField[] = [
+    { key: 'clientId', label: 'Klant', value: filters.clientId, searchable: true, searchPlaceholder: 'Zoek een klant…', options: [{ value: '', label: 'Alle klanten' }, ...clientOptions.map(client => ({ value: client.id, label: client.name }))] },
+    { key: 'projectId', label: 'Project', value: filters.projectId, searchable: true, searchPlaceholder: 'Zoek een project…', options: [{ value: '', label: 'Alle projecten' }, ...projectOptions.map(project => ({ value: project.id, label: project.name }))] },
+    { key: 'status', label: 'Status', value: filters.status, options: [{ value: '', label: 'Alle statussen' }, ...statusOptions] },
+    { key: 'dateFrom', label: isQuote ? 'Offertedatum vanaf' : 'Factuurdatum vanaf', value: filters.dateFrom, type: 'date' },
+    { key: 'dateTo', label: isQuote ? 'Offertedatum t/m' : 'Factuurdatum t/m', value: filters.dateTo, type: 'date' },
+    { key: 'amountMin', label: 'Bedrag vanaf', value: filters.amountMin, inputMode: 'decimal', placeholder: '€ min.' },
+    { key: 'amountMax', label: 'Bedrag t/m', value: filters.amountMax, inputMode: 'decimal', placeholder: '€ max.' },
+  ];
 
-  return <section className="finance-search-card" aria-label={`${isQuote ? 'Offertes' : 'Facturen'} zoeken en filteren`}>
-    <div className="finance-search-main">
-      <label className="finance-search-query">
-        <span><Search size={15}/> Snel zoeken</span>
-        <input
-          className="form-input"
-          value={filters.query}
-          onChange={event => updateFilters({ query: event.target.value })}
-          placeholder={isQuote ? 'Zoek op offertenummer, klant, project, omschrijving, status of bedrag…' : 'Zoek op factuurnummer, klant, project, offerte, omschrijving, status of bedrag…'}
-          autoComplete="off"
-        />
-      </label>
-      <div className="finance-search-result-card">
-        <SlidersHorizontal size={16}/>
-        <div><strong>{visibleCount} van {docs.length}</strong><span>{label} zichtbaar</span></div>
-        <small>{euro(visibleTotalAmount)} totaal</small>
-      </div>
-    </div>
-
-    <div className="finance-search-grid">
-      <label className="field finance-search-field"><span>Klant</span><Select className="form-select" value={filters.clientId} onChange={event => updateFilters({ clientId: event.target.value })}><option value="">Alle klanten</option>{clientOptions.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</Select></label>
-      <label className="field finance-search-field"><span>Project</span><Select className="form-select" value={filters.projectId} onChange={event => updateFilters({ projectId: event.target.value })}><option value="">Alle projecten</option>{projectOptions.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</Select></label>
-      <label className="field finance-search-field"><span>Status</span><Select className="form-select" value={filters.status} onChange={event => updateFilters({ status: event.target.value })}><option value="">Alle statussen</option>{statusOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</Select></label>
-      <label className="field finance-search-field"><span>{isQuote ? 'Offertedatum vanaf' : 'Factuurdatum vanaf'}</span><input className="form-input" type="date" value={filters.dateFrom} onChange={event => updateFilters({ dateFrom: event.target.value })}/></label>
-      <label className="field finance-search-field"><span>{isQuote ? 'Offertedatum t/m' : 'Factuurdatum t/m'}</span><input className="form-input" type="date" value={filters.dateTo} onChange={event => updateFilters({ dateTo: event.target.value })}/></label>
-      <label className="field finance-search-field"><span>Bedrag vanaf</span><input className="form-input" inputMode="decimal" value={filters.amountMin} onChange={event => updateFilters({ amountMin: event.target.value })} placeholder="€ min."/></label>
-      <label className="field finance-search-field"><span>Bedrag t/m</span><input className="form-input" inputMode="decimal" value={filters.amountMax} onChange={event => updateFilters({ amountMax: event.target.value })} placeholder="€ max."/></label>
-    </div>
-
-    {activeFilterCount > 0 && <div className="finance-search-active-row">
-      <span>{activeFilterCount} filter{activeFilterCount === 1 ? '' : 's'} actief</span>
-      <button type="button" onClick={resetFilters}><RotateCcw size={14}/> Filters wissen</button>
-    </div>}
-  </section>;
+  return <SearchFilterPanel
+    ariaLabel={`${isQuote ? 'Offertes' : 'Facturen'} zoeken en filteren`}
+    query={filters.query}
+    queryPlaceholder={isQuote ? 'Zoek op offertenummer, klant, project, omschrijving, status of bedrag…' : 'Zoek op factuurnummer, klant, project, offerte, omschrijving, status of bedrag…'}
+    onQueryChange={query => updateFilters({ query })}
+    visibleCount={visibleCount}
+    totalCount={docs.length}
+    noun={isQuote ? 'offertes' : 'facturen'}
+    summary={`${euro(visibleTotalAmount)} totaal`}
+    chips={chips}
+    activeChips={filters.quick}
+    onChipToggle={key => {
+      const quickKey = key as FinanceQuickKey;
+      updateFilters({ quick: filters.quick.includes(quickKey) ? filters.quick.filter(k => k !== quickKey) : [...filters.quick, quickKey] });
+    }}
+    fields={fields}
+    onFieldChange={(key, value) => updateFilters({ [key]: value } as Partial<FinanceSearchFilters>)}
+    onReset={() => onChange(createDefaultFinanceSearchFilters())}
+  />;
 }
 
 function buildFinanceStatusOptions<T extends Quote | Invoice>(kind: FinanceKind, docs: T[]): Array<{ value: string; label: string }> {
@@ -279,7 +315,10 @@ function filterFinanceDocs<T extends Quote | Invoice>(kind: FinanceKind, docs: T
   const amountMin = parseAmountFilter(filters.amountMin);
   const amountMax = parseAmountFilter(filters.amountMax);
 
+  const quick = FINANCE_QUICK_FILTERS.filter(def => filters.quick.includes(def.key));
+
   return docs.filter(doc => {
+    for (const def of quick) if (!def.match(doc)) return false;
     if (filters.clientId && doc.client_id !== filters.clientId) return false;
     if (filters.projectId && doc.project_id !== filters.projectId) return false;
     if (filters.status && getFinanceStatusKey(kind, doc) !== filters.status) return false;
@@ -351,10 +390,6 @@ function getFinanceStatusKey<T extends Quote | Invoice>(kind: FinanceKind, doc: 
 function getFinanceStatusLabel<T extends Quote | Invoice>(kind: FinanceKind, doc: T): string {
   if (kind === 'quote') return quoteStatusLabel(doc as Quote);
   return statusLabel((doc as Invoice).status);
-}
-
-function countActiveFinanceFilters(filters: FinanceSearchFilters): number {
-  return Object.values(filters).filter(value => value.trim() !== '').length;
 }
 
 function parseAmountFilter(value: string): number | null {

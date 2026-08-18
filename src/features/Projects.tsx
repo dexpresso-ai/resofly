@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AppData, Contract, InternalDocument, Invoice, Note, OrganizationMember, Project, ProjectMember, Quote, Task, TaskStatus, TimeEntry, UUID } from '../types';
 import { Button, Select } from '../components/Ui';
+import { SearchFilterPanel } from '../components/SearchFilterPanel';
+import type { FilterField } from '../components/SearchFilterPanel';
 import { AssigneeAvatars } from '../components/AssigneeAvatars';
 import { dateNL, euro, formatMinutes, priorityLabel, total } from '../lib/format';
 import { memberColor, memberInitials, memberName } from '../lib/members';
@@ -179,6 +181,37 @@ export function ProjectsPlanningPage({
   </div>;
 }
 
+/* ── Snelfilters op de projectlijst ───────────────────────────────────────
+ * Wat je op een projectlijst wilt weten is zelden "welke status" maar "waar
+ * moet ik nu heen": loopt er iets uit de hand, is er iets af, hangt er iets
+ * los. De teller op de chip rekent over álle projecten, ook gearchiveerde. */
+type ProjectQuickKey = 'overdue' | 'noClient' | 'done' | 'running';
+
+function projectTaskCounts(project: Project, data: AppData) {
+  const tasks = data.tasks.filter(task => task.project_id === project.id);
+  const done = tasks.filter(task => task.status === 'done').length;
+  const overdue = tasks.filter(task => task.status !== 'done' && task.end_date && new Date(`${task.end_date}T23:59:59`) < new Date()).length;
+  return { total: tasks.length, done, overdue };
+}
+
+const PROJECT_QUICK_FILTERS: Array<{ key: ProjectQuickKey; label: string; title: string; match: (project: Project, data: AppData) => boolean }> = [
+  { key: 'overdue', label: 'Achterstallige taken', title: 'Projecten met minstens één taak waarvan de einddatum voorbij is', match: (project, data) => projectTaskCounts(project, data).overdue > 0 },
+  { key: 'running', label: 'Loopt nu', title: 'Projecten waarvan de periode vandaag omvat', match: project => {
+    const today = new Date().toISOString().slice(0, 10);
+    if (project.start_date && project.start_date > today) return false;
+    if (project.end_date && project.end_date < today) return false;
+    return Boolean(project.start_date || project.end_date);
+  } },
+  { key: 'done', label: 'Alle taken af', title: 'Projecten waarin elke taak op afgerond staat', match: (project, data) => {
+    const counts = projectTaskCounts(project, data);
+    return counts.total > 0 && counts.done === counts.total;
+  } },
+  { key: 'noClient', label: 'Zonder klant', title: 'Projecten die nog aan geen enkele klant hangen', match: project => !project.client_id },
+];
+
+type ProjectFilters = { query: string; clientId: string; quick: ProjectQuickKey[] };
+const emptyProjectFilters: ProjectFilters = { query: '', clientId: '', quick: [] };
+
 export function ProjectsListPage({
   data,
   canWrite,
@@ -193,8 +226,7 @@ export function ProjectsListPage({
   onEditProject: (project: Project) => void;
 }) {
   const [viewMode, setViewMode] = useState<ProjectViewMode>(readProjectViewMode);
-  const [search, setSearch] = useState('');
-  const [clientFilter, setClientFilter] = useState<string>('all');
+  const [filters, setFilters] = useState<ProjectFilters>(emptyProjectFilters);
   const [sortKey, setSortKey] = useState<ProjectSortKey>(readProjectSortKey);
 
   const clientNameById = useMemo(() => {
@@ -212,16 +244,18 @@ export function ProjectsListPage({
   }, [data.clients, data.projects]);
 
   const matchesFilters = useMemo(() => {
-    const needle = search.trim().toLowerCase();
+    const needle = filters.query.trim().toLowerCase();
+    const quick = PROJECT_QUICK_FILTERS.filter(def => filters.quick.includes(def.key));
     return (project: Project) => {
-      if (clientFilter === 'unassigned' && project.client_id) return false;
-      if (clientFilter !== 'all' && clientFilter !== 'unassigned' && project.client_id !== clientFilter) return false;
+      if (filters.clientId === 'unassigned' && project.client_id) return false;
+      if (filters.clientId && filters.clientId !== 'unassigned' && project.client_id !== filters.clientId) return false;
+      for (const def of quick) if (!def.match(project, data)) return false;
       if (!needle) return true;
       const clientName = project.client_id ? (clientNameById.get(project.client_id) ?? '') : '';
       return [project.name, project.description ?? '', clientName]
         .some(field => field.toLowerCase().includes(needle));
     };
-  }, [search, clientFilter, clientNameById]);
+  }, [filters.query, filters.clientId, filters.quick, clientNameById, data]);
 
   const activeProjects = useMemo(
     () => sortProjects(data.projects.filter(project => !project.archived && matchesFilters(project)), data, sortKey),
@@ -234,7 +268,7 @@ export function ProjectsListPage({
 
   const totalActive = useMemo(() => data.projects.filter(project => !project.archived).length, [data.projects]);
   const totalArchived = useMemo(() => data.projects.filter(project => project.archived).length, [data.projects]);
-  const isFiltering = search.trim().length > 0 || clientFilter !== 'all';
+  const isFiltering = filters.query.trim().length > 0 || filters.clientId !== '' || filters.quick.length > 0;
   const visibleCount = activeProjects.length + archivedProjects.length;
 
   const changeViewMode = (nextViewMode: ProjectViewMode) => {
@@ -255,10 +289,34 @@ export function ProjectsListPage({
     }
   };
 
-  const resetFilters = () => {
-    setSearch('');
-    setClientFilter('all');
-  };
+  const resetFilters = () => setFilters(emptyProjectFilters);
+
+  // De tellers rekenen over álle projecten, ook gearchiveerde: een chip zegt
+  // "hoeveel projecten zijn er zo?", niet "hoeveel blijven er over".
+  const projectChips = useMemo(
+    () => PROJECT_QUICK_FILTERS.map(def => ({
+      key: def.key,
+      label: def.label,
+      title: def.title,
+      count: data.projects.filter(project => def.match(project, data)).length,
+    })),
+    [data],
+  );
+
+  const projectFields: FilterField[] = [
+    {
+      key: 'clientId',
+      label: 'Klant',
+      value: filters.clientId,
+      searchable: true,
+      searchPlaceholder: 'Zoek een klant…',
+      options: [
+        { value: '', label: 'Alle klanten' },
+        { value: 'unassigned', label: 'Zonder klant' },
+        ...filterClients.map(client => ({ value: client.id, label: client.name })),
+      ],
+    },
+  ];
 
   const renderSection = (
     projects: Project[],
@@ -306,43 +364,38 @@ export function ProjectsListPage({
           <button type="button" className={viewMode === 'cards' ? 'active' : ''} onClick={() => changeViewMode('cards')} aria-pressed={viewMode === 'cards'}>Kaarten</button>
           <button type="button" className={viewMode === 'table' ? 'active' : ''} onClick={() => changeViewMode('table')} aria-pressed={viewMode === 'table'}>Tabel</button>
         </div>
+        <Select
+          className="projects-filter-select"
+          inline
+          value={sortKey}
+          onChange={event => changeSortKey(event.target.value as ProjectSortKey)}
+          aria-label="Sorteren"
+        >
+          {projectSortOptions.map(option => <option key={option.key} value={option.key}>Sorteer: {option.label}</option>)}
+        </Select>
         <Button variant="primary" onClick={onNewProject} disabled={!canWrite}>+ Nieuw project</Button>
       </div>
     </div>
 
-    <div className="projects-filterbar">
-      <div className="projects-search">
-        <span className="projects-search-icon" aria-hidden="true">⌕</span>
-        <input
-          type="search"
-          value={search}
-          onChange={event => setSearch(event.target.value)}
-          placeholder="Zoek op project, omschrijving of klant"
-          aria-label="Projecten zoeken"
-        />
-      </div>
-      <Select
-        className="projects-filter-select"
-        inline
-        value={clientFilter}
-        onChange={event => setClientFilter(event.target.value)}
-        aria-label="Filter op klant"
-      >
-        <option value="all">Alle klanten</option>
-        <option value="unassigned">Zonder klant</option>
-        {filterClients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
-      </Select>
-      <Select
-        className="projects-filter-select"
-        inline
-        value={sortKey}
-        onChange={event => changeSortKey(event.target.value as ProjectSortKey)}
-        aria-label="Sorteren"
-      >
-        {projectSortOptions.map(option => <option key={option.key} value={option.key}>Sorteer: {option.label}</option>)}
-      </Select>
-      {isFiltering && <button type="button" className="projects-filter-reset" onClick={resetFilters}>Wis filters</button>}
-    </div>
+    <SearchFilterPanel
+      className="is-wide"
+      ariaLabel="Projecten zoeken en filteren"
+      query={filters.query}
+      queryPlaceholder="Zoek op project, omschrijving of klant…"
+      onQueryChange={query => setFilters(prev => ({ ...prev, query }))}
+      visibleCount={visibleCount}
+      totalCount={totalActive + totalArchived}
+      noun="projecten"
+      chips={projectChips}
+      activeChips={filters.quick}
+      onChipToggle={key => setFilters(prev => {
+        const quickKey = key as ProjectQuickKey;
+        return { ...prev, quick: prev.quick.includes(quickKey) ? prev.quick.filter(k => k !== quickKey) : [...prev.quick, quickKey] };
+      })}
+      fields={projectFields}
+      onFieldChange={(key, value) => setFilters(prev => ({ ...prev, [key]: value }))}
+      onReset={resetFilters}
+    />
 
     {isFiltering && visibleCount === 0 ? <div className="empty project-empty">
       <div className="e-big">Geen projecten gevonden</div>

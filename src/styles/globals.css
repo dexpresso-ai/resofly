@@ -1759,17 +1759,8 @@ body::before{
 .project-view-toggle button{appearance:none;border:0;background:transparent;color:var(--muted2);font:inherit;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;border-radius:999px;padding:7px 11px;cursor:pointer;transition:all .15s ease}
 .project-view-toggle button:hover{color:var(--text);background:rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)))}
 .project-view-toggle button.active{background:var(--accent);color:var(--on-accent);box-shadow:0 6px 18px rgba(var(--accent-rgb),.16)}
-.projects-filterbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px}
-.projects-search{position:relative;flex:1;min-width:220px}
-.projects-search-icon{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:15px;pointer-events:none}
-.projects-search input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:10px 12px 10px 34px;color:var(--text);font-family:inherit;font-size:13px;outline:none;transition:border-color .15s ease}
-.projects-search input::placeholder{color:var(--muted)}
-.projects-search input:focus{border-color:var(--accent)}
-.projects-search input::-webkit-search-cancel-button{filter:invert(.6)}
 .projects-filter-select{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text);font-family:inherit;font-size:13px;outline:none;cursor:pointer;transition:border-color .15s ease}
 .projects-filter-select:focus{border-color:var(--accent)}
-.projects-filter-reset{appearance:none;background:transparent;border:1px solid var(--border);border-radius:10px;padding:10px 13px;color:var(--muted2);font:inherit;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s ease}
-.projects-filter-reset:hover{color:var(--text);border-color:var(--border2);background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)))}
 .projects-table-card{border:1px solid var(--border);border-radius:24px;background:linear-gradient(145deg,rgba(var(--sheen-rgb),calc(.058 * var(--sheen-k))),rgba(var(--sheen-rgb),calc(.018 * var(--sheen-k)))),rgba(var(--surface-rgb),.86);box-shadow:0 18px 58px rgba(var(--shade-rgb),calc(.26 * var(--shade-k)));overflow:hidden}
 .projects-table-scroll{width:100%;overflow:auto}
 .projects-table{width:100%;min-width:980px;border-collapse:collapse}
@@ -1819,7 +1810,7 @@ body::before{
 .client-duplicate-notice.warning{border-color:rgba(var(--accent-rgb),.28);background:rgba(var(--accent-rgb),.085)}
 .modal.modal-client-editor .form-textarea{min-height:118px}
 @media(max-width:820px){.clients-page-head{align-items:flex-start;flex-direction:column}.clients-toolbar-actions{justify-content:flex-start;width:100%}.projects-page-head{align-items:flex-start;flex-direction:column}.projects-toolbar-actions{justify-content:flex-start;width:100%}.modal.modal-client-editor{width:100%;max-width:100%;max-height:94vh;border-radius:24px 24px 0 0}.client-form-intro{flex-direction:column}.client-form-intro strong{min-width:0}.client-form-grid{grid-template-columns:1fr}}
-@media(max-width:560px){.client-view-toggle{width:100%}.client-view-toggle button{flex:1}.clients-toolbar-actions .btn{width:100%}.clients-page-head h2{font-size:23px}.project-view-toggle{width:100%}.project-view-toggle button{flex:1}.projects-toolbar-actions .btn{width:100%}.projects-page-head h2{font-size:23px}.projects-filterbar{flex-direction:column;align-items:stretch}.projects-search{min-width:0}.projects-filter-select,.projects-filter-reset{width:100%}}
+@media(max-width:560px){.client-view-toggle{width:100%}.client-view-toggle button{flex:1}.clients-toolbar-actions .btn{width:100%}.clients-page-head h2{font-size:23px}.project-view-toggle{width:100%}.project-view-toggle button{flex:1}.projects-toolbar-actions .btn{width:100%}.projects-page-head h2{font-size:23px}.projects-filter-select{width:100%}}
 
 /* Invoice workflow additions — 2026-05-26 */
 .quote-converted-pill { display:inline-flex; align-items:center; gap:6px; padding:8px 11px; border-radius:999px; border:1px solid rgba(var(--ok-rgb),.22); background:rgba(var(--ok-rgb),.1); color:var(--ok); font-size:12px; font-weight:700; }
@@ -1868,10 +1859,10 @@ body::before{
 .finance-search-main{display:grid;grid-template-columns:minmax(0,1fr) minmax(210px,260px);gap:12px;align-items:stretch}
 .finance-search-query{display:grid;gap:8px;min-width:0}.finance-search-query>span{display:inline-flex;align-items:center;gap:8px;color:var(--accent-ink);font-size:10px;font-weight:700;letter-spacing:.13em;text-transform:uppercase}.finance-search-query .form-input{min-height:48px;border-radius:17px;background:rgba(var(--shade-rgb),calc(.22 * var(--shade-k)));font-weight:600}.finance-search-query .form-input::placeholder{color:rgba(var(--ink-rgb),.36);font-weight:600}
 .finance-search-result-card{display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid rgba(var(--accent-rgb),.18);border-radius:18px;background:rgba(var(--accent-rgb),.075);box-shadow:inset 0 1px 0 rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)))}.finance-search-result-card svg{color:var(--accent-ink);flex:0 0 auto}.finance-search-result-card div{display:grid;gap:2px;min-width:0}.finance-search-result-card strong{color:var(--text);font-size:15px;font-weight:700;letter-spacing:-.03em;white-space:nowrap}.finance-search-result-card span{color:var(--muted2);font-size:11px;font-weight:600}.finance-search-result-card small{margin-left:auto;color:var(--accent-ink);font-size:11px;font-weight:700;white-space:nowrap}
-.finance-search-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:9px}.finance-search-field{gap:6px}.finance-search-field>span{font-size:9px}.finance-search-field .form-select,.finance-search-field .form-input{width:100%;min-height:40px;border-radius:13px;padding:9px 10px;background:rgba(var(--sheen-rgb),calc(.045 * var(--sheen-k)));font-size:12px}.finance-search-field .form-select{appearance:auto;color:var(--text)}
+.finance-search-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(172px,268px));justify-content:start;gap:9px}.finance-search-field{gap:6px}.finance-search-field>span{font-size:9px}.finance-search-field .form-select,.finance-search-field .form-input{width:100%;min-height:40px;border-radius:13px;padding:9px 10px;background:rgba(var(--sheen-rgb),calc(.045 * var(--sheen-k)));font-size:12px}.finance-search-field .form-select{appearance:auto;color:var(--text)}
 .finance-search-active-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:2px}.finance-search-active-row span{display:inline-flex;align-items:center;min-height:28px;padding:6px 10px;border:1px solid rgba(var(--accent-rgb),.2);border-radius:999px;background:rgba(var(--accent-rgb),.07);color:var(--accent-ink);font-size:11px;font-weight:700}.finance-search-active-row button,.finance-search-empty button{display:inline-flex;align-items:center;gap:7px;border:1px solid rgba(var(--sheen-rgb),calc(.12 * var(--sheen-k)));border-radius:999px;background:rgba(var(--sheen-rgb),calc(.045 * var(--sheen-k)));color:var(--muted2);font:inherit;font-size:11px;font-weight:700;padding:8px 12px;cursor:pointer;transition:background .16s ease,color .16s ease,border-color .16s ease,transform .16s ease}.finance-search-active-row button:hover,.finance-search-empty button:hover{transform:translateY(-1px);border-color:rgba(var(--accent-rgb),.28);background:rgba(var(--accent-rgb),.08);color:var(--text)}
 .finance-search-empty{display:grid;justify-items:center;gap:8px;text-align:center}.finance-search-empty button{margin-top:2px;color:var(--accent-ink)}
-@media(max-width:1180px){.finance-search-card{max-width:100%}.finance-search-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:1180px){.finance-search-card{max-width:100%}}
 @media(max-width:760px){.finance-search-card{border-radius:20px;margin-bottom:12px;padding:13px}.finance-search-main{grid-template-columns:1fr}.finance-search-grid{grid-template-columns:1fr 1fr}.finance-search-result-card small{margin-left:0}.finance-search-active-row{align-items:stretch;flex-direction:column}.finance-search-active-row button{justify-content:center}}
 @media(max-width:520px){.finance-search-grid{grid-template-columns:1fr}}
 
@@ -3379,7 +3370,7 @@ button.chat-member:hover{background:var(--bg3)}
 .ticket-stat.as-filter.is-active{border-color:rgba(var(--accent-rgb),.5);background:rgba(var(--accent-rgb),.08)}
 .ticket-stat.as-filter .ts-label{color:var(--muted)}
 .ticket-stat.as-filter.is-active .ts-label{color:var(--accent-ink)}
-.ticket-search-card{max-width:none}
+.finance-search-card.is-wide{max-width:none}
 .ticket-table-card{max-width:none}
 /* De kaartweergave deelt zijn regel met `.fin-list` (1100px); tickets mogen mee
    tot de rand, net als de tabel ernaast. */
@@ -3387,7 +3378,6 @@ button.chat-member:hover{background:var(--bg3)}
 /* Drie filterkolommen, maar mét plafond: nu de kaart doorloopt tot de rand zou
    `1fr` op een breed scherm drie dropdowns van 600px opleveren voor woorden van
    twee tellen. Ze houden hun leesbare maat en staan links uitgelijnd. */
-@media(min-width:1181px){.ticket-search-grid{grid-template-columns:repeat(3,minmax(170px,290px));justify-content:start}}
 .th-sort{display:inline-flex;align-items:center;gap:5px;background:none;border:0;color:inherit;font:inherit;letter-spacing:inherit;text-transform:inherit;cursor:pointer;padding:0}
 .th-sort:hover{color:var(--muted2)}
 .th-sort.is-active{color:var(--accent-ink)}
@@ -3430,19 +3420,19 @@ button.chat-member:hover{background:var(--bg3)}
    Echte checkboxes (spatiebalk werkt, schermlezer kondigt "aangevinkt" aan),
    maar getekend als chip. Het vinkje zelf is het enige gekleurde vlak; de chip
    markeert zich met een vulling, niet met een streep langs de rand. */
-.ticket-quick-filters{display:flex;flex-wrap:wrap;gap:7px}
-.ticket-quick-chip{position:relative;display:inline-flex;align-items:center;gap:8px;padding:6px 11px 6px 9px;border:1px solid rgba(var(--sheen-rgb),calc(.12 * var(--sheen-k)));border-radius:999px;background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)));color:var(--muted2);font-size:11.5px;font-weight:700;line-height:1.2;cursor:pointer;user-select:none;transition:background .16s ease,border-color .16s ease,color .16s ease,transform .16s ease}
-.ticket-quick-chip:hover{transform:translateY(-1px);border-color:rgba(var(--accent-rgb),.3);color:var(--text)}
-.ticket-quick-chip input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;margin:0}
-.ticket-quick-chip .tqc-box{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:5px;border:1px solid rgba(var(--sheen-rgb),calc(.2 * var(--sheen-k)));background:rgba(var(--shade-rgb),calc(.2 * var(--shade-k)));color:transparent;transition:background .16s ease,border-color .16s ease,color .16s ease}
-.ticket-quick-chip .tqc-count{min-width:20px;padding:1px 6px;border-radius:999px;background:rgba(var(--shade-rgb),calc(.26 * var(--shade-k)));color:var(--muted);font-size:10px;font-weight:700;text-align:center}
-.ticket-quick-chip.is-active{border-color:rgba(var(--accent-rgb),.42);background:rgba(var(--accent-rgb),.13);color:var(--text)}
-.ticket-quick-chip.is-active .tqc-box{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
-.ticket-quick-chip.is-active .tqc-count{background:rgba(var(--accent-rgb),.22);color:var(--accent-ink)}
+.finance-search-chips{display:flex;flex-wrap:wrap;gap:7px}
+.finance-search-chip{position:relative;display:inline-flex;align-items:center;gap:8px;padding:6px 11px 6px 9px;border:1px solid rgba(var(--sheen-rgb),calc(.12 * var(--sheen-k)));border-radius:999px;background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)));color:var(--muted2);font-size:11.5px;font-weight:700;line-height:1.2;cursor:pointer;user-select:none;transition:background .16s ease,border-color .16s ease,color .16s ease,transform .16s ease}
+.finance-search-chip:hover{transform:translateY(-1px);border-color:rgba(var(--accent-rgb),.3);color:var(--text)}
+.finance-search-chip input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;margin:0}
+.finance-search-chip .fsc-box{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:5px;border:1px solid rgba(var(--sheen-rgb),calc(.2 * var(--sheen-k)));background:rgba(var(--shade-rgb),calc(.2 * var(--shade-k)));color:transparent;transition:background .16s ease,border-color .16s ease,color .16s ease}
+.finance-search-chip .fsc-count{min-width:20px;padding:1px 6px;border-radius:999px;background:rgba(var(--shade-rgb),calc(.26 * var(--shade-k)));color:var(--muted);font-size:10px;font-weight:700;text-align:center}
+.finance-search-chip.is-active{border-color:rgba(var(--accent-rgb),.42);background:rgba(var(--accent-rgb),.13);color:var(--text)}
+.finance-search-chip.is-active .fsc-box{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.finance-search-chip.is-active .fsc-count{background:rgba(var(--accent-rgb),.22);color:var(--accent-ink)}
 /* Een snelfilter dat nul tickets zou opleveren blijft klikbaar maar dringt zich
    niet op — behalve als hij aanstaat, want dan verklaart hij je lege scherm. */
-.ticket-quick-chip.is-empty{opacity:.5}
-.ticket-quick-chip input:focus-visible ~ .tqc-box{outline:2px solid var(--accent);outline-offset:2px}
+.finance-search-chip.is-empty{opacity:.5}
+.finance-search-chip input:focus-visible ~ .fsc-box{outline:2px solid var(--accent);outline-offset:2px}
 
 /* ── Account-menu onderin de zijbalk: avatar + alle instellingen + uitloggen ── */
 .sidebar-user{position:relative;z-index:2;flex-shrink:0;padding:10px;border-top:1px solid var(--border);background:rgba(var(--sheen-rgb),calc(.018 * var(--sheen-k)))}
@@ -6553,21 +6543,17 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    een volle regel pakken, samen 240-500px vóór het eerste resultaat. Ook
    hier: één veegbare regel in plaats van een stapel. */
 @media(max-width:760px){
-  .tt-filters,.projects-filterbar,.ptl-chips{
+  .tt-filters,.ptl-chips{
     flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;
     scrollbar-width:none;
   }
   .tt-filters::-webkit-scrollbar,
-  .projects-filterbar::-webkit-scrollbar,
   .ptl-chips::-webkit-scrollbar{display:none}
-  .tt-filters>*,.projects-filterbar>*,.ptl-chips>*{flex:0 0 auto}
+  .tt-filters>*,.ptl-chips>*{flex:0 0 auto}
   .tt-filters .select-control,
-  .projects-filterbar .select-control,
   .projects-filter-select{min-width:150px;width:auto}
-  /* Zoeken blijft vooraan en krijgt de meeste ruimte. */
-  .projects-search{flex:0 0 62%;min-width:0}
-  /* Deze twee stonden op `width:100%` uit het ≤560-blok (regel 1704). */
-  .projects-filter-select,.projects-filter-reset{width:auto}
+  /* Stond op `width:100%` uit het ≤560-blok (regel 1704). */
+  .projects-filter-select{width:auto}
 }
 
 /* 19 ── Brede tabellen buiten de boekhouding ──────────────────────────────
@@ -7836,30 +7822,40 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
      filters zijn een hulpmiddel, ze horen het scherm niet op te eten. Het
      negatieve marge-trucje laat ze tot de kaartrand doorlopen zodat zichtbaar
      is dat er meer naast staat. */
-  .ticket-quick-filters{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;margin:0 -13px;padding:0 13px 2px}
-  .ticket-quick-filters::-webkit-scrollbar{display:none}
-  .ticket-quick-chip{flex:0 0 auto;min-height:34px}
+  .finance-search-chips{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;margin:0 -13px;padding:0 13px 2px}
+  .finance-search-chips::-webkit-scrollbar{display:none}
+  .finance-search-chip{flex:0 0 auto;min-height:34px}
 }
 
 /* Uitklapper voor de drie dropdowns. Alleen op een telefoon zichtbaar: daar
    kostten ze meer dan de helft van het filterblok terwijl de snelfilters
    erboven het meeste werk doen. Op desktop staat het raster gewoon open. */
-.ticket-filter-toggle{display:none}
+.finance-search-toggle{display:none}
 @media(max-width:760px){
-  .ticket-filter-toggle{
+  .finance-search-toggle{
     display:inline-flex;align-self:start;align-items:center;gap:7px;min-height:36px;
     padding:8px 13px;border:1px solid rgba(var(--sheen-rgb),calc(.12 * var(--sheen-k)));
     border-radius:999px;background:rgba(var(--sheen-rgb),calc(.045 * var(--sheen-k)));
     color:var(--muted2);font:inherit;font-size:11.5px;font-weight:700;cursor:pointer;
   }
-  .ticket-filter-toggle svg{flex:0 0 auto}
-  .ticket-filter-toggle .tft-count{
+  .finance-search-toggle svg{flex:0 0 auto}
+  .finance-search-toggle .fst-count{
     min-width:18px;padding:1px 6px;border-radius:999px;
     background:rgba(var(--accent-rgb),.22);color:var(--accent-ink);font-size:10px;text-align:center;
   }
-  .ticket-search-grid.is-collapsed{display:none}
+  .finance-search-grid.is-collapsed{display:none}
   /* "Al omgezet" / "Niet converteerbaar" is een uitgeschakelde knop die
      herhaalt wat de statuspil ernaast al zegt. Op een telefoon kost dat 40px
      per kaart zonder dat je er iets mee kunt. */
   .ticket-table td.ticket-row-actions .btn:disabled{display:none}
+}
+
+/* De velden in het filterraster stonden op `min-height:40px` (regel 1871), en
+   die selector is specifieker dan de mobiele 44px-regel voor formuliervelden.
+   Gevolg: elke datum- en bedragfilter was op een telefoon net te klein om
+   betrouwbaar te raken. De keuzelijsten haalden hun 44px al wél. */
+@media(max-width:760px){
+  .finance-search-field .form-input,
+  .finance-search-field .form-select,
+  .finance-search-field .select-trigger{min-height:44px}
 }

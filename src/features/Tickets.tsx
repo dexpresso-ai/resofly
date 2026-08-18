@@ -1,7 +1,9 @@
-﻿import { useId, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, Check, List, RotateCcw, Search, SlidersHorizontal, Table as TableIcon } from 'lucide-react';
+﻿import { useMemo, useState } from 'react';
+import { ArrowDown, ArrowUp, List, RotateCcw, Table as TableIcon } from 'lucide-react';
 import type { AppData, Priority, Ticket, TicketStatus } from '../types';
-import { Button, Select } from '../components/Ui';
+import { Button } from '../components/Ui';
+import { SearchFilterPanel } from '../components/SearchFilterPanel';
+import type { FilterField } from '../components/SearchFilterPanel';
 import { dateNL, priorityLabel } from '../lib/format';
 
 const convertibleStatuses = new Set<TicketStatus>(['new', 'review', 'approved']);
@@ -45,10 +47,6 @@ const QUICK_FILTERS: QuickFilterDef[] = [
 
 type TicketFilters = { query: string; status: string; priority: string; clientId: string; quick: QuickFilterKey[] };
 const emptyTicketFilters: TicketFilters = { query: '', status: '', priority: '', clientId: '', quick: [] };
-function countActiveFilters(filters: TicketFilters): number {
-  const text = [filters.query, filters.status, filters.priority, filters.clientId].filter(value => value.trim() !== '').length;
-  return text + filters.quick.length;
-}
 
 type SortKey = 'title' | 'client' | 'priority' | 'status' | 'created';
 type SortState = { key: SortKey; dir: 'asc' | 'desc' };
@@ -247,73 +245,40 @@ function TicketFilterPanel({ data, filters, visibleCount, onChange, unreadTicket
       .filter(client => clientIds.has(client.id))
       .sort((a, b) => a.name.localeCompare(b.name, 'nl-NL'));
   }, [data.clients, data.tickets]);
-  // Het getal op een snelfilter telt over álle tickets, niet over de al
-  // gefilterde selectie: het beantwoordt "hoeveel zijn er zo?" en zakt dus
-  // niet naar 0 zodra een ánder filter aanstaat.
-  const quickCounts = useMemo(() => {
-    const out = {} as Record<QuickFilterKey, number>;
-    for (const def of QUICK_FILTERS) out[def.key] = data.tickets.filter(ticket => def.match(ticket, unreadTicketIds)).length;
-    return out;
-  }, [data.tickets, unreadTicketIds]);
-  const activeFilterCount = countActiveFilters(filters);
-  const totalCount = data.tickets.length;
+  const chips = useMemo(
+    () => QUICK_FILTERS.map(def => ({
+      key: def.key,
+      label: def.label,
+      title: def.title,
+      count: data.tickets.filter(ticket => def.match(ticket, unreadTicketIds)).length,
+    })),
+    [data.tickets, unreadTicketIds],
+  );
+
   const update = (patch: Partial<TicketFilters>) => onChange({ ...filters, ...patch });
-  const toggleQuick = (key: QuickFilterKey) => update({
-    quick: filters.quick.includes(key) ? filters.quick.filter(k => k !== key) : [...filters.quick, key],
-  });
-  // Op een telefoon kostten de drie dropdowns ruim de helft van het filterblok,
-  // terwijl de snelfilters eronder het meeste werk doen. Ze zitten daar achter
-  // één knop; op een breed scherm staan ze gewoon uitgeklapt (CSS regelt dat,
-  // deze schakelaar is daar niet zichtbaar).
-  const [showFields, setShowFields] = useState(false);
-  const fieldsId = useId();
-  const fieldFilterCount = [filters.status, filters.priority, filters.clientId].filter(value => value !== '').length;
+  const fields: FilterField[] = [
+    { key: 'status', label: 'Status', value: filters.status, options: [{ value: '', label: 'Alle statussen' }, { value: 'open', label: 'Openstaand' }, ...STATUS_ORDER.map(status => ({ value: status, label: ticketStatusLabels[status] }))] },
+    { key: 'priority', label: 'Prioriteit', value: filters.priority, options: [{ value: '', label: 'Alle prioriteiten' }, { value: 'high', label: 'Hoog' }, { value: 'med', label: 'Normaal' }, { value: 'low', label: 'Laag' }] },
+    { key: 'clientId', label: 'Klant', value: filters.clientId, searchable: true, searchPlaceholder: 'Zoek een klant…', options: [{ value: '', label: 'Alle klanten' }, ...clientOptions.map(client => ({ value: client.id, label: client.name }))] },
+  ];
 
-  return <section className="finance-search-card ticket-search-card" aria-label="Tickets zoeken en filteren">
-    <div className="finance-search-main">
-      <label className="finance-search-query">
-        <span><Search size={15}/> Snel zoeken</span>
-        <input
-          className="form-input"
-          value={filters.query}
-          onChange={event => update({ query: event.target.value })}
-          placeholder="Zoek op titel, klant, omschrijving of notitie…"
-          autoComplete="off"
-        />
-      </label>
-      <div className="finance-search-result-card">
-        <SlidersHorizontal size={16}/>
-        <div><strong>{visibleCount} van {totalCount}</strong><span>tickets zichtbaar</span></div>
-      </div>
-    </div>
-
-    <div className="ticket-quick-filters" role="group" aria-label="Snelfilters">
-      {QUICK_FILTERS.map(def => {
-        const isActive = filters.quick.includes(def.key);
-        const count = quickCounts[def.key] ?? 0;
-        return <label key={def.key} className={`ticket-quick-chip${isActive ? ' is-active' : ''}${!isActive && count === 0 ? ' is-empty' : ''}`} title={def.title}>
-          <input type="checkbox" checked={isActive} onChange={() => toggleQuick(def.key)} />
-          <span className="tqc-box" aria-hidden="true"><Check size={11} strokeWidth={3}/></span>
-          <span className="tqc-label">{def.label}</span>
-          <span className="tqc-count">{count}</span>
-        </label>;
-      })}
-    </div>
-
-    <button type="button" className="ticket-filter-toggle" onClick={() => setShowFields(value => !value)} aria-expanded={showFields} aria-controls={fieldsId}>
-      <SlidersHorizontal size={13}/> {showFields ? 'Minder filters' : 'Meer filters'}
-      {fieldFilterCount > 0 && <span className="tft-count">{fieldFilterCount}</span>}
-    </button>
-
-    <div id={fieldsId} className={`finance-search-grid ticket-search-grid${showFields ? '' : ' is-collapsed'}`}>
-      <label className="field finance-search-field"><span>Status</span><Select className="form-select" value={filters.status} onChange={event => update({ status: event.target.value })}><option value="">Alle statussen</option><option value="open">Openstaand</option>{STATUS_ORDER.map(status => <option key={status} value={status}>{ticketStatusLabels[status]}</option>)}</Select></label>
-      <label className="field finance-search-field"><span>Prioriteit</span><Select className="form-select" value={filters.priority} onChange={event => update({ priority: event.target.value })}><option value="">Alle prioriteiten</option><option value="high">Hoog</option><option value="med">Normaal</option><option value="low">Laag</option></Select></label>
-      <label className="field finance-search-field"><span>Klant</span><Select className="form-select" searchable searchPlaceholder="Zoek een klant…" value={filters.clientId} onChange={event => update({ clientId: event.target.value })}><option value="">Alle klanten</option>{clientOptions.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</Select></label>
-    </div>
-
-    {activeFilterCount > 0 && <div className="finance-search-active-row">
-      <span>{activeFilterCount} filter{activeFilterCount === 1 ? '' : 's'} actief</span>
-      <button type="button" onClick={() => onChange(emptyTicketFilters)}><RotateCcw size={14}/> Filters wissen</button>
-    </div>}
-  </section>;
+  return <SearchFilterPanel
+    className="is-wide"
+    ariaLabel="Tickets zoeken en filteren"
+    query={filters.query}
+    queryPlaceholder="Zoek op titel, klant, omschrijving of notitie…"
+    onQueryChange={query => update({ query })}
+    visibleCount={visibleCount}
+    totalCount={data.tickets.length}
+    noun="tickets"
+    chips={chips}
+    activeChips={filters.quick}
+    onChipToggle={key => {
+      const quickKey = key as QuickFilterKey;
+      update({ quick: filters.quick.includes(quickKey) ? filters.quick.filter(k => k !== quickKey) : [...filters.quick, quickKey] });
+    }}
+    fields={fields}
+    onFieldChange={(key, value) => update({ [key]: value } as Partial<TicketFilters>)}
+    onReset={() => onChange(emptyTicketFilters)}
+  />;
 }

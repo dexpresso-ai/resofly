@@ -6,6 +6,8 @@ import type {
   EmailFlow, EmailFlowStep, EmailFlowStats, EmailFlowStepStats, FlowStopCondition, FlowStepInput,
 } from '../types';
 import { Button, Input, Select, ColorPicker } from '../components/Ui';
+import { SearchFilterPanel } from '../components/SearchFilterPanel';
+import type { FilterField } from '../components/SearchFilterPanel';
 import { STANDARD_MERGE_TOKENS, customFieldToken, unknownMergeTokens, type MergeFieldDefinition } from '../lib/mergeTokens';
 import { activeFieldDefinitions, distinctFieldValues } from '../components/CustomFields';
 import { RichTextEditor } from '../components/RichTextEditor';
@@ -27,6 +29,34 @@ const STATUS_LABEL: Record<string, string> = {
   draft: 'Concept', scheduled: 'Ingepland', sending: 'Wordt verzonden', sent: 'Verzonden', paused: 'Gepauzeerd', cancelled: 'Geannuleerd',
   active: 'Actief', archived: 'Gestopt',
 };
+
+/* ── Zoeken en filteren op de campagnelijst ───────────────────────────────
+ * Vier kolommen, maar wel een lijst die met de maand groeit. Zelfde blok als
+ * op de andere tabellen; de chips beantwoorden "waar sta ik mee" en de
+ * statuslijst vangt de zeldzamere gevallen (wordt verzonden, gepauzeerd). */
+type CampaignQuickKey = 'draft' | 'scheduled' | 'sent' | 'replied';
+
+const CAMPAIGN_QUICK_FILTERS: Array<{ key: CampaignQuickKey; label: string; title: string; match: (campaign: EmailCampaign, stats?: EmailCampaignStats) => boolean }> = [
+  { key: 'draft', label: 'Concept', title: 'Campagnes die nog niet de deur uit zijn', match: campaign => campaign.status === 'draft' },
+  { key: 'scheduled', label: 'Ingepland', title: 'Campagnes die op een tijdstip staan te wachten', match: campaign => campaign.status === 'scheduled' },
+  { key: 'sent', label: 'Verzonden', title: 'Campagnes die volledig verstuurd zijn', match: campaign => campaign.status === 'sent' },
+  { key: 'replied', label: 'Met antwoorden', title: 'Campagnes waar iemand op teruggeschreven heeft', match: (_campaign, stats) => (stats?.replied ?? 0) > 0 },
+];
+
+type CampaignFilters = { query: string; status: string; quick: CampaignQuickKey[] };
+const emptyCampaignFilters: CampaignFilters = { query: '', status: '', quick: [] };
+
+function filterCampaigns(campaigns: EmailCampaign[], stats: Record<UUID, EmailCampaignStats>, filters: CampaignFilters): EmailCampaign[] {
+  const needle = filters.query.trim().toLocaleLowerCase('nl-NL');
+  const quick = CAMPAIGN_QUICK_FILTERS.filter(def => filters.quick.includes(def.key));
+  return campaigns.filter(campaign => {
+    if (filters.status && campaign.status !== filters.status) return false;
+    for (const def of quick) if (!def.match(campaign, stats[campaign.id])) return false;
+    if (!needle) return true;
+    return [campaign.name, campaign.subject, STATUS_LABEL[campaign.status] ?? campaign.status]
+      .some(field => (field ?? '').toLocaleLowerCase('nl-NL').includes(needle));
+  });
+}
 
 const STOP_CONDITION_LABEL: Record<FlowStopCondition, string> = {
   reply: 'Alleen een antwoord',
@@ -56,6 +86,7 @@ export function Marketing({ data, organizationId, canWrite, onChanged, openCampa
   const [tab, setTab] = useState<Tab>('campaigns');
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([]);
   const [stats, setStats] = useState<Record<UUID, EmailCampaignStats>>({});
+  const [campaignFilters, setCampaignFilters] = useState<CampaignFilters>(emptyCampaignFilters);
   const [suppressions, setSuppressions] = useState<EmailSuppression[]>([]);
   const [flows, setFlows] = useState<EmailFlow[]>([]);
   const [flowStats, setFlowStats] = useState<Record<UUID, EmailFlowStats>>({});
@@ -187,6 +218,36 @@ export function Marketing({ data, organizationId, canWrite, onChanged, openCampa
     }
   }
 
+  const visibleCampaigns = useMemo(() => filterCampaigns(campaigns, stats, campaignFilters), [campaigns, stats, campaignFilters]);
+
+  // De tellers rekenen over de hele lijst: een chip zegt "hoeveel zijn er zo?",
+  // niet "hoeveel blijven er over als je hem aanzet".
+  const campaignChips = useMemo(
+    () => CAMPAIGN_QUICK_FILTERS.map(def => ({
+      key: def.key,
+      label: def.label,
+      title: def.title,
+      count: campaigns.filter(campaign => def.match(campaign, stats[campaign.id])).length,
+    })),
+    [campaigns, stats],
+  );
+
+  // Alleen de statussen die in deze werkruimte echt voorkomen; een keuze waar
+  // nooit iets onder valt is alleen maar ruis.
+  const campaignFields: FilterField[] = [
+    {
+      key: 'status',
+      label: 'Status',
+      value: campaignFilters.status,
+      options: [
+        { value: '', label: 'Alle statussen' },
+        ...[...new Set(campaigns.map(campaign => campaign.status))]
+          .map(status => ({ value: status, label: STATUS_LABEL[status] ?? status }))
+          .sort((a, b) => a.label.localeCompare(b.label, 'nl-NL')),
+      ],
+    },
+  ];
+
   return (
     <div className="mk">
       <div className="mk-head">
@@ -250,11 +311,35 @@ export function Marketing({ data, organizationId, canWrite, onChanged, openCampa
           <div className="mk-empty">Stroom niet gevonden.</div>
         )
       ) : view.mode === 'list' ? (
-        <CampaignList
-          campaigns={campaigns} stats={stats} canWrite={canWrite}
-          onOpen={(c) => setView(c.status === 'draft' || c.status === 'scheduled' ? { mode: 'edit', id: c.id } : { mode: 'detail', id: c.id })}
-          onDuplicate={handleDuplicate} onDelete={handleDelete}
-        />
+        <>
+          {campaigns.length > 0 && <SearchFilterPanel
+            ariaLabel="Campagnes zoeken en filteren"
+            query={campaignFilters.query}
+            queryPlaceholder="Zoek op campagnenaam, onderwerp of status…"
+            onQueryChange={query => setCampaignFilters(prev => ({ ...prev, query }))}
+            visibleCount={visibleCampaigns.length}
+            totalCount={campaigns.length}
+            noun="campagnes"
+            chips={campaignChips}
+            activeChips={campaignFilters.quick}
+            onChipToggle={key => setCampaignFilters(prev => {
+              const quickKey = key as CampaignQuickKey;
+              return { ...prev, quick: prev.quick.includes(quickKey) ? prev.quick.filter(k => k !== quickKey) : [...prev.quick, quickKey] };
+            })}
+            fields={campaignFields}
+            onFieldChange={(key, value) => setCampaignFilters(prev => ({ ...prev, [key]: value }))}
+            onReset={() => setCampaignFilters(emptyCampaignFilters)}
+          />}
+          {campaigns.length > 0 && visibleCampaigns.length === 0 ? (
+            <div className="mk-empty"><Mail size={30} /><p>Geen campagne komt overeen met je zoekterm of filters.</p></div>
+          ) : (
+            <CampaignList
+              campaigns={visibleCampaigns} stats={stats} canWrite={canWrite}
+              onOpen={(c) => setView(c.status === 'draft' || c.status === 'scheduled' ? { mode: 'edit', id: c.id } : { mode: 'detail', id: c.id })}
+              onDuplicate={handleDuplicate} onDelete={handleDelete}
+            />
+          )}
+        </>
       ) : selected && view.mode === 'edit' ? (
         <CampaignEditor
           key={selected.id} data={data} organizationId={organizationId} canWrite={canWrite} campaign={selected}

@@ -6,6 +6,8 @@ import { dateNL, euro, formatMinutes, minutesToHours, total } from '../lib/forma
 import { sanitizeEmailHtml } from '../lib/sanitizeHtml';
 import { Button, Input, Select } from '../components/Ui';
 import { CsvImportModal } from '../components/CsvImportModal';
+import { SearchFilterPanel } from '../components/SearchFilterPanel';
+import type { FilterField } from '../components/SearchFilterPanel';
 import type { ImportColumn } from '../lib/csvImport';
 import { RichTextEditor } from '../components/RichTextEditor';
 import { blockInboundSender, createClientWithServerCode, deleteClientEmail, linkInboundMessage, loadClientEmails, loadClientEmailThreads, loadClientEmailReadIds, loadInboundAlias, loadInboundMessages, loadInboundOpenCount, loadMySenderIdentity, loadSendingDomains, markClientEmailsRead, setInboundMessageStatus } from '../lib/repository';
@@ -71,6 +73,55 @@ const clientStatusLabels: Record<ClientStatus, string> = {
   inactive: 'Inactief',
 };
 
+/* ── Zoeken en filteren op de klantenlijst ────────────────────────────────
+ * De klantenlijst was de enige grote lijst zónder zoekveld: bij meer dan een
+ * scherm vol klanten bleef alleen scrollen over. Nu hetzelfde blok als op
+ * tickets, offertes, facturen, projecten en campagnes. */
+type ClientQuickKey = 'overdue' | 'openInvoices' | 'unread' | 'noContact' | 'noEmail';
+type ClientQuickDef = {
+  key: ClientQuickKey;
+  label: string;
+  title: string;
+  match: (row: ClientOverviewRow, unread: number) => boolean;
+};
+const CLIENT_QUICK_FILTERS: ClientQuickDef[] = [
+  { key: 'overdue', label: 'Vervallen facturen', title: 'Klanten met minstens één factuur waarvan de betaaltermijn verstreken is', match: row => row.overdueInvoiceCount > 0 },
+  { key: 'openInvoices', label: 'Openstaand', title: 'Klanten met minstens één factuur die nog niet betaald is', match: row => row.openInvoiceCount > 0 },
+  { key: 'unread', label: 'Nieuwe berichten', title: 'Klanten met post die je nog niet gelezen hebt', match: (_row, unread) => unread > 0 },
+  { key: 'noContact', label: 'Zonder contactpersoon', title: 'Klanten waar nog geen contactpersoon bij staat', match: row => !row.client.contact_name },
+  { key: 'noEmail', label: 'Zonder e-mailadres', title: 'Klanten die je niet kunt mailen omdat er geen adres bekend is', match: row => !row.client.email },
+];
+
+type ClientFilters ={ query: string; status: string; tag: string; quick: ClientQuickKey[] };
+const emptyClientFilters: ClientFilters = { query: '', status: '', tag: '', quick: [] };
+
+function normalizeClientSearch(value: string): string {
+  return value.toLocaleLowerCase('nl-NL').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/** Alles waarop je een klant zou kunnen herkennen op één regel, zodat één
+ *  zoekterm net zo goed op een klantnummer als op een plaatsnaam werkt. */
+function buildClientSearchText(row: ClientOverviewRow): string {
+  const client = row.client;
+  return normalizeClientSearch([
+    client.name, client.client_code, client.contact_name, client.email, client.phone, client.city,
+    clientStatusLabels[client.status], (client.tags ?? []).join(' '),
+  ].filter(Boolean).join(' '));
+}
+
+function filterClientRows(rows: ClientOverviewRow[], filters: ClientFilters, unreadByClient: Record<string, number>): ClientOverviewRow[] {
+  const query = normalizeClientSearch(filters.query);
+  const quick = CLIENT_QUICK_FILTERS.filter(def => filters.quick.includes(def.key));
+  return rows.filter(row => {
+    if (filters.status && row.client.status !== filters.status) return false;
+    if (filters.tag && !(row.client.tags ?? []).includes(filters.tag)) return false;
+    const unread = unreadByClient[row.client.id] ?? 0;
+    for (const def of quick) if (!def.match(row, unread)) return false;
+    if (!query) return true;
+    return buildClientSearchText(row).includes(query);
+  });
+}
+
 export function Clients({
   data,
   organizationId,
@@ -92,6 +143,7 @@ export function Clients({
   const [importing, setImporting] = useState(false);
   const [listTab, setListTab] = useState<'clients' | 'inbox'>('clients');
   const [inboxCount, setInboxCount] = useState(0);
+  const [filters, setFilters] = useState<ClientFilters>(emptyClientFilters);
 
   // Telling van de opvangbak. Faalt dit (bijv. geen leesrecht op de module),
   // dan blijft de teller op 0 en verdwijnt het tabblad simpelweg uit beeld.
@@ -115,6 +167,30 @@ export function Clients({
       openInvoiceTotal: openInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0),
     };
   }), [data]);
+
+  const visibleRows = useMemo(() => filterClientRows(rows, filters, unreadByClient), [rows, filters, unreadByClient]);
+
+  // De tellers staan op de volledige lijst, niet op de al gefilterde selectie:
+  // een chip zegt "hoeveel klanten zijn er zo?", niet "hoeveel blijven er over".
+  const clientChips = useMemo(
+    () => CLIENT_QUICK_FILTERS.map(def => ({
+      key: def.key,
+      label: def.label,
+      title: def.title,
+      count: rows.filter(row => def.match(row, unreadByClient[row.client.id] ?? 0)).length,
+    })),
+    [rows, unreadByClient],
+  );
+
+  const clientTags = useMemo(
+    () => [...new Set(data.clients.flatMap(client => client.tags ?? []))].filter(Boolean).sort((a, b) => a.localeCompare(b, 'nl-NL')),
+    [data.clients],
+  );
+
+  const clientFields: FilterField[] = [
+    { key: 'status', label: 'Status', value: filters.status, options: [{ value: '', label: 'Alle statussen' }, ...(['active', 'prospect', 'inactive'] as ClientStatus[]).map(status => ({ value: status, label: clientStatusLabels[status] }))] },
+    { key: 'tag', label: 'Label', value: filters.tag, searchPlaceholder: 'Zoek een label…', options: [{ value: '', label: 'Alle labels' }, ...clientTags.map(tag => ({ value: tag, label: tag }))] },
+  ];
 
   // Alleen de vrije velden die als kolom gemarkeerd zijn; de rest zou de tabel
   // onleesbaar breed maken.
@@ -176,6 +252,26 @@ export function Clients({
       onChanged={() => { refreshInboxCount(); onChanged(); }}
     />}
 
+    {listTab === 'clients' && rows.length > 0 && <SearchFilterPanel
+      className="is-wide"
+      ariaLabel="Klanten zoeken en filteren"
+      query={filters.query}
+      queryPlaceholder="Zoek op naam, klantnummer, contactpersoon, e-mail, telefoon of plaats…"
+      onQueryChange={query => setFilters(prev => ({ ...prev, query }))}
+      visibleCount={visibleRows.length}
+      totalCount={rows.length}
+      noun="klanten"
+      chips={clientChips}
+      activeChips={filters.quick}
+      onChipToggle={key => setFilters(prev => {
+        const quickKey = key as ClientQuickKey;
+        return { ...prev, quick: prev.quick.includes(quickKey) ? prev.quick.filter(k => k !== quickKey) : [...prev.quick, quickKey] };
+      })}
+      fields={clientFields}
+      onFieldChange={(key, value) => setFilters(prev => ({ ...prev, [key]: value }))}
+      onReset={() => setFilters(emptyClientFilters)}
+    />}
+
     {listTab === 'clients' && <>
       {rows.length === 0 && <div className="client-empty-state">
         <strong>Nog geen klanten</strong>
@@ -183,8 +279,14 @@ export function Clients({
         <Button variant="primary" onClick={onNew}>+ Nieuwe klant</Button>
       </div>}
 
-      {rows.length > 0 && viewMode === 'cards' && <ClientCardGrid rows={rows} onOpen={onOpen} unreadByClient={unreadByClient} />}
-      {rows.length > 0 && viewMode === 'table' && <ClientTable rows={rows} onOpen={onOpen} unreadByClient={unreadByClient} listFields={listFields} />}
+      {rows.length > 0 && visibleRows.length === 0 && <div className="empty finance-search-empty">
+        <div className="e-big">Geen klanten gevonden</div>
+        <p>Geen enkele klant komt overeen met je zoekterm of filters.</p>
+        <button type="button" onClick={() => setFilters(emptyClientFilters)}><RotateCcw size={14}/> Filters wissen</button>
+      </div>}
+
+      {visibleRows.length > 0 && viewMode === 'cards' && <ClientCardGrid rows={visibleRows} onOpen={onOpen} unreadByClient={unreadByClient} />}
+      {visibleRows.length > 0 && viewMode === 'table' && <ClientTable rows={visibleRows} onOpen={onOpen} unreadByClient={unreadByClient} listFields={listFields} />}
     </>}
   </div>;
 }
