@@ -3364,8 +3364,11 @@ button.chat-member:hover{background:var(--bg3)}
   .sidebar-close:hover{background:rgba(var(--sheen-rgb),calc(.1 * var(--sheen-k)));color:var(--text)}
 }
 
-/* ── Tickets: weergaveschakelaar, klikbare statuskaarten + tabelweergave ── */
-.ticket-toolbar{max-width:1180px}
+/* ── Tickets: weergaveschakelaar, klikbare statuskaarten + tabelweergave ──
+   Alles op deze pagina loopt tot de rand van het werkblad. De statusbalk deed
+   dat al (vijf gelijke kolommen zonder plafond), dus een tabel die op 1180px
+   stopte trok een onzichtbare knip halverwege het scherm. */
+.ticket-toolbar{max-width:none}
 .ticket-view-switch{display:inline-flex;gap:2px;padding:3px;border:1px solid var(--border);border-radius:12px;background:var(--bg2)}
 .ticket-view-switch button{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;color:var(--muted2);font:inherit;font-size:12px;font-weight:700;padding:7px 12px;border-radius:9px;cursor:pointer;transition:background .15s,color .15s}
 .ticket-view-switch button:hover{color:var(--text)}
@@ -3376,11 +3379,15 @@ button.chat-member:hover{background:var(--bg3)}
 .ticket-stat.as-filter.is-active{border-color:rgba(var(--accent-rgb),.5);background:rgba(var(--accent-rgb),.08)}
 .ticket-stat.as-filter .ts-label{color:var(--muted)}
 .ticket-stat.as-filter.is-active .ts-label{color:var(--accent-ink)}
-.ticket-search-card{max-width:1180px}
-.ticket-table-card{max-width:1180px}
-/* Op ruime schermen 3 filterkolommen; onder 1180px pakken we de finance-defaults
-   (3 → 2 → 1 kolom) zodat de dropdowns op tablet/telefoon niet in elkaar drukken. */
-@media(min-width:1181px){.ticket-search-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.ticket-search-card{max-width:none}
+.ticket-table-card{max-width:none}
+/* De kaartweergave deelt zijn regel met `.fin-list` (1100px); tickets mogen mee
+   tot de rand, net als de tabel ernaast. */
+.ticket-list{max-width:none}
+/* Drie filterkolommen, maar mét plafond: nu de kaart doorloopt tot de rand zou
+   `1fr` op een breed scherm drie dropdowns van 600px opleveren voor woorden van
+   twee tellen. Ze houden hun leesbare maat en staan links uitgelijnd. */
+@media(min-width:1181px){.ticket-search-grid{grid-template-columns:repeat(3,minmax(170px,290px));justify-content:start}}
 .th-sort{display:inline-flex;align-items:center;gap:5px;background:none;border:0;color:inherit;font:inherit;letter-spacing:inherit;text-transform:inherit;cursor:pointer;padding:0}
 .th-sort:hover{color:var(--muted2)}
 .th-sort.is-active{color:var(--accent-ink)}
@@ -3400,9 +3407,42 @@ button.chat-member:hover{background:var(--bg3)}
 .ticket-row-actions .btn{white-space:nowrap}
 /* Smallere min-breedte dan de offerte/factuur-tabel (minder kolommen); alleen op desktop,
    zodat de mobiele kaart-stapelweergave (≤760px) van .quote-table intact blijft. */
-@media(min-width:761px){.ticket-table{min-width:820px}}
-@media(max-width:1180px){.ticket-search-card{max-width:100%}.ticket-table-card{max-width:100%}}
+@media(min-width:761px){
+  .ticket-table{min-width:820px}
+  /* Nu de tabel doorloopt tot de rand moet de extra ruimte érgens heen. Zonder
+     verdeling verdeelt de browser hem gelijk over zes kolommen en krijgt "Hoog"
+     evenveel ruimte als de tickettitel. De vier vaste kolommen (pil, pil, datum,
+     knop) pakken wat ze nodig hebben, klant een vast aandeel, en de titel — het
+     enige waar je op leest — slikt de rest op en mag afbreken. */
+  .ticket-table th:nth-child(1),.ticket-table td:nth-child(1){width:auto;min-width:190px;white-space:normal}
+  .ticket-table th:nth-child(2),.ticket-table td:nth-child(2){width:20%}
+  .ticket-table th:nth-child(3),.ticket-table td:nth-child(3){width:112px}
+  .ticket-table th:nth-child(4),.ticket-table td:nth-child(4){width:168px}
+  .ticket-table th:nth-child(5),.ticket-table td:nth-child(5){width:128px}
+  .ticket-table th:nth-child(6),.ticket-table td:nth-child(6){width:156px}
+  /* De 190px-afkapping uit .quote-table hoort bij een tabel die krap staat; hier
+     is er ruimte, dus mag een klantnaam gewoon uitschrijven. */
+  .ticket-table td[data-label="Klant"] span{max-width:100%}
+}
 @media(max-width:760px){.ticket-toolbar{display:flex}.ticket-view-switch{width:100%}.ticket-view-switch button{flex:1;justify-content:center}}
+
+/* ── Snelfilters: aanvinken in plaats van uitklappen ───────────────────────
+   Echte checkboxes (spatiebalk werkt, schermlezer kondigt "aangevinkt" aan),
+   maar getekend als chip. Het vinkje zelf is het enige gekleurde vlak; de chip
+   markeert zich met een vulling, niet met een streep langs de rand. */
+.ticket-quick-filters{display:flex;flex-wrap:wrap;gap:7px}
+.ticket-quick-chip{position:relative;display:inline-flex;align-items:center;gap:8px;padding:6px 11px 6px 9px;border:1px solid rgba(var(--sheen-rgb),calc(.12 * var(--sheen-k)));border-radius:999px;background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)));color:var(--muted2);font-size:11.5px;font-weight:700;line-height:1.2;cursor:pointer;user-select:none;transition:background .16s ease,border-color .16s ease,color .16s ease,transform .16s ease}
+.ticket-quick-chip:hover{transform:translateY(-1px);border-color:rgba(var(--accent-rgb),.3);color:var(--text)}
+.ticket-quick-chip input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;margin:0}
+.ticket-quick-chip .tqc-box{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:5px;border:1px solid rgba(var(--sheen-rgb),calc(.2 * var(--sheen-k)));background:rgba(var(--shade-rgb),calc(.2 * var(--shade-k)));color:transparent;transition:background .16s ease,border-color .16s ease,color .16s ease}
+.ticket-quick-chip .tqc-count{min-width:20px;padding:1px 6px;border-radius:999px;background:rgba(var(--shade-rgb),calc(.26 * var(--shade-k)));color:var(--muted);font-size:10px;font-weight:700;text-align:center}
+.ticket-quick-chip.is-active{border-color:rgba(var(--accent-rgb),.42);background:rgba(var(--accent-rgb),.13);color:var(--text)}
+.ticket-quick-chip.is-active .tqc-box{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.ticket-quick-chip.is-active .tqc-count{background:rgba(var(--accent-rgb),.22);color:var(--accent-ink)}
+/* Een snelfilter dat nul tickets zou opleveren blijft klikbaar maar dringt zich
+   niet op — behalve als hij aanstaat, want dan verklaart hij je lege scherm. */
+.ticket-quick-chip.is-empty{opacity:.5}
+.ticket-quick-chip input:focus-visible ~ .tqc-box{outline:2px solid var(--accent);outline-offset:2px}
 
 /* ── Account-menu onderin de zijbalk: avatar + alle instellingen + uitloggen ── */
 .sidebar-user{position:relative;z-index:2;flex-shrink:0;padding:10px;border-top:1px solid var(--border);background:rgba(var(--sheen-rgb),calc(.018 * var(--sheen-k)))}
@@ -7724,4 +7764,102 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .abx-activate{ width:100%; margin-right:0; }
   .abx-card>footer .cc-btn{ flex:1; justify-content:center; min-height:42px; text-align:center; }
   .abx-send{ width:44px; height:44px; }
+}
+
+/* ── 22 ── Zoeken binnen een dropdown ──────────────────────────────────────
+   Een lijst met tweehonderd klanten of grootboekrekeningen is met scrollen
+   niet te doen: je weet de naam wel, je kunt hem alleen niet vinden. Boven de
+   opties komt daarom een zoekveld, dat vanzelf verschijnt zodra de lijst lang
+   genoeg is (SEARCHABLE_THRESHOLD in Ui.tsx) — korter dan dat leest je oog
+   sneller dan je typt. Het veld staat vast bovenin en alleen de optielijst
+   eronder scrolt, anders zoek je je zoekveld weg. */
+.select-menu.has-search{display:flex;flex-direction:column;padding:0;overflow:hidden}
+.select-menu.has-search .select-menu-list{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:5px}
+.select-search{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border)}
+.select-search svg{flex:0 0 auto;color:var(--muted)}
+.select-search input{flex:1;min-width:0;padding:0;border:0;background:none;outline:none;color:var(--text);font:inherit;font-size:13px}
+.select-search input::placeholder{color:var(--muted)}
+.select-empty{padding:14px 10px;text-align:center;color:var(--muted);font-size:12px;line-height:1.5}
+@media(max-width:760px){
+  /* 16px, anders zoomt iOS het hele scherm in zodra je het veld aanraakt. */
+  .select-search{padding:9px 11px}
+  .select-search input{font-size:16px}
+}
+
+/* ── 23 ── Tickets op mobiel: één kaart van drie regels ────────────────────
+   De generieke `.quote-table`-kaartstapel zet elke cel op een eigen regel met
+   het kolomlabel ervoor: zes regels per ticket, ruim 240px, dus anderhalf
+   ticket per telefoonscherm. Voor tickets is dat label overbodig — een titel,
+   een klantnaam, een datum en twee gekleurde pillen lezen zonder dat er
+   "TITEL" en "STATUS" bij staat. Drie regels in plaats van zes:
+
+     titel ................ status
+     klant ............. aangemaakt
+     prioriteit ....... [actieknop]
+
+   Deze regels staan bewust achteraan het bestand: ze moeten ná de generieke
+   `.quote-table`-mobielregels komen, want die hebben dezelfde specificiteit. */
+@media(max-width:760px){
+  .ticket-table{border-spacing:0}
+  .ticket-table tr{
+    display:grid;grid-template-columns:minmax(0,1fr) auto;
+    gap:3px 10px;align-items:center;padding:11px 13px;margin-bottom:8px;
+  }
+  .ticket-table tbody tr:last-child{margin-bottom:0}
+  .ticket-table td{display:block;width:auto;padding:0;border-bottom:0;white-space:normal;text-align:left}
+  .ticket-table td::before{display:none}
+  .ticket-table td[data-label="Titel"]{grid-row:1;grid-column:1;font-size:13.5px;line-height:1.35}
+  .ticket-table td[data-label="Status"]{grid-row:1;grid-column:2;justify-self:end}
+  .ticket-table td[data-label="Klant"]{grid-row:2;grid-column:1;font-size:11.5px;color:var(--muted)}
+  .ticket-table td[data-label="Aangemaakt"]{grid-row:2;grid-column:2;justify-self:end;font-size:11px;color:var(--muted);white-space:nowrap}
+  .ticket-table td[data-label="Prioriteit"]{grid-row:3;grid-column:1;margin-top:5px}
+  .ticket-table td.ticket-row-actions{grid-row:3;grid-column:2;justify-self:end;margin-top:5px;padding:0}
+  /* De pillen mogen kleiner: ze staan naast tekst die al vertelt wat ze zijn. */
+  .ticket-table .tk-status{font-size:9px;padding:3px 7px;letter-spacing:.06em}
+  .ticket-table .tk-pri-label{font-size:9px;padding:2px 8px}
+  .ticket-table .tk-converted-pill{margin-left:6px}
+  .ticket-table td .tk-new-badge{margin-left:6px}
+  .ticket-table .ticket-row-actions .btn{padding:7px 12px;font-size:11px}
+
+  /* Dezelfde inhoud in de lijstweergave: titel en status op één regel, meta
+     eronder, de knop over de volle breedte. Stond in drie losse blokken
+     onder elkaar (regel 6358). */
+  .ticket-item{grid-template-columns:minmax(0,1fr) auto;gap:6px 10px;align-items:center;padding:12px 13px}
+  .ticket-item .tk-body{grid-row:1;grid-column:1}
+  .ticket-item .tk-status{grid-row:1;grid-column:2;justify-self:end;font-size:9px;padding:3px 7px}
+  .ticket-item .tk-actions-btn{grid-row:2;grid-column:1/-1}
+  .ticket-item .tk-actions-btn .btn{width:100%}
+  .ticket-item .tk-title{font-size:13.5px;margin-bottom:3px}
+  .ticket-item .tk-meta{flex-wrap:wrap;gap:6px 9px}
+
+  /* Snelfilters worden een veegstrook in plaats van drie regels chips: de
+     filters zijn een hulpmiddel, ze horen het scherm niet op te eten. Het
+     negatieve marge-trucje laat ze tot de kaartrand doorlopen zodat zichtbaar
+     is dat er meer naast staat. */
+  .ticket-quick-filters{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;margin:0 -13px;padding:0 13px 2px}
+  .ticket-quick-filters::-webkit-scrollbar{display:none}
+  .ticket-quick-chip{flex:0 0 auto;min-height:34px}
+}
+
+/* Uitklapper voor de drie dropdowns. Alleen op een telefoon zichtbaar: daar
+   kostten ze meer dan de helft van het filterblok terwijl de snelfilters
+   erboven het meeste werk doen. Op desktop staat het raster gewoon open. */
+.ticket-filter-toggle{display:none}
+@media(max-width:760px){
+  .ticket-filter-toggle{
+    display:inline-flex;align-self:start;align-items:center;gap:7px;min-height:36px;
+    padding:8px 13px;border:1px solid rgba(var(--sheen-rgb),calc(.12 * var(--sheen-k)));
+    border-radius:999px;background:rgba(var(--sheen-rgb),calc(.045 * var(--sheen-k)));
+    color:var(--muted2);font:inherit;font-size:11.5px;font-weight:700;cursor:pointer;
+  }
+  .ticket-filter-toggle svg{flex:0 0 auto}
+  .ticket-filter-toggle .tft-count{
+    min-width:18px;padding:1px 6px;border-radius:999px;
+    background:rgba(var(--accent-rgb),.22);color:var(--accent-ink);font-size:10px;text-align:center;
+  }
+  .ticket-search-grid.is-collapsed{display:none}
+  /* "Al omgezet" / "Niet converteerbaar" is een uitgeschakelde knop die
+     herhaalt wat de statuspil ernaast al zegt. Op een telefoon kost dat 40px
+     per kaart zonder dat je er iets mee kunt. */
+  .ticket-table td.ticket-row-actions .btn:disabled{display:none}
 }
