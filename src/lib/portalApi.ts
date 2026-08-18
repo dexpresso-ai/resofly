@@ -137,6 +137,8 @@ export interface PortalAccount {
   id: string;
   organizationId: string;
   company: PortalCompany | null;
+  /** Huisstijl van de leverancier; stuurt de hele schil van het portaal. */
+  branding: BrandingPayload | null;
   client: PortalClient | null;
   /** Gezet als de ingelogde gebruiker een geregistreerde contactpersoon is
    *  (i.p.v. het hoofd-e-mailadres van de klant zelf) — voor een persoonlijke

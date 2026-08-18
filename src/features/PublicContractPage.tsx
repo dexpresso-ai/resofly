@@ -3,6 +3,8 @@ import { Button, Input, Textarea } from '../components/Ui';
 import { sanitizeRichText } from '../components/RichTextEditor';
 import { supabase } from '../lib/supabase';
 import { dateNL } from '../lib/format';
+import { PublicBrandFooter, PublicBrandMark, usePublicBrandTheme } from '../components/PublicBrand';
+import type { BrandingPayload } from '../lib/branding';
 
 const CONSENT_TEXT =
   'Ik heb dit contract gelezen en ga ermee akkoord. Ik onderteken dit document rechtsgeldig met een elektronische handtekening.';
@@ -47,7 +49,15 @@ type PublicClient = { name: string; contact_name: string | null; email: string |
 type PublicCompany = { company_name: string; trade_name: string | null; email: string | null; phone: string | null; website: string | null; invoice_accent_color: string | null } | null;
 type PublicSigner = { name: string; email: string; status: string; signed_at: string | null; signature_method: string | null } | null;
 type PublicEvent = { id: string; event_type: string; title: string; description: string | null; created_at: string };
-type Payload = { contract: PublicContract; client: PublicClient; company: PublicCompany; signer: PublicSigner; events: PublicEvent[] };
+type Payload = {
+  contract: PublicContract;
+  client: PublicClient;
+  company: PublicCompany;
+  /** Huisstijl van de leverancier; stuurt de kleuren en letters van deze pagina. */
+  branding: BrandingPayload | null;
+  signer: PublicSigner;
+  events: PublicEvent[];
+};
 
 export function PublicContractPage({ token }: { token: string }) {
   const [payload, setPayload] = useState<Payload | null>(null);
@@ -161,8 +171,13 @@ export function PublicContractPage({ token }: { token: string }) {
 
   const contract = payload?.contract;
   const company = payload?.company;
-  const companyName = company?.trade_name || company?.company_name || 'ResoFly';
-  const accent = company?.invoice_accent_color && /^#[0-9a-f]{6}$/i.test(company.invoice_accent_color) ? company.invoice_accent_color : '#FFD966';
+  const branding = payload?.branding ?? null;
+  // Zonder bedrijfsnaam gewoon "Contract" — hier stond de naam van ResoFly op
+  // het contract van iemand anders. En de losse `invoice_accent_color` is weg:
+  // die kleurde alleen de twee tabjes, terwijl de knop ernaast ResoFly-goud
+  // bleef. Alles hangt nu aan dezelfde tokens.
+  const companyName = branding?.companyName || company?.trade_name || company?.company_name || '';
+  usePublicBrandTheme(branding, 'Contract');
   const isFinal = contract && ['signed', 'declined', 'expired', 'voided'].includes(contract.status);
   const isPdfContract = contract?.content_kind === 'pdf';
   // Niemand tekent iets wat hij niet heeft kunnen lezen: zonder document geen
@@ -189,7 +204,8 @@ export function PublicContractPage({ token }: { token: string }) {
   return <main className="public-quote-page">
     <section className="public-quote-card public-quote-hero">
       <div>
-        <p className="eyebrow">{companyName}</p>
+        <PublicBrandMark branding={branding} name={companyName} />
+        {companyName && <p className="eyebrow">{companyName}</p>}
         <h1>Contract {contract.number}</h1>
         <p>{contract.title || 'Bekijk je contract en onderteken het digitaal.'}</p>
       </div>
@@ -226,23 +242,23 @@ export function PublicContractPage({ token }: { token: string }) {
           </div>
 
           {documentUnavailable
-            ? <p style={{ marginTop: 14, color: '#d8d8df' }}>
+            ? <p style={{ marginTop: 14, color: 'var(--muted2)' }}>
                 Ondertekenen kan pas zodra het contractdocument weer geladen kan worden — je hoort eerst te kunnen lezen wat je tekent. Je kunt hierboven opnieuw proberen, of ons nu al een vraag stellen of het contract weigeren.
               </p>
             : <>
                 <div style={{ marginTop: 14 }}>
                   <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                    <MethodTab active={method === 'typed'} onClick={() => setMethod('typed')} accent={accent}>Typ je naam</MethodTab>
-                    <MethodTab active={method === 'drawn'} onClick={() => setMethod('drawn')} accent={accent}>Teken handtekening</MethodTab>
+                    <MethodTab active={method === 'typed'} onClick={() => setMethod('typed')}>Typ je naam</MethodTab>
+                    <MethodTab active={method === 'drawn'} onClick={() => setMethod('drawn')}>Teken handtekening</MethodTab>
                   </div>
                   {method === 'typed'
-                    ? <div style={{ border: '1px solid #2a2a31', borderRadius: 14, padding: '18px 16px', background: '#0e0e11', minHeight: 72, display: 'flex', alignItems: 'center' }}>
-                        <span style={{ fontFamily: '"Brush Script MT","Segoe Script",cursive', fontSize: 34, color: '#fff' }}>{name || 'Je naam'}</span>
+                    ? <div style={{ border: '1px solid var(--border)', borderRadius: 14, padding: '18px 16px', background: 'var(--bg-deep)', minHeight: 72, display: 'flex', alignItems: 'center' }}>
+                        <span style={{ fontFamily: '"Brush Script MT","Segoe Script",cursive', fontSize: 34, color: 'var(--text)' }}>{name || 'Je naam'}</span>
                       </div>
                     : <SignaturePad onChange={setDrawnImage} />}
                 </div>
 
-                <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginTop: 14, cursor: 'pointer', color: '#d8d8df' }}>
+                <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginTop: 14, cursor: 'pointer', color: 'var(--muted2)' }}>
                   <input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} style={{ marginTop: 3 }} />
                   <span>{CONSENT_TEXT}</span>
                 </label>
@@ -253,10 +269,10 @@ export function PublicContractPage({ token }: { token: string }) {
             <Button variant="danger" onClick={() => setPanel(panel === 'decline' ? 'none' : 'decline')} disabled={submitting}>Weigeren</Button>
             {!documentUnavailable && <Button variant="primary" onClick={sign} disabled={submitting || !canSign}>Onderteken contract</Button>}
           </div>
-          {!documentUnavailable && <p style={{ marginTop: 10, color: '#9b9ba7', fontSize: 13 }}>🔒 Beveiligde ondertekening. Tijdstip, IP-adres en je akkoord worden vastgelegd als bewijs (eenvoudige elektronische handtekening, eIDAS).</p>}
+          {!documentUnavailable && <p style={{ marginTop: 10, color: 'var(--muted)', fontSize: 13 }}>🔒 Beveiligde ondertekening. Tijdstip, IP-adres en je akkoord worden vastgelegd als bewijs (eenvoudige elektronische handtekening, eIDAS).</p>}
         </div>
 
-        {panel === 'decline' && <div style={{ marginTop: 14, borderTop: '1px solid #2a2a31', paddingTop: 14 }}>
+        {panel === 'decline' && <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
           <Textarea value={declineReason} onChange={e => setDeclineReason(e.target.value)} placeholder="Reden van weigering (optioneel)" rows={3} />
           <div className="public-decision-actions" style={{ marginTop: 10 }}>
             <Button variant="ghost" onClick={() => setPanel('none')} disabled={submitting}>Annuleren</Button>
@@ -264,9 +280,9 @@ export function PublicContractPage({ token }: { token: string }) {
           </div>
         </div>}
 
-        {panel === 'question' && <div style={{ marginTop: 14, borderTop: '1px solid #2a2a31', paddingTop: 14 }}>
+        {panel === 'question' && <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
           {questionSent
-            ? <p style={{ color: '#d8d8df' }}>Bedankt! Je vraag is verstuurd. We nemen zo snel mogelijk contact met je op.</p>
+            ? <p style={{ color: 'var(--muted2)' }}>Bedankt! Je vraag is verstuurd. We nemen zo snel mogelijk contact met je op.</p>
             : <>
                 <Textarea value={question} onChange={e => setQuestion(e.target.value)} placeholder="Waar kunnen we je mee helpen?" rows={4} />
                 <div className="public-decision-actions" style={{ marginTop: 10 }}>
@@ -317,7 +333,7 @@ function ContractDocument({ url, unavailable, onDownload, onRetry }: {
   return <div style={{ display: 'grid', gap: 12 }}>
     <div style={{ display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
       {/* flex-basis 240px: op een telefoon zakt de downloadknop netjes onder de tekst i.p.v. hem plat te drukken. */}
-      <span style={{ color: '#9b9ba7', fontSize: 13, flex: '1 1 240px', minWidth: 0 }}>Lees het contract hieronder. Zie je het niet (dat gebeurt op sommige telefoons)? Download dan de PDF.</span>
+      <span style={{ color: 'var(--muted)', fontSize: 13, flex: '1 1 240px', minWidth: 0 }}>Lees het contract hieronder. Zie je het niet (dat gebeurt op sommige telefoons)? Download dan de PDF.</span>
       <Button variant="ghost" onClick={onDownload} disabled={!url}>Download PDF</Button>
     </div>
     {url
@@ -325,9 +341,10 @@ function ContractDocument({ url, unavailable, onDownload, onRetry }: {
           key={url}
           src={`${url}#view=FitH`}
           title="Contractdocument (PDF)"
-          style={{ width: '100%', height: 'min(80vh, 900px)', minHeight: 360, display: 'block', border: '1px solid #2a2a31', borderRadius: 14, background: '#fff' }}
+          // Het PDF-venster blijft wit: dat is papier, geen onderdeel van de schil.
+          style={{ width: '100%', height: 'min(80vh, 900px)', minHeight: 360, display: 'block', border: '1px solid var(--border)', borderRadius: 14, background: '#fff' }}
         />
-      : <div style={{ padding: 24, textAlign: 'center', color: '#9b9ba7', border: '1px solid #2a2a31', borderRadius: 14 }}>Document wordt geladen…</div>}
+      : <div style={{ padding: 24, textAlign: 'center', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: 14 }}>Document wordt geladen…</div>}
   </div>;
 }
 
@@ -353,12 +370,12 @@ function FinalState({ contract }: { contract: PublicContract }) {
   return <div className="public-decision-done"><h3>Niet meer beschikbaar</h3><p>Dit contract kan niet meer worden ondertekend.</p></div>;
 }
 
-function MethodTab({ active, onClick, accent, children }: { active: boolean; onClick: () => void; accent: string; children: React.ReactNode }) {
+function MethodTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return <button type="button" onClick={onClick} style={{
     flex: 1, padding: '9px 12px', borderRadius: 12, cursor: 'pointer', fontWeight: 600, fontSize: 14,
-    border: `1px solid ${active ? accent : '#2a2a31'}`,
-    background: active ? accent : 'transparent',
-    color: active ? '#111' : '#d8d8df',
+    border: `1px solid ${active ? 'var(--accent-edge, var(--accent))' : 'var(--border)'}`,
+    background: active ? 'var(--accent)' : 'transparent',
+    color: active ? 'var(--on-accent)' : 'var(--muted2)',
   }}>{children}</button>;
 }
 
@@ -429,11 +446,11 @@ function SignaturePad({ onChange }: { onChange: (dataUrl: string | null) => void
     <canvas
       ref={canvasRef}
       onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerLeave={up}
-      style={{ width: '100%', height: 160, background: '#fff', borderRadius: 14, border: '1px solid #2a2a31', touchAction: 'none', cursor: 'crosshair', display: 'block' }}
+      style={{ width: '100%', height: 160, background: '#fff', borderRadius: 14, border: '1px solid var(--border)', touchAction: 'none', cursor: 'crosshair', display: 'block' }}
     />
     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
-      <span style={{ color: '#9b9ba7', fontSize: 13 }}>Teken je handtekening met je muis of vinger.</span>
-      <button type="button" onClick={clear} style={{ background: 'none', border: 'none', color: '#9b9ba7', cursor: 'pointer', textDecoration: 'underline', fontSize: 13 }}>Wissen</button>
+      <span style={{ color: 'var(--muted)', fontSize: 13 }}>Teken je handtekening met je muis of vinger.</span>
+      <button type="button" onClick={clear} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', textDecoration: 'underline', fontSize: 13 }}>Wissen</button>
     </div>
   </div>;
 }

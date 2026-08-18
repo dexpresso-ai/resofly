@@ -1171,15 +1171,19 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .notif-prefs .notif-pref-row { white-space:normal; }
 @media(max-width:640px){ .notif-prefs { grid-template-columns:1fr; } }
 
-.public-quote-page { min-height: 100vh; padding: 42px 18px 70px; background: radial-gradient(circle at top left, rgba(var(--accent-rgb),.18), transparent 34%), #0f0f13; color: #f5f5f5; font-family: Poppins, Inter, system-ui, sans-serif; }
-.public-quote-card { max-width: 1040px; margin: 0 auto 18px; border: 1px solid rgba(var(--sheen-rgb),calc(.1 * var(--sheen-k))); border-radius: 28px; padding: 24px; background: rgba(24,24,30,.86); box-shadow: 0 24px 80px rgba(var(--shade-rgb),calc(.35 * var(--shade-k))); backdrop-filter: blur(14px); }
+.public-quote-page { min-height: 100vh; padding: 42px 18px 70px; background: radial-gradient(circle at top left, rgba(var(--accent-rgb),.18), transparent 34%), var(--bg-deep); color: var(--text); font-family: var(--brand-body, Poppins, Inter, system-ui, sans-serif); }
+.public-quote-page h1, .public-quote-page h2, .public-quote-page h3 { font-family: var(--brand-heading, inherit); }
+.public-quote-card { max-width: 1040px; margin: 0 auto 18px; border: 1px solid rgba(var(--sheen-rgb),calc(.1 * var(--sheen-k))); border-radius: 28px; padding: 24px; background: rgba(var(--surface-rgb),.86); box-shadow: 0 24px 80px rgba(var(--shade-rgb),calc(.35 * var(--shade-k))); backdrop-filter: blur(14px); }
 .public-quote-hero { display: flex; justify-content: space-between; gap: 22px; align-items: flex-start; }
 .public-quote-hero h1 { margin: 6px 0 8px; font-size: clamp(32px, 6vw, 58px); letter-spacing:-.025em; }
 .public-quote-hero p { margin: 0; color: rgba(var(--sheen-rgb),calc(.65 * var(--sheen-k))); }
-.public-quote-status { padding: 10px 14px; border-radius: 999px; background: rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k))); color: #fff; white-space: nowrap; font-weight:600; }
-.public-quote-status.st-accepted { background: rgba(80,220,150,.15); color: #8df0ba; }
-.public-quote-status.st-rejected { background: rgba(var(--danger-rgb),.15); color: #ff9a9a; }
-.public-quote-alert { max-width: 1040px; margin: 0 auto 18px; padding: 14px 18px; border-radius: 18px; background: rgba(var(--danger-rgb),.13); border: 1px solid rgba(var(--danger-rgb),.28); color: #ffd3d3; }
+.public-quote-status { padding: 10px 14px; border-radius: 999px; background: rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k))); color: var(--text); white-space: nowrap; font-weight:600; }
+.public-quote-status.st-accepted { background: rgba(var(--ok-rgb),.15); color: var(--ok-ink,var(--ok)); }
+.public-quote-status.st-rejected { background: rgba(var(--danger-rgb),.15); color: var(--danger-ink,var(--danger)); }
+/* De waarschuwing lag rechtstreeks op de pagina-achtergrond; in de lichte sfeer
+   zakte rode tekst op zijn eigen 13%-tint dan naar 4,4:1. Nu ligt de tint op een
+   paneelvlak, net als de kaarten eromheen. */
+.public-quote-alert { max-width: 1040px; margin: 0 auto 18px; padding: 14px 18px; border-radius: 18px; background: linear-gradient(rgba(var(--danger-rgb),.13), rgba(var(--danger-rgb),.13)), var(--panel); border: 1px solid rgba(var(--danger-rgb),.28); color: var(--danger); }
 .public-quote-grid { max-width: 1040px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(280px, .7fr); gap: 18px; }
 .public-quote-grid .public-quote-card { margin: 0; }
 .quote-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; }
@@ -1190,7 +1194,7 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .public-line div { display: grid; gap: 4px; }
 .public-line span { color: rgba(var(--sheen-rgb),calc(.54 * var(--sheen-k))); font-size: 13px; }
 .public-total-row { display: flex; justify-content: space-between; margin-top: 12px; color: rgba(var(--sheen-rgb),calc(.7 * var(--sheen-k))); }
-.public-total-row.grand { font-size: 20px; color: #fff; padding-top: 14px; border-top: 1px solid rgba(var(--sheen-rgb),calc(.1 * var(--sheen-k))); }
+.public-total-row.grand { font-size: 20px; color: var(--text); padding-top: 14px; border-top: 1px solid rgba(var(--sheen-rgb),calc(.1 * var(--sheen-k))); }
 .public-notes { margin-top: 18px; padding: 14px; border-radius: 16px; background: rgba(var(--accent-rgb),.08); color: rgba(var(--sheen-rgb),calc(.78 * var(--sheen-k))); }
 .public-decision-form { display: grid; gap: 12px; }
 .public-decision-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
@@ -1424,7 +1428,7 @@ body::before{
 
 .topbar{height:72px;padding:0 30px;border-bottom:1px solid var(--border);background:rgba(var(--bg-deep-rgb),.72);backdrop-filter:blur(18px);box-shadow:0 10px 34px rgba(var(--shade-rgb),calc(.2 * var(--shade-k)))}.topbar-title{font-size:22px;font-weight:700;letter-spacing:-.03em;line-height:1}.topbar-eyebrow{margin-bottom:5px;color:var(--accent-ink);font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}.topbar-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
 
-.btn{min-height:40px;border-radius:999px;padding:10px 15px;border:1px solid var(--border2);background:rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)));color:var(--muted2);font-size:12px;font-weight:700;line-height:1;box-shadow:inset 0 1px 0 rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)));transition:transform .18s ease,border-color .18s ease,background .18s ease,color .18s ease,box-shadow .18s ease}.btn:hover:not(:disabled){transform:translateY(-2px);border-color:rgba(var(--accent-rgb),.28);background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));color:var(--text)}.btn-primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent);box-shadow:0 0 0 1px rgba(var(--accent-rgb),.18),0 18px 48px rgba(var(--accent-rgb),.18)}.btn-primary:hover:not(:disabled){background:#ffe08f;color:var(--on-accent);box-shadow:0 0 0 1px rgba(var(--accent-rgb),.24),0 22px 58px rgba(var(--accent-rgb),.25)}.btn-danger{color:var(--accent-r);border-color:rgba(var(--danger-rgb),.32);background:rgba(var(--danger-rgb),.055)}.btn:disabled{opacity:.48;cursor:not-allowed}.form-input,.form-textarea,.form-select{border:1px solid var(--border);border-radius:15px;background:rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)));color:var(--text);padding:11px 13px;box-shadow:inset 0 1px 0 rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)));transition:border-color .18s ease,box-shadow .18s ease,background .18s ease}.form-input:focus,.form-textarea:focus,.form-select:focus{border-color:var(--border-strong);background:rgba(var(--sheen-rgb),calc(.075 * var(--sheen-k)));box-shadow:0 0 0 4px rgba(var(--accent-rgb),.085)}
+.btn{min-height:40px;border-radius:999px;padding:10px 15px;border:1px solid var(--border2);background:rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)));color:var(--muted2);font-size:12px;font-weight:700;line-height:1;box-shadow:inset 0 1px 0 rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)));transition:transform .18s ease,border-color .18s ease,background .18s ease,color .18s ease,box-shadow .18s ease}.btn:hover:not(:disabled){transform:translateY(-2px);border-color:rgba(var(--accent-rgb),.28);background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));color:var(--text)}.btn-primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent);box-shadow:0 0 0 1px rgba(var(--accent-rgb),.18),0 18px 48px rgba(var(--accent-rgb),.18)}.btn-primary:hover:not(:disabled){background:var(--accent-hover,#ffe08f);color:var(--on-accent);box-shadow:0 0 0 1px rgba(var(--accent-rgb),.24),0 22px 58px rgba(var(--accent-rgb),.25)}.btn-danger{color:var(--accent-r);border-color:rgba(var(--danger-rgb),.32);background:rgba(var(--danger-rgb),.055)}.btn:disabled{opacity:.48;cursor:not-allowed}.form-input,.form-textarea,.form-select{border:1px solid var(--border);border-radius:15px;background:rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)));color:var(--text);padding:11px 13px;box-shadow:inset 0 1px 0 rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)));transition:border-color .18s ease,box-shadow .18s ease,background .18s ease}.form-input:focus,.form-textarea:focus,.form-select:focus{border-color:var(--border-strong);background:rgba(var(--sheen-rgb),calc(.075 * var(--sheen-k)));box-shadow:0 0 0 4px rgba(var(--accent-rgb),.085)}
 
 .eyebrow{display:inline-flex;align-items:center;gap:8px;margin-bottom:10px;color:var(--accent-ink);font-size:11px;font-weight:700;letter-spacing:.13em;text-transform:uppercase}.eyebrow::before{content:'';display:inline-block;width:8px;height:8px;border-radius:999px;background:var(--accent);box-shadow:0 0 22px var(--accent)}
 
@@ -1542,9 +1546,9 @@ body::before{
 
 .login{min-height:100vh;background:radial-gradient(circle at 72% 24%,rgba(var(--accent-rgb),.17),transparent 32rem),radial-gradient(circle at 18% 12%,rgba(var(--accent-rgb),.1),transparent 28rem),var(--bg-deep)}.login-card{position:relative;overflow:hidden;width:min(460px,calc(100% - 34px));border-radius:32px;padding:30px;background:linear-gradient(145deg,rgba(var(--sheen-rgb),calc(.075 * var(--sheen-k))),rgba(var(--sheen-rgb),calc(.018 * var(--sheen-k)))),rgba(var(--surface-rgb),.9);box-shadow:var(--shadow)}.login-card::before{content:'';position:absolute;right:-8rem;top:-8rem;width:20rem;height:20rem;border-radius:999px;background:radial-gradient(circle,rgba(var(--accent-rgb),.2),transparent 68%);filter:blur(8px)}.login-card>*{position:relative}.login-card h1{font-size:clamp(38px,6vw,60px);line-height:.92;letter-spacing:-.03em}.login-card p{color:var(--muted2);line-height:1.65}.login-eyebrow{margin-top:22px}
 
-.error{border:1px solid rgba(var(--danger-rgb),.28);border-radius:18px;background:rgba(var(--danger-rgb),.1);color:#ffd5d5;padding:12px 14px;margin-bottom:14px}.success{border:1px solid rgba(var(--ok-rgb),.28);border-radius:18px;background:rgba(var(--ok-rgb),.1);color:#d4ffe5;padding:12px 14px}.settings-help{color:var(--muted2);line-height:1.65}
+.error{border:1px solid rgba(var(--danger-rgb),.28);border-radius:18px;background:rgba(var(--danger-rgb),.1);color:var(--accent-r);padding:12px 14px;margin-bottom:14px}.success{border:1px solid rgba(var(--ok-rgb),.28);border-radius:18px;background:rgba(var(--ok-rgb),.1);color:var(--accent-g);padding:12px 14px}.settings-help{color:var(--muted2);line-height:1.65}
 
-.public-quote-page{background:radial-gradient(circle at top left,rgba(var(--accent-rgb),.18),transparent 34%),#050505}.public-quote-status.st-accepted,.fin-status.accepted{background:rgba(var(--ok-rgb),.14);color:var(--ok)}.fin-status.pending_internal_approval,.fin-status.internally_approved,.quote-step.done small,.quote-version-pill strong{color:var(--accent-ink)}.quote-step.done span{background:var(--accent);border-color:var(--accent);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.13)}.quote-version-pill{border-color:rgba(var(--accent-rgb),.18);background:linear-gradient(135deg,rgba(var(--accent-rgb),.11),rgba(var(--sheen-rgb),calc(.025 * var(--sheen-k))))}
+.public-quote-page{background:radial-gradient(circle at top left,rgba(var(--accent-rgb),.18),transparent 34%),var(--bg-deep)}.public-quote-status.st-accepted,.fin-status.accepted{background:rgba(var(--ok-rgb),.14);color:var(--ok-ink,var(--ok))}.fin-status.pending_internal_approval,.fin-status.internally_approved,.quote-step.done small,.quote-version-pill strong{color:var(--accent-ink)}.quote-step.done span{background:var(--accent);border-color:var(--accent);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.13)}.quote-version-pill{border-color:rgba(var(--accent-rgb),.18);background:linear-gradient(135deg,rgba(var(--accent-rgb),.11),rgba(var(--sheen-rgb),calc(.025 * var(--sheen-k))))}
 
 @keyframes rfScan{0%,46%{transform:translateX(-120%)}62%,100%{transform:translateX(120%)}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
@@ -1844,11 +1848,11 @@ body::before{
 .refund-error { color:var(--danger); font-size:12px; font-weight:600; }
 .quote-version-pill .att-btn { justify-self:start; width:auto; gap:5px; padding:4px 9px; font-size:11px; font-weight:700; }
 .public-invoice-page .public-payment-card { display:grid; align-content:start; gap:14px; }
-.public-invoice-amount { font-size:clamp(34px,7vw,58px); line-height:.95; letter-spacing:-.03em; color:#fff; }
+.public-invoice-amount { font-size:clamp(34px,7vw,58px); line-height:.95; letter-spacing:-.03em; color:var(--text); }
 .public-invoice-actions { justify-content:flex-start; }
-.public-quote-status.st-paid { background:rgba(var(--ok-rgb),.15); color:#9ff2c0; }
-.public-quote-status.st-sent,.public-quote-status.st-draft { background:rgba(var(--accent-rgb),.14); color:#ffe6a3; }
-.public-quote-status.st-overdue { background:rgba(var(--danger-rgb),.16); color:#ffabab; }
+.public-quote-status.st-paid { background:rgba(var(--ok-rgb),.15); color:var(--ok-ink,var(--ok)); }
+.public-quote-status.st-sent,.public-quote-status.st-draft { background:rgba(var(--accent-rgb),.14); color:var(--accent-ink); }
+.public-quote-status.st-overdue { background:rgba(var(--danger-rgb),.16); color:var(--danger-ink,var(--danger)); }
 
 /* Finance advanced search: quotes + invoices */
 .finance-search-card{max-width:1180px;margin:0 0 14px;padding:15px;border:1px solid rgba(var(--sheen-rgb),calc(.09 * var(--sheen-k)));border-radius:24px;background:radial-gradient(circle at 92% 4%,rgba(var(--accent-rgb),.13),transparent 28%),linear-gradient(145deg,rgba(var(--sheen-rgb),calc(.062 * var(--sheen-k))),rgba(var(--sheen-rgb),calc(.018 * var(--sheen-k)))),rgba(var(--surface-rgb),.82);box-shadow:var(--shadow-soft);display:grid;gap:13px;overflow:hidden}
@@ -2511,14 +2515,14 @@ button.chat-member:hover{background:var(--bg3)}
 .portal-row-number{font-weight:700;font-size:13px}
 .portal-row-amount{font-weight:700;white-space:nowrap}
 .portal-status{font-size:10px;font-weight:600;padding:4px 9px;border-radius:5px;text-transform:uppercase;letter-spacing:.06em;background:var(--bg5);color:var(--text);white-space:nowrap}
-.portal-status.paid,.portal-status.ticket-approved{background:rgba(var(--ok-rgb),.16);color:var(--accent-g)}
-.portal-status.overdue{background:rgba(var(--danger-rgb),.16);color:var(--accent-r)}
+.portal-status.paid,.portal-status.ticket-approved{background:rgba(var(--ok-rgb),.16);color:var(--ok-ink,var(--accent-g))}
+.portal-status.overdue{background:rgba(var(--danger-rgb),.16);color:var(--danger-ink,var(--accent-r))}
 .portal-status.ticket-new{background:rgba(var(--accent-rgb),.16);color:var(--accent-ink)}
 .portal-row-actions{display:flex;align-items:center;gap:8px}
 .portal-row-error{font-size:11px;color:var(--accent-r)}
 .portal-ticket{align-items:flex-start}
 .portal-ticket-desc{font-size:12px;color:var(--muted2);line-height:1.5;margin-top:4px}
-.portal-ticket.is-new{border-color:var(--accent)}
+.portal-ticket.is-new{border-color:var(--accent-edge,var(--accent))}
 .portal-ticket-form{display:flex;flex-direction:column;gap:12px;margin-bottom:16px;padding:16px;background:var(--bg3);border:1px solid var(--border);border-radius:10px}
 .portal-field{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:var(--muted2)}
 .portal-field-inline{max-width:220px}
@@ -2567,17 +2571,17 @@ button.chat-member:hover{background:var(--bg3)}
 .portal-task-title{flex:1;font-size:13px;font-weight:600;min-width:0}
 .portal-task-date{white-space:nowrap}
 .portal-task-status{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:3px 9px;border-radius:5px;background:var(--bg5);color:var(--muted2);white-space:nowrap;flex-shrink:0}
-.portal-task-status.status-done{background:rgba(var(--ok-rgb),.16);color:var(--accent-g)}
+.portal-task-status.status-done{background:rgba(var(--ok-rgb),.16);color:var(--ok-ink,var(--accent-g))}
 .portal-task-status.status-doing{background:rgba(var(--accent-rgb),.16);color:var(--accent-ink)}
-.portal-task-status.status-review{background:rgba(var(--note-rgb),.16);color:var(--accent-v)}
+.portal-task-status.status-review{background:rgba(var(--note-rgb),.16);color:var(--note-ink,var(--accent-v))}
 @media(max-width:760px){.portal-thread-item{max-width:100%}}
 .client-portal-access-hint{color:var(--muted)}
 .client-welcome-toggle{grid-column:1/-1}
 .client-welcome-hint{color:var(--muted);font-style:normal}
 
 /* ── Klantportaal: offerte-/factuurdetail met acties ──────────────────── */
-.portal-status.accepted,.portal-status.paid{background:rgba(var(--ok-rgb),.16);color:var(--accent-g)}
-.portal-status.rejected,.portal-status.cancelled,.portal-status.expired{background:rgba(var(--danger-rgb),.16);color:var(--accent-r)}
+.portal-status.accepted,.portal-status.paid{background:rgba(var(--ok-rgb),.16);color:var(--ok-ink,var(--accent-g))}
+.portal-status.rejected,.portal-status.cancelled,.portal-status.expired{background:rgba(var(--danger-rgb),.16);color:var(--danger-ink,var(--accent-r))}
 .portal-status.sent{background:rgba(var(--accent-rgb),.16);color:var(--accent-ink)}
 .portal-doc-lines{display:flex;flex-direction:column;gap:2px;margin:14px 0 4px}
 .portal-doc-line{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 0;border-bottom:1px solid var(--border)}
@@ -4643,7 +4647,11 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
 /* ── Toetsenbord-focus overal zichtbaar én on-brand (volgt de merkkleur) ─── */
 :where(button,a,input,textarea,select,[tabindex],[role="button"]):focus-visible{
-  outline:2px solid var(--accent);outline-offset:2px;border-radius:8px;
+  /* Een lijn moet 3:1 halen (WCAG 1.4.11) en dat lukt de kale merkkleur niet op
+     een licht vlak: #FFD966 op wit is 1,37. --accent-edge is diezelfde kleur,
+     opgeschoven tot hij als lijn leesbaar is; buiten een klantpagina bestaat het
+     token niet en blijft de app precies zoals hij was. */
+  outline:2px solid var(--accent-edge,var(--accent));outline-offset:2px;border-radius:8px;
 }
 
 /* ── Trendlijn rechtsboven in statkaarten (Sparkline) ────────────────────── */
@@ -6942,8 +6950,17 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    Daarom: op deze pagina's staan de kanalen en vlakken weer op hun donkere
    waarde, zodat de kaarten en teksten binnen de donkere merkkleur kloppen,
    ongeacht wat de gebruiker in de app heeft ingesteld. Alleen de tokens die
-   `:root[data-theme="light"]` daadwerkelijk omzet staan hier terug. */
-.public-quote-page{
+   `:root[data-theme="light"]` daadwerkelijk omzet staan hier terug.
+
+   TOEGEVOEGD: alleen zolang er GEEN huisstijl staat. Zodra een pagina
+   `applyBrandTheme()` heeft gedraaid staat het complete pakket al op `:root`
+   — inclusief de kanalen — en zet die functie `data-brand-theme` op <html>.
+   Dit blok moet dan wijken, want een declaratie op een afstammeling wint van
+   een geërfde waarde: het zou de merkkleuren van de leverancier terugdraaien
+   naar ResoFly-donker en bij de lichte sfeer donkergroene statustekst op een
+   zwart vlak achterlaten. Zonder huisstijl (de boekingspagina, of het frame
+   vóór het effect draait) blijft de noodrem gewoon staan. */
+:root:not([data-brand-theme]) .public-quote-page{
   --sheen-rgb:255,255,255;
   --shade-rgb:0,0,0;
   --ink-rgb:246,244,239;
@@ -7900,4 +7917,74 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .finance-search-field .form-input,
   .finance-search-field .form-select,
   .finance-search-field .select-trigger{min-height:44px}
+}
+
+
+/* ── Huisstijl over het hele klantportaal ─────────────────────────────────
+   De kleuren staan hier niet. Die worden afgeleid uit de merkkleur van de
+   leverancier (brandThemeVars() in src/lib/branding.ts) en als tokens op
+   :root gezet zolang /portal in beeld is — laag 1 en 2 van het THEMA-TOKENS-
+   blok, plus de compat-laag, precies zoals .public-quote-page dat doet. Alle
+   .portal-*-regels hierboven draaien al op die tokens en verspringen dus
+   vanzelf mee; hier staat alleen wat tokens niet kunnen dekken.
+
+   Op :root en niet op .portal, om twee redenen: het menu van Select wordt naar
+   document.body geportald en valt buiten elke scope op .portal, en de compat-
+   laag (--bg2, --border, --text …) wordt uitgerekend op het element waar hij
+   STÁÁT — dat is :root, dus daar moet de overschrijving ook staan. */
+.portal{font-family:var(--brand-body,inherit)}
+.portal h1,.portal h2,.portal h3,.portal h4,
+.portal .portal-brand-name,.portal .portal-kpi strong{font-family:var(--brand-heading,inherit)}
+
+/* Het logo van de leverancier; zonder logo blijft het de initiaal in .brand-icon. */
+.portal-mark{display:block;height:34px;width:auto;max-width:180px;object-fit:contain}
+.portal.login .portal-mark{height:30px}
+/* Zonder logo staat er een letter-tegeltje; dat moet even hoog zijn als het
+   logo, anders springt de kop van het inlogscherm 10px zodra iemand een logo
+   instelt. */
+.portal.login .brand-icon{width:30px;height:30px;border-radius:8px;font-size:14px}
+
+/* Afsluiting onderaan: de eigen tekst van de leverancier, en "Geleverd via
+   ResoFly" zolang die niet is uitgezet in Instellingen → Huisstijl. */
+.portal-foot{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);color:var(--muted2);font-size:12px;text-align:center}
+.portal-foot-own{color:var(--muted2);font-weight:600}
+.portal.login .portal-foot{margin-top:4px;padding-top:14px}
+
+/* De keuze donker/licht voor het klantportaal. Elk kaartje toont een miniatuur
+   van het echte palet: het zwatch-element krijgt via brandThemeVars() dezelfde
+   tokens als het portaal straks, dus wat je hier ziet ís wat je klant krijgt. */
+.brand-theme-row{display:flex;gap:12px;flex-wrap:wrap}
+.brand-theme-card{flex:1 1 190px;display:flex;flex-direction:column;gap:7px;align-items:flex-start;padding:11px;border:1px solid var(--border);border-radius:var(--radius-md,14px);background:var(--bg3);cursor:pointer;text-align:left;font:inherit;color:var(--text);transition:border-color .15s,background .15s}
+.brand-theme-card:hover:not(:disabled){border-color:var(--border2);background:var(--bg4)}
+.brand-theme-card:disabled{opacity:.55;cursor:not-allowed}
+.brand-theme-card.is-active{border-color:var(--accent);background:rgba(var(--accent-rgb),.10)}
+.brand-theme-card strong{font-size:13px;font-weight:700}
+.brand-theme-card small{font-size:11px;color:var(--muted);line-height:1.45}
+/* Het voorbeeld is een miniatuur van een échte factuurkop: de tokens die het
+   kaartje krijgt zijn dezelfde die de klantpagina straks krijgt, dus kop,
+   gedempte regel, statuschip en knop laten precies zien wat er met een heel
+   licht of heel donker merk gebeurt. */
+.brand-theme-preview{display:block;width:100%;padding:10px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--text);overflow:hidden}
+.brand-theme-card-mock{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:10px 11px;border-radius:9px;border:1px solid var(--line);background:var(--surface)}
+.brand-theme-logo{max-height:18px;max-width:96px;object-fit:contain;margin-bottom:1px}
+.brand-theme-mark{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;background:var(--accent);color:var(--on-accent);font-size:11px;font-weight:700}
+.brand-theme-title{font-family:var(--brand-heading,inherit);font-size:13px;font-weight:700;letter-spacing:-.01em;color:var(--text)}
+.brand-theme-sub{font-family:var(--brand-body,inherit);font-size:11px;color:var(--muted)}
+.brand-theme-row-inline{display:flex;align-items:center;gap:7px;margin-top:3px}
+.brand-theme-chip{font-style:normal;font-size:9.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:3px 7px;border-radius:5px;background:rgba(var(--accent-rgb),.16);color:var(--accent-ink)}
+.brand-theme-btn{font-style:normal;font-size:10.5px;font-weight:700;padding:4px 10px;border-radius:999px;background:var(--accent);color:var(--on-accent);border:1px solid var(--accent-edge,var(--accent))}
+
+/* ── Merk op de publieke offerte-, factuur- en contractpagina ──────────────
+   De kleuren komen net als bij het portaal uit brandThemeVars() op :root; hier
+   staat alleen het logo en de afsluiting die er nog niet waren. */
+.public-brand{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.public-brand img{display:block;height:38px;width:auto;max-width:200px;object-fit:contain}
+.public-brand-name{font-weight:700;font-size:15px;letter-spacing:-.01em}
+.public-foot{max-width:1040px;margin:22px auto 0;display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;text-align:center;font-size:12px;color:var(--muted2)}
+.public-foot-own{color:rgba(var(--sheen-rgb),calc(.8 * var(--sheen-k)));font-weight:600}
+.public-foot-by::before{content:'·';margin-right:12px}
+@media(max-width:640px){
+  .public-foot{flex-direction:column;gap:4px}
+  .public-foot-by::before{content:none}
+  .public-brand img{height:30px;max-width:150px}
 }

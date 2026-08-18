@@ -4,6 +4,7 @@ import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
 import { renderContractPdf, appendSignaturePagesToPdf, bytesToBase64, sha256HexBytes, type PdfSignature } from '../_shared/contractPdf.ts';
 import { sanitizeContractHtml } from '../_shared/htmlSanitize.ts';
+import { loadBranding } from '../_shared/branding.ts';
 import { buildContractTokens, fillContractTokens } from '../_shared/contractTokens.ts';
 import {
   convertContractDocxToPdf,
@@ -622,6 +623,7 @@ async function buildPayload(contract: ContractRow) {
     company: company
       ? { company_name: company.company_name, trade_name: company.trade_name, email: company.email, phone: company.phone, website: company.website, invoice_accent_color: company.invoice_accent_color }
       : null,
+    branding: await loadBranding(supabaseAdmin, contract.organization_id),
     signer,
     events,
   };

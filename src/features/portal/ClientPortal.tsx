@@ -33,9 +33,72 @@ import { dateNL, euro, lineGross, priorityLabel, total } from '../../lib/format'
 import type { FinanceLine, Priority } from '../../types';
 import { GalleryViewer, type GalleryViewerItem } from '../GalleryViewer';
 import { galleryFileUrl, galleryRefreshDelayMs, galleryZipUrl, streamDownloadUrl } from '../../lib/gallery';
-import { brandStyle, ensureBrandFontsLoaded } from '../../lib/branding';
+import { applyBrandTheme, brandStyle, ensureBrandFontsLoaded, sanitizeStoredBranding, type BrandingPayload } from '../../lib/branding';
 
 type PortalTab = 'overview' | 'invoices' | 'quotes' | 'contracts' | 'tickets' | 'projects' | 'galleries';
+
+/**
+ * Het loginscherm weet nog niet bij wélke leverancier deze bezoeker hoort — dat
+ * blijkt pas uit het geverifieerde e-mailadres. Het adres vóór de login naar de
+ * server sturen om alvast de huisstijl op te halen zou van elk e-mailadres
+ * verklappen wie zijn leverancier is, dus dat doen we niet. In plaats daarvan
+ * onthoudt dit apparaat de huisstijl van de vorige sessie: de eerste keer is
+ * het portaal neutraal, elke keer daarna staat het meteen in het merk van de
+ * leverancier.
+ *
+ * Bij het uitloggen gaat de herinnering wél weg. Op een balie- of gezinscomputer
+ * zou de volgende bezoeker anders het logo en de afsluittekst van de vorige
+ * zien staan, en daarmee weten bij wie die klant is. En bij het lezen keuren we
+ * de waarde opnieuw (`sanitizeStoredBranding`): wat van de schijf van de
+ * bezoeker komt is geen databasewaarde meer.
+ */
+const BRAND_MEMORY_KEY = 'resofly.portal.brand';
+
+function rememberBranding(branding: BrandingPayload | null | undefined): void {
+  try {
+    if (branding) window.localStorage.setItem(BRAND_MEMORY_KEY, JSON.stringify(branding));
+  } catch {
+    // Privémodus of vol quotum: dan blijft het loginscherm gewoon neutraal.
+  }
+}
+
+function forgetBranding(): void {
+  try {
+    window.localStorage.removeItem(BRAND_MEMORY_KEY);
+  } catch {
+    // Niets aan te doen; het is een sierlaag.
+  }
+}
+
+function rememberedBranding(): BrandingPayload | null {
+  try {
+    const raw = window.localStorage.getItem(BRAND_MEMORY_KEY);
+    return raw ? sanitizeStoredBranding(JSON.parse(raw)) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Logo als de leverancier er een heeft, anders zijn initiaal in de merkkleur.
+ *  Kent het apparaat de leverancier nog niet, dan blijft het tegeltje weg —
+ *  liever niets dan de "R" van ResoFly op andermans portaal. */
+function PortalMark({ branding, name }: { branding: BrandingPayload | null | undefined; name: string }) {
+  if (branding?.logoDataUrl) {
+    return <img className="portal-mark" src={branding.logoDataUrl} alt={branding.companyName ?? name} />;
+  }
+  if (!name) return null;
+  return <div className="brand-icon">{name.slice(0, 1).toUpperCase()}</div>;
+}
+
+/** Afsluiting van de leverancier onder elk portaalscherm. */
+function PortalFooter({ branding }: { branding: BrandingPayload | null | undefined }) {
+  if (!branding) return null;
+  if (!branding.footerText && branding.hidePoweredBy) return null;
+  return <footer className="portal-foot">
+    {branding.footerText && <span className="portal-foot-own">{branding.footerText}</span>}
+    {!branding.hidePoweredBy && <span className="portal-foot-by">Geleverd via ResoFly</span>}
+  </footer>;
+}
 
 /**
  * Klantportaal-root. Aparte route (/portal) met een eigen, wachtwoordloze login
@@ -46,6 +109,19 @@ type PortalTab = 'overview' | 'invoices' | 'quotes' | 'contracts' | 'tickets' | 
 export function ClientPortal() {
   const [sessionReady, setSessionReady] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
+  // Begint bij de huisstijl die dit apparaat onthield en gaat over op de echte
+  // zodra de dossiers binnen zijn. Bewust ÉÉN eigenaar van het thema: twee
+  // componenten die allebei :root beschrijven zouden elkaars momentopname
+  // terugzetten, en dan staat het portaal na uitloggen weer in ResoFly-goud.
+  const [branding, setBranding] = useState<BrandingPayload | null>(rememberedBranding);
+
+  // Alleen opnieuw toepassen als er echt iets aan het beeld verandert; `load()`
+  // levert bij elke "Ververs" een nieuw object met dezelfde inhoud.
+  const brandKey = branding
+    ? [branding.accentColor, branding.clientTheme, branding.headingFont, branding.bodyFont,
+       branding.companyName, branding.footerText, branding.hidePoweredBy, branding.logoDataUrl].join('|')
+    : '';
+  useEffect(() => applyBrandTheme(branding), [brandKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     let active = true;
@@ -66,11 +142,11 @@ export function ClientPortal() {
     return <main className="portal boot"><div className="login-card"><h1>Configuratie ontbreekt</h1><p>Het klantportaal is nog niet geconfigureerd. Neem contact op met je leverancier.</p></div></main>;
   }
   if (!sessionReady) return <main className="portal boot"><div className="portal-boot"><span className="boot-spinner" aria-hidden="true" /><span>Klantportaal laden…</span></div></main>;
-  if (!loggedIn) return <PortalLogin />;
-  return <PortalDashboard />;
+  if (!loggedIn) return <PortalLogin branding={branding} />;
+  return <PortalDashboard branding={branding} onBranding={setBranding} />;
 }
 
-function PortalLogin() {
+function PortalLogin({ branding }: { branding: BrandingPayload | null }) {
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -101,7 +177,7 @@ function PortalLogin() {
 
   return <main className="portal login">
     <div className="login-card">
-      <div className="app-brand"><div className="brand-icon">R</div><span>Klantportaal</span></div>
+      <div className="app-brand"><PortalMark branding={branding} name={branding?.companyName ?? ''} /><span>{branding?.companyName ?? 'Klantportaal'}</span></div>
       <p className="eyebrow login-eyebrow">Facturen • Offertes • Tickets • Projecten</p>
       <h1>Inloggen</h1>
       <p>Vul je e-mailadres in. Je ontvangt een veilige inloglink in je mailbox — geen wachtwoord nodig.</p>
@@ -115,11 +191,15 @@ function PortalLogin() {
       <Button variant="primary" onClick={signIn} disabled={!email.trim() || busy}>{busy ? 'Versturen…' : 'Stuur inloglink'}</Button>
       {sent && <p className="success">Check je mailbox. Open de link in dezelfde browser als waar je deze pagina hebt geopend.</p>}
       {error && <p className="error">{error}</p>}
+      <PortalFooter branding={branding} />
     </div>
   </main>;
 }
 
-function PortalDashboard() {
+function PortalDashboard({ branding, onBranding }: {
+  branding: BrandingPayload | null;
+  onBranding: (branding: BrandingPayload | null) => void;
+}) {
   const [accounts, setAccounts] = useState<PortalAccount[] | null>(null);
   const [email, setEmail] = useState('');
   const [activeAccountId, setActiveAccountId] = useState<string | null>(null);
@@ -148,11 +228,21 @@ function PortalDashboard() {
   );
 
   const companyName = activeAccount?.company?.trade_name || activeAccount?.company?.company_name || 'Klantportaal';
+  const accountBranding = activeAccount?.branding ?? null;
+
+  // Eén klant kan bij meerdere leveranciers klant zijn; de huisstijl hoort dus
+  // bij het gekozen dossier, niet bij de sessie. Wisselen van dossier zet het
+  // hele portaal om — het toepassen zelf doet ClientPortal hierboven.
+  useEffect(() => {
+    if (!accountBranding) return;
+    rememberBranding(accountBranding);
+    onBranding(accountBranding);
+  }, [accountBranding, onBranding]);
 
   return <main className="portal portal-app">
     <header className="portal-topbar">
       <div className="portal-brand">
-        <div className="brand-icon">{(companyName || 'R').slice(0, 1).toUpperCase()}</div>
+        <PortalMark branding={branding} name={companyName} />
         <div>
           <div className="portal-brand-name">{companyName}</div>
           <div className="portal-brand-sub">{activeAccount?.actingContact ? `${activeAccount.actingContact.name} · ${email}` : (email || 'Klantportaal')}</div>
@@ -165,7 +255,7 @@ function PortalDashboard() {
           </Select>
         )}
         <Button onClick={load}>{loading ? 'Laden…' : 'Ververs'}</Button>
-        <Button onClick={() => supabasePortalAuth.signOut()}>Uitloggen</Button>
+        <Button onClick={() => { forgetBranding(); void supabasePortalAuth.signOut(); }}>Uitloggen</Button>
       </div>
     </header>
 
@@ -173,7 +263,8 @@ function PortalDashboard() {
       {error && <div className="error">{error}</div>}
       {loading && !accounts && <div className="portal-boot"><span className="boot-spinner" aria-hidden="true" /><span>Gegevens laden…</span></div>}
       {!loading && accounts && accounts.length === 0 && <PortalEmpty email={email} />}
-      {activeAccount && <PortalAccountView account={activeAccount} onTicketCreated={load} />}
+      {activeAccount && <PortalAccountView key={activeAccount.id} account={activeAccount} supplierName={companyName} onTicketCreated={load} />}
+      <PortalFooter branding={branding} />
     </section>
   </main>;
 }
@@ -185,7 +276,7 @@ function PortalEmpty({ email }: { email: string }) {
   </div>;
 }
 
-function PortalAccountView({ account, onTicketCreated }: { account: PortalAccount; onTicketCreated: () => void }) {
+function PortalAccountView({ account, supplierName, onTicketCreated }: { account: PortalAccount; supplierName: string; onTicketCreated: () => void }) {
   const [tab, setTab] = useState<PortalTab>('overview');
   const [openDoc, setOpenDoc] = useState<{ type: 'quote' | 'invoice'; id: string } | null>(null);
 
@@ -261,7 +352,7 @@ function PortalAccountView({ account, onTicketCreated }: { account: PortalAccoun
 
     {tab === 'contracts' && <ContractsTab account={account} />}
 
-    {tab === 'tickets' && <TicketsTab account={account} onTicketCreated={onTicketCreated} />}
+    {tab === 'tickets' && <TicketsTab account={account} supplierName={supplierName} onTicketCreated={onTicketCreated} />}
 
     {tab === 'projects' && <ProjectsTab account={account} />}
 
@@ -703,7 +794,7 @@ function PortalContactCard({ account }: { account: PortalAccount }) {
   </article>;
 }
 
-function TicketsTab({ account, onTicketCreated }: { account: PortalAccount; onTicketCreated: () => void }) {
+function TicketsTab({ account, supplierName, onTicketCreated }: { account: PortalAccount; supplierName: string; onTicketCreated: () => void }) {
   const [showForm, setShowForm] = useState(account.tickets.length === 0);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -729,7 +820,7 @@ function TicketsTab({ account, onTicketCreated }: { account: PortalAccount; onTi
   }
 
   if (openTicketId) {
-    return <PortalTicketDetail ticketId={openTicketId} onBack={() => setOpenTicketId(null)} onChanged={onTicketCreated} />;
+    return <PortalTicketDetail ticketId={openTicketId} supplierName={supplierName} onBack={() => setOpenTicketId(null)} onChanged={onTicketCreated} />;
   }
 
   return <article className="portal-card">
@@ -777,7 +868,7 @@ function TicketRow({ ticket, highlight, onOpen }: { ticket: PortalTicket; highli
 
 // ── Ticketdetail met tijdlijn ────────────────────────────────────────
 
-function PortalTicketDetail({ ticketId, onBack, onChanged }: { ticketId: string; onBack: () => void; onChanged: () => void }) {
+function PortalTicketDetail({ ticketId, supplierName, onBack, onChanged }: { ticketId: string; supplierName: string; onBack: () => void; onChanged: () => void }) {
   const [thread, setThread] = useState<PortalTicketThread | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -828,7 +919,7 @@ function PortalTicketDetail({ ticketId, onBack, onChanged }: { ticketId: string;
 
       <div className="portal-thread">
         {thread.notes.length === 0 && <p className="portal-muted">Nog geen berichten. Stel hieronder je vraag of voeg informatie toe.</p>}
-        {thread.notes.map(note => <PortalThreadItem key={note.id} note={note} />)}
+        {thread.notes.map(note => <PortalThreadItem key={note.id} note={note} supplierName={supplierName} />)}
       </div>
 
       <div className="portal-thread-composer">
@@ -841,11 +932,13 @@ function PortalTicketDetail({ ticketId, onBack, onChanged }: { ticketId: string;
   </article>;
 }
 
-function PortalThreadItem({ note }: { note: PortalTicketNote }) {
+function PortalThreadItem({ note, supplierName }: { note: PortalTicketNote; supplierName: string }) {
   const fromClient = note.author_type === 'client';
   return <div className={`portal-thread-item ${fromClient ? 'is-mine' : 'is-team'}`}>
     <div className="portal-thread-meta">
-      <strong>{fromClient ? (note.author_name || 'U') : 'Support team'}</strong>
+      {/* De leverancier ondertekent met zijn eigen naam; "Support team" was
+          hier het enige wat nog niet van hem was. */}
+      <strong>{fromClient ? (note.author_name || 'U') : supplierName}</strong>
       <span>{new Date(note.created_at).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
     </div>
     <p>{note.body}</p>
@@ -866,7 +959,7 @@ function ProjectsTab({ account }: { account: PortalAccount }) {
     {account.projects.length === 0 && <p className="portal-muted">Er zijn nog geen projecten voor je.</p>}
     <div className="portal-project-list">
       {account.projects.map(p => <button type="button" key={p.id} className="portal-project portal-row-clickable" onClick={() => setOpenProjectId(p.id)}>
-        <span className="portal-project-dot" style={{ background: p.color || '#FFD966' }} />
+        <span className="portal-project-dot" style={{ background: p.color || 'var(--accent)' }} />
         <div className="portal-project-body">
           <strong>{p.name}{p.archived && <em className="portal-archived"> · Afgerond</em>}</strong>
           {p.description && <p>{p.description}</p>}
@@ -922,7 +1015,7 @@ function PortalProjectDetail({ projectId, onBack }: { projectId: string; onBack:
 
     {project && <>
       <div className="portal-detail-title">
-        <h2><span className="portal-project-dot" style={{ background: project.color || '#FFD966' }} /> {project.name}</h2>
+        <h2><span className="portal-project-dot" style={{ background: project.color || 'var(--accent)' }} /> {project.name}</h2>
         {project.archived && <span className="portal-status">Afgerond</span>}
       </div>
       <p className="portal-muted">{project.start_date ? `Start ${dateNL(project.start_date)}` : 'Nog geen startdatum'}{project.end_date ? ` · Eind ${dateNL(project.end_date)}` : ''}</p>

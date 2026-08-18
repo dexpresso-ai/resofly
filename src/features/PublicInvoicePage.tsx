@@ -3,6 +3,8 @@ import { Button } from '../components/Ui';
 import { supabase } from '../lib/supabase';
 import { dateNL, euro, total, lineGross } from '../lib/format';
 import type { FinanceLine } from '../types';
+import { PublicBrandFooter, PublicBrandMark, usePublicBrandTheme } from '../components/PublicBrand';
+import type { BrandingPayload } from '../lib/branding';
 
 // Supabase functions.invoke geeft een non-2xx terug als FunctionsHttpError, waarvan
 // .message altijd de generieke "Edge Function returned a non-2xx status code" is.
@@ -50,6 +52,8 @@ type PublicInvoicePayload = {
   project: PublicProject;
   quote: PublicQuote;
   company: PublicCompany;
+  /** Huisstijl van de leverancier; stuurt de kleuren en letters van deze pagina. */
+  branding: BrandingPayload | null;
   events: PublicEvent[];
   payments: PublicPayment[];
   versions: PublicVersion[];
@@ -87,7 +91,11 @@ export function PublicInvoicePage({ token }: { token: string }) {
   useEffect(() => { void load(); }, [token]);
 
   const invoice = payload?.invoice;
-  const companyName = payload?.company?.trade_name || payload?.company?.company_name || 'ResoFly';
+  const branding = payload?.branding ?? null;
+  // Zonder bedrijfsnaam gewoon "Factuur" — hier stond de naam van ResoFly op de
+  // factuur van iemand anders.
+  const companyName = branding?.companyName || payload?.company?.trade_name || payload?.company?.company_name || '';
+  usePublicBrandTheme(branding, 'Factuur');
   const totals = useMemo(() => total(invoice?.lines || []), [invoice?.lines]);
   const payment = useMemo(() => {
     const records = payload?.payments || [];
@@ -121,7 +129,8 @@ export function PublicInvoicePage({ token }: { token: string }) {
   return <main className="public-quote-page public-invoice-page">
     <section className="public-quote-card public-quote-hero">
       <div>
-        <p className="eyebrow">{companyName}</p>
+        <PublicBrandMark branding={branding} name={companyName} />
+        {companyName && <p className="eyebrow">{companyName}</p>}
         <h1>Factuur {invoice.number}</h1>
         <p>{payload?.project?.name ? `Project: ${payload.project.name}` : 'Bekijk en betaal deze factuur veilig online.'}</p>
       </div>
@@ -210,6 +219,8 @@ export function PublicInvoicePage({ token }: { token: string }) {
         </div>)}
       </div>
     </section>
+
+    <PublicBrandFooter branding={branding} />
   </main>;
 }
 

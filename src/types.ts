@@ -2715,8 +2715,9 @@ export interface CompanySettings extends OrgScopedRow {
   year_result_account_code: string;
   /** Bedrijfsbreed standaard uurtarief (centen) — fallback als een project geen eigen tarief heeft. */
   default_hourly_rate_cents: number | null;
-  /** Huisstijl op klantgerichte pagina's (galerij). Logo als data-URL: de
-   *  publieke galerijpagina heeft geen sessie en dus geen media-token. */
+  /** Huisstijl op klantgerichte pagina's (galerij en klantportaal). Logo als
+   *  data-URL: de publieke galerijpagina heeft geen sessie en dus geen
+   *  media-token. */
   brand_logo_data_url: string | null;
   brand_accent_color: string;
   brand_footer_text: string | null;
@@ -2726,6 +2727,10 @@ export interface CompanySettings extends OrgScopedRow {
   brand_body_font: string;
   /** Achtergrond van de galerij; de frontend leidt er het contrastpalet uit af. */
   brand_gallery_bg: string;
+  /** Sfeer van de klantgerichte pagina's (portaal, galerij, publieke
+   *  offerte/factuur/contract): 'dark' of 'light'. De merkkleur bepaalt de
+   *  tint, deze kolom de helderheid (zie brandThemeVars in lib/branding.ts). */
+  brand_client_theme: string;
   created_at: string;
   updated_at: string;
 }

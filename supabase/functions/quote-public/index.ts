@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { loadBranding } from '../_shared/branding.ts';
 
 type QuoteLine = { id?: string; description: string; quantity: number; unit_price: number; vat?: number };
 type PublicQuote = {
@@ -100,13 +101,14 @@ serve(async (req) => {
 async function getPublicQuote(tokenHash: string) {
   const quote = await loadQuoteByTokenHash(tokenHash);
   await insertClientViewedEvent(quote.organization_id, quote.id);
-  const [client, project, company, events] = await Promise.all([
+  const [client, project, company, branding, events] = await Promise.all([
     quote.client_id ? loadClient(quote.organization_id, quote.client_id) : Promise.resolve(null),
     quote.project_id ? loadProject(quote.organization_id, quote.project_id) : Promise.resolve(null),
     loadCompanySettings(quote.organization_id),
+    loadBranding(supabaseAdmin, quote.organization_id),
     loadQuoteEvents(quote.organization_id, quote.id),
   ]);
-  return { quote: publicQuotePayload(quote), client, project, company, events };
+  return { quote: publicQuotePayload(quote), client, project, company, branding, events };
 }
 
 async function decidePublicQuote(kind: 'accept' | 'reject', tokenHash: string, body: Record<string, unknown>) {
@@ -129,13 +131,17 @@ async function decidePublicQuote(kind: 'accept' | 'reject', tokenHash: string, b
   }
   const row = Array.isArray(data) ? data[0] : data;
   const quote = row as PublicQuote;
-  const [client, project, company, events] = await Promise.all([
+  // Ook na "Akkoord geven" moet de huisstijl mee: de frontend vervangt de hele
+  // payload met dit antwoord, en zonder branding klapt de pagina op dat moment
+  // terug naar de ResoFly-stijl.
+  const [client, project, company, branding, events] = await Promise.all([
     quote.client_id ? loadClient(quote.organization_id, quote.client_id) : Promise.resolve(null),
     quote.project_id ? loadProject(quote.organization_id, quote.project_id) : Promise.resolve(null),
     loadCompanySettings(quote.organization_id),
+    loadBranding(supabaseAdmin, quote.organization_id),
     loadQuoteEvents(quote.organization_id, quote.id),
   ]);
-  return { quote: publicQuotePayload(quote), client, project, company, events };
+  return { quote: publicQuotePayload(quote), client, project, company, branding, events };
 }
 
 async function loadQuoteByTokenHash(tokenHash: string): Promise<PublicQuote> {

@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { BRANDING_COLUMNS, sanitizeBranding } from '../_shared/branding.ts';
 import { createPortalInvoiceCheckout, calculateTotalCents, orgHasInvoiceMollie } from '../_shared/invoiceCheckout.ts';
 
 // ============================================================
@@ -694,25 +695,6 @@ async function toggleGalleryFavorite(user: { id: string; email: string }, body: 
   return { itemId, on, reaction };
 }
 
-/**
- * Huisstijl van de beeldmaker voor de galerij. Nooit blokkerend: zonder
- * instellingen valt de weergave terug op de ResoFly-stijl. De lettertypen zijn
- * sleutels uit een vaste lijst in de frontend, geen rauwe CSS.
- */
-function sanitizeBranding(row: Record<string, unknown> | null) {
-  const accent = String(row?.brand_accent_color ?? '');
-  return {
-    logoDataUrl: (row?.brand_logo_data_url as string | null) ?? null,
-    accentColor: /^#[0-9A-Fa-f]{6}$/.test(accent) ? accent : '#FFD966',
-    footerText: (row?.brand_footer_text as string | null) ?? null,
-    hidePoweredBy: row?.brand_hide_powered_by === true,
-    companyName: (row?.trade_name as string | null) || (row?.company_name as string | null) || null,
-    headingFont: String(row?.brand_heading_font ?? 'system'),
-    bodyFont: String(row?.brand_body_font ?? 'system'),
-    galleryBg: /^#[0-9A-Fa-f]{6}$/.test(String(row?.brand_gallery_bg ?? '')) ? String(row?.brand_gallery_bg) : '#0B0B0B',
-  };
-}
-
 function sanitizeGallery(row: Record<string, unknown>) {
   return {
     id: row.id,
@@ -802,6 +784,9 @@ async function buildAccount(client: ClientRow, email: string) {
     id: client.id,
     organizationId: orgId,
     company: sanitizeCompany(company),
+    // Nul extra queries: de huisstijlkolommen zitten al in de rij die we
+    // hierboven voor sanitizeCompany hebben opgehaald.
+    branding: sanitizeBranding(company),
     client: sanitizeClient(client),
     actingContact: actingContact ? { name: actingContact.name, email: actingContact.email } : null,
     projects: projects.map(sanitizeProject),
@@ -883,14 +868,45 @@ async function selectRows(table: string, build: (q: QueryBuilder) => QueryBuilde
   return (data || []) as Record<string, unknown>[];
 }
 
+// Alleen de kolommen die het portaal ook echt naar buiten stuurt. Bewust geen
+// select('*') meer: dat sleepte invoice_template_data_url mee — het rauwe
+// briefpapier, ongelimiteerd in grootte — bij elke portaalopvraag, per account.
+// De huisstijlkolommen komen uit _shared/branding.ts, zodat een nieuwe
+// huisstijlinstelling maar op één plek hoeft te worden bijgeschreven.
+const COMPANY_COLUMNS = [
+  'email', 'phone', 'website', 'city', 'country', 'iban', 'vat_number', 'kvk_number',
+  BRANDING_COLUMNS,
+].join(',');
+
+// Dezelfde lijst zonder de kolommen die de nieuwste migratie toevoegt. Draait de
+// functie al terwijl `db push` nog moet, dan faalt de brede lijst en levert deze
+// terugval nog altijd alles behalve de sfeerkeuze — beter dan terugvallen op
+// `select('*')`, want dan komt het rauwe briefpapier alsnog mee.
+const COMPANY_COLUMNS_LEGACY = COMPANY_COLUMNS
+  .split(',')
+  .filter((column) => column !== 'brand_client_theme')
+  .join(',');
+
 async function optionalCompany(organizationId: string) {
+  const row = (columns: string) => supabaseAdmin
+    .from('company_settings')
+    .select(columns)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
   try {
-    const { data, error } = await supabaseAdmin.from('company_settings').select('*').eq('organization_id', organizationId).maybeSingle();
+    let { data, error } = await row(COMPANY_COLUMNS);
+    if (error) {
+      // Draait deze versie al terwijl de migratie nog niet is toegepast, dan
+      // bestaat de nieuwste kolom nog niet en faalt de hele opvraag. Liever de
+      // sfeerkeuze missen dan een portaal zonder bedrijfsgegevens.
+      console.warn('client-portal company lookup mislukt, opnieuw zonder de nieuwste kolom', error.message);
+      ({ data, error } = await row(COMPANY_COLUMNS_LEGACY));
+    }
     if (error) {
       console.warn('client-portal company lookup failed', error.message);
       return null;
     }
-    return data || null;
+    return (data as Record<string, unknown> | null) || null;
   } catch (error) {
     console.warn('client-portal company lookup crashed', error instanceof Error ? error.message : error);
     return null;

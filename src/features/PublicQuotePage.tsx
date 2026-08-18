@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Button, Input, Textarea } from '../components/Ui';
 import { supabase } from '../lib/supabase';
 import { dateNL, euro, total, lineGross } from '../lib/format';
+import { PublicBrandFooter, PublicBrandMark, usePublicBrandTheme } from '../components/PublicBrand';
+import type { BrandingPayload } from '../lib/branding';
 
 async function extractFunctionError(error: unknown, fallback: string): Promise<string> {
   const context = (error as { context?: unknown })?.context;
@@ -46,6 +48,8 @@ type PublicQuotePayload = {
   client: PublicClient;
   project: PublicProject;
   company: PublicCompany;
+  /** Huisstijl van de leverancier; stuurt de kleuren en letters van deze pagina. */
+  branding: BrandingPayload | null;
   events: PublicEvent[];
 };
 
@@ -97,7 +101,11 @@ export function PublicQuotePage({ token }: { token: string }) {
   }
 
   const quote = payload?.quote;
-  const companyName = payload?.company?.trade_name || payload?.company?.company_name || 'ResoFly';
+  const branding = payload?.branding ?? null;
+  // Zonder bedrijfsnaam gewoon "Offerte" — hier stond de naam van ResoFly op de
+  // offerte van iemand anders.
+  const companyName = branding?.companyName || payload?.company?.trade_name || payload?.company?.company_name || '';
+  usePublicBrandTheme(branding, 'Offerte');
   const totals = useMemo(() => total(quote?.lines || []), [quote?.lines]);
   const finalStatus = quote?.status === 'accepted' || quote?.status === 'rejected';
 
@@ -110,7 +118,8 @@ export function PublicQuotePage({ token }: { token: string }) {
   return <main className="public-quote-page">
     <section className="public-quote-card public-quote-hero">
       <div>
-        <p className="eyebrow">{companyName}</p>
+        <PublicBrandMark branding={branding} name={companyName} />
+        {companyName && <p className="eyebrow">{companyName}</p>}
         <h1>Offerte {quote.number}</h1>
         <p>{payload?.project?.name ? `Project: ${payload.project.name}` : 'Bekijk de offerte en geef digitaal akkoord.'}</p>
       </div>
@@ -183,6 +192,8 @@ export function PublicQuotePage({ token }: { token: string }) {
         </div>)}
       </div>
     </section>
+
+    <PublicBrandFooter branding={branding} />
   </main>;
 }
 

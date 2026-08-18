@@ -5,7 +5,7 @@ import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
-import { BRAND_BODY_FONTS, BRAND_FONTS, GALLERY_BACKGROUNDS, brandFont, brandStyle, ensureBrandFontsLoaded } from '../lib/branding';
+import { BRAND_BODY_FONTS, BRAND_FONTS, CLIENT_THEMES, GALLERY_BACKGROUNDS, brandFont, brandStyle, brandThemeVars, ensureBrandFontsLoaded } from '../lib/branding';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setBusinessAddon, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
 import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom } from '../lib/repository';
@@ -65,6 +65,7 @@ const emptySettings: CompanySettingsInput = {
   brand_heading_font: 'system',
   brand_body_font: 'system',
   brand_gallery_bg: '#0B0B0B',
+  brand_client_theme: 'dark',
 };
 
 const ROLE_LABELS: Record<OrganizationRole, string> = {
@@ -128,7 +129,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'organisatie', label: 'Organisatie & team', Icon: Users, description: 'Beheer je werkruimte, teamleden en rollen, en bekijk de recente activiteit.' },
   { id: 'sjablonen', label: 'Projectsjablonen', Icon: ListChecks, description: 'Leg je vaste werkwijze vast als standaardtaken en subtaken, en rol die bij elk nieuw project in één klik uit.' },
   { id: 'klantvelden', label: 'Eigen klantvelden', Icon: SlidersHorizontal, description: 'Verzin je eigen velden bij een klant — en gebruik ze als variabele in je campagnes en mailings.' },
-  { id: 'huisstijl', label: 'Huisstijl', Icon: Palette, description: 'Je logo, accentkleur en afsluiting op klantgerichte pagina\'s zoals de galerij — zodat een oplevering van jou is, niet van ResoFly.' },
+  { id: 'huisstijl', label: 'Huisstijl', Icon: Palette, description: 'Je logo, merkkleur en afsluiting op alles wat je klant ziet — het klantportaal en de galerij — zodat het van jou is, niet van ResoFly.' },
   { id: 'meldingen', label: 'Meldingen', Icon: Bell, description: 'Ontvang OS-meldingen op je apparaat bij nieuwe tickets, chatberichten, e-mails en boekingen — ook als ResoFly dicht is.' },
   { id: 'agenda', label: 'Agenda', Icon: CalendarCog, description: 'Koppel Google Calendar of Microsoft Outlook, maak eigen ResoFly-agenda\'s, abonneer op een agenda via een link en zet de sync met je telefoon aan.' },
   { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens, factuurtemplate en betaalteksten die op je facturen en offertes verschijnen.' },
@@ -2556,7 +2557,7 @@ function BrandingCard({ form, setForm, canWrite }: {
       <h3>Je merk</h3>
       <p className="settings-help">
         Hier staat je merk in z&apos;n geheel: naam, logo, kleur en lettertypen. De merkkleur werkt door in
-        álles wat je klant ziet — galerijen, facturen, offertes, contracten en e-mails.
+        álles wat je klant ziet — het klantportaal, galerijen, facturen, offertes, contracten en e-mails.
       </p>
 
       <div className="brand-grid">
@@ -2617,7 +2618,7 @@ function BrandingCard({ form, setForm, canWrite }: {
               aria-label="Accentkleur als hexcode"
             />
           </div>
-          <p className="settings-help">Werkt door in de galerij én op je facturen, offertes, contracten en e-mails.</p>
+          <p className="settings-help">Werkt door in het klantportaal en de galerij, én op je facturen, offertes, contracten en e-mails.</p>
         </div>
 
         <div className="brand-field brand-field-wide">
@@ -2650,6 +2651,58 @@ function BrandingCard({ form, setForm, canWrite }: {
           </p>
         </div>
 
+        <div className="brand-field brand-field-wide">
+          <span className="brand-label">Sfeer van je klantpagina&apos;s</span>
+          <div className="brand-theme-row">
+            {CLIENT_THEMES.map(option => (
+              <button
+                key={option.value}
+                type="button"
+                className={`brand-theme-card${form.brand_client_theme === option.value ? ' is-active' : ''}`}
+                onClick={() => setForm(prev => ({ ...prev, brand_client_theme: option.value }))}
+                disabled={!canWrite}
+                aria-pressed={form.brand_client_theme === option.value}
+              >
+                {/* Geen kleurstaal maar een echt stukje pagina: kop, gedempte
+                    regel, statuschip en knop zijn precies de vier plekken waar
+                    een heel licht of heel donker merk uit de bocht kan vliegen. */}
+                <span
+                  className="brand-theme-preview"
+                  style={brandThemeVars({
+                    logoDataUrl: null,
+                    accentColor: form.brand_accent_color,
+                    footerText: null,
+                    hidePoweredBy: false,
+                    companyName: null,
+                    headingFont: form.brand_heading_font,
+                    bodyFont: form.brand_body_font,
+                    clientTheme: option.value,
+                  }) as React.CSSProperties}
+                >
+                  <span className="brand-theme-card-mock">
+                    {form.brand_logo_data_url
+                      ? <img className="brand-theme-logo" src={form.brand_logo_data_url} alt="" />
+                      : <span className="brand-theme-mark">{(form.trade_name || 'A').slice(0, 1).toUpperCase()}</span>}
+                    <strong className="brand-theme-title">Factuur 2026-014</strong>
+                    <span className="brand-theme-sub">Vervalt 15 september · € 1.240</span>
+                    <span className="brand-theme-row-inline">
+                      <em className="brand-theme-chip">Verstuurd</em>
+                      <i className="brand-theme-btn">Betaal nu</i>
+                    </span>
+                  </span>
+                </span>
+                <strong>{option.label}</strong>
+                <small>{option.hint}</small>
+              </button>
+            ))}
+          </div>
+          <p className="settings-help">
+            Geldt voor het klantportaal en de publieke offerte-, factuur- en contractpagina. Licht of donker
+            kiezen is genoeg: vlakken, randen en tekst worden uit je merkkleur afgeleid en halen overal het
+            vereiste contrast — ook als je merkkleur heel licht of heel donker is.
+          </p>
+        </div>
+
         <div className="brand-field">
           <span className="brand-label">Lettertype koppen</span>
           <Select
@@ -2676,7 +2729,7 @@ function BrandingCard({ form, setForm, canWrite }: {
 
         {/* Voorbeeld met de daadwerkelijke lettertypen en accentkleur. */}
         <div className="brand-field brand-field-wide">
-          <span className="brand-label">Voorbeeld</span>
+          <span className="brand-label">Voorbeeld galerij</span>
           <div
             className="brand-preview"
             style={{
@@ -2706,7 +2759,7 @@ function BrandingCard({ form, setForm, canWrite }: {
         </div>
 
         <div className="brand-field brand-field-wide">
-          <span className="brand-label">Afsluiting onder de galerij</span>
+          <span className="brand-label">Afsluiting onder je klantpagina&apos;s</span>
           <Input
             value={form.brand_footer_text ?? ''}
             onChange={(e) => setForm(prev => ({ ...prev, brand_footer_text: e.target.value || null }))}
@@ -2771,6 +2824,7 @@ function settingsToForm(settings: CompanySettings | null): CompanySettingsInput 
     brand_heading_font: settings.brand_heading_font ?? 'system',
     brand_body_font: settings.brand_body_font ?? 'system',
     brand_gallery_bg: settings.brand_gallery_bg ?? '#0B0B0B',
+    brand_client_theme: settings.brand_client_theme === 'light' ? 'light' : 'dark',
   };
 }
 
@@ -2812,6 +2866,8 @@ function cleanSettingsInput(input: CompanySettingsInput): CompanySettingsInput {
     // dit ook af met een trigger, hier al zodat de UI meteen klopt).
     brand_accent_color: normalizeHex(input.brand_accent_color, '#FFD966'),
     invoice_accent_color: normalizeHex(input.brand_accent_color, '#FFD966'),
+    // Twee vaste waarden; de CHECK op de kolom laat niets anders toe.
+    brand_client_theme: input.brand_client_theme === 'light' ? 'light' : 'dark',
     invoice_font_size: Math.max(8, Math.min(14, Number(input.invoice_font_size ?? 10))),
   };
 }
