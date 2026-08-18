@@ -349,37 +349,34 @@ export function ProjectsListPage({
       />;
 
   return <div className="projects-page">
-    <div className="projects-page-head">
-      <div>
-        <p className="eyebrow">Projecthub</p>
-        <h2>Projecten</h2>
-        <span>
-          {isFiltering
-            ? `${visibleCount} van ${totalActive + totalArchived} getoond`
-            : `${totalActive} actief · ${totalArchived} gearchiveerd`}
-        </span>
-      </div>
-      <div className="projects-toolbar-actions">
-        <div className="project-view-toggle" role="group" aria-label="Projectweergave">
-          <button type="button" className={viewMode === 'cards' ? 'active' : ''} onClick={() => changeViewMode('cards')} aria-pressed={viewMode === 'cards'}>Kaarten</button>
-          <button type="button" className={viewMode === 'table' ? 'active' : ''} onClick={() => changeViewMode('table')} aria-pressed={viewMode === 'table'}>Tabel</button>
-        </div>
-        <Select
-          className="projects-filter-select"
-          inline
-          value={sortKey}
-          onChange={event => changeSortKey(event.target.value as ProjectSortKey)}
-          aria-label="Sorteren"
-        >
-          {projectSortOptions.map(option => <option key={option.key} value={option.key}>Sorteer: {option.label}</option>)}
-        </Select>
-        <Button variant="primary" onClick={onNewProject} disabled={!canWrite}>+ Nieuw project</Button>
-      </div>
-    </div>
-
+    {/* Titel, knoppen én zoeken zitten in één kaart: als losse blokken kostten ze
+        samen ruim 350px voordat het eerste project in beeld kwam. De kopregel
+        houdt de vaste totalen, de telpil naast het zoekveld zegt wat er van het
+        filter overblijft. */}
     <SearchFilterPanel
       className="is-wide"
       ariaLabel="Projecten zoeken en filteren"
+      header={{
+        eyebrow: 'Projecthub',
+        title: 'Projecten',
+        meta: `${totalActive} actief · ${totalArchived} gearchiveerd`,
+        actions: <>
+          <div className="project-view-toggle" role="group" aria-label="Projectweergave">
+            <button type="button" className={viewMode === 'cards' ? 'active' : ''} onClick={() => changeViewMode('cards')} aria-pressed={viewMode === 'cards'}>Kaarten</button>
+            <button type="button" className={viewMode === 'table' ? 'active' : ''} onClick={() => changeViewMode('table')} aria-pressed={viewMode === 'table'}>Tabel</button>
+          </div>
+          <Select
+            className="projects-filter-select"
+            inline
+            value={sortKey}
+            onChange={event => changeSortKey(event.target.value as ProjectSortKey)}
+            aria-label="Sorteren"
+          >
+            {projectSortOptions.map(option => <option key={option.key} value={option.key}>Sorteer: {option.label}</option>)}
+          </Select>
+          <Button variant="primary" onClick={onNewProject} disabled={!canWrite}>+ Nieuw project</Button>
+        </>,
+      }}
       query={filters.query}
       queryPlaceholder="Zoek op project, omschrijving of klant…"
       onQueryChange={query => setFilters(prev => ({ ...prev, query }))}

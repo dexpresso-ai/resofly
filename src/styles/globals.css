@@ -1751,10 +1751,6 @@ body::before{
 .clients-table-avatar{width:30px;height:30px;min-width:30px;border-radius:10px;display:grid;place-items:center;color:var(--on-accent);font-size:11px;font-weight:700;letter-spacing:-.03em}
 
 /* Projects: compacte header, weergave-toggle en tabelweergave */
-.projects-page-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px;margin-bottom:18px;border:1px solid var(--border);border-radius:var(--r2);background:linear-gradient(135deg,var(--bg2),var(--bg3))}
-.projects-page-head h2{margin:3px 0 4px;font-size:26px;line-height:1;font-weight:700;letter-spacing:-.025em}
-.projects-page-head span{color:var(--muted2);font-size:12px}
-.projects-toolbar-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}
 .project-view-toggle{display:inline-flex;align-items:center;gap:4px;padding:4px;border:1px solid var(--border);border-radius:999px;background:rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)))}
 .project-view-toggle button{appearance:none;border:0;background:transparent;color:var(--muted2);font:inherit;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;border-radius:999px;padding:7px 11px;cursor:pointer;transition:all .15s ease}
 .project-view-toggle button:hover{color:var(--text);background:rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)))}
@@ -1809,8 +1805,8 @@ body::before{
 .client-duplicate-notice.block{border-color:rgba(var(--danger-rgb),.35);background:rgba(var(--danger-rgb),.1)}
 .client-duplicate-notice.warning{border-color:rgba(var(--accent-rgb),.28);background:rgba(var(--accent-rgb),.085)}
 .modal.modal-client-editor .form-textarea{min-height:118px}
-@media(max-width:820px){.clients-page-head{align-items:flex-start;flex-direction:column}.clients-toolbar-actions{justify-content:flex-start;width:100%}.projects-page-head{align-items:flex-start;flex-direction:column}.projects-toolbar-actions{justify-content:flex-start;width:100%}.modal.modal-client-editor{width:100%;max-width:100%;max-height:94vh;border-radius:24px 24px 0 0}.client-form-intro{flex-direction:column}.client-form-intro strong{min-width:0}.client-form-grid{grid-template-columns:1fr}}
-@media(max-width:560px){.client-view-toggle{width:100%}.client-view-toggle button{flex:1}.clients-toolbar-actions .btn{width:100%}.clients-page-head h2{font-size:23px}.project-view-toggle{width:100%}.project-view-toggle button{flex:1}.projects-toolbar-actions .btn{width:100%}.projects-page-head h2{font-size:23px}.projects-filter-select{width:100%}}
+@media(max-width:820px){.clients-page-head{align-items:flex-start;flex-direction:column}.clients-toolbar-actions{justify-content:flex-start;width:100%}.modal.modal-client-editor{width:100%;max-width:100%;max-height:94vh;border-radius:24px 24px 0 0}.client-form-intro{flex-direction:column}.client-form-intro strong{min-width:0}.client-form-grid{grid-template-columns:1fr}}
+@media(max-width:560px){.client-view-toggle{width:100%}.client-view-toggle button{flex:1}.clients-toolbar-actions .btn{width:100%}.clients-page-head h2{font-size:23px}.project-view-toggle{width:100%}.project-view-toggle button{flex:1}.projects-filter-select{width:100%}}
 
 /* Invoice workflow additions — 2026-05-26 */
 .quote-converted-pill { display:inline-flex; align-items:center; gap:6px; padding:8px 11px; border-radius:999px; border:1px solid rgba(var(--ok-rgb),.22); background:rgba(var(--ok-rgb),.1); color:var(--ok); font-size:12px; font-weight:700; }
@@ -1865,6 +1861,52 @@ body::before{
 @media(max-width:1180px){.finance-search-card{max-width:100%}}
 @media(max-width:760px){.finance-search-card{border-radius:20px;margin-bottom:12px;padding:13px}.finance-search-main{grid-template-columns:1fr}.finance-search-grid{grid-template-columns:1fr 1fr}.finance-search-result-card small{margin-left:0}.finance-search-active-row{align-items:stretch;flex-direction:column}.finance-search-active-row button{justify-content:center}}
 @media(max-width:520px){.finance-search-grid{grid-template-columns:1fr}}
+
+/* ── Zoekblok mét de paginakop erin (`has-head`) ───────────────────────────
+   De titelbalk en het zoekblok stonden als twee kaarten boven elkaar: twee
+   randen, twee keer binnenruimte, en dan nog het zoeklabel, de telkaart en de
+   klantkeuze elk op een eigen regel. Samen 404px voordat er één project in
+   beeld kwam, terwijl beide kaarten over hetzelfde gaan. Nu 259px (gemeten bij
+   een venster van 1280px; op een telefoon 518 → 424).
+
+   In één kaart past het op drie regels: kop, zoekregel, snelfilters. Daarvoor
+   wordt de kaart een flex-wrap-rij in plaats van een grid, zodat `order` de
+   volgorde per schermbreedte kan zetten — naast elkaar op een breed scherm,
+   onder elkaar op een telefoon, mét de dropdowns weer achter "Meer filters".
+   `display:contents` haalt de tussenlaag `.finance-search-main` weg zodat het
+   zoekveld en de telpil zélf flexkinderen worden en dus mee kunnen ordenen. */
+.finance-search-card.has-head{display:flex;flex-wrap:wrap;align-items:flex-end;gap:11px 10px}
+.finance-search-head{flex:1 0 100%;order:0;display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.finance-search-head .fsh-text{min-width:0}
+.finance-search-head .eyebrow{margin-bottom:0}
+.finance-search-head h2{margin:4px 0 3px;font-size:25px;line-height:1;font-weight:700;letter-spacing:-.025em}
+.finance-search-head .fsh-text>span{color:var(--muted2);font-size:12px}
+.fsh-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+
+/* Het label "Snel zoeken" kostte een hele regel om te zeggen wat het
+   vergrootglas ín het veld ook zegt. Het staat er nog wél, alleen op nul
+   punten: een schermlezer leest het gewoon voor, want het label hoort bij het
+   invoerveld en `font-size:0` verbergt niets voor hulpsoftware. */
+.has-head .finance-search-main{display:contents}
+.has-head .finance-search-query{position:relative;order:1;flex:1 1 260px;min-width:0}
+.has-head .finance-search-query>span{position:absolute;top:0;bottom:0;left:14px;z-index:1;gap:0;font-size:0;letter-spacing:0;pointer-events:none}
+.has-head .finance-search-query .form-input{padding-left:38px}
+.has-head .finance-search-grid{order:2;flex:0 1 auto;grid-template-columns:repeat(auto-fit,minmax(150px,212px))}
+.has-head .finance-search-result-card{order:3;flex:0 0 auto;padding:11px 14px;border-radius:999px}
+.has-head .finance-search-result-card div{display:flex;align-items:baseline;gap:6px}
+.has-head .finance-search-chips{flex:1 0 100%;order:4}
+.has-head .finance-search-toggle{order:5}
+.has-head .finance-search-active-row{flex:1 0 100%;order:6}
+@media(max-width:760px){
+  .has-head .finance-search-head{padding-bottom:10px}
+  .has-head .fsh-actions{flex:1 0 100%;justify-content:flex-start}
+  .has-head .finance-search-query{flex-basis:100%}
+  .has-head .finance-search-result-card{order:2;flex:1 0 100%}
+  .has-head .finance-search-chips{order:3}
+  .has-head .finance-search-toggle{order:4}
+  .has-head .finance-search-grid{order:5;flex:1 0 100%}
+}
+@media(max-width:560px){.finance-search-head h2{font-size:23px}.fsh-actions .btn{width:100%}}
 
 /* Calendar workday density refinement: compact 08:00-18:00 grid without losing the premium cockpit look */
 :root{--tb-h:clamp(24px,calc((100vh - 310px) / 20),32px);--tb-gutter:58px}
@@ -3792,7 +3834,7 @@ button.chat-member:hover{background:var(--bg3)}
      KPI's, filters en knoppen (die schuiven zo naar boven). */
   .workspace-hero{ display:none; }                 /* Dashboard: orgnaam staat in het menu */
   .clients-page-head>div:first-child,
-  .projects-page-head>div:first-child,
+  .finance-search-head .fsh-text,
   .fin-header>div:first-child,
   .bk-head>div:first-child,
   .mk-head>div:first-child,
@@ -3800,7 +3842,7 @@ button.chat-member:hover{background:var(--bg3)}
   .tt-hero .tt-hero-text{ display:none; }
 
   /* Containers compacter nu het titelblok weg is. */
-  .clients-page-head,.projects-page-head,.fin-header,.mk-head,.tt-hero{ gap:10px; margin-bottom:12px; }
+  .clients-page-head,.fin-header,.mk-head,.tt-hero{ gap:10px; margin-bottom:12px; }
   .bk-head,.settings-head{ margin-bottom:10px; }
 }
 

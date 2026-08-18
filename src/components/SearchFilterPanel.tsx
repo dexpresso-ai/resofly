@@ -1,4 +1,5 @@
 import { useId, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Check, RotateCcw, Search, SlidersHorizontal } from 'lucide-react';
 import { Select } from './Ui';
 
@@ -14,11 +15,27 @@ import { Select } from './Ui';
  * of "vervallen" betekent verschilt per soort rij.
  *
  * Opbouw, van boven naar beneden:
+ *   0. optioneel de paginakop zélf (titel + knoppen), zie `header`
  *   1. vrij zoekveld + een telkaart die zegt hoeveel er van het totaal over is
  *   2. snelfilters als aanvinkbare chips, mét het aantal dat ze zouden tonen
  *   3. dropdowns en datum-/bedragvelden (op een telefoon achter "Meer filters")
  *   4. een regel die zegt hoeveel filters er aanstaan, met één knop om te wissen
  */
+
+/** De paginakop mág in dit blok. Twee losse kaarten boven elkaar — een titelbalk
+ *  en daaronder een zoekblok — kostten samen zo'n 350px voordat het eerste rijtje
+ *  in beeld kwam, terwijl beide over hetzelfde gaan. Wordt dit meegegeven, dan
+ *  trekt het blok zichzelf compacter: het zoeklabel wordt een vergrootglas ín het
+ *  veld, de dropdowns schuiven naast het zoekveld en de telkaart wordt een pil.
+ *  Zonder `header` blijft het blok precies zoals het was. */
+export type SearchFilterHeader = {
+  eyebrow?: string;
+  title: string;
+  /** Regel onder de titel — houd dit de vaste totalen; de telpil rechts van het
+   *  zoekveld zegt al wat het filter overlaat. */
+  meta?: ReactNode;
+  actions?: ReactNode;
+};
 
 /** Een snelfilter: één vinkje dat een veelgebruikte vraag beantwoordt. Het
  *  getal telt over álle rijen, niet over de al gefilterde selectie — het zegt
@@ -45,6 +62,7 @@ export type FilterField = {
 export function SearchFilterPanel({
   ariaLabel,
   className = '',
+  header,
   query,
   queryPlaceholder,
   onQueryChange,
@@ -63,6 +81,8 @@ export function SearchFilterPanel({
   /** Extra klassen op de kaart. `is-wide` haalt de 1180px-cap eraf, voor
    *  pagina's waarvan de tabel zelf ook tot de rand doorloopt. */
   className?: string;
+  /** Paginakop in dezelfde kaart, in plaats van een losse titelbalk erboven. */
+  header?: SearchFilterHeader;
   query: string;
   queryPlaceholder: string;
   onQueryChange: (value: string) => void;
@@ -89,7 +109,16 @@ export function SearchFilterPanel({
   const activeFieldCount = fields.filter(field => field.value !== '').length;
   const activeFilterCount = (query.trim() === '' ? 0 : 1) + activeFieldCount + activeChips.length;
 
-  return <section className={`finance-search-card ${className}`.trim()} aria-label={ariaLabel}>
+  return <section className={`finance-search-card${header ? ' has-head' : ''} ${className}`.trim()} aria-label={ariaLabel}>
+    {header && <div className="finance-search-head">
+      <div className="fsh-text">
+        {header.eyebrow && <p className="eyebrow">{header.eyebrow}</p>}
+        <h2>{header.title}</h2>
+        {header.meta && <span>{header.meta}</span>}
+      </div>
+      {header.actions && <div className="fsh-actions">{header.actions}</div>}
+    </div>}
+
     <div className="finance-search-main">
       <label className="finance-search-query">
         <span><Search size={15}/> Snel zoeken</span>
