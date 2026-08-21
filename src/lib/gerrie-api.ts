@@ -193,6 +193,26 @@ export interface GerrieSendClientEmailProposal {
   /** Klanten die de agent wilde mailen maar (nog) geen e-mailadres hebben. */
   skipped: string[];
 }
+/**
+ * Een voorstel uit de HANDELINGENREGISTRY — de lange staart van wat de app kan.
+ *
+ * Eén type voor alle handelingen samen, in plaats van een eigen type per handeling.
+ * De server heeft de gegevens al opgezocht en gecontroleerd en schrijft `title` en
+ * `sub`: dat is precies wat de gebruiker leest voordat hij akkoord geeft. `payload`
+ * is wat de uitvoerder in `src/lib/actions/` nodig heeft.
+ *
+ * Zo kost een nieuwe handeling geen nieuw voorsteltype, geen nieuwe kaart en geen
+ * nieuwe tak in de uitvoerder — alleen een regel aan beide kanten.
+ */
+export interface GerrieRegistryActionProposal {
+  type: 'action';
+  /** Sleutel in ACTION_EXECUTORS, bv. 'gallery.publish'. */
+  action_id: string;
+  title: string;
+  sub: string;
+  kind: 'money' | 'mail' | 'agenda' | 'work' | 'insight' | 'agent';
+  payload: Record<string, unknown>;
+}
 /** Een door Gerrie klaargezette agent; goedkeuren opent de agent-editor vooringevuld. */
 export interface GerrieAgentProposal {
   type: 'agent';
@@ -369,7 +389,7 @@ export interface GerrieTicketNoteProposal {
   body: string;
   is_internal: boolean;
 }
-export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieEditCalendarEventProposal | GerrieCancelCalendarEventProposal | GerrieClientContactProposal | GerrieEditClientContactProposal | GerrieProjectTeamProposal | GerrieTaskAssignProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieEditTimeEntryProposal | GerrieTicketProposal | GerrieEditTicketProposal | GerrieTicketNoteProposal | GerrieSupplierProposal | GerriePurchaseInvoiceProposal | GerrieContractProposal | GerrieCampaignProposal | GerrieContentProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
+export type GerrieProposal = GerrieRegistryActionProposal | GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieEditCalendarEventProposal | GerrieCancelCalendarEventProposal | GerrieClientContactProposal | GerrieEditClientContactProposal | GerrieProjectTeamProposal | GerrieTaskAssignProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieEditTimeEntryProposal | GerrieTicketProposal | GerrieEditTicketProposal | GerrieTicketNoteProposal | GerrieSupplierProposal | GerriePurchaseInvoiceProposal | GerrieContractProposal | GerrieCampaignProposal | GerrieContentProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
 
 /**
  * De uitvoer-handlers voor een door Gerrie voorgestelde actie.
@@ -396,6 +416,12 @@ export interface GerrieActionHandlers {
    * Ontbreekt de handler, dan valt alles terug op het formulier.
    */
   onApplyProposal?: (proposal: GerrieProposal) => Promise<string>;
+  /**
+   * Voert een handeling uit de registry uit (voorsteltype 'action') en geeft de
+   * bevestigingszin terug. Eén handler voor de hele lange staart: welke handeling
+   * het is, staat in `action_id`, en de uitvoerder daarvoor zit in src/lib/actions/.
+   */
+  onRunRegistryAction?: (proposal: GerrieRegistryActionProposal) => Promise<string>;
   onCreateInvoiceDraft?: (proposal: GerrieInvoiceProposal) => void;
   onCreateQuoteDraft?: (proposal: GerrieQuoteProposal) => void;
   onCreateClientDraft?: (proposal: GerrieClientProposal) => void;
@@ -1008,6 +1034,9 @@ const toolLabels = new Map<string, string>();
 export function routineToolLabel(name: string): string {
   const known = toolLabels.get(name);
   if (known) return known;
+  // Een handeling uit de registry ('action:gallery.publish'): zonder catalogus is
+  // 'gallery publish' nog altijd leesbaarder dan het rauwe id.
+  if (name.startsWith('action:')) return name.slice('action:'.length).replace(/[._]/g, ' ');
   // Ook een audit-actie ('propose_send_reminders') komt hier langs.
   return name.replace(/^propose_/, '').replace(/_/g, ' ');
 }

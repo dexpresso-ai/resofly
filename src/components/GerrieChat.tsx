@@ -107,7 +107,7 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
   // kaarten hieronder), maar we houden ook de hele set bij de hand: "Openen" geeft een
   // voorstel door aan de gedeelde openProposal, en die verwacht het complete pakket.
   const {
-    onApplyProposal, onSendInvoice, onSendQuote, onConvertQuote, onSendReminders,
+    onApplyProposal, onRunRegistryAction, onSendInvoice, onSendQuote, onConvertQuote, onSendReminders,
     onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onSendClientEmail, onCreateAgent,
     onAddTicketNote, onEditTimeEntry, onEditCalendarEvent, onCancelCalendarEvent,
     onCreateClientContact, onEditClientContact, onSetProjectTeam, onAssignTask, onCreateCampaign,
@@ -327,6 +327,19 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
     // schrijft het écht weg; "Openen" zet het eerst vooringevuld in het scherm, voor
     // wie de regels of de grootboekrekeningen zelf wil nalopen. De teksten komen uit
     // dezelfde bron als de wachtrij, zodat beide plekken hetzelfde beloven.
+    // Een handeling uit de registry: de server schreef de titel en het onderschrift,
+    // dus hier is er niets meer te bedenken — alleen uitvoeren of laten staan.
+    if (p.type === 'action') {
+      return <ConfirmActionCard
+        icon={kindIcon(p.kind)}
+        title={`${p.title}?`}
+        sub={p.sub}
+        confirmLabel="Uitvoeren" pendingLabel="Bezig…" doneLabel={p.title}
+        onConfirm={() => runConfirmed(auditId, () => onRunRegistryAction
+          ? onRunRegistryAction(p)
+          : Promise.reject(new Error('Uitvoeren is hier niet beschikbaar.')))}
+      />;
+    }
     if (isFormBackedProposal(p)) {
       const info = proposalLabel(p);
       const verb = proposalVerb(p);

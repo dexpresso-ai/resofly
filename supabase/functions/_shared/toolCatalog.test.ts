@@ -69,10 +69,22 @@ test('TOOL_LABELS bevat geen labels voor tools die niet meer bestaan', () => {
   assert.deepEqual(stale, [], `deze labels horen bij verdwenen tools: ${stale.join(', ')}`);
 });
 
+/**
+ * `propose_action` hoort bewust NIET in TOOL_MODULE.
+ *
+ * Hij staat niet voor één module maar voor de hele handelingenregistry, en welke
+ * module er geldt hangt af van de handeling die het model kiest. Die controle zit
+ * daarom een laag dieper, in `resolveAction()`: daar wordt de module van de gekozen
+ * handeling opgezocht en getoetst vóórdat er iets gebeurt. Zie ook
+ * actionRegistry.test.ts, die bewaakt dat élke handeling een bekende module heeft.
+ */
+const MODULE_CHECKED_AT_RUNTIME = new Set(['propose_action']);
+
 test('elke schrijf-tool zit aan een module vast, zodat modulerechten hem kunnen afschermen', () => {
   const mapped = new Set(moduleMappedNames());
   const unmapped = toolDefinitionNames()
     .filter((n) => n.startsWith('propose_'))
+    .filter((n) => !MODULE_CHECKED_AT_RUNTIME.has(n))
     .filter((n) => !mapped.has(n));
   assert.deepEqual(
     unmapped, [],

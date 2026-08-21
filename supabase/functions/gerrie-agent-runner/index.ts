@@ -25,7 +25,7 @@ import {
   resolveModelKind, runAgent, buildContext, createConversation, insertMessage,
   recordUsage, costUsd, checkUserBudget, requireUser, requireOrganizationAccess,
   describeError, isUuid, todayIso, tzOffsetMs, parseAllowedOrigins, loadHistory,
-  AGENT_ICON_KEYS,
+  AGENT_ICON_KEYS, isEnabledToolName, isReadOnlyToolName,
 } from '../_shared/gerrieCore.ts';
 import type { AgentStep, Emit, OrganizationRole } from '../_shared/gerrieCore.ts';
 import { sendViaResend } from '../_shared/resend.ts';
@@ -419,10 +419,11 @@ function resolveAllowedTools(agent: Record<string, unknown>, mode: 'report' | 'p
   const raw = Array.isArray(agent.enabled_tools) ? (agent.enabled_tools as unknown[]).map(String) : [];
   // Een onbewaakte agent mag nooit zelf nieuwe agents laten klaarzetten: dat is
   // een chat-handeling waar een mens bij zit. Ook niet als iemand hem aanvinkt.
-  const enabled = raw.filter((n) => ALL_TOOL_NAMES.includes(n) && !AGENT_FORBIDDEN_TOOLS.includes(n));
+  const enabled = raw.filter((n) => isEnabledToolName(n) && !AGENT_FORBIDDEN_TOOLS.includes(n));
   if (mode === 'report') {
-    // Alleen lezen — strip elke propose_-tool, ook als hij per ongeluk is geconfigureerd.
-    return enabled.length ? enabled.filter((n) => READ_TOOL_NAMES.includes(n)) : READ_TOOL_NAMES;
+    // Alleen lezen — strip elke schrijf-tool en elke schrijf-handeling, ook als iemand
+    // die per ongeluk heeft aangevinkt.
+    return enabled.length ? enabled.filter(isReadOnlyToolName) : READ_TOOL_NAMES;
   }
   // propose: altijd de lees-tools + de gekozen (propose-)tools erbij.
   const chosen = enabled.length ? enabled : READ_TOOL_NAMES;
@@ -548,7 +549,7 @@ function sanitizeAgentFields(body: Record<string, unknown>): Record<string, unkn
   const mode = String(body.mode || 'report') === 'propose' ? 'propose' : 'report';
   const scheduleKind = ['daily', 'weekly', 'monthly'].includes(String(body.schedule_kind)) ? String(body.schedule_kind) : 'weekly';
   const enabledTools = Array.isArray(body.enabled_tools)
-    ? [...new Set((body.enabled_tools as unknown[]).map(String).filter((n) => ALL_TOOL_NAMES.includes(n)))]
+    ? [...new Set((body.enabled_tools as unknown[]).map(String).filter(isEnabledToolName))]
     : [];
   const channelsRaw = Array.isArray((body.delivery as { channels?: unknown })?.channels)
     ? ((body.delivery as { channels: unknown[] }).channels).map(String).filter((c) => ['inapp', 'email'].includes(c))

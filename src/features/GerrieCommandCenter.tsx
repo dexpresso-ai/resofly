@@ -1156,12 +1156,25 @@ function RoutineEditor({ organizationId, routine, onDone, onCancel }: { organiza
  * vinkjes is geen keuze meer maar een muur.
  */
 function ToolPicker({ tools, chosen, onToggle }: { tools: RoutineTool[]; chosen: string[]; onToggle: (name: string) => void }) {
+  // De lijst telt inmiddels honderden regels: alles wat de app kan, staat erin.
+  // Zonder zoekveld scrol je je een ongeluk om "galerij publiceren" te vinden.
+  const [query, setQuery] = useState('');
   if (tools.length === 0) return <p className="cc-note">Laden…</p>;
 
+  const needle = query.trim().toLowerCase();
+  // Aangevinkte regels blijven altijd staan, ook als ze buiten het filter vallen —
+  // anders lijkt het alsof je selectie verdwijnt zodra je begint te typen.
+  const visible = needle
+    ? tools.filter((t) => chosen.includes(t.name)
+        || t.label.toLowerCase().includes(needle)
+        || t.name.toLowerCase().includes(needle)
+        || (t.moduleLabel ?? '').toLowerCase().includes(needle))
+    : tools;
+
   // Volgorde van eerste voorkomen aanhouden: die volgt de tooldefinities, en die
-  // staan al in een logische vololgorde (klanten → geld → werk → agenda).
+  // staan al in een logische volgorde (klanten → geld → werk → agenda).
   const groups: Array<{ key: string; label: string; tools: RoutineTool[] }> = [];
-  for (const t of tools) {
+  for (const t of visible) {
     const key = t.module ?? 'overig';
     const label = t.moduleLabel ?? 'Overig';
     let group = groups.find((g) => g.key === key);
@@ -1171,6 +1184,15 @@ function ToolPicker({ tools, chosen, onToggle }: { tools: RoutineTool[]; chosen:
 
   return (
     <div className="cc-tool-groups">
+      <input
+        className="cc-input"
+        type="search"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder={`Zoek in ${tools.length} dingen die hij kan…`}
+        aria-label="Zoek een capability"
+      />
+      {needle && visible.length === 0 && <p className="cc-note">Niets gevonden voor “{query}”.</p>}
       {groups.map((g) => (
         <section key={g.key} className="cc-tool-group">
           <h5>{g.label}</h5>

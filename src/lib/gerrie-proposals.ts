@@ -47,6 +47,7 @@ const FORM_BACKED_TYPES = new Set<GerrieProposal['type']>([
  * Staat hier omdat de chat en de wachtrij dezelfde knop horen te tonen.
  */
 export function proposalVerb(p: GerrieProposal): string {
+  if (p.type === 'action') return 'Uitvoeren';
   if (p.type === 'report') return 'Opslaan';
   return p.type.startsWith('edit_') ? 'Bijwerken' : 'Aanmaken';
 }
@@ -63,6 +64,10 @@ export function proposalLabel(p: GerrieProposal): ProposalInfo {
 
 function describeProposal(p: GerrieProposal): Omit<ProposalInfo, 'openable'> {
   switch (p.type) {
+    // De registry schrijft zijn eigen titel en onderschrift: daar is de handeling
+    // bekend en zijn de namen al opgezocht. Hier iets slims van maken zou betekenen
+    // dat we dat voor honderden handelingen nóg een keer doen.
+    case 'action': return { title: p.title, sub: p.sub, write: true, kind: p.kind };
     case 'send_invoice': return { title: `Factuur ${p.number} versturen`, sub: `naar ${p.recipient_email}`, write: true, kind: 'mail' };
     case 'send_quote': return { title: `Offerte ${p.number} versturen`, sub: `naar ${p.recipient_email}`, write: true, kind: 'mail' };
     case 'send_invoices': return {
@@ -228,6 +233,10 @@ export async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers
   if (FORM_BACKED_TYPES.has(p.type)) {
     if (h.onApplyProposal) { await h.onApplyProposal(p); return; }
     openProposal(p, h);
+    return;
+  }
+  if (p.type === 'action') {
+    await need(h.onRunRegistryAction ? () => h.onRunRegistryAction!(p).then(() => undefined) : undefined);
     return;
   }
   switch (p.type) {

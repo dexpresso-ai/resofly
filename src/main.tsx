@@ -136,6 +136,7 @@ import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat } from './components/GerrieChat';
 import { GerrieCommandCenter } from './features/GerrieCommandCenter';
 import type { GerrieActionHandlers, GerrieProposal } from './lib/gerrie-api';
+import { runRegistryAction } from './lib/actions';
 import { saveRoutine, setRoutineStatus, runRoutineNow } from './lib/gerrie-api';
 import { plainTextToEmailHtml, sendClientEmail } from './services/mailService';
 import { exportFinancePDF } from './lib/pdf';
@@ -2188,6 +2189,18 @@ function App() {
       if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
       let label: string;
       try { label = await applyProposal(p); }
+      catch (e) { throw new Error(saveErrorMessage(e)); }
+      await refresh();
+      return label;
+    },
+    // De handelingenregistry: alles wat de app kan maar geen eigen kaart heeft —
+    // van een galerij publiceren tot een banktransactie afletteren. De server heeft
+    // het voorstel al opgebouwd en gecontroleerd; hier gaat het langs dezelfde
+    // repository-functie als de knop in het scherm zelf.
+    onRunRegistryAction: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      let label: string;
+      try { label = await runRegistryAction(p.action_id, p.payload, { organizationId: activeOrg.id, data }); }
       catch (e) { throw new Error(saveErrorMessage(e)); }
       await refresh();
       return label;
