@@ -432,9 +432,12 @@ export const CLIENT_ACTIONS: ActionDef[] = [
     async read(ctx, input) {
       const clientId = id(input, 'client_id');
       const limit = Math.min(Math.max(Number(input.limit) || 20, 1), 100);
+      // Verwijderde berichten horen hier niet bij. De app leunt daarvoor op RLS, maar
+      // dit draait met de service-role en die slaat RLS over — dus zelf filteren.
       const { data, error } = await orgQuery(ctx, 'client_emails',
         'id, direction, subject, from_email, to_email, created_at, status')
-        .eq('client_id', clientId).order('created_at', { ascending: false }).limit(limit);
+        .eq('client_id', clientId).is('deleted_at', null)
+        .order('created_at', { ascending: false }).limit(limit);
       if (error) throw new ActionError(`Berichten ophalen mislukt: ${error.message}`);
       return { client_id: clientId, emails: data ?? [] };
     },
