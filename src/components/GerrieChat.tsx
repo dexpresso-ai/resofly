@@ -1,18 +1,19 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { streamGerrieReply, confirmGerrieAction, loadGerrieBudget, type GerrieStatus, type GerrieActionHandlers, type GerrieProposal } from '../lib/gerrie-api';
 import { euro, formatMinutes } from '../lib/format';
-import { describeReportDefinition } from '../lib/reporting';
 import { supabase } from '../lib/supabase';
 import { AgentBatchBoard, asBatchProposal } from './AgentBatchBoard';
+import { isFormBackedProposal, openProposal, proposalLabel, proposalVerb, type ProposalKind } from '../lib/gerrie-proposals';
 import type { UUID } from '../types';
 
 /**
  * Gerrie — drijvende AI-chatassistent (rechtsonder), gekoppeld aan Claude.
  *
  * De koppeling loopt via de `gerrie-agent` Edge Function (zie src/lib/gerrie-api.ts).
- * Gerrie kan in deze versie MEELEZEN in de workspace (klanten, facturen, offertes,
- * projecten, tickets, financiële cijfers). Echte acties (aanmaken/versturen) komen
- * later en vragen dan altijd eerst een bevestiging van de gebruiker.
+ * Gerrie leest mee in de workspace (klanten, facturen, offertes, projecten, tickets,
+ * financiële cijfers) én voert acties uit: versturen, aanmaken, wijzigen. Nooit uit
+ * zichzelf — elke actie komt eerst als kaart in dit gesprek en gebeurt pas als de
+ * gebruiker daarop akkoord geeft.
  */
 
 type ChatRole = 'user' | 'assistant';
@@ -101,7 +102,16 @@ const SpeechRecognitionImpl: SpeechRecognitionCtor | undefined =
       ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionCtor }).webkitSpeechRecognition;
 const speechSupported = Boolean(SpeechRecognitionImpl);
 
-export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuoteDraft, onCreateClientDraft, onSendInvoice, onSendQuote, onConvertQuote, onEditInvoice, onEditQuote, onEditClient, onSendReminders, onCreateProject, onEditProject, onCreateTask, onEditTask, onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onCreateReport, onSendClientEmail, onCreateAgent, onCreateTicket, onEditTicket, onAddTicketNote, onEditTimeEntry, onEditCalendarEvent, onCancelCalendarEvent, onCreateClientContact, onEditClientContact, onSetProjectTeam, onAssignTask, onCreateContent, onCreateSupplier, onCreatePurchaseInvoice, onCreateContract, onCreateCampaign }: { organizationId: UUID } & GerrieActionHandlers) {
+export function GerrieChat({ organizationId, ...handlers }: { organizationId: UUID } & GerrieActionHandlers) {
+  // De losse handlers blijven met hun eigen naam in beeld (dat leest prettiger in de
+  // kaarten hieronder), maar we houden ook de hele set bij de hand: "Openen" geeft een
+  // voorstel door aan de gedeelde openProposal, en die verwacht het complete pakket.
+  const {
+    onApplyProposal, onSendInvoice, onSendQuote, onConvertQuote, onSendReminders,
+    onCreateCalendarEvent, onCreateWeekAction, onLogTimeEntry, onSendClientEmail, onCreateAgent,
+    onAddTicketNote, onEditTimeEntry, onEditCalendarEvent, onCancelCalendarEvent,
+    onCreateClientContact, onEditClientContact, onSetProjectTeam, onAssignTask, onCreateCampaign,
+  } = handlers;
   const [open, setOpen] = useState(false);
   const [firstName, setFirstName] = useState<string | null>(null);
   const firstNameRef = useRef<string | null>(null);
@@ -290,37 +300,56 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
   function toggleDictation() { if (listening) stopDictation(); else startDictation(); }
 
   // Meld een uitgevoerde/mislukte actie terug voor de audit (best-effort).
-  async function runConfirmed(auditId: string | undefined, action: () => Promise<void>) {
+  async function runConfirmed<T>(auditId: string | undefined, action: () => Promise<T>): Promise<T> {
     try {
-      await action();
+      const result = await action();
       if (auditId) void confirmGerrieAction(organizationId, auditId, 'executed');
+      return result;
     } catch (e) {
       if (auditId) void confirmGerrieAction(organizationId, auditId, 'failed', e instanceof Error ? e.message : undefined);
       throw e;
     }
   }
 
+  /** Icoon per soort voorstel — dezelfde indeling als de goedkeurwachtrij. */
+  function kindIcon(kind: ProposalKind): ReactNode {
+    if (kind === 'mail') return <MailIcon />;
+    if (kind === 'agenda') return <CalendarIcon />;
+    if (kind === 'insight') return <ChartIcon />;
+    if (kind === 'agent') return <RobotIcon />;
+    return <DocIcon />;
+  }
+
   // Kies de juiste voorstel-kaart + actie op basis van het type voorstel.
   function proposalCard(p: GerrieProposal, auditId?: string) {
-    if (p.type === 'invoice') return <ProposalCard title="Conceptfactuur openen & controleren" sub={`${p.client_name} · ${euro(p.total_eur)} · ${lineLabel(p.lines.length)}`} onClick={() => onCreateInvoiceDraft?.(p)} />;
-    if (p.type === 'quote') return <ProposalCard title="Conceptofferte openen & controleren" sub={`${p.client_name} · ${euro(p.total_eur)} · ${lineLabel(p.lines.length)}`} onClick={() => onCreateQuoteDraft?.(p)} />;
+    // De concept-voorstellen (factuur, offerte, klant, project, taak, ticket, notitie,
+    // leverancier, inkoopfactuur, contract, rapportage) delen één kaart. "Aanmaken"
+    // schrijft het écht weg; "Openen" zet het eerst vooringevuld in het scherm, voor
+    // wie de regels of de grootboekrekeningen zelf wil nalopen. De teksten komen uit
+    // dezelfde bron als de wachtrij, zodat beide plekken hetzelfde beloven.
+    if (isFormBackedProposal(p)) {
+      const info = proposalLabel(p);
+      const verb = proposalVerb(p);
+      return <ConfirmActionCard
+        icon={kindIcon(info.kind)}
+        title={`${info.title}?`}
+        sub={info.sub}
+        confirmLabel={verb} pendingLabel={`${verb}…`} doneLabel={info.title}
+        secondaryLabel="Openen" onSecondary={() => openProposal(p, handlers)}
+        onConfirm={() => runConfirmed(auditId, () => onApplyProposal
+          ? onApplyProposal(p)
+          : Promise.reject(new Error('Uitvoeren is hier niet beschikbaar.')))}
+      />;
+    }
     if (p.type === 'send_invoice') return <ConfirmActionCard icon={<MailIcon />} title={`Factuur ${p.number} versturen?`} sub={`Naar ${p.recipient_email}${p.client_name ? ` · ${p.client_name}` : ''}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`Factuur ${p.number} verstuurd naar ${p.recipient_email}`} onConfirm={() => runConfirmed(auditId, () => onSendInvoice ? onSendInvoice(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.')))} />;
     if (p.type === 'send_quote') return <ConfirmActionCard icon={<MailIcon />} title={`Offerte ${p.number} versturen?`} sub={`Naar ${p.recipient_email}${p.client_name ? ` · ${p.client_name}` : ''}`} confirmLabel="Versturen" pendingLabel="Versturen…" doneLabel={`Offerte ${p.number} verstuurd naar ${p.recipient_email}`} onConfirm={() => runConfirmed(auditId, () => onSendQuote ? onSendQuote(p) : Promise.reject(new Error('Versturen is hier niet beschikbaar.')))} />;
     if (p.type === 'convert_quote') return <ConfirmActionCard icon={<DocIcon />} title={`Offerte ${p.number} omzetten naar factuur?`} sub={`${p.client_name} · ${euro(p.total_eur)}`} confirmLabel="Omzetten" pendingLabel="Omzetten…" doneLabel={`Factuur gemaakt van offerte ${p.number}`} onConfirm={() => runConfirmed(auditId, () => onConvertQuote ? onConvertQuote(p) : Promise.reject(new Error('Omzetten is hier niet beschikbaar.')))} />;
-    if (p.type === 'edit_invoice') return <ProposalCard title="Wijziging factuur openen & controleren" sub={`Factuur ${p.number} · ${p.client_name}`} onClick={() => onEditInvoice?.(p)} />;
-    if (p.type === 'edit_quote') return <ProposalCard title="Wijziging offerte openen & controleren" sub={`Offerte ${p.number} · ${p.client_name}`} onClick={() => onEditQuote?.(p)} />;
-    if (p.type === 'edit_client') return <ProposalCard title="Wijziging klant openen & controleren" sub={p.name} onClick={() => onEditClient?.(p)} />;
-    if (p.type === 'project') return <ProposalCard title="Project openen & controleren" sub={[p.name, p.client_name].filter(Boolean).join(' · ')} onClick={() => onCreateProject?.(p)} />;
-    if (p.type === 'edit_project') return <ProposalCard title="Wijziging project openen & controleren" sub={p.name} onClick={() => onEditProject?.(p)} />;
-    if (p.type === 'task') return <ProposalCard title="Taak openen & controleren" sub={`${p.title} · ${p.project_name}`} onClick={() => onCreateTask?.(p)} />;
-    if (p.type === 'edit_task') return <ProposalCard title="Wijziging taak openen & controleren" sub={p.title} onClick={() => onEditTask?.(p)} />;
     if (p.type === 'week_action') return <ConfirmActionCard icon={<CalendarIcon />} title={`${p.total} actiepunt${p.total === 1 ? '' : 'en'} toevoegen?`} sub={p.items.map((i) => i.title).join(' · ')} confirmLabel="Toevoegen" pendingLabel="Toevoegen…" doneLabel={`${p.total} actiepunt${p.total === 1 ? '' : 'en'} toegevoegd`} onConfirm={() => runConfirmed(auditId, () => onCreateWeekAction ? onCreateWeekAction(p) : Promise.reject(new Error('Toevoegen is hier niet beschikbaar.')))} />;
     if (p.type === 'calendar_event') return <ConfirmActionCard icon={<CalendarIcon />} title="Agenda-item aanmaken?" sub={`${p.title} · ${p.date} ${p.start_time}–${p.end_time} · ${p.source_name}`} confirmLabel="Aanmaken" pendingLabel="Aanmaken…" doneLabel={`Agenda-item aangemaakt: ${p.title}`} onConfirm={() => runConfirmed(auditId, () => onCreateCalendarEvent ? onCreateCalendarEvent(p) : Promise.reject(new Error('Aanmaken is hier niet beschikbaar.')))} />;
     if (p.type === 'time_entry') {
       const target = [p.client_name, p.project_name].filter(Boolean).join(' · ') || 'geen koppeling';
       return <ConfirmActionCard icon={<ClockIcon />} title={`${formatMinutes(p.minutes)} registreren?`} sub={`${target} · ${p.date} · ${p.billable ? 'declarabel' : 'niet-declarabel'}`} confirmLabel="Registreren" pendingLabel="Registreren…" doneLabel={`${formatMinutes(p.minutes)} geregistreerd${p.project_name ? ` op ${p.project_name}` : ''}`} onConfirm={() => runConfirmed(auditId, () => onLogTimeEntry ? onLogTimeEntry(p) : Promise.reject(new Error('Registreren is hier niet beschikbaar.')))} />;
     }
-    if (p.type === 'report') return <ProposalCard icon={<ChartIcon />} title={`Rapportage openen & controleren: ${p.name}`} sub={describeReportDefinition(p.definition)} onClick={() => onCreateReport?.(p)} />;
     if (p.type === 'edit_calendar_event') {
       const wordt = `${p.changes.date ?? p.current.date} ${p.changes.start_time ?? p.current.start_time}–${p.changes.end_time ?? p.current.end_time}`;
       return <ConfirmActionCard icon={<CalendarIcon />} title={`Agenda-item "${p.title}" aanpassen?`}
@@ -363,9 +392,6 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
         confirmLabel="Toewijzen" pendingLabel="Toewijzen…" doneLabel={`"${p.task_title}" toegewezen`}
         onConfirm={() => runConfirmed(auditId, () => onAssignTask ? onAssignTask(p) : Promise.reject(new Error('Toewijzen is hier niet beschikbaar.')))} />;
     }
-    if (p.type === 'supplier') return <ProposalCard title="Leverancier openen & controleren" sub={[p.name, p.city, p.email].filter(Boolean).join(' · ')} onClick={() => onCreateSupplier?.(p)} />;
-    if (p.type === 'purchase_invoice') return <ProposalCard icon={<DocIcon />} title="Concept-inkoopfactuur openen & controleren" sub={[p.supplier_name, p.supplier_invoice_number, euro(p.total_eur)].filter(Boolean).join(' · ')} onClick={() => onCreatePurchaseInvoice?.(p)} />;
-    if (p.type === 'contract') return <ProposalCard icon={<DocIcon />} title={`Concept-contract openen & controleren: ${p.title}`} sub={[p.client_name, p.amount_eur != null ? euro(p.amount_eur) : ''].filter(Boolean).join(' · ')} onClick={() => onCreateContract?.(p)} />;
     if (p.type === 'campaign') {
       return <ConfirmActionCard
         icon={<MailIcon />}
@@ -376,9 +402,6 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
         onConfirm={() => runConfirmed(auditId, () => onCreateCampaign ? onCreateCampaign(p) : Promise.reject(new Error('Campagnes zijn hier niet beschikbaar.')))}
       />;
     }
-    if (p.type === 'content') return <ProposalCard title={`${p.kind === 'note' ? 'Notitie' : 'Document'} openen & controleren`} sub={[p.title, p.client_name, p.project_name].filter(Boolean).join(' · ')} onClick={() => onCreateContent?.(p)} />;
-    if (p.type === 'ticket') return <ProposalCard title="Ticket openen & controleren" sub={[p.title, p.client_name].filter(Boolean).join(' · ')} onClick={() => onCreateTicket?.(p)} />;
-    if (p.type === 'edit_ticket') return <ProposalCard title="Wijziging ticket openen & controleren" sub={p.title} onClick={() => onEditTicket?.(p)} />;
     if (p.type === 'ticket_note') {
       // De klant-zichtbare variant krijgt bewust een ander woord in de knop: dit is
       // het verschil tussen een memo voor jezelf en post naar buiten.
@@ -431,7 +454,6 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
         onConfirm={() => runConfirmed(auditId, () => onCreateAgent ? onCreateAgent(p) : Promise.reject(new Error('Agents aanmaken is hier niet beschikbaar.')))}
       />;
     }
-    if (p.type === 'client') return <ProposalCard title="Nieuwe klant openen & controleren" sub={[p.name, p.email].filter(Boolean).join(' · ')} onClick={() => onCreateClientDraft?.(p)} />;
     // Onbekend voorstel (nieuwer type dan deze build kent): liever niets tonen dan
     // een knop die het verkeerde doet.
     return null;
@@ -522,7 +544,7 @@ export function GerrieChat({ organizationId, onCreateInvoiceDraft, onCreateQuote
               <span className="gerrie-budget-pct">{Math.round(budget * 100)}%</span>
             </div>
           )}
-          <p className="gerrie-foot-note">Gerrie kan meelezen in je workspace. Acties vraagt hij straks altijd eerst ter bevestiging.</p>
+          <p className="gerrie-foot-note">Gerrie leest mee in je workspace en kan acties uitvoeren — altijd pas nadat jij op de kaart akkoord geeft.</p>
         </section>
       )}
 
@@ -599,36 +621,38 @@ function DocIcon() {
   );
 }
 
-function lineLabel(n: number): string { return `${n} regel${n === 1 ? '' : 's'}`; }
 
-function ProposalCard({ title, sub, onClick, icon }: { title: string; sub: string; onClick: () => void; icon?: ReactNode }) {
-  return (
-    <button className="gerrie-proposal" onClick={onClick}>
-      <span className="gerrie-proposal-icon" aria-hidden="true">{icon ?? <DocIcon />}</span>
-      <span className="gerrie-proposal-body">
-        <span className="gerrie-proposal-title">{title}</span>
-        <span className="gerrie-proposal-sub">{sub}</span>
-      </span>
-    </button>
-  );
-}
-
-/** Bevestigkaart voor een actie (versturen, omzetten, …) — beheert eigen status. */
-function ConfirmActionCard({ icon, title, sub, confirmLabel, pendingLabel, doneLabel, onConfirm }: {
+/**
+ * Bevestigkaart voor een actie (versturen, aanmaken, omzetten, …) — beheert eigen status.
+ *
+ * `onConfirm` mag een zin teruggeven; die vervangt dan `doneLabel`. Zo meldt de kaart
+ * wat er ECHT gebeurd is ("Factuur 2026-014 aangemaakt als concept") in plaats van wat
+ * de knop vooraf beloofde — het nummer weet je immers pas achteraf.
+ *
+ * `onSecondary` is de zachte weg ernaast: hetzelfde voorstel eerst vooringevuld in een
+ * scherm openen in plaats van het meteen weg te schrijven.
+ */
+function ConfirmActionCard({ icon, title, sub, confirmLabel, pendingLabel, doneLabel, onConfirm, secondaryLabel, onSecondary }: {
   icon: ReactNode; title: string; sub: string;
   confirmLabel: string; pendingLabel: string; doneLabel: string;
-  onConfirm: () => Promise<void>;
+  onConfirm: () => Promise<void | string>;
+  secondaryLabel?: string; onSecondary?: () => void;
 }) {
   const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error' | 'cancelled'>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
 
   async function go() {
     setState('busy'); setError(null);
-    try { await onConfirm(); setState('done'); }
+    try {
+      const result = await onConfirm();
+      setDone(typeof result === 'string' && result.trim() ? result : null);
+      setState('done');
+    }
     catch (e) { setError(e instanceof Error ? e.message : 'Actie mislukt.'); setState('error'); }
   }
 
-  if (state === 'done') return <div className="gerrie-send-result ok">✓ {doneLabel}</div>;
+  if (state === 'done') return <div className="gerrie-send-result ok">✓ {done ?? doneLabel}</div>;
   if (state === 'cancelled') return <div className="gerrie-send-result cancelled">Geannuleerd.</div>;
 
   return (
@@ -643,6 +667,9 @@ function ConfirmActionCard({ icon, title, sub, confirmLabel, pendingLabel, doneL
       {state === 'error' && error && <div className="gerrie-send-error">{error}</div>}
       <div className="gerrie-send-actions">
         <button className="gerrie-cancel" onClick={() => setState('cancelled')} disabled={state === 'busy'}>Annuleren</button>
+        {secondaryLabel && onSecondary && (
+          <button className="gerrie-cancel" onClick={onSecondary} disabled={state === 'busy'}>{secondaryLabel}</button>
+        )}
         <button className="gerrie-confirm" onClick={go} disabled={state === 'busy'}>{state === 'busy' ? pendingLabel : state === 'error' ? 'Opnieuw proberen' : confirmLabel}</button>
       </div>
     </div>

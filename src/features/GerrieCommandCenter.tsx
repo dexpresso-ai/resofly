@@ -10,7 +10,7 @@ import {
   type RoutineMode, type RoutineScheduleKind, type RoutineStatus, type RoutineRunStatus, type AgentEmailMode,
 } from '../lib/gerrie-api';
 import { STANDARD_MERGE_TOKENS } from '../lib/mergeTokens';
-import { executeProposal, proposalLabel } from '../lib/gerrie-proposals';
+import { executeProposal, openProposal, proposalLabel } from '../lib/gerrie-proposals';
 import { AgentApprovals } from '../components/AgentApprovals';
 import { AgentBuilder } from '../components/AgentBuilder';
 import { AgentBatchBoard, asBatchProposal } from '../components/AgentBatchBoard';
@@ -324,8 +324,12 @@ function RunCard({ run, canWrite, handlers, organizationId, onStop, onApprove, o
             {info.sub && <div className="cc-approve-s">{info.sub}</div>}
             <div className="cc-approve-actions">
               <button className="cc-btn tiny ghost" disabled={run.resolution === 'executing'} onClick={onReject}>Afwijzen</button>
+              {/* Akkoord schrijft het weg; Openen zet het eerst vooringevuld in het scherm. */}
+              {info.openable && canWrite && (
+                <button className="cc-btn tiny ghost" disabled={run.resolution === 'executing'} onClick={() => run.proposal && openProposal(run.proposal, handlers)}>Openen</button>
+              )}
               <button className="cc-btn tiny primary" disabled={run.resolution === 'executing' || (info.write && !canWrite)} onClick={onApprove}>
-                {run.resolution === 'executing' ? 'Bezig…' : info.write ? 'Akkoord' : 'Openen'}
+                {run.resolution === 'executing' ? 'Bezig…' : 'Akkoord'}
               </button>
             </div>
           </div>
@@ -1339,8 +1343,11 @@ function RunDetail({ run, organizationId, canWrite, handlers, onApprovalsChanged
                   ) : (
                     <div className="cc-approve-actions">
                       <button className="cc-btn tiny ghost" disabled={st === 'busy'} onClick={() => reject(auditId)}>Afwijzen</button>
+                      {info.openable && canWrite && (
+                        <button className="cc-btn tiny ghost" disabled={st === 'busy'} onClick={() => openProposal(proposal, handlers)}>Openen</button>
+                      )}
                       <button className="cc-btn tiny primary" disabled={st === 'busy' || (info.write && !canWrite)} onClick={() => void approve(auditId, proposal)}>
-                        {st === 'busy' ? <><Spin size={13} /> Bezig…</> : info.write ? 'Goedkeuren' : 'Openen'}
+                        {st === 'busy' ? <><Spin size={13} /> Bezig…</> : 'Goedkeuren'}
                       </button>
                     </div>
                   )}

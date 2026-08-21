@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ArrowRight, Bot, CalendarClock, Check, ChevronRight, ClipboardCheck, Coins, ListChecks, Loader2, Mail, RefreshCw, Sparkles, X } from 'lucide-react';
 import { confirmGerrieAction, listPendingAgentApprovals, type AgentApproval } from '../lib/gerrie-api';
 import type { GerrieActionHandlers } from '../lib/gerrie-api';
-import { executeProposal, proposalLabel, type ProposalKind } from '../lib/gerrie-proposals';
+import { executeProposal, openProposal, proposalLabel, type ProposalKind } from '../lib/gerrie-proposals';
 import { AgentGlyph } from './AgentGlyph';
 import { AgentBatchBoard, asBatchProposal } from './AgentBatchBoard';
 import type { UUID } from '../types';
@@ -192,10 +192,18 @@ export function AgentApprovals({
                       <button type="button" className="ag-btn ag-btn-ghost" disabled={state === 'busy'} onClick={() => reject(item)}>
                         <X size={13} /> Afwijzen
                       </button>
+                      {/* Akkoord voert het uit. Wie de regels eerst wil nalopen, opent het
+                          voorstel vooringevuld in zijn eigen scherm — de rij blijft dan
+                          gewoon wachten, want er is nog niets besloten. */}
+                      {info.openable && !blocked && (
+                        <button type="button" className="ag-btn ag-btn-ghost" disabled={state === 'busy'} onClick={() => openProposal(item.proposal, handlers)}>
+                          <ArrowRight size={13} /> Openen
+                        </button>
+                      )}
                       <button type="button" className="ag-btn ag-btn-go" disabled={state === 'busy' || blocked} onClick={() => void approve(item)}>
                         {state === 'busy'
                           ? <><Loader2 size={13} className="ag-spin" /> Bezig…</>
-                          : info.write ? <><Check size={13} /> Akkoord</> : <><ArrowRight size={13} /> Openen</>}
+                          : <><Check size={13} /> Akkoord</>}
                       </button>
                     </div>}
                   </li>

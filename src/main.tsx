@@ -34,6 +34,7 @@ import {
   createTimeEntry,
   updateTimeEntry,
   disableOrganizationMember,
+  createSavedReport,
   insertRow,
   inviteOrganizationMember,
   sendTeamInvitationEmail,
@@ -103,7 +104,7 @@ import { documentTypeLabels } from './features/Documents';
 import { ContentLibrary } from './features/ContentLibrary';
 import { clientFolderOptions } from './lib/folders';
 import { Invoices, Quotes, type RefundInput } from './features/Finance';
-import { LedgerPage, PurchaseInvoicesPage, SuppliersPage } from './features/Bookkeeping';
+import { LedgerPage, PurchaseInvoicesPage, SuppliersPage, nextPurchaseNumber, purchaseTotals } from './features/Bookkeeping';
 import type { InvoiceFormSeed } from './features/Bookkeeping';
 import { BankPage } from './features/Bank';
 import { AssetsPage } from './features/Assets';
@@ -134,13 +135,13 @@ import { formatISODate, parseISODate, startOfWeek } from './lib/dates';
 import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat } from './components/GerrieChat';
 import { GerrieCommandCenter } from './features/GerrieCommandCenter';
-import type { GerrieActionHandlers } from './lib/gerrie-api';
+import type { GerrieActionHandlers, GerrieProposal } from './lib/gerrie-api';
 import { saveRoutine, setRoutineStatus, runRoutineNow } from './lib/gerrie-api';
 import { plainTextToEmailHtml, sendClientEmail } from './services/mailService';
 import { exportFinancePDF } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
 import type {
-  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, Quote, Supplier, Task, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
+  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, PurchaseInvoice, PurchaseInvoiceLine, Quote, Supplier, Task, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
 } from './types';
 import { CustomFieldsSection, normalizeCustomFieldValues } from './components/CustomFields';
 import { euro, total, uid, lineGross } from './lib/format';
@@ -278,6 +279,138 @@ function purchaseInvoiceSeedFrom(payload: Record<string, unknown>): InvoiceFormS
     extractionMeta: { source: 'gerrie_agent' },
     ai: { confidence: 'medium', warnings: ['Door een agent opgesteld — controleer de regels en kies de grootboekrekeningen.'] },
   };
+}
+
+/** Een voorstel dat op een bewerkformulier uitkomt: waar het scherm heen moet, en wat erin staat. */
+type ProposalEditTarget = { edit: NonNullable<EditMode>; page: Page; projectId?: string | null };
+
+/**
+ * Vertaalt een voorstel van Gerrie naar dezelfde bewerking die het formulier zou tonen.
+ *
+ * Eén bron, twee uitgangen: het scherm openen zodat je het nakijkt, óf meteen
+ * wegschrijven omdat je op Aanmaken drukt. Zouden die twee elk hun eigen vertaling
+ * hebben, dan is het een kwestie van tijd tot "openen" iets anders invult dan
+ * "aanmaken" — en dat verschil zie je pas terug in de database.
+ *
+ * Geeft null voor voorstellen die geen bewerkformulier hebben (leverancier, contract,
+ * inkoopfactuur, rapportage — die kennen hun eigen scherm), en een error-object als het
+ * voorstel naar een rij verwijst die hier niet (meer) bestaat.
+ */
+function editModeForProposal(p: GerrieProposal, data: AppData): ProposalEditTarget | { error: string } | null {
+  switch (p.type) {
+    case 'invoice':
+      return { page: 'invoices', edit: { kind: 'invoice', item: undefined, defaults: {
+        client_id: p.client_id, notes: p.notes ?? undefined, due_date: p.due_date ?? undefined,
+        lines: p.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat })),
+      } } };
+    case 'quote':
+      return { page: 'quotes', edit: { kind: 'quote', item: undefined, defaults: {
+        client_id: p.client_id, notes: p.notes ?? undefined, valid_until: p.valid_until ?? undefined,
+        lines: p.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat })),
+      } } };
+    case 'client':
+      return { page: 'clients', edit: { kind: 'client', item: undefined, defaults: {
+        name: p.name, contact_name: p.contact_name ?? undefined, email: p.email ?? undefined,
+        phone: p.phone ?? undefined, notes: p.notes ?? undefined, status: (p.status as Client['status']),
+      } } };
+    case 'edit_invoice': {
+      const existing = data.invoices.find((i) => i.id === p.id);
+      if (!existing) return { error: 'Factuur niet gevonden.' };
+      const merged: Invoice = { ...existing };
+      if (p.changes.lines) merged.lines = p.changes.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat }));
+      if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
+      if (p.changes.due_date !== undefined) merged.due_date = p.changes.due_date;
+      return { page: 'invoices', edit: { kind: 'invoice', item: merged } };
+    }
+    case 'edit_quote': {
+      const existing = data.quotes.find((q) => q.id === p.id);
+      if (!existing) return { error: 'Offerte niet gevonden.' };
+      const merged: Quote = { ...existing };
+      if (p.changes.lines) merged.lines = p.changes.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat }));
+      if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
+      if (p.changes.valid_until !== undefined) merged.valid_until = p.changes.valid_until;
+      return { page: 'quotes', edit: { kind: 'quote', item: merged } };
+    }
+    case 'edit_client': {
+      const existing = data.clients.find((c) => c.id === p.id);
+      if (!existing) return { error: 'Klant niet gevonden.' };
+      const merged: Client = { ...existing };
+      if (p.changes.name !== undefined) merged.name = p.changes.name;
+      if (p.changes.contact_name !== undefined) merged.contact_name = p.changes.contact_name;
+      if (p.changes.email !== undefined) merged.email = p.changes.email;
+      if (p.changes.phone !== undefined) merged.phone = p.changes.phone;
+      if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
+      if (p.changes.status !== undefined) merged.status = p.changes.status as Client['status'];
+      return { page: 'clients', edit: { kind: 'client', item: merged } };
+    }
+    case 'project':
+      return { page: 'projects', edit: { kind: 'project', item: undefined, defaults: {
+        name: p.name, client_id: p.client_id ?? undefined, description: p.description ?? undefined,
+        start_date: p.start_date ?? undefined, end_date: p.end_date ?? undefined,
+      } } };
+    case 'edit_project': {
+      const existing = data.projects.find((pr) => pr.id === p.id);
+      if (!existing) return { error: 'Project niet gevonden.' };
+      const merged: Project = { ...existing };
+      if (p.changes.name !== undefined) merged.name = p.changes.name;
+      if (p.changes.client_id !== undefined) merged.client_id = p.changes.client_id;
+      if (p.changes.description !== undefined) merged.description = p.changes.description;
+      if (p.changes.start_date !== undefined) merged.start_date = p.changes.start_date;
+      if (p.changes.end_date !== undefined) merged.end_date = p.changes.end_date;
+      if (p.changes.archived !== undefined) merged.archived = p.changes.archived;
+      return { page: 'projects', edit: { kind: 'project', item: merged } };
+    }
+    case 'task':
+      return { page: 'project', projectId: p.project_id, edit: { kind: 'task', item: undefined, projectId: p.project_id, defaults: {
+        title: p.title, description: p.description ?? undefined, status: p.status as Task['status'], priority: p.priority as Task['priority'],
+        tags: p.tags, start_date: p.start_date ?? undefined, end_date: p.end_date ?? undefined, planned_date: p.planned_date ?? undefined,
+        estimated_minutes: p.estimated_minutes, subtasks: p.subtasks.map((sub) => ({ id: uid(), label: sub.label, done: sub.done })),
+      } } };
+    case 'edit_task': {
+      const existing = data.tasks.find((t) => t.id === p.id);
+      if (!existing) return { error: 'Taak niet gevonden.' };
+      const merged: Task = { ...existing };
+      const c = p.changes;
+      if (c.title !== undefined) merged.title = c.title;
+      if (c.description !== undefined) merged.description = c.description;
+      if (c.status !== undefined) merged.status = c.status as Task['status'];
+      if (c.priority !== undefined) merged.priority = c.priority as Task['priority'];
+      if (c.planned_date !== undefined) merged.planned_date = c.planned_date;
+      if (c.start_date !== undefined) merged.start_date = c.start_date;
+      if (c.end_date !== undefined) merged.end_date = c.end_date;
+      if (c.estimated_minutes !== undefined) merged.estimated_minutes = c.estimated_minutes;
+      if (c.tags !== undefined) merged.tags = c.tags;
+      if (c.subtasks !== undefined) merged.subtasks = c.subtasks.map((sub) => ({ id: uid(), label: sub.label, done: sub.done }));
+      return { page: existing.project_id ? 'project' : 'weekplanner', projectId: existing.project_id, edit: { kind: 'task', item: merged, projectId: existing.project_id } };
+    }
+    case 'ticket':
+      return { page: 'tickets', edit: { kind: 'ticket', item: undefined, defaults: {
+        title: p.title, description: p.description ?? undefined, client_id: p.client_id ?? undefined,
+        priority: p.priority as Ticket['priority'], status: p.status as Ticket['status'],
+      } } };
+    case 'edit_ticket': {
+      const existing = data.tickets.find((t) => t.id === p.id);
+      if (!existing) return { error: 'Ticket niet gevonden.' };
+      const merged: Ticket = { ...existing };
+      if (p.changes.title !== undefined) merged.title = p.changes.title;
+      if (p.changes.description !== undefined) merged.description = p.changes.description;
+      if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
+      if (p.changes.status !== undefined) merged.status = p.changes.status as Ticket['status'];
+      if (p.changes.priority !== undefined) merged.priority = p.changes.priority as Ticket['priority'];
+      return { page: 'tickets', edit: { kind: 'ticket', item: merged } };
+    }
+    case 'content': {
+      const defaults = {
+        title: p.title, content: p.content,
+        client_id: p.client_id ?? undefined, project_id: p.project_id ?? undefined,
+      };
+      return p.kind === 'note'
+        ? { page: 'notes', edit: { kind: 'note', item: undefined, defaults } }
+        : { page: 'documents', edit: { kind: 'document', item: undefined, defaults } };
+    }
+    default:
+      return null;
+  }
 }
 
 const editKindToTable: Record<NonNullable<EditMode>['kind'], Table> = {
@@ -914,134 +1047,171 @@ function App() {
 
   const activeOrg = activeOrganization;
 
+  /**
+   * Controleert de waarden vóór opslaan. Zit los van het formulier omdat Gerrie
+   * dezelfde weg gebruikt: een voorstel dat hier niet doorheen komt, hoort ook niet
+   * ongezien in de database te belanden.
+   */
+  function validateEditValues(kind: NonNullable<EditMode>['kind'], values: Record<string, unknown>): string | null {
+    if (kind !== 'quote' && kind !== 'invoice') return null;
+    const financeLines = Array.isArray(values.lines) ? (values.lines as FinanceLine[]) : [];
+    const meaningfulLines = financeLines.filter(line => String(line.description || '').trim().length > 0 && Number(line.quantity || 0) > 0);
+    if (meaningfulLines.length === 0) return 'Voeg minimaal één regel toe met een omschrijving en een aantal groter dan 0.';
+    if (!(total(financeLines).total > 0)) return 'Het documenttotaal moet groter zijn dan € 0,00.';
+    return null;
+  }
+
+  /**
+   * Schrijft één bewerking weg — de enige plek waar dat gebeurt.
+   *
+   * Zowel de knop Opslaan in het formulier als Gerrie's "Aanmaken" komt hier langs.
+   * Dat is bewust: zou Gerrie een eigen insert doen, dan lopen de twee wegen vroeg of
+   * laat uiteen (een veld dat het formulier wél normaliseert, een sjabloon dat alleen
+   * daar wordt uitgerold) en merk je dat pas aan een scheve rij in de database.
+   *
+   * Geeft terug wat er gebeurd is (voor de bevestiging in de chat) plus een
+   * niet-blokkerende waarschuwing, bijvoorbeeld: klant is aangemaakt maar de
+   * welkomstmail ging niet weg.
+   */
+  async function persistEdit(mode: NonNullable<EditMode>, values: Record<string, unknown>): Promise<{ label: string; warning: string | null }> {
+    const edit = mode;
+    let deferredWarning: string | null = null;
+    let label = '';
+    switch (edit.kind) {
+      case 'client': {
+        const duplicateIssue = findClientDuplicateIssue(data.clients, values, edit.item);
+        if (duplicateIssue?.blocksSave) throw new Error(duplicateIssue.message);
+
+        // _sendWelcomeEmail is een UI-keuze, geen klantkolom: eruit halen vóór opslaan.
+        const { _sendWelcomeEmail, ...clientValues } = values;
+        if (edit.item) {
+          await updateRow<Client>('clients', edit.item.id, clientValues, activeOrg.id);
+        } else {
+          const newClient = await createClientWithServerCode(activeOrg.id, clientValues);
+          if (_sendWelcomeEmail && newClient.email) {
+            try {
+              await sendClientPortalWelcomeEmail(activeOrg.id, newClient.id);
+            } catch (mailError) {
+              // De klant is wél aangemaakt; alleen de welkomstmail faalde. De opslag
+              // niet laten klappen, maar de gebruiker wel waarschuwen.
+              deferredWarning = `Klant is aangemaakt, maar de welkomstmail kon niet worden verzonden: ${mailError instanceof Error ? mailError.message : 'onbekende fout'}`;
+            }
+          }
+        }
+        label = `Klant "${String(clientValues.name ?? '')}" ${edit.item ? 'bijgewerkt' : 'aangemaakt'}`;
+        break;
+      }
+      case 'project': {
+        // _templateId is een UI-keuze bij het aanmaken, geen projectkolom.
+        const { _templateId, ...rest } = values;
+        const projectValues = {
+          ...rest,
+          archived: typeof rest.archived === 'boolean' ? rest.archived : false,
+        };
+
+        if (edit.item) {
+          await updateRow<Project>('projects', edit.item.id, projectValues, activeOrg.id);
+        } else {
+          const newProject = await insertRow<Project>('projects', activeOrg.id, projectValues);
+          const templateId = typeof _templateId === 'string' ? _templateId : '';
+          if (templateId) {
+            try {
+              await applyProjectTemplate(activeOrg.id, newProject.id, templateId, newProject.start_date);
+            } catch (templateError) {
+              // Het project staat er al; alleen het uitrollen faalde. Niet
+              // terugdraaien, wél melden — de gebruiker kan het sjabloon
+              // daarna alsnog handmatig nalopen.
+              deferredWarning = `Project "${newProject.name}" is aangemaakt, maar de sjabloontaken konden niet worden toegevoegd: ${templateError instanceof Error ? templateError.message : 'onbekende fout'}`;
+            }
+          }
+        }
+        label = `Project "${String(values.name ?? '')}" ${edit.item ? 'bijgewerkt' : 'aangemaakt'}`;
+        break;
+      }
+      case 'task': {
+        // _assigneeIds is een UI-veld (relatie), geen taakkolom: eruit halen
+        // vóór opslaan en daarna apart als task_assignees wegschrijven.
+        const { _assigneeIds, ...taskValues } = values;
+        const assigneeIds = Array.isArray(_assigneeIds) ? (_assigneeIds as string[]) : null;
+        // project_id/client_id komen uit het formulier zelf: een taak mag ook los
+        // (zonder project of klant) bestaan en later pas gekoppeld worden.
+        const savedTask = edit.item
+          ? await updateRow<Task>('tasks', edit.item.id, taskValues, activeOrg.id)
+          : await insertRow<Task>('tasks', activeOrg.id, taskValues);
+        if (assigneeIds) await setTaskAssignees(activeOrg.id, savedTask.id, assigneeIds);
+        label = `Taak "${savedTask.title}" ${edit.item ? 'bijgewerkt' : 'aangemaakt'}`;
+        break;
+      }
+      case 'ticket': {
+        const sanitizedValues = sanitizeTicketValues(values, edit.item);
+        edit.item
+          ? await updateRow<Ticket>('tickets', edit.item.id, sanitizedValues, activeOrg.id)
+          : await insertRow<Ticket>('tickets', activeOrg.id, sanitizedValues);
+        label = `Ticket "${String(sanitizedValues.title ?? '')}" ${edit.item ? 'bijgewerkt' : 'aangemaakt'}`;
+        break;
+      }
+      case 'note': {
+        const calLink = (values._calLink as CalendarNoteLinkInput | null) ?? edit.calendarLink ?? null;
+        const { _calLink, ...noteValues } = values;
+        if (edit.item) {
+          await updateRow<Note>('notes', edit.item.id, noteValues, activeOrg.id);
+        } else if (calLink) {
+          await createNoteWithCalendarLink(activeOrg.id, noteValues, calLink);
+        } else {
+          await insertRow<Note>('notes', activeOrg.id, noteValues);
+        }
+        label = `Notitie "${String(noteValues.title ?? '')}" ${edit.item ? 'bijgewerkt' : 'aangemaakt'}`;
+        break;
+      }
+      case 'document':
+        edit.item
+          ? await updateRow<InternalDocument>('documents', edit.item.id, values, activeOrg.id)
+          : await insertRow<InternalDocument>('documents', activeOrg.id, values);
+        label = `Document "${String(values.title ?? '')}" ${edit.item ? 'bijgewerkt' : 'aangemaakt'}`;
+        break;
+      case 'quote':
+        edit.item
+          ? await updateRow<Quote>('quotes', edit.item.id, values, activeOrg.id)
+          : await insertRow<Quote>('quotes', activeOrg.id, values);
+        label = `Offerte ${String(values.number ?? '')} ${edit.item ? 'bijgewerkt' : 'aangemaakt als concept'}`;
+        break;
+      case 'invoice':
+        edit.item
+          ? await updateRow<Invoice>('invoices', edit.item.id, values, activeOrg.id)
+          : await insertRow<Invoice>('invoices', activeOrg.id, values);
+        label = `Factuur ${String(values.number ?? '')} ${edit.item ? 'bijgewerkt' : 'aangemaakt als concept'}`;
+        break;
+    }
+    return { label, warning: deferredWarning };
+  }
+
+  /**
+   * Menselijke uitleg bij een opslagfout. Een dubbel factuurnummer levert anders
+   * alleen de kale Postgres-index op, en daar kan niemand iets mee.
+   */
+  function saveErrorMessage(e: unknown): string {
+    const msg = e instanceof Error ? e.message : 'Opslaan mislukt';
+    // Uniek-factuurnummer-index (migratie 20260721): race of handmatig dubbel nummer.
+    return /invoices_org_number_key|duplicate key.*invoices/i.test(msg)
+      ? 'Dit factuurnummer bestaat al binnen je organisatie. Kies een ander nummer en sla opnieuw op.'
+      : msg;
+  }
+
+  /** Opslaan vanuit het bewerkformulier: valideren, wegschrijven, sluiten, verversen. */
   async function saveEdit(values: Record<string, unknown>) {
     if (!edit) return;
     if (!ensureCanWrite()) return;
-    if (edit.kind === 'quote' || edit.kind === 'invoice') {
-      const financeLines = Array.isArray(values.lines) ? (values.lines as FinanceLine[]) : [];
-      const meaningfulLines = financeLines.filter(line => String(line.description || '').trim().length > 0 && Number(line.quantity || 0) > 0);
-      if (meaningfulLines.length === 0) {
-        setError('Voeg minimaal één regel toe met een omschrijving en een aantal groter dan 0.');
-        return;
-      }
-      const docTotal = total(financeLines).total;
-      if (!(docTotal > 0)) {
-        setError('Het documenttotaal moet groter zijn dan € 0,00.');
-        return;
-      }
-    }
+    const invalid = validateEditValues(edit.kind, values);
+    if (invalid) { setError(invalid); return; }
     setLoading(true); setError(null);
-    // Niet-blokkerende waarschuwing die we pas ná refresh tonen (refresh wist de
-    // foutbanner): bijv. klant aangemaakt maar welkomstmail mislukt.
-    let deferredWarning: string | null = null;
     try {
-      switch (edit.kind) {
-        case 'client': {
-          const duplicateIssue = findClientDuplicateIssue(data.clients, values, edit.item);
-          if (duplicateIssue?.blocksSave) throw new Error(duplicateIssue.message);
-
-          // _sendWelcomeEmail is een UI-keuze, geen klantkolom: eruit halen vóór opslaan.
-          const { _sendWelcomeEmail, ...clientValues } = values;
-          if (edit.item) {
-            await updateRow<Client>('clients', edit.item.id, clientValues, activeOrg.id);
-          } else {
-            const newClient = await createClientWithServerCode(activeOrg.id, clientValues);
-            if (_sendWelcomeEmail && newClient.email) {
-              try {
-                await sendClientPortalWelcomeEmail(activeOrg.id, newClient.id);
-              } catch (mailError) {
-                // De klant is wél aangemaakt; alleen de welkomstmail faalde. De opslag
-                // niet laten klappen, maar de gebruiker wel waarschuwen.
-                deferredWarning = `Klant is aangemaakt, maar de welkomstmail kon niet worden verzonden: ${mailError instanceof Error ? mailError.message : 'onbekende fout'}`;
-              }
-            }
-          }
-          break;
-        }
-        case 'project': {
-          // _templateId is een UI-keuze bij het aanmaken, geen projectkolom.
-          const { _templateId, ...rest } = values;
-          const projectValues = {
-            ...rest,
-            archived: typeof rest.archived === 'boolean' ? rest.archived : false,
-          };
-
-          if (edit.item) {
-            await updateRow<Project>('projects', edit.item.id, projectValues, activeOrg.id);
-          } else {
-            const newProject = await insertRow<Project>('projects', activeOrg.id, projectValues);
-            const templateId = typeof _templateId === 'string' ? _templateId : '';
-            if (templateId) {
-              try {
-                await applyProjectTemplate(activeOrg.id, newProject.id, templateId, newProject.start_date);
-              } catch (templateError) {
-                // Het project staat er al; alleen het uitrollen faalde. Niet
-                // terugdraaien, wél melden — de gebruiker kan het sjabloon
-                // daarna alsnog handmatig nalopen.
-                deferredWarning = `Project "${newProject.name}" is aangemaakt, maar de sjabloontaken konden niet worden toegevoegd: ${templateError instanceof Error ? templateError.message : 'onbekende fout'}`;
-              }
-            }
-          }
-          break;
-        }
-        case 'task': {
-          // _assigneeIds is een UI-veld (relatie), geen taakkolom: eruit halen
-          // vóór opslaan en daarna apart als task_assignees wegschrijven.
-          const { _assigneeIds, ...taskValues } = values;
-          const assigneeIds = Array.isArray(_assigneeIds) ? (_assigneeIds as string[]) : null;
-          // project_id/client_id komen uit het formulier zelf: een taak mag ook los
-          // (zonder project of klant) bestaan en later pas gekoppeld worden.
-          const savedTask = edit.item
-            ? await updateRow<Task>('tasks', edit.item.id, taskValues, activeOrg.id)
-            : await insertRow<Task>('tasks', activeOrg.id, taskValues);
-          if (assigneeIds) await setTaskAssignees(activeOrg.id, savedTask.id, assigneeIds);
-          break;
-        }
-        case 'ticket': {
-          const sanitizedValues = sanitizeTicketValues(values, edit.item);
-          edit.item
-            ? await updateRow<Ticket>('tickets', edit.item.id, sanitizedValues, activeOrg.id)
-            : await insertRow<Ticket>('tickets', activeOrg.id, sanitizedValues);
-          break;
-        }
-        case 'note': {
-          const calLink = (values._calLink as CalendarNoteLinkInput | null) ?? edit.calendarLink ?? null;
-          const { _calLink, ...noteValues } = values;
-          if (edit.item) {
-            await updateRow<Note>('notes', edit.item.id, noteValues, activeOrg.id);
-          } else if (calLink) {
-            await createNoteWithCalendarLink(activeOrg.id, noteValues, calLink);
-          } else {
-            await insertRow<Note>('notes', activeOrg.id, noteValues);
-          }
-          break;
-        }
-        case 'document':
-          edit.item
-            ? await updateRow<InternalDocument>('documents', edit.item.id, values, activeOrg.id)
-            : await insertRow<InternalDocument>('documents', activeOrg.id, values);
-          break;
-        case 'quote':
-          edit.item
-            ? await updateRow<Quote>('quotes', edit.item.id, values, activeOrg.id)
-            : await insertRow<Quote>('quotes', activeOrg.id, values);
-          break;
-        case 'invoice':
-          edit.item
-            ? await updateRow<Invoice>('invoices', edit.item.id, values, activeOrg.id)
-            : await insertRow<Invoice>('invoices', activeOrg.id, values);
-          break;
-      }
+      const { warning } = await persistEdit(edit, values);
       setEdit(null);
       await refresh();
-      if (deferredWarning) setError(deferredWarning);
+      // Pas ná refresh tonen: refresh wist de foutbanner.
+      if (warning) setError(warning);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Opslaan mislukt';
-      // Uniek-factuurnummer-index (migratie 20260721): race of handmatig
-      // dubbel nummer → leg uit i.p.v. de kale Postgres-melding tonen.
-      setError(/invoices_org_number_key|duplicate key.*invoices/i.test(msg)
-        ? 'Dit factuurnummer bestaat al binnen je organisatie. Kies een ander nummer en sla opnieuw op.'
-        : msg);
+      setError(saveErrorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -1910,31 +2080,121 @@ function App() {
   // Gedeelde uitvoer-handlers voor een door Gerrie voorgesteld actie — hergebruikt door
   // de chat-dock (GerrieChat) én het Commandocentrum, zodat een goedgekeurd voorstel
   // overal identiek wordt uitgevoerd (één bron van waarheid).
+  /**
+   * Opent een voorstel van Gerrie als vooringevuld formulier — de tweede knop, voor
+   * wie eerst wil kijken. Er wordt niets weggeschreven; dat gebeurt pas als je in dat
+   * scherm op Opslaan drukt.
+   */
+  function openProposalForm(proposal: GerrieProposal) {
+    if (!ensureCanWrite()) return;
+    const target = editModeForProposal(proposal, data);
+    if (!target) return;
+    if ('error' in target) { setError(target.error); return; }
+    setPage(target.page); setProjectId(target.projectId ?? null); setClientId(null);
+    setEdit(target.edit);
+  }
+
+  /**
+   * Voert een concept-voorstel ECHT uit en geeft terug wat er gebeurd is.
+   *
+   * Alles wat een bewerkformulier kent, loopt via `persistEdit` — precies dezelfde weg
+   * als de knop Opslaan, inclusief de nummering, de opschoning van de velden en de
+   * validatie. De vier voorstellen zonder bewerkformulier (leverancier, inkoopfactuur,
+   * contract, rapportage) schrijven hier hun eigen rij weg, maar houden zich aan wat
+   * hun scherm ook zou doen: een CONCEPT, niets geboekt en niets verstuurd.
+   */
+  async function applyProposal(proposal: GerrieProposal): Promise<string> {
+    switch (proposal.type) {
+      case 'supplier': {
+        const created = await insertRow<Supplier>('suppliers', activeOrg.id, {
+          name: proposal.name, contact_name: proposal.contact_name, email: proposal.email,
+          phone: proposal.phone, iban: proposal.iban, vat_number: proposal.vat_number,
+          kvk_number: proposal.kvk_number, city: proposal.city, status: 'active',
+        });
+        return `Leverancier "${created.name}" aangemaakt`;
+      }
+      case 'purchase_invoice': {
+        if (!proposal.supplier_id) throw new Error('Deze inkoopfactuur heeft geen leverancier; open hem in het formulier en kies er een.');
+        const seed = purchaseInvoiceSeedFrom({
+          supplierId: proposal.supplier_id,
+          supplier_invoice_number: proposal.supplier_invoice_number,
+          date: proposal.date, due_date: proposal.due_date ?? '', notes: proposal.notes ?? '',
+          lines: proposal.lines.map((l) => ({ description: l.description, amount_eur: l.amount_eur, vat_rate: l.vat_rate })),
+        });
+        const lines = seed.lines.filter((l) => String(l.description || '').trim() || Number(l.amount_cents));
+        if (lines.length === 0) throw new Error('Deze inkoopfactuur heeft geen regels.');
+        // Een lege kostenrekening valt server-side terug op de vangnetrekening 4500;
+        // de btw-som moet daar hier al van uitgaan, anders sluit het totaal niet aan.
+        const fallbackAccountId = data.ledgerAccounts.find((a) => a.code === '4500')?.id ?? null;
+        const totals = purchaseTotals(lines, fallbackAccountId);
+        const internalNumber = nextPurchaseNumber(data);
+        await insertRow<PurchaseInvoice>('purchase_invoices', activeOrg.id, {
+          supplier_id: proposal.supplier_id,
+          supplier_invoice_number: proposal.supplier_invoice_number || null,
+          internal_number: internalNumber,
+          date: seed.form.date || new Date().toISOString().slice(0, 10),
+          due_date: seed.form.due_date || null,
+          project_id: null, notes: seed.form.notes || null, lines,
+          subtotal_cents: totals.subtotal_cents, vat_cents: totals.vat_cents, total_cents: totals.total_cents,
+          status: 'draft', payment_status: 'unpaid',
+          source: seed.source, extraction_meta: seed.extractionMeta,
+        });
+        return `Inkoopfactuur ${internalNumber} aangemaakt als concept — kies zelf de grootboekrekeningen voordat je hem boekt`;
+      }
+      case 'contract': {
+        const title = proposal.title.trim();
+        if (!title) throw new Error('Geef het contract een titel.');
+        const { data: row, error } = await supabase.from('contracts').insert({
+          organization_id: activeOrg.id,
+          client_id: proposal.client_id ?? null,
+          title,
+          body: proposal.body,
+          date: new Date().toISOString().slice(0, 10),
+          valid_until: proposal.valid_until ?? null,
+          amount_cents: proposal.amount_eur != null ? Math.round(proposal.amount_eur * 100) : null,
+          currency: 'EUR',
+        }).select('*').single();
+        if (error) throw error;
+        return `Contract "${(row as Contract).title}" aangemaakt als concept — versturen ter ondertekening doe je zelf`;
+      }
+      case 'report': {
+        const saved = await createSavedReport(activeOrg.id, { name: proposal.name, definition: proposal.definition });
+        return `Rapportage "${saved.name}" opgeslagen bij Statistieken`;
+      }
+      default:
+        break;
+    }
+
+    const target = editModeForProposal(proposal, data);
+    if (!target) throw new Error('Dit voorstel kan hier niet uitgevoerd worden.');
+    if ('error' in target) throw new Error(target.error);
+    const values = cleanForm(target.edit.kind, initialForm(target.edit, data), data.clientFieldDefinitions);
+    // Het formulier vinkt "welkomstmail sturen" standaard aan bij een nieuwe klant.
+    // Dat is daar zichtbaar; hier niet. Post naar een klant hoort niet mee te liften
+    // op een kaart die alleen "Klant aanmaken" belooft.
+    if (target.edit.kind === 'client') values._sendWelcomeEmail = false;
+    const invalid = validateEditValues(target.edit.kind, values);
+    if (invalid) throw new Error(invalid);
+    const { label, warning } = await persistEdit(target.edit, values);
+    if (warning) setError(warning);
+    return label;
+  }
+
   const gerrieActions: GerrieActionHandlers = {
-    onCreateInvoiceDraft: (p) => {
-      if (!ensureCanWrite()) return;
-      setPage('invoices'); setProjectId(null); setClientId(null);
-      setEdit({ kind: 'invoice', item: undefined, defaults: {
-        client_id: p.client_id, notes: p.notes ?? undefined, due_date: p.due_date ?? undefined,
-        lines: p.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat })),
-      } });
+    // Akkoord op een concept-voorstel schrijft het ECHT weg, langs dezelfde weg als
+    // het formulier. Het formulier blijft ernaast bestaan (onCreate*Draft hieronder)
+    // voor wie eerst wil kijken; die knop staat op elke kaart.
+    onApplyProposal: async (p) => {
+      if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
+      let label: string;
+      try { label = await applyProposal(p); }
+      catch (e) { throw new Error(saveErrorMessage(e)); }
+      await refresh();
+      return label;
     },
-    onCreateQuoteDraft: (p) => {
-      if (!ensureCanWrite()) return;
-      setPage('quotes'); setProjectId(null); setClientId(null);
-      setEdit({ kind: 'quote', item: undefined, defaults: {
-        client_id: p.client_id, notes: p.notes ?? undefined, valid_until: p.valid_until ?? undefined,
-        lines: p.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat })),
-      } });
-    },
-    onCreateClientDraft: (p) => {
-      if (!ensureCanWrite()) return;
-      setPage('clients'); setProjectId(null); setClientId(null);
-      setEdit({ kind: 'client', item: undefined, defaults: {
-        name: p.name, contact_name: p.contact_name ?? undefined, email: p.email ?? undefined,
-        phone: p.phone ?? undefined, notes: p.notes ?? undefined, status: (p.status as Client['status']),
-      } });
-    },
+    onCreateInvoiceDraft: openProposalForm,
+    onCreateQuoteDraft: openProposalForm,
+    onCreateClientDraft: openProposalForm,
     onSendInvoice: async (p) => {
       if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
       const invoice = data.invoices.find((i) => i.id === p.id);
@@ -1959,42 +2219,9 @@ function App() {
       setPage('invoices'); setProjectId(null); setClientId(null);
       setEdit({ kind: 'invoice', item: invoice });
     },
-    onEditInvoice: (p) => {
-      if (!ensureCanWrite()) return;
-      const existing = data.invoices.find((i) => i.id === p.id);
-      if (!existing) { setError('Factuur niet gevonden.'); return; }
-      const merged: Invoice = { ...existing };
-      if (p.changes.lines) merged.lines = p.changes.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat }));
-      if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
-      if (p.changes.due_date !== undefined) merged.due_date = p.changes.due_date;
-      setPage('invoices'); setProjectId(null); setClientId(null);
-      setEdit({ kind: 'invoice', item: merged });
-    },
-    onEditQuote: (p) => {
-      if (!ensureCanWrite()) return;
-      const existing = data.quotes.find((q) => q.id === p.id);
-      if (!existing) { setError('Offerte niet gevonden.'); return; }
-      const merged: Quote = { ...existing };
-      if (p.changes.lines) merged.lines = p.changes.lines.map((l) => ({ id: uid(), description: l.description, quantity: l.quantity, unit_price: l.unit_price, vat: l.vat }));
-      if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
-      if (p.changes.valid_until !== undefined) merged.valid_until = p.changes.valid_until;
-      setPage('quotes'); setProjectId(null); setClientId(null);
-      setEdit({ kind: 'quote', item: merged });
-    },
-    onEditClient: (p) => {
-      if (!ensureCanWrite()) return;
-      const existing = data.clients.find((c) => c.id === p.id);
-      if (!existing) { setError('Klant niet gevonden.'); return; }
-      const merged: Client = { ...existing };
-      if (p.changes.name !== undefined) merged.name = p.changes.name;
-      if (p.changes.contact_name !== undefined) merged.contact_name = p.changes.contact_name;
-      if (p.changes.email !== undefined) merged.email = p.changes.email;
-      if (p.changes.phone !== undefined) merged.phone = p.changes.phone;
-      if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
-      if (p.changes.status !== undefined) merged.status = p.changes.status as Client['status'];
-      setPage('clients'); setProjectId(null); setClientId(null);
-      setEdit({ kind: 'client', item: merged });
-    },
+    onEditInvoice: openProposalForm,
+    onEditQuote: openProposalForm,
+    onEditClient: openProposalForm,
     onSendReminders: async (p) => {
       if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
       let sent = 0;
@@ -2048,53 +2275,10 @@ function App() {
       setPage('gerrie'); setProjectId(null); setClientId(null);
       setOpenAgentId(agentId);
     },
-    onCreateProject: (p) => {
-      if (!ensureCanWrite()) return;
-      setPage('projects'); setProjectId(null); setClientId(null);
-      setEdit({ kind: 'project', item: undefined, defaults: { name: p.name, client_id: p.client_id ?? undefined, description: p.description ?? undefined, start_date: p.start_date ?? undefined, end_date: p.end_date ?? undefined } });
-    },
-    onEditProject: (p) => {
-      if (!ensureCanWrite()) return;
-      const existing = data.projects.find((pr) => pr.id === p.id);
-      if (!existing) { setError('Project niet gevonden.'); return; }
-      const merged: Project = { ...existing };
-      if (p.changes.name !== undefined) merged.name = p.changes.name;
-      if (p.changes.client_id !== undefined) merged.client_id = p.changes.client_id;
-      if (p.changes.description !== undefined) merged.description = p.changes.description;
-      if (p.changes.start_date !== undefined) merged.start_date = p.changes.start_date;
-      if (p.changes.end_date !== undefined) merged.end_date = p.changes.end_date;
-      if (p.changes.archived !== undefined) merged.archived = p.changes.archived;
-      setPage('projects'); setProjectId(null); setClientId(null);
-      setEdit({ kind: 'project', item: merged });
-    },
-    onCreateTask: (p) => {
-      if (!ensureCanWrite()) return;
-      setProjectId(p.project_id); setClientId(null); setPage('project');
-      setEdit({ kind: 'task', item: undefined, projectId: p.project_id, defaults: {
-        title: p.title, description: p.description ?? undefined, status: p.status as Task['status'], priority: p.priority as Task['priority'],
-        tags: p.tags, start_date: p.start_date ?? undefined, end_date: p.end_date ?? undefined, planned_date: p.planned_date ?? undefined,
-        estimated_minutes: p.estimated_minutes, subtasks: p.subtasks.map((s) => ({ id: uid(), label: s.label, done: s.done })),
-      } });
-    },
-    onEditTask: (p) => {
-      if (!ensureCanWrite()) return;
-      const existing = data.tasks.find((t) => t.id === p.id);
-      if (!existing) { setError('Taak niet gevonden.'); return; }
-      const merged: Task = { ...existing };
-      const c = p.changes;
-      if (c.title !== undefined) merged.title = c.title;
-      if (c.description !== undefined) merged.description = c.description;
-      if (c.status !== undefined) merged.status = c.status as Task['status'];
-      if (c.priority !== undefined) merged.priority = c.priority as Task['priority'];
-      if (c.planned_date !== undefined) merged.planned_date = c.planned_date;
-      if (c.start_date !== undefined) merged.start_date = c.start_date;
-      if (c.end_date !== undefined) merged.end_date = c.end_date;
-      if (c.estimated_minutes !== undefined) merged.estimated_minutes = c.estimated_minutes;
-      if (c.tags !== undefined) merged.tags = c.tags;
-      if (c.subtasks !== undefined) merged.subtasks = c.subtasks.map((s) => ({ id: uid(), label: s.label, done: s.done }));
-      setProjectId(existing.project_id); setClientId(null); setPage(existing.project_id ? 'project' : 'weekplanner');
-      setEdit({ kind: 'task', item: merged, projectId: existing.project_id });
-    },
+    onCreateProject: openProposalForm,
+    onEditProject: openProposalForm,
+    onCreateTask: openProposalForm,
+    onEditTask: openProposalForm,
     onCreateCalendarEvent: async (p) => {
       if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
       // Lokale tijd (browser = Europe/Amsterdam) -> UTC ISO voor de agenda-API.
@@ -2231,38 +2415,9 @@ function App() {
       setPage('marketing'); setProjectId(null); setClientId(null);
       setPendingDraft({ key: uid(), kind: 'campaign', payload: { id: created.id } });
     },
-    onCreateContent: (p) => {
-      if (!ensureCanWrite()) return;
-      setPage(p.kind === 'note' ? 'notes' : 'documents'); setProjectId(null); setClientId(null);
-      const defaults = {
-        title: p.title, content: p.content,
-        client_id: p.client_id ?? undefined, project_id: p.project_id ?? undefined,
-      };
-      setEdit(p.kind === 'note'
-        ? { kind: 'note', item: undefined, defaults }
-        : { kind: 'document', item: undefined, defaults });
-    },
-    onCreateTicket: (p) => {
-      if (!ensureCanWrite()) return;
-      setPage('tickets'); setProjectId(null); setClientId(null);
-      setEdit({ kind: 'ticket', item: undefined, defaults: {
-        title: p.title, description: p.description ?? undefined, client_id: p.client_id ?? undefined,
-        priority: p.priority as Ticket['priority'], status: p.status as Ticket['status'],
-      } });
-    },
-    onEditTicket: (p) => {
-      if (!ensureCanWrite()) return;
-      const existing = data.tickets.find((t) => t.id === p.id);
-      if (!existing) { setError('Ticket niet gevonden.'); return; }
-      const merged: Ticket = { ...existing };
-      if (p.changes.title !== undefined) merged.title = p.changes.title;
-      if (p.changes.description !== undefined) merged.description = p.changes.description;
-      if (p.changes.notes !== undefined) merged.notes = p.changes.notes;
-      if (p.changes.status !== undefined) merged.status = p.changes.status as Ticket['status'];
-      if (p.changes.priority !== undefined) merged.priority = p.changes.priority as Ticket['priority'];
-      setPage('tickets'); setProjectId(null); setClientId(null);
-      setEdit({ kind: 'ticket', item: merged });
-    },
+    onCreateContent: openProposalForm,
+    onCreateTicket: openProposalForm,
+    onEditTicket: openProposalForm,
     // Een reactie op een ticket gaat direct de tijdlijn in — langs dezelfde weg als
     // de knop op het ticket zelf, dus met jouw naam eronder. Staat `is_internal` op
     // false, dan leest de klant hem in het portaal; dat staat op de kaart die je

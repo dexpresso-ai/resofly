@@ -217,7 +217,7 @@ function SupplierForm({ data, organizationId, canWrite, supplier, seed, expenseA
 
 // ──────────────────────────── Inkoopfacturen ────────────────────────────
 
-function nextPurchaseNumber(data: AppData, date = new Date()): string {
+export function nextPurchaseNumber(data: AppData, date = new Date()): string {
   const prefix = `INK-${date.getFullYear()}-`;
   const max = data.purchaseInvoices
     .map(p => p.internal_number || '')
@@ -233,7 +233,7 @@ function nextPurchaseNumber(data: AppData, date = new Date()): string {
  *  hetzelfde tarief op verschillende kostenrekeningen staan.
  *  fallbackAccountId spiegelt de server-coalesce van een lege rekening → 4500,
  *  zodat een blanco regel en een expliciete 4500-regel in dezelfde groep vallen. */
-function purchaseTotals(lines: PurchaseInvoiceLine[], fallbackAccountId: UUID | null = null) {
+export function purchaseTotals(lines: PurchaseInvoiceLine[], fallbackAccountId: UUID | null = null) {
   const groups = new Map<string, { base: number; rate: number }>();
   let subtotal = 0;
   for (const l of lines) {

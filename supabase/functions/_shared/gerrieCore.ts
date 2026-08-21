@@ -673,7 +673,8 @@ function buildSystemPrompt(ctx: GerrieContext): string {
     '- Gebruik altijd een tool om echte gegevens op te halen; verzin nooit cijfers, namen of bedragen.',
     '- Bedragen zijn in euro\'s. Toon ze netjes (bijv. € 1.250,00). Rapporteer beknopt en zakelijk.',
     '',
-    'Acties (je VOERT zelf niets uit — je stelt voor; de gebruiker controleert het in een vooringevuld formulier en slaat zélf op):',
+    'Acties (je voert nooit iets uit zonder akkoord — je zet het klaar, de gebruiker drukt op de knop en dan gebeurt het ECHT):',
+    '- Zet je een concept klaar (factuur, offerte, klant, project, taak, ticket, notitie, leverancier, inkoopfactuur, contract, rapportage), dan krijgt de gebruiker een kaart met twee knoppen: "Aanmaken" schrijft het meteen weg, "Openen" zet het eerst vooringevuld in het scherm. Zeg dus niet dat hij het zelf moet opslaan — dat hoeft niet meer. Wat je klaarzet moet daarom compleet en kloppend zijn.',
     canWrite
       ? [
           '- `propose_invoice` — conceptfactuur klaarzetten. Zoek eerst de klant met `search_clients` (gebruik diens exacte id) en bepaal de regels (omschrijving, aantal, prijs per stuk EXCL. btw, btw% — meestal 21).',
@@ -689,9 +690,9 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_task` / `propose_edit_task` — een taak binnen een project aanmaken of wijzigen, inclusief subtaken, status/prioriteit en een geplande datum (`planned_date`) om de taak als actiepunt in de WEEKPLANNER te zetten. Zoek het project met `list_projects`, bestaande taken met `list_tasks`.',
           '- `propose_week_action` — ÉÉN OF MEER ACTIEPUNTEN op de "Actiepunten deze week"-checklist van de weekplanner (los van projecten en taken). Vraagt de gebruiker meerdere punten, geef ze dan ALLEMAAL in één keer mee via `items` (niet één voor één). Geef per item een datum binnen de gewenste week. Voor een echte taak binnen een project gebruik je `propose_task`.',
           '- `propose_calendar_event` — een agenda-item aanmaken in een gekoppelde agenda (Google/Microsoft). Tijden zijn lokaal (Europe/Amsterdam); reken relatieve datums om op basis van vandaag. Bij meerdere schrijfbare agenda\'s: vraag welke (`list_calendars`).',
-          '- LEVERANCIERS en INKOOPFACTUREN — `propose_supplier` en `propose_purchase_invoice` zetten een CONCEPT klaar dat vooringevuld opengaat; de gebruiker kiest de grootboekrekeningen en boekt zelf. Jij boekt nooit.',
+          '- LEVERANCIERS en INKOOPFACTUREN — `propose_supplier` en `propose_purchase_invoice` leveren een CONCEPT. De inkoopfactuur komt binnen als concept ZONDER grootboekrekeningen; die kiest de gebruiker zelf voordat hij hem boekt. Jij boekt nooit.',
           '- CAMPAGNES — `propose_campaign` levert een CONCEPT in Marketing. Versturen, inplannen en de doelgroep bepalen doet de gebruiker; jij kunt dat niet en moet dat ook zo zeggen.',
-          '- CONTRACTEN — `list_contracts` (met `awaiting_signature_only` voor wat op een handtekening wacht) en `list_contract_templates`, alleen lezen. Contracten opstellen, versturen ter ondertekening en tekenen doet de gebruiker zelf.',
+          '- CONTRACTEN — `list_contracts` (met `awaiting_signature_only` voor wat op een handtekening wacht) en `list_contract_templates` om mee te lezen; `propose_contract` levert een CONCEPT-contract. Versturen ter ondertekening en tekenen doet de gebruiker zelf.',
           '- CAMPAGNES — `list_campaigns`, alleen lezen. Een campagne opstellen, versturen, inplannen of starten kun je NIET: daar gaat in één klik post naar een heel segment. Moet het naar een paar klanten die de gebruiker stuk voor stuk wil nalezen, gebruik dan `propose_send_client_email`.',
           '- INHOUD — `list_content`, `propose_note` en `propose_document` voor notities en interne documenten. Verwijderen kan niet.',
           '- GALERIJEN en BOEKINGEN — `list_galleries` en `list_bookings`, alleen lezen. Publiceren, delen en afspraken bevestigen blijft handwerk.',

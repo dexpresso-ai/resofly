@@ -372,12 +372,30 @@ export interface GerrieTicketNoteProposal {
 export type GerrieProposal = GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieEditCalendarEventProposal | GerrieCancelCalendarEventProposal | GerrieClientContactProposal | GerrieEditClientContactProposal | GerrieProjectTeamProposal | GerrieTaskAssignProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieEditTimeEntryProposal | GerrieTicketProposal | GerrieEditTicketProposal | GerrieTicketNoteProposal | GerrieSupplierProposal | GerriePurchaseInvoiceProposal | GerrieContractProposal | GerrieCampaignProposal | GerrieContentProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
 
 /**
- * De uitvoer-handlers voor een door Gerrie voorgestelde actie. Draft-types openen een
- * vooringevuld formulier (void); verstuur-/aanmaak-types voeren de actie uit (Promise).
- * Gedeeld door de chat-dock (GerrieChat) én het Commandocentrum, zodat een goedgekeurd
- * voorstel overal identiek wordt uitgevoerd.
+ * De uitvoer-handlers voor een door Gerrie voorgestelde actie.
+ *
+ * Twee soorten. De verstuur-/aanmaak-types (onSendInvoice, onCreateCalendarEvent, …)
+ * dóen het meteen. De concept-types (onCreateInvoiceDraft, onCreateTask, …) openen het
+ * vooringevulde formulier — dat is een tweede lezing, geen uitvoering.
+ *
+ * Dat tweede pad was lang het enige, en daardoor kon Gerrie strikt genomen geen factuur
+ * AANMAKEN: hij zette een scherm klaar en jij drukte op opslaan. Voor een geplande agent
+ * die om 08:00 draait terwijl niemand kijkt, is dat helemaal onwerkbaar. Daarom is er nu
+ * onApplyProposal: dezelfde voorstellen, maar écht weggeschreven zodra jij akkoord geeft.
+ * Het formulier blijft als tweede knop bestaan voor wie liever eerst kijkt.
+ *
+ * Gedeeld door de chat-dock (GerrieChat), het Commandocentrum én de goedkeurwachtrij,
+ * zodat een goedgekeurd voorstel overal identiek wordt uitgevoerd.
  */
 export interface GerrieActionHandlers {
+  /**
+   * Voert een CONCEPT-voorstel écht uit in plaats van het formulier te openen, en geeft
+   * een korte bevestigingszin terug ("Factuur 2026-014 aangemaakt voor Jansen"). Eén
+   * handler voor alle concept-types: de uitvoering loopt langs precies dezelfde opslagweg
+   * als het formulier, dus er is geen tweede plek waar de validatie kan gaan afwijken.
+   * Ontbreekt de handler, dan valt alles terug op het formulier.
+   */
+  onApplyProposal?: (proposal: GerrieProposal) => Promise<string>;
   onCreateInvoiceDraft?: (proposal: GerrieInvoiceProposal) => void;
   onCreateQuoteDraft?: (proposal: GerrieQuoteProposal) => void;
   onCreateClientDraft?: (proposal: GerrieClientProposal) => void;

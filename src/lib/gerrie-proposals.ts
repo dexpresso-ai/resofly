@@ -1,4 +1,5 @@
 import { euro, formatMinutes } from './format';
+import { describeReportDefinition } from './reporting';
 import type { GerrieActionHandlers, GerrieProposal } from './gerrie-api';
 
 /**
@@ -18,13 +19,49 @@ export type ProposalKind = 'money' | 'mail' | 'agenda' | 'work' | 'insight' | 'a
 export interface ProposalInfo {
   title: string;
   sub: string;
-  /** `true` = echte actie (versturen/aanmaken/registreren); `false` = opent een formulier. */
+  /** `true` = akkoord voert het écht uit. Sinds de concept-voorstellen ook echt worden
+   *  weggeschreven, geldt dat voor alles behalve een puur informatief voorstel. */
   write: boolean;
   kind: ProposalKind;
+  /** Er is óók een vooringevuld formulier voor; het scherm mag een tweede knop tonen. */
+  openable: boolean;
+}
+
+/**
+ * De voorstellen die naast uitvoeren óók een formulier kennen.
+ *
+ * Voor deze types bouwde Gerrie vroeger alleen een scherm op: akkoord betekende "open
+ * het formulier", en pas jouw klik op Opslaan maakte er iets van. Dat brak zodra een
+ * GEPLANDE agent hetzelfde voorstel deed — die zet om 08:00 een factuur klaar en er is
+ * niemand om dat scherm te openen. Nu voert akkoord ze echt uit (`onApplyProposal`);
+ * het formulier blijft ernaast staan voor wie eerst wil kijken of bijschaven.
+ */
+const FORM_BACKED_TYPES = new Set<GerrieProposal['type']>([
+  'invoice', 'quote', 'client', 'edit_invoice', 'edit_quote', 'edit_client',
+  'project', 'edit_project', 'task', 'edit_task', 'ticket', 'edit_ticket',
+  'content', 'supplier', 'purchase_invoice', 'contract', 'report',
+]);
+
+/**
+ * Het werkwoord op de knop van een concept-voorstel: aanmaken, bijwerken of opslaan.
+ * Staat hier omdat de chat en de wachtrij dezelfde knop horen te tonen.
+ */
+export function proposalVerb(p: GerrieProposal): string {
+  if (p.type === 'report') return 'Opslaan';
+  return p.type.startsWith('edit_') ? 'Bijwerken' : 'Aanmaken';
+}
+
+/** Kan dit voorstel ook vooringevuld in een formulier geopend worden? */
+export function isFormBackedProposal(p: GerrieProposal): boolean {
+  return FORM_BACKED_TYPES.has(p.type);
 }
 
 /** Kort label voor een voorstel in de goedkeuringswachtrij. */
 export function proposalLabel(p: GerrieProposal): ProposalInfo {
+  return { ...describeProposal(p), openable: FORM_BACKED_TYPES.has(p.type) };
+}
+
+function describeProposal(p: GerrieProposal): Omit<ProposalInfo, 'openable'> {
   switch (p.type) {
     case 'send_invoice': return { title: `Factuur ${p.number} versturen`, sub: `naar ${p.recipient_email}`, write: true, kind: 'mail' };
     case 'send_quote': return { title: `Offerte ${p.number} versturen`, sub: `naar ${p.recipient_email}`, write: true, kind: 'mail' };
@@ -83,19 +120,19 @@ export function proposalLabel(p: GerrieProposal): ProposalInfo {
       write: true, kind: 'work',
     };
     case 'supplier': return {
-      title: `Leverancier openen: ${p.name}`,
+      title: `Leverancier aanmaken: ${p.name}`,
       sub: [p.city, p.email].filter(Boolean).join(' · '),
-      write: false, kind: 'money',
+      write: true, kind: 'money',
     };
     case 'purchase_invoice': return {
-      title: 'Concept-inkoopfactuur openen',
+      title: 'Concept-inkoopfactuur aanmaken',
       sub: [p.supplier_name, p.supplier_invoice_number, euro(p.total_eur)].filter(Boolean).join(' · '),
-      write: false, kind: 'money',
+      write: true, kind: 'money',
     };
     case 'contract': return {
-      title: `Concept-contract openen: ${p.title}`,
+      title: `Concept-contract aanmaken: ${p.title}`,
       sub: [p.client_name, p.amount_eur != null ? euro(p.amount_eur) : ''].filter(Boolean).join(' · '),
-      write: false, kind: 'work',
+      write: true, kind: 'work',
     };
     case 'campaign': return {
       title: `Concept-campagne aanmaken: ${p.name}`,
@@ -103,28 +140,28 @@ export function proposalLabel(p: GerrieProposal): ProposalInfo {
       write: true, kind: 'mail',
     };
     case 'content': return {
-      title: `${p.kind === 'note' ? 'Notitie' : 'Document'} openen: ${p.title}`,
+      title: `${p.kind === 'note' ? 'Notitie' : 'Document'} aanmaken: ${p.title}`,
       sub: [p.client_name, p.project_name].filter(Boolean).join(' · '),
-      write: false, kind: 'work',
+      write: true, kind: 'work',
     };
-    case 'ticket': return { title: 'Ticket openen', sub: [p.title, p.client_name].filter(Boolean).join(' · '), write: false, kind: 'work' };
-    case 'edit_ticket': return { title: `Wijziging ticket openen`, sub: p.title, write: false, kind: 'work' };
+    case 'ticket': return { title: 'Ticket aanmaken', sub: [p.title, p.client_name].filter(Boolean).join(' · '), write: true, kind: 'work' };
+    case 'edit_ticket': return { title: 'Ticket bijwerken', sub: p.title, write: true, kind: 'work' };
     case 'ticket_note': return {
       title: p.is_internal ? 'Interne notitie plaatsen' : 'Reactie naar de klant plaatsen',
       sub: `${p.ticket_title} — ${p.body.slice(0, 60)}${p.body.length > 60 ? '…' : ''}`,
       write: true, kind: 'work',
     };
-    case 'invoice': return { title: 'Conceptfactuur openen', sub: `${p.client_name} · ${euro(p.total_eur)}`, write: false, kind: 'money' };
-    case 'quote': return { title: 'Conceptofferte openen', sub: `${p.client_name} · ${euro(p.total_eur)}`, write: false, kind: 'money' };
-    case 'client': return { title: 'Nieuwe klant openen', sub: p.name, write: false, kind: 'work' };
-    case 'edit_invoice': return { title: `Wijziging factuur ${p.number} openen`, sub: p.client_name, write: false, kind: 'money' };
-    case 'edit_quote': return { title: `Wijziging offerte ${p.number} openen`, sub: p.client_name, write: false, kind: 'money' };
-    case 'edit_client': return { title: 'Wijziging klant openen', sub: p.name, write: false, kind: 'work' };
-    case 'project': return { title: 'Project openen', sub: p.name, write: false, kind: 'work' };
-    case 'edit_project': return { title: 'Wijziging project openen', sub: p.name, write: false, kind: 'work' };
-    case 'task': return { title: 'Taak openen', sub: `${p.title} · ${p.project_name}`, write: false, kind: 'work' };
-    case 'edit_task': return { title: 'Wijziging taak openen', sub: p.title, write: false, kind: 'work' };
-    case 'report': return { title: `Rapportage openen: ${p.name}`, sub: '', write: false, kind: 'insight' };
+    case 'invoice': return { title: 'Conceptfactuur aanmaken', sub: `${p.client_name} · ${euro(p.total_eur)} · ${lineLabel(p.lines.length)}`, write: true, kind: 'money' };
+    case 'quote': return { title: 'Conceptofferte aanmaken', sub: `${p.client_name} · ${euro(p.total_eur)} · ${lineLabel(p.lines.length)}`, write: true, kind: 'money' };
+    case 'client': return { title: 'Klant aanmaken', sub: [p.name, p.email].filter(Boolean).join(' · '), write: true, kind: 'work' };
+    case 'edit_invoice': return { title: `Factuur ${p.number} bijwerken`, sub: p.client_name, write: true, kind: 'money' };
+    case 'edit_quote': return { title: `Offerte ${p.number} bijwerken`, sub: p.client_name, write: true, kind: 'money' };
+    case 'edit_client': return { title: 'Klantgegevens bijwerken', sub: p.name, write: true, kind: 'work' };
+    case 'project': return { title: 'Project aanmaken', sub: [p.name, p.client_name].filter(Boolean).join(' · '), write: true, kind: 'work' };
+    case 'edit_project': return { title: 'Project bijwerken', sub: p.name, write: true, kind: 'work' };
+    case 'task': return { title: 'Taak aanmaken', sub: `${p.title} · ${p.project_name}`, write: true, kind: 'work' };
+    case 'edit_task': return { title: 'Taak bijwerken', sub: p.title, write: true, kind: 'work' };
+    case 'report': return { title: `Rapportage opslaan: ${p.name}`, sub: describeReportDefinition(p.definition), write: true, kind: 'insight' };
     case 'send_client_email': return {
       title: p.total === 1 ? `Mail aan ${p.items[0].client_name || 'de klant'}` : `${p.total} mailtjes naar klanten`,
       sub: p.total === 1 ? p.items[0].subject : p.items.map((i) => i.client_name).filter(Boolean).join(', ').slice(0, 80),
@@ -136,6 +173,9 @@ export function proposalLabel(p: GerrieProposal): ProposalInfo {
   }
 }
 
+/** "3 regels" — het aantal factuur-/offerteregels in het onderschrift. */
+function lineLabel(n: number): string { return `${n} regel${n === 1 ? '' : 's'}`; }
+
 /** "Elke maandag om 08:00" — voor het onderschrift van een agent-voorstel. */
 function scheduleSummary(p: { schedule_kind: string; hour: number; day_of_week: number | null; day_of_month: number | null }): string {
   const days = ['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag', 'zondag'];
@@ -145,9 +185,14 @@ function scheduleSummary(p: { schedule_kind: string; hour: number; day_of_week: 
   return `maandelijks op dag ${p.day_of_month ?? 1} om ${time}`;
 }
 
-/** Voert een goedgekeurd voorstel uit via de gedeelde handlers (zelfde als de chat-dock). */
-export async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers): Promise<void> {
-  const need = (fn: (() => Promise<void>) | undefined) => fn ? fn() : Promise.reject(new Error('Deze actie is hier niet beschikbaar.'));
+/**
+ * Opent een voorstel als VOORINGEVULD FORMULIER, zonder iets weg te schrijven.
+ *
+ * Dit is de tweede knop naast akkoord: je wilt de regels nog nalopen, een rekening
+ * kiezen of een zin herschrijven voordat het bestaat. Alleen zinvol voor de types in
+ * `FORM_BACKED_TYPES`; voor de rest is er geen scherm om te openen.
+ */
+export function openProposal(p: GerrieProposal, h: GerrieActionHandlers): void {
   switch (p.type) {
     case 'invoice': h.onCreateInvoiceDraft?.(p); return;
     case 'quote': h.onCreateQuoteDraft?.(p); return;
@@ -166,6 +211,26 @@ export async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers
     case 'supplier': h.onCreateSupplier?.(p); return;
     case 'purchase_invoice': h.onCreatePurchaseInvoice?.(p); return;
     case 'contract': h.onCreateContract?.(p); return;
+    default: return;
+  }
+}
+
+/**
+ * Voert een goedgekeurd voorstel uit via de gedeelde handlers (zelfde als de chat-dock).
+ *
+ * De formulier-types lopen eerst langs `onApplyProposal`: dat schrijft het voorstel écht
+ * weg langs dezelfde opslagweg als het formulier. Ontbreekt die handler (een scherm dat
+ * hem niet doorgeeft), dan valt het terug op het openen van het formulier — dan gebeurt
+ * er nog steeds niets stiekem.
+ */
+export async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers): Promise<void> {
+  const need = (fn: (() => Promise<void>) | undefined) => fn ? fn() : Promise.reject(new Error('Deze actie is hier niet beschikbaar.'));
+  if (FORM_BACKED_TYPES.has(p.type)) {
+    if (h.onApplyProposal) { await h.onApplyProposal(p); return; }
+    openProposal(p, h);
+    return;
+  }
+  switch (p.type) {
     // Een concept-campagne wordt écht aangemaakt (als draft) voordat de editor hem
     // kan openen; daarom een await-pad en geen los formulier.
     case 'campaign': await need(h.onCreateCampaign ? () => h.onCreateCampaign!(p) : undefined); return;
