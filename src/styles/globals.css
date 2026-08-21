@@ -7988,3 +7988,43 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .public-foot-by::before{content:none}
   .public-brand img{height:30px;max-width:150px}
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   NACHTVLUCHT · signatuur — "goud is licht, geen verf"
+   Bewust ALLEEN in de donkere modus. Een harde gloed die klopt op bijna-zwart
+   wordt vuil op een lichte achtergrond; daarom sneuvelde deze laag bij de
+   invoering van het lichte thema (5434b3c). Met :root:not([data-theme=light])
+   krijgt donker de signatuur terug zonder dat licht ook maar iets verandert.
+   Alle kleuren lopen via --accent-rgb / --accent, zodat een klant met een eigen
+   huisstijl (applyBrandTheme) in ZIJN kleur gloeit, niet in ResoFly-goud.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* 1 · Instrumentenrail — het actieve menu-item is waar het licht valt.
+   Vervangt de 6px-stip door een gloeiende rail tegen de rand. */
+:root:not([data-theme="light"]) .nav-item.active::before{
+  left:4px; top:8px; bottom:8px;
+  width:2.5px; height:auto;
+  border-radius:0 3px 3px 0;
+  transform:none;
+  box-shadow:0 0 10px 1px rgba(var(--accent-rgb),.65);
+}
+
+/* 2 · Primaire knop — warm licht met gewicht i.p.v. één vlak goud vlak.
+   color-mix houdt het verloop merk-agnostisch; background-image staat ook op
+   :hover omdat de bestaande hover-regel de background-shorthand gebruikt en
+   die het verloop anders zou wegvagen. */
+:root:not([data-theme="light"]) .btn-primary{
+  background-image:linear-gradient(165deg,
+    color-mix(in srgb, var(--accent) 84%, #fff),
+    color-mix(in srgb, var(--accent) 90%, #000));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.28),
+             0 8px 22px -8px rgba(var(--accent-rgb),.5);
+}
+:root:not([data-theme="light"]) .btn-primary:hover:not(:disabled){
+  background-image:linear-gradient(165deg,
+    color-mix(in srgb, var(--accent) 90%, #fff),
+    color-mix(in srgb, var(--accent) 84%, #000));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.34),
+             0 0 0 1px rgba(var(--accent-rgb),.3),
+             0 12px 30px -8px rgba(var(--accent-rgb),.55);
+}
