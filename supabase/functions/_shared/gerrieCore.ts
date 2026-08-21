@@ -4,7 +4,7 @@ import {
   buildMergeFallbacks, buildMergeTokens, fillMergeTokens,
   type MergeClient, type MergeCompany, type MergeFieldDefinition,
 } from '../_shared/mergeTokens.ts';
-import { ACTIONS, actionCatalog, getAction, searchActions, summarize } from '../_shared/actions/index.ts';
+import { ACTIONS, getAction, searchActions } from '../_shared/actions/index.ts';
 import { ActionError, type ActionCtx, type ActionPlan } from '../_shared/actions/types.ts';
 
 // ============================================================
@@ -380,8 +380,14 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
   // Staat er minstens één handeling in, dan horen de drie meta-tools er vanzelf bij —
   // zonder die drie kan de agent zijn eigen handelingen niet eens aanroepen.
   const actionIds = (allowedToolNames ?? []).filter((n) => n.startsWith('action:')).map((n) => n.slice('action:'.length));
+  // Alleen de meta-tools die deze agent ook echt nodig heeft. Een agent die alleen
+  // leest hoort propose_action niet eens te zien: die kost tokens en nodigt uit tot
+  // een poging die daarna toch op de rechten stukloopt.
+  const hasWriteAction = actionIds.some((actionId) => !isReadOnlyToolName('action:' + actionId));
+  const metaTools = actionIds.length === 0 ? []
+    : hasWriteAction ? ACTION_TOOL_NAMES : ACTION_TOOL_NAMES.filter((n) => n !== 'propose_action');
   const base = allowedToolNames
-    ? [...allowedToolNames.filter((n) => !n.startsWith('action:')), ...(actionIds.length ? ACTION_TOOL_NAMES : [])]
+    ? [...allowedToolNames.filter((n) => !n.startsWith('action:')), ...metaTools]
     : undefined;
   // Dezelfde context, maar met de allowlist erin: runTool en buildProposal leunen erop.
   const toolCtx: GerrieContext = allowedToolNames ? { ...ctx, allowedActionIds: new Set(actionIds) } : ctx;

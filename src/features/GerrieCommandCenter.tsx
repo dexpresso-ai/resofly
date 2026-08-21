@@ -3,7 +3,7 @@ import { Sparkles, Send, Check, X, AlertTriangle, Wand2, Clock, Plus, Play, Paus
 import {
   streamGerrieReply, loadGerrieBudget, confirmGerrieAction,
   listRoutines, listRoutineRuns, saveRoutine, setRoutineStatus, archiveRoutine, restoreRoutine, runRoutineNow, listRunProposals,
-  loadRunTranscript, listRunEvents, listRunDecisions, replyToRun, listPendingAgentApprovals, listRoutineToolsSafe, routineToolLabel,
+  loadRunTranscript, listRunEvents, listRunDecisions, replyToRun, listPendingAgentApprovals, listRoutineToolsSafe, routineToolLabel, routineToolIsRead,
   type GerrieActionHandlers, type GerrieProposal,
   type GerrieRoutine, type GerrieRoutineRun, type GerrieRoutineInput, type GerrieRunMessage, type GerrieAgentProposal,
   type GerrieRunEvent, type GerrieRunDecision, type RoutineTool,
@@ -96,6 +96,10 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
   useEffect(() => {
     let cancelled = false;
     loadGerrieBudget(organizationId).then((f) => { if (!cancelled && f !== null) setBudget(f); });
+    // De capability-catalogus alvast ophalen. Niet voor deze pagina zelf, maar voor
+    // de agentkaarten eronder: die tonen per agent wat hij mag, en zonder catalogus
+    // kennen ze alleen de rauwe namen en niet of iets leest of schrijft.
+    void listRoutineToolsSafe(organizationId).catch(() => { /* dan de terugval */ });
     reloadPending();
     return () => { cancelled = true; };
   }, [organizationId, reloadPending]);
@@ -762,8 +766,8 @@ function AgentSheet({ routine, organizationId, canWrite, handlers, busy, runsKey
   onClose: () => void;
   onApprovalsChanged: () => void;
 }) {
-  const readTools = routine.enabled_tools.filter((n) => !n.startsWith('propose_'));
-  const proposeTools = routine.enabled_tools.filter((n) => n.startsWith('propose_'));
+  const readTools = routine.enabled_tools.filter(routineToolIsRead);
+  const proposeTools = routine.enabled_tools.filter((n) => !routineToolIsRead(n));
   const emailToo = Array.isArray(routine.delivery?.channels) && routine.delivery.channels.includes('email');
   const isArchived = routine.status === 'archived';
 

@@ -1019,7 +1019,7 @@ export async function listRoutineTools(organizationId: UUID): Promise<RoutineToo
       moduleLabel: r.moduleLabel != null ? String(r.moduleLabel) : null,
       kind: r.kind === 'propose' ? 'propose' as const : 'read' as const,
     }));
-  for (const t of tools) toolLabels.set(t.name, t.label);
+  for (const t of tools) { toolLabels.set(t.name, t.label); toolKinds.set(t.name, t.kind); }
   return tools;
 }
 
@@ -1029,6 +1029,24 @@ export async function listRoutineTools(organizationId: UUID): Promise<RoutineToo
  * lijstje voor hoeven bij te houden. Begint gevuld met de terugval hieronder.
  */
 const toolLabels = new Map<string, string>();
+
+/**
+ * En of die capability leest of schrijft.
+ *
+ * Bij een klassieke tool zie je dat aan de naam (`propose_…`), maar een handeling
+ * uit de registry heet gewoon `action:gallery.publish` — daar valt niets aan af te
+ * lezen. Zonder deze kaart belandde \"galerij publiceren\" op de agentkaart onder
+ * \"kijkt mee\", en dat is precies het verkeerde om je in te vergissen.
+ */
+const toolKinds = new Map<string, 'read' | 'propose'>();
+
+/** Leest deze capability alleen mee? */
+export function routineToolIsRead(name: string): boolean {
+  const known = toolKinds.get(name);
+  if (known) return known === 'read';
+  // Catalogus nog niet geladen: de naam is dan het enige houvast.
+  return !name.startsWith('propose_');
+}
 
 /** Menselijk label bij een tool-naam; valt netjes terug op de naam zelf. */
 export function routineToolLabel(name: string): string {

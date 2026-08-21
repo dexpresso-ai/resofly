@@ -86,8 +86,3 @@ export function searchActions(
   scored.sort((a, b) => b.score - a.score || a.action.id.localeCompare(b.action.id));
   return scored.slice(0, limit).map((s) => summarize(s.action));
 }
-
-/** Alles wat een agent aan te vinken is, voor de agent-bouwer. */
-export function actionCatalog(): Array<{ id: string; label: string; module: string; kind: 'read' | 'write' }> {
-  return ACTIONS.map((a) => ({ id: a.id, label: a.label, module: a.module, kind: a.kind }));
-}
