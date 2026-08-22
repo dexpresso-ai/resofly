@@ -345,6 +345,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     label: 'Testmail van een campagne versturen',
     module: 'marketing',
     kind: 'write',
+    risk: 'high',
     description:
       'Stuurt de campagne als testmail naar één opgegeven adres, zonder tracking en zonder iemand uit de doelgroep aan te raken. De campagne wordt eerst opgeslagen zoals hij nu is. ' +
       'Dit is de veilige manier om te zien hoe de mail eruitziet vóór hij naar het hele segment gaat.',
@@ -373,6 +374,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     label: 'Campagne nu versturen naar de hele doelgroep',
     module: 'marketing',
     kind: 'write',
+    risk: 'high',
     description:
       'Zet de verzending in gang: de ontvangerslijst wordt vastgelegd en de eerste batch gaat direct de deur uit, de rest volgt automatisch. ' +
       'ONOMKEERBAAR — verstuurde mail komt niet terug. Alleen een concept of een ingeplande campagne kan hier gestart worden; een gepauzeerde hervat je met `campaign.resume`. ' +
@@ -482,6 +484,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     label: 'Gepauzeerde campagne hervatten',
     module: 'marketing',
     kind: 'write',
+    risk: 'high',
     description:
       'Laat een gepauzeerde campagne verder gaan: de ontvangers die nog in de wachtrij staan krijgen alsnog hun mail. Er gaat dus ECHT post de deur uit.',
     keywords: ['hervatten', 'doorgaan', 'verder', 'resume', 'weer starten'],
@@ -512,6 +515,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     label: 'Campagne annuleren',
     module: 'marketing',
     kind: 'write',
+    risk: 'high',
     description:
       'Breekt de campagne definitief af. Wat nog in de wachtrij staat gaat NIET meer uit en een ingepland moment vervalt. ONOMKEERBAAR: hervatten kan hierna niet meer. ' +
       'Wat al verstuurd is blijft verstuurd — annuleren haalt geen mail terug. Wil je alleen tijdelijk stilleggen, gebruik dan `campaign.pause`.',
@@ -640,6 +644,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     label: 'Blokkering van een e-mailadres opheffen',
     module: 'marketing',
     kind: 'write',
+    risk: 'high',
     description:
       'Haalt een adres van de blokkeerlijst; het mag daarna weer marketingmail ontvangen. ' +
       'LET OP: stond de reden op "unsubscribed", dan heeft die persoon zich ZELF afgemeld. Hem weer aanschrijven zonder dat hij daar opnieuw om vroeg is in strijd met de AVG. Doe dit alleen als de gebruiker uitdrukkelijk zegt dat de toestemming er weer is.',
@@ -847,6 +852,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     label: 'Follow-up-stroom activeren',
     module: 'marketing',
     kind: 'write',
+    risk: 'high',
     description:
       'Schrijft de hele doelgroep in en stuurt de eerste mail DIRECT uit; de vervolgstappen gaan daarna vanzelf, zonder dat er nog iemand naar kijkt. ' +
       'ONOMKEERBAAR — die eerste mail komt niet terug, en een geactiveerde stroom kun je alleen nog pauzeren of stoppen, niet meer wijzigen. Controleer eerst met `flow.get` of de stappen en de doelgroep kloppen. Stel dit nooit voor zonder dat de gebruiker er expliciet om vroeg.',
@@ -918,6 +924,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     label: 'Gepauzeerde stroom hervatten',
     module: 'marketing',
     kind: 'write',
+    risk: 'high',
     description:
       'Laat een gepauzeerde stroom verder lopen. De ingeschreven klanten krijgen hun vervolgmails weer, dus er gaat ECHT post de deur uit.',
     keywords: ['stroom hervatten', 'doorgaan', 'verder', 'weer aanzetten'],
@@ -946,6 +953,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     label: 'Follow-up-stroom stoppen',
     module: 'marketing',
     kind: 'write',
+    risk: 'high',
     description:
       'Beëindigt de stroom definitief: alle lopende inschrijvingen worden geannuleerd en openstaande vervolgstappen gaan NIET meer uit. De stroom komt op "gestopt" te staan; de resultaten blijven leesbaar. ' +
       'ONOMKEERBAAR — hervatten kan hierna niet meer. Wil je alleen tijdelijk stilleggen, gebruik dan `flow.pause`.',
@@ -1117,6 +1125,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     label: 'Contract ter ondertekening versturen',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Mailt de klant een persoonlijke ondertekenlink; de status gaat naar "wacht op ondertekening". Staat het contract al op "wacht op ondertekening", dan is dit een HERINNERING met een nieuwe link. ' +
       'Dit is echte post naar buiten MET RECHTSGEVOLG: de ontvanger kan met die link tekenen, en dan ligt het contract vast. Onomkeerbaar in de zin dat de mail niet terug te halen is. ' +
@@ -1187,6 +1196,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     label: 'Contract intrekken',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Trekt een contract in met een reden. De publieke ondertekenlink wordt onmiddellijk ONGELDIG: een klant die het contract al in zijn mailbox heeft, kan het daarna niet meer tekenen. ' +
       'ONOMKEERBAAR — een ingetrokken contract komt niet terug op "concept"; je maakt een nieuw contract als het alsnog door moet. Een ondertekend contract kan niet ingetrokken worden.',
@@ -1464,6 +1474,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     label: 'Galerij publiceren',
     module: 'projects',
     kind: 'write',
+    risk: 'high',
     description:
       'Zet de galerij op "gepubliceerd". Vanaf dat moment zien de contactpersonen van de klant met portaaltoegang de oplevering in hun klantportaal. ' +
       'Dit is een oplevering naar buiten: controleer eerst of de juiste bestanden erin staan, of de indeling klopt en of downloads goed staan. Terugdraaien kan met `gallery.unpublish`.',
@@ -1527,6 +1538,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     label: 'Publieke deellink voor een galerij genereren',
     module: 'projects',
     kind: 'write',
+    risk: 'high',
     description:
       'Maakt een geheime link waarmee IEDEREEN die hem heeft de galerij kan bekijken — geen inlog, geen portaal. Met een pincode van 6 tot 8 cijfers zit er nog een slot op. ' +
       'De link is maar ÉÉN keer te zien: hij staat in de bevestiging en wordt daarna alleen als hashcode bewaard. Bestond er al een deellink, dan werkt die oude vanaf nu niet meer. ' +
@@ -1561,6 +1573,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     label: 'Publieke deellink intrekken',
     module: 'projects',
     kind: 'write',
+    risk: 'high',
     description:
       'Zet het delen uit en wist de bewaarde link- en pincodehash. Elke link die je eerder hebt uitgedeeld werkt daarna NIET meer — ook die in mails en appjes die je niet terug kunt halen. ' +
       'ONOMKEERBAAR: dezelfde link komt niet terug, je genereert hoogstens een nieuwe. Het klantportaal is een aparte weg en blijft gewoon werken.',

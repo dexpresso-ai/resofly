@@ -458,6 +458,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
     label: 'Modulerechten van een teamlid opslaan',
     module: 'stats',
     kind: 'write',
+    risk: 'high',
     description:
       'Zet per module wat een teamlid mag: "none" (de module verdwijnt volledig uit zijn menu en is ook via de database niet op te vragen), "read" (alleen lezen) of "write" (volledig). Een module die je weglaat staat volledig open — geef dus altijd de VOLLEDIGE gewenste set door, want deze handeling vervangt de bestaande instelling. ' +
       'Een leeg object zet alles weer open. Bij een viewer kan alleen none of read. Owners hebben altijd alles; bij een admin wordt de instelling wél bewaard maar gaat hij pas gelden zodra je hem naar member of viewer zet. Zoek het `member_id` met `team.list_access`.',
@@ -768,6 +769,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
     label: 'Boekhoudinstellingen opslaan (KOR, btw-periode, knipdatum, boekjaar)',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Stelt de instellingen in die het grootboek en de btw-aangifte aansturen: de boekhoud-knipdatum (vanaf wanneer het grootboek leidend is), de kleineondernemersregeling (KOR), de btw-aangifteperiode (per kwartaal of maandelijks), de startmaand van het boekjaar (voor een gebroken boekjaar) en de rekening waarop het jaarresultaat bij de afsluiting wordt geboekt. ' +
       'Geef alleen wat verandert. Vraag door voordat je de KOR of de knipdatum aanraakt: dat verandert de btw op alle nieuwe facturen respectievelijk welke facturen nog in het grootboek belanden.',

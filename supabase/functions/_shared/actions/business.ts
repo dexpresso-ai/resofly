@@ -653,6 +653,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Resultaatbestemming vastleggen en boeken',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Legt het besluit van de algemene vergadering over de bestemming van het resultaat vast en BOEKT het meteen: van de resultaatrekening naar de overige reserves (0520) en, voor zover er dividend wordt toegekend, naar een dividendschuld (1580). ' +
       'Wat niet als dividend wordt toegekend, gaat automatisch naar de reserves. Bij een verlies valt er niets uit te keren. ' +
@@ -716,6 +717,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Resultaatbestemming terugdraaien',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Zet een geboekte resultaatbestemming op "teruggedraaid", zodat zij nergens meer meetelt. Er komt geen spiegelpost — die zou op een datum vallen die inmiddels in een afgesloten aangifteperiode kan liggen; het boekstuk zelf gaat op reversed. ' +
       'Alleen een eigenaar of beheerder kan dit, en alleen als er geen opgemaakte jaarrekening op dit boekjaar rust. Is er al dividend uitgekeerd op dit besluit, draai dan eerst die uitkering terug.',
@@ -794,6 +796,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Dividend uitkeren, inhouden en boeken',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Legt een dividenduitkering vast, berekent per aandeelhouder de dividendbelasting en boekt beide. Twee wegen: `final` gaat op een eerder vastgelegde resultaatbestemming (het bruto bedrag moet dan exact overeenkomen met het toegekende dividend, want dat staat al als schuld op 1580) en `interim` ontstaat hier — dan toetst de database de balanstest en is `board_approved` verplicht (art. 2:216 lid 2 BW). ' +
       'De inhouding is per ontvanger: bij een aandeelhouder met inhoudingsvrijstelling (art. 4 Wet DB 1965) blijft zij achterwege. ' +
@@ -937,6 +940,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Dividenduitkering terugdraaien',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Draait een geboekte dividenduitkering terug: beide boekstukken (het besluit en de inhouding) gaan op "teruggedraaid". Alleen een eigenaar of beheerder kan dit. ' +
       'Let op: de afdrachtverplichting die door de terbeschikkingstelling is ontstaan verdwijnt hiermee niet vanzelf uit de werkelijkheid — is er al aangifte dividendbelasting gedaan, overleg dan met de adviseur.',
@@ -1060,6 +1064,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Rente over de rekening-courant DGA boeken',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Boekt de over het dagsaldo berekende jaarrente op de rekening-courant DGA, tegen 9000 Rentebaten of 9100 Rentelasten. ' +
       'Kan alleen als er voor het hele jaar een percentage is vastgelegd; is er ook maar één dag zonder percentage, dan weigert dit. Bekijk eerst `dga.interest`.',
@@ -1101,6 +1106,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Geboekte DGA-rente terugdraaien',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Draait de geboekte rente over de rekening-courant DGA van een jaar terug; het boekstuk gaat op "teruggedraaid". Alleen een eigenaar of beheerder kan dit. Zoek de boeking eerst op met `dga.interest`.',
     keywords: ['rente terugdraaien', 'dga rente', 'reversed', 'corrigeren'],
@@ -1129,6 +1135,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Loonjournaalpost van de salarisverwerker boeken',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Boekt de complete loonjournaalpost van de salarisverwerker in één keer als één boekstuk: loonkosten, nettolonen en loonheffingsschulden. ' +
       'ResoFly voert géén salarisadministratie en rekent niets na — wij kennen de loonheffingstabellen niet. Neem letterlijk over wat de verwerker heeft berekend; wij controleren alleen dat de post sluit en dat elke grootboekrekening bestaat. ' +
@@ -1346,6 +1353,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Vennootschapsbelasting vaststellen en boeken',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Stelt de Vpb-berekening van een boekjaar definitief vast en BOEKT de last op 9900 Vennootschapsbelasting tegen 1540 Te betalen vennootschapsbelasting, op de balansdatum van het boekjaar. De fiscale correcties gaan daarna op slot. ' +
       'Dit is de grondslag voor de aangifte vennootschapsbelasting — laat de gebruiker de uitkomst eerst bekijken met `corporate_tax.compute`. Indienen doet hij zelf of via zijn accountant; ResoFly doet geen aangifte.',
@@ -1382,6 +1390,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Vastgestelde Vpb-berekening terugdraaien',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Draait een vastgestelde Vpb-berekening terug, waardoor de geboekte belastingschuld vervalt en de fiscale correcties weer aanpasbaar worden. Alleen een eigenaar of beheerder kan dit. Zoek de berekening op met `corporate_tax.list`.',
     keywords: ['vpb terugdraaien', 'reservering vervallen', 'belastingschuld ongedaan', 'corrigeren'],
@@ -1605,6 +1614,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Jaarrekening opmaken en de cijfers bevriezen',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Maakt de jaarrekening op (art. 2:210 lid 1 BW): de cijfers worden BEVROREN met een sha256-hash en de opmaaktermijn wordt vastgeklonken. Vanaf dat moment komt alles uit die momentopname; het boekjaar heropenen of de resultaatbestemming terugdraaien kan pas nadat dit stuk is ingetrokken. ' +
       'Verplicht: minstens één bestuurder als ondertekenaar — alle bestuurders én alle commissarissen horen erbij (art. 2:210 lid 2 BW). Waarderen op fiscale grondslagen mag alleen bij een kleine of micro-rechtspersoon en dan alles-of-niets. ' +
@@ -1805,6 +1815,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Jaarrekening vaststellen',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Legt de vaststelling van de jaarrekening vast. Twee methodes: `ava` is een besluit van de algemene vergadering (art. 2:210 lid 3 BW) — dat strekt NIET tot kwijting, dat is een apart besluit dat je met `discharge_granted` vastlegt. ' +
       '`signature_210_5` is vaststelling door ondertekening: die kan alleen als alle aandeelhouders tevens bestuurder zijn, de overige vergadergerechtigden zijn geïnformeerd en hebben ingestemd (art. 2:238 lid 1 BW), de statuten het niet uitsluiten en ALLE ondertekenaars hebben getekend. Die route verleent AUTOMATISCH kwijting en dat kan niet ongedaan worden gemaakt — wijs de gebruiker daar uitdrukkelijk op. ' +
@@ -1892,6 +1903,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Deponering bij het handelsregister vastleggen',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Legt vast DÁT en WANNÉÉR de jaarrekening bij het handelsregister is gedeponeerd (art. 2:394 BW), met de referentie van het register. ResoFly deponeert NIET zelf: micro, kleine en middelgrote rechtspersonen deponeren digitaal in SBR/XBRL en dat bestand levert ResoFly niet — de gegenereerde PDF is geen deponeerbestand. ' +
       'Is de jaarrekening nog niet vastgesteld, dan kan zij alleen als onvastgesteld stuk worden gedeponeerd (art. 2:394 lid 2 BW); zet dan `unadopted` aan. Dat is een begin, geen einde: de vaststelling moet alsnog komen en daarna moet het vastgestelde stuk binnen acht dagen opnieuw worden gedeponeerd. ' +
@@ -1961,6 +1973,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     label: 'Jaarrekening intrekken',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Trekt een opgemaakte of vastgestelde jaarrekening in, met opgaaf van reden. Het bevroren stuk wordt ongeldig maar blijft als spoor staan en blokkeert daarna niets meer; pas ná het intrekken kan het boekjaar worden heropend en de resultaatbestemming worden teruggedraaid. ' +
       'Alleen een eigenaar of beheerder kan dit. Een GEDEPONEERD stuk kan niet worden ingetrokken — dat is een feit (art. 2:394 BW) en wordt hersteld met een opvolgend stuk via `annual_accounts.prepare`.',

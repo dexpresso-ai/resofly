@@ -1372,6 +1372,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     label: 'Btw-aangifte als ingediend of betaald markeren',
     module: 'finance',
     kind: 'write',
+    risk: 'high',
     description:
       'Zet de status van een afgesloten btw-aangifte (of van een suppletie) op "ingediend" of "betaald". Dit legt alleen vast wat er bij de Belastingdienst is gebeurd; er wordt niets geboekt. ' +
       'De volgorde is vast: van doorgeboekt naar ingediend, en van ingediend naar betaald. Wordt de betaling via de bank afgeletterd tegen "Te betalen omzetbelasting", dan gaat de status vanzelf op betaald. ' +
