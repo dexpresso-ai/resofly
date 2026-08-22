@@ -47,13 +47,30 @@ export function summarize(action: ActionDef): ActionSummary {
 }
 
 /**
+ * De woorden van elke handeling, één keer uitgerekend.
+ *
+ * `strong` is de naam, het label en de trefwoorden; `weak` de omschrijving. Die laatste
+ * weegt lichter omdat hij vaak zijdelings andere handelingen noemt ("gebruik hiervoor
+ * propose_report") — een treffer daarin zegt minder dan een treffer in de naam.
+ */
+const INDEX = ACTIONS.map((action) => ({
+  action,
+  strong: new Set([...tokens(action.id), ...tokens(action.label), ...(action.keywords ?? []).flatMap(tokens)]),
+  weak: new Set([...tokens(action.description), ...tokens(action.module)]),
+}));
+
+/**
  * Zoekt handelingen op woorden uit de vraag van de gebruiker.
  *
- * Bewust een simpele woordscore en geen slimmigheid: het model formuleert de zoekterm
- * zelf en kan het gerust twee keer proberen. Wat hier vooral telt is dat een handeling
- * die er ÍS ook gevonden wordt — vandaar `keywords` naast label en omschrijving, met
- * de woorden die een gebruiker gebruikt maar een ontwikkelaar niet ("aanmaning",
- * "afletteren", "deponeren").
+ * Bewust een woordscore en geen slimmigheid: het model formuleert de zoekterm zelf en
+ * kan het gerust twee keer proberen. Wat hier telt is dat een handeling die er ÍS ook
+ * gevonden wordt — vandaar `keywords` naast label en omschrijving, met de woorden die
+ * een gebruiker gebruikt maar een ontwikkelaar niet ("aanmaning", "afletteren").
+ *
+ * Eén ding is niet zo simpel: een ZELDZAAM woord weegt zwaarder dan een alledaags.
+ * "memoriaalboeking maken" liep anders stuk omdat "maken" op vijftig handelingen past
+ * en ze daarmee allemaal op dezelfde score zet — de echte treffer verdronk in de
+ * alfabetische volgorde. Hoe minder handelingen een woord raakt, hoe meer het zegt.
  *
  * Het antwoord draagt per handeling het volledige invoerschema mee, want daarmee kan
  * het model hem meteen aanroepen. Dat maakt een ruime uitslag duur, dus de standaard
@@ -66,27 +83,33 @@ export function searchActions(
   const limit = Math.min(Math.max(opts.limit ?? 6, 1), 25);
   const terms = tokens(query);
 
-  const pool = ACTIONS
-    .filter((a) => !opts.allowedIds || opts.allowedIds.has(a.id))
-    .filter((a) => !opts.modules || opts.modules(a.module, a.kind));
+  const pool = INDEX
+    .filter((e) => !opts.allowedIds || opts.allowedIds.has(e.action.id))
+    .filter((e) => !opts.modules || opts.modules(e.action.module, e.action.kind));
 
-  if (terms.length === 0) return pool.slice(0, limit).map(summarize);
+  if (terms.length === 0 || pool.length === 0) return pool.slice(0, limit).map((e) => summarize(e.action));
 
-  const scored = pool.map((action) => {
-    // De naam en de trefwoorden wegen zwaarder dan de omschrijving: die laatste
-    // noemt vaak zijdelings andere handelingen ("gebruik hiervoor propose_report").
-    const strong = new Set([...tokens(action.id), ...tokens(action.label), ...(action.keywords ?? []).flatMap(tokens)]);
-    const weak = new Set([...tokens(action.description), ...tokens(action.module)]);
+  // Eerst per zoekwoord tellen hoe breed het valt; daaruit volgt zijn gewicht.
+  const weight = new Map<string, number>();
+  for (const term of terms) {
+    let matches = 0;
+    for (const entry of pool) if (hits(entry.strong, term) || hits(entry.weak, term)) matches += 1;
+    weight.set(term, matches === 0 ? 0 : Math.log(1 + pool.length / matches));
+  }
+
+  const scored = pool.map((entry) => {
     let score = 0;
     for (const term of terms) {
-      if (hits(strong, term)) score += 3;
-      else if (hits(weak, term)) score += 1;
+      const w = weight.get(term) ?? 0;
+      if (w === 0) continue;
+      if (hits(entry.strong, term)) score += w * 3;
+      else if (hits(entry.weak, term)) score += w;
     }
-    return { action, score };
+    return { entry, score };
   }).filter((s) => s.score > 0);
 
-  scored.sort((a, b) => b.score - a.score || a.action.id.localeCompare(b.action.id));
-  return scored.slice(0, limit).map((s) => summarize(s.action));
+  scored.sort((a, b) => b.score - a.score || a.entry.action.id.localeCompare(b.entry.action.id));
+  return scored.slice(0, limit).map((s) => summarize(s.entry.action));
 }
 
 /**
@@ -99,20 +122,25 @@ function tokens(text: string): string[] {
 }
 
 /**
- * Treffer op een heel woord, op een woord dat ermee begint, of op een gedeelde stam.
+ * Matcht dit woord op deze zoekterm?
  *
- * Dat laatste is nodig omdat het Nederlands meervouden maakt die ná de stam uiteen
- * gaan lopen: "factuur" en "facturen" delen alleen "factur", dus een gewone
- * begint-met-vergelijking mist ze allebei. Vijf tekens gedeelde stam is genoeg om
- * factuur/facturen en klant/klanten te vangen zonder dat losse woorden aan elkaar
- * geplakt raken — en een misser hier kost een handeling die de gebruiker niet vindt,
- * terwijl een valse treffer hooguit een regel extra in een lijstje van zes is.
+ * Twee dingen moeten allebei kunnen. Het Nederlands maakt meervouden die ná de stam
+ * uiteenlopen ("factuur" / "facturen" delen alleen "factur"), dus puur op gelijkheid
+ * vergelijken mist te veel. Maar losjes op een gedeelde stam vergelijken haalt er
+ * onzin bij: "memo" is een prefix van "memoriaalboeking", en "aanmaning" deelt vijf
+ * letters met "aanmaken" — dan verdringt "leverancier aanmaken" de aanmaning die je
+ * zocht, en met 260 handelingen in de lijst is dat geen theoretisch risico.
+ *
+ * Eén regel dekt allebei: de gedeelde stam moet minstens vier tekens lang zijn én
+ * het grootste deel van het LANGSTE van de twee woorden beslaan. Dan halen
+ * factuur/facturen (6 van 8) en klant/klanten (5 van 7) het wel, en
+ * memo/memoriaalboeking (4 van 16) en aanmaning/aanmaken (5 van 9) niet.
  */
 function hits(haystack: Set<string>, term: string): boolean {
   if (haystack.has(term)) return true;
   for (const word of haystack) {
-    if (word.startsWith(term) || term.startsWith(word)) return true;
-    if (sharedPrefix(word, term) >= 5) return true;
+    const shared = sharedPrefix(word, term);
+    if (shared >= 4 && shared >= 0.7 * Math.max(word.length, term.length)) return true;
   }
   return false;
 }

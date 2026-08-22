@@ -1,6 +1,13 @@
 import type { ActionDef } from './types.ts';
 import { CLIENT_ACTIONS } from './clients.ts';
+import { FINANCE_ACTIONS } from './finance.ts';
+import { BOOKKEEPING_ACTIONS } from './bookkeeping.ts';
+import { BUSINESS_ACTIONS } from './business.ts';
+import { PROJECTS_ACTIONS } from './projects.ts';
+import { CALENDAR_ACTIONS } from './calendar.ts';
 import { TICKETS_ACTIONS } from './tickets.ts';
+import { MARKETING_ACTIONS } from './marketing.ts';
+import { ADMIN_ACTIONS } from './admin.ts';
 import { INSIGHT_ACTIONS } from './insight.ts';
 
 /**
@@ -15,6 +22,13 @@ import { INSIGHT_ACTIONS } from './insight.ts';
  */
 export const ACTIONS: ActionDef[] = [
   ...CLIENT_ACTIONS,
+  ...FINANCE_ACTIONS,
+  ...BOOKKEEPING_ACTIONS,
+  ...BUSINESS_ACTIONS,
+  ...PROJECTS_ACTIONS,
+  ...CALENDAR_ACTIONS,
   ...TICKETS_ACTIONS,
+  ...MARKETING_ACTIONS,
+  ...ADMIN_ACTIONS,
   ...INSIGHT_ACTIONS,
 ];

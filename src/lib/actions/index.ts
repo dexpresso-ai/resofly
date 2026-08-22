@@ -1,5 +1,12 @@
 import { CLIENT_EXECUTORS } from './clients';
+import { FINANCE_EXECUTORS } from './finance';
+import { BOOKKEEPING_EXECUTORS } from './bookkeeping';
+import { BUSINESS_EXECUTORS } from './business';
+import { PROJECTS_EXECUTORS } from './projects';
+import { CALENDAR_EXECUTORS } from './calendar';
 import { TICKETS_EXECUTORS } from './tickets';
+import { MARKETING_EXECUTORS } from './marketing';
+import { ADMIN_EXECUTORS } from './admin';
 import { INSIGHT_EXECUTORS } from './insight';
 import type { ActionExecutor, ActionRunCtx } from './types';
 
@@ -17,7 +24,14 @@ export type { ActionExecutor, ActionRunCtx } from './types';
  */
 export const ACTION_EXECUTORS: Record<string, ActionExecutor> = {
   ...CLIENT_EXECUTORS,
+  ...FINANCE_EXECUTORS,
+  ...BOOKKEEPING_EXECUTORS,
+  ...BUSINESS_EXECUTORS,
+  ...PROJECTS_EXECUTORS,
+  ...CALENDAR_EXECUTORS,
   ...TICKETS_EXECUTORS,
+  ...MARKETING_EXECUTORS,
+  ...ADMIN_EXECUTORS,
   ...INSIGHT_EXECUTORS,
 };
 
