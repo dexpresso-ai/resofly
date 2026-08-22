@@ -264,3 +264,54 @@ export function mergeTaskRows(tasks: Task[], rows: Task[]): Task[] {
   }
   return merged;
 }
+
+/**
+ * Leest een tijdsduur zoals iemand die typt: "90", "90m", "1u", "1u30", "1:30",
+ * "1.5u". Geeft `null` als er niets bruikbaars in staat, zodat een typfout geen
+ * verzonnen schatting oplevert.
+ */
+export function parseDurationInput(raw: string): number | null {
+  const text = raw.trim().toLowerCase().replace(',', '.');
+  if (!text) return null;
+
+  // "1:30" — uren en minuten gescheiden door een dubbele punt.
+  const clock = text.match(/^(\d+)\s*:\s*(\d{1,2})$/);
+  if (clock) {
+    const minutes = Number(clock[1]) * 60 + Number(clock[2]);
+    return Number.isFinite(minutes) ? clamp(minutes) : null;
+  }
+
+  // "1u30", "1u", "2 uur 15" — uren met eventueel losse minuten erachter.
+  const hours = text.match(/^(\d+(?:\.\d+)?)\s*(?:u|uur|h)\s*(\d{1,2})?\s*(?:m|min|minuten)?$/);
+  if (hours) {
+    const total = Number(hours[1]) * 60 + (hours[2] ? Number(hours[2]) : 0);
+    return Number.isFinite(total) ? clamp(total) : null;
+  }
+
+  // "90", "90m", "45 min" — kaal getal is altijd minuten.
+  const minutes = text.match(/^(\d+(?:\.\d+)?)\s*(?:m|min|minuten)?$/);
+  if (minutes) {
+    const total = Number(minutes[1]);
+    return Number.isFinite(total) ? clamp(total) : null;
+  }
+
+  return null;
+}
+
+function clamp(minutes: number): number {
+  return Math.max(0, Math.min(24 * 60, Math.round(minutes)));
+}
+
+/**
+ * Haalt een tijdsduur uit een net getypte taaktitel: "Montage 2u" wordt een taak
+ * van 120 minuten die gewoon "Montage" heet. Alleen aan het eind van de titel,
+ * zodat "2 uur durende sessie" niet stilletjes wordt opgegeten.
+ */
+export function splitTitleAndEstimate(title: string): { title: string; minutes: number | null } {
+  const match = title.match(/^(.*?)[\s·-]+(\d+(?:[.,]\d+)?\s*(?:u|uur|h)(?:\s*\d{1,2})?|\d+\s*(?:m|min|minuten)|\d+\s*:\s*\d{1,2})$/i);
+  if (!match) return { title: title.trim(), minutes: null };
+  const rest = match[1].trim();
+  if (!rest) return { title: title.trim(), minutes: null };
+  const minutes = parseDurationInput(match[2]);
+  return minutes === null ? { title: title.trim(), minutes: null } : { title: rest, minutes };
+}

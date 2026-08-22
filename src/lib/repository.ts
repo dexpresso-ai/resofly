@@ -737,9 +737,13 @@ export async function selectProjectMembers(organizationId: UUID): Promise<Projec
 }
 
 /** Taak-toewijzingen (org-breed; filter client-side op task_id). */
-export async function selectTaskAssignees(organizationId: UUID): Promise<TaskAssignee[]> {
+/** Alle toewijzingen van de organisatie, of — met `taskId` — alleen die van één
+ *  taak. Dat tweede is voor de weekplanner: na het slepen van één kaart hoeft
+ *  niet de hele tabel opnieuw opgehaald te worden. */
+export async function selectTaskAssignees(organizationId: UUID, taskId?: UUID): Promise<TaskAssignee[]> {
   return selectOptional<TaskAssignee>('task_assignees', organizationId, {
     orderBy: 'created_at', ascending: true, hint: PROJECT_TEAM_MIGRATION_HINT,
+    eq: taskId ? { task_id: taskId } : undefined,
   });
 }
 
@@ -1530,15 +1534,19 @@ const CLIENT_FIELD_DEFINITIONS_MIGRATION_HINT =
 async function selectOptional<T>(
   table: string,
   organizationId: UUID,
-  opts: { orderBy: string; ascending: boolean; hint: string },
+  opts: { orderBy: string; ascending: boolean; hint: string; eq?: Record<string, string> },
 ): Promise<T[]> {
   try {
-    return await fetchAllPages<T>(() => supabase
-      .from(table)
-      .select('*')
-      .eq('organization_id', organizationId)
-      .order(opts.orderBy, { ascending: opts.ascending })
-      .order('id', { ascending: true }));
+    return await fetchAllPages<T>(() => {
+      let query = supabase
+        .from(table)
+        .select('*')
+        .eq('organization_id', organizationId);
+      for (const [column, value] of Object.entries(opts.eq ?? {})) query = query.eq(column, value);
+      return query
+        .order(opts.orderBy, { ascending: opts.ascending })
+        .order('id', { ascending: true });
+    });
   } catch (error) {
     const err = error as { message?: string; details?: string };
     const message = `${err?.message ?? ''} ${err?.details ?? ''}`;

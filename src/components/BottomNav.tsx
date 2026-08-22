@@ -6,8 +6,8 @@ type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'tim
 // Welke pagina's onder welke onderbalk-knop vallen (voor de actief-markering).
 // Zelfde groepering als de zijbalk, zodat bv. de Grootboek-pagina "Financiën" oplicht.
 const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'pnl', 'vat-returns', 'corporate-tax', 'dga', 'shareholders', 'fiscal-years', 'annual-accounts'];
-const projectPages: Page[] = ['projects', 'project', 'project-planning', 'archive'];
-const calendarPages: Page[] = ['calendar', 'weekplanner', 'meeting-booking'];
+const projectPages: Page[] = ['projects', 'project', 'project-planning', 'weekplanner', 'archive'];
+const calendarPages: Page[] = ['calendar', 'meeting-booking'];
 const clientPages: Page[] = ['clients', 'client'];
 
 // De vijf duim-bereikbare kerndestinaties. Alle overige pagina's blijven via het

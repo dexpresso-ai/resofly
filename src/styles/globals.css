@@ -62,9 +62,6 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .wp-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .wp-week-label{margin-left:auto;font-weight:700;font-size:13px;color:var(--muted2)}
 .wp-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
-.wp-day{background:var(--bg2);border:1px solid var(--border);border-radius:10px;display:flex;flex-direction:column;min-height:280px;transition:border-color .15s,background .15s}
-.wp-day.is-today{border-color:var(--accent)}
-.wp-day.is-drop{background:var(--bg3);border-color:var(--accent);border-style:dashed}
 .wp-day-head{padding:10px 12px 8px;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted2)}
 .wp-day-name{color:var(--muted)}
 .wp-day-num{color:var(--text);font-size:14px}
@@ -87,39 +84,6 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .wp-task-body{flex:1;min-width:0}
 .wp-task-title{font-size:12px;font-weight:600;line-height:1.3;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .wp-task-meta{display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-size:10px}
-.wp-task-project{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px}
-.wp-unscheduled{background:var(--bg2);border:1px solid var(--border);border-radius:10px;transition:border-color .15s,background .15s}
-.wp-unscheduled.is-drop{background:var(--bg3);border-color:var(--accent);border-style:dashed}
-.wp-unscheduled-head{padding:10px 14px;border-bottom:1px solid var(--border);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted2)}
-.wp-outside{color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0}
-.wp-unscheduled-body{padding:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px}
-/* Weekplanner bottom row: 3 kolommen */
-.wp-bottom-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;align-items:start}
-.wp-bottom-row .wp-unscheduled-body{grid-template-columns:1fr;max-height:360px;overflow-y:auto}
-@media(max-width:1200px){.wp-bottom-row{grid-template-columns:1fr 1fr}}
-@media(max-width:900px){.wp-bottom-row{grid-template-columns:1fr}}
-/* Week checklist */
-.wp-checklist{background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden}
-.wp-checklist-head{padding:10px 14px;border-bottom:1px solid var(--border);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted2);display:flex;align-items:center;justify-content:space-between}
-.wp-checklist-count{font-size:10px;font-weight:500;color:var(--muted);text-transform:none;letter-spacing:0;background:var(--bg3);padding:2px 8px;border-radius:99px}
-.wp-checklist-body{padding:10px 12px;display:flex;flex-direction:column;gap:8px}
-.wp-checklist-input-row{display:flex;gap:6px;align-items:center}
-.wp-checklist-input{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:6px 10px;font-size:12px;color:var(--text);outline:none}
-.wp-checklist-input:focus{border-color:var(--accent)}
-.wp-checklist-input::placeholder{color:var(--muted)}
-.wp-checklist-add{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:7px;border:1px solid var(--border);background:var(--bg3);color:var(--muted2);cursor:pointer;flex-shrink:0;transition:background .12s,border-color .12s}
-.wp-checklist-add:hover:not(:disabled){background:var(--bg4);border-color:var(--accent);color:var(--accent-ink)}
-.wp-checklist-add:disabled{opacity:.4;cursor:default}
-.wp-checklist-empty{font-size:11px;color:var(--muted);padding:6px 2px}
-.wp-checklist-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;max-height:300px;overflow-y:auto}
-.wp-checklist-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:7px;background:var(--bg3);border:1px solid var(--border);transition:opacity .15s}
-.wp-checklist-item.is-done{opacity:.55}
-.wp-checklist-checkbox{width:15px;height:15px;accent-color:var(--accent);flex-shrink:0;cursor:pointer}
-.wp-checklist-label{flex:1;font-size:12px;color:var(--text);cursor:pointer;line-height:1.3;min-width:0}
-.wp-checklist-item.is-done .wp-checklist-label{text-decoration:line-through;color:var(--muted)}
-.wp-checklist-delete{display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;border:none;background:transparent;color:var(--muted);cursor:pointer;flex-shrink:0;opacity:0;transition:opacity .12s,background .12s,color .12s}
-.wp-checklist-item:hover .wp-checklist-delete{opacity:1}
-.wp-checklist-delete:hover{background:var(--bg4);color:var(--text)}
 
 @media(max-width:900px){
   .wp-grid{grid-template-columns:repeat(2,1fr)}
@@ -1309,6 +1273,10 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
   --text:var(--ink);
   --muted:var(--ink-3);
   --muted2:var(--ink-2);
+  /* Druktebalk: op donker vult het merkgoud, op licht is 3,85%-goud op wit
+     onleesbaar (±1,3:1) — daar vult de diepe amber die het stelsel al kent. */
+  --load-fill:var(--accent);
+  --load-track:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));
   --accent-soft:rgba(var(--accent-rgb),.14);
   --accent-glow:rgba(var(--accent-rgb),.28);
   --accent-g:var(--ok);
@@ -1351,6 +1319,8 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
   --info-rgb:36,92,153;
 
   --accent-ink:#7A5A0C;
+  --load-fill:#7A5A0C;
+  --load-track:rgba(26,23,16,.10);
   --two:#4A5A34;
   --two-ink:#4A5A34;
 
@@ -1975,7 +1945,7 @@ body::before{
 .tb-ev-bg:hover{opacity:.85;z-index:4;transform:none}
 
 /* Weekplanner V2 - planning fields, filtering, outside-week section and capacity */
-.week-planner{gap:16px}.wp-toolbar{position:relative}.wp-summary{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;background:linear-gradient(135deg,rgba(var(--accent-rgb),.12),rgba(var(--sheen-rgb),calc(.03 * var(--sheen-k))));border:1px solid rgba(var(--accent-rgb),.22);border-radius:var(--r2);padding:14px 16px}.wp-summary-main{display:flex;flex-direction:column;gap:4px}.wp-summary-main span{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-ink);font-weight:700}.wp-summary-main strong{font-size:17px;letter-spacing:-.02em}.wp-summary-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.wp-summary-meta span{font-size:11px;font-weight:600;color:var(--muted2);background:rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)));border:1px solid var(--border);border-radius:999px;padding:5px 9px}.wp-filters{display:grid;grid-template-columns:minmax(220px,1.7fr) repeat(4,minmax(140px,1fr));gap:8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:10px}.wp-grid{gap:10px}.wp-day{min-height:360px;overflow:hidden}.wp-day.is-over-capacity{border-color:rgba(var(--danger-rgb),.42)}.wp-day-head{padding:10px 12px}.wp-day-count{margin-left:auto;color:var(--text);background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));border:1px solid var(--border);font-size:10px;font-weight:700}.wp-day-capacity{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 12px;border-bottom:1px solid rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));font-size:10px;color:var(--muted);background:rgba(var(--sheen-rgb),calc(.025 * var(--sheen-k)))}.wp-day-body{gap:7px;overflow:auto}.wp-task{position:relative;min-height:78px}.wp-task.is-insert-target::before{content:"";position:absolute;left:8px;right:8px;top:-5px;height:2px;border-radius:999px;background:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.11)}.wp-task-status{font-size:10px;font-weight:600;padding:2px 6px;border-radius:4px;background:rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));border:1px solid var(--border);color:var(--muted2)}.wp-task-client{color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.wp-task-planning-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:7px;padding-top:7px;border-top:1px solid rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)));font-size:10px;color:var(--muted)}.wp-task-planning-meta span{background:rgba(var(--shade-rgb),calc(.16 * var(--shade-k)));border:1px solid rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));border-radius:999px;padding:2px 7px}.wp-drop-to-bottom{font-size:10px;color:var(--muted);text-align:center;padding:9px 6px;border:1px dashed rgba(var(--sheen-rgb),calc(.1 * var(--sheen-k)));border-radius:7px;opacity:.72}.wp-unscheduled{overflow:hidden}.wp-unscheduled-body{max-height:340px;overflow:auto}.wp-unscheduled .wp-task{min-height:74px}.wp-outside{display:inline;font-size:10px;line-height:1.4}@media(max-width:1200px){.wp-grid{grid-template-columns:repeat(3,1fr)}.wp-filters{grid-template-columns:1fr 1fr}}@media(max-width:900px){.wp-grid{grid-template-columns:1fr}.wp-filters{grid-template-columns:1fr}.wp-summary{align-items:stretch}.wp-summary-meta{align-items:stretch}.wp-summary-meta span{flex:1;text-align:center}.wp-week-label{width:100%;margin-left:0}.wp-day{min-height:280px}}
+.week-planner{gap:16px}.wp-toolbar{position:relative}.wp-summary{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;background:linear-gradient(135deg,rgba(var(--accent-rgb),.12),rgba(var(--sheen-rgb),calc(.03 * var(--sheen-k))));border:1px solid rgba(var(--accent-rgb),.22);border-radius:var(--r2);padding:14px 16px}.wp-summary-main{display:flex;flex-direction:column;gap:4px}.wp-summary-main span{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-ink);font-weight:700}.wp-summary-main strong{font-size:17px;letter-spacing:-.02em}.wp-summary-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.wp-summary-meta span{font-size:11px;font-weight:600;color:var(--muted2);background:rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)));border:1px solid var(--border);border-radius:999px;padding:5px 9px}.wp-filters{display:grid;grid-template-columns:minmax(220px,1.7fr) repeat(4,minmax(140px,1fr));gap:8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:10px}.wp-grid{gap:10px}.wp-day-head{padding:10px 12px}.wp-day-count{color:var(--text);background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));border:1px solid var(--border);font-size:10px;font-weight:700}.wp-day-body{gap:7px;overflow:auto}.wp-task.is-insert-target::before{content:"";position:absolute;left:8px;right:8px;top:-5px;height:2px;border-radius:999px;background:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.11)}.wp-task-status{font-size:10px;font-weight:600;padding:2px 6px;border-radius:4px;background:rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));border:1px solid var(--border);color:var(--muted2)}.wp-task-client{color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.wp-task-planning-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:7px;padding-top:7px;border-top:1px solid rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)));font-size:10px;color:var(--muted)}.wp-task-planning-meta span{background:rgba(var(--shade-rgb),calc(.16 * var(--shade-k)));border:1px solid rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));border-radius:999px;padding:2px 7px}@media(max-width:1200px){.wp-grid{grid-template-columns:repeat(3,1fr)}.wp-filters{grid-template-columns:1fr 1fr}}@media(max-width:900px){.wp-grid{grid-template-columns:1fr}.wp-filters{grid-template-columns:1fr}.wp-summary{align-items:stretch}.wp-summary-meta{align-items:stretch}.wp-summary-meta span{flex:1;text-align:center}.wp-week-label{width:100%;margin-left:0}}
 
 /* Projectplanning submenu + readability pass */
 .nav-submenu-projects button{display:flex;align-items:center;gap:7px}
@@ -5815,13 +5785,11 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .wp-day-row{display:flex;align-items:baseline;gap:6px}
 .wp-day-total{margin-left:auto;font-size:10px;font-weight:700;color:var(--muted2);font-variant-numeric:tabular-nums}
 .wp-day-total.is-empty{color:var(--muted);font-weight:600}
-.wp-day-total.is-peak{color:var(--accent-ink)}
-.wp-day-load{height:5px;border-radius:99px;background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));overflow:hidden}
+.wp-day-load{height:5px;border-radius:99px;background:var(--load-track);overflow:hidden}
 /* Vullen met scaleX i.p.v. width: dat loopt over de compositor en geeft geen
    herberekening van de lay-out bij elke verplaatste taak. */
-.wp-day-load-fill{display:block;width:100%;height:100%;background:var(--accent);border-radius:99px;transform-origin:left center;transition:transform .2s ease}
-.wp-day.is-peak{border-color:rgba(var(--accent-rgb),.28)}
-.wp-day.is-drop{background:var(--bg3);border-color:var(--accent);border-style:dashed}
+.wp-day-load-fill{display:block;width:100%;height:100%;background:var(--load-fill);border-radius:99px;transform-origin:left center;transition:transform .2s ease}
+
 .wp-day-body{padding:7px;gap:6px}
 
 /* Kaarten: lichter, sleepbaar met muis én vinger, bereikbaar met toetsenbord */
@@ -5979,7 +5947,6 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .wp-week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));column-gap:10px;row-gap:4px}
 .wp-col{grid-row:1/-1;z-index:0;pointer-events:none;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2)}
 .wp-col.is-today{border-color:rgba(var(--accent-rgb),.5)}
-.wp-col.is-peak{border-color:rgba(var(--accent-rgb),.28)}
 .wp-col.is-drop{background:var(--bg3);border-color:var(--accent);border-style:dashed}
 
 .wp-week > .wp-day-head{position:relative;z-index:1;border-bottom:0}
@@ -6262,14 +6229,14 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    klein blijven — een ::after zonder inhoud rekt alleen het raakvlak op,
    dus de indeling verschuift niet. */
 @media(max-width:760px){
-  .att-btn,.wp-day-add,.modal-close,.tab-close,.wp-notes-delete,.wp-checklist-delete{position:relative}
+  .att-btn,.wp-day-add,.modal-close,.tab-close,.wp-notes-delete{position:relative}
   .att-btn::after,.wp-day-add::after,.modal-close::after,.tab-close::after,
-  .wp-notes-delete::after,.wp-checklist-delete::after{content:"";position:absolute;inset:-7px}
+  .wp-notes-delete::after{content:"";position:absolute;inset:-7px}
 
   .att-btn,.quote-row-actions .att-btn{width:34px;height:34px;border-radius:9px}
   .wp-day-add{width:32px;height:32px}
   /* De wisknop in een taakregel is op touch niet te "hoveren" — altijd tonen. */
-  .wp-notes-delete,.wp-checklist-delete{opacity:.65}
+  .wp-notes-delete{opacity:.65}
 
   /* Keuzevelden en knoppen op duimhoogte. */
   .btn{min-height:40px}
@@ -8028,3 +7995,88 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
              0 0 0 1px rgba(var(--accent-rgb),.3),
              0 12px 30px -8px rgba(var(--accent-rgb),.55);
 }
+
+/* ── Weekplanner: de bedienbare kaart ───────────────────────────────────────
+   De kaart was één groot knopvlak waarop je alleen kon slepen; elke echte
+   handeling liep via het taakvenster. Nu zijn het drie zones: links het
+   vinkje, in het midden het sleep- en openvlak, rechts de tijdpil. Daarom is
+   het buitenste element een `group` en geen `button` — een knop in een knop
+   bestaat niet, en een schermlezer sloeg de binnenste knoppen over. */
+.wp-task{align-items:flex-start;gap:7px}
+.wp-task-check{flex-shrink:0;width:18px;height:18px;margin-top:1px;display:grid;place-items:center;padding:0;border-radius:6px;border:1.5px solid var(--border2);background:var(--bg2);color:var(--on-accent);cursor:pointer;transition:background .14s,border-color .14s}
+.wp-task-check:hover:not(:disabled){border-color:var(--accent)}
+.wp-task-check:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wp-task-check:disabled{cursor:default;opacity:.45}
+.wp-task.is-done .wp-task-check{background:var(--accent-g);border-color:var(--accent-g);color:var(--bg)}
+/* Afgevinkt werk blijft staan: je week loopt vol in plaats van leeg. */
+.wp-task.is-done{opacity:.62}
+.wp-task.is-done .wp-task-title{text-decoration:line-through;color:var(--muted)}
+
+/* De titel is de knop die de taak opent — niet de hele kaart. */
+.wp-task-title{display:block;width:100%;padding:0;border:0;background:transparent;text-align:left;font:inherit;font-size:12px;font-weight:600;line-height:1.32;color:var(--text);cursor:pointer;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
+.wp-task-title:hover{color:var(--accent-ink)}
+.wp-task-title:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+/* Het project was platte tekst zonder deur; nu een echte doorgang. */
+.wp-task-project-link{padding:0;border:0;background:transparent;font:inherit;font-size:10px;color:var(--muted);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:130px;text-align:left}
+.wp-task-project-link:hover{color:var(--accent-ink);text-decoration:underline}
+.wp-task-project-link:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+/* Statuspil met echte kleur. De formule stond alleen in het klantportaal, dus
+   alle vier de statussen kregen hier dezelfde grijze pil. Vulling, geen lijn. */
+.wp-task-status{border:1px solid var(--border);cursor:pointer;font:inherit;font-size:10px;font-weight:600;padding:2px 7px;border-radius:5px;background:var(--bg5);color:var(--muted2);transition:filter .12s}
+.wp-task-status:hover:not(:disabled){filter:brightness(1.12)}
+.wp-task-status:disabled{cursor:default}
+.wp-task-status:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wp-task-status.status-doing{background:rgba(var(--accent-rgb),.16);border-color:rgba(var(--accent-rgb),.3);color:var(--accent-ink)}
+.wp-task-status.status-review{background:rgba(var(--note-rgb),.16);border-color:rgba(var(--note-rgb),.3);color:var(--accent-v)}
+.wp-task-status.status-done{background:rgba(var(--ok-rgb),.16);border-color:rgba(var(--ok-rgb),.3);color:var(--accent-g)}
+.wp-task-counts{display:inline-flex;align-items:center;gap:3px;color:var(--muted);font-size:10px}
+
+/* De tijdpil is een knop met een eigen keuzeschermpje. */
+.wp-task-est{border:1px solid rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));cursor:pointer;font:inherit}
+.wp-task-est:disabled{cursor:default}
+.wp-task-est:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wp-est-pop{position:absolute;z-index:12;top:calc(100% - 4px);right:6px;min-width:196px;display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid var(--border2);border-radius:9px;background:var(--panel-strong);box-shadow:var(--shadow-2)}
+.wp-est-presets{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+.wp-est-presets button{border:1px solid var(--border);background:var(--bg3);color:var(--muted2);border-radius:6px;padding:5px 4px;font:inherit;font-size:10.5px;font-weight:600;cursor:pointer}
+.wp-est-presets button:hover{border-color:var(--accent);color:var(--text)}
+.wp-est-presets button.is-on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.wp-est-free{display:flex;gap:5px;align-items:center}
+.wp-est-input{flex:1;min-width:0;background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font:inherit;font-size:11px;color:var(--text);outline:none}
+.wp-est-input:focus{border-color:var(--accent)}
+.wp-est-clear{border:1px solid var(--border);background:transparent;color:var(--muted);border-radius:6px;padding:5px 8px;font:inherit;font-size:10.5px;cursor:pointer}
+.wp-est-clear:hover{color:var(--text);border-color:var(--border2)}
+
+/* "nog 8 ↓" — anders verklapt niets dat er meer onder staat. */
+.wp-day-more{flex:0 0 auto;padding:3px 0 1px;font-size:9.5px;font-weight:600;letter-spacing:.03em;color:var(--muted);text-align:center}
+
+/* Dagkop: aantal én uren. Acht ongeschatte taken lazen eerder als lege dag. */
+.wp-day-count{color:var(--muted2);background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));border:1px solid var(--border);border-radius:99px;padding:0 6px;font-size:9.5px;font-weight:700;font-variant-numeric:tabular-nums}
+.wp-day-total{margin-left:auto}
+
+/* Snelinvoer in de teamweergave: deze cel weet wélke dag én wie. */
+.wp-team-add{position:absolute;top:3px;right:3px;width:20px;height:20px;display:grid;place-items:center;padding:0;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--muted);cursor:pointer;opacity:0;transition:opacity .12s,border-color .12s,color .12s}
+.wp-team-cell{position:relative}
+.wp-team-cell:hover .wp-team-add,.wp-team-add:focus-visible{opacity:1}
+.wp-team-add:hover{border-color:var(--accent);color:var(--accent-ink)}
+
+/* Slepen naar een collega bij een taak met meerdere mensen: eerst vragen. */
+.wp-assign-choice{position:fixed;z-index:420;transform:translate(-50%,-115%);display:flex;align-items:center;gap:6px;flex-wrap:wrap;max-width:min(340px,90vw);padding:8px 10px;border:1px solid var(--accent);border-radius:9px;background:var(--panel-strong);box-shadow:var(--shadow-2);font-size:11.5px}
+.wp-assign-text{color:var(--muted2)}
+.wp-assign-choice button{border:1px solid var(--accent);background:rgba(var(--accent-rgb),.14);color:var(--accent-ink);border-radius:6px;padding:3px 9px;font:inherit;font-size:11px;font-weight:700;cursor:pointer}
+.wp-assign-choice button.is-ghost{border-color:var(--border2);background:transparent;color:var(--muted)}
+
+.wp-summary-meta span.is-soft{color:var(--muted);background:transparent;border-style:dashed}
+
+/* ── Dichtheid ──────────────────────────────────────────────────────────────
+   De schakelaar Compact/Ruim zette wel een klasse maar er bestond geen enkele
+   regel voor: hij beloofde dichtheid en leverde alleen minder detail. */
+.week-planner.density-compact .wp-task{padding:5px 7px;gap:6px}
+.week-planner.density-compact .wp-task-title{-webkit-line-clamp:1;font-size:11.5px}
+.week-planner.density-compact .wp-task-sub{margin-top:1px;font-size:9.5px}
+.week-planner.density-compact .wp-task-dot{margin-top:4px}
+.week-planner.density-compact .wp-task-check{width:16px;height:16px}
+.week-planner.density-compact .wp-day-pane{gap:4px}
+.week-planner.density-comfortable .wp-task{padding:9px 10px}
+.week-planner.density-comfortable .wp-day-pane{gap:7px}

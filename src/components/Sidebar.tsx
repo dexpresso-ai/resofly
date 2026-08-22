@@ -59,8 +59,8 @@ function canOpenNavItem(key: string, permissions: Permissions): boolean {
 }
 
 const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'pnl', 'vat-returns', 'corporate-tax', 'dga', 'shareholders', 'fiscal-years', 'annual-accounts'];
-const calendarPages: Page[] = ['calendar', 'weekplanner', 'meeting-booking'];
-const projectPages: Page[] = ['projects', 'project', 'project-planning', 'archive'];
+const calendarPages: Page[] = ['calendar', 'meeting-booking'];
+const projectPages: Page[] = ['projects', 'project', 'project-planning', 'weekplanner', 'archive'];
 const contentPages: Page[] = ['content', 'notes', 'documents'];
 
 export function Sidebar({
@@ -169,7 +169,7 @@ export function Sidebar({
     }, 80);
   }
 
-  function openCalendarPage(target: 'weekplanner' | 'meeting-booking') {
+  function openCalendarPage(target: 'meeting-booking') {
     setCalendarOpen(true);
     onPage(target);
   }
@@ -179,7 +179,7 @@ export function Sidebar({
     onPage(target);
   }
 
-  function openProjectPage(target: 'projects' | 'project-planning' | 'archive') {
+  function openProjectPage(target: 'projects' | 'project-planning' | 'weekplanner' | 'archive') {
     setProjectsOpen(true);
     onPage(target);
   }
@@ -272,12 +272,12 @@ export function Sidebar({
 
           {key === 'calendar' && calendarOpen && <div className="nav-submenu nav-submenu-projects">
             {permissions.canOpenPage('calendar') && <button type="button" className={page === 'calendar' ? 'active' : ''} onClick={openCalendarView}><Calendar size={13}/><span>Agendaweergave</span></button>}
-            {permissions.canOpenPage('weekplanner') && <button type="button" className={page === 'weekplanner' ? 'active' : ''} onClick={() => openCalendarPage('weekplanner')}><CalendarRange size={13}/><span>Weekplanner</span></button>}
             {permissions.canOpenPage('meeting-booking') && <button type="button" className={page === 'meeting-booking' ? 'active' : ''} onClick={() => openCalendarPage('meeting-booking')}><CalendarClock size={13}/><span>Boekingslinks</span></button>}
           </div>}
 
           {key === 'projects' && projectsOpen && <div className="nav-submenu nav-submenu-projects">
             <button type="button" className={page === 'projects' || page === 'project' ? 'active' : ''} onClick={() => openProjectPage('projects')}><FolderOpen size={13}/><span>Projectoverzicht</span></button>
+            {permissions.canOpenPage('weekplanner') && <button type="button" className={page === 'weekplanner' ? 'active' : ''} onClick={() => openProjectPage('weekplanner')}><CalendarRange size={13}/><span>Weekplanner</span></button>}
             <button type="button" className={page === 'project-planning' ? 'active' : ''} onClick={() => openProjectPage('project-planning')}><Calendar size={13}/><span>Planningstimeline</span></button>
             <button type="button" className={page === 'archive' ? 'active' : ''} onClick={() => openProjectPage('archive')}><Archive size={13}/><span>Archief</span></button>
           </div>}

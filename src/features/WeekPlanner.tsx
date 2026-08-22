@@ -1,13 +1,13 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import { ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
+import { Check, CheckSquare, ChevronLeft, ChevronRight, MessageSquare, Plus, X } from 'lucide-react';
 import type { AppData, CalendarExternalEvent, OrganizationMember, PlannerNote, Priority, Task, TaskStatus, UUID } from '../types';
 import { getCachedCalendarEvents, listCalendarEventsCached } from '../lib/calendar-api';
 import { memberColor, memberInitials, memberShortName } from '../lib/members';
 import { Button, Input, Select } from '../components/Ui';
 import { AssigneeAvatars } from '../components/AssigneeAvatars';
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
-import { comparePlannedTasks, edgeScrollDelta, groupEventMinutesByDay, isSpanningTask, layoutWeekBars, PANE_EDGE_SCROLL_ZONE_PX, shiftDateKey } from '../lib/planning';
+import { comparePlannedTasks, edgeScrollDelta, groupEventMinutesByDay, isSpanningTask, layoutWeekBars, PANE_EDGE_SCROLL_ZONE_PX, parseDurationInput, shiftDateKey } from '../lib/planning';
 import type { WeekBar } from '../lib/planning';
 import { priorityLabel } from '../lib/format';
 
@@ -186,6 +186,9 @@ export function WeekPlanner({
   onToggleNote,
   onRemoveNote,
   onEditTask,
+  onSetTaskStatus,
+  onSetTaskEstimate,
+  onOpenProject,
 }: {
   data: AppData;
   organizationId: UUID;
@@ -194,13 +197,16 @@ export function WeekPlanner({
   currentUserId: string | null;
   onPlanTask: (taskId: UUID, plannedDate: string | null, beforeTaskId?: UUID | null) => Promise<void>;
   onSetTaskPeriod: (taskId: UUID, plannedDate: string, plannedEndDate: string | null) => Promise<void>;
-  onQuickAddTask: (plannedDate: string, title: string, plannedEndDate?: string | null) => Promise<void>;
+  onQuickAddTask: (plannedDate: string, title: string, plannedEndDate?: string | null) => Promise<Task | null>;
   onCarryOver: (taskIds: UUID[], toDate: string) => Promise<void>;
-  onAssignTask: (taskId: UUID, userId: string | null) => Promise<void>;
+  onAssignTask: (taskId: UUID, userId: string | null, mode?: 'replace' | 'add') => Promise<void>;
   onAddNote: (weekStart: string, text: string) => Promise<void>;
   onToggleNote: (id: UUID, done: boolean) => Promise<void>;
   onRemoveNote: (id: UUID) => Promise<void>;
   onEditTask: (task: Task) => void;
+  onSetTaskStatus: (task: Task, status: TaskStatus) => Promise<void> | void;
+  onSetTaskEstimate: (task: Task, minutes: number | null) => Promise<void> | void;
+  onOpenProject: (projectId: UUID) => void;
 }) {
   const storedPrefs = useRef(loadPrefs()).current;
 
@@ -217,6 +223,8 @@ export function WeekPlanner({
   const [drag, setDrag] = useState<DragState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [quickAddDay, setQuickAddDay] = useState<string | null>(null);
+  /** Snelinvoer in de teamweergave: welke persoon, welke dag. */
+  const [teamQuickAdd, setTeamQuickAdd] = useState<{ rowKey: string; dateKey: string } | null>(null);
   const [quickAddBusy, setQuickAddBusy] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   // Op smal scherm staan de dagen onder elkaar; een strook over kolommen slepen
@@ -273,15 +281,32 @@ export function WeekPlanner({
     return map;
   }, [data.taskAssignees]);
 
+  /** Gearchiveerde projecten horen niet in de keuzelijst — anders kies je werk
+   *  van twee jaar terug. Staat er tóch een archiefproject in het filter (bijv.
+   *  omdat het net gearchiveerd is), dan blijft dat ene zichtbaar zodat de
+   *  dropdown zijn eigen waarde niet kwijtraakt. */
   const projectOptions = useMemo(() => {
-    if (!filters.clientId || filters.clientId === NO_LINK) return data.projects;
-    return data.projects.filter(project => project.client_id === filters.clientId);
-  }, [data.projects, filters.clientId]);
+    const live = data.projects.filter(project => !project.archived || project.id === filters.projectId);
+    if (!filters.clientId || filters.clientId === NO_LINK) return live;
+    return live.filter(project => project.client_id === filters.clientId);
+  }, [data.projects, filters.clientId, filters.projectId]);
+
+  /** Projecten die uit beeld horen te blijven. De lade liep vol met taken van
+   *  gearchiveerde projecten; die zijn per definitie niet meer in te plannen. */
+  const archivedProjectIds = useMemo(
+    () => new Set(data.projects.filter(project => project.archived).map(project => project.id)),
+    [data.projects],
+  );
 
   const filteredTasks = useMemo(() => {
     const normalizedQuery = filters.query.trim().toLowerCase();
 
     return data.tasks.filter(task => {
+      // Werk van een gearchiveerd project plan je niet meer in. Kies je dat
+      // project expliciet in het filter, dan zie je het wél — dat is dan een
+      // bewuste vraag en geen ruis.
+      if (task.project_id && archivedProjectIds.has(task.project_id) && filters.projectId !== task.project_id) return false;
+
       // "Mijn week" toont wat aan mij is toegewezen én wat nog aan niemand hangt —
       // anders zou een net toegevoegde losse taak meteen uit beeld verdwijnen.
       if (scope === 'mine' && currentUserId) {
@@ -312,7 +337,7 @@ export function WeekPlanner({
       ].join(' ').toLowerCase();
       return haystack.includes(normalizedQuery);
     });
-  }, [assigneesByTask, clientsById, currentUserId, data.tasks, filters, projectsById, scope]);
+  }, [archivedProjectIds, assigneesByTask, clientsById, currentUserId, data.tasks, filters, projectsById, scope]);
 
   const { byDay, unscheduled, outsideThisWeek, weekBucket, busiestMinutes, spanningTasks } = useMemo(() => {
     const byDay = new Map<string, PlannerBucket>();
@@ -372,8 +397,43 @@ export function WeekPlanner({
     return { byDay, unscheduled, outsideThisWeek, weekBucket, busiestMinutes, spanningTasks };
   }, [agendaByDay, dayKeys, days, filteredTasks]);
 
-  const todayLocal = new Date();
+  // "Vandaag" mag niet blijven staan op gisteren wanneer de app 's nachts open
+  // blijft — alle werktabbladen blijven gemount. Eén timer die precies om
+  // middernacht afgaat, plus een controle zodra het venster weer focus krijgt;
+  // géén interval van een minuut dat de hele app wakker houdt.
+  const [todayLocal, setTodayLocal] = useState(() => new Date());
+  useEffect(() => {
+    let timer = 0;
+    function schedule() {
+      const now = new Date();
+      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
+      timer = window.setTimeout(() => { setTodayLocal(new Date()); schedule(); }, midnight.getTime() - now.getTime());
+    }
+    function onFocus() {
+      setTodayLocal(prev => isSameDay(prev, new Date()) ? prev : new Date());
+    }
+    schedule();
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, []);
+
   const weekLabel = `Week ${isoWeekNumber(anchor)} · ${anchor.toLocaleDateString('nl-NL', { day: '2-digit', month: 'short' })} – ${weekEnd.toLocaleDateString('nl-NL', { day: '2-digit', month: 'short', year: 'numeric' })}`;
+  const isCurrentWeek = isSameDay(anchor, startOfWeek(todayLocal));
+
+  /** Alle taakuren van de week: dagtaken plus de weekstroken. Die laatste vielen
+   *  eerder buiten het weektotaal en hingen als los pilletje in de kop. */
+  const weekTaskMinutes = weekBucket.minutes + spanningTasks.reduce((sum, task) => sum + taskEstimateMinutes(task), 0);
+  const weekTaskCount = weekBucket.count + spanningTasks.length;
+
+  /** De schaal van de dagbalken. Een bodem van vier uur voorkomt dat één taak van
+   *  een kwartier de maandagbalk helemaal vol trekt: zonder bodem is de volste
+   *  dag per definitie 100%, hoe leeg de week ook is. */
+  const loadScale = Math.max(busiestMinutes, 240);
   const busiestKey = useMemo(() => {
     let best: { key: string; minutes: number } | null = null;
     for (const [key, bucket] of byDay) {
@@ -457,6 +517,19 @@ export function WeekPlanner({
     });
   }, [assigneesByTask, byDay, currentUserId, days, scope, teamMembers]);
 
+  /** Staat er iets aan dat het beeld beperkt? De filters overleven het herladen,
+   *  dus je kunt maandag een lege planner openen zonder te zien dat er nog een
+   *  projectfilter van vrijdag aanstaat. */
+  const hasActiveFilters = filters.query.trim() !== ''
+    || filters.clientId !== ''
+    || filters.projectId !== ''
+    || filters.priority !== 'all'
+    || filters.status !== 'open';
+
+  function resetFilters() {
+    setFilters({ query: '', clientId: '', projectId: '', priority: 'all', status: 'open' });
+  }
+
   function updateFilter<K extends keyof PlannerFilters>(key: K, value: PlannerFilters[K]) {
     setFilters(prev => {
       const next = { ...prev, [key]: value };
@@ -527,11 +600,33 @@ export function WeekPlanner({
     pendingFocusRef.current = taskId;
     try {
       await onPlanTask(taskId, plannedDate, beforeTaskId);
-      if (reassign) await onAssignTask(taskId, targetUser ?? null);
+      if (!reassign) return;
+      // Hangt de taak aan meerdere mensen, dan is "verplaatsen" dubbelzinnig:
+      // vervang je het hele team of komt deze collega erbij? Eerder werd er
+      // stilzwijgend vervangen en raakte je zonder één woord mensen kwijt.
+      if (targetUser && current.length > 1) {
+        setAssignChoice({ taskId, userId: targetUser, point: dragRef.current?.pointer ?? null });
+        return;
+      }
+      await onAssignTask(taskId, targetUser ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Planning bijwerken mislukt');
     }
   }, [assigneesByTask, byDay, data.tasks, onAssignTask, onPlanTask]);
+
+  /** Openstaande vraag na een sleep naar de rij van een collega. */
+  const [assignChoice, setAssignChoice] = useState<{ taskId: UUID; userId: string; point: { x: number; y: number } | null } | null>(null);
+
+  async function resolveAssignChoice(mode: 'replace' | 'add' | 'cancel') {
+    const choice = assignChoice;
+    setAssignChoice(null);
+    if (!choice || mode === 'cancel') return;
+    try {
+      await onAssignTask(choice.taskId, choice.userId, mode);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Toewijzen mislukt');
+    }
+  }
 
   // Zet de focus terug op de kaart die zojuist verplaatst is, zodat je met het
   // toetsenbord door kunt werken zonder opnieuw te hoeven zoeken.
@@ -882,13 +977,16 @@ export function WeekPlanner({
     else if (e.key === 't' || e.key === 'T') { e.preventDefault(); setAnchor(startOfWeek(new Date())); }
   }
 
-  async function quickAdd(dateKey: string, title: string, endKey?: string): Promise<boolean> {
+  /** Maakt een taak op een dag. `assignTo` is alleen gezet vanuit de teamweergave:
+   *  daar hoort een nieuwe taak meteen bij de persoon van die rij. */
+  async function quickAdd(dateKey: string, title: string, endKey?: string, assignTo?: string | null): Promise<boolean> {
     const trimmed = title.trim();
     if (!trimmed || quickAddBusy) return false;
     setError(null);
     setQuickAddBusy(true);
     try {
-      await onQuickAddTask(dateKey, trimmed, endKey ?? null);
+      const created = await onQuickAddTask(dateKey, trimmed, endKey ?? null);
+      if (created && assignTo) await onAssignTask(created.id, assignTo);
       return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Taak aanmaken mislukt');
@@ -897,6 +995,11 @@ export function WeekPlanner({
       setQuickAddBusy(false);
     }
   }
+
+  // Een half getypte taaktitel hoort niet stilletjes te verdwijnen doordat het
+  // invoerveld ergens anders opnieuw opduikt: bij het wisselen van week of
+  // weergave sluiten we de snelinvoer expliciet.
+  useEffect(() => { setQuickAddDay(null); setTeamQuickAdd(null); }, [anchor, scope]);
 
   /** Project en klant van een taak. Beide zijn optioneel: een taak die net in de
    *  weekplanner is aangemaakt heeft ze nog niet. Hangt er een project aan, dan is dat
@@ -907,6 +1010,7 @@ export function WeekPlanner({
     const client = clientId ? clientsById.get(clientId) ?? null : null;
     return {
       projectName: project?.name ?? null,
+      projectId: project?.id ?? null,
       clientName: client?.name ?? null,
       color: project?.color ?? client?.color ?? '#FFD966',
     };
@@ -940,6 +1044,9 @@ export function WeekPlanner({
       onPointerDown={(event) => beginCardPointer(event, task)}
       onKeyDown={(event) => handleCardKey(event, task)}
       onOpen={() => onEditTask(task)}
+      onSetStatus={(target, status) => { void onSetTaskStatus(target, status); }}
+      onSetEstimate={(target, minutes) => { void onSetTaskEstimate(target, minutes); }}
+      onOpenProject={onOpenProject}
     />
   );
 
@@ -963,19 +1070,27 @@ export function WeekPlanner({
       <div className="wp-week-label">{weekLabel}</div>
     </div>
 
+    {/*
+      Eén optelling, niet twee die elkaar tegenspreken. Hiervoor stond in
+      dezelfde balk "Xu ingepland" (alleen taken) náást "Volst: Yu" (taken plús
+      agenda), met de dagkoppen die weer die tweede definitie volgden. Nu telt
+      alles bij elkaar op: taken + weekstroken + afspraken = belegd.
+    */}
     <section className="wp-summary" aria-label="Deze week in uren">
       <div className="wp-summary-main">
-        <span>Deze week</span>
-        <strong>{weekBucket.count} {weekBucket.count === 1 ? 'taak' : 'taken'} · {formatDuration(weekBucket.minutes)} ingepland</strong>
+        <span>{isCurrentWeek ? 'Deze week' : `Week ${isoWeekNumber(anchor)}`}</span>
+        <strong>
+          {formatDuration(weekTaskMinutes)} taken
+          {weekBucket.agendaMinutes > 0 && <> + {formatDuration(weekBucket.agendaMinutes)} afspraken</>}
+          {weekBucket.agendaMinutes > 0 && <> = {formatDuration(weekTaskMinutes + weekBucket.agendaMinutes)} belegd</>}
+        </strong>
       </div>
       <div className="wp-summary-meta">
-        <span>{busiestKey ? `Volst: ${formatDayShort(busiestKey)} · ${formatDuration(busiestMinutes)}` : 'Nog niets op een dag'}</span>
-        {spanningTasks.length > 0 && <span>
-          {spanningTasks.length} {spanningTasks.length === 1 ? 'weekstrook' : 'weekstroken'} · {formatDuration(spanningTasks.reduce((sum, task) => sum + taskEstimateMinutes(task), 0))}
+        <span>{weekTaskCount} {weekTaskCount === 1 ? 'taak' : 'taken'}</span>
+        {busiestKey && <span>Volst: {formatDayShort(busiestKey)} · {formatDuration(busiestMinutes)}</span>}
+        {weekBucket.noEstimateCount > 0 && <span className="is-soft">
+          {weekBucket.noEstimateCount === 1 ? '1 taak zonder schatting' : `${weekBucket.noEstimateCount} taken zonder schatting`}
         </span>}
-        <span>{unscheduled.length} in de lade</span>
-        <span>{outsideThisWeek.length} buiten deze week</span>
-        <span>{scope === 'mine' ? 'Alleen mijn taken' : 'Alle taken van het team'}</span>
       </div>
     </section>
 
@@ -1084,8 +1199,11 @@ export function WeekPlanner({
             const isToday = isSameDay(day, todayLocal);
             const marker = scope === 'mine' ? insertMarkerFor(key) : null;
             const total = bucket.minutes + bucket.agendaMinutes;
-            const scale = busiestMinutes > 0 ? busiestMinutes : 1;
-            const state = `${isToday ? 'is-today ' : ''}${marker !== null ? 'is-drop ' : ''}${key === busiestKey ? 'is-peak' : ''}`;
+            const scale = loadScale;
+            // Geen aparte markering meer voor de volste dag: die deelde zijn
+            // specificiteit met `is-today` en won, waardoor "vandaag" verdween
+            // zodra vandaag óók je drukste dag was. De balk zegt het al.
+            const state = `${isToday ? 'is-today ' : ''}${marker !== null ? 'is-drop' : ''}`;
             return <Fragment key={key}>
               {/* Het kolomvlak geeft de dag zijn kaartvorm en loopt van de kop
                   tot onder de kolom door, zodat een strook er dwars overheen valt. */}
@@ -1095,10 +1213,14 @@ export function WeekPlanner({
                 <div className="wp-day-row">
                   <span className="wp-day-name">{DAY_NAMES_NL[i]}</span>
                   <span className="wp-day-num">{day.getDate()}</span>
-                  <span className={`wp-day-total ${total === 0 ? 'is-empty' : ''} ${key === busiestKey ? 'is-peak' : ''}`}>
-                    {total === 0 ? '—' : formatDuration(total)}
-                  </span>
-                  {canWrite && <button
+                  {/* Aantal én uren: acht taken zonder schatting leest anders als
+                      een lege dag, want dan staat de urenteller op nul. */}
+                  {bucket.count > 0 && <span className="wp-day-count">{bucket.count}</span>}
+                  {total > 0 && <span className="wp-day-total">{formatDuration(total)}</span>}
+                  {/* Alleen in "Mijn week": in de teamweergave hoort een nieuwe
+                      taak bij een persoon, en die staat in de rij eronder — niet
+                      hier. Deze knop stond er wél en deed daar niets. */}
+                  {canWrite && scope === 'mine' && <button
                     type="button"
                     className="wp-day-add"
                     onClick={() => setQuickAddDay(prev => prev === key ? null : key)}
@@ -1147,16 +1269,17 @@ export function WeekPlanner({
                   onSubmit={(title, mode) => quickAdd(key, title, mode === 'week' ? weekStripEnd(key, orderedDayKeys[6]) : undefined)}
                   onCancel={() => setQuickAddDay(null)}
                 />}
-                <div
-                  className="wp-day-pane wp-day-tasks"
-                  role="group"
-                  aria-label={`Taken op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
+                {/* Een lege dag krijgt geen tekst en geen stippellijn meer: zeven
+                    keer "Sleep een taak hierheen" is ruis, en tijdens het slepen
+                    laat `.wp-col.is-drop` de dropzone al zien. In alleen-lezen
+                    stond die uitnodiging er zelfs terwijl slepen uit staat. */}
+                <DayTasksPane
+                  label={`Taken op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
+                  count={bucket.tasks.length}
                 >
                   {bucket.tasks.map(task => taskCard(task, { insertBefore: marker }))}
                   {marker === '__end__' && <div className="wp-insert-line" aria-hidden="true"/>}
-                  {bucket.tasks.length === 0 && quickAddDay !== key
-                    && <div className="wp-day-empty">Sleep een taak hierheen of gebruik <strong>+</strong></div>}
-                </div>
+                </DayTasksPane>
                 {bucket.noEstimateCount > 0 && <div className="wp-day-noestimate">
                   {bucket.noEstimateCount === 1 ? '1 taak zonder schatting' : `${bucket.noEstimateCount} taken zonder schatting`}
                 </div>}
@@ -1178,6 +1301,7 @@ export function WeekPlanner({
                 const zoneKey = `${row.key}${ZONE_SEP}${key}`;
                 const cards = row.byDay.get(key) ?? [];
                 const marker = insertMarkerFor(key, row.key === NO_MEMBER ? null : row.key);
+                const isAdding = teamQuickAdd?.rowKey === row.key && teamQuickAdd.dateKey === key;
                 return <div
                   key={key}
                   className={`wp-team-cell ${marker !== null ? 'is-drop' : ''}`}
@@ -1185,7 +1309,26 @@ export function WeekPlanner({
                 >
                   {cards.map(task => taskCard(task, { insertBefore: marker }))}
                   {marker === '__end__' && <div className="wp-insert-line" aria-hidden="true"/>}
-                  {cards.length === 0 && <div className="wp-team-empty" aria-hidden="true"/>}
+                  {isAdding && <QuickAddTask
+                    busy={quickAddBusy}
+                    weekHint={`van ${formatDateShort(key)} tot en met ${formatDateShort(weekStripEnd(key, orderedDayKeys[6]))}`}
+                    onSubmit={(title, mode) => quickAdd(
+                      key,
+                      title,
+                      mode === 'week' ? weekStripEnd(key, orderedDayKeys[6]) : undefined,
+                      row.key === NO_MEMBER ? null : row.key,
+                    )}
+                    onCancel={() => setTeamQuickAdd(null)}
+                  />}
+                  {/* Hier wél een plusje: deze cel weet wélke dag én wie. */}
+                  {canWrite && !isAdding && <button
+                    type="button"
+                    className="wp-team-add"
+                    aria-label={`Taak toevoegen voor ${row.name} op ${formatDayShort(key)}`}
+                    title={`Taak toevoegen voor ${row.name}`}
+                    onClick={() => setTeamQuickAdd({ rowKey: row.key, dateKey: key })}
+                  ><Plus size={12}/></button>}
+                  {cards.length === 0 && !isAdding && <div className="wp-team-empty" aria-hidden="true"/>}
                 </div>;
               })}
             </div>
@@ -1205,11 +1348,26 @@ export function WeekPlanner({
         notes={weekNotes}
         weekStart={formatISODate(anchor)}
         canWrite={canWrite}
+        hasFilters={hasActiveFilters}
         onAddNote={onAddNote}
         onToggleNote={onToggleNote}
         onRemoveNote={onRemoveNote}
       />
     </div>
+
+    {assignChoice && <div
+      className="wp-assign-choice"
+      role="dialog"
+      aria-label="Toewijzing van deze taak"
+      style={assignChoice.point ? { left: assignChoice.point.x, top: assignChoice.point.y } : undefined}
+    >
+      <span className="wp-assign-text">
+        Deze taak staat op meerdere mensen. {memberShortName(assignChoice.userId, teamMembers, currentUserId)} …
+      </span>
+      <button type="button" onClick={() => void resolveAssignChoice('replace')}>alleen {memberShortName(assignChoice.userId, teamMembers, currentUserId)}</button>
+      <button type="button" onClick={() => void resolveAssignChoice('add')}>erbij</button>
+      <button type="button" className="is-ghost" onClick={() => void resolveAssignChoice('cancel')}>annuleren</button>
+    </div>}
 
     {drag?.moved && draggedTask && <div
       className="wp-ghost"
@@ -1222,9 +1380,69 @@ export function WeekPlanner({
   </div>;
 }
 
+/**
+ * Het scrollvak met de taken van één dag, plus een voet die zegt hoeveel er nog
+ * onder staan. Zonder die voet zie je bij vijftien taken er zeven en verklapt
+ * niets dat er meer is — op een Mac verschijnt de scrollbalk pas als je al
+ * scrolt. Het tellen gebeurt in een observer, niet in de renderlus.
+ */
+function DayTasksPane({ label, count, children }: { label: string; count: number; children: React.ReactNode }) {
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const [hidden, setHidden] = useState(0);
+
+  useEffect(() => {
+    const pane = paneRef.current;
+    if (!pane) return;
+
+    function measure() {
+      const el = paneRef.current;
+      if (!el) return;
+      const cards = Array.from(el.querySelectorAll<HTMLElement>('[data-task-id]'));
+      const cutoff = el.scrollTop + el.clientHeight;
+      // Een kaart telt pas als "onder de vouw" wanneer hij er echt helemaal
+      // buiten valt; half zichtbaar zie je nog.
+      setHidden(cards.filter(card => card.offsetTop >= cutoff - 2).length);
+    }
+
+    measure();
+    pane.addEventListener('scroll', measure, { passive: true });
+    const observer = new ResizeObserver(measure);
+    observer.observe(pane);
+    return () => {
+      pane.removeEventListener('scroll', measure);
+      observer.disconnect();
+    };
+  }, [count]);
+
+  return <>
+    <div className="wp-day-pane wp-day-tasks" role="group" aria-label={label} ref={paneRef}>
+      {children}
+    </div>
+    {hidden > 0 && <div className="wp-day-more" aria-hidden="true">nog {hidden} ↓</div>}
+  </>;
+}
+
+/** Snelkeuzes van de tijdpil. Zes stappen dekken vrijwel elke plannerbeslissing;
+ *  wat er niet bij staat typ je in het vrije veld ernaast. */
+const ESTIMATE_PRESETS: { label: string; minutes: number }[] = [
+  { label: '15m', minutes: 15 },
+  { label: '30m', minutes: 30 },
+  { label: '1u', minutes: 60 },
+  { label: '2u', minutes: 120 },
+  { label: '4u', minutes: 240 },
+  { label: 'Hele dag', minutes: 480 },
+];
+
+/**
+ * De kaart in de planner. Drie zones: links het vinkje, in het midden het sleep-
+ * en openvlak, rechts de tijdpil. Bewust `role="group"` en niet `role="button"`:
+ * een knop in een knop bestaat niet in HTML, en een schermlezer sloeg de
+ * binnenste knoppen daardoor over.
+ */
 function TaskCard({
   task,
   projectName,
+  projectId,
   clientName,
   color,
   assigneeIds,
@@ -1238,9 +1456,13 @@ function TaskCard({
   onPointerDown,
   onKeyDown,
   onOpen,
+  onSetStatus,
+  onSetEstimate,
+  onOpenProject,
 }: {
   task: Task;
   projectName: string | null;
+  projectId: string | null;
   clientName: string | null;
   color: string;
   assigneeIds: string[];
@@ -1254,30 +1476,84 @@ function TaskCard({
   onPointerDown: (event: React.PointerEvent) => void;
   onKeyDown: (event: React.KeyboardEvent) => void;
   onOpen: () => void;
+  onSetStatus: (task: Task, status: TaskStatus) => void;
+  onSetEstimate: (task: Task, minutes: number | null) => void;
+  onOpenProject: (projectId: string) => void;
 }) {
   const plannedAfterDeadline = !!task.end_date && !!task.planned_date && task.planned_date > task.end_date;
+  const done = task.status === 'done';
+  const [estimateOpen, setEstimateOpen] = useState(false);
+  const [freeInput, setFreeInput] = useState('');
+
+  const subtaskTotal = task.subtasks?.length ?? 0;
+  const subtaskDone = task.subtasks?.filter(s => s.done).length ?? 0;
+  const commentCount = task.comments?.length ?? 0;
+
+  /** Een klik op een bedieningselement mag geen sleepgebaar starten. */
+  const swallow = (event: React.PointerEvent) => event.stopPropagation();
+
+  function commitFree() {
+    const raw = freeInput.trim();
+    if (!raw) return;
+    const minutes = parseDurationInput(raw);
+    if (minutes === null) return;
+    onSetEstimate(task, minutes);
+    setFreeInput('');
+    setEstimateOpen(false);
+  }
+
   return <article
-    className={`wp-task ${isDragging ? 'is-dragging' : ''} ${isInsertTarget ? 'is-insert-target' : ''}`}
+    className={`wp-task ${isDragging ? 'is-dragging' : ''} ${isInsertTarget ? 'is-insert-target' : ''} ${done ? 'is-done' : ''}`}
     data-task-id={task.id}
     tabIndex={0}
-    role="button"
-    aria-label={`${task.title}${projectName ? `, project ${projectName}` : ''}`}
+    role="group"
+    aria-label={`${task.title}${projectName ? `, project ${projectName}` : ''}${done ? ', klaar' : ''}`}
     onPointerDown={onPointerDown}
     onKeyDown={onKeyDown}
-    // Alleen-lezen kent geen sleepgebaar, dus daar opent een gewone klik de taak.
-    onClick={canWrite ? undefined : onOpen}
   >
+    <button
+      type="button"
+      className="wp-task-check"
+      aria-pressed={done}
+      aria-label={done ? `${task.title} weer openzetten` : `${task.title} afvinken`}
+      disabled={!canWrite}
+      onPointerDown={swallow}
+      onClick={() => onSetStatus(task, done ? 'todo' : 'done')}
+    >
+      {done && <Check size={12} aria-hidden="true"/>}
+    </button>
+
     <span className="wp-task-dot" style={{ background: color }}/>
+
     <div className="wp-task-body">
-      <div className="wp-task-title">{task.title}</div>
+      {/* De titel is de knop die de taak opent — niet de hele kaart. */}
+      <button type="button" className="wp-task-title" onPointerDown={swallow} onClick={onOpen}>{task.title}</button>
       <div className="wp-task-sub">
-        <span className={projectName ? '' : 'is-unlinked'}>{projectName ?? 'Geen project'}</span>
+        {projectName && projectId
+          ? <button
+              type="button"
+              className="wp-task-project-link"
+              onPointerDown={swallow}
+              onClick={() => onOpenProject(projectId)}
+              title={`Open project ${projectName}`}
+            >{projectName}</button>
+          : <span className="is-unlinked">Geen project</span>}
         {clientName && <span className="wp-task-client">{clientName}</span>}
       </div>
       {density === 'comfortable' && <div className="wp-task-meta">
         <span className={`pri-badge pri-${task.priority}`}>{priorityLabel(task.priority)}</span>
-        <span className={`wp-task-status status-${task.status}`}>{statusLabel(task.status)}</span>
-        <span className="wp-task-counts">☑ {task.subtasks?.filter(s => s.done).length ?? 0}/{task.subtasks?.length ?? 0} · 💬 {task.comments?.length ?? 0}</span>
+        {/* Status is nu een knop: één klik schuift hem door de cyclus. */}
+        <button
+          type="button"
+          className={`wp-task-status status-${task.status}`}
+          disabled={!canWrite}
+          onPointerDown={swallow}
+          onClick={() => onSetStatus(task, nextStatus(task.status))}
+          title={canWrite ? `Nu ${statusLabel(task.status).toLowerCase()} — klik voor ${statusLabel(nextStatus(task.status)).toLowerCase()}` : undefined}
+        >{statusLabel(task.status)}</button>
+        {/* Tellers alleen tonen als er echt iets te tellen valt. */}
+        {subtaskTotal > 0 && <span className="wp-task-counts"><CheckSquare size={10} aria-hidden="true"/> {subtaskDone}/{subtaskTotal}</span>}
+        {commentCount > 0 && <span className="wp-task-counts"><MessageSquare size={10} aria-hidden="true"/> {commentCount}</span>}
       </div>}
       {(plannedAfterDeadline || showPlannedDate || density === 'comfortable') && <div className="wp-task-planning-meta">
         {plannedAfterDeadline && <span className="wp-flag-clash">Gepland ná deadline {formatDateShort(task.end_date!)}</span>}
@@ -1286,9 +1562,48 @@ function TaskCard({
         {density === 'comfortable' && <AssigneeAvatars userIds={assigneeIds} teamMembers={teamMembers} currentUserId={currentUserId} max={4} />}
       </div>}
     </div>
-    <span className={`wp-task-est ${hasEstimate(task) ? '' : 'is-unset'}`} title={hasEstimate(task) ? undefined : 'Nog geen tijdschatting'}>
+
+    <button
+      type="button"
+      className={`wp-task-est ${hasEstimate(task) ? '' : 'is-unset'}`}
+      disabled={!canWrite}
+      aria-expanded={estimateOpen}
+      aria-label={hasEstimate(task) ? `Tijdschatting ${formatDuration(taskEstimateMinutes(task))}, klik om te wijzigen` : 'Nog geen tijdschatting, klik om in te vullen'}
+      onPointerDown={swallow}
+      onClick={() => setEstimateOpen(open => !open)}
+    >
       {hasEstimate(task) ? formatDuration(taskEstimateMinutes(task)) : '—'}
-    </span>
+    </button>
+
+    {estimateOpen && canWrite && <div className="wp-est-pop" onPointerDown={swallow}>
+      <div className="wp-est-presets">
+        {ESTIMATE_PRESETS.map(preset => <button
+          key={preset.minutes}
+          type="button"
+          className={taskEstimateMinutes(task) === preset.minutes && hasEstimate(task) ? 'is-on' : ''}
+          onClick={() => { onSetEstimate(task, preset.minutes); setEstimateOpen(false); }}
+        >{preset.label}</button>)}
+      </div>
+      <div className="wp-est-free">
+        <input
+          className="wp-est-input"
+          value={freeInput}
+          placeholder="bijv. 90m of 1u30"
+          aria-label="Eigen tijdschatting"
+          autoFocus
+          onChange={e => setFreeInput(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { e.preventDefault(); commitFree(); }
+            if (e.key === 'Escape') { e.preventDefault(); setEstimateOpen(false); }
+          }}
+        />
+        {hasEstimate(task) && <button
+          type="button"
+          className="wp-est-clear"
+          onClick={() => { onSetEstimate(task, null); setEstimateOpen(false); }}
+        >Wissen</button>}
+      </div>
+    </div>}
   </article>;
 }
 
@@ -1370,7 +1685,7 @@ function QuickAddTask({ busy, onSubmit, onCancel, weekHint }: {
  */
 function PlannerTray({
   unscheduled, outsideThisWeek, deadlineThisWeek, renderTask, isDropTarget, forceTray, trayRef,
-  notes, weekStart, canWrite, onAddNote, onToggleNote, onRemoveNote,
+  notes, weekStart, canWrite, hasFilters, onAddNote, onToggleNote, onRemoveNote,
 }: {
   unscheduled: Task[];
   outsideThisWeek: Task[];
@@ -1382,6 +1697,8 @@ function PlannerTray({
   notes: PlannerNote[];
   weekStart: string;
   canWrite: boolean;
+  /** Staat er een filter aan? Dan is "niets gevonden" iets anders dan "niets te doen". */
+  hasFilters: boolean;
   onAddNote: (weekStart: string, text: string) => Promise<void>;
   onToggleNote: (id: UUID, done: boolean) => Promise<void>;
   onRemoveNote: (id: UUID) => Promise<void>;
@@ -1405,9 +1722,13 @@ function PlannerTray({
 
     {/* De lade is de dropzone, dus die blijft altijd gemonteerd. */}
     <div className="wp-tray-body" ref={trayRef} hidden={active !== 'tray'}>
-      <p className="wp-tray-hint">Sleep hierheen om een taak van de kalender te halen, of van hier naar een dag.</p>
+      {/* In alleen-lezen kan er niets gesleept worden; dan is deze uitnodiging
+          een belofte die het scherm niet waarmaakt. */}
+      {canWrite && <p className="wp-tray-hint">Sleep hierheen om een taak van de kalender te halen, of van hier naar een dag.</p>}
       {unscheduled.map(task => renderTask(task))}
-      {unscheduled.length === 0 && <div className="wp-day-empty">Geen taken zonder planning binnen deze filterselectie</div>}
+      {unscheduled.length === 0 && <div className="wp-day-empty">
+        {hasFilters ? 'Geen taken zonder planning binnen dit filter' : 'Niets zonder planning — alles staat op een dag.'}
+      </div>}
     </div>
 
     {active === 'deadline' && <div className="wp-tray-body">
@@ -1589,6 +1910,13 @@ function sortLooseTasks(a: Task, b: Task): number {
 
 function statusLabel(status: TaskStatus): string {
   return ({ todo: 'Te doen', doing: 'Bezig', review: 'Review', done: 'Klaar' } as Record<TaskStatus, string>)[status] ?? status;
+}
+
+/** De volgende stand in de cyclus, zodat één klik op de statuspil vooruit loopt.
+ *  Vanaf "klaar" begin je weer bij "te doen" — dat is de enige weg terug die je
+ *  zonder venster nodig hebt. */
+function nextStatus(status: TaskStatus): TaskStatus {
+  return ({ todo: 'doing', doing: 'review', review: 'done', done: 'todo' } as Record<TaskStatus, TaskStatus>)[status] ?? 'doing';
 }
 
 function formatDuration(minutes: number): string {

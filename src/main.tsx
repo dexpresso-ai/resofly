@@ -130,7 +130,7 @@ import type { ReportDefinition } from './lib/reporting';
 import { CalendarPage } from './features/CalendarPage';
 import { MeetingBookingManager } from './features/MeetingBookingManager';
 import { WeekPlanner } from './features/WeekPlanner';
-import { applyPeriodLocally, applyPlanningLocally, mergeTaskRows } from './lib/planning';
+import { applyPeriodLocally, applyPlanningLocally, mergeTaskRows, splitTitleAndEstimate } from './lib/planning';
 import { formatISODate, parseISODate, startOfWeek } from './lib/dates';
 import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat } from './components/GerrieChat';
@@ -142,7 +142,7 @@ import { plainTextToEmailHtml, sendClientEmail } from './services/mailService';
 import { exportFinancePDF } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
 import type {
-  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, PurchaseInvoice, PurchaseInvoiceLine, Quote, Supplier, Task, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
+  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, PurchaseInvoice, PurchaseInvoiceLine, Quote, Supplier, Task, TaskAssignee, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
 } from './types';
 import { CustomFieldsSection, normalizeCustomFieldValues } from './components/CustomFields';
 import { euro, total, uid, lineGross } from './lib/format';
@@ -1394,11 +1394,40 @@ function App() {
     }
   }
 
+  /**
+   * Zet de status van één taak. Bewust optimistisch en zónder `refresh()`: dit
+   * hangt onder een vinkje op een kaart, en de hele werkruimte opnieuw ophalen
+   * voor één vinkje maakt afvinken duurder dan het waard is.
+   */
   async function setTaskStatus(task: Task, status: TaskStatus) {
     if (!ensureCanWrite()) return;
     setError(null);
-    try { await updateRow<Task>('tasks', task.id, { status }, activeOrg.id); await refresh(); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Status bijwerken mislukt'); }
+    const previousTasks = data.tasks;
+    setData(prev => ({ ...prev, tasks: prev.tasks.map(row => row.id === task.id ? { ...row, status } : row) }));
+    try {
+      const updated = await updateRow<Task>('tasks', task.id, { status }, activeOrg.id);
+      setData(prev => ({ ...prev, tasks: mergeTaskRows(prev.tasks, [updated]) }));
+    } catch (e) {
+      setData(prev => ({ ...prev, tasks: previousTasks }));
+      setError(e instanceof Error ? e.message : 'Status bijwerken mislukt');
+    }
+  }
+
+  /** Tijdschatting vanaf de kaart, zonder het taakvenster te hoeven openen.
+   *  `null` betekent "nog geen schatting" — die telt nergens als tijd mee. */
+  async function setTaskEstimate(task: Task, minutes: number | null) {
+    if (!ensureCanWrite()) return;
+    setError(null);
+    const previousTasks = data.tasks;
+    const safe = minutes === null ? null : Math.max(0, Math.min(24 * 60, Math.round(minutes)));
+    setData(prev => ({ ...prev, tasks: prev.tasks.map(row => row.id === task.id ? { ...row, estimated_minutes: safe } : row) }));
+    try {
+      const updated = await updateRow<Task>('tasks', task.id, { estimated_minutes: safe }, activeOrg.id);
+      setData(prev => ({ ...prev, tasks: mergeTaskRows(prev.tasks, [updated]) }));
+    } catch (e) {
+      setData(prev => ({ ...prev, tasks: previousTasks }));
+      setError(e instanceof Error ? e.message : 'Schatting bijwerken mislukt');
+    }
   }
 
   /**
@@ -1481,14 +1510,59 @@ function App() {
     }
   }
 
-  /** Zet in de teamweergave de toewijzing van een taak op één persoon (of maakt
-   *  hem vrij). Slepen naar de rij van een collega doet dit. */
-  async function assignTaskToMember(taskId: string, userId: string | null) {
+  /**
+   * Toewijzing van één taak, vanuit de teamweergave. `mode` maakt het verschil
+   * dat hier eerder ontbrak: slepen naar de rij van een collega zette de lijst
+   * op precies die ene persoon, dus een taak met drie toegewezenen raakte er
+   * zonder één woord twee kwijt. Met `'add'` komt de collega erbij.
+   *
+   * Optimistisch en per taak: eerder werd na elke sleep de volledige
+   * toewijzingstabel van de hele organisatie opnieuw opgehaald, en bij een fout
+   * bleef het scherm achter met een stand die niet in de database stond.
+   */
+  async function assignTaskToMember(taskId: string, userId: string | null, mode: 'replace' | 'add' = 'replace') {
     if (!ensureCanWrite()) return;
     setError(null);
-    await setTaskAssignees(activeOrg.id, taskId, userId ? [userId] : []);
-    const rows = await selectTaskAssignees(activeOrg.id);
-    setData(prev => ({ ...prev, taskAssignees: rows }));
+    const previous = data.taskAssignees;
+    const current = previous.filter(row => row.task_id === taskId).map(row => row.user_id);
+    const next = userId === null
+      ? []
+      : mode === 'add'
+        ? Array.from(new Set([...current, userId]))
+        : [userId];
+
+    // Al precies goed? Dan hoeft er niets naar de server.
+    if (next.length === current.length && next.every(id => current.includes(id))) return;
+
+    setData(prev => ({
+      ...prev,
+      taskAssignees: [
+        ...prev.taskAssignees.filter(row => row.task_id !== taskId),
+        ...next.map(id => ({
+          id: `local-${taskId}-${id}`,
+          organization_id: activeOrg.id,
+          task_id: taskId,
+          user_id: id,
+        } as TaskAssignee)),
+      ],
+    }));
+
+    try {
+      await setTaskAssignees(activeOrg.id, taskId, next);
+      const rows = await selectTaskAssignees(activeOrg.id, taskId);
+      setData(prev => ({
+        ...prev,
+        taskAssignees: [...prev.taskAssignees.filter(row => row.task_id !== taskId), ...rows],
+      }));
+    } catch (e) {
+      // Alleen déze taak terug — niet de hele tabel, want andere sleepbewegingen
+      // die wél lukten mogen niet meegetrokken worden.
+      setData(prev => ({
+        ...prev,
+        taskAssignees: [...prev.taskAssignees.filter(row => row.task_id !== taskId), ...previous.filter(row => row.task_id === taskId)],
+      }));
+      throw e;
+    }
   }
 
   // ── Actiepunten van de week (persoonlijk, in de database) ────────────────
@@ -1524,15 +1598,20 @@ function App() {
   /** Snel een losse taak op een dag zetten vanuit de weekplanner. Project en klant
    *  koppel je daarna in het taakvenster — die zijn hier bewust nog leeg.
    *  Met een einddatum erbij ontstaat meteen een weekstrook. */
-  async function quickAddTask(plannedDate: string, title: string, plannedEndDate?: string | null) {
-    if (!ensureCanWrite()) return;
+  async function quickAddTask(plannedDate: string, title: string, plannedEndDate?: string | null): Promise<Task | null> {
+    if (!ensureCanWrite()) return null;
     setError(null);
+    // "Montage 2u" wordt een taak "Montage" van 120 minuten. Staat er geen duur
+    // in de titel, dan blijft de schatting leeg — nooit een verzonnen uur.
+    const parsed = splitTitleAndEstimate(title);
     const created = await insertRow<Task>('tasks', activeOrg.id, {
-      title,
+      title: parsed.title,
+      estimated_minutes: parsed.minutes,
       planned_date: plannedDate,
       planned_end_date: plannedEndDate && plannedEndDate > plannedDate ? plannedEndDate : null,
     });
     setData(prev => ({ ...prev, tasks: mergeTaskRows(prev.tasks, [created]) }));
+    return created;
   }
 
   async function convert(ticket: Ticket) {
@@ -2462,7 +2541,7 @@ function App() {
     <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onNewEntity={(organizationContext.businessStatus?.active && activeMembership?.role === 'owner') ? createNewEntity : null} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => supabaseAuth.signOut()} clientEmailUnread={clientEmailUnread.total} ticketUnread={ticketUnreadIds.size} chatUnread={teamChat.unreadTotal} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })} permissions={permissions}/>
     <main className="main">
       <TabBar tabs={tabs} activeTabId={activeTab.id} data={data} onSelect={switchTab} onClose={closeTab} onNew={openTab} />
-      {page !== 'calendar' && page !== 'gerrie' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!(orgCanWrite && permissions.canWritePage(page)) && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
+      {page !== 'calendar' && page !== 'weekplanner' && page !== 'gerrie' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!(orgCanWrite && permissions.canWritePage(page)) && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
       {/* Alle open tabbladen blijven gemount (keep-alive); alleen het actieve is
           zichtbaar. Elk pane is z'n eigen scrollcontainer én bevat z'n eigen
           EditModal, zodat een openstaande bewerking bij het wisselen bewaard blijft. */}
@@ -2587,7 +2666,7 @@ function App() {
     if (page === 'shareholders') return <ShareholdersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'annual-accounts') return <AnnualAccountsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
-    if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})}/>;
+    if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} onSetTaskEstimate={setTaskEstimate} onOpenProject={(id) => { setProjectId(id); setClientId(null); setPage('project'); }}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'meeting-booking') return <MeetingBookingManager organizationId={activeOrg.id} currentUserId={currentUserId ?? ''} data={data} canWrite={canWrite}/>;
     if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;

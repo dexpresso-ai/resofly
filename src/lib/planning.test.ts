@@ -22,7 +22,9 @@ import {
   layoutWeekBars,
   mergeTaskRows,
   PANE_EDGE_SCROLL_ZONE_PX,
+  parseDurationInput,
   shiftDateKey,
+  splitTitleAndEstimate,
   PLANNING_ORDER_STEP,
 } from './planning.ts';
 
@@ -356,4 +358,45 @@ test('mergeTaskRows overschrijft op id en voegt onbekende rijen toe', () => {
   assert.equal(merged.find(t => t.id === 'a')!.planned_date, '2026-08-12');
   assert.equal(merged.find(t => t.id === 'b')!.planned_order, 2000);
   assert.ok(merged.some(t => t.id === 'c'));
+});
+
+/* ── Tijdsduur lezen zoals iemand hem typt ─────────────────────────────────
+ * De tijdpil op de plannerkaart en de snelinvoer leunen hier allebei op. Een
+ * typfout mag nooit een verzonnen schatting opleveren: dan telt de weekbalk
+ * getallen op die niemand heeft ingevuld.
+ */
+test('parseDurationInput leest minuten, uren en klokvorm', () => {
+  assert.equal(parseDurationInput('90'), 90);
+  assert.equal(parseDurationInput('90m'), 90);
+  assert.equal(parseDurationInput('45 min'), 45);
+  assert.equal(parseDurationInput('1u'), 60);
+  assert.equal(parseDurationInput('1u30'), 90);
+  assert.equal(parseDurationInput('2 uur'), 120);
+  assert.equal(parseDurationInput('1:30'), 90);
+  assert.equal(parseDurationInput('1.5u'), 90);
+  assert.equal(parseDurationInput('1,5u'), 90);
+});
+
+test('parseDurationInput geeft null bij onzin, en knipt op één etmaal', () => {
+  assert.equal(parseDurationInput(''), null);
+  assert.equal(parseDurationInput('   '), null);
+  assert.equal(parseDurationInput('morgen'), null);
+  assert.equal(parseDurationInput('2 dagen'), null);
+  assert.equal(parseDurationInput('-30'), null);
+  // Meer dan een etmaal plannen op één dag kan niet; dat wordt afgetopt.
+  assert.equal(parseDurationInput('40u'), 24 * 60);
+});
+
+test('splitTitleAndEstimate haalt de duur alleen achteraan weg', () => {
+  assert.deepEqual(splitTitleAndEstimate('Montage 2u'), { title: 'Montage', minutes: 120 });
+  assert.deepEqual(splitTitleAndEstimate('Kleurcorrectie 90m'), { title: 'Kleurcorrectie', minutes: 90 });
+  assert.deepEqual(splitTitleAndEstimate('Edit 1:30'), { title: 'Edit', minutes: 90 });
+});
+
+test('splitTitleAndEstimate laat een titel zonder duur met rust', () => {
+  assert.deepEqual(splitTitleAndEstimate('Montage'), { title: 'Montage', minutes: null });
+  // Een duur midden in de zin is gewoon tekst, geen schatting.
+  assert.deepEqual(splitTitleAndEstimate('2 uur durende sessie'), { title: '2 uur durende sessie', minutes: null });
+  // En een titel die alléén een duur is blijft zijn eigen titel.
+  assert.deepEqual(splitTitleAndEstimate('2u'), { title: '2u', minutes: null });
 });
