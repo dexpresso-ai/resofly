@@ -98,9 +98,28 @@ function tokens(text: string): string[] {
   return text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length > 2);
 }
 
-/** Treffer op een heel woord of op een woord dat ermee begint ("factuur" ↔ "facturen"). */
+/**
+ * Treffer op een heel woord, op een woord dat ermee begint, of op een gedeelde stam.
+ *
+ * Dat laatste is nodig omdat het Nederlands meervouden maakt die ná de stam uiteen
+ * gaan lopen: "factuur" en "facturen" delen alleen "factur", dus een gewone
+ * begint-met-vergelijking mist ze allebei. Vijf tekens gedeelde stam is genoeg om
+ * factuur/facturen en klant/klanten te vangen zonder dat losse woorden aan elkaar
+ * geplakt raken — en een misser hier kost een handeling die de gebruiker niet vindt,
+ * terwijl een valse treffer hooguit een regel extra in een lijstje van zes is.
+ */
 function hits(haystack: Set<string>, term: string): boolean {
   if (haystack.has(term)) return true;
-  for (const word of haystack) if (word.startsWith(term) || term.startsWith(word)) return true;
+  for (const word of haystack) {
+    if (word.startsWith(term) || term.startsWith(word)) return true;
+    if (sharedPrefix(word, term) >= 5) return true;
+  }
   return false;
+}
+
+function sharedPrefix(a: string, b: string): number {
+  const max = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < max && a[i] === b[i]) i += 1;
+  return i;
 }
