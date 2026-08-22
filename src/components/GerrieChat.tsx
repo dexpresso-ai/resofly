@@ -334,7 +334,7 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
         icon={kindIcon(p.kind)}
         title={`${p.title}?`}
         sub={p.sub}
-        confirmLabel="Uitvoeren" pendingLabel="Bezig…" doneLabel={p.title}
+        confirmLabel={proposalVerb(p)} pendingLabel="Bezig…" doneLabel={p.title}
         onConfirm={() => runConfirmed(auditId, () => onRunRegistryAction
           ? onRunRegistryAction(p)
           : Promise.reject(new Error('Uitvoeren is hier niet beschikbaar.')))}

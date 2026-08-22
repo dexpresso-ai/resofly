@@ -209,8 +209,11 @@ export interface GerrieRegistryActionProposal {
   /** Sleutel in ACTION_EXECUTORS, bv. 'gallery.publish'. */
   action_id: string;
   title: string;
+  /** Wat er gebeurt; bij iets onomkeerbaars begint dit met een waarschuwing. */
   sub: string;
   kind: 'money' | 'mail' | 'agenda' | 'work' | 'insight' | 'agent';
+  /** 'high' = onomkeerbaar of naar buiten gericht; de knop heet dan anders. */
+  risk?: 'normal' | 'high';
   payload: Record<string, unknown>;
 }
 /** Een door Gerrie klaargezette agent; goedkeuren opent de agent-editor vooringevuld. */

@@ -74,6 +74,14 @@ export interface ActionPlan {
   sub: string;
   kind: ProposalKind;
   payload: Record<string, unknown>;
+  /**
+   * Eén zin over wat er ONOMKEERBAAR gebeurt, in de je-vorm: "Na het afsluiten kun
+   * je in deze periode niets meer boeken." Komt vóór het onderschrift op de kaart te
+   * staan, want dat is het enige wat de gebruiker leest voordat hij akkoord geeft.
+   * Alleen invullen als er echt iets onomkeerbaars of naar buiten gerichts gebeurt —
+   * een waarschuwing bij alles is een waarschuwing bij niets.
+   */
+  warning?: string;
 }
 
 /** Invoer klopt niet; de tekst gaat terug naar het model zodat het zichzelf corrigeert. */
@@ -90,6 +98,12 @@ export interface ActionDef {
   /** Modulesleutel: clients/projects/time/calendar/tickets/content/stats/marketing/finance/gerrie. */
   module: string;
   kind: 'read' | 'write';
+  /**
+   * 'high' = onomkeerbaar of naar buiten gericht (een boeking, een aangifte, post
+   * naar een klant, een publieke link). De knop op de goedkeurkaart heet dan
+   * "Definitief uitvoeren" in plaats van "Uitvoeren". Standaard 'normal'.
+   */
+  risk?: 'normal' | 'high';
   /** Voor het model: wanneer gebruik je dit, en wat gebeurt er dan? */
   description: string;
   /** Extra zoekwoorden voor `find_actions`, naast label en omschrijving. */

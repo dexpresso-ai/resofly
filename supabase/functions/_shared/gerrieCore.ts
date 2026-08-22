@@ -344,6 +344,8 @@ interface ActionProposal {
   title: string;
   sub: string;
   kind: 'money' | 'mail' | 'agenda' | 'work' | 'insight' | 'agent';
+  /** 'high' = onomkeerbaar of naar buiten gericht; de knop heet dan anders. */
+  risk: 'normal' | 'high';
   payload: Record<string, unknown>;
 }
 
@@ -2429,11 +2431,17 @@ async function buildActionProposal(ctx: GerrieContext, input: Record<string, unk
   const payload = (input.input && typeof input.input === 'object') ? input.input as Record<string, unknown> : {};
   try {
     const plan: ActionPlan = await action.plan!(actionCtxFor(ctx), payload);
+    // De waarschuwing gaat VOORAAN in het onderschrift staan. Niet in een eigen veld
+    // met een eigen opmaak: dan zou elk scherm dat een voorstel toont hem apart
+    // moeten leren tonen, en het scherm dat dat vergeet toont hem niet.
+    const sub = plan.warning ? `\u26A0\uFE0F ${plan.warning}${plan.sub ? ` — ${plan.sub}` : ''}` : plan.sub;
     return {
       ok: true,
       proposal: {
         type: 'action', action_id: action.id,
-        title: plan.title, sub: plan.sub, kind: plan.kind, payload: plan.payload,
+        title: plan.title, sub, kind: plan.kind,
+        risk: action.risk === 'high' ? 'high' : 'normal',
+        payload: plan.payload,
       },
     };
   } catch (error) {

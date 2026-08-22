@@ -47,7 +47,9 @@ const FORM_BACKED_TYPES = new Set<GerrieProposal['type']>([
  * Staat hier omdat de chat en de wachtrij dezelfde knop horen te tonen.
  */
 export function proposalVerb(p: GerrieProposal): string {
-  if (p.type === 'action') return 'Uitvoeren';
+  // Bij iets onomkeerbaars hoort de knop dat te zeggen. "Uitvoeren" leest als iets
+  // wat je terug kunt draaien; een aangifteperiode afsluiten is dat niet.
+  if (p.type === 'action') return p.risk === 'high' ? 'Definitief uitvoeren' : 'Uitvoeren';
   if (p.type === 'report') return 'Opslaan';
   return p.type.startsWith('edit_') ? 'Bijwerken' : 'Aanmaken';
 }
