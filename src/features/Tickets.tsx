@@ -108,7 +108,7 @@ function sortTickets(tickets: Ticket[], data: AppData, sort: SortState): Ticket[
   });
 }
 
-export function Tickets({ data, onNew, onEdit, onConvert, unreadTicketIds }: { data: AppData; onNew: () => void; onEdit: (t: Ticket) => void; onConvert: (t: Ticket) => void; unreadTicketIds: Set<string> }) {
+export function Tickets({ data, onNew, onEdit, onConvert, onPlan, unreadTicketIds }: { data: AppData; onNew: () => void; onEdit: (t: Ticket) => void; onConvert: (t: Ticket) => void; onPlan: (t: Ticket) => void; unreadTicketIds: Set<string> }) {
   const [view, setView] = useState<TicketView>(() => readStoredView());
   const [filters, setFilters] = useState<TicketFilters>(emptyTicketFilters);
   // Filteren gebeurt hier en niet in de tabel, zodat hetzelfde filter ook in de
@@ -136,8 +136,8 @@ export function Tickets({ data, onNew, onEdit, onConvert, unreadTicketIds }: { d
     <TicketFilterPanel data={data} filters={filters} visibleCount={visible.length} onChange={setFilters} unreadTicketIds={unreadTicketIds} />
 
     {view === 'list'
-      ? <TicketCardList data={data} tickets={visible} onEdit={onEdit} onConvert={onConvert} unreadTicketIds={unreadTicketIds} onReset={resetFilters} />
-      : <TicketTable data={data} tickets={visible} onEdit={onEdit} onConvert={onConvert} unreadTicketIds={unreadTicketIds} onReset={resetFilters} />}
+      ? <TicketCardList data={data} tickets={visible} onEdit={onEdit} onConvert={onConvert} onPlan={onPlan} unreadTicketIds={unreadTicketIds} onReset={resetFilters} />
+      : <TicketTable data={data} tickets={visible} onEdit={onEdit} onConvert={onConvert} onPlan={onPlan} unreadTicketIds={unreadTicketIds} onReset={resetFilters} />}
   </>;
 }
 
@@ -161,7 +161,7 @@ function TicketEmpty({ hasTickets, onReset }: { hasTickets: boolean; onReset: ()
   return <div className="empty quote-table-empty finance-search-empty"><div className="e-big">Geen tickets gevonden</div><p>Pas je zoekterm of filters aan om meer resultaten te tonen.</p><button type="button" onClick={onReset}><RotateCcw size={14}/> Filters wissen</button></div>;
 }
 
-function TicketCardList({ data, tickets, onEdit, onConvert, unreadTicketIds, onReset }: { data: AppData; tickets: Ticket[]; onEdit: (t: Ticket) => void; onConvert: (t: Ticket) => void; unreadTicketIds: Set<string>; onReset: () => void }) {
+function TicketCardList({ data, tickets, onEdit, onConvert, onPlan, unreadTicketIds, onReset }: { data: AppData; tickets: Ticket[]; onEdit: (t: Ticket) => void; onConvert: (t: Ticket) => void; onPlan: (t: Ticket) => void; unreadTicketIds: Set<string>; onReset: () => void }) {
   if (tickets.length === 0) return <TicketEmpty hasTickets={data.tickets.length > 0} onReset={onReset} />;
   return <div className="ticket-list">
     {tickets.map(ticket => {
@@ -169,13 +169,13 @@ function TicketCardList({ data, tickets, onEdit, onConvert, unreadTicketIds, onR
       const canConvert = convertibleStatuses.has(ticket.status) && !ticket.converted_to_project_id;
       const isUnread = unreadTicketIds.has(ticket.id);
       return <article className={`ticket-item pri-${ticket.priority}${isUnread ? ' is-unread' : ''}`} key={ticket.id} onClick={() => onEdit(ticket)}>
-        <div className="tk-body"><div className="tk-title">{ticket.title}</div><div className="tk-meta"><span>{client?.name ?? 'Geen klant'}</span><span className={`tk-pri-label ${ticket.priority}`}>{priorityLabel(ticket.priority)}</span>{isUnread && <span className="tk-new-badge">Nieuw</span>}{ticket.converted_to_project_id && <span>Project aangemaakt</span>}</div></div><span className={`tk-status ${ticket.status}`}>{ticketStatusLabels[ticket.status]}</span><div className="tk-actions-btn">{canConvert ? <Button onClick={(e) => { e.stopPropagation(); onConvert(ticket); }}>Project maken</Button> : <Button disabled>{ticket.status === 'converted' || ticket.converted_to_project_id ? 'Al omgezet' : 'Niet converteerbaar'}</Button>}</div>
+        <div className="tk-body"><div className="tk-title">{ticket.title}</div><div className="tk-meta"><span>{client?.name ?? 'Geen klant'}</span><span className={`tk-pri-label ${ticket.priority}`}>{priorityLabel(ticket.priority)}</span>{isUnread && <span className="tk-new-badge">Nieuw</span>}{ticket.converted_to_project_id && <span>Project aangemaakt</span>}</div></div><span className={`tk-status ${ticket.status}`}>{ticketStatusLabels[ticket.status]}</span><div className="tk-actions-btn">{canConvert && <Button onClick={(e) => { e.stopPropagation(); onPlan(ticket); }} title="Maak er meteen een taak van in de weekplanner">Zet op de planning</Button>}{canConvert ? <Button onClick={(e) => { e.stopPropagation(); onConvert(ticket); }}>Project maken</Button> : <Button disabled>{ticket.status === 'converted' || ticket.converted_to_project_id ? 'Al omgezet' : 'Niet converteerbaar'}</Button>}</div>
       </article>;
     })}
   </div>;
 }
 
-function TicketTable({ data, tickets, onEdit, onConvert, unreadTicketIds, onReset }: { data: AppData; tickets: Ticket[]; onEdit: (t: Ticket) => void; onConvert: (t: Ticket) => void; unreadTicketIds: Set<string>; onReset: () => void }) {
+function TicketTable({ data, tickets, onEdit, onConvert, onPlan, unreadTicketIds, onReset }: { data: AppData; tickets: Ticket[]; onEdit: (t: Ticket) => void; onConvert: (t: Ticket) => void; onPlan: (t: Ticket) => void; unreadTicketIds: Set<string>; onReset: () => void }) {
   const [sort, setSort] = useState<SortState>({ key: 'created', dir: 'desc' });
   const sorted = useMemo(() => sortTickets(tickets, data, sort), [tickets, data, sort]);
 
@@ -216,7 +216,7 @@ function TicketTable({ data, tickets, onEdit, onConvert, unreadTicketIds, onRese
               <td data-label="Aangemaakt"><span>{dateNL(ticket.created_at)}</span></td>
               <td className="quote-row-actions ticket-row-actions" onClick={event => event.stopPropagation()}>
                 {canConvert
-                  ? <Button onClick={(e) => { e.stopPropagation(); onConvert(ticket); }}>Project maken</Button>
+                  ? <><Button onClick={(e) => { e.stopPropagation(); onPlan(ticket); }} title="Maak er meteen een taak van in de weekplanner">Op de planning</Button> <Button onClick={(e) => { e.stopPropagation(); onConvert(ticket); }}>Project maken</Button></>
                   : <Button disabled>{ticket.status === 'converted' || ticket.converted_to_project_id ? 'Al omgezet' : 'Niet converteerbaar'}</Button>}
               </td>
             </tr>;

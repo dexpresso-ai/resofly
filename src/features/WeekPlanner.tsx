@@ -1,13 +1,15 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import { Check, CheckSquare, ChevronLeft, ChevronRight, MessageSquare, Plus, X } from 'lucide-react';
-import type { AppData, CalendarExternalEvent, OrganizationMember, PlannerNote, Priority, Task, TaskStatus, UUID } from '../types';
+import { Check, CheckSquare, ChevronLeft, ChevronRight, MessageSquare, Play, Plus, Square, X } from 'lucide-react';
+import type { AppData, CalendarExternalEvent, OrganizationMember, PlannerDayCapacity, PlannerNote, Priority, Task, TaskStatus, UUID } from '../types';
 import { getCachedCalendarEvents, listCalendarEventsCached } from '../lib/calendar-api';
 import { memberColor, memberInitials, memberShortName } from '../lib/members';
 import { SearchFilterPanel } from '../components/SearchFilterPanel';
+import { loggedMinutesByTask, useRunningTimer } from '../lib/useTimer';
 import { AssigneeAvatars } from '../components/AssigneeAvatars';
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
 import { comparePlannedTasks, edgeScrollDelta, groupEventMinutesByDay, isSpanningTask, layoutWeekBars, PANE_EDGE_SCROLL_ZONE_PX, parseDurationInput, shiftDateKey } from '../lib/planning';
+import { groupAssigneesByTask, scopeTasks } from '../lib/workweek';
 import type { WeekBar } from '../lib/planning';
 import { priorityLabel } from '../lib/format';
 
@@ -100,6 +102,8 @@ const TRAY_KEY = '__unscheduled__';
 const STRIP_PREFIX = 'strip:';
 
 const PREFS_STORAGE_KEY = 'resofly-weekplanner-prefs';
+/** Dezelfde sleutel als de urenpagina: één lopende timer in de hele app. */
+const TIMER_STORAGE_KEY = 'resofly-timer';
 
 // Touch: vegen moet gewoon blijven scrollen, dus pakken we een sleep pas op nadat
 // de vinger ~⅓ seconde stil ligt — hetzelfde gebaar als in de agenda.
@@ -207,6 +211,9 @@ export function WeekPlanner({
   onSetTaskEstimate,
   onOpenProject,
   onOpenCalendar,
+  onSaveCapacity,
+  onStopTimer,
+  onOpenTicket,
 }: {
   data: AppData;
   organizationId: UUID;
@@ -227,6 +234,10 @@ export function WeekPlanner({
   onOpenProject: (projectId: UUID) => void;
   /** Opent de agenda op één dag — de chips in de dagkolom zijn nu deuren. */
   onOpenCalendar: (dateKey: string) => void;
+  onSaveCapacity: (minutes: number, includeWeekend: boolean) => Promise<void>;
+  /** Schrijft een lopende timer weg als urenpost op deze taak. */
+  onStopTimer: (startedAt: string, task: Task | null) => Promise<void>;
+  onOpenTicket: (ticketId: UUID) => void;
 }) {
   const storedPrefs = useRef(loadPrefs()).current;
 
@@ -294,14 +305,7 @@ export function WeekPlanner({
 
   const projectsById = useMemo(() => new Map(data.projects.map(project => [project.id, project])), [data.projects]);
   const clientsById = useMemo(() => new Map(data.clients.map(client => [client.id, client])), [data.clients]);
-  const assigneesByTask = useMemo(() => {
-    const map = new Map<string, string[]>();
-    for (const a of data.taskAssignees) {
-      const list = map.get(a.task_id);
-      if (list) list.push(a.user_id); else map.set(a.task_id, [a.user_id]);
-    }
-    return map;
-  }, [data.taskAssignees]);
+  const assigneesByTask = useMemo(() => groupAssigneesByTask(data.taskAssignees), [data.taskAssignees]);
 
   /** Gearchiveerde projecten horen niet in de keuzelijst — anders kies je werk
    *  van twee jaar terug. Staat er tóch een archiefproject in het filter (bijv.
@@ -323,18 +327,13 @@ export function WeekPlanner({
   const filteredTasks = useMemo(() => {
     const normalizedQuery = filters.query.trim().toLowerCase();
 
-    return data.tasks.filter(task => {
+    // "Mijn werk" komt uit dezelfde module als het startscherm, zodat dezelfde
+    // taak niet op het ene scherm van jou is en op het andere niet.
+    return scopeTasks(data.tasks, scope, currentUserId, assigneesByTask).filter(task => {
       // Werk van een gearchiveerd project plan je niet meer in. Kies je dat
       // project expliciet in het filter, dan zie je het wél — dat is dan een
       // bewuste vraag en geen ruis.
       if (task.project_id && archivedProjectIds.has(task.project_id) && filters.projectId !== task.project_id) return false;
-
-      // "Mijn week" toont wat aan mij is toegewezen én wat nog aan niemand hangt —
-      // anders zou een net toegevoegde losse taak meteen uit beeld verdwijnen.
-      if (scope === 'mine' && currentUserId) {
-        const assignees = assigneesByTask.get(task.id);
-        if (assignees && assignees.length > 0 && !assignees.includes(currentUserId)) return false;
-      }
 
       const project = task.project_id ? projectsById.get(task.project_id) ?? null : null;
       const clientId = project?.client_id ?? task.client_id ?? null;
@@ -467,10 +466,25 @@ export function WeekPlanner({
   const weekTaskMinutes = weekBucket.minutes + spanningTasks.reduce((sum, task) => sum + taskEstimateMinutes(task), 0);
   const weekTaskCount = weekBucket.count + spanningTasks.length;
 
-  /** De schaal van de dagbalken. Een bodem van vier uur voorkomt dat één taak van
-   *  een kwartier de maandagbalk helemaal vol trekt: zonder bodem is de volste
-   *  dag per definitie 100%, hoe leeg de week ook is. */
-  const loadScale = Math.max(busiestMinutes, 240);
+  /**
+   * De schaal van de dagbalken.
+   *
+   * Zonder streep is het puur een onderlinge verhouding, met een bodem van vier
+   * uur zodat één taak van een kwartier de maandagbalk niet helemaal vol trekt.
+   * Heb je zelf een streep gezet, dan is dát de schaal — en pas dan kan de
+   * planner antwoord geven op de vraag van maandagochtend: past dit nog?
+   */
+  const capacityMinutes = data.plannerCapacity && data.plannerCapacity.minutes > 0
+    ? data.plannerCapacity.minutes
+    : null;
+  const loadScale = capacityMinutes ?? Math.max(busiestMinutes, 240);
+
+  /** Telt deze dag mee voor de streep? Weekend alleen als je dat zelf aanzet. */
+  const dayCountsForCapacity = useCallback((day: Date) => {
+    if (!capacityMinutes) return false;
+    const weekend = day.getDay() === 0 || day.getDay() === 6;
+    return !weekend || (data.plannerCapacity?.include_weekend ?? false);
+  }, [capacityMinutes, data.plannerCapacity]);
   const busiestKey = useMemo(() => {
     let best: { key: string; minutes: number } | null = null;
     for (const [key, bucket] of byDay) {
@@ -731,6 +745,47 @@ export function WeekPlanner({
       setError(err instanceof Error ? err.message : 'Planning bijwerken mislukt');
     }
   }, [assigneesByTask, byDay, captureUndo, data.tasks, offerUndo, onAssignTask, onPlanTask]);
+
+  // ── Timer ─────────────────────────────────────────────────────────────
+  // De timer zat opgesloten op de pagina Urenregistratie: je zag een taak voor
+  // je liggen en moest naar een ander scherm om de klok te starten, waar je
+  // project en klant nog eens met de hand koos. Nu leidt hij dat uit de taak af.
+  const { running, persist: persistTimer } = useRunningTimer(TIMER_STORAGE_KEY);
+  const loggedByTask = useMemo(() => loggedMinutesByTask(data.timeEntries), [data.timeEntries]);
+
+  async function toggleTimer(task: Task) {
+    if (!canWrite) return;
+    setError(null);
+    // Loopt de klok al op déze taak, dan stopt hij en wordt de tijd geschreven.
+    if (running?.taskId === task.id) {
+      try {
+        await onStopTimer(running.startedAt, task);
+        persistTimer(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Uren opslaan mislukt');
+      }
+      return;
+    }
+    // Loopt er een klok op iets anders? Die schrijven we eerst weg, zodat er
+    // nooit twee tegelijk lopen en er geen tijd zoekraakt.
+    if (running) {
+      const previous = data.tasks.find(row => row.id === running.taskId) ?? null;
+      try {
+        await onStopTimer(running.startedAt, previous);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Lopende timer opslaan mislukt');
+        return;
+      }
+    }
+    const links = taskLinks(task);
+    persistTimer({
+      taskId: task.id,
+      projectId: task.project_id ?? '',
+      clientId: links.clientId ?? '',
+      description: task.title,
+      startedAt: new Date().toISOString(),
+    });
+  }
 
   // ── Snelmenu ──────────────────────────────────────────────────────────
   // `onContextMenu` kwam in de hele app niet voor, en lang indrukken is op touch
@@ -1189,6 +1244,7 @@ export function WeekPlanner({
     return {
       projectName: project?.name ?? null,
       projectId: project?.id ?? null,
+      clientId,
       clientName: client?.name ?? null,
       color: project?.color ?? client?.color ?? '#FFD966',
     };
@@ -1226,6 +1282,10 @@ export function WeekPlanner({
       onSetEstimate={(target, minutes) => { void onSetTaskEstimate(target, minutes); }}
       onOpenProject={onOpenProject}
       onMenu={openMenu}
+      loggedMinutes={loggedByTask.get(task.id) ?? 0}
+      isTiming={running?.taskId === task.id}
+      onToggleTimer={() => { void toggleTimer(task); }}
+      onOpenTicket={onOpenTicket}
     />
   );
 
@@ -1257,6 +1317,11 @@ export function WeekPlanner({
             <button type="button" className={density === 'compact' ? 'is-on' : ''} aria-pressed={density === 'compact'} onClick={() => setDensity('compact')}>Compact</button>
             <button type="button" className={density === 'comfortable' ? 'is-on' : ''} aria-pressed={density === 'comfortable'} onClick={() => setDensity('comfortable')}>Ruim</button>
           </div>
+          {scope === 'mine' && <CapacityControl
+            capacity={data.plannerCapacity}
+            canWrite={canWrite}
+            onSave={onSaveCapacity}
+          />}
           <div className="wp-nav" role="group" aria-label="Week kiezen">
             <button type="button" onClick={() => setAnchor(prev => addDays(prev, -7))} aria-label="Vorige week" title="Vorige week (shift + pijl links)"><ChevronLeft size={15}/></button>
             <button type="button" onClick={goToToday} title="Deze week (T)">Vandaag</button>
@@ -1465,6 +1530,13 @@ export function WeekPlanner({
                 {/* Hele-dag-afspraken kosten geen minuten maar maken je dag wél
                     vol. Ze verdwenen hier volledig, dus een shootdag las als een
                     lege dag. */}
+                {/* Met een streep zegt de dagkop het in mensentaal, niet in een
+                    verhouding: "nog 1u15 vrij" of "45m over je streep". */}
+                {dayCountsForCapacity(day) && capacityMinutes !== null && <div className={`wp-day-room ${total > capacityMinutes ? 'is-over' : ''}`}>
+                  {total > capacityMinutes
+                    ? `${formatDuration(total - capacityMinutes)} over je streep`
+                    : `nog ${formatDuration(capacityMinutes - total)} vrij`}
+                </div>}
                 {!!agenda?.allDay.length && <div className="wp-day-allday">
                   {agenda.allDay.map(event => <span key={`${event.source_id}-${event.provider_event_id}`} className="wp-allday-chip" title={event.title}>
                     {event.title}
@@ -1676,6 +1748,81 @@ export function WeekPlanner({
 }
 
 /**
+ * De persoonlijke dagstreep. Standaard uit: dan blijft het scherm precies zoals
+ * het was — zeven gelijkwaardige dagen, geen werkweeknorm. Zet je hem aan, dan
+ * schaalt de dagbalk op jóuw getal en kan de planner eindelijk zeggen dat iets
+ * niet meer past, in plaats van alleen dat de ene dag voller is dan de andere.
+ *
+ * Bewust persoonlijk en niet zichtbaar in de teamweergave: "wiens streep?" is
+ * daar onbeantwoordbaar.
+ */
+function CapacityControl({ capacity, canWrite, onSave }: {
+  capacity: PlannerDayCapacity | null;
+  canWrite: boolean;
+  onSave: (minutes: number, includeWeekend: boolean) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const active = !!capacity && capacity.minutes > 0;
+  const [hours, setHours] = useState(() => String(((capacity?.minutes ?? 480) / 60).toFixed(1).replace(/\.0$/, '')));
+  const [weekend, setWeekend] = useState(capacity?.include_weekend ?? false);
+
+  async function save(minutes: number, includeWeekend: boolean) {
+    setBusy(true);
+    try { await onSave(minutes, includeWeekend); setOpen(false); }
+    finally { setBusy(false); }
+  }
+
+  return <div className="wp-cap">
+    <button
+      type="button"
+      className={`wp-cap-btn ${active ? 'is-on' : ''}`}
+      aria-expanded={open}
+      disabled={!canWrite}
+      onClick={() => setOpen(o => !o)}
+      title={active ? 'Je dagstreep aanpassen' : 'Een dagstreep zetten'}
+    >
+      {active ? `Streep ${formatDuration(capacity!.minutes)}` : 'Geen streep'}
+    </button>
+
+    {open && <div className="wp-cap-pop">
+      <p className="wp-cap-hint">
+        Hoeveel uur wil je op een werkdag kwijt kunnen? De dagbalk schaalt daarop, en
+        elke dag zegt hoeveel er nog vrij is. Alleen voor jou.
+      </p>
+      <div className="wp-cap-row">
+        <input
+          className="wp-cap-input"
+          type="number"
+          min="0"
+          max="24"
+          step="0.5"
+          value={hours}
+          aria-label="Uren per werkdag"
+          onChange={e => setHours(e.target.value)}
+        />
+        <span>uur per dag</span>
+      </div>
+      <label className="wp-cap-weekend">
+        <input type="checkbox" checked={weekend} onChange={e => setWeekend(e.target.checked)}/>
+        Weekend telt ook mee
+      </label>
+      <div className="wp-cap-actions">
+        <button
+          type="button"
+          className="wp-cap-save"
+          disabled={busy}
+          onClick={() => void save(Math.round(Math.max(0, Math.min(24, Number(hours) || 0)) * 60), weekend)}
+        >{busy ? 'Bezig…' : 'Streep zetten'}</button>
+        {active && <button type="button" className="wp-cap-clear" disabled={busy} onClick={() => void save(0, weekend)}>
+          Streep weghalen
+        </button>}
+      </div>
+    </div>}
+  </div>;
+}
+
+/**
  * Het meeneem-voorstel voor blijven liggen werk. Was één knop die twintig taken
  * ineens verzette naar vandaag, zonder weg terug — een onomkeerbare herindeling
  * van je week met één klik. Nu kies je wát er meegaat en naar wélke dag, en zie
@@ -1846,6 +1993,10 @@ function TaskCard({
   onSetEstimate,
   onOpenProject,
   onMenu,
+  loggedMinutes,
+  isTiming,
+  onToggleTimer,
+  onOpenTicket,
 }: {
   task: Task;
   projectName: string | null;
@@ -1867,6 +2018,11 @@ function TaskCard({
   onSetEstimate: (task: Task, minutes: number | null) => void;
   onOpenProject: (projectId: string) => void;
   onMenu: (task: Task, x: number, y: number) => void;
+  /** Al geschreven uren op deze taak. Nul zolang er niets op geboekt is. */
+  loggedMinutes: number;
+  isTiming: boolean;
+  onToggleTimer: () => void;
+  onOpenTicket: (ticketId: string) => void;
 }) {
   const plannedAfterDeadline = !!task.end_date && !!task.planned_date && task.planned_date > task.end_date;
   const done = task.status === 'done';
@@ -1941,6 +2097,14 @@ function TaskCard({
             >{projectName}</button>
           : <span className="is-unlinked">Geen project</span>}
         {clientName && <span className="wp-task-client">{clientName}</span>}
+        {/* Werk dat uit een klantvraag komt draagt dat zichtbaar mee. */}
+        {task.ticket_id && <button
+          type="button"
+          className="wp-task-ticket"
+          title="Open het ticket waar deze taak uit komt"
+          onPointerDown={swallow}
+          onClick={() => onOpenTicket(task.ticket_id!)}
+        >Ticket</button>}
       </div>
       {density === 'comfortable' && <div className="wp-task-meta">
         <span className={`pri-badge pri-${task.priority}`}>{priorityLabel(task.priority)}</span>
@@ -1965,17 +2129,38 @@ function TaskCard({
       </div>}
     </div>
 
-    <button
-      type="button"
-      className={`wp-task-est ${hasEstimate(task) ? '' : 'is-unset'}`}
-      disabled={!canWrite}
-      aria-expanded={estimateOpen}
-      aria-label={hasEstimate(task) ? `Tijdschatting ${formatDuration(taskEstimateMinutes(task))}, klik om te wijzigen` : 'Nog geen tijdschatting, klik om in te vullen'}
-      onPointerDown={swallow}
-      onClick={() => setEstimateOpen(open => !open)}
-    >
-      {hasEstimate(task) ? formatDuration(taskEstimateMinutes(task)) : '—'}
-    </button>
+    <div className="wp-task-right">
+      {/* Klok starten vanaf de kaart. Project, klant en het declarabel-vinkje
+          leidt de app af uit de taak — die wist je toch al. */}
+      {canWrite && <button
+        type="button"
+        className={`wp-task-timer ${isTiming ? 'is-running' : ''}`}
+        aria-pressed={isTiming}
+        aria-label={isTiming ? `Timer stoppen voor ${task.title}` : `Timer starten voor ${task.title}`}
+        title={isTiming ? 'Stop en schrijf de uren weg' : 'Start de timer op deze taak'}
+        onPointerDown={swallow}
+        onClick={onToggleTimer}
+      >{isTiming ? <Square size={10}/> : <Play size={10}/>}</button>}
+
+      <button
+        type="button"
+        className={`wp-task-est ${hasEstimate(task) ? '' : 'is-unset'}`}
+        disabled={!canWrite}
+        aria-expanded={estimateOpen}
+        aria-label={hasEstimate(task)
+          ? `${loggedMinutes > 0 ? `${formatDuration(loggedMinutes)} gewerkt van ` : ''}${formatDuration(taskEstimateMinutes(task))} geschat, klik om te wijzigen`
+          : 'Nog geen tijdschatting, klik om in te vullen'}
+        onPointerDown={swallow}
+        onClick={() => setEstimateOpen(open => !open)}
+      >
+        {/* Zodra er uren op de taak staan zegt de pil er twee dingen: gewerkt
+            van geschat. Dat kon voorheen principieel niet — urenposten kenden
+            geen taak. */}
+        {loggedMinutes > 0 && <span className="wp-task-done-time">{formatDuration(loggedMinutes)}</span>}
+        {loggedMinutes > 0 && hasEstimate(task) && <span className="wp-task-slash">/</span>}
+        {hasEstimate(task) ? formatDuration(taskEstimateMinutes(task)) : (loggedMinutes > 0 ? '' : '—')}
+      </button>
+    </div>
 
     {/* Op touch is de rechtermuisknop er niet en is lang indrukken al bezet
         door het slepen; daarom een eigen knopje. */}

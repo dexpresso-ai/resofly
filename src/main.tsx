@@ -44,7 +44,9 @@ import {
   planTaskInWeek,
   setTaskPlanningPeriod,
   fetchTasksForPlannedDates,
+  savePlannerDayCapacity,
   selectTaskAssignees,
+  shiftProjectTaskPlanning,
   createPlannerNote,
   updatePlannerNote,
   deletePlannerNote,
@@ -96,7 +98,7 @@ import { useTicketUnread, TicketToasts } from './components/TicketNotifications'
 import { useTeamChat, TeamChatPage, TeamChatDock } from './components/TeamChat';
 import { usePushNotifications } from './components/usePushNotifications';
 import { ProjectPage, ProjectsListPage, ProjectsPlanningPage } from './features/Projects';
-import { TimeTracking } from './features/TimeTracking';
+import { TimeTracking, defaultBillableForProject, resolveRateCents } from './features/TimeTracking';
 import { Tickets } from './features/Tickets';
 import { Marketing } from './features/Marketing';
 import { RelatedNotes, noteTypeLabels } from './features/Notes';
@@ -130,6 +132,8 @@ import type { ReportDefinition } from './lib/reporting';
 import { CalendarPage } from './features/CalendarPage';
 import { MeetingBookingManager } from './features/MeetingBookingManager';
 import { WeekPlanner } from './features/WeekPlanner';
+import { ProjectShiftDialog } from './components/ProjectShiftDialog';
+import type { ProjectShift } from './components/ProjectShiftDialog';
 import { applyPeriodLocally, applyPlanningLocally, mergeTaskRows, restoreTasksForDates, splitTitleAndEstimate } from './lib/planning';
 import { formatISODate, parseISODate, startOfWeek } from './lib/dates';
 import { AttachmentList } from './components/AttachmentList';
@@ -160,7 +164,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id' | 'notes' | 'due_date' | 'lines'>> }
   | null;
 
-const emptyData: AppData = { clients: [], clientContacts: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], galleries: [], savedReports: [], plannerNotes: [], companySettings: null };
+const emptyData: AppData = { clients: [], clientContacts: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null, creativeStatus: null, businessStatus: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
@@ -559,6 +563,9 @@ function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   /** Op welke dag de agenda opent als je er vanuit de weekplanner heen springt. */
   const [calendarJump, setCalendarJump] = useState<string | null>(null);
+  /** Openstaand voorstel om de taken van een verschoven project mee te schuiven. */
+  const [projectShift, setProjectShift] = useState<ProjectShift | null>(null);
+  const [projectShiftBusy, setProjectShiftBusy] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
   const [data, setData] = useState<AppData>(emptyData);
@@ -1208,15 +1215,58 @@ function App() {
     if (invalid) { setError(invalid); return; }
     setLoading(true); setError(null);
     try {
+      // Schuift de startdatum van een project op? Dan blijven de ingeplande
+      // taken er anders stilletjes achter — geen ontbrekende functie maar een
+      // stille fout, die je pas ontdekt als de week eromheen niet meer klopt.
+      const shift = edit.kind === 'project' && edit.item
+        ? projectShiftDays(edit.item as Project, values)
+        : 0;
       const { warning } = await persistEdit(edit, values);
       setEdit(null);
       await refresh();
+      if (shift !== 0 && edit.item) {
+        const project = edit.item as Project;
+        const affected = data.tasks.filter(task =>
+          task.project_id === project.id && task.status !== 'done' && !!task.planned_date);
+        if (affected.length > 0) setProjectShift({ project, days: shift, tasks: affected });
+      }
       // Pas ná refresh tonen: refresh wist de foutbanner.
       if (warning) setError(warning);
     } catch (e) {
       setError(saveErrorMessage(e));
     } finally {
       setLoading(false);
+    }
+  }
+
+  /**
+   * Hoeveel dagen schuift de startdatum van dit project op? Nul als er geen
+   * startdatum was of die niet verandert — dan is er ook niets mee te schuiven.
+   */
+  function projectShiftDays(project: Project, values: Record<string, unknown>): number {
+    const next = String(values.start_date ?? '').trim();
+    if (!project.start_date || !next || next === project.start_date) return 0;
+    const from = parseISODate(project.start_date).getTime();
+    const to = parseISODate(next).getTime();
+    return Math.round((to - from) / 86400000);
+  }
+
+  /** Voert het meeschuiven uit: één RPC in één transactie, zodat een halve
+   *  verschuiving niet kan bestaan. */
+  async function applyProjectShift(taskIds: string[], shiftDeadlines: boolean) {
+    if (!projectShift || !ensureCanWrite()) return;
+    setProjectShiftBusy(true);
+    setError(null);
+    try {
+      const moved = await shiftProjectTaskPlanning(
+        activeOrg.id, projectShift.project.id, taskIds, projectShift.days, shiftDeadlines,
+      );
+      setData(prev => ({ ...prev, tasks: mergeTaskRows(prev.tasks, moved) }));
+      setProjectShift(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Taken meeschuiven mislukt');
+    } finally {
+      setProjectShiftBusy(false);
     }
   }
 
@@ -1570,6 +1620,46 @@ function App() {
     }
   }
 
+  /**
+   * Schrijft een lopende timer weg als urenpost op een taak. Project, klant,
+   * declarabel en het uurtarief komen uit de taak — de database maakt project en
+   * klant daarna nog eens hard gelijk aan die van de taak, zodat een uur nooit
+   * op een ander project belandt dan waar je op klikte.
+   */
+  async function stopTimerForTask(startedAt: string, task: Task | null) {
+    if (!ensureCanWrite()) return;
+    const started = new Date(startedAt);
+    const minutes = Math.max(1, Math.round((Date.now() - started.getTime()) / 60000));
+    const projectId = task?.project_id ?? null;
+    const created = await createTimeEntry(activeOrg.id, {
+      project_id: projectId,
+      client_id: task?.client_id ?? null,
+      task_id: task?.id ?? null,
+      source: 'timer',
+      description: task?.title ?? null,
+      entry_date: formatISODate(started),
+      started_at: startedAt,
+      ended_at: new Date().toISOString(),
+      minutes,
+      billable: defaultBillableForProject(data, projectId),
+      hourly_rate_cents: resolveRateCents(data, projectId),
+    });
+    setData(prev => ({ ...prev, timeEntries: [...prev.timeEntries, created] }));
+  }
+
+  /** Zet of wist je persoonlijke dagstreep. Nul minuten = geen streep, en dan
+   *  schaalt de planner weer op de volste dag van de week. */
+  async function savePlannerCapacity(minutes: number, includeWeekend: boolean) {
+    if (!ensureCanWrite() || !currentUserId) return;
+    setError(null);
+    try {
+      const saved = await savePlannerDayCapacity(activeOrg.id, currentUserId, { minutes, include_weekend: includeWeekend });
+      setData(prev => ({ ...prev, plannerCapacity: saved }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Dagstreep opslaan mislukt');
+    }
+  }
+
   // ── Actiepunten van de week (persoonlijk, in de database) ────────────────
   async function addPlannerNote(weekStart: string, text: string) {
     if (!ensureCanWrite() || !currentUserId) return;
@@ -1617,6 +1707,34 @@ function App() {
     });
     setData(prev => ({ ...prev, tasks: mergeTaskRows(prev.tasks, [created]) }));
     return created;
+  }
+
+  /**
+   * Zet een ticket rechtstreeks op de planning. De enige uitweg was tot nu toe
+   * "Project maken", en dat is een zwaar besluit voor een vraag die soms een
+   * half uur werk is. Dit maakt er meteen een taak van, op vandaag, met de klant
+   * erbij en met de koppeling terug naar het ticket. Het ticket blijft open — dat
+   * is pas klaar als het werk klaar is.
+   */
+  async function planTicket(ticket: Ticket) {
+    if (!ensureCanWrite()) return;
+    setError(null);
+    try {
+      const created = await insertRow<Task>('tasks', activeOrg.id, {
+        title: ticket.title,
+        description: ticket.description,
+        priority: ticket.priority,
+        client_id: ticket.client_id,
+        ticket_id: ticket.id,
+        planned_date: formatISODate(new Date()),
+      });
+      setData(prev => ({ ...prev, tasks: mergeTaskRows(prev.tasks, [created]) }));
+      setProjectId(null);
+      setClientId(null);
+      setPage('weekplanner');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Op de planning zetten mislukt');
+    }
   }
 
   async function convert(ticket: Ticket) {
@@ -2546,6 +2664,12 @@ function App() {
     <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onNewEntity={(organizationContext.businessStatus?.active && activeMembership?.role === 'owner') ? createNewEntity : null} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => supabaseAuth.signOut()} clientEmailUnread={clientEmailUnread.total} ticketUnread={ticketUnreadIds.size} chatUnread={teamChat.unreadTotal} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })} permissions={permissions}/>
     <main className="main">
       <TabBar tabs={tabs} activeTabId={activeTab.id} data={data} onSelect={switchTab} onClose={closeTab} onNew={openTab} />
+      {projectShift && <ProjectShiftDialog
+        shift={projectShift}
+        busy={projectShiftBusy}
+        onCancel={() => setProjectShift(null)}
+        onConfirm={(taskIds, shiftDeadlines) => { void applyProjectShift(taskIds, shiftDeadlines); }}
+      />}
       {page !== 'calendar' && page !== 'weekplanner' && page !== 'gerrie' && <header className="topbar"><div><div className="topbar-eyebrow">ResoFly workspace</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{!(orgCanWrite && permissions.canWritePage(page)) && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
       {/* Alle open tabbladen blijven gemount (keep-alive); alleen het actieve is
           zichtbaar. Elk pane is z'n eigen scrollcontainer én bevat z'n eigen
@@ -2647,7 +2771,7 @@ function App() {
     if (page === 'project-planning') return <ProjectsPlanningPage data={data} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} />;
     if (page === 'client' && client) return <ClientDetailPage data={data} client={client} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewNote={(folderId) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(folderId) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: client.id, folder_id: folderId ?? null }})} onEditDocument={openDocument} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread}/>;
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient}/>;
-    if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} unreadTicketIds={ticketUnreadIds}/>;
+    if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} onPlan={planTicket} unreadTicketIds={ticketUnreadIds}/>;
     if (page === 'chat') return <TeamChatPage api={teamChat} />;
     if (page === 'gerrie') return <GerrieCommandCenter organizationId={activeOrg.id} canWrite={canWrite} openAgentId={view.openAgentId} onOpenAgentConsumed={() => setOpenAgentId(null)} {...gerrieActions} />;
     if (page === 'marketing') return <Marketing data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
@@ -2671,7 +2795,7 @@ function App() {
     if (page === 'shareholders') return <ShareholdersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'annual-accounts') return <AnnualAccountsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
-    if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} onSetTaskEstimate={setTaskEstimate} onOpenProject={(id) => { setProjectId(id); setClientId(null); setPage('project'); }} onOpenCalendar={(dateKey) => { setCalendarJump(dateKey); setPage('calendar'); }}/>;
+    if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} onSetTaskEstimate={setTaskEstimate} onOpenProject={(id) => { setProjectId(id); setClientId(null); setPage('project'); }} onOpenCalendar={(dateKey) => { setCalendarJump(dateKey); setPage('calendar'); }} onSaveCapacity={savePlannerCapacity} onStopTimer={stopTimerForTask} onOpenTicket={(ticketId) => { const ticket = data.tickets.find(t => t.id === ticketId); if (ticket) setEdit({ kind: 'ticket', item: ticket }); }}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" initialDate={calendarJump} key={calendarJump ?? 'today'} organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'meeting-booking') return <MeetingBookingManager organizationId={activeOrg.id} currentUserId={currentUserId ?? ''} data={data} canWrite={canWrite}/>;
     if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;

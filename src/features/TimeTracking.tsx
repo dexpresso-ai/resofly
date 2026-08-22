@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useElapsedLabel, useRunningTimer } from '../lib/useTimer';
 import { CalendarDays, ChevronLeft, ChevronRight, Clock, Pencil, Play, Plus, Square, Target, Trash2 } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
@@ -205,34 +206,20 @@ export function TimeEntryModal({ organizationId, data, entry, defaults, onClose,
 
 /* ── Timer ────────────────────────────────────────────────────────────── */
 
-interface RunningTimer { projectId: string; clientId: string; description: string; startedAt: string; }
-
 function TimerCard({ organizationId, data, storageKey, onSaved }: {
   organizationId: UUID; data: AppData; storageKey: string; onSaved: () => void | Promise<void>;
 }) {
-  const [running, setRunning] = useState<RunningTimer | null>(() => {
-    try { const raw = localStorage.getItem(storageKey); return raw ? JSON.parse(raw) as RunningTimer : null; } catch { return null; }
-  });
+  // De timer leeft niet meer in dit component maar in een gedeelde hook, zodat
+  // de weekplanner hem ook kan starten en stoppen.
+  const { running, persist } = useRunningTimer(storageKey);
   const [clientId, setClientId] = useState('');
   const [projectId, setProjectId] = useState('');
   const [description, setDescription] = useState('');
-  const [, setTick] = useState(0);
   const [busy, setBusy] = useState(false);
-
-  // Houd de verstreken-teller live terwijl de timer loopt.
-  useEffect(() => {
-    if (!running) return;
-    const id = window.setInterval(() => setTick(t => t + 1), 1000);
-    return () => window.clearInterval(id);
-  }, [running]);
-
-  function persist(next: RunningTimer | null) {
-    setRunning(next);
-    try { if (next) localStorage.setItem(storageKey, JSON.stringify(next)); else localStorage.removeItem(storageKey); } catch { /* localStorage kan geweigerd zijn */ }
-  }
+  const elapsedLabel = useElapsedLabel(running?.startedAt ?? null);
 
   function start() {
-    persist({ projectId, clientId, description, startedAt: new Date().toISOString() });
+    persist({ projectId, clientId, taskId: '', description, startedAt: new Date().toISOString() });
   }
 
   async function stop() {
@@ -243,7 +230,7 @@ function TimerCard({ organizationId, data, storageKey, onSaved }: {
     setBusy(true);
     try {
       await createTimeEntry(organizationId, {
-        project_id: running.projectId || null, client_id: running.clientId || null, source: 'timer',
+        project_id: running.projectId || null, client_id: running.clientId || null, task_id: running.taskId || null, source: 'timer',
         description: running.description.trim() || null, entry_date: formatISODate(started),
         started_at: running.startedAt, ended_at: ended.toISOString(), minutes,
         billable: defaultBillableForProject(data, running.projectId || null),
@@ -255,11 +242,6 @@ function TimerCard({ organizationId, data, storageKey, onSaved }: {
     } finally { setBusy(false); }
   }
 
-  const elapsedMs = running ? Date.now() - new Date(running.startedAt).getTime() : 0;
-  const elapsed = new Date(elapsedMs);
-  const hh = String(Math.floor(elapsedMs / 3600000)).padStart(2, '0');
-  const mm = String(elapsed.getUTCMinutes()).padStart(2, '0');
-  const ss = String(elapsed.getUTCSeconds()).padStart(2, '0');
   const runProject = running?.projectId ? data.projects.find(p => p.id === running.projectId) : null;
   const runClient = running?.clientId ? data.clients.find(c => c.id === running.clientId) : null;
 
@@ -267,7 +249,7 @@ function TimerCard({ organizationId, data, storageKey, onSaved }: {
     <article className="tt-timer-card">
       {running ? (
         <div className="tt-timer-running">
-          <div className="tt-timer-clock">{hh}:{mm}:{ss}</div>
+          <div className="tt-timer-clock">{elapsedLabel}</div>
           <div className="tt-timer-meta">
             <strong>{running.description || 'Lopende registratie'}</strong>
             <span>{[runClient?.name, runProject?.name].filter(Boolean).join(' · ') || 'Geen koppeling'}</span>

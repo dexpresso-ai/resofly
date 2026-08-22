@@ -408,6 +408,8 @@ export interface Comment { id: UUID; text: string; author?: string; created_at: 
 export interface Task extends OrgScopedRow {
   /** Optioneel: een taak kan los bestaan (bijv. snel toegevoegd in de weekplanner) en pas later aan een project worden gekoppeld. */
   project_id: UUID | null; client_id: UUID | null; title: string; description: string | null; status: TaskStatus; priority: Priority; tags: string[]; start_date: string | null; end_date: string | null; planned_date: string | null;
+  /** Het ticket waaruit deze taak is ingepland. Leeg voor gewoon projectwerk. */
+  ticket_id: UUID | null;
   /** Laatste dag van een meerdaagse taak. Leeg = gewone dagtaak; gevuld = weekstrook. */
   planned_end_date: string | null;
   planned_order: number | null;
@@ -427,6 +429,19 @@ export interface PlannerNote extends OrgScopedRow {
   created_at: string;
   updated_at: string;
 }
+/**
+ * Hoeveel uur jij op een werkdag kwijt wilt kunnen. Bewust persoonlijk en
+ * opt-in: zeven gelijkwaardige dagen zonder werkweeknorm blijft de standaard,
+ * en dit is geen bedrijfsregel die iemand anders voor je invult.
+ */
+export interface PlannerDayCapacity extends OrgScopedRow {
+  user_id: UUID;
+  minutes: number;
+  include_weekend: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 // ── Projectsjablonen ────────────────────────────────────────────────────────
 // Vaste werkwijze van een organisatie voor één soort project, één keer
 // vastgelegd en bij elk nieuw project uit te rollen.
@@ -665,6 +680,9 @@ export interface TimeEntry extends OrgScopedRow {
   user_id: UUID;
   project_id: UUID | null;
   client_id: UUID | null;
+  /** De taak waar dit uur bij hoort. Leeg = alleen op project/klant geboekt.
+   *  Zonder deze koppeling kon "begroot vs. werkelijk" per taak niet bestaan. */
+  task_id: UUID | null;
   source: TimeEntrySource;
   calendar_event_link_id: UUID | null;
   description: string | null;
@@ -2788,7 +2806,7 @@ export interface SavedReport extends OrgScopedRow {
   updated_at: string;
 }
 
-export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; plannerCapacity: PlannerDayCapacity | null; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft' | 'native' | 'ics';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';

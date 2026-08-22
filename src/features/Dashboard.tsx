@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, CheckCircle2, ChevronRight, Clock, FileText, FolderOpen, Landmark, ListTodo, Percent, Pin, Ticket as TicketIcon } from 'lucide-react';
 import type { AppData, CalendarExternalEvent, Invoice, OrganizationContext, SavedReport, Task, TaskStatus, UUID } from '../types';
+import { coversDay, isOverdue, scopeTasks, taskDayKey, taskLastDayKey } from '../lib/workweek';
 import { euro, formatMinutes, total } from '../lib/format';
 import { addDays, formatISODate, isoWeekNumber, startOfWeek } from '../lib/dates';
 import { getCachedCalendarEvents, listCalendarEventsCached } from '../lib/calendar-api';
@@ -169,15 +170,11 @@ export function Dashboard({
     return map;
   }, [data.taskAssignees]);
 
-  const scopedTasks = useMemo(() => {
-    if (effectiveScope === 'team' || !currentUserId) return data.tasks;
-    // Zoals in de weekplanner: van mij, óf (nog) van niemand. Een net toegevoegde
-    // losse taak verdwijnt daardoor niet meteen uit beeld.
-    return data.tasks.filter(task => {
-      const assignees = assigneesByTask.get(task.id);
-      return !assignees || assignees.length === 0 || assignees.includes(currentUserId);
-    });
-  }, [assigneesByTask, currentUserId, data.tasks, effectiveScope]);
+  // Dezelfde definitie van "mijn werk" als de weekplanner, uit één module.
+  const scopedTasks = useMemo(
+    () => scopeTasks(data.tasks, effectiveScope, currentUserId, assigneesByTask),
+    [assigneesByTask, currentUserId, data.tasks, effectiveScope],
+  );
 
   // ── Vandaag ─────────────────────────────────────────────────────────────
   // Twee groepen, in deze volgorde: eerst wat is blijven liggen, dan wat je
@@ -617,31 +614,6 @@ function invoiceOverdue(invoice: Invoice): boolean {
   if (!invoice.due_date) return false;
   const due = new Date(invoice.due_date);
   return !Number.isNaN(due.getTime()) && due.getTime() < Date.now();
-}
-
-/** De dag waarop een taak in een daglijst thuishoort: de plandatum, anders de deadline. */
-function taskDayKey(task: Task): string | null {
-  return task.planned_date ?? task.end_date ?? null;
-}
-
-/** Laatste dag waarop deze taak nog op tijd is; bij een weekstrook de einddag. */
-function taskLastDayKey(task: Task): string | null {
-  if (task.planned_date) {
-    return task.planned_end_date && task.planned_end_date > task.planned_date ? task.planned_end_date : task.planned_date;
-  }
-  return task.end_date ?? null;
-}
-
-/** Loopt deze taak op de opgegeven dag? Houdt rekening met meerdaagse stroken. */
-function coversDay(task: Task, dayKey: string): boolean {
-  if (!task.planned_date) return false;
-  const end = task.planned_end_date && task.planned_end_date > task.planned_date ? task.planned_end_date : task.planned_date;
-  return task.planned_date <= dayKey && dayKey <= end;
-}
-
-function isOverdue(task: Task, todayKey: string): boolean {
-  const last = taskLastDayKey(task);
-  return last != null && last < todayKey;
 }
 
 function priorityRank(task: Task): number {

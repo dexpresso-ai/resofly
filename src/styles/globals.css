@@ -8171,3 +8171,61 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .wp-task-more{opacity:1;width:28px;height:24px}
   .wp-est-pop{right:0;min-width:min(240px,80vw)}
 }
+
+/* ── Weekplanner: dagstreep, timer en de koppeling met ticket en project ────
+   De dagbalk schaalde op de volste dag van diezelfde week, dus je drukste dag
+   was per definitie 100% en de planner kon nooit zeggen dat iets niet paste.
+   De streep is persoonlijk en standaard uit: zeven gelijkwaardige dagen zonder
+   werkweeknorm blijft de standaard. */
+.wp-cap{position:relative}
+.wp-cap-btn{border:1px solid var(--border);background:transparent;color:var(--muted);border-radius:8px;padding:0 12px;min-height:32px;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap}
+.wp-cap-btn:hover:not(:disabled){color:var(--text);background:var(--bg3)}
+.wp-cap-btn.is-on{border-color:var(--gold-line,var(--border-strong));color:var(--accent-ink);background:var(--accent-soft)}
+.wp-cap-btn:disabled{opacity:.5;cursor:default}
+.wp-cap-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wp-cap-pop{position:absolute;z-index:60;top:calc(100% + 6px);right:0;width:min(280px,86vw);display:flex;flex-direction:column;gap:9px;padding:12px;border:1px solid var(--border2);border-radius:11px;background:var(--panel-strong);box-shadow:var(--shadow-2)}
+.wp-cap-hint{margin:0;font-size:11px;line-height:1.5;color:var(--muted)}
+.wp-cap-row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted2)}
+.wp-cap-input{width:78px;background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:6px 9px;font:inherit;font-size:13px;font-weight:600;color:var(--text);outline:none}
+.wp-cap-input:focus{border-color:var(--accent)}
+.wp-cap-weekend{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--muted2);cursor:pointer}
+.wp-cap-weekend input{accent-color:var(--accent)}
+.wp-cap-actions{display:flex;gap:7px}
+.wp-cap-save{flex:1;border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);border-radius:7px;padding:6px 10px;font:inherit;font-size:11.5px;font-weight:700;cursor:pointer}
+.wp-cap-save:disabled{opacity:.6;cursor:default}
+.wp-cap-clear{border:1px solid var(--border2);background:transparent;color:var(--muted);border-radius:7px;padding:6px 10px;font:inherit;font-size:11.5px;cursor:pointer}
+.wp-cap-clear:hover:not(:disabled){color:var(--text)}
+
+/* Met een streep zegt de dagkop het in mensentaal, niet in een verhouding. */
+.wp-day-room{font-size:9.5px;font-weight:600;color:var(--muted);letter-spacing:.02em}
+.wp-day-room.is-over{color:var(--accent-o)}
+
+/* Timer op de kaart. Project, klant en declarabel komen uit de taak. */
+.wp-task-right{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.wp-task-timer{display:grid;place-items:center;width:20px;height:20px;padding:0;border:1px solid var(--border);border-radius:6px;background:var(--bg2);color:var(--muted);cursor:pointer;transition:border-color .12s,color .12s,background .12s}
+.wp-task-timer:hover{border-color:var(--accent);color:var(--accent-ink)}
+.wp-task-timer:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wp-task-timer.is-running{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.wp-task-done-time{color:var(--accent-g);font-weight:700}
+.wp-task-slash{opacity:.5;margin:0 1px}
+
+/* Werk dat uit een klantvraag komt draagt dat zichtbaar mee. */
+.wp-task-ticket{flex-shrink:0;padding:0 6px;border:1px solid rgba(var(--info-rgb),.3);border-radius:4px;background:rgba(var(--info-rgb),.13);color:var(--accent-b);font:inherit;font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;cursor:pointer}
+.wp-task-ticket:hover{background:rgba(var(--info-rgb),.22)}
+.wp-task-ticket:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+/* ── "Schuift het werk mee?" ────────────────────────────────────────────────
+   Verzet je een project twee weken, dan bleven de ingeplande taken stilletjes
+   staan. Deze vraag komt alleen daar waar je bewust een datum verandert. */
+.ps-lede{margin:0 0 14px;font-size:13px;line-height:1.6;color:var(--muted2)}
+.ps-lede strong{color:var(--text)}
+.ps-list{list-style:none;margin:0 0 16px;padding:0;display:flex;flex-direction:column;gap:4px;max-height:min(320px,42vh);overflow-y:auto}
+.ps-list label{display:flex;align-items:baseline;gap:9px;padding:7px 9px;border-radius:7px;background:var(--bg3);border:1px solid var(--border);cursor:pointer}
+.ps-list label:hover{border-color:var(--border2)}
+.ps-list input{accent-color:var(--accent);flex-shrink:0}
+.ps-title{flex:1;min-width:0;font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ps-move{flex-shrink:0;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.ps-deadlines{display:flex;align-items:flex-start;gap:9px;padding:10px 11px;border:1px solid var(--border);border-radius:9px;background:var(--bg2);cursor:pointer}
+.ps-deadlines input{accent-color:var(--accent);margin-top:2px;flex-shrink:0}
+.ps-deadlines span{font-size:12.5px;font-weight:600;color:var(--text)}
+.ps-deadlines em{display:block;margin-top:3px;font-size:11px;font-style:normal;font-weight:400;line-height:1.5;color:var(--muted)}

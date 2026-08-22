@@ -140,6 +140,7 @@ import type {
   ShareTransaction,
   SavedReport,
   PlannerNote,
+  PlannerDayCapacity,
   ContractProject,
   Task,
   TaskAssignee,
@@ -518,6 +519,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     galleries,
     savedReports,
     plannerNotes,
+    plannerCapacity,
     companySettings,
     projectMembers,
     taskAssignees,
@@ -536,6 +538,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectGalleries(organizationId),
     selectSavedReports(organizationId),
     selectPlannerNotes(organizationId),
+    selectPlannerDayCapacity(organizationId),
     loadCompanySettings(organizationId),
     selectProjectMembers(organizationId),
     selectTaskAssignees(organizationId),
@@ -543,7 +546,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectProjectTemplateTasks(organizationId),
     selectContractProjects(organizationId),
   ]);
-  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, galleries, savedReports, plannerNotes, companySettings };
+  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, galleries, savedReports, plannerNotes, plannerCapacity, companySettings };
 }
 
 const CONTRACT_PROJECTS_MIGRATION_HINT =
@@ -942,6 +945,63 @@ export async function selectPlannerNotes(organizationId: UUID): Promise<PlannerN
   return selectOptional<PlannerNote>('planner_notes', organizationId, {
     orderBy: 'position', ascending: true, hint: PLANNER_NOTES_MIGRATION_HINT,
   });
+}
+
+// ── Persoonlijke dagstreep ─────────────────────────────────────────────────
+
+const PLANNER_CAPACITY_MIGRATION_HINT =
+  'Voer de migratie 20260822000000_planner_day_capacity.sql uit in Supabase om de persoonlijke dagstreep te activeren.';
+
+/** Jouw eigen dagstreep, of null als je er (nog) geen hebt gezet. De RLS zorgt
+ *  dat je hier nooit die van een ander ziet — hoeveel uur iemand op een dag
+ *  kwijt wil is geen bedrijfsgegeven. */
+export async function selectPlannerDayCapacity(organizationId: UUID): Promise<PlannerDayCapacity | null> {
+  const rows = await selectOptional<PlannerDayCapacity>('planner_day_capacity', organizationId, {
+    orderBy: 'created_at', ascending: true, hint: PLANNER_CAPACITY_MIGRATION_HINT,
+  });
+  return rows[0] ?? null;
+}
+
+/** Zet of wijzigt de streep. Nul minuten betekent "geen streep". */
+export async function savePlannerDayCapacity(
+  organizationId: UUID,
+  userId: UUID,
+  input: { minutes: number; include_weekend: boolean },
+): Promise<PlannerDayCapacity> {
+  const { data, error } = await supabase
+    .from('planner_day_capacity')
+    .upsert(
+      { organization_id: organizationId, user_id: userId, ...input },
+      { onConflict: 'organization_id,user_id' },
+    )
+    .select()
+    .single();
+  if (error) throw error;
+  return data as PlannerDayCapacity;
+}
+
+/**
+ * Schuift de planning van een reeks projecttaken op. Eén RPC in één transactie:
+ * een lus vanuit de client die halverwege strandt laat de helft van je project
+ * verzet achter.
+ */
+export async function shiftProjectTaskPlanning(
+  organizationId: UUID,
+  projectId: UUID,
+  taskIds: UUID[],
+  days: number,
+  shiftDeadlines: boolean,
+): Promise<Task[]> {
+  if (taskIds.length === 0 || days === 0) return [];
+  const { data, error } = await supabase.rpc('shift_project_task_planning', {
+    p_organization_id: organizationId,
+    p_project_id: projectId,
+    p_task_ids: taskIds,
+    p_days: days,
+    p_shift_deadlines: shiftDeadlines,
+  });
+  if (error) throw error;
+  return (data ?? []) as Task[];
 }
 
 export async function createPlannerNote(organizationId: UUID, userId: UUID, weekStart: string, text: string, position: number): Promise<PlannerNote> {
@@ -1393,6 +1453,9 @@ export async function selectDunningNotices(organizationId: UUID): Promise<Dunnin
 export interface TimeEntryInput {
   project_id: UUID | null;
   client_id: UUID | null;
+  /** Optioneel: de taak waar dit uur bij hoort. De database leidt project en
+   *  klant dan uit die taak af, zodat een uur nooit op een ander project landt. */
+  task_id?: UUID | null;
   source?: 'manual' | 'timer';
   description?: string | null;
   entry_date: string;
