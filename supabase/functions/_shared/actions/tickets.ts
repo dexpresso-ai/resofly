@@ -103,6 +103,7 @@ export const TICKETS_ACTIONS: ActionDef[] = [
     label: 'Ticket omzetten naar een project',
     module: 'tickets',
     kind: 'write',
+    risk: 'high',
     description:
       'Maakt van een ticket een project: de titel, de omschrijving en de klant van het ticket worden het nieuwe project, en het ticket komt op status "omgezet" met een verwijzing naar dat project. Dat gebeurt in één databasetransactie, dus of allebei of geen van beide. ' +
       'Dit is ONOMKEERBAAR: het ticket kan daarna niet meer terug naar nieuw, review of goedgekeurd, en het project blijft bestaan (weggooien kan een agent niet). ' +
@@ -127,8 +128,8 @@ export const TICKETS_ACTIONS: ActionDef[] = [
         sub: joinShort([
           clientName ? `voor ${clientName}` : 'zonder klant',
           `prioriteit ${PRIORITY_LABELS[ticket.priority] ?? ticket.priority}`,
-          'ONOMKEERBAAR: het ticket komt op "omgezet" en kan daarna niet meer terug',
         ], 170),
+        warning: 'Het ticket komt op "omgezet" en kan daarna niet meer terug naar nieuw of review.',
         kind: 'work',
         payload: {
           ticket_id: ticketId,
@@ -215,6 +216,8 @@ export const TICKETS_ACTIONS: ActionDef[] = [
           `"${excerpt}"`,
         ], 220),
         kind: internal ? 'work' : 'mail',
+        risk: internal ? 'normal' : 'high',
+        warning: internal ? undefined : 'De klant kan deze tekst hierna lezen in het portaal.',
         payload: {
           note_id: noteId,
           ticket_id: note.ticket_id,

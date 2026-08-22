@@ -146,6 +146,7 @@ export const CLIENT_ACTIONS: ActionDef[] = [
     label: 'Welkomstmail met portaaltoegang naar de klant sturen',
     module: 'clients',
     kind: 'write',
+    risk: 'high',
     description:
       'Stuurt de klant een uitnodiging voor het klantportaal, waar hij zijn offertes, facturen en tickets ziet. Dit is ECHTE POST naar buiten en geeft toegang — zeg in je antwoord naar welk adres hij gaat. ' +
       'De klant moet een e-mailadres hebben.',
@@ -158,7 +159,8 @@ export const CLIENT_ACTIONS: ActionDef[] = [
       if (!client.email) throw new ActionError(`${client.name} heeft geen e-mailadres; vul dat eerst in.`);
       return {
         title: `Portaaluitnodiging sturen aan ${client.name}`,
-        sub: `naar ${client.email} — hij kan daarna zijn offertes, facturen en tickets inzien`,
+        sub: `naar ${client.email}`,
+        warning: 'De mail gaat echt de deur uit en geeft toegang tot al zijn offertes, facturen en tickets.',
         kind: 'mail',
         payload: { client_id: clientId, client_name: client.name, email: client.email },
       };

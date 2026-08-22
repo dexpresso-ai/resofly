@@ -2440,7 +2440,7 @@ async function buildActionProposal(ctx: GerrieContext, input: Record<string, unk
       proposal: {
         type: 'action', action_id: action.id,
         title: plan.title, sub, kind: plan.kind,
-        risk: action.risk === 'high' ? 'high' : 'normal',
+        risk: (plan.risk ?? action.risk) === 'high' ? 'high' : 'normal',
         payload: plan.payload,
       },
     };

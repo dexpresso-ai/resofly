@@ -82,6 +82,12 @@ export interface ActionPlan {
    * een waarschuwing bij alles is een waarschuwing bij niets.
    */
   warning?: string;
+  /**
+   * Overschrijft het risico van de handeling voor dit ene geval. Nodig bij een
+   * handeling die twee kanten op werkt: een ticketnotitie verbergen is ongevaarlijk,
+   * hem zichtbaar maken voor de klant is dat niet.
+   */
+  risk?: 'normal' | 'high';
 }
 
 /** Invoer klopt niet; de tekst gaat terug naar het model zodat het zichzelf corrigeert. */
