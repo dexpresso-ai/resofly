@@ -1,5 +1,7 @@
 import type { ActionDef } from './types.ts';
 import { CLIENT_ACTIONS } from './clients.ts';
+import { TICKETS_ACTIONS } from './tickets.ts';
+import { INSIGHT_ACTIONS } from './insight.ts';
 
 /**
  * De volledige handelingenregistry, samengesteld uit de domeinbestanden.
@@ -12,6 +14,8 @@ import { CLIENT_ACTIONS } from './clients.ts';
  */
 export const ACTIONS: ActionDef[] = [
   ...CLIENT_ACTIONS,
+  ...TICKETS_ACTIONS,
+  ...INSIGHT_ACTIONS,
 ];
 
 const BY_ID = new Map(ACTIONS.map((a) => [a.id, a]));

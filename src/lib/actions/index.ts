@@ -1,4 +1,6 @@
 import { CLIENT_EXECUTORS } from './clients';
+import { TICKETS_EXECUTORS } from './tickets';
+import { INSIGHT_EXECUTORS } from './insight';
 import type { ActionExecutor, ActionRunCtx } from './types';
 
 export type { ActionExecutor, ActionRunCtx } from './types';
@@ -13,6 +15,8 @@ export type { ActionExecutor, ActionRunCtx } from './types';
  */
 export const ACTION_EXECUTORS: Record<string, ActionExecutor> = {
   ...CLIENT_EXECUTORS,
+  ...TICKETS_EXECUTORS,
+  ...INSIGHT_EXECUTORS,
 };
 
 /** Voert een goedgekeurde handeling uit en geeft de bevestigingszin terug. */
