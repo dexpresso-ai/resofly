@@ -34,19 +34,19 @@ function readAll(dir: string, skip: string[]): string {
 
 /** De id's zoals ze in de serverregistry staan: `id: 'client.update_details',`. */
 function serverActionIds(): string[] {
-  const source = readAll(serverDir, ['types.ts', 'index.ts']);
+  const source = readAll(serverDir, ['types.ts', 'index.ts', 'registry.ts']);
   return [...source.matchAll(/^\s{4}id: '([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)',$/gm)].map((m) => m[1]);
 }
 
 /** De sleutels in de uitvoerdertabellen: `'client.update_details': async (…)`. */
 function clientExecutorIds(): string[] {
-  const source = readAll(clientDir, ['types.ts', 'index.ts']);
+  const source = readAll(clientDir, ['types.ts', 'index.ts', 'registry.ts']);
   return [...source.matchAll(/^\s{2}'([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)':/gm)].map((m) => m[1]);
 }
 
 /** Alleen schrijf-handelingen hebben een uitvoerder nodig; lezen gebeurt op de server. */
 function serverWriteActionIds(): string[] {
-  const source = readAll(serverDir, ['types.ts', 'index.ts']);
+  const source = readAll(serverDir, ['types.ts', 'index.ts', 'registry.ts']);
   const ids: string[] = [];
   // Per blok tussen twee `id:`-regels kijken of er `kind: 'write'` in staat.
   const blocks = source.split(/^\s{4}id: '/m).slice(1);
@@ -85,7 +85,7 @@ test('elke uitvoerder hoort bij een bestaande handeling', () => {
 });
 
 test('elke handeling hangt aan een module, zodat modulerechten hem kunnen afschermen', () => {
-  const source = readAll(serverDir, ['types.ts', 'index.ts']);
+  const source = readAll(serverDir, ['types.ts', 'index.ts', 'registry.ts']);
   const known = ['clients', 'projects', 'time', 'calendar', 'tickets', 'content', 'stats', 'marketing', 'finance', 'chat', 'gerrie'];
   const blocks = source.split(/^\s{4}id: '/m).slice(1);
   const bad: string[] = [];

@@ -4,7 +4,8 @@ import {
   buildMergeFallbacks, buildMergeTokens, fillMergeTokens,
   type MergeClient, type MergeCompany, type MergeFieldDefinition,
 } from '../_shared/mergeTokens.ts';
-import { ACTIONS, getAction, searchActions } from '../_shared/actions/index.ts';
+import { ACTIONS } from '../_shared/actions/index.ts';
+import { getAction, searchActions } from '../_shared/actions/registry.ts';
 import { ActionError, type ActionCtx, type ActionPlan } from '../_shared/actions/types.ts';
 
 // ============================================================
@@ -1074,7 +1075,7 @@ const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Waar zoek je naar, in gewone woorden. Bijvoorbeeld "galerij delen met de klant" of "banktransactie afletteren".' },
-        limit: { type: 'number', description: 'Maximaal aantal handelingen (standaard 12).' },
+        limit: { type: 'number', description: 'Maximaal aantal handelingen (standaard 6, hoogstens 25). Zoek liever gericht dan breed.' },
       },
       required: ['query'],
     },

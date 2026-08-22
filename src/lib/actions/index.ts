@@ -12,6 +12,8 @@ export type { ActionExecutor, ActionRunCtx } from './types';
  * als handeling staat, hoort hier een uitvoerder te hebben — anders zet Gerrie iets
  * klaar dat bij het akkoord blijft steken. `npm test` vergelijkt de twee lijsten en
  * slaat alarm zodra er een uit de pas loopt.
+ *
+ * Het bovenste deel van dit bestand wordt gegenereerd uit de domeinen die er liggen.
  */
 export const ACTION_EXECUTORS: Record<string, ActionExecutor> = {
   ...CLIENT_EXECUTORS,
