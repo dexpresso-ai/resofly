@@ -25,7 +25,7 @@ import {
   resolveModelKind, runAgent, buildContext, createConversation, insertMessage,
   recordUsage, costUsd, checkUserBudget, requireUser, requireOrganizationAccess,
   describeError, isUuid, todayIso, tzOffsetMs, parseAllowedOrigins, loadHistory,
-  AGENT_ICON_KEYS, isEnabledToolName, isReadOnlyToolName,
+  AGENT_ICON_KEYS, isEnabledToolName, isReadOnlyToolName, auditActionName,
 } from '../_shared/gerrieCore.ts';
 import type { AgentStep, Emit, OrganizationRole } from '../_shared/gerrieCore.ts';
 import { sendViaResend } from '../_shared/resend.ts';
@@ -295,15 +295,15 @@ async function executeAgentRun(
     if (outcome.proposal && mode === 'propose') {
       const { data: auditRow } = await supabaseAdmin.from('ai_action_audit').insert({
         organization_id: orgId, conversation_id: convId, message_id: assistantId, user_id: runAsUserId,
-        action: `propose_${outcome.proposal.type}`, params: outcome.proposal, status: 'proposed',
+        action: auditActionName(outcome.proposal), params: outcome.proposal, status: 'proposed',
         agent_id: agentId, agent_run_id: runId,
       }).select('id').single();
       auditId = (auditRow?.id as string) ?? null;
       proposalsCreated = 1;
-      log.add('proposal', 'Wacht op jouw akkoord', { auditId, type: outcome.proposal.type });
+      log.add('proposal', 'Wacht op jouw akkoord', { auditId, type: auditActionName(outcome.proposal) });
     } else if (outcome.proposal) {
       // Kan alleen als iemand de modus terugzet terwijl er al een run liep.
-      log.add('proposal', 'Voorstel niet klaargezet: deze agent mag alleen rapporteren.', { type: outcome.proposal.type });
+      log.add('proposal', 'Voorstel niet klaargezet: deze agent mag alleen rapporteren.', { type: auditActionName(outcome.proposal) });
     }
 
     const costUsdVal = costUsd(outcome.usage, modelKind);
@@ -755,11 +755,11 @@ async function replyToRun(orgId: string, userId: string, role: OrganizationRole,
   if (outcome.proposal && mode === 'propose') {
     const { data: auditRow } = await supabaseAdmin.from('ai_action_audit').insert({
       organization_id: orgId, conversation_id: convId, message_id: assistantId, user_id: userId,
-      action: `propose_${outcome.proposal.type}`, params: outcome.proposal, status: 'proposed',
+      action: auditActionName(outcome.proposal), params: outcome.proposal, status: 'proposed',
       agent_id: String(agent.id), agent_run_id: runId,
     }).select('id').single();
     proposalCreated = 1;
-    log.add('proposal', 'Wacht op jouw akkoord', { auditId: auditRow?.id ?? null, type: outcome.proposal.type });
+    log.add('proposal', 'Wacht op jouw akkoord', { auditId: auditRow?.id ?? null, type: auditActionName(outcome.proposal) });
     // Houd de teller op de run bij (voor de UI-badge).
     const { data: cur } = await supabaseAdmin.from('ai_agent_runs').select('proposals_created').eq('id', runId).maybeSingle();
     await supabaseAdmin.from('ai_agent_runs').update({ proposals_created: Number(cur?.proposals_created || 0) + 1 }).eq('id', runId);

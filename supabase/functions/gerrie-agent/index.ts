@@ -17,7 +17,7 @@ import {
   resolveModelKind, runAgent, planMission, designAgent, estimateMission, buildContext,
   createConversation, loadHistory, insertMessage, recordUsage, costUsd,
   checkUserBudget, remainingFraction, confirmAction, getUsageSummary,
-  requireUser, requireOrganizationAccess, describeError, parseAllowedOrigins,
+  requireUser, requireOrganizationAccess, describeError, parseAllowedOrigins, auditActionName,
 } from '../_shared/gerrieCore.ts';
 import type { Emit, HttpStatus } from '../_shared/gerrieCore.ts';
 
@@ -120,7 +120,7 @@ Deno.serve(async (req) => {
       if (outcome.proposal) {
         const { data: auditRow } = await supabaseAdmin.from('ai_action_audit').insert({
           organization_id: organizationId, conversation_id: convId, message_id: assistantId, user_id: user.id,
-          action: `propose_${outcome.proposal.type}`, params: outcome.proposal, status: 'proposed',
+          action: auditActionName(outcome.proposal), params: outcome.proposal, status: 'proposed',
         }).select('id').single();
         auditId = (auditRow?.id as string) ?? null;
       }

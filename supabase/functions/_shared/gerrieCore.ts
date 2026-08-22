@@ -2344,6 +2344,19 @@ function isReadOnlyToolName(name: string): boolean {
   return !name.startsWith('propose_');
 }
 
+/**
+ * De naam waaronder een voorstel in het auditspoor belandt.
+ *
+ * Voor een klassieke tool is dat `propose_<type>`. Maar een handeling uit de registry
+ * heeft ALTIJD type 'action' — dan zou het logboek bij elke boeking, mail en publicatie
+ * hetzelfde zeggen, en dat is precies waar je achteraf naar zoekt. Vandaar
+ * `action:<id>`: routineToolLabel maakt daar met de catalogus weer "Galerij publiceren"
+ * van, en zonder catalogus nog altijd "gallery publish".
+ */
+function auditActionName(proposal: Proposal): string {
+  return proposal.type === 'action' ? `action:${proposal.action_id}` : `propose_${proposal.type}`;
+}
+
 /** De omgeving voor een handeling. organization_id komt uit de sessie, nooit uit het model. */
 function actionCtxFor(ctx: GerrieContext): ActionCtx {
   return { organizationId: ctx.organizationId, userId: ctx.userId, role: ctx.role, today: ctx.today, db: supabaseAdmin };
@@ -5021,7 +5034,7 @@ function requiredEnv(name: string): string { const value = Deno.env.get(name); i
 export {
   supabaseAdmin, HttpError, ANTHROPIC_API_KEY, MISSION_MAX_SUBTASKS, USD_TO_EUR, MODELS,
   TOOL_DEFINITIONS, toolCatalog, AGENT_FORBIDDEN_TOOLS, resolveModelKind, runAgent, planMission, estimateMission,
-  isEnabledToolName, isReadOnlyToolName, ACTION_TOOL_NAMES,
+  isEnabledToolName, isReadOnlyToolName, ACTION_TOOL_NAMES, auditActionName,
   buildContext, buildSystemPrompt, createConversation, loadHistory, insertMessage,
   recordUsage, costUsd, checkUserBudget, remainingFraction,
   confirmAction, getUsageSummary, requireUser, requireOrganizationAccess,
