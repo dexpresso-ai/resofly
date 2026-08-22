@@ -130,7 +130,7 @@ import type { ReportDefinition } from './lib/reporting';
 import { CalendarPage } from './features/CalendarPage';
 import { MeetingBookingManager } from './features/MeetingBookingManager';
 import { WeekPlanner } from './features/WeekPlanner';
-import { applyPeriodLocally, applyPlanningLocally, mergeTaskRows, splitTitleAndEstimate } from './lib/planning';
+import { applyPeriodLocally, applyPlanningLocally, mergeTaskRows, restoreTasksForDates, splitTitleAndEstimate } from './lib/planning';
 import { formatISODate, parseISODate, startOfWeek } from './lib/dates';
 import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat } from './components/GerrieChat';
@@ -557,6 +557,8 @@ function NoOrganizationScreen({
 function App() {
   const [sessionReady, setSessionReady] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
+  /** Op welke dag de agenda opent als je er vanuit de weekplanner heen springt. */
+  const [calendarJump, setCalendarJump] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
   const [data, setData] = useState<AppData>(emptyData);
@@ -1453,8 +1455,11 @@ function App() {
       );
       setData(prev => ({ ...prev, tasks: mergeTaskRows(prev.tasks, [moved, ...affected]) }));
     } catch (e) {
-      // Terug naar de stand van vóór het slepen; de planner toont de melding.
-      setData(prev => ({ ...prev, tasks: previousTasks }));
+      // Alleen de dagen die deze sleep raakte terugdraaien. Eerder ging hier de
+      // hele takenlijst terug naar de stand van vóór het slepen, dus twee
+      // sleepbewegingen die wél lukten kwamen mee terug en liepen beeld en
+      // database uiteen tot je ververste.
+      setData(prev => ({ ...prev, tasks: restoreTasksForDates(prev.tasks, previousTasks, [fromDate, plannedDate]) }));
       throw e;
     }
   }
@@ -1478,7 +1483,7 @@ function App() {
       );
       setData(prev => ({ ...prev, tasks: mergeTaskRows(prev.tasks, [moved, ...affected]) }));
     } catch (e) {
-      setData(prev => ({ ...prev, tasks: previousTasks }));
+      setData(prev => ({ ...prev, tasks: restoreTasksForDates(prev.tasks, previousTasks, [fromDate, plannedDate]) }));
       throw e;
     }
   }
@@ -1505,7 +1510,7 @@ function App() {
       const affected = await fetchTasksForPlannedDates(activeOrg.id, [...fromDates, toDate]);
       setData(prev => ({ ...prev, tasks: mergeTaskRows(prev.tasks, affected) }));
     } catch (e) {
-      setData(prev => ({ ...prev, tasks: previousTasks }));
+      setData(prev => ({ ...prev, tasks: restoreTasksForDates(prev.tasks, previousTasks, [...fromDates, toDate]) }));
       throw e;
     }
   }
@@ -2666,8 +2671,8 @@ function App() {
     if (page === 'shareholders') return <ShareholdersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'annual-accounts') return <AnnualAccountsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
-    if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} onSetTaskEstimate={setTaskEstimate} onOpenProject={(id) => { setProjectId(id); setClientId(null); setPage('project'); }}/>;
-    if (page === 'calendar') return <CalendarPage mode="agenda" organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
+    if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} onSetTaskEstimate={setTaskEstimate} onOpenProject={(id) => { setProjectId(id); setClientId(null); setPage('project'); }} onOpenCalendar={(dateKey) => { setCalendarJump(dateKey); setPage('calendar'); }}/>;
+    if (page === 'calendar') return <CalendarPage mode="agenda" initialDate={calendarJump} key={calendarJump ?? 'today'} organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'meeting-booking') return <MeetingBookingManager organizationId={activeOrg.id} currentUserId={currentUserId ?? ''} data={data} canWrite={canWrite}/>;
     if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;
     if (page === 'stats') return <Statistics data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} openReportId={statsReportId} pendingReport={pendingReport}/>;

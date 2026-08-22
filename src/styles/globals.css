@@ -8080,3 +8080,94 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .week-planner.density-compact .wp-day-pane{gap:4px}
 .week-planner.density-comfortable .wp-task{padding:9px 10px}
 .week-planner.density-comfortable .wp-day-pane{gap:7px}
+
+/* ── Weekplanner: ongedaan maken, snelmenu en het meeneem-voorstel ──────────
+   "Undo" kwam in dit scherm nul keer voor en een sleep die net naast een
+   dropzone landde was volkomen stil. Wie bang is iets kwijt te raken sleept
+   niet meer — en dan is een briefje sneller dan het bord. */
+.wp-undo{position:fixed;z-index:430;left:50%;bottom:22px;transform:translateX(-50%);display:flex;align-items:center;gap:10px;max-width:min(460px,92vw);padding:9px 10px 9px 14px;border:1px solid var(--border2);border-radius:11px;background:var(--panel-strong);box-shadow:var(--shadow-2);font-size:12px}
+.wp-undo-text{color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wp-undo-btn{flex-shrink:0;border:1px solid var(--accent);background:rgba(var(--accent-rgb),.14);color:var(--accent-ink);border-radius:7px;padding:4px 11px;font:inherit;font-size:11px;font-weight:700;cursor:pointer}
+.wp-undo-btn:disabled{opacity:.55;cursor:default}
+.wp-undo-close{flex-shrink:0;display:grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer}
+.wp-undo-close:hover{background:var(--bg4);color:var(--text)}
+
+/* Eén snelmenu dekt zeven handelingen die anders elk een knopje op een kaart
+   van 52px hadden gekregen. */
+.wp-menu{position:fixed;z-index:440;min-width:196px;max-height:320px;overflow-y:auto;padding:5px;border:1px solid var(--border2);border-radius:10px;background:var(--panel-strong);box-shadow:var(--shadow-2)}
+.wp-menu-head{padding:6px 9px 7px;font-size:11px;font-weight:700;color:var(--muted2);border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wp-menu-group{display:flex;flex-direction:column;padding:4px 0;border-bottom:1px solid var(--border)}
+.wp-menu-group:last-child{border-bottom:0}
+.wp-menu-label{padding:3px 9px 4px;font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.wp-menu button{display:block;width:100%;text-align:left;border:0;background:transparent;color:var(--text);border-radius:6px;padding:6px 9px;font:inherit;font-size:12px;cursor:pointer}
+.wp-menu button:hover:not(:disabled){background:var(--bg4)}
+.wp-menu button:disabled{color:var(--muted);cursor:default}
+.wp-menu button.is-on{color:var(--accent-ink);font-weight:600}
+.wp-menu button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+.wp-task-more{position:absolute;right:6px;bottom:4px;width:20px;height:18px;display:grid;place-items:center;padding:0;border:0;border-radius:5px;background:transparent;color:var(--muted);font-size:13px;line-height:1;cursor:pointer;opacity:0;transition:opacity .12s}
+.wp-task:hover .wp-task-more,.wp-task:focus-within .wp-task-more{opacity:1}
+.wp-task-more:hover{background:var(--bg4);color:var(--text)}
+@media(pointer:coarse){.wp-task-more{opacity:.7}}
+
+/* Het meeneem-voorstel: kiezen wát er meegaat en naar wélke dag. */
+.wp-rollover{flex-direction:column;align-items:stretch;gap:9px}
+.wp-rollover-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.wp-rollover-toggle{border:1px solid rgba(var(--warn-rgb),.4);background:transparent;color:var(--accent-o);border-radius:6px;padding:3px 9px;font:inherit;font-size:10.5px;font-weight:700;cursor:pointer}
+.wp-rollover-targets{display:flex;border:1px solid rgba(var(--warn-rgb),.4);border-radius:7px;overflow:hidden}
+.wp-rollover-targets button{border:0;background:transparent;color:var(--muted2);padding:4px 10px;font:inherit;font-size:11px;font-weight:600;cursor:pointer}
+.wp-rollover-targets button.is-on{background:rgba(var(--warn-rgb),.22);color:var(--accent-o)}
+.wp-rollover-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px;max-height:230px;overflow-y:auto}
+.wp-rollover-list label{display:flex;align-items:baseline;gap:8px;padding:4px 7px;border-radius:6px;background:rgba(var(--shade-rgb),calc(.14 * var(--shade-k)));cursor:pointer}
+.wp-rollover-list input{accent-color:var(--accent);flex-shrink:0}
+.wp-rollover-title{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wp-rollover-meta{margin-left:auto;flex-shrink:0;font-size:10px;color:var(--muted)}
+
+/* Vooruitkijken in plaats van achteruit. */
+.wp-deadline-cue{padding:7px 12px;border:1px solid rgba(var(--note-rgb),.32);background:rgba(var(--note-rgb),.09);border-radius:9px;font-size:11.5px;font-weight:600;color:var(--accent-v)}
+
+/* Hele-dag-afspraken kosten geen minuten maar maken je dag wél vol. */
+.wp-day-allday{display:flex;flex-wrap:wrap;gap:3px}
+.wp-allday-chip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 6px;border-radius:4px;background:rgba(var(--note-rgb),.14);color:var(--accent-v);font-size:9.5px;font-weight:700}
+
+/* De agenda-chip is nu een knop, geen dode div. */
+.wp-agenda-chip{width:100%;text-align:left;cursor:pointer;font:inherit;font-size:10.5px;font-weight:600}
+.wp-agenda-chip:hover{background:rgba(var(--note-rgb),.18)}
+.wp-agenda-chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+/* Weeknavigatie in de kopkaart. */
+.wp-nav{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.wp-nav button{display:flex;align-items:center;justify-content:center;min-width:34px;min-height:32px;border:0;background:transparent;color:var(--muted2);padding:0 10px;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer}
+.wp-nav button:hover{background:var(--bg3);color:var(--text)}
+.wp-nav button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+/* ── Tussenmaten en telefoon ────────────────────────────────────────────────
+   Tussen 900 en 1200px was een dagkolom 80 tot 116px breed en werd een titel na
+   vier letters weggeknipt. Onder de 1024px gaat de lade bóven het raster, zodat
+   slepen altijd van boven naar beneden gaat. */
+@media(min-width:901px) and (max-width:1200px){
+  .wp-week{grid-template-columns:repeat(7,minmax(150px,1fr));overflow-x:auto;padding-bottom:6px}
+}
+@media(max-width:1024px){
+  .wp-board{grid-template-columns:1fr}
+  .wp-board-main{order:2}
+  .wp-tray{order:1}
+}
+
+/* De dagstrip op de telefoon: één dag in beeld, de rest één tik ver — en
+   tegelijk een dropzone, zodat slepen naar een andere dag blijft werken. */
+.wp-daystrip{display:none}
+@media(max-width:900px){
+  .wp-daystrip{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:10px}
+  .wp-daystrip-day{display:flex;flex-direction:column;align-items:center;gap:2px;min-height:52px;padding:6px 2px;border:1px solid var(--border);border-radius:9px;background:var(--bg2);color:var(--muted);font:inherit;cursor:pointer}
+  .wp-daystrip-day.is-on{background:var(--bg4);border-color:var(--accent);color:var(--text)}
+  .wp-daystrip-day.is-today .wp-daystrip-num{color:var(--accent-ink);font-weight:800}
+  .wp-daystrip-day.is-drop{border-style:dashed;border-color:var(--accent);background:var(--bg3)}
+  .wp-daystrip-name{font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+  .wp-daystrip-num{font-size:14px;font-weight:700;line-height:1}
+  .wp-daystrip-dot{width:5px;height:5px;border-radius:50%;background:var(--load-fill)}
+  /* Duimformaat op de kaart. */
+  .wp-task-check{width:24px;height:24px}
+  .wp-task-more{opacity:1;width:28px;height:24px}
+  .wp-est-pop{right:0;min-width:min(240px,80vw)}
+}

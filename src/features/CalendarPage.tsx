@@ -3067,8 +3067,11 @@ function useIsMobile(): boolean {
   return isMobile;
 }
 
-export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, data, canWrite, onChanged, onEditTask, onNewNoteForEvent, onNewDocumentForEvent, onSetEventLink, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
+export function CalendarPage({ mode = 'agenda', initialDate, organizationId, currentUserId, data, canWrite, onChanged, onEditTask, onNewNoteForEvent, onNewDocumentForEvent, onSetEventLink, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
   mode?: 'agenda' | 'settings';
+  /** Op welke dag de agenda opent. De weekplanner springt hierheen vanaf een
+   *  agenda-chip; zonder dit landde je altijd op vandaag. */
+  initialDate?: string | null;
   organizationId: UUID; currentUserId: UUID | null; data: AppData; canWrite: boolean; onEditTask: (task: Task) => void;
   onChanged: () => void | Promise<void>;
   onNewNoteForEvent: (event: CalendarExternalEvent) => void;
@@ -3078,7 +3081,7 @@ export function CalendarPage({ mode = 'agenda', organizationId, currentUserId, d
   onLinkExistingNoteToEvent: (noteId: UUID, event: CalendarExternalEvent) => void | Promise<void>;
   onUnlinkNoteFromEvent: (linkId: UUID) => void | Promise<void>;
 }) {
-  const [anchor, setAnchor] = useState<Date>(() => startOfDay(new Date()));
+  const [anchor, setAnchor] = useState<Date>(() => initialDate ? startOfDay(parseISODate(initialDate)) : startOfDay(new Date()));
   const [integrations, setIntegrations] = useState<CalendarIntegrationsPayload>({ connections: [], sources: [] });
   const [events, setEvents] = useState<CalendarExternalEvent[]>([]);
   const [loading, setLoading] = useState(false);

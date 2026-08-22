@@ -4,7 +4,7 @@ import { Check, CheckSquare, ChevronLeft, ChevronRight, MessageSquare, Plus, X }
 import type { AppData, CalendarExternalEvent, OrganizationMember, PlannerNote, Priority, Task, TaskStatus, UUID } from '../types';
 import { getCachedCalendarEvents, listCalendarEventsCached } from '../lib/calendar-api';
 import { memberColor, memberInitials, memberShortName } from '../lib/members';
-import { Button, Input, Select } from '../components/Ui';
+import { SearchFilterPanel } from '../components/SearchFilterPanel';
 import { AssigneeAvatars } from '../components/AssigneeAvatars';
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
 import { comparePlannedTasks, edgeScrollDelta, groupEventMinutesByDay, isSpanningTask, layoutWeekBars, PANE_EDGE_SCROLL_ZONE_PX, parseDurationInput, shiftDateKey } from '../lib/planning';
@@ -55,9 +55,14 @@ type PlannerBucket = {
   noEstimateCount: number;
   /** Uit de agenda: hoeveel van deze dag al bezet is met afspraken. */
   agendaMinutes: number;
+  /** Aandeel van de weekstroken die over deze dag lopen. Een strook van drie
+   *  dagen met achttien uur droeg eerder aan géén enkele dagbalk bij, waardoor
+   *  een volgeplande week er leeg uitzag. Het is een verdeling, geen meting —
+   *  daarom staat er een ± bij zodra dit meetelt. */
+  spanMinutes: number;
 };
 
-const EMPTY_BUCKET: PlannerBucket = { tasks: [], count: 0, minutes: 0, noEstimateCount: 0, agendaMinutes: 0 };
+const EMPTY_BUCKET: PlannerBucket = { tasks: [], count: 0, minutes: 0, noEstimateCount: 0, agendaMinutes: 0, spanMinutes: 0 };
 
 /** Een lopend gebaar op een strook: verschuiven of aan een van de randen trekken. */
 type BarDrag = {
@@ -71,16 +76,28 @@ type BarDrag = {
   moved: boolean;
 };
 
-type ChecklistItem = {
-  id: string;
-  text: string;
-  done: boolean;
+/** Eén taak terug naar waar hij stond, inclusief zijn plek in de rij. */
+type UndoStep = {
+  taskId: UUID;
+  plannedDate: string | null;
+  plannedEndDate: string | null;
+  /** Vóór wélke taak hij stond. Zonder dit is "terug" niet meer dan "die dag". */
+  beforeTaskId: UUID | null;
+};
+
+type UndoAction = {
+  /** Wat er gebeurde, in gewone taal: "Montage: wo → do". */
+  label: string;
+  steps: UndoStep[];
 };
 
 /** Filterwaarde voor "taken die (nog) geen project of klant hebben". */
 const NO_LINK = '__none__';
 /** Sleutel van de lade in de dropzone-registratie; geen datum, dus botst nooit. */
 const TRAY_KEY = '__unscheduled__';
+/** Prefix van een dropzone in de mobiele dagstrip: slepen naar een andere dag
+ *  blijft daardoor mogelijk terwijl er maar één dag in beeld staat. */
+const STRIP_PREFIX = 'strip:';
 
 const PREFS_STORAGE_KEY = 'resofly-weekplanner-prefs';
 
@@ -189,6 +206,7 @@ export function WeekPlanner({
   onSetTaskStatus,
   onSetTaskEstimate,
   onOpenProject,
+  onOpenCalendar,
 }: {
   data: AppData;
   organizationId: UUID;
@@ -207,6 +225,8 @@ export function WeekPlanner({
   onSetTaskStatus: (task: Task, status: TaskStatus) => Promise<void> | void;
   onSetTaskEstimate: (task: Task, minutes: number | null) => Promise<void> | void;
   onOpenProject: (projectId: UUID) => void;
+  /** Opent de agenda op één dag — de chips in de dagkolom zijn nu deuren. */
+  onOpenCalendar: (dateKey: string) => void;
 }) {
   const storedPrefs = useRef(loadPrefs()).current;
 
@@ -223,6 +243,8 @@ export function WeekPlanner({
   const [drag, setDrag] = useState<DragState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [quickAddDay, setQuickAddDay] = useState<string | null>(null);
+  /** Welke dag er op een smal scherm in beeld staat. */
+  const [mobileDay, setMobileDay] = useState<string>(() => formatISODate(new Date()));
   /** Snelinvoer in de teamweergave: welke persoon, welke dag. */
   const [teamQuickAdd, setTeamQuickAdd] = useState<{ rowKey: string; dateKey: string } | null>(null);
   const [quickAddBusy, setQuickAddBusy] = useState(false);
@@ -378,6 +400,19 @@ export function WeekPlanner({
       bucket.agendaMinutes = agendaByDay.get(key)?.minutes ?? 0;
     }
 
+    // Weekstroken verdelen hun uren over de dagen die ze beslaan.
+    for (const task of spanningTasks) {
+      const minutes = taskEstimateMinutes(task);
+      if (minutes <= 0) continue;
+      const covered = orderedKeys.filter(key => key >= task.planned_date! && key <= task.planned_end_date!);
+      if (covered.length === 0) continue;
+      const share = minutes / covered.length;
+      for (const key of covered) {
+        const bucket = byDay.get(key);
+        if (bucket) bucket.spanMinutes += share;
+      }
+    }
+
     unscheduled.sort(sortLooseTasks);
     outsideThisWeek.sort(sortOutsideTasks);
 
@@ -388,11 +423,13 @@ export function WeekPlanner({
       minutes: weekTasks.reduce((sum, task) => sum + taskEstimateMinutes(task), 0),
       noEstimateCount: [...weekTasks, ...spanningTasks].filter(task => !hasEstimate(task)).length,
       agendaMinutes: Array.from(byDay.values()).reduce((sum, bucket) => sum + bucket.agendaMinutes, 0),
+      spanMinutes: 0,
     };
     // De balk per dag wordt geschaald op de volste dag van deze week: geen norm,
-    // alleen de onderlinge verhouding. Weekstroken tellen niet mee — hun uren
-    // horen bij geen enkele dag in het bijzonder.
-    const busiestMinutes = Math.max(0, ...Array.from(byDay.values()).map(bucket => bucket.minutes + bucket.agendaMinutes));
+    // alleen de onderlinge verhouding. De weekstroken tellen nu wél mee met hun
+    // aandeel per dag — een strook van achttien uur die nul bijdraagt is erger
+    // dan een verdeling met een ± ervoor.
+    const busiestMinutes = Math.max(0, ...Array.from(byDay.values()).map(bucket => bucket.minutes + bucket.agendaMinutes + bucket.spanMinutes));
 
     return { byDay, unscheduled, outsideThisWeek, weekBucket, busiestMinutes, spanningTasks };
   }, [agendaByDay, dayKeys, days, filteredTasks]);
@@ -447,13 +484,20 @@ export function WeekPlanner({
   // Open taken met een plandatum vóór vandaag. Niet automatisch verplaatsen:
   // dat zou de geschiedenis herschrijven. Eén klik, en jij beslist.
   const todayKey = formatISODate(todayLocal);
-  const overdueTasks = useMemo(() => filteredTasks.filter(task =>
-    task.status !== 'done'
-    && !!task.planned_date
-    && task.planned_date < todayKey
-    && !isSpanningTask(task)), [filteredTasks, todayKey]);
+  /**
+   * Alles wat open staat en waarvan de laatste dag voorbij is — inclusief de
+   * weekstroken, die hier eerder expliciet werden overgeslagen. Op vrijdagmiddag
+   * telt je eigen vrijdagwerk mee: dat is precies het moment waarop je deze
+   * vraag stelt, en het viel er eerst buiten omdat alleen `< vandaag` telde.
+   */
+  const overdueTasks = useMemo(() => filteredTasks
+    .filter(task => task.status !== 'done' && !!task.planned_date && (task.planned_end_date ?? task.planned_date)! <= todayKey)
+    .sort((a, b) => String(a.planned_date).localeCompare(String(b.planned_date)) || sortLooseTasks(a, b)),
+    [filteredTasks, todayKey]);
   const [carryOverBusy, setCarryOverBusy] = useState(false);
-  const [carryOverDismissed, setCarryOverDismissed] = useState(false);
+  /** Per week weggeklikt, niet voor de hele sessie: één vlag die bij bladeren
+   *  nooit terugkwam maakte het voorstel onvindbaar. */
+  const [carryOverDismissed, setCarryOverDismissed] = useState<string[]>([]);
 
   /** Taken met een deadline ín deze week — die verdienen een eigen tabblad in de lade. */
   const deadlineThisWeek = useMemo(() => {
@@ -463,6 +507,14 @@ export function WeekPlanner({
       .filter(task => task.status !== 'done' && !!task.end_date && task.end_date >= first && task.end_date <= last)
       .sort((a, b) => String(a.end_date).localeCompare(String(b.end_date)) || sortLooseTasks(a, b));
   }, [days, filteredTasks]);
+
+  /** Taken met een deadline in deze week die nog nergens gepland staan. Dat is
+   *  het signaal dat vooruitkijkt; de meeneembalk kijkt alleen achteruit. */
+  const unplannedDeadlines = useMemo(
+    () => deadlineThisWeek.filter(task => !task.planned_date),
+    [deadlineThisWeek],
+  );
+
 
   /** Actiepunten van de zichtbare week (persoonlijk, uit de database). */
   const weekNotes = useMemo(() => {
@@ -555,6 +607,8 @@ export function WeekPlanner({
       const rect = el.getBoundingClientRect();
       if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
       if (key === TRAY_KEY) return { type: 'unscheduled' };
+      // Loslaten op de dagstrip: dan is de dag zelf het doel, achteraan.
+      if (key.startsWith(STRIP_PREFIX)) return { type: 'day', date: key.slice(STRIP_PREFIX.length), beforeTaskId: null };
       // In de teamweergave heet een zone `<persoon>::<datum>`; de rij waar je
       // loslaat bepaalt dan óók de toewijzing.
       const separator = key.indexOf(ZONE_SEP);
@@ -574,6 +628,65 @@ export function WeekPlanner({
     }
     return null;
   }, []);
+
+  // ── Ongedaan maken ────────────────────────────────────────────────────
+  // "Undo" kwam in dit scherm nul keer voor, en een sleep die net naast een
+  // dropzone landde was volkomen stil. Wie bang is iets kwijt te raken sleept
+  // niet meer, en dan is een briefje sneller dan het bord.
+  const [undo, setUndo] = useState<UndoAction | null>(null);
+  const [undoBusy, setUndoBusy] = useState(false);
+  const undoTimer = useRef(0);
+
+  const offerUndo = useCallback((action: UndoAction) => {
+    setUndo(action);
+    window.clearTimeout(undoTimer.current);
+    undoTimer.current = window.setTimeout(() => setUndo(null), 9000);
+  }, []);
+  useEffect(() => () => window.clearTimeout(undoTimer.current), []);
+
+  /**
+   * Legt van elke taak vast waar hij nú staat — inclusief vóór wélke taak.
+   * Dat laatste is het punt: `reorder_task_planning` hernummert de hele dag, dus
+   * na de verplaatsing bestaat de oude volgorde niet meer en is "terug" zonder
+   * die buurman niet meer dan "ergens op die dag".
+   */
+  const captureUndo = useCallback((taskIds: UUID[]): UndoStep[] => {
+    return taskIds.map(taskId => {
+      const task = data.tasks.find(row => row.id === taskId);
+      if (!task) return null;
+      const siblings = task.planned_date
+        ? [...data.tasks.filter(row => row.planned_date === task.planned_date && !isSpanningTask(row))].sort(comparePlannedTasks)
+        : [];
+      const index = siblings.findIndex(row => row.id === taskId);
+      return {
+        taskId,
+        plannedDate: task.planned_date ?? null,
+        plannedEndDate: task.planned_end_date ?? null,
+        beforeTaskId: index >= 0 ? siblings[index + 1]?.id ?? null : null,
+      } as UndoStep;
+    }).filter((step): step is UndoStep => step !== null);
+  }, [data.tasks]);
+
+  async function runUndo() {
+    const action = undo;
+    if (!action || undoBusy) return;
+    setUndoBusy(true);
+    setError(null);
+    try {
+      for (const step of action.steps) {
+        if (step.plannedDate && step.plannedEndDate && step.plannedEndDate > step.plannedDate) {
+          await onSetTaskPeriod(step.taskId, step.plannedDate, step.plannedEndDate);
+        } else {
+          await onPlanTask(step.taskId, step.plannedDate, step.beforeTaskId);
+        }
+      }
+      setUndo(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ongedaan maken mislukt');
+    } finally {
+      setUndoBusy(false);
+    }
+  }
 
   const commitPlan = useCallback(async (taskId: UUID, target: DropTarget) => {
     const task = data.tasks.find(t => t.id === taskId);
@@ -598,8 +711,13 @@ export function WeekPlanner({
 
     setError(null);
     pendingFocusRef.current = taskId;
+    const undoSteps = captureUndo([taskId]);
     try {
       await onPlanTask(taskId, plannedDate, beforeTaskId);
+      offerUndo({
+        label: `${task.title}: ${undoSteps[0] ? planLabel(undoSteps[0].plannedDate) : '?'} → ${planLabel(plannedDate)}`,
+        steps: undoSteps,
+      });
       if (!reassign) return;
       // Hangt de taak aan meerdere mensen, dan is "verplaatsen" dubbelzinnig:
       // vervang je het hele team of komt deze collega erbij? Eerder werd er
@@ -612,7 +730,31 @@ export function WeekPlanner({
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Planning bijwerken mislukt');
     }
-  }, [assigneesByTask, byDay, data.tasks, onAssignTask, onPlanTask]);
+  }, [assigneesByTask, byDay, captureUndo, data.tasks, offerUndo, onAssignTask, onPlanTask]);
+
+  // ── Snelmenu ──────────────────────────────────────────────────────────
+  // `onContextMenu` kwam in de hele app niet voor, en lang indrukken is op touch
+  // al bezet door het slepen. Eén menu dekt zeven handelingen die anders elk hun
+  // eigen knopje op een kaart van 52px hadden moeten krijgen.
+  const [menu, setMenu] = useState<{ taskId: UUID; x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('resize', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', close);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [menu]);
+
+  function openMenu(task: Task, x: number, y: number) {
+    if (!canWrite) return;
+    setMenu({ taskId: task.id, x, y });
+  }
 
   /** Openstaande vraag na een sleep naar de rij van een collega. */
   const [assignChoice, setAssignChoice] = useState<{ taskId: UUID; userId: string; point: { x: number; y: number } | null } | null>(null);
@@ -666,12 +808,15 @@ export function WeekPlanner({
 
   const commitPeriod = useCallback(async (taskId: UUID, start: string, end: string) => {
     setError(null);
+    const task = data.tasks.find(row => row.id === taskId);
+    const undoSteps = captureUndo([taskId]);
     try {
       await onSetTaskPeriod(taskId, start, end > start ? end : null);
+      offerUndo({ label: `${task?.title ?? 'Weekstrook'}: periode verzet`, steps: undoSteps });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Weekstrook bijwerken mislukt');
     }
-  }, [onSetTaskPeriod]);
+  }, [captureUndo, data.tasks, offerUndo, onSetTaskPeriod]);
 
   function beginBarPointer(e: React.PointerEvent, bar: WeekBar, mode: BarDrag['mode']) {
     if (!canWrite) return;
@@ -969,12 +1114,35 @@ export function WeekPlanner({
     }
   }
 
+  /**
+   * "Vandaag" zette alleen de week terug. Op een smal scherm staan de dagen
+   * onder elkaar, dus je landde bovenaan bij maandag en moest alsnog scrollen
+   * naar de dag waar het om ging.
+   */
+  function goToToday() {
+    const target = startOfWeek(todayLocal);
+    setAnchor(target);
+    if (!isNarrow) return;
+    const key = formatISODate(todayLocal);
+    window.setTimeout(() => {
+      rootRef.current
+        ?.querySelector<HTMLElement>(`[data-day-head="${key}"]`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 60);
+  }
+
   function handleRootKey(e: React.KeyboardEvent) {
     const target = e.target as HTMLElement;
     if (target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+      if (!undo) return;
+      e.preventDefault();
+      void runUndo();
+      return;
+    }
     if (e.key === 'ArrowLeft' && e.shiftKey) { e.preventDefault(); setAnchor(prev => addDays(prev, -7)); }
     else if (e.key === 'ArrowRight' && e.shiftKey) { e.preventDefault(); setAnchor(prev => addDays(prev, 7)); }
-    else if (e.key === 't' || e.key === 'T') { e.preventDefault(); setAnchor(startOfWeek(new Date())); }
+    else if (e.key === 't' || e.key === 'T') { e.preventDefault(); goToToday(); }
   }
 
   /** Maakt een taak op een dag. `assignTo` is alleen gezet vanuit de teamweergave:
@@ -1000,6 +1168,16 @@ export function WeekPlanner({
   // invoerveld ergens anders opnieuw opduikt: bij het wisselen van week of
   // weergave sluiten we de snelinvoer expliciet.
   useEffect(() => { setQuickAddDay(null); setTeamQuickAdd(null); }, [anchor, scope]);
+
+  // Blader je naar een andere week, dan wijst de gekozen mobiele dag nergens
+  // meer naar. Vandaag als die in beeld is, anders de maandag.
+  useEffect(() => {
+    setMobileDay(prev => {
+      if (dayKeys.has(prev)) return prev;
+      const today = formatISODate(todayLocal);
+      return dayKeys.has(today) ? today : formatISODate(anchor);
+    });
+  }, [anchor, dayKeys, todayLocal]);
 
   /** Project en klant van een taak. Beide zijn optioneel: een taak die net in de
    *  weekplanner is aangemaakt heeft ze nog niet. Hangt er een project aan, dan is dat
@@ -1047,28 +1225,60 @@ export function WeekPlanner({
       onSetStatus={(target, status) => { void onSetTaskStatus(target, status); }}
       onSetEstimate={(target, minutes) => { void onSetTaskEstimate(target, minutes); }}
       onOpenProject={onOpenProject}
+      onMenu={openMenu}
     />
   );
 
   const draggedTask = drag ? data.tasks.find(t => t.id === drag.taskId) ?? null : null;
 
   return <div className={`week-planner density-${density}`} ref={rootRef} onKeyDown={handleRootKey}>
-    <div className="wp-toolbar">
-      <Button onClick={() => setAnchor(prev => addDays(prev, -7))} title="Vorige week (shift + pijl links)"><ChevronLeft size={14}/> Vorige</Button>
-      <Button onClick={() => setAnchor(startOfWeek(new Date()))} title="Deze week (T)">Vandaag</Button>
-      <Button onClick={() => setAnchor(prev => addDays(prev, 7))} title="Volgende week (shift + pijl rechts)">Volgende <ChevronRight size={14}/></Button>
-
-      <div className="wp-seg" role="group" aria-label="Wiens taken">
-        <button type="button" className={scope === 'mine' ? 'is-on' : ''} aria-pressed={scope === 'mine'} onClick={() => setScope('mine')}>Mijn week</button>
-        <button type="button" className={scope === 'team' ? 'is-on' : ''} aria-pressed={scope === 'team'} onClick={() => setScope('team')}>Team</button>
-      </div>
-      <div className="wp-seg" role="group" aria-label="Hoeveel detail per kaart">
-        <button type="button" className={density === 'compact' ? 'is-on' : ''} aria-pressed={density === 'compact'} onClick={() => setDensity('compact')}>Compact</button>
-        <button type="button" className={density === 'comfortable' ? 'is-on' : ''} aria-pressed={density === 'comfortable'} onClick={() => setDensity('comfortable')}>Ruim</button>
-      </div>
-
-      <div className="wp-week-label">{weekLabel}</div>
-    </div>
+    {/*
+      Eén kopkaart in plaats van vier losse stroken. Werkbalk, gouden
+      samenvatting, vijf eigengebouwde filtervelden en een sneltoetsalinea
+      kostten samen zo'n 437px voordat de eerste taakkaart in beeld kwam — op
+      een laptopscherm moest je scrollen om je eigen week te zien. Dit is
+      hetzelfde blok dat klanten, offertes, facturen, projecten, tickets en
+      campagnes al delen; de telpil erin verklapt eindelijk dat er nog een
+      filter van vorige week aanstaat.
+    */}
+    <SearchFilterPanel
+      className="is-wide"
+      ariaLabel="Weekplanner zoeken en filteren"
+      header={{
+        eyebrow: 'Planning',
+        title: isCurrentWeek ? 'Deze week' : `Week ${isoWeekNumber(anchor)}`,
+        meta: weekLabel,
+        actions: <>
+          <div className="wp-seg" role="group" aria-label="Wiens taken">
+            <button type="button" className={scope === 'mine' ? 'is-on' : ''} aria-pressed={scope === 'mine'} onClick={() => setScope('mine')}>Mijn week</button>
+            <button type="button" className={scope === 'team' ? 'is-on' : ''} aria-pressed={scope === 'team'} onClick={() => setScope('team')}>Team</button>
+          </div>
+          <div className="wp-seg" role="group" aria-label="Hoeveel detail per kaart">
+            <button type="button" className={density === 'compact' ? 'is-on' : ''} aria-pressed={density === 'compact'} onClick={() => setDensity('compact')}>Compact</button>
+            <button type="button" className={density === 'comfortable' ? 'is-on' : ''} aria-pressed={density === 'comfortable'} onClick={() => setDensity('comfortable')}>Ruim</button>
+          </div>
+          <div className="wp-nav" role="group" aria-label="Week kiezen">
+            <button type="button" onClick={() => setAnchor(prev => addDays(prev, -7))} aria-label="Vorige week" title="Vorige week (shift + pijl links)"><ChevronLeft size={15}/></button>
+            <button type="button" onClick={goToToday} title="Deze week (T)">Vandaag</button>
+            <button type="button" onClick={() => setAnchor(prev => addDays(prev, 7))} aria-label="Volgende week" title="Volgende week (shift + pijl rechts)"><ChevronRight size={15}/></button>
+          </div>
+        </>,
+      }}
+      query={filters.query}
+      queryPlaceholder="Zoek op taak, project, klant of tag…"
+      onQueryChange={query => updateFilter('query', query)}
+      visibleCount={weekTaskCount + unscheduled.length}
+      totalCount={data.tasks.filter(task => task.status !== 'done').length}
+      noun="taken"
+      fields={[
+        { key: 'clientId', label: 'Klant', value: filters.clientId, options: [{ value: '', label: 'Alle klanten' }, { value: NO_LINK, label: 'Zonder klant' }, ...data.clients.map(client => ({ value: client.id, label: client.name }))] },
+        { key: 'projectId', label: 'Project', value: filters.projectId, options: [{ value: '', label: 'Alle projecten' }, { value: NO_LINK, label: 'Zonder project' }, ...projectOptions.map(project => ({ value: project.id, label: project.name }))] },
+        { key: 'priority', label: 'Prioriteit', value: filters.priority, options: [{ value: 'all', label: 'Alle prioriteiten' }, { value: 'high', label: 'Hoog' }, { value: 'med', label: 'Normaal' }, { value: 'low', label: 'Laag' }] },
+        { key: 'status', label: 'Status', value: filters.status, options: [{ value: 'open', label: 'Open taken' }, { value: 'todo', label: 'Te doen' }, { value: 'doing', label: 'Bezig' }, { value: 'review', label: 'Review' }, { value: 'done', label: 'Klaar' }, { value: 'all', label: 'Alle statussen' }] },
+      ]}
+      onFieldChange={(key, value) => updateFilter(key as keyof PlannerFilters, value as never)}
+      onReset={resetFilters}
+    />
 
     {/*
       Eén optelling, niet twee die elkaar tegenspreken. Hiervoor stond in
@@ -1094,56 +1304,39 @@ export function WeekPlanner({
       </div>
     </section>
 
-    <section className="wp-filters" aria-label="Weekplanner filters">
-      <Input value={filters.query} onChange={e => updateFilter('query', e.target.value)} placeholder="Zoek op taak, project, klant of tag" />
-      <Select value={filters.clientId} onChange={e => updateFilter('clientId', e.target.value)}>
-        <option value="">Alle klanten</option><option value={NO_LINK}>Zonder klant</option>{data.clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
-      </Select>
-      <Select value={filters.projectId} onChange={e => updateFilter('projectId', e.target.value)}>
-        <option value="">Alle projecten</option><option value={NO_LINK}>Zonder project</option>{projectOptions.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
-      </Select>
-      <Select value={filters.priority} onChange={e => updateFilter('priority', e.target.value as PlannerFilters['priority'])}>
-        <option value="all">Alle prioriteiten</option>
-        <option value="high">Hoog</option>
-        <option value="med">Normaal</option>
-        <option value="low">Laag</option>
-      </Select>
-      <Select value={filters.status} onChange={e => updateFilter('status', e.target.value as StatusFilter)}>
-        <option value="open">Open taken</option>
-        <option value="todo">Te doen</option>
-        <option value="doing">Bezig</option>
-        <option value="review">Review</option>
-        <option value="done">Klaar</option>
-        <option value="all">Alle statussen</option>
-      </Select>
-    </section>
-
     {!canWrite && <div className="readonly-note">Je hebt alleen-lezen toegang. Taken openen kan, maar slepen en plannen is uitgeschakeld.</div>}
-    {canWrite && <p className="wp-keyhint">Sleep een kaart, of selecteer er een en druk <kbd>1</kbd>–<kbd>7</kbd> voor een weekdag, <kbd>0</kbd> voor de lade. Op een weekstrook verschuiven <kbd>←</kbd> <kbd>→</kbd> de hele periode en verzet <kbd>shift</kbd> + pijl alleen het einde. Op touch: even vasthouden en dan slepen.</p>}
     {error && <div className="error">{error}</div>}
 
-    {canWrite && overdueTasks.length > 0 && !carryOverDismissed && <div className="wp-rollover">
-      <strong>{overdueTasks.length === 1 ? '1 taak' : `${overdueTasks.length} taken`} van eerder staan nog open.</strong>
-      <span className="wp-rollover-grow">Meenemen naar vandaag, of laten staan waar ze stonden?</span>
-      <button
-        type="button"
-        className="wp-rollover-btn"
-        disabled={carryOverBusy}
-        onClick={async () => {
-          setCarryOverBusy(true);
-          setError(null);
-          try {
-            await onCarryOver(overdueTasks.map(task => task.id), todayKey);
-          } catch (err) {
-            setError(err instanceof Error ? err.message : 'Meenemen mislukt');
-          } finally {
-            setCarryOverBusy(false);
-          }
-        }}
-      >
-        {carryOverBusy ? 'Bezig…' : 'Meenemen naar vandaag'}
-      </button>
-      <button type="button" className="wp-rollover-btn is-ghost" onClick={() => setCarryOverDismissed(true)}>Laat staan</button>
+    {canWrite && overdueTasks.length > 0 && !carryOverDismissed.includes(formatISODate(anchor)) && <CarryOverPanel
+      tasks={overdueTasks}
+      busy={carryOverBusy}
+      todayKey={todayKey}
+      taskLinks={taskLinks}
+      onDismiss={() => setCarryOverDismissed(prev => [...prev, formatISODate(anchor)])}
+      onCarryOver={async (taskIds, toDate) => {
+        setCarryOverBusy(true);
+        setError(null);
+        const undoSteps = captureUndo(taskIds);
+        try {
+          await onCarryOver(taskIds, toDate);
+          offerUndo({
+            label: `${taskIds.length} ${taskIds.length === 1 ? 'taak' : 'taken'} meegenomen naar ${planLabel(toDate)}`,
+            steps: undoSteps,
+          });
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Meenemen mislukt');
+        } finally {
+          setCarryOverBusy(false);
+        }
+      }}
+    />}
+
+    {/* Vooruitkijken in plaats van achteruit: deze lijst bestond al maar werd
+        nergens als signaal gebruikt. */}
+    {unplannedDeadlines.length > 0 && <div className="wp-deadline-cue" role="status">
+      {unplannedDeadlines.length === 1
+        ? '1 taak met een deadline deze week staat nog nergens gepland.'
+        : `${unplannedDeadlines.length} taken met een deadline deze week staan nog nergens gepland.`}
     </div>}
 
     <div className="wp-board">
@@ -1155,6 +1348,28 @@ export function WeekPlanner({
           balk erboven. De stroken staan bewust vooraan in de DOM: op een smal
           scherm — waar het raster een kolom wordt — komen ze dan bovenaan.
         */}
+        {isNarrow && scope === 'mine' && <div className="wp-daystrip" role="tablist" aria-label="Dag kiezen">
+          {days.map(day => {
+            const key = formatISODate(day);
+            const bucket = byDay.get(key) ?? EMPTY_BUCKET;
+            const total = bucket.minutes + bucket.agendaMinutes + bucket.spanMinutes;
+            const isDropHere = drag?.moved === true && drag.target?.type === 'day' && drag.target.date === key;
+            return <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={key === mobileDay}
+              className={`wp-daystrip-day ${key === mobileDay ? 'is-on' : ''} ${isSameDay(day, todayLocal) ? 'is-today' : ''} ${isDropHere ? 'is-drop' : ''}`}
+              ref={el => registerZone(`${STRIP_PREFIX}${key}`, el)}
+              onClick={() => setMobileDay(key)}
+            >
+              <span className="wp-daystrip-name">{DAY_NAMES_NL[day.getDay() === 0 ? 6 : day.getDay() - 1]}</span>
+              <span className="wp-daystrip-num">{day.getDate()}</span>
+              <span className={`wp-daystrip-dot ${total > 0 ? 'is-busy' : ''}`} style={{ opacity: total > 0 ? Math.min(1, 0.35 + total / loadScale) : 0 }}/>
+            </button>;
+          })}
+        </div>}
+
         <div
           className="wp-week"
           ref={bandRef}
@@ -1194,11 +1409,16 @@ export function WeekPlanner({
 
           {days.map((day, i) => {
             const key = formatISODate(day);
+            // Op een telefoon zeven blokken onder elkaar zetten betekent scrollen
+            // langs zes dagen die je niet zocht, met de lade helemaal onderaan.
+            // Daar tonen we één dag; de strook erboven is de weg naar de rest —
+            // én een dropzone, dus slepen naar een andere dag kan er nog steeds.
+            if (isNarrow && key !== mobileDay) return null;
             const bucket = byDay.get(key) ?? EMPTY_BUCKET;
             const agenda = agendaByDay.get(key);
             const isToday = isSameDay(day, todayLocal);
             const marker = scope === 'mine' ? insertMarkerFor(key) : null;
-            const total = bucket.minutes + bucket.agendaMinutes;
+            const total = bucket.minutes + bucket.agendaMinutes + bucket.spanMinutes;
             const scale = loadScale;
             // Geen aparte markering meer voor de volste dag: die deelde zijn
             // specificiteit met `is-today` en won, waardoor "vandaag" verdween
@@ -1209,14 +1429,16 @@ export function WeekPlanner({
                   tot onder de kolom door, zodat een strook er dwars overheen valt. */}
               <div className={`wp-col ${state}`} style={{ gridColumn: i + 1, gridRow: '1 / -1' }} aria-hidden="true"/>
 
-              <div className={`wp-day-head ${state}`} style={{ gridColumn: i + 1, gridRow: 1 }}>
+              <div className={`wp-day-head ${state}`} data-day-head={key} style={{ gridColumn: i + 1, gridRow: 1 }}>
                 <div className="wp-day-row">
                   <span className="wp-day-name">{DAY_NAMES_NL[i]}</span>
                   <span className="wp-day-num">{day.getDate()}</span>
                   {/* Aantal én uren: acht taken zonder schatting leest anders als
                       een lege dag, want dan staat de urenteller op nul. */}
                   {bucket.count > 0 && <span className="wp-day-count">{bucket.count}</span>}
-                  {total > 0 && <span className="wp-day-total">{formatDuration(total)}</span>}
+                  {/* De ± staat er zodra een weekstrook meetelt: dat deel is een
+                      verdeling over zijn dagen, geen gemeten tijd. */}
+                  {total > 0 && <span className="wp-day-total">{bucket.spanMinutes > 0 ? '±' : ''}{formatDuration(total)}</span>}
                   {/* Alleen in "Mijn week": in de teamweergave hoort een nieuwe
                       taak bij een persoon, en die staat in de rij eronder — niet
                       hier. Deze knop stond er wél en deed daar niets. */}
@@ -1235,11 +1457,19 @@ export function WeekPlanner({
                 <div
                   className="wp-day-load"
                   role="img"
-                  aria-label={`${formatDuration(bucket.agendaMinutes)} afspraken en ${formatDuration(bucket.minutes)} taken`}
+                  aria-label={`${formatDuration(bucket.agendaMinutes)} afspraken en ${formatDuration(bucket.minutes + bucket.spanMinutes)} taken`}
                 >
                   <span className="wp-day-load-agenda" style={{ width: `${(bucket.agendaMinutes / scale) * 100}%` }}/>
-                  <span className="wp-day-load-fill" style={{ width: `${(bucket.minutes / scale) * 100}%` }}/>
+                  <span className="wp-day-load-fill" style={{ width: `${((bucket.minutes + bucket.spanMinutes) / scale) * 100}%` }}/>
                 </div>
+                {/* Hele-dag-afspraken kosten geen minuten maar maken je dag wél
+                    vol. Ze verdwenen hier volledig, dus een shootdag las als een
+                    lege dag. */}
+                {!!agenda?.allDay.length && <div className="wp-day-allday">
+                  {agenda.allDay.map(event => <span key={`${event.source_id}-${event.provider_event_id}`} className="wp-allday-chip" title={event.title}>
+                    {event.title}
+                  </span>)}
+                </div>}
               </div>
 
               {scope === 'mine' && <div
@@ -1256,10 +1486,18 @@ export function WeekPlanner({
                   role="group"
                   aria-label={`Afspraken op ${DAY_NAMES_NL[i]} ${day.getDate()}`}
                 >
-                  {agenda.items.map(event => <div key={`${event.source_id}-${event.provider_event_id}-${event.starts_at}`} className="wp-agenda-chip" title={event.title}>
+                  {/* Was een dode <div> met alleen een `title`; nu een deur naar
+                      de agenda op precies deze dag. */}
+                  {agenda.items.map(event => <button
+                    key={`${event.source_id}-${event.provider_event_id}-${event.starts_at}`}
+                    type="button"
+                    className="wp-agenda-chip"
+                    title={`${event.title} — open in de agenda`}
+                    onClick={() => onOpenCalendar(key)}
+                  >
                     <span className="wp-agenda-time">{formatEventTime(event.starts_at)}</span>
                     <span className="wp-agenda-name">{event.title}</span>
-                  </div>)}
+                  </button>)}
                 </div>}
                 {/* Het invoerveld blijft bewust búiten het scrollvak staan: het
                     hoort bij de dag, niet bij een plek in de lijst. */}
@@ -1355,6 +1593,63 @@ export function WeekPlanner({
       />
     </div>
 
+    {/* Een sleep die landt zegt nu wát er gebeurde, en biedt de weg terug.
+        `role="status"` zodat een schermlezer het ook meekrijgt. */}
+    {menu && (() => {
+      const task = data.tasks.find(row => row.id === menu.taskId);
+      if (!task) return null;
+      const assigned = assigneesByTask.get(task.id) ?? [];
+      const move = (date: string | null) => {
+        setMenu(null);
+        void commitPlan(task.id, date === null ? { type: 'unscheduled' } : { type: 'day', date, beforeTaskId: null });
+      };
+      return <div
+        className="wp-menu"
+        role="menu"
+        style={{ left: Math.min(menu.x, window.innerWidth - 210), top: Math.min(menu.y, window.innerHeight - 330) }}
+        onPointerDown={e => e.stopPropagation()}
+      >
+        <div className="wp-menu-head">{task.title}</div>
+        <div className="wp-menu-group">
+          {(['doing', 'review', 'done'] as TaskStatus[]).map(status => <button
+            key={status}
+            type="button"
+            role="menuitem"
+            disabled={task.status === status}
+            onClick={() => { setMenu(null); void onSetTaskStatus(task, status); }}
+          >{statusLabel(status)}</button>)}
+        </div>
+        <div className="wp-menu-group">
+          <button type="button" role="menuitem" onClick={() => move(shiftDateKey(todayKey, 1))}>Naar morgen</button>
+          <button type="button" role="menuitem" onClick={() => move(shiftDateKey(task.planned_date ?? todayKey, 7))}>Naar volgende week</button>
+          {/* Een weekstrook kon langs geen enkele weg naar de lade: het
+              toetsenbord kent daar geen '0' en slepen kan alleen binnen de band. */}
+          <button type="button" role="menuitem" onClick={() => move(null)}>Naar de lade</button>
+        </div>
+        {teamMembers.length > 0 && <div className="wp-menu-group">
+          <div className="wp-menu-label">Toewijzen aan</div>
+          {teamMembers.slice(0, 6).map(member => <button
+            key={member.user_id}
+            type="button"
+            role="menuitem"
+            className={assigned.includes(member.user_id) ? 'is-on' : ''}
+            onClick={() => { setMenu(null); void onAssignTask(task.id, member.user_id, 'add'); }}
+          >{memberShortName(member.user_id, teamMembers, currentUserId)}</button>)}
+        </div>}
+        <div className="wp-menu-group">
+          <button type="button" role="menuitem" onClick={() => { setMenu(null); onEditTask(task); }}>Open taak…</button>
+        </div>
+      </div>;
+    })()}
+
+    {undo && <div className="wp-undo" role="status">
+      <span className="wp-undo-text">{undo.label}</span>
+      <button type="button" className="wp-undo-btn" disabled={undoBusy} onClick={() => void runUndo()}>
+        {undoBusy ? 'Bezig…' : 'Ongedaan maken'}
+      </button>
+      <button type="button" className="wp-undo-close" aria-label="Melding sluiten" onClick={() => setUndo(null)}><X size={12}/></button>
+    </div>}
+
     {assignChoice && <div
       className="wp-assign-choice"
       role="dialog"
@@ -1378,6 +1673,97 @@ export function WeekPlanner({
       <span className="wp-ghost-title">{draggedTask.title}</span>
     </div>}
   </div>;
+}
+
+/**
+ * Het meeneem-voorstel voor blijven liggen werk. Was één knop die twintig taken
+ * ineens verzette naar vandaag, zonder weg terug — een onomkeerbare herindeling
+ * van je week met één klik. Nu kies je wát er meegaat en naar wélke dag, en zie
+ * je de uitkomst in de knop staan voordat je hem indrukt.
+ */
+function CarryOverPanel({ tasks, busy, todayKey, taskLinks, onCarryOver, onDismiss }: {
+  tasks: Task[];
+  busy: boolean;
+  todayKey: string;
+  taskLinks: (task: Task) => { projectName: string | null };
+  onCarryOver: (taskIds: UUID[], toDate: string) => Promise<void>;
+  onDismiss: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  // Standaard staat alles aan: dat is bijna altijd wat je wilt, en uitvinken is
+  // sneller dan twintig keer aanvinken.
+  const [skipped, setSkipped] = useState<UUID[]>([]);
+  const [target, setTarget] = useState<'today' | 'tomorrow' | 'monday'>('today');
+
+  const chosen = tasks.filter(task => !skipped.includes(task.id));
+  const minutes = chosen.reduce((sum, task) => sum + taskEstimateMinutes(task), 0);
+
+  const targets: { key: typeof target; label: string; date: string }[] = [
+    { key: 'today', label: 'vandaag', date: todayKey },
+    { key: 'tomorrow', label: 'morgen', date: shiftDateKey(todayKey, 1) },
+    { key: 'monday', label: 'maandag', date: nextMondayKey(todayKey) },
+  ];
+  const targetDate = targets.find(t => t.key === target)!;
+
+  return <div className={`wp-rollover ${open ? 'is-open' : ''}`}>
+    <div className="wp-rollover-row">
+      <strong>{tasks.length === 1 ? '1 taak' : `${tasks.length} taken`} van eerder staan nog open.</strong>
+      <button type="button" className="wp-rollover-toggle" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        {open ? 'Verberg lijst' : 'Bekijk en kies'}
+      </button>
+      <span className="wp-rollover-grow"/>
+      <div className="wp-rollover-targets" role="group" aria-label="Naar welke dag">
+        {targets.map(option => <button
+          key={option.key}
+          type="button"
+          className={target === option.key ? 'is-on' : ''}
+          aria-pressed={target === option.key}
+          onClick={() => setTarget(option.key)}
+        >{option.label}</button>)}
+      </div>
+      <button
+        type="button"
+        className="wp-rollover-btn"
+        disabled={busy || chosen.length === 0}
+        onClick={() => void onCarryOver(chosen.map(task => task.id), targetDate.date)}
+      >
+        {busy
+          ? 'Bezig…'
+          : `Neem ${chosen.length} ${chosen.length === 1 ? 'taak' : 'taken'} mee naar ${targetDate.label}${minutes > 0 ? ` (${formatDuration(minutes)})` : ''}`}
+      </button>
+      <button type="button" className="wp-rollover-btn is-ghost" onClick={onDismiss}>Laat staan</button>
+    </div>
+
+    {open && <ul className="wp-rollover-list">
+      {tasks.map(task => {
+        const checked = !skipped.includes(task.id);
+        return <li key={task.id}>
+          <label>
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={() => setSkipped(prev => checked ? [...prev, task.id] : prev.filter(id => id !== task.id))}
+            />
+            <span className="wp-rollover-title">{task.title}</span>
+            <span className="wp-rollover-meta">
+              {taskLinks(task).projectName ?? 'Losse taak'}
+              {' · '}
+              {planLabel(task.planned_date)}
+              {hasEstimate(task) ? ` · ${formatDuration(taskEstimateMinutes(task))}` : ''}
+            </span>
+          </label>
+        </li>;
+      })}
+    </ul>}
+  </div>;
+}
+
+/** De eerstvolgende maandag ná deze dag. Voor de vrijdagmiddagvraag. */
+function nextMondayKey(fromKey: string): string {
+  const date = parseISODate(fromKey);
+  const day = date.getDay(); // 0 = zondag
+  const ahead = day === 1 ? 7 : (8 - (day === 0 ? 7 : day)) % 7 || 7;
+  return shiftDateKey(fromKey, ahead);
 }
 
 /**
@@ -1459,6 +1845,7 @@ function TaskCard({
   onSetStatus,
   onSetEstimate,
   onOpenProject,
+  onMenu,
 }: {
   task: Task;
   projectName: string | null;
@@ -1479,6 +1866,7 @@ function TaskCard({
   onSetStatus: (task: Task, status: TaskStatus) => void;
   onSetEstimate: (task: Task, minutes: number | null) => void;
   onOpenProject: (projectId: string) => void;
+  onMenu: (task: Task, x: number, y: number) => void;
 }) {
   const plannedAfterDeadline = !!task.end_date && !!task.planned_date && task.planned_date > task.end_date;
   const done = task.status === 'done';
@@ -1509,7 +1897,21 @@ function TaskCard({
     role="group"
     aria-label={`${task.title}${projectName ? `, project ${projectName}` : ''}${done ? ', klaar' : ''}`}
     onPointerDown={onPointerDown}
-    onKeyDown={onKeyDown}
+    onKeyDown={event => {
+      // Shift+F10 is de toetsenbordweg naar een contextmenu.
+      if (event.shiftKey && event.key === 'F10') {
+        event.preventDefault();
+        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+        onMenu(task, rect.left + 24, rect.bottom - 4);
+        return;
+      }
+      onKeyDown(event);
+    }}
+    onContextMenu={event => {
+      if (!canWrite) return;
+      event.preventDefault();
+      onMenu(task, event.clientX, event.clientY);
+    }}
   >
     <button
       type="button"
@@ -1574,6 +1976,19 @@ function TaskCard({
     >
       {hasEstimate(task) ? formatDuration(taskEstimateMinutes(task)) : '—'}
     </button>
+
+    {/* Op touch is de rechtermuisknop er niet en is lang indrukken al bezet
+        door het slepen; daarom een eigen knopje. */}
+    {canWrite && <button
+      type="button"
+      className="wp-task-more"
+      aria-label={`Meer handelingen voor ${task.title}`}
+      onPointerDown={swallow}
+      onClick={event => {
+        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+        onMenu(task, rect.left, rect.bottom + 2);
+      }}
+    >⋯</button>}
 
     {estimateOpen && canWrite && <div className="wp-est-pop" onPointerDown={swallow}>
       <div className="wp-est-presets">
@@ -1930,6 +2345,11 @@ function formatDuration(minutes: number): string {
 
 function formatDateShort(date: string): string {
   return parseISODate(date).toLocaleDateString('nl-NL', { day: '2-digit', month: 'short' });
+}
+
+/** Waar een taak stond of komt te staan, in twee woorden: "wo 13" of "de lade". */
+function planLabel(dateKey: string | null): string {
+  return dateKey ? formatDayShort(dateKey) : 'de lade';
 }
 
 function formatDayShort(dateKey: string): string {

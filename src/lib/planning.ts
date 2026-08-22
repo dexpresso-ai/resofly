@@ -212,7 +212,13 @@ export function edgeScrollDelta(position: number, min: number, max: number, zone
   return 0;
 }
 
-export type DayAgenda = { minutes: number; items: CalendarExternalEvent[] };
+export type DayAgenda = {
+  minutes: number;
+  items: CalendarExternalEvent[];
+  /** Hele-dag-items van deze dag. Ze tellen géén minuten — ze zouden in hun
+   *  eentje elke balk volzetten — maar een shootdag mag niet als lege dag lezen. */
+  allDay: CalendarExternalEvent[];
+};
 
 /**
  * Wat staat er per dag in de agenda, en hoeveel tijd kost dat? Een afspraak die
@@ -220,14 +226,24 @@ export type DayAgenda = { minutes: number; items: CalendarExternalEvent[] };
  * zijn eigen minuten telt.
  *
  * Hele-dag-items tellen géén uren: ze claimen geen blok in je dag. Ze zouden
- * anders in hun eentje elke dagbalk volzetten.
+ * anders in hun eentje elke dagbalk volzetten. Ze verdwenen eerder helemaal,
+ * waardoor een dag vol hele-dag-afspraken er leeg uitzag; nu komen ze apart
+ * terug in `allDay` zodat de dagkop ze kan tonen.
  */
 export function groupEventMinutesByDay(dayKeys: string[], events: CalendarExternalEvent[]): Map<string, DayAgenda> {
   const byDay = new Map<string, DayAgenda>();
-  for (const key of dayKeys) byDay.set(key, { minutes: 0, items: [] });
+  for (const key of dayKeys) byDay.set(key, { minutes: 0, items: [], allDay: [] });
 
   for (const event of events) {
-    if (event.all_day) continue;
+    if (event.all_day) {
+      // Over welke kalenderdagen loopt dit hele-dag-item?
+      const from = event.starts_at.slice(0, 10);
+      const to = (event.ends_at || event.starts_at).slice(0, 10);
+      for (const key of dayKeys) {
+        if (key >= from && key <= to) byDay.get(key)?.allDay.push(event);
+      }
+      continue;
+    }
     const start = new Date(event.starts_at);
     const end = new Date(event.ends_at);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) continue;
@@ -250,6 +266,7 @@ export function groupEventMinutesByDay(dayKeys: string[], events: CalendarExtern
 
   for (const bucket of byDay.values()) {
     bucket.items.sort((a, b) => a.starts_at.localeCompare(b.starts_at));
+    bucket.allDay.sort((a, b) => a.title.localeCompare(b.title, 'nl-NL'));
   }
   return byDay;
 }
@@ -314,4 +331,25 @@ export function splitTitleAndEstimate(title: string): { title: string; minutes: 
   if (!rest) return { title: title.trim(), minutes: null };
   const minutes = parseDurationInput(match[2]);
   return minutes === null ? { title: title.trim(), minutes: null } : { title: rest, minutes };
+}
+
+/**
+ * Draait alleen de taken terug die op één van `dates` stonden of staan. Bij een
+ * mislukte planningsactie ging eerder de héle takenlijst terug naar een
+ * momentopname van vóór de actie: sleepbewegingen die intussen wél gelukt waren
+ * kwamen dan mee terug, en beeld en database liepen uiteen tot de eerstvolgende
+ * verversing. `null` in `dates` staat voor de lade (taken zonder plandatum).
+ */
+export function restoreTasksForDates(current: Task[], snapshot: Task[], dates: (string | null)[]): Task[] {
+  const keys = new Set(dates.map(date => date ?? '__unscheduled__'));
+  const dayOf = (task: Task) => task.planned_date ?? '__unscheduled__';
+  const before = new Map(snapshot.map(task => [task.id, task]));
+
+  return current.map(task => {
+    const original = before.get(task.id);
+    if (!original) return task;
+    // Raakt deze taak een van de betrokken dagen — nu of in de oude stand?
+    if (!keys.has(dayOf(task)) && !keys.has(dayOf(original))) return task;
+    return original;
+  });
 }
