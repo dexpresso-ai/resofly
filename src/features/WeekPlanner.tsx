@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import { Check, CheckSquare, ChevronLeft, ChevronRight, MessageSquare, Play, Plus, Square, X } from 'lucide-react';
+import { Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, MessageSquare, Play, Plus, Square, X } from 'lucide-react';
 import type { AppData, CalendarExternalEvent, OrganizationMember, PlannerDayCapacity, PlannerNote, Priority, Task, TaskStatus, UUID } from '../types';
 import { getCachedCalendarEvents, listCalendarEventsCached } from '../lib/calendar-api';
 import { memberColor, memberInitials, memberShortName } from '../lib/members';
@@ -16,6 +16,9 @@ import { priorityLabel } from '../lib/format';
 type StatusFilter = 'open' | 'all' | TaskStatus;
 type Scope = 'mine' | 'team';
 type Density = 'compact' | 'comfortable';
+/** Staan de zeven dagen naast elkaar als kolommen, of onder elkaar als rijen
+ *  die je open- en dichtklapt? */
+type Layout = 'stack' | 'columns';
 /** Maakt het plusje van een dag werk van één dag, of een strook over meer dagen? */
 type QuickAddMode = 'day' | 'week';
 
@@ -115,6 +118,13 @@ const MOUSE_DRAG_THRESHOLD_PX = 4;
 /** Onder deze breedte staan de dagen onder elkaar in plaats van naast elkaar. */
 const NARROW_QUERY = '(max-width: 900px)';
 
+/** Voluit in de rijweergave: naast elkaar past alleen "Ma", onder elkaar is er
+ *  ruimte zat en leest "maandag" een stuk rustiger. */
+const DAY_FULL_NL = ['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag', 'zondag'] as const;
+
+/** Alle zeven weekdagnummers — voor "alles inklappen". */
+const ALL_DAY_INDEXES = [0, 1, 2, 3, 4, 5, 6];
+
 /** Korte trilling als een sleepgebaar "pakt" (waar ondersteund). */
 function hapticTick() {
   try { navigator.vibrate?.(12); } catch { /* niet ondersteund — puur cosmetisch */ }
@@ -175,6 +185,11 @@ function scrollablePaneAt(x: number, y: number, stop: HTMLElement | null): HTMLE
 type StoredPrefs = {
   scope: Scope;
   density: Density;
+  layout: Layout;
+  /** Weekdagnummers (0 = maandag … 6 = zondag) die dichtgeklapt staan. Op
+   *  nummer en niet op datum: wie het weekend dichtklapt wil dat volgende week
+   *  ook, en anders staat elke nieuwe week weer helemaal open. */
+  collapsedDays: number[];
   clientId: string;
   projectId: string;
   priority: PlannerFilters['priority'];
@@ -244,6 +259,10 @@ export function WeekPlanner({
   const [anchor, setAnchor] = useState<Date>(() => startOfWeek(new Date()));
   const [scope, setScope] = useState<Scope>(storedPrefs.scope === 'team' ? 'team' : 'mine');
   const [density, setDensity] = useState<Density>(storedPrefs.density === 'comfortable' ? 'comfortable' : 'compact');
+  const [layout, setLayout] = useState<Layout>(storedPrefs.layout === 'columns' ? 'columns' : 'stack');
+  const [collapsedDays, setCollapsedDays] = useState<number[]>(() => (Array.isArray(storedPrefs.collapsedDays)
+    ? storedPrefs.collapsedDays.filter(day => Number.isInteger(day) && day >= 0 && day <= 6)
+    : []));
   const [filters, setFilters] = useState<PlannerFilters>({
     query: '',
     clientId: storedPrefs.clientId ?? '',
@@ -263,18 +282,29 @@ export function WeekPlanner({
   // Op smal scherm staan de dagen onder elkaar; een strook over kolommen slepen
   // heeft dan geen betekenis meer.
   const isNarrow = useMediaQuery(NARROW_QUERY);
+  /** Dagen onder elkaar als rijen die je open- en dichtklapt. Op een smal
+   *  scherm staan ze al onder elkaar en toont de planner er één tegelijk — daar
+   *  verandert deze keuze niets aan. De teamweergave blijft een raster van
+   *  mensen × dagen: daar zíjn de kolommen het punt. */
+  const stacked = layout === 'stack' && scope === 'mine' && !isNarrow;
+  const allFolded = collapsedDays.length === 7;
+  const toggleDayFold = useCallback((index: number) => {
+    setCollapsedDays(prev => prev.includes(index) ? prev.filter(day => day !== index) : [...prev, index]);
+  }, []);
 
   useEffect(() => {
     const prefs: StoredPrefs = {
       scope,
       density,
+      layout,
+      collapsedDays,
       clientId: filters.clientId,
       projectId: filters.projectId,
       priority: filters.priority,
       status: filters.status,
     };
     try { localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(prefs)); } catch { /* privémodus: niet erg */ }
-  }, [scope, density, filters.clientId, filters.projectId, filters.priority, filters.status]);
+  }, [scope, density, layout, collapsedDays, filters.clientId, filters.projectId, filters.priority, filters.status]);
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(anchor, i)), [anchor]);
   const weekEnd = days[6];
@@ -1338,6 +1368,19 @@ export function WeekPlanner({
             <button type="button" className={density === 'compact' ? 'is-on' : ''} aria-pressed={density === 'compact'} onClick={() => setDensity('compact')}>Compact</button>
             <button type="button" className={density === 'comfortable' ? 'is-on' : ''} aria-pressed={density === 'comfortable'} onClick={() => setDensity('comfortable')}>Ruim</button>
           </div>
+          {scope === 'mine' && !isNarrow && <div className="wp-seg" role="group" aria-label="Hoe de dagen staan">
+            <button type="button" className={layout === 'stack' ? 'is-on' : ''} aria-pressed={layout === 'stack'} onClick={() => setLayout('stack')}>Onder elkaar</button>
+            <button type="button" className={layout === 'columns' ? 'is-on' : ''} aria-pressed={layout === 'columns'} onClick={() => setLayout('columns')}>Naast elkaar</button>
+          </div>}
+          {stacked && <button
+            type="button"
+            className="wp-cap-btn wp-fold-all"
+            onClick={() => setCollapsedDays(allFolded ? [] : [...ALL_DAY_INDEXES])}
+            title={allFolded ? 'Alle dagen uitklappen' : 'Alle dagen inklappen — dan past de hele week op één scherm'}
+          >
+            {allFolded ? <ChevronsUpDown size={13}/> : <ChevronsDownUp size={13}/>}
+            {allFolded ? 'Uitklappen' : 'Inklappen'}
+          </button>}
           {scope === 'mine' && <CapacityControl
             capacity={data.plannerCapacity}
             canWrite={canWrite}
@@ -1432,7 +1475,171 @@ export function WeekPlanner({
           })}
         </div>}
 
-        <div
+        {/*
+          Dagen onder elkaar, elk open en dicht te klappen.
+
+          Zeven kolommen naast elkaar geven per dag ~200px: genoeg voor een titel
+          van drie woorden en verder niets, en een dag met acht taken verdwijnt in
+          zijn eigen scrollvak. Onder elkaar krijgt een taak de volle breedte, en
+          wat je nu niet nodig hebt klap je dicht — dichtgeklapt is de hele week
+          zeven koppen op één scherm, mét de drukte-balk, de uren en je streep.
+
+          De dichtgeklapte kop blijft een dropzone. Hij meldt zich aan onder
+          dezelfde `strip:`-sleutel als de dagstrook op een telefoon, en die
+          betekent al "deze dag, achteraan". Slepen naar een dichte dag werkt dus
+          zonder dat hij onder je vinger openspringt.
+
+          Weekstroken staan bovenaan in plaats van dwars over de dagen: zonder
+          kolommen is er niets om dwars overheen te lopen. Ze zijn hier dus ook
+          niet sleepbaar — precies zoals op een smal scherm.
+        */}
+        {stacked && <div className="wp-stack">
+          {bars.length > 0 && <div className="wp-stack-bars" role="group" aria-label="Taken over meerdere dagen">
+            {bars.map(bar => {
+              const links = taskLinks(bar.task);
+              return <div
+                key={bar.task.id}
+                className="wp-bar is-static"
+                style={{ '--bar': links.color } as React.CSSProperties}
+                data-bar-id={bar.task.id}
+                tabIndex={0}
+                role="button"
+                aria-label={`${bar.task.title}, van ${formatDateShort(bar.task.planned_date!)} tot en met ${formatDateShort(bar.task.planned_end_date!)}`}
+                onKeyDown={e => handleBarKey(e, bar)}
+                onClick={() => onEditTask(bar.task)}
+              >
+                <span className="wp-bar-title">{bar.task.title}</span>
+                {links.projectName && <span className="wp-bar-project">{links.projectName}</span>}
+                <span className="wp-bar-span">{barDateLabel(bar)}</span>
+              </div>;
+            })}
+          </div>}
+
+          {days.map((day, i) => {
+            const key = formatISODate(day);
+            const bucket = byDay.get(key) ?? EMPTY_BUCKET;
+            const agenda = agendaByDay.get(key);
+            const isToday = isSameDay(day, todayLocal);
+            const marker = insertMarkerFor(key);
+            const total = bucket.minutes + bucket.agendaMinutes + bucket.spanMinutes;
+            const folded = collapsedDays.includes(i);
+            const state = `${isToday ? 'is-today ' : ''}${marker !== null ? 'is-drop' : ''}`;
+            // Zeven <section>-landmarks in één scherm maakt de landmarkslijst
+            // onbruikbaar; dit is een uitklapper, geen sectie. De knop noemt de dag
+            // en wijst met aria-controls naar het vak dat hij opent.
+            const bodyId = `wp-day-${key}`;
+            return <div
+              className={`wp-stack-day ${folded ? 'is-folded' : 'is-open'} ${state}`}
+              key={key}
+            >
+              {/* Dichtgeklapt is de kop zélf de dropzone; open neemt het vak
+                  eronder het over. Twee sleutels, dus ze kunnen elkaar niet
+                  wegpoetsen als React de refs opnieuw zet. */}
+              <div
+                className="wp-stack-head"
+                ref={folded ? (el => registerZone(`${STRIP_PREFIX}${key}`, el)) : undefined}
+              >
+                <button
+                  type="button"
+                  className="wp-stack-toggle"
+                  aria-expanded={!folded}
+                  aria-controls={bodyId}
+                  onClick={() => toggleDayFold(i)}
+                  title={folded ? 'Uitklappen' : 'Inklappen'}
+                >
+                  <ChevronDown size={15} className="wp-stack-caret" aria-hidden="true"/>
+                  <span className="wp-stack-name">{DAY_FULL_NL[i]}</span>
+                  <span className="wp-stack-num">{day.getDate()}</span>
+                  {isToday && <span className="wp-stack-today">vandaag</span>}
+                </button>
+
+                {/* Aantal én uren: acht taken zonder schatting leest anders als
+                    een lege dag, want dan staat de urenteller op nul. De ± staat
+                    er zodra een weekstrook meetelt — dat deel is een verdeling
+                    over zijn dagen, geen gemeten tijd. */}
+                {bucket.count > 0 && <span className="wp-day-count">{bucket.count}</span>}
+                {total > 0 && <span className="wp-day-total">{bucket.spanMinutes > 0 ? '±' : ''}{formatDuration(total)}</span>}
+
+                <div
+                  className="wp-day-load"
+                  role="img"
+                  aria-label={`${formatDuration(bucket.agendaMinutes)} afspraken en ${formatDuration(bucket.minutes + bucket.spanMinutes)} taken`}
+                >
+                  <span className="wp-day-load-agenda" style={{ width: `${(bucket.agendaMinutes / loadScale) * 100}%` }}/>
+                  <span className="wp-day-load-fill" style={{ width: `${((bucket.minutes + bucket.spanMinutes) / loadScale) * 100}%` }}/>
+                </div>
+
+                {dayCountsForCapacity(day) && capacityMinutes !== null && <div className={`wp-day-room ${total > capacityMinutes ? 'is-over' : ''}`}>
+                  {total > capacityMinutes
+                    ? `${formatDuration(total - capacityMinutes)} over je streep`
+                    : `nog ${formatDuration(capacityMinutes - total)} vrij`}
+                </div>}
+
+                {canWrite && <button
+                  type="button"
+                  className="wp-day-add"
+                  onClick={() => {
+                    // Op een dichte dag typen kan niet: het invoerveld zit in het
+                    // vak eronder. Het plusje klapt hem daarom eerst open.
+                    if (folded) setCollapsedDays(prev => prev.filter(index => index !== i));
+                    setQuickAddDay(prev => (!folded && prev === key) ? null : key);
+                  }}
+                  aria-expanded={quickAddDay === key}
+                  aria-label={`Taak toevoegen op ${DAY_FULL_NL[i]} ${day.getDate()}`}
+                  title={`Taak toevoegen op ${DAY_FULL_NL[i]} ${day.getDate()}`}
+                >
+                  <Plus size={13}/>
+                </button>}
+              </div>
+
+              {/* Hele-dag-afspraken kosten geen minuten maar maken je dag wél vol.
+                  Ze blijven daarom ook staan als de dag dicht is: een shootdag mag
+                  niet als een lege dag lezen. */}
+              {!!agenda?.allDay.length && <div className="wp-stack-allday">
+                {agenda.allDay.map(event => <span key={`${event.source_id}-${event.provider_event_id}`} className="wp-allday-chip" title={event.title}>
+                  {event.title}
+                </span>)}
+              </div>}
+
+              {!folded && <div className="wp-stack-body" id={bodyId} ref={el => registerZone(key, el)}>
+                {!!agenda?.items.length && <div
+                  className="wp-day-pane wp-day-agenda"
+                  role="group"
+                  aria-label={`Afspraken op ${DAY_FULL_NL[i]} ${day.getDate()}`}
+                >
+                  {agenda.items.map(event => <button
+                    key={`${event.source_id}-${event.provider_event_id}-${event.starts_at}`}
+                    type="button"
+                    className="wp-agenda-chip"
+                    title={`${event.title} — open in de agenda`}
+                    onClick={() => onOpenCalendar(key)}
+                  >
+                    <span className="wp-agenda-time">{formatEventTime(event.starts_at)}</span>
+                    <span className="wp-agenda-name">{event.title}</span>
+                  </button>)}
+                </div>}
+                {quickAddDay === key && <QuickAddTask
+                  busy={quickAddBusy}
+                  weekHint={`van ${formatDateShort(key)} tot en met ${formatDateShort(weekStripEnd(key, orderedDayKeys[6]))}`}
+                  onSubmit={(title, mode) => quickAdd(key, title, mode === 'week' ? weekStripEnd(key, orderedDayKeys[6]) : undefined)}
+                  onCancel={() => setQuickAddDay(null)}
+                />}
+                <DayTasksPane
+                  label={`Taken op ${DAY_FULL_NL[i]} ${day.getDate()}`}
+                  count={bucket.tasks.length}
+                >
+                  {bucket.tasks.map(task => taskCard(task, { insertBefore: marker }))}
+                  {marker === '__end__' && <div className="wp-insert-line" aria-hidden="true"/>}
+                </DayTasksPane>
+                {bucket.noEstimateCount > 0 && <div className="wp-day-noestimate">
+                  {bucket.noEstimateCount === 1 ? '1 taak zonder schatting' : `${bucket.noEstimateCount} taken zonder schatting`}
+                </div>}
+              </div>}
+            </div>;
+          })}
+        </div>}
+
+        {!stacked && <div
           className="wp-week"
           ref={bandRef}
           style={{ gridTemplateRows: `auto${laneCount > 0 ? ` repeat(${laneCount}, 26px)` : ''}${scope === 'mine' ? ' minmax(0, 1fr)' : ''}` }}
@@ -1440,7 +1647,7 @@ export function WeekPlanner({
           {bars.map(bar => {
             const links = taskLinks(bar.task);
             const dragging = barDrag?.taskId === bar.task.id && barDrag.moved;
-            const draggable = canWrite && !isNarrow;
+            const draggable = canWrite && !isNarrow && !stacked;
             return <div
               key={bar.task.id}
               className={`wp-bar ${dragging ? 'is-dragging' : ''} ${bar.continuesLeft ? 'continues-left' : ''} ${bar.continuesRight ? 'continues-right' : ''} ${draggable ? '' : 'is-static'}`}
@@ -1593,7 +1800,7 @@ export function WeekPlanner({
               </div>}
             </Fragment>;
           })}
-        </div>
+        </div>}
 
         {scope === 'team' && <div className="wp-team">
           {teamRows.map(row => <div className="wp-team-row" key={row.key}>

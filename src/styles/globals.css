@@ -6054,6 +6054,64 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 /* Strook zonder sleepgedrag (alleen-lezen of smal scherm) */
 .wp-bar.is-static{cursor:pointer}
 
+/* ── Dagen onder elkaar: rijen die je open- en dichtklapt ─────────────────
+   Naast elkaar krijgt een dag ~200px — genoeg voor een titel van drie woorden
+   en verder niets — en een dag met acht taken verdwijnt in zijn eigen
+   scrollvak. Onder elkaar krijgt een taak de volle breedte, en een
+   dichtgeklapte dag is nog steeds één regel met alles wat telt: dag, aantal,
+   uren, drukte-balk en je streep. Zeven van die regels passen op één scherm,
+   en dát is het overzicht.
+
+   Geen scrollvak per dag hier: de pagina scrollt al, en een vak ín een
+   scrollende pagina zit tijdens het slepen alleen maar in de weg. */
+.wp-stack{display:flex;flex-direction:column;gap:8px}
+
+/* Weekstroken bovenaan — zonder kolommen is er niets om dwars overheen te
+   lopen, dus ze staan hier als volle regels en zijn niet sleepbaar. */
+.wp-stack-bars{display:flex;flex-direction:column;gap:5px}
+.wp-stack-bars .wp-bar{height:auto;min-height:34px;padding:7px 12px;white-space:normal;cursor:pointer}
+.wp-stack-bars .wp-bar-title{overflow:visible;white-space:normal}
+
+.wp-stack-day{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);transition:border-color .16s ease,background .16s ease}
+.wp-stack-day.is-today{border-color:rgba(var(--accent-rgb),.5)}
+.wp-stack-day.is-drop{background:var(--bg3);border-color:var(--accent);border-style:dashed}
+
+/* De kop is één regel, open of dicht. Alles erin heeft een vaste maat behalve
+   de drukte-balk: die slokt op wat overblijft. */
+.wp-stack-head{display:flex;align-items:center;gap:10px;padding:7px 12px 7px 6px}
+.wp-stack-toggle{flex:0 0 auto;display:flex;align-items:center;gap:8px;min-width:184px;padding:5px 8px;border:0;border-radius:9px;background:transparent;color:var(--muted2);font:inherit;text-align:left;cursor:pointer;transition:background .12s ease,color .12s ease}
+.wp-stack-toggle:hover{background:var(--bg3);color:var(--text)}
+.wp-stack-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.wp-stack-caret{flex:0 0 auto;color:var(--muted);transition:transform .16s ease}
+.wp-stack-day.is-folded .wp-stack-caret{transform:rotate(-90deg)}
+.wp-stack-name{font-size:12.5px;font-weight:600;letter-spacing:-.01em;text-transform:capitalize}
+.wp-stack-num{font-size:15px;font-weight:700;color:var(--text);font-variant-numeric:tabular-nums}
+.wp-stack-today{padding:2px 7px;border-radius:999px;background:var(--accent);color:var(--on-accent);font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+
+/* `.wp-day-count` en `.wp-day-total` staan in de kolomweergave rechts uitgelijnd
+   met `margin-left:auto`. Hier volgen ze gewoon de rij. */
+.wp-stack-head .wp-day-count{flex:0 0 auto;margin-left:0}
+.wp-stack-head .wp-day-total{flex:0 0 auto;margin-left:0;min-width:50px}
+.wp-stack-head .wp-day-load{flex:1 1 auto;min-width:80px;height:6px}
+.wp-stack-head .wp-day-room{flex:0 0 auto;white-space:nowrap}
+.wp-stack-head .wp-day-add{flex:0 0 auto;width:26px;height:26px}
+
+.wp-stack-allday{display:flex;flex-wrap:wrap;gap:4px;padding:0 12px 8px 14px}
+
+/* Het vak eronder: geen dak, geen eigen scrollbalk, en een bodem zodat een
+   lege dag nog steeds een vlak is om iets in los te laten. */
+.wp-stack-body{display:flex;flex-direction:column;gap:7px;min-height:46px;margin:0 12px 11px;padding:9px 2px 0;border-top:1px solid var(--border)}
+.wp-stack-body .wp-day-pane{overflow:visible;max-height:none}
+/* Afspraken naast elkaar in plaats van volle regels: ze zijn kort en de rij is
+   hier ruim 1100px breed. */
+.wp-stack-body .wp-day-agenda{flex-direction:row;flex-wrap:wrap;gap:5px;align-items:flex-start}
+.wp-stack-body .wp-agenda-chip{flex:0 1 auto;max-width:340px}
+.wp-stack-body .wp-day-tasks{min-height:0}
+.wp-stack-body .wp-day-noestimate{margin-top:0;padding-left:2px;text-align:left}
+
+/* De knop die alle zeven tegelijk opent of sluit; leunt op de streep-knop. */
+.wp-fold-all{display:inline-flex;align-items:center;gap:6px}
+
 @media(max-width:900px){
   /* Dagen onder elkaar. Het raster wordt een kolom, dus de rasterplaatsing van
      stroken, koppen en kolommen vervalt; de stroken staan vooraan in de DOM en
