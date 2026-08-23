@@ -1871,6 +1871,54 @@ body::before{
 .has-head .finance-search-chips{flex:1 0 100%;order:4}
 .has-head .finance-search-toggle{order:5}
 .has-head .finance-search-active-row{flex:1 0 100%;order:6}
+
+/* ── Compacte commandobalk (`is-bar`) ─────────────────────────────────────
+   Alleen de weekplanner geeft deze klasse mee. Daar staat onder dit blok
+   geen tabel maar zeven dagkolommen die zélf hoogte nodig hebben, en die
+   begonnen pas op 534px: een kop van drie regels, vier filtervelden ónder
+   elkaar, en daaronder nog een gouden urenstrook die herhaalde wat de titel
+   al zei.
+
+   Die vier velden werden vier regels door een val in de spec. `flex:0 1 auto`
+   geeft het raster een ONBEPAALDE breedte, en `repeat(auto-fit,…)` herhaalt
+   dan volgens CSS Grid §7.2.3.2 precies één keer — één kolom dus. Met
+   `align-items:flex-end` op de kaart zakte het zoekveld naar de onderkant
+   van die kolom, en bleef het gat erboven staan.
+
+   Hier is het raster daarom geen raster maar een rij pillen: elk filter is
+   zo breed als wat erin staat. Kop, zoekregel en filterregel samen: 204px.
+
+   De andere vijf schermen die dit blok delen krijgen deze klasse niet — daar
+   staan datum- en bedragvelden waar het label bóven het veld wél iets zegt. */
+.finance-search-card.is-bar{align-items:center;padding:14px 15px;gap:10px}
+
+/* Kop op één regel: titel, weeklabel en de urenstand naast elkaar. */
+.is-bar .finance-search-head{align-items:center;padding-bottom:11px}
+.is-bar .finance-search-head h2{margin:0;font-size:21px}
+.is-bar .finance-search-head .fsh-text{display:flex;align-items:baseline;gap:4px 10px;flex-wrap:wrap}
+.is-bar .finance-search-head .fsh-text>span{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:11.5px}
+.is-bar .fsh-text b{font-weight:600;color:var(--text)}
+.is-bar .fsh-text i{width:3px;height:3px;border-radius:50%;background:var(--muted);flex:0 0 auto}
+.is-bar .fsh-text em{font-style:normal;color:var(--accent-ink)}
+
+/* Zoekveld, filterpillen en telpil op dezelfde hoogte, op één regel. Een
+   zoekveld dat tot 963px doorgroeit staat scheef naast pillen van 38px, dus
+   groeit het mee tot 420px en schuift de telpil naar de rechterrand. */
+.is-bar .finance-search-query{flex:1 1 190px;max-width:420px}
+.is-bar .finance-search-query .form-input{min-height:38px;border-radius:999px;padding-left:35px}
+.is-bar .finance-search-query>span{left:13px}
+.is-bar .finance-search-grid{display:flex;flex-wrap:wrap;flex:0 1 auto;gap:8px}
+.is-bar .finance-search-field{flex:0 0 auto;gap:0}
+/* "KLANT" boven een keuzelijst die "Alle klanten" zegt is dubbelop en kost
+   een hele regel. Het label blijft staan — alleen niet meer in beeld, zodat
+   een schermlezer het gewoon voorleest. */
+.is-bar .finance-search-field>span{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.is-bar .finance-search-field .select-control{width:auto}
+.is-bar .finance-search-field .select-trigger{width:auto;max-width:210px;min-height:38px;border-radius:999px;padding:0 32px 0 14px;font-weight:600}
+.is-bar .finance-search-result-card{margin-left:auto;min-height:38px;padding:8px 14px}
+.is-bar .finance-search-active-row{padding-top:0}
+.is-bar .finance-search-active-row span{min-height:24px;padding:3px 10px;font-size:10.5px}
+.is-bar .finance-search-active-row button{padding:5px 11px;font-size:10.5px}
 @media(max-width:760px){
   .has-head .finance-search-head{padding-bottom:10px}
   .has-head .fsh-actions{flex:1 0 100%;justify-content:flex-start}
@@ -1879,6 +1927,23 @@ body::before{
   .has-head .finance-search-chips{order:3}
   .has-head .finance-search-toggle{order:4}
   .has-head .finance-search-grid{order:5;flex:1 0 100%}
+}
+@media(max-width:760px){
+  /* De urenstand staat nu in de meta-regel van deze kop, niet meer in een
+     eigen strook. Het titelblok mag hier dus niet compleet weg zoals bij de
+     andere lijstpagina's (zie "Minimale titels" verderop) — alleen de titel
+     zelf, want de bovenbalk zegt al waar je bent. */
+  .is-bar .finance-search-head .fsh-text{display:flex}
+  .is-bar .finance-search-head h2{display:none}
+  /* De pillen zitten op een telefoon achter "Meer filters", net als elders. */
+  .is-bar .finance-search-grid.is-collapsed{display:none}
+  /* Duimmaat wint van de compacte hoogte hierboven. */
+  .is-bar .finance-search-field .select-trigger{min-height:44px}
+  /* De telregel mag hier een rij blijven: één pil en één knop, allebei
+     klein genoeg. Onder elkaar kost datzelfde 58px. */
+  .is-bar .finance-search-active-row{flex-direction:row;align-items:center}
+  .is-bar .finance-search-query{max-width:none}
+  .is-bar .finance-search-query .form-input{min-height:44px}
 }
 @media(max-width:560px){.finance-search-head h2{font-size:23px}.fsh-actions .btn{width:100%}}
 
@@ -1945,7 +2010,7 @@ body::before{
 .tb-ev-bg:hover{opacity:.85;z-index:4;transform:none}
 
 /* Weekplanner V2 - planning fields, filtering, outside-week section and capacity */
-.week-planner{gap:16px}.wp-toolbar{position:relative}.wp-summary{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;background:linear-gradient(135deg,rgba(var(--accent-rgb),.12),rgba(var(--sheen-rgb),calc(.03 * var(--sheen-k))));border:1px solid rgba(var(--accent-rgb),.22);border-radius:var(--r2);padding:14px 16px}.wp-summary-main{display:flex;flex-direction:column;gap:4px}.wp-summary-main span{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-ink);font-weight:700}.wp-summary-main strong{font-size:17px;letter-spacing:-.02em}.wp-summary-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.wp-summary-meta span{font-size:11px;font-weight:600;color:var(--muted2);background:rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)));border:1px solid var(--border);border-radius:999px;padding:5px 9px}.wp-filters{display:grid;grid-template-columns:minmax(220px,1.7fr) repeat(4,minmax(140px,1fr));gap:8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:10px}.wp-grid{gap:10px}.wp-day-head{padding:10px 12px}.wp-day-count{color:var(--text);background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));border:1px solid var(--border);font-size:10px;font-weight:700}.wp-day-body{gap:7px;overflow:auto}.wp-task.is-insert-target::before{content:"";position:absolute;left:8px;right:8px;top:-5px;height:2px;border-radius:999px;background:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.11)}.wp-task-status{font-size:10px;font-weight:600;padding:2px 6px;border-radius:4px;background:rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));border:1px solid var(--border);color:var(--muted2)}.wp-task-client{color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.wp-task-planning-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:7px;padding-top:7px;border-top:1px solid rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)));font-size:10px;color:var(--muted)}.wp-task-planning-meta span{background:rgba(var(--shade-rgb),calc(.16 * var(--shade-k)));border:1px solid rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));border-radius:999px;padding:2px 7px}@media(max-width:1200px){.wp-grid{grid-template-columns:repeat(3,1fr)}.wp-filters{grid-template-columns:1fr 1fr}}@media(max-width:900px){.wp-grid{grid-template-columns:1fr}.wp-filters{grid-template-columns:1fr}.wp-summary{align-items:stretch}.wp-summary-meta{align-items:stretch}.wp-summary-meta span{flex:1;text-align:center}.wp-week-label{width:100%;margin-left:0}}
+.week-planner{gap:16px}.wp-toolbar{position:relative}.wp-filters{display:grid;grid-template-columns:minmax(220px,1.7fr) repeat(4,minmax(140px,1fr));gap:8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:10px}.wp-grid{gap:10px}.wp-day-head{padding:10px 12px}.wp-day-count{color:var(--text);background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));border:1px solid var(--border);font-size:10px;font-weight:700}.wp-day-body{gap:7px;overflow:auto}.wp-task.is-insert-target::before{content:"";position:absolute;left:8px;right:8px;top:-5px;height:2px;border-radius:999px;background:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.11)}.wp-task-status{font-size:10px;font-weight:600;padding:2px 6px;border-radius:4px;background:rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));border:1px solid var(--border);color:var(--muted2)}.wp-task-client{color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.wp-task-planning-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:7px;padding-top:7px;border-top:1px solid rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)));font-size:10px;color:var(--muted)}.wp-task-planning-meta span{background:rgba(var(--shade-rgb),calc(.16 * var(--shade-k)));border:1px solid rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));border-radius:999px;padding:2px 7px}@media(max-width:1200px){.wp-grid{grid-template-columns:repeat(3,1fr)}.wp-filters{grid-template-columns:1fr 1fr}}@media(max-width:900px){.wp-grid{grid-template-columns:1fr}.wp-filters{grid-template-columns:1fr}.wp-week-label{width:100%;margin-left:0}}
 
 /* Projectplanning submenu + readability pass */
 .nav-submenu-projects button{display:flex;align-items:center;gap:7px}
@@ -6159,29 +6224,9 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
              werktabs als icoon.
    ═══════════════════════════════════════════════════════════════════════ */
 
-/* 1 ── Pillen die tot ovalen wrappen ──────────────────────────────────────
-   `.wp-summary-meta span` is een pil met border-radius:999px. Het blok op
-   regel 1823 geeft hem op ≤900 `flex:1`, waardoor vijf pillen de breedte
-   delen: ~65px per stuk op een telefoon. De tekst ("Volst: do 13 · 28u 30m")
-   breekt dan over drie à vier regels en de pil groeit mee tot een ovale
-   klodder van 61px hoog — precies wat er op de telefoon te zien was.
-
-   Een pil hóórt niet te breken. Dus: nooit afbreken, en de rij mag opzij
-   schuiven wanneer hij niet past. Dat is meteen ook de compactste vorm —
-   één regel van 30px in plaats van drie rijen van 61px. De weekcijfers zijn
-   bijzaak naast de kop erboven; opzij vegen hoort daarbij. */
-@media(max-width:900px){
-  .wp-summary{gap:10px;padding:12px 13px}
-  .wp-summary-meta{
-    display:flex;flex-wrap:nowrap;gap:6px;
-    overflow-x:auto;overscroll-behavior-x:contain;
-    /* Het randje aflopen i.p.v. abrupt afkappen: laat zien dat er meer is. */
-    padding-right:12px;margin-right:-4px;
-    scrollbar-width:none;
-  }
-  .wp-summary-meta::-webkit-scrollbar{display:none}
-  .wp-summary-meta span{flex:0 0 auto;text-align:left;white-space:nowrap}
-}
+/* 1 ── (vervallen) De weekcijfers stonden in een eigen gouden strook met
+   pillen die op een telefoon tot ovalen wrapten. Die strook bestaat niet
+   meer: de cijfers staan in de meta-regel van de kopbalk — zie `is-bar`. */
 
 /* 2 ── Weekplanner: minder chrome vóór de planning ────────────────────────
    Op de telefoon stond er drie rijen knoppen, een samenvatting van drie
@@ -6215,13 +6260,6 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
   /* De sneltoetsuitleg gaat over een toetsenbord dat er niet is. */
   .wp-keyhint{display:none}
-
-  /* "DEZE WEEK" staat als opschrift bóven het weeklabel dat nu de kop is —
-     twee keer dezelfde mededeling. De regel eronder ("3 taken · 1u
-     ingepland") spreekt voor zich. */
-  .wp-summary{padding:10px 12px}
-  .wp-summary-main>span{display:none}
-  .wp-summary-main strong{font-size:15px}
 }
 
 /* 3 ── Raakvlakken: wat je met je duim raakt is minstens 44px ─────────────
@@ -8066,8 +8104,6 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .wp-assign-text{color:var(--muted2)}
 .wp-assign-choice button{border:1px solid var(--accent);background:rgba(var(--accent-rgb),.14);color:var(--accent-ink);border-radius:6px;padding:3px 9px;font:inherit;font-size:11px;font-weight:700;cursor:pointer}
 .wp-assign-choice button.is-ghost{border-color:var(--border2);background:transparent;color:var(--muted)}
-
-.wp-summary-meta span.is-soft{color:var(--muted);background:transparent;border-style:dashed}
 
 /* ── Dichtheid ──────────────────────────────────────────────────────────────
    De schakelaar Compact/Ruim zette wel een klasse maar er bestond geen enkele

@@ -1300,14 +1300,35 @@ export function WeekPlanner({
       hetzelfde blok dat klanten, offertes, facturen, projecten, tickets en
       campagnes al delen; de telpil erin verklapt eindelijk dat er nog een
       filter van vorige week aanstaat.
+
+      `is-bar` perst datzelfde blok tot één commandobalk. Het bleef namelijk
+      groeien: vier keuzelijsten stapelden zich tot vier regels (zie de CSS
+      bij `is-bar`), en de urenstrook eronder herhaalde met een eigen gouden
+      kaart wat de titel al zei. Samen 534px voordat de maandag begon. De
+      uren staan nu achter het weeklabel — je leest ze terwijl je toch al
+      naar de weekkeuze kijkt.
+
+      Het opschrift "Planning" is weg: het tabblad en het zijmenu zeggen al
+      waar je bent.
     */}
     <SearchFilterPanel
-      className="is-wide"
+      className="is-wide is-bar"
       ariaLabel="Weekplanner zoeken en filteren"
       header={{
-        eyebrow: 'Planning',
         title: isCurrentWeek ? 'Deze week' : `Week ${isoWeekNumber(anchor)}`,
-        meta: weekLabel,
+        meta: <>
+          {weekLabel}
+          <i aria-hidden="true"/><span><b>{formatDuration(weekTaskMinutes)}</b> taken</span>
+          {weekBucket.agendaMinutes > 0 && <>
+            <i aria-hidden="true"/><span><b>{formatDuration(weekBucket.agendaMinutes)}</b> afspraken</span>
+            <i aria-hidden="true"/><span><b>{formatDuration(weekTaskMinutes + weekBucket.agendaMinutes)}</b> belegd</span>
+          </>}
+          <i aria-hidden="true"/><span>{weekTaskCount} {weekTaskCount === 1 ? 'taak' : 'taken'}</span>
+          {busiestKey && <><i aria-hidden="true"/><span>Volst: {formatDayShort(busiestKey)} · {formatDuration(busiestMinutes)}</span></>}
+          {weekBucket.noEstimateCount > 0 && <><i aria-hidden="true"/><em>
+            {weekBucket.noEstimateCount === 1 ? '1 taak zonder schatting' : `${weekBucket.noEstimateCount} taken zonder schatting`}
+          </em></>}
+        </>,
         actions: <>
           <div className="wp-seg" role="group" aria-label="Wiens taken">
             <button type="button" className={scope === 'mine' ? 'is-on' : ''} aria-pressed={scope === 'mine'} onClick={() => setScope('mine')}>Mijn week</button>
@@ -1344,30 +1365,6 @@ export function WeekPlanner({
       onFieldChange={(key, value) => updateFilter(key as keyof PlannerFilters, value as never)}
       onReset={resetFilters}
     />
-
-    {/*
-      Eén optelling, niet twee die elkaar tegenspreken. Hiervoor stond in
-      dezelfde balk "Xu ingepland" (alleen taken) náást "Volst: Yu" (taken plús
-      agenda), met de dagkoppen die weer die tweede definitie volgden. Nu telt
-      alles bij elkaar op: taken + weekstroken + afspraken = belegd.
-    */}
-    <section className="wp-summary" aria-label="Deze week in uren">
-      <div className="wp-summary-main">
-        <span>{isCurrentWeek ? 'Deze week' : `Week ${isoWeekNumber(anchor)}`}</span>
-        <strong>
-          {formatDuration(weekTaskMinutes)} taken
-          {weekBucket.agendaMinutes > 0 && <> + {formatDuration(weekBucket.agendaMinutes)} afspraken</>}
-          {weekBucket.agendaMinutes > 0 && <> = {formatDuration(weekTaskMinutes + weekBucket.agendaMinutes)} belegd</>}
-        </strong>
-      </div>
-      <div className="wp-summary-meta">
-        <span>{weekTaskCount} {weekTaskCount === 1 ? 'taak' : 'taken'}</span>
-        {busiestKey && <span>Volst: {formatDayShort(busiestKey)} · {formatDuration(busiestMinutes)}</span>}
-        {weekBucket.noEstimateCount > 0 && <span className="is-soft">
-          {weekBucket.noEstimateCount === 1 ? '1 taak zonder schatting' : `${weekBucket.noEstimateCount} taken zonder schatting`}
-        </span>}
-      </div>
-    </section>
 
     {!canWrite && <div className="readonly-note">Je hebt alleen-lezen toegang. Taken openen kan, maar slepen en plannen is uitgeschakeld.</div>}
     {error && <div className="error">{error}</div>}

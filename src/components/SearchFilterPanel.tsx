@@ -79,7 +79,12 @@ export function SearchFilterPanel({
 }: {
   ariaLabel: string;
   /** Extra klassen op de kaart. `is-wide` haalt de 1180px-cap eraf, voor
-   *  pagina's waarvan de tabel zelf ook tot de rand doorloopt. */
+   *  pagina's waarvan de tabel zelf ook tot de rand doorloopt. `is-bar`
+   *  perst het blok tot één commandobalk: de veldlabels gaan uit beeld en
+   *  de keuzelijsten worden pillen die naast het zoekveld passen. Dat kan
+   *  alleen als élk veld een keuzelijst is die zelf al zegt wat hij doet
+   *  ("Alle klanten") — bij een leeg datum- of bedragveld is het label
+   *  onmisbaar, dus die pagina's laten hem staan. */
   className?: string;
   /** Paginakop in dezelfde kaart, in plaats van een losse titelbalk erboven. */
   header?: SearchFilterHeader;
