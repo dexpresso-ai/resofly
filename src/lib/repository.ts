@@ -4197,6 +4197,20 @@ export async function deleteInvoiceMollieKey(organizationId: UUID): Promise<{ st
 }
 
 /**
+ * Hernoem een geüpload bestand. Alleen de weergavenaam verandert: de `storage_key`
+ * in R2 blijft precies waar hij is, zodat bestaande links, office-sessies en
+ * downloads gewoon blijven werken. Deze update loopt bewust niet via `updateRow`,
+ * want `attachments` heeft geen `updated_at`-kolom.
+ */
+export async function renameAttachment(id: UUID, name: string, organizationId?: UUID): Promise<Attachment> {
+  let query = supabase.from('attachments').update({ name }).eq('id', id);
+  if (organizationId) query = query.eq('organization_id', organizationId);
+  const { data, error } = await query.select('*').single();
+  if (error) throw error;
+  return data as Attachment;
+}
+
+/**
  * Delete a single attachment: remove the DB row first (so the UI can never show a ghost
  * pointing at a missing file), then best-effort R2 cleanup. An R2 failure leaves an orphan
  * in storage but does not block the user.

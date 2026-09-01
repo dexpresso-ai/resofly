@@ -7,10 +7,12 @@ import {
 } from 'lucide-react';
 import type { AppData, Attachment, ContentFolder, InternalDocument, Note, Project } from '../types';
 import { dateNL } from '../lib/format';
-import { insertRow, updateRow, deleteContentFolder, deleteAttachment } from '../lib/repository';
+import { insertRow, updateRow, deleteContentFolder, deleteAttachment, renameAttachment } from '../lib/repository';
 import { uploadToR2, downloadAttachment } from '../lib/r2';
 import { createOfficeSession, createOfficeDocument, isOfficeEditable, NEW_OFFICE_LABEL, type NewOfficeType, type OfficeSession } from '../lib/office';
 import { OfficeEditor } from './OfficeEditor';
+import { DriveRenameInput } from '../components/DriveRename';
+import { fileExtension, resolveRename } from '../lib/rename';
 import { childFolders, clientFolderOptions, folderDescendantIds, folderPath, scopedFolders } from '../lib/folders';
 import { AttachmentGlyph, DocumentGlyph, attAccentColor, attTypeLabel, documentAccentColor, fmtBytes } from './ClientFolders';
 
@@ -64,6 +66,10 @@ type Row = {
   att?: Attachment;
   doc?: InternalDocument;
   menu?: ((menuKey: string) => ReactNode) | null;
+  /** Inline hernoemen (F2 of ⋮ → Naam wijzigen); null als je hier niet mag schrijven. */
+  rename?: ((typed: string) => void) | null;
+  /** Bestanden houden hun extensie: alleen de naam ervóór staat geselecteerd. */
+  keepExtension?: boolean;
 };
 const isFolderRow = (r: Row) => r.kind === 'client' || r.kind === 'project' || r.kind === 'folder';
 
@@ -127,6 +133,8 @@ export function ContentLibrary({
   const [sortOpen, setSortOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [menu, setMenu] = useState<{ key: string; mode: 'main' | 'move'; up: boolean } | null>(null);
+  /** De rij waarvan de naam op dit moment wordt bewerkt (`Row.key`). */
+  const [renaming, setRenaming] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -306,10 +314,10 @@ export function ContentLibrary({
     return list;
   }, [data.clients, data.projects, countByClient, attCountByClient, showFiles]);
 
-  function openClient(id: string | null) { setClientId(id); setProjectId(null); setFolderId(null); setQuery(''); setMenu(null); }
-  function openProject(id: string | null) { setProjectId(id); setFolderId(null); setQuery(''); setMenu(null); }
+  function openClient(id: string | null) { setClientId(id); setProjectId(null); setFolderId(null); setQuery(''); setMenu(null); setRenaming(null); }
+  function openProject(id: string | null) { setProjectId(id); setFolderId(null); setQuery(''); setMenu(null); setRenaming(null); }
   /** Mappen leven binnen de open scope: het project blijft dus staan bij het openen. */
-  function openFolder(id: string | null) { setFolderId(id); setQuery(''); setMenu(null); }
+  function openFolder(id: string | null) { setFolderId(id); setQuery(''); setMenu(null); setRenaming(null); }
 
   /** Eén niveau omhoog: submap → bovenliggende map → projectmap → klantwortel → alle klanten. */
   function goUp() {
@@ -351,10 +359,24 @@ export function ContentLibrary({
     });
   }
 
-  function renameFolder(folder: ContentFolder) {
-    const name = window.prompt('Nieuwe naam voor de map:', folder.name);
-    if (!name || !name.trim() || name.trim() === folder.name) return;
-    run(async () => { await updateRow('content_folders', folder.id, { name: name.trim() }, organizationId); });
+  /** Start het inline naamveld op een rij (⋮ → Naam wijzigen, of F2 op de rij zelf). */
+  function beginRename(key: string) { setMenu(null); setRenaming(key); }
+
+  /**
+   * Bevestig een inline hernoeming. Verandert er niets, dan gaat er ook niets naar de
+   * database; verandert de bestandsextensie, dan waarschuwen we eerst — net als de
+   * Verkenner, want zonder de juiste extensie opent de online editor het bestand niet meer.
+   */
+  function commitRename(oldName: string, typed: string, keepExtension: boolean, save: (name: string) => Promise<void>) {
+    setRenaming(null);
+    const next = resolveRename(oldName, typed, keepExtension);
+    if (!next.changed) return;
+    if (next.extensionChanged) {
+      const ext = fileExtension(next.name);
+      const warning = `Je wijzigt de bestandsextensie van “${oldName}” naar “${ext || 'geen extensie'}”.\n\nHet bestand wordt daardoor mogelijk onbruikbaar. Weet je zeker dat je dit wilt?`;
+      if (!window.confirm(warning)) return;
+    }
+    run(() => save(next.name));
   }
 
   function deleteFolder(folder: ContentFolder) {
@@ -445,43 +467,68 @@ export function ContentLibrary({
   const canDrop = Boolean(folderId) && canWrite;
 
   // ── Rijen voor de huidige map (mappen eerst, dan items; beide gesorteerd) ──
-  const itemRow = (it: ContentItem): Row => ({
-    key: `${it.kind}-${it.id}`,
-    kind: it.kind,
-    name: it.title || 'Naamloos',
-    color: it.kind === 'note' ? 'var(--accent-v)' : documentAccentColor(it.doc),
-    modified: it.modified,
-    size: '',
-    typeLabel: it.kind === 'note' ? 'Notitie' : 'Document',
-    doc: it.doc,
-    onOpen: () => it.kind === 'note' ? onEditNote(it.note!) : onEditDocument(it.doc!),
-    menu: canWrite && realClient
-      ? (menuKey: string) => contentMenu(menuKey, it.kind, it.id, () => it.kind === 'note' ? onEditNote(it.note!) : onEditDocument(it.doc!))
-      : null,
-  });
-  const contentFolderRow = (folder: ContentFolder, typeLabel: 'Map' | 'Submap'): Row => ({
-    key: `f-${folder.id}`,
-    kind: 'folder',
-    name: folder.name,
-    color: 'var(--accent)',
-    modified: folderModified(folder.id),
-    size: plural(folderCount(folder.id)),
-    typeLabel,
-    onOpen: () => openFolder(folder.id),
-    menu: canWrite ? () => folderMenu(folder) : null,
-  });
-  const attRow = (att: Attachment): Row => ({
-    key: `a-${att.id}`,
-    kind: 'file',
-    name: att.name,
-    color: attAccentColor(att),
-    modified: att.created_at,
-    size: fmtBytes(att.size_bytes),
-    typeLabel: attTypeLabel(att),
-    onOpen: () => attOpen(att),
-    att,
-    menu: () => fileMenu(att),
-  });
+  const itemRow = (it: ContentItem): Row => {
+    const key = `${it.kind}-${it.id}`;
+    const label = it.title || 'Naamloos';
+    const open = () => it.kind === 'note' ? onEditNote(it.note!) : onEditDocument(it.doc!);
+    return {
+      key,
+      kind: it.kind,
+      name: label,
+      color: it.kind === 'note' ? 'var(--accent-v)' : documentAccentColor(it.doc),
+      modified: it.modified,
+      size: '',
+      typeLabel: it.kind === 'note' ? 'Notitie' : 'Document',
+      doc: it.doc,
+      onOpen: open,
+      menu: canWrite && realClient ? (menuKey: string) => contentMenu(menuKey, key, it.kind, it.id, open) : null,
+      rename: canWrite
+        ? typed => commitRename(label, typed, false, async name => {
+            await updateRow(it.kind === 'note' ? 'notes' : 'documents', it.id, { title: name }, organizationId);
+          })
+        : null,
+    };
+  };
+  const contentFolderRow = (folder: ContentFolder, typeLabel: 'Map' | 'Submap'): Row => {
+    const key = `f-${folder.id}`;
+    return {
+      key,
+      kind: 'folder',
+      name: folder.name,
+      color: 'var(--accent)',
+      modified: folderModified(folder.id),
+      size: plural(folderCount(folder.id)),
+      typeLabel,
+      onOpen: () => openFolder(folder.id),
+      menu: canWrite ? () => folderMenu(folder, key) : null,
+      rename: canWrite
+        ? typed => commitRename(folder.name, typed, false, async name => {
+            await updateRow('content_folders', folder.id, { name }, organizationId);
+          })
+        : null,
+    };
+  };
+  const attRow = (att: Attachment): Row => {
+    const key = `a-${att.id}`;
+    return {
+      key,
+      kind: 'file',
+      name: att.name,
+      color: attAccentColor(att),
+      modified: att.created_at,
+      size: fmtBytes(att.size_bytes),
+      typeLabel: attTypeLabel(att),
+      onOpen: () => attOpen(att),
+      att,
+      menu: () => fileMenu(att, key),
+      keepExtension: true,
+      rename: canWrite
+        ? typed => commitRename(att.name, typed, true, async name => {
+            await renameAttachment(att.id, name, att.organization_id);
+          })
+        : null,
+    };
+  };
 
   const folderRows: Row[] = [];
   const fileRows: Row[] = [];
@@ -545,8 +592,10 @@ export function ContentLibrary({
     ? (sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)
     : <ChevronDown size={12} style={{ opacity: .45 }} />;
 
-  const rowKeyDown = (e: ReactKeyboardEvent, open: () => void) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+  /** Enter/spatie opent, F2 hernoemt — dezelfde toetsen als in de Verkenner. */
+  const rowKeyDown = (e: ReactKeyboardEvent, row: Row) => {
+    if (e.key === 'F2' && row.rename) { e.preventDefault(); beginRename(row.key); return; }
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.onOpen(); }
   };
 
   const emptyState = () => {
@@ -581,16 +630,16 @@ export function ContentLibrary({
     </div>;
   }
 
-  function folderMenu(folder: ContentFolder) {
+  function folderMenu(folder: ContentFolder, rowKey: string) {
     return <>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openFolder(folder.id)}><FolderOpen size={16} /> Openen</button>
-      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); renameFolder(folder); }}><Pencil size={16} /> Hernoemen</button>
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
       <div className="drive-pop-sep" />
       <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteFolder(folder); }}><Trash2 size={16} /> Verwijderen</button>
     </>;
   }
 
-  function contentMenu(key: string, kind: 'note' | 'document', id: string, open: () => void) {
+  function contentMenu(key: string, rowKey: string, kind: 'note' | 'document', id: string, open: () => void) {
     if (menu?.key === key && menu.mode === 'move') {
       return <>
         <div className="drive-pop-head"><button type="button" className="drive-pop-back" onClick={() => setMenu({ key, mode: 'main', up: menu.up })} aria-label="Terug"><ChevronLeft size={14} /></button> Verplaatsen naar</div>
@@ -601,16 +650,18 @@ export function ContentLibrary({
       </>;
     }
     return <>
-      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); open(); }}><Pencil size={16} /> Openen</button>
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); open(); }}><FilePen size={16} /> Openen</button>
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => setMenu(m => m ? { ...m, mode: 'move' } : m)}><Folder size={16} /> Verplaatsen naar… <ChevronRight size={14} style={{ marginLeft: 'auto' }} /></button>
     </>;
   }
 
-  function fileMenu(att: Attachment) {
+  function fileMenu(att: Attachment, rowKey: string) {
     return <>
       {isOfficeEditable(att) && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); void openOffice(att); }}><FilePen size={16} style={{ color: 'var(--accent-o)' }} /> Openen in editor</button>}
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); void handleDownload(att); }}><Download size={16} /> Downloaden</button>
       {canWrite && <>
+        <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
         <div className="drive-pop-sep" />
         <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteFile(att); }}><Trash2 size={16} /> Verwijderen</button>
       </>}
@@ -626,36 +677,51 @@ export function ContentLibrary({
       <button type="button" className={`odrv-th odrv-td-type${sortKey === 'type' ? ' is-active' : ''}`} onClick={() => toggleSort('type')}>Type <SortCaret col="type" /></button>
       <span className="odrv-td-act" aria-hidden="true" />
     </div>
-    {rows.map(row => <div
-      className="odrv-tr odrv-row has-act"
-      key={row.key}
-      role="button"
-      tabIndex={0}
-      onClick={row.onOpen}
-      onKeyDown={e => rowKeyDown(e, row.onOpen)}
-    >
-      <span className="odrv-td-ic" style={{ color: row.color || 'var(--accent)' }}><RowGlyph row={row} size={20} /></span>
-      <span className="odrv-td-name" title={row.name}>{row.name}{row.archived && <em className="odrv-arch">gearchiveerd</em>}</span>
-      <span className="odrv-td-mod">{row.modified ? dateNL(row.modified) : '—'}</span>
-      <span className="odrv-td-size">{row.size}</span>
-      <span className="odrv-td-type">{row.typeLabel}</span>
-      <span className="odrv-td-act" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
-        {row.menu ? kebab(row.key, () => row.menu!(row.key)) : null}
-      </span>
-    </div>)}
+    {rows.map(row => {
+      const isRenaming = renaming === row.key && Boolean(row.rename);
+      return <div
+        className="odrv-tr odrv-row has-act"
+        key={row.key}
+        role="button"
+        tabIndex={0}
+        onClick={isRenaming ? undefined : row.onOpen}
+        onKeyDown={e => rowKeyDown(e, row)}
+      >
+        <span className="odrv-td-ic" style={{ color: row.color || 'var(--accent)' }}><RowGlyph row={row} size={20} /></span>
+        {isRenaming
+          ? <DriveRenameInput value={row.name} keepExtension={row.keepExtension} onCommit={row.rename!} onCancel={() => setRenaming(null)} />
+          : <span className="odrv-td-name" title={row.name}>{row.name}{row.archived && <em className="odrv-arch">gearchiveerd</em>}</span>}
+        <span className="odrv-td-mod">{row.modified ? dateNL(row.modified) : '—'}</span>
+        <span className="odrv-td-size">{row.size}</span>
+        <span className="odrv-td-type">{row.typeLabel}</span>
+        <span className="odrv-td-act" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
+          {row.menu ? kebab(row.key, () => row.menu!(row.key)) : null}
+        </span>
+      </div>;
+    })}
   </div>;
 
   const renderTiles = () => <div className="odrv-tiles">
-    {rows.map(row => <div className="odrv-tile odrv-tile-wrap" key={`t-${row.key}`}>
-      <button type="button" className="odrv-tile-main" onClick={row.onOpen}>
+    {rows.map(row => {
+      const isRenaming = renaming === row.key && Boolean(row.rename);
+      // Het naamveld mag niet ín de tegelknop staan (een input in een button is ongeldig),
+      // dus tijdens het hernoemen dragen we dezelfde inhoud in een div.
+      const body = <>
         <span className="odrv-tile-canvas" style={{ color: row.color || 'var(--accent)' }}><RowGlyph row={row} size={isFolderRow(row) ? 46 : 38} /></span>
         <span className="odrv-tile-foot">
-          <span className="odrv-tile-name" title={row.name}>{row.name}</span>
+          {isRenaming
+            ? <DriveRenameInput value={row.name} keepExtension={row.keepExtension} onCommit={row.rename!} onCancel={() => setRenaming(null)} />
+            : <span className="odrv-tile-name" title={row.name}>{row.name}</span>}
           <span className="odrv-tile-meta">{isFolderRow(row) ? `${row.typeLabel} · ${row.size}` : `${row.typeLabel}${row.modified ? ` · ${dateNL(row.modified)}` : ''}`}</span>
         </span>
-      </button>
-      {row.menu && kebab(`t-${row.key}`, () => row.menu!(`t-${row.key}`))}
-    </div>)}
+      </>;
+      return <div className="odrv-tile odrv-tile-wrap" key={`t-${row.key}`}>
+        {isRenaming
+          ? <div className="odrv-tile-main">{body}</div>
+          : <button type="button" className="odrv-tile-main" onClick={row.onOpen}>{body}</button>}
+        {row.menu && kebab(`t-${row.key}`, () => row.menu!(`t-${row.key}`))}
+      </div>;
+    })}
   </div>;
 
   return <div

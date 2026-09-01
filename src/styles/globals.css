@@ -4517,6 +4517,9 @@ button.odrv-th:hover{color:var(--text)}
 .odrv-td-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;font-weight:600}
 .odrv-td-mod,.odrv-td-size,.odrv-td-type{font-size:12.5px;color:var(--muted2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .odrv-arch{color:var(--muted);font-style:normal;font-weight:600;font-size:11px;margin-left:8px}
+/* Naamveld tijdens het hernoemen: staat exact op de plek van de naam, in lijst én tegel. */
+.odrv-rename{width:100%;min-width:0;background:var(--bg);border:1px solid var(--accent);border-radius:8px;padding:5px 8px;font-family:inherit;font-size:13.5px;font-weight:600;color:var(--text);outline:none;box-shadow:0 0 0 3px rgba(var(--accent-rgb),.18)}
+.odrv-tile-foot .odrv-rename{font-size:13px;padding:3px 6px}
 .odrv-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(188px,1fr));gap:12px;padding-top:12px}
 .odrv-tile{display:flex;flex-direction:column;background:var(--bg2);border:1px solid var(--border);border-radius:16px;overflow:hidden;cursor:pointer;font-family:inherit;color:var(--text);text-align:left;padding:0;transition:border-color .15s,transform .15s}
 .odrv-tile:hover{border-color:var(--border-strong,var(--border2));transform:translateY(-2px)}
