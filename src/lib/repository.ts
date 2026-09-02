@@ -4322,6 +4322,23 @@ export async function renameAttachment(id: UUID, name: string, organizationId?: 
 }
 
 /**
+ * Verplaatst een geüpload bestand naar een andere dossiermap. Een bestand hangt
+ * aan zijn map via `entity_type = 'folder'` + `entity_id`, dus verplaatsen is
+ * die verwijzing omzetten — de `storage_key` blijft staan, zodat bestaande
+ * links, deellinks en openstaande Office-sessies blijven werken.
+ *
+ * Bypasst `updateRow` op dezelfde grond als `renameAttachment`: `attachments`
+ * heeft geen `updated_at`-kolom.
+ */
+export async function moveAttachmentToFolder(id: UUID, folderId: UUID, organizationId?: UUID): Promise<Attachment> {
+  let query = supabase.from('attachments').update({ entity_type: 'folder', entity_id: folderId }).eq('id', id);
+  if (organizationId) query = query.eq('organization_id', organizationId);
+  const { data, error } = await query.select('*').single();
+  if (error) throw error;
+  return data as Attachment;
+}
+
+/**
  * Delete a single attachment: remove the DB row first (so the UI can never show a ghost
  * pointing at a missing file), then best-effort R2 cleanup. An R2 failure leaves an orphan
  * in storage but does not block the user.

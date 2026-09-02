@@ -8410,3 +8410,37 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .share-public-name span{font-size:11.5px;color:rgba(var(--sheen-rgb),calc(.55 * var(--sheen-k)))}
 .share-public-foot{max-width:1040px;margin:20px auto 0;font-size:11.5px;color:rgba(var(--sheen-rgb),calc(.5 * var(--sheen-k)));text-align:center}
 .modal.share-read-modal{width:760px;max-width:100%}
+
+/* ── Selecteren en slepen in de verkenner ─────────────────────────────────
+   Het vinkje ligt óver het icoon en verschijnt pas als je erlangs gaat of als
+   er al iets aanstaat — zoals in OneDrive. Zo blijft een rustige lijst rustig,
+   maar is selecteren altijd één klik ver. */
+.odrv-td-ic{position:relative}
+.odrv-check{position:absolute;inset:0;margin:0;width:18px;height:18px;justify-self:center;align-self:center;left:50%;top:50%;transform:translate(-50%,-50%);accent-color:var(--accent);cursor:pointer;opacity:0;transition:opacity .12s;z-index:1}
+.odrv-row:hover .odrv-check,.odrv-row:focus-within .odrv-check,.odrv-check:checked{opacity:1}
+/* Alleen dimmen waar het vinkje het icoon overneemt; klant- en projectmappen
+   hebben er geen en zouden anders bij hover onnodig vervagen. */
+.odrv-row:hover .odrv-td-ic:has(.odrv-check)>svg,.odrv-row:focus-within .odrv-td-ic:has(.odrv-check)>svg{opacity:.25}
+.odrv-tr.is-picked .odrv-td-ic:has(.odrv-check)>svg{opacity:.25}
+.odrv-tr.is-picked{background:rgba(var(--accent-rgb),.13)}
+.odrv-tr.is-picked:hover{background:rgba(var(--accent-rgb),.18)}
+
+.odrv-tile-check{position:absolute;top:9px;left:9px;inset:auto;transform:none;width:17px;height:17px;z-index:3}
+.odrv-tile-wrap:hover .odrv-tile-check,.odrv-tile-wrap:focus-within .odrv-tile-check,.odrv-tile-check:checked{opacity:1}
+.odrv-tile-wrap.is-picked{border-color:var(--accent);box-shadow:0 0 0 2px rgba(var(--accent-rgb),.35)}
+
+/* Waar de sleep landt. Eén duidelijke rand is genoeg; een rij die opspringt
+   maakt het richten juist moeilijker. */
+.odrv-tr.is-drop-target,.odrv-tile-wrap.is-drop-target{background:rgba(var(--accent-rgb),.16);box-shadow:inset 0 0 0 2px var(--accent)}
+.odrv-crumbs button.odrv-crumb-drop,.odrv-tool.odrv-crumb-drop{background:rgba(var(--accent-rgb),.16);box-shadow:inset 0 0 0 2px var(--accent);color:var(--text)}
+[draggable=true]{-webkit-user-drag:element}
+
+/* De balk die verschijnt zodra je iets aanvinkt. */
+.odrv-selbar{position:sticky;top:0;z-index:4;display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 10px;padding:8px 10px;border-radius:12px;border:1px solid rgba(var(--accent-rgb),.3);background:linear-gradient(rgba(var(--accent-rgb),.1),rgba(var(--accent-rgb),.1)),var(--panel);backdrop-filter:blur(8px)}
+.odrv-selbar strong{font-size:13px;font-weight:600;color:var(--text)}
+.odrv-selbar-spacer{flex:1;min-width:0}
+.odrv-selbar-clear{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:none;border-radius:8px;background:var(--bg3);color:var(--muted2);cursor:pointer}
+.odrv-selbar-clear:hover{color:var(--text);background:var(--bg4)}
+.odrv-selbar-link{border:none;background:none;font-family:inherit;font-size:12px;font-weight:600;color:var(--accent-ink);cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:2px}
+.odrv-selbar .odrv-tool{padding:7px 10px;font-size:12px}
+.odrv-tool-danger:hover{background:rgba(var(--danger-rgb),.14);color:var(--danger)}

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import {
   ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Download, File,
   FilePen, FileText, Folder, FolderOpen, FolderPlus, Image as ImageIcon, LayoutGrid, Link2, List,
@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import type { AppData, Attachment, Client, ContentFolder, InternalDocument, Note } from '../types';
 import { dateNL } from '../lib/format';
-import { insertRow, updateRow, deleteContentFolder, deleteAttachment, renameAttachment } from '../lib/repository';
+import { insertRow, updateRow, deleteContentFolder, deleteAttachment, moveAttachmentToFolder, renameAttachment } from '../lib/repository';
 import { uploadToR2, downloadAttachment } from '../lib/r2';
 import { createOfficeSession, createOfficeDocument, isOfficeEditable, NEW_OFFICE_LABEL, type NewOfficeType, type OfficeSession } from '../lib/office';
 import { OfficeEditor } from './OfficeEditor';
@@ -16,6 +16,11 @@ import { fileExtension, resolveRename } from '../lib/rename';
 import { childFolders, clientFolderOptions, folderDescendantIds, folderPath, scopedFolders } from '../lib/folders';
 import { ShareDialog } from '../components/ShareDialog';
 import { shareKey, sharedItemKeys, type ShareTarget } from '../lib/shares';
+import {
+  activeDriveDrag, beginDriveDrag, dragHasDriveItems, dragHasFiles, endDriveDrag, itemCountLabel,
+  planDriveMove, readDriveDrag, type DriveDragItem,
+} from '../lib/driveDnd';
+import { useDriveSelection } from '../lib/useDriveSelection';
 
 /**
  * Klant-"Bestanden" in dezelfde OneDrive-verkennerlook als de Inhoud-pagina (odrv):
@@ -157,6 +162,10 @@ type Row = {
   keepExtension?: boolean;
   /** Staat er een lopende deling op dit item? Toont het personen-icoontje in de rij. */
   shared?: boolean;
+  /** Wat deze rij is als je hem vastpakt. */
+  drag?: DriveDragItem;
+  /** De map waar een sleep in landt. Alleen gevuld op mappen. */
+  dropFolderId?: string;
 };
 
 export function ClientFolders({
@@ -201,6 +210,10 @@ export function ClientFolders({
   const [opening, setOpening] = useState(false);
   /** Het item waarvoor het deelvenster openstaat. */
   const [sharing, setSharing] = useState<ShareTarget | null>(null);
+  /** Waar de sleep op dit moment boven hangt — stuurt alleen de oplichting. */
+  const [dropKey, setDropKey] = useState<string | null>(null);
+  /** Het "Verplaatsen naar…"-menu van de selectiebalk. */
+  const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Alleen de mappenboom op klantniveau; mappen ín een projectmap (project_id gevuld)
@@ -331,12 +344,13 @@ export function ClientFolders({
     catch (e) { setError(e instanceof Error ? e.message : 'Download mislukt'); }
   }
 
-  async function uploadFiles(list: FileList | File[]) {
-    if (!currentId) return;
+  /** Uploaden in een bepaalde map — die hoeft niet de open map te zijn: je kunt
+   *  bestanden ook rechtstreeks op een maprij laten vallen. */
+  async function uploadFilesTo(list: FileList | File[], targetFolderId: string) {
     setUploading(true); setError(null);
     try {
       for (const file of Array.from(list)) {
-        await uploadToR2(file, organizationId, { entity_type: 'folder', entity_id: currentId });
+        await uploadToR2(file, organizationId, { entity_type: 'folder', entity_id: targetFolderId });
       }
       onChanged();
     } catch (e) {
@@ -344,6 +358,11 @@ export function ClientFolders({
     } finally {
       setUploading(false);
     }
+  }
+
+  async function uploadFiles(list: FileList | File[]) {
+    if (!currentId) return;
+    await uploadFilesTo(list, currentId);
   }
 
   async function openOffice(att: Attachment) {
@@ -405,6 +424,8 @@ export function ClientFolders({
       glyph: size => <Folder size={size} fill="currentColor" strokeWidth={1.4} />,
       menu: canWrite ? () => folderMenu(folder, key) : null,
       shared: sharedKeys.has(shareKey('folder', folder.id)),
+      drag: { kind: 'folder', id: folder.id, name: folder.name },
+      dropFolderId: folder.id,
       rename: canWrite
         ? typed => commitRename(folder.name, typed, false, async name => {
             await updateRow('content_folders', folder.id, { name }, organizationId);
@@ -442,6 +463,7 @@ export function ClientFolders({
       rename,
       keepExtension: it.kind === 'file',
       shared: sharedKeys.has(shareKey(it.kind === 'file' ? 'attachment' : it.kind, itemId)),
+      drag: { kind: it.kind === 'file' ? 'attachment' : it.kind, id: itemId, name: label },
     };
   });
   const cmp = (a: Row, b: Row): number => {
@@ -458,6 +480,176 @@ export function ClientFolders({
     else { setSortKey(key); setSortDir(key === 'modified' ? 'desc' : 'asc'); }
   }
 
+  // ── Selecteren en slepen ───────────────────────────────────────────
+  // Zelfde gedrag als de Inhoud-verkenner: aanvinken met Ctrl/Shift, slepen naar
+  // een map, en bestanden van je computer rechtstreeks op een maprij laten vallen.
+  const selectable = useMemo(
+    () => rows.map(row => ({ key: row.key, row, selectable: canWrite && Boolean(row.drag) })),
+    [rows, canWrite],
+  );
+  const selection = useDriveSelection<Row>(selectable);
+  const { clear: clearSelection } = selection;
+
+  useEffect(() => { clearSelection(); setBulkMoveOpen(false); }, [currentId, clearSelection]);
+
+  const currentFolderOf = useCallback((item: DriveDragItem): string | null => {
+    if (item.kind === 'folder') return data.folders.find(f => f.id === item.id)?.parent_id ?? null;
+    if (item.kind === 'attachment') return data.attachments.find(a => a.id === item.id)?.entity_id ?? null;
+    if (item.kind === 'note') return data.notes.find(n => n.id === item.id)?.folder_id ?? null;
+    return data.documents.find(d => d.id === item.id)?.folder_id ?? null;
+  }, [data.folders, data.attachments, data.notes, data.documents]);
+
+  const movePlanFor = useCallback((items: DriveDragItem[], targetFolderId: string | null) => planDriveMove(
+    items,
+    targetFolderId,
+    { currentFolderId: currentFolderOf, descendantIds: id => folderDescendantIds(data.folders, id) },
+  ), [currentFolderOf, data.folders]);
+
+  const moveTo = useCallback(async (items: DriveDragItem[], targetFolderId: string | null) => {
+    if (items.length === 0) return;
+    const plan = movePlanFor(items, targetFolderId);
+    const blockedText = plan.blocked.length ? plan.blocked.map(b => b.reason).join(' ') : null;
+    if (plan.moves.length === 0) { setError(blockedText); return; }
+    setBusy(true); setError(null);
+    try {
+      for (const item of plan.moves) {
+        if (item.kind === 'folder') {
+          await updateRow('content_folders', item.id, { parent_id: targetFolderId }, organizationId);
+        } else if (item.kind === 'attachment') {
+          await moveAttachmentToFolder(item.id, targetFolderId as string, organizationId);
+        } else {
+          await updateRow(item.kind === 'note' ? 'notes' : 'documents', item.id, { folder_id: targetFolderId }, organizationId);
+        }
+      }
+      setError(blockedText);
+      clearSelection();
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Verplaatsen mislukt');
+    } finally {
+      setBusy(false);
+    }
+  }, [movePlanFor, organizationId, onChanged, clearSelection]);
+
+  function startDrag(event: ReactDragEvent, row: Row) {
+    if (!row.drag || !canWrite) return;
+    const byKey = new Map(rows.map(r => [r.key, r] as const));
+    const items = selection.dragKeys(row.key)
+      .map(key => byKey.get(key)?.drag)
+      .filter((item): item is DriveDragItem => Boolean(item));
+    beginDriveDrag(event.dataTransfer, items.length > 0 ? items : [row.drag]);
+  }
+
+  function canDropOnFolder(event: ReactDragEvent, targetFolderId: string): boolean {
+    if (!canWrite) return false;
+    if (dragHasFiles(event.dataTransfer)) return true;
+    if (!dragHasDriveItems(event.dataTransfer)) return false;
+    const items = activeDriveDrag();
+    if (!items) return true;
+    return movePlanFor(items, targetFolderId).moves.length > 0;
+  }
+
+  const leaveDrop = (key: string) => (event: ReactDragEvent) => {
+    event.stopPropagation();
+    setDropKey(current => (current === key ? null : current));
+  };
+
+  const dropProps = (key: string, targetFolderId: string) => ({
+    onDragOver: (event: ReactDragEvent) => {
+      if (!canDropOnFolder(event, targetFolderId)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = dragHasFiles(event.dataTransfer) ? 'copy' : 'move';
+      if (dropKey !== key) setDropKey(key);
+    },
+    onDragLeave: leaveDrop(key),
+    onDrop: (event: ReactDragEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setDropKey(null);
+      if (!canWrite) return;
+      if (dragHasFiles(event.dataTransfer)) {
+        if (event.dataTransfer.files?.length) void uploadFilesTo(event.dataTransfer.files, targetFolderId);
+        return;
+      }
+      const items = readDriveDrag(event.dataTransfer);
+      endDriveDrag();
+      void moveTo(items, targetFolderId);
+    },
+  });
+
+  /** Broodkruimels en "Terug": zo sleep je iets weer naar boven. */
+  const crumbDropTargetProps = (key: string, targetFolderId: string | null) => ({
+    onDragOver: (event: ReactDragEvent) => {
+      if (!canWrite || dragHasFiles(event.dataTransfer) || !dragHasDriveItems(event.dataTransfer)) return;
+      const items = activeDriveDrag();
+      if (items && movePlanFor(items, targetFolderId).moves.length === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = 'move';
+      if (dropKey !== key) setDropKey(key);
+    },
+    onDragLeave: leaveDrop(key),
+    onDrop: (event: ReactDragEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setDropKey(null);
+      if (!canWrite) return;
+      const items = readDriveDrag(event.dataTransfer);
+      endDriveDrag();
+      void moveTo(items, targetFolderId);
+    },
+  });
+  const crumbDropProps = (key: string, targetFolderId: string | null) => ({
+    ...crumbDropTargetProps(key, targetFolderId),
+    className: dropKey === key ? 'odrv-crumb-drop' : undefined,
+  });
+
+  const selectedItems = selection.items
+    .map(row => row.drag)
+    .filter((item): item is DriveDragItem => Boolean(item));
+  const selectedAttachments = selection.items
+    .filter(row => row.kind === 'file')
+    .map(row => data.attachments.find(a => a.id === row.drag?.id))
+    .filter((att): att is Attachment => Boolean(att));
+  /** Notities en documenten verwijder je in de editor, net als elders in de app. */
+  const selectionDeletable = selectedItems.length > 0 && selectedItems.every(i => i.kind === 'attachment' || i.kind === 'folder');
+
+  async function deleteSelection() {
+    const files = selectedAttachments;
+    const folders = selection.items.filter(row => row.kind === 'folder');
+    const what = [
+      files.length ? `${files.length} ${files.length === 1 ? 'bestand' : 'bestanden'}` : null,
+      folders.length ? `${folders.length} ${folders.length === 1 ? 'map' : 'mappen'}` : null,
+    ].filter(Boolean).join(' en ');
+    if (!window.confirm(`${what} verwijderen? Notities en documenten in verwijderde mappen blijven bestaan (ze worden ontkoppeld); geüploade bestanden erin gaan wel weg.`)) return;
+    setBusy(true); setError(null);
+    try {
+      for (const att of files) {
+        await deleteAttachment({ id: att.id, storage_key: att.storage_key, organization_id: att.organization_id });
+      }
+      for (const row of folders) {
+        const id = row.drag!.id;
+        await deleteContentFolder(id, folderDescendantIds(data.folders, id), organizationId);
+        if (currentId === id) setCurrentId(null);
+      }
+      clearSelection();
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Verwijderen mislukt');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function downloadSelection() {
+    setError(null);
+    for (const att of selectedAttachments) {
+      try { await downloadAttachment(att); }
+      catch (e) { setError(e instanceof Error ? e.message : 'Download mislukt'); return; }
+    }
+  }
+
   const SortCaret = ({ col }: { col: SortKey }) => sortKey === col
     ? (sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)
     : <ChevronDown size={12} style={{ opacity: .45 }} />;
@@ -470,9 +662,9 @@ export function ClientFolders({
 
   return <div
     className={`odrv odrv-embed${dragOver ? ' is-dragging' : ''}`}
-    onDragOver={canDrop ? e => { e.preventDefault(); setDragOver(true); } : undefined}
+    onDragOver={canDrop ? e => { if (!dragHasFiles(e.dataTransfer)) return; e.preventDefault(); setDragOver(true); } : undefined}
     onDragLeave={canDrop ? e => { if (e.currentTarget === e.target) setDragOver(false); } : undefined}
-    onDrop={canDrop ? e => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files?.length) uploadFiles(e.dataTransfer.files); } : undefined}
+    onDrop={canDrop ? e => { if (!dragHasFiles(e.dataTransfer)) return; e.preventDefault(); setDragOver(false); if (e.dataTransfer.files?.length) uploadFiles(e.dataTransfer.files); } : undefined}
   >
     <input ref={fileInputRef} type="file" multiple hidden onChange={e => { if (e.target.files?.length) uploadFiles(e.target.files); e.target.value = ''; }} />
 
@@ -482,12 +674,12 @@ export function ClientFolders({
           {currentId === null
             ? <span className="odrv-crumb-current">{client.name}</span>
             : <>
-                <button type="button" onClick={() => openFolder(null)}>{client.name}</button>
+                <button type="button" onClick={() => openFolder(null)} {...crumbDropProps('crumb-root', null)}>{client.name}</button>
                 {path.map((folder, i) => <span key={folder.id} className="odrv-crumb-step">
                   <ChevronRight size={17} aria-hidden="true" />
                   {i === path.length - 1
                     ? <span className="odrv-crumb-current">{folder.name}</span>
-                    : <button type="button" onClick={() => openFolder(folder.id)}>{folder.name}</button>}
+                    : <button type="button" onClick={() => openFolder(folder.id)} {...crumbDropProps(`crumb-${folder.id}`, folder.id)}>{folder.name}</button>}
                 </span>)}
               </>}
         </nav>
@@ -567,6 +759,33 @@ export function ClientFolders({
       </div>}
 
       <div className="odrv-scroll">
+        {selection.count > 0 && <div className="odrv-selbar">
+          <button type="button" className="odrv-selbar-clear" onClick={selection.clear} aria-label="Selectie wissen"><X size={14} /></button>
+          <strong>{itemCountLabel(selection.count)} geselecteerd</strong>
+          {selection.count < selectable.filter(e => e.selectable).length && <button type="button" className="odrv-selbar-link" onClick={selection.selectAll}>Alles selecteren</button>}
+          <span className="odrv-selbar-spacer" />
+          <div className="drive-new-wrap">
+            <button type="button" className="odrv-tool drive-pop-trigger" disabled={busy} onClick={() => { setBulkMoveOpen(o => !o); setMenu(null); setNewOpen(false); }} aria-haspopup="menu" aria-expanded={bulkMoveOpen}>
+              <Folder size={14} /> Verplaatsen naar… <ChevronDown size={13} />
+            </button>
+            {bulkMoveOpen && <div className="drive-pop" role="menu">
+              <div className="drive-pop-scroll">
+                <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setBulkMoveOpen(false); void moveTo(selectedItems, null); }}>
+                  <FolderOpen size={16} /> {client.name} (geen map)
+                </button>
+                {folderOptions.map(o => <button type="button" key={o.id} className="drive-pop-item" role="menuitem" onClick={() => { setBulkMoveOpen(false); void moveTo(selectedItems, o.id); }}>
+                  <Folder size={16} style={{ color: 'var(--accent)' }} /> {o.label}
+                </button>)}
+              </div>
+            </div>}
+          </div>
+          {selectedAttachments.length > 0 && <button type="button" className="odrv-tool" onClick={() => void downloadSelection()}>
+            <Download size={14} /> Downloaden{selectedAttachments.length !== selection.count ? ` (${selectedAttachments.length})` : ''}
+          </button>}
+          {canWrite && selectionDeletable && <button type="button" className="odrv-tool odrv-tool-danger" disabled={busy} onClick={() => void deleteSelection()}>
+            <Trash2 size={14} /> Verwijderen
+          </button>}
+        </div>}
         {isEmpty
           ? <div className="drive-empty odrv-empty">
               <span className="drive-empty-ic">{q ? <Search size={24} /> : <FolderOpen size={24} />}</span>
@@ -657,15 +876,30 @@ export function ClientFolders({
       </div>
       {rows.map(row => {
         const isRenaming = renaming === row.key && Boolean(row.rename);
+        const picked = selection.has(row.key);
         return <div
-          className="odrv-tr odrv-row has-act"
+          className={`odrv-tr odrv-row has-act${picked ? ' is-picked' : ''}${dropKey === row.key ? ' is-drop-target' : ''}`}
           key={row.key}
           role="button"
           tabIndex={0}
-          onClick={isRenaming ? undefined : row.onOpen}
+          draggable={canWrite && Boolean(row.drag) && !isRenaming}
+          onDragStart={e => startDrag(e, row)}
+          onDragEnd={() => { endDriveDrag(); setDropKey(null); }}
+          {...(row.dropFolderId ? dropProps(row.key, row.dropFolderId) : {})}
+          onClick={isRenaming ? undefined : e => { if (!selection.handleRowClick(e, row.key)) row.onOpen(); }}
           onKeyDown={e => rowKeyDown(e, row)}
         >
-          <span className="odrv-td-ic" style={{ color: row.color }}>{row.glyph(20)}</span>
+          <span className="odrv-td-ic" style={{ color: row.color }}>
+            {canWrite && row.drag && <input
+              type="checkbox"
+              className="odrv-check"
+              checked={picked}
+              onClick={e => e.stopPropagation()}
+              onChange={() => selection.toggle(row.key)}
+              aria-label={`${row.name} selecteren`}
+            />}
+            {row.glyph(20)}
+          </span>
           {isRenaming
             ? <DriveRenameInput value={row.name} keepExtension={row.keepExtension} onCommit={row.rename!} onCancel={() => setRenaming(null)} />
             : <span className="odrv-td-name" title={row.name}>{row.name}{row.shared && <span className="odrv-shared" role="img" aria-label="Gedeeld" title="Gedeeld met anderen"><Users size={13} /></span>}</span>}
@@ -695,10 +929,26 @@ export function ClientFolders({
             <span className="odrv-tile-meta">{row.kind === 'folder' ? `${row.typeLabel} · ${row.size}` : `${row.typeLabel}${row.modified ? ` · ${dateNL(row.modified)}` : ''}`}</span>
           </span>
         </>;
-        return <div className="odrv-tile odrv-tile-wrap" key={`t-${row.key}`}>
+        const picked = selection.has(row.key);
+        return <div
+          className={`odrv-tile odrv-tile-wrap${picked ? ' is-picked' : ''}${dropKey === row.key ? ' is-drop-target' : ''}`}
+          key={`t-${row.key}`}
+          draggable={canWrite && Boolean(row.drag) && !isRenaming}
+          onDragStart={e => startDrag(e, row)}
+          onDragEnd={() => { endDriveDrag(); setDropKey(null); }}
+          {...(row.dropFolderId ? dropProps(row.key, row.dropFolderId) : {})}
+        >
+          {canWrite && row.drag && <input
+            type="checkbox"
+            className="odrv-check odrv-tile-check"
+            checked={picked}
+            onClick={e => e.stopPropagation()}
+            onChange={() => selection.toggle(row.key)}
+            aria-label={`${row.name} selecteren`}
+          />}
           {isRenaming
             ? <div className="odrv-tile-main">{body}</div>
-            : <button type="button" className="odrv-tile-main" onClick={row.onOpen}>{body}</button>}
+            : <button type="button" className="odrv-tile-main" onClick={e => { if (!selection.handleRowClick(e, row.key)) row.onOpen(); }}>{body}</button>}
           {row.menu && kebab(`t-${row.key}`, () => row.menu!(`t-${row.key}`))}
         </div>;
       })}
