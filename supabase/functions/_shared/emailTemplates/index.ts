@@ -2,6 +2,7 @@ import { renderContractSentEmail } from './contractSent.ts';
 import { renderContractSignedClientEmail } from './contractSignedClient.ts';
 import { renderContractSignedInternalEmail } from './contractSignedInternal.ts';
 import { renderCreditNoteSentEmail } from './creditNoteSent.ts';
+import { renderFileSharedEmail } from './fileShared.ts';
 import { renderInvoiceDunningWik14Email } from './invoiceDunningWik14.ts';
 import { renderInvoiceReminderEmail } from './invoiceReminder.ts';
 import { renderInvoiceSentEmail } from './invoiceSent.ts';
@@ -31,6 +32,8 @@ export function renderEmailTemplate<K extends EmailTemplateKey>(templateKey: K, 
       return renderContractSignedClientEmail(data as EmailTemplateInputMap['contract.signed.client']);
     case 'contract.signed.internal':
       return renderContractSignedInternalEmail(data as EmailTemplateInputMap['contract.signed.internal']);
+    case 'file.shared':
+      return renderFileSharedEmail(data as EmailTemplateInputMap['file.shared']);
     default: {
       const exhaustiveCheck: never = templateKey;
       throw new Error(`Unknown email template: ${exhaustiveCheck}`);

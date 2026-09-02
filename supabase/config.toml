@@ -125,3 +125,15 @@ verify_jwt = false
 # functie hardt zelf via een origin-allowlist (zoals contract-public). Daarom geen JWT-eis.
 [functions.gallery-public]
 verify_jwt = false
+
+# file-share (bestanden delen) handelt CORS-preflight + auth zelf af, net als de
+# andere app-functies: elke actie verifieert requireUser() +
+# requireOrganizationAccess() + assertModuleAccess('content', 'write').
+[functions.file-share]
+verify_jwt = false
+
+# file-share-public bedient /gedeeld/<token>: de ontvanger van een deellink is
+# per definitie niet ingelogd. De token in de body IS de sleutel; de database
+# bewaart alleen sha256(token) en bewaakt intrekken + verlopen.
+[functions.file-share-public]
+verify_jwt = false

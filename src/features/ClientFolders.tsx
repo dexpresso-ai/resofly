@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import {
   ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Download, File,
   FilePen, FileText, Folder, FolderOpen, FolderPlus, Image as ImageIcon, LayoutGrid, Link2, List,
-  MoreVertical, Pencil, Plus, Presentation, Search, Sheet, StickyNote, Trash2, Upload, UploadCloud, X,
+  MoreVertical, Pencil, Plus, Presentation, Search, Share2, Sheet, StickyNote, Trash2, Upload, UploadCloud, Users, X,
 } from 'lucide-react';
 import type { AppData, Attachment, Client, ContentFolder, InternalDocument, Note } from '../types';
 import { dateNL } from '../lib/format';
@@ -14,6 +14,8 @@ import { OfficeEditor } from './OfficeEditor';
 import { DriveRenameInput } from '../components/DriveRename';
 import { fileExtension, resolveRename } from '../lib/rename';
 import { childFolders, clientFolderOptions, folderDescendantIds, folderPath, scopedFolders } from '../lib/folders';
+import { ShareDialog } from '../components/ShareDialog';
+import { shareKey, sharedItemKeys, type ShareTarget } from '../lib/shares';
 
 /**
  * Klant-"Bestanden" in dezelfde OneDrive-verkennerlook als de Inhoud-pagina (odrv):
@@ -153,6 +155,8 @@ type Row = {
   rename: ((typed: string) => void) | null;
   /** Bestanden houden hun extensie: alleen de naam ervóór staat geselecteerd. */
   keepExtension?: boolean;
+  /** Staat er een lopende deling op dit item? Toont het personen-icoontje in de rij. */
+  shared?: boolean;
 };
 
 export function ClientFolders({
@@ -195,6 +199,8 @@ export function ClientFolders({
   /** Het bestand dat in de editor openstaat — drijft de "Downloaden"-knop (native formaat). */
   const [officeAtt, setOfficeAtt] = useState<Attachment | null>(null);
   const [opening, setOpening] = useState(false);
+  /** Het item waarvoor het deelvenster openstaat. */
+  const [sharing, setSharing] = useState<ShareTarget | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Alleen de mappenboom op klantniveau; mappen ín een projectmap (project_id gevuld)
@@ -212,6 +218,7 @@ export function ClientFolders({
   const notesHere = currentId === null ? clientNotes.filter(n => !n.folder_id) : data.notes.filter(n => n.folder_id === currentId);
   const docsHere = currentId === null ? clientDocuments.filter(d => !d.folder_id) : data.documents.filter(d => d.folder_id === currentId);
   const folderFiles = currentId ? data.attachments.filter(a => a.entity_type === 'folder' && a.entity_id === currentId) : [];
+  const sharedKeys = useMemo(() => sharedItemKeys(data), [data]);
 
   const linkableNotes = currentId ? clientNotes.filter(n => n.folder_id !== currentId) : [];
   const linkableDocs = currentId ? clientDocuments.filter(d => d.folder_id !== currentId) : [];
@@ -277,6 +284,9 @@ export function ClientFolders({
 
   /** Start het inline naamveld op een rij (⋮ → Naam wijzigen, of F2 op de rij zelf). */
   function beginRename(key: string) { setMenu(null); setRenaming(key); }
+
+  /** Opent het deelvenster voor één item. De klantregel bepaalt daar wie er in beeld komt. */
+  function openShare(target: ShareTarget) { setMenu(null); setSharing(target); }
 
   /**
    * Bevestig een inline hernoeming. Verandert er niets, dan gaat er ook niets naar de
@@ -394,6 +404,7 @@ export function ClientFolders({
       onOpen: () => openFolder(folder.id),
       glyph: size => <Folder size={size} fill="currentColor" strokeWidth={1.4} />,
       menu: canWrite ? () => folderMenu(folder, key) : null,
+      shared: sharedKeys.has(shareKey('folder', folder.id)),
       rename: canWrite
         ? typed => commitRename(folder.name, typed, false, async name => {
             await updateRow('content_folders', folder.id, { name }, organizationId);
@@ -407,7 +418,7 @@ export function ClientFolders({
     const menu: Row['menu'] = it.kind === 'file'
       ? () => fileMenu(it.att, it.key)
       : canWrite
-        ? (menuKey: string) => contentMenu(menuKey, it.key, it.kind as 'note' | 'document', itemId, () => fileOpen(it))
+        ? (menuKey: string) => contentMenu(menuKey, it.key, it.kind as 'note' | 'document', itemId, label, () => fileOpen(it))
         : null;
     const rename: Row['rename'] = !canWrite ? null
       : it.kind === 'file'
@@ -430,6 +441,7 @@ export function ClientFolders({
       menu,
       rename,
       keepExtension: it.kind === 'file',
+      shared: sharedKeys.has(shareKey(it.kind === 'file' ? 'attachment' : it.kind, itemId)),
     };
   });
   const cmp = (a: Row, b: Row): number => {
@@ -575,6 +587,7 @@ export function ClientFolders({
 
     {opening && <span className="drive-uploading" style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 1500 }}><UploadCloud size={14} /> Editor openen…</span>}
     {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeAtt(null); onChanged(); }} onDownload={officeAtt ? () => handleDownload(officeAtt) : undefined} />}
+    {sharing && <ShareDialog data={data} organizationId={organizationId} target={sharing} onClose={() => setSharing(null)} onChanged={onChanged} />}
   </div>;
 
   // ── Renderers ────────────────────────────────────────────────────────────
@@ -595,12 +608,13 @@ export function ClientFolders({
     return <>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openFolder(folder.id)}><FolderOpen size={16} /> Openen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: 'folder', id: folder.id, name: folder.name })}><Share2 size={16} /> Delen…</button>
       <div className="drive-pop-sep" />
       <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteFolder(folder); }}><Trash2 size={16} /> Verwijderen</button>
     </>;
   }
 
-  function contentMenu(key: string, rowKey: string, kind: 'note' | 'document', id: string, open: () => void) {
+  function contentMenu(key: string, rowKey: string, kind: 'note' | 'document', id: string, name: string, open: () => void) {
     if (menu?.key === key && menu.mode === 'move') {
       return <>
         <div className="drive-pop-head"><button type="button" className="drive-pop-back" onClick={() => setMenu({ key, mode: 'main' })} aria-label="Terug"><ChevronLeft size={14} /></button> Verplaatsen naar</div>
@@ -614,6 +628,7 @@ export function ClientFolders({
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); open(); }}><FilePen size={16} /> Openen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => setMenu({ key, mode: 'move' })}><Folder size={16} /> Verplaatsen naar… <ChevronRight size={14} style={{ marginLeft: 'auto' }} /></button>
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: kind, id, name })}><Share2 size={16} /> Delen…</button>
     </>;
   }
 
@@ -621,6 +636,7 @@ export function ClientFolders({
     return <>
       {isOfficeEditable(att) && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); openOffice(att); }}><FilePen size={16} style={{ color: 'var(--accent-o)' }} /> Openen in editor</button>}
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); handleDownload(att); }}><Download size={16} /> Downloaden</button>
+      {canWrite && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: 'attachment', id: att.id, name: att.name })}><Share2 size={16} /> Delen…</button>}
       {canWrite && <>
         <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
         <div className="drive-pop-sep" />
@@ -652,7 +668,7 @@ export function ClientFolders({
           <span className="odrv-td-ic" style={{ color: row.color }}>{row.glyph(20)}</span>
           {isRenaming
             ? <DriveRenameInput value={row.name} keepExtension={row.keepExtension} onCommit={row.rename!} onCancel={() => setRenaming(null)} />
-            : <span className="odrv-td-name" title={row.name}>{row.name}</span>}
+            : <span className="odrv-td-name" title={row.name}>{row.name}{row.shared && <span className="odrv-shared" role="img" aria-label="Gedeeld" title="Gedeeld met anderen"><Users size={13} /></span>}</span>}
           <span className="odrv-td-mod">{row.modified ? dateNL(row.modified) : '—'}</span>
           <span className="odrv-td-size">{row.size}</span>
           <span className="odrv-td-type">{row.typeLabel}</span>
@@ -675,7 +691,7 @@ export function ClientFolders({
           <span className="odrv-tile-foot">
             {isRenaming
               ? <DriveRenameInput value={row.name} keepExtension={row.keepExtension} onCommit={row.rename!} onCancel={() => setRenaming(null)} />
-              : <span className="odrv-tile-name" title={row.name}>{row.name}</span>}
+              : <span className="odrv-tile-name" title={row.name}>{row.name}{row.shared && <span className="odrv-shared" role="img" aria-label="Gedeeld" title="Gedeeld met anderen"><Users size={12} /></span>}</span>}
             <span className="odrv-tile-meta">{row.kind === 'folder' ? `${row.typeLabel} · ${row.size}` : `${row.typeLabel}${row.modified ? ` · ${dateNL(row.modified)}` : ''}`}</span>
           </span>
         </>;

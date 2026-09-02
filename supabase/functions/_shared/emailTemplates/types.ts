@@ -11,7 +11,8 @@ export type EmailTemplateKey =
   | 'creditNote.sent'
   | 'contract.sent'
   | 'contract.signed.client'
-  | 'contract.signed.internal';
+  | 'contract.signed.internal'
+  | 'file.shared';
 
 // De per-organisatie tekstsleutels in de email_templates-tabel. Herinneringen
 // hebben een sleutel per niveau; de overige sleutels komen overeen met de
@@ -25,7 +26,8 @@ export type EmailTemplateContentKey =
   | 'invoice.dunning.wik14'
   | 'creditNote.sent'
   | 'contract.sent'
-  | 'contract.signed.client';
+  | 'contract.signed.client'
+  | 'file.shared';
 
 export type RenderedEmailTemplate = {
   templateKey: EmailTemplateKey;
@@ -264,6 +266,30 @@ export type ContractSignedInternalEmailInput = {
   appUrl?: string | null;
 };
 
+/** "Iemand deelt een map/bestand/notitie/document met je" — portaal, collega of deellink. */
+export type FileSharedEmailInput = {
+  /** Naam van het gedeelde item, zoals het in de drive heet. */
+  itemName: string;
+  /** "Map" / "Bestand" / "Notitie" / "Document" — stuurt de koptekst en de knop. */
+  itemKindLabel: string;
+  /** Waar de ontvanger het opent: het portaal, de app of de deellink. */
+  url: string;
+  /** Eén regel die uitlegt hoe de ontvanger binnenkomt (inloggen met e-mail, enz.). */
+  accessHint?: string | null;
+  recipientName?: string | null;
+  senderName?: string | null;
+  clientName?: string | null;
+  /** Vrij bericht van de afzender. Wordt altijd ge-escaped weergegeven. */
+  personalMessage?: string | null;
+  expiresAt?: string | null;
+  company?: {
+    company_name?: string | null;
+    trade_name?: string | null;
+    invoice_accent_color?: string | null;
+  } | null;
+  content?: EmailTemplateContent | null;
+};
+
 export type EmailTemplateInputMap = {
   'test.resend': TestResendEmailInput;
   'quote.sent': QuoteSentEmailInput;
@@ -274,4 +300,5 @@ export type EmailTemplateInputMap = {
   'contract.sent': ContractSentEmailInput;
   'contract.signed.client': ContractSignedClientEmailInput;
   'contract.signed.internal': ContractSignedInternalEmailInput;
+  'file.shared': FileSharedEmailInput;
 };

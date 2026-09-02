@@ -333,6 +333,44 @@ export interface ClientContact extends OrgScopedRow {
   client_id: UUID; name: string; email: string; phone: string | null; role: string | null; gives_portal_access: boolean; is_active: boolean; created_at: string; updated_at: string;
 }
 
+// ── Bestanden delen (drive_shares) ─────────────────────────────────────────
+/** Wat er gedeeld wordt: een map deelt zijn hele inhoud mee. */
+export type DriveShareItemType = 'folder' | 'attachment' | 'note' | 'document';
+/**
+ * Met wie er gedeeld wordt.
+ * - `contact` — geregistreerde contactpersoon van de klant; ziet het in het klantportaal.
+ * - `member`  — collega in dezelfde organisatie; krijgt een melding met een link.
+ * - `link`    — los e-mailadres met een geheime deellink. Alleen toegestaan als het
+ *               item NIET bij een klantdossier hoort (de database weigert de rest).
+ */
+export type DriveShareRecipientKind = 'contact' | 'member' | 'link';
+
+export interface DriveShare extends OrgScopedRow {
+  item_type: DriveShareItemType;
+  item_id: UUID;
+  /** Naamsnapshot op het moment van delen; blijft staan als het item wordt hernoemd. */
+  item_name: string | null;
+  /** Server-side afgeleid. Gevuld = klantgerelateerd = alleen contactpersonen van deze klant. */
+  client_id: UUID | null;
+  project_id: UUID | null;
+  recipient_kind: DriveShareRecipientKind;
+  client_contact_id: UUID | null;
+  member_user_id: UUID | null;
+  recipient_email: string | null;
+  recipient_name: string | null;
+  can_download: boolean;
+  message: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+  revoked_by: UUID | null;
+  last_viewed_at: string | null;
+  view_count: number;
+  notified_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+
 // ── E-mailmarketing / campagnes ─────────────────────────────────────────────
 export type CampaignStatus = 'draft' | 'scheduled' | 'sending' | 'sent' | 'paused' | 'cancelled';
 /** Eén voorwaarde op een vrij klantveld, bv. "Pakket is Premium". */
@@ -2767,7 +2805,8 @@ export type EmailTemplateKey =
   | 'contract.sent'
   | 'contract.signed.client'
   | 'meetingBooking.linkSent'
-  | 'meetingBooking.confirmed';
+  | 'meetingBooking.confirmed'
+  | 'file.shared';
 
 export interface EmailTemplate extends OrgScopedRow {
   template_key: EmailTemplateKey;
@@ -2806,7 +2845,7 @@ export interface SavedReport extends OrgScopedRow {
   updated_at: string;
 }
 
-export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; plannerCapacity: PlannerDayCapacity | null; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; driveShares: DriveShare[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; plannerCapacity: PlannerDayCapacity | null; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft' | 'native' | 'ics';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';

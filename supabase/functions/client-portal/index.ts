@@ -108,6 +108,10 @@ serve(async (req) => {
         return json(req, { ok: true, ...(await getInvoicePdf(user, body)) });
       case 'getContractPdf':
         return json(req, { ok: true, ...(await getContractPdf(user, body)) });
+      case 'getSharedFiles':
+        return json(req, { ok: true, ...(await getSharedFiles(user, body)) });
+      case 'downloadSharedFile':
+        return json(req, { ok: true, ...(await downloadSharedFile(user, body)) });
       case 'getGalleryDetail':
         return json(req, { ok: true, ...(await getGalleryDetail(user, body)) });
       case 'toggleGalleryFavorite':
@@ -131,9 +135,13 @@ serve(async (req) => {
 
 async function getPortalData(user: { id: string; email: string }) {
   const clients = await resolveAccountsForEmail(user.email);
+  // Eén keer ophalen en per klant tellen: het aantal met jou gedeelde bestanden
+  // voedt alleen het tabblad-badgetje, de inhoud komt pas als je erop klikt.
+  const shares = await loadSharesForUser(user.email);
   const accounts = [];
   for (const client of clients) {
-    accounts.push(await buildAccount(client, user.email));
+    const sharedFileCount = shares.filter((share) => share.client_id === client.id).length;
+    accounts.push({ ...(await buildAccount(client, user.email)), sharedFileCount });
   }
   return { email: user.email, accounts };
 }
@@ -533,6 +541,157 @@ async function getContractPdf(user: { id: string; email: string }, body: Record<
       fileName: contract.signed_pdf_file_name || `contract-${contract.number}.pdf`,
       mimeType: 'application/pdf',
       base64,
+    },
+  };
+}
+
+// ── Gedeelde bestanden ────────────────────────────────────────────────
+//
+// Een medewerker deelt een map, bestand, notitie of document met een
+// geregistreerde contactpersoon (drive_shares, recipient_kind = 'contact').
+// Hier komt die deling terug bij de ingelogde contactpersoon zelf. De toegang
+// wordt UITSLUITEND afgeleid uit het geverifieerde e-mailadres: de RPC
+// portal_drive_shares_for_email geeft alleen lopende delingen terug van actieve,
+// portaal-gemachtigde contactpersonen met precies dit adres.
+
+type SharedShareRow = {
+  id: string;
+  organization_id: string;
+  client_id: string | null;
+  item_type: string;
+  item_name: string | null;
+  can_download: boolean;
+  message: string | null;
+  expires_at: string | null;
+  created_at: string;
+};
+
+type SharedItemRow = {
+  item_type: string;
+  item_id: string;
+  name: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  storage_key: string | null;
+  modified: string | null;
+  path: string | null;
+};
+
+async function loadSharesForUser(email: string): Promise<SharedShareRow[]> {
+  const { data, error } = await supabaseAdmin.rpc('portal_drive_shares_for_email', { p_email: email });
+  if (error) {
+    // Het portaal mag nooit omvallen op een module die nog niet is uitgerold.
+    if (/does not exist|schema cache/i.test(`${error.message} ${error.details ?? ''}`)) {
+      console.warn('client-portal drive_shares nog niet beschikbaar', error.message);
+      return [];
+    }
+    throw error;
+  }
+  return (data || []) as SharedShareRow[];
+}
+
+async function loadShareItems(shareId: string): Promise<SharedItemRow[]> {
+  const { data, error } = await supabaseAdmin.rpc('drive_share_items', { p_share_id: shareId });
+  if (error) throw error;
+  return ((data || []) as SharedItemRow[]).sort((a, b) =>
+    (a.path || '').localeCompare(b.path || '', 'nl')
+    || a.name.localeCompare(b.name, 'nl', { numeric: true }));
+}
+
+async function getSharedFiles(user: { id: string; email: string }, body: Record<string, unknown>) {
+  const clientId = String(body.clientId || '').trim();
+  const shares = await loadSharesForUser(user.email);
+  const scoped = isUuid(clientId) ? shares.filter((s) => s.client_id === clientId) : shares;
+
+  const out = [];
+  for (const share of scoped) {
+    const items = await loadShareItems(share.id);
+    out.push({
+      id: share.id,
+      clientId: share.client_id,
+      itemType: share.item_type,
+      itemName: share.item_name,
+      message: share.message,
+      canDownload: share.can_download === true,
+      expiresAt: share.expires_at,
+      sharedAt: share.created_at,
+      items: items.map((item) => ({
+        itemType: item.item_type,
+        itemId: item.item_id,
+        name: item.name,
+        mimeType: item.mime_type,
+        sizeBytes: item.size_bytes,
+        modified: item.modified,
+        path: item.path || null,
+        downloadable: share.can_download === true && Boolean(item.storage_key),
+        readable: item.item_type === 'note' || (item.item_type === 'document' && !item.storage_key),
+      })),
+    });
+  }
+  return { shares: out };
+}
+
+async function downloadSharedFile(user: { id: string; email: string }, body: Record<string, unknown>) {
+  const shareId = String(body.shareId || '').trim();
+  const itemId = String(body.itemId || '').trim();
+  const itemType = String(body.itemType || '').trim();
+  if (!isUuid(shareId) || !isUuid(itemId)) throw new PortalError('Ongeldig bestand.', 400);
+
+  // Opnieuw afleiden uit het geverifieerde e-mailadres: een shareId uit de
+  // request wordt nooit blind vertrouwd.
+  const shares = await loadSharesForUser(user.email);
+  const share = shares.find((candidate) => candidate.id === shareId);
+  if (!share) throw new PortalError('Deze deling is niet (meer) met je gedeeld.', 403);
+
+  const items = await loadShareItems(share.id);
+  const item = items.find((candidate) => candidate.item_id === itemId && candidate.item_type === itemType);
+  if (!item) throw new PortalError('Dit bestand hoort niet bij deze deling.', 403);
+
+  // Bijhouden dat er gekeken is mag nooit de download zelf laten sneuvelen.
+  // (De query-builder van supabase-js heeft geen .catch(); alleen await erop
+  //  levert een promise, dus dit moet met try/catch.)
+  try {
+    await supabaseAdmin.rpc('touch_drive_share', { p_share_id: share.id });
+  } catch (error) {
+    console.warn('client-portal touch_drive_share overgeslagen', error instanceof Error ? error.message : error);
+  }
+
+  // Lezen is kijken, geen downloaden: een notitie of tekstdocument blijft dus ook
+  // leesbaar als de afzender downloaden heeft uitgezet.
+  if (item.item_type === 'note' || (!item.storage_key && item.item_type === 'document')) {
+    const table = item.item_type === 'note' ? 'notes' : 'documents';
+    const { data, error } = await supabaseAdmin
+      .from(table)
+      .select('title,content')
+      .eq('id', item.item_id)
+      .eq('organization_id', share.organization_id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new PortalError('Dit item bestaat niet meer.', 404);
+    const row = data as { title: string; content: string | null };
+    return { text: { title: row.title, html: row.content || '' } };
+  }
+
+  if (share.can_download !== true) throw new PortalError('De afzender heeft downloaden voor deze deling uitgezet.', 403);
+  if (!item.storage_key) throw new PortalError('Voor dit item is geen bestand om te downloaden.', 404);
+  if (!MEDIA_WORKER_URL || !MEDIA_INTERNAL_SECRET) {
+    throw new PortalError('Het bestand staat in private opslag, maar de storage-koppeling ontbreekt.', 500);
+  }
+
+  const response = await fetch(`${MEDIA_WORKER_URL}/internal/media/${encodeURIComponent(item.storage_key)}`, {
+    headers: { Authorization: `Bearer ${MEDIA_INTERNAL_SECRET}` },
+  });
+  if (!response.ok) {
+    if (response.status === 404) throw new PortalError('Dit bestand is niet meer beschikbaar.', 404);
+    throw new PortalError('Het bestand kon niet uit de opslag worden opgehaald.', 502);
+  }
+
+  return {
+    file: {
+      fileName: item.name,
+      mimeType: item.mime_type || 'application/octet-stream',
+      sizeBytes: item.size_bytes,
+      base64: arrayBufferToBase64(await response.arrayBuffer()),
     },
   };
 }

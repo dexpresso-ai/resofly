@@ -83,6 +83,7 @@ const EMAIL_TEMPLATES: Array<{ key: string; label: string; fields: string[] }> =
   { key: 'contract.signed.client', label: 'Contract ondertekend — bevestiging', fields: ['subject', 'intro', 'closing', 'cta_label'] },
   { key: 'meetingBooking.linkSent', label: 'Boekingslink versturen', fields: ['subject', 'intro', 'cta_label'] },
   { key: 'meetingBooking.confirmed', label: 'Boeking bevestigd', fields: ['subject', 'intro', 'closing'] },
+  { key: 'file.shared', label: 'Bestand gedeeld', fields: ['subject', 'intro', 'closing', 'cta_label'] },
 ];
 const EMAIL_TEMPLATE_KEYS = EMAIL_TEMPLATES.map((t) => t.key);
 const EMAIL_FIELDS = ['subject', 'intro', 'closing', 'cta_label'] as const;

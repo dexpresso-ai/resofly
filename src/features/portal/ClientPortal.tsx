@@ -9,10 +9,12 @@ import {
   decidePortalQuote,
   downloadPortalContractPdf,
   downloadPortalInvoicePdf,
+  downloadPortalSharedItem,
   fetchPortalData,
   fetchPortalGalleryDetail,
   fetchPortalInvoicePaymentInfo,
   fetchPortalProjectDetail,
+  fetchPortalSharedFiles,
   fetchPortalTicketThread,
   requestPortalLogin,
   togglePortalGalleryFavorite,
@@ -23,6 +25,8 @@ import {
   type PortalInvoice,
   type PortalInvoicePaymentInfo,
   type PortalProject,
+  type PortalShare,
+  type PortalSharedItem,
   type PortalQuote,
   type PortalTask,
   type PortalTicket,
@@ -34,8 +38,9 @@ import type { FinanceLine, Priority } from '../../types';
 import { GalleryViewer, type GalleryViewerItem } from '../GalleryViewer';
 import { galleryFileUrl, galleryRefreshDelayMs, galleryZipUrl, streamDownloadUrl } from '../../lib/gallery';
 import { applyBrandTheme, brandStyle, ensureBrandFontsLoaded, sanitizeStoredBranding, type BrandingPayload } from '../../lib/branding';
+import { ReadModal } from '../../components/ReadModal';
 
-type PortalTab = 'overview' | 'invoices' | 'quotes' | 'contracts' | 'tickets' | 'projects' | 'galleries';
+type PortalTab = 'overview' | 'invoices' | 'quotes' | 'contracts' | 'files' | 'tickets' | 'projects' | 'galleries';
 
 /**
  * Het loginscherm weet nog niet bij wélke leverancier deze bezoeker hoort — dat
@@ -301,6 +306,7 @@ function PortalAccountView({ account, supplierName, onTicketCreated }: { account
     { id: 'invoices', label: 'Facturen', count: account.invoices.length },
     { id: 'quotes', label: 'Offertes', count: account.quotes.length },
     { id: 'contracts', label: 'Contracten', count: account.contracts?.length ?? 0 },
+    { id: 'files', label: 'Bestanden', count: account.sharedFileCount ?? 0 },
     { id: 'tickets', label: 'Tickets', count: account.tickets.length },
     { id: 'projects', label: 'Projecten', count: ongoingProjects.length },
     { id: 'galleries', label: 'Galerijen', count: account.galleries?.length ?? 0 },
@@ -351,6 +357,8 @@ function PortalAccountView({ account, supplierName, onTicketCreated }: { account
     </article>}
 
     {tab === 'contracts' && <ContractsTab account={account} />}
+
+    {tab === 'files' && <SharedFilesTab account={account} />}
 
     {tab === 'tickets' && <TicketsTab account={account} supplierName={supplierName} onTicketCreated={onTicketCreated} />}
 
@@ -738,6 +746,125 @@ function PortalInvoiceDetail({ invoice, account, onBack }: { invoice: PortalInvo
       <Button onClick={downloadPdf} disabled={downloading}>{downloading ? 'PDF…' : 'PDF downloaden'}</Button>
     </div>
   </article>;
+}
+
+// ── Met jou gedeelde bestanden ──────────────────────────────────────────────
+//
+// Een medewerker deelt een map, bestand, notitie of document met jou als
+// geregistreerde contactpersoon. Alleen delingen die op jouw geverifieerde
+// e-mailadres staan komen hier terug; de server leidt dat opnieuw af bij elke
+// aanvraag en vertrouwt nooit een id uit de browser.
+
+function SharedFilesTab({ account }: { account: PortalAccount }) {
+  const [shares, setShares] = useState<PortalShare[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setShares(null); setError(null);
+    fetchPortalSharedFiles(account.id)
+      .then(rows => { if (!cancelled) setShares(rows); })
+      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'Gedeelde bestanden ophalen mislukt'); });
+    return () => { cancelled = true; };
+  }, [account.id]);
+
+  if (error) {
+    return <article className="portal-card">
+      <div className="portal-card-head"><h2>Bestanden</h2></div>
+      <p className="portal-row-error">{error}</p>
+    </article>;
+  }
+  if (shares === null) {
+    return <article className="portal-card">
+      <div className="portal-card-head"><h2>Bestanden</h2></div>
+      <p className="portal-muted">Bestanden laden…</p>
+    </article>;
+  }
+  if (shares.length === 0) {
+    return <article className="portal-card">
+      <div className="portal-card-head"><h2>Bestanden</h2></div>
+      <p className="portal-muted">Er zijn nog geen bestanden met je gedeeld.</p>
+    </article>;
+  }
+
+  return <>
+    {shares.map(share => <SharedShareCard key={share.id} share={share} />)}
+  </>;
+}
+
+function SharedShareCard({ share }: { share: PortalShare }) {
+  const [reading, setReading] = useState<{ title: string; html: string } | null>(null);
+  return <article className="portal-card">
+    <div className="portal-card-head">
+      <h2>{share.itemName || 'Gedeeld'}</h2>
+      <span>{share.items.length}</span>
+    </div>
+    <p className="portal-muted">
+      Gedeeld op {dateNL(share.sharedAt)}
+      {share.expiresAt ? ` · beschikbaar tot ${dateNL(share.expiresAt)}` : ''}
+      {share.canDownload ? '' : ' · alleen bekijken'}
+    </p>
+    {share.message && <p className="portal-shared-message">{share.message}</p>}
+    {share.items.length === 0
+      ? <p className="portal-muted">Deze map is op dit moment leeg.</p>
+      : <div className="portal-rows">
+          {share.items.map(item => <SharedItemRow
+            key={`${item.itemType}-${item.itemId}`}
+            shareId={share.id}
+            item={item}
+            canDownload={share.canDownload}
+            onRead={setReading}
+          />)}
+        </div>}
+    {reading && <ReadModal title={reading.title} html={reading.html} onClose={() => setReading(null)} />}
+  </article>;
+}
+
+function SharedItemRow({ shareId, item, canDownload, onRead }: {
+  shareId: string;
+  item: PortalSharedItem;
+  canDownload: boolean;
+  onRead: (value: { title: string; html: string }) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function open() {
+    setBusy(true); setError(null);
+    try {
+      const result = await downloadPortalSharedItem(shareId, item.itemType, item.itemId);
+      if (result.kind === 'text') onRead({ title: result.title || item.name, html: result.html });
+      else downloadBase64File(result.base64, result.fileName, result.mimeType);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Openen mislukt');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="portal-row">
+    <div className="portal-row-main">
+      <span className="portal-row-number">{item.name}</span>
+      <span className="portal-muted">
+        {[item.path, fmtSharedBytes(item.sizeBytes), item.modified ? dateNL(item.modified) : ''].filter(Boolean).join(' · ')}
+      </span>
+    </div>
+    <div className="portal-row-actions">
+      {(item.readable || item.downloadable)
+        ? <Button onClick={open} disabled={busy}>{busy ? 'Bezig…' : item.readable ? 'Lezen' : 'Downloaden'}</Button>
+        : <span className="portal-muted" style={{ fontSize: 12 }}>{canDownload ? 'Niet beschikbaar' : 'Downloaden staat uit'}</span>}
+      {error && <span className="portal-row-error">{error}</span>}
+    </div>
+  </div>;
+}
+
+function fmtSharedBytes(bytes: number | null): string {
+  if (!bytes) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let n = bytes;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
+  return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
 function ContractsTab({ account }: { account: PortalAccount }) {

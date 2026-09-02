@@ -11,6 +11,9 @@ import type {
   Client,
   ClientContact,
   ClientFieldDefinition,
+  DriveShare,
+  DriveShareItemType,
+  DriveShareRecipientKind,
   CompanySettings,
   CompanySettingsInput,
   EmailTemplate,
@@ -149,7 +152,7 @@ import type {
   UUID,
 } from '../types';
 
-const tables = ['clients', 'client_contacts', 'client_field_definitions', 'projects', 'project_templates', 'project_template_tasks', 'tasks', 'project_members', 'task_assignees', 'contract_projects', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'galleries', 'gallery_items', 'gallery_favorites', 'gallery_categories', 'gallery_category_presets', 'saved_reports', 'planner_notes', 'company_settings'] as const;
+const tables = ['clients', 'client_contacts', 'client_field_definitions', 'projects', 'project_templates', 'project_template_tasks', 'tasks', 'project_members', 'task_assignees', 'contract_projects', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'drive_shares', 'galleries', 'gallery_items', 'gallery_favorites', 'gallery_categories', 'gallery_category_presets', 'saved_reports', 'planner_notes', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -182,6 +185,7 @@ const tableToEntity: Record<Table, EntityType | null> = {
   bank_accounts: null,
   bank_rules: null,
   attachments: null,
+  drive_shares: null,
   galleries: null,
   gallery_items: null,
   gallery_favorites: null,
@@ -515,6 +519,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     bankRules,
     bankRequisitions,
     attachments,
+    driveShares,
     folders,
     galleries,
     savedReports,
@@ -534,6 +539,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectFiscalYears(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId), selectFixedAssets(organizationId), selectAssetDepreciations(organizationId), selectVatReturns(organizationId),
     selectBankAccounts(organizationId), selectBankStatements(organizationId), selectBankTransactions(organizationId), selectBankRules(organizationId), selectBankRequisitions(organizationId),
     select<Attachment>('attachments', organizationId),
+    selectDriveShares(organizationId),
     selectFolders(organizationId),
     selectGalleries(organizationId),
     selectSavedReports(organizationId),
@@ -546,7 +552,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectProjectTemplateTasks(organizationId),
     selectContractProjects(organizationId),
   ]);
-  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, galleries, savedReports, plannerNotes, plannerCapacity, companySettings };
+  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings };
 }
 
 const CONTRACT_PROJECTS_MIGRATION_HINT =
@@ -1625,6 +1631,111 @@ export const selectClientContacts = (organizationId: UUID) =>
   selectOptional<ClientContact>('client_contacts', organizationId, { orderBy: 'name', ascending: true, hint: CLIENT_CONTACTS_MIGRATION_HINT });
 export const selectClientFieldDefinitions = (organizationId: UUID) =>
   selectOptional<ClientFieldDefinition>('client_field_definitions', organizationId, { orderBy: 'position', ascending: true, hint: CLIENT_FIELD_DEFINITIONS_MIGRATION_HINT });
+
+const DRIVE_SHARES_MIGRATION_HINT =
+  'Voer de migratie 20260823000000_drive_shares.sql uit in Supabase om bestanden te kunnen delen.';
+
+/** Alle delingen van deze organisatie — ingetrokken delingen blijven staan als geschiedenis. */
+export const selectDriveShares = (organizationId: UUID) =>
+  selectOptional<DriveShare>('drive_shares', organizationId, { orderBy: 'created_at', ascending: false, hint: DRIVE_SHARES_MIGRATION_HINT });
+
+/** Eén ontvanger voor een nieuwe deling. Precies één van de drie velden is gevuld. */
+export type DriveShareRecipientInput =
+  | { kind: Extract<DriveShareRecipientKind, 'contact'>; clientContactId: UUID }
+  | { kind: Extract<DriveShareRecipientKind, 'member'>; memberUserId: UUID }
+  | { kind: Extract<DriveShareRecipientKind, 'link'>; email: string; name?: string | null };
+
+export interface DriveShareResult {
+  /** Null als het delen met déze ontvanger niet lukte; `error` zegt dan waarom. */
+  share: DriveShare | null;
+  /** De ontvanger die is geweigerd — alleen ingevuld als `share` null is. */
+  recipient?: DriveShareRecipientInput;
+  /** Alleen bij een deellink, en alleen direct na het aanmaken: daarna is hij weg. */
+  url: string | null;
+  /** Is de melding per e-mail ook echt verstuurd? */
+  notified: boolean;
+  /** Waarom het delen met deze ontvanger niet lukte. Null als het wél lukte. */
+  error: string | null;
+  /** De deling staat klaar, maar de melding kwam niet aan. */
+  notifyError: string | null;
+}
+
+/**
+ * Deelt een drive-item met een of meer mensen. Loopt via de `file-share` Edge
+ * Function omdat daar de deellink-token wordt gemunt (alleen de hash gaat naar de
+ * database) en de melding per e-mail wordt verstuurd. De klantregel — een
+ * klantgerelateerd bestand mag alleen naar een geregistreerde contactpersoon van
+ * diezelfde klant — wordt daarnaast door de database zelf afgedwongen.
+ */
+export async function shareDriveItem(input: {
+  organizationId: UUID;
+  itemType: DriveShareItemType;
+  itemId: UUID;
+  itemName?: string | null;
+  recipients: DriveShareRecipientInput[];
+  canDownload?: boolean;
+  expiresAt?: string | null;
+  message?: string | null;
+  notify?: boolean;
+}): Promise<DriveShareResult[]> {
+  const { data, error } = await supabase.functions.invoke('file-share', {
+    body: {
+      action: 'share',
+      organizationId: input.organizationId,
+      itemType: input.itemType,
+      itemId: input.itemId,
+      itemName: input.itemName ?? null,
+      recipients: input.recipients,
+      canDownload: input.canDownload ?? true,
+      expiresAt: input.expiresAt ?? null,
+      message: input.message ?? null,
+      notify: input.notify ?? true,
+    },
+  });
+  if (error) await throwFunctionError(error, 'Delen is niet gelukt.');
+  if (!data?.ok) throw new Error(data?.error || 'Delen is niet gelukt.');
+  return (data.results ?? []) as DriveShareResult[];
+}
+
+/** Stuurt de melding voor een bestaande deling opnieuw (bv. omdat de eerste mail niet aankwam). */
+export async function resendDriveShareNotice(organizationId: UUID, shareId: UUID): Promise<DriveShareResult> {
+  const { data, error } = await supabase.functions.invoke('file-share', {
+    body: { action: 'resendNotice', organizationId, shareId },
+  });
+  if (error) await throwFunctionError(error, 'De melding opnieuw versturen is niet gelukt.');
+  if (!data?.ok) throw new Error(data?.error || 'De melding opnieuw versturen is niet gelukt.');
+  return data.result as DriveShareResult;
+}
+
+/**
+ * Trekt een deling in. De rij blijft bestaan (deelgeschiedenis), maar telt
+ * nergens meer mee: het portaal filtert op revoked_at en de deellink is dood.
+ */
+export async function revokeDriveShare(shareId: UUID, organizationId: UUID): Promise<DriveShare> {
+  const { data, error } = await supabase
+    .from('drive_shares')
+    .update({
+      revoked_at: new Date().toISOString(),
+      revoked_by: await currentUserId(),
+      token_hash: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', shareId)
+    .eq('organization_id', organizationId)
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as DriveShare;
+}
+
+/** Past de instellingen van een lopende deling aan (vervaldatum / downloaden mag). */
+export async function updateDriveShare(
+  shareId: UUID,
+  organizationId: UUID,
+  values: { can_download?: boolean; expires_at?: string | null },
+): Promise<DriveShare> {
+  return updateRow<DriveShare>('drive_shares', shareId, values, organizationId);
+}
 export const selectLedgerAccounts = (organizationId: UUID) =>
   selectOptional<LedgerAccount>('ledger_accounts', organizationId, { orderBy: 'code', ascending: true, hint: BOOKKEEPING_MIGRATION_HINT });
 export const selectVatCodes = (organizationId: UUID) =>

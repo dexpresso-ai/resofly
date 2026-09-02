@@ -122,6 +122,7 @@ import { PublicInvoicePage } from './features/PublicInvoicePage';
 import { PublicContractPage } from './features/PublicContractPage';
 import { PublicBookingPage } from './features/PublicBookingPage';
 import { PublicGalleryPage } from './features/PublicGalleryPage';
+import { PublicSharePage } from './features/PublicSharePage';
 import { GalleryTab } from './features/ProjectGallery';
 import { Contracts } from './features/Contracts';
 import { ClientPortal } from './features/portal/ClientPortal';
@@ -164,7 +165,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id' | 'notes' | 'due_date' | 'lines'>> }
   | null;
 
-const emptyData: AppData = { clients: [], clientContacts: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null };
+const emptyData: AppData = { clients: [], clientContacts: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null, creativeStatus: null, businessStatus: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
@@ -473,6 +474,15 @@ function getPublicBookingTokenFromLocation(): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+/** Deellink naar een gedeeld bestand: /gedeeld/<token>. */
+function getPublicShareTokenFromLocation(): string | null {
+  const url = new URL(window.location.href);
+  const queryToken = url.searchParams.get('share_token');
+  if (queryToken) return queryToken;
+  const match = url.pathname.match(/^\/gedeeld\/([^/]+)\/?$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function getPublicGalleryTokenFromLocation(): string | null {
   const url = new URL(window.location.href);
   const queryToken = url.searchParams.get('gallery_token');
@@ -633,6 +643,7 @@ function App() {
   const publicContractToken = getPublicContractTokenFromLocation();
   const publicBookingToken = getPublicBookingTokenFromLocation();
   const publicGalleryToken = getPublicGalleryTokenFromLocation();
+  const publicShareToken = getPublicShareTokenFromLocation();
   const portalRoute = isClientPortalRoute();
 
   // Track which user + organization we have loaded data for, so auth events do not
@@ -1047,6 +1058,7 @@ function App() {
   if (publicContractToken) return <PublicContractPage token={publicContractToken} />;
   if (publicBookingToken) return <PublicBookingPage token={publicBookingToken} />;
   if (publicGalleryToken) return <PublicGalleryPage token={publicGalleryToken} />;
+  if (publicShareToken) return <PublicSharePage token={publicShareToken} />;
   if (!sessionReady) return <BootLoading />;
   if (!loggedIn) return <Login />;
   // Zolang de werkruimte nog wordt geladen weten we nog niet of er een organisatie

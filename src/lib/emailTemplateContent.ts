@@ -16,7 +16,7 @@ export type EmailPlaceholder = { token: string; label: string; example: string }
 export type EmailTemplateMeta = {
   key: EmailTemplateKey;
   label: string;
-  group: 'offerte' | 'factuur' | 'herinnering' | 'creditfactuur' | 'contract' | 'booking';
+  group: 'offerte' | 'factuur' | 'herinnering' | 'creditfactuur' | 'contract' | 'booking' | 'bestanden';
   description: string;
   fields: EmailField[];
   defaults: Record<EmailField, string>;
@@ -43,6 +43,11 @@ const PLACEHOLDERS: Record<string, Omit<EmailPlaceholder, 'token'>> = {
   reason: { label: 'Reden creditfactuur', example: 'Correctie aantal uren' },
   meeting_title: { label: 'Titel van de afspraak', example: 'Kennismakingsgesprek' },
   booking_when: { label: 'Gekozen moment', example: 'maandag 6 juli 2026 10:00–10:30' },
+  sender_name: { label: 'Wie deelt', example: 'Gerjan van Lopik' },
+  item_name: { label: 'Naam van het gedeelde item', example: 'Oplevering fase 2' },
+  item_kind: { label: 'Soort item', example: 'Map' },
+  item_kind_lower: { label: 'Soort item (kleine letter)', example: 'map' },
+  client_name: { label: 'Klantnaam', example: 'Jansen Bouw BV' },
 };
 
 function placeholders(...tokens: string[]): EmailPlaceholder[] {
@@ -189,6 +194,20 @@ export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
       cta_label: '',
     },
     placeholders: placeholders('recipient_name', 'company_name', 'meeting_title', 'booking_when'),
+  },
+  {
+    key: 'file.shared',
+    label: 'Bestand gedeeld',
+    group: 'bestanden',
+    description: 'De e-mail die iemand krijgt zodra je een map, bestand, notitie of document met hem deelt. De link erin gaat naar het klantportaal, de app of de deellink — dat bepaalt de ontvanger, niet deze tekst.',
+    fields: ['subject', 'intro', 'closing', 'cta_label'],
+    defaults: {
+      subject: '{{sender_name}} deelt “{{item_name}}” met je',
+      intro: 'Beste {{recipient_name}},\n{{sender_name}} heeft {{item_kind_lower}} “{{item_name}}” met je gedeeld.',
+      closing: '',
+      cta_label: 'Bekijk {{item_kind_lower}}',
+    },
+    placeholders: placeholders('recipient_name', 'sender_name', 'company_name', 'item_name', 'item_kind', 'item_kind_lower', 'client_name', 'valid_until'),
   },
 ];
 

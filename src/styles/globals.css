@@ -8326,3 +8326,87 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .ps-deadlines input{accent-color:var(--accent);margin-top:2px;flex-shrink:0}
 .ps-deadlines span{font-size:12.5px;font-weight:600;color:var(--text)}
 .ps-deadlines em{display:block;margin-top:3px;font-size:11px;font-style:normal;font-weight:400;line-height:1.5;color:var(--muted)}
+
+/* ── Bestanden delen ──────────────────────────────────────────────────────
+   Het deelvenster (⋮ → Delen…) plus de kleine sporen die delen achterlaat:
+   het personen-icoontje in de verkennerrij, de gedeelde-bestandenlijst in het
+   klantportaal en de publieke deelpagina op /gedeeld/<token>. */
+.odrv-shared{display:inline-flex;align-items:center;margin-left:7px;color:var(--accent-ink);vertical-align:-2px}
+.odrv-tile-name .odrv-shared{margin-left:5px}
+
+.modal.share-modal{width:640px;max-width:100%}
+.share-lede{margin:0 0 12px;font-size:13px;line-height:1.6;color:var(--muted2)}
+.share-lede strong{color:var(--text)}
+.share-rule{display:flex;align-items:flex-start;gap:9px;padding:11px 13px;margin:0 0 14px;border-radius:11px;border:1px solid rgba(var(--accent-rgb),.28);background:rgba(var(--accent-rgb),.08);font-size:12.5px;line-height:1.55;color:var(--muted2)}
+.share-rule strong{color:var(--text)}
+.share-rule svg{flex-shrink:0;margin-top:2px;color:var(--accent-ink)}
+.share-rule.is-open{border-color:var(--border);background:var(--bg2)}
+.share-rule.is-open svg{color:var(--muted2)}
+
+.share-section{margin:0 0 18px;padding:0 0 16px;border-bottom:1px solid var(--border)}
+.share-section:last-child{margin-bottom:0;padding-bottom:0;border-bottom:none}
+.share-section h4{display:flex;align-items:center;gap:7px;margin:0 0 9px;font-size:12px;font-weight:700;letter-spacing:.02em;color:var(--text)}
+.share-section h4 svg{color:var(--muted)}
+.share-empty{margin:0;font-size:12px;line-height:1.6;color:var(--muted)}
+.share-hint{display:flex;align-items:flex-start;gap:6px;margin:8px 0 0;font-size:11px;line-height:1.55;color:var(--muted)}
+
+.share-people{list-style:none;margin:0;padding:0;display:grid;gap:2px;max-height:230px;overflow:auto}
+.share-people li{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:7px 9px;border-radius:9px}
+.share-people li:hover{background:var(--bg2)}
+.share-people li.is-shared{opacity:.9}
+.share-people label{display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer}
+.share-people input[type=checkbox]{accent-color:var(--accent);flex-shrink:0}
+.share-person{display:grid;gap:1px;min-width:0}
+.share-person strong{font-size:13px;font-weight:600;color:var(--text)}
+.share-person-meta{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.share-tag{flex-shrink:0;padding:2px 7px;border-radius:999px;background:var(--bg3);border:1px solid var(--border);font-size:10px;font-weight:600;color:var(--muted2)}
+.share-warn{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:var(--warn,var(--accent-o))}
+.share-warn button{border:1px solid var(--border2);background:var(--bg3);color:var(--text);border-radius:6px;padding:3px 7px;font-size:10.5px;font-weight:600;cursor:pointer}
+.share-warn button:hover:not(:disabled){border-color:var(--accent)}
+.share-warn-line{display:flex;align-items:center;gap:6px;margin:6px 0 0;font-size:11.5px;color:var(--danger)}
+
+.share-email-row{display:flex;gap:8px;align-items:center}
+.share-email-row .form-input{flex:1;min-width:0}
+.share-chips{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:6px}
+.share-chips li{display:inline-flex;align-items:center;gap:6px;padding:4px 6px 4px 9px;border-radius:999px;background:var(--bg3);border:1px solid var(--border);font-size:11.5px;color:var(--text)}
+.share-chips button{border:none;background:none;color:var(--muted);font-size:15px;line-height:1;cursor:pointer;padding:0 3px}
+.share-chips button:hover{color:var(--danger)}
+
+.share-options{display:grid;gap:10px}
+.share-option{display:grid;gap:5px}
+.share-option>span{font-size:11.5px;font-weight:600;color:var(--muted2)}
+.share-toggle{display:flex;align-items:flex-start;gap:9px;cursor:pointer}
+.share-toggle input{accent-color:var(--accent);margin-top:3px;flex-shrink:0}
+.share-toggle>span{font-size:12.5px;font-weight:600;color:var(--text)}
+.share-toggle em{display:block;margin-top:3px;font-size:11px;font-style:normal;font-weight:400;line-height:1.5;color:var(--muted)}
+.share-message{display:grid;gap:5px;margin-top:12px}
+.share-message>span{font-size:11.5px;font-weight:600;color:var(--muted2)}
+
+.share-results ul,.share-current{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.share-result-line{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text)}
+.share-link-row{display:flex;align-items:center;gap:8px;margin-top:6px}
+.share-link-row code{flex:1;min-width:0;padding:7px 9px;border-radius:8px;background:var(--bg2);border:1px solid var(--border);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted2)}
+.share-current li{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:9px 10px;border-radius:10px;border:1px solid var(--border);background:var(--bg2)}
+.share-current-main{display:grid;gap:2px;flex:1;min-width:0}
+.share-current-main strong{font-size:13px;font-weight:600;color:var(--text)}
+.share-current-actions{display:flex;gap:6px;flex-shrink:0}
+.share-current-actions button{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border2);background:var(--bg3);color:var(--muted2);border-radius:7px;padding:5px 9px;font-size:11px;font-weight:600;cursor:pointer}
+.share-current-actions button:hover:not(:disabled){border-color:var(--accent);color:var(--text)}
+.share-current-actions button.danger:hover:not(:disabled){border-color:var(--danger);color:var(--danger)}
+
+/* Klantportaal → Bestanden */
+.portal-shared-message{margin:6px 0 12px;padding:10px 12px;border-radius:10px;background:rgba(var(--accent-rgb),.08);border-left:3px solid var(--accent);font-size:13px;line-height:1.6;color:var(--muted2);white-space:pre-wrap}
+
+/* Publieke deelpagina /gedeeld/<token> */
+.share-public-message{margin:0;font-size:14px;line-height:1.65;white-space:pre-wrap;color:var(--muted2)}
+.share-public-group{margin-top:14px}
+.share-public-group:first-of-type{margin-top:6px}
+.share-public-group h3{display:flex;align-items:center;gap:7px;margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:.02em;color:rgba(var(--sheen-rgb),calc(.62 * var(--sheen-k)))}
+.share-public-list{display:grid;gap:8px}
+.share-public-row{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:14px;background:rgba(var(--sheen-rgb),calc(.045 * var(--sheen-k)));border:1px solid rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)))}
+.share-public-ic{display:inline-flex;color:var(--accent-ink);flex-shrink:0}
+.share-public-name{display:grid;gap:2px;flex:1;min-width:0}
+.share-public-name strong{font-size:14px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.share-public-name span{font-size:11.5px;color:rgba(var(--sheen-rgb),calc(.55 * var(--sheen-k)))}
+.share-public-foot{max-width:1040px;margin:20px auto 0;font-size:11.5px;color:rgba(var(--sheen-rgb),calc(.5 * var(--sheen-k)));text-align:center}
+.modal.share-read-modal{width:760px;max-width:100%}

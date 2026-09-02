@@ -3,7 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import {
   ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Download, Eye, EyeOff,
   File, FilePen, FileText, Folder, FolderOpen, FolderPlus, Info, LayoutGrid, List, MoreVertical,
-  Pencil, Plus, Presentation, Search, Sheet, SlidersHorizontal, StickyNote, Trash2, Upload, UploadCloud, X,
+  Pencil, Plus, Presentation, Search, Share2, Sheet, SlidersHorizontal, StickyNote, Trash2, Upload, UploadCloud, Users, X,
 } from 'lucide-react';
 import type { AppData, Attachment, ContentFolder, InternalDocument, Note, Project } from '../types';
 import { dateNL } from '../lib/format';
@@ -15,6 +15,9 @@ import { DriveRenameInput } from '../components/DriveRename';
 import { fileExtension, resolveRename } from '../lib/rename';
 import { childFolders, clientFolderOptions, folderDescendantIds, folderPath, scopedFolders } from '../lib/folders';
 import { AttachmentGlyph, DocumentGlyph, attAccentColor, attTypeLabel, documentAccentColor, fmtBytes } from './ClientFolders';
+import { ShareDialog } from '../components/ShareDialog';
+import { SharedOverview, SharedOverviewButton } from '../components/SharedOverview';
+import { shareKey, sharedItemKeys, type ShareTarget } from '../lib/shares';
 
 export type ContentView = 'all' | 'notes' | 'documents';
 
@@ -70,6 +73,8 @@ type Row = {
   rename?: ((typed: string) => void) | null;
   /** Bestanden houden hun extensie: alleen de naam ervóór staat geselecteerd. */
   keepExtension?: boolean;
+  /** Staat er een lopende deling op dit item? Toont het personen-icoontje in de rij. */
+  shared?: boolean;
 };
 const isFolderRow = (r: Row) => r.kind === 'client' || r.kind === 'project' || r.kind === 'folder';
 
@@ -143,6 +148,10 @@ export function ContentLibrary({
   /** Het bestand dat in de editor openstaat — drijft de "Downloaden"-knop (native formaat). */
   const [officeAtt, setOfficeAtt] = useState<Attachment | null>(null);
   const [opening, setOpening] = useState(false);
+  /** Het item waarvoor het deelvenster openstaat. */
+  const [sharing, setSharing] = useState<ShareTarget | null>(null);
+  /** Het overzicht "wat hebben we allemaal gedeeld". */
+  const [sharedOpen, setSharedOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { try { window.localStorage.setItem(VIEW_KEY, view); } catch { /* ignore */ } }, [view]);
@@ -165,6 +174,7 @@ export function ContentLibrary({
   const projectsById = useMemo(() => new Map(data.projects.map(p => [p.id, p] as const)), [data.projects]);
   const clientsById = useMemo(() => new Map(data.clients.map(c => [c.id, c] as const)), [data.clients]);
   const foldersById = useMemo(() => new Map(data.folders.map(f => [f.id, f] as const)), [data.folders]);
+  const sharedKeys = useMemo(() => sharedItemKeys(data), [data]);
 
   const noteCount = data.notes.length;
   const documentCount = data.documents.length;
@@ -459,6 +469,9 @@ export function ContentLibrary({
     })();
   }
 
+  /** Opent het deelvenster voor één item. De klantregel bepaalt daar wie er in beeld komt. */
+  function openShare(target: ShareTarget) { setMenu(null); setSharing(target); }
+
   function attOpen(att: Attachment) {
     if (isOfficeEditable(att)) void openOffice(att);
     else void handleDownload(att);
@@ -481,7 +494,11 @@ export function ContentLibrary({
       typeLabel: it.kind === 'note' ? 'Notitie' : 'Document',
       doc: it.doc,
       onOpen: open,
-      menu: canWrite && realClient ? (menuKey: string) => contentMenu(menuKey, key, it.kind, it.id, open) : null,
+      // Ook zónder klant een menu: juist die items ("Geen klant") zijn de items
+      // die je met een deellink mag delen. Alleen "Verplaatsen naar…" heeft een
+      // klantmap nodig en valt daarom weg.
+      menu: canWrite ? (menuKey: string) => contentMenu(menuKey, key, it.kind, it.id, label, open, realClient) : null,
+      shared: sharedKeys.has(shareKey(it.kind, it.id)),
       rename: canWrite
         ? typed => commitRename(label, typed, false, async name => {
             await updateRow(it.kind === 'note' ? 'notes' : 'documents', it.id, { title: name }, organizationId);
@@ -501,6 +518,7 @@ export function ContentLibrary({
       typeLabel,
       onOpen: () => openFolder(folder.id),
       menu: canWrite ? () => folderMenu(folder, key) : null,
+      shared: sharedKeys.has(shareKey('folder', folder.id)),
       rename: canWrite
         ? typed => commitRename(folder.name, typed, false, async name => {
             await updateRow('content_folders', folder.id, { name }, organizationId);
@@ -521,6 +539,7 @@ export function ContentLibrary({
       onOpen: () => attOpen(att),
       att,
       menu: () => fileMenu(att, key),
+      shared: sharedKeys.has(shareKey('attachment', att.id)),
       keepExtension: true,
       rename: canWrite
         ? typed => commitRename(att.name, typed, true, async name => {
@@ -634,13 +653,14 @@ export function ContentLibrary({
     return <>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openFolder(folder.id)}><FolderOpen size={16} /> Openen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: 'folder', id: folder.id, name: folder.name })}><Share2 size={16} /> Delen…</button>
       <div className="drive-pop-sep" />
       <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteFolder(folder); }}><Trash2 size={16} /> Verwijderen</button>
     </>;
   }
 
-  function contentMenu(key: string, rowKey: string, kind: 'note' | 'document', id: string, open: () => void) {
-    if (menu?.key === key && menu.mode === 'move') {
+  function contentMenu(key: string, rowKey: string, kind: 'note' | 'document', id: string, name: string, open: () => void, canMove = true) {
+    if (canMove && menu?.key === key && menu.mode === 'move') {
       return <>
         <div className="drive-pop-head"><button type="button" className="drive-pop-back" onClick={() => setMenu({ key, mode: 'main', up: menu.up })} aria-label="Terug"><ChevronLeft size={14} /></button> Verplaatsen naar</div>
         <div className="drive-pop-scroll">
@@ -652,7 +672,8 @@ export function ContentLibrary({
     return <>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); open(); }}><FilePen size={16} /> Openen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
-      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => setMenu(m => m ? { ...m, mode: 'move' } : m)}><Folder size={16} /> Verplaatsen naar… <ChevronRight size={14} style={{ marginLeft: 'auto' }} /></button>
+      {canMove && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => setMenu(m => m ? { ...m, mode: 'move' } : m)}><Folder size={16} /> Verplaatsen naar… <ChevronRight size={14} style={{ marginLeft: 'auto' }} /></button>}
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: kind, id, name })}><Share2 size={16} /> Delen…</button>
     </>;
   }
 
@@ -660,6 +681,7 @@ export function ContentLibrary({
     return <>
       {isOfficeEditable(att) && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); void openOffice(att); }}><FilePen size={16} style={{ color: 'var(--accent-o)' }} /> Openen in editor</button>}
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); void handleDownload(att); }}><Download size={16} /> Downloaden</button>
+      {canWrite && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: 'attachment', id: att.id, name: att.name })}><Share2 size={16} /> Delen…</button>}
       {canWrite && <>
         <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
         <div className="drive-pop-sep" />
@@ -690,7 +712,7 @@ export function ContentLibrary({
         <span className="odrv-td-ic" style={{ color: row.color || 'var(--accent)' }}><RowGlyph row={row} size={20} /></span>
         {isRenaming
           ? <DriveRenameInput value={row.name} keepExtension={row.keepExtension} onCommit={row.rename!} onCancel={() => setRenaming(null)} />
-          : <span className="odrv-td-name" title={row.name}>{row.name}{row.archived && <em className="odrv-arch">gearchiveerd</em>}</span>}
+          : <span className="odrv-td-name" title={row.name}>{row.name}{row.shared && <span className="odrv-shared" role="img" aria-label="Gedeeld" title="Gedeeld met anderen"><Users size={13} /></span>}{row.archived && <em className="odrv-arch">gearchiveerd</em>}</span>}
         <span className="odrv-td-mod">{row.modified ? dateNL(row.modified) : '—'}</span>
         <span className="odrv-td-size">{row.size}</span>
         <span className="odrv-td-type">{row.typeLabel}</span>
@@ -711,7 +733,7 @@ export function ContentLibrary({
         <span className="odrv-tile-foot">
           {isRenaming
             ? <DriveRenameInput value={row.name} keepExtension={row.keepExtension} onCommit={row.rename!} onCancel={() => setRenaming(null)} />
-            : <span className="odrv-tile-name" title={row.name}>{row.name}</span>}
+            : <span className="odrv-tile-name" title={row.name}>{row.name}{row.shared && <span className="odrv-shared" role="img" aria-label="Gedeeld" title="Gedeeld met anderen"><Users size={12} /></span>}</span>}
           <span className="odrv-tile-meta">{isFolderRow(row) ? `${row.typeLabel} · ${row.size}` : `${row.typeLabel}${row.modified ? ` · ${dateNL(row.modified)}` : ''}`}</span>
         </span>
       </>;
@@ -794,6 +816,7 @@ export function ContentLibrary({
         {uploading && <span className="drive-uploading"><UploadCloud size={14} /> Uploaden…</span>}
 
         <div className="odrv-cmdbar-right">
+          <SharedOverviewButton data={data} onOpen={() => { setSharedOpen(true); setNewOpen(false); setSortOpen(false); setFilterOpen(false); setMenu(null); }} />
           <div className="drive-new-wrap">
             <button type="button" className={`odrv-tool drive-pop-trigger${anyFilterOff ? ' is-active' : ''}`} onClick={() => { setFilterOpen(o => !o); setNewOpen(false); setSortOpen(false); setMenu(null); }} aria-haspopup="menu" aria-expanded={filterOpen}>
               <SlidersHorizontal size={14} /> <span className="odrv-tool-label">Weergeven</span> <ChevronDown size={13} />
@@ -881,5 +904,7 @@ export function ContentLibrary({
 
     {opening && <span className="drive-uploading drive-opening-toast"><UploadCloud size={14} /> Editor openen…</span>}
     {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeAtt(null); onChanged(); }} onDownload={officeAtt ? () => handleDownload(officeAtt) : undefined} />}
+    {sharing && <ShareDialog data={data} organizationId={organizationId} target={sharing} onClose={() => setSharing(null)} onChanged={onChanged} />}
+    {sharedOpen && <SharedOverview data={data} organizationId={organizationId} canWrite={canWrite} onClose={() => setSharedOpen(false)} onChanged={onChanged} />}
   </div>;
 }

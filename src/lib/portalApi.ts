@@ -150,6 +150,36 @@ export interface PortalAccount {
   contracts: PortalContract[];
   tickets: PortalTicket[];
   galleries: PortalGallery[];
+  /** Aantal met deze contactpersoon gedeelde mappen/bestanden — voedt het tabbladtelletje. */
+  sharedFileCount?: number;
+}
+
+/** Eén ding binnen een deling: een bestand, notitie of document. */
+export interface PortalSharedItem {
+  itemType: 'attachment' | 'note' | 'document';
+  itemId: string;
+  name: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  modified: string | null;
+  /** Pad binnen de gedeelde map, bv. "Contracten / 2026". Leeg bij een los bestand. */
+  path: string | null;
+  downloadable: boolean;
+  /** Notities en tekstdocumenten lees je op de pagina zelf. */
+  readable: boolean;
+}
+
+/** Eén deling: wat er is gedeeld, met welk bericht erbij, en wat erin zit. */
+export interface PortalShare {
+  id: string;
+  clientId: string | null;
+  itemType: 'folder' | 'attachment' | 'note' | 'document';
+  itemName: string | null;
+  message: string | null;
+  canDownload: boolean;
+  expiresAt: string | null;
+  sharedAt: string;
+  items: PortalSharedItem[];
 }
 
 export interface PortalGallery {
@@ -372,6 +402,43 @@ export async function downloadPortalContractPdf(contractId: string): Promise<{ f
   if (error) throw new Error(await extractFunctionError(error, 'Contract-PDF downloaden mislukt'));
   if (!data?.ok || !data.pdf?.base64) throw new Error(data?.error || 'Contract-PDF downloaden mislukt');
   return { fileName: data.pdf.fileName || `contract-${contractId}.pdf`, mimeType: data.pdf.mimeType || 'application/pdf', base64: data.pdf.base64 };
+}
+
+/** De mappen/bestanden die met deze contactpersoon zijn gedeeld. */
+export async function fetchPortalSharedFiles(clientId?: string): Promise<PortalShare[]> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'getSharedFiles', clientId: clientId ?? null },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Gedeelde bestanden ophalen mislukt'));
+  if (!data?.ok) throw new Error(data?.error || 'Gedeelde bestanden ophalen mislukt');
+  return (data.shares ?? []) as PortalShare[];
+}
+
+export type PortalSharedDownload =
+  | { kind: 'file'; fileName: string; mimeType: string; base64: string }
+  | { kind: 'text'; title: string; html: string };
+
+/** Haalt één gedeeld item op: bestandsbytes (base64) of de tekst van een notitie/document. */
+export async function downloadPortalSharedItem(
+  shareId: string,
+  itemType: string,
+  itemId: string,
+): Promise<PortalSharedDownload> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'downloadSharedFile', shareId, itemType, itemId },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Downloaden mislukt'));
+  if (!data?.ok) throw new Error(data?.error || 'Downloaden mislukt');
+  if (data.text) return { kind: 'text', title: data.text.title || '', html: data.text.html || '' };
+  if (data.file?.base64) {
+    return {
+      kind: 'file',
+      fileName: data.file.fileName || 'bestand',
+      mimeType: data.file.mimeType || 'application/octet-stream',
+      base64: data.file.base64 as string,
+    };
+  }
+  throw new Error('Downloaden mislukt');
 }
 
 // Supabase functions.invoke geeft een non-2xx terug als FunctionsHttpError, waarvan

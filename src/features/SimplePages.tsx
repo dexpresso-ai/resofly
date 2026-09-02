@@ -941,7 +941,11 @@ function EmailTemplatesCard({ organizationId, canAdmin }: { organizationId: stri
           <div className="email-preview-subject">{fillPlaceholders(form.subject || meta.defaults.subject) || '(geen onderwerp)'}</div>
           <div className="email-preview-body">
             {fillPlaceholders(form.intro || meta.defaults.intro).split('\n').map((line, i) => <p key={i}>{line || ' '}</p>)}
-            <p className="email-preview-structural">— Hier vult ResoFly automatisch {meta.group === 'booking' ? 'de gekozen tijden, de videocall-link en je begeleidende tekst' : `het overzicht in: bedrag, datums${meta.group === 'offerte' ? ' en geldigheid' : ''}`}.</p>
+            <p className="email-preview-structural">— Hier vult ResoFly automatisch {meta.group === 'booking'
+              ? 'de gekozen tijden, de videocall-link en je begeleidende tekst'
+              : meta.group === 'bestanden'
+                ? 'het overzicht in: wat er is gedeeld, jouw bericht en tot wanneer de link geldig is'
+                : `het overzicht in: bedrag, datums${meta.group === 'offerte' ? ' en geldigheid' : ''}`}.</p>
             {form.closing.trim() && fillPlaceholders(form.closing).split('\n').map((line, i) => <p key={`c${i}`}>{line || ' '}</p>)}
             {meta.fields.includes('cta_label') && <p><span className="email-preview-cta">{fillPlaceholders(form.cta_label || meta.defaults.cta_label)}</span></p>}
           </div>
