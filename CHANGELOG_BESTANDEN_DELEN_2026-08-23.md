@@ -33,7 +33,10 @@ persoonlijk bericht, en een melding per e-mail.
 
 ## Toegevoegd
 
-- **Migratie `20260823000000_drive_shares.sql`**
+- **Migratie `20260823000000_drive_shares.sql`** (+ `20260823010000_drive_shares_revoke_always_possible.sql`,
+  die één ding rechtzet: intrekken moet altijd lukken, ook als de contactpersoon intussen
+  inactief is of zijn portaaltoegang kwijt is — anders zit je vast aan precies de deling
+  die je wilde stoppen)
   - `drive_shares` (wat, met wie, tot wanneer, mag downloaden) met RLS
     (`can_read_org`/`can_write_org`), de module-poort op `content`, org-integriteits- en
     audittriggers, en partiële unieke indexen zodat opnieuw delen bijwerkt in plaats van
