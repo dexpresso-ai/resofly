@@ -23,6 +23,7 @@ import {
   planDriveMove, readDriveDrag, type DriveDragItem, type DriveLocation,
 } from '../lib/driveDnd';
 import { useDriveSelection } from '../lib/useDriveSelection';
+import { useMarqueeSelection } from '../lib/useMarqueeSelection';
 import { MoveDialog } from '../components/MoveDialog';
 
 export type ContentView = 'all' | 'notes' | 'documents';
@@ -638,6 +639,16 @@ export function ContentLibrary({
   const selection = useDriveSelection<Row>(selectable);
   const { clear: clearSelection } = selection;
 
+  // Op lege ruimte drukken en slepen tekent een selectiekader, zoals in de Verkenner
+  // van Windows; Ctrl+A pakt alles. Rijen en tegels doen mee via `data-selkey`.
+  const marquee = useMarqueeSelection({ enabled: canWrite, getBase: selection.snapshot, apply: selection.replace, clear: clearSelection });
+  const rootKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!canWrite || !(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'a') return;
+    if ((e.target as HTMLElement).closest('input, textarea, select, [contenteditable="true"]')) return;
+    e.preventDefault();
+    selection.selectAll();
+  };
+
   // Van map wisselen betekent van context wisselen; een selectie die je niet meer
   // ziet mag niet blijven staan — en een openstaand verplaatsvenster ook niet.
   useEffect(() => { clearSelection(); setMoving(null); }, [clientId, projectId, folderId, clearSelection]);
@@ -897,6 +908,7 @@ export function ContentLibrary({
         key={row.key}
         role="button"
         tabIndex={0}
+        data-selkey={canWrite && row.drag ? row.key : undefined}
         draggable={canWrite && Boolean(row.drag) && !isRenaming}
         onDragStart={e => startDrag(e, row)}
         onDragEnd={() => { endDriveDrag(); setDropKey(null); }}
@@ -946,6 +958,7 @@ export function ContentLibrary({
       return <div
         className={`odrv-tile odrv-tile-wrap${picked ? ' is-picked' : ''}${dropKey === row.key ? ' is-drop-target' : ''}`}
         key={`t-${row.key}`}
+        data-selkey={canWrite && row.drag ? row.key : undefined}
         draggable={canWrite && Boolean(row.drag) && !isRenaming}
         onDragStart={e => startDrag(e, row)}
         onDragEnd={() => { endDriveDrag(); setDropKey(null); }}
@@ -969,6 +982,7 @@ export function ContentLibrary({
 
   return <div
     className={`odrv${dragOver ? ' is-dragging' : ''}`}
+    onKeyDown={rootKeyDown}
     onDragOver={canDrop ? e => { if (!dragHasFiles(e.dataTransfer)) return; e.preventDefault(); setDragOver(true); } : undefined}
     onDragLeave={canDrop ? e => { if (e.currentTarget === e.target) setDragOver(false); } : undefined}
     onDrop={canDrop ? e => { if (!dragHasFiles(e.dataTransfer)) return; e.preventDefault(); setDragOver(false); if (e.dataTransfer.files?.length) uploadFiles(e.dataTransfer.files); } : undefined}
@@ -1111,7 +1125,7 @@ export function ContentLibrary({
             <span>Zet in het menu “Weergeven” Notities, Documenten of Bestanden aan om je inhoud te tonen.</span>
           </div></div>
         : <div className="odrv-body">
-            <div className="odrv-scroll">
+            <div className={`odrv-scroll${marquee.active ? ' is-marquee' : ''}`} ref={marquee.containerRef} tabIndex={-1} onMouseDown={marquee.onMouseDown}>
               {selection.count > 0 && <div className="odrv-selbar">
                 <button type="button" className="odrv-selbar-clear" onClick={selection.clear} aria-label="Selectie wissen"><X size={14} /></button>
                 <strong>{itemCountLabel(selection.count)} geselecteerd</strong>
@@ -1131,6 +1145,7 @@ export function ContentLibrary({
               {canDrop && rows.length > 0 && <div className={`drive-dropzone odrv-dropzone${dragOver ? ' is-dragging' : ''}`}>
                 <UploadCloud size={18} /> Sleep bestanden hierheen om ze te uploaden
               </div>}
+              {marquee.rect && <div className="odrv-marquee" style={marquee.rect} aria-hidden="true" />}
             </div>
             {detailsOpen && <aside className="odrv-details">
               <div className="odrv-details-head">

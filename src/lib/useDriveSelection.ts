@@ -26,6 +26,10 @@ export type DriveSelection<T> = {
   clear: () => void;
   /** Wat er meegaat als je gaat slepen: de hele selectie, of alleen deze rij. */
   dragKeys: (key: string) => string[];
+  /** Alles wat nu aanstaat, als losse Set — het uitgangspunt voor een selectiekader. */
+  snapshot: () => Set<string>;
+  /** Vervangt de selectie in één keer (selectiekader). Wat niet selecteerbaar is valt af. */
+  replace: (next: ReadonlySet<string>) => void;
 };
 
 export function useDriveSelection<T>(
@@ -33,6 +37,10 @@ export function useDriveSelection<T>(
 ): DriveSelection<T> {
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const anchorRef = useRef<string | null>(null);
+  // Het selectiekader leest de selectie op het moment van de muisdruk, buiten de
+  // render-cyclus om; een ref houdt daarvoor altijd de laatste stand vast.
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
 
   // `visible` is elke render een nieuwe array (de rijen worden opnieuw opgebouwd),
   // dus memoïseren op de array zelf levert niets op. De sleutels eruit vormen wél
@@ -65,6 +73,17 @@ export function useDriveSelection<T>(
   const selectAll = useCallback(() => {
     setSelected(new Set(selectableKeys));
   }, [selectableKeys]);
+
+  const snapshot = useCallback(() => new Set(selectedRef.current), []);
+
+  const replace = useCallback((next: ReadonlySet<string>) => {
+    setSelected(current => {
+      const filtered = new Set<string>();
+      for (const key of next) if (selectableSet.has(key)) filtered.add(key);
+      if (filtered.size === current.size && [...filtered].every(key => current.has(key))) return current;
+      return filtered;
+    });
+  }, [selectableSet]);
 
   const toggle = useCallback((key: string) => {
     if (!selectableSet.has(key)) return;
@@ -123,5 +142,7 @@ export function useDriveSelection<T>(
     selectAll,
     clear,
     dragKeys,
+    snapshot,
+    replace,
   };
 }

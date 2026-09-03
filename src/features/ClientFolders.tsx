@@ -21,6 +21,7 @@ import {
   planDriveMove, readDriveDrag, type DriveDragItem, type DriveLocation,
 } from '../lib/driveDnd';
 import { useDriveSelection } from '../lib/useDriveSelection';
+import { useMarqueeSelection } from '../lib/useMarqueeSelection';
 import { MoveDialog } from '../components/MoveDialog';
 
 /**
@@ -500,6 +501,16 @@ export function ClientFolders({
   const selection = useDriveSelection<Row>(selectable);
   const { clear: clearSelection } = selection;
 
+  // Op lege ruimte drukken en slepen tekent een selectiekader, zoals in de Verkenner
+  // van Windows; Ctrl+A pakt alles. Rijen en tegels doen mee via `data-selkey`.
+  const marquee = useMarqueeSelection({ enabled: canWrite, getBase: selection.snapshot, apply: selection.replace, clear: clearSelection });
+  const rootKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!canWrite || !(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'a') return;
+    if ((e.target as HTMLElement).closest('input, textarea, select, [contenteditable="true"]')) return;
+    e.preventDefault();
+    selection.selectAll();
+  };
+
   useEffect(() => { clearSelection(); setMoving(null); }, [currentId, clearSelection]);
 
   /** Waar ligt dit item nu? Bepaalt of een sleep of een keuze in het venster iets verandert. */
@@ -646,6 +657,7 @@ export function ClientFolders({
 
   return <div
     className={`odrv odrv-embed${dragOver ? ' is-dragging' : ''}`}
+    onKeyDown={rootKeyDown}
     onDragOver={canDrop ? e => { if (!dragHasFiles(e.dataTransfer)) return; e.preventDefault(); setDragOver(true); } : undefined}
     onDragLeave={canDrop ? e => { if (e.currentTarget === e.target) setDragOver(false); } : undefined}
     onDrop={canDrop ? e => { if (!dragHasFiles(e.dataTransfer)) return; e.preventDefault(); setDragOver(false); if (e.dataTransfer.files?.length) uploadFiles(e.dataTransfer.files); } : undefined}
@@ -742,7 +754,7 @@ export function ClientFolders({
         </div>}
       </div>}
 
-      <div className="odrv-scroll">
+      <div className={`odrv-scroll${marquee.active ? ' is-marquee' : ''}`} ref={marquee.containerRef} tabIndex={-1} onMouseDown={marquee.onMouseDown}>
         {selection.count > 0 && <div className="odrv-selbar">
           <button type="button" className="odrv-selbar-clear" onClick={selection.clear} aria-label="Selectie wissen"><X size={14} /></button>
           <strong>{itemCountLabel(selection.count)} geselecteerd</strong>
@@ -773,6 +785,7 @@ export function ClientFolders({
         {canDrop && !isEmpty && <div className={`drive-dropzone odrv-dropzone${dragOver ? ' is-dragging' : ''}`}>
           <UploadCloud size={18} /> Sleep bestanden hierheen om ze te uploaden
         </div>}
+        {marquee.rect && <div className="odrv-marquee" style={marquee.rect} aria-hidden="true" />}
       </div>
     </div>
 
@@ -855,6 +868,7 @@ export function ClientFolders({
           key={row.key}
           role="button"
           tabIndex={0}
+          data-selkey={canWrite && row.drag ? row.key : undefined}
           draggable={canWrite && Boolean(row.drag) && !isRenaming}
           onDragStart={e => startDrag(e, row)}
           onDragEnd={() => { endDriveDrag(); setDropKey(null); }}
@@ -906,6 +920,7 @@ export function ClientFolders({
         return <div
           className={`odrv-tile odrv-tile-wrap${picked ? ' is-picked' : ''}${dropKey === row.key ? ' is-drop-target' : ''}`}
           key={`t-${row.key}`}
+          data-selkey={canWrite && row.drag ? row.key : undefined}
           draggable={canWrite && Boolean(row.drag) && !isRenaming}
           onDragStart={e => startDrag(e, row)}
           onDragEnd={() => { endDriveDrag(); setDropKey(null); }}

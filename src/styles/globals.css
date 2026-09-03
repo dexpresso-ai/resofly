@@ -8474,3 +8474,11 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .mv-hint svg{flex-shrink:0;margin-top:2px;color:var(--accent-ink)}
 .mv-hint.is-blocked svg{color:var(--accent-r)}
 .mv-foot-actions{display:flex;gap:8px;margin-left:auto}
+
+/* Selectiekader: op lege ruimte drukken en slepen, zoals in de Verkenner van Windows.
+   Het kader leeft ín de scrollende lijst, dus die is het referentievlak. */
+.odrv-scroll{position:relative}
+.odrv-scroll:focus{outline:none}
+.odrv-scroll.is-marquee{user-select:none;cursor:default}
+.odrv-scroll.is-marquee .odrv-row,.odrv-scroll.is-marquee .odrv-tile-wrap{pointer-events:none}
+.odrv-marquee{position:absolute;z-index:6;pointer-events:none;border:1px solid var(--accent);background:rgba(var(--accent-rgb),.14);border-radius:3px}
