@@ -4,6 +4,8 @@ import { Button, Select } from '../components/Ui';
 import { SearchFilterPanel } from '../components/SearchFilterPanel';
 import type { FilterField } from '../components/SearchFilterPanel';
 import { AssigneeAvatars } from '../components/AssigneeAvatars';
+import { DetailTabs } from '../components/DetailTabs';
+import type { DetailTab } from '../components/DetailTabs';
 import { dateNL, euro, formatMinutes, priorityLabel, total } from '../lib/format';
 import { memberColor, memberInitials, memberName } from '../lib/members';
 import { RelatedNotes } from './Notes';
@@ -15,7 +17,7 @@ import { TimeEntryModal, timeEntryValueCents } from './TimeTracking';
 import { GalleryTab } from './ProjectGallery';
 import { supabase } from '../lib/supabase';
 import { addContractProject, addProjectMember, deleteTimeEntry, removeContractProject, removeProjectMember, updateTimeEntry } from '../lib/repository';
-import { ChevronDown, ChevronRight, Clock, Link2, Pencil, Trash2, UserPlus } from 'lucide-react';
+import { CalendarRange, ChevronDown, ChevronRight, Clock, FileSignature, FileText, Files, Images, LayoutDashboard, Link2, Pencil, Receipt, SquareKanban, StickyNote, Trash2, UserPlus } from 'lucide-react';
 
 /** Uitklapbare dashboard-sectie */
 function DashboardSection({
@@ -93,6 +95,73 @@ const projectInvoiceStatusLabels: Record<string, string> = {
   overdue: 'Vervallen',
   cancelled: 'Geannuleerd',
 };
+
+const taskStatusLabel = (status: TaskStatus) => columns.find(column => column.key === status)?.label ?? status;
+
+/** Vandaag als lokale kalenderdatum (YYYY-MM-DD). `toISOString()` rekent in UTC
+ *  en zegt 's avonds al "morgen" — dan is een deadline van vandaag ineens te laat. */
+function localIsoDate(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+/** Datum óf tijdstip → lokale kalenderdatum. Deadlines zijn DATE-kolommen, maar
+ *  oudere rijen kunnen een volledig tijdstip dragen. */
+function toLocalIsoDate(value: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value.slice(0, 10) : localIsoDate(parsed);
+}
+
+/** Aantal kalenderdagen van `todayIso` tot `iso` (negatief = verstreken). */
+function dayDiff(iso: string, todayIso: string): number {
+  const [y, m, d] = iso.split('-').map(Number);
+  const [ty, tm, td] = todayIso.split('-').map(Number);
+  return Math.round((new Date(y, m - 1, d).getTime() - new Date(ty, tm - 1, td).getTime()) / 86_400_000);
+}
+
+/** "22 jun" of "22 jun 2026" — zonder de puntjes die nl-NL achter een maand zet. */
+function shortDateNL(iso: string, withYear: boolean): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', ...(withYear ? { year: 'numeric' } : {}) }).replace(/\./g, '');
+}
+
+type ChipTone = 'ok' | 'warn' | 'danger' | 'muted';
+
+/** Deadline als korte, relatieve tekst: "3 dagen te laat", "Vandaag", "Over 5 dagen", "12 sep". */
+function deadlineLabel(endDate: string | null, todayIso: string): { text: string; tone: ChipTone } | null {
+  if (!endDate) return null;
+  const iso = toLocalIsoDate(endDate);
+  const diff = dayDiff(iso, todayIso);
+  if (Number.isNaN(diff)) return null;
+  if (diff < 0) return { text: diff === -1 ? '1 dag te laat' : `${-diff} dagen te laat`, tone: 'danger' };
+  if (diff === 0) return { text: 'Vandaag', tone: 'warn' };
+  if (diff === 1) return { text: 'Morgen', tone: 'warn' };
+  if (diff <= 7) return { text: `Over ${diff} dagen`, tone: 'muted' };
+  return { text: shortDateNL(iso, iso.slice(0, 4) !== todayIso.slice(0, 4)), tone: 'muted' };
+}
+
+/** Looptijd van het project in één regel: "22 jun – 6 jul 2026", "Vanaf 1 sep 2026". */
+function periodLabel(start: string | null, end: string | null): string | null {
+  const from = start ? toLocalIsoDate(start) : null;
+  const until = end ? toLocalIsoDate(end) : null;
+  if (from && until) return `${shortDateNL(from, from.slice(0, 4) !== until.slice(0, 4))} – ${shortDateNL(until, true)}`;
+  if (from) return `Vanaf ${shortDateNL(from, true)}`;
+  if (until) return `Tot ${shortDateNL(until, true)}`;
+  return null;
+}
+
+/** Waar het project staat, in één woord — afgeleid uit taken en data, niet opgeslagen. */
+function projectPhase(project: Project, taskCount: number, progress: number, overdueTasks: number, todayIso: string): { label: string; tone: ChipTone } {
+  if (project.archived) return { label: 'Gearchiveerd', tone: 'muted' };
+  if (taskCount > 0 && progress === 100) return { label: 'Afgerond', tone: 'ok' };
+  if (project.end_date && dayDiff(toLocalIsoDate(project.end_date), todayIso) < 0) return { label: 'Einddatum verstreken', tone: 'danger' };
+  if (project.start_date && dayDiff(toLocalIsoDate(project.start_date), todayIso) > 0) return { label: `Start ${shortDateNL(toLocalIsoDate(project.start_date), false)}`, tone: 'muted' };
+  if (taskCount === 0) return { label: 'Nog geen taken', tone: 'muted' };
+  if (overdueTasks > 0) return { label: `Loopt · ${overdueTasks} te laat`, tone: 'warn' };
+  return { label: 'Loopt', tone: 'ok' };
+}
 
 type ProjectViewMode = 'cards' | 'table';
 const projectViewStorageKey = 'resofly.projects.viewMode';
@@ -921,37 +990,78 @@ export function ProjectPage({
     await onChanged();
   }
 
+  const todayIso = localIsoDate(new Date());
   const doneTasks = tasks.filter(t => t.status === 'done').length;
   const progress = tasks.length > 0 ? Math.round((doneTasks / tasks.length) * 100) : 0;
   const openTasks = tasks.filter(t => t.status !== 'done').length;
-  const overdueTasks = tasks.filter(t => t.end_date && new Date(t.end_date) < new Date() && t.status !== 'done').length;
-  const invoiceTotal = projectInvoices.reduce((sum, i) => sum + (i.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0), 0);
+  // Op kalenderdag vergeleken: een taak die vandaag afloopt is nog niet te laat.
+  const overdueTasks = tasks.filter(t => t.status !== 'done' && !!t.end_date && dayDiff(toLocalIsoDate(t.end_date), todayIso) < 0).length;
+  const statusCounts: Record<TaskStatus, number> = { todo: 0, doing: 0, review: 0, done: 0 };
+  for (const task of tasks) statusCounts[task.status] += 1;
+  // De vijf open taken die het eerst aflopen — te laat bovenaan, zonder deadline onderaan.
+  const nextTasks = useMemo(() => {
+    const dueKey = (task: Task) => (task.end_date ? toLocalIsoDate(task.end_date) : '9999-12-31');
+    return tasks
+      .filter(t => t.status !== 'done')
+      .sort((a, b) => dueKey(a).localeCompare(dueKey(b)) || a.created_at.localeCompare(b.created_at))
+      .slice(0, 5);
+  }, [tasks]);
+  const quoteTotal = projectQuotes.reduce((sum, quote) => sum + total(quote.lines).total, 0);
+  const invoiceTotal = projectInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
+  const openInvoiceTotal = projectInvoices
+    .filter(i => !['draft', 'paid', 'cancelled', 'void'].includes(i.status))
+    .reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
+  const phase = projectPhase(project, tasks.length, progress, overdueTasks, todayIso);
+  const period = periodLabel(project.start_date, project.end_date);
+  const billingLabel = project.billing_type === 'fixed_price'
+    ? 'Aangenomen prijs'
+    : `Urenbasis${project.hourly_rate_cents != null ? ` · ${euro(project.hourly_rate_cents / 100)}/u` : ''}`;
 
   const switchTab = (tab: ProjectTab) => setActiveTab(tab);
 
-  const tabs: Array<{ id: ProjectTab; label: string; count: number }> = [
-    { id: 'overview', label: 'Overzicht', count: 0 },
-    { id: 'kanban', label: 'Kanban', count: openTasks },
-    { id: 'quotes', label: 'Offertes', count: projectQuotes.length },
+  // De cijferstrook in de kop: elk cijfer opent het tabblad waar het vandaan komt.
+  const stats: Array<{ key: string; label: string; value: string; sub?: string; tone?: 'accent' | 'danger' | 'muted'; tab: ProjectTab }> = [
+    { key: 'tasks', label: 'Taken', value: String(tasks.length), sub: tasks.length > 0 ? `${doneTasks} klaar` : undefined, tab: 'kanban' },
+    { key: 'open', label: 'Open', value: String(openTasks), tone: openTasks > 0 ? 'accent' : undefined, tab: 'kanban' },
+    { key: 'late', label: 'Te laat', value: String(overdueTasks), tone: overdueTasks > 0 ? 'danger' : undefined, tab: 'kanban' },
+    { key: 'quotes', label: 'Offertes', value: String(projectQuotes.length), sub: quoteTotal > 0 ? euro(quoteTotal) : undefined, tab: 'quotes' },
+    {
+      key: 'invoiced', label: 'Gefactureerd',
+      value: projectInvoices.length > 0 ? euro(invoiceTotal) : '—',
+      sub: projectInvoices.length > 0 ? `${projectInvoices.length} ${projectInvoices.length === 1 ? 'factuur' : 'facturen'}` : undefined,
+      tone: projectInvoices.length === 0 ? 'muted' : undefined, tab: 'invoices',
+    },
+    {
+      key: 'time', label: 'Uren',
+      value: trackedMinutes > 0 ? formatMinutes(trackedMinutes) : '—',
+      sub: budgetedMinutes != null ? `van ${formatMinutes(budgetedMinutes)}` : trackedValueCents > 0 ? euro(trackedValueCents / 100) : undefined,
+      tone: overBudget ? 'danger' : trackedMinutes === 0 ? 'muted' : undefined, tab: 'time',
+    },
+  ];
+
+  const tabs: DetailTab<ProjectTab>[] = [
+    { id: 'overview', label: 'Overzicht', icon: LayoutDashboard },
+    { id: 'kanban', label: 'Kanban', count: openTasks, icon: SquareKanban },
+    { id: 'quotes', label: 'Offertes', count: projectQuotes.length, icon: FileText },
     // Zonder leesrecht op Financiën bestaat het tabblad niet; de rijen zijn er
     // door RLS dan toch niet.
-    ...(canReadContracts ? [{ id: 'contracts' as ProjectTab, label: 'Contracten', count: linkedContractCount }] : []),
-    { id: 'invoices', label: 'Facturen', count: projectInvoices.length },
-    { id: 'time', label: 'Uren', count: projectTimeEntries.length },
-    { id: 'notes', label: 'Notities', count: projectNotes.length },
-    { id: 'documents', label: 'Documenten', count: projectDocuments.length },
+    ...(canReadContracts ? [{ id: 'contracts' as ProjectTab, label: 'Contracten', count: linkedContractCount, icon: FileSignature }] : []),
+    { id: 'invoices', label: 'Facturen', count: projectInvoices.length, icon: Receipt },
+    { id: 'time', label: 'Uren', count: projectTimeEntries.length, icon: Clock },
+    { id: 'notes', label: 'Notities', count: projectNotes.length, icon: StickyNote },
+    { id: 'documents', label: 'Documenten', count: projectDocuments.length, icon: Files },
     // De galerij hoort bij de creatieve module. Zonder die module is er geen
     // tabblad — behalve wanneer dit project er al galerijen heeft: die blijven
     // zichtbaar (bevroren) zodat niemand zijn werk kwijtraakt.
     ...((creativeActive || projectGalleries.length > 0)
-      ? [{ id: 'gallery' as ProjectTab, label: 'Galerij', count: projectGalleries.length }]
+      ? [{ id: 'gallery' as ProjectTab, label: 'Galerij', count: projectGalleries.length, icon: Images }]
       : []),
   ];
 
   return (
     <div className="proj-dashboard">
 
-      {/* ── Hero header ── */}
+      {/* ── Kop: naam, fase en de cijfers die je het eerst wilt weten ── */}
       <div className="proj-dash-hero">
         <div className="proj-dash-hero-accent" style={{ background: project.color ?? 'var(--accent)' }} />
         <div className="proj-dash-hero-content">
@@ -959,7 +1069,11 @@ export function ProjectPage({
             <div className="proj-dash-hero-kicker">{client?.name ?? 'Geen klant'}</div>
             <h2 className="proj-dash-hero-name">{project.name}</h2>
             {project.description && <p className="proj-dash-hero-desc">{project.description}</p>}
-            {project.archived && <span className="status-pill archived">Gearchiveerd</span>}
+            <div className="proj-dash-hero-meta">
+              <span className={`proj-chip is-${phase.tone}`}>{phase.label}</span>
+              {period && <span className="proj-chip is-plain"><CalendarRange size={12} aria-hidden="true" />{period}</span>}
+              <span className="proj-chip is-plain">{billingLabel}</span>
+            </div>
           </div>
           <div className="proj-dash-hero-actions">
             <Button onClick={onEditProject}>Bewerken</Button>
@@ -967,77 +1081,120 @@ export function ProjectPage({
           </div>
         </div>
 
-        {/* ── Klikbare stat strip ── */}
+        {/* ── Klikbare cijferstrook ── */}
         <div className="proj-dash-stats">
-          <button type="button" className="proj-dash-stat proj-dash-stat-btn" onClick={() => switchTab('kanban')}>
-            <span className="proj-dash-stat-val">{tasks.length}</span>
-            <span className="proj-dash-stat-lbl">Taken totaal</span>
-          </button>
-          <button type="button" className="proj-dash-stat proj-dash-stat-btn" onClick={() => switchTab('kanban')}>
-            <span className="proj-dash-stat-val" style={{ color: 'var(--accent)' }}>{openTasks}</span>
-            <span className="proj-dash-stat-lbl">Open</span>
-          </button>
-          <button type="button" className="proj-dash-stat proj-dash-stat-btn" onClick={() => switchTab('kanban')}>
-            <span className="proj-dash-stat-val" style={{ color: overdueTasks > 0 ? 'var(--accent-r)' : 'inherit' }}>{overdueTasks}</span>
-            <span className="proj-dash-stat-lbl">Te laat</span>
-          </button>
-          <button type="button" className="proj-dash-stat proj-dash-stat-btn" onClick={() => switchTab('quotes')}>
-            <span className="proj-dash-stat-val">{projectQuotes.length}</span>
-            <span className="proj-dash-stat-lbl">Offertes</span>
-          </button>
-          <button type="button" className="proj-dash-stat proj-dash-stat-btn" onClick={() => switchTab('invoices')}>
-            <span className="proj-dash-stat-val">{projectInvoices.length > 0 ? euro(invoiceTotal) : '—'}</span>
-            <span className="proj-dash-stat-lbl">Gefactureerd</span>
-          </button>
-          <button type="button" className="proj-dash-stat proj-dash-stat-btn" onClick={() => switchTab('time')}>
-            <span className="proj-dash-stat-val">{trackedMinutes > 0 ? formatMinutes(trackedMinutes) : '—'}</span>
-            <span className="proj-dash-stat-lbl">Uren</span>
-          </button>
-          <div className="proj-dash-stat proj-dash-stat-progress">
+          {stats.map(stat => (
+            <button key={stat.key} type="button" className={`proj-dash-stat proj-dash-stat-btn${stat.tone ? ` is-${stat.tone}` : ''}`} onClick={() => switchTab(stat.tab)}>
+              <span className="proj-dash-stat-val">{stat.value}</span>
+              <span className="proj-dash-stat-lbl">{stat.label}</span>
+              {stat.sub && <span className="proj-dash-stat-sub">{stat.sub}</span>}
+            </button>
+          ))}
+          <div className="proj-dash-stat proj-dash-stat-progress" role="progressbar" aria-label="Voortgang" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
+            <span className="proj-dash-stat-val">{progress}%</span>
             <div className="proj-dash-progress-bar">
               <div className="proj-dash-progress-fill" style={{ '--fill': progress / 100, background: project.color ?? 'var(--accent)' } as React.CSSProperties} />
             </div>
-            <span className="proj-dash-stat-lbl">{progress}% klaar</span>
+            <span className="proj-dash-stat-lbl">{tasks.length > 0 ? `${doneTasks} van ${tasks.length} taken klaar` : 'Voortgang'}</span>
           </div>
         </div>
       </div>
 
-      {/* ── Tab bar ── */}
-      <div className="client-tabs-bar" role="tablist">
-        {tabs.map(tab => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === tab.id}
-            className={`client-tab-btn${activeTab === tab.id ? ' active' : ''}`}
-            onClick={() => switchTab(tab.id)}
-          >
-            {tab.label}
-            {tab.count > 0 && <span className="client-tab-badge">{tab.count}</span>}
-          </button>
-        ))}
-      </div>
+      {/* ── Tabbladen ── */}
+      <DetailTabs tabs={tabs} active={activeTab} onSelect={switchTab} label="Projectonderdelen" />
 
-      {/* ── Tab: Overzicht ── */}
-      {activeTab === 'overview' && <div className="client-overview-layout">
-        <aside className="client-overview-sidebar">
+      {/* ── Tab: Overzicht — de startpagina van het project ── */}
+      {activeTab === 'overview' && <div className="proj-home">
+        <div className="proj-home-main">
+          <article className="client-panel proj-next">
+            <div className="client-panel-head">
+              <h3>Eerstvolgende taken</h3>
+              <button type="button" className="client-overview-more-btn" onClick={() => switchTab('kanban')}>
+                {openTasks > 0 ? `Alle ${openTasks} open taken →` : 'Kanban →'}
+              </button>
+            </div>
+            {nextTasks.length === 0
+              ? <div className="proj-next-empty">
+                  {tasks.length === 0
+                    ? <><strong>Nog geen taken.</strong><span>Zet de eerste stap erin; de voortgang in de kop volgt vanzelf.</span></>
+                    : <><strong>Alle taken zijn klaar.</strong><span>Er staat niets meer open op dit project.</span></>}
+                  {canWrite && !project.archived && tasks.length === 0 && <Button variant="primary" onClick={onNewTask}>+ Taak</Button>}
+                </div>
+              : <div className="proj-next-list">
+                  {nextTasks.map(task => {
+                    const due = deadlineLabel(task.end_date, todayIso);
+                    return <button key={task.id} type="button" className="proj-next-row" onClick={() => onEditTask(task)}>
+                      <span className={`proj-next-dot is-${task.status}`} aria-hidden="true" />
+                      <span className="proj-next-text">
+                        <span className="proj-next-title">{task.title}</span>
+                        <span className="proj-next-meta">{taskStatusLabel(task.status)}{task.priority === 'high' ? ' · Hoge prioriteit' : ''}</span>
+                      </span>
+                      <AssigneeAvatars userIds={assigneesByTask.get(task.id) ?? []} teamMembers={teamMembers} currentUserId={currentUserId} />
+                      {due && <span className={`proj-next-due is-${due.tone}`}>{due.text}</span>}
+                    </button>;
+                  })}
+                  {openTasks > nextTasks.length && <button type="button" className="client-overview-more-link" onClick={() => switchTab('kanban')}>+{openTasks - nextTasks.length} meer open taken</button>}
+                </div>}
+          </article>
+
+          <article className="client-panel proj-fin">
+            <div className="client-panel-head">
+              <h3>Offertes &amp; facturen</h3>
+              {openInvoiceTotal > 0 && <span>Openstaand {euro(openInvoiceTotal)}</span>}
+            </div>
+            <div className="proj-fin-cols">
+              <section className="proj-fin-col">
+                <header className="proj-fin-col-head">
+                  <h4>Offertes <em>{projectQuotes.length}</em></h4>
+                  <button type="button" className="client-overview-more-btn" onClick={() => switchTab('quotes')}>Alle →</button>
+                </header>
+                <div className="client-finance-list">
+                  {projectQuotes.length === 0 && <div className="client-empty-line">Nog geen offertes bij dit project.</div>}
+                  {projectQuotes.slice(0, 3).map(quote => (
+                    <button key={quote.id} type="button" className="client-finance-row" onClick={() => onEditQuote(quote)}>
+                      <span className="client-finance-number">{quote.number}</span>
+                      <span className="client-finance-meta">{dateNL(quote.date)}</span>
+                      <span className="client-finance-amount">{euro(total(quote.lines).total)}</span>
+                      <span className={`client-finance-status ${quote.status}`}>{projectQuoteStatusLabels[quote.status] ?? quote.status}</span>
+                    </button>
+                  ))}
+                  {projectQuotes.length > 3 && <button type="button" className="client-overview-more-link" onClick={() => switchTab('quotes')}>+{projectQuotes.length - 3} meer offertes</button>}
+                </div>
+              </section>
+              <section className="proj-fin-col">
+                <header className="proj-fin-col-head">
+                  <h4>Facturen <em>{projectInvoices.length}</em></h4>
+                  <button type="button" className="client-overview-more-btn" onClick={() => switchTab('invoices')}>Alle →</button>
+                </header>
+                <div className="client-finance-list">
+                  {projectInvoices.length === 0 && <div className="client-empty-line">Nog geen facturen bij dit project.</div>}
+                  {projectInvoices.slice(0, 3).map(inv => {
+                    const overdue = inv.status !== 'paid' && inv.status !== 'cancelled' && !!inv.due_date && inv.due_date.slice(0, 10) < todayIso;
+                    return <button key={inv.id} type="button" className={`client-finance-row${overdue ? ' is-overdue' : ''}`} onClick={() => onEditInvoice(inv)}>
+                      <span className="client-finance-number">{inv.number}</span>
+                      <span className="client-finance-meta">{dateNL(inv.date)} · Vervalt {dateNL(inv.due_date)}</span>
+                      <span className="client-finance-amount">{euro(total(inv.lines).total)}</span>
+                      <span className={`client-finance-status ${overdue ? 'overdue' : inv.status}`}>{overdue ? 'Vervallen' : (projectInvoiceStatusLabels[inv.status] ?? inv.status)}</span>
+                    </button>;
+                  })}
+                  {projectInvoices.length > 3 && <button type="button" className="client-overview-more-link" onClick={() => switchTab('invoices')}>+{projectInvoices.length - 3} meer facturen</button>}
+                </div>
+              </section>
+            </div>
+          </article>
+        </div>
+
+        <aside className="proj-home-side">
           <article className="client-panel">
             <div className="client-panel-head"><h3>Projectgegevens</h3></div>
             <dl className="client-info-list">
               <div><dt>Klant</dt><dd>{client?.name ?? '—'}</dd></div>
-              <div><dt>Facturatie</dt><dd>{project.billing_type === 'fixed_price' ? 'Aangenomen prijs' : 'Urenbasis'}{project.billing_type === 'hourly' && project.hourly_rate_cents != null ? ` · ${euro(project.hourly_rate_cents / 100)}/u` : ''}</dd></div>
+              <div><dt>Facturatie</dt><dd>{billingLabel}</dd></div>
+              <div><dt>Startdatum</dt><dd>{dateNL(project.start_date)}</dd></div>
+              <div><dt>Einddatum</dt><dd>{dateNL(project.end_date)}</dd></div>
               {budgetedMinutes != null && <div><dt>Urenbudget</dt><dd>{formatMinutes(trackedMinutes)} van {formatMinutes(budgetedMinutes)}{budgetPct != null ? ` (${Math.round(budgetPct)}%)` : ''}</dd></div>}
-              <div><dt>Startdatum</dt><dd>{dateNL(project.start_date) || '—'}</dd></div>
-              <div><dt>Einddatum</dt><dd>{dateNL(project.end_date) || '—'}</dd></div>
               <div><dt>Aangemaakt</dt><dd>{dateNL(project.created_at)}</dd></div>
             </dl>
-            <div className="proj-overview-progress">
-              <div className="proj-overview-progress-bar">
-                <div className="proj-overview-progress-fill" style={{ '--fill': progress / 100, background: project.color ?? 'var(--accent)' } as React.CSSProperties} />
-              </div>
-              <span className="proj-overview-progress-pct">{progress}% klaar · {doneTasks}/{tasks.length} taken</span>
-            </div>
           </article>
 
           <article className="client-panel">
@@ -1045,10 +1202,13 @@ export function ProjectPage({
               <h3>Taken per status</h3>
               <button type="button" className="client-overview-more-btn" onClick={() => switchTab('kanban')}>Kanban →</button>
             </div>
-            <div className="proj-task-status-grid">
+            <div className="proj-status-bar" aria-hidden="true">
+              {columns.map(col => statusCounts[col.key] > 0 && <span key={col.key} className={`proj-status-seg is-${col.key}`} style={{ flexGrow: statusCounts[col.key] }} />)}
+            </div>
+            <div className="proj-status-grid">
               {columns.map(col => (
-                <button key={col.key} type="button" className={`proj-task-status-card ${col.key}`} onClick={() => switchTab('kanban')}>
-                  <strong>{tasks.filter(t => t.status === col.key).length}</strong>
+                <button key={col.key} type="button" className={`proj-status-cell is-${col.key}`} onClick={() => switchTab('kanban')}>
+                  <strong>{statusCounts[col.key]}</strong>
                   <span>{col.label}</span>
                 </button>
               ))}
@@ -1057,53 +1217,6 @@ export function ProjectPage({
 
           <ProjectTeamPanel project={project} data={data} teamMembers={teamMembers} currentUserId={currentUserId} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />
         </aside>
-
-        <div className="client-overview-main">
-          <article className="client-panel">
-            <div className="client-panel-head">
-              <h3>Recente offertes</h3>
-              <button type="button" className="client-overview-more-btn" onClick={() => switchTab('quotes')}>
-                Alle {projectQuotes.length} offertes →
-              </button>
-            </div>
-            <div className="client-finance-list">
-              {projectQuotes.length === 0 && <div className="client-empty-line">Nog geen offertes bij dit project.</div>}
-              {projectQuotes.slice(0, 4).map(quote => {
-                const qt = quote.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0;
-                return <button key={quote.id} type="button" className="client-finance-row" onClick={() => onEditQuote(quote)}>
-                  <span className="client-finance-number">{quote.number}</span>
-                  <span className="client-finance-meta">{dateNL(quote.date)}</span>
-                  <span className="client-finance-amount">{euro(qt)}</span>
-                  <span className={`client-finance-status ${quote.status}`}>{projectQuoteStatusLabels[quote.status] ?? quote.status}</span>
-                </button>;
-              })}
-              {projectQuotes.length > 4 && <button type="button" className="client-overview-more-link" onClick={() => switchTab('quotes')}>+{projectQuotes.length - 4} meer offertes</button>}
-            </div>
-          </article>
-
-          <article className="client-panel">
-            <div className="client-panel-head">
-              <h3>Recente facturen</h3>
-              <button type="button" className="client-overview-more-btn" onClick={() => switchTab('invoices')}>
-                Alle {projectInvoices.length} facturen →
-              </button>
-            </div>
-            <div className="client-finance-list">
-              {projectInvoices.length === 0 && <div className="client-empty-line">Nog geen facturen bij dit project.</div>}
-              {projectInvoices.slice(0, 4).map(inv => {
-                const invTotal = inv.lines?.reduce((s, l) => s + l.quantity * l.unit_price * (1 + (l.vat ?? 0) / 100), 0) ?? 0;
-                const overdue = inv.status !== 'paid' && inv.status !== 'cancelled' && !!inv.due_date && inv.due_date.slice(0, 10) < new Date().toISOString().slice(0, 10);
-                return <button key={inv.id} type="button" className={`client-finance-row ${overdue ? 'is-overdue' : ''}`} onClick={() => onEditInvoice(inv)}>
-                  <span className="client-finance-number">{inv.number}</span>
-                  <span className="client-finance-meta">{dateNL(inv.date)} · Vervalt {dateNL(inv.due_date)}</span>
-                  <span className="client-finance-amount">{euro(invTotal)}</span>
-                  <span className={`client-finance-status ${overdue ? 'overdue' : inv.status}`}>{overdue ? 'Vervallen' : (projectInvoiceStatusLabels[inv.status] ?? inv.status)}</span>
-                </button>;
-              })}
-              {projectInvoices.length > 4 && <button type="button" className="client-overview-more-link" onClick={() => switchTab('invoices')}>+{projectInvoices.length - 4} meer facturen</button>}
-            </div>
-          </article>
-        </div>
       </div>}
 
       {/* ── Tab: Kanban ── */}

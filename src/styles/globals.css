@@ -877,7 +877,7 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 @media(max-width:700px){.client-contact-form-grid{grid-template-columns:1fr}}
 
 @media(max-width:1100px){.client-kpi-grid{grid-template-columns:repeat(3,1fr)}.client-detail-grid,.client-finance-grid{grid-template-columns:1fr}.client-finance-row{grid-template-columns:1fr auto}.client-finance-meta{grid-column:1/-1}.client-finance-status{justify-self:start}.client-overview-layout{grid-template-columns:1fr}}
-@media(max-width:700px){.client-kpi-grid{grid-template-columns:1fr 1fr}.client-detail-hero{align-items:flex-start}.client-info-list{grid-template-columns:1fr}.client-billing-alert{flex-direction:column;align-items:flex-start}.client-title-row h2{font-size:23px}.client-tabs-bar{flex-wrap:wrap;gap:2px}.client-tab-btn{padding:6px 9px;font-size:11px}.client-tab-search{flex-direction:column;align-items:stretch}.client-tab-status-select{width:100% !important}}
+@media(max-width:700px){.client-kpi-grid{grid-template-columns:1fr 1fr}.client-detail-hero{align-items:flex-start}.client-info-list{grid-template-columns:1fr}.client-billing-alert{flex-direction:column;align-items:flex-start}.client-title-row h2{font-size:23px}.client-tab-search{flex-direction:column;align-items:stretch}.client-tab-status-select{width:100% !important}}
 
 /* Client detail — hero status pill & meta */
 .client-status-pill{font-size:10px;font-weight:700;padding:3px 9px;border-radius:999px;letter-spacing:.06em;text-transform:uppercase;border:1px solid}
@@ -886,10 +886,22 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .client-panel-head-right{display:flex;align-items:center;gap:8px}
 
 /* Client detail — tab bar */
-.client-tabs-bar{display:flex;align-items:center;gap:1px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:4px;overflow-x:auto}
-.client-tab-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;border:none;background:transparent;color:var(--muted2);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;letter-spacing:-.01em}
-.client-tab-btn:hover{background:var(--bg3);color:var(--text)}.client-tab-btn.active{background:var(--bg4);color:var(--text);box-shadow:0 1px 4px rgba(var(--shade-rgb),calc(.28 * var(--shade-k)))}
-.client-tab-badge{font-size:10px;font-weight:700;padding:1px 6px;border-radius:999px;background:var(--bg4);color:var(--muted2);line-height:1.6}.client-tab-btn.active .client-tab-badge{background:rgba(var(--accent-rgb),.17);color:var(--accent-ink)}
+/* Eén pil-strook die om de tabbladen heen sluit (max-content) en opzij schuift
+   zodra hij niet past; de mobiele variant en de vervaging staan achteraan bij
+   "PROJECTSTARTPAGINA + TABSTROOK". Actief = dezelfde goudwas als het actieve
+   menu-item en het actieve werktabblad. */
+.client-tabs-bar{position:relative;display:flex;align-items:center;gap:2px;width:max-content;max-width:100%;padding:4px;background:var(--bg2);border:1px solid var(--border);border-radius:999px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.client-tabs-bar::-webkit-scrollbar{display:none}
+.client-tab-btn{display:inline-flex;align-items:center;gap:7px;flex:0 0 auto;height:36px;padding:0 14px;border-radius:999px;border:1px solid transparent;background:transparent;color:var(--muted2);font-family:inherit;font-size:12.5px;font-weight:600;letter-spacing:-.01em;line-height:1;white-space:nowrap;cursor:pointer;transition:background .15s,color .15s,border-color .15s,box-shadow .15s}
+.client-tab-btn:not(.active):hover{background:var(--bg3);color:var(--text)}
+.client-tab-btn:focus-visible{outline:none;box-shadow:var(--ring)}
+.client-tab-btn.active{background:linear-gradient(135deg,rgba(var(--accent-rgb),.18),rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)))),var(--bg2);border-color:rgba(var(--accent-rgb),.38);color:var(--text);box-shadow:0 1px 3px rgba(var(--shade-rgb),calc(.18 * var(--shade-k)))}
+.client-tab-ico{display:inline-flex;align-items:center;flex-shrink:0;color:var(--muted)}
+.client-tab-btn.active .client-tab-ico{color:var(--accent-ink)}
+.client-tab-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 6px;border-radius:999px;background:var(--bg4);color:var(--muted2);font-size:10.5px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.client-tab-btn.active .client-tab-badge{background:var(--accent);color:var(--on-accent)}
+/* De instellingen-strook plakt bovenaan en dekt daarom de volle breedte. */
+.client-tabs-bar.settings-tabs-bar{width:100%}
 
 /* Client detail — tab search bar */
 .client-tab-search{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -1485,16 +1497,6 @@ body::before{
 .proj-dash-stat-btn{cursor:pointer;background:none;border:none;font-family:inherit;color:inherit;text-align:left;transition:background .12s}.proj-dash-stat-btn:hover{background:rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)))}
 
 /* Project detail — overzicht tab */
-.proj-task-status-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
-.proj-task-status-card{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px 13px;display:flex;flex-direction:column;gap:4px;cursor:pointer;font-family:inherit;text-align:left;transition:all .15s}
-.proj-task-status-card:hover{background:var(--bg4);border-color:var(--border2);transform:translateY(-1px)}
-.proj-task-status-card strong{font-size:22px;font-weight:700;letter-spacing:-.025em;color:var(--text)}
-.proj-task-status-card span{font-size:10px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;color:var(--muted)}
-.proj-task-status-card.doing strong{color:var(--accent-o)}.proj-task-status-card.review strong{color:var(--accent-v)}.proj-task-status-card.done strong{color:var(--accent-g)}
-.proj-overview-progress{margin-top:12px}
-.proj-overview-progress-bar{height:6px;background:var(--bg4);border-radius:999px;overflow:hidden;margin-bottom:6px}
-.proj-overview-progress-fill{height:100%;width:100%;transform-origin:left center;transform:scaleX(var(--fill,0));transition:transform .4s ease}
-.proj-overview-progress-pct{font-size:11px;color:var(--muted2);font-weight:600}
 
 /* Project detail — kanban tab */
 .proj-kanban-tab{display:flex;flex-direction:column;gap:12px}
@@ -8482,3 +8484,130 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .odrv-scroll.is-marquee{user-select:none;cursor:default}
 .odrv-scroll.is-marquee .odrv-row,.odrv-scroll.is-marquee .odrv-tile-wrap{pointer-events:none}
 .odrv-marquee{position:absolute;z-index:6;pointer-events:none;border:1px solid var(--accent);background:rgba(var(--accent-rgb),.14);border-radius:3px}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PROJECTSTARTPAGINA + TABSTROOK VAN DETAILPAGINA'S (2026-09-03)
+   De projectkop draagt fase, looptijd en facturatie als chips en elk cijfer in
+   de strook krijgt zijn context eronder. Het tabblad Overzicht is een echte
+   startpagina: eerstvolgende taken, offertes & facturen, gegevens, taken per
+   status en het team. De tabstrook (.client-tabs-bar — gedeeld met het
+   klantdossier, marketing en instellingen; basisregels bij "Client detail —
+   tab bar") is één pil-strook met iconen die op een smal scherm opzij schuift
+   en aan de kant vervaagt waar nog tabbladen staan (data-fade uit DetailTabs).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Tabstrook: vervaging aan de kant waar nog tabbladen staan ── */
+.client-tabs-bar[data-fade="right"]{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 44px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 44px),transparent)}
+.client-tabs-bar[data-fade="left"]{-webkit-mask-image:linear-gradient(90deg,transparent,#000 44px);mask-image:linear-gradient(90deg,transparent,#000 44px)}
+.client-tabs-bar[data-fade="both"]{-webkit-mask-image:linear-gradient(90deg,transparent,#000 44px,#000 calc(100% - 44px),transparent);mask-image:linear-gradient(90deg,transparent,#000 44px,#000 calc(100% - 44px),transparent)}
+
+/* ── Projectkop ── */
+.proj-dash-hero-name{font-size:24px;line-height:1.15}
+.proj-dash-hero-desc{max-width:64ch;line-height:1.5}
+.proj-dash-hero-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px}
+.proj-chip{display:inline-flex;align-items:center;gap:5px;min-height:24px;padding:0 10px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.01em;line-height:1;white-space:nowrap;background:var(--bg3);color:var(--muted2)}
+.proj-chip svg{flex-shrink:0;opacity:.8}
+.proj-chip.is-ok{background:rgba(var(--ok-rgb),.14);color:var(--accent-g)}
+.proj-chip.is-warn{background:rgba(var(--warn-rgb),.16);color:var(--accent-o)}
+.proj-chip.is-danger{background:rgba(var(--danger-rgb),.14);color:var(--accent-r)}
+.proj-chip.is-muted{background:var(--bg4);color:var(--muted2)}
+
+/* Cijferstrook: waarde, opschrift en één regel context. De haarlijn onder elk
+   cijfer (box-shadow) telt alleen mee zodra de strook op een smal scherm
+   over meerdere rijen loopt; op één rij knipt de kop hem weg (overflow). */
+.proj-dash-stat{gap:2px;padding:14px 18px;box-shadow:0 1px 0 var(--border)}
+.proj-dash-stat-val{font-size:20px;line-height:1.15;font-variant-numeric:tabular-nums}
+.proj-dash-stat-sub{font-size:11px;font-weight:600;color:var(--muted2);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.proj-dash-stat.is-accent .proj-dash-stat-val{color:var(--accent-ink)}
+.proj-dash-stat.is-danger .proj-dash-stat-val{color:var(--accent-r)}
+.proj-dash-stat.is-muted .proj-dash-stat-val{color:var(--muted)}
+.proj-dash-stat-btn:focus-visible{outline:none;box-shadow:inset var(--ring)}
+.proj-dash-stat-progress{flex:1.6;min-width:170px;justify-content:flex-start}
+.proj-dash-stat-progress .proj-dash-progress-bar{margin:6px 0 5px}
+
+@media(max-width:900px){
+  /* Zes cijfers in twee rijen van drie; de voortgang krijgt een eigen rij. */
+  .proj-dash-stat{min-width:calc(33.333% - 1px);padding:12px}
+  .proj-dash-stat:nth-child(3n){border-right:none}
+  .proj-dash-stat-progress{flex-basis:100%;min-width:100%;border-right:none}
+}
+
+@media(max-width:760px){
+  .proj-dash-hero{padding:14px 14px 0;margin-bottom:12px;border-radius:16px}
+  /* De naam staat al in de bovenbalk én op het werktabblad; hier was hij de derde. */
+  .proj-dash-hero-name{display:none}
+  .proj-dash-hero-content{gap:10px;padding-top:2px}
+  .proj-dash-hero-kicker{margin-bottom:6px}
+  .proj-dash-hero-actions{width:100%}
+  .proj-dash-hero-actions .btn{flex:1 1 0}
+  /* Omschrijving hooguit twee regels; de cijfers compacter — de kop hoort op een
+     telefoon niet meer dan een half scherm te zijn. */
+  .proj-dash-hero-desc{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:12.5px}
+  .proj-dash-stats{margin-top:12px}
+  .proj-dash-stat{padding:9px 10px 10px;gap:1px}
+  .proj-dash-stat-val{font-size:17px}
+  .proj-dash-stat-lbl{font-size:9.5px;letter-spacing:.06em}
+  .proj-dash-stat-sub{font-size:10.5px}
+  .proj-dash-stat-progress .proj-dash-progress-bar{margin:4px 0 3px}
+
+  /* Tabstrook zonder kader: losse pillen die opzij schuiven. */
+  .client-tabs-bar{width:auto;max-width:none;padding:2px 0;gap:6px;background:transparent;border-color:transparent;border-radius:0;scroll-padding-inline:8px}
+  .client-tab-btn{height:40px;min-height:40px;padding:0 13px;background:rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)));border-color:var(--border)}
+  /* De instellingen-strook plakt bovenaan; zonder vlak zou de inhoud er doorheen schuiven. */
+  .client-tabs-bar.settings-tabs-bar{background:var(--bg);padding:6px 0}
+}
+
+/* ── Startpagina van het project ── */
+.proj-home{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:14px;align-items:flex-start}
+.proj-home-main,.proj-home-side{display:flex;flex-direction:column;gap:14px;min-width:0}
+/* In de smalle zijkolom mogen lange waarden (tarief, urenbudget) gewoon afbreken. */
+.proj-home-side .client-info-list dd{white-space:normal;overflow:visible;line-height:1.35}
+@media(max-width:1100px){.proj-home{grid-template-columns:1fr}}
+
+/* Eerstvolgende taken */
+.proj-next-list{display:flex;flex-direction:column;gap:6px}
+.proj-next-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:10px;width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:11px;background:var(--bg3);color:var(--text);font-family:inherit;text-align:left;cursor:pointer;transition:background .15s,border-color .15s}
+.proj-next-row:hover{background:var(--bg4);border-color:var(--border2)}
+.proj-next-row:focus-visible{outline:none;box-shadow:var(--ring)}
+.proj-next-dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex-shrink:0}
+.proj-next-dot.is-doing{background:var(--accent-o)}.proj-next-dot.is-review{background:var(--accent-v)}.proj-next-dot.is-done{background:var(--accent-g)}
+.proj-next-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+.proj-next-title{font-size:13px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.proj-next-meta{font-size:11px;color:var(--muted);font-weight:500}
+.proj-next-row .assignee-avatars{margin-left:0}
+/* Op de telefoon mag een taaknaam over twee regels lopen in plaats van af te breken
+   (staat bewust ná de basisregel hierboven, anders wint die met nowrap). */
+@media(max-width:760px){.proj-next-title{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}}
+.proj-next-due{font-size:11px;font-weight:700;padding:4px 8px;border-radius:999px;white-space:nowrap;background:var(--bg4);color:var(--muted2);font-variant-numeric:tabular-nums}
+.proj-next-due.is-warn{background:rgba(var(--warn-rgb),.16);color:var(--accent-o)}
+.proj-next-due.is-danger{background:rgba(var(--danger-rgb),.14);color:var(--accent-r)}
+.proj-next-empty{display:flex;flex-direction:column;align-items:center;gap:6px;padding:22px 16px;border:1px dashed var(--border);border-radius:11px;text-align:center}
+.proj-next-empty strong{font-size:13px}
+.proj-next-empty span{font-size:12px;color:var(--muted);line-height:1.5;max-width:40ch}
+.proj-next-empty .btn{margin-top:6px}
+
+/* Offertes & facturen naast elkaar; elke rij in twee regels zodat nummer,
+   bedrag, datum en status ook in een halve kolom leesbaar blijven. */
+.proj-fin-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.proj-fin-col{min-width:0}
+.proj-fin-col-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.proj-fin-col-head h4{margin:0;display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted2)}
+.proj-fin-col-head h4 em{font-style:normal;font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:999px;background:var(--bg4);color:var(--muted2);letter-spacing:0}
+.proj-fin-col .client-finance-row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"number amount" "meta status";row-gap:4px}
+.proj-fin-col .client-finance-number{grid-area:number}
+.proj-fin-col .client-finance-amount{grid-area:amount}
+.proj-fin-col .client-finance-meta{grid-area:meta}
+.proj-fin-col .client-finance-status{grid-area:status;justify-self:end}
+@media(max-width:640px){.proj-fin-cols{grid-template-columns:1fr}}
+
+/* Taken per status: één balk plus vier tellers. */
+.proj-status-bar{display:flex;gap:2px;height:8px;border-radius:999px;overflow:hidden;background:var(--bg4);margin-bottom:10px}
+.proj-status-seg{flex:0 1 0;min-width:4px;background:var(--muted)}
+.proj-status-seg.is-doing{background:var(--accent-o)}.proj-status-seg.is-review{background:var(--accent-v)}.proj-status-seg.is-done{background:var(--accent-g)}
+.proj-status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.proj-status-cell{display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 4px;border:1px solid var(--border);border-radius:10px;background:var(--bg3);font-family:inherit;color:var(--text);cursor:pointer;transition:background .15s,border-color .15s}
+.proj-status-cell:hover{background:var(--bg4);border-color:var(--border2)}
+.proj-status-cell:focus-visible{outline:none;box-shadow:var(--ring)}
+.proj-status-cell strong{font-size:18px;font-weight:700;letter-spacing:-.02em;line-height:1;font-variant-numeric:tabular-nums}
+.proj-status-cell span{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);white-space:nowrap}
+.proj-status-cell.is-doing strong{color:var(--accent-o)}.proj-status-cell.is-review strong{color:var(--accent-v)}.proj-status-cell.is-done strong{color:var(--accent-g)}

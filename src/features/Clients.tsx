@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Search, RotateCcw, Upload, ChevronDown, ChevronRight, Mail } from 'lucide-react';
+import { ChevronDown, ChevronRight, FileSignature, FileText, Files, FolderOpen, LayoutDashboard, Mail, Receipt, RotateCcw, Search, Upload, Users } from 'lucide-react';
 import type { AppData, Client, ClientEmail, ClientEmailStatus, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, InboundMessage, InboundMessageCategory, InternalDocument, Invoice, Note, Project, Quote } from '../types';
 import { activeFieldDefinitions, customFieldsSearchText, formatCustomFieldValue } from '../components/CustomFields';
 import { dateNL, euro, formatMinutes, minutesToHours, total } from '../lib/format';
 import { sanitizeEmailHtml } from '../lib/sanitizeHtml';
 import { Button, Input, Select } from '../components/Ui';
+import { DetailTabs } from '../components/DetailTabs';
+import type { DetailTab } from '../components/DetailTabs';
 import { CsvImportModal } from '../components/CsvImportModal';
 import { SearchFilterPanel } from '../components/SearchFilterPanel';
 import type { FilterField } from '../components/SearchFilterPanel';
@@ -235,15 +237,15 @@ export function Clients({
       onDone={onChanged}
     />}
 
-    <div className="client-tabs-bar" role="tablist">
-      <button type="button" role="tab" aria-selected={listTab === 'clients'} className={listTab === 'clients' ? 'active' : ''} onClick={() => setListTab('clients')}>
-        Klanten
-      </button>
-      <button type="button" role="tab" aria-selected={listTab === 'inbox'} className={listTab === 'inbox' ? 'active' : ''} onClick={() => setListTab('inbox')}>
-        Niet gekoppeld
-        {inboxCount > 0 && <span className="client-comm-unread-badge">{inboxCount}</span>}
-      </button>
-    </div>
+    <DetailTabs
+      tabs={[
+        { id: 'clients', label: 'Klanten', icon: Users },
+        { id: 'inbox', label: 'Niet gekoppeld', count: inboxCount, unread: true, icon: Mail },
+      ]}
+      active={listTab}
+      onSelect={setListTab}
+      label="Klanten en binnengekomen mail"
+    />
 
     {listTab === 'inbox' && <InboundInboxTab
       organizationId={organizationId}
@@ -713,14 +715,14 @@ export function ClientDetailPage({
   const activeFilterCount = (normalizedQuery ? 1 : 0) + (statusFilter ? 1 : 0);
   const resetFilters = () => { setQuery(''); setStatusFilter(''); };
 
-  const tabs: Array<{ id: ClientTab; label: string; count: number; unread?: boolean }> = [
-    { id: 'overview', label: 'Overzicht', count: 0 },
-    { id: 'projects', label: 'Projecten', count: projects.length },
-    { id: 'quotes', label: 'Offertes', count: quotes.length },
-    { id: 'contracts', label: 'Contracten', count: contracts.length },
-    { id: 'invoices', label: 'Facturen', count: invoices.length },
-    { id: 'files', label: 'Bestanden', count: notes.length + documents.length },
-    { id: 'communication', label: 'Communicatie', count: unreadCount, unread: true },
+  const tabs: DetailTab<ClientTab>[] = [
+    { id: 'overview', label: 'Overzicht', icon: LayoutDashboard },
+    { id: 'projects', label: 'Projecten', count: projects.length, icon: FolderOpen },
+    { id: 'quotes', label: 'Offertes', count: quotes.length, icon: FileText },
+    { id: 'contracts', label: 'Contracten', count: contracts.length, icon: FileSignature },
+    { id: 'invoices', label: 'Facturen', count: invoices.length, icon: Receipt },
+    { id: 'files', label: 'Bestanden', count: notes.length + documents.length, icon: Files },
+    { id: 'communication', label: 'Communicatie', count: unreadCount, unread: true, icon: Mail },
   ];
 
   return <div className="client-detail-page">
@@ -759,21 +761,7 @@ export function ClientDetailPage({
       <ClientKpi label="Uren" value={Math.round(minutesToHours(clientTrackedMinutes))} sub={effectiveRate != null ? `Effectief ${euro(effectiveRate)}/u` : clientTrackedMinutes > 0 ? formatMinutes(clientTrackedMinutes) : 'Geen uren geboekt'} onClick={() => switchTab('projects')} />
     </section>
 
-    <div className="client-tabs-bar" role="tablist">
-      {tabs.map(tab => (
-        <button
-          key={tab.id}
-          type="button"
-          role="tab"
-          aria-selected={activeTab === tab.id}
-          className={`client-tab-btn${activeTab === tab.id ? ' active' : ''}`}
-          onClick={() => switchTab(tab.id)}
-        >
-          {tab.label}
-          {tab.count > 0 && <span className={`client-tab-badge${tab.unread ? ' unread' : ''}`}>{tab.count}</span>}
-        </button>
-      ))}
-    </div>
+    <DetailTabs tabs={tabs} active={activeTab} onSelect={switchTab} label="Klantdossier" />
 
     {activeTab !== 'overview' && activeTab !== 'files' && activeTab !== 'communication' && <div className="client-tab-search">
       <label className="client-tab-search-field">
