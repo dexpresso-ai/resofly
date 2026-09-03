@@ -1,26 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import {
-  ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Download, File,
+  ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Download, File,
   FilePen, FileText, Folder, FolderOpen, FolderPlus, Image as ImageIcon, LayoutGrid, Link2, List,
   MoreVertical, Pencil, Plus, Presentation, Search, Share2, Sheet, StickyNote, Trash2, Upload, UploadCloud, Users, X,
 } from 'lucide-react';
 import type { AppData, Attachment, Client, ContentFolder, InternalDocument, Note } from '../types';
 import { dateNL } from '../lib/format';
-import { insertRow, updateRow, deleteContentFolder, deleteAttachment, moveAttachmentToFolder, renameAttachment } from '../lib/repository';
+import { insertRow, updateRow, deleteContentFolder, deleteAttachment, moveDriveItem, renameAttachment } from '../lib/repository';
 import { uploadToR2, downloadAttachment } from '../lib/r2';
 import { createOfficeSession, createOfficeDocument, isOfficeEditable, NEW_OFFICE_LABEL, type NewOfficeType, type OfficeSession } from '../lib/office';
 import { OfficeEditor } from './OfficeEditor';
 import { DriveRenameInput } from '../components/DriveRename';
 import { fileExtension, resolveRename } from '../lib/rename';
-import { childFolders, clientFolderOptions, folderDescendantIds, folderPath, scopedFolders } from '../lib/folders';
+import { childFolders, folderDescendantIds, folderPath, scopedFolders } from '../lib/folders';
 import { ShareDialog } from '../components/ShareDialog';
 import { shareKey, sharedItemKeys, type ShareTarget } from '../lib/shares';
 import {
-  activeDriveDrag, beginDriveDrag, dragHasDriveItems, dragHasFiles, endDriveDrag, itemCountLabel,
-  planDriveMove, readDriveDrag, type DriveDragItem,
+  activeDriveDrag, beginDriveDrag, dragHasDriveItems, dragHasFiles, driveItemLocation, endDriveDrag, itemCountLabel,
+  planDriveMove, readDriveDrag, type DriveDragItem, type DriveLocation,
 } from '../lib/driveDnd';
 import { useDriveSelection } from '../lib/useDriveSelection';
+import { MoveDialog } from '../components/MoveDialog';
 
 /**
  * Klant-"Bestanden" in dezelfde OneDrive-verkennerlook als de Inhoud-pagina (odrv):
@@ -164,8 +165,8 @@ type Row = {
   shared?: boolean;
   /** Wat deze rij is als je hem vastpakt. */
   drag?: DriveDragItem;
-  /** De map waar een sleep in landt. Alleen gevuld op mappen. */
-  dropFolderId?: string;
+  /** Waar een sleep landt. Alleen gevuld op mappen. */
+  dropTarget?: DriveLocation;
 };
 
 export function ClientFolders({
@@ -201,7 +202,7 @@ export function ClientFolders({
   const [linkOpen, setLinkOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
-  const [menu, setMenu] = useState<{ key: string; mode: 'main' | 'move' } | null>(null);
+  const [menu, setMenu] = useState<{ key: string } | null>(null);
   /** De rij waarvan de naam op dit moment wordt bewerkt (`Row.key`). */
   const [renaming, setRenaming] = useState<string | null>(null);
   const [officeSession, setOfficeSession] = useState<OfficeSession | null>(null);
@@ -212,8 +213,8 @@ export function ClientFolders({
   const [sharing, setSharing] = useState<ShareTarget | null>(null);
   /** Waar de sleep op dit moment boven hangt — stuurt alleen de oplichting. */
   const [dropKey, setDropKey] = useState<string | null>(null);
-  /** Het "Verplaatsen naar…"-menu van de selectiebalk. */
-  const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
+  /** De items waarvoor het venster "Verplaatsen naar…" openstaat. */
+  const [moving, setMoving] = useState<DriveDragItem[] | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Alleen de mappenboom op klantniveau; mappen ín een projectmap (project_id gevuld)
@@ -221,7 +222,8 @@ export function ClientFolders({
   const folders = scopedFolders(data.folders, client.id, null);
   const path = folderPath(folders, currentId);
   const subfolders = childFolders(folders, client.id, null, currentId);
-  const folderOptions = clientFolderOptions(data.folders, client.id, null);
+  /** Waar je nu staat: de klantwortel of de open map. Startpunt van "Verplaatsen naar…" en doel van de broodkruimels. */
+  const here: DriveLocation = { clientId: client.id, projectId: null, folderId: currentId };
 
   // Items van deze klant (direct of via een project), voor de wortel en het koppelen.
   const projectIds = new Set(data.projects.filter(p => p.client_id === client.id).map(p => p.id));
@@ -328,9 +330,17 @@ export function ClientFolders({
     });
   }
 
+  /** "Bestaande inhoud koppelen": een notitie of document van deze klant in de open map plaatsen. */
   function moveItem(kind: 'note' | 'document', id: string, folderId: string | null) {
     setMenu(null);
     run(async () => { await updateRow(kind === 'note' ? 'notes' : 'documents', id, { folder_id: folderId }, organizationId); });
+  }
+
+  /** Opent het venster "Verplaatsen naar…" — voor één rij (⋮) of voor de hele selectie. */
+  function openMove(items: DriveDragItem[]) {
+    if (items.length === 0) return;
+    setMenu(null); setNewOpen(false);
+    setMoving(items);
   }
 
   function deleteFile(att: Attachment) {
@@ -425,7 +435,7 @@ export function ClientFolders({
       menu: canWrite ? () => folderMenu(folder, key) : null,
       shared: sharedKeys.has(shareKey('folder', folder.id)),
       drag: { kind: 'folder', id: folder.id, name: folder.name },
-      dropFolderId: folder.id,
+      dropTarget: { clientId: client.id, projectId: null, folderId: folder.id },
       rename: canWrite
         ? typed => commitRename(folder.name, typed, false, async name => {
             await updateRow('content_folders', folder.id, { name }, organizationId);
@@ -439,7 +449,7 @@ export function ClientFolders({
     const menu: Row['menu'] = it.kind === 'file'
       ? () => fileMenu(it.att, it.key)
       : canWrite
-        ? (menuKey: string) => contentMenu(menuKey, it.key, it.kind as 'note' | 'document', itemId, label, () => fileOpen(it))
+        ? () => contentMenu(it.key, it.kind as 'note' | 'document', itemId, label, () => fileOpen(it))
         : null;
     const rename: Row['rename'] = !canWrite ? null
       : it.kind === 'file'
@@ -490,42 +500,33 @@ export function ClientFolders({
   const selection = useDriveSelection<Row>(selectable);
   const { clear: clearSelection } = selection;
 
-  useEffect(() => { clearSelection(); setBulkMoveOpen(false); }, [currentId, clearSelection]);
+  useEffect(() => { clearSelection(); setMoving(null); }, [currentId, clearSelection]);
 
-  const currentFolderOf = useCallback((item: DriveDragItem): string | null => {
-    if (item.kind === 'folder') return data.folders.find(f => f.id === item.id)?.parent_id ?? null;
-    if (item.kind === 'attachment') return data.attachments.find(a => a.id === item.id)?.entity_id ?? null;
-    if (item.kind === 'note') return data.notes.find(n => n.id === item.id)?.folder_id ?? null;
-    return data.documents.find(d => d.id === item.id)?.folder_id ?? null;
-  }, [data.folders, data.attachments, data.notes, data.documents]);
+  /** Waar ligt dit item nu? Bepaalt of een sleep of een keuze in het venster iets verandert. */
+  const locationOf = useCallback((item: DriveDragItem) => driveItemLocation(data, item), [data]);
 
-  const movePlanFor = useCallback((items: DriveDragItem[], targetFolderId: string | null) => planDriveMove(
+  const movePlanFor = useCallback((items: DriveDragItem[], target: DriveLocation) => planDriveMove(
     items,
-    targetFolderId,
-    { currentFolderId: currentFolderOf, descendantIds: id => folderDescendantIds(data.folders, id) },
-  ), [currentFolderOf, data.folders]);
+    target,
+    { locationOf, descendantIds: id => folderDescendantIds(data.folders, id) },
+  ), [locationOf, data.folders]);
 
-  const moveTo = useCallback(async (items: DriveDragItem[], targetFolderId: string | null) => {
-    if (items.length === 0) return;
-    const plan = movePlanFor(items, targetFolderId);
+  /** Verplaatst naar één plek — ook een andere klant of een projectmap; een map neemt zijn boom mee. `true` = gelukt. */
+  const moveTo = useCallback(async (items: DriveDragItem[], target: DriveLocation): Promise<boolean> => {
+    if (items.length === 0) return false;
+    const plan = movePlanFor(items, target);
     const blockedText = plan.blocked.length ? plan.blocked.map(b => b.reason).join(' ') : null;
-    if (plan.moves.length === 0) { setError(blockedText); return; }
+    if (plan.moves.length === 0) { setError(blockedText); return false; }
     setBusy(true); setError(null);
     try {
-      for (const item of plan.moves) {
-        if (item.kind === 'folder') {
-          await updateRow('content_folders', item.id, { parent_id: targetFolderId }, organizationId);
-        } else if (item.kind === 'attachment') {
-          await moveAttachmentToFolder(item.id, targetFolderId as string, organizationId);
-        } else {
-          await updateRow(item.kind === 'note' ? 'notes' : 'documents', item.id, { folder_id: targetFolderId }, organizationId);
-        }
-      }
+      for (const item of plan.moves) await moveDriveItem(item, target, organizationId);
       setError(blockedText);
       clearSelection();
       onChanged();
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Verplaatsen mislukt');
+      return false;
     } finally {
       setBusy(false);
     }
@@ -540,13 +541,14 @@ export function ClientFolders({
     beginDriveDrag(event.dataTransfer, items.length > 0 ? items : [row.drag]);
   }
 
-  function canDropOnFolder(event: ReactDragEvent, targetFolderId: string): boolean {
+  /** Mag er hier iets landen? Bestanden van je computer alleen in een map; eigen items alleen als ze echt verhuizen. */
+  function canDropAt(event: ReactDragEvent, target: DriveLocation): boolean {
     if (!canWrite) return false;
-    if (dragHasFiles(event.dataTransfer)) return true;
+    if (dragHasFiles(event.dataTransfer)) return Boolean(target.folderId);
     if (!dragHasDriveItems(event.dataTransfer)) return false;
     const items = activeDriveDrag();
     if (!items) return true;
-    return movePlanFor(items, targetFolderId).moves.length > 0;
+    return movePlanFor(items, target).moves.length > 0;
   }
 
   const leaveDrop = (key: string) => (event: ReactDragEvent) => {
@@ -554,9 +556,11 @@ export function ClientFolders({
     setDropKey(current => (current === key ? null : current));
   };
 
-  const dropProps = (key: string, targetFolderId: string) => ({
+  /** Een plek als doel. Maprijen nemen ook bestanden van je computer aan (uploaden); broodkruimels alleen eigen items. */
+  const targetProps = (key: string, target: DriveLocation, acceptFiles: boolean) => ({
     onDragOver: (event: ReactDragEvent) => {
-      if (!canDropOnFolder(event, targetFolderId)) return;
+      if (!acceptFiles && dragHasFiles(event.dataTransfer)) return;
+      if (!canDropAt(event, target)) return;
       event.preventDefault();
       event.stopPropagation();
       event.dataTransfer.dropEffect = dragHasFiles(event.dataTransfer) ? 'copy' : 'move';
@@ -564,44 +568,24 @@ export function ClientFolders({
     },
     onDragLeave: leaveDrop(key),
     onDrop: (event: ReactDragEvent) => {
+      if (!acceptFiles && dragHasFiles(event.dataTransfer)) return;
       event.preventDefault();
       event.stopPropagation();
       setDropKey(null);
       if (!canWrite) return;
       if (dragHasFiles(event.dataTransfer)) {
-        if (event.dataTransfer.files?.length) void uploadFilesTo(event.dataTransfer.files, targetFolderId);
+        if (target.folderId && event.dataTransfer.files?.length) void uploadFilesTo(event.dataTransfer.files, target.folderId);
         return;
       }
       const items = readDriveDrag(event.dataTransfer);
       endDriveDrag();
-      void moveTo(items, targetFolderId);
+      void moveTo(items, target);
     },
   });
-
-  /** Broodkruimels en "Terug": zo sleep je iets weer naar boven. */
-  const crumbDropTargetProps = (key: string, targetFolderId: string | null) => ({
-    onDragOver: (event: ReactDragEvent) => {
-      if (!canWrite || dragHasFiles(event.dataTransfer) || !dragHasDriveItems(event.dataTransfer)) return;
-      const items = activeDriveDrag();
-      if (items && movePlanFor(items, targetFolderId).moves.length === 0) return;
-      event.preventDefault();
-      event.stopPropagation();
-      event.dataTransfer.dropEffect = 'move';
-      if (dropKey !== key) setDropKey(key);
-    },
-    onDragLeave: leaveDrop(key),
-    onDrop: (event: ReactDragEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      setDropKey(null);
-      if (!canWrite) return;
-      const items = readDriveDrag(event.dataTransfer);
-      endDriveDrag();
-      void moveTo(items, targetFolderId);
-    },
-  });
-  const crumbDropProps = (key: string, targetFolderId: string | null) => ({
-    ...crumbDropTargetProps(key, targetFolderId),
+  const dropProps = (key: string, target: DriveLocation) => targetProps(key, target, true);
+  /** Broodkruimels: zo sleep je iets weer naar boven. */
+  const crumbDropProps = (key: string, target: DriveLocation) => ({
+    ...targetProps(key, target, false),
     className: dropKey === key ? 'odrv-crumb-drop' : undefined,
   });
 
@@ -674,12 +658,12 @@ export function ClientFolders({
           {currentId === null
             ? <span className="odrv-crumb-current">{client.name}</span>
             : <>
-                <button type="button" onClick={() => openFolder(null)} {...crumbDropProps('crumb-root', null)}>{client.name}</button>
+                <button type="button" onClick={() => openFolder(null)} {...crumbDropProps('crumb-root', { clientId: client.id, projectId: null, folderId: null })}>{client.name}</button>
                 {path.map((folder, i) => <span key={folder.id} className="odrv-crumb-step">
                   <ChevronRight size={17} aria-hidden="true" />
                   {i === path.length - 1
                     ? <span className="odrv-crumb-current">{folder.name}</span>
-                    : <button type="button" onClick={() => openFolder(folder.id)} {...crumbDropProps(`crumb-${folder.id}`, folder.id)}>{folder.name}</button>}
+                    : <button type="button" onClick={() => openFolder(folder.id)} {...crumbDropProps(`crumb-${folder.id}`, { clientId: client.id, projectId: null, folderId: folder.id })}>{folder.name}</button>}
                 </span>)}
               </>}
         </nav>
@@ -764,21 +748,9 @@ export function ClientFolders({
           <strong>{itemCountLabel(selection.count)} geselecteerd</strong>
           {selection.count < selectable.filter(e => e.selectable).length && <button type="button" className="odrv-selbar-link" onClick={selection.selectAll}>Alles selecteren</button>}
           <span className="odrv-selbar-spacer" />
-          <div className="drive-new-wrap">
-            <button type="button" className="odrv-tool drive-pop-trigger" disabled={busy} onClick={() => { setBulkMoveOpen(o => !o); setMenu(null); setNewOpen(false); }} aria-haspopup="menu" aria-expanded={bulkMoveOpen}>
-              <Folder size={14} /> Verplaatsen naar… <ChevronDown size={13} />
-            </button>
-            {bulkMoveOpen && <div className="drive-pop" role="menu">
-              <div className="drive-pop-scroll">
-                <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setBulkMoveOpen(false); void moveTo(selectedItems, null); }}>
-                  <FolderOpen size={16} /> {client.name} (geen map)
-                </button>
-                {folderOptions.map(o => <button type="button" key={o.id} className="drive-pop-item" role="menuitem" onClick={() => { setBulkMoveOpen(false); void moveTo(selectedItems, o.id); }}>
-                  <Folder size={16} style={{ color: 'var(--accent)' }} /> {o.label}
-                </button>)}
-              </div>
-            </div>}
-          </div>
+          {canWrite && selectedItems.length > 0 && <button type="button" className="odrv-tool" disabled={busy} onClick={() => openMove(selectedItems)}>
+            <Folder size={14} /> Verplaatsen naar…
+          </button>}
           {selectedAttachments.length > 0 && <button type="button" className="odrv-tool" onClick={() => void downloadSelection()}>
             <Download size={14} /> Downloaden{selectedAttachments.length !== selection.count ? ` (${selectedAttachments.length})` : ''}
           </button>}
@@ -807,6 +779,14 @@ export function ClientFolders({
     {opening && <span className="drive-uploading" style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 1500 }}><UploadCloud size={14} /> Editor openen…</span>}
     {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeAtt(null); onChanged(); }} onDownload={officeAtt ? () => handleDownload(officeAtt) : undefined} />}
     {sharing && <ShareDialog data={data} organizationId={organizationId} target={sharing} onClose={() => setSharing(null)} onChanged={onChanged} />}
+    {moving && <MoveDialog
+      data={data}
+      items={moving}
+      start={here}
+      companyName={data.companySettings?.company_name?.trim() || 'Inhoud'}
+      onClose={() => setMoving(null)}
+      onMove={target => moveTo(moving, target)}
+    />}
   </div>;
 
   // ── Renderers ────────────────────────────────────────────────────────────
@@ -817,7 +797,7 @@ export function ClientFolders({
         className={`drive-kebab drive-pop-trigger${menu?.key === key ? ' is-open' : ''}`}
         aria-label="Acties"
         disabled={busy}
-        onClick={e => { e.stopPropagation(); setMenu(menu?.key === key ? null : { key, mode: 'main' }); setNewOpen(false); setSortOpen(false); }}
+        onClick={e => { e.stopPropagation(); setMenu(menu?.key === key ? null : { key }); setNewOpen(false); setSortOpen(false); }}
       ><MoreVertical size={16} /></button>
       {menu?.key === key && <div className="drive-pop is-right" role="menu">{content()}</div>}
     </div>;
@@ -827,26 +807,18 @@ export function ClientFolders({
     return <>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openFolder(folder.id)}><FolderOpen size={16} /> Openen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openMove([{ kind: 'folder', id: folder.id, name: folder.name }])}><Folder size={16} /> Verplaatsen naar…</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: 'folder', id: folder.id, name: folder.name })}><Share2 size={16} /> Delen…</button>
       <div className="drive-pop-sep" />
       <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteFolder(folder); }}><Trash2 size={16} /> Verwijderen</button>
     </>;
   }
 
-  function contentMenu(key: string, rowKey: string, kind: 'note' | 'document', id: string, name: string, open: () => void) {
-    if (menu?.key === key && menu.mode === 'move') {
-      return <>
-        <div className="drive-pop-head"><button type="button" className="drive-pop-back" onClick={() => setMenu({ key, mode: 'main' })} aria-label="Terug"><ChevronLeft size={14} /></button> Verplaatsen naar</div>
-        <div className="drive-pop-scroll">
-          <button type="button" className="drive-pop-item" role="menuitem" onClick={() => moveItem(kind, id, null)}><FolderOpen size={16} /> {client.name} (geen map)</button>
-          {folderOptions.map(o => <button type="button" key={o.id} className="drive-pop-item" role="menuitem" onClick={() => moveItem(kind, id, o.id)}><Folder size={16} style={{ color: 'var(--accent)' }} /> {o.label}</button>)}
-        </div>
-      </>;
-    }
+  function contentMenu(rowKey: string, kind: 'note' | 'document', id: string, name: string, open: () => void) {
     return <>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); open(); }}><FilePen size={16} /> Openen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
-      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => setMenu({ key, mode: 'move' })}><Folder size={16} /> Verplaatsen naar… <ChevronRight size={14} style={{ marginLeft: 'auto' }} /></button>
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openMove([{ kind, id, name }])}><Folder size={16} /> Verplaatsen naar…</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: kind, id, name })}><Share2 size={16} /> Delen…</button>
     </>;
   }
@@ -858,6 +830,7 @@ export function ClientFolders({
       {canWrite && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: 'attachment', id: att.id, name: att.name })}><Share2 size={16} /> Delen…</button>}
       {canWrite && <>
         <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
+        <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openMove([{ kind: 'attachment', id: att.id, name: att.name }])}><Folder size={16} /> Verplaatsen naar…</button>
         <div className="drive-pop-sep" />
         <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteFile(att); }}><Trash2 size={16} /> Verwijderen</button>
       </>}
@@ -885,7 +858,7 @@ export function ClientFolders({
           draggable={canWrite && Boolean(row.drag) && !isRenaming}
           onDragStart={e => startDrag(e, row)}
           onDragEnd={() => { endDriveDrag(); setDropKey(null); }}
-          {...(row.dropFolderId ? dropProps(row.key, row.dropFolderId) : {})}
+          {...(row.dropTarget ? dropProps(row.key, row.dropTarget) : {})}
           onClick={isRenaming ? undefined : e => { if (!selection.handleRowClick(e, row.key)) row.onOpen(); }}
           onKeyDown={e => rowKeyDown(e, row)}
         >
@@ -936,7 +909,7 @@ export function ClientFolders({
           draggable={canWrite && Boolean(row.drag) && !isRenaming}
           onDragStart={e => startDrag(e, row)}
           onDragEnd={() => { endDriveDrag(); setDropKey(null); }}
-          {...(row.dropFolderId ? dropProps(row.key, row.dropFolderId) : {})}
+          {...(row.dropTarget ? dropProps(row.key, row.dropTarget) : {})}
         >
           {canWrite && row.drag && <input
             type="checkbox"

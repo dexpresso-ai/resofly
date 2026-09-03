@@ -7,22 +7,23 @@ import {
 } from 'lucide-react';
 import type { AppData, Attachment, ContentFolder, InternalDocument, Note, Project } from '../types';
 import { dateNL } from '../lib/format';
-import { insertRow, updateRow, deleteContentFolder, deleteAttachment, moveAttachmentToFolder, renameAttachment } from '../lib/repository';
+import { insertRow, updateRow, deleteContentFolder, deleteAttachment, moveDriveItem, renameAttachment } from '../lib/repository';
 import { uploadToR2, downloadAttachment } from '../lib/r2';
 import { createOfficeSession, createOfficeDocument, isOfficeEditable, NEW_OFFICE_LABEL, type NewOfficeType, type OfficeSession } from '../lib/office';
 import { OfficeEditor } from './OfficeEditor';
 import { DriveRenameInput } from '../components/DriveRename';
 import { fileExtension, resolveRename } from '../lib/rename';
-import { childFolders, clientFolderOptions, folderDescendantIds, folderPath, scopedFolders } from '../lib/folders';
+import { childFolders, folderDescendantIds, folderPath, scopedFolders } from '../lib/folders';
 import { AttachmentGlyph, DocumentGlyph, attAccentColor, attTypeLabel, documentAccentColor, fmtBytes } from './ClientFolders';
 import { ShareDialog } from '../components/ShareDialog';
 import { SharedOverview, SharedOverviewButton } from '../components/SharedOverview';
 import { shareKey, sharedItemKeys, type ShareTarget } from '../lib/shares';
 import {
-  activeDriveDrag, beginDriveDrag, dragHasDriveItems, dragHasFiles, endDriveDrag, itemCountLabel,
-  planDriveMove, readDriveDrag, type DriveDragItem,
+  activeDriveDrag, beginDriveDrag, dragHasDriveItems, dragHasFiles, driveItemLocation, endDriveDrag, itemCountLabel,
+  planDriveMove, readDriveDrag, type DriveDragItem, type DriveLocation,
 } from '../lib/driveDnd';
 import { useDriveSelection } from '../lib/useDriveSelection';
+import { MoveDialog } from '../components/MoveDialog';
 
 export type ContentView = 'all' | 'notes' | 'documents';
 
@@ -83,8 +84,8 @@ type Row = {
   /** Wat deze rij is als je hem vastpakt. Ontbreekt = niet te selecteren en niet te slepen
    *  (klant- en projectmappen zijn navigatie, geen inhoud). */
   drag?: DriveDragItem;
-  /** De dossiermap waar een sleep in landt. Alleen gevuld op echte mappen. */
-  dropFolderId?: string;
+  /** Waar een sleep landt: een dossiermap, of de wortel van een projectmap. */
+  dropTarget?: DriveLocation;
 };
 const isFolderRow = (r: Row) => r.kind === 'client' || r.kind === 'project' || r.kind === 'folder';
 
@@ -147,7 +148,7 @@ export function ContentLibrary({
   const [newOpen, setNewOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
-  const [menu, setMenu] = useState<{ key: string; mode: 'main' | 'move'; up: boolean } | null>(null);
+  const [menu, setMenu] = useState<{ key: string; up: boolean } | null>(null);
   /** De rij waarvan de naam op dit moment wordt bewerkt (`Row.key`). */
   const [renaming, setRenaming] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -164,8 +165,8 @@ export function ContentLibrary({
   const [sharedOpen, setSharedOpen] = useState(false);
   /** Waar de sleep op dit moment boven hangt — stuurt alleen de oplichting. */
   const [dropKey, setDropKey] = useState<string | null>(null);
-  /** Het "Verplaatsen naar…"-menu van de selectiebalk. */
-  const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
+  /** De items waarvoor het venster "Verplaatsen naar…" openstaat. */
+  const [moving, setMoving] = useState<DriveDragItem[] | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { try { window.localStorage.setItem(VIEW_KEY, view); } catch { /* ignore */ } }, [view]);
@@ -273,7 +274,15 @@ export function ContentLibrary({
   const currentFolderPath = folderId ? folderPath(folderScope, folderId) : [];
   const currentFolder = currentFolderPath.length ? currentFolderPath[currentFolderPath.length - 1] : null;
   const subfolderList = realClient ? childFolders(folderScope, clientId, projectId, folderId) : [];
-  const folderOptions = realClient ? clientFolderOptions(data.folders, clientId, projectId) : [];
+  /** De klant van de open scope als échte id; "Geen klant" telt als geen klant. */
+  const scopeClientId = realClient ? clientId : null;
+  /** Waar je nu staat — startpunt van "Verplaatsen naar…". `null` = de wortel. */
+  const here: DriveLocation | null = atRoot ? null : { clientId: scopeClientId, projectId, folderId };
+  /** Waar "Terug" heen gaat, als doel voor een sleep: de bovenliggende map, of de wortel van klant/project. */
+  const upTarget: DriveLocation | null =
+    folderId ? { clientId: scopeClientId, projectId, folderId: currentFolder?.parent_id ?? null } :
+    projectId ? { clientId: scopeClientId, projectId: null, folderId: null } :
+    null;
 
   const folderCount = (id: string) =>
     data.notes.filter(n => n.folder_id === id).length
@@ -413,9 +422,11 @@ export function ContentLibrary({
     });
   }
 
-  function moveItem(kind: 'note' | 'document', id: string, targetFolderId: string | null) {
-    setMenu(null);
-    run(async () => { await updateRow(kind === 'note' ? 'notes' : 'documents', id, { folder_id: targetFolderId }, organizationId); });
+  /** Opent het venster "Verplaatsen naar…" — voor één rij (⋮) of voor de hele selectie. */
+  function openMove(items: DriveDragItem[]) {
+    if (items.length === 0) return;
+    setMenu(null); setNewOpen(false);
+    setMoving(items);
   }
 
   function deleteFile(att: Attachment) {
@@ -514,10 +525,9 @@ export function ContentLibrary({
       typeLabel: it.kind === 'note' ? 'Notitie' : 'Document',
       doc: it.doc,
       onOpen: open,
-      // Ook zónder klant een menu: juist die items ("Geen klant") zijn de items
-      // die je met een deellink mag delen. Alleen "Verplaatsen naar…" heeft een
-      // klantmap nodig en valt daarom weg.
-      menu: canWrite ? (menuKey: string) => contentMenu(menuKey, key, it.kind, it.id, label, open, realClient) : null,
+      // Ook zónder klant een menu: juist die items ("Geen klant") deel je met een
+      // deellink, en verplaats je naar het dossier waar ze thuishoren.
+      menu: canWrite ? () => contentMenu(key, it.kind, it.id, label, open) : null,
       shared: sharedKeys.has(shareKey(it.kind, it.id)),
       drag: { kind: it.kind, id: it.id, name: label },
       rename: canWrite
@@ -541,7 +551,7 @@ export function ContentLibrary({
       menu: canWrite ? () => folderMenu(folder, key) : null,
       shared: sharedKeys.has(shareKey('folder', folder.id)),
       drag: { kind: 'folder', id: folder.id, name: folder.name },
-      dropFolderId: folder.id,
+      dropTarget: { clientId: scopeClientId, projectId, folderId: folder.id },
       rename: canWrite
         ? typed => commitRename(folder.name, typed, false, async name => {
             await updateRow('content_folders', folder.id, { name }, organizationId);
@@ -592,6 +602,8 @@ export function ContentLibrary({
       key: `p-${f.id}`, kind: 'project', name: f.name, color: f.color || 'var(--accent)', archived: f.archived,
       modified: lastByProject.get(f.id) ?? null, size: plural(f.count), typeLabel: 'Projectmap',
       onOpen: () => openProject(f.id),
+      // Een projectmap is óók een doel: zo sleep je een notitie of map het project in.
+      dropTarget: { clientId: scopeClientId, projectId: f.id, folderId: null },
     });
     for (const f of subfolderList) folderRows.push(contentFolderRow(f, 'Map'));
     for (const it of generalItems) fileRows.push(itemRow(it));
@@ -627,46 +639,40 @@ export function ContentLibrary({
   const { clear: clearSelection } = selection;
 
   // Van map wisselen betekent van context wisselen; een selectie die je niet meer
-  // ziet mag niet blijven staan.
-  useEffect(() => { clearSelection(); setBulkMoveOpen(false); }, [clientId, projectId, folderId, clearSelection]);
+  // ziet mag niet blijven staan — en een openstaand verplaatsvenster ook niet.
+  useEffect(() => { clearSelection(); setMoving(null); }, [clientId, projectId, folderId, clearSelection]);
 
-  /** Waar ligt dit item nu? Bepaalt of een sleep iets verandert. */
-  const currentFolderOf = useCallback((item: DriveDragItem): string | null => {
-    if (item.kind === 'folder') return data.folders.find(f => f.id === item.id)?.parent_id ?? null;
-    if (item.kind === 'attachment') return data.attachments.find(a => a.id === item.id)?.entity_id ?? null;
-    if (item.kind === 'note') return data.notes.find(n => n.id === item.id)?.folder_id ?? null;
-    return data.documents.find(d => d.id === item.id)?.folder_id ?? null;
-  }, [data.folders, data.attachments, data.notes, data.documents]);
+  /** Waar ligt dit item nu? Bepaalt of een sleep of een keuze in het venster iets verandert. */
+  const locationOf = useCallback((item: DriveDragItem) => driveItemLocation(data, item), [data]);
 
-  const movePlanFor = useCallback((items: DriveDragItem[], targetFolderId: string | null) => planDriveMove(
+  const movePlanFor = useCallback((items: DriveDragItem[], target: DriveLocation) => planDriveMove(
     items,
-    targetFolderId,
-    { currentFolderId: currentFolderOf, descendantIds: id => folderDescendantIds(data.folders, id) },
-  ), [currentFolderOf, data.folders]);
+    target,
+    { locationOf, descendantIds: id => folderDescendantIds(data.folders, id) },
+  ), [locationOf, data.folders]);
 
-  /** Verplaatst wat er gesleept (of aangevinkt) is naar één map. `null` = het niveau boven de mappen. */
-  const moveTo = useCallback(async (items: DriveDragItem[], targetFolderId: string | null) => {
-    if (items.length === 0) return;
-    const plan = movePlanFor(items, targetFolderId);
+  /**
+   * Verplaatst wat er gesleept, aangevinkt of in het venster gekozen is naar één
+   * plek: een map, een projectwortel, een klantwortel of "Geen klant" — ook bij een
+   * andere klant. Een map neemt zijn hele boom mee (database-cascade). Geeft `true`
+   * terug als er iets verplaatst is.
+   */
+  const moveTo = useCallback(async (items: DriveDragItem[], target: DriveLocation): Promise<boolean> => {
+    if (items.length === 0) return false;
+    const plan = movePlanFor(items, target);
     const blockedText = plan.blocked.length ? plan.blocked.map(b => b.reason).join(' ') : null;
-    if (plan.moves.length === 0) { setError(blockedText); return; }
+    if (plan.moves.length === 0) { setError(blockedText); return false; }
     setBusy(true); setError(null);
     try {
-      for (const item of plan.moves) {
-        if (item.kind === 'folder') {
-          await updateRow('content_folders', item.id, { parent_id: targetFolderId }, organizationId);
-        } else if (item.kind === 'attachment') {
-          await moveAttachmentToFolder(item.id, targetFolderId as string, organizationId);
-        } else {
-          await updateRow(item.kind === 'note' ? 'notes' : 'documents', item.id, { folder_id: targetFolderId }, organizationId);
-        }
-      }
+      for (const item of plan.moves) await moveDriveItem(item, target, organizationId);
       // De weigeringen pas ná de verplaatsing melden: wat wél kon is dan al gebeurd.
       setError(blockedText);
       clearSelection();
       onChanged();
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Verplaatsen mislukt');
+      return false;
     } finally {
       setBusy(false);
     }
@@ -682,76 +688,58 @@ export function ContentLibrary({
     beginDriveDrag(event.dataTransfer, items.length > 0 ? items : [row.drag]);
   }
 
-  /** Mag er hier iets landen? Bestanden van je computer altijd; eigen items alleen als ze echt verhuizen. */
-  function canDropOnFolder(event: ReactDragEvent, targetFolderId: string): boolean {
+  /** Mag er hier iets landen? Bestanden van je computer alleen in een map; eigen items alleen als ze echt verhuizen. */
+  function canDropAt(event: ReactDragEvent, target: DriveLocation): boolean {
     if (!canWrite) return false;
-    if (dragHasFiles(event.dataTransfer)) return true;
+    if (dragHasFiles(event.dataTransfer)) return Boolean(target.folderId);
     if (!dragHasDriveItems(event.dataTransfer)) return false;
     const items = activeDriveDrag();
     if (!items) return true;
-    return movePlanFor(items, targetFolderId).moves.length > 0;
+    return movePlanFor(items, target).moves.length > 0;
   }
 
-  function folderDragOver(event: ReactDragEvent, key: string, targetFolderId: string) {
-    if (!canDropOnFolder(event, targetFolderId)) return;
+  function targetDragOver(event: ReactDragEvent, key: string, target: DriveLocation) {
+    if (!canDropAt(event, target)) return;
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = dragHasFiles(event.dataTransfer) ? 'copy' : 'move';
     if (dropKey !== key) setDropKey(key);
   }
 
-  function folderDrop(event: ReactDragEvent, targetFolderId: string) {
+  function targetDrop(event: ReactDragEvent, target: DriveLocation) {
     event.preventDefault();
     event.stopPropagation();
     setDropKey(null);
     if (!canWrite) return;
     if (dragHasFiles(event.dataTransfer)) {
-      if (event.dataTransfer.files?.length) void uploadFilesTo(event.dataTransfer.files, targetFolderId);
+      if (target.folderId && event.dataTransfer.files?.length) void uploadFilesTo(event.dataTransfer.files, target.folderId);
       return;
     }
     const items = readDriveDrag(event.dataTransfer);
     endDriveDrag();
-    void moveTo(items, targetFolderId);
-  }
-
-  /** Broodkruimels en "Terug" zijn óók doelen: zo sleep je iets weer naar boven. */
-  function crumbDragOver(event: ReactDragEvent, key: string, targetFolderId: string | null) {
-    if (!canWrite || dragHasFiles(event.dataTransfer) || !dragHasDriveItems(event.dataTransfer)) return;
-    const items = activeDriveDrag();
-    if (items && movePlanFor(items, targetFolderId).moves.length === 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = 'move';
-    if (dropKey !== key) setDropKey(key);
-  }
-
-  function crumbDrop(event: ReactDragEvent, targetFolderId: string | null) {
-    event.preventDefault();
-    event.stopPropagation();
-    setDropKey(null);
-    if (!canWrite) return;
-    const items = readDriveDrag(event.dataTransfer);
-    endDriveDrag();
-    void moveTo(items, targetFolderId);
+    void moveTo(items, target);
   }
 
   const leaveDrop = (key: string) => (event: ReactDragEvent) => {
     event.stopPropagation();
     setDropKey(current => (current === key ? null : current));
   };
-  const dropProps = (key: string, targetFolderId: string) => ({
-    onDragOver: (e: ReactDragEvent) => folderDragOver(e, key, targetFolderId),
+  /** Rijen (dossiermappen én projectmappen) als doel: bestanden van je computer en eigen items. */
+  const dropProps = (key: string, target: DriveLocation) => ({
+    onDragOver: (e: ReactDragEvent) => targetDragOver(e, key, target),
     onDragLeave: leaveDrop(key),
-    onDrop: (e: ReactDragEvent) => folderDrop(e, targetFolderId),
+    onDrop: (e: ReactDragEvent) => targetDrop(e, target),
   });
-  /** Alleen de sleep-handlers — voor knoppen die hun eigen className al zetten. */
-  const crumbDropTargetProps = (key: string, targetFolderId: string | null) => ({
-    onDragOver: (e: ReactDragEvent) => crumbDragOver(e, key, targetFolderId),
+  /** Broodkruimels en "Terug" zijn óók doelen: zo sleep je iets weer naar boven — maar
+   *  alleen voor eigen items; uploaden doe je op een maprij. Alleen de handlers, voor
+   *  knoppen die hun eigen className al zetten. */
+  const crumbDropTargetProps = (key: string, target: DriveLocation) => ({
+    onDragOver: (e: ReactDragEvent) => { if (!dragHasFiles(e.dataTransfer)) targetDragOver(e, key, target); },
     onDragLeave: leaveDrop(key),
-    onDrop: (e: ReactDragEvent) => crumbDrop(e, targetFolderId),
+    onDrop: (e: ReactDragEvent) => { if (!dragHasFiles(e.dataTransfer)) targetDrop(e, target); },
   });
-  const crumbDropProps = (key: string, targetFolderId: string | null) => ({
-    ...crumbDropTargetProps(key, targetFolderId),
+  const crumbDropProps = (key: string, target: DriveLocation) => ({
+    ...crumbDropTargetProps(key, target),
     className: dropKey === key ? 'odrv-crumb-drop' : undefined,
   });
 
@@ -851,7 +839,7 @@ export function ContentLibrary({
             const br = (e.currentTarget as HTMLElement).getBoundingClientRect();
             up = br.bottom > sr.top + sr.height * 0.55;
           }
-          setMenu({ key, mode: 'main', up }); setNewOpen(false); setSortOpen(false);
+          setMenu({ key, up }); setNewOpen(false); setSortOpen(false);
         }}
       ><MoreVertical size={16} /></button>
       {menu?.key === key && <div className={`drive-pop is-right${menu.up ? ' is-up' : ''}`} role="menu">{content()}</div>}
@@ -862,26 +850,18 @@ export function ContentLibrary({
     return <>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openFolder(folder.id)}><FolderOpen size={16} /> Openen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openMove([{ kind: 'folder', id: folder.id, name: folder.name }])}><Folder size={16} /> Verplaatsen naar…</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: 'folder', id: folder.id, name: folder.name })}><Share2 size={16} /> Delen…</button>
       <div className="drive-pop-sep" />
       <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteFolder(folder); }}><Trash2 size={16} /> Verwijderen</button>
     </>;
   }
 
-  function contentMenu(key: string, rowKey: string, kind: 'note' | 'document', id: string, name: string, open: () => void, canMove = true) {
-    if (canMove && menu?.key === key && menu.mode === 'move') {
-      return <>
-        <div className="drive-pop-head"><button type="button" className="drive-pop-back" onClick={() => setMenu({ key, mode: 'main', up: menu.up })} aria-label="Terug"><ChevronLeft size={14} /></button> Verplaatsen naar</div>
-        <div className="drive-pop-scroll">
-          <button type="button" className="drive-pop-item" role="menuitem" onClick={() => moveItem(kind, id, null)}><FolderOpen size={16} /> {currentProject?.name ?? currentClientName} (geen map)</button>
-          {folderOptions.map(o => <button type="button" key={o.id} className="drive-pop-item" role="menuitem" onClick={() => moveItem(kind, id, o.id)}><Folder size={16} style={{ color: 'var(--accent)' }} /> {o.label}</button>)}
-        </div>
-      </>;
-    }
+  function contentMenu(rowKey: string, kind: 'note' | 'document', id: string, name: string, open: () => void) {
     return <>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); open(); }}><FilePen size={16} /> Openen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
-      {canMove && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => setMenu(m => m ? { ...m, mode: 'move' } : m)}><Folder size={16} /> Verplaatsen naar… <ChevronRight size={14} style={{ marginLeft: 'auto' }} /></button>}
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openMove([{ kind, id, name }])}><Folder size={16} /> Verplaatsen naar…</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: kind, id, name })}><Share2 size={16} /> Delen…</button>
     </>;
   }
@@ -893,6 +873,7 @@ export function ContentLibrary({
       {canWrite && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: 'attachment', id: att.id, name: att.name })}><Share2 size={16} /> Delen…</button>}
       {canWrite && <>
         <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
+        <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openMove([{ kind: 'attachment', id: att.id, name: att.name }])}><Folder size={16} /> Verplaatsen naar…</button>
         <div className="drive-pop-sep" />
         <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteFile(att); }}><Trash2 size={16} /> Verwijderen</button>
       </>}
@@ -919,7 +900,7 @@ export function ContentLibrary({
         draggable={canWrite && Boolean(row.drag) && !isRenaming}
         onDragStart={e => startDrag(e, row)}
         onDragEnd={() => { endDriveDrag(); setDropKey(null); }}
-        {...(row.dropFolderId ? dropProps(row.key, row.dropFolderId) : {})}
+        {...(row.dropTarget ? dropProps(row.key, row.dropTarget) : {})}
         onClick={isRenaming ? undefined : e => { if (!selection.handleRowClick(e, row.key)) row.onOpen(); }}
         onKeyDown={e => rowKeyDown(e, row)}
       >
@@ -968,7 +949,7 @@ export function ContentLibrary({
         draggable={canWrite && Boolean(row.drag) && !isRenaming}
         onDragStart={e => startDrag(e, row)}
         onDragEnd={() => { endDriveDrag(); setDropKey(null); }}
-        {...(row.dropFolderId ? dropProps(row.key, row.dropFolderId) : {})}
+        {...(row.dropTarget ? dropProps(row.key, row.dropTarget) : {})}
       >
         {canWrite && row.drag && <input
           type="checkbox"
@@ -1007,7 +988,7 @@ export function ContentLibrary({
                   : <button
                       type="button"
                       onClick={() => openClient(clientId)}
-                      {...(projectId === null && realClient ? crumbDropProps('crumb-client', null) : {})}
+                      {...(realClient ? crumbDropProps('crumb-client', { clientId: scopeClientId, projectId: null, folderId: null }) : {})}
                     >{currentClientName}</button>}
                 {projectId && <span className="odrv-crumb-step">
                   <ChevronRight size={17} aria-hidden="true" />
@@ -1015,7 +996,7 @@ export function ContentLibrary({
                     ? <button
                         type="button"
                         onClick={() => openProject(projectId)}
-                        {...crumbDropProps('crumb-project', null)}
+                        {...crumbDropProps('crumb-project', { clientId: scopeClientId, projectId, folderId: null })}
                       >{currentProject?.name ?? ''}</button>
                     : <span className="odrv-crumb-current">{currentProject?.name ?? ''}</span>}
                 </span>}
@@ -1026,7 +1007,7 @@ export function ContentLibrary({
                     : <button
                         type="button"
                         onClick={() => openFolder(folder.id)}
-                        {...crumbDropProps(`crumb-${folder.id}`, folder.id)}
+                        {...crumbDropProps(`crumb-${folder.id}`, { clientId: scopeClientId, projectId, folderId: folder.id })}
                       >{folder.name}</button>}
                 </span>)}
               </>}
@@ -1066,9 +1047,9 @@ export function ContentLibrary({
           type="button"
           className={`odrv-tool odrv-up${dropKey === 'up' ? ' odrv-crumb-drop' : ''}`}
           onClick={goUp}
-          title={folderId ? 'Eén niveau omhoog — of sleep hier iets heen om het omhoog te verplaatsen' : 'Eén niveau omhoog'}
+          title={upTarget ? 'Eén niveau omhoog — of sleep hier iets heen om het omhoog te verplaatsen' : 'Eén niveau omhoog'}
           aria-label="Eén niveau omhoog"
-          {...(folderId ? crumbDropTargetProps('up', currentFolder?.parent_id ?? null) : {})}
+          {...(upTarget ? crumbDropTargetProps('up', upTarget) : {})}
         >
           <ChevronLeft size={15} /> <span className="odrv-tool-label">Terug</span>
         </button>}
@@ -1136,21 +1117,9 @@ export function ContentLibrary({
                 <strong>{itemCountLabel(selection.count)} geselecteerd</strong>
                 {selection.count < selectable.filter(e => e.selectable).length && <button type="button" className="odrv-selbar-link" onClick={selection.selectAll}>Alles selecteren</button>}
                 <span className="odrv-selbar-spacer" />
-                {realClient && <div className="drive-new-wrap">
-                  <button type="button" className="odrv-tool drive-pop-trigger" disabled={busy} onClick={() => { setBulkMoveOpen(o => !o); setMenu(null); setNewOpen(false); }} aria-haspopup="menu" aria-expanded={bulkMoveOpen}>
-                    <Folder size={14} /> Verplaatsen naar… <ChevronDown size={13} />
-                  </button>
-                  {bulkMoveOpen && <div className="drive-pop" role="menu">
-                    <div className="drive-pop-scroll">
-                      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setBulkMoveOpen(false); void moveTo(selectedItems, null); }}>
-                        <FolderOpen size={16} /> {currentProject?.name ?? currentClientName} (geen map)
-                      </button>
-                      {folderOptions.map(o => <button type="button" key={o.id} className="drive-pop-item" role="menuitem" onClick={() => { setBulkMoveOpen(false); void moveTo(selectedItems, o.id); }}>
-                        <Folder size={16} style={{ color: 'var(--accent)' }} /> {o.label}
-                      </button>)}
-                    </div>
-                  </div>}
-                </div>}
+                {canWrite && selectedItems.length > 0 && <button type="button" className="odrv-tool" disabled={busy} onClick={() => openMove(selectedItems)}>
+                  <Folder size={14} /> Verplaatsen naar…
+                </button>}
                 {selectedAttachments.length > 0 && <button type="button" className="odrv-tool" onClick={() => void downloadSelection()}>
                   <Download size={14} /> Downloaden{selectedAttachments.length !== selection.count ? ` (${selectedAttachments.length})` : ''}
                 </button>}
@@ -1192,5 +1161,13 @@ export function ContentLibrary({
     {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeAtt(null); onChanged(); }} onDownload={officeAtt ? () => handleDownload(officeAtt) : undefined} />}
     {sharing && <ShareDialog data={data} organizationId={organizationId} target={sharing} onClose={() => setSharing(null)} onChanged={onChanged} />}
     {sharedOpen && <SharedOverview data={data} organizationId={organizationId} canWrite={canWrite} onClose={() => setSharedOpen(false)} onChanged={onChanged} />}
+    {moving && <MoveDialog
+      data={data}
+      items={moving}
+      start={here}
+      companyName={companyName}
+      onClose={() => setMoving(null)}
+      onMove={target => moveTo(moving, target)}
+    />}
   </div>;
 }

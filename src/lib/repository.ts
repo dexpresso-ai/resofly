@@ -1,3 +1,4 @@
+import type { DriveDragItem, DriveLocation } from './driveDnd';
 import { supabase, supabaseAuth } from './supabase';
 import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
@@ -4336,6 +4337,28 @@ export async function moveAttachmentToFolder(id: UUID, folderId: UUID, organizat
   const { data, error } = await query.select('*').single();
   if (error) throw error;
   return data as Attachment;
+}
+
+/**
+ * Verplaatst één drive-item naar een plek: klant + (optioneel) project + (optioneel)
+ * map — ook naar een andere klant. Notities en documenten krijgen klant, project én
+ * map in één update, zodat de plaatsingsregel van de verkenner (project mét klant
+ * is leidend) blijft kloppen. Een map neemt zijn hele boom mee: de database
+ * (trigger `content_folders_cascade_scope`) zet de nieuwe scope door naar de
+ * submappen en de inhoud, en trekt delingen in die met de nieuwe klant niet meer
+ * mogen. Een geüpload bestand hangt aan zijn map en kan alleen ín een map landen.
+ */
+export async function moveDriveItem(item: DriveDragItem, target: DriveLocation, organizationId: UUID): Promise<void> {
+  if (item.kind === 'attachment') {
+    if (!target.folderId) throw new Error(`“${item.name}” moet in een map blijven staan.`);
+    await moveAttachmentToFolder(item.id, target.folderId, organizationId);
+    return;
+  }
+  if (item.kind === 'folder') {
+    await updateRow('content_folders', item.id, { client_id: target.clientId, project_id: target.projectId, parent_id: target.folderId }, organizationId);
+    return;
+  }
+  await updateRow(item.kind === 'note' ? 'notes' : 'documents', item.id, { client_id: target.clientId, project_id: target.projectId, folder_id: target.folderId }, organizationId);
 }
 
 /**
