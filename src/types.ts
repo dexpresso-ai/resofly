@@ -683,6 +683,9 @@ export interface CalendarEventLink extends OrgScopedRow {
   event_title_snapshot: string | null;
   client_id: UUID | null;
   project_id: UUID | null;
+  /** De taak waar deze afspraak bij hoort. Leidend voor project en klant van de
+   *  koppeling (DB-trigger), net als bij urenposten. Leeg = alleen klant/project. */
+  task_id: UUID | null;
   /** Telt dit gekoppelde agenda-item mee voor de urenregistratie? Standaard aan. */
   track_time: boolean;
   created_at: string;
@@ -699,6 +702,7 @@ export interface CalendarEventLinkInput {
   event_title_snapshot?: string | null;
   client_id: UUID | null;
   project_id: UUID | null;
+  task_id?: UUID | null;
   track_time?: boolean;
 }
 

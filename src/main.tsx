@@ -31,6 +31,7 @@ import {
   deleteNoteCalendarLink,
   upsertCalendarEventLink,
   deleteCalendarEventLink,
+  setCalendarEventLinkTask,
   createTimeEntry,
   updateTimeEntry,
   disableOrganizationMember,
@@ -130,7 +131,9 @@ import { Archive, Settings, type SettingsTab } from './features/SimplePages';
 import { ProjectTemplatePicker } from './features/ProjectTemplates';
 import { Statistics } from './features/Statistics';
 import type { ReportDefinition } from './lib/reporting';
-import { CalendarPage } from './features/CalendarPage';
+import { CalendarPage, type CalendarDraft } from './features/CalendarPage';
+import { TaskAgendaSection } from './components/TaskAgenda';
+import { calendarEventLinkMatchesEvent } from './lib/calendar-links';
 import { MeetingBookingManager } from './features/MeetingBookingManager';
 import { WeekPlanner } from './features/WeekPlanner';
 import { ProjectShiftDialog } from './components/ProjectShiftDialog';
@@ -573,6 +576,8 @@ function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   /** Op welke dag de agenda opent als je er vanuit de weekplanner heen springt. */
   const [calendarJump, setCalendarJump] = useState<string | null>(null);
+  /** "Tijd reserveren" vanuit een taak: de agenda opent met dit concept. */
+  const [calendarDraft, setCalendarDraft] = useState<CalendarDraft | null>(null);
   /** Openstaand voorstel om de taken van een verschoven project mee te schuiven. */
   const [projectShift, setProjectShift] = useState<ProjectShift | null>(null);
   const [projectShiftBusy, setProjectShiftBusy] = useState(false);
@@ -2185,12 +2190,18 @@ function App() {
     });
   }
 
-  async function setCalendarEventLink(event: CalendarExternalEvent, clientId: string | null, projectId: string | null, trackTime: boolean = true) {
+  /**
+   * Klant, project en taak van een afspraak (her)koppelen. `taskId` weglaten
+   * betekent: de taak die er al aan hangt laten staan — zo raakt een aanroep
+   * die alleen de klant wijzigt de taak niet stilletjes kwijt. `null` wist hem.
+   */
+  async function setCalendarEventLink(event: CalendarExternalEvent, clientId: string | null, projectId: string | null, trackTime: boolean = true, taskId?: string | null) {
     if (!ensureCanWrite()) return;
     setLoading(true); setError(null);
     try {
-      if (!clientId && !projectId) {
-        const existing = eventLinkFor(event);
+      const existing = eventLinkFor(event);
+      const nextTaskId = taskId === undefined ? existing?.task_id ?? null : taskId;
+      if (!clientId && !projectId && !nextTaskId) {
         if (existing) await deleteCalendarEventLink(existing.id, activeOrg.id);
       } else {
         await upsertCalendarEventLink(activeOrg.id, {
@@ -2204,6 +2215,7 @@ function App() {
           event_title_snapshot: event.visibility === 'organization' && !event.is_private_masked ? event.title : null,
           client_id: clientId,
           project_id: projectId,
+          task_id: nextTaskId,
           track_time: trackTime,
         });
       }
@@ -2213,6 +2225,54 @@ function App() {
     } finally {
       setLoading(false);
     }
+  }
+
+  /** Een taak aan een bestaande afspraak hangen. Klant en project laat de
+   *  database uit de taak volgen; wat er al aan de koppeling hing blijft staan
+   *  als de taak zelf geen project of klant heeft. */
+  async function linkTaskToEvent(task: Task, event: CalendarExternalEvent) {
+    if (event.visibility !== 'organization' || event.is_private_masked) {
+      setError('Een privé-afspraak is niet aan een taak te koppelen. Deel de agenda eerst met de organisatie.');
+      return;
+    }
+    const existing = eventLinkFor(event);
+    await setCalendarEventLink(event, existing?.client_id ?? task.client_id ?? null, existing?.project_id ?? task.project_id ?? null, existing?.track_time ?? true, task.id);
+  }
+
+  /** Alleen de taak van de koppeling af; klant, project en de uren-instelling blijven. */
+  async function unlinkTaskEvent(link: CalendarEventLink) {
+    if (!ensureCanWrite()) return;
+    setLoading(true); setError(null);
+    try {
+      await setCalendarEventLinkTask(link.id, activeOrg.id, null);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Afspraak ontkoppelen mislukt');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /** Tijd reserveren: naar de agenda op de plandatum, met de taak als
+   *  concept-afspraak. De agenda opent het aanmaakpaneel en meldt zich terug
+   *  zodra het concept verwerkt is. Duur = wat er van de schatting nog open staat. */
+  function reserveTimeForTask(task: Task) {
+    if (!ensureCanWrite()) return;
+    const project = task.project_id ? data.projects.find(p => p.id === task.project_id) ?? null : null;
+    const logged = data.timeEntries.filter(entry => entry.task_id === task.id).reduce((sum, entry) => sum + entry.minutes, 0);
+    const estimate = task.estimated_minutes != null && Number.isFinite(Number(task.estimated_minutes)) ? Number(task.estimated_minutes) : 0;
+    const date = task.planned_date ?? formatISODate(new Date());
+    setCalendarDraft({
+      taskId: task.id,
+      title: task.title,
+      clientId: project?.client_id ?? task.client_id ?? '',
+      projectId: task.project_id ?? '',
+      minutes: estimate > 0 ? Math.max(30, estimate - logged) : 60,
+      date,
+    });
+    setEdit(null);
+    setCalendarJump(date);
+    setPage('calendar');
   }
 
   async function linkExistingNoteToCalendarEvent(noteId: string, event: CalendarExternalEvent) {
@@ -2690,7 +2750,7 @@ function App() {
         <section key={tab.id} className="content" hidden={tab.id !== activeTab.id}>
           {tab.id === activeTab.id && error && <div className="error">{error}</div>}
           {renderPage(tab)}
-          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} />}
+          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}
         </section>
       ))}
     </main>
@@ -2807,8 +2867,8 @@ function App() {
     if (page === 'shareholders') return <ShareholdersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'annual-accounts') return <AnnualAccountsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
-    if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} onSetTaskEstimate={setTaskEstimate} onOpenProject={(id) => { setProjectId(id); setClientId(null); setPage('project'); }} onOpenCalendar={(dateKey) => { setCalendarJump(dateKey); setPage('calendar'); }} onSaveCapacity={savePlannerCapacity} onStopTimer={stopTimerForTask} onOpenTicket={(ticketId) => { const ticket = data.tickets.find(t => t.id === ticketId); if (ticket) setEdit({ kind: 'ticket', item: ticket }); }}/>;
-    if (page === 'calendar') return <CalendarPage mode="agenda" initialDate={calendarJump} key={calendarJump ?? 'today'} organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
+    if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} onSetTaskEstimate={setTaskEstimate} onOpenProject={(id) => { setProjectId(id); setClientId(null); setPage('project'); }} onOpenCalendar={(dateKey) => { setCalendarJump(dateKey); setPage('calendar'); }} onSaveCapacity={savePlannerCapacity} onStopTimer={stopTimerForTask} onOpenTicket={(ticketId) => { const ticket = data.tickets.find(t => t.id === ticketId); if (ticket) setEdit({ kind: 'ticket', item: ticket }); }} onLinkTaskToEvent={linkTaskToEvent} onUnlinkTaskEvent={unlinkTaskEvent} onReserveTime={reserveTimeForTask}/>;
+    if (page === 'calendar') return <CalendarPage mode="agenda" initialDate={calendarJump} key={calendarJump ?? 'today'} initialDraft={calendarDraft} onDraftConsumed={() => setCalendarDraft(null)} organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'meeting-booking') return <MeetingBookingManager organizationId={activeOrg.id} currentUserId={currentUserId ?? ''} data={data} canWrite={canWrite}/>;
     if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;
     if (page === 'stats') return <Statistics data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} openReportId={statsReportId} pendingReport={pendingReport}/>;
@@ -2904,14 +2964,6 @@ function buildCalendarNoteLinkInput(event: CalendarExternalEvent): CalendarNoteL
   };
 }
 
-/** Identificeert dezelfde event-instantie als de UI: provider + agenda + event-id + starttijd. */
-function calendarEventLinkMatchesEvent(link: CalendarEventLink, event: CalendarExternalEvent): boolean {
-  return link.provider === event.provider
-    && link.calendar_source_id === event.source_id
-    && link.provider_event_id === event.provider_event_id
-    && new Date(link.event_starts_at).getTime() === new Date(event.starts_at).getTime();
-}
-
 /**
  * Kiezer om een taak toe te wijzen aan één of meer teamleden. Biedt uitsluitend
  * de leden van het projectteam aan (data.projectMembers voor dit project); is
@@ -2955,7 +3007,15 @@ function TaskAssigneePicker({ projectId, assigneeIds, teamMembers, projectMember
   </div>;
 }
 
-function EditModal({ edit, data, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord, onCreateFromOfficeFile, onCreateBlankOffice }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void; onCreateFromOfficeFile: (file: File, values: Record<string, unknown>) => void; onCreateBlankOffice: (docType: NewOfficeType, values: Record<string, unknown>) => void }) {
+/** Afspraak ↔ taak vanuit het taakvenster; de handlers leven in de werkruimte. */
+type TaskAgendaHandlers = {
+  onReserve: (task: Task) => void;
+  onLinkEvent: (task: Task, event: CalendarExternalEvent) => Promise<void>;
+  onUnlink: (link: CalendarEventLink) => Promise<void>;
+  onOpenDay: (dateKey: string) => void;
+};
+
+function EditModal({ edit, data, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord, onCreateFromOfficeFile, onCreateBlankOffice, taskAgenda }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void; onCreateFromOfficeFile: (file: File, values: Record<string, unknown>) => void; onCreateBlankOffice: (docType: NewOfficeType, values: Record<string, unknown>) => void; taskAgenda: TaskAgendaHandlers }) {
   const item = 'item' in edit ? edit.item : undefined;
   const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit, data));
   const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
@@ -3176,7 +3236,7 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
       {attachmentBlock}
     </FormGrid>}
     {edit.kind === 'project' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Projectnaam"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Omschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/>{!item && <ProjectTemplatePicker data={data} value={String(form._templateId ?? '')} startDate={String(form.start_date ?? '')} disabled={disabled} onChange={templateId=>set('_templateId',templateId)}/>}<Field label="Facturatie" hint="Urenbasis: geregistreerde uren zijn declarabel en vormen de factuurbasis. Aangenomen prijs: factureren via offerte/factuur; uren worden geregistreerd maar standaard niet-declarabel."><Select value={form.billing_type} onChange={e=>set('billing_type',e.target.value)} disabled={disabled}><option value="hourly">Urenbasis</option><option value="fixed_price">Aangenomen prijs (offerte)</option></Select></Field><Field label="Uurtarief (€)" hint="Voor de declarabele waarde van geregistreerde uren. Leeg = bedrijfsbreed standaardtarief."><Input type="number" min="0" step="0.01" value={form.hourly_rate_euro} onChange={e=>set('hourly_rate_euro',e.target.value)} placeholder="Standaardtarief" disabled={disabled}/></Field><Field label="Begrote uren" hint="Urenbudget voor dit project — op het projectdashboard zie je begroot vs. werkelijk geboekt en het effectieve uurtarief."><Input type="number" min="0" step="0.5" value={form.budgeted_hours} onChange={e=>set('budgeted_hours',e.target.value)} placeholder="Geen budget" disabled={disabled}/></Field><Field label="Projectkleur" hint="Bepaalt de kleur van het project in lijsten, kanban en de timeline."><ColorPicker value={form.color} onChange={color=>set('color',color)} disabled={disabled}/></Field><label className="check-row"><input type="checkbox" checked={Boolean(form.archived)} onChange={e=>set('archived',e.target.checked)}/><span>Project archiveren</span></label>{!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.project} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}{attachmentBlock}</FormGrid>}
-    {edit.kind === 'task' && <FormGrid><Field label="Taaktitel"><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Taaktitel" disabled={disabled}/></Field><Field label="Status"><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="todo">Te doen</option><option value="doing">Bezig</option><option value="review">Review</option><option value="done">Klaar</option></Select></Field><Field label="Prioriteit"><Select value={form.priority} onChange={e=>set('priority',e.target.value)} disabled={disabled}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select></Field><Field label="Klant" hint={taskClientFollowsProject ? 'Volgt automatisch uit het gekozen project.' : 'Optioneel — handig als je het project nog niet weet.'}><Select value={form.client_id} onChange={e=>setTaskClient(e.target.value)} disabled={disabled || taskClientFollowsProject}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field><Field label="Project" hint="Optioneel — een taak mag ook los in de weekplanner staan."><Select value={form.project_id} onChange={e=>setTaskProject(e.target.value)} disabled={disabled}><option value="">Geen project</option>{taskProjectOptions.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select></Field><Field label="Tags" hint="Gebruik komma’s om meerdere tags toe te voegen."><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags" disabled={disabled}/></Field><Field label="Toegewezen aan" hint={form.project_id ? 'Kies teamleden uit het projectteam die aan deze taak werken.' : 'Zonder project kun je iedereen uit je organisatie toewijzen.'}><TaskAssigneePicker projectId={form.project_id || null} assigneeIds={(form._assigneeIds as string[]) ?? []} teamMembers={teamMembers} projectMembers={data.projectMembers} currentUserId={currentUserId} disabled={disabled} onChange={ids => set('_assigneeIds', ids)}/></Field><Field label="Beschrijving"><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving" disabled={disabled}/></Field><Field label="Startdatum"><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)} disabled={disabled}/></Field><Field label="Deadline" hint="Deze datum blijft de inhoudelijke deadline en wordt niet meer aangepast door de weekplanner."><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)} disabled={disabled}/></Field><Field label="Plandatum" hint="Deze datum bepaalt op welke dag de taak in de weekplanner staat."><Input type="date" value={form.planned_date} onChange={e=>set('planned_date',e.target.value)} disabled={disabled}/></Field><Field label="Loopt door tot" hint="Laat leeg voor werk van één dag. Vul je een latere dag in, dan wordt het een weekstrook over die dagen heen."><Input type="date" value={form.planned_end_date} min={form.planned_date || undefined} onChange={e=>set('planned_end_date',e.target.value)} disabled={disabled || !form.planned_date}/></Field><Field label="Geschatte duur" hint="In minuten. Laat leeg als je het nog niet weet — de taak telt dan nergens als tijd mee."><Input type="number" min="0" max="1440" step="15" placeholder="Nog geen schatting" value={form.estimated_minutes} onChange={e=>set('estimated_minutes',e.target.value)} disabled={disabled}/></Field><TaskDetailEditor subtasks={form.subtasks} comments={form.comments} set={set}/>{!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.task} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'task' && <FormGrid><Field label="Taaktitel"><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Taaktitel" disabled={disabled}/></Field><Field label="Status"><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="todo">Te doen</option><option value="doing">Bezig</option><option value="review">Review</option><option value="done">Klaar</option></Select></Field><Field label="Prioriteit"><Select value={form.priority} onChange={e=>set('priority',e.target.value)} disabled={disabled}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select></Field><Field label="Klant" hint={taskClientFollowsProject ? 'Volgt automatisch uit het gekozen project.' : 'Optioneel — handig als je het project nog niet weet.'}><Select value={form.client_id} onChange={e=>setTaskClient(e.target.value)} disabled={disabled || taskClientFollowsProject}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field><Field label="Project" hint="Optioneel — een taak mag ook los in de weekplanner staan."><Select value={form.project_id} onChange={e=>setTaskProject(e.target.value)} disabled={disabled}><option value="">Geen project</option>{taskProjectOptions.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select></Field><Field label="Tags" hint="Gebruik komma’s om meerdere tags toe te voegen."><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags" disabled={disabled}/></Field><Field label="Toegewezen aan" hint={form.project_id ? 'Kies teamleden uit het projectteam die aan deze taak werken.' : 'Zonder project kun je iedereen uit je organisatie toewijzen.'}><TaskAssigneePicker projectId={form.project_id || null} assigneeIds={(form._assigneeIds as string[]) ?? []} teamMembers={teamMembers} projectMembers={data.projectMembers} currentUserId={currentUserId} disabled={disabled} onChange={ids => set('_assigneeIds', ids)}/></Field><Field label="Beschrijving"><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving" disabled={disabled}/></Field><Field label="Startdatum"><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)} disabled={disabled}/></Field><Field label="Deadline" hint="Deze datum blijft de inhoudelijke deadline en wordt niet meer aangepast door de weekplanner."><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)} disabled={disabled}/></Field><Field label="Plandatum" hint="Deze datum bepaalt op welke dag de taak in de weekplanner staat."><Input type="date" value={form.planned_date} onChange={e=>set('planned_date',e.target.value)} disabled={disabled}/></Field><Field label="Loopt door tot" hint="Laat leeg voor werk van één dag. Vul je een latere dag in, dan wordt het een weekstrook over die dagen heen."><Input type="date" value={form.planned_end_date} min={form.planned_date || undefined} onChange={e=>set('planned_end_date',e.target.value)} disabled={disabled || !form.planned_date}/></Field><Field label="Geschatte duur" hint="In minuten. Laat leeg als je het nog niet weet — de taak telt dan nergens als tijd mee."><Input type="number" min="0" max="1440" step="15" placeholder="Nog geen schatting" value={form.estimated_minutes} onChange={e=>set('estimated_minutes',e.target.value)} disabled={disabled}/></Field><TaskDetailEditor subtasks={form.subtasks} comments={form.comments} set={set}/>{item && <TaskAgendaSection task={item as Task} data={data} organizationId={organizationId} canWrite={!disabled} onReserve={taskAgenda.onReserve} onLinkEvent={taskAgenda.onLinkEvent} onUnlink={taskAgenda.onUnlink} onOpenDay={taskAgenda.onOpenDay}/>}{!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.task} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}{attachmentBlock}</FormGrid>}
     {edit.kind === 'ticket' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Ticket titel"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={Boolean((item as Ticket | undefined)?.converted_to_project_id)}><option value="new">Nieuw</option><option value="review">Review</option><option value="approved">Goedgekeurd</option><option value="rejected">Geweigerd</option>{(item as Ticket | undefined)?.converted_to_project_id && <option value="converted">Omgezet</option>}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Field label="Korte interne notitie" hint="Privé memo op het ticket. Voor een gesprek met de klant gebruik je de tijdlijn hieronder."><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne notities (privé, niet in de tijdlijn)"/></Field><small className="ticket-status-hint">Gebruik <strong>Project maken</strong> om een ticket om te zetten. <strong>Omgezet</strong> is geen handmatige status.</small>{item ? <TicketNotesTimeline ticketId={item.id} organizationId={organizationId} currentUserId={currentUserId} notes={data.ticketNotes.filter(n => n.ticket_id === item.id)} canWrite={!disabled} onChanged={onAttachmentsChanged}/> : <div className="ticket-timeline-hint">Sla het ticket eerst op om de notitietijdlijn te gebruiken — daar kunnen jij en de klant berichten plaatsen.</div>}{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.ticket} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
     {edit.kind === 'note' && <FormGrid>
       <Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Titel"/>

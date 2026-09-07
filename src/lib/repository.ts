@@ -1422,8 +1422,26 @@ export async function upsertCalendarEventLink(organizationId: UUID, input: Calen
       event_title_snapshot: input.event_title_snapshot ?? null,
       client_id: input.client_id,
       project_id: input.project_id,
+      task_id: input.task_id ?? null,
       track_time: input.track_time ?? true,
     }, { onConflict: 'organization_id,provider,calendar_source_id,provider_event_id,event_starts_at' })
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as CalendarEventLink;
+}
+
+/**
+ * Zet of wist alleen de taak op een bestaande koppeling. Klant en project
+ * blijven staan (de trigger leidt ze opnieuw af als er een taak bij komt), en
+ * de afgeleide urenpost volgt vanzelf mee.
+ */
+export async function setCalendarEventLinkTask(linkId: UUID, organizationId: UUID, taskId: UUID | null): Promise<CalendarEventLink> {
+  const { data, error } = await supabase
+    .from('calendar_event_links')
+    .update({ task_id: taskId })
+    .eq('id', linkId)
+    .eq('organization_id', organizationId)
     .select('*')
     .single();
   if (error) throw error;

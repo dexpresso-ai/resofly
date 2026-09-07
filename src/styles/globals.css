@@ -8613,3 +8613,97 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .proj-status-cell strong{font-size:18px;font-weight:700;letter-spacing:-.02em;line-height:1;font-variant-numeric:tabular-nums}
 .proj-status-cell span{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);white-space:nowrap}
 .proj-status-cell.is-doing strong{color:var(--accent-o)}.proj-status-cell.is-review strong{color:var(--accent-v)}.proj-status-cell.is-done strong{color:var(--accent-g)}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   AFSPRAAK ↔ TAAK + WEEKTAKEN ALS KAART (2026-09-07)
+   Autoritatief blok achteraan: wint van de eerdere generaties .wp-*-regels.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* De agendapil op de kaart: violet als de afspraak-chips, één klik naar de agenda. */
+.wp-task-agenda{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;padding:0 6px;border:1px solid rgba(var(--note-rgb),.32);border-radius:4px;background:rgba(var(--note-rgb),.12);color:var(--accent-v);font:inherit;font-size:9.5px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;cursor:pointer}
+.wp-task-agenda:hover{background:rgba(var(--note-rgb),.22)}
+.wp-task-agenda:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+/* Periode-pil van een weektaak: de echte data, en of het werk doorloopt. */
+.wp-task-period{flex-shrink:0;padding:0 6px;border:1px solid var(--border);border-radius:4px;background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));color:var(--text);font-size:9.5px;font-weight:700;font-variant-numeric:tabular-nums}
+
+/* De afspraak-chip draagt de taak, en is tijdens het slepen een dropzone. */
+.wp-agenda-chip{position:relative;flex-wrap:wrap}
+.wp-agenda-chip .wp-agenda-task{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%;padding-left:7px;margin-left:1px;border-left:1px solid rgba(var(--note-rgb),.35);color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wp-agenda-chip .wp-agenda-task i{flex-shrink:0;width:6px;height:6px;border-radius:50%}
+.wp-agenda-chip.is-linked{border-color:rgba(var(--note-rgb),.42)}
+.wp-agenda-chip.is-drop{background:rgba(var(--accent-rgb),.16);border-color:var(--accent);border-style:dashed;color:var(--text)}
+
+/* Weektaken-blok (rijweergave): een eigen kaart per strook, met alles wat een dagtaak ook heeft. */
+.wp-weektasks{border:1px solid var(--border2);border-radius:var(--r2);background:var(--bg2);overflow:hidden}
+.wp-weektasks-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--border);background:rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)))}
+.wp-weektasks-title{font-size:12.5px;font-weight:700;letter-spacing:-.01em}
+.wp-weektasks-sub{font-size:10.5px;color:var(--muted)}
+.wp-weektasks-hint{margin-left:auto;font-size:10px;color:var(--muted);white-space:nowrap}
+.wp-weektasks-body{display:flex;flex-direction:column;gap:7px;padding:10px 12px 12px}
+.wp-task.wp-task-week{background:var(--bg3);border-color:var(--border2)}
+.wp-task.wp-task-week .wp-task-title{font-size:13px}
+
+/* Weektaak dwars over zijn dagen (kolomweergave): dezelfde kaart, op kaarthoogte,
+   met de sleepranden erop. `--bar` is de projectkleur. */
+.wp-week > .wp-task-bar{position:relative;z-index:2;cursor:grab;touch-action:none;background:color-mix(in srgb, var(--bar) 12%, var(--bg3));border-color:color-mix(in srgb, var(--bar) 55%, var(--border))}
+.wp-week > .wp-task-bar:hover{background:color-mix(in srgb, var(--bar) 18%, var(--bg3))}
+.wp-week > .wp-task-bar.is-dragging{cursor:grabbing;opacity:.5;box-shadow:0 10px 26px rgba(var(--shade-rgb),calc(.45 * var(--shade-k)));z-index:3}
+.wp-week > .wp-task-bar.is-static{cursor:pointer}
+.wp-week > .wp-task-bar.continues-left{border-left-style:dashed;border-top-left-radius:2px;border-bottom-left-radius:2px}
+.wp-week > .wp-task-bar.continues-right{border-right-style:dashed;border-top-right-radius:2px;border-bottom-right-radius:2px}
+.wp-task-bar .wp-bar-grip{position:absolute;top:0;bottom:0;width:12px;cursor:ew-resize;touch-action:none;z-index:1}
+.wp-task-bar .wp-bar-grip-start{left:0}
+.wp-task-bar .wp-bar-grip-end{right:0}
+.wp-task-bar .wp-bar-grip::after{content:"";position:absolute;top:8px;bottom:8px;width:3px;border-radius:99px;background:var(--bar);opacity:0;transition:opacity .12s}
+.wp-task-bar .wp-bar-grip-start::after{left:3px}
+.wp-task-bar .wp-bar-grip-end::after{right:3px}
+.wp-task-bar:hover .wp-bar-grip::after,.wp-task-bar:focus-visible .wp-bar-grip::after{opacity:.75}
+/* De ⋯ zit rechtsonder; op een strook zit daar de rechtergreep — een tikje naar binnen. */
+.wp-task-bar .wp-task-more{right:14px}
+@media(max-width:900px){
+  .wp-week > .wp-task-bar{margin-bottom:6px;cursor:pointer}
+  .wp-week > .wp-task-bar.continues-left,.wp-week > .wp-task-bar.continues-right{border-radius:8px;border-style:solid}
+}
+
+/* Snelmenu: de groep Agenda, met de afspraken van deze week als sublijst. */
+.wp-menu button.wp-menu-sub{display:flex;align-items:center;gap:8px;padding-left:18px;font-size:11.5px}
+.wp-menu-when{flex-shrink:0;font-variant-numeric:tabular-nums;color:var(--accent-v);font-weight:600}
+.wp-menu-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wp-menu-hint{float:right;color:var(--muted);font-size:10px}
+
+/* Taakvenster: sectie Agenda. */
+.task-agenda{grid-column:1/-1}
+.task-agenda-actions{display:flex;gap:6px;flex-wrap:wrap}
+.task-agenda-actions .btn{display:inline-flex;align-items:center;gap:5px}
+.task-agenda-list{display:flex;flex-direction:column;gap:6px}
+.task-agenda-row,.task-agenda-option{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg2);font-size:12px;color:var(--text);text-align:left}
+.task-agenda-option{grid-template-columns:auto minmax(0,1fr) auto;width:100%;font:inherit;font-size:12px;cursor:pointer}
+.task-agenda-option:hover:not(:disabled){background:var(--bg4);border-color:var(--border2)}
+.task-agenda-option:disabled{opacity:.6;cursor:default}
+.task-agenda-when{padding:0;border:0;background:transparent;font:inherit;font-size:11.5px;font-weight:700;color:var(--accent-v);font-variant-numeric:tabular-nums;white-space:nowrap;text-align:left}
+button.task-agenda-when{cursor:pointer}
+button.task-agenda-when:hover{text-decoration:underline}
+.task-agenda-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.task-agenda-dur{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.task-agenda-dur em{font-style:normal}
+.task-agenda-unlink{display:inline-flex;align-items:center;gap:3px;padding:2px 6px;border:1px solid var(--border);border-radius:5px;background:transparent;color:var(--muted2);font:inherit;font-size:10.5px;cursor:pointer;white-space:nowrap}
+.task-agenda-unlink:hover{color:var(--text);border-color:var(--border2);background:var(--bg4)}
+.task-agenda-picker{margin-top:10px;display:flex;flex-direction:column;gap:6px;padding:10px;border:1px dashed var(--border2);border-radius:9px}
+.task-agenda-picker-head{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:11px;color:var(--muted)}
+@media(max-width:640px){
+  .task-agenda-row{grid-template-columns:auto minmax(0,1fr)}
+  .task-agenda-row .task-agenda-dur,.task-agenda-row .task-agenda-unlink{grid-column:2;justify-self:start}
+}
+
+/* Agenda: de taak in het afspraakdetail en op het blok in het rooster. */
+.event-task-field{grid-column:1/-1}
+.event-task-field .calendar-help{display:block;margin-top:4px}
+.event-task-chip{display:flex;align-items:center;gap:8px;min-width:0;padding:8px 10px;border:1px solid var(--border);border-radius:11px;background:rgba(var(--shade-rgb),calc(.12 * var(--shade-k)));font-size:12px}
+.event-task-dot{flex-shrink:0;width:8px;height:8px;border-radius:50%}
+.event-task-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.event-task-project{flex-shrink:0;color:var(--muted);font-size:11px}
+.event-task-open{margin-left:auto;flex-shrink:0;padding:0;border:0;background:transparent;color:var(--accent-ink);font:inherit;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap}
+.event-task-open:hover{text-decoration:underline}
+.tb-ev-task{position:absolute;right:3px;bottom:4px;display:inline-flex;align-items:center;padding:2px 3px;border-radius:6px;background:rgba(var(--shade-rgb),calc(.34 * var(--shade-k)));color:#fff;line-height:1;pointer-events:none}
+.tb-ev-tight .tb-ev-task,.tb-ev-compact .tb-ev-task{display:none}

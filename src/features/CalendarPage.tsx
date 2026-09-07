@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { CalendarDays, CalendarPlus, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Mail, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
+import { CalendarDays, CalendarPlus, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Mail, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { MeetingRecorder } from '../components/MeetingRecorder';
 import { RichTextExcerpt } from '../components/RichTextEditor';
@@ -40,6 +40,7 @@ import type { AttendeeStatus, CalendarAppPassword, CalendarEventAttendee, EventR
 import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, Client, Note, NoteCalendarLink, Project, Supplier, Task, UUID } from '../types';
 import { getNoteTypeLabel } from './Notes';
 import { TimeEntryModal } from './TimeTracking';
+import { calendarEventLinkMatchesEvent } from '../lib/calendar-links';
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
 
@@ -144,6 +145,8 @@ const RECURRENCE_LABELS: Record<RecurrenceFrequency, string> = { daily: 'Elke da
 type NewEventState = {
   sourceId: string; title: string; description: string; location: string;
   startsAt: string; endsAt: string; allDay: boolean; clientId: string; projectId: string;
+  /** De taak waar deze afspraak bij hoort; leidend voor klant en project. */
+  taskId: string;
   trackTime: boolean;
   recurrenceFreq: '' | RecurrenceFrequency; recurrenceUntil: string; editingEventId: string;
   attendees: { email: string; name: string }[];
@@ -368,25 +371,36 @@ function noteCalendarLinkMatchesEvent(link: NoteCalendarLink, event: CalendarExt
     && timeValue(link.event_starts_at) === timeValue(event.starts_at);
 }
 
-function calendarEventLinkMatchesEvent(link: CalendarEventLink, event: CalendarExternalEvent): boolean {
-  return link.provider === event.provider
-    && link.calendar_source_id === event.source_id
-    && link.provider_event_id === event.provider_event_id
-    && timeValue(link.event_starts_at) === timeValue(event.starts_at);
-}
-
 /**
  * Klant- en projectkeuze voor een agenda-item. Het projectmenu filtert op de
  * gekozen klant; bij het kiezen van een project wordt de klant automatisch
  * afgeleid als die nog leeg is. Wordt gebruikt bij het aanmaken én bij het
  * bewerken van de koppeling in het eventdetail.
  */
-function ClientProjectPicker({ clients, projects, clientId, projectId, onChange, disabled = false }: {
+/** Past deze taak nog bij de gekozen klant en het gekozen project? */
+function taskFitsSelection(task: Task, projects: Project[], clientId: string, projectId: string): boolean {
+  if (projectId) return task.project_id === projectId;
+  if (clientId) {
+    const projectClient = task.project_id ? projects.find(p => p.id === task.project_id)?.client_id ?? null : null;
+    return (projectClient ?? task.client_id ?? null) === clientId || (!projectClient && !task.client_id);
+  }
+  return true;
+}
+
+/**
+ * Klant, project en taak van een afspraak. De taak is leidend: kies je er een
+ * mét project, dan volgen project en klant daaruit en gaan die twee op slot —
+ * dezelfde regel als de database hanteert voor de koppeling én voor urenposten.
+ * Zonder `tasks` is het de oude tweevelds-kiezer.
+ */
+function ClientProjectPicker({ clients, projects, tasks, clientId, projectId, taskId = '', onChange, disabled = false }: {
   clients: Client[];
   projects: Project[];
+  tasks?: Task[];
   clientId: string;
   projectId: string;
-  onChange: (next: { clientId: string; projectId: string }) => void;
+  taskId?: string;
+  onChange: (next: { clientId: string; projectId: string; taskId: string }) => void;
   disabled?: boolean;
 }) {
   const sortedClients = useMemo(() => [...clients].sort((a, b) => a.name.localeCompare(b.name, 'nl')), [clients]);
@@ -396,28 +410,65 @@ function ClientProjectPicker({ clients, projects, clientId, projectId, onChange,
       .sort((a, b) => a.name.localeCompare(b.name, 'nl')),
     [projects, clientId],
   );
+  const linkedTask = taskId && tasks ? tasks.find(t => t.id === taskId) ?? null : null;
+  const taskLocksProject = Boolean(linkedTask?.project_id);
+  const taskLocksClient = Boolean(linkedTask?.project_id || linkedTask?.client_id);
+  // Open taken die bij de keuze passen; de gekoppelde taak zelf blijft altijd
+  // zichtbaar, ook als hij inmiddels klaar is. Eerst ingepland werk, dan de rest.
+  const taskOptions = useMemo(() => {
+    if (!tasks) return [];
+    return tasks
+      .filter(t => t.id === taskId || (t.status !== 'done' && taskFitsSelection(t, projects, clientId, projectId)))
+      .sort((a, b) => {
+        const byPlanned = String(a.planned_date ?? '9999').localeCompare(String(b.planned_date ?? '9999'));
+        return byPlanned || a.title.localeCompare(b.title, 'nl');
+      });
+  }, [tasks, projects, clientId, projectId, taskId]);
+  const projectName = (id: string | null) => (id ? projects.find(p => p.id === id)?.name ?? null : null);
+
   return (
     <div className="settings-grid compact">
       <label>Klant
-        <Select value={clientId} disabled={disabled} onChange={e => {
+        <Select value={clientId} disabled={disabled || taskLocksClient} onChange={e => {
           const nextClient = e.target.value;
           const keepProject = projectId && projects.find(p => p.id === projectId)?.client_id === nextClient;
-          onChange({ clientId: nextClient, projectId: keepProject ? projectId : '' });
+          const nextProject = keepProject ? projectId : '';
+          const keepTask = linkedTask ? taskFitsSelection(linkedTask, projects, nextClient, nextProject) : false;
+          onChange({ clientId: nextClient, projectId: nextProject, taskId: keepTask ? taskId : '' });
         }}>
           <option value="">Geen klant</option>
           {sortedClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </Select>
       </label>
       <label>Project
-        <Select value={projectId} disabled={disabled} onChange={e => {
+        <Select value={projectId} disabled={disabled || taskLocksProject} onChange={e => {
           const nextProject = e.target.value;
           const proj = projects.find(p => p.id === nextProject);
-          onChange({ clientId: clientId || (proj?.client_id ?? ''), projectId: nextProject });
+          const nextClient = clientId || (proj?.client_id ?? '');
+          const keepTask = linkedTask ? taskFitsSelection(linkedTask, projects, nextClient, nextProject) : false;
+          onChange({ clientId: nextClient, projectId: nextProject, taskId: keepTask ? taskId : '' });
         }}>
           <option value="">Geen project</option>
           {projectOptions.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </Select>
       </label>
+      {tasks && <label className="event-task-field">Taak
+        <Select value={taskId} disabled={disabled} onChange={e => {
+          const nextTaskId = e.target.value;
+          const task = nextTaskId ? tasks.find(t => t.id === nextTaskId) ?? null : null;
+          if (!task) { onChange({ clientId, projectId, taskId: '' }); return; }
+          const proj = task.project_id ? projects.find(p => p.id === task.project_id) ?? null : null;
+          onChange({
+            clientId: proj?.client_id ?? task.client_id ?? clientId,
+            projectId: task.project_id ?? projectId,
+            taskId: nextTaskId,
+          });
+        }}>
+          <option value="">Geen taak</option>
+          {taskOptions.map(t => <option key={t.id} value={t.id}>{t.title}{projectName(t.project_id) ? ` · ${projectName(t.project_id)}` : ''}</option>)}
+        </Select>
+        {taskLocksClient && <small className="calendar-help">Klant en project volgen uit de taak.</small>}
+      </label>}
     </div>
   );
 }
@@ -679,12 +730,14 @@ function eventIdentityKey(ev: CalendarExternalEvent): string {
  *  `removable` = een verwijderbaar blok (concept/eigen link); anders alleen-lezen (aangeboden optie). */
 export type BookingOverlaySlot = { id: string; starts_at: string; ends_at: string; status: string; removable?: boolean };
 
-export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent, onOpenDay, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false, zoom = 1, onZoomChange, autoScrollKey = 0 }: {
+export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, linkedTaskFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent, onOpenDay, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false, zoom = 1, onZoomChange, autoScrollKey = 0 }: {
   days: Date[];
   events: CalendarExternalEvent[];
   tasks: Task[];
   sourceColors: Map<string, string>;
   trackedMinutesFor: (event: CalendarExternalEvent) => number | null;
+  /** Titel van de taak waar dit blok bij hoort, als er een koppeling is. */
+  linkedTaskFor?: (event: CalendarExternalEvent) => string | null;
   canWrite: boolean;
   writeableSources: CalendarSource[];
   onSelectSlot: (day: Date, startSlot: number, endSlot: number) => void;
@@ -1420,6 +1473,7 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                     // De volledige bron blijft in de tooltip en het detailpaneel.
                     const eventLocation = ev.location?.trim() ?? '';
                     const trackedMin = trackedMinutesFor(ev);
+                    const linkedTaskTitle = linkedTaskFor?.(ev) ?? null;
                     const draggable = !readOnlyEvents && canDragEvent(ev) && !segment.startsBeforeDay && !segment.endsAfterDay;
                     const isGhosted = Boolean(interaction) && eventIdentityKey(interaction!.event) === eventIdentityKey(ev);
                     return (
@@ -1433,8 +1487,9 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                           left: `calc((100% - ${EVENT_CLICK_STRIP}) * ${left / 100} + 2px)`,
                           right: `calc((100% - ${EVENT_CLICK_STRIP}) * ${right / 100} + ${EVENT_CLICK_STRIP} + 2px)`,
                         }}
-                        title={`${visualTime}\n${ev.title}\n${eventMeta}${trackedMin != null ? `\n${formatMinutes(trackedMin)} geregistreerd` : ''}${draggable ? '\nSleep om te verplaatsen · sleep de randen om de duur te wijzigen' : ''}`}>
+                        title={`${visualTime}\n${ev.title}\n${eventMeta}${linkedTaskTitle ? `\nTaak: ${linkedTaskTitle}` : ''}${trackedMin != null ? `\n${formatMinutes(trackedMin)} geregistreerd` : ''}${draggable ? '\nSleep om te verplaatsen · sleep de randen om de duur te wijzigen' : ''}`}>
                         {trackedMin != null && <span className="tb-ev-track" title={`${formatMinutes(trackedMin)} geregistreerd`}><Clock size={10} />{formatMinutes(trackedMin)}</span>}
+                        {linkedTaskTitle && <span className={`tb-ev-task${trackedMin != null ? ' tb-ev-task-shifted' : ''}`} title={`Taak: ${linkedTaskTitle}`}><CheckSquare size={10} /></span>}
                         {ev.meeting_url && <span className="tb-ev-video" title="Videocall gekoppeld"><Video size={10} /></span>}
                         {draggable && <span className="tb-ev-handle tb-ev-handle-top" onPointerDown={e => beginEventInteraction(e, ev, di, 'resize-start')} title="Sleep om de starttijd te wijzigen" />}
                         <span className="tb-ev-time">{visualTime}</span>
@@ -2227,13 +2282,14 @@ function AttendeePicker({ organizationId, sourceId, sourceProvider, clients, sup
   );
 }
 
-function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, suppliers, projects, loading, canWrite, selectedSourceIsNative, selectedSourceProvider, organizationId, onSubmit, onClose }: {
+function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, suppliers, projects, tasks, loading, canWrite, selectedSourceIsNative, selectedSourceProvider, organizationId, onSubmit, onClose }: {
   newEvent: NewEventState;
   setNewEvent: (fn: (prev: NewEventState) => NewEventState) => void;
   writeableSources: CalendarSource[];
   clients: Client[];
   suppliers: Supplier[];
   projects: Project[];
+  tasks: Task[];
   loading: boolean;
   canWrite: boolean;
   selectedSourceIsNative: boolean;
@@ -2280,12 +2336,12 @@ function EventCreationPanel({ newEvent, setNewEvent, writeableSources, clients, 
           clients={clients} suppliers={suppliers} attendees={newEvent.attendees}
           onChange={next => setNewEvent(p => ({ ...p, attendees: next }))} />
         <div className="tb-panel-section-label">Koppelen aan</div>
-        <ClientProjectPicker clients={clients} projects={projects} clientId={newEvent.clientId} projectId={newEvent.projectId}
-          onChange={next => setNewEvent(p => ({ ...p, clientId: next.clientId, projectId: next.projectId }))} />
-        {(newEvent.clientId || newEvent.projectId) && !newEvent.allDay && (
+        <ClientProjectPicker clients={clients} projects={projects} tasks={tasks} clientId={newEvent.clientId} projectId={newEvent.projectId} taskId={newEvent.taskId}
+          onChange={next => setNewEvent(p => ({ ...p, clientId: next.clientId, projectId: next.projectId, taskId: next.taskId }))} />
+        {(newEvent.clientId || newEvent.projectId || newEvent.taskId) && !newEvent.allDay && (
           <label className="check-row track-time-row">
             <input type="checkbox" checked={newEvent.trackTime} onChange={e => setNewEvent(p => ({ ...p, trackTime: e.target.checked }))} />
-            <span><Clock size={13} /> Telt mee voor urenregistratie</span>
+            <span><Clock size={13} /> Telt mee voor urenregistratie{newEvent.taskId ? ' — op de taak' : ''}</span>
           </label>
         )}
         <Button variant="primary" disabled={loading || !canWrite || !writeableSources.length}>{editing ? 'Wijzigingen opslaan' : 'Afspraak opslaan'}</Button>
@@ -2322,7 +2378,7 @@ function detailFormFromEvent(event: CalendarExternalEvent): EventDetailForm {
   };
 }
 
-function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, canWrite, editable, onNewNote, onNewDocument, onSetEventLink, onLogTime, onEditNote, onLinkExistingNote, onUnlinkNote, onSaveEvent, onDeleteEvent, onClose }: {
+function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, canWrite, editable, onNewNote, onNewDocument, onSetEventLink, onEditTask, onLogTime, onEditNote, onLinkExistingNote, onUnlinkNote, onSaveEvent, onDeleteEvent, onClose }: {
   event: CalendarExternalEvent | null;
   organizationId: UUID;
   data: AppData;
@@ -2331,7 +2387,8 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
   editable: boolean;
   onNewNote: (event: CalendarExternalEvent) => void;
   onNewDocument: (event: CalendarExternalEvent) => void;
-  onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null, trackTime?: boolean) => void | Promise<void>;
+  onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null, trackTime?: boolean, taskId?: string | null) => void | Promise<void>;
+  onEditTask: (task: Task) => void;
   onLogTime: (event: CalendarExternalEvent) => void;
   onEditNote: (note: Note) => void;
   onLinkExistingNote: (noteId: UUID, event: CalendarExternalEvent) => void | Promise<void>;
@@ -2399,6 +2456,12 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
   const eventLink = data.calendarEventLinks.find(link => calendarEventLinkMatchesEvent(link, event)) ?? null;
   const linkedClient = eventLink?.client_id ? data.clients.find(c => c.id === eventLink.client_id) ?? null : null;
   const linkedProject = eventLink?.project_id ? data.projects.find(p => p.id === eventLink.project_id) ?? null : null;
+  const linkedTask = eventLink?.task_id ? data.tasks.find(t => t.id === eventLink.task_id) ?? null : null;
+  const linkedTaskColor = linkedTask
+    ? (linkedTask.project_id ? data.projects.find(p => p.id === linkedTask.project_id)?.color : null)
+      ?? (linkedTask.client_id ? data.clients.find(c => c.id === linkedTask.client_id)?.color : null)
+      ?? '#FFD966'
+    : null;
   // Genodigden: native uit de opgehaalde rijen, extern (Google/Microsoft) uit het event zelf.
   const displayAttendees: { key: string; label: string; status: AttendeeStatus }[] = event.provider === 'native'
     ? attendees.map(a => ({ key: a.id, label: a.display_name || a.email, status: a.status }))
@@ -2552,32 +2615,44 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
         <section className="event-link-panel">
           <div className="event-link-head">
             <span className="event-notes-kicker">Koppeling</span>
-            <h4>Klant &amp; project</h4>
-            <p>Koppel dit agenda-item aan een klant en project, zodat je er makkelijk notities en documenten bij maakt.</p>
+            <h4>Klant, project &amp; taak</h4>
+            <p>Koppel dit agenda-item aan een klant, project of taak. Bij een taak volgen project en klant vanzelf, en tellen de uren op die taak.</p>
           </div>
           {canAttachNotes ? (
             <ClientProjectPicker
               clients={data.clients}
               projects={data.projects}
+              tasks={data.tasks}
               clientId={eventLink?.client_id ?? ''}
               projectId={eventLink?.project_id ?? ''}
-              onChange={next => onSetEventLink(event, next.clientId || null, next.projectId || null, eventLink?.track_time ?? true)}
+              taskId={eventLink?.task_id ?? ''}
+              onChange={next => onSetEventLink(event, next.clientId || null, next.projectId || null, eventLink?.track_time ?? true, next.taskId || null)}
             />
           ) : (
             <div className="event-link-readonly">
-              {linkedClient || linkedProject
-                ? <>{linkedClient ? `Klant: ${linkedClient.name}` : 'Geen klant'} · {linkedProject ? `Project: ${linkedProject.name}` : 'Geen project'}</>
-                : 'Nog niet gekoppeld aan een klant of project.'}
+              {linkedClient || linkedProject || linkedTask
+                ? <>{linkedClient ? `Klant: ${linkedClient.name}` : 'Geen klant'} · {linkedProject ? `Project: ${linkedProject.name}` : 'Geen project'}{linkedTask ? ` · Taak: ${linkedTask.title}` : ''}</>
+                : 'Nog niet gekoppeld aan een klant, project of taak.'}
             </div>
           )}
-          {canAttachNotes && eventLink && (eventLink.client_id || eventLink.project_id) && !event.all_day && (() => {
+          {/* De taak als deur: één klik en je staat in het taakvenster, met de
+              afspraak in de sectie Agenda. */}
+          {linkedTask && (
+            <div className="event-task-chip">
+              <span className="event-task-dot" style={{ background: linkedTaskColor ?? undefined }} aria-hidden="true" />
+              <span className="event-task-title">{linkedTask.title}</span>
+              {linkedProject && <span className="event-task-project">{linkedProject.name}</span>}
+              <button type="button" className="event-task-open" onClick={() => { onClose(); onEditTask(linkedTask); }}>Open taak →</button>
+            </div>
+          )}
+          {canAttachNotes && eventLink && (eventLink.client_id || eventLink.project_id || eventLink.task_id) && !event.all_day && (() => {
             const tracked = data.timeEntries.find(t => t.calendar_event_link_id === eventLink.id) ?? null;
             return (
               <div className="event-track-time">
                 <label className="check-row track-time-row">
                   <input type="checkbox" checked={eventLink.track_time}
-                    onChange={e => onSetEventLink(event, eventLink.client_id, eventLink.project_id, e.target.checked)} />
-                  <span><Clock size={13} /> Telt mee voor urenregistratie</span>
+                    onChange={e => onSetEventLink(event, eventLink.client_id, eventLink.project_id, e.target.checked, eventLink.task_id)} />
+                  <span><Clock size={13} /> Telt mee voor urenregistratie{eventLink.task_id ? ' — op de taak' : ''}</span>
                 </label>
                 {eventLink.track_time && tracked && <span className="event-track-time-amount">{formatMinutes(tracked.minutes)} geregistreerd</span>}
               </div>
@@ -3067,16 +3142,36 @@ function useIsMobile(): boolean {
   return isMobile;
 }
 
-export function CalendarPage({ mode = 'agenda', initialDate, organizationId, currentUserId, data, canWrite, onChanged, onEditTask, onNewNoteForEvent, onNewDocumentForEvent, onSetEventLink, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
+/**
+ * Tijd reserveren vanuit een taak: de weekplanner of het taakvenster stuurt de
+ * agenda hierheen mét de taak. De agenda opent dan meteen het aanmaakpaneel,
+ * voorgevuld met titel, klant, project en de schatting als duur — je kiest
+ * alleen nog het tijdstip.
+ */
+export type CalendarDraft = {
+  taskId: string;
+  title: string;
+  clientId: string;
+  projectId: string;
+  /** Duur van het blok in minuten (de schatting van de taak, of een uur). */
+  minutes: number;
+  /** Dag waarop het blok start; leeg = vandaag. */
+  date: string | null;
+};
+
+export function CalendarPage({ mode = 'agenda', initialDate, initialDraft = null, onDraftConsumed, organizationId, currentUserId, data, canWrite, onChanged, onEditTask, onNewNoteForEvent, onNewDocumentForEvent, onSetEventLink, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
   mode?: 'agenda' | 'settings';
   /** Op welke dag de agenda opent. De weekplanner springt hierheen vanaf een
    *  agenda-chip; zonder dit landde je altijd op vandaag. */
   initialDate?: string | null;
+  /** Een afspraak-in-wording vanuit een taak; wordt één keer verwerkt. */
+  initialDraft?: CalendarDraft | null;
+  onDraftConsumed?: () => void;
   organizationId: UUID; currentUserId: UUID | null; data: AppData; canWrite: boolean; onEditTask: (task: Task) => void;
   onChanged: () => void | Promise<void>;
   onNewNoteForEvent: (event: CalendarExternalEvent) => void;
   onNewDocumentForEvent: (event: CalendarExternalEvent) => void;
-  onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null, trackTime?: boolean) => void | Promise<void>;
+  onSetEventLink: (event: CalendarExternalEvent, clientId: string | null, projectId: string | null, trackTime?: boolean, taskId?: string | null) => void | Promise<void>;
   onEditNote: (note: Note) => void;
   onLinkExistingNoteToEvent: (noteId: UUID, event: CalendarExternalEvent) => void | Promise<void>;
   onUnlinkNoteFromEvent: (linkId: UUID) => void | Promise<void>;
@@ -3099,7 +3194,7 @@ export function CalendarPage({ mode = 'agenda', initialDate, organizationId, cur
   const [newEvent, setNewEvent] = useState(() => {
     const s = new Date(); s.setMinutes(0, 0, 0); s.setHours(s.getHours() + 1);
     const e = new Date(s); e.setHours(e.getHours() + 1);
-    return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '' as '' | RecurrenceFrequency, recurrenceUntil: '', editingEventId: '', attendees: [] as { email: string; name: string }[], meetingUrl: '', addConference: false };
+    return { sourceId: '', title: '', description: '', location: '', startsAt: toInputDateTime(s), endsAt: toInputDateTime(e), allDay: false, clientId: '', projectId: '', taskId: '', trackTime: true, recurrenceFreq: '' as '' | RecurrenceFrequency, recurrenceUntil: '', editingEventId: '', attendees: [] as { email: string; name: string }[], meetingUrl: '', addConference: false };
   });
   // Bij het bewerken van een native afspraak bewaren we het originele event, zodat
   // we bij een gewijzigde starttijd de oude koppeling (en afgeleide urenpost) kunnen opruimen.
@@ -3214,6 +3309,15 @@ export function CalendarPage({ mode = 'agenda', initialDate, organizationId, cur
       trackedMinutesByEvent.get(`${event.provider}|${event.source_id}|${event.provider_event_id}|${new Date(event.starts_at).getTime()}`) ?? null,
     [trackedMinutesByEvent],
   );
+  /** Titel van de gekoppelde taak per afspraak — voor het taakteken op het blok. */
+  const linkedTaskFor = useCallback(
+    (event: CalendarExternalEvent): string | null => {
+      const link = data.calendarEventLinks.find(l => l.task_id && calendarEventLinkMatchesEvent(l, event));
+      if (!link?.task_id) return null;
+      return data.tasks.find(t => t.id === link.task_id)?.title ?? null;
+    },
+    [data.calendarEventLinks, data.tasks],
+  );
 
   // Opent de uren-modal voorgevuld met de klant/het project en de duur van de afspraak.
   const openLogTimeForEvent = useCallback((event: CalendarExternalEvent) => {
@@ -3260,6 +3364,30 @@ export function CalendarPage({ mode = 'agenda', initialDate, organizationId, cur
     if (!newEvent.sourceId && writeableSources[0]) setNewEvent(p => ({ ...p, sourceId: writeableSources[0].id }));
     if (newEvent.sourceId && !writeableSources.some(s => s.id === newEvent.sourceId)) setNewEvent(p => ({ ...p, sourceId: writeableSources[0]?.id ?? '' }));
   }, [newEvent.sourceId, writeableSources]);
+
+  // Komt er een taak mee ("Tijd reserveren")? Dan staat het aanmaakpaneel
+  // meteen klaar: op de plandatum, om negen uur (of het eerstvolgende hele
+  // uur als dat vandaag is), zo lang als de schatting. De agenda-keuze vult
+  // het effect hierboven zodra de agenda's binnen zijn.
+  useEffect(() => {
+    if (mode !== 'agenda' || !initialDraft) return;
+    const now = new Date();
+    const day = initialDraft.date ? parseISODate(initialDraft.date) : now;
+    const start = new Date(day);
+    if (isSameDay(day, now)) start.setHours(now.getHours() + 1, 0, 0, 0);
+    else start.setHours(9, 0, 0, 0);
+    const minutes = Math.min(8 * 60, Math.max(30, initialDraft.minutes || 60));
+    const end = new Date(start.getTime() + minutes * 60000);
+    setEditingOriginal(null);
+    setNewEvent(p => ({
+      ...p, title: initialDraft.title, description: '', location: '', allDay: false,
+      startsAt: toInputDateTime(start), endsAt: toInputDateTime(end),
+      clientId: initialDraft.clientId, projectId: initialDraft.projectId, taskId: initialDraft.taskId, trackTime: true,
+      recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false,
+    }));
+    setShowCreatePanel(true);
+    onDraftConsumed?.();
+  }, [initialDraft]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function refreshAll(opts?: { fresh?: boolean }) {
     setLoading(true); setError(null); setMessage(null);
@@ -3380,7 +3508,7 @@ export function CalendarPage({ mode = 'agenda', initialDate, organizationId, cur
       return;
     }
     setEditingOriginal(null);
-    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '', trackTime: true, editingEventId: '', meetingUrl: '', addConference: false }));
+    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(sd), endsAt: toInputDateTime(ed), clientId: '', projectId: '', taskId: '', trackTime: true, editingEventId: '', meetingUrl: '', addConference: false }));
     setShowCreatePanel(true);
   }, [bookingMode]);
 
@@ -3394,7 +3522,7 @@ export function CalendarPage({ mode = 'agenda', initialDate, organizationId, cur
     else { start.setHours(9, 0, 0, 0); }
     const end = new Date(start); end.setHours(start.getHours() + 1);
     setEditingOriginal(null);
-    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(start), endsAt: toInputDateTime(end), clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false }));
+    setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: toInputDateTime(start), endsAt: toInputDateTime(end), clientId: '', projectId: '', taskId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false }));
     setShowCreatePanel(true);
   }, []);
 
@@ -3451,18 +3579,18 @@ export function CalendarPage({ mode = 'agenda', initialDate, organizationId, cur
         // koppeling nog op de vorige starttijd (die zit in de unieke sleutel).
         // Ontkoppel die eerst, zodat de afgeleide urenpost niet verweesd achterblijft.
         const moved = editingOriginal && new Date(editingOriginal.starts_at).getTime() !== new Date(updated.starts_at).getTime();
-        if (moved && editingOriginal) await onSetEventLink(editingOriginal, null, null);
+        if (moved && editingOriginal) await onSetEventLink(editingOriginal, null, null, true, null);
         // (Her)koppel op de huidige identiteit — leeg = ontkoppelen.
-        await onSetEventLink(updated, newEvent.clientId || null, newEvent.projectId || null, newEvent.trackTime);
+        await onSetEventLink(updated, newEvent.clientId || null, newEvent.projectId || null, newEvent.trackTime, newEvent.taskId || null);
         setMessage('Afspraak bijgewerkt.');
       } else {
         const created = await createExternalCalendarEvent(organizationId, input);
-        if (newEvent.clientId || newEvent.projectId) await onSetEventLink(created, newEvent.clientId || null, newEvent.projectId || null, newEvent.trackTime);
+        if (newEvent.clientId || newEvent.projectId || newEvent.taskId) await onSetEventLink(created, newEvent.clientId || null, newEvent.projectId || null, newEvent.trackTime, newEvent.taskId || null);
         setMessage(isNative ? 'Afspraak aangemaakt in je ResoFly-agenda.' : 'Event aangemaakt en zichtbaar in je externe agenda.');
       }
       setEditingOriginal(null);
       const d = makeDefaultTimes();
-      setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false }));
+      setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', taskId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false }));
       setShowCreatePanel(false);
       refreshEventsOnly({ fresh: true }).catch(() => {});
     } catch (err) { setError(err instanceof Error ? err.message : 'Opslaan mislukt.'); }
@@ -3500,9 +3628,9 @@ export function CalendarPage({ mode = 'agenda', initialDate, organizationId, cur
     const startChanged = new Date(event.starts_at).getTime() !== new Date(updated.starts_at).getTime();
     if (startChanged) {
       const link = data.calendarEventLinks.find(l => calendarEventLinkMatchesEvent(l, event)) ?? null;
-      if (link && (link.client_id || link.project_id)) {
-        await onSetEventLink(event, null, null);
-        await onSetEventLink(updated, link.client_id, link.project_id, link.track_time);
+      if (link && (link.client_id || link.project_id || link.task_id)) {
+        await onSetEventLink(event, null, null, true, null);
+        await onSetEventLink(updated, link.client_id, link.project_id, link.track_time, link.task_id);
       }
     }
     // Het bijgewerkte item meteen in het rooster verwerken en terug naar de
@@ -3572,9 +3700,9 @@ export function CalendarPage({ mode = 'agenda', initialDate, organizationId, cur
       const startChanged = new Date(event.starts_at).getTime() !== new Date(updated.starts_at).getTime();
       if (startChanged) {
         const link = data.calendarEventLinks.find(l => calendarEventLinkMatchesEvent(l, event)) ?? null;
-        if (link && (link.client_id || link.project_id)) {
-          await onSetEventLink(event, null, null);
-          await onSetEventLink(updated, link.client_id, link.project_id, link.track_time);
+        if (link && (link.client_id || link.project_id || link.task_id)) {
+          await onSetEventLink(event, null, null, true, null);
+          await onSetEventLink(updated, link.client_id, link.project_id, link.track_time, link.task_id);
         }
       }
       // `events` staat al optimistisch goed; alleen het geopende detailpaneel moet
@@ -4102,7 +4230,7 @@ export function CalendarPage({ mode = 'agenda', initialDate, organizationId, cur
         <div className="cal-stage-live" ref={liveRef}>
           {isTimeGridView(view) ? (
             <TimeBlockGrid days={days} events={events} tasks={data.tasks.filter(t => t.status !== 'done')}
-              sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} onMoveEvent={rescheduleEvent}
+              sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} linkedTaskFor={linkedTaskFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} onMoveEvent={rescheduleEvent}
               onOpenDay={view === 'day' ? undefined : openDay}
               zoom={zoom} onZoomChange={applyZoom} autoScrollKey={autoScrollKey}
               bookingMode={bookingMode} bookingSlots={bookingOverlay} onRemoveBookingSlot={handleRemoveBookingSlot} />
@@ -4163,12 +4291,12 @@ export function CalendarPage({ mode = 'agenda', initialDate, organizationId, cur
           clients={data.clients} suppliers={data.suppliers} attendees={newEvent.attendees}
           onChange={next => setNewEvent(p => ({ ...p, attendees: next }))} />
         <div className="tb-panel-section-label">Koppelen aan</div>
-        <ClientProjectPicker clients={data.clients} projects={data.projects} clientId={newEvent.clientId} projectId={newEvent.projectId}
-          onChange={next => setNewEvent(p => ({ ...p, clientId: next.clientId, projectId: next.projectId }))} />
-        {(newEvent.clientId || newEvent.projectId) && !newEvent.allDay && (
+        <ClientProjectPicker clients={data.clients} projects={data.projects} tasks={data.tasks} clientId={newEvent.clientId} projectId={newEvent.projectId} taskId={newEvent.taskId}
+          onChange={next => setNewEvent(p => ({ ...p, clientId: next.clientId, projectId: next.projectId, taskId: next.taskId }))} />
+        {(newEvent.clientId || newEvent.projectId || newEvent.taskId) && !newEvent.allDay && (
           <label className="check-row track-time-row">
             <input type="checkbox" checked={newEvent.trackTime} onChange={e => setNewEvent(p => ({ ...p, trackTime: e.target.checked }))} />
-            <span><Clock size={13} /> Telt mee voor urenregistratie</span>
+            <span><Clock size={13} /> Telt mee voor urenregistratie{newEvent.taskId ? ' — op de taak' : ''}</span>
           </label>
         )}
         <Button variant="primary" disabled={loading || !canWrite || !writeableSources.length}>Event aanmaken</Button>
@@ -4178,19 +4306,19 @@ export function CalendarPage({ mode = 'agenda', initialDate, organizationId, cur
 
     {/* FAB for time-grid views */}
     {isTimeGridView(view) && canWrite && writeableSources.length > 0 && !showCreatePanel && (
-      <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setEditingOriginal(null); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false })); setShowCreatePanel(true); }} title="Nieuwe afspraak aanmaken">
+      <button className="tb-fab" onClick={() => { const d = makeDefaultTimes(); setEditingOriginal(null); setNewEvent(p => ({ ...p, title: '', description: '', location: '', allDay: false, startsAt: d.startsAt, endsAt: d.endsAt, clientId: '', projectId: '', taskId: '', trackTime: true, recurrenceFreq: '', recurrenceUntil: '', editingEventId: '', attendees: [], meetingUrl: '', addConference: false })); setShowCreatePanel(true); }} title="Nieuwe afspraak aanmaken">
         <Plus size={22} />
       </button>
     )}
 
     {/* Floating panel */}
     {showCreatePanel && <EventCreationPanel newEvent={newEvent} setNewEvent={setNewEvent} writeableSources={writeableSources}
-      clients={data.clients} suppliers={data.suppliers} projects={data.projects} organizationId={organizationId}
+      clients={data.clients} suppliers={data.suppliers} projects={data.projects} tasks={data.tasks} organizationId={organizationId}
       selectedSourceIsNative={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider === 'native'}
       selectedSourceProvider={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider ?? null}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => { setShowCreatePanel(false); setEditingOriginal(null); }} />}
 
-    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sourceColors={sourceColors} canWrite={canWrite} editable={selectedEvent ? eventIsEditable(selectedEvent) : false} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onLogTime={openLogTimeForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onSaveEvent={saveEventEdits} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
+    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sourceColors={sourceColors} canWrite={canWrite} editable={selectedEvent ? eventIsEditable(selectedEvent) : false} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onEditTask={onEditTask} onLogTime={openLogTimeForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onSaveEvent={saveEventEdits} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
 
     {showBookingSend && (
       <BookingSendDialog sources={writeableSources} clients={data.clients} draftCount={draftSlots.length}
