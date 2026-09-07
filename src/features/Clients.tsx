@@ -627,6 +627,7 @@ export function ClientDetailPage({
   onNewInvoice,
   onEditInvoice,
   onOpenProject,
+  onNewProject,
   onNewNote,
   onEditNote,
   onNewDocument,
@@ -647,6 +648,7 @@ export function ClientDetailPage({
   onNewInvoice: () => void;
   onEditInvoice: (invoice: Invoice) => void;
   onOpenProject: (project: Project) => void;
+  onNewProject: () => void;
   onNewNote: (target?: ContentCreateTarget) => void;
   onEditNote: (note: Note) => void;
   onNewDocument: (target?: ContentCreateTarget) => void;
@@ -751,6 +753,7 @@ export function ClientDetailPage({
       </div>
       <div className="client-detail-actions">
         <Button onClick={onEditClient}>Klant bewerken</Button>
+        <Button onClick={onNewProject} disabled={!canWrite}>+ Project</Button>
         <Button onClick={onNewQuote} disabled={!canWrite}>+ Offerte</Button>
         <Button variant="primary" onClick={onNewInvoice} disabled={!canWrite}>+ Factuur</Button>
       </div>
@@ -831,11 +834,13 @@ export function ClientDetailPage({
             <h3>Projecten</h3>
             <div className="client-panel-head-right">
               <span>{projects.length}</span>
+              {canWrite && <button type="button" className="client-overview-more-btn" onClick={onNewProject}>+ Nieuw</button>}
               {projects.length > 0 && <button type="button" className="client-overview-more-btn" onClick={() => switchTab('projects')}>Bekijk alle →</button>}
             </div>
           </div>
           <div className="client-project-list">
             {projects.length === 0 && <div className="client-empty-line">Nog geen projecten gekoppeld.</div>}
+            {projects.length === 0 && canWrite && <button type="button" className="client-overview-more-link" onClick={onNewProject}>+ Eerste project aanmaken</button>}
             {projects.slice(0, 6).map(project => <button key={project.id} type="button" className="client-project-row" onClick={() => onOpenProject(project)}>
               <span className="client-project-dot" style={{ background: project.color }} />
               <span>{project.name}</span>
@@ -897,9 +902,16 @@ export function ClientDetailPage({
     </div>}
 
     {activeTab === 'projects' && <article className="client-panel">
-      <div className="client-panel-head"><h3>Projecten</h3><span>{filteredProjects.length}</span></div>
+      <div className="client-panel-head">
+        <h3>Projecten</h3>
+        <div className="client-panel-head-right">
+          <span>{filteredProjects.length}</span>
+          {canWrite && <button type="button" className="client-overview-more-btn" onClick={onNewProject}>+ Nieuw project</button>}
+        </div>
+      </div>
       <div className="client-project-list">
         {filteredProjects.length === 0 && <div className="client-empty-line">{projects.length === 0 ? 'Nog geen projecten gekoppeld.' : 'Geen projecten voor deze zoekopdracht.'}</div>}
+        {projects.length === 0 && canWrite && <button type="button" className="client-overview-more-link" onClick={onNewProject}>+ Eerste project aanmaken</button>}
         {filteredProjects.map(project => <button key={project.id} type="button" className="client-project-row" onClick={() => onOpenProject(project)}>
           <span className="client-project-dot" style={{ background: project.color }} />
           <span>{project.name}</span>
