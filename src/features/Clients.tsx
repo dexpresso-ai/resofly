@@ -15,7 +15,9 @@ import { RichTextEditor } from '../components/RichTextEditor';
 import { blockInboundSender, createClientWithServerCode, deleteClientEmail, linkInboundMessage, loadClientEmails, loadClientEmailThreads, loadClientEmailReadIds, loadInboundAlias, loadInboundMessages, loadInboundOpenCount, loadMySenderIdentity, loadSendingDomains, markClientEmailsRead, setInboundMessageStatus } from '../lib/repository';
 import { resolveEffectiveSender, sendClientEmail, type EffectiveSender } from '../services/mailService';
 import { supabase } from '../lib/supabase';
-import { ClientFolders } from './ClientFolders';
+import { ContentLibrary } from './ContentLibrary';
+import type { ContentCreateTarget } from './ContentLibrary';
+import type { NewOfficeType } from '../lib/office';
 import { ClientContacts } from './ClientContacts';
 import { ContractStatusBadge } from './Contracts';
 
@@ -628,6 +630,7 @@ export function ClientDetailPage({
   onNewNote,
   onEditNote,
   onNewDocument,
+  onNewOfficeDocument,
   onEditDocument,
   unreadCount,
   onUnreadChanged,
@@ -644,9 +647,10 @@ export function ClientDetailPage({
   onNewInvoice: () => void;
   onEditInvoice: (invoice: Invoice) => void;
   onOpenProject: (project: Project) => void;
-  onNewNote: (folderId?: string | null) => void;
+  onNewNote: (target?: ContentCreateTarget) => void;
   onEditNote: (note: Note) => void;
-  onNewDocument: (folderId?: string | null) => void;
+  onNewDocument: (target?: ContentCreateTarget) => void;
+  onNewOfficeDocument: (docType: NewOfficeType, title: string, target?: ContentCreateTarget) => void;
   onEditDocument: (doc: InternalDocument) => void;
   unreadCount: number;
   onUnreadChanged: () => void;
@@ -654,6 +658,11 @@ export function ClientDetailPage({
   const projects = data.projects.filter(project => project.client_id === client.id);
   const notes = getClientNotes(data, client.id);
   const documents = getClientDocuments(data, client.id);
+  // Het tabblad "Bestanden" toont dezelfde verkenner als Inhoud → deze klant, dus telt
+  // de teller ook de bestanden in de mappen van de klant en van haar projectmappen.
+  const clientFolderIds = new Set(data.folders.filter(folder => folder.client_id === client.id).map(folder => folder.id));
+  const clientFileCount = notes.length + documents.length
+    + data.attachments.filter(att => att.entity_type === 'folder' && clientFolderIds.has(att.entity_id)).length;
   const quotes = getClientQuotes(data, client.id);
   const invoices = getClientInvoices(data, client.id);
   const openInvoices = invoices.filter(isInvoiceOpen);
@@ -721,7 +730,7 @@ export function ClientDetailPage({
     { id: 'quotes', label: 'Offertes', count: quotes.length, icon: FileText },
     { id: 'contracts', label: 'Contracten', count: contracts.length, icon: FileSignature },
     { id: 'invoices', label: 'Facturen', count: invoices.length, icon: Receipt },
-    { id: 'files', label: 'Bestanden', count: notes.length + documents.length, icon: Files },
+    { id: 'files', label: 'Bestanden', count: clientFileCount, icon: Files },
     { id: 'communication', label: 'Communicatie', count: unreadCount, unread: true, icon: Mail },
   ];
 
@@ -918,15 +927,16 @@ export function ClientDetailPage({
     {activeTab === 'contracts' && <ClientContractsCard contracts={contracts} organizationId={organizationId} />}
 
     {activeTab === 'communication' && <ClientCommunication client={client} organizationId={organizationId} canWrite={canWrite} onUnreadChanged={onUnreadChanged} />}
-    {activeTab === 'files' && <ClientFolders
+    {activeTab === 'files' && <ContentLibrary
       data={data}
-      client={client}
-      canWrite={canWrite}
       organizationId={organizationId}
+      canWrite={canWrite}
+      rootClientId={client.id}
       onChanged={onChanged}
       onNewNote={onNewNote}
       onEditNote={onEditNote}
       onNewDocument={onNewDocument}
+      onNewOfficeDocument={onNewOfficeDocument}
       onEditDocument={onEditDocument}
     />}
   </div>;

@@ -4561,13 +4561,15 @@ button.odrv-th:hover{color:var(--text)}
 }
 
 /* ── KLANTDOSSIER · "Bestanden" in dezelfde OneDrive-look (odrv-embed) ─────
-   (2026-07-20) Ingebed in het klantdossier: geen zijkolom, hoogte volgt de
-   pagina (de klantpagina scrolt zelf) en popovers mogen buiten de kaart
-   vallen. Elke rij/tegel krijgt een ⋮-actiekolom (hernoemen, verplaatsen,
-   downloaden, verwijderen); kolommen en koppen komen 1-op-1 van de
-   Inhoud-pagina zodat beide verkenners één geheel vormen. */
+   (2026-07-20) Ingebed in het klantdossier: de hoogte volgt de pagina (de
+   klantpagina scrolt zelf) en popovers mogen buiten de kaart vallen. Elke
+   rij/tegel heeft een ⋮-actiekolom (hernoemen, verplaatsen, downloaden,
+   verwijderen). Sinds 2026-09-07 draait hier letterlijk dezelfde component
+   als op de Inhoud-pagina (ContentLibrary met rootClientId), dus deze regels
+   passen alleen de maatvoering aan — nooit de opbouw. */
 .odrv.odrv-embed{display:flex;flex-direction:column;height:auto;min-height:460px;overflow:visible}
 .odrv-embed .odrv-head{padding:14px 16px 8px}
+.odrv-embed .odrv-cmdbar{padding:0 16px 10px}
 .odrv-embed .odrv-scroll{overflow:visible;padding:0 16px 16px}
 .odrv-embed .odrv-crumbs button,.odrv-embed .odrv-crumb-current{font-size:17px}
 .odrv-crumb-step{display:inline-flex;align-items:center;gap:2px;min-width:0}

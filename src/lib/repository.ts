@@ -4362,17 +4362,28 @@ export async function moveDriveItem(item: DriveDragItem, target: DriveLocation, 
 }
 
 /**
- * Delete a single attachment: remove the DB row first (so the UI can never show a ghost
- * pointing at a missing file), then best-effort R2 cleanup. An R2 failure leaves an orphan
- * in storage but does not block the user.
+ * Verwijdert een bestand écht: eerst het object in de Cloudflare R2-opslag, daarna pas
+ * de rij in `attachments`. Die volgorde voorkomt weesbestanden — mislukt het opruimen
+ * in Cloudflare, dan blijft de rij staan en krijg je een foutmelding, zodat je het
+ * opnieuw kunt proberen. (Andersom zou een mislukte opruiming stil een bestand
+ * achterlaten dat nergens meer in de app te zien is, maar wél opslag blijft kosten.)
+ * Opnieuw proberen kan altijd: een object dat al weg is, laat R2 zonder fout los.
  */
 export async function deleteAttachment(att: { id: UUID; storage_key: string; organization_id?: UUID }): Promise<void> {
+  if (att.storage_key) {
+    try {
+      await deleteR2Object(att.storage_key);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      throw new Error(`Het bestand kon niet uit de Cloudflare-opslag worden verwijderd (${reason}). Er is niets verwijderd — probeer het opnieuw.`);
+    }
+  }
   let query = supabase.from('attachments').delete().eq('id', att.id);
   if (att.organization_id) query = query.eq('organization_id', att.organization_id);
   const { error } = await query;
-  if (error) throw error;
-  try { await deleteR2Object(att.storage_key); }
-  catch (e) { console.warn('R2 cleanup mislukt voor', att.storage_key, e); }
+  if (error) {
+    throw new Error(`Het bestand is uit de Cloudflare-opslag gehaald, maar de verwijzing kon niet worden verwijderd (${error.message}). Probeer het opnieuw.`);
+  }
 }
 
 async function selectAttachmentRefsForEntity(type: EntityType, id: UUID, organizationId?: UUID): Promise<AttachmentRef[]> {

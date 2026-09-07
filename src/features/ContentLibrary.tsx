@@ -2,19 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import {
   ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Download, Eye, EyeOff,
-  File, FilePen, FileText, Folder, FolderOpen, FolderPlus, Info, LayoutGrid, List, MoreVertical,
+  File, FilePen, FileText, Folder, FolderOpen, FolderPlus, Info, LayoutGrid, Link2, List, MoreVertical,
   Pencil, Plus, Presentation, Search, Share2, Sheet, SlidersHorizontal, StickyNote, Trash2, Upload, UploadCloud, Users, X,
 } from 'lucide-react';
 import type { AppData, Attachment, ContentFolder, InternalDocument, Note, Project } from '../types';
 import { dateNL } from '../lib/format';
-import { insertRow, updateRow, deleteContentFolder, deleteAttachment, moveDriveItem, renameAttachment } from '../lib/repository';
+import { insertRow, updateRow, deleteContentFolder, deleteAttachment, deleteEntityCascade, moveDriveItem, renameAttachment } from '../lib/repository';
 import { uploadToR2, downloadAttachment } from '../lib/r2';
 import { createOfficeSession, createOfficeDocument, isOfficeEditable, NEW_OFFICE_LABEL, type NewOfficeType, type OfficeSession } from '../lib/office';
 import { OfficeEditor } from './OfficeEditor';
 import { DriveRenameInput } from '../components/DriveRename';
 import { fileExtension, resolveRename } from '../lib/rename';
 import { childFolders, folderDescendantIds, folderPath, scopedFolders } from '../lib/folders';
-import { AttachmentGlyph, DocumentGlyph, attAccentColor, attTypeLabel, documentAccentColor, fmtBytes } from './ClientFolders';
+import { AttachmentGlyph, DocumentGlyph, attAccentColor, attTypeLabel, documentAccentColor, fmtBytes } from '../components/DriveGlyphs';
 import { ShareDialog } from '../components/ShareDialog';
 import { SharedOverview, SharedOverviewButton } from '../components/SharedOverview';
 import { shareKey, sharedItemKeys, type ShareTarget } from '../lib/shares';
@@ -110,12 +110,18 @@ function RowGlyph({ row, size }: { row: Row; size: number }) {
  * submappen maken. Nieuwe items worden in de open map aangemaakt (klant/project/map
  * vooringevuld); de sidebar-ingangen Overzicht/Notities/Documenten deeplinken via
  * `initialView`.
+ *
+ * Met `rootClientId` draait dezelfde verkenner ingebed in het klantdossier
+ * (tabblad "Bestanden"): de klantmap is dan de wortel — je ziet er dus exact
+ * dezelfde projectmappen, dossiermappen en bestanden als via Inhoud → klant, maar
+ * je kunt niet hoger dan die klant.
  */
 export function ContentLibrary({
   data,
   organizationId,
   canWrite,
   initialView = 'all',
+  rootClientId = null,
   onChanged,
   onNewNote,
   onEditNote,
@@ -127,6 +133,8 @@ export function ContentLibrary({
   organizationId: string;
   canWrite: boolean;
   initialView?: ContentView;
+  /** Ingebed in één klant: die klantmap is de wortel en de verkenner gaat niet hoger. */
+  rootClientId?: string | null;
   onChanged: () => void;
   onNewNote: (target?: ContentCreateTarget) => void;
   onEditNote: (n: Note) => void;
@@ -135,10 +143,12 @@ export function ContentLibrary({
   onNewOfficeDocument: (docType: NewOfficeType, title: string, target?: ContentCreateTarget) => void;
   onEditDocument: (d: InternalDocument) => void;
 }) {
+  /** Ingebed in het klantdossier: geen "alle klanten"-niveau, wél dezelfde inhoud. */
+  const embedded = rootClientId !== null;
   const [showNotes, setShowNotes] = useState(initialView !== 'documents');
   const [showDocuments, setShowDocuments] = useState(initialView !== 'notes');
   const [showFiles, setShowFiles] = useState(true);
-  const [clientId, setClientId] = useState<string | null>(null);   // null = wortel (alle klanten)
+  const [clientId, setClientId] = useState<string | null>(rootClientId);   // null = wortel (alle klanten)
   const [projectId, setProjectId] = useState<string | null>(null); // null = klantwortel
   const [folderId, setFolderId] = useState<string | null>(null);   // dossiermap binnen de klant
   const [query, setQuery] = useState('');
@@ -168,10 +178,15 @@ export function ContentLibrary({
   const [dropKey, setDropKey] = useState<string | null>(null);
   /** De items waarvoor het venster "Verplaatsen naar…" openstaat. */
   const [moving, setMoving] = useState<DriveDragItem[] | null>(null);
+  /** Staat het paneel "Bestaande inhoud in deze map plaatsen" open? */
+  const [linkOpen, setLinkOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { try { window.localStorage.setItem(VIEW_KEY, view); } catch { /* ignore */ } }, [view]);
   useEffect(() => { try { window.localStorage.setItem(DETAILS_KEY, detailsOpen ? '1' : '0'); } catch { /* ignore */ } }, [detailsOpen]);
+
+  // Ingebed: een andere klant openen betekent terug naar de wortel van díe klant.
+  useEffect(() => { setClientId(rootClientId); setProjectId(null); setFolderId(null); setQuery(''); }, [rootClientId]);
 
   // Sluit de menu's ("+ Nieuw", Weergeven, Sorteren, ⋮) bij een klik buitenom of Escape.
   useEffect(() => {
@@ -192,16 +207,22 @@ export function ContentLibrary({
   const foldersById = useMemo(() => new Map(data.folders.map(f => [f.id, f] as const)), [data.folders]);
   const sharedKeys = useMemo(() => sharedItemKeys(data), [data]);
 
-  const noteCount = data.notes.length;
-  const documentCount = data.documents.length;
-
   // Effectieve plaatsing: heeft een item een project, dan hoort het bij de klant van dat project.
+  const place = useCallback((rawClient: string | null, rawProject: string | null) => {
+    const proj = rawProject ? projectsById.get(rawProject) : undefined;
+    if (proj) return { clientId: proj.client_id ?? null, projectId: proj.id };
+    return { clientId: rawClient ?? null, projectId: null as string | null };
+  }, [projectsById]);
+
+  /** Telt dit item mee in de tellers? Ingebed kijken we alleen naar deze klant. */
+  const inScope = useCallback(
+    (rawClient: string | null, rawProject: string | null) => !embedded || place(rawClient, rawProject).clientId === rootClientId,
+    [embedded, place, rootClientId],
+  );
+  const noteCount = data.notes.filter(n => inScope(n.client_id, n.project_id)).length;
+  const documentCount = data.documents.filter(d => inScope(d.client_id, d.project_id)).length;
+
   const items = useMemo<ContentItem[]>(() => {
-    const place = (rawClient: string | null, rawProject: string | null) => {
-      const proj = rawProject ? projectsById.get(rawProject) : undefined;
-      if (proj) return { clientId: proj.client_id ?? null, projectId: proj.id };
-      return { clientId: rawClient ?? null, projectId: null as string | null };
-    };
     const out: ContentItem[] = [];
     if (showNotes) for (const n of data.notes) {
       const p = place(n.client_id, n.project_id);
@@ -212,13 +233,17 @@ export function ContentLibrary({
       out.push({ kind: 'document', id: d.id, title: d.title, content: d.content, modified: d.updated_at || d.created_at, clientId: p.clientId, projectId: p.projectId, folderId: d.folder_id ?? null, doc: d });
     }
     return out;
-  }, [data.notes, data.documents, showNotes, showDocuments, projectsById]);
+  }, [data.notes, data.documents, showNotes, showDocuments, place]);
 
   // Geüploade bestanden leven in dossiermappen; tel ze mee bij de klant van die map.
   const folderAttachments = useMemo(
     () => data.attachments.filter(a => a.entity_type === 'folder' && foldersById.has(a.entity_id)),
     [data.attachments, foldersById],
   );
+  /** Bestandsteller in het "Weergeven"-menu — ingebed alleen die van deze klant. */
+  const scopedAttachmentCount = embedded
+    ? folderAttachments.filter(a => (foldersById.get(a.entity_id)?.client_id ?? null) === rootClientId).length
+    : folderAttachments.length;
   const attCountByClient = useMemo(() => {
     const m = new Map<string, number>();
     for (const a of folderAttachments) {
@@ -284,6 +309,8 @@ export function ContentLibrary({
     folderId ? { clientId: scopeClientId, projectId, folderId: currentFolder?.parent_id ?? null } :
     projectId ? { clientId: scopeClientId, projectId: null, folderId: null } :
     null;
+  /** Omhoog kan overal behalve op de wortel; ingebed is de klantmap zelf de wortel. */
+  const canGoUp = !atRoot && (!embedded || Boolean(projectId || folderId));
 
   const folderCount = (id: string) =>
     data.notes.filter(n => n.folder_id === id).length
@@ -328,6 +355,14 @@ export function ContentLibrary({
     [clientItems, projectId],
   );
 
+  // "Bestaande inhoud koppelen": notities en documenten van deze klant die nog niet
+  // in de open map staan. Ze verhuizen via dezelfde weg als slepen, dus klant en
+  // project van het item lopen daarna gelijk met de map waarin het belandt.
+  const linkable = useMemo(
+    () => folderId && realClient ? clientItems.filter(it => it.folderId !== folderId) : [],
+    [clientItems, folderId, realClient],
+  );
+
   // Inhoud van de open dossiermap (notities/documenten op folder_id + uploads).
   const folderNotes = folderId && showNotes ? data.notes.filter(n => n.folder_id === folderId) : [];
   const folderDocs = folderId && showDocuments ? data.documents.filter(d => d.folder_id === folderId) : [];
@@ -357,6 +392,7 @@ export function ContentLibrary({
   function goUp() {
     if (folderId) { openFolder(currentFolder?.parent_id ?? null); return; }
     if (projectId) { openProject(null); return; }
+    if (embedded) return; // ingebed houdt de klantmap als wortel vast
     openClient(null);
   }
 
@@ -431,8 +467,15 @@ export function ContentLibrary({
   }
 
   function deleteFile(att: Attachment) {
-    if (!window.confirm(`"${att.name}" verwijderen?`)) return;
+    if (!window.confirm(`"${att.name}" verwijderen? Het bestand wordt ook uit de Cloudflare-opslag gehaald.`)) return;
     run(async () => { await deleteAttachment({ id: att.id, storage_key: att.storage_key, organization_id: att.organization_id }); });
+  }
+
+  /** Een notitie of document verwijderen — de bijlagen eraan gaan mee (ook uit Cloudflare). */
+  function deleteContent(kind: 'note' | 'document', id: string, name: string) {
+    const what = kind === 'note' ? 'De notitie' : 'Het document';
+    if (!window.confirm(`"${name}" verwijderen? ${what} en de bijlagen eraan worden definitief verwijderd.`)) return;
+    run(async () => { await deleteEntityCascade(kind === 'note' ? 'notes' : 'documents', id, organizationId); });
   }
 
   async function handleDownload(att: Attachment) {
@@ -651,7 +694,7 @@ export function ContentLibrary({
 
   // Van map wisselen betekent van context wisselen; een selectie die je niet meer
   // ziet mag niet blijven staan — en een openstaand verplaatsvenster ook niet.
-  useEffect(() => { clearSelection(); setMoving(null); }, [clientId, projectId, folderId, clearSelection]);
+  useEffect(() => { clearSelection(); setMoving(null); setLinkOpen(false); }, [clientId, projectId, folderId, clearSelection]);
 
   /** Waar ligt dit item nu? Bepaalt of een sleep of een keuze in het venster iets verandert. */
   const locationOf = useCallback((item: DriveDragItem) => driveItemLocation(data, item), [data]);
@@ -761,21 +804,28 @@ export function ContentLibrary({
   const selectedAttachments = selection.items
     .map(row => row.att)
     .filter((att): att is Attachment => Boolean(att));
-  /** Notities en documenten verwijder je in de editor, net als elders in de app. */
-  const selectionDeletable = selectedItems.length > 0 && selectedItems.every(i => i.kind === 'attachment' || i.kind === 'folder');
+  /** Alles wat je kunt aanvinken kun je ook verwijderen. */
+  const selectionDeletable = selectedItems.length > 0;
 
   async function deleteSelection() {
     const files = selection.items.filter(row => row.kind === 'file' && row.att);
+    const notes = selection.items.filter(row => row.kind === 'note');
+    const docs = selection.items.filter(row => row.kind === 'document');
     const folders = selection.items.filter(row => row.kind === 'folder');
     const what = [
       files.length ? `${files.length} ${files.length === 1 ? 'bestand' : 'bestanden'}` : null,
+      notes.length ? `${notes.length} ${notes.length === 1 ? 'notitie' : 'notities'}` : null,
+      docs.length ? `${docs.length} ${docs.length === 1 ? 'document' : 'documenten'}` : null,
       folders.length ? `${folders.length} ${folders.length === 1 ? 'map' : 'mappen'}` : null,
     ].filter(Boolean).join(' en ');
-    if (!window.confirm(`${what} verwijderen? Notities en documenten in verwijderde mappen blijven bestaan (ze worden ontkoppeld); geüploade bestanden erin gaan wel weg.`)) return;
+    if (!window.confirm(`${what} verwijderen? Bestanden gaan ook uit de Cloudflare-opslag. Notities en documenten in verwijderde mappen blijven bestaan (ze worden ontkoppeld); geüploade bestanden erin gaan wel weg.`)) return;
     setBusy(true); setError(null);
     try {
       for (const row of files) {
         await deleteAttachment({ id: row.att!.id, storage_key: row.att!.storage_key, organization_id: row.att!.organization_id });
+      }
+      for (const row of [...notes, ...docs]) {
+        await deleteEntityCascade(row.kind === 'note' ? 'notes' : 'documents', row.drag!.id, organizationId);
       }
       for (const row of folders) {
         const id = row.drag!.id;
@@ -874,6 +924,8 @@ export function ContentLibrary({
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openMove([{ kind, id, name }])}><Folder size={16} /> Verplaatsen naar…</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: kind, id, name })}><Share2 size={16} /> Delen…</button>
+      <div className="drive-pop-sep" />
+      <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteContent(kind, id, name); }}><Trash2 size={16} /> Verwijderen</button>
     </>;
   }
 
@@ -981,7 +1033,7 @@ export function ContentLibrary({
   </div>;
 
   return <div
-    className={`odrv${dragOver ? ' is-dragging' : ''}`}
+    className={`odrv${embedded ? ' odrv-embed' : ''}${dragOver ? ' is-dragging' : ''}`}
     onKeyDown={rootKeyDown}
     onDragOver={canDrop ? e => { if (!dragHasFiles(e.dataTransfer)) return; e.preventDefault(); setDragOver(true); } : undefined}
     onDragLeave={canDrop ? e => { if (e.currentTarget === e.target) setDragOver(false); } : undefined}
@@ -992,39 +1044,41 @@ export function ContentLibrary({
     <main className="odrv-main">
       <div className="odrv-head">
         <nav className="odrv-crumbs" aria-label="Locatie">
-          {atRoot
+          {!embedded && (atRoot
             ? <span className="odrv-crumb-current">{companyName}</span>
             : <>
                 <button type="button" onClick={() => openClient(null)}>{companyName}</button>
                 <ChevronRight size={17} aria-hidden="true" />
-                {projectId === null && folderId === null
-                  ? <span className="odrv-crumb-current">{currentClientName}</span>
-                  : <button
-                      type="button"
-                      onClick={() => openClient(clientId)}
-                      {...(realClient ? crumbDropProps('crumb-client', { clientId: scopeClientId, projectId: null, folderId: null }) : {})}
-                    >{currentClientName}</button>}
-                {projectId && <span className="odrv-crumb-step">
-                  <ChevronRight size={17} aria-hidden="true" />
-                  {folderId
-                    ? <button
-                        type="button"
-                        onClick={() => openProject(projectId)}
-                        {...crumbDropProps('crumb-project', { clientId: scopeClientId, projectId, folderId: null })}
-                      >{currentProject?.name ?? ''}</button>
-                    : <span className="odrv-crumb-current">{currentProject?.name ?? ''}</span>}
-                </span>}
-                {currentFolderPath.map((folder, i) => <span key={folder.id} className="odrv-crumb-step">
-                  <ChevronRight size={17} aria-hidden="true" />
-                  {i === currentFolderPath.length - 1
-                    ? <span className="odrv-crumb-current">{folder.name}</span>
-                    : <button
-                        type="button"
-                        onClick={() => openFolder(folder.id)}
-                        {...crumbDropProps(`crumb-${folder.id}`, { clientId: scopeClientId, projectId, folderId: folder.id })}
-                      >{folder.name}</button>}
-                </span>)}
-              </>}
+              </>)}
+          {!atRoot && <>
+            {projectId === null && folderId === null
+              ? <span className="odrv-crumb-current">{currentClientName}</span>
+              : <button
+                  type="button"
+                  onClick={() => openClient(clientId)}
+                  {...(realClient ? crumbDropProps('crumb-client', { clientId: scopeClientId, projectId: null, folderId: null }) : {})}
+                >{currentClientName}</button>}
+            {projectId && <span className="odrv-crumb-step">
+              <ChevronRight size={17} aria-hidden="true" />
+              {folderId
+                ? <button
+                    type="button"
+                    onClick={() => openProject(projectId)}
+                    {...crumbDropProps('crumb-project', { clientId: scopeClientId, projectId, folderId: null })}
+                  >{currentProject?.name ?? ''}</button>
+                : <span className="odrv-crumb-current">{currentProject?.name ?? ''}</span>}
+            </span>}
+            {currentFolderPath.map((folder, i) => <span key={folder.id} className="odrv-crumb-step">
+              <ChevronRight size={17} aria-hidden="true" />
+              {i === currentFolderPath.length - 1
+                ? <span className="odrv-crumb-current">{folder.name}</span>
+                : <button
+                    type="button"
+                    onClick={() => openFolder(folder.id)}
+                    {...crumbDropProps(`crumb-${folder.id}`, { clientId: scopeClientId, projectId, folderId: folder.id })}
+                  >{folder.name}</button>}
+            </span>)}
+          </>}
         </nav>
         <label className="drive-search odrv-search">
           <Search size={14} aria-hidden="true" />
@@ -1055,9 +1109,13 @@ export function ContentLibrary({
               <div className="drive-pop-sep" />
               <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>
             </>}
+            {folderId && linkable.length > 0 && <>
+              <div className="drive-pop-sep" />
+              <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); setLinkOpen(true); }}><Link2 size={16} /> Bestaande inhoud koppelen</button>
+            </>}
           </div>}
         </div>}
-        {!atRoot && <button
+        {canGoUp && <button
           type="button"
           className={`odrv-tool odrv-up${dropKey === 'up' ? ' odrv-crumb-drop' : ''}`}
           onClick={goUp}
@@ -1084,7 +1142,7 @@ export function ContentLibrary({
                 {showDocuments ? <Eye size={16} style={{ color: 'var(--accent-g)' }} /> : <EyeOff size={16} />} Documenten <span className="odrv-pop-count">{documentCount}</span>
               </button>
               <button type="button" className="drive-pop-item" role="menuitemcheckbox" aria-checked={showFiles} onClick={() => setShowFiles(v => !v)}>
-                {showFiles ? <Eye size={16} style={{ color: 'var(--accent-o)' }} /> : <EyeOff size={16} />} Bestanden <span className="odrv-pop-count">{folderAttachments.length}</span>
+                {showFiles ? <Eye size={16} style={{ color: 'var(--accent-o)' }} /> : <EyeOff size={16} />} Bestanden <span className="odrv-pop-count">{scopedAttachmentCount}</span>
               </button>
             </div>}
           </div>
@@ -1116,7 +1174,30 @@ export function ContentLibrary({
         </div>
       </div>
 
-      {error && <div className="odrv-embed-band"><div className="error">{error}</div></div>}
+      {(error || (linkOpen && folderId)) && <div className="odrv-embed-band">
+        {error && <div className="error">{error}</div>}
+        {linkOpen && folderId && here && <div className="folder-link-panel">
+          <div className="folder-link-head">
+            <strong>Bestaande inhoud in deze map plaatsen</strong>
+            <button type="button" className="folder-link-close" onClick={() => setLinkOpen(false)} aria-label="Sluiten"><X size={14} /></button>
+          </div>
+          {linkable.length === 0
+            ? <div className="client-empty-line">Geen andere notities of documenten van deze klant beschikbaar.</div>
+            : <div className="folder-link-list">
+                {linkable.map(it => <button
+                  type="button"
+                  key={`link-${it.kind}-${it.id}`}
+                  className="folder-link-row"
+                  disabled={busy}
+                  onClick={() => void moveTo([{ kind: it.kind, id: it.id, name: it.title }], here)}
+                >
+                  {it.kind === 'note' ? <StickyNote size={13} aria-hidden="true" /> : <FileText size={13} aria-hidden="true" />}
+                  <span>{it.title || 'Naamloos'}</span>
+                  <em>{it.kind === 'note' ? 'Notitie' : 'Document'}</em>
+                </button>)}
+              </div>}
+        </div>}
+      </div>}
 
       {noneSelected
         ? <div className="odrv-scroll"><div className="drive-empty odrv-empty">

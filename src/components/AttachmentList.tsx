@@ -40,7 +40,7 @@ export function AttachmentList({
   }
 
   async function handleDelete(att: Attachment) {
-    if (!confirm(`"${att.name}" verwijderen?`)) return;
+    if (!confirm(`"${att.name}" verwijderen? Het bestand wordt ook uit de Cloudflare-opslag gehaald.`)) return;
     setError(null); setBusyId(att.id);
     try {
       await deleteAttachment({ id: att.id, storage_key: att.storage_key, organization_id: att.organization_id });
