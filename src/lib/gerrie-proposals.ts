@@ -1,6 +1,6 @@
 import { euro, formatMinutes } from './format';
 import { describeReportDefinition } from './reporting';
-import type { GerrieActionHandlers, GerrieProposal } from './gerrie-api';
+import type { GerrieActionHandlers, GerrieCreateTasksProposal, GerrieProposal, GerrieTaskProposal } from './gerrie-api';
 
 /**
  * Eén bron van waarheid voor "wat stelt Gerrie hier voor, en wat gebeurt er als ik
@@ -167,6 +167,11 @@ function describeProposal(p: GerrieProposal): Omit<ProposalInfo, 'openable'> {
     case 'project': return { title: 'Project aanmaken', sub: [p.name, p.client_name].filter(Boolean).join(' · '), write: true, kind: 'work' };
     case 'edit_project': return { title: 'Project bijwerken', sub: p.name, write: true, kind: 'work' };
     case 'task': return { title: 'Taak aanmaken', sub: `${p.title} · ${p.project_name}`, write: true, kind: 'work' };
+    case 'create_tasks': return {
+      title: p.total === 1 ? `Taak aanmaken in ${p.project_name}` : `${p.total} taken aanmaken in ${p.project_name}`,
+      sub: p.items.map((i) => i.title).join(' · ').slice(0, 80),
+      write: true, kind: 'work',
+    };
     case 'edit_task': return { title: 'Taak bijwerken', sub: p.title, write: true, kind: 'work' };
     case 'report': return { title: `Rapportage opslaan: ${p.name}`, sub: describeReportDefinition(p.definition), write: true, kind: 'insight' };
     case 'send_client_email': return {
@@ -178,6 +183,19 @@ function describeProposal(p: GerrieProposal): Omit<ProposalInfo, 'openable'> {
     // "openen". Zie onCreateAgent in main.tsx.
     case 'agent': return { title: `Agent aanmaken en aanzetten: ${p.name}`, sub: scheduleSummary(p), write: true, kind: 'agent' };
   }
+}
+
+/**
+ * Eén regel van een takenlijst als losse taak — precies wat "Taak aanmaken" ook
+ * krijgt, zodat het afvinkbord en de één-klik-akkoord dezelfde weg lopen.
+ */
+export function createTasksItemToTask(p: GerrieCreateTasksProposal, item: GerrieCreateTasksProposal['items'][number]): GerrieTaskProposal {
+  return {
+    type: 'task', project_id: p.project_id, project_name: p.project_name,
+    title: item.title, description: item.description, status: 'todo', priority: item.priority,
+    planned_date: item.planned_date, start_date: null, end_date: item.end_date,
+    estimated_minutes: item.estimated_minutes, tags: [], subtasks: [],
+  };
 }
 
 /** "3 regels" — het aantal factuur-/offerteregels in het onderschrift. */
@@ -288,6 +306,20 @@ export async function executeProposal(p: GerrieProposal, h: GerrieActionHandlers
     case 'send_reminders': await need(h.onSendReminders ? () => h.onSendReminders!(p) : undefined); return;
     case 'calendar_event': await need(h.onCreateCalendarEvent ? () => h.onCreateCalendarEvent!(p) : undefined); return;
     case 'week_action': await need(h.onCreateWeekAction ? () => h.onCreateWeekAction!(p) : undefined); return;
+    // Een takenlijst: normaal vink je hem regel voor regel af in het bord, maar wie
+    // in één keer akkoord geeft loopt hier langs. Elke regel wordt een gewone taak
+    // via onApplyProposal, zodat er geen tweede opslagweg voor taken ontstaat.
+    case 'create_tasks': {
+      if (!h.onApplyProposal) throw new Error('Deze actie is hier niet beschikbaar.');
+      const failed: string[] = [];
+      let made = 0;
+      for (const item of p.items) {
+        try { await h.onApplyProposal(createTasksItemToTask(p, item)); made += 1; }
+        catch { failed.push(item.title); }
+      }
+      if (failed.length) throw new Error(`${made} aangemaakt, ${failed.length} mislukt (${failed.join(', ')}).`);
+      return;
+    }
     case 'time_entry': await need(h.onLogTimeEntry ? () => h.onLogTimeEntry!(p) : undefined); return;
     case 'edit_time_entry': await need(h.onEditTimeEntry ? () => h.onEditTimeEntry!(p) : undefined); return;
     case 'edit_calendar_event': await need(h.onEditCalendarEvent ? () => h.onEditCalendarEvent!(p) : undefined); return;

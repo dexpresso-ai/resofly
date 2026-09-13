@@ -41,7 +41,7 @@ export interface ChecklistItem {
 
 export function ApprovalChecklist({
   items, canWrite, sendOne, onResolved,
-  lead, skippedNote, sendLabel = 'Verstuur', unitLabel = 'regel', unitLabelPlural = 'regels',
+  lead, skippedNote, sendLabel = 'Verstuur', doneLabel = 'Verstuurd', unitLabel = 'regel', unitLabelPlural = 'regels',
   openDetailsUpTo = 0, disabled = false, noWriteHint = 'Je hebt geen schrijfrechten voor deze actie — vraag een owner of admin.',
 }: {
   items: ChecklistItem[];
@@ -55,6 +55,8 @@ export function ApprovalChecklist({
   /** Wat er buiten de lijst viel (en waarom). */
   skippedNote?: ReactNode;
   sendLabel?: string;
+  /** Wat er op een afgehandelde regel staat; standaard "Verstuurd". */
+  doneLabel?: string;
   unitLabel?: string;
   unitLabelPlural?: string;
   /** Klap de details meteen uit als de lijst hoogstens zo lang is. */
@@ -185,7 +187,7 @@ export function ApprovalChecklist({
                 {item.badge && <span className="cem-badge">{item.badge}</span>}
                 <span className="cem-status">
                   {s === 'busy' && <><Loader2 size={12} className="ag-spin" /> Versturen…</>}
-                  {s === 'sent' && <><Check size={12} /> Verstuurd</>}
+                  {s === 'sent' && <><Check size={12} /> {doneLabel}</>}
                   {s === 'skipped' && <>Overgeslagen</>}
                   {s === 'error' && <><AlertTriangle size={12} /> Mislukt</>}
                 </span>

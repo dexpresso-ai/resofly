@@ -1,16 +1,17 @@
-import { AlertTriangle, FileText, Receipt } from 'lucide-react';
+import { AlertTriangle, FileText, ListChecks, Receipt } from 'lucide-react';
 import { ApprovalChecklist, type ChecklistItem } from './ApprovalChecklist';
 import { ClientEmailBatch } from './ClientEmailBatch';
-import { euro } from '../lib/format';
+import { euro, formatMinutes } from '../lib/format';
+import { createTasksItemToTask } from '../lib/gerrie-proposals';
 import type {
-  GerrieActionHandlers, GerrieProposal, GerrieSendDocumentItem,
+  GerrieActionHandlers, GerrieCreateTasksProposal, GerrieProposal, GerrieSendDocumentItem,
   GerrieSendInvoicesProposal, GerrieSendQuotesProposal,
   GerrieSendClientEmailProposal, GerrieSendRemindersProposal,
 } from '../lib/gerrie-api';
 
 /**
  * Het afvinkbord voor alles wat een agent in MEERVOUD klaarzet: mailtjes,
- * facturen, offertes en betalingsherinneringen.
+ * facturen, offertes, betalingsherinneringen en takenlijsten.
  *
  * Deze drie soorten hebben één ding gemeen: er gaat post de deur uit namens jou,
  * en je wilt per regel kunnen beslissen — niet per stapel. Daarom krijgen ze
@@ -21,7 +22,7 @@ import type {
  * zodat afvinken exact hetzelfde doet als goedkeuren — alleen dan per regel.
  */
 
-type BatchProposal = GerrieSendClientEmailProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieSendRemindersProposal;
+type BatchProposal = GerrieSendClientEmailProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieSendRemindersProposal | GerrieCreateTasksProposal;
 
 /** Is dit een voorstel dat je regel voor regel afvinkt? Zo ja: geef het terug. */
 export function asBatchProposal(p: GerrieProposal): BatchProposal | null {
@@ -34,6 +35,10 @@ export function asBatchProposal(p: GerrieProposal): BatchProposal | null {
     // "1 herinnering" ineens een ander soort beslissing wordt dan "7 herinneringen".
     case 'send_reminders':
       return p.invoices.length > 0 ? p : null;
+    // Een takenlijst uit notulen of uit de chat: ook regel voor regel, want een
+    // taak die je niet wilt hoort niet stiekem mee te liften op de rest.
+    case 'create_tasks':
+      return p.items.length > 0 ? p : null;
     default:
       return null;
   }
@@ -89,6 +94,36 @@ export function AgentBatchBoard({ proposal, canWrite, handlers, onResolved, disa
             ? handlers.onSendReminders({ type: 'send_reminders', invoices: [inv], total: 1 })
             : Promise.reject(new Error('Herinneringen versturen is hier niet beschikbaar.'));
         }}
+        onResolved={onResolved}
+      />
+    );
+  }
+
+  if (proposal.type === 'create_tasks') {
+    const prio: Record<string, string> = { high: 'hoge prioriteit', low: 'lage prioriteit' };
+    const items: ChecklistItem[] = proposal.items.map((task, index) => ({
+      key: `${index}:${task.title}`,
+      title: task.title,
+      subtitle: task.description ?? undefined,
+      meta: [prio[task.priority] ?? '', task.planned_date ? `gepland ${task.planned_date}` : '', task.end_date ? `deadline ${task.end_date}` : ''].filter(Boolean).join(' · '),
+      badge: task.estimated_minutes > 0 ? formatMinutes(task.estimated_minutes) : undefined,
+    }));
+    const origin = proposal.source.kind === 'meeting'
+      ? `uit het gesprek${proposal.source.title ? ` "${proposal.source.title}"` : ''}${proposal.source.date ? ` van ${proposal.source.date}` : ''}`
+      : 'uit het gesprek met Gerrie';
+    return (
+      <ApprovalChecklist
+        items={items}
+        canWrite={canWrite}
+        disabled={disabled}
+        sendLabel="Maak"
+        doneLabel="Aangemaakt"
+        unitLabel="taak"
+        unitLabelPlural="taken"
+        lead={<><ListChecks size={13} aria-hidden="true" /> <span>Elke regel wordt een echte taak in {proposal.project_name}, {origin}. Wat je uitvinkt blijft weg.</span></>}
+        sendOne={(_item, index) => handlers.onApplyProposal
+          ? handlers.onApplyProposal(createTasksItemToTask(proposal, proposal.items[index])).then(() => undefined)
+          : Promise.reject(new Error('Taken aanmaken is hier niet beschikbaar.'))}
         onResolved={onResolved}
       />
     );

@@ -446,6 +446,66 @@ export const CLIENT_ACTIONS: ActionDef[] = [
   },
 
   {
+    id: 'client_email.recent_inbound',
+    label: 'Recent binnengekomen klantmail bekijken (hele workspace)',
+    module: 'clients',
+    kind: 'read',
+    description:
+      'Geeft de e-mails die klanten de afgelopen dagen stuurden, over ALLE klanten heen: klant, afzender, onderwerp, ontvangstmoment, of iemand in het team hem al opende, en het begin van de tekst. ' +
+      'Gebruik dit voor "wat is er binnengekomen?", "wat vroeg Jansen gisteren?" of "welke mail wacht nog op antwoord?". Voor de volledige geschiedenis met één klant gebruik je client_email.list.',
+    keywords: ['inkomende mail', 'binnengekomen', 'nieuwe mail', 'ongelezen mail', 'wat vroeg', 'klant mailde', 'reactie van klant', 'wacht op antwoord', 'gemaild'],
+    input: {
+      since: { type: 'string', description: 'Alleen mail vanaf deze datum (JJJJ-MM-DD). Standaard 7 dagen terug.' },
+      unread_only: { type: 'boolean', description: 'Alleen mail die nog niemand in het team opende.' },
+      limit: { type: 'number', description: 'Maximaal aantal berichten (standaard 20).' },
+    },
+    async read(ctx, input) {
+      const limit = Math.min(Math.max(Number(input.limit) || 20, 1), 100);
+      const since = optIsoDate(input, 'since') ?? new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      const unreadOnly = bool(input, 'unread_only', false);
+      // Verwijderde berichten horen hier niet bij; dit draait met de service-role en
+      // die slaat RLS over — dus zelf filteren, net als client_email.list.
+      const { data, error } = await orgQuery(ctx, 'client_emails',
+        'id, client_id, thread_id, subject, from_email, from_name, received_at, created_at, body_text')
+        .eq('direction', 'inbound').is('deleted_at', null)
+        .gte('received_at', `${since}T00:00:00Z`)
+        .order('received_at', { ascending: false }).limit(limit);
+      if (error) throw new ActionError(`Inkomende mail ophalen mislukt: ${error.message}`);
+      const rows = (data ?? []) as Array<Record<string, unknown>>;
+      // "Las iemand hem al?" is per gebruiker vastgelegd (client_email_reads); voor
+      // de vraag "wacht dit op antwoord?" telt of wie dan ook in het team keek.
+      const readIds = new Set<string>();
+      const mailIds = rows.map((r) => String(r.id));
+      if (mailIds.length) {
+        const { data: reads } = await ctx.db.from('client_email_reads').select('client_email_id')
+          .eq('organization_id', ctx.organizationId).in('client_email_id', mailIds);
+        for (const r of (reads ?? []) as Array<{ client_email_id: string }>) readIds.add(r.client_email_id);
+      }
+      const clientName = new Map<string, string>();
+      const clientIds = [...new Set(rows.map((r) => String(r.client_id)))];
+      if (clientIds.length) {
+        const { data: cs } = await orgQuery(ctx, 'clients', 'id, name').in('id', clientIds);
+        for (const c of (cs ?? []) as Array<{ id: string; name: string }>) clientName.set(c.id, c.name);
+      }
+      const emails = rows
+        .map((r) => ({
+          email_id: r.id,
+          client_id: r.client_id,
+          client_name: clientName.get(String(r.client_id)) ?? null,
+          thread_id: r.thread_id,
+          from_name: r.from_name,
+          from_email: r.from_email,
+          subject: r.subject,
+          received_at: r.received_at ?? r.created_at,
+          read_by_someone: readIds.has(String(r.id)),
+          preview: String(r.body_text ?? '').replace(/\s+/g, ' ').trim().slice(0, 300),
+        }))
+        .filter((m) => !unreadOnly || !m.read_by_someone);
+      return { since, unread_only: unreadOnly, emails };
+    },
+  },
+
+  {
     id: 'folder.create',
     label: 'Map aanmaken in het klantdossier',
     module: 'content',

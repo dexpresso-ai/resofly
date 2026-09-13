@@ -24,10 +24,11 @@ import {
   supabaseAdmin, HttpError, ANTHROPIC_API_KEY, TOOL_DEFINITIONS, toolCatalog, AGENT_FORBIDDEN_TOOLS,
   resolveModelKind, runAgent, buildContext, createConversation, insertMessage,
   recordUsage, costUsd, checkUserBudget, requireUser, requireOrganizationAccess,
-  describeError, isUuid, todayIso, tzOffsetMs, parseAllowedOrigins, loadHistory,
+  describeError, isUuid, todayIso, parseAllowedOrigins, loadHistory,
   AGENT_ICON_KEYS, isEnabledToolName, isReadOnlyToolName, auditActionName,
 } from '../_shared/gerrieCore.ts';
 import type { AgentStep, Emit, OrganizationRole } from '../_shared/gerrieCore.ts';
+import { localYmd, wallToUtc, daysInMonth } from '../_shared/schedule.ts';
 import { sendViaResend } from '../_shared/resend.ts';
 
 const AGENTS_CRON_SECRET = Deno.env.get('AGENTS_CRON_SECRET') || '';
@@ -492,23 +493,8 @@ function escapeHtml(s: string): string {
 
 // ── Schema-berekening (presets, DST-bewust) ──────────────────────────────────
 
-/** Lokale kalenderdatum (in tz) van een UTC-instant. */
-function localYmd(tz: string, at: Date): { y: number; m: number; d: number } {
-  const [y, m, d] = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' })
-    .format(at).split('-').map(Number);
-  return { y, m, d };
-}
-
-/** Wandkloktijd `y-m-d hh:00` in `tz` → echte UTC-Date (DST-bewust, zelfde truc als amsWallToUtc). */
-function wallToUtc(tz: string, y: number, m: number, d: number, hh: number): Date {
-  const guess = Date.UTC(y, m - 1, d, hh, 0);
-  const offset = tzOffsetMs(tz, new Date(guess));
-  return new Date(guess - offset);
-}
-
-function daysInMonth(y: number, m: number): number {
-  return new Date(Date.UTC(y, m, 0)).getUTCDate();
-}
+// localYmd, wallToUtc en daysInMonth staan in _shared/schedule.ts: dezelfde DST-rekensom
+// voor de routines én (Fase 1 beslislijst) de dagelijkse veegronde.
 
 /** Eerstvolgende run-tijd na `after`, volgens de preset (daily/weekly/monthly) in de agent-tijdzone. */
 function computeNextRunAt(agent: Record<string, unknown>, after: Date): Date {

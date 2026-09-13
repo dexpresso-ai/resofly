@@ -446,7 +446,7 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
       return <AgentBatchBoard
         proposal={batch}
         canWrite
-        handlers={{ onSendClientEmail, onSendInvoice, onSendQuote, onSendReminders }}
+        handlers={{ onApplyProposal, onSendClientEmail, onSendInvoice, onSendQuote, onSendReminders }}
         onResolved={({ sent, skipped }) => {
           if (auditId) void confirmGerrieAction(organizationId, auditId, sent > 0 ? 'executed' : 'failed', `${sent} verstuurd, ${skipped} overgeslagen.`);
         }}

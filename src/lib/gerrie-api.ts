@@ -151,6 +151,28 @@ export interface GerrieTaskProposal {
   tags: string[];
   subtasks: GerrieProposalSubtask[];
 }
+/** Eén regel van een takenlijst: dezelfde velden als een losse taak, minus wat de lijst deelt. */
+export interface GerrieCreateTasksItem {
+  title: string;
+  description: string | null;
+  priority: string;
+  planned_date: string | null;
+  end_date: string | null;
+  estimated_minutes: number;
+}
+/**
+ * MEERDERE taken in één project, af te vinken per regel (zie AgentBatchBoard).
+ * Elke regel wordt bij akkoord een gewone GerrieTaskProposal en loopt langs
+ * onApplyProposal — dezelfde opslagweg als "Taak aanmaken".
+ */
+export interface GerrieCreateTasksProposal {
+  type: 'create_tasks';
+  project_id: UUID;
+  project_name: string;
+  source: { kind: 'meeting' | 'chat'; recording_id: UUID | null; title: string | null; date: string | null };
+  items: GerrieCreateTasksItem[];
+  total: number;
+}
 export interface GerrieEditTaskProposal {
   type: 'edit_task';
   id: UUID;
@@ -392,7 +414,7 @@ export interface GerrieTicketNoteProposal {
   body: string;
   is_internal: boolean;
 }
-export type GerrieProposal = GerrieRegistryActionProposal | GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieEditCalendarEventProposal | GerrieCancelCalendarEventProposal | GerrieClientContactProposal | GerrieEditClientContactProposal | GerrieProjectTeamProposal | GerrieTaskAssignProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieEditTimeEntryProposal | GerrieTicketProposal | GerrieEditTicketProposal | GerrieTicketNoteProposal | GerrieSupplierProposal | GerriePurchaseInvoiceProposal | GerrieContractProposal | GerrieCampaignProposal | GerrieContentProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
+export type GerrieProposal = GerrieRegistryActionProposal | GerrieInvoiceProposal | GerrieQuoteProposal | GerrieClientProposal | GerrieSendInvoiceProposal | GerrieSendQuoteProposal | GerrieSendInvoicesProposal | GerrieSendQuotesProposal | GerrieConvertQuoteProposal | GerrieEditInvoiceProposal | GerrieEditQuoteProposal | GerrieEditClientProposal | GerrieSendRemindersProposal | GerrieProjectProposal | GerrieEditProjectProposal | GerrieTaskProposal | GerrieCreateTasksProposal | GerrieEditTaskProposal | GerrieCalendarEventProposal | GerrieEditCalendarEventProposal | GerrieCancelCalendarEventProposal | GerrieClientContactProposal | GerrieEditClientContactProposal | GerrieProjectTeamProposal | GerrieTaskAssignProposal | GerrieWeekActionProposal | GerrieTimeEntryProposal | GerrieEditTimeEntryProposal | GerrieTicketProposal | GerrieEditTicketProposal | GerrieTicketNoteProposal | GerrieSupplierProposal | GerriePurchaseInvoiceProposal | GerrieContractProposal | GerrieCampaignProposal | GerrieContentProposal | GerrieReportProposal | GerrieSendClientEmailProposal | GerrieAgentProposal;
 
 /**
  * De uitvoer-handlers voor een door Gerrie voorgestelde actie.

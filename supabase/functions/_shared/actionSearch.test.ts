@@ -26,6 +26,8 @@ const CASES: Array<[string, string]> = [
   ['veld archiveren', 'client_field.archive'],
   ['post die nergens bij hoort', 'inbox.list'],
   ['bericht aan een klant koppelen', 'inbox.link'],
+  ['wat hebben klanten deze week gemaild', 'client_email.recent_inbound'],
+  ['wat is er besproken in het gesprek van gisteren', 'meeting_recording.recent'],
   ['map maken in het dossier', 'folder.create'],
   ['notitie verplaatsen naar een andere map', 'content.move'],
   ['ticket omzetten naar een project', 'ticket.convert_to_project'],

@@ -1,3 +1,4 @@
+import { tzOffsetMs } from './schedule.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { listEvents } from '../_shared/calendarAvailability.ts';
 import {
@@ -148,6 +149,17 @@ interface ProposalSubtask { label: string; done: boolean }
 interface ProjectProposal { type: 'project'; name: string; client_id: string | null; client_name: string; description: string | null; start_date: string | null; end_date: string | null }
 interface EditProjectProposal { type: 'edit_project'; id: string; name: string; changes: { name?: string; client_id?: string | null; description?: string | null; start_date?: string | null; end_date?: string | null; archived?: boolean } }
 interface TaskProposal { type: 'task'; project_id: string; project_name: string; title: string; description: string | null; status: string; priority: string; planned_date: string | null; start_date: string | null; end_date: string | null; estimated_minutes: number; tags: string[]; subtasks: ProposalSubtask[] }
+/**
+ * MEERDERE nieuwe taken in ÉÉN project, af te vinken per regel.
+ *
+ * Dit is de vorm waarin actiepunten uit notulen straks als kaart op de beslislijst
+ * landen (Fase 1); in de chat is het "maak hier taken van". Elke regel draagt de
+ * velden van een losse TaskProposal, zodat de browser hem langs precies dezelfde
+ * opslagweg schrijft als "Taak aanmaken" — alleen dan één voor één, met een vinkje.
+ */
+interface CreateTasksItem { title: string; description: string | null; priority: string; planned_date: string | null; end_date: string | null; estimated_minutes: number }
+interface CreateTasksSource { kind: 'meeting' | 'chat'; recording_id: string | null; title: string | null; date: string | null }
+interface CreateTasksProposal { type: 'create_tasks'; project_id: string; project_name: string; source: CreateTasksSource; items: CreateTasksItem[]; total: number }
 interface EditTaskProposal { type: 'edit_task'; id: string; title: string; project_id: string | null; changes: { title?: string; description?: string | null; status?: string; priority?: string; planned_date?: string | null; start_date?: string | null; end_date?: string | null; estimated_minutes?: number; tags?: string[]; subtasks?: ProposalSubtask[] } }
 interface CalendarEventProposal { type: 'calendar_event'; source_id: string; source_name: string; title: string; date: string; start_time: string; end_time: string; description: string | null; location: string | null }
 /**
@@ -349,7 +361,7 @@ interface ActionProposal {
   payload: Record<string, unknown>;
 }
 
-type Proposal = ActionProposal | InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | SendInvoicesProposal | SendQuotesProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | EditTaskProposal | CalendarEventProposal | EditCalendarEventProposal | CancelCalendarEventProposal | ClientContactProposal | EditClientContactProposal | ProjectTeamProposal | TaskAssignProposal | WeekActionProposal | TimeEntryProposal | EditTimeEntryProposal | SupplierProposal | PurchaseInvoiceProposal | ContractProposal | CampaignProposal | ContentProposal | TicketProposal | EditTicketProposal | TicketNoteProposal | ReportProposal | SendClientEmailProposal | AgentProposal;
+type Proposal = ActionProposal | InvoiceProposal | QuoteProposal | ClientProposal | SendInvoiceProposal | SendQuoteProposal | SendInvoicesProposal | SendQuotesProposal | ConvertQuoteProposal | EditInvoiceProposal | EditQuoteProposal | EditClientProposal | SendRemindersProposal | ProjectProposal | EditProjectProposal | TaskProposal | CreateTasksProposal | EditTaskProposal | CalendarEventProposal | EditCalendarEventProposal | CancelCalendarEventProposal | ClientContactProposal | EditClientContactProposal | ProjectTeamProposal | TaskAssignProposal | WeekActionProposal | TimeEntryProposal | EditTimeEntryProposal | SupplierProposal | PurchaseInvoiceProposal | ContractProposal | CampaignProposal | ContentProposal | TicketProposal | EditTicketProposal | TicketNoteProposal | ReportProposal | SendClientEmailProposal | AgentProposal;
 
 /**
  * Eén stap uit de loop, voor het LOGBOEK van een geplande agent.
@@ -477,6 +489,7 @@ async function runAgent(ctx: GerrieContext, history: Array<{ role: string; conte
         : proposal.type === 'project' ? `Ik heb het project "${proposal.name}" voor je klaargezet. Controleer en sla op:`
         : proposal.type === 'edit_project' ? `Ik heb de wijziging van project "${proposal.name}" klaargezet. Controleer en sla op:`
         : proposal.type === 'task' ? `Ik heb de taak "${proposal.title}" voor je klaargezet. Controleer en sla op:`
+        : proposal.type === 'create_tasks' ? `Ik heb ${proposal.total} ta${proposal.total === 1 ? 'ak' : 'ken'} klaargezet in "${proposal.project_name}". Vink hieronder aan welke je wilt aanmaken.`
         : proposal.type === 'edit_task' ? `Ik heb de wijziging van taak "${proposal.title}" klaargezet. Controleer en sla op:`
         : proposal.type === 'calendar_event' ? `Wil je dat ik dit agenda-item aanmaak in "${proposal.source_name}"? Bevestig hieronder.`
         : proposal.type === 'week_action' ? `Wil je dat ik deze ${proposal.total} actiepunt${proposal.total === 1 ? '' : 'en'} toevoeg? Bevestig hieronder.`
@@ -560,6 +573,7 @@ function describeProposal(p: Proposal): string {
     case 'project': return `project ${p.name}`;
     case 'edit_project': return `wijziging van project ${p.name}`;
     case 'task': return `taak ${p.title}`;
+    case 'create_tasks': return `${p.total} ta${p.total === 1 ? 'ak' : 'ken'} in project ${p.project_name}`;
     case 'edit_task': return `wijziging van taak ${p.title}`;
     case 'calendar_event': return `agenda-item ${p.title} op ${p.date}`;
     case 'week_action': return `${p.total} actiepunt${p.total === 1 ? '' : 'en'}`;
@@ -723,6 +737,7 @@ function buildSystemPrompt(ctx: GerrieContext): string {
     '- Je kunt MEELEZEN in de workspace via de beschikbare tools (klanten, facturen, offertes, projecten, taken incl. weekplanner, tickets, financiële cijfers, gekoppelde agenda\'s, en welke betalingsherinneringen vandaag aan de beurt zijn).',
     '- BOEKHOUDING — je leest de hele administratie mee met `list_suppliers`, `list_purchase_invoices` (inkoop; je eigen verkoopfacturen zitten in `list_invoices`), `list_ledger_accounts`, `list_journal_entries`, `list_bank_transactions`, `list_vat_returns` en `list_fiscal_years`. Boeken doe je NOOIT uit jezelf; wat er wél kan (een boeking klaarzetten, een banktransactie afletteren, een aangifte voorbereiden) vind je via `find_actions` en gaat altijd als voorstel naar de gebruiker. Een definitieve fiscale handeling — aangifte indienen, jaarrekening deponeren — blijft mensenwerk; zeg dat eerlijk en geef het overzicht waarmee hij het zelf kan doen.',
     '- `suggest_meeting_slots` — stelt zelf een paar vrije tijdstippen voor voor een afspraak, op basis van de agenda van de gebruiker (native + Google + Microsoft). Voor een FYSIEKE afspraak (met locatie) houd je standaard 60 minuten reistijd vrij rond bestaande afspraken die een locatie hebben; vermeld die aanname kort. Presenteer de voorstellen als een kort genummerd lijstje. Kiest de gebruiker er één, dan zet je die met `propose_calendar_event` klaar (jij plant niets zelf in).',
+    '- MAIL en NOTULEN — via `find_actions` vind je `client_email.recent_inbound` (wat klanten de laatste dagen mailden, over alle klanten heen, mét of iemand hem al las) en `meeting_recording.recent` (recent afgeronde gesprekken mét notulen: besproken, besluiten, actiepunten). Gebruik ze voor "wat vroeg Jansen gisteren?", "welke mail wacht op antwoord?" en "wat is er besproken in de kick-off?".',
     '- Gebruik altijd een tool om echte gegevens op te halen; verzin nooit cijfers, namen of bedragen.',
     '- Bedragen zijn in euro\'s. Toon ze netjes (bijv. € 1.250,00). Rapporteer beknopt en zakelijk.',
     '',
@@ -741,6 +756,7 @@ function buildSystemPrompt(ctx: GerrieContext): string {
           '- `propose_create_agent` — een terugkerende agent klaarzetten ("elke maandag…"). Zeg er in je antwoord bij WAT hij mag en WANNEER hij draait: geeft de gebruiker akkoord, dan wordt de agent meteen aangemaakt, aangezet en één keer gedraaid. Alles wat die agent daarna wil versturen komt gewoon weer als afvinklijst terug.',
           '- `propose_project` / `propose_edit_project` — een project aanmaken of wijzigen (open het projectformulier vooringevuld).',
           '- `propose_task` / `propose_edit_task` — een taak binnen een project aanmaken of wijzigen, inclusief subtaken, status/prioriteit en een geplande datum (`planned_date`) om de taak als actiepunt in de WEEKPLANNER te zetten. Zoek het project met `list_projects`, bestaande taken met `list_tasks`.',
+          '- `propose_create_tasks` — MEERDERE taken tegelijk in ÉÉN project: de actiepunten uit notulen (zoek ze met find_actions → meeting_recording.recent) of een lijstje uit het gesprek. Geef ze ALLEMAAL in één aanroep mee via `items`; de gebruiker krijgt één afvinklijst en maakt per regel aan. Zet nooit meerdere losse propose_task-voorstellen achter elkaar.',
           '- `propose_week_action` — ÉÉN OF MEER ACTIEPUNTEN op de "Actiepunten deze week"-checklist van de weekplanner (los van projecten en taken). Vraagt de gebruiker meerdere punten, geef ze dan ALLEMAAL in één keer mee via `items` (niet één voor één). Geef per item een datum binnen de gewenste week. Voor een echte taak binnen een project gebruik je `propose_task`.',
           '- `propose_calendar_event` — een agenda-item aanmaken in een gekoppelde agenda (Google/Microsoft). Tijden zijn lokaal (Europe/Amsterdam); reken relatieve datums om op basis van vandaag. Bij meerdere schrijfbare agenda\'s: vraag welke (`list_calendars`).',
           '- LEVERANCIERS en INKOOPFACTUREN — `propose_supplier` en `propose_purchase_invoice` leveren een CONCEPT. De inkoopfactuur komt binnen als concept ZONDER grootboekrekeningen; die kiest de gebruiker zelf voordat hij hem boekt. Jij boekt nooit.',
@@ -1937,6 +1953,36 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'propose_create_tasks',
+    description: "Zet MEERDERE nieuwe taken tegelijk klaar in ÉÉN project — bijvoorbeeld de actiepunten uit notulen (zoek ze met find_actions → meeting_recording.recent) of een lijstje uit het gesprek. Je voert niets uit: de gebruiker krijgt één afvinklijst en maakt per regel aan. Zoek het project eerst met list_projects (project_id). Geef ALLE taken in één aanroep mee via `items` (max 25); voor één losse taak gebruik je propose_task. Komen de taken uit een gesprek, geef dan recording_id, source_title en source_date mee, zodat de gebruiker ziet waar ze vandaan komen.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'Id van het project (uit list_projects).' },
+        items: {
+          type: 'array',
+          description: 'De taken, allemaal in één keer.',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string', description: 'Korte, concrete titel (max 120 tekens).' },
+              description: { type: 'string' },
+              priority: { type: 'string', enum: ['low', 'med', 'high'] },
+              planned_date: { type: 'string', description: 'YYYY-MM-DD — zet de taak meteen in de weekplanner.' },
+              end_date: { type: 'string', description: 'YYYY-MM-DD — deadline.' },
+              estimated_minutes: { type: 'integer' },
+            },
+            required: ['title'],
+          },
+        },
+        recording_id: { type: 'string', description: 'Id van de opname als de taken uit notulen komen.' },
+        source_title: { type: 'string', description: 'Bijvoorbeeld de titel van het gesprek.' },
+        source_date: { type: 'string', description: 'YYYY-MM-DD van het gesprek.' },
+      },
+      required: ['project_id', 'items'],
+    },
+  },
+  {
     name: 'propose_edit_task',
     description: 'Wijzig een bestaande taak (incl. status, prioriteit, planning/weekplanner-datum en subtaken). Je voert niets uit: het opent vooringevuld in het taakformulier. Zoek de taak met list_tasks. Geef alleen de velden die veranderen; voor subtaken geef je de VOLLEDIGE nieuwe lijst.',
     input_schema: {
@@ -2144,6 +2190,7 @@ const TOOL_MODULE: Record<string, string> = {
   propose_project: 'projects',
   propose_edit_project: 'projects',
   propose_task: 'projects',
+  propose_create_tasks: 'projects',
   propose_edit_task: 'projects',
   propose_week_action: 'projects',
   propose_calendar_event: 'calendar',
@@ -2214,6 +2261,7 @@ const TOOL_LABELS: Record<string, string> = {
   propose_project: 'Project aanmaken',
   propose_edit_project: 'Project wijzigen',
   propose_task: 'Taak aanmaken',
+  propose_create_tasks: 'Meerdere taken aanmaken',
   propose_edit_task: 'Taak wijzigen',
   propose_week_action: 'Actiepunten in de weekplanner',
   propose_calendar_event: 'Agenda-afspraak aanmaken',
@@ -2533,13 +2581,7 @@ async function listCalendars(ctx: GerrieContext) {
 const AMS_TZ = 'Europe/Amsterdam';
 
 /** Milliseconden die `tz` vóórloopt op UTC op het moment `at` (DST-bewust). */
-function tzOffsetMs(tz: string, at: Date): number {
-  const dtf = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  const p: Record<string, string> = {};
-  for (const part of dtf.formatToParts(at)) p[part.type] = part.value;
-  const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +(p.hour === '24' ? '0' : p.hour), +p.minute, +p.second);
-  return asUTC - at.getTime();
-}
+// tzOffsetMs staat in _shared/schedule.ts (gedeeld met de runner en de beslislijst-veegronde).
 
 /** Wandkloktijd (Amsterdam) op datum `y-m-d` om hh:mm → echte UTC-Date. */
 function amsWallToUtc(y: number, m: number, d: number, hh: number, mm: number): Date {
@@ -2687,6 +2729,7 @@ function proposeLabel(toolName: string): string {
     case 'propose_edit_project': return 'Project klaarzetten…';
     case 'propose_task':
     case 'propose_edit_task': return 'Taak klaarzetten…';
+    case 'propose_create_tasks': return 'Takenlijst klaarzetten…';
     case 'propose_calendar_event': return 'Agenda-item klaarzetten…';
     case 'propose_week_action': return 'Weekactiepunt klaarzetten…';
     case 'propose_time_entry': return 'Urenregistratie klaarzetten…';
@@ -2740,6 +2783,7 @@ async function buildProposal(ctx: GerrieContext, toolName: string, input: Record
     case 'propose_project': return buildProjectProposal(ctx, input);
     case 'propose_edit_project': return buildEditProjectProposal(ctx, input);
     case 'propose_task': return buildTaskProposal(ctx, input);
+    case 'propose_create_tasks': return buildCreateTasksProposal(ctx, input);
     case 'propose_edit_task': return buildEditTaskProposal(ctx, input);
     case 'propose_calendar_event': return buildCalendarEventProposal(ctx, input);
     case 'propose_week_action': return buildWeekActionProposal(input);
@@ -3096,6 +3140,41 @@ async function buildTaskProposal(ctx: GerrieContext, input: Record<string, unkno
       tags: parseTags(input.tags), subtasks: parseSubtasks(input.subtasks),
     },
   };
+}
+
+/** Meer dan dit is geen afvinklijst meer maar een muur; de rest vraag je in een tweede ronde. */
+const CREATE_TASKS_MAX = 25;
+
+async function buildCreateTasksProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
+  const proj = await resolveProject(ctx, input.project_id);
+  if (!proj.ok) return proj;
+  const recordingId = String(input.recording_id || '').trim();
+  const source: CreateTasksSource = {
+    kind: isUuid(recordingId) ? 'meeting' : 'chat',
+    recording_id: isUuid(recordingId) ? recordingId : null,
+    title: input.source_title ? String(input.source_title).slice(0, 200) : null,
+    date: isoDate(input.source_date),
+  };
+  // Zonder eigen omschrijving krijgt een taak uit een gesprek de herkomst mee, zodat
+  // je over een maand nog weet waarom hij bestaat.
+  const origin = source.title ? `Uit gesprek "${source.title}"${source.date ? ` van ${source.date}` : ''}.` : null;
+  const raw = Array.isArray(input.items) ? (input.items as Record<string, unknown>[]) : [];
+  const items: CreateTasksItem[] = [];
+  for (const r of raw) {
+    const title = String(r?.title || '').trim();
+    if (!title) continue;
+    items.push({
+      title: title.slice(0, 120),
+      description: r?.description ? String(r.description).slice(0, 4000) : origin,
+      priority: validPriority(r?.priority, 'med'),
+      planned_date: isoDate(r?.planned_date),
+      end_date: isoDate(r?.end_date),
+      estimated_minutes: Math.max(0, Math.round(num(r?.estimated_minutes) || 60)),
+    });
+    if (items.length === CREATE_TASKS_MAX) break;
+  }
+  if (items.length === 0) return { ok: false, error: 'Geef minstens één taak met een titel mee via `items`.' };
+  return { ok: true, proposal: { type: 'create_tasks', project_id: proj.id, project_name: proj.name, source, items, total: items.length } };
 }
 
 async function buildEditTaskProposal(ctx: GerrieContext, input: Record<string, unknown>): Promise<ProposalResult> {
@@ -5047,10 +5126,11 @@ export {
   buildContext, buildSystemPrompt, createConversation, loadHistory, insertMessage,
   recordUsage, costUsd, checkUserBudget, remainingFraction,
   confirmAction, getUsageSummary, requireUser, requireOrganizationAccess,
+  buildCreateTasksProposal,
   describeError, requiredEnv, parseAllowedOrigins, isUuid, todayIso, tzOffsetMs,
 };
 export type {
-  GerrieContext, Emit, Proposal, ModelKind, Usage, AgentOutcome, AgentStep, BudgetCheck,
+  GerrieContext, Emit, Proposal, CreateTasksProposal, ModelKind, Usage, AgentOutcome, AgentStep, BudgetCheck,
   OrganizationRole, HttpStatus, MissionSubtask,
 };
 // ToolCatalogEntry wordt hierboven al als interface geëxporteerd.

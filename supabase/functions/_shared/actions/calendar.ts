@@ -1,5 +1,5 @@
 import {
-  ActionError, bool, id, isoDate, joinShort, optChoice, optId, optNum, optStr,
+  ActionError, bool, id, isoDate, joinShort, optChoice, optId, optIsoDate, optNum, optStr,
   orgQuery, row, str,
   type ActionCtx, type ActionDef,
 } from './types.ts';
@@ -1385,6 +1385,52 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
           summary_recipients: r.summary_recipients,
           created_at: r.created_at,
           summary_text: withText ? r.summary_text : undefined,
+        })),
+      };
+    },
+  },
+
+  {
+    id: 'meeting_recording.recent',
+    label: 'Recent afgeronde gesprekken mét notulen bekijken',
+    module: 'calendar',
+    kind: 'read',
+    description:
+      'Geeft de opnames waarvan de notulen klaar zijn (status done), nieuwste eerst, MET de samenvatting: wat er besproken is, de besluiten, de actiepunten en de vervolgafspraken. ' +
+      'Gebruik dit voor "wat is er besproken in de kick-off?", "welke actiepunten kwamen uit het gesprek met Jansen?", of om de actiepunten met propose_create_tasks als taken klaar te zetten (neem project_id van de opname over).',
+    keywords: ['notulen', 'gesprek', 'besproken', 'actiepunten', 'besluiten', 'samenvatting', 'vergadering', 'meeting', 'kick-off', 'vervolgafspraken', 'gisteren besproken'],
+    input: {
+      since: { type: 'string', description: 'Alleen opnames vanaf deze datum (JJJJ-MM-DD). Standaard 14 dagen terug.' },
+      client_id: { type: 'string', description: 'Alleen gesprekken bij deze klant.' },
+      project_id: { type: 'string', description: 'Alleen gesprekken bij dit project.' },
+      limit: { type: 'number', description: 'Maximaal aantal (standaard 5, hoogstens 20 — de notulen gaan mee).' },
+    },
+    async read(ctx, input) {
+      const limit = Math.min(Math.max(Number(input.limit) || 5, 1), 20);
+      const since = optIsoDate(input, 'since') ?? new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+      let query = orgQuery(ctx, 'meeting_recordings',
+        'id, event_title_snapshot, client_id, project_id, duration_seconds, summary_text, summary_json, summary_sent_at, summary_recipients, created_at')
+        .eq('status', 'done').gte('created_at', `${since}T00:00:00Z`)
+        .order('created_at', { ascending: false }).limit(limit);
+      const clientId = optId(input, 'client_id');
+      if (clientId) query = query.eq('client_id', clientId);
+      const projectId = optId(input, 'project_id');
+      if (projectId) query = query.eq('project_id', projectId);
+      const { data, error } = await query;
+      if (error) throw new ActionError(`Gesprekken ophalen mislukt: ${error.message}`);
+      return {
+        since,
+        recordings: (data ?? []).map((r: Record<string, unknown>) => ({
+          recording_id: r.id,
+          event_title: r.event_title_snapshot,
+          client_id: r.client_id,
+          project_id: r.project_id,
+          duration_seconds: r.duration_seconds,
+          recorded_at: r.created_at,
+          summary_sent_at: r.summary_sent_at,
+          summary_recipients: r.summary_recipients,
+          // De gestructureerde notulen als ze er zijn; anders de platte tekst.
+          summary: r.summary_json ?? { samenvatting: r.summary_text ?? '' },
         })),
       };
     },
