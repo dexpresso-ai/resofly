@@ -9451,3 +9451,8 @@ button.task-agenda-when:hover{text-decoration:underline}
   .proj-dash-kanban::-webkit-scrollbar{display:none}
   .proj-dash-kanban .kan-col{flex:0 0 min(84vw,300px);width:min(84vw,300px);min-width:0;scroll-snap-align:start}
 }
+@media(min-width:761px) and (max-width:1024px){
+  /* De projectnaam staat op de tablet al in de titelbalk én op het werktabblad. */
+  .proj-dash-hero-name{display:none}
+  .proj-dash-hero-kicker{margin-bottom:6px}
+}
