@@ -116,8 +116,12 @@ export function storageScript(spec, extra = {}) {
   // Een publieke pagina (spec.path) heeft geen medewerkerssessie nodig; het
   // portaal (spec.portal) krijgt zijn eigen sessie onder de portaalsleutel.
   if (view.path) {
+    // Een klant heeft geen medewerkerssessie. De pagina's delen binnen één
+    // Playwright-context dezelfde localStorage, dus de sessie van de
+    // werkruimtepagina's ervoor moet hier eerst weg — anders opent "/" niet
+    // het inlogscherm maar de werkruimte.
     const items = { ...(view.portal ? { 'resofly.portal.auth': JSON.stringify(session) } : {}), ...extra };
-    return `(() => { const items = ${JSON.stringify(items)}; for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v); })();`;
+    return `(() => { localStorage.clear(); const items = ${JSON.stringify(items)}; for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v); })();`;
   }
   const tabs = { tabs: [{ page: view.page, projectId: view.projectId ?? null, clientId: view.clientId ?? null, statsReportId: null, galleryId: null }], activeIndex: 0 };
   const items = {
