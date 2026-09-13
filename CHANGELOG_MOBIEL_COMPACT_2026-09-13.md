@@ -113,8 +113,33 @@ actief · Filters wissen"). Dit geldt tot en met de staande tablet.
 
 ## Controle
 
-- `npm run typecheck` en `npm run build` slagen.
+- `npm run typecheck`, `npm test` en `npm run build` slagen.
 - Alle 27 pagina's zijn op telefoon- en tabletformaat opnieuw geschoten; geen
   enkele pagina scrolt nog horizontaal (het klantoverzicht deed dat wel).
 - De taakbewerker, het Gerrie-paneel, de teamchat, het projectkanban en de
   tabelweergave van klanten zijn op de telefoon nagelopen.
+- **Licht thema:** dezelfde pagina's nog eens in het lichte thema geschoten
+  (telefoon en tablet). Alle nieuwe vlakken lopen via de kleurtokens en
+  houden hun contrast; niets hoefde aangepast.
+- **Desktop-regressie:** de oude code (`f801a78`) en de nieuwe zijn naast
+  elkaar gedraaid en per pixel vergeleken op 1440×900 en 1180×800, alle 27
+  pagina's. Op 1440 zijn ze tot op de pixel gelijk; op 1180 wijkt alleen de
+  agenda af, met 343 pixels van de "nu"-lijn die tussen de twee opnamen een
+  minuut verder stond. Boven de 1024 px verandert er dus niets.
+- **Toegankelijkheid:** de filterknop is op telefoon en tablet alleen een
+  icoon; hij heeft nu een `aria-label`, want tekst op `display:none` telt
+  voor een schermlezer niet mee.
+
+## Vaste regressietest: `npm run test:mobile`
+
+Het meethárnas van deze ronde staat nu in de repo (`tests/mobile/`), met
+Playwright en een nagebootste backend (`tests/mobile/mock/`). De test opent
+elke pagina op telefoon- en tabletformaat en faalt op een JavaScript-fout,
+horizontale overloop, chrome boven 112 px (telefoon) of 100 px (tablet), en
+op een eerste item dat lager begint dan de grens in `FIRST_ITEM` (zo'n 20%
+boven de meting van vandaag). `--theme=both` draait hem ook in het lichte
+thema; `--shots=<map>` schrijft screenshots weg.
+
+De nieuwe workflow `.github/workflows/frontend-checks.yml` draait typecheck,
+unit tests en deze lay-outtest (beide thema's) op elke pull request en op
+staging. Eenmalig lokaal: `npx playwright install chromium`.

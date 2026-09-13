@@ -155,7 +155,10 @@ export function SearchFilterPanel({
     </div>}
 
     {fields.length > 0 && <>
-      <button type="button" className="finance-search-toggle" onClick={() => setShowFields(value => !value)} aria-expanded={showFields} aria-controls={fieldsId}>
+      {/* Op de telefoon en tablet is dit alleen een icoon (de tekst staat op
+          display:none en telt dan niet mee voor een schermlezer), dus de naam
+          staat er expliciet bij. */}
+      <button type="button" className="finance-search-toggle" onClick={() => setShowFields(value => !value)} aria-expanded={showFields} aria-controls={fieldsId} aria-label={showFields ? 'Minder filters' : 'Meer filters'}>
         <SlidersHorizontal size={13}/> <span className="fst-label">{showFields ? 'Minder filters' : 'Meer filters'}</span>
         {activeFieldCount > 0 && <span className="fst-count">{activeFieldCount}</span>}
       </button>

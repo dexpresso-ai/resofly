@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit --pretty false",
     "test": "node --test supabase/functions/_shared/*.test.ts src/lib/*.test.ts",
+    "test:mobile": "node tests/mobile/run.mjs",
     "lint:sql": "node -e \"console.log('SQL lint placeholder')\""
   },
   "dependencies": {
@@ -20,6 +21,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.1",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",

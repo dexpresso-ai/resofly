@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Screenshots van de mobiele lay-outtest
+tests/mobile/shots/
+
 # Build output
 dist/
 build/
