@@ -8900,3 +8900,554 @@ button.task-agenda-when:hover{text-decoration:underline}
   .wp-proposal{bottom:calc(var(--bottomnav-h,58px) + 12px);max-width:94vw}
   .wp-proposal-text{white-space:normal}
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBIEL & TABLET · COMPACT  (2026-09-13)
+   ───────────────────────────────────────────────────────────────────────
+   Uitgangspunt: op een telefoon en tablet hoort het scherm aan het werk
+   toe, niet aan koppen, knoppenbalken en filters. Gemeten vóór deze ronde
+   (iPhone-formaat, 390×844): de eerste klant stond op 680px, het eerste
+   project op 620px, de eerste taak in de weekplanner op 750px, het
+   dashboard begon met 750px aan cijferkaarten. De vaste chrome (titelbalk
+   + werktabs + onderbalk) nam 163 van de 844 pixels.
+
+   Wat hier verandert, in volgorde van de cascade:
+     1. Shell   — de titelbalk verdwijnt op de telefoon: de actieve werktab
+                  draagt de naam al. Ververs en de alleen-lezen-melding
+                  verhuizen naar het uitschuifmenu. De teamchat-knop zit in
+                  de bovenrij; alleen Gerrie blijft rechtsonder zweven.
+                  Onderbalk 54px i.p.v. 58. Chrome: 163 → ~100px.
+     2. Zoeken  — het gedeelde zoek-/filterblok wordt één rij: zoekveld +
+                  filterknop. De telkaart ("6 van 6 zichtbaar") verdwijnt
+                  zolang er niets gefilterd is; chips en knoppen worden
+                  veegrijen. Van ~330px naar ~60px.
+     3. Pagina's — per pagina de knoppen op één rij, cijfers in drie
+                  kolommen, koppen zonder herhaling van de paginanaam.
+     4. Tablet  — een staande tablet (761–1024px) krijgt dezelfde compacte
+                  bovenbalk en hetzelfde compacte zoekblok; de paginakoppen
+                  die de titelbalk herhalen gaan ook daar weg.
+
+   Bewust helemaal achteraan: op gelijke specificiteit wint de laatste
+   regel, en bijna alles hieronder overschrijft een eerdere mobiele regel.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Hulpklassen die de TSX zet; standaard onzichtbaar ─────────────────── */
+.sidebar-refresh,.sidebar-readonly,.fsa-count{display:none}
+
+/* ═══ 1 · SHELL — één bovenrij, kleinere onderbalk ═══════════════════════ */
+@media(max-width:760px){
+  :root{--bottomnav-h:54px}
+  .app{--tabbar-h:46px}
+
+  /* De titelbalk is weg: de actieve werktab is de titel, "Ververs" staat in
+     het menu. Zonder deze balk zit de hamburger in de tabbalk, dus die houdt
+     links altijd ruimte vrij (ook als de pagina géén titelbalk had). */
+  .topbar{display:none}
+  .tabbar,.main:has(>.topbar) .tabbar{order:0;height:var(--tabbar-h);padding:0 8px 0 54px;gap:5px}
+  .app:has(.team-chat-dock-root) .tabbar{padding-right:50px}
+  .tabbar-strip{gap:5px}
+  .tab{height:34px;padding:0 10px}
+  .tab.active{padding:0 4px 0 11px}
+  .tab.active .tab-label{max-width:min(12rem,44vw);margin-left:7px;font-size:13px}
+  .tab-close{width:24px;height:24px;margin-left:3px}
+  .tab-new{width:32px;height:32px}
+  .mobile-nav-toggle{top:6px;left:10px;width:34px;height:34px;border-radius:10px}
+
+  /* Teamchat als icoon in de bovenrij i.p.v. een tweede zwevende knop die de
+     laatste kaart van elke lijst afdekte. Het paneel zelf blijft schermvullend. */
+  .team-chat-dock-root{position:fixed;top:6px;right:8px;left:auto;bottom:auto;z-index:65;gap:0}
+  .team-chat-fab{width:34px;height:34px;border-radius:10px;box-shadow:none;background:rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)));border:1px solid var(--border);color:var(--muted2)}
+  .team-chat-fab svg{width:18px;height:18px}
+  .team-chat-fab:hover{transform:none;box-shadow:none;color:var(--text)}
+  .team-chat-fab-badge{top:-5px;right:-5px;min-width:16px;height:16px;padding:0 4px;font-size:9px}
+  .team-chat-dock{position:fixed;inset:0;width:100%;max-width:100%;height:100dvh;max-height:none;border-radius:0;border:none}
+  .team-chat-fab.is-open{display:none}
+
+  /* Gerrie blijft rechtsonder, maar kleiner; de agenda-"+" staat erboven. */
+  .gerrie-root{right:12px;bottom:calc(var(--bottomnav-h) + 12px + env(safe-area-inset-bottom))}
+  .gerrie-fab{width:46px;height:46px}
+  .gerrie-fab svg{width:24px;height:24px}
+  .tb-fab{right:13px;width:44px;height:44px;bottom:calc(var(--bottomnav-h) + 68px + env(safe-area-inset-bottom))}
+
+  /* Onderbalk: iets lager, labels iets groter. */
+  .bottomnav{height:calc(var(--bottomnav-h) + env(safe-area-inset-bottom));padding:0 2px env(safe-area-inset-bottom)}
+  .bn-item{gap:2px;padding:4px 2px;min-height:44px;font-size:10px}
+  .bn-item svg{width:21px;height:21px}
+
+  /* Inhoud: smallere marges (elke kaart wint 8px breedte) en onderaan nog
+     maar één zwevende knop om vrij te houden. */
+  .content{padding:12px 12px 76px}
+  .content:has(.calendar-agenda-page),
+  .content:has(.odrv),
+  .content:has(.chat-shell.chat-page){padding:12px 12px 12px}
+  .toast-region{bottom:calc(var(--bottomnav-h) + 10px + env(safe-area-inset-bottom))}
+
+  /* Uitschuifmenu: ververs-knop naast het sluitkruisje, alleen-lezen onder de
+     organisatiekeuze. De kop zelf wat lager. */
+  .sidebar-head{padding:14px 100px 12px 16px}
+  .sidebar-close{top:12px;right:12px}
+  .sidebar-refresh{
+    display:inline-flex;align-items:center;justify-content:center;
+    position:absolute;top:12px;right:54px;z-index:2;
+    width:36px;height:36px;border-radius:10px;
+    border:1px solid var(--border);background:rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)));
+    color:var(--muted2);cursor:pointer;
+  }
+  .sidebar-refresh:disabled{opacity:.6;cursor:default}
+  .sidebar-refresh.is-busy svg{animation:sidebar-refresh-spin 1s linear infinite}
+  @keyframes sidebar-refresh-spin{to{transform:rotate(360deg)}}
+  .sidebar-readonly{
+    display:flex;align-items:center;gap:6px;
+    padding:6px 9px;border-radius:8px;
+    background:rgba(var(--warn-rgb),.12);border:1px solid rgba(var(--warn-rgb),.3);
+    color:var(--accent-o);font-size:11px;font-weight:600;
+  }
+  .org-switcher{margin-top:10px;padding:9px}
+  .sidebar-nav{padding:6px 8px}
+  .nav-item{padding:9px 9px;min-height:42px}
+  .nav-section{padding:10px 6px 4px}
+  .sidebar-user{padding:8px}
+}
+
+/* ═══ 2 · ZOEK-/FILTERBLOK — één rij zoeken, de rest achter een knop ═══════
+   Geldt tot en met de staande tablet. Opbouw (flex-wrap, met `order`):
+     kop (knoppen als veegrij) → zoekveld + filterknop → chips (veegrij) →
+     velden (dicht tot je op de knop tikt) → "N van M · filters wissen"
+     (alleen zolang er iets gefilterd is).
+   De telkaart is weg: zolang je niets filtert zegt "6 van 6" niets, en
+   zodra je wél filtert staat het getal in de wisregel. */
+@media(max-width:1024px){
+  .finance-search-card,
+  .finance-search-card.has-head,
+  .finance-search-card.is-bar{
+    display:flex;flex-wrap:wrap;align-items:center;gap:8px;
+    padding:10px;border-radius:16px;margin:0 0 10px;max-width:none;
+  }
+  .finance-search-card .finance-search-main{display:contents}
+  .finance-search-card .finance-search-head{
+    flex:1 0 100%;order:0;display:flex;align-items:center;justify-content:space-between;gap:8px;
+    padding:0;border:0;margin:0;
+  }
+  .finance-search-card .finance-search-head:empty{display:none}
+  .finance-search-card .fsh-actions{
+    flex:1 1 auto;justify-content:flex-start;gap:6px;min-width:0;
+    flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;
+    padding-bottom:1px;
+  }
+  .finance-search-card .fsh-actions::-webkit-scrollbar{display:none}
+  .finance-search-card .fsh-actions>*{flex:0 0 auto}
+  .finance-search-card .fsh-actions .btn{width:auto;min-height:36px;white-space:nowrap}
+  .finance-search-card .fsh-actions .btn-primary{margin-left:auto}
+  .finance-search-card .fsh-actions .project-view-toggle,
+  .finance-search-card .fsh-actions .client-view-toggle{width:auto}
+  .finance-search-card .fsh-actions .project-view-toggle button,
+  .finance-search-card .fsh-actions .client-view-toggle button{flex:0 0 auto}
+  .finance-search-card .fsh-actions .projects-filter-select,
+  .finance-search-card .fsh-actions .select-control{width:auto;min-width:0}
+  .finance-search-card .fsh-actions .select-trigger{min-height:36px;padding-block:0}
+
+  /* Zoekveld: het vergrootglas ín het veld, het label "Snel zoeken" weg. */
+  .finance-search-card .finance-search-query{position:relative;order:1;flex:1 1 200px;min-width:0;max-width:none;gap:0}
+  .finance-search-card .finance-search-query>span{
+    position:absolute;top:0;bottom:0;left:12px;z-index:1;display:flex;align-items:center;
+    gap:0;font-size:0;letter-spacing:0;pointer-events:none;color:var(--muted);
+  }
+  .finance-search-card .finance-search-query>span svg{width:15px;height:15px}
+  .finance-search-card .finance-search-query .form-input{min-height:40px;border-radius:12px;padding:8px 12px 8px 36px}
+  .finance-search-card .finance-search-result-card{display:none}
+
+  /* Filterknop: alleen het icoon, met een teller als er velden aanstaan. */
+  .finance-search-card .finance-search-toggle{
+    position:relative;order:2;display:inline-flex;align-items:center;justify-content:center;
+    flex:0 0 auto;width:40px;height:40px;min-height:0;padding:0;margin:0;
+    border:1px solid var(--border);border-radius:12px;
+    background:rgba(var(--sheen-rgb),calc(.045 * var(--sheen-k)));color:var(--muted2);cursor:pointer;
+  }
+  .finance-search-card .finance-search-toggle[aria-expanded="true"]{color:var(--accent-ink);border-color:rgba(var(--accent-rgb),.42);background:rgba(var(--accent-rgb),.1)}
+  .finance-search-card .finance-search-toggle svg{width:16px;height:16px}
+  .finance-search-card .finance-search-toggle .fst-label{display:none}
+  .finance-search-card .finance-search-toggle .fst-count{
+    position:absolute;top:-5px;right:-5px;min-width:17px;height:17px;padding:0 4px;
+    border-radius:999px;background:var(--accent);color:var(--on-accent);font-size:9.5px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;
+  }
+
+  /* Chips: één veegrij die tot de kaartrand doorloopt. */
+  .finance-search-card .finance-search-chips{
+    order:3;flex:1 0 100%;flex-wrap:nowrap;gap:6px;
+    overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;
+    margin:0 -10px;padding:0 10px 1px;width:auto;
+  }
+  .finance-search-card .finance-search-chips::-webkit-scrollbar{display:none}
+  .finance-search-card .finance-search-chip{flex:0 0 auto;min-height:32px;padding:5px 10px 5px 8px;font-size:11px}
+
+  /* Velden: dicht achter de knop; open = twee per rij. */
+  .finance-search-card .finance-search-grid{order:4;flex:1 0 100%;display:grid;grid-template-columns:1fr 1fr;gap:8px;justify-content:stretch}
+  .finance-search-card .finance-search-grid.is-collapsed{display:none}
+  .finance-search-card .finance-search-field{gap:4px;min-width:0}
+  .finance-search-card .finance-search-field>span{position:static;width:auto;height:auto;margin:0;overflow:visible;clip-path:none;white-space:normal;font-size:10.5px}
+  .finance-search-card .finance-search-field .select-control,
+  .finance-search-card .finance-search-field .select-trigger{width:100%;max-width:none;border-radius:10px;padding:0 30px 0 11px}
+
+  /* Wisregel: één regel, met het aantal dat overblijft. */
+  .finance-search-card .finance-search-active-row{order:5;flex:1 0 100%;flex-direction:row;align-items:center;justify-content:space-between;gap:8px;padding:0}
+  .finance-search-card .finance-search-active-row span{min-height:26px;padding:3px 9px;font-size:10.5px}
+  .finance-search-card .finance-search-active-row button{justify-content:center;padding:5px 10px;font-size:10.5px}
+  .fsa-count{display:inline;font-weight:700}
+
+  /* Weekplanner-kop (`is-bar`): het weeklabel en de uren blijven, want die
+     staan nergens anders. De titel niet — die staat op het werktabblad. */
+  .finance-search-card.is-bar .finance-search-head{flex-wrap:wrap}
+  .finance-search-card.is-bar .finance-search-head .fsh-text{display:flex;flex:1 1 100%;align-items:baseline;gap:3px 8px;flex-wrap:wrap;font-size:11.5px}
+  .finance-search-card.is-bar .finance-search-head h2{display:none}
+  .finance-search-card.is-bar .fsh-actions{flex-wrap:wrap;overflow:visible;gap:6px}
+  .finance-search-card.is-bar .wp-seg button,
+  .finance-search-card.is-bar .wp-nav button,
+  .finance-search-card.is-bar .wp-cap-btn{min-height:34px;padding:0 10px;font-size:11.5px}
+  .finance-search-card.is-bar .wp-nav{margin-left:auto}
+}
+
+/* ═══ 3 · PAGINA'S ══════════════════════════════════════════════════════════ */
+@media(max-width:760px){
+  /* ── Klanten: één knoppenrij (weergave · importeren · nieuw); de kaart
+        eromheen was alleen nog een lege rand. ── */
+  .clients-page-head{padding:0;border:0;background:none;box-shadow:none;margin-bottom:8px;gap:0}
+  .clients-toolbar-actions{display:flex;flex-wrap:nowrap;align-items:center;gap:6px;width:100%}
+  .client-view-toggle{width:auto;flex:0 0 auto}
+  .client-view-toggle button{flex:0 0 auto;padding:8px 11px}
+  .clients-toolbar-actions .btn{width:auto;min-height:38px;white-space:nowrap}
+  .clients-toolbar-actions .btn-primary{flex:1 1 auto}
+  .clients-toolbar-actions .btn-label{display:none}
+  .client-tabs-bar.is-idle{display:none}
+  .clients-page .client-tabs-bar{margin-bottom:8px}
+  .clients-page .client-tab-btn{height:34px;padding:0 12px;font-size:12px}
+  .clients-grid{gap:8px}
+  .client-card{padding:12px}
+  .cc-avatar{width:32px;height:32px;font-size:12px;border-radius:9px;margin-bottom:8px}
+
+  /* ── Tickets: de vijf statuskaarten worden vijf pillen op één veegrij,
+        de weergavekeuze en "nieuw" delen een rij. ── */
+  .ticket-stats{display:flex;flex-wrap:nowrap;gap:6px;margin:0 -12px 8px;padding:0 12px 2px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none}
+  .ticket-stats::-webkit-scrollbar{display:none}
+  .ticket-stat,.ticket-stat.as-filter{flex:0 0 auto;width:auto;display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:999px}
+  .ticket-stat .ts-label{margin:0;font-size:11px;letter-spacing:.02em;text-transform:none;font-weight:600}
+  .ticket-stat .ts-val{font-size:13px;line-height:1}
+  .ticket-stat.as-filter:hover{transform:none}
+  .ticket-toolbar{display:flex;flex-wrap:nowrap;align-items:center;gap:6px;margin-bottom:8px}
+  .ticket-view-switch{width:auto;flex:0 0 auto}
+  .ticket-view-switch button{flex:0 0 auto;padding:7px 10px}
+  .ticket-toolbar .btn-primary{flex:1 1 auto;min-height:38px}
+  .ticket-list{gap:6px}
+  .ticket-item{padding:10px 12px}
+
+  /* ── Offertes / facturen / contracten / marketing: de losse "+ Nieuw"-knop
+        boven het zoekblok krijgt minder lucht. ── */
+  .fin-header,.crm-toolbar{margin-bottom:8px;gap:6px}
+  .fin-header .btn,.crm-toolbar .btn{min-height:38px}
+  .fin-autobook-banner{padding:9px 11px;font-size:12px}
+  .mk{gap:10px}
+  .mk-head{margin:0;gap:8px}
+  .mk-head .btn{min-height:38px}
+
+  /* ── Dashboard: zes cijfers in drie kolommen (was 2×3 kaarten van 230px),
+        en de takenregels houden hun titel op één plek: de chips staan
+        rechts onder elkaar in plaats van naast de titel. ── */
+  .dash-stats,.dash-stats.dash-stats-rich{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-bottom:10px}
+  .stat-card{padding:9px 9px 8px;border-radius:12px;min-width:0;overflow:hidden}
+  .stat-card>svg{display:none}
+  .stat-card .sc-label{font-size:8.5px;letter-spacing:.05em;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stat-card .sc-val{font-size:15px;letter-spacing:-.02em;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stat-card .sc-sub{margin-top:3px;font-size:9.5px;gap:4px;white-space:nowrap;overflow:hidden}
+  .stat-card .sc-sub>span:not(.sc-trend){overflow:hidden;text-overflow:ellipsis}
+  .stat-card .sc-trend{padding:0 4px;font-size:9px;flex:0 0 auto}
+  .dash-stack{gap:10px}
+  .today-card,.weekactions-card,.attention-card{padding:11px 12px;border-radius:14px}
+  .dash-card-head{flex-direction:row;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+  .dash-card-head h2{font-size:14px}
+  .dash-card-head p{font-size:10.5px;margin-top:1px}
+  .dash-head-tools{flex:0 0 auto;justify-content:flex-end;gap:6px}
+  .dash-scope button{min-height:32px;padding:6px 10px;font-size:11px}
+  .dash-task{padding:8px 9px;gap:8px;align-items:center;margin-bottom:5px}
+  .dash-task-main strong{font-size:12.5px;-webkit-line-clamp:2}
+  .dash-task-tags{flex:0 0 auto;flex-direction:column;align-items:flex-end;gap:3px;max-width:42%}
+  .dash-chip{font-size:9px;padding:2px 6px;letter-spacing:.02em;white-space:nowrap}
+  .attention-list>*{min-height:44px}
+
+  /* ── Klantdossier: terugknop als tekst, avatar naast de naam, acties als
+        veegrij, cijfers in drie kolommen. ── */
+  .client-detail-hero{padding:10px 12px;gap:8px;border-radius:14px;align-items:stretch}
+  .client-detail-title{gap:6px;min-width:0;width:100%}
+  .client-detail-title>.btn{align-self:flex-start;min-height:0;padding:2px 0;border:0;background:transparent;color:var(--muted2);font-size:11.5px}
+  .client-title-row{gap:10px}
+  .client-hero-avatar{width:40px;height:40px;font-size:15px;border-radius:11px;box-shadow:none;flex:0 0 auto}
+  .client-title-row h2{font-size:19px;margin-bottom:2px}
+  .client-hero-meta{margin-top:2px;gap:6px}
+  .client-detail-actions{width:100%;flex-wrap:nowrap;gap:6px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;padding-bottom:1px}
+  .client-detail-actions::-webkit-scrollbar{display:none}
+  .client-detail-actions .btn{flex:0 0 auto;min-height:36px;white-space:nowrap}
+  .client-billing-alert{padding:8px 12px;gap:2px;border-radius:10px}
+  .client-billing-alert strong{font-size:13px}
+  .client-billing-alert span{font-size:12px}
+  .client-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  .client-kpi{padding:8px 9px;gap:2px;border-radius:10px;min-width:0}
+  .client-kpi span{font-size:8.5px;letter-spacing:.05em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .client-kpi strong{font-size:17px}
+  .client-kpi small{font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .client-detail-page .client-tabs-bar{margin-top:2px}
+  .client-tab-search{gap:6px}
+
+  /* ── Projectpagina: de kop is één kaart met de cijfers eronder; alles een
+        maat kleiner, de voortgang als rij met balk. ── */
+  .proj-dash-hero{padding:10px 12px 0;border-radius:14px;margin-bottom:8px}
+  .proj-dash-hero-content{gap:8px;padding-top:2px}
+  .proj-dash-hero-kicker{font-size:10px;margin-bottom:2px}
+  .proj-dash-hero-desc{font-size:12px}
+  .proj-dash-hero-meta{margin-top:6px;gap:4px}
+  .proj-chip{font-size:10.5px;padding:3px 8px}
+  .proj-dash-hero-actions .btn{min-height:36px}
+  .proj-dash-stats{margin-top:8px}
+  .proj-dash-stat{padding:7px 8px 8px;gap:0}
+  .proj-dash-stat-val{font-size:15px}
+  .proj-dash-stat-lbl{font-size:8.5px;letter-spacing:.04em}
+  .proj-dash-stat-sub{font-size:10px}
+  .proj-dash-stat-progress{flex-direction:row;align-items:center;gap:8px;padding:7px 8px}
+  .proj-dash-stat-progress .proj-dash-progress-bar{flex:1 1 auto;margin:0}
+  .proj-dash-stat-progress .proj-dash-stat-lbl{flex:0 0 auto;white-space:nowrap}
+  .proj-dash-stat-progress .proj-dash-stat-val{flex:0 0 auto}
+
+  /* ── Weekplanner: dichtheid ("Compact/Ruim") is op één kolom geen keuze
+        meer; de mindere weekcijfers gaan weg; het meeneem-paneel wordt twee
+        regels in plaats van vijf. ── */
+  .finance-search-card.is-bar .wp-seg[aria-label="Hoeveel detail per kaart"]{display:none}
+  .wp-meta-minor{display:none}
+  .wp-rollover{padding:8px 10px;gap:6px;border-radius:10px}
+  .wp-rollover-row{gap:6px}
+  .wp-rollover-row>strong{flex:1 1 100%;font-size:12px}
+  .wp-rollover-toggle{order:3;padding:6px 9px}
+  .wp-rollover-grow{display:none}
+  .wp-rollover-targets{order:1}
+  .wp-rollover-targets button{padding:6px 9px;font-size:11px}
+  .wp-rollover-row>.wp-rollover-btn:not(.is-ghost){order:2;flex:1 1 auto;padding:7px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .wp-rollover-row>.wp-rollover-btn.is-ghost{order:4;padding:6px 9px}
+  .wp-deadline-cue{padding:6px 10px;font-size:11px}
+  .wp-tray-head{padding:8px 10px 8px 12px}
+  .wp-daystrip{gap:3px;margin-bottom:8px}
+  .wp-daystrip-day{min-height:46px;padding:5px 2px}
+  .week-planner{gap:8px}
+
+  /* ── Uren: periodeknoppen op één rij, de timerkaart van 600px naar twee
+        rijen, de cijfers in drie kolommen. ── */
+  .tt-hero{margin-bottom:0;gap:6px}
+  .tt-hero-controls{display:flex;flex-wrap:wrap;gap:6px;width:100%}
+  .tt-period-tabs{display:flex;flex:1 0 100%;padding:3px}
+  .tt-period-tab{flex:1 1 auto;padding:7px 4px;font-size:11.5px;white-space:nowrap}
+  .tt-scope-tog{flex:1 1 auto}
+  .tt-scope-tog button{flex:1;padding:7px 8px;font-size:12px}
+  .tt-hero-controls .btn{flex:0 0 auto;min-height:36px}
+  .tt-custom-range{gap:8px}
+  .tt-custom-range label{flex:1 1 45%}
+  .tt-timer-card{padding:10px;border-radius:12px}
+  .tt-timer-idle{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center}
+  .tt-timer-head{grid-column:1/-1;gap:6px}
+  .tt-timer-head h3{font-size:13px}
+  .tt-timer-idle .settings-grid.compact{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .tt-timer-idle .settings-grid.compact label{font-size:0;gap:0}
+  .tt-timer-idle .settings-grid.compact .select-trigger{min-height:40px;font-size:13px}
+  .tt-timer-idle>.form-input{min-height:40px}
+  .tt-timer-idle>.btn{min-height:40px;padding:0 14px;white-space:nowrap}
+  .tt-timer-running{gap:10px}
+  .tt-timer-clock{font-size:24px}
+  .tt-kpis{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  .tt-kpi{padding:8px 9px;gap:1px;border-radius:10px;min-width:0}
+  .tt-kpi-val{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tt-kpi-lbl{font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tt-criterion{padding:12px}
+  .time-tracking-page{gap:10px}
+
+  /* ── Projectplanning: de kop met uitleg weg (de tab zegt waar je bent), de
+        vier cijfers op één rij, zoeken en klant naast elkaar. ── */
+  .ptl-heading{display:none}
+  .ptl-head{gap:6px}
+  .ptl-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%}
+  .ptl-stats div{padding:0 8px;min-width:0}
+  .ptl-stats strong{font-size:16px}
+  .ptl-stats span{font-size:9px;white-space:normal;line-height:1.2}
+  .ptl-toolbar{gap:6px}
+  .ptl-search{flex:1 1 52%;min-width:0}
+  .ptl-client{flex:1 1 40%;min-width:0}
+  .ptl-toolbar>.ptl-toggle{flex:0 0 auto}
+  .ptl-toolbar-end{margin-left:0;flex:1 1 auto;justify-content:space-between}
+
+  /* ── Instellingen: de kopkaart bevat op de telefoon alleen nog een lege
+        rand (de tekst is verborgen), tenzij de alleen-lezen-uitleg erin staat. ── */
+  .settings-head:not(:has(.settings-help)){display:none}
+  .settings-head{padding:8px 12px;margin-bottom:8px}
+  .client-tabs-bar.settings-tabs-bar{padding:4px 0}
+
+  /* ── Statistieken: de rapportnaam liep over de knoppen heen (het invoerveld
+        krimpt niet onder zijn eigen breedte). Nu onder elkaar, knoppen als
+        veegrij, de bibliotheek als kolom. ── */
+  .rb-page{gap:10px}
+  .rb-toolbar{flex-direction:column;align-items:stretch;gap:8px}
+  .rb-title-area{width:100%;min-width:0}
+  .rb-title-area .form-input{min-width:0;width:100%;max-width:none}
+  .rb-actions{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;gap:6px;padding-bottom:1px}
+  .rb-actions::-webkit-scrollbar{display:none}
+  .rb-actions .btn{flex:0 0 auto;white-space:nowrap;min-height:36px}
+  .rb-library{flex-direction:column;align-items:stretch;gap:8px;padding:10px 12px}
+  .rb-lib-group{width:100%;min-width:0}
+  .rb-library .select-control{flex:1 1 auto;min-width:0;width:auto}
+  .rb-library .btn{flex:0 0 auto}
+
+  /* ── Gerrie: de uitleg onder "Je agents" is een alinea die je één keer
+        leest; de tabs breken niet meer af. ── */
+  .ag-page{padding:10px 0 30px;gap:12px}
+  .ag-page-head{gap:8px;align-items:center}
+  .ag-page-head h2{font-size:17px;margin:0}
+  .ag-page-head p{display:none}
+  .ag-page-head>.cc-btn{padding:8px 12px;font-size:12.5px}
+  .ag-starters-lead{font-size:12.5px}
+  .cc-top{gap:8px;padding-bottom:8px;flex-wrap:wrap}
+  .cc-tabs{width:100%;justify-content:space-between}
+  .cc-tabs .cc-tab{flex:1 1 auto;justify-content:center;padding:7px 6px;font-size:11.5px;white-space:nowrap}
+
+  /* ── Inhoud/notities/documenten: de verkenner iets dichter. ── */
+  .odrv-head{padding:10px 12px 6px}
+  .odrv-cmdbar{padding:0 12px 8px;gap:6px}
+  .odrv-tr{padding:0 6px}
+
+  /* ── Formulieren: labels en velden iets dichter op elkaar. ── */
+  .form-grid{gap:8px}
+  .field>span{margin-bottom:2px}
+}
+
+/* Kleinste telefoons: nog wat lucht uit de dashboardcijfers en de kop van het
+   klantdossier. */
+@media(max-width:400px){
+  .stat-card .sc-val{font-size:14px}
+  .client-kpi strong{font-size:16px}
+  .tab.active .tab-label{max-width:38vw}
+}
+
+/* ═══ 4 · TABLET (761–1024) — zelfde gedachte, meer breedte ═════════════════ */
+@media(min-width:761px) and (max-width:1024px){
+  /* Compacte titelbalk: de naam van de pagina op één regel, geen kopregel. */
+  .topbar{height:52px;min-height:52px;padding:0 18px;box-shadow:none}
+  .topbar-eyebrow{display:none}
+  .topbar-title{font-size:17px}
+  .topbar-actions .btn{min-height:34px;padding:6px 12px}
+  .content{padding:16px 18px 28px}
+
+  /* Paginakoppen die de titelbalk herhalen. */
+  .workspace-hero,
+  .clients-page-head>div:first-child,
+  .finance-search-head .fsh-text,
+  .fin-header>div:first-child,
+  .bk-head>div:first-child,
+  .mk-head>div:first-child,
+  .settings-head>div:first-child,
+  .tt-hero .tt-hero-text,
+  .ptl-heading{display:none}
+  .settings-head:not(:has(.settings-help)){display:none}
+  .clients-page-head{padding:0;border:0;background:none;box-shadow:none}
+  .clients-page-head,.fin-header,.mk-head,.tt-hero{gap:10px;margin-bottom:10px}
+  .bk-head{margin-bottom:10px}
+
+  /* Cijfers in drie kolommen; kaarten een maat kleiner. */
+  .dash-stats,.dash-stats.dash-stats-rich{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}
+  .stat-card{padding:12px 14px}
+  .stat-card .sc-val{font-size:22px}
+  .stat-card .sc-label{margin-bottom:5px}
+  .dash-stack{gap:12px}
+  .client-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .client-kpi{padding:11px 13px}
+  .client-kpi strong{font-size:20px}
+  .tt-kpis{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+  .ticket-stats{gap:8px;margin-bottom:12px}
+  .ticket-stat{padding:12px 14px}
+  .proj-dash-hero{padding:14px 16px 0}
+
+  /* De zijbalk-rail opent op een tablet niet bij "hover"; de vastzetknop is
+     daar de enige manier om de labels te zien — dus altijd zichtbaar. */
+  .sidebar-pin{opacity:1;pointer-events:auto}
+}
+
+/* ── Tweede ronde na de eerste meting ─────────────────────────────────────── */
+@media(max-width:1024px){
+  /* Het klantoverzicht stond hard op twee kolommen (340px + rest) en had op
+     geen enkel breekpunt een uitzondering: op een telefoon liep de rechter-
+     kolom 240px buiten beeld. */
+  .client-overview-layout{grid-template-columns:minmax(0,1fr)}
+}
+@media(max-width:760px){
+  /* Klantgegevens ná projecten en geld: dat is waarvoor je het dossier opent. */
+  .client-overview-sidebar{order:2}
+  .client-overview-main{order:1}
+
+  /* Ticketkaart: de twee knoppen naast elkaar in plaats van onder elkaar. */
+  .ticket-item .tk-actions-btn{display:flex;gap:6px}
+  .ticket-item .tk-actions-btn .btn{flex:1 1 0;width:auto;min-height:36px;padding:6px 8px;white-space:nowrap}
+
+  /* Weekplanner: "Mijn week" brak af in zijn eigen knop. */
+  .wp-seg button,.wp-nav button,.wp-cap-btn{white-space:nowrap}
+  .wp-rollover-row>.wp-rollover-btn:not(.is-ghost){min-width:0}
+  .wp-rollover-targets button,.wp-rollover-toggle,.wp-rollover-row>.wp-rollover-btn{min-height:34px}
+
+  /* Dashboardcijfers: het opschrift past nu zonder afkapping; het "vs. vorige
+     maand" naast de trendpil zegt op een telefoon niets extra's. */
+  .stat-card .sc-label{font-size:8px;letter-spacing:.03em}
+  .stat-card .sc-trend+span{display:none}
+}
+
+/* ── Derde ronde: agenda-werkbalk, rapportbouwer, drawer-kop ─────────────── */
+@media(max-width:760px){
+  /* Agenda: de datum en de bladerknoppen delen één rij; de weergavetabs en
+     de twee icoonknoppen de rij eronder. Was drie rijen van samen ~135px. */
+  .calendar-agenda-page .calendar-toolbar-premium{padding:6px 8px;gap:6px}
+  .calendar-agenda-page .calendar-range-block{order:0;flex:1 1 120px;min-width:0}
+  .calendar-agenda-page .calendar-range{font-size:15px;line-height:1.2}
+  .calendar-agenda-page .calendar-period-controls{order:1;flex:0 0 auto;gap:4px}
+  .calendar-agenda-page .calendar-period-controls .btn{min-height:34px;padding:5px 9px;font-size:11.5px}
+  .calendar-agenda-page .calendar-period-controls .btn:first-child{margin-right:2px}
+  .calendar-toolbar-right{order:2;flex:1 0 100%;margin-left:0;flex-wrap:nowrap;gap:6px;min-width:0}
+  .calendar-toolbar-right>.btn{flex:0 0 auto;min-height:34px;width:34px;padding:0;justify-content:center}
+  .calendar-toolbar-right .calendar-options-toggle{flex:0 0 auto;font-size:11px}
+  .calendar-agenda-page .calendar-toolbar-right .calendar-view-tabs{width:auto;flex:1 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none}
+  .calendar-view-tabs .tb-vbtn{flex:1 1 auto;min-height:34px;padding:0 8px;font-size:11.5px}
+  .calendar-view-tabs .tb-vbtn svg{display:none}
+  .calendar-loading-hint{display:none}
+
+  /* Rapportbouwer: de instellingen twee per rij i.p.v. vijf stroken van 110px. */
+  .rb-config{display:grid;grid-template-columns:1fr 1fr;gap:10px 8px;padding:12px;position:static}
+  .rb-config .rb-field{min-width:0}
+  .rb-config .rb-field:has(.rb-filters),
+  .rb-config .rb-field:has(.rb-chart-seg){grid-column:1/-1}
+  .rb-config .rb-filters{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .rb-config .rb-filters>*{min-width:0}
+  .rb-chart-seg{width:100%}
+  .rb-chart-seg button{flex:1;justify-content:center}
+  .rb-layout{gap:10px}
+
+  /* Projectplanning: "Alleen actief" naast de periode en "Vandaag". */
+  .ptl-toolbar-end{flex:0 1 auto;margin-left:auto}
+
+  /* Drawer: de organisatieregel brak "+ administratie" over twee regels. */
+  .org-meta{flex-wrap:wrap;gap:4px 10px}
+  .org-meta button{white-space:nowrap}
+}
+
+/* ── Vierde ronde: open panelen en het projectkanban ─────────────────────── */
+@media(max-width:760px){
+  /* Zolang Gerrie of de teamchat schermvullend openstaat, hoort de zwevende
+     hamburger niet over de kop van dat paneel te liggen. */
+  .app:has(.gerrie-panel) .mobile-nav-toggle,
+  .app:has(.team-chat-dock) .mobile-nav-toggle,
+  .app:has(.gerrie-panel) .team-chat-dock-root{display:none}
+
+  /* Projectkanban: was een raster van vier kolommen dat op de telefoon twee
+     smalle kolommen van 175px werd. Nu één kolom per veeg, zoals de losse
+     kanban al deed. */
+  .proj-dash-kanban{display:flex;flex-wrap:nowrap;gap:10px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x mandatory;padding-bottom:8px;margin:0 -12px;padding-left:12px;padding-right:12px;scrollbar-width:none}
+  .proj-dash-kanban::-webkit-scrollbar{display:none}
+  .proj-dash-kanban .kan-col{flex:0 0 min(84vw,300px);width:min(84vw,300px);min-width:0;scroll-snap-align:start}
+}

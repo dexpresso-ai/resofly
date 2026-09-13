@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, Scale, Sparkles, StickyNote, Sun, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, StickyNote, Sun, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, type SettingsTab } from '../features/SimplePages';
@@ -85,6 +85,9 @@ export function Sidebar({
   pinned = false,
   onTogglePin,
   permissions = FULL_PERMISSIONS,
+  onRefresh,
+  refreshing = false,
+  readOnly = false,
 }: {
   page: Page;
   data: AppData;
@@ -110,6 +113,12 @@ export function Sidebar({
   /** Modulerechten van het ingelogde teamlid; modules zonder leesrecht
    *  verschijnen niet in het menu. Standaard alles zichtbaar. */
   permissions?: Permissions;
+  /** Op de telefoon is er geen titelbalk meer: de werktab draagt de naam van de
+   *  pagina. "Ververs" en de alleen-lezen-melding verhuizen daarom naar de kop
+   *  van dit uitschuifmenu (alleen zichtbaar ≤760px, zie globals.css). */
+  onRefresh?: () => void;
+  refreshing?: boolean;
+  readOnly?: boolean;
 }) {
   const [financeOpen, setFinanceOpen] = useState(() => financePages.includes(page));
   const [projectsOpen, setProjectsOpen] = useState(() => projectPages.includes(page));
@@ -200,6 +209,7 @@ export function Sidebar({
   return <aside className={`sidebar${mobileOpen ? ' is-open' : ''}${userMenuOpen ? ' user-open' : ''}`}>
     <div className="sidebar-head">
       <button type="button" className="sidebar-close" onClick={onCloseMobile} aria-label="Menu sluiten"><X size={20}/></button>
+      {onRefresh && <button type="button" className={`sidebar-refresh${refreshing ? ' is-busy' : ''}`} onClick={onRefresh} disabled={refreshing} aria-label="Gegevens verversen" title="Verversen"><RefreshCw size={17}/></button>}
       <button type="button" className="sidebar-pin" onClick={onTogglePin} aria-pressed={pinned} aria-label={pinned ? 'Menu losmaken' : 'Menu vastzetten'} title={pinned ? 'Menu losmaken' : 'Menu vastzetten'}>{pinned ? <PinOff size={15}/> : <Pin size={15}/>}</button>
       <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div>
       <div className="org-switcher">
@@ -212,6 +222,7 @@ export function Sidebar({
                 {group.children.map(child => <option key={child.id} value={child.id}>{child.name}</option>)}
               </optgroup>)}
         </Select>
+        {readOnly && <div className="sidebar-readonly"><Lock size={12} aria-hidden="true"/><span>Alleen lezen op deze pagina</span></div>}
         <div className="org-meta">
           <span>{activeRole ?? 'geen rol'}</span>
           {onNewEntity && <button onClick={onNewEntity}>+ administratie</button>}

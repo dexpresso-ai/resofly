@@ -224,7 +224,7 @@ export function Clients({
           <button type="button" className={viewMode === 'cards' ? 'active' : ''} onClick={() => changeViewMode('cards')} aria-pressed={viewMode === 'cards'}>Kaarten</button>
           <button type="button" className={viewMode === 'table' ? 'active' : ''} onClick={() => changeViewMode('table')} aria-pressed={viewMode === 'table'}>Tabel</button>
         </div>
-        <Button onClick={() => setImporting(true)} disabled={!canWrite}><Upload size={15} /> Importeren</Button>
+        <Button onClick={() => setImporting(true)} disabled={!canWrite} title="Klanten importeren" aria-label="Klanten importeren"><Upload size={15} /> <span className="btn-label">Importeren</span></Button>
         <Button variant="primary" onClick={onNew}>+ Nieuwe klant</Button>
       </div>
     </div>
@@ -247,6 +247,10 @@ export function Clients({
       active={listTab}
       onSelect={setListTab}
       label="Klanten en binnengekomen mail"
+      // Meestal is de opvangbak leeg; op de telefoon kost een strook met één
+      // keuze dan alleen ruimte. Zodra er iets in ligt (of je erin kijkt) staat
+      // hij er gewoon — de CSS verbergt `is-idle` alleen ≤760px.
+      className={inboxCount === 0 && listTab === 'clients' ? 'is-idle' : undefined}
     />
 
     {listTab === 'inbox' && <InboundInboxTab

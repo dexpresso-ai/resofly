@@ -156,7 +156,7 @@ export function SearchFilterPanel({
 
     {fields.length > 0 && <>
       <button type="button" className="finance-search-toggle" onClick={() => setShowFields(value => !value)} aria-expanded={showFields} aria-controls={fieldsId}>
-        <SlidersHorizontal size={13}/> {showFields ? 'Minder filters' : 'Meer filters'}
+        <SlidersHorizontal size={13}/> <span className="fst-label">{showFields ? 'Minder filters' : 'Meer filters'}</span>
         {activeFieldCount > 0 && <span className="fst-count">{activeFieldCount}</span>}
       </button>
 
@@ -186,7 +186,8 @@ export function SearchFilterPanel({
     </>}
 
     {activeFilterCount > 0 && <div className="finance-search-active-row">
-      <span>{activeFilterCount} filter{activeFilterCount === 1 ? '' : 's'} actief</span>
+      {/* Op de telefoon is de telkaart weg; dan zegt deze regel zelf wat er overblijft. */}
+      <span><b className="fsa-count">{visibleCount} van {totalCount} {noun} · </b>{activeFilterCount} filter{activeFilterCount === 1 ? '' : 's'} actief</span>
       <button type="button" onClick={onReset}><RotateCcw size={14}/> Filters wissen</button>
     </div>}
   </section>;

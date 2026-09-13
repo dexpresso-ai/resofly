@@ -1857,12 +1857,14 @@ export function WeekPlanner({
         meta: <>
           {weekLabel}
           <i aria-hidden="true"/><span><b>{formatDuration(weekTaskMinutes)}</b> taken</span>
+          {/* `wp-meta-minor`: op de telefoon blijven alleen de weekdatums en de
+              twee urentotalen over — de rest is daar een derde regel waard. */}
           {weekBucket.agendaMinutes > 0 && <>
-            <i aria-hidden="true"/><span><b>{formatDuration(weekBucket.agendaMinutes)}</b> afspraken</span>
+            <i aria-hidden="true" className="wp-meta-minor"/><span className="wp-meta-minor"><b>{formatDuration(weekBucket.agendaMinutes)}</b> afspraken</span>
             <i aria-hidden="true"/><span><b>{formatDuration(weekTaskMinutes + weekBucket.agendaMinutes)}</b> belegd</span>
           </>}
-          <i aria-hidden="true"/><span>{weekTaskCount} {weekTaskCount === 1 ? 'taak' : 'taken'}</span>
-          {busiestKey && <><i aria-hidden="true"/><span>Volst: {formatDayShort(busiestKey)} · {formatDuration(busiestMinutes)}</span></>}
+          <i aria-hidden="true" className="wp-meta-minor"/><span className="wp-meta-minor">{weekTaskCount} {weekTaskCount === 1 ? 'taak' : 'taken'}</span>
+          {busiestKey && <><i aria-hidden="true" className="wp-meta-minor"/><span className="wp-meta-minor">Volst: {formatDayShort(busiestKey)} · {formatDuration(busiestMinutes)}</span></>}
           {weekBucket.noEstimateCount > 0 && <><i aria-hidden="true"/><em>
             {weekBucket.noEstimateCount === 1 ? '1 taak zonder schatting' : `${weekBucket.noEstimateCount} taken zonder schatting`}
           </em></>}
