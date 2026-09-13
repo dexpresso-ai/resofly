@@ -214,6 +214,9 @@ type StoredPrefs = {
   scope: Scope;
   density: Density;
   layout: Layout;
+  /** Sinds welke ronde de weergavekeuze telt. Vóór versie 2 bestond het rooster
+   *  niet; een bewaarde "onder elkaar" van toen is geen keuze tégen het rooster. */
+  layoutVersion?: number;
   /** Weekdagnummers (0 = maandag … 6 = zondag) die dichtgeklapt staan. Op
    *  nummer en niet op datum: wie het weekend dichtklapt wil dat volgende week
    *  ook, en anders staat elke nieuwe week weer helemaal open. */
@@ -299,9 +302,11 @@ export function WeekPlanner({
   const [anchor, setAnchor] = useState<Date>(() => startOfWeek(new Date()));
   const [scope, setScope] = useState<Scope>(storedPrefs.scope === 'team' ? 'team' : 'mine');
   const [density, setDensity] = useState<Density>(storedPrefs.density === 'comfortable' ? 'comfortable' : 'compact');
-  // Het rooster is de standaard. Wie eerder "onder elkaar" koos houdt de lijst;
-  // de oude kolomweergave bestaat niet meer — het rooster ís de kolomweergave.
-  const [layout, setLayout] = useState<Layout>(storedPrefs.layout === 'stack' ? 'stack' : 'grid');
+  // Het rooster is de standaard — ook voor wie vóór deze ronde "onder elkaar"
+  // koos, want toen was er nog geen rooster om tegen te kiezen. Wie daarna
+  // bewust "Lijst" kiest houdt dat wel (layoutVersion 2). De oude kolomweergave
+  // bestaat niet meer: het rooster ís de kolomweergave.
+  const [layout, setLayout] = useState<Layout>(storedPrefs.layoutVersion === 2 && storedPrefs.layout === 'stack' ? 'stack' : 'grid');
   const [collapsedDays, setCollapsedDays] = useState<number[]>(() => (Array.isArray(storedPrefs.collapsedDays)
     ? storedPrefs.collapsedDays.filter(day => Number.isInteger(day) && day >= 0 && day <= 6)
     : []));
@@ -376,6 +381,7 @@ export function WeekPlanner({
       scope,
       density,
       layout,
+      layoutVersion: 2,
       collapsedDays,
       clientId: filters.clientId,
       projectId: filters.projectId,
