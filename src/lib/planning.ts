@@ -76,12 +76,13 @@ export function applyPlanningLocally(
         planned_date: plannedDate,
         planned_order: (index + 1) * PLANNING_ORDER_STEP,
         // In een dagkolom laten vallen maakt er een dagtaak van; alleen de
-        // versleepte taak verliest zijn looptijd, net als in de RPC.
+        // versleepte taak verliest zijn looptijd én zijn tijdstip, net als in de RPC.
         planned_end_date: task.id === taskId ? null : task.planned_end_date,
+        planned_start_minute: task.id === taskId ? null : task.planned_start_minute,
       });
     });
   } else {
-    patches.set(moving.id, { ...moving, planned_date: null, planned_end_date: null, planned_order: null });
+    patches.set(moving.id, { ...moving, planned_date: null, planned_end_date: null, planned_start_minute: null, planned_order: null });
   }
 
   // De dag waar de taak vandaan komt houdt een gat; die nummeren we opnieuw.
@@ -352,4 +353,222 @@ export function restoreTasksForDates(current: Task[], snapshot: Task[], dates: (
     if (!keys.has(dayOf(task)) && !keys.has(dayOf(original))) return task;
     return original;
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tijdblokken: een taak op een tijdstip in de dag (2026-09-12)
+//
+// De weekplanner tekent taken sinds deze ronde in hetzelfde tijdrooster als de
+// agenda. Een taak zonder tijd staat in de dagband ("nog geen tijd"); zodra hij
+// een `planned_start_minute` heeft is hij een blok, met de schatting als duur.
+// Alles hieronder is puur rekenwerk, zonder DOM en zonder imports, zodat het
+// onder de Node-testrunner draait.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Duur van een blok voor een taak zonder schatting: een uur, tot je hem oprekt. */
+export const DEFAULT_BLOCK_MINUTES = 60;
+/** Blokken klikken op het kwartier, net als afspraken in de agenda. */
+export const BLOCK_SNAP_MINUTES = 15;
+export const MIN_BLOCK_MINUTES = 15;
+const DAY_END_MINUTE = 24 * 60;
+
+/** Staat deze taak op een tijdstip? Een weekstrook nooit — die heeft geen tijd. */
+export function hasPlannedTime(task: Task): boolean {
+  return !!task.planned_date
+    && task.planned_start_minute !== null
+    && task.planned_start_minute !== undefined
+    && Number.isFinite(Number(task.planned_start_minute))
+    && !isSpanningTask(task);
+}
+
+/** Hoeveel minuten beslaat het blok van deze taak? De schatting, en anders een uur. */
+export function taskBlockMinutes(task: Task): number {
+  const raw = task.estimated_minutes === null || task.estimated_minutes === undefined ? NaN : Number(task.estimated_minutes);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_BLOCK_MINUTES;
+  return Math.max(MIN_BLOCK_MINUTES, Math.min(DAY_END_MINUTE, Math.round(raw)));
+}
+
+/** Rondt een minuut in de dag af op het kwartier en houdt hem binnen de dag. */
+export function snapMinute(minute: number, blockMinutes = MIN_BLOCK_MINUTES): number {
+  const snapped = Math.round(minute / BLOCK_SNAP_MINUTES) * BLOCK_SNAP_MINUTES;
+  return Math.max(0, Math.min(DAY_END_MINUTE - Math.max(MIN_BLOCK_MINUTES, blockMinutes), snapped));
+}
+
+/** "09:30" — voor labels op blokken en in menu's. */
+export function clockLabel(minute: number): string {
+  const safe = Math.max(0, Math.min(DAY_END_MINUTE, Math.round(minute)));
+  const hours = Math.floor(safe / 60) % 24;
+  const rest = safe % 60;
+  return String(hours).padStart(2, '0') + ':' + String(rest).padStart(2, '0');
+}
+
+/**
+ * Spiegelt het zetten van een tijdstip in de client. De taak wordt een
+ * dagtaak op `plannedDate` met een tijd; een looptijd vervalt. Verhuist hij
+ * naar een andere dag, dan sluit hij daar achteraan aan en wordt de oude dag
+ * hernummerd — precies wat de server ook doet.
+ */
+export function applyTimeLocally(
+  tasks: Task[],
+  taskId: UUID,
+  plannedDate: string,
+  startMinute: number,
+  minutes?: number | null,
+): Task[] {
+  const moving = tasks.find(task => task.id === taskId);
+  if (!moving) return tasks;
+  const fromDate = moving.planned_date ?? null;
+  const patches = new Map<string, Task>();
+  const dayChanged = fromDate !== plannedDate;
+
+  const siblings = tasks
+    .filter(task => task.planned_date === plannedDate && task.id !== taskId)
+    .sort(comparePlannedTasks);
+  const nextOrder = dayChanged || moving.planned_order === null || moving.planned_order === undefined
+    ? (siblings.length + 1) * PLANNING_ORDER_STEP
+    : moving.planned_order;
+
+  patches.set(taskId, {
+    ...moving,
+    planned_date: plannedDate,
+    planned_end_date: null,
+    planned_start_minute: snapMinute(startMinute, minutes ?? taskBlockMinutes(moving)),
+    planned_order: nextOrder,
+    ...(minutes === null || minutes === undefined ? {} : { estimated_minutes: Math.max(MIN_BLOCK_MINUTES, Math.min(DAY_END_MINUTE, Math.round(minutes))) }),
+  });
+
+  if (dayChanged && fromDate) {
+    tasks
+      .filter(task => task.planned_date === fromDate && task.id !== taskId)
+      .sort(comparePlannedTasks)
+      .forEach((task, index) => {
+        patches.set(task.id, { ...task, planned_order: (index + 1) * PLANNING_ORDER_STEP });
+      });
+  }
+
+  return tasks.map(task => patches.get(task.id) ?? task);
+}
+
+/** Een bezet stuk van een dag, in minuten na middernacht (einde exclusief). */
+export type BusySlot = { start: number; end: number };
+
+/** Voegt overlappende stukken samen en sorteert ze. */
+export function mergeBusySlots(slots: BusySlot[]): BusySlot[] {
+  const sorted = slots
+    .filter(slot => Number.isFinite(slot.start) && Number.isFinite(slot.end) && slot.end > slot.start)
+    .map(slot => ({ start: Math.max(0, slot.start), end: Math.min(DAY_END_MINUTE, slot.end) }))
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged: BusySlot[] = [];
+  for (const slot of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && slot.start <= last.end) last.end = Math.max(last.end, slot.end);
+    else merged.push({ ...slot });
+  }
+  return merged;
+}
+
+/** De vrije gaten binnen een venster, gegeven wat er al bezet is. */
+export function freeGaps(busy: BusySlot[], windowStart: number, windowEnd: number): BusySlot[] {
+  const gaps: BusySlot[] = [];
+  let cursor = windowStart;
+  for (const slot of mergeBusySlots(busy)) {
+    if (slot.end <= cursor) continue;
+    if (slot.start >= windowEnd) break;
+    if (slot.start > cursor) gaps.push({ start: cursor, end: Math.min(slot.start, windowEnd) });
+    cursor = Math.max(cursor, slot.end);
+    if (cursor >= windowEnd) break;
+  }
+  if (cursor < windowEnd) gaps.push({ start: cursor, end: windowEnd });
+  return gaps.filter(gap => gap.end - gap.start >= MIN_BLOCK_MINUTES);
+}
+
+export type PlanProposal = { taskId: UUID; dayKey: string; startMinute: number; minutes: number };
+
+export type AutoPlanInput = {
+  /** De dagen van de zichtbare week, op volgorde. */
+  dayKeys: string[];
+  /** Wat er per dag al vaststaat: afspraken én taken die al een tijd hebben. */
+  busy: Map<string, BusySlot[]>;
+  /** Werk dat een plek zoekt; de volgorde bepaalt wie het eerst kiest. */
+  candidates: Task[];
+  todayKey: string;
+  /** Minuten na middernacht, nu. Op vandaag begint het voorstel pas hierna. */
+  nowMinute: number;
+  /** Het venster waarbinnen werk wordt neergezet. */
+  workStart?: number;
+  workEnd?: number;
+  /** Dagen die overgeslagen worden (bijv. het weekend, tenzij dat meetelt). */
+  skipDays?: Set<string>;
+  /** Je dagstreep in minuten, en wat er per dag al aan uren staat. Zonder streep
+   *  is het venster de enige harde grens. */
+  dailyCap?: number | null;
+  usedMinutes?: Map<string, number>;
+  /** Zonder streep: een zachte bovengrens per dag, zodat het voorstel het werk
+   *  over de week spreidt in plaats van de eerste dag vol te gooien. Past iets
+   *  nergens binnen die grens, dan mag het alsnog in het eerste vrije gat. */
+  softCap?: number | null;
+};
+
+/** De volgorde waarin het voorstel taken neerzet: eerst de deadline die het
+ *  dichtst bij is, dan prioriteit, dan de dag waarop ze al stonden, dan de naam. */
+export function sortForAutoPlan(tasks: Task[]): Task[] {
+  const weight: Record<string, number> = { high: 0, med: 1, low: 2 };
+  return [...tasks].sort((a, b) =>
+    String(a.end_date ?? '9999-12-31').localeCompare(String(b.end_date ?? '9999-12-31'))
+    || (weight[a.priority] ?? 1) - (weight[b.priority] ?? 1)
+    || String(a.planned_date ?? '9999-12-31').localeCompare(String(b.planned_date ?? '9999-12-31'))
+    || a.title.localeCompare(b.title, 'nl-NL'));
+}
+
+/**
+ * "Vul mijn week": zet werk dat nog geen tijd heeft in de eerste vrije gaten.
+ *
+ * Gulzig en voorspelbaar: per taak de eerste dag (vanaf vandaag) met een gat
+ * dat groot genoeg is, vroeg in het venster. Wat niet past blijft liggen — dit
+ * is een voorstel dat de planner laat zien en dat jij bevestigt, geen automaat
+ * die je week volgooit.
+ */
+export function proposeTimeBlocks(input: AutoPlanInput): { proposals: PlanProposal[]; unplaced: Task[] } {
+  const workStart = input.workStart ?? 9 * 60;
+  const workEnd = input.workEnd ?? 17 * 60;
+  const busy = new Map<string, BusySlot[]>();
+  for (const key of input.dayKeys) busy.set(key, [...(input.busy.get(key) ?? [])]);
+  const used = new Map<string, number>();
+  for (const key of input.dayKeys) used.set(key, input.usedMinutes?.get(key) ?? 0);
+
+  const proposals: PlanProposal[] = [];
+  const unplaced: Task[] = [];
+
+  const openDays = input.dayKeys.filter(key => key >= input.todayKey && !input.skipDays?.has(key));
+
+  /** De eerste dag met een gat dat groot genoeg is, binnen de bovengrens. */
+  const tryPlace = (task: Task, minutes: number, cap: number | null): boolean => {
+    for (const key of openDays) {
+      if (cap !== null && (used.get(key) ?? 0) + minutes > cap) continue;
+      // Vandaag begint het voorstel pas ná nu, afgerond op het kwartier.
+      const earliest = key === input.todayKey
+        ? Math.max(workStart, Math.ceil(input.nowMinute / BLOCK_SNAP_MINUTES) * BLOCK_SNAP_MINUTES)
+        : workStart;
+      const gap = freeGaps(busy.get(key) ?? [], earliest, workEnd).find(candidate => candidate.end - candidate.start >= minutes);
+      if (!gap) continue;
+      proposals.push({ taskId: task.id, dayKey: key, startMinute: gap.start, minutes });
+      busy.get(key)!.push({ start: gap.start, end: gap.start + minutes });
+      used.set(key, (used.get(key) ?? 0) + minutes);
+      return true;
+    }
+    return false;
+  };
+
+  for (const task of input.candidates) {
+    const minutes = taskBlockMinutes(task);
+    const strict = input.dailyCap ?? null;
+    // Met een streep is die de grens, punt. Zonder streep spreidt de zachte
+    // grens het werk over de dagen; wat daar nergens in past krijgt alsnog het
+    // eerste vrije gat — beter een volle dag dan werk dat blijft liggen.
+    let placed = tryPlace(task, minutes, strict ?? input.softCap ?? null);
+    if (!placed && strict === null && input.softCap != null) placed = tryPlace(task, minutes, null);
+    if (!placed) unplaced.push(task);
+  }
+
+  return { proposals, unplaced };
 }

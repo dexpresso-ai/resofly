@@ -35,6 +35,7 @@ function task(patch: Partial<Task> & { id: string }): Task {
     end_date: null,
     planned_date: null,
     planned_end_date: null,
+    planned_start_minute: null,
     planned_order: null,
     estimated_minutes: null,
     subtasks: [],

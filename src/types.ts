@@ -450,6 +450,9 @@ export interface Task extends OrgScopedRow {
   ticket_id: UUID | null;
   /** Laatste dag van een meerdaagse taak. Leeg = gewone dagtaak; gevuld = weekstrook. */
   planned_end_date: string | null;
+  /** Minuten na middernacht waarop het tijdblok van deze taak begint (weekplanner).
+   *  Leeg = wel op een dag, nog niet op een tijd. Nooit gevuld bij een weekstrook. */
+  planned_start_minute: number | null;
   planned_order: number | null;
   /** Leeg = nog geen schatting. Telt dan nergens als tijd mee, in plaats van stil als een uur. */
   estimated_minutes: number | null;

@@ -8707,3 +8707,196 @@ button.task-agenda-when:hover{text-decoration:underline}
 .event-task-open:hover{text-decoration:underline}
 .tb-ev-task{position:absolute;right:3px;bottom:4px;display:inline-flex;align-items:center;padding:2px 3px;border-radius:6px;background:rgba(var(--shade-rgb),calc(.34 * var(--shade-k)));color:#fff;line-height:1;pointer-events:none}
 .tb-ev-tight .tb-ev-task,.tb-ev-compact .tb-ev-task{display:none}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   WEEKPLANNER · ROOSTER + TIJDBLOKKEN  (2026-09-12)
+   ───────────────────────────────────────────────────────────────────────
+   De planner tekent in hetzelfde tijdrooster als de agenda: `.wp-rooster`
+   draagt ook `calendar-agenda-page`, zodat de Google-look van de agenda
+   binnenkomt (dezelfde truc als de Boekingslinks-pagina). Hieronder staan de
+   planner-maten daarbovenop, en de twee talen in het rooster:
+
+     • een AFSPRAAK is een vol gevuld blok in de kleur van zijn agenda — vast,
+       met anderen;
+     • een TAAKBLOK is een omlijnd, licht getint vlak in de kleur van zijn
+       project, met een vinkje — van jou, en te verschuiven;
+     • werk dat wel een dag maar nog geen tijd heeft staat als kaart in de
+       dagband ("Dag") boven de kolom.
+
+   Autoritatief blok achteraan: wint van alle eerdere .wp-* en .tb-* regels.
+   Sticky-regel uit de agenda geldt ook hier: de `top` van `.tb-allday-row`
+   MOET gelijk zijn aan de hoogte van `.tb-dh`.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* 1 ── Het bord: werkvoorraad links, rooster rechts ──────────────────────── */
+.wp-board.is-grid{grid-template-columns:300px minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:12px;align-items:stretch}
+.wp-board.is-grid .wp-tray{order:0;min-height:0}
+.wp-board.is-grid .wp-board-main{order:1;min-height:0;display:flex;flex-direction:column;gap:8px}
+
+/* Op een groot scherm vult het bord de rest van het venster: de kopkaart staat
+   boven, het rooster loopt door tot de onderrand en scrolt intern — precies de
+   flex-keten van de agenda, maar dan mét de kopkaart erboven. */
+@media (min-width:1025px){
+  .content:has(.week-planner.is-grid){display:flex;flex-direction:column;overflow:hidden;min-height:0}
+  .week-planner.is-grid{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+  .week-planner.is-grid > .wp-board{flex:1 1 auto;min-height:0}
+  .wp-board.is-grid .wp-tray{max-height:100%}
+}
+
+/* 2 ── De werkvoorraad: volle hoogte, eigen scroll, een kop met naam ───────── */
+.wp-tray{min-height:0}
+.wp-tray-head{display:flex;align-items:center;gap:8px;padding:9px 10px 8px 12px;border-bottom:1px solid var(--border);background:rgba(var(--sheen-rgb),calc(.03 * var(--sheen-k)))}
+.wp-tray-title{font-size:12.5px;font-weight:700;letter-spacing:-.01em}
+.wp-tray-total{font-size:10px;font-weight:700;color:var(--muted2);background:rgba(var(--sheen-rgb),calc(.07 * var(--sheen-k)));border:1px solid var(--border);border-radius:99px;padding:0 6px;font-variant-numeric:tabular-nums}
+.wp-tray-toggle{margin-left:auto;display:grid;place-items:center;width:26px;height:26px;padding:0;border:1px solid var(--border);border-radius:7px;background:transparent;color:var(--muted2);cursor:pointer}
+.wp-tray-toggle:hover{color:var(--text);background:var(--bg3)}
+.wp-tray-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wp-tray-tabs[hidden]{display:none}
+.wp-tray.is-closed .wp-tray-head{border-bottom:0}
+.wp-board.is-grid .wp-tray-body{flex:1 1 auto;min-height:120px;max-height:none}
+.wp-board.is-grid .wp-notes{flex:0 0 auto;max-height:40%;display:flex;flex-direction:column;min-height:0}
+.wp-board.is-grid .wp-notes-list{flex:1 1 auto;min-height:0;max-height:none;overflow-y:auto}
+
+/* 3 ── Het rooster zelf: de planner-maten op de agenda-look ─────────────── */
+.wp-rooster{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:0;border:1px solid var(--border);border-radius:var(--r2);overflow:hidden;background:var(--bg)}
+.wp-rooster .tb-container{flex:1 1 auto;min-height:0;border:0;border-radius:0;margin:0;background:var(--bg)}
+.wp-rooster .tb-scroll{flex:1 1 auto;min-height:0;height:auto;max-height:none;overflow:auto;scrollbar-gutter:stable}
+/* Zeven kolommen naast een werkvoorraad van 300px: de brede agenda-canvas zou
+   hier een zijwaartse scrollbalk geven. De kolommen mogen smaller. */
+.wp-rooster .tb-canvas,.wp-rooster .tb-grid{min-width:0}
+
+/* Legenda-strook: de twee talen in één regel, plus wat je hier kunt doen. */
+.wp-rooster-bar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--bg2);font-size:10.5px;color:var(--muted2)}
+.wp-legend{display:inline-flex;align-items:center;gap:6px;font-weight:600}
+.wp-legend i{display:inline-block;width:16px;height:11px;border-radius:3px;box-sizing:border-box}
+.wp-legend-meeting{background:var(--accent-v)}
+.wp-legend-task{background:rgba(var(--accent-rgb),.16);border:1.5px dashed rgba(var(--accent-rgb),.75)}
+.wp-legend-band{background:rgba(var(--accent-rgb),.1);border:1px dashed rgba(var(--accent-rgb),.55);border-radius:5px}
+.wp-rooster-hint{margin-left:auto;color:var(--muted);font-weight:500}
+
+/* Dagkop: hoger dan in de agenda, met aantal, uren, je streep en de
+   drukte-balk onder de dagnaam. De dagband plakt er direct onder. */
+/* Dubbele klasse in de selector: de agenda zet per breekpunt eigen hoogtes
+   (o.a. `.tb-few-days` op één dag) met dezelfde specificiteit; zo wint dit. */
+.wp-rooster.calendar-agenda-page .tb-dh{height:88px;padding:6px 6px 5px;justify-content:flex-start;gap:1px}
+.wp-rooster.calendar-agenda-page .tb-allday-row{top:88px}
+.wp-rooster .tb-dh-name{font-size:10px}
+.wp-rooster .tb-dh-num{width:24px;height:24px;font-size:13px}
+/* De dagkop van de agenda zet zijn tekst in kapitalen; de cijfers eronder niet. */
+.tb-dh-extra{width:100%;display:flex;flex-direction:column;gap:5px;padding:4px 4px 0;text-transform:none;letter-spacing:0}
+.wp-dh-stats{display:flex;align-items:center;gap:5px;min-height:22px}
+.wp-dh-stats .wp-day-total{margin-left:0;font-size:10.5px}
+.wp-dh-stats .wp-day-total.is-empty{color:var(--muted);font-weight:600}
+.wp-dh-stats .wp-day-room{margin-left:auto;white-space:nowrap}
+.wp-dh-stats .wp-day-add{margin-left:auto;width:22px;height:22px;flex:0 0 auto}
+.wp-dh-stats .wp-day-room + .wp-day-add{margin-left:0}
+.tb-dh-extra .wp-day-load{height:5px;width:100%}
+.wp-rooster .tb-today .tb-dh-extra .wp-day-total{color:var(--accent-ink)}
+
+/* De dagband heet "Dag" en draagt kaarten van taken zonder tijd. */
+.wp-rooster .tb-allday-lanes{grid-auto-rows:24px;row-gap:3px;padding:4px 0}
+.wp-rooster .tb-allday-row{min-height:30px}
+.tb-ad-slot{min-width:0;margin:0 2px;display:flex}
+.tb-ad-slot.tb-ad-cont-l{margin-left:0}
+.tb-ad-slot.tb-ad-cont-r{margin-right:0}
+.wp-band-task{position:relative;display:flex;align-items:center;gap:6px;min-width:0;width:100%;height:24px;padding:0 7px 0 4px;border-radius:6px;border:1px dashed color-mix(in srgb, var(--bar) 62%, var(--border));background:color-mix(in srgb, var(--bar) 12%, var(--bg2));color:var(--text);font-size:11px;font-weight:600;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;transition:background .12s}
+.wp-band-task:hover{background:color-mix(in srgb, var(--bar) 22%, var(--bg2))}
+.wp-band-task:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.wp-band-task.is-dragging{opacity:.4}
+.wp-band-task.is-done{opacity:.55}
+.wp-band-task.is-done .wp-band-title{text-decoration:line-through;color:var(--muted)}
+/* Een weekstrook ligt vast over zijn dagen: geen stippel, want geen blok-in-wording. */
+.wp-band-task.is-span{border-style:solid}
+.tb-ad-cont-l .wp-band-task{border-top-left-radius:0;border-bottom-left-radius:0;border-left:0}
+.tb-ad-cont-r .wp-band-task{border-top-right-radius:0;border-bottom-right-radius:0;border-right:0}
+.wp-band-check{flex:0 0 auto;width:14px;height:14px;display:grid;place-items:center;padding:0;border-radius:4px;border:1.5px solid var(--border2);background:var(--bg2);color:var(--on-accent);cursor:pointer}
+.wp-band-check:hover:not(:disabled){border-color:var(--accent)}
+.wp-band-check:disabled{cursor:default;opacity:.5}
+.wp-band-task.is-done .wp-band-check{background:var(--accent-g);border-color:var(--accent-g);color:var(--bg)}
+.wp-band-title{flex:1 1 auto;min-width:0;padding:0;border:0;background:transparent;font:inherit;color:inherit;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.wp-band-title:hover{color:var(--accent-ink)}
+.wp-band-span{flex:0 0 auto;font-size:9.5px;color:var(--muted);white-space:nowrap}
+.wp-band-est{flex:0 0 auto;font-size:9.5px;font-weight:700;color:var(--muted2);font-variant-numeric:tabular-nums}
+.wp-band-est.is-unset{color:var(--muted);font-weight:500}
+.wp-band-task.is-high .wp-band-title::before{content:"!";display:inline-grid;place-items:center;width:12px;height:12px;margin-right:4px;border-radius:3px;background:var(--accent-r);color:#fff;font-size:9px;font-weight:800;vertical-align:1px}
+
+/* 4 ── Taakblokken: de tweede taal in het rooster ──────────────────────────
+   Waar een afspraak vol gevuld is, is een taak een licht getint vlak met een
+   stippelrand, een zachte arcering en de gewone tekstkleur — "papier" naast
+   "inkt". De kleur komt van het project (--event-color via eventColorStyle). */
+.calendar-agenda-page .tb-ev.tb-task-block{
+  --event-text:var(--text);--event-text-soft:var(--muted2);--event-text-faint:var(--muted);
+  background-color:color-mix(in srgb, var(--event-color) 14%, var(--panel));
+  background-image:repeating-linear-gradient(135deg, transparent 0 6px, rgba(var(--ink-rgb),.045) 6px 7px);
+  border:1.5px dashed color-mix(in srgb, var(--event-color) 72%, transparent);
+  box-shadow:none;color:var(--text);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none}
+.calendar-agenda-page .tb-ev.tb-task-block:hover{filter:none;background-color:color-mix(in srgb, var(--event-color) 22%, var(--panel));box-shadow:0 6px 16px rgba(var(--shade-rgb),calc(.28 * var(--shade-k)))}
+.calendar-agenda-page .tb-ev.tb-task-block:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.calendar-agenda-page .tb-task-block .tb-ev-title{font-weight:700}
+.calendar-agenda-page .tb-task-block.is-done{opacity:.6;border-style:solid}
+.calendar-agenda-page .tb-task-block.is-done .tb-ev-title{text-decoration:line-through;font-weight:600}
+.calendar-agenda-page .tb-task-block.is-high .tb-ev-title::before{content:"!";display:inline-grid;place-items:center;width:13px;height:13px;margin-right:5px;border-radius:4px;background:var(--accent-r);color:#fff;font-size:9.5px;font-weight:800;vertical-align:1px}
+/* Het vinkje linksboven; de tekst schuift ervoor opzij. */
+.tb-ev-check{position:absolute;left:6px;top:5px;width:16px;height:16px;display:grid;place-items:center;padding:0;border-radius:5px;border:1.5px solid color-mix(in srgb, var(--event-color) 75%, var(--border2));background:var(--bg2);color:var(--on-accent);cursor:pointer;z-index:2}
+.tb-ev-check:hover{border-color:var(--accent)}
+.tb-ev-check:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.tb-task-block.is-done .tb-ev-check{background:var(--accent-g);border-color:var(--accent-g);color:var(--bg)}
+.calendar-agenda-page .tb-task-block:has(.tb-ev-check) .tb-ev-time,
+.calendar-agenda-page .tb-task-block:has(.tb-ev-check) .tb-ev-title,
+.calendar-agenda-page .tb-task-block:has(.tb-ev-check) .tb-ev-src{padding-left:20px}
+.calendar-agenda-page .tb-task-block.tb-ev-tight .tb-ev-check,
+.calendar-agenda-page .tb-task-block.tb-ev-compact .tb-ev-check{top:50%;transform:translateY(-50%);width:13px;height:13px}
+/* Resize-grepen ook op een taakblok (het rooster zet ze alleen met onMoveTask). */
+.calendar-agenda-page .tb-task-block .tb-ev-handle{z-index:3}
+
+/* Voorbeeldblokken: de sleep boven een kolom (is-drag) en het voorstel van
+   "Vul mijn week" (is-proposal). Nooit klikbaar. */
+.calendar-agenda-page .tb-ev.tb-ev-preview{pointer-events:none}
+.calendar-agenda-page .tb-ev.tb-ev-preview.tb-task-block{cursor:default}
+.calendar-agenda-page .tb-ev.tb-ev-preview.is-drag{opacity:1;outline:2px solid var(--accent);box-shadow:0 16px 40px rgba(var(--shade-rgb),calc(.5 * var(--shade-k)))}
+.calendar-agenda-page .tb-ev.tb-ev-preview.is-proposal{opacity:.95;outline:0;border:1.5px dashed color-mix(in srgb, var(--event-color) 85%, transparent);background-color:color-mix(in srgb, var(--event-color) 9%, var(--panel));box-shadow:none;animation:wp-proposal-pulse 1.8s ease-in-out infinite}
+.calendar-agenda-page .tb-ev.tb-ev-preview.is-proposal .tb-ev-title::after{content:"voorstel";margin-left:6px;padding:1px 5px;border-radius:4px;background:var(--accent);color:var(--on-accent);font-size:8.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;vertical-align:1px}
+@keyframes wp-proposal-pulse{0%,100%{box-shadow:0 0 0 0 rgba(var(--accent-rgb),0)}50%{box-shadow:0 0 0 4px rgba(var(--accent-rgb),.22)}}
+@media (prefers-reduced-motion: reduce){.calendar-agenda-page .tb-ev.tb-ev-preview.is-proposal{animation:none}}
+
+/* Het getekende tijdvak met het formulier erin. */
+.tb-draft{position:absolute;left:3px;right:calc(var(--tb-strip,12px) + 3px);z-index:40;min-width:0}
+.wp-grid-add{display:flex;flex-direction:column;gap:5px;padding:8px 9px;border:1px solid var(--accent);border-radius:9px;background:var(--panel-strong);box-shadow:var(--shadow-2)}
+.wp-grid-add-when{font-size:10px;font-weight:700;color:var(--accent-ink);font-variant-numeric:tabular-nums;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wp-grid-add-input{width:100%;min-width:0;background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:6px 8px;font:inherit;font-size:12px;color:var(--text);outline:none}
+.wp-grid-add-input:focus{border-color:var(--accent)}
+.wp-grid-add-input::placeholder{color:var(--muted)}
+.wp-grid-add-hint{font-size:9.5px;color:var(--muted);line-height:1.4}
+
+/* 5 ── "Vul mijn week": de knop en de voorstelbalk ─────────────────────────── */
+.wp-autoplan{display:inline-flex;align-items:center;gap:6px}
+.wp-autoplan.is-on{border-color:var(--gold-line,var(--border-strong));color:var(--accent-ink);background:var(--accent-soft)}
+.wp-proposal{position:fixed;z-index:430;left:50%;bottom:66px;transform:translateX(-50%);display:flex;align-items:center;gap:10px;max-width:min(620px,92vw);padding:9px 10px 9px 14px;border:1px solid var(--accent);border-radius:11px;background:var(--panel-strong);box-shadow:var(--shadow-2);font-size:12px;color:var(--text)}
+.wp-proposal > svg{color:var(--accent-ink);flex-shrink:0}
+.wp-proposal-text{color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* 6 ── Kleinere schermen ─────────────────────────────────────────────────── */
+@media (max-width:1200px){
+  .wp-board.is-grid{grid-template-columns:264px minmax(0,1fr)}
+}
+@media (max-width:1024px){
+  /* De werkvoorraad boven het rooster, inklapbaar; de pagina scrolt hier zelf,
+     dus het rooster krijgt een eigen hoogte in plaats van de flex-keten. */
+  .wp-board.is-grid{grid-template-columns:1fr;grid-template-rows:none;align-items:start}
+  .wp-board.is-grid .wp-tray{max-height:none}
+  .wp-board.is-grid .wp-tray-body{flex:0 1 auto;max-height:260px}
+  .wp-board.is-grid .wp-notes{max-height:none}
+  .wp-board.is-grid .wp-notes-list{max-height:220px}
+  .wp-rooster{flex:none;height:calc(100dvh - 240px);min-height:480px}
+  .wp-rooster.calendar-agenda-page .tb-dh{height:82px}
+  .wp-rooster.calendar-agenda-page .tb-allday-row{top:82px}
+}
+@media (max-width:900px){
+  .wp-rooster{height:calc(100dvh - 220px - var(--bottomnav-h,58px));min-height:420px}
+  .wp-rooster-hint{display:none}
+  .wp-rooster.calendar-agenda-page .tb-dh{height:80px}
+  .wp-rooster.calendar-agenda-page .tb-allday-row{top:80px}
+  .wp-rooster.calendar-agenda-page .tb-dh-num{width:22px;height:22px;font-size:12px}
+  .wp-proposal{bottom:calc(var(--bottomnav-h,58px) + 12px);max-width:94vw}
+  .wp-proposal-text{white-space:normal}
+}

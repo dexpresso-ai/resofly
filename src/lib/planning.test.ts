@@ -13,18 +13,28 @@ import type { CalendarExternalEvent, Task } from '../types.ts';
 import {
   applyPeriodLocally,
   applyPlanningLocally,
+  applyTimeLocally,
+  clockLabel,
   comparePlannedTasks,
+  DEFAULT_BLOCK_MINUTES,
   edgeScrollDelta,
   EDGE_SCROLL_MAX_PX,
   EDGE_SCROLL_ZONE_PX,
+  freeGaps,
+  hasPlannedTime,
   isSpanningTask,
   groupEventMinutesByDay,
   layoutWeekBars,
+  mergeBusySlots,
   mergeTaskRows,
   PANE_EDGE_SCROLL_ZONE_PX,
   parseDurationInput,
+  proposeTimeBlocks,
   shiftDateKey,
+  snapMinute,
+  sortForAutoPlan,
   splitTitleAndEstimate,
+  taskBlockMinutes,
   PLANNING_ORDER_STEP,
 } from './planning.ts';
 
@@ -44,6 +54,7 @@ function task(id: string, plannedDate: string | null, plannedOrder: number | nul
     end_date: null,
     planned_date: plannedDate,
     planned_end_date: null,
+    planned_start_minute: null,
     planned_order: plannedOrder,
     estimated_minutes: 60,
     subtasks: [],
@@ -399,4 +410,166 @@ test('splitTitleAndEstimate laat een titel zonder duur met rust', () => {
   assert.deepEqual(splitTitleAndEstimate('2 uur durende sessie'), { title: '2 uur durende sessie', minutes: null });
   // En een titel die alléén een duur is blijft zijn eigen titel.
   assert.deepEqual(splitTitleAndEstimate('2u'), { title: '2u', minutes: null });
+});
+
+/* ── Tijdblokken ───────────────────────────────────────────────────────────
+ * Een taak op een tijdstip is sinds 2026-09-12 een blok in hetzelfde rooster
+ * als de agenda. De verwachtingen hieronder volgen de SQL van migratie
+ * 20260912000000_tasks_planned_start_minute.sql: een dag zonder tijd wist het
+ * tijdstip, een weekstrook heeft er nooit een, en het blok klikt op het kwartier.
+ */
+function timed(id: string, date: string, minute: number, estimate: number | null = 60): Task {
+  return { ...task(id, date, 1000), planned_start_minute: minute, estimated_minutes: estimate };
+}
+
+test('hasPlannedTime: alleen een dagtaak met tijd telt als blok', () => {
+  assert.equal(hasPlannedTime(timed('a', '2026-09-14', 600)), true);
+  assert.equal(hasPlannedTime(task('b', '2026-09-14', 1000)), false, 'dag zonder tijd');
+  assert.equal(hasPlannedTime({ ...timed('c', '2026-09-14', 600), planned_end_date: '2026-09-16' }), false, 'een strook heeft geen tijd');
+  assert.equal(hasPlannedTime({ ...timed('d', '2026-09-14', 600), planned_date: null }), false, 'zonder dag geen blok');
+});
+
+test('taskBlockMinutes: de schatting, anders een uur, nooit korter dan een kwartier', () => {
+  assert.equal(taskBlockMinutes(timed('a', '2026-09-14', 600, 90)), 90);
+  assert.equal(taskBlockMinutes(timed('b', '2026-09-14', 600, null)), DEFAULT_BLOCK_MINUTES);
+  assert.equal(taskBlockMinutes(timed('c', '2026-09-14', 600, 0)), DEFAULT_BLOCK_MINUTES, 'nul is geen duur');
+  assert.equal(taskBlockMinutes(timed('d', '2026-09-14', 600, 5)), 15);
+});
+
+test('snapMinute klikt op het kwartier en blijft binnen de dag', () => {
+  assert.equal(snapMinute(607), 600);
+  assert.equal(snapMinute(608), 615);
+  assert.equal(snapMinute(-20), 0);
+  // Een blok van twee uur kan niet later beginnen dan 22:00.
+  assert.equal(snapMinute(1430, 120), 22 * 60);
+  assert.equal(clockLabel(snapMinute(608)), '10:15');
+  assert.equal(clockLabel(0), '00:00');
+});
+
+test('applyTimeLocally zet dag én tijd, wist de looptijd en sluit achteraan aan op een nieuwe dag', () => {
+  const tasks = [
+    { ...task('strook', '2026-09-14', 1000), planned_end_date: '2026-09-16' },
+    task('a', '2026-09-15', 1000),
+    task('b', '2026-09-15', 2000),
+  ];
+  const next = applyTimeLocally(tasks, 'strook', '2026-09-15', 607, 90);
+  const moved = next.find(t => t.id === 'strook')!;
+  assert.equal(moved.planned_date, '2026-09-15');
+  assert.equal(moved.planned_end_date, null, 'een blok is geen strook meer');
+  assert.equal(moved.planned_start_minute, 600, 'geklikt op het kwartier');
+  assert.equal(moved.estimated_minutes, 90, 'de duur van het blok is de schatting');
+  assert.deepEqual(orderOn(next, '2026-09-15'), ['a', 'b', 'strook'], 'op een nieuwe dag sluit hij achteraan aan');
+  assert.equal(moved.planned_order, 3000);
+});
+
+test('applyTimeLocally houdt de plek in de rij bij een tijd op dezelfde dag, en laat de schatting staan zonder duur', () => {
+  const tasks = [task('a', '2026-09-15', 1000), { ...task('b', '2026-09-15', 2000), estimated_minutes: 45 }, task('c', '2026-09-15', 3000)];
+  const next = applyTimeLocally(tasks, 'b', '2026-09-15', 780);
+  const moved = next.find(t => t.id === 'b')!;
+  assert.equal(moved.planned_order, 2000, 'zelfde dag, zelfde plek');
+  assert.equal(moved.estimated_minutes, 45, 'zonder opgegeven duur blijft de schatting');
+  assert.deepEqual(orderOn(next, '2026-09-15'), ['a', 'b', 'c']);
+});
+
+test('applyPlanningLocally wist het tijdstip van de versleepte taak — de dag, niet de tijd, is het doel', () => {
+  const tasks = [timed('a', '2026-09-14', 600), timed('b', '2026-09-15', 540)];
+  const next = applyPlanningLocally(tasks, 'a', '2026-09-15', null);
+  assert.equal(next.find(t => t.id === 'a')!.planned_start_minute, null, 'de verplaatste taak verliest zijn tijd');
+  assert.equal(next.find(t => t.id === 'b')!.planned_start_minute, 540, 'de buurman houdt de zijne');
+  const unscheduled = applyPlanningLocally(tasks, 'b', null, null);
+  assert.equal(unscheduled.find(t => t.id === 'b')!.planned_start_minute, null);
+});
+
+test('mergeBusySlots en freeGaps: bezet samenvoegen, de gaten overhouden', () => {
+  assert.deepEqual(mergeBusySlots([{ start: 600, end: 660 }, { start: 630, end: 720 }, { start: 900, end: 930 }]), [
+    { start: 600, end: 720 },
+    { start: 900, end: 930 },
+  ]);
+  assert.deepEqual(freeGaps([{ start: 600, end: 720 }, { start: 900, end: 930 }], 540, 1020), [
+    { start: 540, end: 600 },
+    { start: 720, end: 900 },
+    { start: 930, end: 1020 },
+  ]);
+  // Een gat van een paar minuten telt niet: daar past geen kwartier in.
+  assert.deepEqual(freeGaps([{ start: 540, end: 550 }], 540, 560), []);
+  assert.deepEqual(freeGaps([], 540, 1020), [{ start: 540, end: 1020 }]);
+});
+
+test('sortForAutoPlan: deadline eerst, dan prioriteit, dan de dag, dan de naam', () => {
+  const tasks: Task[] = [
+    { ...task('laat', null, null), end_date: '2026-09-20', priority: 'high' },
+    { ...task('vroeg', null, null), end_date: '2026-09-15', priority: 'low' },
+    { ...task('hoog', null, null), priority: 'high' },
+    { ...task('gewoon', null, null), priority: 'med' },
+    { ...task('alfa', null, null), priority: 'med', title: 'Aaa' },
+  ];
+  assert.deepEqual(sortForAutoPlan(tasks).map(t => t.id), ['vroeg', 'laat', 'hoog', 'alfa', 'gewoon']);
+});
+
+test('proposeTimeBlocks vult de eerste vrije gaten, om afspraken heen en pas ná nu', () => {
+  const dayKeys = ['2026-09-14', '2026-09-15', '2026-09-16'];
+  const busy = new Map([
+    ['2026-09-15', [{ start: 9 * 60, end: 10 * 60 }, { start: 11 * 60, end: 12 * 60 }]],
+  ]);
+  const candidates = [
+    timed('a', '2026-09-15', 0, 120), // twee uur
+    { ...task('b', null, null), estimated_minutes: 60 },
+    { ...task('c', null, null), estimated_minutes: null }, // zonder schatting = een uur
+  ];
+  // Het is dinsdag 15 september, half elf: maandag is voorbij, vandaag telt vanaf 10:30.
+  const { proposals, unplaced } = proposeTimeBlocks({ dayKeys, busy, candidates, todayKey: '2026-09-15', nowMinute: 10 * 60 + 20 });
+  assert.equal(unplaced.length, 0);
+  assert.deepEqual(proposals, [
+    // Twee uur past niet tussen 10:30 en 11:00; het eerste gat van twee uur is na de afspraak van 11:00.
+    { taskId: 'a', dayKey: '2026-09-15', startMinute: 12 * 60, minutes: 120 },
+    // Een uur past wél in het gat van 10:30 tot 11:00? Nee — dat is een half uur. Dus ook na 12:00, na taak a.
+    { taskId: 'b', dayKey: '2026-09-15', startMinute: 14 * 60, minutes: 60 },
+    { taskId: 'c', dayKey: '2026-09-15', startMinute: 15 * 60, minutes: 60 },
+  ]);
+  assert.ok(proposals.every(p => p.dayKey !== '2026-09-14'), 'gisteren wordt niet meer ingepland');
+});
+
+test('proposeTimeBlocks respecteert het weekend, de dagstreep en het einde van het venster', () => {
+  const dayKeys = ['2026-09-18', '2026-09-19', '2026-09-20'];
+  const candidates = Array.from({ length: 3 }, (_, i) => ({ ...task(`t${i}`, null, null), estimated_minutes: 4 * 60 }));
+  const { proposals, unplaced } = proposeTimeBlocks({
+    dayKeys,
+    busy: new Map(),
+    candidates,
+    todayKey: '2026-09-18',
+    nowMinute: 8 * 60,
+    skipDays: new Set(['2026-09-19', '2026-09-20']),
+    dailyCap: 6 * 60,
+  });
+  // Vrijdag: één blok van vier uur past binnen de streep van zes; het tweede niet meer.
+  assert.deepEqual(proposals, [{ taskId: 't0', dayKey: '2026-09-18', startMinute: 9 * 60, minutes: 240 }]);
+  assert.deepEqual(unplaced.map(t => t.id), ['t1', 't2']);
+
+  // Zonder streep bepaalt het venster (09:00–17:00) wat er past: twee blokken van vier uur.
+  const open = proposeTimeBlocks({ dayKeys, busy: new Map(), candidates, todayKey: '2026-09-18', nowMinute: 8 * 60, skipDays: new Set(['2026-09-19', '2026-09-20']) });
+  assert.deepEqual(open.proposals.map(p => p.startMinute), [9 * 60, 13 * 60]);
+  assert.deepEqual(open.unplaced.map(t => t.id), ['t2']);
+});
+
+test('proposeTimeBlocks spreidt met een zachte grens over de dagen, en valt terug op het eerste gat', () => {
+  const dayKeys = ['2026-09-14', '2026-09-15', '2026-09-16'];
+  const candidates = Array.from({ length: 5 }, (_, i) => ({ ...task(`t${i}`, null, null), estimated_minutes: 3 * 60 }));
+  const { proposals, unplaced } = proposeTimeBlocks({ dayKeys, busy: new Map(), candidates, todayKey: '2026-09-14', nowMinute: 8 * 60, softCap: 6 * 60 });
+  assert.equal(unplaced.length, 0);
+  // Twee blokken van drie uur per dag, dan is de zachte grens vol en schuift het door.
+  assert.deepEqual(proposals.map(p => `${p.dayKey.slice(-2)} ${p.startMinute / 60}`), ['14 9', '14 12', '15 9', '15 12', '16 9']);
+
+  // Past het nergens binnen de zachte grens, dan telt de grens niet meer: op
+  // één dag met een grens van vier uur gaat het tweede blok van drie uur
+  // alsnog in het gat erna; het derde past dan nergens meer in het venster.
+  const oneDay = ['2026-09-14'];
+  const three = Array.from({ length: 3 }, (_, i) => ({ ...task(`s${i}`, null, null), estimated_minutes: 3 * 60 }));
+  const soft = proposeTimeBlocks({ dayKeys: oneDay, busy: new Map(), candidates: three, todayKey: '2026-09-14', nowMinute: 8 * 60, softCap: 4 * 60 });
+  assert.deepEqual(soft.proposals.map(p => p.startMinute / 60), [9, 12]);
+  assert.deepEqual(soft.unplaced.map(t => t.id), ['s2']);
+
+  // Een echte streep blijft hard: dan blijft na het eerste blok alles liggen.
+  const strict = proposeTimeBlocks({ dayKeys: oneDay, busy: new Map(), candidates: three, todayKey: '2026-09-14', nowMinute: 8 * 60, dailyCap: 4 * 60, softCap: 4 * 60 });
+  assert.deepEqual(strict.proposals.map(p => p.startMinute / 60), [9]);
+  assert.deepEqual(strict.unplaced.map(t => t.id), ['s1', 's2']);
 });

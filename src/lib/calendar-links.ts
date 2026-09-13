@@ -115,3 +115,28 @@ export function linkMinutes(link: Pick<CalendarEventLink, 'event_starts_at' | 'e
   const minutes = Math.round((new Date(link.event_ends_at).getTime() - new Date(link.event_starts_at).getTime()) / 60000);
   return minutes > 0 ? minutes : 0;
 }
+
+/**
+ * Geregistreerde minuten per afspraak-sleutel: urenposten hangen via hun
+ * `calendar_event_link_id` aan een koppeling, en die koppeling wijst naar de
+ * afspraak. Hetzelfde rekenwerk als in de agenda, zodat de weekplanner op een
+ * afspraakblok precies dezelfde klok laat zien.
+ */
+export function groupTrackedMinutesByEventKey(
+  timeEntries: { calendar_event_link_id: string | null; minutes: number }[],
+  links: CalendarEventLink[],
+): Map<string, number> {
+  const minutesByLink = new Map<string, number>();
+  for (const entry of timeEntries) {
+    if (!entry.calendar_event_link_id) continue;
+    minutesByLink.set(entry.calendar_event_link_id, (minutesByLink.get(entry.calendar_event_link_id) ?? 0) + entry.minutes);
+  }
+  const byEvent = new Map<string, number>();
+  for (const link of links) {
+    if (!link.track_time) continue;
+    const minutes = minutesByLink.get(link.id);
+    if (minutes == null) continue;
+    byEvent.set(calendarLinkKey(link), minutes);
+  }
+  return byEvent;
+}

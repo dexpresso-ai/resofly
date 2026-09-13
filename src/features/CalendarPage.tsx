@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { CalendarDays, CalendarPlus, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Mail, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import type React from 'react';
+import { CalendarDays, CalendarPlus, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Mail, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
+import { hasPlannedTime, taskBlockMinutes } from '../lib/planning';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { MeetingRecorder } from '../components/MeetingRecorder';
 import { RichTextExcerpt } from '../components/RichTextEditor';
@@ -40,7 +42,7 @@ import type { AttendeeStatus, CalendarAppPassword, CalendarEventAttendee, EventR
 import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, Client, Note, NoteCalendarLink, Project, Supplier, Task, UUID } from '../types';
 import { getNoteTypeLabel } from './Notes';
 import { TimeEntryModal } from './TimeTracking';
-import { calendarEventLinkMatchesEvent } from '../lib/calendar-links';
+import { calendarEventKey, calendarEventLinkMatchesEvent } from '../lib/calendar-links';
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
 
@@ -338,6 +340,21 @@ function relativeLuminance(hex: string): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
+/**
+ * Een taakblok is licht getint in plaats van vol gevuld, dus de tekst erop is
+ * gewoon de tekst van het thema — niet de wit-of-donker-keuze die bij een vol
+ * gevuld afspraakblok hoort. Die keuze staat inline (uit `eventColorStyle`) en
+ * zou anders van elke stylesheetregel winnen.
+ */
+function taskBlockStyle(color?: string | null): CSSProperties {
+  return {
+    ...eventColorStyle(color),
+    '--event-text': 'var(--text)',
+    '--event-text-soft': 'var(--muted2)',
+    '--event-text-faint': 'var(--muted)',
+  } as CSSProperties;
+}
+
 function eventColorStyle(color?: string | null): CSSProperties {
   const c = normalizeHexColor(color);
   const lightFill = relativeLuminance(c) > 0.42;
@@ -531,8 +548,51 @@ const EVENT_CLICK_STRIP = 'var(--tb-strip, 12px)';
 // weggedrukt of verborgen — die renderen er altijd bovenop.
 const BACKGROUND_EVENT_MIN_MINUTES = 6 * 60;
 
+/**
+ * Wat er in het tijdrooster een blok is: een afspraak uit de agenda, of een
+ * taak die in de weekplanner een tijdstip heeft gekregen. Beide delen de
+ * kolomverdeling, zodat een taakblok netjes naast een afspraak komt te staan
+ * in plaats van eroverheen.
+ */
+export type TimedBlock =
+  | { kind: 'event'; event: CalendarExternalEvent }
+  | { kind: 'task'; task: Task };
+
+type TimedItem = { block: TimedBlock; startsAt: Date; endsAt: Date };
+
+function blockKey(block: TimedBlock): string {
+  return block.kind === 'event' ? `ev-${eventIdentityKey(block.event)}` : `task-${block.task.id}`;
+}
+
+function blockTitle(block: TimedBlock): string {
+  return block.kind === 'event' ? block.event.title : block.task.title;
+}
+
+/** Het tijdblok van een taak op zijn dag: begin uit de planner, duur uit de schatting. */
+function taskBlockBounds(task: Task, day: Date): { startsAt: Date; endsAt: Date } {
+  const start = startOfDay(day);
+  start.setMinutes(Number(task.planned_start_minute ?? 0));
+  const end = new Date(start.getTime() + taskBlockMinutes(task) * 60000);
+  const dayEnd = addDays(startOfDay(day), 1);
+  return { startsAt: start, endsAt: end > dayEnd ? dayEnd : end };
+}
+
+/** Alles wat op deze dag een blok in het rooster is: afspraken plus taken met een tijd. */
+function timedItemsForDay(day: Date, events: CalendarExternalEvent[], tasks: Task[]): TimedItem[] {
+  const dayKey = formatISODate(day);
+  const items: TimedItem[] = events
+    .filter(ev => eventOverlapsVisibleWindow(ev, day) && !isAllDayBarEvent(ev))
+    .map(ev => ({ block: { kind: 'event', event: ev } as TimedBlock, startsAt: new Date(ev.starts_at), endsAt: new Date(ev.ends_at) }));
+  for (const task of tasks) {
+    if (!hasPlannedTime(task) || task.planned_date !== dayKey) continue;
+    const bounds = taskBlockBounds(task, day);
+    items.push({ block: { kind: 'task', task }, ...bounds });
+  }
+  return items;
+}
+
 type TimedEventSegment = {
-  event: CalendarExternalEvent;
+  block: TimedBlock;
   startMinute: number;
   endMinute: number;
   top: number;
@@ -571,7 +631,11 @@ type AllDayBar = {
   timeLabel: string | null;
 };
 
-function layoutAllDayBars(days: Date[], events: CalendarExternalEvent[], tasks: Task[]): { bars: AllDayBar[]; laneCount: number } {
+/** Welke taken staan in de dagband: op hun deadline (agenda) of op hun plandag
+ *  zolang ze nog geen tijd hebben (weekplanner). */
+export type TaskBandMode = 'deadline' | 'planned';
+
+function layoutAllDayBars(days: Date[], events: CalendarExternalEvent[], tasks: Task[], taskBand: TaskBandMode = 'deadline'): { bars: AllDayBar[]; laneCount: number } {
   const dayKeys = days.map(formatISODate);
   const firstKey = dayKeys[0];
   const lastKeyExclusive = addDateKeyDays(dayKeys[dayKeys.length - 1], 1);
@@ -605,14 +669,39 @@ function layoutAllDayBars(days: Date[], events: CalendarExternalEvent[], tasks: 
     });
   }
   for (const task of tasks) {
+    if (taskBand === 'planned') {
+      // De planner: een taak op een dag zónder tijd staat in de band, een
+      // weekstrook als doorlopende balk over zijn dagen. Met een tijd is hij
+      // een blok in het rooster en hoort hij hier niet nog eens.
+      if (!task.planned_date || hasPlannedTime(task)) continue;
+      const startKey = task.planned_date;
+      const endKeyExclusive = addDateKeyDays(task.planned_end_date && task.planned_end_date > startKey ? task.planned_end_date : startKey, 1);
+      if (endKeyExclusive <= firstKey || startKey >= lastKeyExclusive) continue;
+      const clampedStart = startKey < firstKey ? firstKey : startKey;
+      const clampedLastDay = addDateKeyDays(endKeyExclusive > lastKeyExclusive ? lastKeyExclusive : endKeyExclusive, -1);
+      const startIdx = dayKeys.indexOf(clampedStart);
+      const endIdx = dayKeys.indexOf(clampedLastDay);
+      if (startIdx < 0 || endIdx < 0) continue;
+      bars.push({
+        key: `task-${task.id}`, kind: 'task', task,
+        startIdx, span: endIdx - startIdx + 1,
+        continuesLeft: startKey < firstKey, continuesRight: endKeyExclusive > lastKeyExclusive,
+        lane: 0, timeLabel: null,
+      });
+      continue;
+    }
     if (!task.end_date) continue;
     const idx = dayKeys.indexOf(dateKeyFromValue(task.end_date));
     if (idx < 0) continue;
     bars.push({ key: `task-${task.id}`, kind: 'task', task, startIdx: idx, span: 1, continuesLeft: false, continuesRight: false, lane: 0, timeLabel: null });
   }
   // Lange balken eerst per startdag (Google): die claimen de bovenste lanes,
-  // de rest vult de gaten eronder op.
-  bars.sort((a, b) => a.startIdx - b.startIdx || b.span - a.span || (a.kind === 'task' ? 1 : 0) - (b.kind === 'task' ? 1 : 0));
+  // de rest vult de gaten eronder op. In de planner houden de dagtaken hun
+  // eigen volgorde uit de lijst (planned_order), zodat de band leest als de dag.
+  bars.sort((a, b) => a.startIdx - b.startIdx
+    || b.span - a.span
+    || (a.kind === 'task' ? 1 : 0) - (b.kind === 'task' ? 1 : 0)
+    || (taskBand === 'planned' && a.task && b.task ? plannedOrderValue(a.task) - plannedOrderValue(b.task) : 0));
   const laneEnds: number[] = [];
   for (const bar of bars) {
     let lane = laneEnds.findIndex(end => end <= bar.startIdx);
@@ -623,27 +712,32 @@ function layoutAllDayBars(days: Date[], events: CalendarExternalEvent[], tasks: 
   return { bars, laneCount: laneEnds.length };
 }
 
-function layoutTimedEventsForDay(
+/** Volgorde binnen een plandag, gelijk aan de lijst: leeg sorteert achteraan. */
+function plannedOrderValue(task: Task): number {
+  const raw = task.planned_order === null || task.planned_order === undefined ? NaN : Number(task.planned_order);
+  return Number.isFinite(raw) ? raw : Number.MAX_SAFE_INTEGER;
+}
+
+function layoutTimedItemsForDay(
   day: Date,
-  events: CalendarExternalEvent[],
+  items: TimedItem[],
 ): { segments: TimedEventSegment[]; overflows: OverflowChip[] } {
   const { start: visibleStartBound, end: visibleEndBound } = visibleTimeBounds(day);
   const minutesInWindow = (HOUR_END - HOUR_START) * 60;
-  const raw = events
+  const raw = items
     // ≥24-uurs getimede afspraken staan als balk in de hele-dag-rij (Google-stijl),
-    // dus niet nogmaals in het tijdrooster.
-    .filter(ev => eventOverlapsVisibleWindow(ev, day) && !isAllDayBarEvent(ev))
-    .map(ev => {
-      const eventStart = new Date(ev.starts_at);
-      const eventEnd = new Date(ev.ends_at);
+    // dus niet nogmaals in het tijdrooster — `timedItemsForDay` filtert ze al.
+    .map(({ block, startsAt: eventStart, endsAt: eventEnd }) => {
       const visibleStart = new Date(Math.max(eventStart.getTime(), visibleStartBound.getTime()));
       const visibleEnd = new Date(Math.min(eventEnd.getTime(), visibleEndBound.getTime()));
       const startMinute = Math.max(0, Math.round((visibleStart.getTime() - visibleStartBound.getTime()) / 60000));
       const endMinute = Math.max(startMinute + 15, Math.min(minutesInWindow, Math.round((visibleEnd.getTime() - visibleStartBound.getTime()) / 60000)));
       const top = dateToVisibleDayFraction(day, visibleStart) * 100;
       const height = Math.max(dateToVisibleDayFraction(day, visibleEnd) * 100 - top, (100 / TOTAL_SLOTS) * MIN_EVENT_HEIGHT_SLOTS);
-      const isBackground = endMinute - startMinute >= BACKGROUND_EVENT_MIN_MINUTES;
-      return { event: ev, startMinute, endMinute, top, height, column: 0, columns: 1, startsBeforeDay: eventStart < visibleStartBound, endsAfterDay: eventEnd > visibleEndBound, isBackground };
+      // Een dagvullende afspraak is een achtergrondlaag; een lang taakblok is
+      // gewoon een lang blok — dat is precies wat je wilt zien.
+      const isBackground = block.kind === 'event' && endMinute - startMinute >= BACKGROUND_EVENT_MIN_MINUTES;
+      return { block, startMinute, endMinute, top, height, column: 0, columns: 1, startsBeforeDay: eventStart < visibleStartBound, endsAfterDay: eventEnd > visibleEndBound, isBackground };
     })
     .sort((a, b) => a.startMinute - b.startMinute || a.endMinute - b.endMinute);
 
@@ -692,7 +786,8 @@ function layoutTimedEventsForDay(
 type EventInteractionMode = 'move' | 'resize-start' | 'resize-end';
 interface EventInteraction {
   mode: EventInteractionMode;
-  event: CalendarExternalEvent;
+  /** Wat er versleept of herschaald wordt: een afspraak of een taakblok. */
+  block: TimedBlock;
   originDayIndex: number;
   originStartMin: number;
   originEndMin: number;
@@ -730,7 +825,32 @@ function eventIdentityKey(ev: CalendarExternalEvent): string {
  *  `removable` = een verwijderbaar blok (concept/eigen link); anders alleen-lezen (aangeboden optie). */
 export type BookingOverlaySlot = { id: string; starts_at: string; ends_at: string; status: string; removable?: boolean };
 
-export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, linkedTaskFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent, onOpenDay, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false, zoom = 1, onZoomChange, autoScrollKey = 0 }: {
+/** Wat de weekplanner het rooster kan vragen zonder de DOM te kennen. */
+export type TimeBlockGridHandle = {
+  /** Welke dag en welk tijdstip (minuten na middernacht) ligt er onder dit punt?
+   *  `minutes: null` = de dagband of de dagkop (een dag zónder tijd);
+   *  `null` als geheel = buiten het rooster. */
+  hitTest: (clientX: number, clientY: number) => { dayIndex: number; day: Date; minutes: number | null } | null;
+};
+
+/** Een blok dat nog niet bestaat: een sleep vanuit de werkvoorraad, of een
+ *  voorstel van "Vul mijn week". Tekent mee in de kolom, is nooit klikbaar. */
+export type PreviewBlock = {
+  key: string;
+  dayIndex: number;
+  startMin: number;
+  endMin: number;
+  title: string;
+  color?: string | null;
+  meta?: string | null;
+  kind?: 'task' | 'event';
+  className?: string;
+};
+
+/** Een getekende tijdselectie die open blijft staan met een formulier erin. */
+export type GridDraft = { dayIndex: number; startSlot: number; endSlot: number; node: ReactNode };
+
+type TimeBlockGridProps = {
   days: Date[];
   events: CalendarExternalEvent[];
   tasks: Task[];
@@ -758,7 +878,43 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   /** Bump deze waarde om het rooster opnieuw naar "nu" (of de werkdagstart) te scrollen.
    *  Bladeren naar een andere week doet dat bewust NIET: je blijft op dezelfde hoogte staan. */
   autoScrollKey?: number;
-}) {
+
+  // ── Taakblokken (weekplanner, 2026-09-12) ──────────────────────────────
+  /** Welke taken in de dagband staan: op hun deadline (agenda, standaard) of op
+   *  hun plandag zolang ze nog geen tijd hebben (weekplanner). */
+  taskBand?: TaskBandMode;
+  /** Opschrift van de dagband; standaard "Hele dag". */
+  bandLabel?: string;
+  /** Kleur voor een taakblok of -balk (de projectkleur); standaard het merkgoud. */
+  taskColorFor?: (task: Task) => string;
+  /** Tweede regel op een taakblok, bijvoorbeeld "Project · Klant". */
+  taskMetaFor?: (task: Task) => string | null;
+  /** Verplaatsen of herschalen van een taakblok ín het rooster. Zonder deze
+   *  callback zijn taakblokken alleen te bekijken en te openen. */
+  onMoveTask?: (task: Task, dayKey: string, startMin: number, endMin: number) => void | Promise<void>;
+  /** De planner sleept taken met zijn eigen systeem (ook naar de band en de
+   *  werkvoorraad). Is dit gezet, dan start het rooster op het lijf van een
+   *  taakblok géén eigen verplaatsing — de randen herschalen nog wel. */
+  onTaskBlockPointerDown?: (event: React.PointerEvent, task: Task) => void;
+  onTaskMenu?: (task: Task, x: number, y: number) => void;
+  onToggleTaskDone?: (task: Task) => void;
+  /** Eigen weergave van een taakbalk in de dagband (de planner tekent er een sleepbare kaart). */
+  renderTaskBar?: (task: Task, bar: { continuesLeft: boolean; continuesRight: boolean; span: number }) => ReactNode;
+  /** Extra inhoud onder de dagnaam in de kop, bijvoorbeeld de drukte-balk van de planner. */
+  renderDayHeader?: (day: Date) => ReactNode;
+  /** Voorbeeldblokken die meetekenen in de kolommen. */
+  previewBlocks?: PreviewBlock[];
+  /** Een getekende tijdselectie die open blijft staan met een formulier erin. */
+  draft?: GridDraft | null;
+  /** Tijd selecteren toestaan los van schrijfbare agenda's — de planner maakt
+   *  er taken van, geen afspraken. */
+  allowSelect?: boolean;
+  /** Het taakblok dat de planner op dit moment met zijn eigen systeem versleept:
+   *  dat tekenen we vervaagd, het voorbeeldblok laat zien waar het landt. */
+  ghostTaskId?: string | null;
+};
+
+export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>(function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, linkedTaskFor, canWrite, writeableSources, onSelectSlot, onEditTask, onOpenEvent, onMoveEvent, onOpenDay, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false, zoom = 1, onZoomChange, autoScrollKey = 0, taskBand = 'deadline', bandLabel = 'Hele dag', taskColorFor, taskMetaFor, onMoveTask, onTaskBlockPointerDown, onTaskMenu, onToggleTaskDone, renderTaskBar, renderDayHeader, previewBlocks = [], draft = null, allowSelect, ghostTaskId = null }, ref) {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   // Loopt de tijdselectie via een vinger? Dan houden we de pagina stil.
@@ -769,7 +925,7 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   const containerRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const colRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const canSelect = canWrite && writeableSources.length > 0;
+  const canSelect = allowSelect ?? (canWrite && writeableSources.length > 0);
   const daysKey = days.map(formatISODate).join('|');
   // Tijdens een sleep lopen de luisteraars op `window`. Die lezen `days` en de
   // callbacks via refs, zodat de effecten niet bij élke render (dus bij elke
@@ -780,6 +936,8 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   onSelectSlotRef.current = onSelectSlot;
   const onMoveEventRef = useRef(onMoveEvent);
   onMoveEventRef.current = onMoveEvent;
+  const onMoveTaskRef = useRef(onMoveTask);
+  onMoveTaskRef.current = onMoveTask;
 
   // Slepen/herschalen van bestaande native afspraken.
   const [interaction, setInteraction] = useState<EventInteraction | null>(null);
@@ -799,6 +957,13 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
     },
     [canWrite, writeableSourceIds],
   );
+  // Een taakblok verschuif je met dezelfde gebaren als een afspraak, mits de
+  // pagina er iets mee kan (de planner en de agenda geven `onMoveTask` mee).
+  const canDragTask = canWrite && Boolean(onMoveTask);
+  const canDragBlock = useCallback(
+    (block: TimedBlock) => (block.kind === 'event' ? !readOnlyEvents && canDragEvent(block.event) : canDragTask),
+    [canDragEvent, canDragTask, readOnlyEvents],
+  );
 
   // Bepaalt boven welke dagkolom de cursor staat en hoeveel minuten vanaf
   // middernacht dat is (op basis van de werkelijk gerenderde kolomhoogte).
@@ -817,6 +982,37 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
     const frac = Math.min(1, Math.max(0, (clientY - rr.top) / rr.height));
     return { dayIndex, minutes: frac * DAY_MINUTES };
   }, []);
+
+  // De weekplanner sleept taken met zijn eigen systeem (op coördinaten) en
+  // vraagt het rooster alleen: welke dag en welk tijdstip ligt hier? Boven het
+  // rooster — dagkop of dagband — is het antwoord "deze dag, zonder tijd".
+  useImperativeHandle(ref, () => ({
+    hitTest(clientX: number, clientY: number) {
+      const scroll = scrollRef.current;
+      if (!scroll) return null;
+      const bounds = scroll.getBoundingClientRect();
+      if (clientX < bounds.left || clientX > bounds.right || clientY < bounds.top || clientY > bounds.bottom) return null;
+      const cols = colRefs.current;
+      let dayIndex = -1;
+      for (let i = 0; i < cols.length; i++) {
+        const r = cols[i]?.getBoundingClientRect();
+        if (r && clientX >= r.left && clientX <= r.right) { dayIndex = i; break; }
+      }
+      if (dayIndex < 0) return null;
+      const day = daysRef.current[dayIndex];
+      if (!day) return null;
+      const grid = scroll.querySelector<HTMLElement>('.tb-grid');
+      const gridTop = grid?.getBoundingClientRect().top ?? bounds.top;
+      // De koppen en de band plakken bovenaan de scroller en liggen dus óver
+      // het rooster zodra je gescrold hebt: wat daaronder ligt is niet te zien.
+      const band = scroll.querySelector<HTMLElement>('.tb-allday-row');
+      const bandBottom = band?.getBoundingClientRect().bottom ?? gridTop;
+      if (clientY < Math.max(gridTop, bandBottom)) return { dayIndex, day, minutes: null };
+      const rect = cols[dayIndex]!.getBoundingClientRect();
+      const frac = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
+      return { dayIndex, day, minutes: frac * DAY_MINUTES };
+    },
+  }), []);
 
   // ── Lange druk op touch ────────────────────────────────────────────────
   // Zolang we wachten annuleert elke noemenswaardige beweging de druk, zodat
@@ -876,15 +1072,19 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   }, []);
   useEffect(() => stopAutoScroll, [stopAutoScroll]);
 
-  const armEventInteraction = useCallback((clientX: number, clientY: number, ev: CalendarExternalEvent, dayIndex: number, mode: EventInteractionMode, touch: boolean) => {
-    const dayStart = startOfDay(days[dayIndex]).getTime();
-    const startMin = (new Date(ev.starts_at).getTime() - dayStart) / 60000;
-    const endMin = (new Date(ev.ends_at).getTime() - dayStart) / 60000;
+  const armEventInteraction = useCallback((clientX: number, clientY: number, block: TimedBlock, dayIndex: number, mode: EventInteractionMode, touch: boolean) => {
+    const day = days[dayIndex];
+    const dayStart = startOfDay(day).getTime();
+    const bounds = block.kind === 'event'
+      ? { startsAt: new Date(block.event.starts_at), endsAt: new Date(block.event.ends_at) }
+      : taskBlockBounds(block.task, day);
+    const startMin = (bounds.startsAt.getTime() - dayStart) / 60000;
+    const endMin = (bounds.endsAt.getTime() - dayStart) / 60000;
     if (startMin < 0 || endMin > DAY_MINUTES) return; // meerdaagse blokken: niet slepen
     const hit = pointerToCol(clientX, clientY);
     const grabOffsetMin = hit ? hit.minutes - startMin : 0;
     const next: EventInteraction = {
-      mode, event: ev, originDayIndex: dayIndex,
+      mode, block, originDayIndex: dayIndex,
       originStartMin: startMin, originEndMin: endMin, grabOffsetMin,
       pointerStartX: clientX, pointerStartY: clientY,
       preview: { dayIndex, startMin, endMin }, moved: false, touch,
@@ -893,21 +1093,21 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
     setInteraction(next);
   }, [days, pointerToCol]);
 
-  const beginEventInteraction = useCallback((e: React.PointerEvent, ev: CalendarExternalEvent, dayIndex: number, mode: EventInteractionMode) => {
+  const beginEventInteraction = useCallback((e: React.PointerEvent, block: TimedBlock, dayIndex: number, mode: EventInteractionMode) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    if (!canDragEvent(ev)) return;
+    if (!canDragBlock(block)) return;
     if (interactionRef.current || dragRef.current) return; // tweede vinger negeren
     e.stopPropagation(); // nooit ook nog een tijdselectie eronder starten
     if (e.pointerType === 'mouse') {
       e.preventDefault();
-      armEventInteraction(e.clientX, e.clientY, ev, dayIndex, mode, false);
+      armEventInteraction(e.clientX, e.clientY, block, dayIndex, mode, false);
       return;
     }
     // Touch/pen: pas oppakken na een lange druk. Tot dan blijft scrollen werken
     // en opent een gewone tik het item nog steeds.
     const { clientX, clientY } = e;
-    startHold(clientX, clientY, () => armEventInteraction(clientX, clientY, ev, dayIndex, mode, true));
-  }, [canDragEvent, armEventInteraction, startHold]);
+    startHold(clientX, clientY, () => armEventInteraction(clientX, clientY, block, dayIndex, mode, true));
+  }, [canDragBlock, armEventInteraction, startHold]);
 
   // Pointermove/-up wereldwijd volgen zolang er een interactie loopt.
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
@@ -976,10 +1176,14 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
       const shown = daysRef.current;
       const day = shown[pv.dayIndex] ?? shown[it.originDayIndex];
       if (!day) return;
+      if (it.block.kind === 'task') {
+        void onMoveTaskRef.current?.(it.block.task, formatISODate(day), pv.startMin, pv.endMin);
+        return;
+      }
       const base = startOfDay(day).getTime();
       const startIso = new Date(base + pv.startMin * 60000).toISOString();
       const endIso = new Date(base + pv.endMin * 60000).toISOString();
-      void onMoveEventRef.current(it.event, startIso, endIso);
+      void onMoveEventRef.current(it.block.event, startIso, endIso);
     }
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -1213,8 +1417,9 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   const beginSelection = useCallback((e: React.PointerEvent, dayIndex: number) => {
     if (!canSelect) return;
     if (interactionRef.current || dragRef.current) return; // niet selecteren tijdens een sleep
-    // Op een bestaand item, boekingsblok of "+N"-chip nooit een selectie starten.
-    if ((e.target as HTMLElement).closest('.tb-ev,.tb-booking-slot,.tb-overflow-chip')) return;
+    // Op een bestaand item, boekingsblok, "+N"-chip of het open tekenconcept
+    // nooit een selectie starten.
+    if ((e.target as HTMLElement).closest('.tb-ev,.tb-booking-slot,.tb-overflow-chip,.tb-draft')) return;
     const { clientX, clientY } = e;
     if (e.pointerType === 'mouse') {
       if (e.button !== 0) return;
@@ -1311,8 +1516,8 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
 
   // Hele-dag-rij als doorlopende balken (Google): lanes over de dagkolommen heen.
   const { bars: allDayBars, laneCount: allDayLaneCount } = useMemo(
-    () => layoutAllDayBars(days, events, tasks),
-    [daysKey, events, tasks], // eslint-disable-line react-hooks/exhaustive-deps
+    () => layoutAllDayBars(days, events, tasks, taskBand),
+    [daysKey, events, tasks, taskBand], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const ALLDAY_COLLAPSED_LANES = 2;
   const allDayCollapsible = allDayLaneCount > ALLDAY_COLLAPSED_LANES;
@@ -1327,6 +1532,12 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
   const gmtLabel = `GMT${tzOffsetMin >= 0 ? '+' : '-'}${Math.floor(Math.abs(tzOffsetMin) / 60)}`;
 
   function isInSelection(di: number, si: number): boolean {
+    // Een open tekenconcept houdt zijn cellen gemarkeerd tot het formulier sluit.
+    if (draft && di === draft.dayIndex) {
+      const lo = Math.min(draft.startSlot, draft.endSlot);
+      const hi = Math.max(draft.startSlot, draft.endSlot);
+      if (si >= lo && si <= hi) return true;
+    }
     if (!drag || !isDragging || di !== drag.dayIndex) return false;
     const lo = Math.min(drag.startSlot, drag.endSlot);
     const hi = Math.max(drag.startSlot, drag.endSlot);
@@ -1366,17 +1577,19 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                 <span className="tb-dh-name">{dayNameNl(day)}</span>
                 <span className={`tb-dh-num${td ? ' tb-today-num' : ''}`}>{day.getDate()}</span>
               </>;
+              const extra = renderDayHeader?.(day);
               return <div className={`tb-dh${td ? ' tb-today' : ''}`} key={formatISODate(day)}>
                 {onOpenDay
                   ? <button type="button" className="tb-dh-hit" onClick={() => onOpenDay(day)} title="Open dagweergave">{inner}</button>
                   : inner}
+                {extra && <div className="tb-dh-extra">{extra}</div>}
               </div>;
             })}
           </div>
 
           <div className="tb-allday-row">
             <div className="tb-gutter tb-sticky-gutter tb-allday-label">
-              <span className="tb-allday-text">Hele dag</span>
+              <span className="tb-allday-text">{bandLabel}</span>
               {allDayCollapsible && (
                 <button type="button" className="tb-allday-toggle" onClick={() => setAllDayExpanded(v => !v)}
                   title={allDayExpanded ? 'Minder tonen' : 'Alle hele-dag-items tonen'}
@@ -1397,6 +1610,13 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                   <span className="tb-ad-bar-title">{bar.event.title}{bar.timeLabel ? `, ${bar.timeLabel}` : ''}</span>
                   {bar.continuesRight && <ChevronRight size={11} className="tb-ad-bar-cont tb-ad-bar-cont-r" />}
                 </button>
+              ) : bar.task && renderTaskBar ? (
+                // De planner tekent zijn eigen kaart in de band: sleepbaar, met
+                // vinkje en uren. Het rooster regelt alleen kolom en rij.
+                <div className={`tb-ad-slot${bar.continuesLeft ? ' tb-ad-cont-l' : ''}${bar.continuesRight ? ' tb-ad-cont-r' : ''}`} key={bar.key}
+                  style={{ gridColumn: `${bar.startIdx + 1} / span ${bar.span}`, gridRow: bar.lane + 1 }}>
+                  {renderTaskBar(bar.task, { continuesLeft: bar.continuesLeft, continuesRight: bar.continuesRight, span: bar.span })}
+                </div>
               ) : bar.task ? (
                 <button type="button" className="tb-ad-bar tb-ad-bar-task" key={bar.key}
                   style={{ gridColumn: `${bar.startIdx + 1} / span ${bar.span}`, gridRow: bar.lane + 1 }}
@@ -1424,7 +1644,7 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
             ))}
 
             {days.map((day, di) => {
-              const { segments: daySegments, overflows: dayOverflows } = layoutTimedEventsForDay(day, events);
+              const { segments: daySegments, overflows: dayOverflows } = layoutTimedItemsForDay(day, timedItemsForDay(day, events, tasks));
               const isToday = today(day);
               const nowFrac = isToday ? dateToVisibleDayFraction(day, now) : 0;
               return (
@@ -1438,7 +1658,7 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                         key={si}
                         style={{ top: `calc(var(--tb-h) * ${si})`, height: 'var(--tb-h)' }}
                       >
-                        {selected && si === Math.min(drag!.startSlot, drag!.endSlot) && (
+                        {selected && drag && isDragging && di === drag.dayIndex && si === Math.min(drag.startSlot, drag.endSlot) && (
                           <span className="tb-sel-label">{selectionLabel()}</span>
                         )}
                       </div>
@@ -1453,11 +1673,9 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                   )}
 
                   {daySegments.map(segment => {
-                    const ev = segment.event;
                     const columnWidth = 100 / segment.columns;
                     const left = segment.column * columnWidth;
                     const right = 100 - (segment.column + 1) * columnWidth;
-                    const visualTime = `${segment.startsBeforeDay ? '↖ ' : ''}${formatTime(ev.starts_at)} – ${segment.endsAfterDay ? '↘ ' : ''}${formatTime(ev.ends_at)}`;
                     const visibleDuration = segment.endMinute - segment.startMinute;
                     // De blokhoogte bepaalt wat er past. Een half uur is maar één
                     // roosterrij (~26px) hoog: daar zetten titel en starttijd zich
@@ -1467,6 +1685,65 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                       : visibleDuration < 45 ? ' tb-ev-compact'
                         : visibleDuration < 60 ? ' tb-ev-cozy'
                           : ' tb-ev-roomy';
+                    const blockStyle = {
+                      top: `${segment.top}%`,
+                      height: `${segment.height}%`,
+                      left: `calc((100% - ${EVENT_CLICK_STRIP}) * ${left / 100} + 2px)`,
+                      right: `calc((100% - ${EVENT_CLICK_STRIP}) * ${right / 100} + ${EVENT_CLICK_STRIP} + 2px)`,
+                    };
+                    const isGhosted = Boolean(interaction) && blockKey(interaction!.block) === blockKey(segment.block);
+
+                    if (segment.block.kind === 'task') {
+                      // Een taakblok: hetzelfde rooster, een andere taal. Waar een
+                      // afspraak vol gevuld is (vast, met anderen), is een taak een
+                      // omlijnd, licht getint vlak met een vinkje — werk dat van jou
+                      // is en dat je nog kunt schuiven.
+                      const task = segment.block.task;
+                      const startMin = Number(task.planned_start_minute ?? 0);
+                      const endMin = Math.min(DAY_MINUTES, startMin + taskBlockMinutes(task));
+                      const fmt = (m: number) => formatHour(Math.floor(m / 60) % 24, Math.round(m % 60));
+                      const timeLabel = `${fmt(startMin)} – ${fmt(endMin)}`;
+                      const meta = taskMetaFor?.(task) ?? null;
+                      const done = task.status === 'done';
+                      const resizable = canDragTask && !segment.endsAfterDay;
+                      const movesHere = resizable && !onTaskBlockPointerDown;
+                      return (
+                        <div
+                          className={`tb-ev tb-task-block${densityClass}${done ? ' is-done' : ''}${task.priority === 'high' ? ' is-high' : ''}${resizable ? ' tb-ev-draggable' : ''}${isGhosted || task.id === ghostTaskId ? ' tb-ev-ghosted' : ''}`}
+                          key={`task-${task.id}`}
+                          data-task-id={task.id}
+                          role="group"
+                          tabIndex={0}
+                          aria-label={`${task.title}, ${timeLabel}${done ? ', klaar' : ''}`}
+                          onClick={onTaskBlockPointerDown ? undefined : () => { if (draggedRef.current) return; onEditTask(task); }}
+                          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onEditTask(task); } }}
+                          onPointerDown={onTaskBlockPointerDown
+                            ? e => onTaskBlockPointerDown(e, task)
+                            : movesHere ? e => beginEventInteraction(e, segment.block, di, 'move') : undefined}
+                          onContextMenu={onTaskMenu ? e => { e.preventDefault(); onTaskMenu(task, e.clientX, e.clientY); } : undefined}
+                          style={{ ...taskBlockStyle(taskColorFor?.(task) ?? '#FFD966'), ...blockStyle }}
+                          title={`${timeLabel}\n${task.title}${meta ? `\n${meta}` : ''}${resizable ? '\nSleep om te verplaatsen · sleep de randen om de duur te wijzigen' : ''}`}
+                        >
+                          {onToggleTaskDone && (
+                            <button type="button" className="tb-ev-check" aria-pressed={done}
+                              aria-label={done ? `${task.title} weer openzetten` : `${task.title} afvinken`}
+                              onPointerDown={e => e.stopPropagation()}
+                              onClick={e => { e.stopPropagation(); onToggleTaskDone(task); }}>
+                              {done && <Check size={10} aria-hidden="true" />}
+                            </button>
+                          )}
+                          {resizable && <span className="tb-ev-handle tb-ev-handle-top" onPointerDown={e => beginEventInteraction(e, segment.block, di, 'resize-start')} title="Sleep om de starttijd te wijzigen" />}
+                          <span className="tb-ev-time">{timeLabel}</span>
+                          <span className="tb-ev-title">{task.title}</span>
+                          <span className="tb-ev-start">{fmt(startMin)}</span>
+                          {meta && <span className="tb-ev-src">{meta}</span>}
+                          {resizable && <span className="tb-ev-handle tb-ev-handle-bottom" onPointerDown={e => beginEventInteraction(e, segment.block, di, 'resize-end')} title="Sleep om de eindtijd te wijzigen" />}
+                        </div>
+                      );
+                    }
+
+                    const ev = segment.block.event;
+                    const visualTime = `${segment.startsBeforeDay ? '↖ ' : ''}${formatTime(ev.starts_at)} – ${segment.endsAfterDay ? '↘ ' : ''}${formatTime(ev.ends_at)}`;
                     const eventMeta = [providerLabel(ev.provider), ev.source_name, ev.location].filter(Boolean).join(' · ');
                     // In het rooster tonen we alleen de locatie (de kleur duidt de
                     // agenda/bron al aan) — "Google · Agenda" eronder was vooral ruis.
@@ -1475,23 +1752,18 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                     const trackedMin = trackedMinutesFor(ev);
                     const linkedTaskTitle = linkedTaskFor?.(ev) ?? null;
                     const draggable = !readOnlyEvents && canDragEvent(ev) && !segment.startsBeforeDay && !segment.endsAfterDay;
-                    const isGhosted = Boolean(interaction) && eventIdentityKey(interaction!.event) === eventIdentityKey(ev);
+                    const eventBlock = segment.block;
                     return (
                       <button type="button" className={`tb-ev${densityClass}${segment.isBackground ? ' tb-ev-bg' : ''}${ev.visibility === 'private' ? ' tb-ev-priv' : ''}${trackedMin != null ? ' tb-ev-tracked' : ''}${draggable ? ' tb-ev-draggable' : ''}${isGhosted ? ' tb-ev-ghosted' : ''}`} key={`${ev.provider}-${ev.provider_event_id}-${di}`}
+                        data-event-key={calendarEventKey(ev)}
                         onClick={() => { if (draggedRef.current) return; onOpenEvent(ev); }}
-                        onPointerDown={draggable ? e => beginEventInteraction(e, ev, di, 'move') : undefined}
-                        style={{
-                          ...eventColorStyle(eventColor(ev)),
-                          top: `${segment.top}%`,
-                          height: `${segment.height}%`,
-                          left: `calc((100% - ${EVENT_CLICK_STRIP}) * ${left / 100} + 2px)`,
-                          right: `calc((100% - ${EVENT_CLICK_STRIP}) * ${right / 100} + ${EVENT_CLICK_STRIP} + 2px)`,
-                        }}
+                        onPointerDown={draggable ? e => beginEventInteraction(e, eventBlock, di, 'move') : undefined}
+                        style={{ ...eventColorStyle(eventColor(ev)), ...blockStyle }}
                         title={`${visualTime}\n${ev.title}\n${eventMeta}${linkedTaskTitle ? `\nTaak: ${linkedTaskTitle}` : ''}${trackedMin != null ? `\n${formatMinutes(trackedMin)} geregistreerd` : ''}${draggable ? '\nSleep om te verplaatsen · sleep de randen om de duur te wijzigen' : ''}`}>
                         {trackedMin != null && <span className="tb-ev-track" title={`${formatMinutes(trackedMin)} geregistreerd`}><Clock size={10} />{formatMinutes(trackedMin)}</span>}
                         {linkedTaskTitle && <span className={`tb-ev-task${trackedMin != null ? ' tb-ev-task-shifted' : ''}`} title={`Taak: ${linkedTaskTitle}`}><CheckSquare size={10} /></span>}
                         {ev.meeting_url && <span className="tb-ev-video" title="Videocall gekoppeld"><Video size={10} /></span>}
-                        {draggable && <span className="tb-ev-handle tb-ev-handle-top" onPointerDown={e => beginEventInteraction(e, ev, di, 'resize-start')} title="Sleep om de starttijd te wijzigen" />}
+                        {draggable && <span className="tb-ev-handle tb-ev-handle-top" onPointerDown={e => beginEventInteraction(e, eventBlock, di, 'resize-start')} title="Sleep om de starttijd te wijzigen" />}
                         <span className="tb-ev-time">{visualTime}</span>
                         <span className="tb-ev-title">{ev.title}</span>
                         {/* Korte starttijd: op een blok van een half uur past maar
@@ -1500,10 +1772,39 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                             tijdregel hierboven. */}
                         <span className="tb-ev-start">{formatTime(ev.starts_at)}</span>
                         {eventLocation && <span className="tb-ev-src">{eventLocation}</span>}
-                        {draggable && <span className="tb-ev-handle tb-ev-handle-bottom" onPointerDown={e => beginEventInteraction(e, ev, di, 'resize-end')} title="Sleep om de eindtijd te wijzigen" />}
+                        {draggable && <span className="tb-ev-handle tb-ev-handle-bottom" onPointerDown={e => beginEventInteraction(e, eventBlock, di, 'resize-end')} title="Sleep om de eindtijd te wijzigen" />}
                       </button>
                     );
                   })}
+
+                  {/* Voorbeeldblokken: een taak die vanuit de werkvoorraad boven
+                      deze kolom hangt, of het voorstel van "Vul mijn week". Nooit
+                      klikbaar — de sleep eronder moet erdoorheen kunnen kijken. */}
+                  {previewBlocks.filter(block => block.dayIndex === di).map(block => {
+                    const top = (block.startMin / DAY_MINUTES) * 100;
+                    const height = Math.max(((block.endMin - block.startMin) / DAY_MINUTES) * 100, (100 / TOTAL_SLOTS) * MIN_EVENT_HEIGHT_SLOTS);
+                    const fmt = (m: number) => formatHour(Math.floor(m / 60) % 24, Math.round(m % 60));
+                    const minutes = block.endMin - block.startMin;
+                    const densityClass = minutes < 30 ? ' tb-ev-tight' : minutes < 45 ? ' tb-ev-compact' : minutes < 60 ? ' tb-ev-cozy' : ' tb-ev-roomy';
+                    return (
+                      <div key={block.key} className={`tb-ev tb-ev-preview${block.kind === 'task' ? ' tb-task-block' : ''}${densityClass} ${block.className ?? ''}`}
+                        style={{ ...(block.kind === 'task' ? taskBlockStyle(block.color) : eventColorStyle(block.color)), top: `${top}%`, height: `${height}%`, left: '2px', right: `calc(${EVENT_CLICK_STRIP} + 2px)` }}>
+                        <span className="tb-ev-time">{fmt(block.startMin)} – {fmt(block.endMin)}</span>
+                        <span className="tb-ev-title">{block.title}</span>
+                        <span className="tb-ev-start">{fmt(block.startMin)}</span>
+                        {block.meta && <span className="tb-ev-src">{block.meta}</span>}
+                      </div>
+                    );
+                  })}
+
+                  {/* Het open tekenconcept: het formulier staat precies in het
+                      getekende tijdvak, zodat je ziet wat je aan het maken bent. */}
+                  {draft && draft.dayIndex === di && (
+                    <div className="tb-draft" style={{ top: `${(Math.min(draft.startSlot, draft.endSlot) / TOTAL_SLOTS) * 100}%` }}
+                      onPointerDown={e => e.stopPropagation()}>
+                      {draft.node}
+                    </div>
+                  )}
 
                   {bookingSlots.filter(s => s.status !== 'cancelled' && isSameDay(new Date(s.starts_at), day)).map(s => {
                     const top = dateToVisibleDayFraction(day, new Date(s.starts_at)) * 100;
@@ -1535,10 +1836,13 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
                     const top = (pv.startMin / DAY_MINUTES) * 100;
                     const height = Math.max(((pv.endMin - pv.startMin) / DAY_MINUTES) * 100, (100 / TOTAL_SLOTS) * MIN_EVENT_HEIGHT_SLOTS);
                     const fmt = (m: number) => formatHour(Math.floor(m / 60) % 24, Math.round(m % 60));
+                    const previewStyle = interaction.block.kind === 'event'
+                      ? eventColorStyle(eventColor(interaction.block.event))
+                      : taskBlockStyle(taskColorFor?.(interaction.block.task) ?? '#FFD966');
                     return (
-                      <div className="tb-ev tb-ev-preview" style={{ ...eventColorStyle(eventColor(interaction.event)), top: `${top}%`, height: `${height}%`, left: '2px', right: `calc(${EVENT_CLICK_STRIP} + 2px)` }}>
+                      <div className={`tb-ev tb-ev-preview${interaction.block.kind === 'task' ? ' tb-task-block' : ''}`} style={{ ...previewStyle, top: `${top}%`, height: `${height}%`, left: '2px', right: `calc(${EVENT_CLICK_STRIP} + 2px)` }}>
                         <span className="tb-ev-time">{fmt(pv.startMin)} – {fmt(pv.endMin)}</span>
-                        <span className="tb-ev-title">{interaction.event.title}</span>
+                        <span className="tb-ev-title">{blockTitle(interaction.block)}</span>
                       </div>
                     );
                   })()}
@@ -1561,7 +1865,7 @@ export function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinute
 
     </div>
   );
-}
+});
 
 /* ── Month view ───────────────────────────────────────────────────────── */
 
@@ -3159,8 +3463,11 @@ export type CalendarDraft = {
   date: string | null;
 };
 
-export function CalendarPage({ mode = 'agenda', initialDate, initialDraft = null, onDraftConsumed, organizationId, currentUserId, data, canWrite, onChanged, onEditTask, onNewNoteForEvent, onNewDocumentForEvent, onSetEventLink, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
+export function CalendarPage({ mode = 'agenda', initialDate, initialDraft = null, onDraftConsumed, organizationId, currentUserId, data, canWrite, onChanged, onEditTask, onMoveTask, onNewNoteForEvent, onNewDocumentForEvent, onSetEventLink, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
   mode?: 'agenda' | 'settings';
+  /** Een taakblok (taak met tijd uit de weekplanner) verschuiven of herschalen
+   *  in het rooster. Zonder dit zijn taakblokken hier alleen te bekijken. */
+  onMoveTask?: (task: Task, dayKey: string, startMin: number, endMin: number) => void | Promise<void>;
   /** Op welke dag de agenda opent. De weekplanner springt hierheen vanaf een
    *  agenda-chip; zonder dit landde je altijd op vandaag. */
   initialDate?: string | null;
@@ -3318,6 +3625,20 @@ export function CalendarPage({ mode = 'agenda', initialDate, initialDraft = null
     },
     [data.calendarEventLinks, data.tasks],
   );
+  // Taakblokken (taken met een tijd uit de weekplanner) dragen de kleur van
+  // hun project, en eronder in één regel waar ze bij horen.
+  const taskColorFor = useCallback((task: Task): string => {
+    const project = task.project_id ? data.projects.find(p => p.id === task.project_id) ?? null : null;
+    const clientId = project?.client_id ?? task.client_id ?? null;
+    const client = clientId ? data.clients.find(c => c.id === clientId) ?? null : null;
+    return normalizeHexColor(project?.color ?? client?.color ?? null);
+  }, [data.projects, data.clients]);
+  const taskMetaFor = useCallback((task: Task): string | null => {
+    const project = task.project_id ? data.projects.find(p => p.id === task.project_id) ?? null : null;
+    const clientId = project?.client_id ?? task.client_id ?? null;
+    const client = clientId ? data.clients.find(c => c.id === clientId) ?? null : null;
+    return [project?.name, client?.name].filter(Boolean).join(' · ') || null;
+  }, [data.projects, data.clients]);
 
   // Opent de uren-modal voorgevuld met de klant/het project en de duur van de afspraak.
   const openLogTimeForEvent = useCallback((event: CalendarExternalEvent) => {
@@ -4231,6 +4552,7 @@ export function CalendarPage({ mode = 'agenda', initialDate, initialDraft = null
           {isTimeGridView(view) ? (
             <TimeBlockGrid days={days} events={events} tasks={data.tasks.filter(t => t.status !== 'done')}
               sourceColors={sourceColors} trackedMinutesFor={trackedMinutesFor} linkedTaskFor={linkedTaskFor} canWrite={canWrite} writeableSources={writeableSources} onSelectSlot={handleSlotSelect} onEditTask={onEditTask} onOpenEvent={setSelectedEvent} onMoveEvent={rescheduleEvent}
+              taskColorFor={taskColorFor} taskMetaFor={taskMetaFor} onMoveTask={onMoveTask}
               onOpenDay={view === 'day' ? undefined : openDay}
               zoom={zoom} onZoomChange={applyZoom} autoScrollKey={autoScrollKey}
               bookingMode={bookingMode} bookingSlots={bookingOverlay} onRemoveBookingSlot={handleRemoveBookingSlot} />
