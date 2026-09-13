@@ -6,8 +6,12 @@
 // nodig hebben (select met eq-filters, rpc's, een handvol edge functions).
 // Schrijfacties krijgen een leeg antwoord — de test klikt niets weg.
 import * as seed from './seed.mjs';
+import * as pub from './publicdata.mjs';
 
 export const SUPABASE_URL = 'https://example.supabase.co';
+export const MEDIA_URL = 'https://media.example.test';
+// 8×6 px, effen olijfgroen; groot genoeg voor een <img> die zich schaalt.
+const TILE_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAAGklEQVQIW2NkYPjPwMDwn4EBzGBgYGAAAgwADQ4CAUUb5jsAAAAASUVORK5CYII=';
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const exp = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30;
 const accessToken = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ sub: seed.ids.USER, email: seed.user.email, role: 'authenticated', aud: 'authenticated', exp, iat: exp - 3600, session_id: 'sess-1' })}.mocksig`;
@@ -52,6 +56,15 @@ function edgeFunction(name, body) {
     return { ok: true, connections: [], sources: [seed.calendarSource], calendars: [seed.calendarSource], events: [], attendees: [], links: [], slots: [], ics: [] };
   }
   if (name === 'meeting-booking') return { ok: true, links: [], slots: [], bookings: [], link: null };
+  // Publieke klantpagina's en het portaal.
+  if (name === 'quote-public') return pub.quotePublic;
+  if (name === 'invoice-public') return pub.invoicePublic;
+  if (name === 'contract-public') return pub.contractPublic;
+  if (name === 'meeting-booking-public') return pub.bookingPublic;
+  if (name === 'file-share-public') return pub.sharePublic;
+  if (name === 'gallery-public') return pub.galleryPublic;
+  if (name === 'client-portal') return pub.portalData;
+  if (name === 'portal-login') return { ok: true, known: true };
   if (name === 'gerrie-agent') return { ok: true, budget: { remaining_cents: 5000 }, remaining: 5000, tools: [], proposals: [], usage: [] };
   return { ok: true };
 }
@@ -86,6 +99,9 @@ export async function installMock(context) {
     if (p.startsWith('/realtime')) return route.abort();
     return json(route, {});
   });
+  // De media-worker van de galerij (VITE_R2_WORKER_URL wijst in de test naar
+  // dit adres): elke foto is hetzelfde kleine PNG-vlak.
+  await context.route(`${MEDIA_URL}/**`, r => r.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: Buffer.from(TILE_PNG_BASE64, 'base64') }));
   // Lettertypen van buiten zijn in een CI-omgeving niet altijd bereikbaar; de
   // test gaat over lay-out, niet over Poppins.
   await context.route('https://fonts.googleapis.com/**', r => r.abort());
@@ -97,6 +113,12 @@ export async function installMock(context) {
 export function storageScript(spec, extra = {}) {
   const orgId = seed.ids.ORG;
   const view = typeof spec === 'string' ? { page: spec } : spec;
+  // Een publieke pagina (spec.path) heeft geen medewerkerssessie nodig; het
+  // portaal (spec.portal) krijgt zijn eigen sessie onder de portaalsleutel.
+  if (view.path) {
+    const items = { ...(view.portal ? { 'resofly.portal.auth': JSON.stringify(session) } : {}), ...extra };
+    return `(() => { const items = ${JSON.stringify(items)}; for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v); })();`;
+  }
   const tabs = { tabs: [{ page: view.page, projectId: view.projectId ?? null, clientId: view.clientId ?? null, statsReportId: null, galleryId: null }], activeIndex: 0 };
   const items = {
     'sb-example-auth-token': JSON.stringify(session),

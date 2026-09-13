@@ -3163,7 +3163,19 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
     }
   }
 
-  const title = `${item ? 'Bewerk' : 'Nieuw'} ${edit.kind}`;
+  // De titel stond er als "Nieuw invoice" en "Bewerk task": de interne sleutel in
+  // een verder Nederlandse app. Nu in gewone taal, met het juiste lidwoord.
+  const KIND_TITLES: Record<string, [create: string, edit: string]> = {
+    client: ['Nieuwe klant', 'Klant bewerken'],
+    project: ['Nieuw project', 'Project bewerken'],
+    task: ['Nieuwe taak', 'Taak bewerken'],
+    ticket: ['Nieuw ticket', 'Ticket bewerken'],
+    note: ['Nieuwe notitie', 'Notitie bewerken'],
+    document: ['Nieuw document', 'Document bewerken'],
+    quote: ['Nieuwe offerte', 'Offerte bewerken'],
+    invoice: ['Nieuwe factuur', 'Factuur bewerken'],
+  };
+  const title = KIND_TITLES[edit.kind]?.[item ? 1 : 0] ?? `${item ? 'Bewerk' : 'Nieuw'} ${edit.kind}`;
   const quoteWorkflowLocked = edit.kind === 'quote' && item ? isQuoteWorkflowLocked(item as Quote) : false;
   const effectiveReadOnly = readOnly || quoteWorkflowLocked;
   const disabled = effectiveReadOnly;

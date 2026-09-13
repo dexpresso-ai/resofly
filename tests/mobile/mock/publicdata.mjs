@@ -1,0 +1,38 @@
+// Antwoorden voor de publieke klantpagina's en het klantportaal.
+import * as seed from './seed.mjs';
+const iso = (d) => d.toISOString();
+const day = (o, h = 10) => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate() + o, h, 0); };
+const dkey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const company = { company_name: 'Studio Lopik B.V.', trade_name: 'Studio Lopik', email: 'info@studiolopik.nl', phone: '0348-123456', website: 'https://studiolopik.nl', city: 'Lopik', country: 'NL', iban: 'NL12ABNA0123456789', vat_number: 'NL123456789B01', kvk_number: '12345678', invoice_accent_color: '#FFD966' };
+const client = { name: seed.clients[0].name, contact_name: seed.clients[0].contact_name, email: seed.clients[0].email, phone: seed.clients[0].phone };
+const project = { name: seed.projects[0].name, description: seed.projects[0].description, start_date: seed.projects[0].start_date, end_date: seed.projects[0].end_date };
+const branding = { logoDataUrl: null, accentColor: '#FFD966', footerText: 'Studio Lopik · Kerkstraat 12, Lopik', hidePoweredBy: false, companyName: 'Studio Lopik', headingFont: null, bodyFont: null, galleryBg: '#0B0B0B', clientTheme: 'dark' };
+const events = [
+  { id: 'e1', event_type: 'sent_to_client', title: 'Verstuurd naar klant', description: 'Per e-mail aan joost@dekorenaar.nl', created_at: iso(day(-3)) },
+  { id: 'e2', event_type: 'client_viewed', title: 'Bekeken door klant', description: null, created_at: iso(day(-2)) },
+];
+const q = seed.quotes[1];
+export const quotePublic = { ok: true, quote: { id: q.id, number: q.number, date: q.date, valid_until: q.valid_until, lines: q.lines, status: 'sent', notes: 'Prijzen exclusief drukwerk; levering binnen drie weken na akkoord.', public_token_expires_at: iso(day(20)), accepted_at: null, client_decision_at: null, client_decision_by_name: null, client_decision_by_email: null, client_decision_note: null }, client, project, company, branding, events };
+const inv = seed.invoices[0];
+export const invoicePublic = { ok: true, invoice: { number: inv.number, date: inv.date, due_date: inv.due_date, lines: inv.lines, status: 'sent', notes: null, sent_at: inv.sent_at, paid_at: null, public_token_expires_at: iso(day(30)) }, client, project, quote: { id: q.id, number: '2026-019', status: 'accepted', date: q.date, total_amount: 6957.5 }, company, branding, events, payments: [], versions: [{ version_number: 1, snapshot_reason: 'sent_to_client', pdf_file_name: 'factuur-2026-041.pdf', created_at: iso(day(-3)) }] };
+export const contractPublic = { ok: true, contract: { id: 'c1', number: 'C-2026-007', title: 'Onderhoudscontract website', body: '<h2>1. Opdracht</h2><p>Studio Lopik verzorgt het technisch onderhoud van de website van Fysio Centrum Zuid: updates, back-ups en beveiliging.</p><h2>2. Looptijd</h2><p>Dit contract gaat in op 1 oktober 2026 en loopt twaalf maanden, met stilzwijgende verlenging.</p><h2>3. Vergoeding</h2><p>€ 95,00 per maand exclusief btw, maandelijks vooraf gefactureerd.</p><h2>4. Opzegging</h2><p>Opzeggen kan schriftelijk met een opzegtermijn van één maand.</p>', content_kind: 'html', date: dkey(day(-2)), valid_until: dkey(day(28)), status: 'sent', signed_at: null, public_token_expires_at: iso(day(28)) }, client: { name: 'Fysio Centrum Zuid', contact_name: 'Maria Jansen', email: 'maria@fysio.nl' }, company, branding, signer: { name: 'Maria Jansen', email: 'maria@fysio.nl', status: 'pending', signed_at: null, signature_method: null }, events };
+const slots = []; let sid = 0;
+for (const d of [1, 2, 3, 4]) for (const h of [9, 10, 11, 14, 15]) { const s = day(d, h); const e = day(d, h); e.setMinutes(30); slots.push({ id: `s${++sid}`, starts_at: iso(s), ends_at: iso(e) }); }
+export const bookingPublic = { ok: true, link: { title: 'Kennismakingsgesprek (30 min)', intro_text: 'Kies een moment dat jou uitkomt; je krijgt direct een bevestiging met videolink.', max_total_bookings: 1, max_per_week: 1 }, slots, taken_slot_starts: [slots[2].starts_at], prefill: { name: 'Els de Boer', email: 'els@zonnetje.nl' } };
+export const sharePublic = { ok: true, share: { itemType: 'folder', itemName: 'Concepten huisstijl', recipientName: 'Joost Vermeer', message: 'Hierbij de eerste concepten. Kijk vooral naar variant 2 — daar zijn we zelf het meest enthousiast over.', canDownload: true, expiresAt: iso(day(14)) }, items: [
+  { itemType: 'attachment', itemId: 'a1', name: 'huisstijl-schets-v2.pdf', mimeType: 'application/pdf', sizeBytes: 1240000, modified: iso(day(-1)), path: 'Concepten', downloadable: true, readable: false },
+  { itemType: 'attachment', itemId: 'a2', name: 'moodboard.jpg', mimeType: 'image/jpeg', sizeBytes: 2400000, modified: iso(day(-1)), path: 'Concepten', downloadable: true, readable: false },
+  { itemType: 'note', itemId: 'n1', name: 'Toelichting bij de concepten', mimeType: null, sizeBytes: null, modified: iso(day(-1)), path: 'Concepten', downloadable: false, readable: true },
+], company: { company_name: company.company_name, trade_name: company.trade_name }, branding };
+const items = Array.from({ length: 8 }, (_, i) => ({ id: `g${i + 1}`, media_type: 'photo', file_name: `foto-${i + 1}.jpg`, category_id: i < 4 ? 'cat1' : 'cat2', storage_key: `gal/orig/${i + 1}.jpg`, preview_key: `gal/prev/${i + 1}.jpg`, thumb_key: `gal/thumb/${i + 1}.jpg`, width: i % 3 === 0 ? 1200 : 1800, height: i % 3 === 0 ? 1800 : 1200, duration_seconds: null, stream_uid: null, stream_status: null, stream_playback_base: null }));
+export const galleryPublic = { ok: true, gallery: { id: 'gal1', title: 'Fotoshoot Bloem · september', description: 'De selectie van de shoot in het restaurant.', format: 'photo', hero_template: 'classic', published_at: iso(day(-1)), allow_downloads: true, download_quality: 'web', cover_item_id: 'g2', cover_preview_key: null, cover_focus_x: 0.5, cover_focus_y: 0.4, expires_at: null }, items, categories: [{ id: 'cat1', name: 'Gerechten' }, { id: 'cat2', name: 'Sfeer' }], branding, tokens: { mediaToken: 'media-token', streamTokens: {}, exp: Math.floor(Date.now() / 1000) + 3600 }, myFavoriteIds: [], myLikeIds: [], likeCounts: {} };
+const c0 = seed.clients[0];
+export const portalData = { ok: true, email: c0.email, accounts: [{
+  id: 'acc1', organizationId: seed.ids.ORG, company, branding, client: { id: c0.id, name: c0.name, contact_name: c0.contact_name, email: c0.email, phone: c0.phone }, actingContact: { name: 'Joost Vermeer', email: c0.email },
+  projects: seed.projects.filter(p => p.client_id === c0.id).map(p => ({ id: p.id, name: p.name, description: p.description, color: p.color, archived: false, start_date: p.start_date, end_date: p.end_date, created_at: p.created_at })),
+  invoices: seed.invoices.filter(i => i.client_id === c0.id).map(i => ({ id: i.id, number: i.number, date: i.date, due_date: i.due_date, status: i.status, lines: i.lines, notes: null, sent_at: i.sent_at, paid_at: i.paid_at, project_id: i.project_id })),
+  quotes: seed.quotes.filter(x => x.client_id === c0.id).map(x => ({ id: x.id, number: x.number, date: x.date, valid_until: x.valid_until, status: x.status, lines: x.lines, notes: null, sent_at: x.sent_at, accepted_at: x.accepted_at, project_id: x.project_id })),
+  contracts: [{ id: 'c1', number: 'C-2026-003', title: 'Samenwerkingsovereenkomst huisstijl', status: 'signed', date: dkey(day(-40)), valid_until: null, signed_at: iso(day(-38)) }],
+  tickets: seed.tickets.filter(t => t.client_id === c0.id).map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, created_at: t.created_at, updated_at: t.updated_at })),
+  galleries: [], sharedFileCount: 3,
+}] };

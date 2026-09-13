@@ -98,6 +98,34 @@ actief · Filters wissen"). Dit geldt tot en met de staande tablet.
 - De vastzetknop van de zijbalk is altijd zichtbaar: een tablet kent geen
   "hover", dus de labels waren anders niet te bereiken.
 
+## Tweede ronde: wat de klant ziet, en de vensters
+
+De eerste ronde ging over de werkruimte. Daarna zijn ook de pagina's die een
+**klant** op zijn telefoon opent nagelopen, plus de bewerkvensters en de
+subtabbladen van klant en project.
+
+- **Publieke offerte, factuur en contract:** kop van 380 naar 150 px (titel
+  25 px, kaartrand 16 px, paginamarge 12 px); de regels van een offerte staan
+  nu op ±490 px in plaats van 1.250 px. De titel liep bij een lang woord uit
+  de kaart en de intro brak buiten beeld af (de eerste kolom nam de breedte
+  van het langste woord): opgelost met `min-width:0` en `overflow-wrap`.
+- **Boekingslink:** twee tijden naast elkaar met een korte dagnaam
+  ("ma 14 sep"); op het bureaublad blijft de volle naam staan.
+- **Klantportaal:** kop op één rij, tabbladen als veegrij in plaats van drie
+  rijen, cijfers twee naast elkaar en kleiner, elke factuur- of offerteregel
+  op twee lijnen (nummer + datum, dan bedrag + status). Eerste factuur van
+  ±500 naar ±300 px.
+- **Galerij:** de drie knoppen (diavoorstelling, volledig scherm, menu)
+  lagen over de gecentreerde titel; op de telefoon staan ze als rij erboven.
+- **Bewerkvensters:** de titel stond er als "Nieuw invoice" en "Bewerk task"
+  (de interne sleutel); nu "Nieuwe factuur", "Taak bewerken", enzovoort. De
+  kop van het factuur-/offertevenster (nummer op 40 px, uitleg, drie
+  totaalkaarten onder elkaar: 500 px) is één regel met de drie totalen
+  ernaast; de kop van het klantvenster van 430 naar 130 px.
+- **Regressietest:** de publieke pagina's, het portaal en beide inlogpagina's
+  zitten nu ook in `npm run test:mobile` (met een nagebootste media-worker
+  voor de galerijfoto's).
+
 ## Bestanden
 
 - `src/styles/globals.css` — nieuw blok "MOBIEL & TABLET · COMPACT" achteraan.
@@ -110,6 +138,11 @@ actief · Filters wissen"). Dit geldt tot en met de staande tablet.
   `is-idle` bij een lege opvangbak.
 - `src/features/WeekPlanner.tsx` — `wp-meta-minor` op de weekcijfers die op de
   telefoon wegvallen.
+- `src/features/PublicBookingPage.tsx` — klassen op de tijdknoppen en een
+  korte dagnaam voor de telefoon.
+- `src/main.tsx` — Nederlandse titels van de bewerkvensters.
+- `tests/mobile/` — de regressietest, met `mock/publicdata.mjs` voor de
+  publieke pagina's.
 
 ## Controle
 

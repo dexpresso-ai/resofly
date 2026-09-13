@@ -46,6 +46,17 @@ const PAGES = {
   content: 'content', notes: 'notes', documents: 'documents', stats: 'stats',
   quotes: 'quotes', invoices: 'invoices', contracts: 'contracts', ledger: 'ledger', bank: 'bank', pnl: 'pnl',
   'vat-returns': 'vat-returns', settings: 'settings', 'meeting-booking': 'meeting-booking', archive: 'archive',
+  // Wat een klánt op zijn telefoon opent: geen werkruimte-shell, dus geen
+  // chrome-grens; wel dezelfde fout- en overloopcontrole.
+  'public-quote': { path: '/quote/demo-token' },
+  'public-invoice': { path: '/invoice/demo-token' },
+  'public-contract': { path: '/contract/demo-token' },
+  'public-booking': { path: '/booking/demo-token' },
+  'public-share': { path: '/gedeeld/demo-token' },
+  'public-gallery': { path: '/gallerij/demo-token' },
+  'portal-login': { path: '/portal' },
+  portal: { path: '/portal', portal: true },
+  login: { path: '/', login: true },
 };
 
 /**
@@ -68,6 +79,10 @@ const FIRST_ITEM = {
   project: { selector: '.client-tabs-bar', maxTop: 460 },
   'project-planning': { selector: '.ptl-board', maxTop: 460 },
   content: { selector: '.odrv-tr', maxTop: 300 },
+  'public-quote': { selector: '.public-lines', maxTop: 560 },
+  'public-invoice': { selector: '.public-lines', maxTop: 700 },
+  'public-booking': { selector: '.booking-slot', maxTop: 360 },
+  portal: { selector: '.portal-row', maxTop: 380 },
 };
 
 const args = Object.fromEntries(process.argv.slice(2).map(a => { const m = /^--([^=]+)(?:=(.*))?$/.exec(a); return m ? [m[1], m[2] ?? 'true'] : [a, 'true']; }));
@@ -80,6 +95,7 @@ if (shotsDir) fs.mkdirSync(shotsDir, { recursive: true });
 // ── Dev-server ────────────────────────────────────────────────────────────
 process.env.VITE_SUPABASE_URL ??= 'https://example.supabase.co';
 process.env.VITE_SUPABASE_ANON_KEY ??= 'mock-anon-key-for-layout-test';
+process.env.VITE_R2_WORKER_URL ??= 'https://media.example.test';
 let server = null;
 let baseUrl = args.url;
 if (!baseUrl) {
@@ -102,24 +118,30 @@ try {
         const page = await context.newPage();
         const errors = [];
         page.on('pageerror', e => errors.push(String(e.message)));
-        await page.addInitScript(storageScript(PAGES[key], { 'resofly.theme': theme }));
-        await page.goto(baseUrl, { waitUntil: 'networkidle' });
-        const shell = await page.waitForSelector('.app', { timeout: 20000 }).catch(() => null);
-        await page.waitForTimeout(700);
+        const spec = PAGES[key];
+        const isPublic = typeof spec === 'object' && spec.path;
+        await page.addInitScript(storageScript(spec, { 'resofly.theme': theme }));
+        await page.goto(isPublic ? new URL(spec.path, baseUrl).href : baseUrl, { waitUntil: 'networkidle' });
+        // Werkruimte: de shell; publieke pagina: de eigen wortel.
+        const shell = await page.waitForSelector(isPublic ? '.public-quote-page, .portal, .galv, .login, .pgal' : '.app', { timeout: 20000 }).catch(() => null);
+        await page.waitForTimeout(isPublic ? 1200 : 700);
         const m = await page.evaluate((firstSel) => {
           const box = (sel) => { const el = document.querySelector(sel); if (!el) return 0; const cs = getComputedStyle(el); if (cs.display === 'none') return 0; return Math.round(el.getBoundingClientRect().height); };
           const content = document.querySelector('.content:not([hidden])');
           const first = firstSel ? document.querySelector(`.content:not([hidden]) ${firstSel}`) : null;
           return {
             chrome: box('.topbar') + box('.tabbar') + box('.bottomnav'),
+            firstTopDoc: (firstSel && document.querySelector(firstSel)) ? Math.round(document.querySelector(firstSel).getBoundingClientRect().top) : null,
             pageOverflow: document.documentElement.scrollWidth - window.innerWidth,
             contentOverflow: content ? content.scrollWidth - content.clientWidth : 0,
             firstTop: first ? Math.round(first.getBoundingClientRect().top) : null,
           };
         }, FIRST_ITEM[key]?.selector ?? null);
+        // Publieke pagina's hebben geen .content-wikkel: meet daar op het document.
+        if (isPublic && m.firstTop == null) m.firstTop = m.firstTopDoc;
         const label = `${theme}/${vpName}/${key}`;
         const problems = [];
-        if (!shell) problems.push('app-shell niet gerenderd');
+        if (!shell) problems.push(isPublic ? 'pagina niet gerenderd' : 'app-shell niet gerenderd');
         if (errors.length) problems.push(`js-fout: ${errors[0].slice(0, 90)}`);
         if (m.pageOverflow > 1 || m.contentOverflow > 1) problems.push(`horizontale overloop (${Math.max(m.pageOverflow, m.contentOverflow)}px)`);
         if (m.chrome > vp.maxChrome) problems.push(`chrome ${m.chrome}px > ${vp.maxChrome}px`);

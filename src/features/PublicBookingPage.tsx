@@ -30,6 +30,11 @@ function weekKey(iso: string): string {
 function fmtDay(iso: string): string {
   return new Intl.DateTimeFormat('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Amsterdam' }).format(new Date(iso));
 }
+/** "ma 14 sep" — voor de telefoon, waar twee tijden naast elkaar staan en
+ *  "maandag 14 september" niet in een halve kaart past. */
+function fmtDayShort(iso: string): string {
+  return new Intl.DateTimeFormat('nl-NL', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/Amsterdam' }).format(new Date(iso));
+}
 function fmtTime(iso: string): string {
   return new Intl.DateTimeFormat('nl-NL', { timeStyle: 'short', timeZone: 'Europe/Amsterdam' }).format(new Date(iso));
 }
@@ -189,7 +194,10 @@ export function PublicBookingPage({ token }: { token: string }) {
           return (
             <div key={k} style={{ marginBottom: 18 }}>
               <h3 style={{ margin: '0 0 8px' }}>{fmtWeekLabel(k)} {remaining <= 0 && <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· weeklimiet bereikt</span>}</h3>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {/* Klassen erbij zodat de telefoon er twee naast elkaar van kan
+                  maken (zie globals.css ≤760px); de inline-opmaak blijft de
+                  bureaubladweergave. */}
+              <div className="booking-slots" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {slots.map(s => {
                   const isSel = selected.has(s.id);
                   const disabled = !isSel && (totalRemaining <= 0 || remaining <= 0);
@@ -199,12 +207,15 @@ export function PublicBookingPage({ token }: { token: string }) {
                       type="button"
                       onClick={() => toggle(s)}
                       disabled={disabled}
-                      className={`btn ${isSel ? 'btn-primary' : 'btn-ghost'}`}
+                      className={`btn booking-slot ${isSel ? 'btn-primary' : 'btn-ghost'}`}
                       style={{ opacity: disabled ? 0.4 : 1, textAlign: 'left' }}
                       title={`${fmtDay(s.starts_at)} ${fmtTime(s.starts_at)}`}
                     >
-                      <div style={{ fontWeight: 600 }}>{fmtDay(s.starts_at)}</div>
-                      <div style={{ fontSize: 13 }}>{fmtTime(s.starts_at)} – {fmtTime(s.ends_at)}</div>
+                      <div className="booking-slot-day" style={{ fontWeight: 600 }}>
+                        <span className="booking-slot-day-long">{fmtDay(s.starts_at)}</span>
+                        <span className="booking-slot-day-short">{fmtDayShort(s.starts_at)}</span>
+                      </div>
+                      <div className="booking-slot-time" style={{ fontSize: 13 }}>{fmtTime(s.starts_at)} – {fmtTime(s.ends_at)}</div>
                     </button>
                   );
                 })}

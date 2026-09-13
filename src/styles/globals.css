@@ -9456,3 +9456,156 @@ button.task-agenda-when:hover{text-decoration:underline}
   .proj-dash-hero-name{display:none}
   .proj-dash-hero-kicker{margin-bottom:6px}
 }
+
+/* ═══ 5 · PUBLIEKE KLANTPAGINA'S, PORTAAL EN GALERIJ OP DE TELEFOON ═══════
+   Dit zijn de pagina's die een klánt op zijn telefoon opent: de offerte die
+   hij moet goedkeuren, de factuur die hij moet betalen, de boekingslink, het
+   contract, de deellink, de galerij en het portaal. Gemeten op 390px: de kop
+   van een offerte kostte 380px (titel op 32px, kaart met 24px rand, 42px
+   paginamarge) en de regels stonden pas op 1.250px. */
+@media(max-width:760px){
+  .public-quote-page{padding:12px 12px 36px}
+  .public-quote-card{padding:14px 16px;border-radius:18px;margin-bottom:10px;box-shadow:none}
+  .public-quote-hero{gap:10px}
+  /* De eerste kolom kreeg de breedte van het langste woord in de titel
+     ("Kennismakingsgesprek" op 32px is breder dan het scherm) en liep uit de
+     kaart; de intro-tekst brak daardoor buiten beeld af. */
+  .public-quote-hero>div{min-width:0;flex:1 1 auto}
+  .public-quote-hero h1{font-size:25px;line-height:1.15;margin:3px 0 6px;overflow-wrap:anywhere}
+  .public-quote-hero p{font-size:14px;line-height:1.45;overflow-wrap:anywhere}
+  .public-quote-hero .eyebrow{font-size:10px}
+  .public-quote-status{padding:6px 12px;font-size:12.5px;align-self:flex-start}
+  .public-quote-card h2{font-size:17px;margin:0 0 8px}
+  .public-quote-card h3{font-size:15px}
+  .public-quote-grid{gap:10px}
+  .quote-facts{gap:5px 12px;font-size:14px}
+  .public-lines{gap:6px}
+  .public-line{padding:10px 12px;border-radius:12px;gap:10px}
+  .public-line span{font-size:12px}
+  .public-total-row{margin-top:7px;font-size:14px}
+  .public-total-row.grand{font-size:18px;padding-top:10px;margin-top:10px}
+  .public-notes{margin-top:12px;padding:10px 12px;border-radius:12px;font-size:13.5px}
+  .public-quote-alert{padding:10px 12px;border-radius:12px;margin-bottom:10px}
+  .public-decision-form{gap:8px}
+  .public-decision-actions .btn{flex:1 1 auto;min-height:44px}
+  .public-decision-done{padding:12px}
+  .quote-timeline.public .quote-timeline-item{padding:7px 0;font-size:13px}
+
+  /* Boekingslink: de tijden twee naast elkaar, dag klein erboven. */
+  .booking-slots{gap:6px!important}
+  .booking-slot{flex:1 1 calc(50% - 3px);min-width:0;min-height:52px;padding:7px 10px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:1px;border-radius:12px}
+  .booking-slot-day{font-size:11px;font-weight:600;opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .booking-slot-time{font-size:14px!important;font-weight:700;font-variant-numeric:tabular-nums}
+  .public-quote-card .muted{font-size:13px}
+
+  /* Portaal: kop op één rij, tabbladen als veegrij, cijfers twee naast
+     elkaar, elke regel op twee lijnen (nummer + datum, dan bedrag en status). */
+  .portal-topbar{padding:8px 12px;gap:8px;flex-wrap:nowrap;align-items:center}
+  .portal-brand{flex:1 1 auto;min-width:0;gap:8px}
+  .portal-brand .brand-icon,.portal-brand .portal-mark{width:30px;height:30px}
+  .portal-brand-name{font-size:14px}
+  .portal-brand-sub{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .portal-topbar-actions{flex:0 0 auto;flex-wrap:nowrap;gap:5px}
+  .portal-topbar-actions .btn{padding:6px 9px;font-size:11px;min-height:34px;white-space:nowrap}
+  .portal-topbar-actions .select-trigger,.portal-topbar-actions .form-select{min-width:0;max-width:130px}
+  .portal-content{padding:10px 12px 32px}
+  .portal-tabs{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;gap:5px;margin:0 -12px 10px;padding:0 12px 2px;scrollbar-width:none}
+  .portal-tabs::-webkit-scrollbar{display:none}
+  .portal-tab{flex:0 0 auto;padding:7px 11px;font-size:12px;white-space:nowrap;min-height:36px}
+  .portal-overview{gap:10px}
+  .portal-kpis{grid-template-columns:1fr 1fr;gap:6px}
+  .portal-kpi{padding:9px 11px;gap:2px;min-width:0}
+  .portal-kpi span{font-size:9px;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .portal-kpi strong{font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .portal-kpi small{font-size:10.5px}
+  .portal-card{padding:12px;margin-bottom:10px;border-radius:14px}
+  .portal-card-head{margin-bottom:8px}
+  .portal-card-head h2{font-size:14px}
+  .portal-rows{gap:6px}
+  .portal-row{padding:9px 11px;gap:6px 10px;border-radius:10px}
+  .portal-row-main{flex:1 1 100%}
+  .portal-row-number{white-space:nowrap}
+  .portal-row .portal-muted{font-size:11.5px}
+  .portal-row-amount{margin-left:auto}
+  .portal-row-actions{margin-left:auto}
+  .portal-row-actions .btn{min-height:36px}
+  .portal-ticket-form{padding:12px;gap:8px}
+  .portal-project{padding:10px 12px}
+  .portal-empty{padding:28px 16px}
+
+  /* Galerij: de drie knoppen (diavoorstelling, volledig scherm, menu) lagen
+     over de gecentreerde titel heen. Op de telefoon staan ze als eigen rij
+     erboven; op de tv blijven ze zweven. */
+  .galv:not(.is-tv) .galv-actions{position:static;justify-content:flex-end;margin:0 0 -8px}
+  .galv-hero-classic{gap:10px;padding-top:4px}
+  .galv-hero-classic .galv-hero-text{padding:10px 0}
+  .galv-hero-classic .galv-hero-text h2{font-size:22px}
+  .galv-hero-classic .galv-hero-text p{margin-top:4px;font-size:13px}
+  .galv-hero-minimal h2{font-size:22px}
+
+  /* Inlogpagina's (werkruimte en portaal): de kaart hoeft niet te zweven
+     midden in een leeg scherm; bovenaan met wat lucht leest sneller en de
+     knop blijft boven het toetsenbord. */
+  .login .login-card,.portal.login .login-card{padding:20px;gap:10px;border-radius:18px}
+  .login-card h1{font-size:26px}
+  .login-card .login-eyebrow{font-size:10px}
+  .login-card p{font-size:14px}
+}
+
+/* Boekingslink: op de telefoon de korte dagnaam ("ma 14 sep"), elders de volle. */
+.booking-slot-day-short{display:none}
+@media(max-width:760px){
+  .booking-slot-day-long{display:none}
+  .booking-slot-day-short{display:inline}
+}
+
+/* ═══ 6 · BEWERKVENSTERS OP DE TELEFOON ═══════════════════════════════════
+   De kop van het factuur-/offertevenster (nummer op 40px, uitleg, drie
+   totaalkaarten onder elkaar) kostte 500px voordat het eerste veld kwam; de
+   kop van het klantvenster 430px. */
+@media(max-width:760px){
+  .finance-editor-hero{padding:12px 14px;gap:10px;border-radius:14px;flex-direction:column}
+  .finance-editor-hero>div:first-child span{font-size:10px}
+  .finance-editor-hero h3{font-size:22px;margin:2px 0 0}
+  .finance-editor-hero>div:first-child p{display:none}
+  .finance-editor-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;width:100%}
+  .finance-editor-totals>*{padding:8px 9px;min-width:0;border-radius:10px}
+  .finance-editor-totals span{font-size:9px;letter-spacing:.06em}
+  .finance-editor-totals strong{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+  .finance-editor-section{padding:12px}
+  .finance-section-head{flex-wrap:wrap;gap:2px 8px;margin-bottom:8px}
+  .finance-section-head span{font-size:11.5px}
+  .finance-form-grid{gap:8px}
+
+  .client-form-intro{padding:10px 12px;gap:8px;border-radius:14px;align-items:center}
+  .client-form-intro span{margin-bottom:2px;font-size:9.5px}
+  .client-form-intro h3{font-size:16px}
+  .client-form-intro p{display:none}
+  .client-form-intro strong{padding:5px 10px;font-size:12px;white-space:nowrap}
+
+  .modal-head{padding:12px 14px 10px}
+  .modal-head h3{font-size:16px}
+  .modal-body{padding:12px 14px}
+  .modal-foot{padding:10px 14px}
+  .field>span,.field-label{font-size:10.5px}
+  .field .hint,.field small{font-size:11px}
+}
+@media(max-width:760px){
+  /* De kop van het klantvenster stond gecentreerd (kolomrichting uit een
+     eerdere regel); links uitgelijnd leest als de rest van het formulier. */
+  .client-form-intro{align-items:flex-start;text-align:left}
+  .client-form-intro strong{align-self:flex-start}
+}
+
+/* ── Liggende telefoon (844×390): de tabletopmaak, maar met 390px hoogte
+   zijn de twee zwevende knoppen (58 en 54px) een kwart van het scherm en
+   liggen ze over de kop van de eerste kaart. Kleiner en dichter op de rand. */
+@media(min-width:761px) and (max-height:500px){
+  .topbar{height:44px;min-height:44px}
+  .gerrie-root{right:10px;bottom:10px}
+  .gerrie-fab{width:42px;height:42px}
+  .gerrie-fab svg{width:22px;height:22px}
+  .team-chat-dock-root{right:62px;bottom:10px}
+  .team-chat-fab{width:40px;height:40px}
+  .content{padding-top:10px;padding-bottom:70px}
+}
