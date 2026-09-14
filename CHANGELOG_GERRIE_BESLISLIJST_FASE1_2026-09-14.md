@@ -39,6 +39,10 @@ Elke kaart is een voorstel in `ai_action_audit` (status `proposed`) plus een rij
 
 Nagemeten: 144 tests groen, `npm run typecheck` en `npm run build` groen, `deno check` op de drie Gerrie-functies groen.
 
+## Gedeployed op staging (14 september 2026)
+
+Commit `20f24f6` op `origin/staging`; de Pages-bundel bevat het blok *Te beslissen*. Migratie `20260914000000` toegepast via `db push`. Edge functions `gerrie-signals` (nieuw), `gerrie-agent` en `gerrie-agent-runner` gedeployed op project `enzghpduqwaojcxgwarr`; boot-health op alle drie 401 zonder secret. Secret `SIGNALS_CRON_SECRET` gezet; pg_cron-job **`gerrie-signals-tick` = jobid 7**, elke minuut. Geverifieerd: `cron.job_run_details` succeeded en `net._http_response` geeft `200 {"ok":true,"sweeps":0,"claimed":0,"results":[]}`. De lijst staat standaard uit: aanzetten in Gerrie → Beslissingen. Nog open: de rooktest per kaartsoort met een ingelogde gebruiker (sectie 6 van de SETUP), en productie.
+
 ## Deploy-volgorde
 
 1. Frontend: push naar `staging`, Cloudflare Pages bouwt.
