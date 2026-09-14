@@ -5126,7 +5126,7 @@ export {
   buildContext, buildSystemPrompt, createConversation, loadHistory, insertMessage,
   recordUsage, costUsd, checkUserBudget, remainingFraction,
   confirmAction, getUsageSummary, requireUser, requireOrganizationAccess,
-  buildCreateTasksProposal,
+  buildCreateTasksProposal, buildProposal, lineTotal,
   describeError, requiredEnv, parseAllowedOrigins, isUuid, todayIso, tzOffsetMs,
 };
 export type {

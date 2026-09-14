@@ -17,7 +17,8 @@ export type PushEventType =
   | 'chat_message'
   | 'client_email_inbound'
   | 'booking_new'
-  | 'invoice_paid';
+  | 'invoice_paid'
+  | 'decision_digest';
 
 export const PUSH_EVENTS: Array<{ type: PushEventType; label: string; hint: string }> = [
   { type: 'ticket_new', label: 'Nieuw ticket', hint: 'Een klant maakt een ticket aan via het portaal.' },
@@ -26,6 +27,7 @@ export const PUSH_EVENTS: Array<{ type: PushEventType; label: string; hint: stri
   { type: 'client_email_inbound', label: 'Inkomende klant-e-mail', hint: 'Een klant beantwoordt een e-mail.' },
   { type: 'booking_new', label: 'Nieuwe boeking', hint: 'Een klant boekt zelf een afspraak via je boekingslink.' },
   { type: 'invoice_paid', label: 'Factuur betaald', hint: 'Een factuur wordt op betaald gezet.' },
+  { type: 'decision_digest', label: 'Dagelijkse beslislijst', hint: 'Eén melding per dag als Gerrie kaarten voor je heeft klaargezet.' },
 ];
 
 /** Draait deze browser Web Push? (nodig: service worker + PushManager + Notification) */

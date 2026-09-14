@@ -58,6 +58,13 @@ verify_jwt = false
 [functions.gerrie-agent-runner]
 verify_jwt = false
 
+# gerrie-signals is de motor van de beslislijst ("Gerrie signaleert"). Bedient de
+# signalen-cron (?cron=tick, geauthenticeerd via SIGNALS_CRON_SECRET, geen Supabase JWT)
+# én ingelogde beheer-acties (sweep_now/evaluate_now/status via requireUser +
+# requireOrganizationAccess + owner/admin in code).
+[functions.gerrie-signals]
+verify_jwt = false
+
 # billing wordt aangeroepen door de Mollie payment-/subscription-webhook (geen Supabase
 # JWT). De webhook-route is geverifieerd via het Mollie webhook-secret (?secret=...), en
 # elke authenticated app-actie verifieert zelf requireUser() + requireOrganizationAccess().

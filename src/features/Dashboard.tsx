@@ -10,8 +10,10 @@ import { BarChart, LineChart, PieChart, Sparkline } from '../components/Charts';
 import { REPORT_SOURCES, formatMeasure, runReport } from '../lib/reporting';
 import { ProjectTimeline } from './ProjectTimeline';
 import { AgentApprovals } from '../components/AgentApprovals';
+import { DecisionFeed } from '../components/DecisionFeed';
+import type { DecisionTarget } from '../lib/decisions-api';
 import type { GerrieActionHandlers } from '../lib/gerrie-api';
-import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
+import { FULL_PERMISSIONS, type ModuleKey, type Permissions } from '../lib/permissions';
 
 export type DashboardNavPage =
   | 'clients' | 'projects' | 'tickets' | 'quotes' | 'invoices' | 'bank' | 'vat-returns' | 'weekplanner' | 'settings' | 'stats' | 'calendar' | 'gerrie';
@@ -79,6 +81,8 @@ export function Dashboard({
   permissions = FULL_PERMISSIONS,
   gerrieActions,
   canWriteGerrie = false,
+  orgCanWrite = false,
+  onOpenDecisionTarget,
 }: {
   data: AppData;
   organizationContext: OrganizationContext;
@@ -88,6 +92,10 @@ export function Dashboard({
   gerrieActions?: GerrieActionHandlers;
   /** Mag dit teamlid een voorstel écht laten uitvoeren (versturen/aanmaken)? */
   canWriteGerrie?: boolean;
+  /** Organisatiebreed schrijfrecht; samen met de modulerechten bepaalt dit of een kaart uitvoerbaar is. */
+  orgCanWrite?: boolean;
+  /** Opent het item waar een kaart van de beslislijst over gaat. */
+  onOpenDecisionTarget?: (target: DecisionTarget) => void;
   /** Ingelogde gebruiker; bepaalt wat "Mijn" in de acties-blokken betekent. */
   currentUserId?: string | null;
   /** Mag dit lid taken afvinken? (organisatiebreed schrijfrecht én module 'projects'). */
@@ -290,6 +298,16 @@ export function Dashboard({
       {/* Wat je agents hebben klaargezet staat vóór al het andere: het is het enige
           blok op dit scherm waar iets op JOU wacht in plaats van andersom. De kaart
           verbergt zichzelf zodra de wachtrij leeg is. */}
+      {/* De beslislijst staat nog vóór de wachtrij: kaarten die Gerrie uit zichzelf
+          klaarzette, mét de feiten erbij. Verbergt zichzelf als er niets wacht. */}
+      {gerrieActions && permissions.canRead('gerrie') && <DecisionFeed
+        organizationId={organizationId}
+        canWrite={(module) => orgCanWrite && permissions.canWrite(module as ModuleKey)}
+        handlers={gerrieActions}
+        variant="dashboard"
+        onOpenTarget={onOpenDecisionTarget}
+        onOpenCommandCenter={() => openPage('gerrie')}
+      />}
       {gerrieActions && permissions.canRead('gerrie') && <AgentApprovals
         organizationId={organizationId}
         canWrite={canWriteGerrie}

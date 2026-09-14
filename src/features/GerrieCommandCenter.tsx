@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { Sparkles, Send, Check, X, AlertTriangle, Wand2, Clock, Plus, Play, Pause, Archive, ArchiveRestore, Pencil, RotateCw, Loader2, ChevronDown, ChevronRight, ChevronUp, CornerDownLeft, ClipboardCheck, Eye, Mailbox, Users2, Gauge, BookOpen, ScrollText } from 'lucide-react';
+import { Sparkles, Send, Check, X, AlertTriangle, Wand2, Clock, Plus, Play, Pause, Archive, ArchiveRestore, Pencil, RotateCw, Loader2, ChevronDown, ChevronRight, ChevronUp, CornerDownLeft, ClipboardCheck, BellRing, Eye, Mailbox, Users2, Gauge, BookOpen, ScrollText } from 'lucide-react';
 import {
   streamGerrieReply, loadGerrieBudget, confirmGerrieAction,
   listRoutines, listRoutineRuns, saveRoutine, setRoutineStatus, archiveRoutine, restoreRoutine, runRoutineNow, listRunProposals,
@@ -14,6 +14,9 @@ import { executeProposal, openProposal, proposalLabel } from '../lib/gerrie-prop
 import { AgentApprovals } from '../components/AgentApprovals';
 import { AgentBuilder } from '../components/AgentBuilder';
 import { AgentBatchBoard, asBatchProposal } from '../components/AgentBatchBoard';
+import { DecisionFeed } from '../components/DecisionFeed';
+import { SignalSettingsPanel } from '../components/SignalSettingsPanel';
+import { countDueDecisions, type DecisionTarget } from '../lib/decisions-api';
 import { AGENT_ICONS, AgentGlyph, agentIconKey, type AgentIconKey } from '../components/AgentGlyph';
 import type { UUID } from '../types';
 
@@ -62,15 +65,19 @@ const QUICK_TASKS = [
   'Geef een overzicht van mijn omzet en grootste klanten dit jaar',
 ];
 
-export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = null, onOpenAgentConsumed, ...handlers }: {
+export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = null, onOpenAgentConsumed, isAdmin = false, onOpenDecisionTarget, ...handlers }: {
   organizationId: UUID;
   canWrite: boolean;
   /** Net vanuit de chat aangemaakte agent; die klapt hier meteen open. */
   openAgentId?: string | null;
   onOpenAgentConsumed?: () => void;
+  /** Owner of admin: mag de beslislijst instellen. */
+  isAdmin?: boolean;
+  /** "Openen" op een kaart van de beslislijst. */
+  onOpenDecisionTarget?: (target: DecisionTarget) => void;
 } & GerrieActionHandlers) {
   // Agents is de voordeur: daar zit het werk. "Nu uitvoeren" is voor het losse geval.
-  const [tab, setTab] = useState<'agents' | 'run' | 'queue'>('agents');
+  const [tab, setTab] = useState<'agents' | 'run' | 'queue' | 'decisions'>('agents');
   const [draft, setDraft] = useState('');
   const [runs, setRuns] = useState<RunResult[]>([]);
   const [budget, setBudget] = useState<number | null>(null);
@@ -81,6 +88,7 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
   // is alleen gemount als je op dat tabblad staat.
   const [pendingByAgent, setPendingByAgent] = useState<Record<string, number>>({});
   const [pendingTotal, setPendingTotal] = useState(0);
+  const [decisionTotal, setDecisionTotal] = useState(0);
   const reloadPending = useCallback(() => {
     listPendingAgentApprovals(organizationId)
       .then((rows) => {
@@ -100,6 +108,7 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
     // de agentkaarten eronder: die tonen per agent wat hij mag, en zonder catalogus
     // kennen ze alleen de rauwe namen en niet of iets leest of schrijft.
     void listRoutineToolsSafe(organizationId).catch(() => { /* dan de terugval */ });
+    countDueDecisions(organizationId).then((n) => { if (!cancelled) setDecisionTotal(n); }).catch(() => { /* dan geen badge */ });
     reloadPending();
     return () => { cancelled = true; };
   }, [organizationId, reloadPending]);
@@ -183,6 +192,10 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
             <ClipboardCheck size={14} /> Jouw akkoord
             {pendingTotal > 0 && <span className="cc-tab-badge">{pendingTotal}</span>}
           </button>
+          <button className={`cc-tab${tab === 'decisions' ? ' on' : ''}`} onClick={() => setTab('decisions')}>
+            <BellRing size={14} /> Beslissingen
+            {decisionTotal > 0 && <span className="cc-tab-badge">{decisionTotal}</span>}
+          </button>
         </nav>
         <div className="cc-top-spacer" />
         {activeCount > 0 && <span className="cc-live" role="status"><span className="cc-live-dot" />bezig</span>}
@@ -199,6 +212,12 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
         <RoutinesPanel organizationId={organizationId} canWrite={canWrite} handlers={handlers}
           pendingByAgent={pendingByAgent} onApprovalsChanged={reloadPending} budget={budget}
           openAgentId={openAgentId} onOpenAgentConsumed={onOpenAgentConsumed} />
+      ) : tab === 'decisions' ? (
+        <div className="ag-page">
+          <DecisionFeed organizationId={organizationId} canWrite={() => canWrite} handlers={handlers}
+            variant="page" onOpenTarget={onOpenDecisionTarget} onCountChange={setDecisionTotal} />
+          <SignalSettingsPanel organizationId={organizationId} canManage={isAdmin} />
+        </div>
       ) : tab === 'queue' ? (
         <div className="ag-page">
           <AgentApprovals organizationId={organizationId} canWrite={canWrite} handlers={handlers}
