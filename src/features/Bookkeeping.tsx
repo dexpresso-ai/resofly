@@ -122,14 +122,14 @@ export function SuppliersPage({ data, organizationId, canWrite, onChanged, draft
       />}
       {data.suppliers.length === 0
         ? <div className="empty"><div className="e-big">Nog geen leveranciers</div></div>
-        : <div className="bk-table-wrap"><table className="bk-table">
+        : <div className="bk-table-wrap"><table className="bk-table supplier-table">
             <thead><tr><th>Naam</th><th>Contact</th><th>BTW-nummer</th><th>IBAN</th><th></th></tr></thead>
             <tbody>{data.suppliers.map(s => (
               <tr key={s.id} className="bk-row" onClick={() => setEdit(s)}>
-                <td><strong>{s.name}</strong>{s.supplier_code && <small className="bk-muted"> · {s.supplier_code}</small>}</td>
-                <td>{s.contact_name || s.email || '—'}</td>
-                <td>{s.vat_number || '—'}</td>
-                <td>{s.iban || '—'}</td>
+                <td data-label="Naam"><strong>{s.name}</strong>{s.supplier_code && <small className="bk-muted"> · {s.supplier_code}</small>}</td>
+                <td data-label="Contact">{s.contact_name || s.email || '—'}</td>
+                <td data-label="btw">{s.vat_number || '—'}</td>
+                <td data-label="iban">{s.iban || '—'}</td>
                 <td className="bk-cell-action">Bewerk</td>
               </tr>
             ))}</tbody>

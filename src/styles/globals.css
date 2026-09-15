@@ -8125,6 +8125,52 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .fin-doc-table .fin-reminder-pill{font-size:9px;padding:2px 6px}
 }
 
+/* ── 25 ── Leveranciers op mobiel: dezelfde kaart, geen veegtabel ──────────
+   `.bk-table` is op een telefoon een veegrij (`min-width:560px` in een
+   scroller, regel 6504). Voor een grootboek- of btw-rapport klopt dat — daar
+   hoort een kolom cijfers naast een kolom cijfers. Voor de leverancierslijst
+   niet: die heeft vier tekstvelden, en je moest zijwaarts vegen om te zien of
+   er een IBAN in stond. Dus dezelfde vorm als de offerte- en factuurkaart:
+
+     Drukkerij Van Wijk · L-001 ............... Bewerk
+     Bert van Wijk
+     btw NL812345678B01 ....... iban NL91ABNA0417164300
+
+   Alleen `.supplier-table`, want alle andere `.bk-table`s in de administratie
+   zijn wél rapporten en houden hun veegrij. */
+@media(max-width:760px){
+  .supplier-table{min-width:0}
+  .supplier-table thead{display:none}
+  .supplier-table tbody,.supplier-table td{display:block;width:auto}
+  .supplier-table tr{
+    display:grid;grid-template-columns:minmax(0,1fr) auto;
+    gap:2px 10px;align-items:center;padding:11px 13px;
+    border-bottom:1px solid rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)));
+  }
+  .supplier-table tbody tr:last-child{border-bottom:0}
+  .supplier-table td{padding:0;border-bottom:0}
+  .supplier-table td[data-label="Naam"]{grid-row:1;grid-column:1/-1;font-size:14px}
+  /* "Bewerk" is weg: de hele regel opent het formulier al, en die knop duwde
+     de naam in een kolom van 200px — "Drukkerij Van Wijk · L-001" brak dan
+     midden in de code af. Net als bij de klant- en offertekaart is de kaart
+     zelf het doel. */
+  .supplier-table td.bk-cell-action{display:none}
+  .supplier-table td[data-label="Contact"]{grid-row:2;grid-column:1/-1;font-size:12px;color:var(--muted2)}
+  /* Btw-nummer en IBAN zeggen kaal niet welk nummer welk is; het kolomlabel
+     komt terug als klein woord ervóór. Een lange IBAN breekt af in plaats van
+     de kaart uit te rekken. */
+  .supplier-table td[data-label="btw"]{grid-row:3;grid-column:1}
+  .supplier-table td[data-label="Naam"] .bk-muted{white-space:nowrap}
+  .supplier-table td[data-label="iban"]{grid-row:3;grid-column:2;justify-self:end;text-align:right}
+  .supplier-table td[data-label="btw"],
+  .supplier-table td[data-label="iban"]{
+    margin-top:2px;font-size:11px;color:var(--muted);
+    white-space:normal;overflow-wrap:anywhere;
+  }
+  .supplier-table td[data-label="btw"]::before,
+  .supplier-table td[data-label="iban"]::before{content:attr(data-label) " ";color:var(--muted)}
+}
+
 /* Uitklapper voor de drie dropdowns. Alleen op een telefoon zichtbaar: daar
    kostten ze meer dan de helft van het filterblok terwijl de snelfilters
    erboven het meeste werk doen. Op desktop staat het raster gewoon open. */
