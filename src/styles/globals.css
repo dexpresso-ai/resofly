@@ -9900,3 +9900,68 @@ button.task-agenda-when:hover{text-decoration:underline}
   .dc-actions .ag-btn, .dc-chip{ min-height:40px; display:inline-flex; align-items:center; }
   .dc-settings-head{ flex-direction:column; }
 }
+/* ── 26 ── Klanten en projecten op de telefoon: meer rijen per scherm ──────
+   Gemeten op 390×844 (tabelweergave): de eerste klant begon op 291px, het
+   eerste project op 351px. Van de 744px die er onder de werktabs en boven de
+   onderbalk zijn, ging dus een derde op aan chrome — goed voor zes klanten of
+   vijf projecten per scherm.
+
+   Drie dingen kosten die ruimte, en alle drie gaan ze omlaag.
+
+   a) Het zoek-/filterblok. De opbouw blijft (knoppenrij → zoekveld → chips),
+      maar alles krijgt telefoonmaat: minder padding, kleinere tussenruimtes,
+      een zoekveld van 36 en chips van 28px. Dat is ±25px puur lucht. Deze
+      regels gelden voor het gedeelde blok, dus tickets, offertes, facturen en
+      campagnes krimpen mee — het hóórt overal hetzelfde te zijn.
+
+   b) De sectiekaart van Projecten. Rond de tabel zat nóg een kaart, met rand,
+      padding en een kop "Actieve projecten" plus de zin "Open een project voor
+      taken, notities en projectdetails." Die zin lees je één keer; de kop zelf
+      blijft (hij scheidt actief van archief) maar wordt één regel. De kaart
+      eromheen verdwijnt: twee geneste randen om dezelfde tabel is er één te
+      veel.
+
+   c) De rijen zelf. 14px padding boven en onder is muismaat; 10px leest op een
+      telefoon net zo goed en houdt de rij ruim boven de 44px die een duim
+      nodig heeft. De kolomkoppen mogen ook dichter.
+
+   Resultaat: eerste klant op ±245px, eerste project op ±240px, en rijen van
+   ±51 en ±61px — negen klanten en acht projecten per scherm. */
+@media(max-width:760px){
+  /* a) Het gedeelde zoek-/filterblok. */
+  .finance-search-card,
+  .finance-search-card.has-head,
+  .finance-search-card.is-bar{gap:6px;padding:7px;border-radius:14px;margin-bottom:8px}
+  .finance-search-card .finance-search-head{gap:6px}
+  .finance-search-card .fsh-actions{gap:5px}
+  .finance-search-card .fsh-actions .btn{min-height:34px}
+  .finance-search-card .fsh-actions .select-trigger{min-height:34px}
+  .finance-search-card .finance-search-query .form-input{min-height:36px;border-radius:11px;padding:6px 12px 6px 34px}
+  /* De filterknop staat naast het zoekveld en hoort dus even hoog te zijn. */
+  .finance-search-card .finance-search-toggle{width:36px;height:36px;min-height:0;border-radius:11px}
+  .finance-search-card .finance-search-chips{gap:5px;margin:0 -7px;padding:0 7px 1px}
+  .finance-search-card .finance-search-chip{min-height:28px;padding:4px 9px 4px 7px;font-size:10.5px}
+  .finance-search-card .finance-search-grid{gap:6px}
+  /* De knoppenrij (Kaarten/Tabel, importeren, nieuw) en de tussenruimte tussen
+     de blokken op de pagina: 16px scheiden is bureaubladmaat, 10px leest hier
+     net zo goed. */
+  .clients-page,.projects-page{gap:10px}
+  .clients-page-head{margin-bottom:0}
+  .clients-page-head .btn{min-height:34px}
+  .clients-toolbar-actions{gap:6px}
+  .client-view-toggle,.project-view-toggle{padding:3px}
+  .client-view-toggle button,.project-view-toggle button{padding:5px 10px;font-size:10.5px}
+
+  /* b) Projecten: één kop, geen kaart om de kaart. */
+  .project-section{padding:0;border:0;background:none;gap:6px}
+  .project-section-head{align-items:center}
+  .project-section-head h2{font-size:14px}
+  .project-section-head p{display:none}
+
+  /* c) Rijen en kolomkoppen dichter op elkaar. */
+  .clients-table th,
+  .projects-table th{padding:8px 12px}
+  .clients-table td,
+  .projects-table td{padding:10px 12px}
+}
+

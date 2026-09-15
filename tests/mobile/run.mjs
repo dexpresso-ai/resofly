@@ -44,6 +44,8 @@ const PAGES = {
   projects: 'projects', project: { page: 'project', projectId: seed.projects[0].id },
   'project-planning': 'project-planning', tickets: 'tickets', chat: 'chat', marketing: 'marketing',
   content: 'content', notes: 'notes', documents: 'documents', stats: 'stats',
+  'clients-table': { page: 'clients', storage: { 'resofly.clients.viewMode': 'table' } },
+  'projects-table': { page: 'projects', storage: { 'resofly.projects.viewMode': 'table' } },
   quotes: 'quotes', invoices: 'invoices', contracts: 'contracts', ledger: 'ledger', bank: 'bank', pnl: 'pnl',
   'vat-returns': 'vat-returns', suppliers: 'suppliers', settings: 'settings', 'meeting-booking': 'meeting-booking', archive: 'archive',
   // Wat een klánt op zijn telefoon opent: geen werkruimte-shell, dus geen
@@ -67,8 +69,10 @@ const PAGES = {
  */
 const FIRST_ITEM = {
   dashboard: { selector: '.dash-task', maxTop: 280 },
-  clients: { selector: '.client-card', maxTop: 320 },
-  projects: { selector: '.project-list-card', maxTop: 380 },
+  clients: { selector: '.client-card', maxTop: 260 },
+  'clients-table': { selector: '.clients-table tbody tr', maxTop: 290 },
+  projects: { selector: '.project-list-card', maxTop: 285 },
+  'projects-table': { selector: '.projects-table tbody tr', maxTop: 310 },
   tickets: { selector: '.ticket-item', maxTop: 320 },
   invoices: { selector: '.quote-table tbody tr', maxTop: 460 },
   quotes: { selector: '.quote-table tbody tr', maxTop: 460 },
@@ -123,7 +127,7 @@ try {
         page.on('pageerror', e => errors.push(String(e.message)));
         const spec = PAGES[key];
         const isPublic = typeof spec === 'object' && spec.path;
-        await page.addInitScript(storageScript(spec, { 'resofly.theme': theme }));
+        await page.addInitScript(storageScript(spec, { 'resofly.theme': theme, ...(spec.storage ?? {}) }));
         await page.goto(isPublic ? new URL(spec.path, baseUrl).href : baseUrl, { waitUntil: 'networkidle' });
         // Werkruimte: de shell; publieke pagina: de eigen wortel.
         const shell = await page.waitForSelector(isPublic ? '.public-quote-page, .portal, .galv, .login, .pgal' : '.app', { timeout: 20000 }).catch(() => null);
