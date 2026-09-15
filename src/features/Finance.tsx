@@ -471,7 +471,7 @@ function QuoteTable({
 
     <div className="quote-table-card">
       <div className="quote-table-scroll" role="region" aria-label="Offertes tabel">
-        <table className="quote-table">
+        <table className="quote-table fin-doc-table">
           <thead>
             <tr>
               <th>Offerte</th><th>Klant</th><th>Project</th><th>Datum</th><th>Verloopt</th><th className="money">Bedrag ex.</th><th className="money">BTW</th><th className="money">Totaal</th><th>Status</th><th aria-label="Acties" />
@@ -606,7 +606,7 @@ function InvoiceTable({
 
     <div className="quote-table-card invoice-table-card">
       <div className="quote-table-scroll" role="region" aria-label="Facturen tabel">
-        <table className="quote-table invoice-table">
+        <table className="quote-table invoice-table fin-doc-table">
           <thead>
             <tr><th>Factuur</th><th>Klant</th><th>Project</th><th>Offerte</th><th>Datum</th><th>Vervalt</th><th className="money">Bedrag ex.</th><th className="money">BTW</th><th className="money">Totaal</th><th>Status</th><th aria-label="Acties" /></tr>
           </thead>
