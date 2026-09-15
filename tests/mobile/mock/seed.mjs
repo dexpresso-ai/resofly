@@ -166,6 +166,35 @@ export const events = [
   ev(-6, 10, 0, 11, 30, 'Presentatie concept', 'Studio'),
 ];
 
+// ── Teamchat ───────────────────────────────────────────────────────────────
+// Eén kanaal en één 1-op-1 gesprek, met berichten van vandaag en gisteren.
+// Genoeg om de chatpagina op elk formaat echt te laten renderen: gesprekslijst,
+// dagscheiding, eigen en andermans bubbels, en een leesbevestiging.
+const CHAT_CHANNEL = uid('h');
+const CHAT_DM = uid('h');
+const at = (dayOff, h, m) => iso(new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() + dayOff, h, m));
+export const chatConversations = [
+  { id: CHAT_CHANNEL, organization_id: ORG, kind: 'channel', title: 'Studio algemeen', description: 'Alles wat het hele team aangaat', dm_key: null, is_archived: false, last_message_at: at(0, 9, 12), created_by: USER, created_at: iso(day(-60)), updated_at: at(0, 9, 12) },
+  { id: CHAT_DM, organization_id: ORG, kind: 'dm', title: null, description: null, dm_key: [USER, USER2].sort().join(':'), is_archived: false, last_message_at: at(0, 8, 38), created_by: USER, created_at: iso(day(-40)), updated_at: at(0, 8, 38) },
+];
+export const chatParticipants = [
+  { conversation_id: CHAT_CHANNEL, organization_id: ORG, user_id: USER, role: 'admin', last_read_at: at(0, 9, 30), joined_at: iso(day(-60)) },
+  { conversation_id: CHAT_CHANNEL, organization_id: ORG, user_id: USER2, role: 'member', last_read_at: at(0, 9, 30), joined_at: iso(day(-60)) },
+  { conversation_id: CHAT_DM, organization_id: ORG, user_id: USER, role: 'member', last_read_at: at(0, 9, 30), joined_at: iso(day(-40)) },
+  { conversation_id: CHAT_DM, organization_id: ORG, user_id: USER2, role: 'member', last_read_at: at(0, 9, 30), joined_at: iso(day(-40)) },
+];
+const chatMsg = (conversation_id, sender_id, body, created_at) => ({
+  id: uid('g'), organization_id: ORG, conversation_id, sender_id, body, mentions: [], attachment_count: 0,
+  edited_at: null, deleted_at: null, created_at, updated_at: created_at,
+});
+export const chatMessages = [
+  chatMsg(CHAT_CHANNEL, USER2, 'Goedemorgen! De drukproef van de Korenaar ligt op je bureau.', at(-1, 16, 40)),
+  chatMsg(CHAT_CHANNEL, USER, 'Top, ik kijk er vanochtend naar.', at(0, 8, 55)),
+  chatMsg(CHAT_CHANNEL, USER2, 'Ook de fotoshoot van donderdag staat rond — Karim heeft bevestigd.', at(0, 9, 12)),
+  chatMsg(CHAT_DM, USER2, 'We dienen even naar het logo te kijken.', at(0, 8, 35)),
+  chatMsg(CHAT_DM, USER, 'Ja tuurlijk, geen enkel probleem! Laten we dat samen doen.', at(0, 8, 38)),
+];
+
 export const ids = { ORG, USER, USER2 };
 export const tables = {
   clients, client_contacts: [
@@ -176,5 +205,5 @@ export const tables = {
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'client', author_user_id: null, author_name: 'Maria Jansen', body: 'Vooral op de pagina met afspraken duurt het lang.', is_internal: false },
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'user', author_user_id: USER, author_name: 'Gerjan', body: 'We kijken naar de afbeeldingen, die zijn te groot.', is_internal: true },
   ],
-  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers: [], purchase_invoices: [], fixed_assets: [], asset_depreciations: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], organization_invitations: [], audit_logs: [], contracts: [],
+  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers: [], purchase_invoices: [], fixed_assets: [], asset_depreciations: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], organization_invitations: [], audit_logs: [], contracts: [],
 };

@@ -79,6 +79,8 @@ const FIRST_ITEM = {
   project: { selector: '.client-tabs-bar', maxTop: 460 },
   'project-planning': { selector: '.ptl-board', maxTop: 460 },
   content: { selector: '.odrv-tr', maxTop: 300 },
+  // Teamchat opent op de telefoon in de gesprekslijst (één venster tegelijk).
+  chat: { selector: '.chat-conv', maxTop: 260 },
   'public-quote': { selector: '.public-lines', maxTop: 560 },
   'public-invoice': { selector: '.public-lines', maxTop: 700 },
   'public-booking': { selector: '.booking-slot', maxTop: 360 },

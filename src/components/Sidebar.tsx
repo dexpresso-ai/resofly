@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, StickyNote, Sun, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, type SettingsTab } from '../features/SimplePages';
@@ -61,6 +61,12 @@ function canOpenNavItem(key: string, permissions: Permissions): boolean {
 const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'pnl', 'vat-returns', 'corporate-tax', 'dga', 'shareholders', 'fiscal-years', 'annual-accounts'];
 const calendarPages: Page[] = ['calendar', 'meeting-booking'];
 const projectPages: Page[] = ['projects', 'project', 'project-planning', 'weekplanner', 'archive'];
+/**
+ * Inhoud heeft géén submenu: één klik op "Inhoud" en je staat in het overzicht.
+ * Notities en documenten zijn dáár een filter ("Weergeven"), geen eigen menuregel.
+ * De pagina's blijven wel bestaan — de globale zoekfunctie en Gerrie openen een
+ * notitie of document rechtstreeks — en dan hoort "Inhoud" op te lichten.
+ */
 const contentPages: Page[] = ['content', 'notes', 'documents'];
 
 export function Sidebar({
@@ -325,12 +331,6 @@ export function Sidebar({
             {['bv', 'nv', 'cooperatie'].includes(data.companySettings?.legal_form ?? 'eenmanszaak') && (
               <button type="button" className={page === 'annual-accounts' ? 'active' : ''} onClick={() => openFinancePage('annual-accounts')}><Scale size={13}/><span>Jaarrekening</span></button>
             )}
-          </div>}
-
-          {key === 'content' && contentPages.includes(page) && <div className="nav-submenu nav-submenu-finance">
-            <button type="button" className={page === 'content' ? 'active' : ''} onClick={() => onPage('content')}><Library size={13}/><span>Overzicht</span></button>
-            <button type="button" className={page === 'notes' ? 'active' : ''} onClick={() => onPage('notes')}><StickyNote size={13}/><span>Notities</span></button>
-            <button type="button" className={page === 'documents' ? 'active' : ''} onClick={() => onPage('documents')}><Files size={13}/><span>Documenten</span></button>
           </div>}
         </div>;
         })}
