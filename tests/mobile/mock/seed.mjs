@@ -195,6 +195,14 @@ export const chatMessages = [
   chatMsg(CHAT_DM, USER, 'Ja tuurlijk, geen enkel probleem! Laten we dat samen doen.', at(0, 8, 38)),
 ];
 
+// ── Leveranciers ───────────────────────────────────────────────────────────
+// Twee crediteuren: één met een volledig ingevulde kaart, één waar bijna alles
+// leeg is. Zo meet de test zowel de volle regel als de "—"-variant.
+export const suppliers = [
+  { id: uid('s'), ...base(), name: 'Drukkerij Van Wijk', supplier_code: 'L-001', contact_name: 'Bert van Wijk', email: 'bert@drukkerijvanwijk.nl', phone: '030-1234567', vat_number: 'NL812345678B01', iban: 'NL91ABNA0417164300', address_line1: 'Industrieweg 12', postal_code: '3401 MC', city: 'IJsselstein', country: 'NL', default_ledger_account_id: null, notes: null },
+  { id: uid('s'), ...base(), name: 'Amazon.nl', supplier_code: null, contact_name: null, email: null, phone: null, vat_number: null, iban: 'NL35INGB0654321098', address_line1: null, postal_code: null, city: null, country: 'NL', default_ledger_account_id: null, notes: null },
+];
+
 export const ids = { ORG, USER, USER2 };
 export const tables = {
   clients, client_contacts: [
@@ -205,5 +213,5 @@ export const tables = {
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'client', author_user_id: null, author_name: 'Maria Jansen', body: 'Vooral op de pagina met afspraken duurt het lang.', is_internal: false },
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'user', author_user_id: USER, author_name: 'Gerjan', body: 'We kijken naar de afbeeldingen, die zijn te groot.', is_internal: true },
   ],
-  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers: [], purchase_invoices: [], fixed_assets: [], asset_depreciations: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], organization_invitations: [], audit_logs: [], contracts: [],
+  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: [], fixed_assets: [], asset_depreciations: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], organization_invitations: [], audit_logs: [], contracts: [],
 };

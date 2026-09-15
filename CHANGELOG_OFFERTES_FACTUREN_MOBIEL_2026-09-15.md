@@ -1,4 +1,4 @@
-# Changelog — Offertes en facturen op de telefoon: de kaart van de klantenview — 2026-09-15
+# Changelog — Financiële lijsten op de telefoon: de kaart van de klantenview — 2026-09-15
 
 > De offertes en facturen vind ik op mobiel niet overzichtelijk. Die mag meer het
 > uiterlijk van de klantenview hebben.
@@ -52,28 +52,57 @@ Kinderopvang Zonnetje
 
 Vanaf 761 px verandert er niets: daar staat de tabel er nog precies zo.
 
+## Leveranciers: dezelfde behandeling
+
+`.bk-table` is op een telefoon een veegrij: `min-width:560px` in een zijwaartse
+scroller. Voor een grootboek- of btw-rapport klopt dat — daar hoort een kolom
+cijfers naast een kolom cijfers. Voor de leverancierslijst niet: die heeft vier
+tekstvelden, en je moest vegen om te zien of er een IBAN in stond. Nu:
+
+```
+Drukkerij Van Wijk · L-001
+Bert van Wijk
+btw NL812345678B01      iban NL91ABNA0417164300
+```
+
+- **Niets loopt meer uit beeld**; btw-nummer en IBAN staan er allebei, met het
+  kolomlabel als klein woord ervóór, want kaal zie je niet welk nummer welk is.
+  Een lange IBAN breekt af in plaats van de kaart uit te rekken.
+- **"Bewerk" is weg op de telefoon.** Die knop duwde de naam in een kolom van
+  200 px, waardoor "Drukkerij Van Wijk · L-001" middenin de code afbrak — en de
+  hele regel opende het formulier al. Net als bij de klant- en offertekaart is
+  de kaart zelf het doel.
+- **Alleen deze tabel.** Alle andere `.bk-table`s in de administratie zijn wél
+  rapporten en houden hun veegrij; grootboek, btw-aangifte, winst & verlies en
+  bank zijn nagemeten en ongewijzigd.
+
+De leverancierspagina stond niet in de mobiele lay-outtest en had geen testdata.
+Beide zijn toegevoegd: twee crediteuren, één volledig ingevuld en één waar bijna
+alles leeg is, zodat zowel de volle regel als de "—"-variant gemeten wordt.
+
 ## Code
 
 - `src/features/Finance.tsx` — de twee tabellen krijgen de klasse
   `fin-doc-table`. Nodig, want `quote-table` dragen de tickets- en
   marketingtabellen óók, en die hebben hun eigen mobiele vorm (blok 23). Een
   generieke regel zou die overschrijven.
+- `src/features/Bookkeeping.tsx` — de leverancierstabel krijgt de klasse
+  `supplier-table` en `data-label`-attributen per cel. Nodig, want `bk-table`
+  dragen ruim twintig rapporttabellen in de administratie ook.
 - `src/styles/globals.css` — blok **24** in het mobiele deel: `tr` wordt een
   raster van twee kolommen en elke cel krijgt zijn plek via `grid-row`/
   `grid-column`, dus de volgorde in de kaart staat los van de kolomvolgorde in
   de tabel. Staat bewust achteraan het bestand, ná de generieke
   `.quote-table`-mobielregels: die hebben dezelfde specificiteit, dus de
-  volgorde beslist.
+  volgorde beslist. Blok **25** doet hetzelfde voor `.supplier-table`.
+- `tests/mobile/*` — leveranciers in de seed en in de gemeten pagina's, met een
+  ondergrens voor het eerste item.
 
 ## Getest
 
-`npm run test:mobile -- --theme=both` (zoals CI) draait schoon. Offertes,
-facturen, tickets én marketing zijn los nagemeten op 390 px in donker en licht:
-die laatste twee delen de `quote-table`-klasse en zijn ongewijzigd. `tsc` en
-`npm test` zijn groen.
+`npm run test:mobile -- --theme=both` (zoals CI) draait schoon. Los nagemeten op
+390 px in donker en licht: offertes, facturen, **tickets en marketing** (die
+delen de `quote-table`-klasse en zijn ongewijzigd), en leveranciers plus
+**grootboek, btw-aangifte, winst & verlies en bank** (die delen `bk-table` en
+houden hun veegrij). `tsc` en `npm test` zijn groen.
 
-## Wat hier niet in zit
-
-De leverancierstabel loopt op een telefoon rechts uit beeld (de IBAN-kolom valt
-weg). Die staat niet in de mobiele lay-outtest en heeft geen testdata, dus hij
-is niet nagemeten — en de vraag ging over offertes en facturen. Los op te pakken.

@@ -45,7 +45,7 @@ const PAGES = {
   'project-planning': 'project-planning', tickets: 'tickets', chat: 'chat', marketing: 'marketing',
   content: 'content', notes: 'notes', documents: 'documents', stats: 'stats',
   quotes: 'quotes', invoices: 'invoices', contracts: 'contracts', ledger: 'ledger', bank: 'bank', pnl: 'pnl',
-  'vat-returns': 'vat-returns', settings: 'settings', 'meeting-booking': 'meeting-booking', archive: 'archive',
+  'vat-returns': 'vat-returns', suppliers: 'suppliers', settings: 'settings', 'meeting-booking': 'meeting-booking', archive: 'archive',
   // Wat een klánt op zijn telefoon opent: geen werkruimte-shell, dus geen
   // chrome-grens; wel dezelfde fout- en overloopcontrole.
   'public-quote': { path: '/quote/demo-token' },
@@ -81,6 +81,7 @@ const FIRST_ITEM = {
   content: { selector: '.odrv-tr', maxTop: 300 },
   // Teamchat opent op de telefoon in de gesprekslijst (één venster tegelijk).
   chat: { selector: '.chat-conv', maxTop: 260 },
+  suppliers: { selector: '.supplier-table tbody tr', maxTop: 320 },
   'public-quote': { selector: '.public-lines', maxTop: 560 },
   'public-invoice': { selector: '.public-lines', maxTop: 700 },
   'public-booking': { selector: '.booking-slot', maxTop: 360 },
