@@ -4284,7 +4284,11 @@ button.chat-member:hover{background:var(--bg3)}
 .cc-routine-form-foot{ display:flex; justify-content:flex-end; gap:9px; margin-top:2px; }
 
 @media(max-width:760px){
-  .cc-tabs .cc-tab span{ display:none; }
+  /* Hier stond `.cc-tabs .cc-tab span{display:none}` om de tablabels op een
+     telefoon weg te laten. Dat heeft nooit gewerkt — de labels zijn kale
+     tekstknopen — en het enige <span> in een tab is inmiddels de teller, die
+     je juist wél wilt zien. De tabrij is nu een veegrij — zie `.cc-tabs` in
+     het mobiele deel (═══ 3 · PAGINA'S). */
   .cc-field-row{ flex-direction:column; }
 }
 
@@ -9398,8 +9402,21 @@ button.task-agenda-when:hover{text-decoration:underline}
   .ag-page-head>.cc-btn{padding:8px 12px;font-size:12.5px}
   .ag-starters-lead{font-size:12.5px}
   .cc-top{gap:8px;padding-bottom:8px;flex-wrap:wrap}
-  .cc-tabs{width:100%;justify-content:space-between}
-  .cc-tabs .cc-tab{flex:1 1 auto;justify-content:center;padding:7px 6px;font-size:11.5px;white-space:nowrap}
+  /* De tabrij is een veegrij. Vier tabs met tekst (Agents · Nu uitvoeren ·
+     Jouw akkoord · Beslissingen) zijn samen ~430px; met `flex:1 1 auto` kon
+     geen enkele krimpen — een flex-item krimpt niet onder zijn inhoud — dus
+     stak de laatste 65px buiten beeld en scrolde de hele pagina zijwaarts.
+     Afkappen is geen optie: van "Nu uitvoeren" en "Beslissingen" blijft dan
+     niets leesbaars over. Zijwaarts vegen houdt de woorden heel, en er past
+     later gewoon een vijfde tab bij. Zelfde patroon als de knoppenrij van de
+     rapportbouwer hierboven. */
+  .cc-tabs{
+    width:100%;justify-content:flex-start;
+    flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;
+    scrollbar-width:none;
+  }
+  .cc-tabs::-webkit-scrollbar{display:none}
+  .cc-tabs .cc-tab{flex:0 0 auto;justify-content:center;padding:7px 10px;font-size:11.5px;white-space:nowrap;min-height:34px}
 
   /* ── Inhoud/notities/documenten: de verkenner iets dichter. ── */
   .odrv-head{padding:10px 12px 6px}
