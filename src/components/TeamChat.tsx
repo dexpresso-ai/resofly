@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent } from 'react';
 import {
   ArrowLeft, Check, CheckCheck, Hash, LogOut, MessageSquare, Paperclip, Pencil, Plus,
   Search, Send, Smile, Trash2, Users, X,
@@ -21,12 +21,18 @@ import { AttachmentList } from './AttachmentList';
  * - `useTeamChat` draait op App-niveau: één realtime-abonnement (postgres_changes
  *   op de chattabellen) + één presence-kanaal (online-status). Voedt zowel de
  *   sidebar-badge als de volledige pagina én het zwevende paneel.
- * - `TeamChatPage` = volwaardige pagina (twee kolommen).
- * - `TeamChatDock`  = zwevend paneel rechtsonder (één kolom, terugknop).
+ * - `TeamChatPage` = volwaardige pagina: twee kolommen naast elkaar, en op een
+ *   smal scherm één venster tegelijk (lijst → gesprek → terug), zoals MS Teams.
+ * - `TeamChatDock`  = zwevend paneel rechtsonder (altijd één kolom, terugknop).
  * Beide delen dezelfde `TeamChatApi` zodat er maar één abonnement bestaat.
  */
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '✅', '👀'];
+
+/** Touchscreen zonder muis: daar bestaat "hover" niet en werkt alleen een tik. */
+function isTouchOnly(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia('(hover:none)').matches;
+}
 
 export interface ChatRealtimeEvent {
   table: string;
@@ -299,6 +305,27 @@ function buildConversationVMs(api: TeamChatApi): ConversationVM[] {
 
 // ── Gedeelde shell ───────────────────────────────────────────────────────────
 
+/**
+ * Onder deze grens past er geen tweede kolom naast het gesprek. Zelfde waarde
+ * als de mobiele regels in globals.css, zodat React en CSS nooit uit elkaar
+ * lopen: de een toont één venster, de ander rekent met twee.
+ */
+const NARROW_QUERY = '(max-width:760px)';
+
+/** Volgt of de viewport smal is (telefoon, of een heel smal venster). */
+function useNarrowViewport(): boolean {
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia(NARROW_QUERY).matches);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia(NARROW_QUERY);
+    const onChange = () => setNarrow(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return narrow;
+}
+
 function ChatShell({ api, variant, onClose }: { api: TeamChatApi; variant: 'page' | 'dock'; onClose?: () => void }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -307,12 +334,32 @@ function ChatShell({ api, variant, onClose }: { api: TeamChatApi; variant: 'page
   const vms = useMemo(() => buildConversationVMs(api), [api]);
   const activeVm = vms.find((v) => v.conversation.id === activeId) ?? null;
 
-  // Op de pagina: kies automatisch het eerste gesprek als er nog niets openstaat.
+  // Eén venster tegelijk zodra het scherm smal is — de telefoon-ergonomie van
+  // Teams: je ziet óf de gesprekslijst óf het gesprek, met een terugpijl ertussen.
+  // Het zwevende paneel werkte altijd al zo; de pagina doet dat nu ook.
+  const narrow = useNarrowViewport();
+  const singlePane = variant === 'dock' || narrow;
+  // Is het openstaande gesprek een keuze van de gebruiker, of koos de app het
+  // eerste gesprek omdat er twee kolommen naast elkaar stonden? Dat laatste mag
+  // op een telefoon niet schermvullend openklappen.
+  const autoPicked = useRef(false);
+
+  // Twee kolommen naast elkaar: de rechterkolom hoort niet leeg te staan.
   useEffect(() => {
-    if (variant === 'page' && !activeId && vms.length > 0) setActiveId(vms[0].conversation.id);
-  }, [variant, activeId, vms]);
+    if (singlePane || activeId || vms.length === 0) return;
+    autoPicked.current = true;
+    setActiveId(vms[0].conversation.id);
+  }, [singlePane, activeId, vms]);
+
+  // Venster wordt smal: een niet zelf gekozen gesprek maakt plaats voor de lijst.
+  useEffect(() => {
+    if (!singlePane || !autoPicked.current) return;
+    autoPicked.current = false;
+    setActiveId(null);
+  }, [singlePane]);
 
   const openConversation = useCallback((id: string) => {
+    autoPicked.current = false;
     setActiveId(id);
     void api.markRead(id);
   }, [api]);
@@ -321,11 +368,11 @@ function ChatShell({ api, variant, onClose }: { api: TeamChatApi; variant: 'page
     ? vms.filter((v) => v.title.toLowerCase().includes(query.trim().toLowerCase()))
     : vms;
 
-  const showList = variant === 'page' || !activeId;
-  const showThread = variant === 'page' || !!activeId;
+  const showList = !singlePane || !activeId;
+  const showThread = !singlePane || !!activeId;
 
   return (
-    <div className={`chat-shell chat-${variant}`}>
+    <div className={`chat-shell chat-${variant}${singlePane ? ' chat-single' : ''}`}>
       {showList && (
         <ConversationList
           api={api}
@@ -345,7 +392,7 @@ function ChatShell({ api, variant, onClose }: { api: TeamChatApi; variant: 'page
               key={activeVm.conversation.id}
               api={api}
               vm={activeVm}
-              variant={variant}
+              showBack={singlePane}
               onBack={() => setActiveId(null)}
               onLeft={() => { setActiveId(null); void api.reloadConversations(); }}
             />
@@ -433,7 +480,7 @@ function ConversationRow({ vm, active, onOpen, memberById, api }: {
           <span className="chat-conv-time">{relativeTime(vm.conversation.last_message_at)}</span>
         </span>
         <span className="chat-conv-sub">
-          {isChannel ? `${vm.memberIds.length} lid${vm.memberIds.length === 1 ? '' : 'eren'}` : (vm.online ? 'Online' : 'Offline')}
+          {isChannel ? `${vm.memberIds.length} ${vm.memberIds.length === 1 ? 'lid' : 'leden'}` : (vm.online ? 'Online' : 'Offline')}
         </span>
       </span>
       {vm.unread > 0 && <span className="chat-conv-badge">{vm.unread > 99 ? '99+' : vm.unread}</span>}
@@ -443,10 +490,11 @@ function ConversationRow({ vm, active, onOpen, memberById, api }: {
 
 // ── Gespreksvenster (berichten + composer) ───────────────────────────────────
 
-function ConversationThread({ api, vm, variant, onBack, onLeft }: {
+function ConversationThread({ api, vm, showBack, onBack, onLeft }: {
   api: TeamChatApi;
   vm: ConversationVM;
-  variant: 'page' | 'dock';
+  /** Eén venster tegelijk (telefoon of zwevend paneel): terug naar de lijst. */
+  showBack: boolean;
   onBack: () => void;
   onLeft: () => void;
 }) {
@@ -619,7 +667,7 @@ function ConversationThread({ api, vm, variant, onBack, onLeft }: {
   return (
     <div className="chat-thread">
       <header className="chat-thread-head">
-        {variant === 'dock' && <button type="button" className="chat-icon-btn" onClick={onBack} title="Terug"><ArrowLeft size={18} /></button>}
+        {showBack && <button type="button" className="chat-icon-btn chat-back" onClick={onBack} title="Terug" aria-label="Terug naar gesprekken"><ArrowLeft size={20} /></button>}
         {isChannel
           ? <span className="chat-avatar chat-avatar-channel" aria-hidden="true"><Hash size={16} /></span>
           : <Avatar id={vm.counterpartId} initials={memberDisplay(memberById.get(vm.counterpartId ?? '')).initials} online={vm.online} size={34} />}
@@ -708,6 +756,31 @@ function MessageRow({ api, msg, mine, sender, showAvatar, isChannel, reactions, 
   const [showReactPicker, setShowReactPicker] = useState(false);
   const display = memberDisplay(sender);
 
+  // Reageren, bewerken en intrekken hangen op de desktop aan hover. Op een
+  // telefoon bestaat hover niet, dus daar haalt één tik op het bericht de
+  // knoppenrij tevoorschijn — en een tik ernaast laat hem weer verdwijnen.
+  // Tekst selecteren (lang indrukken) blijft zo gewoon werken.
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!toolsOpen) return;
+    const onDown = (ev: Event) => {
+      if (wrapRef.current?.contains(ev.target as Node)) return;
+      setToolsOpen(false);
+      setShowReactPicker(false);
+    };
+    window.addEventListener('pointerdown', onDown);
+    return () => window.removeEventListener('pointerdown', onDown);
+  }, [toolsOpen]);
+
+  function onBubbleTap(e: MouseEvent<HTMLDivElement>) {
+    if (editing || !isTouchOnly()) return;
+    // Een link, knop of bijlage in het bericht doet zijn eigen ding.
+    if ((e.target as HTMLElement).closest('a,button,input,textarea')) return;
+    setToolsOpen((v) => !v);
+    setShowReactPicker(false);
+  }
+
   const grouped = useMemo(() => {
     const map = new Map<string, { count: number; mine: boolean }>();
     for (const r of reactions) {
@@ -754,7 +827,7 @@ function MessageRow({ api, msg, mine, sender, showAvatar, isChannel, reactions, 
       {!mine && (showAvatar ? <Avatar id={msg.sender_id} initials={display.initials} size={28} /> : <span className="chat-avatar-spacer" />)}
       <div className="chat-msg-main">
         {showAvatar && !mine && isChannel && <div className="chat-msg-sender">{display.name}</div>}
-        <div className="chat-bubble-wrap">
+        <div ref={wrapRef} className={`chat-bubble-wrap${toolsOpen ? ' is-open' : ''}`} onClick={onBubbleTap}>
           <div className="chat-bubble">
             {editing ? (
               <div className="chat-edit">

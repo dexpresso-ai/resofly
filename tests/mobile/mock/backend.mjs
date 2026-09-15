@@ -34,6 +34,22 @@ function restRows(table, url) {
     const m = /^eq\.(.*)$/.exec(v);
     if (m && out.length && k in out[0]) out = out.filter(r => String(r[k]) === m[1]);
   }
+  // Sortering meenemen (?order=last_message_at.desc.nullslast,created_at.desc):
+  // een pagina die op datum aflopend opvraagt, hoort dat ook zo terug te krijgen.
+  const order = url.searchParams.get('order');
+  if (order && out.length) {
+    const specs = order.split(',').map(t => { const [col, ...rest] = t.split('.'); return { col, desc: rest.includes('desc') }; }).filter(sp => sp.col in out[0]);
+    if (specs.length) out = [...out].sort((a, b) => {
+      for (const { col, desc } of specs) {
+        const av = a[col], bv = b[col];
+        if (av === bv) continue;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        return (av < bv ? -1 : 1) * (desc ? -1 : 1);
+      }
+      return 0;
+    });
+  }
   return out;
 }
 
@@ -42,6 +58,7 @@ function rpc(fn) {
     case 'ensure_user_default_organization': return null;
     case 'organization_license_usage': return [{ organization_id: seed.ids.ORG, licensed_seats: 3, active_members: 2, pending_invitations: 0, used_seats: 2, available_seats: 1, license_status: 'active', billing_exempt: false }];
     case 'organization_billing_overview': return [];
+    case 'chat_unread_counts': return [{ conversation_id: seed.chatConversations[0].id, unread_count: 2 }];
     case 'organization_creative_status': return [{ active: true, enabled: true, included_in_plan: true, in_grace: false, grace_until: null, addon_price_cents: 900, addon_yearly_price_cents: 9000, billing_interval: 'month' }];
     case 'organization_business_status': return [{ active: true, enabled: true, included_in_plan: true, in_grace: false, grace_until: null, legal_form: 'bv', fiscal_regime: 'vpb', is_corporate: true }];
     default: return [];

@@ -2164,10 +2164,14 @@ body::before{
 /* ── Teamchat ─────────────────────────────────────────────────────────────── */
 .chat-shell{display:flex;min-height:0}
 .chat-shell.chat-page{height:calc(100vh - 140px);border:1px solid var(--border);border-radius:var(--r2);overflow:hidden}
-.chat-page .chat-list{width:300px;min-width:300px;border-right:1px solid var(--border)}
+/* Breed genoeg voor twee kolommen: de gesprekslijst links, het gesprek rechts. */
+.chat-page:not(.chat-single) .chat-list{width:300px;min-width:300px;border-right:1px solid var(--border)}
 .team-chat-dock .chat-shell{flex:1;min-height:0}
-.chat-shell.chat-dock{flex-direction:column;height:100%}
-.chat-dock>.chat-list,.chat-dock>.chat-thread{flex:1;min-height:0;width:100%}
+.chat-shell.chat-dock{height:100%}
+/* Eén venster tegelijk — het zwevende paneel, en de pagina op een telefoon.
+   React zet `.chat-single` en toont dan óf de lijst óf het gesprek. */
+.chat-shell.chat-single{flex-direction:column}
+.chat-single>.chat-list,.chat-single>.chat-thread{flex:1;min-height:0;width:100%}
 
 /* Avatar met status-stip */
 .chat-avatar{border-radius:11px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:var(--on-accent);flex-shrink:0;position:relative;overflow:visible}
@@ -2237,6 +2241,15 @@ body::before{
 .chat-msg.mine .chat-react-picker{right:auto;left:0}
 .chat-react-picker button{font-size:17px;background:transparent;border:none;cursor:pointer;padding:3px;border-radius:6px;line-height:1}
 .chat-react-picker button:hover{background:var(--bg3)}
+/* Touchscreen: hover bestaat daar niet. Eén tik op het bericht zet de rij open
+   (TeamChat.tsx zet `.is-open`), een tik ernaast weer dicht. Lang indrukken
+   blijft van het toestel zelf — tekst selecteren en kopiëren werkt gewoon. */
+@media(hover:none){
+  .chat-bubble-wrap:hover .chat-msg-tools{display:none}
+  .chat-bubble-wrap.is-open .chat-msg-tools{display:flex}
+  .chat-msg-tools button{width:34px;height:34px}
+  .chat-react-picker button{font-size:20px;padding:6px}
+}
 .chat-reactions{display:flex;flex-wrap:wrap;gap:4px}
 .chat-reaction{display:inline-flex;align-items:center;gap:4px;background:var(--bg3);border:1px solid var(--border);border-radius:11px;padding:2px 7px;font-size:12px;cursor:pointer;color:var(--text)}
 .chat-reaction.mine{border-color:var(--accent);background:rgba(var(--accent-rgb),.14)}
@@ -2312,8 +2325,6 @@ button.chat-member:hover{background:var(--bg3)}
 
 @media(max-width:760px){
   .team-chat-dock-root{right:16px;bottom:84px}
-  .chat-shell.chat-page{flex-direction:column;height:calc(100vh - 120px)}
-  .chat-page .chat-list{width:100%;min-width:0;max-height:230px;border-right:none;border-bottom:1px solid var(--border)}
 }
 
 /* ── Meeting picker (note ↔ calendar link) ────────────────────────────── */
@@ -6407,7 +6418,6 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
    onder de zichtbare rand door, en met de vaste onderbalk erbij valt de
    onderste regel helemaal weg. `dvh` volgt wat je echt ziet. */
 @media(max-width:760px){
-  .chat-shell.chat-page{height:calc(100dvh - 120px - var(--bottomnav-h))}
   .portal-app{height:100dvh}
 }
 
@@ -6536,6 +6546,88 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .team-chat-dock .chat-foot{padding-bottom:calc(12px + env(safe-area-inset-bottom))}
   /* De open-knop zou over zijn eigen paneel zweven. */
   .team-chat-fab.is-open{display:none}
+}
+
+/* 13b ── Teamchat op de telefoon: één venster tegelijk, zoals MS Teams ────
+   Op de telefoon stonden de gesprekslijst (afgeknepen tot 230px) en het
+   gesprek ónder elkaar in hetzelfde venster. Van het gesprek bleef een strook
+   van ruim 300px over: twee berichten in beeld, een gesprekskop die de lijst
+   herhaalde en een invoerveld dat tegen de onderbalk aanliep.
+
+   Teams doet het op een telefoon anders, en dat is precies wat hier nodig is:
+   de gesprekslijst vult het scherm, je tikt een gesprek aan en dát vult het
+   scherm — met een terugpijl in de kop. Welk van de twee je ziet bepaalt
+   React (`.chat-single`, zie TeamChat.tsx); hieronder staat hoe het eruitziet.
+
+     - De chat vult exact de ruimte tussen de werktabs en de onderbalk. Geen
+       eigen hoogtesom meer: `.content` wordt een pad-loze flex-kolom, net als
+       bij de agenda (regel 4053). Zo kan er niets onder de onderbalk vallen.
+     - Kop en invoerveld staan vast, alleen de berichten schuiven — de invoer
+       blijft dus in beeld terwijl je terugleest.
+     - Duimformaat: gespreksregels 64px, knoppen 40px. Het invoerveld is 16px,
+       want bij kleinere tekst zoomt iOS bij het aantikken op het veld in en
+       staat de halve pagina scheef.
+   De onderbalk houdt via `.main` al rekening met de home-indicator; de
+   invoerbalk hoeft daar dus niets bovenop te doen (het zwevende paneel wél,
+   dat staat los van de shell — zie blok 13). */
+@media(max-width:760px){
+  .content:has(.chat-shell.chat-page){padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+  .chat-shell.chat-page{flex:1;height:auto;min-height:0;border:none;border-radius:0}
+
+  /* Kop van de gesprekslijst + zoekveld. */
+  .chat-list-head{padding:10px 10px 8px;min-height:52px}
+  .chat-list-title{font-size:16px}
+  .chat-icon-btn{width:40px;height:40px}
+  .chat-search{margin:8px 12px 4px;padding:10px 12px;border-radius:11px}
+  .chat-search input{font-size:15px}
+  .chat-list-scroll{padding:0 8px 12px}
+  .chat-list-section{font-size:10px;padding:14px 8px 6px}
+  .chat-list-hint{font-size:12px}
+
+  /* Een gespreksregel is een duimdoel, geen tabelrij. */
+  .chat-conv{gap:12px;padding:10px 8px;min-height:64px;border-radius:12px}
+  .chat-conv-name{font-size:15px}
+  .chat-conv-sub{font-size:12.5px}
+  .chat-conv-time{font-size:11px}
+  .chat-conv-badge{min-width:20px;height:20px;font-size:11px}
+
+  /* Gesprekskop: terugpijl, naam, status. */
+  .chat-thread-head{padding:8px 10px;min-height:56px;gap:8px}
+  .chat-thread-name{font-size:16px}
+  .chat-thread-sub{font-size:12px}
+  .chat-back{margin-left:-4px}
+
+  /* Berichten: iets groter, en breder dan 78% — het scherm is al smal. */
+  .chat-msgs{padding:12px 12px 4px}
+  .chat-msg-main{max-width:84%}
+  .chat-msg-sender{font-size:12px}
+  .chat-bubble{font-size:15px;line-height:1.45;padding:9px 12px;border-radius:16px;border-bottom-left-radius:5px}
+  .chat-msg.mine .chat-bubble{border-bottom-left-radius:16px;border-bottom-right-radius:5px}
+  .chat-bubble-meta{font-size:10.5px}
+  .chat-day-sep{margin:12px 0}
+  .chat-receipt{padding:2px 14px 0}
+
+  /* Invoerbalk onderaan, altijd in beeld. */
+  .chat-staged{padding:8px 12px 0}
+  .chat-composer{padding:8px 10px;gap:6px}
+  /* 118px = precies vier regels (4 × 24px + 20px padding + 2px rand): het veld
+     groeit mee tot vier regels en scrollt daarna, zonder halve regel bovenaan. */
+  .chat-input{font-size:16px;padding:10px 14px;border-radius:18px;max-height:118px}
+  .chat-send{width:42px;height:42px}
+
+  /* Niets zweeft over de invoerbalk. Gerrie stond precies op de verstuurknop:
+     de chatpagina vult het scherm tot aan de onderbalk, dus er is geen vrije
+     hoek meer waar een zwevende knop onschuldig kan staan. Gerrie en de
+     agenda-"+" zijn op elke andere pagina gewoon bereikbaar.
+     `.content:not([hidden])` want een chattab die achter een andere tab open
+     staat, telt niet — die is verborgen, maar staat wél in de DOM. */
+  .app:has(.content:not([hidden]) .chat-shell.chat-page) .gerrie-root,
+  .app:has(.content:not([hidden]) .chat-shell.chat-page) .tb-fab{display:none}
+
+  /* Kanaalleden en "nieuw gesprek" als vol venster i.p.v. een kleine kaart. */
+  .chat-members{max-height:46dvh}
+  .chat-modal{max-height:82dvh}
+  .chat-modal-member{padding:10px;font-size:14px;min-height:52px}
 }
 
 /* 14 ── Inhoud-verkenner: hoogte volgt het scherm ─────────────────────────
@@ -6968,8 +7060,7 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 @media(max-width:760px){
   .content{padding-bottom:126px}
   .content:has(.calendar-agenda-page),
-  .content:has(.odrv),
-  .content:has(.chat-shell.chat-page){padding-bottom:16px}
+  .content:has(.odrv){padding-bottom:16px}
 }
 
 /* 43 ── Nog wat duimwerk ──────────────────────────────────────────────────
@@ -8978,8 +9069,7 @@ button.task-agenda-when:hover{text-decoration:underline}
      maar één zwevende knop om vrij te houden. */
   .content{padding:12px 12px 76px}
   .content:has(.calendar-agenda-page),
-  .content:has(.odrv),
-  .content:has(.chat-shell.chat-page){padding:12px 12px 12px}
+  .content:has(.odrv){padding:12px 12px 12px}
   .toast-region{bottom:calc(var(--bottomnav-h) + 10px + env(safe-area-inset-bottom))}
 
   /* Uitschuifmenu: ververs-knop naast het sluitkruisje, alleen-lezen onder de
