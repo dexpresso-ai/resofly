@@ -1,8 +1,9 @@
-# Changelog — Inhoud opent meteen, en chatten op de telefoon — 2026-09-15
+# Changelog — Inhoud, teamchat en Gerrie op de telefoon — 2026-09-15
 
-Twee dingen uit de praktijk op de telefoon: het menu-item **Inhoud** klapte eerst een
-submenu uit in plaats van de pagina te openen, en de **teamchat** propte de gesprekslijst
-en het gesprek samen in één scherm, waardoor er van het gesprek een strook overbleef.
+Drie dingen uit de praktijk op de telefoon: het menu-item **Inhoud** klapte eerst een
+submenu uit in plaats van de pagina te openen, de **teamchat** propte de gesprekslijst
+en het gesprek samen in één scherm, en het **commandocentrum van Gerrie** liep zijwaarts
+uit beeld.
 
 ## 1 · Inhoud opent meteen het overzicht
 
@@ -42,6 +43,21 @@ van Teams (en WhatsApp) kent:
   terwijl er een gesprek openstaat dat je niet zelf koos, dan val je terug op de lijst.
 - Ook rechtgezet: een kanaal met twee leden zei "2 lideren".
 
+## 3 · Gerrie: de tabrij loopt niet meer uit beeld
+
+Sinds er een vierde tab bij kwam (*Beslissingen*) stak de tabrij van het commandocentrum
+65 px buiten het scherm en scrolde de hele pagina zijwaarts. De vier tabs staan op
+`flex:1 1 auto` — mochten dus krimpen — maar een flex-item krimpt niet onder zijn eigen
+inhoud. Dus krompen ze niet, ook al was er geen ruimte.
+
+- **De tabrij is nu een veegrij.** Je veegt hem opzij; de vierde tab piept rechts al om
+  de hoek, dus je ziet dat er meer is. Hetzelfde patroon als de knoppenrij van de
+  rapportbouwer. Afkappen was geen optie: van "Nu uitvoeren" en "Beslissingen" blijft dan
+  niets leesbaars over, en er past nu ook gewoon een vijfde tab bij.
+- **Dode regel opgeruimd.** `.cc-tabs .cc-tab span{display:none}` moest de tablabels op
+  een telefoon verbergen, maar die labels zijn kale tekstknopen — de regel deed niets, en
+  het enige `<span>` in een tab is inmiddels de teller, die je juist wél wilt zien.
+
 ## Code
 
 - `src/components/Sidebar.tsx` — het submenu onder *Inhoud* is verwijderd (`StickyNote` en
@@ -55,13 +71,16 @@ van Teams (en WhatsApp) kent:
 - `src/styles/globals.css` — `.chat-single` vervangt de dock-specifieke kolomregels; blok
   **13b** in het mobiele deel bevat de telefoonweergave (`.content` als pad-loze
   flex-kolom, duimformaten, invoerbalk) en `@media(hover:none)` regelt de knoppenrij op
-  een touchscreen. De oude gestapelde regels en de losse hoogtesommen zijn weg.
+  een touchscreen. De oude gestapelde regels en de losse hoogtesommen zijn weg. `.cc-tabs`
+  is op de telefoon een veegrij (`overflow-x:auto`, tabs op `flex:0 0 auto`).
 
 ## Getest
 
-`npm run test:mobile` (telefoon 390×844 en tablet 820×1180, alle pagina's): 72 gemeten, 1
-probleem — `dark/phone/gerrie` loopt 65 px zijwaarts uit beeld. Dat stond er al vóór deze
-wijziging (nagemeten op de kale branch) en hoort bij het commandocentrum, niet bij de chat.
+`npm run test:mobile` (telefoon 390×844 en tablet 820×1180, alle 72 pagina's) draait
+schoon. De Gerrie-pagina stond daar al rood vóór deze wijziging; die overloop is hierboven
+opgelost. De aangeraakte pagina's (chat, inhoud, notities, documenten, Gerrie) zijn ook in
+het lichte thema nagemeten.
+
 De mock-backend kreeg teamchat-data (een kanaal en een 1-op-1 gesprek met berichten), zodat
 de chatpagina in die test niet langer als lege lijst wordt gemeten; `chat` heeft nu ook een
 eigen ondergrens voor het eerste item. De mock sorteert daarnaast op `?order=`, zoals
@@ -69,4 +88,7 @@ PostgREST, anders komen berichten omgekeerd binnen.
 
 Handmatig nagelopen in Chromium op 390×844, 360×640, 820×1180 en 1440×900: gesprek openen,
 terug, tikken op een bericht, een bericht van vier regels typen, en het zwevende chatpaneel
-op de desktop.
+op de desktop. Bij Gerrie: de tabrij opzij vegen en de vierde tab aantikken — die staat
+daarna helemaal in beeld en de pagina blijft staan waar hij staat. Alle vier de tabs zijn
+op 390 px nagemeten (de lay-outtest opent alleen de eerste); geen van de vier loopt nog
+zijwaarts uit beeld.
