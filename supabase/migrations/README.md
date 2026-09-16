@@ -49,6 +49,16 @@ Voor een nieuwe database is `supabase/BRANDCORE_DATABASE_SETUP.sql` de snelste e
 Voor een oude pre-v2/user-scoped database blijft een aparte datamigratie nodig waarin bestaande `user_id`-data naar `organizations` en `organization_members` wordt omgezet voordat je de organisatie-SaaS migraties toepast.
 
 
+## Handgeschreven notities (pen op tablet)
+
+Voor het handschrift bij notities (vectorlijnen per notitie, autosave, badges) is één migratie nodig:
+
+```text
+20260916010000_note_handwriting.sql
+```
+
+Zonder deze migratie blijft de app werken: de sectie "Handschrift" meldt dan bij het opslaan dat de migratie ontbreekt, en lijsten tonen simpelweg geen handschrift-badges.
+
 ## Agenda-notities migratie
 
 Voor de agenda-item-notities feature is er nog maar één migratiebestand nodig:

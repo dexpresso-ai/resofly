@@ -1,6 +1,8 @@
+import { PenLine } from 'lucide-react';
 import type { AppData, Note, NoteType } from '../types';
 import { Button } from '../components/Ui';
 import { RichTextExcerpt, RichTextViewer } from '../components/RichTextEditor';
+import { InkThumbnail, handwritingLabel, noteHandwritingSummary } from '../components/NoteHandwriting';
 import { dateNL } from '../lib/format';
 
 export const noteTypeLabels: Record<NoteType, string> = {
@@ -20,14 +22,17 @@ export function NoteCard({ note, data, onEdit }: { note: Note; data: AppData; on
   const client = data.clients.find(c => c.id === note.client_id);
   const project = data.projects.find(p => p.id === note.project_id);
   const tags = Array.isArray(note.tags) ? note.tags : [];
+  const ink = noteHandwritingSummary(data, note.id);
 
-  return <article className="note-card" onClick={() => onEdit(note)}>
+  return <article className={`note-card${ink ? ' has-ink' : ''}`} onClick={() => onEdit(note)}>
     <div className="note-card-head">
       <span className={`note-type note-type-${note.note_type ?? 'general'}`}>{getNoteTypeLabel(note.note_type)}</span>
+      {ink && <span className="note-ink-badge"><PenLine size={11} /> {handwritingLabel(ink)}</span>}
       <span className="note-date">{dateNL(note.created_at)}</span>
     </div>
     <h3>{note.title}</h3>
-    <div className="note-content-preview"><RichTextViewer content={note.content} /></div>
+    {ink && <InkThumbnail note={note} summary={ink} width={240} className="note-card-ink" />}
+    <div className="note-content-preview"><RichTextViewer content={note.content} emptyText={ink ? 'Handgeschreven notitie' : 'Geen inhoud'} /></div>
     <div className="note-relations">
       <span>{client ? `Klant: ${client.name}` : 'Geen klant'}</span>
       <span>{project ? `Project: ${project.name}` : 'Geen project'}</span>
@@ -66,12 +71,16 @@ export function RelatedNotes({
       {canWrite && <Button onClick={onNew}>+ Notitie</Button>}
     </div>}
     {sorted.length === 0 ? <div className="related-notes-empty">{emptyText}</div> : <div className="related-notes-list">
-      {sorted.map(note => <button type="button" className="related-note-item" key={note.id} onClick={() => onEdit(note)}>
-        <div className="related-note-top"><span className={`note-type note-type-${note.note_type ?? 'general'}`}>{getNoteTypeLabel(note.note_type)}</span><span>{dateNL(note.created_at)}</span></div>
-        <strong>{note.title}</strong>
-        <p><RichTextExcerpt content={note.content} /></p>
-        {Array.isArray(note.tags) && note.tags.length > 0 && <div className="note-tags compact">{note.tags.map(tag => <span key={tag}>{tag}</span>)}</div>}
-      </button>)}
+      {sorted.map(note => {
+        const ink = noteHandwritingSummary(data, note.id);
+        return <button type="button" className={`related-note-item${ink ? ' has-ink' : ''}`} key={note.id} onClick={() => onEdit(note)}>
+          <div className="related-note-top"><span className={`note-type note-type-${note.note_type ?? 'general'}`}>{getNoteTypeLabel(note.note_type)}</span><span>{dateNL(note.created_at)}</span></div>
+          <strong>{note.title}</strong>
+          {ink && <InkThumbnail note={note} summary={ink} width={180} className="related-note-ink" />}
+          <p><RichTextExcerpt content={note.content} emptyText={ink ? handwritingLabel(ink) : 'Geen inhoud'} /></p>
+          {Array.isArray(note.tags) && note.tags.length > 0 && <div className="note-tags compact">{note.tags.map(tag => <span key={tag}>{tag}</span>)}</div>}
+        </button>;
+      })}
     </div>}
   </section>;
 }
