@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from './Ui';
-import { listGrants, revokeGrant, type McpGrant } from '../lib/mcp-api';
+import { listGrants, McpNotAvailableError, revokeGrant, type McpGrant } from '../lib/mcp-api';
 import type { UUID } from '../types';
 
 /**
@@ -26,12 +26,17 @@ export function McpConnections({ organizationId, connectUrl }: {
   const [grants, setGrants] = useState<McpGrant[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // De database is nog niet bijgewerkt in deze omgeving. Geen fout, wel een
+  // reden om het paneel stil te houden in plaats van rood te kleuren.
+  const [unavailable, setUnavailable] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       setGrants(await listGrants(organizationId));
       setError(null);
+      setUnavailable(false);
     } catch (err) {
+      if (err instanceof McpNotAvailableError) { setUnavailable(true); setGrants([]); setError(null); return; }
       setError(err instanceof Error ? err.message : 'De AI-koppelingen konden niet worden opgehaald.');
     }
   }, [organizationId]);
@@ -62,15 +67,21 @@ export function McpConnections({ organizationId, connectUrl }: {
 
       {error && <p className="error">{error}</p>}
 
-      {grants === null && <p className="mcp-connections-empty">Laden…</p>}
+      {unavailable && (
+        <p className="mcp-connections-empty">
+          Nog niet beschikbaar in deze omgeving — de koppeling wordt binnenkort aangezet.
+        </p>
+      )}
 
-      {grants !== null && grants.length === 0 && (
+      {grants === null && !unavailable && <p className="mcp-connections-empty">Laden…</p>}
+
+      {grants !== null && !unavailable && grants.length === 0 && (
         <p className="mcp-connections-empty">
           Je hebt nog geen AI gekoppeld. Voeg ResoFly in je AI-app toe als connector; het koppelen begint daar.
         </p>
       )}
 
-      {grants !== null && grants.length > 0 && (
+      {grants !== null && !unavailable && grants.length > 0 && (
         <ul className="mcp-connections-list">
           {grants.map(grant => (
             <li key={grant.id}>

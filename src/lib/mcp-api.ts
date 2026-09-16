@@ -83,6 +83,26 @@ export async function decideConsent(
   return String(payload.redirect || '');
 }
 
+/**
+ * De frontend loopt via Cloudflare Pages vóór op de database: een push rolt de
+ * app uit, maar de migratie en de edge functions gaan langs een andere weg. In
+ * dat gaatje bestaat `mcp_grants` nog niet, en dan geeft PostgREST een fout waar
+ * een gebruiker niets van begrijpt ("Could not find the table … in the schema
+ * cache") — in het rood, in zijn instellingen, terwijl er niets mis is.
+ *
+ * Daarom onderscheiden we "er is iets stuk" van "dit staat hier nog niet aan".
+ */
+export class McpNotAvailableError extends Error {
+  constructor() { super('De AI-koppeling is in deze omgeving nog niet ingeschakeld.'); this.name = 'McpNotAvailableError'; }
+}
+
+/** Herkent het antwoord van PostgREST op een tabel die (nog) niet bestaat. */
+function isMissingTable(error: { code?: string; message?: string }): boolean {
+  if (error.code === '42P01' || error.code === 'PGRST205') return true;
+  const message = String(error.message ?? '').toLowerCase();
+  return message.includes('schema cache') || message.includes('does not exist');
+}
+
 export async function listGrants(organizationId: UUID): Promise<McpGrant[]> {
   const { data, error } = await supabase
     .from('mcp_grants')
@@ -90,7 +110,10 @@ export async function listGrants(organizationId: UUID): Promise<McpGrant[]> {
     .eq('organization_id', organizationId)
     .is('revoked_at', null)
     .order('created_at', { ascending: false });
-  if (error) throw new Error(`De AI-koppelingen konden niet worden opgehaald: ${error.message}`);
+  if (error) {
+    if (isMissingTable(error)) throw new McpNotAvailableError();
+    throw new Error(`De AI-koppelingen konden niet worden opgehaald: ${error.message}`);
+  }
   return (data ?? []) as McpGrant[];
 }
 
