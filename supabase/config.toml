@@ -144,3 +144,23 @@ verify_jwt = false
 # bewaart alleen sha256(token) en bewaakt intrekken + verlopen.
 [functions.file-share-public]
 verify_jwt = false
+
+# mcp-oauth is de autorisatieserver waarmee een klant zijn eigen AI (Claude,
+# ChatGPT) aan zijn werkruimte koppelt. Registratie, /authorize en /token worden
+# aangeroepen door die AI-client, die geen Supabase-JWT heeft — met verify_jwt
+# = true zou koppelen onmogelijk zijn. Elk pad draagt zijn eigen bewijs: een
+# geregistreerde client met een exact geregistreerde redirect-URI, een
+# HMAC-ondertekend autorisatieverzoek, en verplichte PKCE (S256). Alleen
+# /approve legt iets vast namens een mens, en dat pad eist wél requireUser() +
+# requireOrganizationAccess() + de module Gerrie, plus een toegestane origin.
+[functions.mcp-oauth]
+verify_jwt = false
+
+# mcp is de MCP-server zelf: hier praat de gekoppelde AI van de klant. Hij
+# authenticeert met het toegangstoken uit die koppeling (gesalte SHA-256 in
+# mcp_tokens), niet met een Supabase-sessie. Uit het token volgt één gebruiker
+# in één organisatie; rol en modulerechten worden per aanroep vers uit
+# organization_members gelezen. De functie is ALLEEN-LEZEN: schrijf-handelingen
+# uit de registry worden geweigerd, ook als het model hun id kent.
+[functions.mcp]
+verify_jwt = false
