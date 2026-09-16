@@ -4,7 +4,7 @@ import {
   createAuthCode, createToken, grantableScopes, isAcceptableRedirectUri, isJsonRpcRequest,
   isNotification, isValidCodeVerifier, parseToken, redirectUriAllowed, scopeAllows,
   sha256Hex, verifyPkce, verifyToken, base64Url, randomBytes,
-  signAuthRequest, verifyAuthRequest, AUTH_REQUEST_TTL_SECONDS, type AuthRequest,
+  signAuthRequest, verifyAuthRequest, AUTH_REQUEST_TTL_SECONDS, narrowScopes, type AuthRequest,
 } from './mcpAuth.ts';
 
 /**
@@ -133,14 +133,37 @@ test('alleen veilige redirect-URI-vormen mogen geregistreerd worden', () => {
 
 // ── Scopes ───────────────────────────────────────────────────────────────────
 
-test('fase A geeft alleen leesrechten uit', () => {
+test('vraagt de client niets, dan mag de gebruiker alles kiezen', () => {
+  // Het normale geval: een AI-client kent onze scopes niet en vraagt er geen.
+  // Dan is het plafond alles wat we kunnen uitgeven, en kiest de gebruiker.
+  assert.deepEqual(grantableScopes(''), ['read', 'propose']);
+  assert.deepEqual(grantableScopes(undefined), ['read', 'propose']);
+});
+
+test('noemt de client wél scopes, dan is dat het plafond', () => {
   assert.deepEqual(grantableScopes('read'), ['read']);
-  assert.deepEqual(grantableScopes(''), ['read']);
-  assert.deepEqual(grantableScopes(undefined), ['read']);
-  // `propose` bestaat wel als begrip, maar wordt vandaag niet uitgegeven.
-  assert.deepEqual(grantableScopes('propose'), ['read']);
-  assert.deepEqual(grantableScopes('read propose'), ['read']);
-  assert.deepEqual(grantableScopes('admin write alles'), ['read']);
+  assert.deepEqual(grantableScopes('read propose'), ['read', 'propose']);
+  // Onzin valt weg; wat overblijft is het plafond.
+  assert.deepEqual(grantableScopes('read verzonnen'), ['read']);
+  // Alleen onzin = de client vroeg niets bruikbaars, dus het volle aanbod.
+  assert.deepEqual(grantableScopes('admin alles'), ['read', 'propose']);
+});
+
+test('de keuze van de gebruiker kan nooit ruimer dan het aanbod', () => {
+  // Dit is wat een aangepast formulier tegenhoudt: vroeg de client alleen
+  // meelezen, dan levert "ik wil ook propose" nog steeds alleen meelezen op.
+  assert.deepEqual(narrowScopes('read', 'read propose'), ['read']);
+  assert.deepEqual(narrowScopes('read', 'propose'), ['read']);
+  // Binnen het aanbod mag de gebruiker wel kiezen.
+  assert.deepEqual(narrowScopes('read propose', 'read'), ['read']);
+  assert.deepEqual(narrowScopes('read propose', 'read propose'), ['read', 'propose']);
+});
+
+test('een koppeling houdt altijd minstens leesrecht', () => {
+  // Een koppeling zonder read is zinloos: de AI kan dan niets opzoeken en dus
+  // ook niets zinnigs klaarzetten.
+  assert.deepEqual(narrowScopes('read propose', ''), ['read']);
+  assert.deepEqual(narrowScopes('read propose', 'propose'), ['read', 'propose']);
 });
 
 test('een grant laat alleen toe wat erin staat', () => {

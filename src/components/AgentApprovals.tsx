@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowRight, Bot, CalendarClock, Check, ChevronRight, ClipboardCheck, Coins, ListChecks, Loader2, Mail, RefreshCw, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bot, CalendarClock, Check, ChevronRight, ClipboardCheck, Coins, Link2, ListChecks, Loader2, Mail, RefreshCw, Sparkles, X } from 'lucide-react';
 import { confirmGerrieAction, listPendingAgentApprovals, type AgentApproval } from '../lib/gerrie-api';
 import type { GerrieActionHandlers } from '../lib/gerrie-api';
 import { executeProposal, openProposal, proposalLabel, type ProposalKind } from '../lib/gerrie-proposals';
@@ -153,18 +153,30 @@ export function AgentApprovals({
                 const batch = asBatchProposal(item.proposal);
                 return (
                   <li key={item.auditId} className={`ag-queue-row${state === 'error' ? ' is-error' : ''}${batch ? ' is-batch' : ''}`}>
-                    <AgentGlyph
-                      agent={{ id: item.agentId ?? undefined, name: item.agentName, icon: item.agentIcon, hue: item.agentHue }}
-                      size="md"
-                      title={item.agentName}
-                    />
+                    {/* Een voorstel van een gekoppelde AI krijgt bewust NIET het
+                        embleem van een Gerrie-agent. Het komt van een model dat
+                        niet van ons is, en dat hoor je te zien voordat je op
+                        Uitvoeren klikt — niet pas als je de regel eronder leest. */}
+                    {item.source === 'mcp' ? (
+                      <span className="ag-queue-mcp" title={`Klaargezet door ${item.agentName}, een gekoppelde AI`}>
+                        <Link2 size={16} aria-hidden="true" />
+                      </span>
+                    ) : (
+                      <AgentGlyph
+                        agent={{ id: item.agentId ?? undefined, name: item.agentName, icon: item.agentIcon, hue: item.agentHue }}
+                        size="md"
+                        title={item.agentName}
+                      />
+                    )}
                     <div className="ag-queue-body">
                       <div className="ag-queue-what">
                         <span className="ag-queue-kind" aria-hidden="true"><KindIcon size={12} /></span>
                         <strong>{info.title}</strong>
                       </div>
                       <div className="ag-queue-meta">
-                        <span className="ag-queue-agent">{item.agentName}</span>
+                        <span className="ag-queue-agent">
+                          {item.agentName}{item.source === 'mcp' && ' · gekoppelde AI'}
+                        </span>
                         {info.sub && <span className="ag-queue-sub">{info.sub}</span>}
                         <span className="ag-queue-when">{relativeTime(item.createdAt)}</span>
                       </div>

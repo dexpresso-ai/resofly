@@ -23,7 +23,10 @@ export interface McpConsentRequest {
   clientName: string;
   clientUri: string | null;
   logoUri: string | null;
+  /** Wat deze client ten hoogste kan krijgen; de gebruiker kiest daarbinnen. */
   scope: string;
+  /** Mag deze koppeling überhaupt wijzigingen klaarzetten? */
+  mayPropose: boolean;
   expiresAt: string;
 }
 
@@ -35,6 +38,11 @@ export interface McpGrant {
   scope: string;
   created_at: string;
   last_used_at: string | null;
+}
+
+/** Mag deze koppeling wijzigingen klaarzetten, of alleen meelezen? */
+export function grantMayPropose(grant: McpGrant): boolean {
+  return grant.scope.split(/[\s,]+/).includes('propose');
 }
 
 /** Staat er een koppelverzoek in de URL? Zo ja, dan is dit het ondertekende pakketje. */
@@ -55,6 +63,7 @@ export async function loadConsentRequest(request: string): Promise<McpConsentReq
     clientUri: payload.client_uri ? String(payload.client_uri) : null,
     logoUri: payload.logo_uri ? String(payload.logo_uri) : null,
     scope: String(payload.scope || 'read'),
+    mayPropose: Boolean(payload.may_propose),
     expiresAt: String(payload.expires_at || ''),
   };
 }
@@ -68,6 +77,8 @@ export async function decideConsent(
   decision: 'allow' | 'deny',
   organizationId: UUID,
   label: string,
+  /** Wat de gebruiker toestaat: alleen meelezen, of ook klaarzetten. */
+  scope: string,
 ): Promise<string> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
@@ -76,7 +87,7 @@ export async function decideConsent(
   const res = await fetch(`${FUNCTIONS_BASE}/${OAUTH_FN}/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: ANON_KEY },
-    body: JSON.stringify({ request, decision, organizationId, label }),
+    body: JSON.stringify({ request, decision, organizationId, label, scope }),
   });
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(String(payload?.error || 'Het koppelen is niet gelukt. Probeer het opnieuw vanuit je AI-app.'));

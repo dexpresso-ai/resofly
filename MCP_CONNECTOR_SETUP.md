@@ -1,9 +1,11 @@
 # MCP-connector — klanten koppelen hun eigen AI
 
 Met deze koppeling laat een klant zijn eigen assistent — Claude, ChatGPT, of een
-andere die MCP spreekt — meelezen in zijn ResoFly-werkruimte. Hij vraagt die AI
-dan "welke facturen staan er open?" of "wat heb ik deze week op Jansen geboekt?"
-en krijgt antwoord uit zijn eigen administratie.
+andere die MCP spreekt — meewerken in zijn ResoFly-werkruimte. Hij vraagt die AI
+"welke facturen staan er open?" of "wat heb ik deze week op Jansen geboekt?" en
+krijgt antwoord uit zijn eigen administratie. En hij kan hem laten
+**klaarzetten**: "stuur Jansen een herinnering" belandt als voorstel in zijn
+goedkeurwachtrij, waar hij het met één klik uitvoert.
 
 Het model draait op **zijn** abonnement, niet op het onze. Wij leveren alleen de
 gegevens. Daarmee valt het maandtegoed dat Gerrie begrenst hier weg als
@@ -16,13 +18,18 @@ beperking — en daarmee ook als kostenpost.
 | Model | Ons Claude-abonnement | Dat van de klant |
 | Kosten | Ons maandtegoed | Zijn eigen |
 | Lezen | Ja | Ja |
-| Wijzigen / versturen | Ja, als voorstel op de beslislijst | **Nee** |
+| Wijzigen / versturen | Als voorstel, na goedkeuring | Als voorstel, na goedkeuring |
+| Zelf uitvoeren | Nooit | Nooit |
 | Waar je praat | In ResoFly | In zijn eigen AI-app |
 
-De connector is **alleen-lezen**. Dat is geen tijdelijke beperking maar de reden
-dat dit veilig kan: een model dat niet van ons is, krijgt geen knop die geld
-verstuurt. Wijzigen blijft lopen via Gerrie, waar een mens het voorstel op de
-beslislijst goedkeurt. (Zie "Wat er hierna komt".)
+**Wat een gekoppelde AI kan, kan Gerrie ook — en omgekeerd.** Het verschil zit
+niet in wat er mag, maar in wiens model het is en wie ervoor betaalt.
+
+**Uitvoeren doet geen van beide.** Een schrijf-handeling levert een VOORSTEL op:
+een kaart met wat er gaat gebeuren, in de goedkeurwachtrij. Pas als een mens daar
+klikt, gebeurt het — en dan draait het in zijn browser, onder zijn eigen sessie,
+met alle databasebeveiliging die daarbij hoort. Er is geen pad waarlangs een
+model iets in gang zet zonder die klik. Ook niet als de gebruiker erom vraagt.
 
 ## 1. Database
 
@@ -104,8 +111,17 @@ plakken.
 de klant).
 
 Daarna logt hij in bij ResoFly, kiest hij een organisatie en geeft hij akkoord.
-Loskoppelen doet hij in ResoFly onder **Instellingen → AI → AI-koppelingen**; dat
-werkt meteen, want de database trekt de tokens mee in.
+Op dat scherm staat één keuze: mag deze AI ook wijzigingen klaarzetten, of alleen
+meelezen? Standaard mag hij klaarzetten; één vinkje uit houdt het bij meelezen.
+
+Vraagt hij zijn AI daarna om iets te wijzigen, dan komt dat als kaart in de
+**goedkeurwachtrij** op zijn startscherm — met een eigen merkteken, zodat hij ziet
+dat het van zijn gekoppelde AI komt en niet van een Gerrie-agent. Klikken op
+Uitvoeren doet het echt; tot dat moment is er niets gebeurd.
+
+Loskoppelen doet hij onder **Instellingen → AI**; dat werkt meteen. De database
+trekt de tokens mee in en zet alles wat die koppeling nog had klaarstaan op
+geannuleerd.
 
 ### Een eigen domein ervoor (optioneel)
 
@@ -122,7 +138,40 @@ supabase secrets set MCP_RESOURCE_URL="https://mcp.jouwdomein.nl"
 De functies vergelijken op de staart van het pad, dus ze werken in beide
 opstellingen zonder codewijziging.
 
-## Hoe de beveiliging in elkaar zit
+## De klantgrens — waarom een AI nooit bij een andere klant komt
+
+Dit is de vraag die ertoe doet in een pakket waar meerdere bedrijven in dezelfde
+database zitten. Het antwoord bestaat uit drie sloten die onafhankelijk van
+elkaar werken; er hoeft er maar één te houden.
+
+**1. De organisatie komt uit de koppeling, nooit uit het model.** Een token
+verwijst naar precies één rij in `mcp_grants`: één gebruiker, één organisatie.
+Die `organization_id` gaat als `ActionCtx.organizationId` de handeling in. Het
+model kan hem niet meesturen, niet overschrijven en niet raden — er is geen
+invoerveld voor.
+
+**2. Elke query in de registry filtert erop.** De 264 handelingen draaien op de
+service-role, die RLS overslaat; dat filter is daar dus de enige grens. Alle
+toegang loopt via `orgQuery()` of `row()`, of filtert zelf op
+`organization_id`, en elke RPC krijgt `p_organization_id` uit de sessie mee.
+Geeft het model een id van een andere organisatie mee, dan komt `row()` terug
+met *"niet gevonden in deze organisatie"* — niet met de rij.
+
+Dat is geen belofte maar een test: `actionTenancy.test.ts` leest de hele registry
+na en faalt op een query zonder org-filter, een RPC zonder organisatie, en op elke
+poging om een organisatie-id uit de invoer te lezen. Een nieuwe handeling die het
+vergeet, komt de CI niet door.
+
+**3. Uitvoeren gebeurt onder de sessie van een mens.** Een goedgekeurd voorstel
+draait in de browser van degene die klikt — met RLS, met de modulepoorten en met
+de tenant-triggers die controleren of gekoppelde records bij elkaar horen. Zelfs
+als er onverhoopt een vreemd id in een payload zat, weigert de database het daar
+alsnog.
+
+Binnen de eigen organisatie geldt vervolgens gewoon het rechtenraster: de AI ziet
+en doet precies wat zijn eigen teamlid ziet en doet, niet meer.
+
+## Hoe de beveiliging verder in elkaar zit
 
 **Een koppeling is persoonlijk.** Eén rij in `mcp_grants` is één gebruiker, in
 één organisatie, voor één AI-client. Een admin koppelt niet namens het team.
@@ -132,6 +181,16 @@ rol en modulerechten opnieuw uit `organization_members`. Zet een owner een
 teamlid vandaag op viewer of doet hij Financiën dicht, dan geldt dat meteen —
 niet pas als het token verloopt. Wat een teamlid niet mag zien, bestaat voor zijn
 AI niet: het komt niet eens terug uit `find_actions`.
+
+**Klaarzetten vraagt schrijfrecht, net als in het scherm.** Een member met
+Financiën op "lezen" kan via zijn AI geen factuur klaarzetten — hetzelfde
+antwoord als hij in de app zou krijgen. En een koppeling waarbij de gebruiker
+alleen meelezen toestond, krijgt `propose_action` niet eens aangeboden.
+
+**Het voorstel schrijven wij, niet het model.** Wat er op de goedkeurkaart staat,
+komt uit `plan()`: echte rijen uit de eigen administratie. Een model dat
+"herinnering aan Jansen" zegt terwijl de payload iets anders doet, komt daar niet
+mee weg — de kaart toont wat er werkelijk gaat gebeuren.
 
 **Tokens staan niet leesbaar in de database.** Een token is
 `rsfmcp.<selector>.<verifier>`; we bewaren de selector plat (om de rij te vinden)
@@ -175,20 +234,22 @@ niet als app-route. Dat is dezelfde SPA-fallback waar `/portal`, `/quote/<token>
 en `/gedeeld/<token>` op leunen; werken die wel en deze niet, dan staat er een
 regel in de Cloudflare Pages-routering die dit pad afvangt.
 
+**"Er staan al 25 voorstellen te wachten."** Een plafond op wat één koppeling
+onafgehandeld mag laten staan. Het is er niet tegen misbruik maar tegen een
+onbruikbare wachtrij: een lijst waar niemand doorheen komt, is een lijst waarin
+iemand op Uitvoeren klikt zonder te lezen. Afhandelen in ResoFly geeft meteen
+weer ruimte.
+
 **429 bij intensief gebruik.** Honderdtwintig aanroepen per minuut per koppeling.
 Dat is ruim voor een gesprek; loopt een klant er structureel tegenaan, dan is er
 waarschijnlijk een agent aan het doorslaan.
 
 ## Wat er hierna komt
 
-**Fase B — handelingen klaarzetten.** De registry kent 188 schrijf-handelingen.
-Die hebben op de server alleen een `plan()` die een *voorstel* bouwt; uitvoeren
-gebeurt in de browser nadat een mens akkoord gaf. Een MCP-server draait headless,
-dus schrijven kan daar niet rechtstreeks — en dat hoeft ook niet: de AI van de
-klant kan het voorstel op zijn **beslislijst** zetten, waar hij het in ResoFly
-goedkeurt. Dan blijft de invariant staan dat een mens elke wijziging ziet voordat
-hij gebeurt. De scope `propose` staat al in de code klaar; hij wordt vandaag
-alleen niet uitgegeven.
-
 **Fase C — meer dan tekst.** MCP kent ook resources (documenten) en prompts
 (kant-en-klare vragen). De server antwoordt daar nu met een lege lijst.
+
+**Een melding bij een nieuw voorstel.** Zet de AI van een klant iets klaar terwijl
+hij niet in ResoFly kijkt, dan ziet hij dat pas als hij de app opent. De
+push-infrastructuur ligt er (`decision_digest`); een variant voor
+AI-voorstellen is een kleine toevoeging.

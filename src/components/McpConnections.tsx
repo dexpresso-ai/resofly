@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from './Ui';
-import { listGrants, McpNotAvailableError, revokeGrant, type McpGrant } from '../lib/mcp-api';
+import { grantMayPropose, listGrants, McpNotAvailableError, revokeGrant, type McpGrant } from '../lib/mcp-api';
 import type { UUID } from '../types';
 
 /**
@@ -61,7 +61,8 @@ export function McpConnections({ organizationId, connectUrl }: {
       <h3>AI-koppelingen</h3>
       <p className="mcp-connections-intro">
         Koppel je eigen AI — Claude, ChatGPT of een andere assistent die MCP spreekt — aan deze werkruimte. Die AI kan
-        dan <strong>meelezen</strong> met alles wat jij zelf mag inzien. Wijzigen, versturen of verwijderen kan hij niet.
+        dan <strong>meelezen</strong> met alles wat jij zelf mag inzien, en desgewenst wijzigingen <strong>klaarzetten</strong>
+        in je goedkeurwachtrij. Zelf uitvoeren kan hij nooit: dat blijft een klik van jou.
         {connectUrl && <> <a href={connectUrl} target="_blank" rel="noreferrer">Zo koppel je hem →</a></>}
       </p>
 
@@ -91,10 +92,11 @@ export function McpConnections({ organizationId, connectUrl }: {
                   Gekoppeld op {formatDate(grant.created_at)}
                   {' · '}
                   {grant.last_used_at ? `laatst gebruikt ${formatDate(grant.last_used_at)}` : 'nog niet gebruikt'}
-                  {' · '}
-                  alleen lezen
                 </small>
               </div>
+              <span className={`mcp-connection-scope${grantMayPropose(grant) ? ' is-propose' : ''}`}>
+                {grantMayPropose(grant) ? 'Leest mee · zet klaar' : 'Leest alleen mee'}
+              </span>
               <Button variant="danger" onClick={() => void revoke(grant)} disabled={busyId === grant.id}>
                 {busyId === grant.id ? 'Bezig…' : 'Loskoppelen'}
               </Button>

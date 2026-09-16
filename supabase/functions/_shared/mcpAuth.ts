@@ -153,29 +153,50 @@ export function isAcceptableRedirectUri(uri: string): boolean {
 
 // ── Scopes ───────────────────────────────────────────────────────────────────
 //
-// Fase A geeft alleen `read` uit: de AI van de klant mag zien wat het teamlid
-// zelf ook mag zien. `propose` staat hier al wel in, zodat een token dat straks
-// in fase B wordt uitgegeven van een oud token te onderscheiden is — een grant
-// van vandaag mag morgen niet ineens iets mogen klaarzetten.
+// Twee niveaus:
+//   `read`    — meelezen met wat het teamlid zelf ook mag zien.
+//   `propose` — daarbovenop wijzigingen KLAARZETTEN in de goedkeurwachtrij. Niet
+//               uitvoeren: dat blijft een klik van een mens in ResoFly.
+//
+// WIE BESLIST WAT. Een AI-client vraagt meestal geen scopes op naam — hij kent
+// de onze niet. Daarom is wat de client (eventueel) meestuurt een PLAFOND, en
+// kiest de gebruiker op het toestemmingsscherm daarbinnen. Zo staat de
+// beslissing bij de mens die de gevolgen draagt, en niet bij het programma dat
+// erom vraagt.
 
 export const SCOPE_READ = 'read';
 export const SCOPE_PROPOSE = 'propose';
 export const SUPPORTED_SCOPES = [SCOPE_READ, SCOPE_PROPOSE] as const;
-/** Wat de connector vandaag daadwerkelijk uitgeeft. */
-export const ISSUABLE_SCOPES = [SCOPE_READ] as const;
+/** Wat de connector kan uitgeven. */
+export const ISSUABLE_SCOPES = [SCOPE_READ, SCOPE_PROPOSE] as const;
 
 export function parseScopes(raw: unknown): string[] {
   return [...new Set(String(raw ?? '').split(/[\s,]+/).filter(Boolean))];
 }
 
 /**
- * Wat we uitgeven op een verzoek. Onbekende scopes vallen stil weg en een leeg
- * verzoek wordt `read` — een client die niets vraagt hoort niet te stranden,
- * maar ook niet meer te krijgen dan het minimum.
+ * Het PLAFOND voor dit verzoek: wat de gebruiker straks ten hoogste kan toestaan.
+ *
+ * Vraagt de client niets (het normale geval), dan bieden we alles wat we kunnen
+ * uitgeven aan en kiest de gebruiker. Noemt hij wél scopes, dan houden we ons
+ * daaraan: een client die uitdrukkelijk alleen wil meelezen, hoort niet ineens
+ * meer te krijgen omdat de gebruiker een vinkje liet staan.
  */
 export function grantableScopes(requested: unknown): string[] {
   const asked = parseScopes(requested).filter((s) => (ISSUABLE_SCOPES as readonly string[]).includes(s));
-  return asked.length > 0 ? asked : [SCOPE_READ];
+  return asked.length > 0 ? asked : [...ISSUABLE_SCOPES];
+}
+
+/**
+ * Wat de gebruiker koos, binnen het plafond. Nooit ruimer dan het ondertekende
+ * verzoek — dat is wat verhindert dat een aangepast formulier meer opent dan de
+ * client vroeg — en nooit leeg: zonder `read` is een koppeling zinloos.
+ */
+export function narrowScopes(offered: string, chosen: unknown): string[] {
+  const ceiling = parseScopes(offered);
+  const wanted = parseScopes(chosen).filter((s) => ceiling.includes(s));
+  const result = wanted.includes(SCOPE_READ) ? wanted : [SCOPE_READ, ...wanted];
+  return result.filter((s) => ceiling.includes(s) || s === SCOPE_READ);
 }
 
 export function scopeAllows(granted: string, need: string): boolean {

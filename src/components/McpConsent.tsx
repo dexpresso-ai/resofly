@@ -25,6 +25,9 @@ export function McpConsent({ request, organizations, defaultOrganizationId }: {
   const [info, setInfo] = useState<McpConsentRequest | null>(null);
   const [organizationId, setOrganizationId] = useState<UUID | null>(defaultOrganizationId);
   const [label, setLabel] = useState('');
+  // Mag deze AI ook wijzigingen klaarzetten? Standaard aan als de client erom
+  // kon vragen — maar zichtbaar, en met één klik terug te zetten naar meelezen.
+  const [allowPropose, setAllowPropose] = useState(true);
   const [busy, setBusy] = useState<'allow' | 'deny' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -52,7 +55,8 @@ export function McpConsent({ request, organizations, defaultOrganizationId }: {
     setBusy(decision);
     setError(null);
     try {
-      const redirect = await decideConsent(request, decision, (organizationId ?? '') as UUID, label.trim() || info?.clientName || 'AI-koppeling');
+      const scope = info?.mayPropose && allowPropose ? 'read propose' : 'read';
+      const redirect = await decideConsent(request, decision, (organizationId ?? '') as UUID, label.trim() || info?.clientName || 'AI-koppeling', scope);
       // Terug naar de AI-client. Geen router: dit is een adres buiten onze app.
       window.location.href = redirect;
     } catch (err) {
@@ -94,24 +98,58 @@ export function McpConsent({ request, organizations, defaultOrganizationId }: {
             <span className="mcp-consent-icon" aria-hidden="true">👁</span>
             <span>
               <strong>Mag meelezen</strong>
-              <small>Alles wat jij zelf in {organizationName || 'deze organisatie'} mag inzien — niet meer. Onderdelen die voor jou dichtstaan, blijven dicht.</small>
+              <small>Alles wat jij zelf in {organizationName || 'deze organisatie'} mag inzien — niet meer. Onderdelen die voor jou dichtstaan, blijven dicht, en gegevens van andere organisaties bestaan voor deze koppeling niet.</small>
             </span>
           </li>
+          {info.mayPropose && allowPropose ? (
+            <li>
+              <span className="mcp-consent-icon" aria-hidden="true">📝</span>
+              <span>
+                <strong>Mag wijzigingen klaarzetten</strong>
+                <small>
+                  Een factuur, een mail, een taak — {info.clientName} zet het klaar in je goedkeurwachtrij in ResoFly.
+                  Er gebeurt pas iets als jij daar op Uitvoeren klikt.
+                </small>
+              </span>
+            </li>
+          ) : (
+            <li>
+              <span className="mcp-consent-icon" aria-hidden="true">🔒</span>
+              <span>
+                <strong>Kan niets wijzigen</strong>
+                <small>Geen facturen versturen, niets aanmaken, niets verwijderen. Deze koppeling kan uitsluitend lezen.</small>
+              </span>
+            </li>
+          )}
           <li>
-            <span className="mcp-consent-icon" aria-hidden="true">🔒</span>
+            <span className="mcp-consent-icon" aria-hidden="true">🚫</span>
             <span>
-              <strong>Kan niets wijzigen</strong>
-              <small>Geen facturen versturen, niets aanmaken, niets verwijderen. Deze koppeling kan uitsluitend lezen.</small>
+              <strong>Voert nooit zelf iets uit</strong>
+              <small>Er is geen handeling die deze AI zonder jouw klik kan uitvoeren. Ook niet als je hem dat vraagt.</small>
             </span>
           </li>
           <li>
             <span className="mcp-consent-icon" aria-hidden="true">↩</span>
             <span>
               <strong>Altijd in te trekken</strong>
-              <small>Via Instellingen → AI-koppelingen. Intrekken werkt meteen.</small>
+              <small>Via Instellingen → AI. Intrekken werkt meteen, en trekt ook alles in wat nog klaarstond.</small>
             </span>
           </li>
         </ul>
+
+        {info.mayPropose && (
+          <label className="mcp-consent-toggle">
+            <input
+              type="checkbox"
+              checked={allowPropose}
+              onChange={e => setAllowPropose(e.target.checked)}
+            />
+            <span>
+              <strong>Laat {info.clientName} ook wijzigingen klaarzetten</strong>
+              <small>Zet dit uit als je hem alleen wilt laten meelezen.</small>
+            </span>
+          </label>
+        )}
 
         {organizations.length > 1 && (
           <label className="mcp-consent-field">

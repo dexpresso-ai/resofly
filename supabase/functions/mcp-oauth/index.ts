@@ -37,10 +37,10 @@ import {
   requireOrganizationAccess, requireUser, getModuleLevel, isUuid,
 } from '../_shared/edgeAuth.ts';
 import {
-  AUTH_REQUEST_TTL_SECONDS, createAuthCode, createToken, grantableScopes,
+  AUTH_REQUEST_TTL_SECONDS, createAuthCode, createToken, grantableScopes, narrowScopes,
   isAcceptableRedirectUri, isValidCodeChallenge, parseToken, redirectUriAllowed,
   sha256Hex, signAuthRequest, verifyAuthRequest, verifyPkce, verifyToken,
-  base64Url, randomBytes, type AuthRequest,
+  base64Url, randomBytes, SCOPE_READ, type AuthRequest,
 } from '../_shared/mcpAuth.ts';
 
 const admin = createAdminClient();
@@ -119,7 +119,7 @@ function authorizationServerMetadata(): Record<string, unknown> {
     token_endpoint: `${ISSUER}/token`,
     registration_endpoint: `${ISSUER}/register`,
     revocation_endpoint: `${ISSUER}/revoke`,
-    scopes_supported: ['read'],
+    scopes_supported: ['read', 'propose'],
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
     // Alleen S256: de challenge onversleuteld meesturen ('plain') beschermt
@@ -135,7 +135,7 @@ function protectedResourceMetadata(): Record<string, unknown> {
   return {
     resource: RESOURCE_URL,
     authorization_servers: [ISSUER],
-    scopes_supported: ['read'],
+    scopes_supported: ['read', 'propose'],
     bearer_methods_supported: ['header'],
   };
 }
@@ -262,7 +262,10 @@ async function handleConsent(url: URL): Promise<Response> {
     client_name: client.client_name,
     client_uri: client.client_uri,
     logo_uri: client.logo_uri,
+    // Wat deze client ten HOOGSTE kan krijgen. Het scherm laat de gebruiker
+    // daarbinnen kiezen; ruimer wordt het bij /approve alsnog teruggeknipt.
     scope: request.scope,
+    may_propose: request.scope.includes('propose'),
     expires_at: new Date(request.exp * 1000).toISOString(),
   });
 }
@@ -306,7 +309,16 @@ async function handleApprove(req: Request): Promise<Response> {
     return cors.json(req, { redirect: redirectUrl(request.redirectUri, { error: 'access_denied', error_description: 'De gebruiker heeft de koppeling geweigerd.', state: request.state }) });
   }
 
-  const grantId = await upsertGrant(user.id, organizationId, request, String(body.label || client.client_name));
+  // De gebruiker kiest binnen wat de client vroeg. narrowScopes knipt terug op
+  // het ONDERTEKENDE aanbod, dus een aangepast formulier levert nooit meer op
+  // dan er in stap 2 is vastgelegd.
+  //
+  // Ontbreekt het veld, dan wordt het alleen meelezen. Dat is de veilige kant om
+  // op te vallen: een koppeling die per ongeluk te weinig mag, merkt de
+  // gebruiker meteen en lost hij op door opnieuw te koppelen — een koppeling die
+  // per ongeluk te veel mag, merkt niemand.
+  const scope = narrowScopes(request.scope, body.scope ?? SCOPE_READ).join(' ');
+  const grantId = await upsertGrant(user.id, organizationId, { ...request, scope }, String(body.label || client.client_name));
 
   const code = createAuthCode();
   const { error } = await admin.from('mcp_auth_codes').insert({
