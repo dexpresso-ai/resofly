@@ -72,7 +72,11 @@ begin
     raise exception 'note_handwriting.organization_id wijkt af van de gekoppelde notitie' using errcode = '23514';
   end if;
 
-  if jsonb_typeof(new.pages) <> 'object' or jsonb_typeof(new.pages -> 'pages') <> 'array' then
+  -- `is distinct from` en niet `<>`: ontbreekt de sleutel `pages`, dan geeft
+  -- `->` NULL en zou een vergelijking met <> NULL opleveren — de controle zou
+  -- dan stilzwijgend niets keuren.
+  if jsonb_typeof(new.pages) is distinct from 'object'
+     or jsonb_typeof(new.pages -> 'pages') is distinct from 'array' then
     raise exception 'note_handwriting.pages moet een inktdocument met een pages-lijst zijn' using errcode = '23514';
   end if;
   if pg_column_size(new.pages) > 6 * 1024 * 1024 then

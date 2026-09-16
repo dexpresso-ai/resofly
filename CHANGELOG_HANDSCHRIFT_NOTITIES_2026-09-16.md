@@ -125,7 +125,7 @@ migratie ontbreekt, lijsten tonen geen badges.
 
 ## Verificatie
 
-- `npm run typecheck` ✓, `npm test` ✓ (156 tests), `npm run build` ✓.
+- `npm run typecheck` ✓, `npm test` ✓ (157 tests), `npm run build` ✓.
 - `npm run test:mobile -- --theme=both` ✓ (156 pagina's, 0 problemen).
 - Browsertest in Chromium tegen de nagebootste backend, desktop (donker en
   licht), tablet 820×1180 met aanraking en telefoon 390×844: pen met druk via
@@ -134,6 +134,48 @@ migratie ontbreekt, lijsten tonen geen badges.
   opslaan aan/uit, annuleren met bevestiging; vinger scrolt en tekent niet,
   vinger tekent na de schakelaar, palm vlak na de pen genegeerd; geen
   horizontale overloop op de telefoon.
+
+### Wordt het echt opgeslagen?
+
+De nabootsing hierboven beantwoordt elk schrijfverzoek met een leeg antwoord —
+die test bewijst de bediening, niet de opslag. Daarom nog twee rondes:
+
+**Rondreis in de browser**, tegen een nabootsing die schrijfacties wél onthoudt
+en teruggeeft (36 controles):
+
+- Schrijven op een bestaande notitie zet binnen twee seconden een rij in
+  `note_handwriting`, met de juiste notitie, tellers en lijnen erin.
+- Het venster sluiten met **Annuleren** (dus zónder het formulier op te slaan)
+  en de notitie opnieuw openen: de lijnen komen terug van de server.
+- Alles weggummen verwijdert de rij weer, zodat de badge ook verdwijnt.
+- Een nieuwe notitie schrijft niets weg vóór Opslaan, en daarna precies één
+  notitie plus één handschrift — de notitie verschijnt in de lijst als
+  "Notitie · handschrift".
+- De snelle notitie bij een afspraak wordt opgeslagen met de eerste regel als
+  titel, type Meeting, tag agenda, rich text en een koppeling aan het
+  agenda-item; het paneel blijft open en het invoerveld wordt leeggemaakt.
+- De pen-overlay maakt notitie, koppeling én handschrift aan, en het paneel
+  toont hem daarna met miniatuur.
+
+**De migratie op een echte Postgres 16**, met de bestaande hulpfuncties
+(`can_read_org`, `apply_module_gate`, `audit_row_change`,
+`prevent_organization_id_change`) als steiger. De migratie draait, en een tweede
+keer draaien verandert niets. Daarna 15 gedragscontroles:
+
+- Een teamlid met schrijfrecht kan opslaan; `updated_at` loopt vanzelf mee
+  tussen twee opslagacties.
+- Geweigerd: inkt zonder pagina-lijst, inkt die geen object is, een notitie van
+  een andere organisatie, een tweede vel voor dezelfde notitie, en een
+  handschrift boven de 6 MB.
+- Een lezer ziet het handschrift maar kan het niet wijzigen; iemand van een
+  andere organisatie ziet niets; een teamlid zonder recht op Inhoud ook niet.
+- Aanmaken staat één keer in de audit, de autosave vult hem niet met
+  wijzigingen, en het handschrift verdwijnt mee met de notitie.
+
+Die ronde bracht één echte fout aan het licht, nu gerepareerd: de controle op de
+vorm van `pages` gebruikte `<>` in plaats van `is distinct from`. Ontbreekt de
+sleutel `pages`, dan geeft `->` NULL en levert de vergelijking NULL op — de
+controle keurde dan stilzwijgend niets.
 
 ## Nog open
 
