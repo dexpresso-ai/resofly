@@ -73,6 +73,7 @@ const FIRST_ITEM = {
   'clients-table': { selector: '.clients-table tbody tr', maxTop: 290 },
   projects: { selector: '.project-list-card', maxTop: 285 },
   'projects-table': { selector: '.projects-table tbody tr', maxTop: 310 },
+  marketing: { selector: '.mk-campaign-table tbody tr', maxTop: 330 },
   tickets: { selector: '.ticket-item', maxTop: 320 },
   invoices: { selector: '.quote-table tbody tr', maxTop: 460 },
   quotes: { selector: '.quote-table tbody tr', maxTop: 460 },

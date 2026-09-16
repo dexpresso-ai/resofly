@@ -377,7 +377,7 @@ function CampaignList({ campaigns, stats, canWrite, onOpen, onDuplicate, onDelet
   return (
     <div className="quote-table-card">
       <div className="quote-table-scroll">
-        <table className="quote-table mk-table">
+        <table className="quote-table mk-table mk-campaign-table">
           <thead>
             <tr><th>Campagne</th><th>Status</th><th>Verzonden</th><th>Resultaat</th><th></th></tr>
           </thead>
@@ -392,7 +392,7 @@ function CampaignList({ campaigns, stats, canWrite, onOpen, onDuplicate, onDelet
                   </td>
                   <td data-label="Status"><span className={`mk-status ${c.status}`}>{STATUS_LABEL[c.status] ?? c.status}</span></td>
                   <td data-label="Verzonden">{s ? `${s.sent}/${s.total}` : '—'}</td>
-                  <td data-label="Resultaat">
+                  <td data-label="Resultaat" className={s ? 'mk-result' : 'mk-result is-empty'}>
                     {s ? (
                       <div className="mk-stat-row">
                         <span className="mk-chip" title="Geopend">{s.opened} geopend</span>

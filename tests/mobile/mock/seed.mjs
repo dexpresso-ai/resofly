@@ -203,6 +203,19 @@ export const suppliers = [
   { id: uid('s'), ...base(), name: 'Amazon.nl', supplier_code: null, contact_name: null, email: null, phone: null, vat_number: null, iban: 'NL35INGB0654321098', address_line1: null, postal_code: null, city: null, country: 'NL', default_ledger_account_id: null, notes: null },
 ];
 
+// ── Campagnes ──────────────────────────────────────────────────────────────
+// Eén verzonden campagne met cijfers en één concept zonder. Zo meet de test
+// zowel de kaart mét resultaatchips als de variant waar die regel wegvalt.
+const CAMPAIGN_SENT = uid('k');
+const CAMPAIGN_DRAFT = uid('k');
+export const emailCampaigns = [
+  { id: CAMPAIGN_SENT, ...base(), name: 'Winteractie Van Dijk', subject: 'Klaar voor de winter? Plan je onderhoudsbeurt', preheader: 'Nog tot 1 december', body_html: '<p>Beste klant,</p>', body_text: null, accent_color: null, audience: { kind: 'all' }, status: 'sent', scheduled_at: null, started_at: iso(day(-6)), sent_at: iso(day(-6)) },
+  { id: CAMPAIGN_DRAFT, ...base(), name: 'Nieuwsbrief december', subject: '', preheader: null, body_html: '', body_text: null, accent_color: null, audience: { kind: 'all' }, status: 'draft', scheduled_at: null, started_at: null, sent_at: null },
+];
+export const emailCampaignStats = [
+  { organization_id: ORG, campaign_id: CAMPAIGN_SENT, total: 120, sent: 120, delivered: 118, opened: 42, clicked: 11, replied: 3, bounced: 2, failed: 0, unsubscribed: 1, pending: 0 },
+];
+
 export const ids = { ORG, USER, USER2 };
 export const tables = {
   clients, client_contacts: [
@@ -213,5 +226,5 @@ export const tables = {
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'client', author_user_id: null, author_name: 'Maria Jansen', body: 'Vooral op de pagina met afspraken duurt het lang.', is_internal: false },
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'user', author_user_id: USER, author_name: 'Gerjan', body: 'We kijken naar de afbeeldingen, die zijn te groot.', is_internal: true },
   ],
-  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: [], fixed_assets: [], asset_depreciations: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], organization_invitations: [], audit_logs: [], contracts: [],
+  notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: [], fixed_assets: [], asset_depreciations: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: [], contracts: [],
 };

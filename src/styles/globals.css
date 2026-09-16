@@ -9965,3 +9965,87 @@ button.task-agenda-when:hover{text-decoration:underline}
   .projects-table td{padding:10px 12px}
 }
 
+/* ── 27 ── Inhoud: de uitklapmenu's passen niet in een veegrij ─────────────
+   Blok 39 maakte de commandobalk van de verkenner een veegbare regel
+   (`overflow-x:auto`) om verticale ruimte te winnen. Die balk is 47px hoog,
+   en "+ Nieuw", "Weergeven" en "Sorteren" hangen er als `position:absolute`
+   ín — dus werden ze na negen pixels afgeknipt. Op een telefoon kwam je zo
+   niet bij de sorteeropties: de knop klapte open, maar er was niets te zien
+   of aan te tikken.
+
+   Een scroller knipt alles wat absoluut in hem staat, maar `position:fixed`
+   ontsnapt eraan (er zit geen transform tussen die een nieuw containing block
+   maakt — nagemeten). Daarom worden de drie menu's op een telefoon een
+   bodemvenster: volle breedte boven de onderbalk, regels van 44px. Tikken
+   naast het venster sluit het nog steeds — die afhandeling kijkt naar
+   `.drive-pop`, en dat blijft kloppen. */
+@media(max-width:760px){
+  .odrv-cmdbar .drive-pop,
+  .odrv-cmdbar .drive-pop.is-right{
+    position:fixed;left:12px;right:12px;top:auto;
+    bottom:calc(var(--bottomnav-h) + 12px + env(safe-area-inset-bottom));
+    min-width:0;width:auto;max-height:min(58dvh,420px);overflow-y:auto;
+    border-radius:16px;padding:8px;
+  }
+  .odrv-cmdbar .drive-pop-scroll{max-height:none}
+  .odrv-cmdbar .drive-pop-item{min-height:44px;font-size:14px}
+  /* Gerrie zweeft precies over de onderste regel van het venster. Hij bestaat
+     alleen zolang het menu openstaat, dus `:has()` volstaat — en
+     `.content:not([hidden])` want een Inhoud-tab achter een andere tab telt
+     niet mee. */
+  .app:has(.content:not([hidden]) .odrv-cmdbar .drive-pop) .gerrie-root,
+  .app:has(.content:not([hidden]) .odrv-cmdbar .drive-pop) .tb-fab{display:none}
+}
+
+/* ── 28 ── Campagnes op mobiel: dezelfde kaart als offertes en facturen ────
+   De campagnetabel draait op de generieke `.quote-table`-kaartstapel, dus op
+   een telefoon kreeg elke kolom een eigen regel met het kolomlabel ervoor:
+   CAMPAGNE, STATUS, VERZONDEN, RESULTAAT en daaronder nog twee losse
+   knopregels. Eén campagne vulde zo een half scherm, en er staan er zelden
+   minder dan tien.
+
+   Nu dezelfde vorm als blok 24 (offertes/facturen):
+
+     Winteractie Van Dijk ................... [VERZONDEN]
+     Klaar voor de winter?
+     verzonden 120/120 ................... [kopie] [prullenbak]
+     [42 geopend] [11 klik] [3 antw.]
+
+   De resultaatchips staan op een eigen regel omdat het er vier kunnen zijn;
+   bij een concept is er niets te tonen en blijft die regel weg (`is-empty`,
+   gezet in Marketing.tsx — CSS kan geen "—" herkennen).
+
+   `.mk-campaign-table` en niet `.mk-table`: die klasse dragen de tabellen van
+   Stromen en Afmeldingen ook, en die hebben andere kolommen. */
+@media(max-width:760px){
+  .mk-campaign-table{border-spacing:0}
+  .mk-campaign-table tr{
+    display:grid;grid-template-columns:minmax(0,1fr) auto;
+    gap:2px 10px;align-items:center;padding:11px 13px;margin-bottom:8px;
+  }
+  .mk-campaign-table tbody tr:last-child{margin-bottom:0}
+  .mk-campaign-table td{display:block;width:auto;padding:0;border-bottom:0;white-space:normal;text-align:left}
+  .mk-campaign-table td::before{display:none}
+
+  /* Regel 1 en 2: naam met het onderwerp eronder, status rechts ernaast. */
+  .mk-campaign-table td[data-label="Campagne"]{grid-row:1;grid-column:1}
+  .mk-campaign-table .mk-name{font-size:14px;font-weight:700}
+  .mk-campaign-table .mk-subject{max-width:100%;font-size:12px}
+  .mk-campaign-table td[data-label="Status"]{grid-row:1;grid-column:2;justify-self:end;align-self:start}
+  .mk-campaign-table .mk-status{font-size:9px;padding:3px 7px;letter-spacing:.06em;text-transform:uppercase}
+
+  /* Regel 3: hoeveel er verstuurd is, met de twee acties ernaast. */
+  .mk-campaign-table td[data-label="Verzonden"]{grid-row:2;grid-column:1;margin-top:3px;font-size:11px;color:var(--muted)}
+  .mk-campaign-table td[data-label="Verzonden"]::before{
+    display:inline;content:attr(data-label) " ";
+    font-size:11px;font-weight:400;letter-spacing:0;text-transform:lowercase;color:var(--muted);
+  }
+  .mk-campaign-table td.mk-actions{grid-row:2;grid-column:2;justify-self:end;margin-top:3px}
+  .mk-campaign-table .mk-icon{width:32px;height:32px}
+
+  /* Regel 4: de resultaatchips over de volle breedte — er kunnen er vier zijn. */
+  .mk-campaign-table td.mk-result{grid-row:3;grid-column:1/-1;margin-top:5px}
+  .mk-campaign-table td.mk-result.is-empty{display:none}
+  .mk-campaign-table .mk-chip{font-size:10.5px;padding:2px 8px}
+}
+
