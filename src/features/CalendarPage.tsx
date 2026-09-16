@@ -1,11 +1,13 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import type React from 'react';
-import { CalendarDays, CalendarPlus, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Mail, MapPin, Pencil, Plus, RefreshCcw, Repeat, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
+import { CalendarDays, CalendarPlus, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Mail, MapPin, Pencil, PenLine, Plus, RefreshCcw, Repeat, Send, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
 import { hasPlannedTime, taskBlockMinutes } from '../lib/planning';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { MeetingRecorder } from '../components/MeetingRecorder';
-import { RichTextExcerpt } from '../components/RichTextEditor';
-import { createNoteWithCalendarLink } from '../lib/repository';
+import { RichTextExcerpt, plainTextToRichText } from '../components/RichTextEditor';
+import { InkComposer, InkThumbnail, handwritingLabel, noteHandwritingSummary } from '../components/NoteHandwriting';
+import type { InkDocument } from '../lib/ink';
+import { createNoteWithCalendarLink, saveNoteHandwriting } from '../lib/repository';
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
 import { dateNL, formatMinutes } from '../lib/format';
 import { detectMeetingKind, isValidMeetingUrl } from '../lib/meeting';
@@ -39,7 +41,7 @@ import { addBookingSlots, createBookingLink, listBookingLinks, listBookingSlotsI
 import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabase';
 import type { AttendeeStatus, CalendarAppPassword, CalendarEventAttendee, EventRecurrence, MeetingBookingLinkListItem, RecurrenceFrequency } from '../types';
-import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarProvider, CalendarSource, CalendarVisibility, Client, Note, NoteCalendarLink, Project, Supplier, Task, UUID } from '../types';
+import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, CalendarProvider, CalendarSource, CalendarVisibility, Client, Note, NoteCalendarLink, Project, Supplier, Task, UUID } from '../types';
 import { getNoteTypeLabel } from './Notes';
 import { TimeEntryModal } from './TimeTracking';
 import { calendarEventKey, calendarEventLinkMatchesEvent } from '../lib/calendar-links';
@@ -2682,7 +2684,7 @@ function detailFormFromEvent(event: CalendarExternalEvent): EventDetailForm {
   };
 }
 
-function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, canWrite, editable, onNewNote, onNewDocument, onSetEventLink, onEditTask, onLogTime, onEditNote, onLinkExistingNote, onUnlinkNote, onSaveEvent, onDeleteEvent, onClose }: {
+function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, canWrite, editable, onNewNote, onNewDocument, onSetEventLink, onEditTask, onLogTime, onEditNote, onLinkExistingNote, onUnlinkNote, onNotesChanged, onSaveEvent, onDeleteEvent, onClose }: {
   event: CalendarExternalEvent | null;
   organizationId: UUID;
   data: AppData;
@@ -2697,11 +2699,19 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
   onEditNote: (note: Note) => void;
   onLinkExistingNote: (noteId: UUID, event: CalendarExternalEvent) => void | Promise<void>;
   onUnlinkNote: (linkId: UUID) => void | Promise<void>;
+  /** Na een notitie die het paneel zélf aanmaakt (snelle notitie, handschrift): werkruimte verversen. */
+  onNotesChanged: () => void | Promise<void>;
   onSaveEvent: (event: CalendarExternalEvent, form: EventDetailForm) => Promise<void>;
   onDeleteEvent: (event: CalendarExternalEvent) => void | Promise<void>;
   onClose: () => void;
 }) {
   const [selectedNoteId, setSelectedNoteId] = useState('');
+  // Rechtstreeks vanuit de afspraak een notitie toevoegen: getypt (snelle
+  // notitie) of geschreven (pen, schermvullend) — zonder het paneel te verlaten.
+  const [quickText, setQuickText] = useState('');
+  const [quickBusy, setQuickBusy] = useState(false);
+  const [quickError, setQuickError] = useState<string | null>(null);
+  const [inkOpen, setInkOpen] = useState(false);
   const [attendees, setAttendees] = useState<CalendarEventAttendee[]>([]);
   // Bewerkbare events staan meteen in bewerkmodus: één formulier, voorgevuld
   // vanuit het event; de basislijn bepaalt of er iets te "Opslaan" valt.
@@ -2713,6 +2723,9 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
   useEffect(() => {
     setSelectedNoteId('');
     setSaveError(null);
+    setQuickText('');
+    setQuickError(null);
+    setInkOpen(false);
     const f = event ? detailFormFromEvent(event) : null;
     setForm(f);
     setBaseline(f);
@@ -2771,6 +2784,22 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
     ? attendees.map(a => ({ key: a.id, label: a.display_name || a.email, status: a.status }))
     : (event.attendees ?? []).map((a, i) => ({ key: `${a.email}-${i}`, label: a.name || a.email, status: a.status }));
 
+  /** Koppelgegevens van deze afspraak voor een nieuwe notitie (zelfde vorm als main.tsx). */
+  function noteLinkInput(): CalendarNoteLinkInput {
+    return {
+      provider: event!.provider,
+      calendar_source_id: event!.source_id,
+      provider_event_id: event!.provider_event_id,
+      event_starts_at: event!.starts_at,
+      event_ends_at: event!.ends_at,
+      event_title_snapshot: event!.title,
+      event_location_snapshot: event!.location,
+      event_html_link: event!.html_link,
+      visibility_snapshot: event!.visibility,
+      is_private_masked_snapshot: event!.is_private_masked ?? false,
+    };
+  }
+
   // Notulen van een opname als gekoppelde notitie op de afspraak (klant/project) opslaan.
   async function saveSummaryAsNote(text: string) {
     if (!event) return;
@@ -2781,18 +2810,55 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
       client_id: eventLink?.client_id ?? null,
       project_id: eventLink?.project_id ?? null,
       tags: [],
-    }, {
-      provider: event.provider,
-      calendar_source_id: event.source_id,
-      provider_event_id: event.provider_event_id,
-      event_starts_at: event.starts_at,
-      event_ends_at: event.ends_at,
-      event_title_snapshot: event.title,
-      event_location_snapshot: event.location,
-      event_html_link: event.html_link,
-      visibility_snapshot: event.visibility,
-      is_private_masked_snapshot: event.is_private_masked ?? false,
-    });
+    }, noteLinkInput());
+  }
+
+  /** Titel van een snelle notitie: de eerste regel als die kort is, anders de afspraak. */
+  function quickNoteTitle(text: string): string {
+    const firstLine = text.split('\n').map(line => line.trim()).find(Boolean) ?? '';
+    const base = firstLine.length > 0 && firstLine.length <= 80 ? firstLine : `Notitie: ${event?.title ?? 'afspraak'}`;
+    return base.slice(0, 200);
+  }
+
+  async function addQuickNote() {
+    if (!event || quickBusy) return;
+    const text = quickText.trim();
+    if (!text) { setQuickError('Typ eerst een notitie.'); return; }
+    setQuickBusy(true);
+    setQuickError(null);
+    try {
+      await createNoteWithCalendarLink(organizationId, {
+        title: quickNoteTitle(text),
+        content: plainTextToRichText(text),
+        note_type: 'meeting',
+        client_id: eventLink?.client_id ?? null,
+        project_id: eventLink?.project_id ?? null,
+        tags: ['agenda'],
+      }, noteLinkInput());
+      setQuickText('');
+      await onNotesChanged();
+    } catch (err) {
+      setQuickError(err instanceof Error ? err.message : 'Notitie opslaan mislukt.');
+    } finally {
+      setQuickBusy(false);
+    }
+  }
+
+  /** Handgeschreven notitie vanuit de overlay: notitie + koppeling, daarna de inkt. */
+  async function saveInkNote(doc: InkDocument, title: string) {
+    if (!event) return;
+    const note = await createNoteWithCalendarLink(organizationId, {
+      title: title.slice(0, 200),
+      content: '',
+      note_type: 'meeting',
+      client_id: eventLink?.client_id ?? null,
+      project_id: eventLink?.project_id ?? null,
+      tags: ['agenda', 'handschrift'],
+    }, noteLinkInput());
+    if (!note?.id) throw new Error('De notitie is niet aangemaakt: de database gaf geen notitie terug.');
+    await saveNoteHandwriting(organizationId, note.id, doc);
+    setInkOpen(false);
+    await onNotesChanged();
   }
   const lockedReason = event.visibility !== 'organization'
     ? 'Notities koppelen is uitgeschakeld voor privé-agenda-items, zodat persoonlijke agenda-informatie niet per ongeluk organisatiebreed zichtbaar wordt.'
@@ -2984,24 +3050,51 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
 
           {lockedReason && <div className="event-notes-locked">{lockedReason}</div>}
 
+          {canAttachNotes && (
+            <div className="event-quick-note">
+              <Textarea
+                value={quickText}
+                onChange={e => setQuickText(e.target.value)}
+                placeholder="Typ hier meteen een notitie bij deze afspraak…"
+                aria-label="Snelle notitie bij deze afspraak"
+                rows={2}
+                disabled={quickBusy}
+                onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void addQuickNote(); } }}
+              />
+              <div className="event-quick-note-actions">
+                <button type="button" className="btn btn-ghost event-quick-pen" onClick={() => setInkOpen(true)} disabled={quickBusy} title="Schermvullend schrijven met een pen, alsof je op papier schrijft">
+                  <PenLine size={14} /> Met pen schrijven
+                </button>
+                <Button type="button" variant="primary" onClick={() => void addQuickNote()} disabled={quickBusy || !quickText.trim()}>
+                  <Send size={13} /> {quickBusy ? 'Opslaan…' : 'Toevoegen'}
+                </Button>
+              </div>
+              {quickError && <div className="event-quick-note-error" role="alert">{quickError}</div>}
+            </div>
+          )}
+
           {linkedRows.length === 0 ? (
             <div className="event-notes-empty">Nog geen notities gekoppeld aan deze afspraak.</div>
           ) : (
             <div className="event-notes-list">
-              {linkedRows.map(({ link, note }) => (
-                <article className="event-note-card" key={link.id}>
-                  <button type="button" className="event-note-main" onClick={() => { onClose(); onEditNote(note); }}>
-                    <div className="event-note-top">
-                      <span className={`note-type note-type-${note.note_type ?? 'general'}`}>{getNoteTypeLabel(note.note_type)}</span>
-                      <span>{dateNL(note.created_at)}</span>
-                    </div>
-                    <strong>{note.title}</strong>
-                    <p><RichTextExcerpt content={note.content} emptyText="Geen inhoud" /></p>
-                    {Array.isArray(note.tags) && note.tags.length > 0 && <div className="note-tags compact">{note.tags.map(tag => <span key={tag}>{tag}</span>)}</div>}
-                  </button>
-                  {canAttachNotes && <button type="button" className="event-note-unlink" onClick={() => onUnlinkNote(link.id)}>Ontkoppel</button>}
-                </article>
-              ))}
+              {linkedRows.map(({ link, note }) => {
+                const ink = noteHandwritingSummary(data, note.id);
+                return (
+                  <article className={`event-note-card${ink ? ' has-ink' : ''}`} key={link.id}>
+                    <button type="button" className="event-note-main" onClick={() => { onClose(); onEditNote(note); }}>
+                      <div className="event-note-top">
+                        <span className={`note-type note-type-${note.note_type ?? 'general'}`}>{getNoteTypeLabel(note.note_type)}</span>
+                        <span>{dateNL(note.created_at)}</span>
+                      </div>
+                      <strong>{note.title}</strong>
+                      {ink && <InkThumbnail note={note} summary={ink} width={200} className="event-note-ink" />}
+                      <p><RichTextExcerpt content={note.content} emptyText={ink ? handwritingLabel(ink) : 'Geen inhoud'} /></p>
+                      {Array.isArray(note.tags) && note.tags.length > 0 && <div className="note-tags compact">{note.tags.map(tag => <span key={tag}>{tag}</span>)}</div>}
+                    </button>
+                    {canAttachNotes && <button type="button" className="event-note-unlink" onClick={() => onUnlinkNote(link.id)}>Ontkoppel</button>}
+                  </article>
+                );
+              })}
             </div>
           )}
 
@@ -3085,6 +3178,14 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
           {editable && <button type="button" className="btn btn-danger" onClick={() => onDeleteEvent(event)}><Trash2 size={14} /> Verwijderen</button>}
           <button type="button" className="btn btn-ghost" onClick={onClose}>Sluiten</button>
         </div>
+        {inkOpen && (
+          <InkComposer
+            defaultTitle={`Notitie: ${event.title || 'afspraak'}`}
+            subtitle={event.title}
+            onCancel={() => setInkOpen(false)}
+            onSave={saveInkNote}
+          />
+        )}
       </aside>
     </div>
   );
@@ -4640,7 +4741,7 @@ export function CalendarPage({ mode = 'agenda', initialDate, initialDraft = null
       selectedSourceProvider={integrations.sources.find(s => s.id === newEvent.sourceId)?.provider ?? null}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => { setShowCreatePanel(false); setEditingOriginal(null); }} />}
 
-    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sourceColors={sourceColors} canWrite={canWrite} editable={selectedEvent ? eventIsEditable(selectedEvent) : false} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onEditTask={onEditTask} onLogTime={openLogTimeForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onSaveEvent={saveEventEdits} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
+    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sourceColors={sourceColors} canWrite={canWrite} editable={selectedEvent ? eventIsEditable(selectedEvent) : false} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onEditTask={onEditTask} onLogTime={openLogTimeForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onNotesChanged={onChanged} onSaveEvent={saveEventEdits} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
 
     {showBookingSend && (
       <BookingSendDialog sources={writeableSources} clients={data.clients} draftCount={draftSlots.length}

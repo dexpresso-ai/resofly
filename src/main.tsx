@@ -29,6 +29,8 @@ import {
   applyProjectTemplate,
   deleteEntityCascade,
   deleteNoteCalendarLink,
+  deleteNoteHandwriting,
+  saveNoteHandwriting,
   upsertCalendarEventLink,
   deleteCalendarEventLink,
   setCalendarEventLinkTask,
@@ -105,6 +107,8 @@ import { TimeTracking, defaultBillableForProject, resolveRateCents } from './fea
 import { Tickets } from './features/Tickets';
 import { Marketing } from './features/Marketing';
 import { RelatedNotes, noteTypeLabels } from './features/Notes';
+import { NoteInkSection, noteHandwritingSummary } from './components/NoteHandwriting';
+import type { InkDocument } from './lib/ink';
 import { documentTypeLabels } from './features/Documents';
 import { ContentLibrary } from './features/ContentLibrary';
 import { clientFolderOptions } from './lib/folders';
@@ -152,7 +156,7 @@ import { plainTextToEmailHtml, sendClientEmail } from './services/mailService';
 import { exportFinancePDF } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
 import type {
-  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, PurchaseInvoice, PurchaseInvoiceLine, Quote, Supplier, Task, TaskAssignee, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
+  AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InternalDocument, Invoice, Note, NoteHandwritingSummary, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, PurchaseInvoice, PurchaseInvoiceLine, Quote, Supplier, Task, TaskAssignee, TaskStatus, Ticket, TicketNote, Subtask, Comment as TaskComment,
 } from './types';
 import { CustomFieldsSection, normalizeCustomFieldValues } from './components/CustomFields';
 import { euro, total, uid, lineGross } from './lib/format';
@@ -170,7 +174,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id' | 'notes' | 'due_date' | 'lines'>> }
   | null;
 
-const emptyData: AppData = { clients: [], clientContacts: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null };
+const emptyData: AppData = { clients: [], clientContacts: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], noteHandwriting: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null, creativeStatus: null, businessStatus: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 
@@ -1184,13 +1188,21 @@ function App() {
       }
       case 'note': {
         const calLink = (values._calLink as CalendarNoteLinkInput | null) ?? edit.calendarLink ?? null;
-        const { _calLink, ...noteValues } = values;
+        // _ink is het handschrift (pen op tablet): undefined = niet aangeraakt,
+        // null = weggehaald, document = opslaan. Het is geen kolom van notes.
+        const { _calLink, _ink, ...noteValues } = values;
+        let savedNote: Note;
         if (edit.item) {
-          await updateRow<Note>('notes', edit.item.id, noteValues, activeOrg.id);
+          savedNote = await updateRow<Note>('notes', edit.item.id, noteValues, activeOrg.id);
         } else if (calLink) {
-          await createNoteWithCalendarLink(activeOrg.id, noteValues, calLink);
+          savedNote = await createNoteWithCalendarLink(activeOrg.id, noteValues, calLink);
         } else {
-          await insertRow<Note>('notes', activeOrg.id, noteValues);
+          savedNote = await insertRow<Note>('notes', activeOrg.id, noteValues);
+        }
+        const noteId = savedNote?.id ?? edit.item?.id;
+        if (noteId && _ink !== undefined) {
+          if (_ink === null) await deleteNoteHandwriting(activeOrg.id, noteId);
+          else await saveNoteHandwriting(activeOrg.id, noteId, _ink as InkDocument);
         }
         label = `Notitie "${String(noteValues.title ?? '')}" ${edit.item ? 'bijgewerkt' : 'aangemaakt'}`;
         break;
@@ -2320,6 +2332,21 @@ function App() {
     setPage('calendar');
   }
 
+  /**
+   * Het handschrift slaat tijdens het schrijven vanzelf op; alleen de badge
+   * "handschrift" op kaartjes en in de agenda moet dan meebewegen. Een volledige
+   * herlaadslag per pennenpauze is te zwaar — dit past alleen de samenvatting aan.
+   */
+  function applyNoteHandwritingSummary(noteId: string, summary: NoteHandwritingSummary | null) {
+    setData(prev => ({
+      ...prev,
+      noteHandwriting: [
+        ...(summary ? [summary] : []),
+        ...prev.noteHandwriting.filter(row => row.note_id !== noteId),
+      ],
+    }));
+  }
+
   async function linkExistingNoteToCalendarEvent(noteId: string, event: CalendarExternalEvent) {
     if (!ensureCanWrite()) return;
     setLoading(true); setError(null);
@@ -2813,7 +2840,7 @@ function App() {
         <section key={tab.id} className="content" hidden={tab.id !== activeTab.id}>
           {tab.id === activeTab.id && error && <div className="error">{error}</div>}
           {renderPage(tab)}
-          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}
+          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} onNoteHandwritingChanged={applyNoteHandwritingSummary} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}
         </section>
       ))}
     </main>
@@ -3083,7 +3110,7 @@ type TaskAgendaHandlers = {
   onOpenDay: (dateKey: string) => void;
 };
 
-function EditModal({ edit, data, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord, onCreateFromOfficeFile, onCreateBlankOffice, taskAgenda }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void; onCreateFromOfficeFile: (file: File, values: Record<string, unknown>) => void; onCreateBlankOffice: (docType: NewOfficeType, values: Record<string, unknown>) => void; taskAgenda: TaskAgendaHandlers }) {
+function EditModal({ edit, data, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord, onCreateFromOfficeFile, onCreateBlankOffice, onNoteHandwritingChanged, taskAgenda }: { edit: NonNullable<EditMode>; data: AppData; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void; onCreateFromOfficeFile: (file: File, values: Record<string, unknown>) => void; onCreateBlankOffice: (docType: NewOfficeType, values: Record<string, unknown>) => void; onNoteHandwritingChanged: (noteId: string, summary: NoteHandwritingSummary | null) => void; taskAgenda: TaskAgendaHandlers }) {
   const item = 'item' in edit ? edit.item : undefined;
   const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit, data));
   const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
@@ -3322,6 +3349,16 @@ function EditModal({ edit, data, organizationId, currentUserId, teamMembers, can
       <Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Titel"/>
       <Select value={form.note_type} onChange={e=>set('note_type',e.target.value)}>{Object.entries(noteTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select>
       <RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf je notitie…" disabled={disabled}/>
+      <NoteInkSection
+        organizationId={organizationId}
+        noteId={item ? item.id : null}
+        noteTitle={String(form.title || '').trim() || 'Notitie'}
+        summary={item ? noteHandwritingSummary(data, item.id) : null}
+        value={form._ink as InkDocument | null | undefined}
+        onChange={doc => set('_ink', doc)}
+        disabled={disabled}
+        onSaved={summary => { if (item) onNoteHandwritingChanged(item.id, summary); }}
+      />
       <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
       <Select value={form.project_id} onChange={e=>{set('project_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
       {form.client_id && <Field label="Map" hint={form.project_id ? 'Plaats deze notitie in een map van het gekozen project.' : 'Plaats deze notitie in een map van de gekozen klant.'}>
@@ -4006,7 +4043,7 @@ function initialForm(edit: NonNullable<EditMode>, data: AppData): Record<string,
   }
   if (edit.kind === "note") {
     const item = edit.item;
-    return { title: item?.title ?? edit.defaults?.title ?? "", content: item?.content ?? edit.defaults?.content ?? "", note_type: item?.note_type ?? edit.defaults?.note_type ?? "general", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", folder_id: item?.folder_id ?? edit.defaults?.folder_id ?? "", tags: item?.tags?.join(", ") ?? edit.defaults?.tags?.join(", ") ?? "", _calLink: edit.calendarLink ?? null };
+    return { title: item?.title ?? edit.defaults?.title ?? "", content: item?.content ?? edit.defaults?.content ?? "", note_type: item?.note_type ?? edit.defaults?.note_type ?? "general", client_id: item?.client_id ?? edit.defaults?.client_id ?? "", project_id: item?.project_id ?? edit.defaults?.project_id ?? "", folder_id: item?.folder_id ?? edit.defaults?.folder_id ?? "", tags: item?.tags?.join(", ") ?? edit.defaults?.tags?.join(", ") ?? "", _calLink: edit.calendarLink ?? null, _ink: undefined };
   }
   if (edit.kind === "document") {
     const item = edit.item;

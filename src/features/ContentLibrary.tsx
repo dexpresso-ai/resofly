@@ -12,6 +12,7 @@ import { uploadToR2, downloadAttachment } from '../lib/r2';
 import { createOfficeSession, createOfficeDocument, isOfficeEditable, NEW_OFFICE_LABEL, type NewOfficeType, type OfficeSession } from '../lib/office';
 import { OfficeEditor } from './OfficeEditor';
 import { DriveRenameInput } from '../components/DriveRename';
+import { noteHandwritingSummary } from '../components/NoteHandwriting';
 import { fileExtension, resolveRename } from '../lib/rename';
 import { childFolders, folderDescendantIds, folderPath, scopedFolders } from '../lib/folders';
 import { AttachmentGlyph, DocumentGlyph, attAccentColor, attTypeLabel, documentAccentColor, fmtBytes } from '../components/DriveGlyphs';
@@ -566,7 +567,7 @@ export function ContentLibrary({
       color: it.kind === 'note' ? 'var(--accent-v)' : documentAccentColor(it.doc),
       modified: it.modified,
       size: '',
-      typeLabel: it.kind === 'note' ? 'Notitie' : 'Document',
+      typeLabel: it.kind === 'note' ? (noteHandwritingSummary(data, it.id) ? 'Notitie · handschrift' : 'Notitie') : 'Document',
       doc: it.doc,
       onOpen: open,
       // Ook zónder klant een menu: juist die items ("Geen klant") deel je met een

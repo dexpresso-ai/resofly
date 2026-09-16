@@ -10174,3 +10174,137 @@ button.task-agenda-when:hover{text-decoration:underline}
   .mk-campaign-table .mk-chip{font-size:10.5px;padding:2px 8px}
 }
 
+
+/* ══════════════════════════════════════════════════════════════════════════
+   HANDSCHRIFT · pen op tablet  (2026-09-16)
+   ───────────────────────────────────────────────────────────────────────
+   De notitie krijgt onder de getypte inhoud een vel papier: schrijven met
+   een pen (druk = dikte), gum, marker, pagina's, en een schermvullende
+   tabletmodus. Papier en inkt volgen het thema: donker papier met lichte
+   inkt op donker, warm-wit papier met donkere inkt op licht. Vanuit een
+   agenda-item opent hetzelfde vel als overlay (snelle notitie + pen).
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Sectie in het notitieformulier ── */
+.note-ink-section{grid-column:1/-1;border:1px solid var(--border);border-radius:14px;background:linear-gradient(180deg,rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k))),rgba(var(--sheen-rgb),calc(.015 * var(--sheen-k))));padding:13px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.note-ink-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.note-ink-head>div{min-width:0;flex:1 1 220px}
+.note-ink-kicker{display:block;font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-ink);margin-bottom:4px}
+.note-ink-head h4{font-size:14px;font-weight:700;letter-spacing:-.015em}
+.note-ink-head p{font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45}
+.note-ink-start{white-space:nowrap;display:inline-flex;align-items:center;gap:7px}
+.note-ink-remove{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:999px;background:rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)));color:var(--muted2);font-family:inherit;font-size:10.5px;font-weight:700;padding:6px 10px;cursor:pointer;white-space:nowrap;transition:border-color .14s,color .14s,background .14s}
+.note-ink-remove:hover{border-color:rgba(var(--danger-rgb),.45);color:var(--danger);background:rgba(var(--danger-rgb),.08)}
+.note-ink-loading{display:flex;align-items:center;gap:8px;padding:18px;border:1px dashed var(--border2);border-radius:11px;color:var(--muted);font-size:12px;justify-content:center}
+.note-ink-error{font-size:12px;color:var(--danger);background:rgba(var(--danger-rgb),.1);border:1px solid rgba(var(--danger-rgb),.28);border-radius:9px;padding:8px 10px}
+
+/* ── De editor ── */
+.ink-editor{display:flex;flex-direction:column;gap:10px;min-width:0}
+.ink-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:12px;background:rgba(var(--shade-rgb),calc(.18 * var(--shade-k)))}
+.ink-toolbar-group{display:flex;align-items:center;gap:3px;padding:2px;border-radius:9px;background:rgba(var(--sheen-rgb),calc(.045 * var(--sheen-k)))}
+.ink-tool{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted2);font-family:inherit;font-size:11.5px;font-weight:700;line-height:1;cursor:pointer;white-space:nowrap;transition:background .14s,color .14s,border-color .14s}
+.ink-tool:hover:not(:disabled){background:var(--bg4);color:var(--text)}
+.ink-tool.is-active{background:var(--accent);color:var(--on-accent)}
+.ink-tool:disabled{opacity:.4;cursor:not-allowed}
+.ink-tool:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.ink-tool-icon{padding:0;width:32px;justify-content:center}
+.ink-tool-danger:hover:not(:disabled){color:var(--danger);background:rgba(var(--danger-rgb),.1)}
+.ink-tool-sheet{border-color:var(--border2);background:var(--bg3);color:var(--text)}
+.ink-colors{gap:5px;padding:4px 7px}
+.ink-color{width:22px;height:22px;border-radius:50%;border:2px solid transparent;background:var(--ink-swatch);cursor:pointer;padding:0;box-shadow:inset 0 0 0 1px rgba(var(--shade-rgb),.25);transition:transform .12s,border-color .12s}
+.ink-color:hover:not(:disabled){transform:scale(1.12)}
+.ink-color.is-active{border-color:var(--text);transform:scale(1.15)}
+.ink-color:disabled{opacity:.35;cursor:not-allowed}
+.ink-widths{padding:2px 4px}
+.ink-width{width:30px;height:30px;display:grid;place-items:center;border:1px solid transparent;border-radius:8px;background:transparent;cursor:pointer;padding:0}
+.ink-width i{display:block;border-radius:50%;background:var(--muted2)}
+.ink-width.is-active{background:var(--bg4);border-color:var(--border2)}
+.ink-width.is-active i{background:var(--text)}
+.ink-width:disabled{opacity:.35;cursor:not-allowed}
+.ink-paper-select{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--muted);padding:0 4px}
+.ink-paper-select select{height:28px;border:1px solid var(--border2);border-radius:8px;background:var(--bg3);color:var(--text);font-family:inherit;font-size:11.5px;font-weight:600;padding:0 8px}
+.ink-toolbar-spacer{flex:1}
+/* Vaste strook voor status en pen-chip: tekst die verschijnt of langer wordt
+   mag de balk niet laten omslaan — dan verschuift het vel onder een lopende
+   streek. */
+.ink-toolbar-status{display:inline-flex;align-items:center;justify-content:flex-end;gap:8px;min-width:220px;min-height:32px;white-space:nowrap}
+.ink-pen-chip{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:700;color:var(--accent-g);background:rgba(var(--ok-rgb),.12);border:1px solid rgba(var(--ok-rgb),.3);border-radius:999px;padding:5px 9px;white-space:nowrap}
+.ink-status{font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.ink-status-muted{display:inline-flex;align-items:center;gap:5px;color:var(--muted)}
+.ink-status-ok{display:inline-flex;align-items:center;gap:5px;color:var(--accent-g)}
+.ink-status-error{color:var(--danger);white-space:normal}
+.ink-spin{animation:inkSpin 1s linear infinite}
+@keyframes inkSpin{to{transform:rotate(360deg)}}
+
+.ink-stage{position:relative;min-width:0;overflow:auto;border-radius:12px;border:1px solid var(--border);background:rgba(var(--shade-rgb),calc(.22 * var(--shade-k)));padding:12px;display:flex;justify-content:center;align-items:flex-start;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.ink-editor-inline .ink-stage{max-height:min(76vh,1100px)}
+.ink-paper{position:relative;flex:0 0 auto;border-radius:6px;overflow:hidden;background:var(--ink-paper,#1C1A16);box-shadow:0 14px 36px rgba(var(--shade-rgb),calc(.45 * var(--shade-k))),0 0 0 1px rgba(var(--sheen-rgb),calc(.09 * var(--sheen-k)));user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.ink-layer{position:absolute;inset:0;display:block}
+.ink-layer-base{z-index:1;pointer-events:none}
+.ink-layer-live{z-index:2}
+.ink-empty-hint{position:absolute;left:50%;top:34%;transform:translate(-50%,-50%);z-index:3;pointer-events:none;font-size:15px;font-weight:600;font-style:italic;letter-spacing:.02em;white-space:nowrap;color:rgba(246,244,239,.26)}
+.ink-theme-light .ink-empty-hint{color:rgba(26,23,16,.3)}
+.ink-pagebar{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap}
+.ink-page-indicator{font-size:11.5px;font-weight:700;color:var(--muted2);min-width:112px;text-align:center}
+.ink-editor.is-readonly .ink-layer-live{cursor:default}
+
+/* ── Tabletmodus: schermvullend vel ── */
+.ink-sheet-backdrop{position:fixed;inset:0;z-index:400;background:var(--bg);display:flex;animation:inkSheetIn .16s ease-out}
+@keyframes inkSheetIn{from{opacity:0}to{opacity:1}}
+body.ink-sheet-open{overflow:hidden}
+.ink-editor-sheet{flex:1;min-width:0;width:100%;height:100dvh;display:flex;flex-direction:column;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom));background:var(--bg)}
+.ink-editor-sheet:fullscreen,.ink-editor-sheet:-webkit-full-screen{background:var(--bg)}
+.ink-editor-sheet .ink-stage{flex:1;min-height:0;padding:8px;align-items:center}
+.ink-sheet-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 4px}
+.ink-sheet-title{display:flex;flex-direction:column;min-width:0}
+.ink-sheet-title strong{font-size:15px;font-weight:700;letter-spacing:-.015em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ink-sheet-kicker{display:block;font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-ink);margin-bottom:2px}
+.ink-sheet-hint{font-size:11px;color:var(--muted);white-space:nowrap}
+
+/* ── Schrijfoverlay vanuit de agenda ── */
+.ink-composer{flex:1;min-width:0;height:100dvh;display:flex;flex-direction:column;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom))}
+.ink-composer .ink-editor{flex:1;min-height:0}
+.ink-composer .ink-stage{flex:1;min-height:0;align-items:center}
+.ink-composer-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.ink-composer-title{display:flex;flex-direction:column;gap:4px;flex:1 1 260px;min-width:0}
+.ink-composer-title .form-input{max-width:560px}
+.ink-composer-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.ink-composer-error{font-size:12px;color:var(--danger)}
+
+/* ── Snelle notitie in het agenda-paneel ── */
+.event-quick-note{display:flex;flex-direction:column;gap:8px;border:1px solid rgba(var(--accent-rgb),.22);border-radius:12px;padding:10px;background:rgba(var(--accent-rgb),.05)}
+.event-quick-note .form-textarea{min-height:58px;resize:vertical;font-size:13px}
+.event-quick-note-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.event-quick-note-actions .btn{display:inline-flex;align-items:center;gap:6px}
+.event-quick-pen{border-style:dashed}
+.event-quick-note-error{font-size:11.5px;color:var(--danger)}
+
+/* ── Miniaturen en badges op kaartjes ── */
+.ink-thumb{display:block;position:relative;max-width:100%;aspect-ratio:5/3;border-radius:8px;overflow:hidden;border:1px solid var(--border);background:rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)))}
+.ink-thumb img{position:absolute;left:0;right:0;top:0;display:block;width:100%;height:auto}
+.ink-thumb::after{content:'';position:absolute;left:0;right:0;bottom:0;height:30%;pointer-events:none;background:linear-gradient(to bottom,transparent,rgba(var(--surface-rgb),.85))}
+.ink-thumb-placeholder{display:grid;place-items:center;position:absolute;inset:0;color:var(--muted)}
+.ink-thumb-placeholder.is-loading{animation:inkPulse 1.2s ease-in-out infinite}
+@keyframes inkPulse{0%,100%{opacity:.35}50%{opacity:.85}}
+.note-ink-badge{display:inline-flex;align-items:center;gap:4px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--accent-ink);background:rgba(var(--accent-rgb),.12);border:1px solid rgba(var(--accent-rgb),.28);border-radius:999px;padding:3px 8px;white-space:nowrap}
+.note-card-ink{width:100%!important;margin-bottom:8px}
+.related-note-ink,.event-note-ink{width:100%!important;margin:2px 0 4px}
+
+/* ── Telefoon en kleine tablet ── */
+@media(max-width:760px){
+  .ink-toolbar{gap:5px;padding:6px}
+  .ink-toolbar-group{gap:2px}
+  .ink-tool{height:34px;padding:0 8px}
+  .ink-tool span{display:none}
+  .ink-tool-sheet span{display:inline}
+  .ink-paper-select span{display:none}
+  .ink-sheet-hint{display:none}
+  .ink-pen-chip{display:none}
+  .ink-toolbar-status{min-width:0;flex:1 1 100%;justify-content:flex-start;min-height:0}
+  .ink-editor-inline .ink-stage{max-height:none;padding:8px}
+  .ink-editor-sheet{padding:8px 8px calc(8px + env(safe-area-inset-bottom))}
+  .ink-composer{padding:8px 8px calc(8px + env(safe-area-inset-bottom))}
+  .ink-composer-title{flex-basis:100%}
+  .ink-composer-actions{width:100%}
+  .note-ink-section{padding:10px}
+}

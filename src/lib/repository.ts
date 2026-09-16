@@ -3,6 +3,7 @@ import { supabase, supabaseAuth } from './supabase';
 import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
 import { throwFunctionError } from './functionErrors';
+import { inkPageCount, inkStrokeCount, isInkEmpty, serializeInkDocument, type InkDocument } from './ink';
 import type { ReportDefinition } from './reporting';
 import type { ModuleAccess } from './permissions';
 import type {
@@ -54,6 +55,8 @@ import type {
   CreditNote,
   InvoiceChargeback,
   Note,
+  NoteHandwriting,
+  NoteHandwritingSummary,
   InternalDocument,
   ContentFolder,
   Gallery,
@@ -488,6 +491,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     notes,
     documents,
     noteCalendarLinks,
+    noteHandwriting,
     calendarEventLinks,
     timeEntries,
     quotes,
@@ -534,7 +538,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     contractProjects,
   ] = await Promise.all([
     select<Client>('clients', organizationId), selectClientContacts(organizationId), selectClientFieldDefinitions(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
-    selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectCalendarEventLinks(organizationId), selectTimeEntries(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
+    selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectNoteHandwritingSummaries(organizationId), selectCalendarEventLinks(organizationId), selectTimeEntries(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId), selectDunningNotices(organizationId),
     selectLedgerAccounts(organizationId), selectVatCodes(organizationId), selectJournalEntries(organizationId), selectJournalLines(organizationId), selectClosedPeriods(organizationId), selectFiscalYears(organizationId), selectSuppliers(organizationId), selectPurchaseInvoices(organizationId), selectFixedAssets(organizationId), selectAssetDepreciations(organizationId), selectVatReturns(organizationId),
@@ -553,7 +557,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectProjectTemplateTasks(organizationId),
     selectContractProjects(organizationId),
   ]);
-  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings };
+  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings };
 }
 
 const CONTRACT_PROJECTS_MIGRATION_HINT =
@@ -3313,6 +3317,101 @@ export async function deleteNoteCalendarLink(linkId: UUID, organizationId: UUID)
     .eq('id', linkId)
     .eq('organization_id', organizationId);
   if (error) throw error;
+}
+
+// ── Handschrift (pen op tablet) bij notities ─────────────────────────────────
+
+const NOTE_HANDWRITING_MIGRATION_HINT =
+  'Voer de migratie 20260916000000_note_handwriting.sql uit in Supabase om handgeschreven notities te activeren.';
+const NOTE_HANDWRITING_SUMMARY_COLUMNS = 'id, organization_id, created_by, note_id, page_count, stroke_count, paper, created_at, updated_at';
+
+function isMissingNoteHandwritingTable(error: { message?: string; details?: string; code?: string } | null): boolean {
+  if (!error) return false;
+  const message = `${error.message ?? ''} ${error.details ?? ''}`;
+  return error.code === '42P01' || /note_handwriting.*(does not exist|schema cache)|relation .*note_handwriting/i.test(message);
+}
+
+/** Welke notities handschrift hebben — lichte samenvatting, de inkt zelf wordt pas geladen bij openen. */
+export async function selectNoteHandwritingSummaries(organizationId: UUID): Promise<NoteHandwritingSummary[]> {
+  const { data, error } = await supabase
+    .from('note_handwriting')
+    .select(NOTE_HANDWRITING_SUMMARY_COLUMNS)
+    .eq('organization_id', organizationId)
+    .order('updated_at', { ascending: false });
+  if (error) {
+    if (isMissingNoteHandwritingTable(error)) {
+      console.warn(`note_handwriting is nog niet beschikbaar. ${NOTE_HANDWRITING_MIGRATION_HINT}`, error);
+      return [];
+    }
+    throw error;
+  }
+  return (data ?? []) as unknown as NoteHandwritingSummary[];
+}
+
+/** Het volledige handschrift van één notitie, of null als er (nog) niets geschreven is. */
+export async function loadNoteHandwriting(organizationId: UUID, noteId: UUID): Promise<NoteHandwriting | null> {
+  const { data, error } = await supabase
+    .from('note_handwriting')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('note_id', noteId)
+    .maybeSingle();
+  if (error) {
+    if (isMissingNoteHandwritingTable(error)) throw new Error(NOTE_HANDWRITING_MIGRATION_HINT);
+    throw error;
+  }
+  return (data as NoteHandwriting | null) ?? null;
+}
+
+/**
+ * Slaat het handschrift van een notitie op (één rij per notitie). Een leeg
+ * document — alles weggegumd — verwijdert de rij, zodat de badge "handschrift"
+ * ook weer verdwijnt. Geeft de samenvatting terug, of null na verwijderen.
+ */
+export async function saveNoteHandwriting(organizationId: UUID, noteId: UUID, doc: InkDocument): Promise<NoteHandwritingSummary | null> {
+  if (isInkEmpty(doc)) {
+    await deleteNoteHandwriting(organizationId, noteId);
+    return null;
+  }
+  const payload = {
+    pages: serializeInkDocument(doc),
+    page_count: inkPageCount(doc),
+    stroke_count: inkStrokeCount(doc),
+    paper: doc.pages[0]?.paper ?? 'lined',
+  };
+  const updated = await supabase
+    .from('note_handwriting')
+    .update(payload)
+    .eq('organization_id', organizationId)
+    .eq('note_id', noteId)
+    .select(NOTE_HANDWRITING_SUMMARY_COLUMNS);
+  if (updated.error) {
+    if (isMissingNoteHandwritingTable(updated.error)) throw new Error(NOTE_HANDWRITING_MIGRATION_HINT);
+    throw updated.error;
+  }
+  const existing = (updated.data ?? []) as unknown as NoteHandwritingSummary[];
+  if (existing.length > 0) return existing[0];
+
+  const createdBy = await currentUserId();
+  const inserted = await supabase
+    .from('note_handwriting')
+    .insert({ ...payload, organization_id: organizationId, note_id: noteId, created_by: createdBy })
+    .select(NOTE_HANDWRITING_SUMMARY_COLUMNS)
+    .single();
+  if (inserted.error) {
+    if (isMissingNoteHandwritingTable(inserted.error)) throw new Error(NOTE_HANDWRITING_MIGRATION_HINT);
+    throw inserted.error;
+  }
+  return inserted.data as unknown as NoteHandwritingSummary;
+}
+
+export async function deleteNoteHandwriting(organizationId: UUID, noteId: UUID): Promise<void> {
+  const { error } = await supabase
+    .from('note_handwriting')
+    .delete()
+    .eq('organization_id', organizationId)
+    .eq('note_id', noteId);
+  if (error && !isMissingNoteHandwritingTable(error)) throw error;
 }
 
 
