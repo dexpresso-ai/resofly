@@ -84,7 +84,7 @@ organisatie gedeeld zijn en niet afgeschermd, en alleen met schrijfrechten.
 
 ## Database
 
-Nieuwe migratie: `supabase/migrations/20260916000000_note_handwriting.sql`.
+Nieuwe migratie: `supabase/migrations/20260916010000_note_handwriting.sql`.
 
 - Tabel `note_handwriting`: `note_id` (uniek, `on delete cascade`), `pages`
   (jsonb, inktdocument versie 1), `page_count`, `stroke_count`, `paper`.

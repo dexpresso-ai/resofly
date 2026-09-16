@@ -54,7 +54,7 @@ Voor een oude pre-v2/user-scoped database blijft een aparte datamigratie nodig w
 Voor het handschrift bij notities (vectorlijnen per notitie, autosave, badges) is één migratie nodig:
 
 ```text
-20260916000000_note_handwriting.sql
+20260916010000_note_handwriting.sql
 ```
 
 Zonder deze migratie blijft de app werken: de sectie "Handschrift" meldt dan bij het opslaan dat de migratie ontbreekt, en lijsten tonen simpelweg geen handschrift-badges.

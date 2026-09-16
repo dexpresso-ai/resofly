@@ -3322,7 +3322,7 @@ export async function deleteNoteCalendarLink(linkId: UUID, organizationId: UUID)
 // ── Handschrift (pen op tablet) bij notities ─────────────────────────────────
 
 const NOTE_HANDWRITING_MIGRATION_HINT =
-  'Voer de migratie 20260916000000_note_handwriting.sql uit in Supabase om handgeschreven notities te activeren.';
+  'Voer de migratie 20260916010000_note_handwriting.sql uit in Supabase om handgeschreven notities te activeren.';
 const NOTE_HANDWRITING_SUMMARY_COLUMNS = 'id, organization_id, created_by, note_id, page_count, stroke_count, paper, created_at, updated_at';
 
 function isMissingNoteHandwritingTable(error: { message?: string; details?: string; code?: string } | null): boolean {

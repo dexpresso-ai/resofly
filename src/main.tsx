@@ -102,6 +102,8 @@ import type { DecisionTarget } from './lib/decisions-api';
 import { useTicketUnread, TicketToasts } from './components/TicketNotifications';
 import { useTeamChat, TeamChatPage, TeamChatDock } from './components/TeamChat';
 import { usePushNotifications } from './components/usePushNotifications';
+import { McpConsent } from './components/McpConsent';
+import { readAuthorizeRequest } from './lib/mcp-api';
 import { ProjectPage, ProjectsListPage, ProjectsPlanningPage } from './features/Projects';
 import { TimeTracking, defaultBillableForProject, resolveRateCents } from './features/TimeTracking';
 import { Tickets } from './features/Tickets';
@@ -656,6 +658,11 @@ function App() {
   const publicGalleryToken = getPublicGalleryTokenFromLocation();
   const publicShareToken = getPublicShareTokenFromLocation();
   const portalRoute = isClientPortalRoute();
+  // Koppelverzoek van een externe AI (/mcp/authorize?request=…). Anders dan de
+  // publieke routes hierboven vereist deze juist een INGELOGDE gebruiker: hij
+  // geeft namens zichzelf toestemming. De afhandeling staat daarom verderop,
+  // ná de login- en organisatiecontroles.
+  const mcpAuthorizeRequest = readAuthorizeRequest();
 
   // Track which user + organization we have loaded data for, so auth events do not
   // trigger duplicate refreshes for the same workspace.
@@ -1080,6 +1087,17 @@ function App() {
   // die melding is alléén terecht als het laden klaar is en er echt geen org is.
   if (!activeOrganization && loading) return <BootLoading />;
   if (!activeOrganization) return <NoOrganizationScreen pendingInvitations={organizationContext.pendingInvitations} onAcceptInvitation={acceptInvitation} onCreateOrganization={createNewOrganization} />;
+
+  // Toestemming geven voor een AI-koppeling. Staat bewust hier: pas voorbij de
+  // controles hierboven is er een ingelogde gebruiker met een organisatie, en
+  // dat is precies wat een toestemming nodig heeft.
+  if (mcpAuthorizeRequest) {
+    return <McpConsent
+      request={mcpAuthorizeRequest}
+      organizations={organizationContext.organizations.map(org => ({ id: org.id, name: org.name }))}
+      defaultOrganizationId={activeOrganization.id}
+    />;
+  }
 
   const activeOrg = activeOrganization;
 
@@ -2993,7 +3011,12 @@ function Login() {
     // auth-account al bij de uitnodiging (mail-functie → ensureAuthUser), dus het
     // loginscherm hoeft — en mag — nooit zelf een account aanmaken. shouldCreateUser:
     // false voorkomt dat een onbekend adres alsnog op "Signups not allowed" stuit.
-    const { error } = await supabaseAuth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin, shouldCreateUser: false } });
+    // Normaal komt de magic link terug op de startpagina. Staat er een
+    // koppelverzoek in de URL (/mcp/authorize?request=…), dan moet hij terugkomen
+    // op precies deze pagina — anders is het verzoek na het inloggen verdwenen en
+    // staat de gebruiker zonder uitleg op zijn dashboard.
+    const redirectTo = readAuthorizeRequest() ? window.location.href : window.location.origin;
+    const { error } = await supabaseAuth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo, shouldCreateUser: false } });
     if (error) setError(error.message); else setSent(true);
   }
   return <main className="login"><div className="login-card"><div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div><p className="eyebrow login-eyebrow">Tickets • Projecten • Serviceflows</p><h1>Werkruimte</h1><p>Login met je e-mailadres om je CRM/project-app te gebruiken.</p><Input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="jij@bedrijf.nl"/><Button variant="primary" onClick={signIn} disabled={!email}>Stuur magic link</Button>{sent && <p className="success">Check je mailbox. Open de link in dezelfde browser als waar je deze pagina hebt geopend.</p>}{error && <p className="error">{error}</p>}</div></main>;

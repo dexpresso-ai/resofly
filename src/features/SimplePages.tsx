@@ -13,6 +13,7 @@ import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
 import { ProjectTemplatesManager } from './ProjectTemplates';
 import { ClientFieldsManager } from './ClientFields';
+import { McpConnections } from '../components/McpConnections';
 import { LEVEL_LABELS, MODULES, parseModuleAccess, type ModuleAccess, type ModuleLevel } from '../lib/permissions';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
@@ -136,7 +137,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'boekhouding', label: 'Boekhouding', Icon: BookOpen, description: 'De boekhoud-startdatum (knipdatum) en de KOR-regeling voor je grootboek en BTW-aangifte.' },
   { id: 'betalen', label: 'Online betalen', Icon: CreditCard, description: 'Koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
   { id: 'abonnement', label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
-  { id: 'ai', label: 'AI-gebruik', Icon: Sparkles, description: 'Het verbruik en de kosten van Gerrie (AI-assistent) per gebruiker, deze maand.' },
+  { id: 'ai', label: 'AI', Icon: Sparkles, description: 'Koppel je eigen AI (Claude, ChatGPT) aan deze werkruimte, en bekijk het verbruik en de kosten van Gerrie per gebruiker.' },
   { id: 'email', label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails aan, en verstuur een testmail om je configuratie te controleren.' },
 ];
 
@@ -1111,20 +1112,22 @@ export function Settings({
   const activeOrganization = organizationContext.activeOrganization;
   const activeMembership = organizationContext.activeMembership;
   const canAdminOrganization = activeMembership ? ['owner', 'admin'].includes(activeMembership.role) : false;
-  // AI-gebruik is er alleen voor owners/admins, het agenda-tabblad alleen als de
-  // agenda-module openstaat. Landt iemand toch op een tabblad dat er voor hem
-  // niet is (onthouden keuze, wissel van organisatie), dan valt hij terug op het
-  // eerste tabblad in plaats van op een lege pagina te staren.
+  // Het agenda-tabblad verschijnt alleen als de agenda-module openstaat. Landt
+  // iemand toch op een tabblad dat er voor hem niet is (onthouden keuze, wissel
+  // van organisatie), dan valt hij terug op het eerste tabblad in plaats van op
+  // een lege pagina te staren.
+  //
+  // Het AI-tabblad staat voor IEDER teamlid open, ook al is het verbruikscijfer
+  // erbinnen alleen voor owners en admins: je eigen AI koppel je persoonlijk,
+  // met je eigen rechten, en dan hoor je hem ook zelf te kunnen loskoppelen.
   const hasCalendarSettings = Boolean(calendarSettings);
   const visibleTabs = SETTINGS_TABS.filter(tab => {
-    if (tab.id === 'ai') return canAdminOrganization;
     if (tab.id === 'agenda') return hasCalendarSettings;
     return true;
   });
   useEffect(() => {
-    if (activeTab === 'ai' && !canAdminOrganization) setActiveTab('organisatie');
     if (activeTab === 'agenda' && !hasCalendarSettings) setActiveTab('organisatie');
-  }, [activeTab, canAdminOrganization, hasCalendarSettings]);
+  }, [activeTab, hasCalendarSettings]);
   const canManageRoles = activeMembership?.role === 'owner';
   const activeOwnerCount = organizationContext.teamMembers.filter(member => member.role === 'owner' && member.status === 'active').length;
   const licenseUsage = organizationContext.licenseUsage;
@@ -2391,9 +2394,10 @@ export function Settings({
     </div>}
 
     {activeTab === 'ai' && <div className="settings-tab-panel">
+      {activeOrganization && <McpConnections organizationId={activeOrganization.id} />}
       {canAdminOrganization
         ? (activeOrganization ? <AiUsagePanel organizationId={activeOrganization.id} members={organizationContext.teamMembers} /> : <p className="settings-help">Geen actieve organisatie geselecteerd.</p>)
-        : <p className="settings-help">Alleen owners en admins kunnen het AI-gebruik inzien.</p>}
+        : <p className="settings-help">Alleen owners en admins kunnen het verbruik van Gerrie inzien.</p>}
     </div>}
 
     {activeTab === 'email' && <div className="settings-tab-panel">
