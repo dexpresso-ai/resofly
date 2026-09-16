@@ -183,3 +183,45 @@ test('namen van standaardvragen zijn uniek en opzoekbaar', () => {
   for (const name of names) assert.ok(findPrompt(name), `"${name}" is niet op te zoeken`);
   assert.equal(findPrompt('bestaat-niet'), undefined);
 });
+
+// ── Push-type 'mcp_proposal' ────────────────────────────────────────────────
+//
+// Net als decision_digest moet dit type op vier plekken tegelijk bestaan: de
+// twee CHECKs in de migratie, en PushEventType + PUSH_EVENTS in push-api.ts.
+// Mist er één, dan faalt de insert in notification_outbox stil in een trigger
+// (die is exception-wrapped, dus het voorstel komt wel aan — de melding niet).
+
+const PUSH_MIGRATION = readFileSync(join(here, '..', '..', 'migrations', '20260917010000_mcp_proposal_push.sql'), 'utf8');
+const PUSH_API = readFileSync(join(here, '..', '..', '..', 'src', 'lib', 'push-api.ts'), 'utf8');
+
+/** De types die er al waren; de nieuwe migratie mag er geen laten vallen. */
+const EARLIER_PUSH_TYPES = ['ticket_new', 'ticket_note_client', 'chat_message', 'client_email_inbound', 'booking_new', 'invoice_paid', 'decision_digest'];
+
+test("push-type 'mcp_proposal' staat in beide CHECKs van de migratie", () => {
+  const checks = PUSH_MIGRATION.match(/event_type in \([^)]*'mcp_proposal'[^)]*\)/g) ?? [];
+  assert.equal(checks.length, 2, 'de migratie moet mcp_proposal in BEIDE CHECKs (outbox én preferences) zetten');
+});
+
+test('de nieuwe CHECKs laten geen bestaand push-type vallen', () => {
+  // De migratie vervangt de constraint in zijn geheel. Vergeet hij een oud
+  // type, dan weigert de database vanaf dat moment élke melding van dat type —
+  // en niemand ziet dat, want de triggers slikken de fout in.
+  for (const check of PUSH_MIGRATION.match(/event_type in \([^)]*\)/g) ?? []) {
+    for (const type of EARLIER_PUSH_TYPES) {
+      assert.ok(check.includes(`'${type}'`), `de nieuwe CHECK mist het bestaande push-type '${type}'`);
+    }
+  }
+});
+
+test("push-type 'mcp_proposal' staat in push-api.ts, op beide plekken", () => {
+  assert.match(PUSH_API, /\|\s*'mcp_proposal'/, 'PushEventType mist mcp_proposal');
+  assert.match(PUSH_API, /type: 'mcp_proposal'/, 'PUSH_EVENTS mist mcp_proposal (dan kan niemand hem uitzetten)');
+});
+
+test('de push-trigger kan het voorstel zelf nooit tegenhouden', () => {
+  const start = PUSH_MIGRATION.indexOf('public.push_on_mcp_proposal()');
+  const body = PUSH_MIGRATION.slice(start, PUSH_MIGRATION.indexOf('$$;', start));
+  assert.match(body, /security definer/, 'de trigger moet security definer zijn om push_enqueue te mogen aanroepen');
+  assert.match(body, /exception when others then/, 'de trigger is niet exception-wrapped: een fout in de melding zou het voorstel breken');
+  assert.match(body, /new\.mcp_grant_id is null/, 'de trigger hoort voorstellen zonder koppeling (Gerrie zelf) over te slaan');
+});

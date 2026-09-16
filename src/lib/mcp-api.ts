@@ -33,6 +33,8 @@ export interface McpConsentRequest {
 export interface McpGrant {
   id: UUID;
   organization_id: UUID;
+  /** Wiens koppeling dit is. Een owner/admin ziet ook die van collega's. */
+  user_id: UUID;
   client_id: string;
   label: string;
   scope: string;
@@ -114,10 +116,15 @@ function isMissingTable(error: { code?: string; message?: string }): boolean {
   return message.includes('schema cache') || message.includes('does not exist');
 }
 
+/**
+ * Alle koppelingen die deze gebruiker MAG zien. Welke dat zijn, beslist RLS:
+ * een gewoon teamlid krijgt zijn eigen rijen, een owner of admin die van de
+ * hele organisatie. Het scherm splitst ze op `user_id`.
+ */
 export async function listGrants(organizationId: UUID): Promise<McpGrant[]> {
   const { data, error } = await supabase
     .from('mcp_grants')
-    .select('id, organization_id, client_id, label, scope, created_at, last_used_at')
+    .select('id, organization_id, user_id, client_id, label, scope, created_at, last_used_at')
     .eq('organization_id', organizationId)
     .is('revoked_at', null)
     .order('created_at', { ascending: false });

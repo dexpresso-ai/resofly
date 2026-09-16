@@ -2394,7 +2394,14 @@ export function Settings({
     </div>}
 
     {activeTab === 'ai' && <div className="settings-tab-panel">
-      {activeOrganization && <McpConnections organizationId={activeOrganization.id} />}
+      {activeOrganization && (
+        <McpConnections
+          organizationId={activeOrganization.id}
+          currentUserId={currentUserId}
+          canAdmin={canAdminOrganization}
+          teamMembers={organizationContext.teamMembers}
+        />
+      )}
       {canAdminOrganization
         ? (activeOrganization ? <AiUsagePanel organizationId={activeOrganization.id} members={organizationContext.teamMembers} /> : <p className="settings-help">Geen actieve organisatie geselecteerd.</p>)
         : <p className="settings-help">Alleen owners en admins kunnen het verbruik van Gerrie inzien.</p>}

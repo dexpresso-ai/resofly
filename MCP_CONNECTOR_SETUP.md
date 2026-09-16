@@ -37,9 +37,14 @@ model iets in gang zet zonder die klik. Ook niet als de gebruiker erom vraagt.
 supabase db push
 ```
 
-Of draai `supabase/migrations/20260916000000_mcp_connector.sql` in de SQL-editor.
-Die maakt vier tabellen: `mcp_clients`, `mcp_grants`, `mcp_auth_codes` en
-`mcp_tokens`. Veilig om meermaals te draaien.
+Dat draait vier migraties, in volgorde en veilig om te herhalen:
+
+| Migratie | Wat |
+|---|---|
+| `20260916000000_mcp_connector.sql` | De tabellen: `mcp_clients`, `mcp_grants`, `mcp_auth_codes`, `mcp_tokens` |
+| `20260917000000_mcp_propose.sql` | `ai_action_audit.mcp_grant_id`; intrekken annuleert klaarstaande voorstellen |
+| `20260917010000_mcp_proposal_push.sql` | Push-type `mcp_proposal` en de trigger die de melding stuurt |
+| `20260917020000_mcp_grants_admin_overview.sql` | Owners/admins zien en stoppen alle koppelingen; wijzigingsguard |
 
 ## 2. Secrets
 
@@ -239,6 +244,33 @@ terugzien wat eruit ging.
 dat moet, anders kan Claude.ai niet koppelen — maar een registratie is een
 naamplaatje. Gegevens komen er pas uit als een ingelogd mens akkoord geeft.
 
+## Toezicht: wie heeft wat gekoppeld
+
+Een koppeling is persoonlijk, maar de organisatie is van de owner. Onder
+**Instellingen → AI** ziet een owner of admin daarom twee lijsten: *mijn
+koppelingen* en *koppelingen van het team* — alles wat collega's aan deze
+organisatie hebben gehangen, met wie het is en of het meeleest of ook klaarzet.
+Elke koppeling is daar te stoppen, ook die van iemand die uit dienst is.
+
+Stoppen is definitief en werkt meteen: de tokens gaan mee, en wat die koppeling
+nog had klaarstaan wordt geannuleerd. Een databasetrigger houdt de rest dicht —
+vanuit de app is aan een koppeling niets anders te veranderen dan intrekken en
+hernoemen, ook niet door een admin. Meer rechten geven kan alleen de gebruiker
+zelf, door opnieuw te koppelen.
+
+## De melding
+
+Zet een gekoppelde AI iets klaar, dan krijgt de eigenaar van die koppeling een
+push: *"Claude op mijn laptop heeft iets klaargezet — herinnering aan Jansen"*.
+Eén tik en hij staat op zijn wachtrij. Uit te zetten onder **Instellingen →
+Meldingen** (*Je gekoppelde AI zet iets klaar*).
+
+Alleen de eigenaar, niet het team. De andere meldingen (nieuw ticket, klantmail)
+gaan wél naar iedereen, maar die gaan over iets wat van buiten komt. Dit gaat
+over iets wat de gebruiker zelf net in gang zette; zou het hele team een ping
+krijgen bij elke vraag die iemand aan zijn AI stelt, dan zet iedereen het na een
+week uit. De wachtrij op het startscherm blijft van het team.
+
 ## Als het niet werkt
 
 **"Onbekende AI-client" in de browser.** De client registreerde zich bij een
@@ -273,11 +305,6 @@ Dat is ruim voor een gesprek; loopt een klant er structureel tegenaan, dan is er
 waarschijnlijk een agent aan het doorslaan.
 
 ## Wat er hierna komt
-
-**Een melding bij een nieuw voorstel.** Zet de AI van een klant iets klaar terwijl
-hij niet in ResoFly kijkt, dan ziet hij dat pas als hij de app opent. De
-push-infrastructuur ligt er (`decision_digest`); een variant voor
-AI-voorstellen is een kleine toevoeging.
 
 **Bronnen per klant.** Nu zijn er sjablonen voor een project en een factuur. Een
 klantdossier als bron zou logisch zijn, maar daar is nog geen lees-handeling voor

@@ -10366,3 +10366,8 @@ body.ink-sheet-open{overflow:hidden}
    niet in het merkgoud van de agent-emblemen: dit komt van een model dat niet
    van ons is, en dat verschil hoort te zien te zijn zonder de regel te lezen. */
 .ag-queue-mcp{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;flex-shrink:0;border-radius:10px;border:1px solid var(--border2);background:var(--bg4);color:var(--muted2)}
+
+/* Twee lijsten in het koppelingenpaneel (eigen versus team). */
+.mcp-connections-heading{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:16px 0 8px}
+.mcp-connections-heading:first-of-type{margin-top:4px}
+.mcp-connections-hint{font-size:12px;line-height:1.55;color:var(--muted2);margin:0 0 10px}
