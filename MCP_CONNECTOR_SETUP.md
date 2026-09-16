@@ -138,6 +138,34 @@ supabase secrets set MCP_RESOURCE_URL="https://mcp.jouwdomein.nl"
 De functies vergelijken op de staart van het pad, dus ze werken in beide
 opstellingen zonder codewijziging.
 
+## Standaardvragen en bronnen
+
+Een klant die zijn AI net gekoppeld heeft, weet niet wat hij kan vragen. Daarom
+staan er twee dingen klaar die hij in zijn AI-app uit een menu pakt.
+
+**Standaardvragen** (`prompts`) — vijf opdrachten die deze koppeling goed aankan:
+weekoverzicht, klant doorlichten (met de naam als invulveld), openstaande
+facturen nalopen, notulen opvolgen, en je dag voorbereiden. In Claude verschijnen
+ze als keuzes; de opdracht die eronder zit stuurt het model langs `find_actions`
+en `run_action`, met de instructie niets te verzinnen.
+
+**Bronnen** (`resources`) — dingen die hij aanhecht vóórdat hij iets vraagt: zijn
+postvak, recente klantmail, de planning van deze week, de openstaande posten, de
+recente notulen. Plus twee met een veld erin: `resofly://project/{project_id}`
+en `resofly://factuur/{invoice_id}`.
+
+Beide lopen over dezelfde rails als `run_action`: een lees-handeling uit de
+registry, org-scoped, achter het modulerecht van dat teamlid. Er komt dus geen
+tweede weg naar de gegevens bij — alleen een tweede manier om die ene weg aan te
+roepen. Wie Financiën niet mag zien, krijgt *facturen nalopen* niet in zijn menu
+én kan `resofly://openstaande-posten` niet ophalen; beide kanten controleren
+hetzelfde.
+
+Dat de catalogus blijft kloppen met de registry is een test: `mcpCatalog.test.ts`
+faalt als een bron naar een handeling wijst die niet bestaat, naar een
+schrijf-handeling wijst, op de verkeerde module staat, of als een URI-sjabloon een
+ander veld invult dan de handeling verplicht stelt.
+
 ## De klantgrens — waarom een AI nooit bij een andere klant komt
 
 Dit is de vraag die ertoe doet in een pakket waar meerdere bedrijven in dezelfde
@@ -246,10 +274,11 @@ waarschijnlijk een agent aan het doorslaan.
 
 ## Wat er hierna komt
 
-**Fase C — meer dan tekst.** MCP kent ook resources (documenten) en prompts
-(kant-en-klare vragen). De server antwoordt daar nu met een lege lijst.
-
 **Een melding bij een nieuw voorstel.** Zet de AI van een klant iets klaar terwijl
 hij niet in ResoFly kijkt, dan ziet hij dat pas als hij de app opent. De
 push-infrastructuur ligt er (`decision_digest`); een variant voor
 AI-voorstellen is een kleine toevoeging.
+
+**Bronnen per klant.** Nu zijn er sjablonen voor een project en een factuur. Een
+klantdossier als bron zou logisch zijn, maar daar is nog geen lees-handeling voor
+die het hele dossier in één keer geeft.
