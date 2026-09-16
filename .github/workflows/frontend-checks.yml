@@ -3,6 +3,14 @@ name: Frontend checks
 # Typecheck, unit tests en de mobiele lay-outtest op elke pull request en op
 # staging. De lay-outtest draait tegen een nagebootste backend en heeft dus
 # geen Supabase-secrets nodig.
+#
+# Daarnaast een Deno-typecheck op de edge functions van de MCP-connector. Die
+# draaien op Deno, niet op node: `npm run typecheck` ziet ze niet, en een
+# typefout daarin komt anders pas aan het licht bij het uitrollen — of erger,
+# bij de eerste aanroep door de AI van een klant. Alleen de MCP-functies, geen
+# `supabase/functions/*`: meeting-transcribe heeft een pre-existente typefout
+# (_shared/elevenlabs.ts, Uint8Array → Blob onder TS 6) en zou de hele job rood
+# zetten. Verbreed de lijst zodra die is opgelost.
 on:
   pull_request:
   push:
@@ -35,3 +43,17 @@ jobs:
 
       - name: Mobiele lay-outtest (donker en licht)
         run: npm run test:mobile -- --theme=both
+
+  edge-functions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Deno-typecheck MCP-functies
+        run: |
+          deno check supabase/functions/mcp-oauth/index.ts
+          deno check supabase/functions/mcp/index.ts

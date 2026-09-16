@@ -69,6 +69,10 @@ supabase functions deploy mcp-oauth --no-verify-jwt
 supabase functions deploy mcp --no-verify-jwt
 ```
 
+Beide functies worden bij elke push naar `staging` en elke pull request al
+door CI met `deno check` getypecheckt (job *edge-functions* in
+`frontend-checks.yml`); het uitrollen doet dezelfde check nog eens.
+
 `--no-verify-jwt` is hier noodzakelijk en staat met de reden uitgeschreven in
 `supabase/config.toml`. Kort: beide functies worden aangeroepen door de AI-client
 van de klant, die geen Supabase-sessie heeft. Ze authenticeren zelf — met een

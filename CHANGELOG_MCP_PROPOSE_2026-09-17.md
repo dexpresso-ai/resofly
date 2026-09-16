@@ -52,4 +52,4 @@ De `instructions` bij het koppelen zijn aangevuld met de regel waar een model an
 | Server-side uitvoerders voor de 188 schrijf-handelingen | Dubbele implementatie, en het haalt juist het slot weg dat het uitvoeren onder een menselijke sessie legt. |
 | Melding bij een nieuw AI-voorstel | De push-infrastructuur ligt er (`decision_digest`); een variant hiervoor is een losse toevoeging. |
 
-Nagemeten: `npm test` 178 tests groen (169 + 6 grensbewaking + 3 scope), `npm run typecheck` en `npm run build` groen. De edge functions zijn met `tsc --noResolve` gecontroleerd; `deno check` kon in deze omgeving niet draaien en hoort vóór het uitrollen alsnog te lopen.
+Nagemeten: `npm test` 178 tests groen (169 + 6 grensbewaking + 3 scope), `npm run typecheck` en `npm run build` groen. De edge functions zijn met `tsc --noResolve` gecontroleerd. *Naschrift:* `deno check` is later alsnog gedraaid en is groen; sindsdien bewaakt CI het.

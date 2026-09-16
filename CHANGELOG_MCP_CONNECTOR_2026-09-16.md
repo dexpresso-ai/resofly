@@ -54,4 +54,4 @@ Maar ook als het kón, zou het hier niet gebeuren. Het model aan de andere kant 
 | Een eigen domein vóór de connector | Werkt met de Supabase-URL; `MCP_PUBLIC_BASE_URL` ligt klaar voor wie het netter wil. |
 | Koppelingen van collega's inzien | RLS geeft alleen je eigen rijen. Een organisatiebreed overzicht is een aparte vraag. |
 
-Nagemeten: `npm test` 169 tests groen (144 + 25 nieuwe), `npm run typecheck` groen, `npm run build` groen. De twee edge functions zijn met `tsc --noResolve` op type- en syntaxfouten gecontroleerd; `deno check` kon in deze omgeving niet draaien (geen Deno beschikbaar) en hoort vóór het uitrollen alsnog te lopen.
+Nagemeten: `npm test` 169 tests groen (144 + 25 nieuwe), `npm run typecheck` groen, `npm run build` groen. De twee edge functions zijn met `tsc --noResolve` op type- en syntaxfouten gecontroleerd. *Naschrift:* `deno check` is later alsnog gedraaid (Deno 2.9.6 via npm, `@supabase/supabase-js@2.45.0` van het npm-register omdat esm.sh hier geblokkeerd is) en is groen; sindsdien bewaakt CI het.

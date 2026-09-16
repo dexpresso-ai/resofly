@@ -54,4 +54,4 @@ Verder: `matchTemplate` is apart getest op alles wat er níét op een sjabloon m
 | Abonneren op bronwijzigingen | `resources/subscribe` geeft een lege bevestiging. Wij duwen niets uit onszelf. |
 | Melding bij een nieuw AI-voorstel | De push-infrastructuur ligt er (`decision_digest`); een variant hiervoor is een losse toevoeging. |
 
-Nagemeten: `npm test` 205 tests groen (191 + 14 nieuwe), `npm run typecheck` en `npm run build` groen. De edge functions zijn met `tsc --noResolve` gecontroleerd; `deno check` kon in deze omgeving niet draaien en hoort vóór het uitrollen alsnog te lopen.
+Nagemeten: `npm test` 205 tests groen (191 + 14 nieuwe), `npm run typecheck` en `npm run build` groen. De edge functions zijn met `tsc --noResolve` gecontroleerd. *Naschrift:* `deno check` is later alsnog gedraaid en is groen; sindsdien bewaakt CI het.
