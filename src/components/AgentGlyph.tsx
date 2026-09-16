@@ -14,12 +14,13 @@ import {
  * leest. Dit bestand maakt dat embleem, en doet dat in drie lagen:
  *
  *   1. een ICOON dat zegt waar hij over gaat (facturen, agenda, klanten …),
- *   2. een KLEURTINT die hem van zijn buren onderscheidt,
- *   3. een SIGIL: een ringpatroon dat uit het agent-id wordt gerekend, zodat twee
- *      agents met hetzelfde icoon en dezelfde kleur tóch niet identiek zijn.
+ *   2. een STAND: draait hij, dan is de tegel gevuld met het merkgoud; staat hij
+ *      stil, dan zakt hij terug naar een tonale tegel met een gouden icoon,
+ *   3. LICHTVAL: twee zachte vlekken op een uit het agent-id gerekende plek, zodat
+ *      twee agents met hetzelfde icoon het licht net anders vangen.
  *
  * Alle drie zijn AFLEIDBAAR. Een agent hoeft dus niets te kiezen om er goed uit
- * te zien; kiest de gebruiker wél iets (kolommen `icon`/`hue`), dan wint dat.
+ * te zien; kiest de gebruiker wél iets (kolom `icon`), dan wint dat.
  * Puur cosmetisch — er hangt geen enkele runner-beslissing aan.
  */
 
@@ -119,23 +120,20 @@ export function agentIconKey(agent: AgentLike): AgentIconKey {
   return pool[hash(agent.id || agent.name || 'gerrie') % pool.length];
 }
 
-/**
- * Eén tint voor alle emblemen: het merkgoud (#FFD966 ≈ 45°).
+/*
+ * Over KLEUR staat hier geen code meer.
  *
- * Hier stond een wiel van twaalf tinten, zodat elke agent zijn eigen kleur kreeg.
+ * Er stond een wiel van twaalf tinten, zodat elke agent zijn eigen kleur kreeg.
  * Dat gaf herkenning per agent, maar het maakte de app bont: twaalf willekeurige
- * kleuren náást een merk dat maar één kleur heeft. De PO koos voor één merkkleur.
+ * kleuren náást een merk dat maar één kleur heeft. De PO koos voor één merkkleur,
+ * en die staat nu gewoon in `globals.css` (--accent). De functie die hier de tint
+ * teruggaf, gaf dus altijd hetzelfde getal terug en is daarmee weg.
  *
- * Onderscheid tússen agents komt daarmee volledig van het ICOON en de sigil — die
- * blijven wél per agent afgeleid, dus twee agents zien er nog steeds anders uit.
- * Een eerder opgeslagen eigen tint wordt bewust genegeerd in plaats van gewist: dan
- * blijft de kolom bruikbaar als je ooit terug wilt.
+ * Onderscheid tússen agents komt volledig van het ICOON en de lichtval — allebei
+ * per agent afgeleid, dus twee agents zien er nog steeds anders uit. De kolom
+ * `hue` in de database wordt bewust genegeerd in plaats van gewist: dan blijft
+ * hij bruikbaar als je ooit terug wilt.
  */
-export const BRAND_HUE = 45;
-
-export function agentHue(_agent: AgentLike): number {
-  return BRAND_HUE;
-}
 
 export type AgentGlyphSize = 'sm' | 'md' | 'lg';
 export type AgentGlyphState = 'active' | 'paused' | 'draft' | 'archived' | 'running';
@@ -143,8 +141,25 @@ export type AgentGlyphState = 'active' | 'paused' | 'draft' | 'archived' | 'runn
 const GLYPH_PX: Record<AgentGlyphSize, number> = { sm: 34, md: 46, lg: 68 };
 
 /**
- * Het embleem zelf. `state` kleurt alleen de ring eromheen; het embleem blijft in
- * alle standen hetzelfde, zodat je een gepauzeerde agent nog steeds herkent.
+ * Het embleem zelf.
+ *
+ * Drie lagen, in deze volgorde: een tegel, twee uit de seed gerekende lichtvlekken
+ * erop, en het icoon erbovenop. Meer is het niet — en dat is precies het punt.
+ *
+ * Wat hier VROEGER stond en bewust weg is: een glans-verloop met een opstaand
+ * randje (`inset 0 1px 0 wit`) en een "sigil" van gestreepte ringen met drie
+ * satellieten. Samen gaven die het embleem de glimmende-knop-look van een decennium
+ * geleden, en de ringen lazen als ruis in plaats van als informatie. De herkenning
+ * die de sigil moest leveren zit nu in de lichtvlekken: hun plek komt uit dezelfde
+ * seed, dus twee agents met hetzelfde icoon vangen het licht nog steeds anders,
+ * zonder dat je een patroon ziet dat iets lijkt te betekenen.
+ *
+ * `state` bepaalt de STAND van de tegel, niet alleen een ring eromheen:
+ * een agent die draait of actief staat krijgt het merkgoud als vulling, een
+ * gepauzeerde of gearchiveerde agent zakt terug naar een tonale tegel met een
+ * gouden icoon. Dat verving het oude `filter:saturate(.3)`, dat van elk goud een
+ * vuilbeige vlek maakte — vier van die vlekken naast elkaar was de kern van de
+ * "niet modern"-klacht.
  */
 export function AgentGlyph({ agent, size = 'md', state, title }: {
   agent: AgentLike;
@@ -153,49 +168,33 @@ export function AgentGlyph({ agent, size = 'md', state, title }: {
   title?: string;
 }) {
   const key = agentIconKey(agent);
-  const hue = agentHue(agent);
   const def = ICON_BY_KEY.get(key) ?? AGENT_ICONS[AGENT_ICONS.length - 1];
   const px = GLYPH_PX[size];
   const seed = useMemo(() => hash(`${agent.id || ''}|${agent.name || ''}|${key}`), [agent.id, agent.name, key]);
 
+  /**
+   * De twee lichtvlekken. De eerste zit in de bovenste helft (daar valt licht
+   * vandaan), de tweede in de onderste — zo blijft het een belichte tegel en wordt
+   * het nooit een willekeurige vlekkenwolk. De marges houden elke vlek van de rand
+   * af, anders valt hij half buiten de tegel en zie je alleen een lichte hoek.
+   */
+  const face = useMemo<CSSProperties>(() => ({
+    '--ag-x1': `${20 + (seed % 60)}%`,
+    '--ag-y1': `${6 + ((seed >>> 5) % 34)}%`,
+    '--ag-x2': `${18 + ((seed >>> 11) % 64)}%`,
+    '--ag-y2': `${64 + ((seed >>> 17) % 32)}%`,
+  } as CSSProperties), [seed]);
+
   return (
     <span
       className={`ag-glyph ag-glyph-${size}${state ? ` is-${state}` : ''}`}
-      style={{ '--ag-h': hue } as CSSProperties}
+      style={face}
       title={title}
       aria-hidden="true"
     >
       <span className="ag-glyph-tile">
-        <Sigil seed={seed} />
-        <span className="ag-glyph-icon"><def.Icon size={Math.round(px * 0.42)} strokeWidth={1.9} /></span>
+        <span className="ag-glyph-icon"><def.Icon size={Math.round(px * 0.44)} strokeWidth={1.75} /></span>
       </span>
     </span>
-  );
-}
-
-/**
- * Het sigil: twee ringen met een uit de seed gerekend streepjespatroon plus drie
- * satellieten. Zit onder het icoon en blijft bewust vaag — het is textuur, geen
- * informatie. Puur decoratief, dus buiten de toegankelijkheidsboom.
- */
-function Sigil({ seed }: { seed: number }) {
-  const dash = 3 + (seed % 7);
-  const gap = 2 + ((seed >> 3) % 6);
-  const rot = seed % 360;
-  const innerRot = (seed >> 5) % 360;
-  const dots = [0, 1, 2].map((i) => {
-    const angle = ((seed >> (i * 4)) % 360) * (Math.PI / 180);
-    const radius = 27 + ((seed >> (i * 3)) % 12);
-    return { x: 50 + Math.cos(angle) * radius, y: 50 + Math.sin(angle) * radius, r: 1.6 + ((seed >> i) % 3) * 0.6 };
-  });
-
-  return (
-    <svg className="ag-sigil" viewBox="0 0 100 100" focusable="false" aria-hidden="true">
-      <circle cx="50" cy="50" r="41" fill="none" stroke="currentColor" strokeWidth="2"
-        strokeDasharray={`${dash * 2} ${gap * 2}`} transform={`rotate(${rot} 50 50)`} opacity="0.5" />
-      <circle cx="50" cy="50" r="30" fill="none" stroke="currentColor" strokeWidth="1.2"
-        strokeDasharray={`${gap * 3} ${dash}`} transform={`rotate(${innerRot} 50 50)`} opacity="0.35" />
-      {dots.map((d, i) => <circle key={i} cx={d.x} cy={d.y} r={d.r} fill="currentColor" opacity="0.45" />)}
-    </svg>
   );
 }

@@ -202,7 +202,7 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
         {budget !== null && (
           <div className="cc-budget" title="Resterend AI-tegoed deze maand">
             <span className="cc-budget-label">AI-tegoed</span>
-            <span className="cc-budget-track"><span className="cc-budget-fill" data-low={budget <= 0.2 ? 'true' : 'false'} style={{ width: `${Math.round(budget * 100)}%` }} /></span>
+            <span className="cc-budget-track"><span className="cc-budget-fill" data-low={budget <= 0.2 ? 'true' : 'false'} style={{ '--fill': budget } as CSSProperties} /></span>
             <span className="cc-budget-pct">{Math.round(budget * 100)}%</span>
           </div>
         )}
