@@ -7,7 +7,7 @@ import {
 } from '../_shared/mergeTokens.ts';
 import { ACTIONS } from '../_shared/actions/index.ts';
 import { getAction, searchActions } from '../_shared/actions/registry.ts';
-import { ActionError, type ActionCtx, type ActionPlan } from '../_shared/actions/types.ts';
+import { ActionError, type ActionCtx, type ActionDef, type ActionPlan } from '../_shared/actions/types.ts';
 
 // ============================================================
 // gerrie-agent — Gerrie, de AI-assistent, gekoppeld aan Claude (Anthropic).
@@ -2393,6 +2393,75 @@ function isEnabledToolName(name: string): boolean {
 function isReadOnlyToolName(name: string): boolean {
   if (name.startsWith('action:')) return getAction(name.slice('action:'.length))?.kind === 'read';
   return !name.startsWith('propose_');
+}
+
+// ── Gerrie's kerntools, ook vindbaar voor een gekoppelde AI ──────────────────
+
+/**
+ * Gerrie's KERNTOOLS, beschreven als handelingen.
+ *
+ * WAAROM DIT BESTAAT
+ * De handelingenregistry is de LANGE STAART van wat de app kan; de tools hierboven
+ * zijn de KOP. In de chat heeft Gerrie allebei: de tools staan in zijn toollijst en
+ * de staart zoekt hij erbij met `find_actions`. Een gekoppelde AI (de MCP) kreeg
+ * alleen de staart, en dat gat was zichtbaar tot in de registry zelf — daar staat
+ * bij `ticket.mark_read` letterlijk "reageren doe je met `propose_ticket_note`",
+ * een verwijzing die aan de MCP-kant nergens op sloeg.
+ *
+ * Door de kerntools hier als ActionDef te BESCHRIJVEN vindt `find_actions` ze ook
+ * daar, en kloppen die verwijzingen weer. Het is met opzet alleen een beschrijving
+ * en geen tweede implementatie: uitvoeren loopt nog steeds via `runTool` en
+ * `buildProposal`, met dezelfde rechtencontrole als in de chat. Er komt dus geen
+ * tweede weg naar de gegevens bij — alleen een tweede manier om die ene weg te
+ * vinden.
+ *
+ * Deze lijst is er ALLEEN voor de MCP. Gerrie's eigen `find_actions` krijgt hem
+ * niet: daar zijn het al gewone tools, en ze dubbel aanbieden zou het model laten
+ * kiezen tussen twee wegen naar hetzelfde.
+ *
+ * WAT ER NIET IN ZIT
+ *  - De drie meta-tools zelf: dat ZIJN de MCP-tools, en als handeling aanbieden
+ *    zou het model zichzelf laten aanroepen.
+ *  - `propose_create_agent`: een agent bouwen die daarna vanzelf draait en zelf
+ *    mag klaarzetten. Een geplande agent mag dat van zichzelf ook niet
+ *    (AGENT_FORBIDDEN_TOOLS), en een koppeling van buiten hoort niet ruimer te
+ *    zijn dan iets wat binnen draait.
+ *  - `ask_user`, `emit_plan`, `emit_agent`: die horen bij de chatstroom op het
+ *    scherm en betekenen niets aan de andere kant van een JSON-RPC-verbinding.
+ */
+const MCP_HIDDEN_TOOLS = [...ACTION_TOOL_NAMES, ...AGENT_FORBIDDEN_TOOLS, 'ask_user', 'emit_plan', 'emit_agent'];
+
+/**
+ * Een tool zonder module mag in de chat iedereen gebruiken (zie
+ * `allowedToolNamesFor`). Aan de MCP-kant moet er wél een module staan, want daar
+ * wordt elk id tegen het modulerecht van dit teamlid gewogen. 'stats' is waar de
+ * registry teamgegevens al onderbrengt (`team.list_access`), dus die.
+ */
+const TOOL_MODULE_FALLBACK = 'stats';
+
+interface RawToolDefinition {
+  name: string;
+  description: string;
+  input_schema?: { properties?: Record<string, unknown>; required?: string[] };
+}
+
+const GERRIE_CORE_ACTIONS: ActionDef[] = (TOOL_DEFINITIONS as unknown as RawToolDefinition[])
+  .filter((t) => !MCP_HIDDEN_TOOLS.includes(t.name))
+  .map((t) => ({
+    id: t.name,
+    label: TOOL_LABELS[t.name] ?? t.name,
+    module: TOOL_MODULE[t.name] ?? TOOL_MODULE_FALLBACK,
+    kind: t.name.startsWith('propose_') ? 'write' as const : 'read' as const,
+    description: t.description,
+    input: t.input_schema?.properties ?? {},
+    required: t.input_schema?.required ?? [],
+  }));
+
+const GERRIE_CORE_BY_ID = new Map(GERRIE_CORE_ACTIONS.map((a) => [a.id, a]));
+
+/** Is dit id een kerntool van Gerrie (en dus geen handeling uit de registry)? */
+function getGerrieCoreAction(id: string): ActionDef | undefined {
+  return GERRIE_CORE_BY_ID.get(id);
 }
 
 /**
@@ -5127,6 +5196,7 @@ export {
   recordUsage, costUsd, checkUserBudget, remainingFraction,
   confirmAction, getUsageSummary, requireUser, requireOrganizationAccess,
   buildCreateTasksProposal, buildProposal, lineTotal,
+  GERRIE_CORE_ACTIONS, getGerrieCoreAction, runTool as runGerrieTool, describeProposal,
   describeError, requiredEnv, parseAllowedOrigins, isUuid, todayIso, tzOffsetMs,
 };
 export type {
