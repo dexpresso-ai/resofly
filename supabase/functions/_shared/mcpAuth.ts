@@ -120,13 +120,39 @@ export async function verifyPkce(codeVerifier: string, codeChallenge: string): P
 // Hier gaat het in de praktijk mis. Een autorisatieserver die redirect-URI's
 // "ongeveer" vergelijkt (op voorvoegsel, of met een joker) stuurt de code van de
 // gebruiker naar de eerste de beste plek die daar toevallig onder valt. Dus:
-// EXACTE tekstvergelijking met wat er bij de registratie is opgegeven, en verder
-// niets. Geen normalisatie, geen subpaden, geen uitzonderingen.
+// EXACTE tekstvergelijking met wat er bij de registratie is opgegeven. Geen
+// normalisatie, geen subpaden — en één uitzondering die de standaard zelf
+// voorschrijft: de poort van een loopback-adres (zie hieronder).
 
 export function redirectUriAllowed(registered: readonly string[], requested: string): boolean {
   const value = String(requested || '');
   if (!value) return false;
-  return registered.some((uri) => uri === value);
+  return registered.some((uri) => uri === value || sameLoopbackApartFromPort(uri, value));
+}
+
+/**
+ * De ene uitzondering op "exact": de POORT van een loopback-adres.
+ *
+ * Een programma op de computer van de gebruiker zelf (Claude Code, een
+ * desktop-app) vangt de code op via een vrije poort die het per keer kiest. Bij
+ * de volgende koppeling is dat een andere poort dan bij de registratie, en een
+ * exacte vergelijking stuurt die gebruiker dan weg met "ongeldig
+ * terugkeeradres". RFC 8252 §7.3 schrijft daarom voor dat de poort daar vrij is.
+ *
+ * Alleen de poort: host en pad-met-query blijven een letterlijke
+ * tekstvergelijking, en het geldt uitsluitend voor http naar localhost,
+ * 127.0.0.1 of [::1]. Zo'n adres komt per definitie uit op de computer van de
+ * gebruiker, dus een andere poort stuurt de code nooit het huis uit.
+ */
+const LOOPBACK_REDIRECT = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::(\d{1,5}))?(\/[^#]*)?$/;
+
+function sameLoopbackApartFromPort(registered: string, requested: string): boolean {
+  const known = LOOPBACK_REDIRECT.exec(registered);
+  const asked = LOOPBACK_REDIRECT.exec(requested);
+  if (!known || !asked) return false;
+  const port = asked[2] === undefined ? null : Number(asked[2]);
+  if (port !== null && (port < 1 || port > 65535)) return false;
+  return known[1] === asked[1] && (known[3] ?? '') === (asked[3] ?? '');
 }
 
 /**
@@ -201,6 +227,97 @@ export function narrowScopes(offered: string, chosen: unknown): string[] {
 
 export function scopeAllows(granted: string, need: string): boolean {
   return parseScopes(granted).includes(need);
+}
+
+// ── Discovery ────────────────────────────────────────────────────────────────
+//
+// Met deze documenten vindt een AI-client zelf uit hoe hij koppelt: welke
+// autorisatieserver bij de MCP-server hoort, waar hij zich registreert, waar hij
+// zijn token haalt. Ze staan hier en niet in de functies, want ze worden op twee
+// plekken geserveerd (mcp én mcp-oauth) — en daar liepen twee kopieën al eens
+// uit elkaar: de ene bood `propose` aan, de andere niet.
+
+/** Scope die een client vraagt om een refresh token; geen recht in de werkruimte. */
+export const SCOPE_OFFLINE_ACCESS = 'offline_access';
+
+export interface McpDiscoveryUrls {
+  /** De autorisatieserver (mcp-oauth), zonder slash aan het eind. */
+  issuer: string;
+  /** De MCP-server, letterlijk zoals de klant hem in zijn AI-app plakt. */
+  resource: string;
+  /** Uitleg voor mensen; leeg laat het veld weg. */
+  documentation?: string;
+}
+
+/**
+ * RFC 9728: welke autorisatieserver bij deze bron hoort.
+ *
+ * Noemt de 401 geen scope, dan vragen Claude en de officiële MCP-SDK's precies
+ * wat hier in `scopes_supported` staat. Ontbreekt `propose`, dan komt die scope
+ * nooit in het koppelverzoek en kan de gebruiker op het toestemmingsscherm alleen
+ * nog meelezen toestaan.
+ */
+export function protectedResourceMetadata(urls: McpDiscoveryUrls): Record<string, unknown> {
+  return {
+    resource: urls.resource,
+    authorization_servers: [urls.issuer],
+    scopes_supported: [...ISSUABLE_SCOPES],
+    bearer_methods_supported: ['header'],
+  };
+}
+
+/**
+ * RFC 8414 — of, met `openIdVariant`, hetzelfde in de vorm van OpenID Connect
+ * Discovery.
+ *
+ * WAAROM TWEE VORMEN. Voor een issuer mét pad (…/functions/v1/mcp-oauth) zoekt
+ * een client eerst op de root van het domein, zoals
+ * `/.well-known/oauth-authorization-server/functions/v1/mcp-oauth`. Die root is
+ * op supabase.co niet van ons: Supabase antwoordt daar zelf met een 401. Het
+ * enige adres dat een client daarna nog probeert en dat wij wél beantwoorden, is
+ * `…/mcp-oauth/.well-known/openid-configuration` — en dat leest hij als
+ * OpenID-document. De officiële MCP-SDK (Claude Code, MCP Inspector) keurt het
+ * zonder `jwks_uri`, `subject_types_supported` en
+ * `id_token_signing_alg_values_supported` af, en dan stopt het koppelen nog vóór
+ * het inloggen.
+ *
+ * Die drie velden zijn daar een vormvereiste, geen belofte. We geven geen
+ * ID-tokens uit: `openid` staat niet in scopes_supported, dus niemand vraagt er
+ * een, en de sleutelset achter jwks_uri is leeg omdat we niets ondertekenen. Met
+ * een eigen domein ervoor (MCP_PUBLIC_BASE_URL) vindt een client het
+ * RFC 8414-document al bij de eerste poging.
+ */
+export function authorizationServerMetadata(
+  urls: McpDiscoveryUrls,
+  { openIdVariant = false }: { openIdVariant?: boolean } = {},
+): Record<string, unknown> {
+  const { issuer } = urls;
+  return {
+    issuer,
+    authorization_endpoint: `${issuer}/authorize`,
+    token_endpoint: `${issuer}/token`,
+    registration_endpoint: `${issuer}/register`,
+    revocation_endpoint: `${issuer}/revoke`,
+    // offline_access staat erbij omdat Claude en ChatGPT pas om een refresh token
+    // vragen als het hier genoemd wordt. We geven er altijd een mee, en
+    // grantableScopes laat de scope daarna weer vallen.
+    scopes_supported: [...ISSUABLE_SCOPES, SCOPE_OFFLINE_ACCESS],
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+    // Alleen S256: de challenge onversleuteld meesturen ('plain') beschermt
+    // nergens tegen en is in OAuth 2.1 niet meer toegestaan.
+    code_challenge_methods_supported: ['S256'],
+    // Onze clients zijn publieke clients: geen client_secret, wel verplicht PKCE.
+    token_endpoint_auth_methods_supported: ['none'],
+    ...(urls.documentation ? { service_documentation: urls.documentation } : {}),
+    ...(openIdVariant
+      ? {
+        jwks_uri: `${issuer}/jwks`,
+        subject_types_supported: ['public'],
+        id_token_signing_alg_values_supported: ['RS256'],
+      }
+      : {}),
+  };
 }
 
 // ── Het autorisatieverzoek onderweg ──────────────────────────────────────────

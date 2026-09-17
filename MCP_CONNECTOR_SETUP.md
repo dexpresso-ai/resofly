@@ -101,23 +101,50 @@ Dat hoort een **401** te geven met een `WWW-Authenticate`-header die naar
 AI-client van de klant zelf uitvindt waar hij moet koppelen — krijg je hier een
 200, dan staat er iets open dat dicht hoort te zijn.
 
+Groene curls bewijzen nog niet dat een AI-client erdoor komt: de officiële
+MCP-SDK keurde het discovery-document hier eerst af terwijl elke curl 200 gaf.
+Zie *Discovery op supabase.co* hieronder.
+
 ## 5. Wat de klant invult
 
-Eén URL:
+Eén URL, letterlijk zo — zonder slash erachter, want Claude vergelijkt hem met de
+`resource` uit het discovery-document:
 
 ```
 https://<PROJECT>.supabase.co/functions/v1/mcp
 ```
 
-De rest gaat vanzelf: de AI-client leest de `WWW-Authenticate`-header, vindt de
-autorisatieserver, registreert zichzelf en stuurt de klant naar het
-toestemmingsscherm.
+Die staat met een kopieerknop en de stappen per AI-app in **Instellingen → AI**
+(`MCP_SERVER_URL` in `src/lib/mcp-api.ts`). De rest gaat vanzelf: de AI-client
+leest de `WWW-Authenticate`-header, vindt de autorisatieserver, registreert
+zichzelf en stuurt de klant naar het toestemmingsscherm.
 
-**Claude.ai** — Instellingen → Connectors → Custom connector toevoegen → URL
-plakken.
-**Claude Desktop** — Instellingen → Connectors → dezelfde URL.
-**ChatGPT** — Instellingen → Connectors (waar beschikbaar in het abonnement van
-de klant).
+**Claude** (web, desktop, telefoon) — Customize → Connectors → + → Add custom
+connector → URL plakken → Add → Connect. Bij Claude Team/Enterprise zet een owner
+hem eerst klaar onder Organization settings → Connectors.
+**Claude Code** — `claude mcp add --transport http resofly <URL>`, daarna `/mcp`
+→ resofly → Authenticate.
+**ChatGPT** — Developer mode aan, nieuwe app met de URL, OAuth als aanmelding.
+
+### Discovery op supabase.co: waarom er een OpenID-vorm is
+
+Een client zoekt de metadata van een issuer mét pad eerst op de root van het
+domein (`/.well-known/oauth-authorization-server/functions/v1/mcp-oauth`). Die
+root is op supabase.co niet van ons; Supabase geeft daar een 401. Het enige
+adres dat hij daarna nog probeert en dat wij beantwoorden, is
+`…/mcp-oauth/.well-known/openid-configuration` — en dat leest hij als
+OpenID-document. Zonder `jwks_uri`, `subject_types_supported` en
+`id_token_signing_alg_values_supported` keurt de officiële SDK het af en stopt
+het koppelen vóór het inloggen. Die velden staan er daarom in (de sleutelset is
+leeg; we geven geen ID-tokens uit). `mcpAuth.test.ts` bewaakt dat.
+
+**Scopes.** Noemt de 401 geen scope, dan vraagt Claude precies de
+`scopes_supported` uit het resource-document. Staat `propose` daar niet in, dan
+kan niemand via zijn AI iets klaarzetten — ook dat staat in een test.
+
+**Claude Code** kiest per koppeling een nieuwe vrije poort op 127.0.0.1. Bij een
+loopback-adres mag daarom alleen de poort afwijken van de registratie (RFC 8252
+§7.3); pad, query en host blijven een exacte vergelijking.
 
 Daarna logt hij in bij ResoFly, kiest hij een organisatie en geeft hij akkoord.
 Op dat scherm staat één keuze: mag deze AI ook wijzigingen klaarzetten, of alleen

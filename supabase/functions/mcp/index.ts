@@ -43,7 +43,7 @@ import {
   templateField, type McpResource,
 } from '../_shared/mcpCatalog.ts';
 import {
-  isJsonRpcRequest, isNotification, parseToken, rpcError, rpcResult, scopeAllows,
+  isJsonRpcRequest, isNotification, parseToken, protectedResourceMetadata, rpcError, rpcResult, scopeAllows,
   toolFailure, toolText, verifyToken, JSONRPC_INVALID_PARAMS, JSONRPC_INVALID_REQUEST,
   JSONRPC_METHOD_NOT_FOUND, JSONRPC_PARSE_ERROR, SCOPE_PROPOSE, SCOPE_READ, type JsonRpcRequest,
 } from '../_shared/mcpAuth.ts';
@@ -84,14 +84,10 @@ Deno.serve(async (req) => {
 
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders() });
 
-  // RFC 9728: hier vindt een client welke autorisatieserver bij deze bron hoort.
+  // RFC 9728: hier vindt een client welke autorisatieserver bij deze bron hoort,
+  // en welke scopes hij kan vragen (zie protectedResourceMetadata).
   if (req.method === 'GET' && url.pathname.endsWith('/.well-known/oauth-protected-resource')) {
-    return json({
-      resource: RESOURCE_URL,
-      authorization_servers: [ISSUER],
-      scopes_supported: ['read'],
-      bearer_methods_supported: ['header'],
-    });
+    return json(protectedResourceMetadata({ issuer: ISSUER, resource: RESOURCE_URL }));
   }
 
   // Streamable HTTP kent ook een GET voor een server-naar-client-stroom. Wij

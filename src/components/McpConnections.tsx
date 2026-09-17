@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button } from './Ui';
-import { grantMayPropose, listGrants, McpNotAvailableError, revokeGrant, type McpGrant } from '../lib/mcp-api';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Button, Select } from './Ui';
+import { grantMayPropose, listGrants, MCP_SERVER_URL, McpNotAvailableError, revokeGrant, type McpGrant } from '../lib/mcp-api';
 import type { OrganizationMember, UUID } from '../types';
 
 /**
@@ -26,19 +26,55 @@ import type { OrganizationMember, UUID } from '../types';
  * iets stuk is.
  */
 
-export function McpConnections({ organizationId, currentUserId, canAdmin, teamMembers, connectUrl }: {
+type ConnectApp = 'claude' | 'claude-code' | 'chatgpt';
+
+const CONNECT_APPS: { id: ConnectApp; label: string }[] = [
+  { id: 'claude', label: 'Claude (web, desktop, telefoon)' },
+  { id: 'claude-code', label: 'Claude Code' },
+  { id: 'chatgpt', label: 'ChatGPT' },
+];
+
+const CLAUDE_CODE_COMMAND = `claude mcp add --transport http resofly ${MCP_SERVER_URL}`;
+
+/**
+ * De stappen tot aan het toestemmingsscherm, per AI-app. Menunamen in het
+ * Engels omdat de apps ze zo tonen. Die namen veranderen af en toe, dus niet
+ * meer stappen dan nodig om het adres op de goede plek te krijgen: vanaf het
+ * toestemmingsscherm is het weer ons scherm.
+ */
+const CONNECT_STEPS: Record<ConnectApp, ReactNode[]> = {
+  claude: [
+    <>Ga in Claude naar <strong>Customize → Connectors</strong> en kies <strong>+ → Add custom connector</strong>.</>,
+    <>Plak het adres hierboven en klik op <strong>Add</strong>. Vraagt Claude hoe hij zich aanmeldt, laat dan staan wat hij zelf vond.</>,
+    <>Klik op <strong>Connect</strong>. Je komt in ResoFly: log in, kies de organisatie en geef akkoord.</>,
+    <>Zet ResoFly in een gesprek aan via <strong>+ → Connectors</strong> en vraag bijvoorbeeld welke facturen er openstaan.</>,
+  ],
+  'claude-code': [
+    <>Voer de opdracht hierboven uit in je terminal.</>,
+    <>Start Claude Code, typ <strong>/mcp</strong>, kies <strong>resofly</strong> en daarna <strong>Authenticate</strong>.</>,
+    <>Je browser opent ResoFly: log in, kies de organisatie en geef akkoord.</>,
+  ],
+  chatgpt: [
+    <>Zet in de instellingen van ChatGPT de <strong>Developer mode</strong> aan. Dat kan op het web met Plus, Pro, Business, Enterprise of Education; bij een zakelijk account zet een beheerder hem eerst aan.</>,
+    <>Maak een nieuwe app aan met het adres hierboven en kies <strong>OAuth</strong> als aanmelding.</>,
+    <>ChatGPT stuurt je naar ResoFly: log in, kies de organisatie en geef akkoord.</>,
+    <>Kies in een gesprek via <strong>+</strong> de Developer mode en zet ResoFly aan.</>,
+  ],
+};
+
+export function McpConnections({ organizationId, currentUserId, canAdmin, teamMembers }: {
   organizationId: UUID;
   currentUserId: UUID | null;
   /** Owner of admin: ziet en stopt ook de koppelingen van collega's. */
   canAdmin: boolean;
   /** Om bij een koppeling van een collega te kunnen zeggen wie het is. */
   teamMembers: OrganizationMember[];
-  /** Waar de gebruiker leest hoe hij koppelt. Leeg = geen link tonen. */
-  connectUrl?: string;
 }) {
   const [grants, setGrants] = useState<McpGrant[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [app, setApp] = useState<ConnectApp>('claude');
+  const [copied, setCopied] = useState<'url' | 'command' | null>(null);
   // De database is nog niet bijgewerkt in deze omgeving. Geen fout, wel een
   // reden om het paneel stil te houden in plaats van rood te kleuren.
   const [unavailable, setUnavailable] = useState(false);
@@ -62,6 +98,16 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
   const team = useMemo(() => (grants ?? []).filter(g => g.user_id !== currentUserId), [grants, currentUserId]);
   const emailByUser = useMemo(() => new Map(teamMembers.map(m => [m.user_id, m.email || null])), [teamMembers]);
 
+  async function copy(value: string, what: 'url' | 'command') {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(what);
+      window.setTimeout(() => setCopied(current => (current === what ? null : current)), 2000);
+    } catch {
+      setError('Kopiëren lukte niet. Selecteer de tekst en kopieer hem handmatig.');
+    }
+  }
+
   async function revoke(grant: McpGrant, ofColleague: boolean) {
     const who = ofColleague ? (emailByUser.get(grant.user_id) ?? 'een collega') : null;
     const question = ofColleague
@@ -84,9 +130,8 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
       <h3>AI-koppelingen</h3>
       <p className="mcp-connections-intro">
         Koppel je eigen AI — Claude, ChatGPT of een andere assistent die MCP spreekt — aan deze werkruimte. Die AI kan
-        dan <strong>meelezen</strong> met alles wat jij zelf mag inzien, en desgewenst wijzigingen <strong>klaarzetten</strong>
-        in je goedkeurwachtrij. Zelf uitvoeren kan hij nooit: dat blijft een klik van jou.
-        {connectUrl && <> <a href={connectUrl} target="_blank" rel="noreferrer">Zo koppel je hem →</a></>}
+        dan <strong>meelezen</strong> met alles wat jij zelf mag inzien, en desgewenst wijzigingen{' '}
+        <strong>klaarzetten</strong> in je goedkeurwachtrij. Zelf uitvoeren kan hij nooit: dat blijft een klik van jou.
       </p>
 
       {error && <p className="error">{error}</p>}
@@ -97,15 +142,57 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
         </p>
       )}
 
+      {!unavailable && (
+        <>
+          <h4 className="mcp-connections-heading">Koppelen</h4>
+          <div className="dns-record">
+            <div className="dns-record-field grow">
+              <span className="dns-record-label">Adres van de connector</span>
+              <code className="dns-record-value">{MCP_SERVER_URL}</code>
+            </div>
+            <Button onClick={() => void copy(MCP_SERVER_URL, 'url')}>{copied === 'url' ? 'Gekopieerd' : 'Kopieer'}</Button>
+          </div>
+
+          <div className="settings-grid compact">
+            <label>Welke AI gebruik je?
+              <Select value={app} onChange={e => setApp(e.target.value as ConnectApp)}>
+                {CONNECT_APPS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+              </Select>
+            </label>
+          </div>
+
+          {app === 'claude-code' && (
+            <div className="dns-record">
+              <div className="dns-record-field grow">
+                <span className="dns-record-label">Opdracht voor je terminal</span>
+                <code className="dns-record-value">{CLAUDE_CODE_COMMAND}</code>
+              </div>
+              <Button onClick={() => void copy(CLAUDE_CODE_COMMAND, 'command')}>{copied === 'command' ? 'Gekopieerd' : 'Kopieer'}</Button>
+            </div>
+          )}
+
+          <ol className="inbound-steps">
+            {CONNECT_STEPS[app].map((step, index) => <li key={index}>{step}</li>)}
+          </ol>
+
+          {app === 'claude' && (
+            <p className="mcp-connections-hint">
+              Werk je met Claude Team of Enterprise? Dan zet een owner van dat Claude-account het adres eerst klaar
+              onder <strong>Organization settings → Connectors</strong>; daarna klik jij op Connect.
+            </p>
+          )}
+        </>
+      )}
+
       {grants === null && !unavailable && <p className="mcp-connections-empty">Laden…</p>}
 
       {grants !== null && !unavailable && (
         <>
-          {canAdmin && <h4 className="mcp-connections-heading">Mijn koppelingen</h4>}
+          <h4 className="mcp-connections-heading">Mijn koppelingen</h4>
 
           {mine.length === 0 && (
             <p className="mcp-connections-empty">
-              Je hebt nog geen AI gekoppeld. Voeg ResoFly in je AI-app toe als connector; het koppelen begint daar.
+              Je hebt nog geen AI gekoppeld. Na het akkoord in ResoFly staat hij hier.
             </p>
           )}
 

@@ -18,6 +18,20 @@ const FUNCTIONS_BASE = `${import.meta.env.VITE_SUPABASE_URL as string}/functions
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 const OAUTH_FN = 'mcp-oauth';
 
+/**
+ * Het adres dat een klant in zijn AI-app plakt.
+ *
+ * Letterlijk dit, zonder slash erachter: Claude vergelijkt het met de `resource`
+ * die de MCP-server in zijn discovery-document noemt, en één teken verschil is
+ * daar een mislukte koppeling. Staat de connector achter een eigen domein
+ * (MCP_RESOURCE_URL op de edge functions), zet VITE_MCP_SERVER_URL dan op
+ * precies dezelfde waarde.
+ */
+export const MCP_SERVER_URL = String(
+  import.meta.env.VITE_MCP_SERVER_URL
+    || `${String(import.meta.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '')}/functions/v1/mcp`,
+).replace(/\/+$/, '');
+
 /** Wie er toestemming vraagt, zoals het toestemmingsscherm het toont. */
 export interface McpConsentRequest {
   clientName: string;

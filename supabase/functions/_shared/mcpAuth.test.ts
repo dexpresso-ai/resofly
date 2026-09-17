@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createAuthCode, createToken, grantableScopes, isAcceptableRedirectUri, isJsonRpcRequest,
-  isNotification, isValidCodeVerifier, parseToken, redirectUriAllowed, scopeAllows,
+  authorizationServerMetadata, createAuthCode, createToken, grantableScopes, isAcceptableRedirectUri, isJsonRpcRequest,
+  isNotification, isValidCodeVerifier, parseToken, protectedResourceMetadata, redirectUriAllowed, scopeAllows,
   sha256Hex, verifyPkce, verifyToken, base64Url, randomBytes,
-  signAuthRequest, verifyAuthRequest, AUTH_REQUEST_TTL_SECONDS, narrowScopes, type AuthRequest,
+  signAuthRequest, verifyAuthRequest, AUTH_REQUEST_TTL_SECONDS, ISSUABLE_SCOPES, narrowScopes, type AuthRequest,
 } from './mcpAuth.ts';
 
 /**
@@ -117,6 +117,27 @@ test('een redirect-URI moet exact overeenkomen', () => {
   assert.equal(redirectUriAllowed(registered, ''), false);
 });
 
+test('bij een loopback-adres mag alleen de poort verschillen', () => {
+  // Claude Code en desktop-apps kiezen per koppeling een nieuwe vrije poort
+  // (RFC 8252 §7.3). Registreerde hij gisteren 33418, dan moet vandaag 51234
+  // ook kunnen — anders strandt hij op "ongeldig terugkeeradres".
+  const registered = ['http://127.0.0.1:33418/callback'];
+  assert.equal(redirectUriAllowed(registered, 'http://127.0.0.1:51234/callback'), true);
+  assert.equal(redirectUriAllowed(['http://localhost/callback'], 'http://localhost:3118/callback'), true);
+  assert.equal(redirectUriAllowed(['http://[::1]:1/callback'], 'http://[::1]:2/callback'), true);
+  // Verder blijft het letterlijk: pad, query en host.
+  assert.equal(redirectUriAllowed(registered, 'http://127.0.0.1:51234/callback/../evil'), false);
+  assert.equal(redirectUriAllowed(registered, 'http://127.0.0.1:51234/callback?next=evil'), false);
+  assert.equal(redirectUriAllowed(registered, 'http://localhost:51234/callback'), false);
+  // Wat na de poort een ander domein van het adres maakt:
+  assert.equal(redirectUriAllowed(registered, 'http://127.0.0.1:51234@evil.com/callback'), false);
+  assert.equal(redirectUriAllowed(['http://localhost:1/callback'], 'http://localhost.evil.com:2/callback'), false);
+  assert.equal(redirectUriAllowed(registered, 'http://127.0.0.1:99999/callback'), false);
+  // En het geldt alleen voor loopback: elk ander adres houdt zijn poort.
+  assert.equal(redirectUriAllowed(['https://claude.ai/api/mcp/auth_callback'], 'https://claude.ai:8443/api/mcp/auth_callback'), false);
+  assert.equal(redirectUriAllowed(['http://voorbeeld.nl:1/cb'], 'http://voorbeeld.nl:2/cb'), false);
+});
+
 test('alleen veilige redirect-URI-vormen mogen geregistreerd worden', () => {
   assert.equal(isAcceptableRedirectUri('https://claude.ai/api/mcp/auth_callback'), true);
   assert.equal(isAcceptableRedirectUri('http://localhost:33418/callback'), true);
@@ -171,6 +192,57 @@ test('een grant laat alleen toe wat erin staat', () => {
   assert.equal(scopeAllows('read', 'propose'), false);
   assert.equal(scopeAllows('read propose', 'propose'), true);
   assert.equal(scopeAllows('', 'read'), false);
+});
+
+// ── Discovery ────────────────────────────────────────────────────────────────
+
+const URLS = {
+  issuer: 'https://voorbeeld.supabase.co/functions/v1/mcp-oauth',
+  resource: 'https://voorbeeld.supabase.co/functions/v1/mcp',
+};
+
+test('de bron biedt klaarzetten aan, anders vraagt geen client erom', () => {
+  // Claude vraagt precies de scopes_supported uit dit document als de 401 geen
+  // scope noemt. Stond hier alleen `read`, dan kon niemand via zijn AI iets
+  // klaarzetten, hoe het toestemmingsscherm ook stond.
+  const prm = protectedResourceMetadata(URLS);
+  assert.deepEqual(prm.scopes_supported, [...ISSUABLE_SCOPES]);
+  assert.deepEqual(grantableScopes((prm.scopes_supported as string[]).join(' ')), ['read', 'propose']);
+  // Claude vergelijkt `resource` letterlijk met de URL die de klant plakte.
+  assert.equal(prm.resource, URLS.resource);
+  assert.deepEqual(prm.authorization_servers, [URLS.issuer]);
+});
+
+test('offline_access staat in het aanbod maar wordt nooit een recht', () => {
+  const meta = authorizationServerMetadata(URLS);
+  assert.ok((meta.scopes_supported as string[]).includes('offline_access'));
+  assert.deepEqual(grantableScopes('read propose offline_access'), ['read', 'propose']);
+  assert.deepEqual(grantableScopes('read offline_access'), ['read']);
+});
+
+test('de OpenID-vorm heeft de velden zonder welke de MCP-SDK hem afkeurt', () => {
+  // Op supabase.co is …/mcp-oauth/.well-known/openid-configuration het enige
+  // discovery-adres dat een client bereikt. De officiële SDK leest dat als
+  // OpenID-document en stopt het koppelen als deze velden ontbreken.
+  const oidc = authorizationServerMetadata(URLS, { openIdVariant: true });
+  for (const field of ['issuer', 'authorization_endpoint', 'token_endpoint', 'jwks_uri']) {
+    assert.equal(typeof oidc[field], 'string', `${field} hoort er te staan`);
+  }
+  for (const field of ['response_types_supported', 'subject_types_supported', 'id_token_signing_alg_values_supported']) {
+    assert.ok(Array.isArray(oidc[field]), `${field} hoort een lijst te zijn`);
+  }
+  assert.equal(oidc.registration_endpoint, `${URLS.issuer}/register`);
+  assert.deepEqual(oidc.code_challenge_methods_supported, ['S256']);
+  // Geen ID-tokens: niemand kan erom vragen.
+  assert.equal((oidc.scopes_supported as string[]).includes('openid'), false);
+});
+
+test('de RFC 8414-vorm belooft geen OpenID', () => {
+  const meta = authorizationServerMetadata(URLS);
+  assert.equal(meta.jwks_uri, undefined);
+  assert.equal(meta.id_token_signing_alg_values_supported, undefined);
+  assert.equal(meta.token_endpoint, `${URLS.issuer}/token`);
+  assert.equal(meta.service_documentation, undefined);
 });
 
 // ── Het autorisatieverzoek onderweg ──────────────────────────────────────────

@@ -37,10 +37,10 @@ import {
   requireOrganizationAccess, requireUser, getModuleLevel, isUuid,
 } from '../_shared/edgeAuth.ts';
 import {
-  AUTH_REQUEST_TTL_SECONDS, createAuthCode, createToken, grantableScopes, narrowScopes,
-  isAcceptableRedirectUri, isValidCodeChallenge, parseToken, redirectUriAllowed,
+  AUTH_REQUEST_TTL_SECONDS, authorizationServerMetadata, createAuthCode, createToken, grantableScopes, narrowScopes,
+  isAcceptableRedirectUri, isValidCodeChallenge, parseToken, protectedResourceMetadata, redirectUriAllowed,
   sha256Hex, signAuthRequest, verifyAuthRequest, verifyPkce, verifyToken,
-  base64Url, randomBytes, SCOPE_READ, type AuthRequest,
+  base64Url, randomBytes, SCOPE_READ, type AuthRequest, type McpDiscoveryUrls,
 } from '../_shared/mcpAuth.ts';
 
 const admin = createAdminClient();
@@ -54,6 +54,11 @@ const APP_PUBLIC_URL = (Deno.env.get('APP_PUBLIC_URL') || '').replace(/\/$/, '')
  */
 const ISSUER = (Deno.env.get('MCP_PUBLIC_BASE_URL') || `${requiredEnv('SUPABASE_URL')}/functions/v1/mcp-oauth`).replace(/\/$/, '');
 const RESOURCE_URL = (Deno.env.get('MCP_RESOURCE_URL') || `${requiredEnv('SUPABASE_URL')}/functions/v1/mcp`).replace(/\/$/, '');
+const DISCOVERY: McpDiscoveryUrls = {
+  issuer: ISSUER,
+  resource: RESOURCE_URL,
+  documentation: APP_PUBLIC_URL ? `${APP_PUBLIC_URL}/mcp` : undefined,
+};
 
 // Kort genoeg dat een gelekt token snel waardeloos is, lang genoeg dat een
 // gesprek met de AI niet halverwege omvalt.
@@ -83,12 +88,19 @@ Deno.serve(async (req) => {
         : new Response('ok', { headers: openCorsHeaders() });
     }
 
-    if (req.method === 'GET' && (at(path, '.well-known/oauth-authorization-server') || at(path, '.well-known/openid-configuration'))) {
-      return openJson(authorizationServerMetadata());
+    // Discovery: hiermee vindt een AI-client zelf uit hoe hij moet koppelen. Het
+    // waarom van de twee vormen staat bij authorizationServerMetadata.
+    if (req.method === 'GET' && at(path, '.well-known/oauth-authorization-server')) {
+      return openJson(authorizationServerMetadata(DISCOVERY));
+    }
+    if (req.method === 'GET' && at(path, '.well-known/openid-configuration')) {
+      return openJson(authorizationServerMetadata(DISCOVERY, { openIdVariant: true }));
     }
     if (req.method === 'GET' && at(path, '.well-known/oauth-protected-resource')) {
-      return openJson(protectedResourceMetadata());
+      return openJson(protectedResourceMetadata(DISCOVERY));
     }
+    // Hoort bij de OpenID-vorm: een lege sleutelset, want we ondertekenen niets.
+    if (req.method === 'GET' && at(path, 'jwks')) return openJson({ keys: [] });
     if (req.method === 'POST' && at(path, 'register')) return await handleRegister(req);
     if (req.method === 'GET' && at(path, 'authorize')) return await handleAuthorize(url);
     if (req.method === 'GET' && at(path, 'consent')) return await handleConsent(url);
@@ -105,40 +117,6 @@ Deno.serve(async (req) => {
     return openJson({ error: status === 500 ? 'server_error' : 'invalid_request', error_description: message }, status);
   }
 });
-
-// ── Discovery ────────────────────────────────────────────────────────────────
-//
-// Hiermee vindt een AI-client zelf uit hoe hij moet koppelen: waar hij zich
-// registreert, waar hij de gebruiker heen stuurt, waar hij zijn token haalt.
-// Zonder dit moet een klant handmatig URL's overtypen.
-
-function authorizationServerMetadata(): Record<string, unknown> {
-  return {
-    issuer: ISSUER,
-    authorization_endpoint: `${ISSUER}/authorize`,
-    token_endpoint: `${ISSUER}/token`,
-    registration_endpoint: `${ISSUER}/register`,
-    revocation_endpoint: `${ISSUER}/revoke`,
-    scopes_supported: ['read', 'propose'],
-    response_types_supported: ['code'],
-    grant_types_supported: ['authorization_code', 'refresh_token'],
-    // Alleen S256: de challenge onversleuteld meesturen ('plain') beschermt
-    // nergens tegen en is in OAuth 2.1 niet meer toegestaan.
-    code_challenge_methods_supported: ['S256'],
-    // Onze clients zijn publieke clients: geen client_secret, wel verplicht PKCE.
-    token_endpoint_auth_methods_supported: ['none'],
-    service_documentation: APP_PUBLIC_URL ? `${APP_PUBLIC_URL}/mcp` : undefined,
-  };
-}
-
-function protectedResourceMetadata(): Record<string, unknown> {
-  return {
-    resource: RESOURCE_URL,
-    authorization_servers: [ISSUER],
-    scopes_supported: ['read', 'propose'],
-    bearer_methods_supported: ['header'],
-  };
-}
 
 // ── 1. Registratie van een AI-client (RFC 7591) ──────────────────────────────
 //
