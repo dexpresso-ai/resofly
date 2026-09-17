@@ -53,11 +53,34 @@ export function summarize(action: ActionDef): ActionSummary {
  * weegt lichter omdat hij vaak zijdelings andere handelingen noemt ("gebruik hiervoor
  * propose_report") — een treffer daarin zegt minder dan een treffer in de naam.
  */
-const INDEX = ACTIONS.map((action) => ({
-  action,
-  strong: new Set([...tokens(action.id), ...tokens(action.label), ...(action.keywords ?? []).flatMap(tokens)]),
-  weak: new Set([...tokens(action.description), ...tokens(action.module)]),
-}));
+interface IndexEntry { action: ActionDef; strong: Set<string>; weak: Set<string> }
+
+function indexEntry(action: ActionDef): IndexEntry {
+  return {
+    action,
+    strong: new Set([...tokens(action.id), ...tokens(action.label), ...(action.keywords ?? []).flatMap(tokens)]),
+    weak: new Set([...tokens(action.description), ...tokens(action.module)]),
+  };
+}
+
+const INDEX = ACTIONS.map(indexEntry);
+
+/**
+ * Hetzelfde, maar voor een lijst die NIET in de registry staat.
+ *
+ * De MCP zoekt behalve in de registry ook in Gerrie's kerntools (zie
+ * `GERRIE_CORE_ACTIONS` in gerrieCore.ts). Die lijst is per proces constant, dus
+ * hem bij elke zoekopdracht opnieuw uitrekenen is zonde — maar hij hoort ook niet
+ * in `INDEX` thuis, want Gerrie's eigen `find_actions` moet hem juist NIET zien:
+ * daar zijn het al gewone tools, en dan zou hij ze dubbel aanbieden.
+ */
+const EXTRA_INDEX = new WeakMap<ActionDef[], IndexEntry[]>();
+
+function extraIndex(extra: ActionDef[]): IndexEntry[] {
+  let entries = EXTRA_INDEX.get(extra);
+  if (!entries) { entries = extra.map(indexEntry); EXTRA_INDEX.set(extra, entries); }
+  return entries;
+}
 
 /**
  * Zoekt handelingen op woorden uit de vraag van de gebruiker.
@@ -78,12 +101,22 @@ const INDEX = ACTIONS.map((action) => ({
  */
 export function searchActions(
   query: string,
-  opts: { allowedIds?: Set<string> | null; modules?: (module: string, kind: 'read' | 'write') => boolean; limit?: number } = {},
+  opts: {
+    allowedIds?: Set<string> | null;
+    modules?: (module: string, kind: 'read' | 'write') => boolean;
+    limit?: number;
+    /** Extra doorzoekbare handelingen buiten de registry; de MCP geeft hier Gerrie's kerntools mee. */
+    extra?: ActionDef[];
+  } = {},
 ): ActionSummary[] {
   const limit = Math.min(Math.max(opts.limit ?? 6, 1), 25);
   const terms = tokens(query);
 
-  const pool = INDEX
+  // Eerst samenvoegen, dan pas filteren en wegen. Andersom zou het gewicht van een
+  // zoekwoord per lijst verschillen, en dan is een score uit de ene lijst niet meer
+  // te vergelijken met een score uit de andere.
+  const all = opts.extra && opts.extra.length > 0 ? [...INDEX, ...extraIndex(opts.extra)] : INDEX;
+  const pool = all
     .filter((e) => !opts.allowedIds || opts.allowedIds.has(e.action.id))
     .filter((e) => !opts.modules || opts.modules(e.action.module, e.action.kind));
 

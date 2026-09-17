@@ -25,6 +25,33 @@ beperking — en daarmee ook als kostenpost.
 **Wat een gekoppelde AI kan, kan Gerrie ook — en omgekeerd.** Het verschil zit
 niet in wat er mag, maar in wiens model het is en wie ervoor betaalt.
 
+Dat klopte een tijd lang maar half. De connector bood alleen de
+*handelingenregistry* aan (`_shared/actions/`, de lange staart: galerijen,
+grootboek, aangiftes), terwijl Gerrie daarnáást zijn eigen *kerntools* heeft — een
+factuur opstellen, reageren op een ticket, een mail aan een klant. Die ontbraken,
+en je zag het terug in de registry zelf: daar staat bij een ticket "reageren doe je
+met `propose_ticket_note`", een tool die aan de MCP-kant niet bestond. Wat de klant
+ervan merkte, was dat zijn eigen AI zei dat iets niet kon terwijl Gerrie het in
+hetzelfde scherm gewoon deed.
+
+Sinds september 2026 doorzoekt `find_actions` beide lijsten en voert
+`run_action` / `propose_action` uit beide uit. Er is geen tweede weg naar de
+gegevens bijgekomen: een kerntool loopt langs exact dezelfde `runGerrieTool` en
+`buildProposal` als de chat, met dezelfde rol- en modulecontrole. Er is alleen een
+tweede manier bijgekomen om die ene weg te vínden.
+
+Twee dingen krijgt een gekoppelde AI bewust niet:
+
+- **`propose_create_agent`** — een agent bouwen die daarna vanzelf draait en zelf
+  dingen mag klaarzetten. Een geplande agent mag dat van zichzelf ook niet
+  (`AGENT_FORBIDDEN_TOOLS`), en een koppeling van buiten hoort niet ruimer te zijn
+  dan iets wat binnen draait.
+- **`ask_user`, `emit_plan`, `emit_agent`** — die horen bij de chatstroom op het
+  scherm en betekenen niets aan de andere kant van een JSON-RPC-verbinding.
+
+`mcpParity.test.ts` bewaakt allebei, en bewaakt ook dat elke tool waar een
+omschrijving naar verwijst via de MCP te bereiken is.
+
 **Uitvoeren doet geen van beide.** Een schrijf-handeling levert een VOORSTEL op:
 een kaart met wat er gaat gebeuren, in de goedkeurwachtrij. Pas als een mens daar
 klikt, gebeurt het — en dan draait het in zijn browser, onder zijn eigen sessie,
@@ -364,3 +391,11 @@ waarschijnlijk een agent aan het doorslaan.
 **Bronnen per klant.** Nu zijn er sjablonen voor een project en een factuur. Een
 klantdossier als bron zou logisch zijn, maar daar is nog geen lees-handeling voor
 die het hele dossier in één keer geeft.
+
+**gerrieCore in de CI-typecheck.** Sinds de connector Gerrie's kerntools aanbiedt,
+importeert `supabase/functions/mcp/index.ts` ook `_shared/gerrieCore.ts` — en
+daarmee loopt dat bestand voor het eerst mee in `deno check`. Dat is winst (het
+werd nergens getypecheckt), maar het betekent ook dat een typefout in gerrieCore nu
+de MCP-check rood maakt in plaats van de gerrie-agent-deploy. Overweeg
+`supabase/functions/gerrie-agent/index.ts` aan dezelfde CI-stap toe te voegen, dan
+staat die dekking er expliciet in plaats van als bijvangst.

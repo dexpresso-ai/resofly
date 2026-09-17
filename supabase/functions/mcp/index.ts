@@ -6,26 +6,35 @@
 // over zijn eigen administratie. Deze functie is wat die assistent aan de andere
 // kant vindt: JSON-RPC over HTTP, met een handvol tools.
 //
-// DRIE TOOLS, GEEN TWEEHONDERD
-// De app kent 264 handelingen. Die allemaal als losse tool aanbieden werkt niet:
-// een MCP-client zet de HELE toollijst in de context van het model, bij elke
-// beurt. Dat is precies het probleem waarvoor de handelingenregistry is bedacht
-// (zie _shared/actions/types.ts), en het antwoord is hier hetzelfde: het model
-// krijgt een zoektool en een uitvoertool, en de lange staart kost pas iets op
-// het moment dat hij nodig is.
+// VIER TOOLS, GEEN DRIEHONDERD
+// De app kent 264 handelingen plus de kerntools van Gerrie. Die allemaal als
+// losse tool aanbieden werkt niet: een MCP-client zet de HELE toollijst in de
+// context van het model, bij elke beurt. Dat is precies het probleem waarvoor de
+// handelingenregistry is bedacht (zie _shared/actions/types.ts), en het antwoord
+// is hier hetzelfde: het model krijgt een zoektool en twee uitvoertools, en de
+// lange staart kost pas iets op het moment dat hij nodig is.
+//
+// TWEE LIJSTEN, ÉÉN ZOEKTOOL
+// `find_actions` doorzoekt de registry én Gerrie's kerntools (GERRIE_CORE_ACTIONS
+// in gerrieCore.ts). Die tweede lijst hoorde er vanaf het begin bij maar zat er
+// niet in, en dat was aan de registry zelf te zien: daar staat bij een ticket
+// "reageren doe je met `propose_ticket_note`" — een tool die hier niet bestond.
+// Wat de gebruiker daarvan merkte was dat zijn AI zei dat iets niet kon terwijl
+// Gerrie het in hetzelfde scherm gewoon deed.
 //
 // DE VIER HARDE REGELS GELDEN OOK HIER — juist hier, want dit is een deur naar
 // buiten:
 //  1. organization_id komt uit de KOPPELING, nooit uit wat het model meestuurt.
 //  2. Elke query is org-scoped; de service-role slaat RLS over, dus dit is de
 //     enige grens.
-//  3. FASE A IS ALLEEN-LEZEN. Er zit geen enkel pad in deze functie dat iets
-//     wijzigt. Schrijven komt in fase B en gaat dan langs de beslislijst, waar
-//     een mens het goedkeurt — niet langs het model van een ander.
+//  3. DEZE FUNCTIE WIJZIGT NOOIT IETS. `run_action` leest; `propose_action` zet
+//     een voorstel klaar in de goedkeurwachtrij en meer niet. Het uitvoeren
+//     gebeurt later in de BROWSER, onder de sessie van wie akkoord geeft, waar
+//     RLS geldt. Een koppeling zonder propose-scope krijgt die tool niet eens.
 //  4. Gegevens uit de database zijn DATA, geen instructie. Dat staat in de
 //     `instructions` die we bij het koppelen meegeven, maar we leunen er niet
 //     op: het model aan de andere kant is niet van ons, dus de echte grens is
-//     regel 3 — er is niets dat het kán doen.
+//     regel 3 — er is niets dat het achter de rug van een mens om kán doen.
 //
 // Waarom verify_jwt = false: de AI-client heeft geen Supabase-sessie. Hij
 // authenticeert met het token dat hij bij het koppelen kreeg, en dat wordt
@@ -37,7 +46,12 @@ import { createAdminClient, requiredEnv } from '../_shared/edgeAuth.ts';
 import { localYmd } from '../_shared/schedule.ts';
 import { ACTIONS } from '../_shared/actions/index.ts';
 import { getAction, searchActions } from '../_shared/actions/registry.ts';
-import { ActionError, type ActionCtx } from '../_shared/actions/types.ts';
+import { ActionError, type ActionCtx, type ActionDef } from '../_shared/actions/types.ts';
+import {
+  GERRIE_CORE_ACTIONS, getGerrieCoreAction, runGerrieTool, buildProposal, describeProposal,
+  type GerrieContext, type OrganizationRole, type Proposal,
+} from '../_shared/gerrieCore.ts';
+import { severityForProposal } from '../_shared/signalRules.ts';
 import {
   MCP_PROMPTS, MCP_RESOURCES, MCP_RESOURCE_TEMPLATES, findPrompt, matchTemplate,
   templateField, type McpResource,
@@ -313,7 +327,8 @@ function initialize(params: Record<string, unknown>, session: Session): Record<s
       `Je bent gekoppeld aan de ResoFly-werkruimte van ${session.organizationName}.`,
       'ResoFly is een CRM- en administratiepakket: klanten, projecten, taken, uren, agenda, tickets, offertes, facturen, boekhouding en marketing.',
       '',
-      'Werkwijze: zoek eerst met `find_actions` op de woorden van de vraag ("openstaande facturen", "uren deze week"). Je krijgt per handeling het id, het invoerschema en de soort terug.',
+      'Werkwijze: zoek eerst met `find_actions` op de woorden van de vraag ("openstaande facturen", "uren deze week", "reageren op een ticket"). Je krijgt per handeling het id, het invoerschema en de soort terug.',
+      'Daar zit alles in wat Gerrie, de ingebouwde assistent, ook kan — van een factuur opstellen tot een reactie op een ticket of een mail aan een klant. Zeg dus niet dat iets niet kan zonder eerst gezocht te hebben.',
       'Handelingen met kind "read" voer je uit met `run_action`.',
       ...(mayPropose(session) ? [
         'Handelingen met kind "write" zet je KLAAR met `propose_action`. Je voert ze niet uit: ze komen in de goedkeurwachtrij in ResoFly en gebeuren pas als een mens daar op Uitvoeren klikt.',
@@ -435,12 +450,21 @@ function getWorkspace(session: Session): Record<string, unknown> {
     writable_modules: mayPropose(session)
       ? MODULE_KEYS.filter((m) => moduleLevel(session, m) === 'write').map((m) => MODULE_LABEL[m] ?? m)
       : [],
-    available_read_actions: ACTIONS.filter((a) => a.kind === 'read' && actionPermitted(session, a)).length,
-    available_write_actions: ACTIONS.filter((a) => a.kind === 'write' && actionPermitted(session, a)).length,
+    // Registry + kerntools samen: dit is wat `find_actions` echt kan vinden, en
+    // het model hoort geen getal te krijgen dat kleiner is dan wat het aantreft.
+    available_read_actions: countAvailable(session, 'read'),
+    available_write_actions: countAvailable(session, 'write'),
     hint: mayPropose(session)
       ? 'Zoek met find_actions; haal gegevens op met run_action en zet wijzigingen klaar met propose_action. Je voert zelf nooit iets uit — de gebruiker keurt goed in ResoFly.'
       : 'Zoek met find_actions op de woorden van de gebruiker; voer daarna uit met run_action.',
   };
+}
+
+/** Hoeveel handelingen van deze soort deze koppeling mag — uit beide lijsten. */
+function countAvailable(session: Session, kind: 'read' | 'write'): number {
+  const registry = ACTIONS.filter((a) => a.kind === kind && actionPermitted(session, a)).length;
+  const coreTools = permittedCoreActions(session).filter((a) => a.kind === kind).length;
+  return registry + coreTools;
 }
 
 function findActions(args: Record<string, unknown>, session: Session): Record<string, unknown> {
@@ -452,6 +476,14 @@ function findActions(args: Record<string, unknown>, session: Session): Record<st
     // teamlid bij mag. Wat hij niet mag ziet het model niet eens bestaan.
     modules: (module, kind) => actionPermitted(session, { module, kind }),
     limit: Number(args.limit) || 12,
+    // Gerrie's kerntools zoeken mee, in dezelfde uitslag en op dezelfde score.
+    // Apart zoeken zou niet werken: het gewicht van een zoekwoord hangt af van
+    // hoe breed het valt, en dat is alleen te vergelijken binnen één lijst.
+    //
+    // Bewust de HELE lijst en niet de gefilterde: `modules` hierboven zeeft hem
+    // toch al, en searchActions onthoudt de woorden per lijst. Een vers gefilterde
+    // array is elke keer een andere en zou dat geheugen nooit raken.
+    extra: GERRIE_CORE_ACTIONS,
   });
 
   return {
@@ -470,8 +502,9 @@ async function runAction(args: Record<string, unknown>, session: Session): Promi
   if (!scopeAllows(session.scope, SCOPE_READ)) throw new ActionError('Deze koppeling mag niets opvragen.');
 
   const actionId = String(args.action_id ?? '').trim();
-  const action = getAction(actionId);
-  if (!action) throw new ActionError(`Onbekende handeling "${actionId}". Zoek hem eerst op met find_actions.`);
+  const resolved = resolveAction(actionId);
+  if (!resolved) throw new ActionError(`Onbekende handeling "${actionId}". Zoek hem eerst op met find_actions.`);
+  const { action, core } = resolved;
 
   // Regel 3 in de praktijk: een schrijf-handeling komt hier niet doorheen. Het
   // is geen filter op de lijst maar een controle op de uitvoer, zodat ook een
@@ -496,7 +529,12 @@ async function runAction(args: Record<string, unknown>, session: Session): Promi
   };
 
   try {
-    const result = await action.read!(ctx, input);
+    // Een kerntool draait langs `runGerrieTool` — precies de weg die de chat ook
+    // neemt, mét de modulecontrole die daarin zit. Een handeling uit de registry
+    // langs zijn eigen `read()`.
+    const result = core
+      ? await runGerrieTool(gerrieContext(session), action.id, input)
+      : await action.read!(ctx, input);
     await audit(session, action.id, input, 'executed', null);
     return result;
   } catch (error) {
@@ -539,8 +577,9 @@ async function proposeAction(args: Record<string, unknown>, session: Session): P
   }
 
   const actionId = String(args.action_id ?? '').trim();
-  const action = getAction(actionId);
-  if (!action) throw new ActionError(`Onbekende handeling "${actionId}". Zoek hem eerst op met find_actions.`);
+  const resolved = resolveAction(actionId);
+  if (!resolved) throw new ActionError(`Onbekende handeling "${actionId}". Zoek hem eerst op met find_actions.`);
+  const { action, core } = resolved;
 
   if (action.kind !== 'write') {
     throw new ActionError(`"${action.label}" haalt alleen gegevens op; gebruik run_action in plaats van propose_action.`);
@@ -573,9 +612,11 @@ async function proposeAction(args: Record<string, unknown>, session: Session): P
     db: admin,
   };
 
-  let plan;
+  let proposal: Proposal;
   try {
-    plan = await action.plan!(ctx, input);
+    proposal = core
+      ? await buildCoreProposal(session, action, input)
+      : await buildRegistryProposal(action, ctx, input);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Onbekende fout.';
     await audit(session, `propose:${action.id}`, input, 'failed', message);
@@ -583,20 +624,19 @@ async function proposeAction(args: Record<string, unknown>, session: Session): P
     throw new ActionError(`Dit voorstel kon niet worden opgesteld: ${message}`);
   }
 
-  // Zelfde vorm als Gerrie's voorstellen (GerrieRegistryActionProposal), want de
-  // wachtrij en de uitvoerder in de browser zijn dezelfde. De waarschuwing komt
-  // VOORAAN in het onderschrift en niet in een eigen veld — anders moet elk
-  // scherm hem apart leren tonen, en het scherm dat dat vergeet toont hem niet.
-  const sub = plan.warning ? `\u26A0\uFE0F ${plan.warning}${plan.sub ? ` — ${plan.sub}` : ''}` : plan.sub;
-  const proposal = {
-    type: 'action' as const,
-    action_id: action.id,
-    title: plan.title,
-    sub,
-    kind: plan.kind,
-    risk: (plan.risk ?? action.risk) === 'high' ? 'high' as const : 'normal' as const,
-    payload: plan.payload,
-  };
+  // Wat de gebruiker op de kaart leest. Een handeling uit de registry draagt zijn
+  // eigen titel en onderschrift; een kerntool heeft die niet, want zijn voorstel is
+  // een `invoice`, een `ticket_note` of een `send_client_email` en de wachtrij maakt
+  // er zelf een kaart van. Voor het ANTWOORD aan het model schrijven we er hier één
+  // zin bij — dezelfde zin die het agent-logboek gebruikt.
+  const title = proposal.type === 'action' ? proposal.title : capitalize(describeProposal(proposal));
+  // Een kerntool heeft geen onderschrift; zijn label zegt in elk geval welke soort
+  // voorstel er klaarstaat ("Reageren op een ticket").
+  const details = proposal.type === 'action' ? proposal.sub : action.label;
+  const irreversible = severityForProposal(
+    proposal.type,
+    proposal.type === 'action' ? proposal.risk : null,
+  ) === 'high';
 
   const { data, error } = await admin.from('ai_action_audit').insert({
     organization_id: session.organizationId,
@@ -605,22 +645,72 @@ async function proposeAction(args: Record<string, unknown>, session: Session): P
     params: proposal,
     status: 'proposed',
     mcp_grant_id: session.grantId,
-    result: { via: session.clientName, client_id: session.clientId },
+    // `title` erbij voor de pushmelding: die leest `params->>'title'`, en dat veld
+    // heeft een voorstel in Gerrie's eigen vorm niet — zie de migratie
+    // 20260917030000_mcp_proposal_push_core_tools.sql. `params` zelf blijft schoon,
+    // want dat is het voorstel dat de browser straks uitvoert.
+    result: { via: session.clientName, client_id: session.clientId, title },
   }).select('id').single();
   if (error) throw new ActionError(`Het voorstel kon niet worden klaargezet: ${error.message}`);
 
   return {
     status: 'klaargezet_voor_goedkeuring',
     proposal_id: String(data.id),
-    title: proposal.title,
-    details: proposal.sub,
-    irreversible: proposal.risk === 'high',
+    title,
+    details,
+    irreversible,
     // Onomwonden, want dit is precies waar een model de neiging heeft af te
     // ronden met "ik heb het verstuurd".
     what_happens_next:
       `Er is NOG NIETS gebeurd. Dit voorstel staat nu in de goedkeurwachtrij van ${session.organizationName} in ResoFly. ` +
       'Het wordt pas uitgevoerd als een mens daar op Uitvoeren klikt. Zeg dat zo tegen de gebruiker; beweer niet dat het al gedaan is.',
   };
+}
+
+/**
+ * Een voorstel uit de REGISTRY.
+ *
+ * De waarschuwing komt VOORAAN in het onderschrift en niet in een eigen veld —
+ * anders moet elk scherm hem apart leren tonen, en het scherm dat dat vergeet
+ * toont hem niet.
+ */
+async function buildRegistryProposal(action: ActionDef, ctx: ActionCtx, input: Record<string, unknown>): Promise<Proposal> {
+  const plan = await action.plan!(ctx, input);
+  const sub = plan.warning ? `\u26A0\uFE0F ${plan.warning}${plan.sub ? ` — ${plan.sub}` : ''}` : plan.sub;
+  return {
+    type: 'action',
+    action_id: action.id,
+    title: plan.title,
+    sub,
+    kind: plan.kind,
+    risk: (plan.risk ?? action.risk) === 'high' ? 'high' : 'normal',
+    payload: plan.payload,
+  };
+}
+
+/**
+ * Een voorstel uit een KERNTOOL van Gerrie.
+ *
+ * Hier wordt niets nagebouwd: `buildProposal` is dezelfde functie die de chat en de
+ * geplande agents gebruiken. Hij doet zijn eigen rol- en modulecontrole en zoekt de
+ * gegevens op uit de administratie van DEZE organisatie — wat het model meestuurt is
+ * hooguit een id, en een id van een andere organisatie vindt hij niet.
+ *
+ * Wat eruit komt is een voorstel in Gerrie's eigen vorm (`ticket_note`,
+ * `send_client_email`, `invoice`, …). Dat is precies wat de goedkeurwachtrij al
+ * verwacht: die leest `params` en voert hem uit via dezelfde `executeProposal` als
+ * een voorstel van een geplande agent. Er hoefde aan die kant dus niets bij.
+ */
+async function buildCoreProposal(session: Session, action: ActionDef, input: Record<string, unknown>): Promise<Proposal> {
+  const built = await buildProposal(gerrieContext(session), action.id, input);
+  // Geen uitzondering maar een nette tekst: het model kan zichzelf corrigeren.
+  if (!built.ok) throw new ActionError(built.error);
+  return built.proposal;
+}
+
+/** Eerste letter groot; `describeProposal` schrijft kleine zinsdelen. */
+function capitalize(text: string): string {
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
 }
 
 /**
@@ -843,6 +933,59 @@ function actionPermitted(session: Session, action: { module: string; kind: 'read
 /** Mag deze koppeling wijzigingen klaarzetten? Staat in de grant, niet in de code. */
 function mayPropose(session: Session): boolean {
   return scopeAllows(session.scope, SCOPE_PROPOSE);
+}
+
+// ── Gerrie's kerntools ───────────────────────────────────────────────────────
+//
+// De registry is de lange staart van wat de app kan; Gerrie's eigen tools zijn de
+// kop (een factuur opstellen, een reactie op een ticket, een mail aan een klant).
+// In de chat heeft hij allebei. Een gekoppelde AI kreeg alleen de staart, en dat
+// was aan de registry zelf te zien: daar staat "reageren doe je met
+// `propose_ticket_note`" — een tool die hier niet bestond.
+//
+// Nu bestaat hij hier wel. Niet als kopie: `find_actions` vindt de BESCHRIJVING
+// (GERRIE_CORE_ACTIONS), en uitvoeren loopt langs exact dezelfde `runGerrieTool`
+// en `buildProposal` als de chat, met dezelfde rechtencontrole. Er komt dus geen
+// tweede weg naar de gegevens bij — alleen een tweede manier om die ene te vinden.
+
+/**
+ * De omgeving waarin een kerntool draait.
+ *
+ * Net als bij een handeling uit de registry: `organization_id` en de rol komen uit
+ * de KOPPELING, nooit uit wat het model meestuurt. `userLabel` en `orgName` leest
+ * alleen de systeemprompt van de chat, die hier niet draait — ze staan er voor de
+ * volledigheid van het type, en omdat een lege string in een logregel niets zegt.
+ */
+function gerrieContext(session: Session): GerrieContext {
+  return {
+    organizationId: session.organizationId,
+    role: session.role as OrganizationRole,
+    userId: session.userId,
+    userLabel: `${session.clientName} (gekoppelde AI)`,
+    orgName: session.organizationName,
+    today: today(),
+    moduleAccess: session.moduleAccess as Record<string, string>,
+  };
+}
+
+/** Wat deze koppeling van de kerntools mag zien — hetzelfde filter als de registry. */
+function permittedCoreActions(session: Session): ActionDef[] {
+  return GERRIE_CORE_ACTIONS.filter((a) => actionPermitted(session, a));
+}
+
+/**
+ * De handeling achter een id, uit welke van de twee lijsten hij ook komt.
+ *
+ * De id's kunnen niet botsen: een handeling uit de registry heet `domein.werkwoord`
+ * en heeft altijd een punt, een kerntool heet `list_tickets` en nooit. Toch kijken
+ * we eerst bij de kerntools — die lijst is de kortste, en zo staat de volgorde vast
+ * in plaats van dat hij van een toevallige naam afhangt.
+ */
+function resolveAction(actionId: string): { action: ActionDef; core: boolean } | null {
+  const core = getGerrieCoreAction(actionId);
+  if (core) return { action: core, core: true };
+  const action = getAction(actionId);
+  return action ? { action, core: false } : null;
 }
 
 // ── Kleine hulpjes ───────────────────────────────────────────────────────────
