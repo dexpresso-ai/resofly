@@ -65,6 +65,15 @@ Klantgegevens, klantvelden, mappen, inhoud verplaatsen, tickets, uren,
 projectinstellingen, factuurstatus, grootboek- en bankstamgegevens, rapportages,
 galerijen.
 
+**Wat de browser-uitvoering afdwong en de serverkant zelf moet doen.** Uitvoeren
+in de browser gebeurde onder de sessie van het teamlid, dus met RLS erbovenop;
+`apply.ts` draait op de service-role en slaat RLS over. Van de 20 tabellen die de
+uitvoerders aanraken, trekt de RLS-regel bij 19 dezelfde grens die de code al
+trekt (dezelfde organisatie, plus de modulepoort die de MCP-server toetst). Alleen
+`planner_notes` is smaller — weekplanner-actiepunten zijn persoonlijk — en die
+uitvoerder gaat daarom langs `updateOwn()`, dat ook op `user_id` filtert.
+`mcpExecute.test.ts` bewaakt die lijst.
+
 Alles daarbuiten valt terug op een voorstel — `execute_action` geeft dan
 `status: "klaargezet_voor_goedkeuring"` met een `reason` erbij, en de AI hoort dat
 zo tegen de gebruiker te zeggen. In `find_actions` ziet het model het vooraf aan

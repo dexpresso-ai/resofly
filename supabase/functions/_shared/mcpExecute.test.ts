@@ -124,6 +124,50 @@ test('de uitvoerders SCHRIJVEN alleen langs de twee org-scoped hulpjes', () => {
     `deze uitvoerders schrijven rechtstreeks naar de database in plaats van via updateOne()/insertOne(): ${strays.join(' | ')}`);
 });
 
+/**
+ * Tabellen waar de organisatie NIET de grens is, maar de gebruiker.
+ *
+ * In ResoFly is bijna alles van het team: collega's bewerken elkaars klanten,
+ * projecten en facturen, en dat is het punt van een gedeelde administratie. Een
+ * handvol tabellen is persoonlijk, te herkennen aan een RLS-regel met
+ * `user_id = auth.uid()`. Die regel deed zijn werk vanzelf zolang uitvoeren in de
+ * browser gebeurde, onder de sessie van het teamlid — een uitvoerder op de
+ * service-role slaat RLS over en moet het dus zelf doen.
+ *
+ * Bewust een korte, met redenen benoemde lijst en geen patroon, net als
+ * ORG_FREE_RPCS in actionTenancy.test.ts: elke regel hier is een plek waar het
+ * mis kan gaan zonder dat iemand een foutmelding ziet.
+ */
+const OWNER_SCOPED_TABLES: Record<string, string> = {
+  planner_notes: 'Actiepunten van de weekplanner zijn persoonlijk (RLS: user_id = auth.uid()).',
+};
+
+test('een uitvoerder op een persoonlijke tabel filtert ook op de gebruiker', () => {
+  const table = applySource.slice(applySource.indexOf('export const DIRECT_APPLIERS'));
+  const lines = table.split('\n');
+  const problems: string[] = [];
+
+  lines.forEach((line, index) => {
+    for (const name of Object.keys(OWNER_SCOPED_TABLES)) {
+      if (!new RegExp(`['"]${name}['"]`).test(line)) continue;
+      // updateOwn() legt het filter op; updateOne() kent alleen de organisatie.
+      if (!/\bupdateOwn\(/.test(line)) problems.push(`regel ${index + 1}: ${line.trim()}`);
+    }
+  });
+
+  assert.deepEqual(problems, [],
+    'Deze uitvoerders schrijven naar een persoonlijke tabel zonder op de gebruiker te filteren, ' +
+    `en draaien op de service-role die RLS overslaat. Gebruik updateOwn(). Persoonlijke tabellen: ${
+      Object.entries(OWNER_SCOPED_TABLES).map(([t, why]) => `${t} — ${why}`).join(' ')}`);
+});
+
+test('updateOwn filtert daadwerkelijk op de gebruiker uit de sessie', () => {
+  // Zonder deze regel is de test hierboven een controle op een naam.
+  const fn = applySource.slice(applySource.indexOf('async function updateOwn'));
+  assert.match(fn.slice(0, 600), /\.eq\('organization_id', ctx\.organizationId\)\.eq\('id', rowId\)\.eq\('user_id', ctx\.userId\)/,
+    'updateOwn hoort op organisatie, rij én gebruiker te filteren.');
+});
+
 // ── 2. Wat mag: de twee schakelaars ─────────────────────────────────────────
 
 test('execute_action bestaat alleen voor een koppeling die mag uitvoeren', () => {

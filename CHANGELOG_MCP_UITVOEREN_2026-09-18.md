@@ -98,6 +98,20 @@ Wat wél wegvalt is de tweede grens die het uitvoeren-in-de-browser oplegde: RLS
 onder een menselijke sessie. Dat is precies waarom de lijst in `apply.ts` met de
 hand is nagelopen en waarom het risiconiveau een aparte schakelaar heeft.
 
+**Wat die tweede grens precies deed, per tabel nagelopen.** Voor 19 van de 20
+tabellen die `apply.ts` aanraakt, is de RLS-regel dezelfde grens die de code al
+trekt: dezelfde organisatie, en de modulepoort die `actionPermitted()` in de
+MCP-server toetst. Eén tabel is smaller: `planner_notes` — de actiepunten van de
+weekplanner zijn persoonlijk (`user_id = auth.uid()`). Die uitvoerder gaat daarom
+langs `updateOwn()`, dat naast de organisatie ook op de gebruiker filtert.
+
+`plan()` controleerde dat al (`week_action.set_done` weigert id's die niet op jouw
+lijst staan), en dat is geen reden om het in de uitvoerder over te slaan: een
+uitvoerder die op zijn aanroeper vertrouwt, valt stil zodra iemand hem ergens
+anders vandaan aanroept. `mcpExecute.test.ts` houdt een benoemde lijst van
+persoonlijke tabellen bij en faalt op een uitvoerder die er zonder dat filter
+naartoe schrijft.
+
 ## De melding
 
 Dezelfde push als bij een voorstel, met "heeft iets uitgevoerd" erin. Bij een
@@ -108,7 +122,7 @@ AI uit zette, heeft het voor allebei uit staan.
 
 ## Wat de tests bewaken
 
-`mcpExecute.test.ts` — 15 tests langs de vier grenzen: wat kán (elke uitvoerder
+`mcpExecute.test.ts` — 17 tests langs de vier grenzen: wat kán (elke uitvoerder
 hoort bij een bestaande schrijf-handeling, én bij een uitvoerder in de browser,
 anders kan een mens niet goedkeuren wat een AI zelf wél doet), wat mág (de tool
 bestaat alleen met de scope, en toetst het risico van het gebouwde plan en niet
@@ -133,6 +147,6 @@ gevonden en naar een andere geschreven.
 | Een admin die het voor een teamlid aanzet | Stoppen is toezicht, verruimen is een keuze met andermans rechten. |
 | Een scherm met alles wat een gekoppelde AI heeft uitgevoerd | Het staat in `ai_action_audit` met koppeling, client en tijdstip erbij, maar er is nog geen overzicht voor de gebruiker zelf. Dat is een eigen vraag — ook voor de opvragingen uit fase A. |
 
-Nagemeten: `npm test` 238 tests groen (218 + 20 nieuw), `npm run typecheck` en
+Nagemeten: `npm test` 240 tests groen (218 + 22 nieuw), `npm run typecheck` en
 `npm run build` groen, `deno check` groen op beide edge functions. Eén migratie
 erbij (vijf in totaal voor de connector).

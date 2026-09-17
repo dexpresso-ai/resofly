@@ -118,6 +118,34 @@ async function updateOne<T = Record<string, unknown>>(
   return data as T;
 }
 
+/**
+ * Eén rij bijwerken die van DEZE GEBRUIKER is, binnen de organisatie.
+ *
+ * Voor bijna alles in ResoFly is de organisatie de grens: collega's zien en
+ * bewerken elkaars klanten, projecten en facturen, en dat is het hele punt van
+ * een gedeelde administratie. Een paar tabellen zijn persoonlijk, en die hebben
+ * in de database een RLS-regel met `user_id = auth.uid()` — de weekplanner-
+ * actiepunten zijn er zo een.
+ *
+ * Die regel deed vroeger zijn werk vanzelf: uitvoeren gebeurde in de browser,
+ * onder de sessie van het teamlid. Hier niet. Dit draait op de service-role, die
+ * RLS overslaat, dus is dit filter de enige plek waar "van jou" nog iets
+ * betekent. `plan()` controleert het ook, en dat is geen reden om het hier over
+ * te slaan: een uitvoerder die op zijn aanroeper vertrouwt, is een uitvoerder
+ * die stilvalt zodra iemand hem ergens anders vandaan aanroept.
+ */
+async function updateOwn<T = Record<string, unknown>>(
+  ctx: ActionCtx, table: string, rowId: string, values: Record<string, unknown>, select = '*', label = 'Rij',
+): Promise<T> {
+  const { data, error } = await ctx.db.from(table)
+    .update({ ...clean(values), updated_at: new Date().toISOString() })
+    .eq('organization_id', ctx.organizationId).eq('id', rowId).eq('user_id', ctx.userId)
+    .select(select).maybeSingle();
+  if (error) throw new ActionError(`${label} bijwerken mislukt: ${error.message}`);
+  if (!data) throw new ActionError(`${label} niet gevonden op jouw lijst.`);
+  return data as T;
+}
+
 /** Eén rij aanmaken binnen de organisatie — de serverkant van `insertRow`. */
 async function insertOne<T = Record<string, unknown>>(
   ctx: ActionCtx, table: string, values: Record<string, unknown>, select = '*', label = 'Rij',
@@ -294,7 +322,8 @@ export const DIRECT_APPLIERS: Record<string, DirectApplier> = {
     const texts = pStrings(payload, 'texts');
     const failed: string[] = [];
     for (let i = 0; i < noteIds.length; i += 1) {
-      try { await updateOne(ctx, 'planner_notes', noteIds[i], { done }, 'id', 'Actiepunt'); }
+      // `updateOwn`: actiepunten zijn persoonlijk. Zie de toelichting bij die functie.
+      try { await updateOwn(ctx, 'planner_notes', noteIds[i], { done }, 'id', 'Actiepunt'); }
       catch { failed.push(texts[i] ?? noteIds[i]); }
     }
     if (failed.length) throw new ActionError(`${noteIds.length - failed.length} bijgewerkt, ${failed.length} mislukt (${failed.join(', ')}).`);
