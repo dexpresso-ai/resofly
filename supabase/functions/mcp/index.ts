@@ -6,13 +6,13 @@
 // over zijn eigen administratie. Deze functie is wat die assistent aan de andere
 // kant vindt: JSON-RPC over HTTP, met een handvol tools.
 //
-// VIER TOOLS, GEEN DRIEHONDERD
+// EEN HANDVOL TOOLS, GEEN DRIEHONDERD
 // De app kent 264 handelingen plus de kerntools van Gerrie. Die allemaal als
 // losse tool aanbieden werkt niet: een MCP-client zet de HELE toollijst in de
 // context van het model, bij elke beurt. Dat is precies het probleem waarvoor de
 // handelingenregistry is bedacht (zie _shared/actions/types.ts), en het antwoord
-// is hier hetzelfde: het model krijgt een zoektool en twee uitvoertools, en de
-// lange staart kost pas iets op het moment dat hij nodig is.
+// is hier hetzelfde: het model krijgt een zoektool en een paar uitvoertools, en
+// de lange staart kost pas iets op het moment dat hij nodig is.
 //
 // TWEE LIJSTEN, ÉÉN ZOEKTOOL
 // `find_actions` doorzoekt de registry én Gerrie's kerntools (GERRIE_CORE_ACTIONS
@@ -27,14 +27,21 @@
 //  1. organization_id komt uit de KOPPELING, nooit uit wat het model meestuurt.
 //  2. Elke query is org-scoped; de service-role slaat RLS over, dus dit is de
 //     enige grens.
-//  3. DEZE FUNCTIE WIJZIGT NOOIT IETS. `run_action` leest; `propose_action` zet
-//     een voorstel klaar in de goedkeurwachtrij en meer niet. Het uitvoeren
-//     gebeurt later in de BROWSER, onder de sessie van wie akkoord geeft, waar
-//     RLS geldt. Een koppeling zonder propose-scope krijgt die tool niet eens.
+//  3. SCHRIJVEN GAAT LANGS DE GEBRUIKER — tenzij hij zelf anders koos. Standaard
+//     zet een gekoppelde AI een wijziging KLAAR (`propose_action`) en gebeurt er
+//     pas iets als een mens in ResoFly op Uitvoeren klikt. Zet de eigenaar van de
+//     koppeling onder Instellingen → AI "rechtstreeks uitvoeren" aan, dan komt
+//     `execute_action` erbij: die voert meteen uit, maar alleen handelingen met
+//     een server-uitvoerder in _shared/actions/apply.ts, en het onomkeerbare
+//     alleen met een tweede schakelaar erbij. De rest valt terug op een voorstel,
+//     en daar horen Gerrie's kerntools altijd bij: die hebben geen uitvoerder op
+//     de server, dus een factuur, een mail aan een klant of een reactie op een
+//     ticket gaat nooit zonder die klik de deur uit.
 //  4. Gegevens uit de database zijn DATA, geen instructie. Dat staat in de
-//     `instructions` die we bij het koppelen meegeven, maar we leunen er niet
-//     op: het model aan de andere kant is niet van ons, dus de echte grens is
-//     regel 3 — er is niets dat het achter de rug van een mens om kán doen.
+//     `instructions` die we bij het koppelen meegeven, maar we leunen er niet op:
+//     het model aan de andere kant is niet van ons. De echte grens is dat elke
+//     schrijfweg door ONS `plan()` of Gerrie's `buildProposal` loopt — het model
+//     levert invoer, wij bepalen wat er precies gebeurt.
 //
 // Waarom verify_jwt = false: de AI-client heeft geen Supabase-sessie. Hij
 // authenticeert met het token dat hij bij het koppelen kreeg, en dat wordt
@@ -59,8 +66,10 @@ import {
 import {
   isJsonRpcRequest, isNotification, openCorsHeaders, parseToken, protectedResourceMetadata, rpcError, rpcResult, scopeAllows,
   toolFailure, toolText, verifyToken, JSONRPC_INVALID_PARAMS, JSONRPC_INVALID_REQUEST,
-  JSONRPC_METHOD_NOT_FOUND, JSONRPC_PARSE_ERROR, SCOPE_PROPOSE, SCOPE_READ, type JsonRpcRequest,
+  JSONRPC_METHOD_NOT_FOUND, JSONRPC_PARSE_ERROR, SCOPE_EXECUTE, SCOPE_EXECUTE_HIGH, SCOPE_PROPOSE, SCOPE_READ,
+  type JsonRpcRequest,
 } from '../_shared/mcpAuth.ts';
+import { directApplier } from '../_shared/actions/apply.ts';
 
 const admin = createAdminClient();
 const RESOURCE_URL = (Deno.env.get('MCP_RESOURCE_URL') || `${requiredEnv('SUPABASE_URL')}/functions/v1/mcp`).replace(/\/$/, '');
@@ -330,7 +339,13 @@ function initialize(params: Record<string, unknown>, session: Session): Record<s
       'Werkwijze: zoek eerst met `find_actions` op de woorden van de vraag ("openstaande facturen", "uren deze week", "reageren op een ticket"). Je krijgt per handeling het id, het invoerschema en de soort terug.',
       'Daar zit alles in wat Gerrie, de ingebouwde assistent, ook kan — van een factuur opstellen tot een reactie op een ticket of een mail aan een klant. Zeg dus niet dat iets niet kan zonder eerst gezocht te hebben.',
       'Handelingen met kind "read" voer je uit met `run_action`.',
-      ...(mayPropose(session) ? [
+      ...(mayExecute(session) ? [
+        'Handelingen met kind "write" doe je met `execute_action`. De gebruiker heeft onder Instellingen → AI aangezet dat jij dat rechtstreeks mag; er komt dus geen goedkeuringsscherm meer tussen.',
+        'Niet alles kan rechtstreeks. Lukt het niet — geen server-uitvoerder, of een onomkeerbare handeling die daarvoor niet is aangezet — dan zet `execute_action` hem alsnog KLAAR in de goedkeurwachtrij.',
+        'Kijk daarom ALTIJD naar het veld `status` in het antwoord voordat je iets terugkoppelt. "uitgevoerd" = het is gebeurd. "klaargezet_voor_goedkeuring" = er is nog niets gebeurd; zeg dan "ik heb het klaargezet, keur het goed in ResoFly", nooit "ik heb het gedaan". Het veld `reason` zegt waarom.',
+        'In `find_actions` zie je het vooraf: `direct: true` gaat rechtstreeks, `direct: false` wordt klaargezet.',
+        'Doe niets ongevraagd. Vraagt iemand om informatie, geef dan informatie; voer pas iets uit als hij daar duidelijk om vraagt. Twijfel je of hij het écht bedoelt, vraag het dan eerst — een uitvoering draait niemand voor je terug.',
+      ] : mayPropose(session) ? [
         'Handelingen met kind "write" zet je KLAAR met `propose_action`. Je voert ze niet uit: ze komen in de goedkeurwachtrij in ResoFly en gebeuren pas als een mens daar op Uitvoeren klikt.',
         'Zeg dat ook zo. Na een `propose_action` is er nog niets gebeurd — geen mail verstuurd, geen factuur aangemaakt. Schrijf dus "ik heb het klaargezet, keur het goed in ResoFly", nooit "ik heb het verstuurd".',
         'Zet niet ongevraagd dingen klaar. Vraagt iemand om informatie, geef dan informatie; zet pas iets klaar als hij daar duidelijk om vraagt.',
@@ -353,12 +368,17 @@ function initialize(params: Record<string, unknown>, session: Session): Record<s
  * De tools die DEZE koppeling ziet.
  *
  * Een koppeling die alleen mag meelezen krijgt `propose_action` niet eens
- * aangeboden. Dat scheelt niet alleen tokens: een tool die er niet is, kan een
- * model ook niet proberen, en het hoeft de gebruiker dus nooit iets te beloven
- * wat hier toch geweigerd wordt.
+ * aangeboden, en zonder de schakelaar onder Instellingen → AI ontbreekt
+ * `execute_action`. Dat scheelt niet alleen tokens: een tool die er niet is, kan
+ * een model ook niet proberen, en het hoeft de gebruiker dus nooit iets te
+ * beloven wat hier toch geweigerd wordt.
  */
 function toolsFor(session: Session): typeof TOOLS {
-  return TOOLS.filter((tool) => tool.name !== 'propose_action' || mayPropose(session));
+  return TOOLS.filter((tool) => {
+    if (tool.name === 'propose_action') return mayPropose(session);
+    if (tool.name === 'execute_action') return mayExecute(session);
+    return true;
+  });
 }
 
 const TOOLS = [
@@ -416,6 +436,23 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'execute_action',
+    description:
+      'Voert een handeling die iets wijzigt METEEN uit, zonder dat de gebruiker hem eerst hoeft goed te keuren. Die keuze heeft hij zelf gemaakt onder Instellingen → AI. ' +
+      'Gebruik dit als hij je vraagt iets te dóén ("zet die factuur op betaald", "koppel dat ticket aan Jansen"); zoek het id eerst op met `find_actions` en gebruik precies de invoervelden die daar staan. ' +
+      'Kan een handeling niet rechtstreeks — omdat ResoFly er geen server-uitvoerder voor heeft, of omdat hij onomkeerbaar is en dat apart aangezet moet worden — dan wordt hij alsnog KLAARGEZET in de goedkeurwachtrij. ' +
+      'Kijk daarom altijd naar het veld `status` in het antwoord: bij "uitgevoerd" is het gebeurd, bij "klaargezet_voor_goedkeuring" nog niet. Zeg dat ook zo tegen de gebruiker.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action_id: { type: 'string', description: 'Het exacte id uit find_actions, bijvoorbeeld "invoice.set_status".' },
+        input: { type: 'object', description: 'De invoervelden zoals het schema van die handeling ze beschrijft.' },
+      },
+      required: ['action_id'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 async function callTool(params: Record<string, unknown>, session: Session): Promise<Record<string, unknown>> {
@@ -431,7 +468,8 @@ async function callTool(params: Record<string, unknown>, session: Session): Prom
       case 'find_actions': return toolText(findActions(args, session));
       case 'run_action': return toolText(await runAction(args, session));
       case 'propose_action': return toolText(await proposeAction(args, session));
-      default: return toolFailure(`Onbekende tool "${name}". Beschikbaar: ${TOOLS.map((t) => t.name).join(', ')}.`);
+      case 'execute_action': return toolText(await executeAction(args, session));
+      default: return toolFailure(`Onbekende tool "${name}". Beschikbaar: ${toolsFor(session).map((t) => t.name).join(', ')}.`);
     }
   } catch (error) {
     return toolFailure(error instanceof Error ? error.message : 'Er ging iets mis bij het uitvoeren van deze tool.');
@@ -445,7 +483,7 @@ function getWorkspace(session: Session): Record<string, unknown> {
     role: session.role,
     today: today(),
     timezone: TZ,
-    access: mayPropose(session) ? 'lezen, en wijzigingen klaarzetten die de gebruiker goedkeurt' : 'alleen lezen',
+    access: describeAccess(session),
     readable_modules: modules.map((m) => MODULE_LABEL[m] ?? m),
     writable_modules: mayPropose(session)
       ? MODULE_KEYS.filter((m) => moduleLevel(session, m) === 'write').map((m) => MODULE_LABEL[m] ?? m)
@@ -454,9 +492,19 @@ function getWorkspace(session: Session): Record<string, unknown> {
     // het model hoort geen getal te krijgen dat kleiner is dan wat het aantreft.
     available_read_actions: countAvailable(session, 'read'),
     available_write_actions: countAvailable(session, 'write'),
-    hint: mayPropose(session)
-      ? 'Zoek met find_actions; haal gegevens op met run_action en zet wijzigingen klaar met propose_action. Je voert zelf nooit iets uit — de gebruiker keurt goed in ResoFly.'
-      : 'Zoek met find_actions op de woorden van de gebruiker; voer daarna uit met run_action.',
+    // Hoeveel van die schrijf-handelingen je écht zelf kunt afmaken. Het verschil
+    // met de regel hierboven is precies wat er alsnog op een akkoord wacht — dat
+    // hoort het model te weten vóórdat het iets belooft. Alleen de registry telt
+    // hier: een kerntool van Gerrie heeft geen uitvoerder op de server.
+    directly_executable_actions: mayExecute(session)
+      ? ACTIONS.filter((a) => a.kind === 'write' && actionPermitted(session, a)
+        && directlyExecutable(session, a.id, a.risk === 'high' ? 'high' : 'normal')).length
+      : 0,
+    hint: mayExecute(session)
+      ? 'Zoek met find_actions; haal gegevens op met run_action en doe wijzigingen met execute_action. Staat er `direct: false` bij een handeling, dan wordt hij klaargezet in plaats van uitgevoerd — kijk daarvoor naar het veld `status` in het antwoord.'
+      : mayPropose(session)
+        ? 'Zoek met find_actions; haal gegevens op met run_action en zet wijzigingen klaar met propose_action. Je voert zelf nooit iets uit — de gebruiker keurt goed in ResoFly.'
+        : 'Zoek met find_actions op de woorden van de gebruiker; voer daarna uit met run_action.',
   };
 }
 
@@ -465,6 +513,14 @@ function countAvailable(session: Session, kind: 'read' | 'write'): number {
   const registry = ACTIONS.filter((a) => a.kind === kind && actionPermitted(session, a)).length;
   const coreTools = permittedCoreActions(session).filter((a) => a.kind === kind).length;
   return registry + coreTools;
+}
+
+/** Eén zin over wat deze koppeling mag, voor `get_workspace`. */
+function describeAccess(session: Session): string {
+  if (mayExecuteHigh(session)) return 'lezen, en wijzigingen rechtstreeks uitvoeren — ook onomkeerbare';
+  if (mayExecute(session)) return 'lezen, en omkeerbare wijzigingen rechtstreeks uitvoeren; onomkeerbare worden klaargezet';
+  if (mayPropose(session)) return 'lezen, en wijzigingen klaarzetten die de gebruiker goedkeurt';
+  return 'alleen lezen';
 }
 
 function findActions(args: Record<string, unknown>, session: Session): Record<string, unknown> {
@@ -489,13 +545,27 @@ function findActions(args: Record<string, unknown>, session: Session): Record<st
   return {
     query,
     found: found.length,
-    actions: found,
+    // Met `execute` erbij is "kind: write" niet meer één ding: de ene handeling
+    // doe je zelf, de andere zet je klaar. Dat verschil hoort in de lijst waaruit
+    // het model kiest, niet pas in het antwoord op de aanroep.
+    actions: mayExecute(session)
+      ? found.map((action) => (action.kind === 'write'
+        ? { ...action, direct: directlyExecutable(session, action.id, riskOf(action.id)) }
+        : action))
+      : found,
     hint: found.length === 0
       ? 'Niets gevonden. Probeer één keer andere woorden; lukt dat ook niet, zeg dan eerlijk dat ResoFly dit niet kan.'
-      : mayPropose(session)
-        ? 'Gebruik run_action voor kind "read" (gegevens ophalen) en propose_action voor kind "write" (iets klaarzetten).'
-        : 'Voer uit met run_action en het exacte id.',
+      : mayExecute(session)
+        ? 'Gebruik run_action voor kind "read". Bij kind "write": execute_action doet het meteen als er `direct: true` staat, en zet het anders klaar voor goedkeuring.'
+        : mayPropose(session)
+          ? 'Gebruik run_action voor kind "read" (gegevens ophalen) en propose_action voor kind "write" (iets klaarzetten).'
+          : 'Voer uit met run_action en het exacte id.',
   };
+}
+
+/** Het risico van een handeling zoals de registry het kent, vóór `plan()`. */
+function riskOf(actionId: string): 'normal' | 'high' {
+  return getAction(actionId)?.risk === 'high' ? 'high' : 'normal';
 }
 
 async function runAction(args: Record<string, unknown>, session: Session): Promise<unknown> {
@@ -510,9 +580,11 @@ async function runAction(args: Record<string, unknown>, session: Session): Promi
   // is geen filter op de lijst maar een controle op de uitvoer, zodat ook een
   // id dat het model ergens anders vandaan haalt stukloopt.
   if (action.kind !== 'read') {
-    throw new ActionError(mayPropose(session)
-      ? `"${action.label}" wijzigt iets; gebruik daarvoor propose_action in plaats van run_action.`
-      : `"${action.label}" wijzigt iets, en deze koppeling mag alleen meelezen. Laat de gebruiker dit in ResoFly zelf doen, of via Gerrie.`);
+    throw new ActionError(mayExecute(session)
+      ? `"${action.label}" wijzigt iets; gebruik daarvoor execute_action in plaats van run_action.`
+      : mayPropose(session)
+        ? `"${action.label}" wijzigt iets; gebruik daarvoor propose_action in plaats van run_action.`
+        : `"${action.label}" wijzigt iets, en deze koppeling mag alleen meelezen. Laat de gebruiker dit in ResoFly zelf doen, of via Gerrie.`);
   }
   if (!actionPermitted(session, action)) {
     throw new ActionError(`Je hebt geen leesrechten voor de module ${MODULE_LABEL[action.module] ?? action.module}.`);
@@ -576,54 +648,191 @@ async function proposeAction(args: Record<string, unknown>, session: Session): P
     );
   }
 
+  const { action, core } = writeAction(args, session);
+  const input = inputOf(args);
+  // Vóór het werk, niet erna: een plan bouwen kost queries, en die hoeven niet
+  // gedraaid te worden voor een voorstel dat toch niet geplaatst wordt.
+  await assertQueueHasRoom(session);
+  const proposal = await buildMcpProposal(action, core, input, session);
+  return await queueProposal(action, proposal, session);
+}
+
+/**
+ * Voert een schrijf-handeling RECHTSTREEKS uit — de tweede weg, en de enige
+ * waarbij er geen mens tussen zit.
+ *
+ * WAT DIT WEL EN NIET VERANDERT AAN DE GRENZEN. Alles wat een voorstel veilig
+ * maakte, geldt hier onverkort: `plan()` draait met de organisatie uit de
+ * koppeling, de payload komt uit ons plan en niet uit het model, en de
+ * modulerechten van het teamlid gelden onverminderd. Wat wegvalt is de klik —
+ * en dus ook de tweede grens die het uitvoeren onder een menselijke sessie legde
+ * (RLS). Dat is precies waarom hier twee dingen bovenop komen:
+ *
+ *  1. Alleen handelingen met een SERVER-UITVOERDER in `apply.ts`. Dat is een
+ *     korte, met de hand nagelopen lijst van enkelvoudige org-scoped queries —
+ *     geen mail, geen PDF, geen bestandsopslag.
+ *  2. Alleen wat de EIGENAAR van de koppeling zelf aanzette, en voor het
+ *     onomkeerbare een tweede schakelaar apart.
+ *
+ * Kan of mag het niet rechtstreeks, dan wordt het alsnog een voorstel. Dat is de
+ * terugval en geen fout: de gebruiker vroeg iets te doen, en "klaargezet, keur
+ * het goed" is daar het eerlijke antwoord op — beter dan een weigering waar hij
+ * niets mee kan.
+ */
+async function executeAction(args: Record<string, unknown>, session: Session): Promise<unknown> {
+  if (!mayExecute(session)) {
+    throw new ActionError(
+      'Deze koppeling mag niets rechtstreeks uitvoeren. De gebruiker zet dat zelf aan onder Instellingen → AI; '
+      + 'gebruik tot die tijd propose_action, dan komt het in zijn goedkeurwachtrij.',
+    );
+  }
+
+  const { action, core } = writeAction(args, session);
+  const input = inputOf(args);
+
+  // Geen uitvoerder op de server? Dan hoeft het plan niet eens gebouwd te worden
+  // voor een uitvoering die toch niet doorgaat — het wordt een voorstel.
+  //
+  // Gerrie's kerntools komen hier altijd langs. Een uitvoerder hoort bij een
+  // handeling uit de registry (`invoice.set_status`, altijd met een punt), een
+  // kerntool heet `propose_ticket_note` en nooit zo. Zijn voorstel — een factuur,
+  // een mail aan een klant, een reactie op een ticket — voert de browser uit, en
+  // dat blijft zo, ook met deze schakelaar aan.
+  if (!directApplier(action.id)) {
+    return await fallbackToProposal(action, core, input, session,
+      `ResoFly kan "${action.label}" niet rechtstreeks uitvoeren: daarvoor is de app zelf nodig.`);
+  }
+
+  // Vanaf hier is het een handeling uit de registry: alleen die heeft een uitvoerder.
+  const proposal = await explainPlanFailure(action, input, session,
+    () => buildRegistryProposal(action, input, session));
+
+  // Het risico van DIT geval, niet van de handeling in het algemeen: een `plan()`
+  // mag het omhoog zetten voor de ene aanroep en niet voor de andere.
+  if (!directlyExecutable(session, action.id, proposal.risk)) {
+    return await fallbackToProposal(action, core, input, session,
+      `"${action.label}" is onomkeerbaar of gaat naar buiten, en deze koppeling mag dat niet rechtstreeks doen.`,
+      proposal);
+  }
+
+  const ctx = actionContext(session);
+  let confirmation: string;
+  try {
+    confirmation = await directApplier(action.id)!(ctx, proposal.payload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Onbekende fout.';
+    await recordExecution(session, proposal, 'failed', message);
+    if (error instanceof ActionError) throw error;
+    throw new ActionError(`Dit uitvoeren liep vast: ${message}`);
+  }
+
+  const auditId = await recordExecution(session, proposal, 'auto_executed', confirmation);
+
+  return {
+    status: 'uitgevoerd',
+    audit_id: auditId,
+    title: proposal.title,
+    details: proposal.sub,
+    result: confirmation,
+    // Net zo onomwonden als de tegenhanger bij propose_action, en om dezelfde
+    // reden: dit is de zin waar een model de neiging heeft omheen te praten.
+    what_happens_next:
+      'Dit is DAADWERKELIJK gebeurd in ResoFly — er staat niets meer te wachten op goedkeuring. '
+      + 'Vertel de gebruiker precies wat er is gewijzigd en noem het document, de klant of het project bij naam: '
+      + 'hij heeft het niet zien gebeuren, dus jouw zin is waar hij het aan moet herkennen.',
+  };
+}
+
+/**
+ * De handeling uit de argumenten, gecontroleerd op alles wat voor beide schrijf-
+ * wegen geldt: hij bestaat, hij schrijft, en dit teamlid mag die module. Met
+ * erbij uit welke lijst hij komt, want daar hangt van af wie het voorstel bouwt.
+ */
+function writeAction(args: Record<string, unknown>, session: Session): { action: ActionDef; core: boolean } {
   const actionId = String(args.action_id ?? '').trim();
   const resolved = resolveAction(actionId);
   if (!resolved) throw new ActionError(`Onbekende handeling "${actionId}". Zoek hem eerst op met find_actions.`);
-  const { action, core } = resolved;
+  const { action } = resolved;
 
   if (action.kind !== 'write') {
-    throw new ActionError(`"${action.label}" haalt alleen gegevens op; gebruik run_action in plaats van propose_action.`);
+    throw new ActionError(`"${action.label}" haalt alleen gegevens op; gebruik run_action.`);
   }
   if (!actionPermitted(session, action)) {
     throw new ActionError(`Je hebt geen schrijfrechten voor de module ${MODULE_LABEL[action.module] ?? action.module}.`);
   }
+  return resolved;
+}
 
-  // Vóór het werk, niet erna: een plan bouwen kost queries, en die hoeven niet
-  // gedraaid te worden voor een voorstel dat toch niet geplaatst wordt.
-  const { count, error: countError } = await admin.from('ai_action_audit')
-    .select('id', { count: 'exact', head: true })
-    .eq('organization_id', session.organizationId)
-    .eq('mcp_grant_id', session.grantId)
-    .eq('status', 'proposed');
-  if (countError) throw new ActionError(`Openstaande voorstellen tellen mislukt: ${countError.message}`);
-  if ((count ?? 0) >= MAX_OPEN_PROPOSALS) {
-    throw new ActionError(
-      `Er staan al ${count} voorstellen van deze koppeling te wachten op goedkeuring. ` +
-      'Zet er geen nieuwe meer klaar; vraag de gebruiker eerst om de wachtrij in ResoFly af te handelen.',
-    );
-  }
+function inputOf(args: Record<string, unknown>): Record<string, unknown> {
+  return (args.input && typeof args.input === 'object') ? args.input as Record<string, unknown> : {};
+}
 
-  const input = (args.input && typeof args.input === 'object') ? args.input as Record<string, unknown> : {};
-  const ctx: ActionCtx = {
+/** Alles wat een handeling van zijn omgeving nodig heeft — nooit uit het model. */
+function actionContext(session: Session): ActionCtx {
+  return {
     organizationId: session.organizationId,
     userId: session.userId,
     role: session.role,
     today: today(),
     db: admin,
   };
+}
 
-  let proposal: Proposal;
+/** Een voorstel in de vorm van de registry — de enige vorm die `execute_action` uitvoert. */
+type RegistryProposal = Extract<Proposal, { type: 'action' }>;
+
+/**
+ * Bouwt het voorstel, uit welke van de twee lijsten de handeling ook komt. Eén
+ * plek, want beide schrijfwegen hebben hetzelfde nodig: de kaart die de gebruiker
+ * leest én de payload die uitgevoerd wordt.
+ */
+function buildMcpProposal(
+  action: ActionDef, core: boolean, input: Record<string, unknown>, session: Session,
+): Promise<Proposal> {
+  return explainPlanFailure<Proposal>(action, input, session, () => (core
+    ? buildCoreProposal(session, action, input)
+    : buildRegistryProposal(action, input, session)));
+}
+
+/**
+ * Bouwt een voorstel en legt vast als dat stukloopt. Invoer die niet klopt gaat
+ * als leesbare tekst terug, zodat het model zichzelf kan corrigeren in plaats van
+ * vast te lopen.
+ */
+async function explainPlanFailure<T>(
+  action: ActionDef, input: Record<string, unknown>, session: Session, build: () => Promise<T>,
+): Promise<T> {
   try {
-    proposal = core
-      ? await buildCoreProposal(session, action, input)
-      : await buildRegistryProposal(action, ctx, input);
+    return await build();
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Onbekende fout.';
     await audit(session, `propose:${action.id}`, input, 'failed', message);
     if (error instanceof ActionError) throw error;
     throw new ActionError(`Dit voorstel kon niet worden opgesteld: ${message}`);
   }
+}
 
+/**
+ * De wachtrij loopt niet vol met dingen die niemand meer naloopt. Staat er al
+ * een stapel, dan is er geen voorstel bij gebaat maar een mens.
+ */
+async function assertQueueHasRoom(session: Session): Promise<void> {
+  const { count, error } = await admin.from('ai_action_audit')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', session.organizationId)
+    .eq('mcp_grant_id', session.grantId)
+    .eq('status', 'proposed');
+  if (error) throw new ActionError(`Openstaande voorstellen tellen mislukt: ${error.message}`);
+  if ((count ?? 0) >= MAX_OPEN_PROPOSALS) {
+    throw new ActionError(
+      `Er staan al ${count} voorstellen van deze koppeling te wachten op goedkeuring. ` +
+      'Zet er geen nieuwe meer klaar; vraag de gebruiker eerst om de wachtrij in ResoFly af te handelen.',
+    );
+  }
+}
+
+/** Zet het voorstel in het auditlog, waar de goedkeurwachtrij het oppikt. */
+async function queueProposal(action: ActionDef, proposal: Proposal, session: Session): Promise<Record<string, unknown>> {
   // Wat de gebruiker op de kaart leest. Een handeling uit de registry draagt zijn
   // eigen titel en onderschrift; een kerntool heeft die niet, want zijn voorstel is
   // een `invoice`, een `ticket_note` of een `send_client_email` en de wachtrij maakt
@@ -668,20 +877,22 @@ async function proposeAction(args: Record<string, unknown>, session: Session): P
 }
 
 /**
- * Een voorstel uit de REGISTRY.
+ * Een voorstel uit de REGISTRY, gebouwd met zijn eigen `plan()`.
  *
- * De waarschuwing komt VOORAAN in het onderschrift en niet in een eigen veld —
- * anders moet elk scherm hem apart leren tonen, en het scherm dat dat vergeet
- * toont hem niet.
+ * Zelfde vorm als Gerrie's voorstellen (GerrieRegistryActionProposal), want de
+ * wachtrij en de uitvoerder in de browser zijn dezelfde. De waarschuwing komt
+ * VOORAAN in het onderschrift en niet in een eigen veld — anders moet elk scherm
+ * hem apart leren tonen, en het scherm dat dat vergeet toont hem niet.
  */
-async function buildRegistryProposal(action: ActionDef, ctx: ActionCtx, input: Record<string, unknown>): Promise<Proposal> {
-  const plan = await action.plan!(ctx, input);
-  const sub = plan.warning ? `\u26A0\uFE0F ${plan.warning}${plan.sub ? ` — ${plan.sub}` : ''}` : plan.sub;
+async function buildRegistryProposal(
+  action: ActionDef, input: Record<string, unknown>, session: Session,
+): Promise<RegistryProposal> {
+  const plan = await action.plan!(actionContext(session), input);
   return {
     type: 'action',
     action_id: action.id,
     title: plan.title,
-    sub,
+    sub: plan.warning ? `\u26A0\uFE0F ${plan.warning}${plan.sub ? ` — ${plan.sub}` : ''}` : plan.sub,
     kind: plan.kind,
     risk: (plan.risk ?? action.risk) === 'high' ? 'high' : 'normal',
     payload: plan.payload,
@@ -711,6 +922,53 @@ async function buildCoreProposal(session: Session, action: ActionDef, input: Rec
 /** Eerste letter groot; `describeProposal` schrijft kleine zinsdelen. */
 function capitalize(text: string): string {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+}
+
+/**
+ * De terugval van `execute_action`: het wordt alsnog een voorstel, mét de reden
+ * erbij.
+ *
+ * Die reden is geen beleefdheid. Een model dat alleen "klaargezet" terugkrijgt
+ * op een vraag om iets te dóén, probeert het de volgende keer gewoon opnieuw;
+ * eentje dat weet dat DEZE handeling nu eenmaal langs een mens gaat, zegt dat
+ * tegen de gebruiker en houdt op.
+ */
+async function fallbackToProposal(
+  action: ActionDef,
+  core: boolean,
+  input: Record<string, unknown>,
+  session: Session,
+  reason: string,
+  planned?: Proposal,
+): Promise<Record<string, unknown>> {
+  await assertQueueHasRoom(session);
+  const proposal = planned ?? await buildMcpProposal(action, core, input, session);
+  const queued = await queueProposal(action, proposal, session);
+  return { ...queued, reason, retry: false };
+}
+
+/**
+ * Een rechtstreekse uitvoering in het auditlog. Zelfde tabel, zelfde vorm en
+ * dezelfde `params` als een voorstel — alleen de status verschilt. Zo staat een
+ * "gedaan" en een "wacht nog" in hetzelfde overzicht, en hoeft geen scherm twee
+ * soorten rijen te leren kennen.
+ */
+async function recordExecution(
+  session: Session, proposal: RegistryProposal, status: 'auto_executed' | 'failed', detail: string,
+): Promise<string | null> {
+  const { data, error } = await admin.from('ai_action_audit').insert({
+    organization_id: session.organizationId,
+    user_id: session.userId,
+    action: `mcp:execute:${proposal.action_id}`,
+    params: proposal,
+    status,
+    mcp_grant_id: session.grantId,
+    result: { ok: status === 'auto_executed', detail, via: session.clientName, client_id: session.clientId },
+  }).select('id').single();
+  // Een audit die niet wegkomt mag een geslaagde uitvoering niet alsnog laten
+  // klappen — dan zou het model melden dat het misging terwijl het gebeurd is.
+  if (error) { console.error('[mcp] uitvoering vastleggen mislukt:', error.message); return null; }
+  return String(data.id);
 }
 
 /**
@@ -930,9 +1188,50 @@ function actionPermitted(session: Session, action: { module: string; kind: 'read
   return level !== 'none';
 }
 
-/** Mag deze koppeling wijzigingen klaarzetten? Staat in de grant, niet in de code. */
+/**
+ * Mag deze koppeling wijzigingen klaarzetten? Staat in de grant, niet in de code.
+ *
+ * `execute` telt hier mee, en niet alleen voor de netheid: niet elke handeling
+ * heeft een server-uitvoerder, dus een koppeling die mag uitvoeren VALT TERUG op
+ * klaarzetten. Zou dat recht er niet bij zitten, dan zou juist de ruimste
+ * koppeling bij die handelingen met lege handen staan.
+ */
 function mayPropose(session: Session): boolean {
-  return scopeAllows(session.scope, SCOPE_PROPOSE);
+  return scopeAllows(session.scope, SCOPE_PROPOSE) || mayExecute(session);
+}
+
+/** Mag deze koppeling omkeerbare handelingen rechtstreeks uitvoeren? */
+function mayExecute(session: Session): boolean {
+  return scopeAllows(session.scope, SCOPE_EXECUTE);
+}
+
+/**
+ * ...en ook de onomkeerbare? Dit is de tweede, aparte schakelaar onder
+ * Instellingen → AI, en hij staat los omdat het risico losstaat: een
+ * projectstatus zet je terug, een verstuurde aanmaning niet.
+ */
+function mayExecuteHigh(session: Session): boolean {
+  return mayExecute(session) && scopeAllows(session.scope, SCOPE_EXECUTE_HIGH);
+}
+
+/**
+ * Kan én mag deze handeling rechtstreeks, zonder menselijke klik?
+ *
+ * Drie voorwaarden, en ze zeggen alle drie iets anders: de koppeling moet het
+ * mogen (`execute`), de handeling moet een server-uitvoerder hebben (anders is
+ * er niets om uit te voeren), en bij risico 'high' moet de tweede schakelaar ook
+ * om. Valt er één weg, dan wordt het een voorstel — dat is de terugval, geen fout.
+ *
+ * Het risico komt als parameter binnen en niet uit de handeling zelf, want een
+ * `plan()` mag het per geval overschrijven: een ticketnotitie verbergen is
+ * ongevaarlijk, hem zichtbaar maken voor de klant niet. `find_actions` kent dat
+ * geval nog niet en geeft het risico van de handeling mee (een hint); bij het
+ * uitvoeren telt het risico van het plan dat er dan ligt.
+ */
+function directlyExecutable(session: Session, actionId: string, risk: 'normal' | 'high'): boolean {
+  if (!mayExecute(session)) return false;
+  if (!directApplier(actionId)) return false;
+  return risk !== 'high' || mayExecuteHigh(session);
 }
 
 // ── Gerrie's kerntools ───────────────────────────────────────────────────────

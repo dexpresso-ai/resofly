@@ -5,7 +5,7 @@ import {
   isNotification, isValidCodeVerifier, parseToken, protectedResourceMetadata, redirectUriAllowed, scopeAllows,
   sha256Hex, verifyPkce, verifyToken, base64Url, randomBytes,
   signAuthRequest, verifyAuthRequest, AUTH_REQUEST_TTL_SECONDS, ISSUABLE_SCOPES, narrowScopes, type AuthRequest,
-  openCorsHeaders,
+  openCorsHeaders, normalizeScopes, CONSENT_SCOPES,
 } from './mcpAuth.ts';
 
 /**
@@ -155,11 +155,13 @@ test('alleen veilige redirect-URI-vormen mogen geregistreerd worden', () => {
 
 // ── Scopes ───────────────────────────────────────────────────────────────────
 
+const ALL_SCOPES = ['read', 'propose', 'execute', 'execute_high'];
+
 test('vraagt de client niets, dan mag de gebruiker alles kiezen', () => {
   // Het normale geval: een AI-client kent onze scopes niet en vraagt er geen.
   // Dan is het plafond alles wat we kunnen uitgeven, en kiest de gebruiker.
-  assert.deepEqual(grantableScopes(''), ['read', 'propose']);
-  assert.deepEqual(grantableScopes(undefined), ['read', 'propose']);
+  assert.deepEqual(grantableScopes(''), ALL_SCOPES);
+  assert.deepEqual(grantableScopes(undefined), ALL_SCOPES);
 });
 
 test('noemt de client wél scopes, dan is dat het plafond', () => {
@@ -168,7 +170,7 @@ test('noemt de client wél scopes, dan is dat het plafond', () => {
   // Onzin valt weg; wat overblijft is het plafond.
   assert.deepEqual(grantableScopes('read verzonnen'), ['read']);
   // Alleen onzin = de client vroeg niets bruikbaars, dus het volle aanbod.
-  assert.deepEqual(grantableScopes('admin alles'), ['read', 'propose']);
+  assert.deepEqual(grantableScopes('admin alles'), ALL_SCOPES);
 });
 
 test('de keuze van de gebruiker kan nooit ruimer dan het aanbod', () => {
@@ -179,6 +181,41 @@ test('de keuze van de gebruiker kan nooit ruimer dan het aanbod', () => {
   // Binnen het aanbod mag de gebruiker wel kiezen.
   assert.deepEqual(narrowScopes('read propose', 'read'), ['read']);
   assert.deepEqual(narrowScopes('read propose', 'read propose'), ['read', 'propose']);
+  // En het uitvoerrecht al helemaal niet: de trap mag nooit langs het plafond
+  // tillen wat de client niet aanbood.
+  assert.deepEqual(narrowScopes('read propose', 'read propose execute'), ['read', 'propose']);
+  assert.deepEqual(narrowScopes('read', 'execute_high'), ['read']);
+});
+
+// ── De trap: uitvoeren, klaarzetten, lezen ──────────────────────────────────
+
+test('de niveaus zijn een trap en geen losse vinkjes', () => {
+  // Wie mag uitvoeren, mag ook klaarzetten: niet elke handeling heeft een
+  // server-uitvoerder, dus `execute` VALT TERUG op `propose`. Zonder dat recht
+  // zou juist de ruimste koppeling daar met lege handen staan.
+  assert.deepEqual(normalizeScopes(['execute']), ['read', 'propose', 'execute']);
+  // En het onomkeerbare bestaat niet zonder het omkeerbare.
+  assert.deepEqual(normalizeScopes(['execute_high']), ALL_SCOPES);
+  // Lezen hoort er altijd bij, klaarzetten niet vanzelf.
+  assert.deepEqual(normalizeScopes(['propose']), ['read', 'propose']);
+  // Een lege keuze blijft leeg; `read` erbij verzinnen zou een koppeling maken
+  // van iemand die er geen wilde.
+  assert.deepEqual(normalizeScopes([]), []);
+});
+
+test('de gebruiker die uitvoeren kiest, krijgt de hele trap binnen het plafond', () => {
+  assert.deepEqual(narrowScopes(ALL_SCOPES.join(' '), 'execute'), ['read', 'propose', 'execute']);
+  assert.deepEqual(narrowScopes(ALL_SCOPES.join(' '), 'execute_high'), ALL_SCOPES);
+});
+
+test('het toestemmingsscherm kan geen uitvoerrecht uitdelen', () => {
+  // De scopes waar dat scherm uit kiest. Dat `execute` hier NIET bij staat is de
+  // hele afspraak: rechtstreeks uitvoeren zet je aan onder Instellingen → AI, in
+  // je eigen tijd — niet op een scherm dat je bereikt door in je AI-app op
+  // Connect te klikken. mcp-oauth knipt de keuze hierop terug vóór narrowScopes.
+  assert.deepEqual([...CONSENT_SCOPES], ['read', 'propose']);
+  assert.ok(!(CONSENT_SCOPES as readonly string[]).includes('execute'));
+  assert.ok(!(CONSENT_SCOPES as readonly string[]).includes('execute_high'));
 });
 
 test('een koppeling houdt altijd minstens leesrecht', () => {
@@ -208,7 +245,7 @@ test('de bron biedt klaarzetten aan, anders vraagt geen client erom', () => {
   // klaarzetten, hoe het toestemmingsscherm ook stond.
   const prm = protectedResourceMetadata(URLS);
   assert.deepEqual(prm.scopes_supported, [...ISSUABLE_SCOPES]);
-  assert.deepEqual(grantableScopes((prm.scopes_supported as string[]).join(' ')), ['read', 'propose']);
+  assert.deepEqual(grantableScopes((prm.scopes_supported as string[]).join(' ')), ALL_SCOPES);
   // Claude vergelijkt `resource` letterlijk met de URL die de klant plakte.
   assert.equal(prm.resource, URLS.resource);
   assert.deepEqual(prm.authorization_servers, [URLS.issuer]);
@@ -218,6 +255,7 @@ test('offline_access staat in het aanbod maar wordt nooit een recht', () => {
   const meta = authorizationServerMetadata(URLS);
   assert.ok((meta.scopes_supported as string[]).includes('offline_access'));
   assert.deepEqual(grantableScopes('read propose offline_access'), ['read', 'propose']);
+  assert.deepEqual(grantableScopes('read execute offline_access'), ['read', 'propose', 'execute']);
   assert.deepEqual(grantableScopes('read offline_access'), ['read']);
 });
 

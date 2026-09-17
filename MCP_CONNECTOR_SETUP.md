@@ -5,7 +5,8 @@ andere die MCP spreekt — meewerken in zijn ResoFly-werkruimte. Hij vraagt die 
 "welke facturen staan er open?" of "wat heb ik deze week op Jansen geboekt?" en
 krijgt antwoord uit zijn eigen administratie. En hij kan hem laten
 **klaarzetten**: "stuur Jansen een herinnering" belandt als voorstel in zijn
-goedkeurwachtrij, waar hij het met één klik uitvoert.
+goedkeurwachtrij, waar hij het met één klik uitvoert. Wil hij die klik niet, dan
+zet hij per koppeling **rechtstreeks uitvoeren** aan onder Instellingen → AI.
 
 Het model draait op **zijn** abonnement, niet op het onze. Wij leveren alleen de
 gegevens. Daarmee valt het maandtegoed dat Gerrie begrenst hier weg als
@@ -19,13 +20,16 @@ beperking — en daarmee ook als kostenpost.
 | Kosten | Ons maandtegoed | Zijn eigen |
 | Lezen | Ja | Ja |
 | Wijzigen / versturen | Als voorstel, na goedkeuring | Als voorstel, na goedkeuring |
-| Zelf uitvoeren | Nooit | Nooit |
+| Zelf uitvoeren | Nooit | Alleen als de gebruiker het zelf aanzet |
 | Waar je praat | In ResoFly | In zijn eigen AI-app |
 
 **Wat een gekoppelde AI kan, kan Gerrie ook — en omgekeerd.** Het verschil zit
-niet in wat er mag, maar in wiens model het is en wie ervoor betaalt.
+niet in wat er mag, maar in wiens model het is en wie ervoor betaalt. Op één punt
+kan de gekoppelde AI méér: rechtstreeks uitvoeren. Dat is geen ruimere
+bevoegdheid maar een andere plek voor de klik — en het is aan de gebruiker, niet
+aan ons.
 
-Dat klopte een tijd lang maar half. De connector bood alleen de
+Dat eerste klopte een tijd lang maar half. De connector bood alleen de
 *handelingenregistry* aan (`_shared/actions/`, de lange staart: galerijen,
 grootboek, aangiftes), terwijl Gerrie daarnáást zijn eigen *kerntools* heeft — een
 factuur opstellen, reageren op een ticket, een mail aan een klant. Die ontbraken,
@@ -52,11 +56,63 @@ Twee dingen krijgt een gekoppelde AI bewust niet:
 `mcpParity.test.ts` bewaakt allebei, en bewaakt ook dat elke tool waar een
 omschrijving naar verwijst via de MCP te bereiken is.
 
-**Uitvoeren doet geen van beide.** Een schrijf-handeling levert een VOORSTEL op:
-een kaart met wat er gaat gebeuren, in de goedkeurwachtrij. Pas als een mens daar
-klikt, gebeurt het — en dan draait het in zijn browser, onder zijn eigen sessie,
-met alle databasebeveiliging die daarbij hoort. Er is geen pad waarlangs een
-model iets in gang zet zonder die klik. Ook niet als de gebruiker erom vraagt.
+### De drie standen
+
+Standaard staat een koppeling op **klaarzetten**. De gebruiker schuift hem zelf
+op onder **Instellingen → AI**, per koppeling, met twee losse schakelaars:
+
+| Stand | Scope | Wat er gebeurt bij "zet die factuur op betaald" |
+|---|---|---|
+| Klaarzetten *(standaard)* | `read propose` | Een kaart in de goedkeurwachtrij. Er gebeurt pas iets als een mens klikt. |
+| Rechtstreeks uitvoeren | `+ execute` | Het gebeurt meteen. Handelingen die ResoFly niet server-side kan, en alles wat `risk: 'high'` is, worden alsnog klaargezet. |
+| Ook het onomkeerbare | `+ execute_high` | Ook post naar klanten, aangiftes, boekingen en publieke links gaan er rechtstreeks door. |
+
+Die tweede schakelaar staat apart omdat het risico apart staat: een projectstatus
+zet je terug, een verstuurde aanmaning niet. Zaten ze in één knop, dan koos de
+gebruiker tussen "mijn AI mag niets doen" en "mijn AI mag mailen naar klanten".
+
+**Het toestemmingsscherm deelt geen uitvoerrecht uit.** Daar kiest de gebruiker
+alleen tussen meelezen en klaarzetten. Rechtstreeks uitvoeren staat alleen in
+zijn eigen instellingen — een scherm dat je bereikt door in je AI-app op *Connect*
+te klikken, is niet de plek om af te spreken dat die AI voortaan ongevraagd mag
+boeken. Koppelt hij dezelfde AI opnieuw, dan begint die keuze weer bij uit.
+
+### Wat "rechtstreeks" wél en niet kan
+
+De 188 schrijf-handelingen hebben hun uitvoerder in de **browser**
+(`src/lib/actions/`), bovenop `repository.ts`: dezelfde weg als de knop in het
+scherm, met dezelfde normalisatie en foutafhandeling. Die allemaal naar de server
+kopiëren levert een tweede implementatie op die uit de pas gaat lopen — juist bij
+de handelingen waar dat het duurst is (mail, PDF, bestandsopslag).
+
+Daarom heeft `supabase/functions/_shared/actions/apply.ts` alleen uitvoerders
+voor handelingen waarvan de serverkant **aantoonbaar dezelfde** is: één
+org-scoped insert of update, zonder mail, zonder PDF, zonder afgeleide rijen.
+Klantgegevens, klantvelden, mappen, inhoud verplaatsen, tickets, uren,
+projectinstellingen, factuurstatus, grootboek- en bankstamgegevens, rapportages,
+galerijen.
+
+**Wat de browser-uitvoering afdwong en de serverkant zelf moet doen.** Uitvoeren
+in de browser gebeurde onder de sessie van het teamlid, dus met RLS erbovenop;
+`apply.ts` draait op de service-role en slaat RLS over. Van de 20 tabellen die de
+uitvoerders aanraken, trekt de RLS-regel bij 19 dezelfde grens die de code al
+trekt (dezelfde organisatie, plus de modulepoort die de MCP-server toetst). Alleen
+`planner_notes` is smaller — weekplanner-actiepunten zijn persoonlijk — en die
+uitvoerder gaat daarom langs `updateOwn()`, dat ook op `user_id` filtert.
+`mcpExecute.test.ts` bewaakt die lijst.
+
+Alles daarbuiten valt terug op een voorstel — `execute_action` geeft dan
+`status: "klaargezet_voor_goedkeuring"` met een `reason` erbij, en de AI hoort dat
+zo tegen de gebruiker te zeggen. In `find_actions` ziet het model het vooraf aan
+`direct: true` of `direct: false`. De dekking groeit door er uitvoerders bij te
+zetten; `mcpExecute.test.ts` bewaakt dat elke uitvoerder bij een bestaande
+schrijf-handeling hoort én dat een mens hem in de app ook kan goedkeuren.
+
+**Gerrie's kerntools vallen daar altijd onder.** Een factuur opstellen, een mail
+aan een klant of een reactie op een ticket heeft geen uitvoerder op de server.
+`execute_action` zet zo'n kerntool dus altijd klaar, ook met beide schakelaars
+aan, en `find_actions` toont hem met `direct: false`. Uitvoeren gebeurt daarna in
+de browser, via dezelfde `executeProposal` als een voorstel van een geplande agent.
 
 ## 1. Database
 
@@ -64,7 +120,7 @@ model iets in gang zet zonder die klik. Ook niet als de gebruiker erom vraagt.
 supabase db push
 ```
 
-Dat draait vier migraties, in volgorde en veilig om te herhalen:
+Dat draait zes migraties, in volgorde en veilig om te herhalen:
 
 | Migratie | Wat |
 |---|---|
@@ -72,6 +128,8 @@ Dat draait vier migraties, in volgorde en veilig om te herhalen:
 | `20260917000000_mcp_propose.sql` | `ai_action_audit.mcp_grant_id`; intrekken annuleert klaarstaande voorstellen |
 | `20260917010000_mcp_proposal_push.sql` | Push-type `mcp_proposal` en de trigger die de melding stuurt |
 | `20260917020000_mcp_grants_admin_overview.sql` | Owners/admins zien en stoppen alle koppelingen; wijzigingsguard |
+| `20260917040000_mcp_proposal_push_core_tools.sql` | De melding noemt ook bij een kerntool-voorstel wat er klaarstaat (`result->>'title'`) |
+| `20260917050000_mcp_execute.sql` | `mcp_grants.scope_ceiling`; de eigenaar mag zijn eigen scope wijzigen; melding ook bij een uitvoering |
 
 ## 2. Secrets
 
@@ -312,9 +370,17 @@ Elke koppeling is daar te stoppen, ook die van iemand die uit dienst is.
 
 Stoppen is definitief en werkt meteen: de tokens gaan mee, en wat die koppeling
 nog had klaarstaan wordt geannuleerd. Een databasetrigger houdt de rest dicht —
-vanuit de app is aan een koppeling niets anders te veranderen dan intrekken en
-hernoemen, ook niet door een admin. Meer rechten geven kan alleen de gebruiker
-zelf, door opnieuw te koppelen.
+vanuit de app is aan een koppeling van een ander niets te veranderen dan
+intrekken en hernoemen, ook niet door een admin.
+
+**Verruimen kan alleen de eigenaar zelf.** De schakelaars voor rechtstreeks
+uitvoeren staan daarom alleen bij *mijn koppelingen*. Een owner die de koppeling
+van een collega ziet, kan hem stoppen — dat is toezicht — maar hem niet méér laten
+doen: dat zou namens die collega een keuze maken die diens rechten gebruikt. De
+trigger weigert het ook als iemand het buiten het scherm om probeert, en toetst
+daarbij drie dingen: alleen de eigenaar, binnen `scope_ceiling` (wat de AI-client
+bij het koppelen vroeg), en geen losse treden — `execute_high` bestaat niet zonder
+`execute`, en niets bestaat zonder `read`.
 
 ## De melding
 
@@ -322,6 +388,11 @@ Zet een gekoppelde AI iets klaar, dan krijgt de eigenaar van die koppeling een
 push: *"Claude op mijn laptop heeft iets klaargezet — herinnering aan Jansen"*.
 Eén tik en hij staat op zijn wachtrij. Uit te zetten onder **Instellingen →
 Meldingen** (*Je gekoppelde AI zet iets klaar*).
+
+Voert die AI iets **rechtstreeks** uit, dan komt diezelfde melding — met "heeft
+iets uitgevoerd" erin. Daar valt niets meer te keuren, en dat is precies waarom
+hij er hoort te zijn: het is het enige moment waarop de gebruiker ziet dat er iets
+in zijn administratie is gewijzigd terwijl hij ergens anders mee bezig was.
 
 Alleen de eigenaar, niet het team. De andere meldingen (nieuw ticket, klantmail)
 gaan wél naar iedereen, maar die gaan over iets wat van buiten komt. Dit gaat
@@ -387,6 +458,11 @@ Dat is ruim voor een gesprek; loopt een klant er structureel tegenaan, dan is er
 waarschijnlijk een agent aan het doorslaan.
 
 ## Wat er hierna komt
+
+**Meer rechtstreekse uitvoerders.** Er zijn er nu 36 van de 188
+schrijf-handelingen. Elke handeling waarvan de browser-uitvoerder één org-scoped
+insert of update is, kan erbij in `apply.ts`; wat mail verstuurt, een PDF rendert
+of bestanden aanraakt hoort er bewust niet bij te komen.
 
 **Bronnen per klant.** Nu zijn er sjablonen voor een project en een factuur. Een
 klantdossier als bron zou logisch zijn, maar daar is nog geen lees-handeling voor
