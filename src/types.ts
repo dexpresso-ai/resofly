@@ -1193,6 +1193,22 @@ export interface ClientEmailThreadOverview extends OrgScopedRow {
   last_preview: string | null;
 }
 
+/**
+ * Eén treffer van de zoekfunctie over álle klantmail (rpc search_client_emails):
+ * het bericht waarin de zoekwoorden staan, met een stuk tekst rond de treffer.
+ */
+export interface ClientEmailSearchHit {
+  id: UUID;
+  thread_id: UUID;
+  client_id: UUID;
+  subject: string;
+  from_name: string | null;
+  from_email: string;
+  direction: ClientEmailDirection;
+  created_at: string;
+  excerpt: string;
+}
+
 export interface InvoiceWorkflowEvent {
   id: UUID;
   organization_id: UUID;

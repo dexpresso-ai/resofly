@@ -5,15 +5,15 @@ import { Button } from '../components/Ui';
 import { SearchFilterPanel } from '../components/SearchFilterPanel';
 import type { FilterField } from '../components/SearchFilterPanel';
 import { dateNL, priorityLabel } from '../lib/format';
+import { TICKET_OPEN_STATUSES, TICKET_STATUS_LABELS, TICKET_STATUS_ORDER } from '../lib/tickets';
 
-const convertibleStatuses = new Set<TicketStatus>(['new', 'review', 'approved']);
-// "Openstaand" = nog actief te behandelen (dus niet afgewezen en niet omgezet).
-const openStatuses = new Set<TicketStatus>(['new', 'review', 'approved']);
-
-const STATUS_ORDER: TicketStatus[] = ['new', 'review', 'approved', 'rejected', 'converted'];
-const ticketStatusLabels: Record<TicketStatus, string> = {
-  new: 'Nieuw', review: 'Review', approved: 'Goedgekeurd', rejected: 'Geweigerd', converted: 'Omgezet',
-};
+// Om te zetten naar een project = nog actief te behandelen: dezelfde drie
+// statussen als "Openstaand" (niet afgewezen en niet omgezet). De labels en
+// volgorde staan in lib/tickets.ts, gedeeld met het klantdossier en Berichten.
+const convertibleStatuses = TICKET_OPEN_STATUSES;
+const openStatuses = TICKET_OPEN_STATUSES;
+const STATUS_ORDER = TICKET_STATUS_ORDER;
+const ticketStatusLabels = TICKET_STATUS_LABELS;
 const priorityRank: Record<Priority, number> = { high: 3, med: 2, low: 1 };
 
 const VIEW_STORAGE_KEY = 'resofly.tickets.view';

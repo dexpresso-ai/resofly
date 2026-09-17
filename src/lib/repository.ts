@@ -34,6 +34,7 @@ import type {
   DunningNotice,
   SendingDomain,
   ClientEmail,
+  ClientEmailSearchHit,
   ClientEmailThread,
   ClientEmailThreadOverview,
   ClientEmailUnreadCounts,
@@ -3913,6 +3914,48 @@ export async function loadClientEmailsForThread(organizationId: UUID, threadId: 
     .order('created_at', { ascending: false });
   if (error) throw error;
   return (data ?? []) as ClientEmail[];
+}
+
+/**
+ * Een handvol gesprekken op id, in dezelfde vorm als de lijst. Voor treffers
+ * van de zoekfunctie die buiten de eerste 400 gesprekken vallen: die staan nog
+ * niet in de lijst en worden zo alsnog getoond.
+ */
+export async function loadClientEmailThreadOverviewByIds(organizationId: UUID, threadIds: UUID[]): Promise<ClientEmailThreadOverview[]> {
+  const ids = [...new Set(threadIds)].slice(0, 200);
+  if (ids.length === 0) return [];
+  const { data, error } = await supabase
+    .from('client_email_thread_overview')
+    .select(CLIENT_EMAIL_THREAD_OVERVIEW_COLUMNS)
+    .eq('organization_id', organizationId)
+    .in('id', ids)
+    .order('last_message_at', { ascending: false });
+  if (error) {
+    if (isMissingRelation(error)) return [];
+    throw error;
+  }
+  return (data ?? []) as ClientEmailThreadOverview[];
+}
+
+/**
+ * Zoek door álle klantmail van de organisatie (rpc search_client_emails):
+ * elke mail waarin alle zoekwoorden voorkomen, nieuwste eerst, met een stuk
+ * tekst rond de treffer. De view achter de lijst kent alleen het laatste
+ * bericht per gesprek; dit vindt ook een woord uit een oudere mail.
+ *
+ * Bestaat de functie in deze omgeving nog niet, dan valt zoeken stilletjes
+ * terug op wat er lokaal geladen is — geen fout, geen rode balk.
+ */
+export async function searchClientEmails(organizationId: UUID, query: string, limit = 200): Promise<ClientEmailSearchHit[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const { data, error } = await supabase.rpc('search_client_emails', { p_organization_id: organizationId, p_query: q, p_limit: limit });
+  if (error) {
+    // PGRST202 = onbekende functie in de schema-cache (nog niet gemigreerd).
+    if (error.code === 'PGRST202' || isMissingRelation(error)) return [];
+    throw error;
+  }
+  return (data ?? []) as ClientEmailSearchHit[];
 }
 
 // ── Doorstuuradres + opvangbak voor inkomende mail ──────────────────────────

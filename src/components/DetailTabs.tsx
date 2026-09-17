@@ -9,6 +9,8 @@ export interface DetailTab<T extends string> {
   icon?: LucideIcon;
   /** Teller in accentkleur, voor ongelezen berichten. */
   unread?: boolean;
+  /** Een stip naast de teller: er is iets nieuws, zonder dat de teller zelf "ongelezen" telt. */
+  dot?: boolean;
 }
 
 type Fade = 'none' | 'left' | 'right' | 'both';
@@ -79,6 +81,7 @@ export function DetailTabs<T extends string>({ tabs, active, onSelect, label, cl
             {Icon && <span className="client-tab-ico" aria-hidden="true"><Icon size={14} /></span>}
             <span className="client-tab-label">{tab.label}</span>
             {tab.count != null && tab.count > 0 && <span className={`client-tab-badge${tab.unread ? ' unread' : ''}`}>{tab.count}</span>}
+            {tab.dot && <span className="client-tab-dot" role="img" aria-label="nieuwe activiteit" />}
           </button>
         );
       })}

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, FileSignature, FileText, Files, FolderOpen, LayoutDashboard, Mail, Receipt, RotateCcw, Search, Upload, Users } from 'lucide-react';
-import type { AppData, Client, ClientEmail, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, InternalDocument, Invoice, Note, Project, Quote } from '../types';
+import { ChevronDown, ChevronRight, FileSignature, FileText, Files, FolderOpen, LayoutDashboard, Mail, Receipt, RotateCcw, Search, Ticket as TicketIcon, Upload, Users } from 'lucide-react';
+import type { AppData, Client, ClientEmail, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, InternalDocument, Invoice, Note, Project, Quote, Ticket } from '../types';
 import { activeFieldDefinitions, customFieldsSearchText, formatCustomFieldValue } from '../components/CustomFields';
-import { dateNL, euro, formatMinutes, minutesToHours, total } from '../lib/format';
+import { dateNL, euro, formatMinutes, minutesToHours, priorityLabel, total } from '../lib/format';
+import { TICKET_STATUS_LABELS, TICKET_STATUS_ORDER, groupNotesByTicket, ticketLastActivity, ticketMatchesStatus } from '../lib/tickets';
+import { listTime } from '../lib/communication';
 import { Button, Input, Select } from '../components/Ui';
 import { DetailTabs } from '../components/DetailTabs';
 import type { DetailTab } from '../components/DetailTabs';
@@ -425,6 +427,11 @@ export function ClientDetailPage({
   onEditDocument,
   unreadCount,
   onUnreadChanged,
+  onNewTicket,
+  onEditTicket,
+  unreadTicketIds,
+  canReadTickets,
+  canWriteTickets,
 }: {
   data: AppData;
   client: Client;
@@ -446,8 +453,22 @@ export function ClientDetailPage({
   onEditDocument: (doc: InternalDocument) => void;
   unreadCount: number;
   onUnreadChanged: () => void;
+  onNewTicket: () => void;
+  onEditTicket: (ticket: Ticket) => void;
+  /** Tickets met klant-activiteit die deze gebruiker nog niet gezien heeft (view ticket_unread). */
+  unreadTicketIds: Set<string>;
+  /** Module Tickets staat open voor dit teamlid: dan is er een tabblad Tickets. */
+  canReadTickets: boolean;
+  canWriteTickets: boolean;
 }) {
   const projects = data.projects.filter(project => project.client_id === client.id);
+  // Tickets van deze klant, laatste activiteit (ticket of notitie) bovenaan.
+  const notesByTicket = useMemo(() => groupNotesByTicket(data.ticketNotes), [data.ticketNotes]);
+  const clientTickets = useMemo(() => data.tickets
+    .filter(ticket => ticket.client_id === client.id)
+    .map(ticket => ({ ticket, lastAt: ticketLastActivity(ticket, notesByTicket.get(ticket.id) ?? []), noteCount: (notesByTicket.get(ticket.id) ?? []).length }))
+    .sort((a, b) => (Date.parse(b.lastAt) || 0) - (Date.parse(a.lastAt) || 0)), [data.tickets, notesByTicket, client.id]);
+  const unreadClientTickets = clientTickets.filter(row => unreadTicketIds.has(row.ticket.id)).length;
   const notes = getClientNotes(data, client.id);
   const documents = getClientDocuments(data, client.id);
   // Het tabblad "Bestanden" toont dezelfde verkenner als Inhoud → deze klant, dus telt
@@ -507,6 +528,10 @@ export function ClientDetailPage({
     () => invoices.filter(invoice => invoiceMatchesQuery(invoice, normalizedQuery) && invoiceMatchesStatus(invoice, statusFilter)),
     [invoices, normalizedQuery, statusFilter],
   );
+  const filteredTickets = useMemo(
+    () => clientTickets.filter(row => ticketMatchesQuery(row.ticket, normalizedQuery) && ticketMatchesStatus(row.ticket, statusFilter)),
+    [clientTickets, normalizedQuery, statusFilter],
+  );
   const switchTab = (tab: ClientTab) => {
     setActiveTab(tab);
     setQuery('');
@@ -519,6 +544,9 @@ export function ClientDetailPage({
   const tabs: DetailTab<ClientTab>[] = [
     { id: 'overview', label: 'Overzicht', icon: LayoutDashboard },
     { id: 'projects', label: 'Projecten', count: projects.length, icon: FolderOpen },
+    // De teller is het totaal; de stip zegt dat er een ticket met nieuwe
+    // klant-activiteit tussen zit (anders zou "Tickets 2" twee dingen betekenen).
+    ...(canReadTickets ? [{ id: 'tickets' as const, label: 'Tickets', count: clientTickets.length, icon: TicketIcon, dot: unreadClientTickets > 0 }] : []),
     { id: 'quotes', label: 'Offertes', count: quotes.length, icon: FileText },
     { id: 'contracts', label: 'Contracten', count: contracts.length, icon: FileSignature },
     { id: 'invoices', label: 'Facturen', count: invoices.length, icon: Receipt },
@@ -580,6 +608,13 @@ export function ClientDetailPage({
         <Select className="form-select client-tab-status-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
           <option value="">Alle statussen</option>
           {clientStatusFilterOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+        </Select>
+      )}
+      {activeTab === 'tickets' && (
+        <Select className="form-select client-tab-status-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Filter op ticketstatus">
+          <option value="">Alle statussen</option>
+          <option value="open">Openstaand</option>
+          {TICKET_STATUS_ORDER.map(status => <option key={status} value={status}>{TICKET_STATUS_LABELS[status]}</option>)}
         </Select>
       )}
       {activeFilterCount > 0 && (
@@ -709,6 +744,15 @@ export function ClientDetailPage({
         </button>)}
       </div>
     </article>}
+
+    {activeTab === 'tickets' && canReadTickets && <ClientTicketsPanel
+      rows={filteredTickets}
+      total={clientTickets.length}
+      unreadTicketIds={unreadTicketIds}
+      canWrite={canWrite && canWriteTickets}
+      onNew={onNewTicket}
+      onOpen={onEditTicket}
+    />}
 
     {activeTab === 'quotes' && <FinancePanel
       title="Offertes"
@@ -977,6 +1021,57 @@ function ClientCommunication({ client, organizationId, canWrite, onUnreadChanged
   </div>;
 }
 
+/**
+ * Tabblad Tickets: de tickets van deze klant als dezelfde kaarten als op de
+ * ticketpagina, laatste activiteit bovenaan. Openen = het bewerkvenster met
+ * de tijdlijn (en het ticket telt dan als gelezen, zoals op de ticketpagina).
+ */
+function ClientTicketsPanel({ rows, total, unreadTicketIds, canWrite, onNew, onOpen }: {
+  rows: Array<{ ticket: Ticket; lastAt: string; noteCount: number }>;
+  total: number;
+  unreadTicketIds: Set<string>;
+  canWrite: boolean;
+  onNew: () => void;
+  onOpen: (ticket: Ticket) => void;
+}) {
+  return <article className="client-panel">
+    <div className="client-panel-head">
+      <h3>Tickets</h3>
+      <div className="client-panel-head-right">
+        <span>{rows.length}</span>
+        {canWrite && <button type="button" className="client-overview-more-btn" onClick={onNew}>+ Nieuw ticket</button>}
+      </div>
+    </div>
+    {rows.length === 0 && <div className="client-empty-line">{total === 0 ? 'Nog geen tickets voor deze klant.' : 'Geen tickets voor deze zoekopdracht of filter.'}</div>}
+    {total === 0 && canWrite && <button type="button" className="client-overview-more-link" onClick={onNew}>+ Eerste ticket aanmaken</button>}
+    {rows.length > 0 && <div className="ticket-list client-ticket-list">
+      {rows.map(({ ticket, lastAt, noteCount }) => {
+        const isUnread = unreadTicketIds.has(ticket.id);
+        return <article key={ticket.id} className={`ticket-item pri-${ticket.priority}${isUnread ? ' is-unread' : ''}`} role="button" tabIndex={0}
+          onClick={() => onOpen(ticket)}
+          onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen(ticket); } }}>
+          <div className="tk-body">
+            <div className="tk-title">{ticket.title}</div>
+            <div className="tk-meta">
+              <span className={`tk-pri-label ${ticket.priority}`}>{priorityLabel(ticket.priority)}</span>
+              {isUnread && <span className="tk-new-badge">Nieuw</span>}
+              <span className="tk-activity" title={`Laatste activiteit ${dateNL(lastAt)}`}>{noteCount > 0 ? `${noteCount} notitie${noteCount === 1 ? '' : 's'} · ` : ''}{listTime(lastAt)}</span>
+              {ticket.converted_to_project_id && <span>Project aangemaakt</span>}
+            </div>
+          </div>
+          <span className={`tk-status ${ticket.status}`}>{TICKET_STATUS_LABELS[ticket.status]}</span>
+        </article>;
+      })}
+    </div>}
+  </article>;
+}
+
+function ticketMatchesQuery(ticket: Ticket, query: string): boolean {
+  if (!query) return true;
+  return [ticket.title, ticket.description, ticket.notes, TICKET_STATUS_LABELS[ticket.status], priorityLabel(ticket.priority)]
+    .map(clientSearchNormalize).join(' ').includes(query);
+}
+
 function getClientProjectIds(data: AppData, clientId: string) {
   return new Set(data.projects.filter(project => project.client_id === clientId).map(project => project.id));
 }
@@ -1069,7 +1164,7 @@ function isInvoiceOverdue(invoice: Invoice) {
 }
 
 // ── Zoeken/filteren op de klantdetailpagina ────────────────────────────
-type ClientTab = 'overview' | 'projects' | 'quotes' | 'contracts' | 'invoices' | 'files' | 'communication';
+type ClientTab = 'overview' | 'projects' | 'tickets' | 'quotes' | 'contracts' | 'invoices' | 'files' | 'communication';
 
 // Statussen die zowel op offertes als facturen slaan staan zonder suffix; de
 // finance- of offerte-specifieke statussen krijgen een suffix zodat duidelijk is

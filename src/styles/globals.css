@@ -900,6 +900,13 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .client-tab-btn.active .client-tab-ico{color:var(--accent-ink)}
 .client-tab-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 6px;border-radius:999px;background:var(--bg4);color:var(--muted2);font-size:10.5px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
 .client-tab-btn.active .client-tab-badge{background:var(--accent);color:var(--on-accent)}
+/* Stip naast de teller: er is nieuwe klant-activiteit (tickets), zonder dat de teller zelf ongelezen telt. */
+.client-tab-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex-shrink:0;box-shadow:0 0 0 2px rgba(var(--accent-rgb),.22)}
+/* Tabblad Tickets in het klantdossier: dezelfde kaarten als de ticketlijst, in het paneel. */
+.client-ticket-list{display:flex;flex-direction:column;gap:7px;margin-top:6px}
+.client-ticket-list .ticket-item{grid-template-columns:minmax(0,1fr) auto}
+.client-ticket-list .ticket-item:hover{transform:none}
+.client-ticket-list .tk-meta .tk-activity{color:var(--muted)}
 /* De instellingen-strook plakt bovenaan en dekt daarom de volle breedte. */
 .client-tabs-bar.settings-tabs-bar{width:100%}
 
@@ -3044,6 +3051,39 @@ button.chat-member:hover{background:var(--bg3)}
 .comm-shell-inbox{display:block}
 .comm-inbox-pane{height:100%;overflow-y:auto;padding:4px 18px 22px}
 .comm-inbox-pane .inbound-inbox{margin-top:8px}
+/* Filters (soort, klant, periode) onder het zoekveld. Op een breed scherm
+   staan ze er altijd; op de telefoon zitten ze achter de schuifjesknop naast
+   het zoekveld, zodat het eerste gesprek niet lager in beeld komt. */
+.comm-search-row{display:flex;align-items:stretch;gap:6px}
+.comm-search-row .comm-search{flex:1;min-width:0}
+.comm-filter-toggle{display:none;position:relative;align-items:center;justify-content:center;width:38px;flex-shrink:0;border:1px solid var(--border);border-radius:9px;background:var(--bg3);color:var(--muted);cursor:pointer;transition:border-color .12s,color .12s,background .12s}
+.comm-filter-toggle.is-open,.comm-filter-toggle.has-active{border-color:rgba(var(--accent-rgb),.5);color:var(--accent-ink)}
+.comm-filter-toggle:focus-visible{outline:none;box-shadow:var(--ring)}
+.comm-filter-count{position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--accent);color:var(--on-accent);font-size:9.5px;font-weight:700;line-height:16px;text-align:center}
+.comm-filters{display:flex;flex-wrap:wrap;gap:6px}
+.comm-filters .select-control{flex:1 1 118px;min-width:0}
+.comm-filters .select-trigger.comm-filter{font-size:12px;padding-top:7px;padding-bottom:7px}
+.comm-date-range{display:flex;align-items:center;gap:6px;flex:1 1 100%;font-size:11.5px;color:var(--muted)}
+.comm-date-range .form-input{flex:1;min-width:0;font-size:12px;padding:6px 8px}
+.comm-search-status{font-size:11px;color:var(--muted);padding:0 2px}
+/* Een ticket tussen de mail: een klein label naast de klantnaam, de status
+   als pil in de zijkolom, en een ticket-icoon als het aan geen klant hangt. */
+.comm-row-kind{display:inline-flex;align-items:center;gap:3px;flex-shrink:0;padding:1px 6px;border-radius:999px;border:1px solid var(--border);background:var(--bg3);color:var(--muted2);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.comm-row-avatar.is-plain{background:var(--bg3);border:1px dashed var(--border2);color:var(--muted2)}
+.comm-row-status{font-size:8.5px;padding:2px 6px;letter-spacing:.06em}
+.comm-row-badge.is-dot{min-width:10px;width:10px;height:10px;padding:0;box-shadow:0 0 0 2px rgba(var(--accent-rgb),.22)}
+.comm-row-found{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--accent-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.comm-row-found svg{flex-shrink:0;opacity:.8}
+.comm-client-link.is-static{cursor:default;color:var(--muted2)}
+.comm-client-link.is-static:hover{border-color:var(--border);background:var(--bg3)}
+.comm-detail-meta .tk-status,.comm-detail-meta .tk-pri-label{font-size:9px;padding:3px 8px}
+/* Ticketgesprek: omschrijving, interne notitie en de tijdlijn als panelen. */
+.comm-ticket-panel{margin:0}
+.comm-ticket-text{margin:0;font-size:13px;line-height:1.6;color:var(--muted2);white-space:pre-wrap;overflow-wrap:anywhere}
+.comm-ticket-panel.is-internal{border-color:rgba(var(--warn-rgb),.32);background:rgba(var(--warn-rgb),.05)}
+.comm-ticket-panel.is-internal .client-panel-head span{font-size:11px;color:var(--accent-o)}
+.comm-ticket-timeline .ticket-timeline{margin-top:0;border-top:0;padding-top:0}
+.comm-ticket-timeline .client-empty-line{margin-top:10px}
 .inbound-inbox-head.is-compact{align-items:center}
 .inbound-inbox-head.is-compact .settings-help{margin:0;max-width:560px}
 
@@ -3084,6 +3124,12 @@ button.chat-member:hover{background:var(--bg3)}
   .comm-detail-actions .btn-label{display:none}
   .comm-detail-scroll{padding:12px 12px 20px}
   .comm-inbox-pane{padding:4px 12px 20px}
+  /* Filters achter de schuifjesknop; het zoekveld houdt de bovenste regel. */
+  .comm-filter-toggle{display:inline-flex}
+  .comm-filters{display:none}
+  .comm-filters.is-open{display:flex}
+  .comm-filters .select-control{flex:1 1 100%}
+  .comm-row-status{display:none}
 }
 
 /* ── Bank (afschriften inlezen + automatisch journaliseren) ──────────── */

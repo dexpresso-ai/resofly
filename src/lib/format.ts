@@ -1,4 +1,5 @@
 import { computeTotals, lineGross, lineNet, type MoneyTotals } from './money';
+import { ticketPriorityLabel } from './tickets';
 
 export const euro = (amount: number | null | undefined) =>
   new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' }).format(Number(amount ?? 0));
@@ -42,4 +43,4 @@ export const total = (lines: { quantity: number; unit_price: number; vat: number
   computeTotals(lines);
 
 export { lineGross, lineNet };
-export const priorityLabel = (p: string) => p === 'high' ? 'Hoog' : p === 'med' ? 'Normaal' : 'Laag';
+export const priorityLabel = (p: string) => ticketPriorityLabel(p);
