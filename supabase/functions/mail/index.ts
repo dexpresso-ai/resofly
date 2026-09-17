@@ -695,21 +695,44 @@ async function sendClientEmail(
   const fromEmailForRow = sender.fromEmail || extractEmailAddress(sender.from);
   const fromNameForRow = extractDisplayName(sender.from);
 
-  // 1. Thread aanmaken.
-  const { data: thread, error: threadError } = await supabaseAdmin
-    .from('client_email_threads')
-    .insert({
-      organization_id: organizationId,
-      client_id: clientId,
-      created_by: user.id,
-      subject,
-      last_direction: 'outbound',
-      last_message_at: new Date().toISOString(),
-    })
-    .select('id')
-    .single();
-  if (threadError) throw threadError;
-  const threadId = String(thread.id);
+  // 1. Thread: een antwoord vanaf de pagina Berichten hangt in het lopende
+  //    gesprek (threadId meegegeven); anders begint de mail een nieuw gesprek.
+  //    Het gesprek moet van déze organisatie én déze klant zijn — anders zou
+  //    een bericht in het dossier van een andere klant kunnen belanden.
+  const requestedThreadId = String(body.threadId || '').trim();
+  let threadId: string;
+  if (requestedThreadId) {
+    if (!isUuid(requestedThreadId)) {
+      throw new MailHttpError('Ongeldig gesprek.', 400);
+    }
+    const { data: existingThread, error: existingThreadError } = await supabaseAdmin
+      .from('client_email_threads')
+      .select('id')
+      .eq('id', requestedThreadId)
+      .eq('organization_id', organizationId)
+      .eq('client_id', clientId)
+      .maybeSingle();
+    if (existingThreadError) throw existingThreadError;
+    if (!existingThread) {
+      throw new MailHttpError('Dit gesprek hoort niet bij deze klant.', 404);
+    }
+    threadId = String(existingThread.id);
+  } else {
+    const { data: thread, error: threadError } = await supabaseAdmin
+      .from('client_email_threads')
+      .insert({
+        organization_id: organizationId,
+        client_id: clientId,
+        created_by: user.id,
+        subject,
+        last_direction: 'outbound',
+        last_message_at: new Date().toISOString(),
+      })
+      .select('id')
+      .single();
+    if (threadError) throw threadError;
+    threadId = String(thread.id);
+  }
 
   // 2. Outbound bericht-rij (queued) zodat we een id hebben voor de Reply-To.
   const { data: emailRow, error: emailError } = await supabaseAdmin

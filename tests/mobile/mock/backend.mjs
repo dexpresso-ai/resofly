@@ -17,7 +17,10 @@ const exp = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30;
 const accessToken = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ sub: seed.ids.USER, email: seed.user.email, role: 'authenticated', aud: 'authenticated', exp, iat: exp - 3600, session_id: 'sess-1' })}.mocksig`;
 export const session = { access_token: accessToken, refresh_token: 'mock-refresh', token_type: 'bearer', expires_in: 3600 * 24 * 30, expires_at: exp, user: seed.user };
 
-const json = (route, body, status = 200, headers = {}) => route.fulfill({ status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*', ...headers }, body: body === undefined ? '' : JSON.stringify(body) });
+// `content-range` is geen standaard CORS-header: zonder expose-headers ziet de
+// browser hem niet, en dan geeft elke telling (`count: 'exact', head: true`)
+// stilletjes nul terug — de opvangbak leek in de test altijd leeg.
+const json = (route, body, status = 200, headers = {}) => route.fulfill({ status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'content-range', ...headers }, body: body === undefined ? '' : JSON.stringify(body) });
 
 function restRows(table, url) {
   const select = url.searchParams.get('select') ?? '*';

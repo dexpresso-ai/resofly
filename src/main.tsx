@@ -97,6 +97,7 @@ import { OfficeEditor } from './features/OfficeEditor';
 import { Dashboard } from './features/Dashboard';
 import { ClientDetailPage, Clients } from './features/Clients';
 import { useClientEmailUnread, ClientEmailToasts } from './components/ClientEmailNotifications';
+import { CommunicationPage, type CommunicationFocus } from './features/Communication';
 import { useDecisionAlerts, DecisionToasts } from './components/DecisionNotifications';
 import type { DecisionTarget } from './lib/decisions-api';
 import { useTicketUnread, TicketToasts } from './components/TicketNotifications';
@@ -164,7 +165,7 @@ import { CustomFieldsSection, normalizeCustomFieldValues } from './components/Cu
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 type EditMode =
   | { kind: 'client'; item?: Client; defaults?: Partial<Pick<Client, 'name' | 'contact_name' | 'email' | 'phone' | 'notes' | 'status'>> }
   | { kind: 'project'; item?: Project; defaults?: Partial<Pick<Project, 'name' | 'client_id' | 'description' | 'start_date' | 'end_date'>> }
@@ -179,6 +180,8 @@ type EditMode =
 const emptyData: AppData = { clients: [], clientContacts: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], noteHandwriting: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null, creativeStatus: null, businessStatus: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
+/** Volgnummer voor sprongen naar de pagina Berichten (zie openCommunication). */
+let commFocusSeq = 0;
 
 // === Actieve tabbladen =====================================================
 // De view-state (welke pagina, welk project/klant, welke editor open staat) leeft
@@ -196,6 +199,9 @@ type ViewState = {
   /** Net aangemaakte agent; de Gerrie-pagina klapt hem meteen open zodat je ziet
    *  wie er nu voor je aan het werk is. */
   openAgentId: string | null;
+  /** Sprong naar de pagina Berichten: welk gesprek of tabblad er open moet
+   *  (melding "nieuw bericht", kaart op de beslislijst). */
+  commFocus: CommunicationFocus | null;
   /**
    * Door een agent klaargezet concept dat in het formulier van een ándere pagina
    * moet openen (leverancier, inkoopfactuur, contract, campagne). Eén veld voor
@@ -210,7 +216,7 @@ type WorkspaceTab = ViewState & { id: string };
 
 /** Nieuw, leeg tabblad op een gegeven pagina (standaard het dashboard). */
 function freshTab(page: Page = 'dashboard'): WorkspaceTab {
-  return { id: uid(), page, projectId: null, clientId: null, statsReportId: null, galleryId: null, settingsNav: null, pendingReport: null, openAgentId: null, pendingDraft: null, edit: null };
+  return { id: uid(), page, projectId: null, clientId: null, statsReportId: null, galleryId: null, settingsNav: null, pendingReport: null, openAgentId: null, commFocus: null, pendingDraft: null, edit: null };
 }
 
 /** Terugkomst van de directe bankkoppeling (PSD2, ?code=&state=…): dan opent het
@@ -246,7 +252,7 @@ function rebuildTabs(persisted: PersistedTab[], data: AppData): WorkspaceTab[] {
       page = data.projects.some(x => x.id === projectId) ? 'project' : 'projects';
       if (page === 'projects') projectId = null;
     }
-    return { id: uid(), page, projectId, clientId, statsReportId: p.statsReportId, galleryId, settingsNav: legacyCalendarSettings ? { tab: 'agenda', key: 0 } : null, pendingReport: null, openAgentId: null, pendingDraft: null, edit: null };
+    return { id: uid(), page, projectId, clientId, statsReportId: p.statsReportId, galleryId, settingsNav: legacyCalendarSettings ? { tab: 'agenda', key: 0 } : null, pendingReport: null, openAgentId: null, commFocus: null, pendingDraft: null, edit: null };
   });
 }
 
@@ -623,6 +629,7 @@ function App() {
   const setSettingsNav = (v: React.SetStateAction<{ tab: SettingsTab; key: number } | null>) => patchActiveTab(t => ({ settingsNav: applyUpdater(v, t.settingsNav) }));
   const setPendingReport = (v: React.SetStateAction<{ key: string; name: string; definition: ReportDefinition } | null>) => patchActiveTab(t => ({ pendingReport: applyUpdater(v, t.pendingReport) }));
   const setOpenAgentId = (v: React.SetStateAction<string | null>) => patchActiveTab(t => ({ openAgentId: applyUpdater(v, t.openAgentId) }));
+  const setCommFocus = (v: CommunicationFocus | null) => patchActiveTab(() => ({ commFocus: v }));
   const setPendingDraft = (v: ViewState['pendingDraft']) => patchActiveTab(() => ({ pendingDraft: v }));
   const setEdit = (v: React.SetStateAction<EditMode>) => patchActiveTab(t => ({ edit: applyUpdater(v, t.edit) }));
   // Word-modus voor interne Documents: de Collabora-editor leeft op app-niveau, zodat een
@@ -687,6 +694,9 @@ function App() {
   const {
     unread: clientEmailUnread,
     refreshUnread: refreshClientEmailUnread,
+    inboxCount,
+    refreshInbox,
+    activity: communicationActivity,
     toasts: clientEmailToasts,
     dismissToast: dismissClientEmailToast,
   } = useClientEmailUnread({
@@ -2545,6 +2555,18 @@ function App() {
     return label;
   }
 
+  /**
+   * Naar de pagina Berichten, meteen op het juiste gesprek of tabblad. De
+   * teller maakt elke sprong uniek, zodat twee keer dezelfde melding ook twee
+   * keer werkt.
+   */
+  function openCommunication(target: Omit<CommunicationFocus, 'key'> = {}) {
+    commFocusSeq += 1;
+    setCommFocus({ key: commFocusSeq, ...target });
+    setProjectId(null); setClientId(null); setStatsReportId(null);
+    setPage('communication');
+  }
+
   /** "Openen" op een kaart van de beslislijst: naar het item waar hij over gaat. */
   function openDecisionTarget(target: DecisionTarget) {
     switch (target.kind) {
@@ -2557,7 +2579,7 @@ function App() {
         return;
       }
       case 'contract': setPage('contracts'); setProjectId(null); setClientId(null); return;
-      case 'inbox': setPage('clients'); setProjectId(null); setClientId(null); return;
+      case 'inbox': openCommunication({ tab: 'inbox' }); return;
       case 'calendar': setPage('calendar'); setProjectId(null); setClientId(null); return;
       default: return;
     }
@@ -2841,7 +2863,7 @@ function App() {
       onClick={() => setMobileNavOpen(open => !open)}
     >{mobileNavOpen ? <X size={22}/> : <Menu size={22}/>}</button>
     <div className={`sidebar-backdrop${mobileNavOpen ? ' is-open' : ''}`} onClick={() => setMobileNavOpen(false)} aria-hidden="true" />
-    <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onNewEntity={(organizationContext.businessStatus?.active && activeMembership?.role === 'owner') ? createNewEntity : null} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => supabaseAuth.signOut()} clientEmailUnread={clientEmailUnread.total} ticketUnread={ticketUnreadIds.size} chatUnread={teamChat.unreadTotal} decisionCount={decisionAlerts.count} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })} permissions={permissions} onRefresh={refresh} refreshing={loading} readOnly={!(orgCanWrite && permissions.canWritePage(page))}/>
+    <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onNewEntity={(organizationContext.businessStatus?.active && activeMembership?.role === 'owner') ? createNewEntity : null} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => supabaseAuth.signOut()} messageUnread={clientEmailUnread.total} inboxOpen={inboxCount} ticketUnread={ticketUnreadIds.size} chatUnread={teamChat.unreadTotal} decisionCount={decisionAlerts.count} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })} permissions={permissions} onRefresh={refresh} refreshing={loading} readOnly={!(orgCanWrite && permissions.canWritePage(page))}/>
     <main className="main">
       <TabBar tabs={tabs} activeTabId={activeTab.id} data={data} onSelect={switchTab} onClose={closeTab} onNew={openTab} />
       {projectShift && <ProjectShiftDialog
@@ -2880,7 +2902,7 @@ function App() {
     <div className="toast-region">
       <ClientEmailToasts
         toasts={clientEmailToasts}
-        onOpen={(clientId) => { setClientId(clientId); setProjectId(null); setPage('client'); }}
+        onOpen={(toast) => openCommunication(toast.kind === 'inbox' ? { tab: 'inbox' } : { tab: 'all', threadId: toast.threadId })}
         onDismiss={dismissClientEmailToast}
       />
       <DecisionToasts
@@ -2955,6 +2977,7 @@ function App() {
     if (page === 'projects') return <ProjectsListPage data={data} canWrite={canWrite} onNewProject={() => ensureCanWrite() && setEdit({kind:'project'})} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} onEditProject={(item) => setEdit({kind:'project', item})}/>;
     if (page === 'project-planning') return <ProjectsPlanningPage data={data} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} />;
     if (page === 'client' && client) return <ClientDetailPage data={data} client={client} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewProject={() => ensureCanWrite() && setEdit({kind:'project', defaults: { client_id: client.id }})} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread}/>;
+    if (page === 'communication') return <CommunicationPage data={data} organizationId={activeOrg.id} canWrite={canWrite} inboxCount={inboxCount} activity={communicationActivity} focus={view.commFocus} onUnreadChanged={refreshClientEmailUnread} onInboxChanged={refreshInbox} onOpenClient={(id) => { setClientId(id); setProjectId(null); setPage('client'); }} onChanged={refresh} />;
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} onPlan={planTicket} unreadTicketIds={ticketUnreadIds}/>;
     if (page === 'chat') return <TeamChatPage api={teamChat} />;

@@ -189,10 +189,15 @@ export interface SendClientEmailResult {
  * Verstuur een vrije e-mail naar een klant vanaf het geverifieerde verzenddomein
  * (valt terug op het globale afzenderadres). De mail wordt server-side verstuurd
  * en gelogd; statusupdates komen via de Resend-webhook binnen.
+ *
+ * `threadId` is optioneel: zonder begint de mail een nieuw gesprek (zoals vanuit
+ * het klantdossier), mét hangt hij als antwoord in dat lopende gesprek — dat is
+ * wat "Beantwoorden" op de pagina Berichten doet. De server controleert dat het
+ * gesprek van dezelfde klant is.
  */
 export async function sendClientEmail(
   organizationId: UUID,
-  input: { clientId: UUID; subject: string; bodyHtml: string; bodyText?: string },
+  input: { clientId: UUID; subject: string; bodyHtml: string; bodyText?: string; threadId?: UUID | null },
 ): Promise<SendClientEmailResult> {
   const { data, error } = await supabase.functions.invoke('mail', {
     body: {
@@ -202,6 +207,7 @@ export async function sendClientEmail(
       subject: input.subject,
       bodyHtml: input.bodyHtml,
       bodyText: input.bodyText,
+      threadId: input.threadId ?? undefined,
     },
   });
   if (error) await throwFunctionError(error, 'E-mail versturen mislukt.');

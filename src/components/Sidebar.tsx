@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { SETTINGS_TABS, type SettingsTab } from '../features/SimplePages';
@@ -7,7 +7,7 @@ import { Select } from './Ui';
 import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
 import { useTheme } from '../lib/theme';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 
 /**
  * Het menu in categorieën in plaats van dertien regels onder elkaar. Een groep
@@ -19,6 +19,10 @@ type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'tim
  * Agenda is de kop boven alles wat op de kalender staat: de agendaweergave, de
  * weekplanner en de boekingslinks. De agenda-instellingen zijn hier weg — die
  * wonen bij de rest van de instellingen (accountmenu → Instellingen → Agenda).
+ *
+ * Communicatie begint met Berichten: alle klantmail van de organisatie op één
+ * pagina, inclusief de post die nog niet aan een klant gekoppeld is. Het
+ * tabblad Communicatie per klant blijft daarnaast gewoon bestaan.
  */
 const navGroups = [
   { id: 'overzicht', label: 'Overzicht', items: [
@@ -38,6 +42,7 @@ const navGroups = [
     ['finance', Receipt, 'Financiën'],
   ] },
   { id: 'communicatie', label: 'Communicatie', items: [
+    ['communication', Inbox, 'Berichten'],
     ['chat', MessageSquare, 'Chat'],
     ['marketing', Megaphone, 'Marketing'],
   ] },
@@ -83,7 +88,8 @@ export function Sidebar({
   userEmail = null,
   onOpenSettings,
   onSignOut,
-  clientEmailUnread = 0,
+  messageUnread = 0,
+  inboxOpen = 0,
   ticketUnread = 0,
   chatUnread = 0,
   decisionCount = 0,
@@ -110,7 +116,10 @@ export function Sidebar({
   userEmail?: string | null;
   onOpenSettings: (tab?: SettingsTab) => void;
   onSignOut: () => void;
-  clientEmailUnread?: number;
+  /** Ongelezen klantmail van dit teamlid — samen met `inboxOpen` de badge op Berichten. */
+  messageUnread?: number;
+  /** Post in de opvangbak die nog aan een klant gekoppeld moet worden (organisatiebreed). */
+  inboxOpen?: number;
   ticketUnread?: number;
   chatUnread?: number;
   /** Kaarten op de beslislijst die op een beslissing wachten (badge op Gerrie). */
@@ -167,6 +176,13 @@ export function Sidebar({
     if (tab.id === 'agenda') return permissions.canRead('calendar');
     return true;
   });
+  // De badge op Berichten telt wat aandacht vraagt: ongelezen post én post die
+  // nog niet aan een klant hangt. De tooltip houdt de twee uit elkaar.
+  const messageBadge = messageUnread + inboxOpen;
+  const messageBadgeTitle = [
+    messageUnread > 0 ? `${messageUnread} ongelezen bericht${messageUnread === 1 ? '' : 'en'}` : '',
+    inboxOpen > 0 ? `${inboxOpen} bericht${inboxOpen === 1 ? '' : 'en'} nog niet aan een klant gekoppeld` : '',
+  ].filter(Boolean).join(' · ');
   const emailLocalPart = (userEmail ?? '').split('@')[0] ?? '';
   const accountName = emailLocalPart || 'Account';
   const accountInitials = (() => {
@@ -288,7 +304,7 @@ export function Sidebar({
                   <span className="ni-label">{label}</span>
                   <span className="nav-chevron" aria-hidden="true">{calendarOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}</span>
                 </button>
-              : <button className={`nav-item ${isActive ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span>{key === 'clients' && clientEmailUnread > 0 && <span className="nav-badge" title={`${clientEmailUnread} ongelezen bericht${clientEmailUnread === 1 ? '' : 'en'}`}>{clientEmailUnread > 99 ? '99+' : clientEmailUnread}</span>}{key === 'tickets' && ticketUnread > 0 && <span className="nav-badge" title={`${ticketUnread} ticket${ticketUnread === 1 ? '' : 's'} met nieuwe klant-activiteit`}>{ticketUnread > 99 ? '99+' : ticketUnread}</span>}{key === 'chat' && chatUnread > 0 && <span className="nav-badge" title={`${chatUnread} ongelezen chatbericht${chatUnread === 1 ? '' : 'en'}`}>{chatUnread > 99 ? '99+' : chatUnread}</span>}{key === 'gerrie' && decisionCount > 0 && <span className="nav-badge" title={`${decisionCount} kaart${decisionCount === 1 ? '' : 'en'} te beslissen`}>{decisionCount > 99 ? '99+' : decisionCount}</span>}</button>}
+              : <button className={`nav-item ${isActive ? 'active' : ''}`} onClick={() => onPage(key as Page)}><Icon size={16}/><span className="ni-label">{label}</span>{key === 'communication' && messageBadge > 0 && <span className="nav-badge" title={messageBadgeTitle}>{messageBadge > 99 ? '99+' : messageBadge}</span>}{key === 'tickets' && ticketUnread > 0 && <span className="nav-badge" title={`${ticketUnread} ticket${ticketUnread === 1 ? '' : 's'} met nieuwe klant-activiteit`}>{ticketUnread > 99 ? '99+' : ticketUnread}</span>}{key === 'chat' && chatUnread > 0 && <span className="nav-badge" title={`${chatUnread} ongelezen chatbericht${chatUnread === 1 ? '' : 'en'}`}>{chatUnread > 99 ? '99+' : chatUnread}</span>}{key === 'gerrie' && decisionCount > 0 && <span className="nav-badge" title={`${decisionCount} kaart${decisionCount === 1 ? '' : 'en'} te beslissen`}>{decisionCount > 99 ? '99+' : decisionCount}</span>}</button>}
 
           {key === 'calendar' && calendarOpen && <div className="nav-submenu nav-submenu-projects">
             {permissions.canOpenPage('calendar') && <button type="button" className={page === 'calendar' ? 'active' : ''} onClick={openCalendarView}><Calendar size={13}/><span>Agendaweergave</span></button>}

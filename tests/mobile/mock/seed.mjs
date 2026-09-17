@@ -195,6 +195,64 @@ export const chatMessages = [
   chatMsg(CHAT_DM, USER, 'Ja tuurlijk, geen enkel probleem! Laten we dat samen doen.', at(0, 8, 38)),
 ];
 
+// ── Klantmail ──────────────────────────────────────────────────────────────
+// Drie gesprekken (één met een ongelezen antwoord) en twee niet-gekoppelde
+// berichten in de opvangbak, zodat de pagina Berichten op elk formaat echt
+// iets te tonen heeft: gesprekkenlijst, gesprek en het tabblad Niet gekoppeld.
+// Dezelfde rijen voeden het tabblad Communicatie in het klantdossier.
+const mailThread = (ci, subject, lastDir, lastAt) => ({ id: uid('r'), ...base(), client_id: clients[ci].id, subject, last_direction: lastDir, last_message_at: lastAt, updated_at: lastAt });
+export const clientEmailThreads = [
+  mailThread(0, 'Re: offerte huisstijl', 'inbound', at(0, 9, 12)),
+  mailThread(1, 'Planning fotoshoot', 'outbound', at(-1, 16, 40)),
+  mailThread(4, 'Menukaart: laatste versie', 'inbound', at(-3, 11, 5)),
+];
+const mail = (thread, direction, from_name, from_email, to_email, body_text, created_at) => ({
+  id: uid('e'), ...base(), thread_id: thread.id, client_id: thread.client_id, direction, provider: direction === 'inbound' ? 'inbound' : 'resend', provider_email_id: null,
+  from_email, from_name, to_email, subject: thread.subject, body_html: null, body_text,
+  status: direction === 'inbound' ? 'received' : 'delivered', sent_at: direction === 'outbound' ? created_at : null, delivered_at: direction === 'outbound' ? created_at : null,
+  opened_at: null, clicked_at: null, bounced_at: null, failed_at: null, complained_at: null, received_at: direction === 'inbound' ? created_at : null, last_event_at: created_at,
+  error_message: null, link_source: direction === 'inbound' ? 'reply_token' : null, link_confidence: null, rfc_message_id: null, metadata: {}, created_at, updated_at: created_at,
+});
+export const clientEmails = [
+  mail(clientEmailThreads[0], 'outbound', 'Studio Lopik', 'info@studiolopik.nl', clients[0].email, 'Beste Joost, hierbij de offerte voor de nieuwe huisstijl. Laat je weten wat je ervan vindt?', at(-2, 10, 0)),
+  mail(clientEmailThreads[0], 'inbound', 'Joost Vermeer', clients[0].email, 'info@studiolopik.nl', 'Dank voor de offerte, we gaan akkoord. Wanneer kunnen we starten?', at(0, 9, 12)),
+  mail(clientEmailThreads[1], 'outbound', 'Studio Lopik', 'info@studiolopik.nl', clients[1].email, 'Zullen we de fotoshoot donderdag om 9 uur doen?', at(-1, 16, 40)),
+  mail(clientEmailThreads[2], 'inbound', 'Karim El Amrani', clients[4].email, 'info@studiolopik.nl', 'Hierbij de laatste versie van de menukaart, met de nieuwe prijzen.', at(-3, 11, 5)),
+];
+// Gelezen: alles behalve het antwoord van Joost van vanochtend.
+export const clientEmailReads = [
+  { organization_id: ORG, client_id: clients[4].id, client_email_id: clientEmails[3].id, user_id: USER, read_at: at(-3, 12, 0) },
+];
+const readIds = new Set(clientEmailReads.map(r => r.client_email_id));
+export const clientEmailUnread = clientEmails
+  .filter(m => m.direction === 'inbound' && !readIds.has(m.id))
+  .map(m => ({ id: m.id, organization_id: ORG, client_id: m.client_id, thread_id: m.thread_id, subject: m.subject, from_email: m.from_email, from_name: m.from_name, received_at: m.received_at, created_at: m.created_at }));
+// De view client_email_thread_overview, nagebouwd uit de rijen hierboven.
+export const clientEmailThreadOverview = clientEmailThreads.map(t => {
+  const msgs = clientEmails.filter(m => m.thread_id === t.id).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  const last = msgs[0];
+  const client = clients.find(c => c.id === t.client_id);
+  return {
+    ...t, client_name: client.name, client_email: client.email, message_count: msgs.length,
+    unread_count: msgs.filter(m => m.direction === 'inbound' && !readIds.has(m.id)).length, has_delivery_problem: false,
+    last_email_id: last.id, last_email_direction: last.direction, last_from_name: last.from_name, last_from_email: last.from_email,
+    last_status: last.status, last_email_at: last.created_at, last_preview: last.body_text.slice(0, 200),
+  };
+});
+export const inboundAlias = { id: uid('a'), ...base(), local_part: 'studio-lopik-abcdefghijklmnop', label: 'Doorstuuradres', forward_from_email: 'info@studiolopik.nl', status: 'active', retires_at: null, blocked_senders: [], last_received_at: at(0, 8, 2), received_total: 14, rate_window_started_at: null, rate_window_count: 0, pending_confirmation_code: null, pending_confirmation_at: null };
+const inbound = (sender_name, sender_email, subject, body_text, received_at, reason, candidates = [], suggested = null) => ({
+  id: uid('u'), ...base(), alias_id: inboundAlias.id, origin_client_email_id: null, route: 'alias', dedup_key: uid('k'), recipient: `${inboundAlias.local_part}@inbound.resofly.com`,
+  envelope_from: sender_email, header_from: sender_email, sender_email, sender_name, sender_source: 'header_from', sender_confidence: 'high', sender_candidates: [sender_email],
+  forwarding_evidence: 'x-forwarded-for', subject, body_text, body_html: null, rfc_message_id: `<${uid('i')}@example.test>`, in_reply_to: null, reference_ids: [], headers: {},
+  attachment_names: [], raw_hash: null, raw_size: 2048, truncated: false, received_at, status: 'unmatched', reason, category: 'human', candidates, suggested_client_id: suggested,
+  linked_client_id: null, linked_thread_id: null, client_email_id: null, duplicate_of_client_email_id: null, link_source: null, link_confidence: null, handled_by: null, handled_at: null,
+  purge_after: iso(day(80)), created_at: received_at, updated_at: received_at,
+});
+export const inboundMessages = [
+  inbound('Sanne Bakker', 'sanne@dekorenaar.nl', 'Foto\'s voor de website', 'Hoi, hierbij de foto\'s van de nieuwe winkel. Kunnen die op de site?', at(0, 8, 2), 'no_match', [{ client_id: clients[0].id, label: clients[0].name, matched_on: 'domain' }], clients[0].id),
+  inbound('Peter de Vries', 'peter@nieuwbedrijf.nl', 'Offerte aanvragen', 'Goedemiddag, wij zoeken een bureau voor een nieuwe huisstijl. Kunnen jullie een offerte maken?', at(-1, 14, 30), 'no_match'),
+];
+
 // ── Leveranciers ───────────────────────────────────────────────────────────
 // Twee crediteuren: één met een volledig ingevulde kaart, één waar bijna alles
 // leeg is. Zo meet de test zowel de volle regel als de "—"-variant.
@@ -227,4 +285,6 @@ export const tables = {
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'user', author_user_id: USER, author_name: 'Gerjan', body: 'We kijken naar de afbeeldingen, die zijn te groot.', is_internal: true },
   ],
   notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: [], fixed_assets: [], asset_depreciations: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], planner_notes: plannerNotes, planner_day_capacity: [], company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: [], contracts: [],
+  client_email_threads: clientEmailThreads, client_emails: clientEmails, client_email_reads: clientEmailReads, client_email_unread: clientEmailUnread, client_email_thread_overview: clientEmailThreadOverview,
+  inbound_messages: inboundMessages, organization_inbound_aliases: [inboundAlias],
 };

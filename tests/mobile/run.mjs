@@ -42,7 +42,7 @@ const PAGES = {
   dashboard: 'dashboard', gerrie: 'gerrie', weekplanner: 'weekplanner', calendar: 'calendar', time: 'time',
   clients: 'clients', client: { page: 'client', clientId: seed.clients[0].id },
   projects: 'projects', project: { page: 'project', projectId: seed.projects[0].id },
-  'project-planning': 'project-planning', tickets: 'tickets', chat: 'chat', marketing: 'marketing',
+  'project-planning': 'project-planning', tickets: 'tickets', chat: 'chat', communication: 'communication', marketing: 'marketing',
   content: 'content', notes: 'notes', documents: 'documents', stats: 'stats',
   'clients-table': { page: 'clients', storage: { 'resofly.clients.viewMode': 'table' } },
   'projects-table': { page: 'projects', storage: { 'resofly.projects.viewMode': 'table' } },
@@ -69,8 +69,13 @@ const PAGES = {
  */
 const FIRST_ITEM = {
   dashboard: { selector: '.dash-task', maxTop: 280 },
-  clients: { selector: '.client-card', maxTop: 260 },
-  'clients-table': { selector: '.clients-table tbody tr', maxTop: 290 },
+  // De klantenlijst toont boven de kaarten de tabstrook "Klanten | Niet
+  // gekoppeld" zodra er post in de opvangbak ligt — en dat ligt er in de seed
+  // (twee berichten). Die strook telde tot 2026-09-17 nooit mee: de mock gaf
+  // de teller niet door (content-range viel weg door CORS), dus de strook bleef
+  // verborgen. Gemeten mét strook: kaarten 274px, tabel 303px.
+  clients: { selector: '.client-card', maxTop: 330 },
+  'clients-table': { selector: '.clients-table tbody tr', maxTop: 365 },
   projects: { selector: '.project-list-card', maxTop: 285 },
   'projects-table': { selector: '.projects-table tbody tr', maxTop: 310 },
   marketing: { selector: '.mk-campaign-table tbody tr', maxTop: 330 },
@@ -86,6 +91,8 @@ const FIRST_ITEM = {
   content: { selector: '.odrv-tr', maxTop: 300 },
   // Teamchat opent op de telefoon in de gesprekslijst (één venster tegelijk).
   chat: { selector: '.chat-conv', maxTop: 260 },
+  // Berichten: idem — kop, tabbladen en zoekveld, dan het eerste gesprek.
+  communication: { selector: '.comm-row', maxTop: 300 },
   suppliers: { selector: '.supplier-table tbody tr', maxTop: 320 },
   'public-quote': { selector: '.public-lines', maxTop: 560 },
   'public-invoice': { selector: '.public-lines', maxTop: 700 },

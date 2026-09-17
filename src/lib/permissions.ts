@@ -84,6 +84,9 @@ export const PAGE_MODULE: Record<string, ModuleKey> = {
   documents: 'content',
   clients: 'clients',
   client: 'clients',
+  // Berichten leest klantmail en de opvangbak: dezelfde tabellen (en dus
+  // dezelfde RLS) als het klantdossier, dus dezelfde module.
+  communication: 'clients',
   tickets: 'tickets',
   marketing: 'marketing',
   quotes: 'finance',

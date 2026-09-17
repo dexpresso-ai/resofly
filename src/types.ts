@@ -1167,6 +1167,32 @@ export interface ClientEmailUnreadCounts {
   byClient: Record<UUID, number>;
 }
 
+/**
+ * Eén regel per klantgesprek voor de pagina Berichten (view
+ * client_email_thread_overview): het gesprek zelf, de klant erbij, het laatste
+ * bericht als preview en de ongelezen-teller van de huidige gebruiker.
+ */
+export interface ClientEmailThreadOverview extends OrgScopedRow {
+  client_id: UUID;
+  client_name: string;
+  client_email: string | null;
+  subject: string;
+  last_message_at: string;
+  last_direction: ClientEmailDirection;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+  unread_count: number;
+  has_delivery_problem: boolean;
+  last_email_id: UUID | null;
+  last_email_direction: ClientEmailDirection | null;
+  last_from_name: string | null;
+  last_from_email: string | null;
+  last_status: ClientEmailStatus | null;
+  last_email_at: string | null;
+  last_preview: string | null;
+}
+
 export interface InvoiceWorkflowEvent {
   id: UUID;
   organization_id: UUID;

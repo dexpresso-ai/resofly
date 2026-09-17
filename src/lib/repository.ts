@@ -34,6 +34,7 @@ import type {
   SendingDomain,
   ClientEmail,
   ClientEmailThread,
+  ClientEmailThreadOverview,
   ClientEmailUnreadCounts,
   OrganizationInboundAlias,
   InboundMessage,
@@ -3872,6 +3873,39 @@ export async function loadClientEmailUnreadCounts(organizationId: UUID): Promise
   const byClient: Record<UUID, number> = {};
   for (const row of rows) byClient[row.client_id] = (byClient[row.client_id] ?? 0) + 1;
   return { total: rows.length, byClient };
+}
+
+// ── Berichten: alle klantgesprekken van de organisatie ──────────────────────
+
+const CLIENT_EMAIL_THREAD_OVERVIEW_COLUMNS = 'id,organization_id,created_by,client_id,client_name,client_email,subject,last_message_at,last_direction,created_at,updated_at,message_count,unread_count,has_delivery_problem,last_email_id,last_email_direction,last_from_name,last_from_email,last_status,last_email_at,last_preview';
+
+/**
+ * Alle klantgesprekken van de organisatie, nieuwste eerst, mét klantnaam,
+ * laatste bericht en ongelezen-teller (view client_email_thread_overview).
+ * Begrensd: de pagina Berichten is een postvak, geen archief — wie verder
+ * terug wil, zoekt in het klantdossier zelf.
+ */
+export async function loadClientEmailThreadOverview(organizationId: UUID, limit = 400): Promise<ClientEmailThreadOverview[]> {
+  const { data, error } = await supabase
+    .from('client_email_thread_overview')
+    .select(CLIENT_EMAIL_THREAD_OVERVIEW_COLUMNS)
+    .eq('organization_id', organizationId)
+    .order('last_message_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data ?? []) as ClientEmailThreadOverview[];
+}
+
+/** De berichten van één gesprek, nieuwste eerst — dezelfde volgorde als in het klantdossier. */
+export async function loadClientEmailsForThread(organizationId: UUID, threadId: UUID): Promise<ClientEmail[]> {
+  const { data, error } = await supabase
+    .from('client_emails')
+    .select(CLIENT_EMAIL_COLUMNS)
+    .eq('organization_id', organizationId)
+    .eq('thread_id', threadId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as ClientEmail[];
 }
 
 // ── Doorstuuradres + opvangbak voor inkomende mail ──────────────────────────
