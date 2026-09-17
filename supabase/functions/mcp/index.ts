@@ -647,7 +647,7 @@ async function proposeAction(args: Record<string, unknown>, session: Session): P
     mcp_grant_id: session.grantId,
     // `title` erbij voor de pushmelding: die leest `params->>'title'`, en dat veld
     // heeft een voorstel in Gerrie's eigen vorm niet — zie de migratie
-    // 20260917030000_mcp_proposal_push_core_tools.sql. `params` zelf blijft schoon,
+    // 20260917040000_mcp_proposal_push_core_tools.sql. `params` zelf blijft schoon,
     // want dat is het voorstel dat de browser straks uitvoert.
     result: { via: session.clientName, client_id: session.clientId, title },
   }).select('id').single();

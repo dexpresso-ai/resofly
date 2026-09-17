@@ -40,7 +40,7 @@ En de scope van de koppeling gaat er nog steeds vóór: een koppeling die alleen
 
 Zonder ingreep viel de melding dus terug op *"Een voorstel wacht op je akkoord"*, en juist bij de voorstellen die het meest naar buiten gericht zijn: een mail aan een klant, een reactie in het klantportaal. Je zag niet meer waarvoor je je telefoon uit je zak haalde.
 
-De edge function schrijft die ene regel nu mee in `result->>'title'` en de trigger valt daarop terug (migratie `20260917030000`). Bewust in `result` en niet in `params`: `params` **is** het voorstel dat de browser straks uitvoert, en een extra sleutel daarin zou een veld zijn dat nergens bij hoort. `result` gaat over de rij — de naam van de koppeling en de client-id staan er al in.
+De edge function schrijft die ene regel nu mee in `result->>'title'` en de trigger valt daarop terug (migratie `20260917040000`). Bewust in `result` en niet in `params`: `params` **is** het voorstel dat de browser straks uitvoert, en een extra sleutel daarin zou een veld zijn dat nergens bij hoort. `result` gaat over de rij — de naam van de koppeling en de client-id staan er al in.
 
 ## Zoeken over twee lijsten
 
