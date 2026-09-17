@@ -57,6 +57,14 @@ function actionSources(): SourceFile[] {
  * die ervan afwijkt — en dat is de regel waar je hem voor schreef.
  */
 const ORG_FILTER = /\.eq\(\s*['"]organization_id['"]\s*,\s*ctx\.organizationId\s*\)/;
+/**
+ * Een INSERT kan niet filteren — die moet de organisatie ZETTEN. Sinds
+ * `apply.ts` (rechtstreeks uitvoeren) schrijft de registry ook echt weg, en dan
+ * is dit de vorm waarin de grens er staat. Zonder deze tweede vorm zou de test
+ * hieronder elke insert als fout aanwijzen, en dat is de snelste manier om een
+ * controle uit te zetten die je juist wilt houden.
+ */
+const ORG_STAMP = /organization_id:\s*ctx\.organizationId\b/;
 const RPC_CALL = /\bdb\.rpc\(\s*['"]([a-z0-9_]+)['"]/;
 
 /** De regels vanaf `index`, samengeplakt, waarin het filter mag staan. */
@@ -75,7 +83,7 @@ test('elke rechtstreekse tabelquery filtert op de organisatie', () => {
       // types.ts bevat `row()` en `orgQuery()` zelf; die worden apart getest.
       if (name === 'types.ts') return;
       const scope = window(lines, index);
-      if (!ORG_FILTER.test(scope)) {
+      if (!ORG_FILTER.test(scope) && !ORG_STAMP.test(scope)) {
         problems.push(`${name}:${index + 1} — ${line.trim()}`);
       }
     });
@@ -83,7 +91,54 @@ test('elke rechtstreekse tabelquery filtert op de organisatie', () => {
 
   assert.deepEqual(problems, [],
     'Deze query\'s draaien op de service-role zonder org-filter en zien dus ook rijen van andere klanten. ' +
-    'Gebruik orgQuery(ctx, …) of row(ctx, …), of filter zelf met .eq(\'organization_id\', ctx.organizationId).');
+    'Gebruik orgQuery(ctx, …) of row(ctx, …), of filter zelf met .eq(\'organization_id\', ctx.organizationId); ' +
+    'een insert zet organization_id: ctx.organizationId.');
+});
+
+/**
+ * Wegschrijven is het spiegelbeeld van lezen, en gevaarlijker.
+ *
+ * Een leesquery zonder org-filter lekt gegevens van een andere klant; een insert
+ * zonder organisatie zet een rij in het niemandsland — of, als er ergens een
+ * standaardwaarde vandaan komt, in de administratie van iemand anders. Sinds
+ * `apply.ts` schrijft de registry echt weg, dus staat die kant hier apart.
+ */
+test('elke insert zet de organisatie uit de sessie', () => {
+  const problems: string[] = [];
+
+  for (const { name, lines } of actionSources()) {
+    lines.forEach((line, index) => {
+      if (!/\.insert\(/.test(line)) return;
+      if (!ORG_STAMP.test(window(lines, index))) {
+        problems.push(`${name}:${index + 1} — ${line.trim()}`);
+      }
+    });
+  }
+
+  assert.deepEqual(problems, [],
+    'Een insert die de organisatie niet zelf zet, zet hem nergens: de service-role heeft geen auth.uid() ' +
+    'en dus ook geen standaardwaarde. Zet organization_id: ctx.organizationId mee.');
+});
+
+/**
+ * De patch van een update mag de organisatie niet kunnen verzetten.
+ *
+ * `plan()` bouwt die patch, maar hij komt uit velden die het model aanlevert.
+ * Zou daar `organization_id` in kunnen staan, dan is de grens niet een filter
+ * maar een suggestie: de rij wordt gevonden binnen de eigen organisatie en
+ * daarna naar een andere geschreven.
+ */
+test('een update kan een rij niet naar een andere organisatie schrijven', () => {
+  const apply = join(actionsDir, 'apply.ts');
+  const source = readFileSync(apply, 'utf8');
+
+  assert.match(source, /const PROTECTED_FIELDS = new Set\(\[[^\]]*'organization_id'/,
+    'apply.ts hoort organization_id uit elke patch te strippen, net als sanitizeMutationValues in de browser.');
+  assert.match(source, /function clean\(/, 'de strip-functie hoort te bestaan…');
+  // …en gebruikt te worden: één update die eromheen gaat is genoeg.
+  const updates = (source.match(/\.update\(/g) ?? []).length;
+  const cleaned = (source.match(/\.update\(\{ \.\.\.clean\(/g) ?? []).length;
+  assert.equal(cleaned, updates, 'elke .update() in apply.ts hoort door clean() te gaan.');
 });
 
 test('de twee hulpfuncties die alle handelingen delen leggen de grens zelf op', () => {

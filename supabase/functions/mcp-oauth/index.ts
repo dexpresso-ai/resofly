@@ -40,7 +40,8 @@ import {
   AUTH_REQUEST_TTL_SECONDS, authorizationServerMetadata, createAuthCode, createToken, grantableScopes, narrowScopes,
   isAcceptableRedirectUri, isValidCodeChallenge, parseToken, protectedResourceMetadata, redirectUriAllowed,
   sha256Hex, signAuthRequest, verifyAuthRequest, verifyPkce, verifyToken,
-  base64Url, randomBytes, openCorsHeaders, SCOPE_READ, type AuthRequest, type McpDiscoveryUrls,
+  base64Url, randomBytes, openCorsHeaders, parseScopes, CONSENT_SCOPES, SCOPE_EXECUTE, SCOPE_READ,
+  type AuthRequest, type McpDiscoveryUrls,
 } from '../_shared/mcpAuth.ts';
 
 const admin = createAdminClient();
@@ -244,6 +245,10 @@ async function handleConsent(url: URL): Promise<Response> {
     // daarbinnen kiezen; ruimer wordt het bij /approve alsnog teruggeknipt.
     scope: request.scope,
     may_propose: request.scope.includes('propose'),
+    // Niet om hier te kiezen — rechtstreeks uitvoeren staat alleen onder
+    // Instellingen → AI — maar zodat het scherm weet of het die zin mag tonen.
+    // Een client die uitdrukkelijk alleen `read` vroeg, krijgt hem nooit.
+    may_enable_execute: request.scope.includes(SCOPE_EXECUTE),
     expires_at: new Date(request.exp * 1000).toISOString(),
   });
 }
@@ -295,8 +300,15 @@ async function handleApprove(req: Request): Promise<Response> {
   // op te vallen: een koppeling die per ongeluk te weinig mag, merkt de
   // gebruiker meteen en lost hij op door opnieuw te koppelen — een koppeling die
   // per ongeluk te veel mag, merkt niemand.
-  const scope = narrowScopes(request.scope, body.scope ?? SCOPE_READ).join(' ');
-  const grantId = await upsertGrant(user.id, organizationId, { ...request, scope }, String(body.label || client.client_name));
+  //
+  // En wat het formulier ook meestuurt, hier valt alleen te kiezen tussen
+  // meelezen en klaarzetten. `execute` hoort bij een knop in de instellingen van
+  // de gebruiker, niet bij een scherm dat hij bereikt door in zijn AI-app op
+  // Connect te klikken — dus wordt het er hier eerst uitgeknipt, vóór het
+  // plafond. Koppelt iemand opnieuw, dan begint die keuze dus weer bij uit.
+  const chosen = parseScopes(body.scope ?? SCOPE_READ).filter((s) => (CONSENT_SCOPES as readonly string[]).includes(s));
+  const scope = narrowScopes(request.scope, chosen).join(' ');
+  const grantId = await upsertGrant(user.id, organizationId, { ...request, scope }, String(body.label || client.client_name), request.scope);
 
   const code = createAuthCode();
   const { error } = await admin.from('mcp_auth_codes').insert({
@@ -319,7 +331,9 @@ async function handleApprove(req: Request): Promise<Response> {
  * koppelen een lijstje van drie identieke regels waarvan hij er twee niet meer
  * herkent — en dat is precies de lijst waarin hij later iets moet intrekken.
  */
-async function upsertGrant(userId: string, organizationId: string, request: AuthRequest, label: string): Promise<string> {
+async function upsertGrant(
+  userId: string, organizationId: string, request: AuthRequest, label: string, ceiling: string,
+): Promise<string> {
   const { data: existing, error: findError } = await admin.from('mcp_grants')
     .select('id').eq('user_id', userId).eq('organization_id', organizationId)
     .eq('client_id', request.clientId).is('revoked_at', null).limit(1);
@@ -327,7 +341,10 @@ async function upsertGrant(userId: string, organizationId: string, request: Auth
 
   if (existing?.[0]?.id) {
     const id = String(existing[0].id);
-    await admin.from('mcp_grants').update({ scope: request.scope, label: label.slice(0, 120) }).eq('id', id);
+    // Het plafond gaat mee: de gebruiker kan straks onder Instellingen → AI
+    // alleen aanzetten wat deze client bij dit verzoek ook aanbood.
+    await admin.from('mcp_grants')
+      .update({ scope: request.scope, scope_ceiling: ceiling, label: label.slice(0, 120) }).eq('id', id);
     return id;
   }
 
@@ -343,6 +360,7 @@ async function upsertGrant(userId: string, organizationId: string, request: Auth
     user_id: userId,
     client_id: request.clientId,
     scope: request.scope,
+    scope_ceiling: ceiling,
     label: label.slice(0, 120),
   }).select('id').single();
   if (error) throw new HttpError(`Koppeling vastleggen mislukt: ${error.message}`, 500);

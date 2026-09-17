@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Button, Select } from './Ui';
-import { grantMayPropose, listGrants, MCP_SERVER_URL, McpNotAvailableError, revokeGrant, type McpGrant } from '../lib/mcp-api';
+import {
+  buildScope, grantCanEnable, grantChosePropose, grantMayExecute, grantMayExecuteHigh, grantMayPropose, listGrants,
+  MCP_SERVER_URL, McpNotAvailableError, revokeGrant, setGrantScope, type McpGrant,
+} from '../lib/mcp-api';
 import type { OrganizationMember, UUID } from '../types';
 
 /**
@@ -18,6 +21,12 @@ import type { OrganizationMember, UUID } from '../types';
  *     hoort te weten, en hoort te kunnen stoppen zonder eerst die medewerker te
  *     hoeven vinden. Zeker als die net uit dienst is. Welke rijen iemand te
  *     zien krijgt beslist RLS; dit scherm splitst alleen op `user_id`.
+ *
+ * DE SCHAKELAARS staan alleen bij je EIGEN koppelingen, en dat is met opzet.
+ * Een owner ziet de koppelingen van zijn team en kan ze stoppen — dat is
+ * toezicht. Maar iemand anders méér laten doen met zijn AI is geen toezicht;
+ * dat is namens hem een keuze maken die zíjn rechten gebruikt. Stoppen kan
+ * altijd, verruimen alleen zelf — en de database zegt hetzelfde nog een keer.
  *
  * Eén ding is hier belangrijker dan mooi: de intrek-knop moet het altijd doen.
  * Daarom loopt hij niet langs een edge function maar rechtstreeks langs RLS —
@@ -108,6 +117,37 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
     }
   }
 
+  /**
+   * De twee schakelaars onder een eigen koppeling.
+   *
+   * Het aanzetten van iets krijgt een vraag vooraf, het uitzetten niet: minder
+   * mogen is nooit de verrassing waar iemand spijt van krijgt. Bij de
+   * onomkeerbare handelingen staat er wél precies wat dat betekent — "post naar
+   * je klanten" is concreter dan "onomkeerbaar", en het is wat er misgaat.
+   */
+  async function changeScope(grant: McpGrant, change: { execute?: boolean; executeHigh?: boolean }) {
+    const execute = change.execute ?? grantMayExecute(grant);
+    const executeHigh = execute && (change.executeHigh ?? grantMayExecuteHigh(grant));
+
+    if (change.execute === true && !grantMayExecute(grant) && !confirm(
+      `"${grant.label}" mag daarna wijzigingen meteen doorvoeren in deze werkruimte, zonder dat jij ze eerst goedkeurt. `
+      + 'Het blijft binnen jouw eigen rechten, en je krijgt er een melding van. Doorgaan?')) return;
+
+    if (change.executeHigh === true && !grantMayExecuteHigh(grant) && !confirm(
+      `"${grant.label}" mag daarna ook onomkeerbare handelingen zelf uitvoeren: post naar je klanten, aangiftes, `
+      + 'publieke links. Die kun je niet terugdraaien en je krijgt ze niet eerst te zien. Zeker weten?')) return;
+
+    setBusyId(grant.id);
+    try {
+      await setGrantScope(grant.id, buildScope({ propose: grantChosePropose(grant), execute, executeHigh }));
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Het wijzigen van deze koppeling is niet gelukt.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function revoke(grant: McpGrant, ofColleague: boolean) {
     const who = ofColleague ? (emailByUser.get(grant.user_id) ?? 'een collega') : null;
     const question = ofColleague
@@ -130,8 +170,9 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
       <h3>AI-koppelingen</h3>
       <p className="mcp-connections-intro">
         Koppel je eigen AI — Claude, ChatGPT of een andere assistent die MCP spreekt — aan deze werkruimte. Die AI kan
-        dan <strong>meelezen</strong> met alles wat jij zelf mag inzien, en desgewenst wijzigingen{' '}
-        <strong>klaarzetten</strong> in je goedkeurwachtrij. Zelf uitvoeren kan hij nooit: dat blijft een klik van jou.
+        dan <strong>meelezen</strong> met alles wat jij zelf mag inzien, en wijzigingen <strong>klaarzetten</strong> in
+        je goedkeurwachtrij. Wil je niet elke keer zelf op Uitvoeren klikken, dan zet je per koppeling hieronder{' '}
+        <strong>rechtstreeks uitvoeren</strong> aan. Wat die AI mag blijft hoe dan ook binnen jouw eigen rechten.
       </p>
 
       {error && <p className="error">{error}</p>}
@@ -198,7 +239,15 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
 
           {mine.length > 0 && (
             <ul className="mcp-connections-list">
-              {mine.map(grant => <GrantRow key={grant.id} grant={grant} busy={busyId === grant.id} onRevoke={() => void revoke(grant, false)} />)}
+              {mine.map(grant => (
+                <GrantRow
+                  key={grant.id}
+                  grant={grant}
+                  busy={busyId === grant.id}
+                  onRevoke={() => void revoke(grant, false)}
+                  onScope={change => void changeScope(grant, change)}
+                />
+              ))}
             </ul>
           )}
 
@@ -231,26 +280,87 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
   );
 }
 
-function GrantRow({ grant, owner, busy, onRevoke }: { grant: McpGrant; owner?: string; busy: boolean; onRevoke: () => void }) {
+function GrantRow({ grant, owner, busy, onRevoke, onScope }: {
+  grant: McpGrant;
+  owner?: string;
+  busy: boolean;
+  onRevoke: () => void;
+  /** Alleen bij je eigen koppelingen; bij die van een collega ontbreekt hij. */
+  onScope?: (change: { execute?: boolean; executeHigh?: boolean }) => void;
+}) {
+  const executes = grantMayExecute(grant);
   return (
     <li>
-      <div className="mcp-connection-info">
-        <strong>{grant.label || grant.client_id}</strong>
-        <small>
-          {owner && <>{owner}{' · '}</>}
-          Gekoppeld op {formatDate(grant.created_at)}
-          {' · '}
-          {grant.last_used_at ? `laatst gebruikt ${formatDate(grant.last_used_at)}` : 'nog niet gebruikt'}
-        </small>
+      <div className="mcp-connection-main">
+        <div className="mcp-connection-info">
+          <strong>{grant.label || grant.client_id}</strong>
+          <small>
+            {owner && <>{owner}{' · '}</>}
+            Gekoppeld op {formatDate(grant.created_at)}
+            {' · '}
+            {grant.last_used_at ? `laatst gebruikt ${formatDate(grant.last_used_at)}` : 'nog niet gebruikt'}
+          </small>
+        </div>
+        <span className={`mcp-connection-scope${scopeTone(grant)}`}>{scopeLabel(grant)}</span>
+        <Button variant="danger" onClick={onRevoke} disabled={busy}>
+          {busy ? 'Bezig…' : owner ? 'Stoppen' : 'Loskoppelen'}
+        </Button>
       </div>
-      <span className={`mcp-connection-scope${grantMayPropose(grant) ? ' is-propose' : ''}`}>
-        {grantMayPropose(grant) ? 'Leest mee · zet klaar' : 'Leest alleen mee'}
-      </span>
-      <Button variant="danger" onClick={onRevoke} disabled={busy}>
-        {busy ? 'Bezig…' : owner ? 'Stoppen' : 'Loskoppelen'}
-      </Button>
+
+      {onScope && grantCanEnable(grant, 'execute') && (
+        <div className="mcp-connection-switches">
+          <label className="mcp-connection-switch">
+            <input
+              type="checkbox"
+              checked={executes}
+              disabled={busy}
+              onChange={e => onScope({ execute: e.target.checked })}
+            />
+            <span>
+              <strong>Mag rechtstreeks uitvoeren</strong>
+              <small>
+                Wijzigingen gebeuren meteen, zonder dat jij ze eerst goedkeurt. Wat ResoFly niet rechtstreeks kan,
+                komt alsnog in je goedkeurwachtrij — je AI hoort je dat dan ook zo te vertellen.
+              </small>
+            </span>
+          </label>
+
+          {grantCanEnable(grant, 'execute_high') && (
+            <label className={`mcp-connection-switch is-risky${executes ? '' : ' is-off'}`}>
+              <input
+                type="checkbox"
+                checked={grantMayExecuteHigh(grant)}
+                disabled={busy || !executes}
+                onChange={e => onScope({ executeHigh: e.target.checked })}
+              />
+              <span>
+                <strong>Ook onomkeerbare handelingen</strong>
+                <small>
+                  Post naar je klanten, aangiftes, boekingen, publieke links. Laat dit uit staan als je die liever
+                  zelf nog ziet voordat ze de deur uit gaan.
+                </small>
+              </span>
+            </label>
+          )}
+        </div>
+      )}
     </li>
   );
+}
+
+/** Wat deze koppeling mag, in twee woorden op de badge. */
+function scopeLabel(grant: McpGrant): string {
+  if (grantMayExecuteHigh(grant)) return 'Leest mee · voert alles uit';
+  if (grantMayExecute(grant)) return 'Leest mee · voert uit';
+  if (grantMayPropose(grant)) return 'Leest mee · zet klaar';
+  return 'Leest alleen mee';
+}
+
+/** Hoe zwaarder de koppeling mag ingrijpen, hoe meer de badge opvalt. */
+function scopeTone(grant: McpGrant): string {
+  if (grantMayExecute(grant)) return ' is-execute';
+  if (grantMayPropose(grant)) return ' is-propose';
+  return '';
 }
 
 function formatDate(value: string): string {

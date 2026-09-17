@@ -124,8 +124,13 @@ export function McpConsent({ request, organizations, defaultOrganizationId }: {
           <li>
             <span className="mcp-consent-icon" aria-hidden="true">🚫</span>
             <span>
-              <strong>Voert nooit zelf iets uit</strong>
-              <small>Er is geen handeling die deze AI zonder jouw klik kan uitvoeren. Ook niet als je hem dat vraagt.</small>
+              <strong>Voert nu nog niets zelf uit</strong>
+              <small>
+                Alles wat wijzigt, wacht op jouw klik.
+                {info.mayEnableExecute
+                  ? ' Wil je dat later niet meer, dan zet je "rechtstreeks uitvoeren" zelf aan onder Instellingen → AI. Hier niet: dat is een keuze voor als je er rustig voor zit, niet voor onderweg naar je AI-app.'
+                  : ' Deze AI-client heeft niet eens gevraagd om meer, dus meer kan hij ook niet krijgen.'}
+              </small>
             </span>
           </li>
           <li>

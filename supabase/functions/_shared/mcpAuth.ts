@@ -179,25 +179,69 @@ export function isAcceptableRedirectUri(uri: string): boolean {
 
 // ── Scopes ───────────────────────────────────────────────────────────────────
 //
-// Twee niveaus:
-//   `read`    — meelezen met wat het teamlid zelf ook mag zien.
-//   `propose` — daarbovenop wijzigingen KLAARZETTEN in de goedkeurwachtrij. Niet
-//               uitvoeren: dat blijft een klik van een mens in ResoFly.
+// Vier niveaus, elk een stap verder van "kijkt mee" naar "doet het zelf":
+//   `read`         — meelezen met wat het teamlid zelf ook mag zien.
+//   `propose`      — daarbovenop wijzigingen KLAARZETTEN in de goedkeurwachtrij.
+//                    Niet uitvoeren: dat blijft een klik van een mens in ResoFly.
+//   `execute`      — omkeerbare handelingen RECHTSTREEKS uitvoeren, zonder die
+//                    klik. Een status wijzigen, een veld invullen, een map
+//                    aanmaken: dingen die je met dezelfde AI weer terugdraait.
+//   `execute_high` — ook de handelingen die de registry als `risk: 'high'`
+//                    kenmerkt: onomkeerbaar of naar buiten gericht. Post naar een
+//                    klant, een aangifte, een boeking, een publieke link.
+//
+// WAAROM DIE LAATSTE TWEE UIT ELKAAR STAAN. "Rechtstreeks uitvoeren" is één
+// wens, maar niet één risico. Een projectstatus die verkeerd gezet wordt zet je
+// terug; een aanmaning die naar de verkeerde klant ging niet. Wie het eerste wil,
+// wil daarom niet automatisch het tweede — en zou hij ze samen aan moeten zetten,
+// dan zet hij ze samen aan of samen uit, en dat kost hem juist het gemak waar hij
+// voor kwam.
 //
 // WIE BESLIST WAT. Een AI-client vraagt meestal geen scopes op naam — hij kent
 // de onze niet. Daarom is wat de client (eventueel) meestuurt een PLAFOND, en
-// kiest de gebruiker op het toestemmingsscherm daarbinnen. Zo staat de
-// beslissing bij de mens die de gevolgen draagt, en niet bij het programma dat
-// erom vraagt.
+// kiest de gebruiker daarbinnen. Zo staat de beslissing bij de mens die de
+// gevolgen draagt, en niet bij het programma dat erom vraagt.
+//
+// WAAR HIJ KIEST is per niveau verschillend, en dat is met opzet:
+//   - `read` en `propose` staan op het TOESTEMMINGSSCHERM, want daar is de
+//     gebruiker op dat moment en daar hoort de keuze bij het koppelen.
+//   - `execute` en `execute_high` staan ALLEEN onder Instellingen → AI, uit.
+//     Een scherm dat je bereikt door in je AI-app op "Connect" te klikken, is
+//     niet de plek om af te spreken dat die AI voortaan ongevraagd mag boeken.
+//     Wie dat wil, gaat ervoor naar zijn eigen instellingen — en vindt daar ook
+//     de knop om het weer uit te zetten.
 
 export const SCOPE_READ = 'read';
 export const SCOPE_PROPOSE = 'propose';
-export const SUPPORTED_SCOPES = [SCOPE_READ, SCOPE_PROPOSE] as const;
+export const SCOPE_EXECUTE = 'execute';
+export const SCOPE_EXECUTE_HIGH = 'execute_high';
+export const SUPPORTED_SCOPES = [SCOPE_READ, SCOPE_PROPOSE, SCOPE_EXECUTE, SCOPE_EXECUTE_HIGH] as const;
 /** Wat de connector kan uitgeven. */
-export const ISSUABLE_SCOPES = [SCOPE_READ, SCOPE_PROPOSE] as const;
+export const ISSUABLE_SCOPES = [SCOPE_READ, SCOPE_PROPOSE, SCOPE_EXECUTE, SCOPE_EXECUTE_HIGH] as const;
+/** Wat er op het toestemmingsscherm te kiezen valt; de rest gaat via Instellingen → AI. */
+export const CONSENT_SCOPES = [SCOPE_READ, SCOPE_PROPOSE] as const;
 
 export function parseScopes(raw: unknown): string[] {
   return [...new Set(String(raw ?? '').split(/[\s,]+/).filter(Boolean))];
+}
+
+/**
+ * De niveaus zijn geen losse vinkjes maar een trap: wie mag uitvoeren, mag ook
+ * klaarzetten (dat is de terugval voor elke handeling zonder server-uitvoerder),
+ * en wie het onomkeerbare mag, mag het omkeerbare zeker.
+ *
+ * Dat staat hier en niet op de plek waar het gecontroleerd wordt, want anders
+ * moet elke controle het opnieuw bedenken — en de controle die het vergeet, is
+ * de controle die te weinig of te veel toestaat.
+ */
+export function normalizeScopes(scopes: readonly string[]): string[] {
+  const set = new Set(scopes);
+  if (set.has(SCOPE_EXECUTE_HIGH)) set.add(SCOPE_EXECUTE);
+  if (set.has(SCOPE_EXECUTE)) set.add(SCOPE_PROPOSE);
+  if (set.size > 0) set.add(SCOPE_READ);
+  // Vaste volgorde, zodat twee gelijke scopes ook als tekst gelijk zijn — dat
+  // scheelt een verschil dat alleen in de database zichtbaar is.
+  return ISSUABLE_SCOPES.filter((s) => set.has(s));
 }
 
 /**
@@ -210,19 +254,22 @@ export function parseScopes(raw: unknown): string[] {
  */
 export function grantableScopes(requested: unknown): string[] {
   const asked = parseScopes(requested).filter((s) => (ISSUABLE_SCOPES as readonly string[]).includes(s));
-  return asked.length > 0 ? asked : [...ISSUABLE_SCOPES];
+  return asked.length > 0 ? normalizeScopes(asked) : [...ISSUABLE_SCOPES];
 }
 
 /**
  * Wat de gebruiker koos, binnen het plafond. Nooit ruimer dan het ondertekende
  * verzoek — dat is wat verhindert dat een aangepast formulier meer opent dan de
  * client vroeg — en nooit leeg: zonder `read` is een koppeling zinloos.
+ *
+ * De trap uit `normalizeScopes` loopt VÓÓR het terugknippen, niet erna: anders
+ * zou "mag uitvoeren" er stilletjes "mag klaarzetten" bij halen bij een client
+ * die dat laatste nooit heeft aangeboden.
  */
 export function narrowScopes(offered: string, chosen: unknown): string[] {
   const ceiling = parseScopes(offered);
-  const wanted = parseScopes(chosen).filter((s) => ceiling.includes(s));
-  const result = wanted.includes(SCOPE_READ) ? wanted : [SCOPE_READ, ...wanted];
-  return result.filter((s) => ceiling.includes(s) || s === SCOPE_READ);
+  const wanted = normalizeScopes(parseScopes(chosen)).filter((s) => ceiling.includes(s));
+  return wanted.includes(SCOPE_READ) ? wanted : [SCOPE_READ, ...wanted];
 }
 
 export function scopeAllows(granted: string, need: string): boolean {

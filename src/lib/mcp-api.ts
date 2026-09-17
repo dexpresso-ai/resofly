@@ -64,6 +64,14 @@ export interface McpConsentRequest {
   scope: string;
   /** Mag deze koppeling überhaupt wijzigingen klaarzetten? */
   mayPropose: boolean;
+  /**
+   * Kan de gebruiker er later "rechtstreeks uitvoeren" bij aanzetten?
+   *
+   * Niet hier — dat staat met opzet alleen onder Instellingen → AI — maar het
+   * scherm hoort die zin alleen te tonen als het ook waar is. Een client die
+   * uitdrukkelijk alleen wilde meelezen, krijgt die knop daar nooit.
+   */
+  mayEnableExecute: boolean;
   expiresAt: string;
 }
 
@@ -75,13 +83,71 @@ export interface McpGrant {
   client_id: string;
   label: string;
   scope: string;
+  /** Wat de AI-client bij het koppelen ten hoogste vroeg; daarbinnen schuift de eigenaar. */
+  scope_ceiling: string;
   created_at: string;
   last_used_at: string | null;
 }
 
+function has(scope: string, need: string): boolean {
+  return scope.split(/[\s,]+/).filter(Boolean).includes(need);
+}
+
 /** Mag deze koppeling wijzigingen klaarzetten, of alleen meelezen? */
 export function grantMayPropose(grant: McpGrant): boolean {
-  return grant.scope.split(/[\s,]+/).includes('propose');
+  // `execute` telt mee: wat niet rechtstreeks kan, zet zo'n koppeling alsnog klaar.
+  return has(grant.scope, 'propose') || grantMayExecute(grant);
+}
+
+/**
+ * Staat `propose` er ZELF in, los van wat `execute` impliceert?
+ *
+ * Het verschil telt op één plek: bij het omzetten van een schakelaar. Zou daar
+ * de afgeleide waarde gebruikt worden, dan bouwt het scherm de nieuwe scope op
+ * uit een recht dat het zelf net had verzonnen.
+ */
+export function grantChosePropose(grant: McpGrant): boolean {
+  return has(grant.scope, 'propose');
+}
+
+/** Mag deze koppeling omkeerbare handelingen rechtstreeks uitvoeren? */
+export function grantMayExecute(grant: McpGrant): boolean {
+  return has(grant.scope, 'execute');
+}
+
+/** ...en ook de onomkeerbare? Dat is de tweede schakelaar, apart aan te zetten. */
+export function grantMayExecuteHigh(grant: McpGrant): boolean {
+  return grantMayExecute(grant) && has(grant.scope, 'execute_high');
+}
+
+/**
+ * Wat er voor deze koppeling überhaupt aan te zetten valt.
+ *
+ * Het plafond komt van de AI-client zelf, vastgelegd bij het koppelen. Vrijwel
+ * elke client vraagt niets op naam en krijgt dan alles aangeboden; eentje die
+ * uitdrukkelijk alleen wilde meelezen, hoort geen uitvoerrechten te kunnen
+ * krijgen doordat de gebruiker hier een knop omzet. De database toetst hetzelfde
+ * nog een keer — dit is het scherm, niet het slot.
+ */
+export function grantCanEnable(grant: McpGrant, need: 'execute' | 'execute_high'): boolean {
+  return has(grant.scope_ceiling, need);
+}
+
+/**
+ * De scope-tekst voor een stand van de twee schakelaars.
+ *
+ * De trappen zitten hier ingebakken omdat de database ze afdwingt: zonder `read`
+ * is een koppeling zinloos, `execute` valt terug op klaarzetten (dus `propose`
+ * hoort erbij) en `execute_high` bestaat niet zonder `execute`.
+ */
+export function buildScope({ propose, execute, executeHigh }: {
+  propose: boolean; execute: boolean; executeHigh: boolean;
+}): string {
+  const scopes = ['read'];
+  if (propose || execute) scopes.push('propose');
+  if (execute) scopes.push('execute');
+  if (execute && executeHigh) scopes.push('execute_high');
+  return scopes.join(' ');
 }
 
 /** Staat er een koppelverzoek in de URL? Zo ja, dan is dit het ondertekende pakketje. */
@@ -108,6 +174,7 @@ export async function loadConsentRequest(request: string): Promise<McpConsentReq
     logoUri: payload.logo_uri ? String(payload.logo_uri) : null,
     scope: String(payload.scope || 'read'),
     mayPropose: Boolean(payload.may_propose),
+    mayEnableExecute: Boolean(payload.may_enable_execute),
     expiresAt: String(payload.expires_at || ''),
   };
 }
@@ -169,7 +236,7 @@ function isMissingTable(error: { code?: string; message?: string }): boolean {
 export async function listGrants(organizationId: UUID): Promise<McpGrant[]> {
   const { data, error } = await supabase
     .from('mcp_grants')
-    .select('id, organization_id, user_id, client_id, label, scope, created_at, last_used_at')
+    .select('id, organization_id, user_id, client_id, label, scope, scope_ceiling, created_at, last_used_at')
     .eq('organization_id', organizationId)
     .is('revoked_at', null)
     .order('created_at', { ascending: false });
@@ -185,6 +252,18 @@ export async function listGrants(organizationId: UUID): Promise<McpGrant[]> {
  * `mcp_grants_revoke_tokens`), zodat de AI meteen de deur dicht vindt en niet
  * pas als zijn toegangstoken over een uur verloopt.
  */
+export async function setGrantScope(grantId: UUID, scope: string): Promise<void> {
+  const { error } = await supabase
+    .from('mcp_grants')
+    .update({ scope })
+    .eq('id', grantId)
+    .is('revoked_at', null);
+  // De database bewaakt de treden en het plafond (trigger
+  // `mcp_grants_guard_client_update`). Komt daar een weigering vandaan, dan is
+  // die in het Nederlands geschreven en kan hij zo op het scherm.
+  if (error) throw new Error(error.message || 'Het wijzigen van deze koppeling is niet gelukt.');
+}
+
 export async function revokeGrant(grantId: UUID): Promise<void> {
   const { error } = await supabase
     .from('mcp_grants')
