@@ -75,7 +75,7 @@ export function useClientEmailUnread(params: {
     refreshInbox();
 
     let cancelled = false;
-    let channel: ReturnType<typeof supabase.channel> | null = null;
+    const channels: ReturnType<typeof supabase.channel>[] = [];
 
     // Realtime met RLS heeft de JWT van de gebruiker nodig, anders komen de
     // org-scoped inbound-events niet door. Zet de auth expliciet vóór abonneren.
@@ -83,7 +83,7 @@ export function useClientEmailUnread(params: {
       if (cancelled) return;
       const token = data.session?.access_token;
       if (token) supabase.realtime.setAuth(token);
-      channel = supabase
+      channels.push(supabase
         .channel(`client-emails-${organizationId}`)
         .on(
           'postgres_changes',
@@ -107,12 +107,22 @@ export function useClientEmailUnread(params: {
             });
           },
         )
-        // De opvangbak. Een binnenkomende mail wordt eerst onvoorwaardelijk
-        // vastgelegd (INSERT, status 'unmatched') en in dezelfde transactie
-        // afgehandeld (UPDATE: gekoppeld, geparkeerd of weggegooid). Pas de
-        // UPDATE zegt dus of er echt iets in de opvangbak ligt: status
-        // 'unmatched' mét een reden en zonder afhandeling. Op elk event tellen
-        // we opnieuw — de server is de waarheid, niet het event.
+        .subscribe());
+
+      // De opvangbak staat bewust op een EIGEN kanaal. Een kanaal met twee
+      // bindingen valt in zijn geheel om als er één niet deugt, en
+      // inbound_messages is pas sinds kort onderdeel van de publicatie: in een
+      // omgeving waar die migratie nog niet gedraaid is, zou de bestaande
+      // melding voor klantmail dan mee omvallen.
+      //
+      // Een binnenkomende mail wordt eerst onvoorwaardelijk vastgelegd (INSERT,
+      // status 'unmatched') en in dezelfde transactie afgehandeld (UPDATE:
+      // gekoppeld, geparkeerd of weggegooid). Pas de UPDATE zegt dus of er echt
+      // iets in de opvangbak ligt: status 'unmatched' mét een reden en zonder
+      // afhandeling. Op elk event tellen we opnieuw — de server is de waarheid,
+      // niet het event.
+      channels.push(supabase
+        .channel(`inbound-messages-${organizationId}`)
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'inbound_messages', filter: `organization_id=eq.${organizationId}` },
@@ -136,10 +146,10 @@ export function useClientEmailUnread(params: {
             });
           },
         )
-        .subscribe();
+        .subscribe());
     });
 
-    return () => { cancelled = true; if (channel) supabase.removeChannel(channel); };
+    return () => { cancelled = true; for (const channel of channels) supabase.removeChannel(channel); };
   }, [organizationId, currentUserId, refreshUnread, refreshInbox, pushToast]);
 
   return { unread, refreshUnread, inboxCount, refreshInbox, activity, toasts, dismissToast };

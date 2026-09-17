@@ -108,6 +108,26 @@ voor gespreksregels (64 px) en het zoekveld (15 px tekst, geen iOS-inzoom).
   "Niet gekoppeld" in beeld; de grenzen van `clients` en `clients-table` zijn met de
   hoogte van die strook verhoogd (gemeten 274 en 303 px).
 
+## 6 · Als de migratie nog niet gedraaid is
+
+Cloudflare Pages rolt de frontend uit op een push; de migratie gaat langs de Supabase-deploy.
+In dat gaatje bestaat `client_email_thread_overview` nog niet, en dan zou de pagina een rode
+PostgREST-fout tonen ("Could not find the table … in the schema cache") terwijl er niets mis
+is. Zelfde aanpak als bij het AI-paneel (16 september):
+
+- `isMissingRelation()` staat nu één keer in `lib/postgrestErrors.ts`, met vier tests. De
+  kopie die in `mcp-api.ts` stond is vervangen door die ene; `McpNotAvailableError` doet
+  verder precies wat het deed.
+- De gesprekkenlijst gooit `NotMigratedError` in plaats van de ruwe fout, en de pagina toont
+  dan één rustige regel: *Nog niet beschikbaar in deze omgeving*, met de verwijzing naar het
+  klantdossier. Hij verdwijnt vanzelf zodra de migratie gedraaid is.
+- Het tabblad **Niet gekoppeld** blijft in dat geval gewoon werken: dat leest
+  `inbound_messages`, en die tabel bestaat al sinds augustus.
+- De opvangbak luistert op een **eigen realtime-kanaal**. Een kanaal met twee bindingen valt
+  in zijn geheel om als er één niet deugt; door ze te splitsen kan een omgeving waar
+  `inbound_messages` nog niet in de publicatie zit de bestaande melding voor klantmail niet
+  meeslepen.
+
 ## Wat níét verandert
 
 Het tabblad **Communicatie** in het klantdossier — mail opstellen, gesprekken openklappen,

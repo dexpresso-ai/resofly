@@ -10,6 +10,7 @@ import { deleteClientEmail, loadClientEmailReadIds, loadClientEmailThreadOvervie
 import { resolveEffectiveSender, sendClientEmail, type EffectiveSender } from '../services/mailService';
 import { countUnread, filterThreads, initials, listTime, previewLine, replySubject, type CommunicationTab } from '../lib/communication';
 import { useNarrowViewport } from '../lib/useNarrowViewport';
+import { NotMigratedError } from '../lib/postgrestErrors';
 
 /**
  * Waar de pagina moet openen als iemand er via een melding, de beslislijst of
@@ -70,6 +71,9 @@ export function CommunicationPage({
   const [threads, setThreads] = useState<ClientEmailThreadOverview[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // De view bestaat in deze omgeving nog niet: de frontend staat er, de
+  // migratie is nog niet gedraaid. Geen fout om rood van te kleuren.
+  const [notMigrated, setNotMigrated] = useState(false);
   const [query, setQuery] = useState('');
   const [clientFilter, setClientFilter] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -84,6 +88,7 @@ export function CommunicationPage({
     setThreads(rows);
     setLoaded(true);
     setLoadError(null);
+    setNotMigrated(false);
     if (pendingSelectRef.current && rows.some(t => t.id === pendingSelectRef.current)) {
       setSelectedId(pendingSelectRef.current);
       pendingSelectRef.current = null;
@@ -97,9 +102,15 @@ export function CommunicationPage({
     setSelectedId(null);
     setComposing(false);
     setDetailOpen(false);
+    setNotMigrated(false);
     loadClientEmailThreadOverview(organizationId)
       .then(rows => { if (!cancelled) { setThreads(rows); setLoaded(true); } })
-      .catch(err => { if (!cancelled) { setLoadError(err instanceof Error ? err.message : 'Berichten laden mislukt.'); setLoaded(true); } });
+      .catch(err => {
+        if (cancelled) return;
+        setLoaded(true);
+        if (err instanceof NotMigratedError) { setNotMigrated(true); setThreads([]); return; }
+        setLoadError(err instanceof Error ? err.message : 'Berichten laden mislukt.');
+      });
     return () => { cancelled = true; };
   }, [organizationId]);
 
@@ -197,7 +208,7 @@ export function CommunicationPage({
         <p className="eyebrow">Communicatie</p>
         <h2>Berichten</h2>
         <span className="comm-head-sub">
-          {loaded && !loadError
+          {loaded && !loadError && !notMigrated
             ? `${threads.length} gesprek${threads.length === 1 ? '' : 'ken'} · ${unreadTotal} ongelezen · ${inboxCount} niet gekoppeld`
             : 'Alle klantmail op één plek'}
         </span>
@@ -260,7 +271,15 @@ export function CommunicationPage({
               {!loaded && <div className="client-empty-line">Gesprekken laden…</div>}
               {loaded && loadError && <div className="error">{loadError}</div>}
 
-              {loaded && !loadError && threads.length === 0 && <div className="client-empty-state comm-empty-state">
+              {loaded && notMigrated && <div className="client-empty-state comm-empty-state">
+                <strong>Nog niet beschikbaar in deze omgeving</strong>
+                <span>
+                  De database is hier nog niet bijgewerkt. Deze pagina werkt zodra de migratie gedraaid is;
+                  je klantmail staat intussen gewoon in het klantdossier, tabblad Communicatie.
+                </span>
+              </div>}
+
+              {loaded && !loadError && !notMigrated && threads.length === 0 && <div className="client-empty-state comm-empty-state">
                 <strong>Nog geen klantmail</strong>
                 <span>
                   Stuur een eerste bericht via <em>Nieuw bericht</em>, of vanuit het klantdossier. Antwoorden van klanten
@@ -269,7 +288,7 @@ export function CommunicationPage({
                 </span>
               </div>}
 
-              {loaded && !loadError && threads.length > 0 && visible.length === 0 && <div className="client-empty-state comm-empty-state">
+              {loaded && !loadError && !notMigrated && threads.length > 0 && visible.length === 0 && <div className="client-empty-state comm-empty-state">
                 <strong>{tab === 'unread' && !filtersActive ? 'Alles gelezen' : 'Geen gesprekken gevonden'}</strong>
                 <span>{tab === 'unread' && !filtersActive
                   ? 'Er staat geen ongelezen post meer in je gesprekken.'

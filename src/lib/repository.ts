@@ -3,6 +3,7 @@ import { supabase, supabaseAuth } from './supabase';
 import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
 import { throwFunctionError } from './functionErrors';
+import { isMissingRelation, NotMigratedError } from './postgrestErrors';
 import { inkPageCount, inkStrokeCount, isInkEmpty, serializeInkDocument, type InkDocument } from './ink';
 import type { ReportDefinition } from './reporting';
 import type { ModuleAccess } from './permissions';
@@ -3892,7 +3893,13 @@ export async function loadClientEmailThreadOverview(organizationId: UUID, limit 
     .eq('organization_id', organizationId)
     .order('last_message_at', { ascending: false })
     .limit(limit);
-  if (error) throw error;
+  if (error) {
+    // De frontend loopt vóór op de database (Cloudflare Pages rolt uit op een
+    // push, de migratie gaat langs een andere weg). Bestaat de view nog niet,
+    // dan is dat geen fout om rood van te kleuren — zie postgrestErrors.ts.
+    if (isMissingRelation(error)) throw new NotMigratedError('De pagina Berichten is in deze omgeving nog niet ingeschakeld.');
+    throw error;
+  }
   return (data ?? []) as ClientEmailThreadOverview[];
 }
 

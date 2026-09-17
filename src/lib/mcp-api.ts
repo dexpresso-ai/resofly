@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { isMissingRelation } from './postgrestErrors';
 import type { UUID } from '../types';
 
 /**
@@ -154,13 +155,6 @@ export class McpNotAvailableError extends Error {
   constructor() { super('De AI-koppeling is in deze omgeving nog niet ingeschakeld.'); this.name = 'McpNotAvailableError'; }
 }
 
-/** Herkent het antwoord van PostgREST op een tabel die (nog) niet bestaat. */
-function isMissingTable(error: { code?: string; message?: string }): boolean {
-  if (error.code === '42P01' || error.code === 'PGRST205') return true;
-  const message = String(error.message ?? '').toLowerCase();
-  return message.includes('schema cache') || message.includes('does not exist');
-}
-
 /**
  * Alle koppelingen die deze gebruiker MAG zien. Welke dat zijn, beslist RLS:
  * een gewoon teamlid krijgt zijn eigen rijen, een owner of admin die van de
@@ -174,7 +168,7 @@ export async function listGrants(organizationId: UUID): Promise<McpGrant[]> {
     .is('revoked_at', null)
     .order('created_at', { ascending: false });
   if (error) {
-    if (isMissingTable(error)) throw new McpNotAvailableError();
+    if (isMissingRelation(error)) throw new McpNotAvailableError();
     throw new Error(`De AI-koppelingen konden niet worden opgehaald: ${error.message}`);
   }
   return (data ?? []) as McpGrant[];
