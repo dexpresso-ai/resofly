@@ -320,6 +320,30 @@ toestemmingsscherm.** Dan ging de magic link naar de startpagina. De app stuurt
 de link terug naar `/mcp/authorize` zolang dat verzoek in de URL staat; is dat
 niet zo, controleer dan of `APP_PUBLIC_URL` klopt voor deze omgeving.
 
+**Het toestemmingsscherm zegt "Koppelen lukt niet — Failed to fetch".** Dat is
+geen antwoord van ons: de browser heeft het verzoek nooit verstuurd. Twee
+oorzaken, en ze zijn uit elkaar te houden met het netwerktabblad van de browser
+(zie je daar een `OPTIONS` met een rode `consent` of `approve` eronder, dan is
+het de tweede).
+
+1. *De edge functions staan er nog niet.* De frontend gaat via Cloudflare Pages
+   sneller live dan `supabase functions deploy`. Rol `mcp-oauth` uit en probeer
+   opnieuw.
+2. *De origin van de app staat niet op de lijst.* Alleen `/approve` heeft een
+   origin-controle — de open paden niet. Zet in de secrets van deze omgeving
+   `APP_PUBLIC_URL` (of `GERRIE_ALLOWED_ORIGINS`) op **exact** de origin waarmee
+   de klant de app opent, zonder slash aan het eind:
+
+   ```bash
+   supabase secrets set APP_PUBLIC_URL="https://staging.resofly.com"
+   # of, staan er meer:
+   supabase secrets set GERRIE_ALLOWED_ORIGINS="https://staging.resofly.com,https://app.resofly.nl"
+   ```
+
+   Opent de klant de app op `www.` of op het `*.pages.dev`-adres, dan is dat een
+   ándere origin en hoort hij er los bij. Klopt dit niet, dan blijft het
+   toestemmingsscherm gewoon staan en gaat pas de knop **Koppelen** stuk.
+
 **Het toestemmingsscherm geeft een 404.** Dan serveert de hosting `/mcp/authorize`
 niet als app-route. Dat is dezelfde SPA-fallback waar `/portal`, `/quote/<token>`
 en `/gedeeld/<token>` op leunen; werken die wel en deze niet, dan staat er een

@@ -43,7 +43,7 @@ import {
   templateField, type McpResource,
 } from '../_shared/mcpCatalog.ts';
 import {
-  isJsonRpcRequest, isNotification, parseToken, protectedResourceMetadata, rpcError, rpcResult, scopeAllows,
+  isJsonRpcRequest, isNotification, openCorsHeaders, parseToken, protectedResourceMetadata, rpcError, rpcResult, scopeAllows,
   toolFailure, toolText, verifyToken, JSONRPC_INVALID_PARAMS, JSONRPC_INVALID_REQUEST,
   JSONRPC_METHOD_NOT_FOUND, JSONRPC_PARSE_ERROR, SCOPE_PROPOSE, SCOPE_READ, type JsonRpcRequest,
 } from '../_shared/mcpAuth.ts';
@@ -853,13 +853,13 @@ function today(): string {
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 
+/**
+ * Eén lijst, gedeeld met de autorisatieserver (zie openCorsHeaders in
+ * mcpAuth.ts), plus de sessie-header die alleen deze server gebruikt. Een
+ * header die hier ontbreekt, laat de browser het verzoek niet eens versturen.
+ */
 function corsHeaders(): HeadersInit {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'authorization, content-type, mcp-protocol-version, mcp-session-id',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Expose-Headers': 'WWW-Authenticate, mcp-session-id',
-  };
+  return openCorsHeaders('mcp-session-id', 'WWW-Authenticate, mcp-session-id');
 }
 
 function json(payload: unknown, status = 200): Response {

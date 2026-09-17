@@ -40,7 +40,7 @@ import {
   AUTH_REQUEST_TTL_SECONDS, authorizationServerMetadata, createAuthCode, createToken, grantableScopes, narrowScopes,
   isAcceptableRedirectUri, isValidCodeChallenge, parseToken, protectedResourceMetadata, redirectUriAllowed,
   sha256Hex, signAuthRequest, verifyAuthRequest, verifyPkce, verifyToken,
-  base64Url, randomBytes, SCOPE_READ, type AuthRequest, type McpDiscoveryUrls,
+  base64Url, randomBytes, openCorsHeaders, SCOPE_READ, type AuthRequest, type McpDiscoveryUrls,
 } from '../_shared/mcpAuth.ts';
 
 const admin = createAdminClient();
@@ -549,14 +549,6 @@ async function readForm(req: Request): Promise<URLSearchParams> {
     return new URLSearchParams(Object.entries(body).map(([k, v]) => [k, String(v ?? '')]));
   }
   return new URLSearchParams(await req.text());
-}
-
-function openCorsHeaders(): HeadersInit {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'authorization, content-type, mcp-protocol-version',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  };
 }
 
 function openJson(payload: unknown, status = 200): Response {

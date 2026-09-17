@@ -5,6 +5,7 @@ import {
   isNotification, isValidCodeVerifier, parseToken, protectedResourceMetadata, redirectUriAllowed, scopeAllows,
   sha256Hex, verifyPkce, verifyToken, base64Url, randomBytes,
   signAuthRequest, verifyAuthRequest, AUTH_REQUEST_TTL_SECONDS, ISSUABLE_SCOPES, narrowScopes, type AuthRequest,
+  openCorsHeaders,
 } from './mcpAuth.ts';
 
 /**
@@ -326,4 +327,53 @@ test('een bericht zonder id is een notificatie en krijgt geen antwoord', () => {
   assert.equal(isNotification({ jsonrpc: '2.0', id: null, method: 'x' }), true);
   assert.equal(isNotification({ jsonrpc: '2.0', id: 0, method: 'x' }), false);
   assert.equal(isNotification({ jsonrpc: '2.0', id: 'abc', method: 'x' }), false);
+});
+
+// ── CORS ─────────────────────────────────────────────────────────────────────
+//
+// Dit is de controle die we niet hadden toen het misging. Een ontbrekende header
+// in dit lijstje ziet er in de code onschuldig uit en is in een curl niet te
+// merken — curl kent geen preflight. In een browser is het het verschil tussen
+// een werkend toestemmingsscherm en "Failed to fetch": bij een niet-toegestane
+// header verstuurt de browser het echte verzoek nooit, dus er komt geen status
+// en geen foutmelding terug waar het scherm iets mee kan.
+
+/** Zoals een browser het leest: kleine letters, gesplitst op komma's. */
+function allowedHeaders(headers: Record<string, string>): string[] {
+  return headers['Access-Control-Allow-Headers'].split(',').map(h => h.trim().toLowerCase());
+}
+
+test('de open paden staan alle headers toe die de app en een AI-client meesturen', () => {
+  const allowed = allowedHeaders(openCorsHeaders());
+  // apikey en x-client-info stuurt supabase-js ongevraagd mee; zonder die twee
+  // is elk pad hier voor de browser dicht. Dit is de regressie zelf.
+  for (const header of ['authorization', 'x-client-info', 'apikey', 'content-type', 'mcp-protocol-version']) {
+    assert.ok(allowed.includes(header), `${header} hoort toegestaan te zijn op de open paden`);
+  }
+});
+
+test('de open paden laten een browser er met GET, POST en OPTIONS langs', () => {
+  const headers = openCorsHeaders();
+  const methods = headers['Access-Control-Allow-Methods'].split(',').map(m => m.trim().toUpperCase());
+  // /consent is een GET, /token en /register zijn POST, en de preflight zelf
+  // is OPTIONS. Valt er één weg, dan valt precies dat pad stil.
+  for (const method of ['GET', 'POST', 'OPTIONS']) {
+    assert.ok(methods.includes(method), `${method} hoort toegestaan te zijn`);
+  }
+  assert.equal(headers['Access-Control-Allow-Origin'], '*');
+});
+
+test('de MCP-server mag zijn eigen headers erbij zetten zonder de rest kwijt te raken', () => {
+  const headers = openCorsHeaders('mcp-session-id', 'WWW-Authenticate, mcp-session-id');
+  const allowed = allowedHeaders(headers);
+  assert.ok(allowed.includes('mcp-session-id'), 'de eigen header hoort erbij te komen');
+  assert.ok(allowed.includes('apikey'), 'en de gedeelde lijst blijft staan');
+  assert.ok(allowed.includes('authorization'));
+  // Zonder WWW-Authenticate kan een MCP-client uit een 401 niet opmaken wélke
+  // autorisatieserver hij moet hebben, en begint het koppelen niet eens.
+  assert.equal(headers['Access-Control-Expose-Headers'], 'WWW-Authenticate, mcp-session-id');
+});
+
+test('zonder extra headers blijft Expose-Headers weg', () => {
+  assert.equal('Access-Control-Expose-Headers' in openCorsHeaders(), false);
 });

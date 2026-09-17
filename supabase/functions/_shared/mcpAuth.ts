@@ -320,6 +320,45 @@ export function authorizationServerMetadata(
   };
 }
 
+// ── CORS op de open paden ────────────────────────────────────────────────────
+
+/**
+ * De headers die een browser mee mag sturen naar de open MCP-paden.
+ *
+ * Dit lijstje is geen formaliteit: een header die er NIET in staat, maakt van
+ * een gewoon verzoek een verzoek dat de browser weigert te versturen. Alles wat
+ * geen "simpele" header is — en `apikey` is dat niet — laat de browser eerst
+ * met een OPTIONS langs de server gaan, en als het antwoord die header niet
+ * noemt, komt het echte verzoek er nooit. De pagina krijgt dan geen status en
+ * geen foutmelding van ons, alleen "Failed to fetch": het verzoek is nooit
+ * verstuurd. Dat is precies wat het toestemmingsscherm overkwam.
+ *
+ * Vandaar dat hier dezelfde vier in staan als in elke andere functie van deze
+ * app (zie makeCors in edgeAuth.ts) — de supabase-js-client stuurt `apikey` en
+ * `x-client-info` ongevraagd mee, dus een pad dat ze niet toestaat, is voor de
+ * browser dicht. `mcp-protocol-version` staat er voor de AI-clients zelf bij.
+ */
+export const OPEN_CORS_ALLOW_HEADERS = 'authorization, x-client-info, apikey, content-type, mcp-protocol-version';
+
+/**
+ * CORS voor de paden die voor iedereen open staan: discovery, registratie,
+ * /authorize, /token, en het ophalen van een koppelverzoek door ons eigen
+ * toestemmingsscherm. Die worden door een AI-client van buiten aangeroepen, dus
+ * er valt geen origin-lijst te maken; ze beschermen zich met PKCE, een
+ * geregistreerde redirect-URI en een ondertekend verzoek.
+ */
+export function openCorsHeaders(extraHeaders = '', extraExposed = ''): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': extraHeaders ? `${OPEN_CORS_ALLOW_HEADERS}, ${extraHeaders}` : OPEN_CORS_ALLOW_HEADERS,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    // Zonder dit vraagt elke aanroep opnieuw eerst een OPTIONS op.
+    'Access-Control-Max-Age': '86400',
+  };
+  if (extraExposed) headers['Access-Control-Expose-Headers'] = extraExposed;
+  return headers;
+}
+
 // ── Het autorisatieverzoek onderweg ──────────────────────────────────────────
 //
 // Tussen "de AI-client stuurt de gebruiker naar ons toe" en "de gebruiker geeft

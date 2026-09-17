@@ -32,6 +32,29 @@ export const MCP_SERVER_URL = String(
     || `${String(import.meta.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '')}/functions/v1/mcp`,
 ).replace(/\/+$/, '');
 
+/**
+ * Eén deur naar de autorisatieserver, omdat een verzoek dat niet AANKOMT hier
+ * anders afloopt dan een verzoek dat wordt afgewezen.
+ *
+ * Komt het niet aan, dan geeft de browser `TypeError: Failed to fetch` — geen
+ * status, geen body, en een Engelse zin die in een Nederlands scherm terechtkomt
+ * zonder te zeggen wat de gebruiker eraan kan doen. Precies dat stond er op het
+ * toestemmingsscherm van een klant. Het betekent altijd hetzelfde: het verzoek
+ * is nooit bij ons geweest — geen verbinding, of de edge functions van deze
+ * omgeving staan nog niet klaar (de frontend loopt daarop voor, zie
+ * McpNotAvailableError verderop).
+ */
+async function fetchOauth(path: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(`${FUNCTIONS_BASE}/${OAUTH_FN}${path}`, init);
+  } catch {
+    throw new Error(
+      'We konden de koppelserver niet bereiken. Controleer je internetverbinding — '
+      + 'blijft het misgaan, dan staat de AI-koppeling in deze omgeving nog niet klaar.',
+    );
+  }
+}
+
 /** Wie er toestemming vraagt, zoals het toestemmingsscherm het toont. */
 export interface McpConsentRequest {
   clientName: string;
@@ -69,9 +92,14 @@ export function readAuthorizeRequest(): string | null {
 }
 
 export async function loadConsentRequest(request: string): Promise<McpConsentRequest> {
-  const res = await fetch(`${FUNCTIONS_BASE}/${OAUTH_FN}/consent?request=${encodeURIComponent(request)}`, {
-    headers: { apikey: ANON_KEY },
-  });
+  // Bewust ZONDER apikey. Deze functie draait met verify_jwt = false (zie
+  // supabase/config.toml) en wordt door AI-clients zonder enige Supabase-sleutel
+  // aangeroepen, dus hij is hier niet nodig — en hij is niet gratis: `apikey` is
+  // geen "simpele" header, dus de browser stuurt er eerst een OPTIONS overheen
+  // en verstuurt dit verzoek alleen als dát antwoord de header toestaat. Eén
+  // header die daar ontbreekt is een toestemmingsscherm dat "Failed to fetch"
+  // toont. Zonder die header is dit een gewoon GET-verzoek dat meteen vertrekt.
+  const res = await fetchOauth(`/consent?request=${encodeURIComponent(request)}`);
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(String(payload?.error_description || payload?.error || 'Dit koppelverzoek is niet (meer) geldig.'));
   return {
@@ -100,7 +128,10 @@ export async function decideConsent(
   const token = data.session?.access_token;
   if (!token) throw new Error('Je sessie is verlopen. Log opnieuw in en probeer het nog eens.');
 
-  const res = await fetch(`${FUNCTIONS_BASE}/${OAUTH_FN}/approve`, {
+  // Hier kan de OPTIONS er niet af: met een Authorization-header is dit nooit
+  // een "simpel" verzoek. Die kant staat goed — /approve antwoordt met de
+  // gedeelde origin-controle uit edgeAuth.ts, die `apikey` wél toestaat.
+  const res = await fetchOauth('/approve', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: ANON_KEY },
     body: JSON.stringify({ request, decision, organizationId, label, scope }),
