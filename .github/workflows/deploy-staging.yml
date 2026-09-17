@@ -24,6 +24,39 @@ jobs:
         with:
           version: latest
 
+      # Vóór de CLI, want die zegt alleen "Access token not provided" — en dan sta
+      # je in de Supabase-documentatie te zoeken terwijl het probleem in GitHub
+      # zit. Deze stap zegt wélke secret ontbreekt en op welk scherm hij hoort.
+      #
+      # Let op de valkuil die ons vier deploys heeft gekost: een secret onder
+      # Settings → Environments is NIET zichtbaar voor een job zonder
+      # `environment:`. Hij staat er dan wel, en toch is hij hier leeg.
+      - name: Controleer de secrets
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          ontbreekt=""
+          [ -n "$SUPABASE_ACCESS_TOKEN" ] || ontbreekt="$ontbreekt SUPABASE_ACCESS_TOKEN"
+          [ -n "$SUPABASE_DB_PASSWORD" ]  || ontbreekt="$ontbreekt SUPABASE_DB_PASSWORD"
+          if [ -n "$ontbreekt" ]; then
+            echo "::error title=Secrets ontbreken::Deze deploy kan niet draaien. Ontbreekt:$ontbreekt"
+            echo ""
+            echo "Zet ze hier neer:"
+            echo "  Settings -> Secrets and variables -> Actions -> tabblad Secrets"
+            echo "  -> New repository secret"
+            echo ""
+            echo "Veelgemaakte fouten:"
+            echo "  * Onder Settings -> Environments gezet. Die zijn onzichtbaar voor"
+            echo "    een job zonder 'environment:', en die heeft deze workflow niet."
+            echo "  * Op het tabblad Variables gezet in plaats van Secrets."
+            echo "  * Op organisatieniveau gezet zonder deze repository toe te laten."
+            echo ""
+            echo "SUPABASE_ACCESS_TOKEN maak je op https://supabase.com/dashboard/account/tokens"
+            exit 1
+          fi
+          echo "Beide secrets zijn aanwezig (lengte: token ${#SUPABASE_ACCESS_TOKEN}, wachtwoord ${#SUPABASE_DB_PASSWORD})."
+
       - name: Link Supabase project
         run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
         env:
