@@ -142,7 +142,18 @@ export function McpConnections({ organizationId, currentUserId, canAdmin, teamMe
         </p>
       )}
 
-      {!unavailable && (
+      {/* Zonder connector-adres heeft het geen zin om de stappen te tonen: de
+          gebruiker zou halverwege stranden met niets om te plakken. Dit is een
+          instelling van de omgeving, niet iets wat hij zelf kan oplossen, dus
+          staat er wat er mist in plaats van een lege regel. */}
+      {!unavailable && !MCP_SERVER_URL && (
+        <p className="mcp-connections-empty">
+          Er is voor deze omgeving nog geen connector-adres ingesteld, dus koppelen kan nog niet.
+          Een beheerder zet <code>VITE_MCP_SERVER_URL</code> klaar; daarna staat het adres hier.
+        </p>
+      )}
+
+      {!unavailable && MCP_SERVER_URL && (
         <>
           <h4 className="mcp-connections-heading">Koppelen</h4>
           <div className="dns-record">

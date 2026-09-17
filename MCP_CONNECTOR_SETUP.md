@@ -107,15 +107,18 @@ Zie *Discovery op supabase.co* hieronder.
 
 ## 5. Wat de klant invult
 
-Eén URL, letterlijk zo — zonder slash erachter, want Claude vergelijkt hem met de
-`resource` uit het discovery-document:
+Eén URL, letterlijk zo — zonder slash erachter, want een AI-client vergelijkt hem
+met de `resource` uit het discovery-document:
 
 ```
-https://<PROJECT>.supabase.co/functions/v1/mcp
+https://connector.resofly.com
 ```
 
 Die staat met een kopieerknop en de stappen per AI-app in **Instellingen → AI**
-(`MCP_SERVER_URL` in `src/lib/mcp-api.ts`). De rest gaat vanzelf: de AI-client
+(`MCP_SERVER_URL` in `src/lib/mcp-api.ts`, gevuld uit `VITE_MCP_SERVER_URL`).
+Staat die variabele niet, dan zegt dat scherm dat koppelen nog niet kan — er is
+met opzet geen terugval op de Supabase-URL, zie *De connector-hostnaam*
+hieronder. De rest gaat vanzelf: de AI-client
 leest de `WWW-Authenticate`-header, vindt de autorisatieserver, registreert
 zichzelf en stuurt de klant naar het toestemmingsscherm.
 
@@ -159,20 +162,111 @@ Loskoppelen doet hij onder **Instellingen → AI**; dat werkt meteen. De databas
 trekt de tokens mee in en zet alles wat die koppeling nog had klaarstaan op
 geannuleerd.
 
-### Een eigen domein ervoor (optioneel)
+### De connector-hostnaam
 
-De URL hierboven werkt, maar hij is lelijk en de discovery-adressen staan op een
-Supabase-pad in plaats van op een root. Wil je
-`https://mcp.jouwdomein.nl`, zet er dan een Cloudflare Worker of een
-Pages-redirect voor die doorstuurt naar de twee functies, en zet:
+De klant plakt `https://connector.resofly.com` in zijn AI-app. Daarachter zit de
+Worker in `workers/mcp-connector`, die de twee edge functions op één hostnaam
+zet. De functies vergelijken op de staart van het pad, dus daar hoefde niets voor
+te veranderen.
+
+Dat dit niet alleen cosmetiek is, staat in *Discovery op supabase.co* hierboven:
+bij een issuer mét pad zoekt een client het metadata-document eerst op de root
+van het domein, en op `supabase.co` is die root niet van ons. Op een eigen
+hostnaam staat de issuer op de root en vindt elke client het document bij de
+eerste poging — precies zoals RFC 8414 het bedoelt. De OpenID-vorm blijft als
+achtervang bestaan, maar niemand hoeft er nog langs.
+
+Issuer en resource zijn allebei de hostnaam zelf. Dat kan omdat hun twee
+metadata-documenten op verschillende `.well-known`-paden staan:
+
+| Adres | Wat erachter zit |
+|---|---|
+| `POST /` | de MCP-server (`mcp`) — hier praat de AI |
+| `/.well-known/oauth-protected-resource` | `mcp` — welke autorisatieserver hierbij hoort |
+| `/.well-known/oauth-authorization-server` | `mcp-oauth` — RFC 8414 |
+| `/.well-known/openid-configuration` | `mcp-oauth` — dezelfde inhoud, OpenID-vorm |
+| `/authorize` `/token` `/register` `/revoke` `/jwks` | `mcp-oauth` |
+| `/consent` `/approve` | `mcp-oauth` — het toestemmingsscherm |
+
+Al het andere geeft een 404. De Worker plakt nooit een binnenkomend pad achter
+een basis-URL: elk pad hierboven wijst een vast doel aan. Dat is met opzet — een
+proxy die dat wél doet, is één `..` verwijderd van élke andere edge function van
+dit project, en die gaan over facturen en bankkoppelingen.
+`workers/mcp-connector/router.test.ts` bewaakt beide kanten: dat elk pad
+aankomt waar het hoort, en dat de rest niet eens een verzoek naar boven stuurt.
+
+#### Uitrollen
+
+**1. DNS + Worker.** De Worker heeft geen secrets; hij kent geen tokens en leest
+geen gegevens.
 
 ```bash
-supabase secrets set MCP_PUBLIC_BASE_URL="https://mcp.jouwdomein.nl/oauth"
-supabase secrets set MCP_RESOURCE_URL="https://mcp.jouwdomein.nl"
+cd workers/mcp-connector
+npm install
+npm run deploy:staging      # of: npm run deploy  (productie)
 ```
 
-De functies vergelijken op de staart van het pad, dus ze werken in beide
-opstellingen zonder codewijziging.
+`custom_domain = true` in `wrangler.toml` laat Cloudflare het DNS-record en het
+certificaat zelf aanmaken, mits het domein in dit Cloudflare-account zit. Voor
+productie staat het routes-blok nog uitgecommentarieerd: aanzetten zodra het
+productieproject er is.
+
+**2. De drie adressen gelijktrekken.** Dit is de stap waar het op misgaat. Een
+AI-client vergelijkt het adres dat hij kreeg met de `resource` uit het
+discovery-document, en één teken verschil — een slash aan het eind, `www`, een
+`http` — is een koppeling die niet tot stand komt.
+
+```bash
+supabase secrets set MCP_PUBLIC_BASE_URL="https://connector.staging.resofly.com"
+supabase secrets set MCP_RESOURCE_URL="https://connector.staging.resofly.com"
+```
+
+En op de Cloudflare Pages-build van de app, als gewone build-variabele:
+
+```
+VITE_MCP_SERVER_URL=https://connector.staging.resofly.com
+```
+
+Alle drie zonder slash aan het eind, alle drie identiek. Zonder de derde toont
+**Instellingen → AI** geen adres maar de mededeling dat koppelen nog niet kan.
+Dat is expres: vroeger viel dat veld terug op de Supabase-URL, en dat is een
+adres met een projectcode erin dat je niet wilt verhuizen en niet bij klanten in
+omloop wilt hebben.
+
+**3. Nameten.** Nu op de eigen hostnaam, en let op het verschil met §4: daar
+vroeg je de functies rechtstreeks, hier vraag je ze zoals een AI-client dat doet.
+
+```bash
+curl -s https://connector.staging.resofly.com/.well-known/oauth-authorization-server | jq
+```
+
+`issuer` hoort exact `https://connector.staging.resofly.com` te zijn — niet het
+Supabase-adres. Staat daar nog het oude, dan is `MCP_PUBLIC_BASE_URL` niet
+aangekomen; secrets gelden pas na een nieuwe deploy van de functies.
+
+```bash
+curl -s https://connector.staging.resofly.com/.well-known/oauth-protected-resource | jq
+```
+
+`resource` hoort dezelfde hostnaam te zijn, en `authorization_servers` de issuer
+hierboven. En de server zelf:
+
+```bash
+curl -si -X POST https://connector.staging.resofly.com \
+  -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+Weer een **401** met de `WWW-Authenticate`-header — die nu ook naar de eigen
+hostnaam wijst.
+
+#### Een bestaande koppeling verhuist niet mee
+
+Een AI-client kent een connector aan zijn URL. Verandert die, dan is het voor
+hem een andere server: de oude koppeling blijft staan en werken, maar hij gaat
+niet vanzelf over. Wie al gekoppeld was, verwijdert de connector in zijn AI-app
+en voegt hem opnieuw toe met het nieuwe adres — en trekt de oude koppeling in
+onder **Instellingen → AI**, zodat er geen toegang blijft staan die niemand meer
+gebruikt.
 
 ## Standaardvragen en bronnen
 
@@ -303,6 +397,23 @@ krijgen bij elke vraag die iemand aan zijn AI stelt, dan zet iedereen het na een
 week uit. De wachtrij op het startscherm blijft van het team.
 
 ## Als het niet werkt
+
+**De AI-app zegt dat hij de server niet kan vinden, of blijft hangen op
+"connecting".** Meestal lopen de drie adressen uiteen. Vraag op de connector-
+hostnaam zelf op wat hij van zichzelf vindt:
+
+```bash
+curl -s https://connector.staging.resofly.com/.well-known/oauth-protected-resource | jq
+```
+
+`resource` moet letterlijk het adres zijn dat de klant plakte, en
+`authorization_servers` moet wijzen naar een hostnaam die antwoordt. Staat daar
+nog een `supabase.co`-adres, dan zijn `MCP_RESOURCE_URL` en `MCP_PUBLIC_BASE_URL`
+niet aangekomen — secrets gelden pas na een nieuwe deploy van de functies.
+
+**Instellingen → AI toont geen adres.** Dan staat `VITE_MCP_SERVER_URL` niet op
+de Pages-build van deze omgeving. Dat is geen storing maar de bedoelde
+mededeling: zie *De connector-hostnaam*.
 
 **"Onbekende AI-client" in de browser.** De client registreerde zich bij een
 andere omgeving dan waar hij nu naartoe stuurt (staging versus productie).

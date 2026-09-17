@@ -21,16 +21,19 @@ const OAUTH_FN = 'mcp-oauth';
 /**
  * Het adres dat een klant in zijn AI-app plakt.
  *
- * Letterlijk dit, zonder slash erachter: Claude vergelijkt het met de `resource`
- * die de MCP-server in zijn discovery-document noemt, en één teken verschil is
- * daar een mislukte koppeling. Staat de connector achter een eigen domein
- * (MCP_RESOURCE_URL op de edge functions), zet VITE_MCP_SERVER_URL dan op
- * precies dezelfde waarde.
+ * Letterlijk dit, zonder slash erachter: een AI-client vergelijkt het met de
+ * `resource` uit het discovery-document van de MCP-server, en één teken verschil
+ * is daar een mislukte koppeling. Deze waarde moet dus gelijk zijn aan
+ * MCP_RESOURCE_URL op de edge functions.
+ *
+ * GEEN TERUGVALADRES. Stond dit leeg, dan viel het vroeger terug op de
+ * Supabase-URL van het project. Dat werkt technisch, maar het is een adres met
+ * een projectcode erin dat je een klant niet wilt geven en dat je later niet
+ * meer kunt verhuizen — en juist dit scherm is de plek waar hij het kopieert.
+ * Liever een leeg veld met uitleg dan een adres dat de ronde doet en blijft
+ * hangen. Niet ingevuld betekent hier dus: de connector staat nog niet open.
  */
-export const MCP_SERVER_URL = String(
-  import.meta.env.VITE_MCP_SERVER_URL
-    || `${String(import.meta.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '')}/functions/v1/mcp`,
-).replace(/\/+$/, '');
+export const MCP_SERVER_URL = String(import.meta.env.VITE_MCP_SERVER_URL || '').trim().replace(/\/+$/, '');
 
 /**
  * Eén deur naar de autorisatieserver, omdat een verzoek dat niet AANKOMT hier

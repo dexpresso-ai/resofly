@@ -4,13 +4,17 @@ name: Frontend checks
 # staging. De lay-outtest draait tegen een nagebootste backend en heeft dus
 # geen Supabase-secrets nodig.
 #
-# Daarnaast een Deno-typecheck op de edge functions van de MCP-connector. Die
-# draaien op Deno, niet op node: `npm run typecheck` ziet ze niet, en een
-# typefout daarin komt anders pas aan het licht bij het uitrollen — of erger,
-# bij de eerste aanroep door de AI van een klant. Alleen de MCP-functies, geen
-# `supabase/functions/*`: meeting-transcribe heeft een pre-existente typefout
-# (_shared/elevenlabs.ts, Uint8Array → Blob onder TS 6) en zou de hele job rood
-# zetten. Verbreed de lijst zodra die is opgelost.
+# Daarnaast twee typechecks op onderdelen die buiten `npm run typecheck` vallen
+# omdat ze niet op node draaien: de edge functions van de MCP-connector (Deno) en
+# de connector-Worker (de Workers-runtime). Samen zijn dat alle drie de
+# onderdelen waar een koppeling langs moet, en een typefout daarin komt anders
+# pas aan het licht bij het uitrollen — of erger, bij de eerste klant die zijn AI
+# wil koppelen.
+#
+# Van de edge functions alleen de MCP-functies, niet heel `supabase/functions/*`:
+# meeting-transcribe heeft een pre-existente typefout (_shared/elevenlabs.ts,
+# Uint8Array → Blob onder TS 6) en zou de hele job rood zetten. Verbreed de lijst
+# zodra die is opgelost.
 on:
   pull_request:
   push:
@@ -37,6 +41,14 @@ jobs:
 
       - name: Unit tests
         run: npm test
+
+      # Om dezelfde reden als de Deno-check hieronder: de connector-Worker staat
+      # in de weg van elke koppeling, draait op de Workers-runtime en valt buiten
+      # `npm run typecheck`. Een typefout daarin merk je anders pas bij
+      # `wrangler deploy` — of bij de eerste klant die wil koppelen.
+      - name: Typecheck connector-Worker
+        run: npm ci && npm run typecheck
+        working-directory: workers/mcp-connector
 
       - name: Chromium voor Playwright
         run: npx playwright install --with-deps chromium

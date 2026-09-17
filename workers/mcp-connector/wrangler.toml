@@ -1,0 +1,37 @@
+name = "resofly-mcp-connector"
+main = "src/index.ts"
+compatibility_date = "2026-09-17"
+
+# De voordeur van de MCP-connector: hij zet `mcp-oauth` en `mcp` samen op één
+# hostnaam, zodat een klant `https://connector.resofly.com` in zijn AI-app plakt
+# in plaats van een Supabase-URL met een projectcode erin.
+#
+# Deze Worker heeft GEEN secrets. Hij kent geen tokens en leest geen gegevens; de
+# twee functies erachter doen hun eigen authenticatie (PKCE en een geregistreerde
+# client bij het koppelen, het toegangstoken van de koppeling daarna).
+#
+# Na het uitrollen moeten de drie adressen op elkaar aansluiten, anders herkent
+# een AI-client de connector niet — zie MCP_CONNECTOR_SETUP.md.
+
+# ---- staging ----
+[env.staging]
+name = "resofly-mcp-connector-staging"
+
+[env.staging.vars]
+SUPABASE_URL = "https://enzghpduqwaojcxgwarr.supabase.co"
+
+[[env.staging.routes]]
+pattern = "connector.staging.resofly.com"
+custom_domain = true
+
+# ---- production ----
+[env.production]
+name = "resofly-mcp-connector"
+
+[env.production.vars]
+SUPABASE_URL = "https://YOUR_PRODUCTION_PROJECT.supabase.co"
+
+# Aanzetten zodra het productieproject er staat en de DNS klopt.
+# [[env.production.routes]]
+# pattern = "connector.resofly.com"
+# custom_domain = true
