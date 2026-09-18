@@ -3904,6 +3904,29 @@ export async function loadClientEmailThreadOverview(organizationId: UUID, limit 
   return (data ?? []) as ClientEmailThreadOverview[];
 }
 
+/**
+ * Álle gesprekken van één klant, nieuwste eerst. De lijst op Berichten is
+ * begrensd (de eerste 400 gesprekken van de organisatie); zodra iemand op één
+ * klant filtert, hoort het mailvenster wél compleet te zijn — een klant met
+ * twee jaar post mag niet stilletjes bij het vierhonderdste gesprek ophouden.
+ */
+export async function loadClientEmailThreadOverviewForClient(organizationId: UUID, clientId: UUID, limit = 500): Promise<ClientEmailThreadOverview[]> {
+  const { data, error } = await supabase
+    .from('client_email_thread_overview')
+    .select(CLIENT_EMAIL_THREAD_OVERVIEW_COLUMNS)
+    .eq('organization_id', organizationId)
+    .eq('client_id', clientId)
+    .order('last_message_at', { ascending: false })
+    .limit(limit);
+  if (error) {
+    // Zelfde afspraak als hierboven: bestaat de view nog niet, dan is de lijst
+    // leeg en blijft de pagina werken op wat er al geladen is.
+    if (isMissingRelation(error)) return [];
+    throw error;
+  }
+  return (data ?? []) as ClientEmailThreadOverview[];
+}
+
 /** De berichten van één gesprek, nieuwste eerst — dezelfde volgorde als in het klantdossier. */
 export async function loadClientEmailsForThread(organizationId: UUID, threadId: UUID): Promise<ClientEmail[]> {
   const { data, error } = await supabase
@@ -3943,19 +3966,42 @@ export async function loadClientEmailThreadOverviewByIds(organizationId: UUID, t
  * tekst rond de treffer. De view achter de lijst kent alleen het laatste
  * bericht per gesprek; dit vindt ook een woord uit een oudere mail.
  *
+ * Staat er een klant in het filter, dan zoekt de database alléén in de post
+ * van die klant (`p_client_id`). Dat is niet hetzelfde als achteraf filteren:
+ * de functie geeft hooguit een paar honderd treffers terug, en die zouden bij
+ * een drukke organisatie allemaal van ándere klanten kunnen zijn — de klant
+ * waar je naar kijkt valt er dan buiten.
+ *
  * Bestaat de functie in deze omgeving nog niet, dan valt zoeken stilletjes
- * terug op wat er lokaal geladen is — geen fout, geen rode balk.
+ * terug op wat er lokaal geladen is — geen fout, geen rode balk. Kent de
+ * functie `p_client_id` nog niet (migratie 20260918000000 nog niet gedraaid),
+ * dan zoekt hij één keer opnieuw zonder dat argument: breder dan bedoeld,
+ * maar nog altijd beter dan niets vinden.
  */
-export async function searchClientEmails(organizationId: UUID, query: string, limit = 200): Promise<ClientEmailSearchHit[]> {
+export async function searchClientEmails(
+  organizationId: UUID,
+  query: string,
+  options: { clientId?: UUID | null; limit?: number } = {},
+): Promise<ClientEmailSearchHit[]> {
   const q = query.trim();
   if (q.length < 2) return [];
-  const { data, error } = await supabase.rpc('search_client_emails', { p_organization_id: organizationId, p_query: q, p_limit: limit });
-  if (error) {
-    // PGRST202 = onbekende functie in de schema-cache (nog niet gemigreerd).
-    if (error.code === 'PGRST202' || isMissingRelation(error)) return [];
-    throw error;
+  const limit = options.limit ?? 200;
+  const clientId = options.clientId ?? null;
+  const base = { p_organization_id: organizationId, p_query: q, p_limit: limit };
+
+  const { data, error } = await supabase.rpc('search_client_emails', clientId ? { ...base, p_client_id: clientId } : base);
+  if (!error) return (data ?? []) as ClientEmailSearchHit[];
+  // PGRST202 = geen functie met deze argumenten in de schema-cache. Met een
+  // klant erbij kan dat ook de oude, driearmige functie zijn: dan nog één keer
+  // zonder klant. Zonder klant is het simpelweg "nog niet gemigreerd".
+  if (error.code === 'PGRST202' && clientId) {
+    const retry = await supabase.rpc('search_client_emails', base);
+    if (!retry.error) return (retry.data ?? []) as ClientEmailSearchHit[];
+    if (retry.error.code === 'PGRST202' || isMissingRelation(retry.error)) return [];
+    throw retry.error;
   }
-  return (data ?? []) as ClientEmailSearchHit[];
+  if (error.code === 'PGRST202' || isMissingRelation(error)) return [];
+  throw error;
 }
 
 // ── Doorstuuradres + opvangbak voor inkomende mail ──────────────────────────

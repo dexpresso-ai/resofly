@@ -2995,16 +2995,33 @@ button.chat-member:hover{background:var(--bg3)}
    patroon van de teamchat, maar dan voor e-mail. De hoogte volgt het scherm
    (zoals .chat-shell.chat-page), zodat alleen de lijst en het gesprek
    scrollen en de kop met de tabbladen blijft staan. */
-.comm-page{display:flex;flex-direction:column;gap:14px;height:calc(100vh - 140px);min-height:520px;max-width:1500px;margin:0 auto;width:100%}
-.comm-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 18px;border:1px solid var(--border);border-radius:var(--r2);background:linear-gradient(135deg,var(--bg2),var(--bg3));flex-shrink:0}
-.comm-head-text{min-width:0}
-.comm-head h2{margin:3px 0 4px;font-size:24px;line-height:1;font-weight:700;letter-spacing:-.025em}
-.comm-head-sub{color:var(--muted2);font-size:12px}
-.comm-head .eyebrow{margin-bottom:6px}
-.comm-tabs{flex-shrink:0}
+/* De pagina vult wat er over is van het scherm. Bewust geen eigen hoogtesom
+   (100vh min een optelsom van balken): die klopt niet meer zodra er boven de
+   pagina iets verandert — en op Berichten laat de app-shell zijn werkbalk nu
+   helemaal weg. Flex rekent het zelf uit, op elk formaat. */
+.content:has(.comm-page){display:flex;flex-direction:column;min-height:0;overflow:hidden;padding-bottom:18px}
+.comm-page{display:flex;flex-direction:column;gap:10px;flex:1;min-height:0;max-width:1500px;margin:0 auto;width:100%}
+/* Zoeken, filteren en de tabbladen staan in één balk helemaal bovenaan — niet
+   meer als losse kop boven een tweede strook, en niet meer in de kop van de
+   lijst. Elke regel die hier weggaat, wint het gesprek eronder aan hoogte; dat
+   is precies waar deze balk voor bestaat. */
+.comm-topbar{display:flex;flex-direction:column;gap:8px;padding:9px 14px;border:1px solid var(--border);border-radius:var(--r2);background:linear-gradient(135deg,var(--bg2),var(--bg3));flex-shrink:0}
+.comm-topbar-main{display:flex;align-items:center;gap:12px}
+.comm-topbar-title{display:flex;align-items:baseline;gap:10px;min-width:0;flex-shrink:0}
+.comm-topbar-title h2{margin:0;font-size:19px;line-height:1.25;font-weight:700;letter-spacing:-.025em;white-space:nowrap}
+.comm-topbar-main .comm-search-row{flex:1;min-width:0}
+/* Op het tabblad Niet gekoppeld staat er geen zoekveld tussen; de knop hoort
+   dan nog steeds rechts, niet tegen de titel aan. */
+.comm-topbar-main>.btn{margin-left:auto}
+.comm-topbar-sub{display:flex;align-items:center;gap:10px}
+/* De tabstrook schuift zelf opzij als hij niet past (overflow-x:auto); hij
+   mag daarom nooit breder worden dan de balk — op de telefoon zet een
+   algemene regel `max-width:none` op elke tabstrook, en dan duwt hij de hele
+   pagina zijwaarts. */
+.comm-topbar-sub .comm-tabs{flex:0 1 auto;min-width:0;max-width:100%}
+.comm-head-sub{color:var(--muted2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .comm-shell{display:flex;flex:1;min-height:0;border:1px solid var(--border);border-radius:var(--r2);overflow:hidden;background:var(--bg2)}
 .comm-list{display:flex;flex-direction:column;width:380px;min-width:300px;max-width:42%;min-height:0;border-right:1px solid var(--border);background:var(--bg2)}
-.comm-list-tools{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border)}
 .comm-search{display:flex;align-items:center;gap:7px;padding:7px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:9px;color:var(--muted)}
 .comm-search:focus-within{border-color:var(--accent);box-shadow:var(--ring)}
 .comm-search input{flex:1;min-width:0;background:transparent;border:none;outline:none;color:var(--text);font-family:inherit;font-size:13px}
@@ -3051,17 +3068,18 @@ button.chat-member:hover{background:var(--bg3)}
 .comm-shell-inbox{display:block}
 .comm-inbox-pane{height:100%;overflow-y:auto;padding:4px 18px 22px}
 .comm-inbox-pane .inbound-inbox{margin-top:8px}
-/* Filters (soort, klant, periode) onder het zoekveld. Op een breed scherm
-   staan ze er altijd; op de telefoon zitten ze achter de schuifjesknop naast
-   het zoekveld, zodat het eerste gesprek niet lager in beeld komt. */
+/* Filters (soort, klant, periode) naast de tabbladen in de bovenbalk. Op een
+   breed scherm staan ze er altijd; op de telefoon zitten ze achter de
+   schuifjesknop naast het zoekveld, zodat het eerste gesprek niet lager in
+   beeld komt. */
 .comm-search-row{display:flex;align-items:stretch;gap:6px}
 .comm-search-row .comm-search{flex:1;min-width:0}
 .comm-filter-toggle{display:none;position:relative;align-items:center;justify-content:center;width:38px;flex-shrink:0;border:1px solid var(--border);border-radius:9px;background:var(--bg3);color:var(--muted);cursor:pointer;transition:border-color .12s,color .12s,background .12s}
 .comm-filter-toggle.is-open,.comm-filter-toggle.has-active{border-color:rgba(var(--accent-rgb),.5);color:var(--accent-ink)}
 .comm-filter-toggle:focus-visible{outline:none;box-shadow:var(--ring)}
 .comm-filter-count{position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--accent);color:var(--on-accent);font-size:9.5px;font-weight:700;line-height:16px;text-align:center}
-.comm-filters{display:flex;flex-wrap:wrap;gap:6px}
-.comm-filters .select-control{flex:1 1 118px;min-width:0}
+.comm-filters{display:flex;flex-wrap:wrap;gap:6px;flex:1;justify-content:flex-end;min-width:0}
+.comm-filters .select-control{flex:0 1 158px;min-width:0}
 .comm-filters .select-trigger.comm-filter{font-size:12px;padding-top:7px;padding-bottom:7px}
 .comm-date-range{display:flex;align-items:center;gap:6px;flex:1 1 100%;font-size:11.5px;color:var(--muted)}
 .comm-date-range .form-input{flex:1;min-width:0;font-size:12px;padding:6px 8px}
@@ -3084,11 +3102,42 @@ button.chat-member:hover{background:var(--bg3)}
 .comm-ticket-panel.is-internal .client-panel-head span{font-size:11px;color:var(--accent-o)}
 .comm-ticket-timeline .ticket-timeline{margin-top:0;border-top:0;padding-top:0}
 .comm-ticket-timeline .client-empty-line{margin-top:10px}
+/* Eén klant gekozen: de lijst splitst in twee vensters met elk een eigen
+   scrollgebied — links de mailgesprekken, rechts de tickets. Twee keer
+   scrollen is het hele punt: door de tickets bladeren mag de mail niet
+   verschuiven. Onder 1250px staan ze onder elkaar (en op de telefoon dus
+   ook); daar is naast elkaar geen kolom meer breed genoeg om een onderwerp
+   in te lezen. */
+.comm-list.is-split{width:660px;min-width:420px;max-width:56%}
+.comm-cols{display:flex;flex:1;min-height:0}
+.comm-col{display:flex;flex-direction:column;flex:1 1 0;min-width:0;min-height:0}
+.comm-col+.comm-col{border-left:1px solid var(--border)}
+.comm-col-head{display:flex;align-items:center;gap:6px;flex-shrink:0;padding:7px 12px;border-bottom:1px solid var(--border);background:var(--bg3);color:var(--muted2);font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase}
+.comm-col-head svg{opacity:.75}
+.comm-col-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.comm-col-count{margin-left:auto;padding:1px 7px;border-radius:999px;border:1px solid var(--border);background:var(--bg2);color:var(--muted);font-size:10px;font-weight:600;letter-spacing:0;font-variant-numeric:tabular-nums}
+.comm-col-empty{margin:12px 10px;text-align:center}
+/* Zonder klantrondje schuift het onderwerp naar voren; de regel heeft dan nog
+   twee kolommen: tekst en de zijkant met teller of status. */
+.comm-row.is-compact{grid-template-columns:minmax(0,1fr) auto;padding:8px 10px}
+.comm-list-notices{flex-shrink:0;max-height:60%;overflow-y:auto;padding:6px;border-bottom:1px solid var(--border)}
 .inbound-inbox-head.is-compact{align-items:center}
 .inbound-inbox-head.is-compact .settings-help{margin:0;max-width:560px}
 
+@media(max-width:1250px){
+  /* Te smal voor twee kolommen naast elkaar: de vensters gaan op elkaar,
+     elk met de halve hoogte en een eigen scrollbalk. */
+  .comm-list.is-split{width:440px;min-width:320px;max-width:48%}
+  .comm-cols{flex-direction:column}
+  .comm-col{flex:1 1 50%}
+  .comm-col+.comm-col{border-left:0;border-top:1px solid var(--border)}
+  .comm-topbar-sub{flex-wrap:wrap}
+  .comm-topbar-sub .comm-filters{flex:1 1 100%;justify-content:flex-start}
+  .comm-head-sub{display:none}
+}
 @media(max-width:900px){
   .comm-list{width:300px;min-width:260px}
+  .comm-list.is-split{width:340px;min-width:280px}
 }
 @media(max-width:760px){
   /* Zelfde vulling van het scherm als de teamchat: geen eigen hoogtesom, de
@@ -3097,22 +3146,28 @@ button.chat-member:hover{background:var(--bg3)}
      gesprek (zie Communication.tsx). */
   .content:has(.comm-page){padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:0}
   .comm-page{flex:1;height:auto;min-height:0;gap:0;max-width:none}
-  .comm-head{padding:8px 12px;border:0;border-radius:0;background:none;gap:10px}
-  .comm-head .eyebrow,.comm-head-sub{display:none}
-  .comm-head h2{margin:0;font-size:18px}
-  .comm-head .btn{min-height:36px}
-  .comm-head .btn-label{display:none}
-  .comm-page .client-tabs-bar{margin:0 12px 8px;width:auto}
+  /* Dezelfde balk, maar gestapeld: titel en knop op de eerste regel, het
+     zoekveld daaronder over de volle breedte, dan de tabbladen. */
+  .comm-topbar{padding:8px 12px 6px;border:0;border-radius:0;background:none;gap:8px}
+  .comm-topbar-main{flex-wrap:wrap;gap:10px}
+  .comm-topbar-title{order:1;flex:1;min-width:0}
+  .comm-topbar-title h2{font-size:18px}
+  .comm-topbar-main>.btn{order:2;min-height:36px}
+  .comm-topbar-main .btn-label{display:none}
+  .comm-topbar-main .comm-search-row{order:3;flex:1 1 100%}
+  .comm-topbar-sub{gap:8px}
+  .comm-topbar-sub .comm-tabs{flex:1 1 100%;min-width:0;max-width:100%}
+  .comm-topbar-sub .comm-filters{flex:1 1 100%}
+  .comm-page .client-tabs-bar{margin:0;width:auto}
   .comm-page .client-tab-btn{height:34px;padding:0 12px;font-size:12px}
   .comm-shell{border:0;border-radius:0;border-top:1px solid var(--border)}
   /* Een geopend gesprek vult het scherm; de terugpijl in de gesprekskop
-     brengt je terug naar de lijst mét kop en tabbladen. */
-  .comm-page.is-detail .comm-head,.comm-page.is-detail .comm-tabs{display:none}
+     brengt je terug naar de lijst mét zoekveld, filters en tabbladen. */
+  .comm-page.is-detail .comm-topbar{display:none}
   .comm-page.is-detail .comm-shell{border-top:0}
   .comm-shell.is-single{flex-direction:column}
   .comm-shell.is-single .comm-list{width:100%;min-width:0;max-width:none;border-right:0;flex:1}
   .comm-shell.is-single .comm-detail{flex:1}
-  .comm-list-tools{padding:8px 10px}
   .comm-search{padding:9px 12px;border-radius:11px}
   .comm-search input{font-size:15px}
   .comm-row{min-height:64px;gap:12px;padding:10px 8px;border-radius:12px}

@@ -225,6 +225,19 @@ export function searchSnippet(text: string | null | undefined, words: readonly s
   return `${start > 0 ? '…' : ''}${source.slice(start, end).trim()}${end < source.length ? '…' : ''}`;
 }
 
+/**
+ * De gesprekken van één klant in twee vensters: de mailwisselingen links, de
+ * tickets rechts. Beide houden de volgorde die de lijst al had (nieuwste
+ * activiteit bovenaan), zodat je in allebei de vensters op dezelfde manier
+ * terugleest.
+ */
+export function splitConversations<T extends Conversation>(items: readonly T[]): { emails: T[]; tickets: T[] } {
+  const emails: T[] = [];
+  const tickets: T[] = [];
+  for (const item of items) (item.kind === 'ticket' ? tickets : emails).push(item);
+  return { emails, tickets };
+}
+
 /** Totaal aantal ongelezen over alle gesprekken (mail-berichten plus tickets met nieuwe klant-activiteit). */
 export function countUnread(items: readonly Pick<Conversation, 'unread'>[]): number {
   return items.reduce((sum, item) => sum + Math.max(0, item.unread), 0);

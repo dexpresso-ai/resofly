@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import type { ClientEmailThreadOverview, Ticket, TicketNote } from '../types.ts';
 import {
   NO_CLIENT, countUnread, emailConversation, filterConversations, initials, listTime, matchesWords, periodRange,
-  previewLine, queryWords, replySubject, searchSnippet, senderShortName, sortConversations,
+  previewLine, queryWords, replySubject, searchSnippet, senderShortName, sortConversations, splitConversations,
 } from './communication.ts';
 import { groupNotesByTicket, noteAuthorShort, ticketConversation, ticketLastActivity, ticketMatchesStatus } from './tickets.ts';
 
@@ -242,4 +242,27 @@ test('listTime: vandaag de tijd, gisteren, de weekdag, anders de datum', () => {
   assert.equal(listTime(new Date(2025, 11, 24, 9, 5).toISOString(), now), '24-12-25');
   assert.equal(listTime('', now), '');
   assert.equal(listTime('nonsens', now), '');
+});
+
+test('splitConversations: mail links, tickets rechts, allebei in de volgorde van de lijst', () => {
+  const { emails, tickets } = splitConversations(sortConversations(all));
+  assert.deepEqual(emails.map(c => c.key), ['email:thread-1', 'email:thread-2']);
+  assert.deepEqual(tickets.map(c => c.key), ['ticket:ticket-1', 'ticket:ticket-2']);
+});
+
+test('splitConversations: een klant met alleen tickets houdt een leeg mailvenster', () => {
+  const eenKlant = filterConversations(all, { ...noFilter, clientId: 'client-a' });
+  const { emails, tickets } = splitConversations(eenKlant);
+  assert.deepEqual(emails.map(c => c.key), ['email:thread-1']);
+  assert.deepEqual(tickets.map(c => c.key), ['ticket:ticket-1']);
+
+  const alleenTickets = splitConversations(filterConversations(all, { ...noFilter, clientId: NO_CLIENT }));
+  assert.deepEqual(alleenTickets.emails, []);
+  assert.deepEqual(alleenTickets.tickets.map(c => c.key), ['ticket:ticket-2']);
+});
+
+test('splitConversations: een lege lijst geeft twee lege vensters, geen undefined', () => {
+  const leeg = splitConversations([]);
+  assert.deepEqual(leeg.emails, []);
+  assert.deepEqual(leeg.tickets, []);
 });

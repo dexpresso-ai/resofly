@@ -91,8 +91,11 @@ const FIRST_ITEM = {
   content: { selector: '.odrv-tr', maxTop: 300 },
   // Teamchat opent op de telefoon in de gesprekslijst (één venster tegelijk).
   chat: { selector: '.chat-conv', maxTop: 260 },
-  // Berichten: idem — kop, tabbladen en zoekveld, dan het eerste gesprek.
-  communication: { selector: '.comm-row', maxTop: 300 },
+  // Berichten: idem. Sinds 2026-09-18 staan zoeken, filters en de tabbladen in
+  // één balk bovenaan en laat de app-shell zijn eigen werkbalk hier weg; het
+  // eerste gesprek begint daardoor op 206px in plaats van ~250px. De grens
+  // volgt mee, anders meet deze test niets meer.
+  communication: { selector: '.comm-row', maxTop: 250 },
   suppliers: { selector: '.supplier-table tbody tr', maxTop: 320 },
   'public-quote': { selector: '.public-lines', maxTop: 560 },
   'public-invoice': { selector: '.public-lines', maxTop: 700 },

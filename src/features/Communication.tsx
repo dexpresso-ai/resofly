@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, ArrowLeft, ExternalLink, Inbox, Mail, MailOpen, Reply, RotateCcw, Search, SlidersHorizontal, SquarePen, Ticket as TicketIcon, X } from 'lucide-react';
 import type { AppData, Client, ClientEmail, ClientEmailSearchHit, ClientEmailThreadOverview, Ticket } from '../types';
 import { Button, Input, Select } from '../components/Ui';
@@ -8,13 +8,14 @@ import { InboundInboxTab } from '../components/InboundInbox';
 import { TicketTimeline } from '../components/TicketTimeline';
 import { ClientEmailMessageCard, formatEmailDateTime } from '../components/ClientEmailMessage';
 import {
-  deleteClientEmail, loadClientEmailReadIds, loadClientEmailThreadOverview, loadClientEmailThreadOverviewByIds, loadClientEmailsForThread,
+  deleteClientEmail, loadClientEmailReadIds, loadClientEmailThreadOverview, loadClientEmailThreadOverviewByIds,
+  loadClientEmailThreadOverviewForClient, loadClientEmailsForThread,
   loadMySenderIdentity, loadSendingDomains, markClientEmailsRead, markTicketRead, searchClientEmails,
 } from '../lib/repository';
 import { resolveEffectiveSender, sendClientEmail, type EffectiveSender } from '../services/mailService';
 import {
   DATE_PERIOD_OPTIONS, NO_CLIENT, countUnread, emailConversation, filterConversations, initials, listTime, matchesWords, periodRange,
-  queryWords, replySubject, searchSnippet, sortConversations,
+  queryWords, replySubject, searchSnippet, sortConversations, splitConversations,
   type CommunicationTab, type Conversation, type ConversationFilter, type ConversationKind, type DatePeriod, type TicketConversation,
 } from '../lib/communication';
 import { groupNotesByTicket, ticketConversation, ticketPriorityLabel, ticketStatusLabel } from '../lib/tickets';
@@ -43,17 +44,33 @@ export interface CommunicationFocus {
  * Het derde tabblad is de opvangbak: post die binnenkwam maar nog niet aan een
  * klant hangt.
  *
+ * Zoeken en filteren staan helemaal bovenaan, in één balk boven de vensters,
+ * en niet meer in de kop van de lijst: alles wat daar weggaat, wint het
+ * gesprek eronder aan hoogte — de bedoeling is een berichtvenster dat vrijwel
+ * het hele scherm vult. Om dezelfde reden laat de app-shell zijn eigen
+ * werkbalk (titel + Ververs) op deze pagina weg, net als bij de agenda, de
+ * weekplanner en Gerrie; de titel, de tellers en het "Alleen lezen"-plaatje
+ * staan daarom in deze balk.
+ *
  * Zoeken kijkt lokaal in klant, onderwerp, afzender en preview, en bij een
  * ticket in élke notitie; voor mail vraagt de pagina daarnaast de database om
  * treffers in oudere berichten (rpc search_client_emails), zodat een woord uit
  * een mail van drie weken terug het gesprek ook vindt. Filteren kan op soort,
  * klant en periode.
  *
+ * Staat er één klant in het filter, dan splitst de lijst in twee vensters met
+ * elk hun eigen scrollgebied: links de mailgesprekken van die klant, rechts
+ * zijn tickets. Zo scrol je door het ene zonder het andere kwijt te raken. De
+ * mail van die klant wordt dan ook compleet opgehaald (de gewone lijst stopt
+ * bij de eerste 400 gesprekken van de organisatie) en de zoekopdracht naar
+ * oudere berichten gaat gericht over die ene klant.
+ *
  * Het tabblad Communicatie per klant blijft precies zoals het was; deze pagina
  * leest dezelfde tabellen en verstuurt via dezelfde mailfunctie.
  *
  * Op een telefoon is het één venster tegelijk (lijst óf gesprek), net als de
- * teamchat: `.is-single` op de shell, React kiest welk deel er staat.
+ * teamchat: `.is-single` op de shell, React kiest welk deel er staat. De twee
+ * vensters van een klant staan daar onder elkaar.
  */
 export function CommunicationPage({
   data,
@@ -127,7 +144,12 @@ export function CommunicationPage({
   /** Gesprekken die de server vond maar die niet in de eerste 400 van de lijst zitten. */
   const [deepThreads, setDeepThreads] = useState<ClientEmailThreadOverview[]>([]);
   const [deepBusy, setDeepBusy] = useState(false);
+  /** Álle gesprekken van de klant in het filter — het mailvenster hoort compleet te zijn. */
+  const [clientThreads, setClientThreads] = useState<ClientEmailThreadOverview[]>([]);
   const threadsRef = useRef(threads); threadsRef.current = threads;
+
+  /** De klant die in het filter staat, of null bij "alle klanten" en "zonder klant". */
+  const focusClientId = clientFilter && clientFilter !== NO_CLIENT ? clientFilter : null;
 
   const reload = useCallback(async () => {
     const rows = await loadClientEmailThreadOverview(organizationId);
@@ -151,6 +173,7 @@ export function CommunicationPage({
     setNotMigrated(false);
     setDeepHits(new Map());
     setDeepThreads([]);
+    setClientThreads([]);
     loadClientEmailThreadOverview(organizationId)
       .then(rows => { if (!cancelled) { setThreads(rows); setLoaded(true); } })
       .catch(err => {
@@ -206,7 +229,7 @@ export function CommunicationPage({
     setDeepBusy(true);
     const timer = window.setTimeout(async () => {
       try {
-        const hits = await searchClientEmails(organizationId, q);
+        const hits = await searchClientEmails(organizationId, q, { clientId: focusClientId });
         if (cancelled) return;
         const byThread = new Map<string, ClientEmailSearchHit>();
         for (const hit of hits) if (!byThread.has(hit.thread_id)) byThread.set(hit.thread_id, hit);
@@ -223,7 +246,21 @@ export function CommunicationPage({
       }
     }, 300);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [query, kindFilter, organizationId, notMigrated, loaded]);
+  }, [query, kindFilter, organizationId, notMigrated, loaded, focusClientId]);
+
+  // Eén klant gekozen: haal álle gesprekken van die klant erbij. De lijst
+  // zelf is begrensd op de eerste 400 gesprekken van de organisatie, en juist
+  // bij een klant met jaren post mag het mailvenster daar niet stilletjes
+  // ophouden. Mislukt het (of bestaat de view nog niet), dan blijft gewoon
+  // staan wat er al geladen was.
+  useEffect(() => {
+    if (!focusClientId) { setClientThreads([]); return; }
+    let cancelled = false;
+    loadClientEmailThreadOverviewForClient(organizationId, focusClientId)
+      .then(rows => { if (!cancelled) setClientThreads(rows); })
+      .catch(() => { if (!cancelled) setClientThreads([]); });
+    return () => { cancelled = true; };
+  }, [organizationId, focusClientId, activity]);
 
   const clientById = useMemo(() => new Map(data.clients.map(c => [c.id, c])), [data.clients]);
   const notesByTicket = useMemo(() => groupNotesByTicket(data.ticketNotes), [data.ticketNotes]);
@@ -232,7 +269,7 @@ export function CommunicationPage({
   const conversations = useMemo(() => {
     const seen = new Set<string>();
     const list: Conversation[] = [];
-    for (const thread of [...threads, ...deepThreads]) {
+    for (const thread of [...threads, ...deepThreads, ...clientThreads]) {
       if (seen.has(thread.id)) continue;
       seen.add(thread.id);
       list.push(emailConversation(thread));
@@ -247,7 +284,7 @@ export function CommunicationPage({
       }
     }
     return sortConversations(list);
-  }, [threads, deepThreads, data.tickets, notesByTicket, clientById, ticketUnreadIds, currentUserId, canReadTickets]);
+  }, [threads, deepThreads, clientThreads, data.tickets, notesByTicket, clientById, ticketUnreadIds, currentUserId, canReadTickets]);
 
   const range = useMemo(
     () => (period === 'custom' ? { from: customFrom || null, to: customTo || null } : periodRange(period)),
@@ -316,8 +353,10 @@ export function CommunicationPage({
 
   /** Het gesprek is geopend en dus gelezen: teller in de lijst meteen op nul. */
   function markThreadReadLocally(threadId: string) {
-    setThreads(prev => prev.map(t => (t.id === threadId ? { ...t, unread_count: 0 } : t)));
-    setDeepThreads(prev => prev.map(t => (t.id === threadId ? { ...t, unread_count: 0 } : t)));
+    const clear = (rows: ClientEmailThreadOverview[]) => rows.map(t => (t.id === threadId ? { ...t, unread_count: 0 } : t));
+    setThreads(clear);
+    setDeepThreads(clear);
+    setClientThreads(clear);
   }
 
   async function afterSent(threadId: string) {
@@ -335,10 +374,21 @@ export function CommunicationPage({
   const showDetail = !singlePane || detailOpen;
   const filterCount = (kindFilter ? 1 : 0) + (clientFilter ? 1 : 0) + (period ? 1 : 0);
   const filtersActive = query.trim().length > 0 || filterCount > 0;
-  // Op de telefoon krijgt een geopend gesprek het hele scherm: kop en
-  // tabbladen gaan weg (CSS), de terugpijl in de gesprekskop brengt je terug.
+  // Op de telefoon krijgt een geopend gesprek het hele scherm: de balk met
+  // zoeken, filters en tabbladen gaat weg (CSS), de terugpijl in de
+  // gesprekskop brengt je terug.
   const detailFillsScreen = singlePane && detailOpen && tab !== 'inbox';
   const ready = loaded && !loadError && !notMigrated;
+
+  // Eén klant gekozen: de gesprekken van die klant in twee vensters naast
+  // elkaar — links de mail, rechts de tickets — zodat je door allebei apart
+  // kunt scrollen zonder dat het ene het andere wegduwt. Staat het soortfilter
+  // op "alleen e-mail" of "alleen tickets", dan is er maar één venster te
+  // vullen en blijft de lijst één kolom.
+  const focusClient = focusClientId ? clientById.get(focusClientId) ?? null : null;
+  const split = Boolean(focusClientId) && canReadTickets && !kindFilter;
+  const { emails: emailVisible, tickets: ticketVisible } = useMemo(() => splitConversations(visible), [visible]);
+
   const headSub = ready
     ? [
         `${threads.length} gesprek${threads.length === 1 ? '' : 'ken'}`,
@@ -348,29 +398,130 @@ export function CommunicationPage({
       ].filter(Boolean).join(' · ')
     : (canReadTickets ? 'Alle klantmail en tickets op één plek' : 'Alle klantmail op één plek');
 
-  return <div className={`comm-page${detailFillsScreen ? ' is-detail' : ''}`}>
-    <div className="comm-head">
-      <div className="comm-head-text">
-        <p className="eyebrow">Communicatie</p>
-        <h2>Berichten</h2>
-        <span className="comm-head-sub">{headSub}</span>
-      </div>
-      <Button variant="primary" onClick={startCompose} disabled={!canWrite} title="Nieuw bericht aan een klant">
-        <SquarePen size={15} /> <span className="btn-label">Nieuw bericht</span>
-      </Button>
-    </div>
+  /**
+   * Meldingen die boven de lijst horen te staan: laden, een fout, "nog niet
+   * gemigreerd", en de twee lege staten. In twee vensters staan ze één keer
+   * boven allebei de kolommen, niet in elk venster apart.
+   */
+  const emptyAll = loaded && !loadError && conversations.length === 0 && (ready || (notMigrated && ticketCount === 0));
+  const emptyFiltered = loaded && !loadError && conversations.length > 0 && visible.length === 0;
+  const hasNotice = !loaded || Boolean(loadError) || notMigrated || emptyAll || emptyFiltered;
+  const notices = <>
+    {!loaded && <div className="client-empty-line">Gesprekken laden…</div>}
+    {loaded && loadError && <div className="error">{loadError}</div>}
 
-    <DetailTabs
-      tabs={[
-        { id: 'all', label: 'Alle gesprekken', icon: Mail, count: conversations.length },
-        { id: 'unread', label: 'Ongelezen', icon: MailOpen, count: unreadTotal, unread: true },
-        { id: 'inbox', label: 'Niet gekoppeld', icon: Inbox, count: inboxCount, unread: true },
-      ]}
-      active={tab}
-      onSelect={next => { setTab(next); if (next === 'inbox') { setComposing(false); setDetailOpen(false); } }}
-      label="Berichten"
-      className="comm-tabs"
-    />
+    {loaded && notMigrated && <div className="client-empty-state comm-empty-state">
+      <strong>Klantmail nog niet beschikbaar in deze omgeving</strong>
+      <span>
+        De database is hier nog niet bijgewerkt. Mailgesprekken verschijnen hier zodra de migratie gedraaid is;
+        je klantmail staat intussen gewoon in het klantdossier, tabblad Communicatie.
+        {canReadTickets && ticketCount > 0 ? ' Tickets staan hieronder wel.' : ''}
+      </span>
+    </div>}
+
+    {emptyAll && <div className="client-empty-state comm-empty-state">
+      <strong>{canReadTickets ? 'Nog geen klantmail of tickets' : 'Nog geen klantmail'}</strong>
+      <span>
+        Stuur een eerste bericht via <em>Nieuw bericht</em>, of vanuit het klantdossier. Antwoorden van klanten
+        {canReadTickets ? ' en tickets uit het portaal' : ''} komen hier vanzelf terug. Wil je ook mail opvangen die een klant
+        rechtstreeks naar je eigen adres stuurt? Stel dan een doorstuuradres in onder Instellingen → E-mail &amp; domeinen.
+      </span>
+    </div>}
+
+    {emptyFiltered && <div className="client-empty-state comm-empty-state">
+      <strong>{tab === 'unread' && !filtersActive ? 'Alles gelezen' : 'Geen gesprekken gevonden'}</strong>
+      <span>{tab === 'unread' && !filtersActive
+        ? 'Er staat geen ongelezen post meer in je gesprekken.'
+        : deepBusy ? 'Nog even: de database zoekt in alle berichten.' : 'Geen enkel gesprek komt overeen met je zoekterm of filters.'}</span>
+      {filtersActive && <Button onClick={resetFilters}><RotateCcw size={14} /> Filters wissen</Button>}
+    </div>}
+  </>;
+
+  const renderRow = (item: Conversation, compact = false) => <ConversationRow
+    key={item.key}
+    item={item}
+    client={item.clientId ? clientById.get(item.clientId) ?? null : null}
+    active={item.key === selectedKey && !composing}
+    found={foundLine(item)}
+    compact={compact}
+    onSelect={() => selectConversation(item.key)}
+  />;
+
+  return <div className={`comm-page${detailFillsScreen ? ' is-detail' : ''}`}>
+    {/* Zoeken, filteren en de tabbladen staan helemaal bovenaan, buiten de
+        vensters: het gesprek eronder krijgt daardoor bijna het hele scherm. */}
+    <div className="comm-topbar">
+      <div className="comm-topbar-main">
+        <div className="comm-topbar-title">
+          <h2>Berichten</h2>
+          <span className="comm-head-sub">{headSub}</span>
+          {!canWrite && <span className="status-pill readonly">Alleen lezen</span>}
+        </div>
+        {tab !== 'inbox' && <div className="comm-search-row">
+          <label className="comm-search">
+            <Search size={14} aria-hidden="true" />
+            <input
+              type="search"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder={canReadTickets ? 'Zoek in berichten en tickets…' : 'Zoek op klant, onderwerp of afzender…'}
+              aria-label={canReadTickets ? 'Zoek in berichten en tickets' : 'Zoek in berichten'}
+            />
+            {query && <button type="button" className="comm-search-clear" onClick={() => setQuery('')} aria-label="Zoekterm wissen"><X size={13} /></button>}
+          </label>
+          <button
+            type="button"
+            className={`comm-filter-toggle${filtersOpen ? ' is-open' : ''}${filterCount > 0 ? ' has-active' : ''}`}
+            onClick={() => setFiltersOpen(open => !open)}
+            aria-expanded={filtersOpen}
+            aria-label={filterCount > 0 ? `Filters (${filterCount} actief)` : 'Filters'}
+            title="Filteren op soort, klant en periode"
+          >
+            <SlidersHorizontal size={15} aria-hidden="true" />
+            {filterCount > 0 && <span className="comm-filter-count">{filterCount}</span>}
+          </button>
+        </div>}
+        <Button variant="primary" onClick={startCompose} disabled={!canWrite} title="Nieuw bericht aan een klant">
+          <SquarePen size={15} /> <span className="btn-label">Nieuw bericht</span>
+        </Button>
+      </div>
+
+      <div className="comm-topbar-sub">
+        <DetailTabs
+          tabs={[
+            { id: 'all', label: 'Alle gesprekken', icon: Mail, count: conversations.length },
+            { id: 'unread', label: 'Ongelezen', icon: MailOpen, count: unreadTotal, unread: true },
+            { id: 'inbox', label: 'Niet gekoppeld', icon: Inbox, count: inboxCount, unread: true },
+          ]}
+          active={tab}
+          onSelect={next => { setTab(next); if (next === 'inbox') { setComposing(false); setDetailOpen(false); } }}
+          label="Berichten"
+          className="comm-tabs"
+        />
+        {tab !== 'inbox' && <div className={`comm-filters${filtersOpen ? ' is-open' : ''}`}>
+          {canReadTickets && <Select className="comm-filter" value={kindFilter} onChange={e => setKindFilter(e.target.value as '' | ConversationKind)} aria-label="Soort">
+            <option value="">Mail en tickets</option>
+            <option value="email">Alleen e-mail</option>
+            <option value="ticket">Alleen tickets</option>
+          </Select>}
+          <Select className="comm-filter" value={clientFilter} onChange={e => setClientFilter(e.target.value)} aria-label="Filter op klant" searchPlaceholder="Zoek een klant…">
+            <option value="">Alle klanten</option>
+            {hasNoClient && <option value={NO_CLIENT}>Zonder klant</option>}
+            {clientOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          </Select>
+          <Select className="comm-filter" value={period} onChange={e => setPeriod(e.target.value as DatePeriod)} aria-label="Periode">
+            {DATE_PERIOD_OPTIONS.map(opt => <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>)}
+          </Select>
+          {period === 'custom' && <div className="comm-date-range">
+            <Input type="date" value={customFrom} max={customTo || undefined} onChange={e => setCustomFrom(e.target.value)} aria-label="Vanaf" />
+            <span>tot</span>
+            <Input type="date" value={customTo} min={customFrom || undefined} onChange={e => setCustomTo(e.target.value)} aria-label="Tot en met" />
+          </div>}
+        </div>}
+      </div>
+
+      {deepBusy && tab !== 'inbox' && <div className="comm-search-status" role="status">Zoeken in alle berichten…</div>}
+    </div>
 
     {tab === 'inbox'
       ? <div className="comm-shell comm-shell-inbox">
@@ -390,96 +541,33 @@ export function CommunicationPage({
           </div>
         </div>
       : <div className={`comm-shell${singlePane ? ' is-single' : ''}`}>
-          {showList && <div className="comm-list">
-            <div className="comm-list-tools">
-              <div className="comm-search-row">
-                <label className="comm-search">
-                  <Search size={14} aria-hidden="true" />
-                  <input
-                    type="search"
-                    value={query}
-                    onChange={e => setQuery(e.target.value)}
-                    placeholder={canReadTickets ? 'Zoek in berichten en tickets…' : 'Zoek op klant, onderwerp of afzender…'}
-                    aria-label={canReadTickets ? 'Zoek in berichten en tickets' : 'Zoek in berichten'}
-                  />
-                  {query && <button type="button" className="comm-search-clear" onClick={() => setQuery('')} aria-label="Zoekterm wissen"><X size={13} /></button>}
-                </label>
-                <button
-                  type="button"
-                  className={`comm-filter-toggle${filtersOpen ? ' is-open' : ''}${filterCount > 0 ? ' has-active' : ''}`}
-                  onClick={() => setFiltersOpen(open => !open)}
-                  aria-expanded={filtersOpen}
-                  aria-label={filterCount > 0 ? `Filters (${filterCount} actief)` : 'Filters'}
-                  title="Filteren op soort, klant en periode"
-                >
-                  <SlidersHorizontal size={15} aria-hidden="true" />
-                  {filterCount > 0 && <span className="comm-filter-count">{filterCount}</span>}
-                </button>
-              </div>
-              <div className={`comm-filters${filtersOpen ? ' is-open' : ''}`}>
-                {canReadTickets && <Select className="comm-filter" value={kindFilter} onChange={e => setKindFilter(e.target.value as '' | ConversationKind)} aria-label="Soort">
-                  <option value="">Mail en tickets</option>
-                  <option value="email">Alleen e-mail</option>
-                  <option value="ticket">Alleen tickets</option>
-                </Select>}
-                <Select className="comm-filter" value={clientFilter} onChange={e => setClientFilter(e.target.value)} aria-label="Filter op klant" searchPlaceholder="Zoek een klant…">
-                  <option value="">Alle klanten</option>
-                  {hasNoClient && <option value={NO_CLIENT}>Zonder klant</option>}
-                  {clientOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-                </Select>
-                <Select className="comm-filter" value={period} onChange={e => setPeriod(e.target.value as DatePeriod)} aria-label="Periode">
-                  {DATE_PERIOD_OPTIONS.map(opt => <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>)}
-                </Select>
-                {period === 'custom' && <div className="comm-date-range">
-                  <Input type="date" value={customFrom} max={customTo || undefined} onChange={e => setCustomFrom(e.target.value)} aria-label="Vanaf" />
-                  <span>tot</span>
-                  <Input type="date" value={customTo} min={customFrom || undefined} onChange={e => setCustomTo(e.target.value)} aria-label="Tot en met" />
+          {showList && <div className={`comm-list${split ? ' is-split' : ''}`}>
+            {split
+              ? <>
+                  {hasNotice && <div className="comm-list-notices">{notices}</div>}
+                  {visible.length > 0 && <div className="comm-cols">
+                    <ConversationColumn
+                      label="E-mail"
+                      icon={Mail}
+                      count={emailVisible.length}
+                      empty={`Geen mailgesprekken van ${focusClient?.name ?? 'deze klant'}.`}
+                    >
+                      {emailVisible.map(item => renderRow(item, true))}
+                    </ConversationColumn>
+                    <ConversationColumn
+                      label="Tickets"
+                      icon={TicketIcon}
+                      count={ticketVisible.length}
+                      empty={`Geen tickets van ${focusClient?.name ?? 'deze klant'}.`}
+                    >
+                      {ticketVisible.map(item => renderRow(item, true))}
+                    </ConversationColumn>
+                  </div>}
+                </>
+              : <div className="comm-list-scroll">
+                  {notices}
+                  {visible.map(item => renderRow(item))}
                 </div>}
-              </div>
-              {deepBusy && <div className="comm-search-status" role="status">Zoeken in alle berichten…</div>}
-            </div>
-
-            <div className="comm-list-scroll">
-              {!loaded && <div className="client-empty-line">Gesprekken laden…</div>}
-              {loaded && loadError && <div className="error">{loadError}</div>}
-
-              {loaded && notMigrated && <div className="client-empty-state comm-empty-state">
-                <strong>Klantmail nog niet beschikbaar in deze omgeving</strong>
-                <span>
-                  De database is hier nog niet bijgewerkt. Mailgesprekken verschijnen hier zodra de migratie gedraaid is;
-                  je klantmail staat intussen gewoon in het klantdossier, tabblad Communicatie.
-                  {canReadTickets && ticketCount > 0 ? ' Tickets staan hieronder wel.' : ''}
-                </span>
-              </div>}
-
-              {loaded && !loadError && conversations.length === 0 && (ready || (notMigrated && ticketCount === 0)) && <div className="client-empty-state comm-empty-state">
-                <strong>{canReadTickets ? 'Nog geen klantmail of tickets' : 'Nog geen klantmail'}</strong>
-                <span>
-                  Stuur een eerste bericht via <em>Nieuw bericht</em>, of vanuit het klantdossier. Antwoorden van klanten
-                  {canReadTickets ? ' en tickets uit het portaal' : ''} komen hier vanzelf terug. Wil je ook mail opvangen die een klant
-                  rechtstreeks naar je eigen adres stuurt? Stel dan een doorstuuradres in onder Instellingen → E-mail &amp; domeinen.
-                </span>
-              </div>}
-
-              {loaded && !loadError && conversations.length > 0 && visible.length === 0 && <div className="client-empty-state comm-empty-state">
-                <strong>{tab === 'unread' && !filtersActive ? 'Alles gelezen' : 'Geen gesprekken gevonden'}</strong>
-                <span>{tab === 'unread' && !filtersActive
-                  ? 'Er staat geen ongelezen post meer in je gesprekken.'
-                  : deepBusy ? 'Nog even: de database zoekt in alle berichten.' : 'Geen enkel gesprek komt overeen met je zoekterm of filters.'}</span>
-                {filtersActive && <Button onClick={resetFilters}><RotateCcw size={14} /> Filters wissen</Button>}
-              </div>}
-
-              {visible.map(item => (
-                <ConversationRow
-                  key={item.key}
-                  item={item}
-                  client={item.clientId ? clientById.get(item.clientId) ?? null : null}
-                  active={item.key === selectedKey && !composing}
-                  found={foundLine(item)}
-                  onSelect={() => selectConversation(item.key)}
-                />
-              ))}
-            </div>
           </div>}
 
           {showDetail && <div className="comm-detail">
@@ -529,32 +617,63 @@ export function CommunicationPage({
   </div>;
 }
 
-function ConversationRow({ item, client, active, found, onSelect }: {
+/**
+ * Eén van de twee vensters bij een gekozen klant: een kopje met het aantal en
+ * daaronder een eigen scrollgebied. Twee scrollgebieden naast elkaar is het
+ * hele punt — door de tickets scrollen mag de mail niet verschuiven.
+ */
+function ConversationColumn({ label, icon: Icon, count, empty, children }: {
+  label: string;
+  icon: typeof Mail;
+  count: number;
+  /** Tekst als dit venster niets te tonen heeft; het andere venster blijft dan gewoon staan. */
+  empty: string;
+  children: ReactNode;
+}) {
+  return <section className="comm-col" aria-label={`${label} (${count})`}>
+    <div className="comm-col-head">
+      <Icon size={13} aria-hidden="true" />
+      <span className="comm-col-label">{label}</span>
+      <span className="comm-col-count">{count}</span>
+    </div>
+    <div className="comm-list-scroll">
+      {count === 0 ? <div className="client-empty-line comm-col-empty">{empty}</div> : children}
+    </div>
+  </section>;
+}
+
+function ConversationRow({ item, client, active, found, compact = false, onSelect }: {
   item: Conversation;
   client: Client | null;
   active: boolean;
   /** Fragment rond de zoektreffer, als die niet al in onderwerp of preview te zien is. */
   found: string | null;
+  /**
+   * In de twee vensters van één klant: zonder klantrondje en zonder klantnaam.
+   * Die staan in elke regel hetzelfde — het is per slot van rekening één klant —
+   * en de smalle kolom kan de ruimte beter aan het onderwerp geven.
+   */
+  compact?: boolean;
   onSelect: () => void;
 }) {
   const unread = item.unread > 0;
   const isTicket = item.kind === 'ticket';
   return <button
     type="button"
-    className={`comm-row${active ? ' active' : ''}${unread ? ' unread' : ''}${isTicket ? ' is-ticket' : ''}`}
+    className={`comm-row${active ? ' active' : ''}${unread ? ' unread' : ''}${isTicket ? ' is-ticket' : ''}${compact ? ' is-compact' : ''}`}
     onClick={onSelect}
     aria-current={active ? 'true' : undefined}
   >
-    {item.clientId
+    {!compact && (item.clientId
       ? <span className="comm-row-avatar" style={{ background: client?.color || 'var(--bg4)' }} aria-hidden="true">{initials(item.clientName)}</span>
-      : <span className="comm-row-avatar is-plain" aria-hidden="true"><TicketIcon size={16} /></span>}
+      : <span className="comm-row-avatar is-plain" aria-hidden="true"><TicketIcon size={16} /></span>)}
     <span className="comm-row-body">
       <span className="comm-row-top">
-        <span className="comm-row-client">{item.clientName}</span>
-        {isTicket && <span className="comm-row-kind" title="Ticket"><TicketIcon size={11} aria-hidden="true" />Ticket</span>}
+        <span className="comm-row-client">{compact ? item.subject : item.clientName}</span>
+        {isTicket && !compact && <span className="comm-row-kind" title="Ticket"><TicketIcon size={11} aria-hidden="true" />Ticket</span>}
         <time className="comm-row-time" dateTime={item.lastAt} title={formatEmailDateTime(item.lastAt)}>{listTime(item.lastAt)}</time>
       </span>
-      <span className="comm-row-subject">{item.subject}</span>
+      {!compact && <span className="comm-row-subject">{item.subject}</span>}
       {found
         ? <span className="comm-row-found" title="Gevonden in dit gesprek"><Search size={11} aria-hidden="true" />{found}</span>
         : <span className="comm-row-preview">{item.preview}</span>}
