@@ -181,6 +181,13 @@ async function handleRegister(req: Request): Promise<Response> {
 // allebei kloppen, mogen we ergens naartoe sturen. Klopt er iets niet aan dat
 // paar, dan tonen we de fout hier en volgen we de redirect NIET — anders is deze
 // server een doorgeefluik naar elke plek die iemand in de URL zet.
+/**
+ * Maximale lengte van `state`. Het ondertekende autorisatieverzoek mag 4096
+ * tekens zijn; hier blijft ruimte over voor de client-id, de redirect-uri, de
+ * scopes en de resource, plus de base64-opslag daarvan.
+ */
+const MAX_STATE_LENGTH = 2048;
+
 async function handleAuthorize(url: URL): Promise<Response> {
   const clientId = url.searchParams.get('client_id') || '';
   const redirectUri = url.searchParams.get('redirect_uri') || '';
@@ -195,6 +202,19 @@ async function handleAuthorize(url: URL): Promise<Response> {
   // wat de client verwacht en waar hij een nette melding van kan maken.
   const state = url.searchParams.get('state') || '';
   const fail = (code: string, description: string) => redirectBack(redirectUri, { error: code, error_description: description, state });
+
+  // Het ondertekende verzoek mag bij het terugkomen hooguit 4096 tekens zijn
+  // (AUTH_REQUEST_MAX_LENGTH in mcpAuth.ts). `state` gaat er ongewijzigd in, en
+  // sommige zakelijke OAuth-clients stoppen daar kilobytes in. Zonder deze
+  // grens kwam zo'n client pas vast te zitten op het toestemmingsscherm, met
+  // "Het autorisatieverzoek heeft een ongeldige lengte" — een doodlopende weg
+  // met een melding die naar niets wijst dat de gebruiker kan oplossen.
+  // Nu weigeren we het meteen, langs de weg waarop de client zijn eigen fout
+  // ziet. De `state` gaat mee terug, ook al is hij te lang: de client heeft hem
+  // nodig om dit antwoord aan zijn verzoek te koppelen.
+  if (state.length > MAX_STATE_LENGTH) {
+    return fail('invalid_request', `De state-waarde is te lang (maximaal ${MAX_STATE_LENGTH} tekens).`);
+  }
 
   if ((url.searchParams.get('response_type') || '') !== 'code') {
     return fail('unsupported_response_type', 'Alleen response_type=code wordt ondersteund.');
@@ -405,22 +425,57 @@ async function exchangeCode(form: URLSearchParams): Promise<Response> {
 
   const grant = await loadGrant(String(row.grant_id));
   if (!grant) return oauthError('invalid_grant', 'De koppeling bestaat niet meer.');
-  if (clientId && clientId !== grant.client_id) return oauthError('invalid_grant', 'Deze code hoort bij een andere client.');
+  // client_id is verplicht, ook voor een publieke client (OAuth 2.1 §4.1.3).
+  // Stond deze controle op "alleen als hij hem meestuurt", dan sloeg een
+  // verzoek dat het veld simpelweg wegliet de hele controle over.
+  if (!clientId) return oauthError('invalid_client', 'client_id ontbreekt in dit tokenverzoek.');
+  if (clientId !== grant.client_id) return oauthError('invalid_grant', 'Deze code hoort bij een andere client.');
+
+  // RFC 8707: vraagt de client een resource, dan moet dat dezelfde zijn als bij
+  // /authorize. De kolom werd tot nu toe alleen gevuld en nooit gelezen, terwijl
+  // de migratie belooft dat een token voor server A niet bij server B werkt.
+  const requestedResource = String(form.get('resource') || '');
+  if (requestedResource && String(row.resource || '') && requestedResource !== String(row.resource)) {
+    return oauthError('invalid_target', 'De gevraagde resource komt niet overeen met die van de autorisatie.');
+  }
 
   // Eerst de code afstempelen, dan pas tokens uitgeven: valt er daarna iets om,
   // dan is het ergste dat de client opnieuw moet koppelen — niet dat er een code
   // blijft liggen die nog een tweede keer werkt.
-  const { error: useError } = await admin.from('mcp_auth_codes')
-    .update({ used_at: new Date().toISOString() }).eq('id', row.id).is('used_at', null);
+  //
+  // De `.select()` is hier het slot. Zonder die uitkomst te lezen was de
+  // controle hierboven een check-dan-doe: twee gelijktijdige /token-verzoeken
+  // met dezelfde code lazen allebei `used_at === null`, kwamen allebei hier, en
+  // de UPDATE raakte er één — maar PostgREST geeft geen fout bij nul geraakte
+  // rijen, dus kregen ze allebéí een geldig tokenpaar. Precies het geval waar
+  // het afstempelen voor bedoeld was (een onderschepte code die geracet wordt)
+  // glipte er zo doorheen.
+  const { data: stamped, error: useError } = await admin.from('mcp_auth_codes')
+    .update({ used_at: new Date().toISOString() })
+    .eq('id', row.id).is('used_at', null)
+    .select('id');
   if (useError) throw new HttpError(`Code afstempelen mislukt: ${useError.message}`, 500);
+  if (!stamped || stamped.length === 0) {
+    // Iemand anders was ons net voor met dezelfde code. Zelfde behandeling als
+    // een al gebruikte code hierboven: uit voorzorg alles intrekken.
+    await admin.from('mcp_tokens').update({ revoked_at: new Date().toISOString() })
+      .eq('grant_id', row.grant_id).is('revoked_at', null);
+    return oauthError('invalid_grant', 'Deze autorisatiecode is al gebruikt. Uit voorzorg zijn de tokens van deze koppeling ingetrokken; koppel opnieuw.');
+  }
 
-  return openJson(await issueTokens(String(row.grant_id), grant.scope));
+  return openJson({ ...await issueTokens(String(row.grant_id), grant.scope), resource: String(row.resource || RESOURCE_URL) });
 }
 
 async function refresh(form: URLSearchParams): Promise<Response> {
   const presented = String(form.get('refresh_token') || '');
   const parsed = parseToken(presented);
   if (!parsed) return oauthError('invalid_grant', 'Dit refresh token heeft niet de juiste vorm.');
+  // Ook hier moet de client zeggen wie hij is. Zonder deze controle was een
+  // refresh token dat uit de opslag van één AI-app lekte door iedereen in te
+  // wisselen — en omdat verversen roteert, hield de vinder daarmee een sessie
+  // eindeloos in leven zonder dat er in mcp_grants iets van te zien was.
+  const clientId = String(form.get('client_id') || '');
+  if (!clientId) return oauthError('invalid_client', 'client_id ontbreekt in dit tokenverzoek.');
 
   const { data, error } = await admin.from('mcp_tokens')
     .select('id, grant_id, kind, verifier_hash, salt, expires_at, revoked_at')
@@ -436,6 +491,7 @@ async function refresh(form: URLSearchParams): Promise<Response> {
 
   const grant = await loadGrant(String(row.grant_id));
   if (!grant) return oauthError('invalid_grant', 'De koppeling bestaat niet meer.');
+  if (clientId !== grant.client_id) return oauthError('invalid_grant', 'Dit refresh token hoort bij een andere client.');
 
   // Rotatie: het gebruikte refresh token gaat eruit en er komt een nieuw paar.
   // Zo is een token dat iemand ooit onderschepte na één keer verversen dood.
@@ -480,10 +536,17 @@ async function handleRevoke(req: Request): Promise<Response> {
   if (!parsed) return openJson({});
 
   const { data } = await admin.from('mcp_tokens')
-    .select('id, verifier_hash, salt').eq('selector', parsed.selector).limit(1);
+    .select('id, grant_id, verifier_hash, salt').eq('selector', parsed.selector).limit(1);
   const row = data?.[0];
   if (row && await verifyToken(parsed.verifier, String(row.salt), String(row.verifier_hash))) {
-    await admin.from('mcp_tokens').update({ revoked_at: new Date().toISOString() }).eq('id', row.id).is('revoked_at', null);
+    // Alles van deze koppeling, niet alleen het aangeboden token. Trok de
+    // AI-app zijn refresh token in — wat ze doen als de gebruiker de connector
+    // verwijdert — dan bleef het bijbehorende access token tot een uur lang
+    // gewoon werken. De gebruiker dacht losgekoppeld te zijn en was dat niet.
+    // RFC 7009 §2.1 vraagt hier ook om, en de intrekknop in de app doet het al
+    // zo (mcp_revoke_grant_tokens).
+    await admin.from('mcp_tokens').update({ revoked_at: new Date().toISOString() })
+      .eq('grant_id', row.grant_id).is('revoked_at', null);
   }
   return openJson({});
 }

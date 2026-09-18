@@ -167,7 +167,19 @@ verify_jwt = false
 # authenticeert met het toegangstoken uit die koppeling (gesalte SHA-256 in
 # mcp_tokens), niet met een Supabase-sessie. Uit het token volgt één gebruiker
 # in één organisatie; rol en modulerechten worden per aanroep vers uit
-# organization_members gelezen. De functie is ALLEEN-LEZEN: schrijf-handelingen
-# uit de registry worden geweigerd, ook als het model hun id kent.
+# organization_members gelezen, en de module Gerrie wordt bij ELKE aanroep
+# opnieuw gewogen — staat die dicht, dan werkt de koppeling niet meer.
+#
+# NIET meer alleen-lezen. Sinds de fasen "klaarzetten" en "uitvoeren" kan deze
+# functie ook schrijven:
+#   - propose_action zet een wijziging in de goedkeurwachtrij (ai_action_audit);
+#     daar komt altijd een mens aan te pas.
+#   - execute_action voert rechtstreeks uit via de service-role, maar alleen
+#     voor handelingen in DIRECT_APPLIERS, alleen als de koppeling het recht
+#     'execute' heeft, en voor onomkeerbare of naar-buiten-gerichte handelingen
+#     bovendien alleen met 'execute_high'. Alles wat daarbuiten valt, valt terug
+#     op klaarzetten.
+# Wie hier leest om in te schatten wat een functie zonder JWT-controle kan
+# aanrichten: dit is de actuele stand.
 [functions.mcp]
 verify_jwt = false

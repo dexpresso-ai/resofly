@@ -102,6 +102,13 @@ const RATE_MAX_CALLS = 120;
  */
 const MAX_OPEN_PROPOSALS = 25;
 
+/**
+ * Hoeveel JSON-RPC-berichten er in één HTTP-verzoek mogen. Ruim genoeg voor een
+ * client die zijn gereedschapslijst en een paar aanroepen bundelt, krap genoeg
+ * dat niemand er de aanroeplimiet mee omzeilt.
+ */
+const MAX_BATCH_CALLS = 25;
+
 Deno.serve(async (req) => {
   const url = new URL(req.url);
 
@@ -152,7 +159,33 @@ Deno.serve(async (req) => {
   }
 
   // Een client mag meerdere verzoeken in één keer sturen (JSON-RPC batch).
+  //
+  // De limiet telt per BERICHT, niet per HTTP-verzoek. Deed hij dat laatste —
+  // en dat deed hij — dan voerde één POST met 130.000 berichten er 130.000 uit
+  // terwijl de teller met 1 opliep: het plafond van 120 per minuut was dan geen
+  // plafond maar een formaliteit. De bovengrens hieronder is er daarnaast,
+  // zodat een doorgedraaide agent niet eerst tien megabyte JSON mag opsturen
+  // voordat iemand nee zegt.
   if (Array.isArray(body)) {
+    if (body.length === 0) {
+      return json(rpcError(null, JSONRPC_INVALID_REQUEST, 'Een lege batch is geen geldig JSON-RPC-verzoek.'));
+    }
+    if (body.length > MAX_BATCH_CALLS) {
+      return json(rpcError(null, JSONRPC_INVALID_REQUEST,
+        `Deze batch bevat ${body.length} verzoeken; er passen er maximaal ${MAX_BATCH_CALLS} in één keer.`));
+    }
+    // Eén aanroep is bij het inloggen al geteld; de rest van de batch komt er hier bij.
+    try {
+      await chargeRateLimit(session.grantId, body.length - 1);
+    } catch (error) {
+      if (error instanceof RateLimited) {
+        return new Response(JSON.stringify({ error: 'rate_limited', error_description: error.message }), {
+          status: 429,
+          headers: { ...corsHeaders(), 'Content-Type': 'application/json', 'Retry-After': String(RATE_WINDOW_SECONDS) },
+        });
+      }
+      throw error;
+    }
     const answers = [];
     for (const item of body) {
       const answer = await dispatch(item, session);
@@ -223,7 +256,15 @@ async function authenticate(req: Request): Promise<Session> {
   const member = members?.[0] as { role?: string; module_access?: Record<string, unknown> } | undefined;
   if (!member?.role) throw new Error('Deze gebruiker is geen actief lid meer van deze organisatie.');
 
-  await enforceRateLimit(grant);
+  // Gerrie stond alleen bij het KOPPELEN in de weg (mcp-oauth). Zette een owner
+  // die module daarna dicht, dan bleef de gekoppelde AI gewoon doorwerken —
+  // terwijl de restrictieve RLS op mcp_grants het teamlid tegelijk de knop
+  // "intrekken" afnam. De deur die dicht moest, ging dus juist op slot mét de
+  // AI erbinnen. Daarom hier opnieuw wegen, bij élke aanroep, net als de rol en
+  // de overige modulerechten hierboven.
+  if (String((member.module_access ?? {}).gerrie ?? '') === 'none') {
+    throw new Error('Deze gebruiker heeft in deze organisatie geen toegang meer tot Gerrie, dus deze koppeling werkt niet meer.');
+  }
 
   return {
     grantId: String(grant.id),
@@ -248,20 +289,37 @@ class RateLimited extends Error {
  * bewust op de grant-rij: een aparte tabel zou per aanroep een extra query
  * kosten voor iets wat we toch al ophalen.
  */
-async function enforceRateLimit(grant: Record<string, unknown>): Promise<void> {
-  const now = Date.now();
-  const windowStart = new Date(String(grant.calls_window_start)).getTime();
-  const fresh = now - windowStart > RATE_WINDOW_SECONDS * 1000;
-  const used = fresh ? 0 : Number(grant.calls_in_window || 0);
-
-  if (used >= RATE_MAX_CALLS) {
+/**
+ * Boekt `cost` aanroepen af op de koppeling. De telling gebeurt in de database
+ * (mcp_consume_rate_limit), in één statement met een rijvergrendeling.
+ *
+ * Dat is het hele punt: dit was een lees-wijzig-schrijf hier in de functie, en
+ * dan lezen 120 parallelle verzoeken allemaal `calls_in_window = 0`, laten ze
+ * allemaal de controle passeren en schrijven ze allemaal 1. Een agent die zijn
+ * gereedschapsaanroepen naast elkaar doet — en dat is precies wat agents doen —
+ * liep daar dus zonder meer doorheen.
+ */
+async function chargeRateLimit(grantId: string, cost = 1): Promise<void> {
+  if (cost <= 0) return;
+  const { data, error } = await admin.rpc('mcp_consume_rate_limit', {
+    p_grant_id: grantId,
+    p_cost: cost,
+    p_window_seconds: RATE_WINDOW_SECONDS,
+    p_max_calls: RATE_MAX_CALLS,
+  });
+  if (error) {
+    // Bestaat de functie nog niet (migratie niet gedraaid), dan blijft de
+    // koppeling werken — met de oude, zwakkere telling. Stilzwijgend hard
+    // falen op een limiet zou erger zijn dan een limiet die even ruim zit.
+    if (/mcp_consume_rate_limit|does not exist|schema cache/i.test(`${error.message} ${error.details ?? ''}`)) {
+      console.warn('mcp: mcp_consume_rate_limit ontbreekt; aanroeplimiet is niet afgedwongen.', error.message);
+      return;
+    }
+    throw new Error(`Aanroeplimiet bijwerken mislukt: ${error.message}`);
+  }
+  if (data === null || Number(data) < 0) {
     throw new RateLimited(`Te veel verzoeken: maximaal ${RATE_MAX_CALLS} per minuut per koppeling. Probeer het over een minuut opnieuw.`);
   }
-  await admin.from('mcp_grants').update({
-    calls_window_start: fresh ? new Date(now).toISOString() : new Date(windowStart).toISOString(),
-    calls_in_window: used + 1,
-    last_used_at: new Date(now).toISOString(),
-  }).eq('id', grant.id);
 }
 
 // ── JSON-RPC ─────────────────────────────────────────────────────────────────
@@ -705,7 +763,7 @@ async function executeAction(args: Record<string, unknown>, session: Session): P
 
   // Vanaf hier is het een handeling uit de registry: alleen die heeft een uitvoerder.
   const proposal = await explainPlanFailure(action, input, session,
-    () => buildRegistryProposal(action, input, session));
+    () => buildRegistryProposal(action, input, session), 'execute');
 
   // Het risico van DIT geval, niet van de handeling in het algemeen: een `plan()`
   // mag het omhoog zetten voor de ene aanroep en niet voor de andere.
@@ -801,12 +859,19 @@ function buildMcpProposal(
  */
 async function explainPlanFailure<T>(
   action: ActionDef, input: Record<string, unknown>, session: Session, build: () => Promise<T>,
+  // Welk werkwoord er in het audit-spoor komt. Beide paden bouwen hun voorstel
+  // met dezelfde plan(), maar een beheerder die naleest wat een gekoppelde AI
+  // probeerde, moet een geweigerde RECHTSTREEKSE UITVOERING kunnen
+  // onderscheiden van een geweigerd voorstel — juist omdat het eerste pad de
+  // goedkeurwachtrij overslaat. Stond hier altijd 'propose', dus was dat niet
+  // te zien.
+  verb: 'propose' | 'execute' = 'propose',
 ): Promise<T> {
   try {
     return await build();
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Onbekende fout.';
-    await audit(session, `propose:${action.id}`, input, 'failed', message);
+    await audit(session, `${verb}:${action.id}`, input, 'failed', message);
     if (error instanceof ActionError) throw error;
     throw new ActionError(`Dit voorstel kon niet worden opgesteld: ${message}`);
   }

@@ -20,6 +20,22 @@ test('isMissingRelation herkent de twee teksten die PostgREST en Postgres geven'
   assert.equal(isMissingRelation({ message: 'relation "public.foo" does not exist' }), true);
 });
 
+test('een ontbrekende KOLOM of FUNCTIE is geen ontbrekende tabel', () => {
+  // Dit was de bug: beide zinnen bevatten "does not exist", en op dat losse
+  // stukje tekst matchen maakte een kapotte deploy visueel identiek aan een
+  // ongemigreerde — én verborg levende AI-koppelingen inclusief hun
+  // intrekknop, omdat mcp_grants.scope_ceiling in een tussenstand ontbrak.
+  assert.equal(isMissingRelation({ code: '42703', message: 'column mcp_grants.scope_ceiling does not exist' }), false);
+  assert.equal(isMissingRelation({ code: '42883', message: 'function public.search_client_emails(uuid, text, integer) does not exist' }), false);
+  assert.equal(isMissingRelation({ message: 'column client_email_threads.foo does not exist' }), false);
+});
+
+test('een écht ontbrekende tabel of view wordt nog steeds herkend', () => {
+  assert.equal(isMissingRelation({ code: '42P01', message: 'relation "public.client_calls" does not exist' }), true);
+  assert.equal(isMissingRelation({ message: 'relation "public.client_calls" does not exist' }), true);
+  assert.equal(isMissingRelation({ message: 'ERROR: relation public.foo does not exist' }), true);
+});
+
 test('isMissingRelation laat een echte fout een echte fout blijven', () => {
   assert.equal(isMissingRelation({ code: '42501', message: 'permission denied for table foo' }), false);
   assert.equal(isMissingRelation({ code: 'PGRST301', message: 'JWT expired' }), false);

@@ -7,6 +7,7 @@ import { MeetingRecorder } from '../components/MeetingRecorder';
 import { RichTextExcerpt, plainTextToRichText } from '../components/RichTextEditor';
 import { InkComposer, InkThumbnail, handwritingLabel, noteHandwritingSummary } from '../components/NoteHandwriting';
 import type { InkDocument } from '../lib/ink';
+import { inkSizeIssue } from '../lib/ink';
 import { createNoteWithCalendarLink, saveNoteHandwriting } from '../lib/repository';
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
 import { dateNL, formatMinutes } from '../lib/format';
@@ -2845,8 +2846,31 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
   }
 
   /** Handgeschreven notitie vanuit de overlay: notitie + koppeling, daarna de inkt. */
+  /**
+   * De notitie die bij een mislukte inktopslag al is aangemaakt. Zonder dit
+   * maakte een tweede poging — en die is waarschijnlijk, want het venster
+   * blijft open staan met de tekening erin — een tweede notitie bij dezelfde
+   * afspraak. Bij een geslaagde poging wordt hij weer leeggemaakt.
+   */
+  const pendingInkNoteRef = useRef<string | null>(null);
+
   async function saveInkNote(doc: InkDocument, title: string) {
     if (!event) return;
+    // Eerst de maat, dan pas iets aanmaken: boven 6 MB weigert de trigger, en
+    // dan is een lege notitie op de agenda het enige dat overblijft.
+    const issue = inkSizeIssue(doc);
+    if (issue) throw new Error(issue);
+
+    // Een eerdere poging kwam al tot een notitie: die hergebruiken.
+    const existingId = pendingInkNoteRef.current;
+    if (existingId) {
+      await saveNoteHandwriting(organizationId, existingId, doc);
+      pendingInkNoteRef.current = null;
+      setInkOpen(false);
+      await onNotesChanged();
+      return;
+    }
+
     const note = await createNoteWithCalendarLink(organizationId, {
       title: title.slice(0, 200),
       content: '',
@@ -2856,7 +2880,11 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
       tags: ['agenda', 'handschrift'],
     }, noteLinkInput());
     if (!note?.id) throw new Error('De notitie is niet aangemaakt: de database gaf geen notitie terug.');
+    // Vanaf hier bestaat de notitie. Gaat het opslaan van de inkt mis, dan moet
+    // een volgende poging dezelfde notitie vullen en niet een nieuwe maken.
+    pendingInkNoteRef.current = note.id;
     await saveNoteHandwriting(organizationId, note.id, doc);
+    pendingInkNoteRef.current = null;
     setInkOpen(false);
     await onNotesChanged();
   }
