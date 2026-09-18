@@ -31,12 +31,15 @@ mail. Drie dingen zijn daarom veranderd.
   laatste notitie ("Maria: Vooral op de pagina met afspraken…", "Jij: We kijken ernaar"),
   zonder notities de omschrijving. Een ticket zonder klant krijgt een ticket-icoon en de naam
   "Geen klant".
-- **Ongelezen** telt nu ook tickets met nieuwe klant-activiteit mee (badge *Nieuw* op de regel).
-  De kop zegt "x gesprekken · y tickets · z ongelezen · n niet gekoppeld".
+- **Ongelezen** telt nu ook tickets met nieuwe klant-activiteit mee. Op de regel staat dan een
+  **stip** in plaats van een getal of het woord "Nieuw": een ticket heeft geen teller, en "Nieuw"
+  naast de status *Nieuw* zou twee dingen betekenen. Het is dezelfde stip als op het tabblad
+  Tickets in het klantdossier. De kop zegt "x gesprekken · y tickets · z ongelezen · n niet
+  gekoppeld".
 - **Een ticket openen** toont rechts de kop (klantchip naar het dossier, status, prioriteit,
   aanmaakdatum, aantal notities), de omschrijving, een eventuele interne notitie en de
   **tijdlijn** — precies dezelfde component als in het bewerkvenster, dus je antwoordt de
-  klant vanaf Berichten, zichtbaar of intern. Openen = lezen: de "Nieuw"-markering gaat weg.
+  klant vanaf Berichten, zichtbaar of intern. Openen = lezen: de stip gaat weg.
   *Ticket openen* brengt je naar het volledige bewerkvenster (status wijzigen, bijlagen).
 - **Meldingen** ("Nieuw ticket", "Nieuwe reactie") blijven het bewerkvenster openen, zoals ze
   deden. De badge op de menuregel *Berichten* telt zoals voorheen alleen mail en opvangbak; de
@@ -89,8 +92,8 @@ mail. Drie dingen zijn daarom veranderd.
 - **`DetailTabs`** kent nu een `dot` (stip naast de teller).
 - **Repository:** `searchClientEmails` (rpc, valt stil terug op `[]` als de functie ontbreekt)
   en `loadClientEmailThreadOverviewByIds`.
-- **Mobiele lay-outtest:** de seed heeft nu een `ticket_unread`-rij, zodat de "Nieuw"-markering
-  in Berichten en de stip op het tabblad Tickets gemeten worden.
+- **Mobiele lay-outtest:** de seed heeft nu een `ticket_unread`-rij, zodat de stip op een
+  ticketregel in Berichten en op het tabblad Tickets gemeten wordt.
 
 ## Wat níét verandert
 
