@@ -4,8 +4,8 @@ import { Button, Input, Textarea } from './Ui';
 import { getAccessToken, getWorkerBase } from '../lib/r2-api';
 import {
   createRecording, deleteRecording as apiDeleteRecording, getRecording,
-  isTerminalStatus, listRecordingsForEvent, sendSummaryToAttendees, startTranscription,
-  summarizeRecording, updateRecordingText, uploadMeetingAudio,
+  isTerminalStatus, listRecordingsForCall, listRecordingsForEvent, sendSummaryToAttendees,
+  startTranscription, summarizeRecording, updateRecordingText, uploadMeetingAudio,
 } from '../lib/meeting-api';
 import type { CalendarProvider, MeetingRecording, UUID } from '../types';
 
@@ -16,7 +16,13 @@ export interface MeetingRecorderEvent {
   eventTitle: string | null;
   clientId: UUID | null;
   projectId: UUID | null;
-  /** Genodigden bij deze afspraak (voor "verstuur notulen naar genodigden"). */
+  /**
+   * Gevuld als de recorder bij een telefoongesprek staat in plaats van bij een
+   * agenda-item. De opnames worden dan per gesprek geladen; de rest van de
+   * component (opnemen, transcript, notulen, mailen) werkt ongewijzigd.
+   */
+  callId?: UUID | null;
+  /** Genodigden bij deze afspraak — bij een gesprek: met wie je sprak. */
   attendees: { email: string; name: string }[];
 }
 
@@ -59,13 +65,15 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote 
   const recordingSupported = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== 'undefined';
 
   const reload = useCallback(async () => {
-    if (!event.eventRef) { setRecordings([]); return; }
+    if (!event.callId && !event.eventRef) { setRecordings([]); return; }
     try {
-      setRecordings(await listRecordingsForEvent(organizationId, event.provider ?? null, event.eventRef));
+      setRecordings(event.callId
+        ? await listRecordingsForCall(organizationId, event.callId)
+        : await listRecordingsForEvent(organizationId, event.provider ?? null, event.eventRef));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Opnames laden mislukt.');
     }
-  }, [organizationId, event.provider, event.eventRef]);
+  }, [organizationId, event.provider, event.eventRef, event.callId]);
 
   useEffect(() => { void reload(); }, [reload]);
 
@@ -137,6 +145,7 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote 
       const recordingId = await createRecording(organizationId, {
         provider: event.provider, sourceId: event.sourceId, eventRef: event.eventRef,
         eventTitle: event.eventTitle, clientId: event.clientId, projectId: event.projectId,
+        callId: event.callId ?? null,
       });
       const storageKey = await uploadMeetingAudio(file, organizationId, recordingId);
       await startTranscription(organizationId, {

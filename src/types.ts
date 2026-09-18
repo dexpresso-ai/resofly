@@ -333,6 +333,61 @@ export interface ClientContact extends OrgScopedRow {
   client_id: UUID; name: string; email: string; phone: string | null; role: string | null; gives_portal_access: boolean; is_active: boolean; created_at: string; updated_at: string;
 }
 
+// ── Telefoongesprekken (client_calls) ───────────────────────────────────────
+/** Wie belde wie. */
+export type CallDirection = 'inbound' | 'outbound';
+/**
+ * Hoe het gesprek afliep. Alles behalve 'answered' betekent dat er niet
+ * gesproken is; de database zet de gespreksduur dan op nul.
+ */
+export type CallOutcome = 'answered' | 'missed' | 'voicemail' | 'busy' | 'no_answer' | 'failed';
+/**
+ * Waar het gelogde gesprek vandaan komt. 'pbx' is gereserveerd voor een
+ * latere koppeling met de telefooncentrale; de kolommen liggen er al zodat
+ * die koppeling geen migratie van bestaande rijen vraagt.
+ */
+export type CallSource = 'manual' | 'click_to_call' | 'pbx';
+
+export interface ClientCall extends OrgScopedRow {
+  client_id: UUID | null;
+  contact_id: UUID | null;
+  supplier_id: UUID | null;
+  project_id: UUID | null;
+  ticket_id: UUID | null;
+  /** Naam zoals die tijdens het gesprek gold (snapshot, net als bij offertes). */
+  counterpart_name: string | null;
+  phone_raw: string | null;
+  /** Genormaliseerd nummer; hierop herkent de app een bestaand contact. */
+  phone_e164: string | null;
+  direction: CallDirection;
+  outcome: CallOutcome;
+  started_at: string;
+  ended_at: string | null;
+  duration_seconds: number | null;
+  subject: string;
+  notes: string | null;
+  source: CallSource;
+  provider: string | null;
+  provider_call_id: string | null;
+  dedup_key: string | null;
+  follow_up_task_id: UUID | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Eén treffer van find_contacts_by_phone: wie hoort er bij dit nummer? */
+export interface PhoneMatch {
+  match_kind: 'client' | 'client_contact' | 'supplier';
+  client_id: UUID | null;
+  contact_id: UUID | null;
+  supplier_id: UUID | null;
+  display_name: string;
+  client_name: string | null;
+  role: string | null;
+  phone: string | null;
+}
+
 // ── Bestanden delen (drive_shares) ─────────────────────────────────────────
 /** Wat er gedeeld wordt: een map deelt zijn hele inhoud mee. */
 export type DriveShareItemType = 'folder' | 'attachment' | 'note' | 'document';
@@ -2865,6 +2920,8 @@ export interface MeetingRecording extends OrgScopedRow {
   event_title_snapshot: string | null;
   client_id: UUID | null;
   project_id: UUID | null;
+  /** Gevuld als deze opname bij een telefoongesprek hoort in plaats van bij een agenda-item. */
+  call_id: UUID | null;
   storage_key: string | null;
   mime_type: string | null;
   size_bytes: number | null;
@@ -2996,7 +3053,7 @@ export interface SavedReport extends OrgScopedRow {
   updated_at: string;
 }
 
-export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; noteHandwriting: NoteHandwritingSummary[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; driveShares: DriveShare[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; plannerCapacity: PlannerDayCapacity | null; companySettings: CompanySettings | null; }
+export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientCalls: ClientCall[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; noteHandwriting: NoteHandwritingSummary[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; driveShares: DriveShare[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; plannerCapacity: PlannerDayCapacity | null; companySettings: CompanySettings | null; }
 
 export type CalendarProvider = 'google' | 'microsoft' | 'native' | 'ics';
 export type CalendarConnectionStatus = 'active' | 'expired' | 'revoked' | 'error';

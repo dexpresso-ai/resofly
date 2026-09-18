@@ -1,6 +1,11 @@
 // ============================================================
 // meeting-transcribe — opname -> ElevenLabs Scribe -> Claude-notulen.
 //
+// Bedient twee soorten opnames met exact dezelfde pijplijn: een afspraak uit
+// de agenda, en sinds 18 september een telefoongesprek (client_calls). Het
+// verschil zit alleen in de modulepoort: een gespreksopname valt onder
+// Klanten, een afspraakopname onder Agenda. Zie resolveModuleKey().
+//
 // Acties (alle POST, Supabase JWT + org-toegang):
 //  - create    : maak een opname-rij aan (AVG-toestemming verplicht) -> { id }
 //  - start     : koppel de R2-audio, stuur naar Scribe. Webhook-modus -> status
@@ -56,9 +61,9 @@ Deno.serve(async (req) => {
 
     const user = await requireUser(admin, req);
     const role = await requireOrganizationAccess(admin, user.id, organizationId);
-    // Meeting-opnames hangen aan de Agenda-module. Lezen mag met leesrecht;
-    // de acties zelf controleren hieronder al op de schrijfrol.
-    await assertModuleAccess(admin, user.id, organizationId, 'calendar', 'read');
+    // Een afspraakopname hangt aan Agenda, een gespreksopname aan Klanten.
+    // Lezen mag met leesrecht; de acties zelf controleren op de schrijfrol.
+    await assertModuleAccess(admin, user.id, organizationId, await resolveModuleKey(organizationId, body), 'read');
 
     switch (action) {
       case 'create': return cors.json(req, await createRecording(organizationId, user.id, role, body));
@@ -87,8 +92,18 @@ async function createRecording(organizationId: string, userId: string, role: Org
   if (provider && !['google', 'microsoft', 'native'].includes(provider)) throw new HttpError('Ongeldige provider.', 400);
   const clientId = body.clientId ? String(body.clientId) : null;
   const projectId = body.projectId ? String(body.projectId) : null;
+  const callId = body.callId ? String(body.callId) : null;
   if (clientId && !isUuid(clientId)) throw new HttpError('Ongeldige klant-id.', 400);
   if (projectId && !isUuid(projectId)) throw new HttpError('Ongeldige project-id.', 400);
+  if (callId && !isUuid(callId)) throw new HttpError('Ongeldige gesprek-id.', 400);
+
+  // Hoort de opname bij een gesprek, dan moet dat gesprek van deze organisatie
+  // zijn — anders zou een opname aan andermans dossier gehangen kunnen worden.
+  if (callId) {
+    const { data: callRow } = await admin.from('client_calls')
+      .select('id').eq('id', callId).eq('organization_id', organizationId).maybeSingle();
+    if (!callRow) throw new HttpError('Gesprek niet gevonden in deze organisatie.', 404);
+  }
 
   const { data, error } = await admin.from('meeting_recordings').insert({
     organization_id: organizationId,
@@ -99,6 +114,7 @@ async function createRecording(organizationId: string, userId: string, role: Org
     event_title_snapshot: body.eventTitle ? String(body.eventTitle).slice(0, 300) : null,
     client_id: clientId,
     project_id: projectId,
+    call_id: callId,
     consent_given: true,
     consent_at: new Date().toISOString(),
     status: 'uploaded',
@@ -265,6 +281,24 @@ async function deleteRecording(organizationId: string, role: Awaited<ReturnType<
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Welke module bewaakt deze aanvraag? Een opname bij een telefoongesprek valt
+ * onder Klanten, een opname bij een afspraak onder Agenda.
+ *
+ * Bij 'create' zegt de body het (callId); bij de acties daarna is er alleen een
+ * recordingId, en dan bepaalt de opname-rij zelf waar hij bij hoort. Die ene
+ * extra lookup is de prijs van een poort die niet te omzeilen is door een veld
+ * uit de body weg te laten.
+ */
+async function resolveModuleKey(organizationId: string, body: Record<string, unknown>): Promise<'clients' | 'calendar'> {
+  if (body.callId) return 'clients';
+  const recordingId = body.recordingId ? String(body.recordingId) : '';
+  if (!isUuid(recordingId)) return 'calendar';
+  const { data } = await admin.from('meeting_recordings')
+    .select('call_id').eq('id', recordingId).eq('organization_id', organizationId).maybeSingle();
+  return data?.call_id ? 'clients' : 'calendar';
+}
 
 async function loadRecording(organizationId: string, recordingId: string) {
   const { data, error } = await admin.from('meeting_recordings')

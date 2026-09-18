@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowLeft, ExternalLink, Inbox, Mail, MailOpen, Reply, RotateCcw, Search, SlidersHorizontal, SquarePen, Ticket as TicketIcon, X } from 'lucide-react';
-import type { AppData, Client, ClientEmail, ClientEmailSearchHit, ClientEmailThreadOverview, Ticket } from '../types';
+import { AlertTriangle, ArrowLeft, ExternalLink, Inbox, Mail, MailOpen, Phone, PhoneIncoming, PhoneOutgoing, Reply, RotateCcw, Search, SlidersHorizontal, SquarePen, Ticket as TicketIcon, X } from 'lucide-react';
+import type { AppData, Client, ClientCall, ClientEmail, ClientEmailSearchHit, ClientEmailThreadOverview, Ticket } from '../types';
 import { Button, Input, Select } from '../components/Ui';
 import { DetailTabs } from '../components/DetailTabs';
 import { RichTextEditor } from '../components/RichTextEditor';
@@ -16,9 +16,12 @@ import { resolveEffectiveSender, sendClientEmail, type EffectiveSender } from '.
 import {
   DATE_PERIOD_OPTIONS, NO_CLIENT, countUnread, emailConversation, filterConversations, initials, listTime, matchesWords, periodRange,
   queryWords, replySubject, searchSnippet, sortConversations, splitConversations,
-  type CommunicationTab, type Conversation, type ConversationFilter, type ConversationKind, type DatePeriod, type TicketConversation,
+  type CallConversation, type CommunicationTab, type Conversation, type ConversationFilter, type ConversationKind, type DatePeriod, type TicketConversation,
 } from '../lib/communication';
 import { groupNotesByTicket, ticketConversation, ticketPriorityLabel, ticketStatusLabel } from '../lib/tickets';
+import { callConversation, callCounterpart, callDirectionLabel, callDurationLabel, callOutcomeLabel, formatPhone, telHref } from '../lib/calls';
+import { CallLogDialog } from '../components/CallLogDialog';
+import { MeetingRecorder } from '../components/MeetingRecorder';
 import { dateNL } from '../lib/format';
 import { useNarrowViewport } from '../lib/useNarrowViewport';
 import { NotMigratedError } from '../lib/postgrestErrors';
@@ -135,6 +138,8 @@ export function CommunicationPage({
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
+  /** Het logvenster: `{ existing: null }` is een nieuw gesprek, een rij is bewerken. */
+  const [logging, setLogging] = useState<{ existing: ClientCall | null } | null>(null);
   /** Op een smal scherm: staat het gesprek (of het nieuwe bericht) in beeld, of de lijst? */
   const [detailOpen, setDetailOpen] = useState(false);
   /** Springt na een verzonden nieuw bericht naar dat gesprek zodra de lijst opnieuw geladen is. */
@@ -283,8 +288,15 @@ export function CommunicationPage({
         }));
       }
     }
+    // Telefoongesprekken staan tussen de mail en de tickets, op het moment
+    // waarop ze gevoerd zijn — niet op het moment waarop ze gelogd werden.
+    for (const call of data.clientCalls) {
+      list.push(callConversation(call, {
+        clientName: call.client_id ? (clientById.get(call.client_id)?.name ?? 'Onbekende klant') : null,
+      }));
+    }
     return sortConversations(list);
-  }, [threads, deepThreads, clientThreads, data.tickets, notesByTicket, clientById, ticketUnreadIds, currentUserId, canReadTickets]);
+  }, [threads, deepThreads, clientThreads, data.tickets, data.clientCalls, notesByTicket, clientById, ticketUnreadIds, currentUserId, canReadTickets]);
 
   const range = useMemo(
     () => (period === 'custom' ? { from: customFrom || null, to: customTo || null } : periodRange(period)),
@@ -307,6 +319,7 @@ export function CommunicationPage({
 
   const unreadTotal = useMemo(() => countUnread(conversations), [conversations]);
   const ticketCount = canReadTickets ? data.tickets.length : 0;
+  const callCount = data.clientCalls.length;
   const selected = selectedKey ? conversations.find(c => c.key === selectedKey) ?? null : null;
 
   // Alleen klanten die daadwerkelijk een gesprek of ticket hebben — een filter
@@ -386,13 +399,14 @@ export function CommunicationPage({
   // op "alleen e-mail" of "alleen tickets", dan is er maar één venster te
   // vullen en blijft de lijst één kolom.
   const focusClient = focusClientId ? clientById.get(focusClientId) ?? null : null;
-  const split = Boolean(focusClientId) && canReadTickets && !kindFilter;
-  const { emails: emailVisible, tickets: ticketVisible } = useMemo(() => splitConversations(visible), [visible]);
+  const split = Boolean(focusClientId) && !kindFilter;
+  const { emails: emailVisible, tickets: ticketVisible, calls: callVisible } = useMemo(() => splitConversations(visible), [visible]);
 
   const headSub = ready
     ? [
         `${threads.length} gesprek${threads.length === 1 ? '' : 'ken'}`,
         canReadTickets ? `${ticketCount} ticket${ticketCount === 1 ? '' : 's'}` : null,
+        callCount > 0 ? `${callCount} telefoongesprek${callCount === 1 ? '' : 'ken'}` : null,
         `${unreadTotal} ongelezen`,
         `${inboxCount} niet gekoppeld`,
       ].filter(Boolean).join(' · ')
@@ -481,6 +495,9 @@ export function CommunicationPage({
             {filterCount > 0 && <span className="comm-filter-count">{filterCount}</span>}
           </button>
         </div>}
+        <Button onClick={() => setLogging({ existing: null })} disabled={!canWrite} title="Een telefoongesprek vastleggen">
+          <Phone size={15} /> <span className="btn-label">Gesprek loggen</span>
+        </Button>
         <Button variant="primary" onClick={startCompose} disabled={!canWrite} title="Nieuw bericht aan een klant">
           <SquarePen size={15} /> <span className="btn-label">Nieuw bericht</span>
         </Button>
@@ -499,11 +516,12 @@ export function CommunicationPage({
           className="comm-tabs"
         />
         {tab !== 'inbox' && <div className={`comm-filters${filtersOpen ? ' is-open' : ''}`}>
-          {canReadTickets && <Select className="comm-filter" value={kindFilter} onChange={e => setKindFilter(e.target.value as '' | ConversationKind)} aria-label="Soort">
-            <option value="">Mail en tickets</option>
+          <Select className="comm-filter" value={kindFilter} onChange={e => setKindFilter(e.target.value as '' | ConversationKind)} aria-label="Soort">
+            <option value="">Alle soorten</option>
             <option value="email">Alleen e-mail</option>
-            <option value="ticket">Alleen tickets</option>
-          </Select>}
+            {canReadTickets && <option value="ticket">Alleen tickets</option>}
+            <option value="call">Alleen telefoon</option>
+          </Select>
           <Select className="comm-filter" value={clientFilter} onChange={e => setClientFilter(e.target.value)} aria-label="Filter op klant" searchPlaceholder="Zoek een klant…">
             <option value="">Alle klanten</option>
             {hasNoClient && <option value={NO_CLIENT}>Zonder klant</option>}
@@ -554,13 +572,21 @@ export function CommunicationPage({
                     >
                       {emailVisible.map(item => renderRow(item, true))}
                     </ConversationColumn>
-                    <ConversationColumn
+                    {canReadTickets && <ConversationColumn
                       label="Tickets"
                       icon={TicketIcon}
                       count={ticketVisible.length}
                       empty={`Geen tickets van ${focusClient?.name ?? 'deze klant'}.`}
                     >
                       {ticketVisible.map(item => renderRow(item, true))}
+                    </ConversationColumn>}
+                    <ConversationColumn
+                      label="Telefoon"
+                      icon={Phone}
+                      count={callVisible.length}
+                      empty={`Nog geen gesprekken met ${focusClient?.name ?? 'deze klant'}.`}
+                    >
+                      {callVisible.map(item => renderRow(item, true))}
                     </ConversationColumn>
                   </div>}
                 </>
@@ -607,6 +633,17 @@ export function CommunicationPage({
               onRead={onTicketUnreadChanged}
               onChanged={onChanged}
             />}
+            {!composing && selected?.kind === 'call' && <CallPane
+              key={selected.key}
+              item={selected}
+              client={selected.clientId ? clientById.get(selected.clientId) ?? null : null}
+              organizationId={organizationId}
+              canWrite={canWrite}
+              singlePane={singlePane}
+              onBack={closeDetail}
+              onOpenClient={selected.clientId ? () => onOpenClient(selected.clientId as string) : null}
+              onEdit={() => setLogging({ existing: selected.call })}
+            />}
             {!composing && !selected && <div className="comm-empty">
               <Mail size={28} aria-hidden="true" />
               <strong>Kies een gesprek</strong>
@@ -614,11 +651,21 @@ export function CommunicationPage({
             </div>}
           </div>}
         </div>}
+
+    {logging && <CallLogDialog
+      organizationId={organizationId}
+      data={data}
+      canWrite={canWrite}
+      existing={logging.existing}
+      draft={logging.existing ? null : { clientId: focusClientId }}
+      onClose={() => setLogging(null)}
+      onSaved={() => { onChanged(); }}
+    />}
   </div>;
 }
 
 /**
- * Eén van de twee vensters bij een gekozen klant: een kopje met het aantal en
+ * Eén van de vensters bij een gekozen klant: een kopje met het aantal en
  * daaronder een eigen scrollgebied. Twee scrollgebieden naast elkaar is het
  * hele punt — door de tickets scrollen mag de mail niet verschuiven.
  */
@@ -658,19 +705,24 @@ function ConversationRow({ item, client, active, found, compact = false, onSelec
 }) {
   const unread = item.unread > 0;
   const isTicket = item.kind === 'ticket';
+  const isCall = item.kind === 'call';
+  const inbound = isCall && item.call.direction === 'inbound';
   return <button
     type="button"
-    className={`comm-row${active ? ' active' : ''}${unread ? ' unread' : ''}${isTicket ? ' is-ticket' : ''}${compact ? ' is-compact' : ''}`}
+    className={`comm-row${active ? ' active' : ''}${unread ? ' unread' : ''}${isTicket ? ' is-ticket' : ''}${isCall ? ' is-call' : ''}${compact ? ' is-compact' : ''}`}
     onClick={onSelect}
     aria-current={active ? 'true' : undefined}
   >
     {!compact && (item.clientId
       ? <span className="comm-row-avatar" style={{ background: client?.color || 'var(--bg4)' }} aria-hidden="true">{initials(item.clientName)}</span>
-      : <span className="comm-row-avatar is-plain" aria-hidden="true"><TicketIcon size={16} /></span>)}
+      : <span className="comm-row-avatar is-plain" aria-hidden="true">{isCall ? <Phone size={16} /> : <TicketIcon size={16} />}</span>)}
     <span className="comm-row-body">
       <span className="comm-row-top">
         <span className="comm-row-client">{compact ? item.subject : item.clientName}</span>
         {isTicket && !compact && <span className="comm-row-kind" title="Ticket"><TicketIcon size={11} aria-hidden="true" />Ticket</span>}
+        {isCall && !compact && <span className="comm-row-kind is-call" title={`${callDirectionLabel(item.call.direction)} telefoongesprek`}>
+          {inbound ? <PhoneIncoming size={11} aria-hidden="true" /> : <PhoneOutgoing size={11} aria-hidden="true" />}Telefoon
+        </span>}
         <time className="comm-row-time" dateTime={item.lastAt} title={formatEmailDateTime(item.lastAt)}>{listTime(item.lastAt)}</time>
       </span>
       {!compact && <span className="comm-row-subject">{item.subject}</span>}
@@ -686,6 +738,14 @@ function ConversationRow({ item, client, active, found, compact = false, onSelec
         : <span className="comm-row-badge" title={`${item.unread} ongelezen`}>{item.unread}</span>)}
       {item.hasProblem && <span className="comm-row-problem" title="Een bericht in dit gesprek is niet afgeleverd"><AlertTriangle size={13} /></span>}
       {isTicket && <span className={`comm-row-status tk-status ${item.status}`}>{ticketStatusLabel(item.status)}</span>}
+      {/* Bij een gesprek zegt de afloop wat de status van een ticket zegt: is
+          er gesproken, of is het blijven liggen? Bij "Gesproken" staat de duur
+          er, want dát is de informatie — het woord voegt niets toe. */}
+      {isCall && <span className={`comm-row-status call-outcome ${item.call.outcome}`}>
+        {item.call.outcome === 'answered'
+          ? (item.call.duration_seconds ? callDurationLabel(item.call.duration_seconds) : callOutcomeLabel(item.call.outcome))
+          : callOutcomeLabel(item.call.outcome)}
+      </span>}
     </span>
   </button>;
 }
@@ -957,6 +1017,88 @@ function TicketPane({ item, client, organizationId, currentUserId, canWrite, sin
           onChanged={onChanged}
         />
         {!canWrite && <p className="client-empty-line">Je hebt geen schrijfrechten voor tickets; je kunt de tijdlijn wel lezen.</p>}
+      </article>
+    </div>
+  </>;
+}
+
+/**
+ * Eén telefoongesprek, rechts in beeld. De kop draagt de feiten (met wie, welke
+ * kant op, hoe lang, wanneer), daaronder staat waar het over ging — en dan de
+ * recorder, precies dezelfde component als bij een meeting. Die toont een
+ * bestaande opname met transcript en samenvatting, en laat een nieuwe maken.
+ */
+function CallPane({ item, client, organizationId, canWrite, singlePane, onBack, onOpenClient, onEdit }: {
+  item: CallConversation;
+  client: Client | null;
+  organizationId: string;
+  canWrite: boolean;
+  singlePane: boolean;
+  onBack: () => void;
+  onOpenClient: (() => void) | null;
+  onEdit: () => void;
+}) {
+  const { call } = item;
+  const inbound = call.direction === 'inbound';
+  const dial = telHref(call.phone_e164 ?? call.phone_raw);
+
+  return <>
+    <div className="comm-detail-head">
+      {singlePane && <button type="button" className="chat-icon-btn comm-back" onClick={onBack} aria-label="Terug naar de gesprekken"><ArrowLeft size={18} /></button>}
+      <div className="comm-detail-title">
+        <h3>{item.subject}</h3>
+        <div className="comm-detail-meta">
+          {onOpenClient
+            ? <button type="button" className="comm-client-link" onClick={onOpenClient} title="Open het klantdossier">
+                <span className="comm-row-avatar is-small" style={{ background: client?.color || 'var(--bg4)' }} aria-hidden="true">{initials(item.clientName)}</span>
+                {item.clientName}
+                <ExternalLink size={12} aria-hidden="true" />
+              </button>
+            : <span className="comm-client-link is-static"><Phone size={12} aria-hidden="true" /> Geen klant</span>}
+          <span className="comm-call-direction">
+            {inbound ? <PhoneIncoming size={12} aria-hidden="true" /> : <PhoneOutgoing size={12} aria-hidden="true" />}
+            {callDirectionLabel(call.direction)}
+          </span>
+          <span className={`call-outcome ${call.outcome}`}>{callOutcomeLabel(call.outcome)}</span>
+          {call.outcome === 'answered' && call.duration_seconds ? <span>{callDurationLabel(call.duration_seconds)}</span> : null}
+          <span>{formatEmailDateTime(call.started_at)}</span>
+          {call.phone_e164 && <span className="comm-call-number">{formatPhone(call.phone_e164)}</span>}
+        </div>
+      </div>
+      <div className="comm-detail-actions">
+        {dial && <Button onClick={() => { window.location.href = dial; }} title={`Bel ${callCounterpart(call)} terug`}>
+          <Phone size={14} /> <span className="btn-label">Terugbellen</span>
+        </Button>}
+        <Button variant="primary" onClick={onEdit} disabled={!canWrite} title="Gesprek bewerken">
+          <SquarePen size={14} /> <span className="btn-label">Bewerken</span>
+        </Button>
+      </div>
+    </div>
+
+    <div className="comm-detail-scroll">
+      <article className="client-panel comm-ticket-panel">
+        <div className="client-panel-head"><h3>Met wie</h3></div>
+        <p className="comm-ticket-text">{callCounterpart(call)}</p>
+      </article>
+
+      {call.notes && <article className="client-panel comm-ticket-panel">
+        <div className="client-panel-head"><h3>Aantekening</h3></div>
+        <p className="comm-ticket-text">{call.notes}</p>
+      </article>}
+
+      <article className="client-panel comm-ticket-panel">
+        <div className="client-panel-head"><h3>Opname en samenvatting</h3></div>
+        <MeetingRecorder
+          organizationId={organizationId}
+          canWrite={canWrite}
+          event={{
+            provider: null, sourceId: null, eventRef: null,
+            eventTitle: `Telefoongesprek met ${callCounterpart(call)}`,
+            clientId: call.client_id, projectId: call.project_id,
+            callId: call.id,
+            attendees: [],
+          }}
+        />
       </article>
     </div>
   </>;

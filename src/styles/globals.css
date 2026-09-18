@@ -10681,3 +10681,93 @@ body.ink-sheet-open{overflow:hidden}
 .invoice-inbox-toggle span{display:flex;flex-direction:column;gap:2px}
 .invoice-inbox-toggle small{font-weight:400;font-size:11.6px;line-height:1.5;color:var(--muted2)}
 .nav-submenu button .nav-sub-badge{margin-left:auto;font-size:10px;font-weight:700;min-width:18px;height:18px;padding:0 5px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:var(--accent);color:#1a1200;line-height:1}
+
+/* ── Telefoongesprekken loggen ─────────────────────────────────────────────
+   Het logvenster, de gespreksregel op Berichten, het paneel in het
+   klantdossier en de balk die na een tik op een telefoonlink verschijnt. */
+
+/* Het logvenster mag wat breder dan een standaardvenster: de nummerherkenning
+   en de recorder eronder hebben regels nodig die niet afbreken. */
+.modal.call-log-modal{width:min(620px,calc(100vw - 32px))}
+.call-log-modal .modal-body{display:grid;gap:12px}
+.modal-foot-spacer{flex:1}
+
+/* Richting: twee knoppen die samen één keuze zijn. */
+.call-direction{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:3px;background:var(--bg3);border:1px solid var(--border);border-radius:10px}
+.call-direction-btn{display:flex;align-items:center;justify-content:center;gap:7px;padding:9px 12px;border:0;border-radius:8px;background:transparent;color:var(--muted2);font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
+.call-direction-btn:hover{color:var(--text)}
+.call-direction-btn.is-active{background:var(--bg1);color:var(--text);box-shadow:0 1px 3px rgba(var(--shade-rgb),calc(.35 * var(--shade-k)))}
+
+.call-phone-row{display:flex;gap:8px;align-items:center}
+.call-phone-row .form-input{flex:1;min-width:0}
+
+/* Nummerherkenning. Bij meerdere treffers is dit een keuze en geen mededeling;
+   dat verschil zit in de rand, zodat je het ziet zonder te lezen. */
+.call-matches{display:grid;gap:7px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--bg3)}
+.call-matches.is-choice{border-color:rgba(var(--accent-rgb),.35);background:rgba(var(--accent-rgb),.06)}
+.call-matches-head{font-size:12px;font-weight:600;color:var(--muted2)}
+.call-matches-hint{font-size:11px;color:var(--muted)}
+.call-match-list{display:grid;gap:5px}
+.call-match{display:grid;gap:2px;text-align:left;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg2);cursor:pointer;transition:all .15s}
+.call-match:hover:not(:disabled){border-color:var(--border2);background:var(--bg4)}
+.call-match.is-active{border-color:rgba(var(--accent-rgb),.55);background:rgba(var(--accent-rgb),.1)}
+.call-match:disabled{cursor:not-allowed;opacity:.6}
+.call-match strong{font-size:13px}
+.call-match span{font-size:11px;color:var(--muted)}
+
+/* Gespreksduur: invoer, timer en de klok die meeloopt. */
+.call-duration{display:grid;gap:7px}
+.call-duration-label{font-size:13px}
+.call-duration-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.call-duration-row .form-input{width:92px;flex:0 0 auto}
+.call-duration-unit{font-size:12px;color:var(--muted)}
+.call-duration-clock{margin-left:auto;font-variant-numeric:tabular-nums;font-size:13px;font-weight:600;color:var(--muted2)}
+.call-duration-clock.is-running{color:var(--accent-r)}
+.call-duration-note{margin:0;font-size:11px;color:var(--muted);line-height:1.5}
+
+/* Opnemen — visueel duidelijk een apart blok, want het is een aparte keuze. */
+.call-recording{border:1px solid var(--border);border-radius:12px;padding:12px 14px;background:var(--bg3);display:grid;gap:10px}
+.call-recording-head{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted2)}
+.call-recording-start{display:grid;gap:9px;justify-items:start}
+.call-recording-start p{margin:0;font-size:12px;color:var(--muted2);line-height:1.55}
+.call-recording-hint{font-size:11px;color:var(--muted)}
+
+/* De balk na terugkeer uit een gesprek. Zwevend onderaan, boven de mobiele
+   onderbalk, en smal genoeg om het scherm niet over te nemen. */
+.call-return-prompt{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:2200;display:flex;align-items:center;gap:12px;max-width:min(520px,calc(100vw - 24px));padding:10px 12px 10px 16px;border:1px solid var(--border2);border-radius:14px;background:var(--panel-strong);backdrop-filter:blur(18px);box-shadow:0 14px 44px rgba(var(--shade-rgb),calc(.5 * var(--shade-k)))}
+.call-return-prompt>svg{flex-shrink:0;color:var(--accent-ink)}
+.call-return-text{display:grid;gap:1px;min-width:0;font-size:13px}
+.call-return-text strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.call-return-sub{font-size:11px;color:var(--muted)}
+.call-return-close{border:0;background:transparent;color:var(--muted);font-size:20px;line-height:1;cursor:pointer;padding:0 2px}
+.call-return-close:hover{color:var(--text)}
+@media(max-width:760px){.call-return-prompt{bottom:calc(var(--mobile-bar-h,64px) + 12px);left:12px;right:12px;transform:none;max-width:none}}
+
+/* De gespreksregel op Berichten. */
+.comm-row-kind.is-call{color:var(--accent-ink)}
+.comm-call-direction{display:inline-flex;align-items:center;gap:4px}
+.comm-call-number{font-variant-numeric:tabular-nums}
+/* De afloop staat waar bij een ticket de status staat. "Gesproken" is de
+   normale uitkomst en blijft rustig; wat bleef liggen, vraagt aandacht. */
+.call-outcome{font-size:10px;font-weight:600;padding:4px 9px;border-radius:4px;text-transform:uppercase;letter-spacing:.08em;background:var(--bg4);color:var(--muted2)}
+.call-outcome.answered{background:rgba(var(--ok-rgb),.15);color:var(--accent-g)}
+.call-outcome.missed,.call-outcome.no_answer{background:rgba(var(--warn-rgb),.15);color:var(--accent-o)}
+.call-outcome.failed{background:rgba(var(--danger-rgb),.15);color:var(--accent-r)}
+
+/* Gesprekken in het klantdossier. */
+.client-comm-calls .client-panel-head{gap:10px}
+.client-comm-calls .client-panel-head .btn{margin-left:auto}
+.client-call-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.client-call-row{width:100%;display:flex;align-items:center;gap:11px;text-align:left;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--bg2);cursor:pointer;transition:all .15s}
+.client-call-row:hover:not(:disabled){border-color:var(--border2);background:var(--bg3)}
+.client-call-row:disabled{cursor:default}
+.client-call-icon{display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;border-radius:8px;background:var(--bg4);color:var(--muted2)}
+.client-call-icon.inbound{color:var(--accent-g)}
+.client-call-icon.outbound{color:var(--accent-ink)}
+.client-call-body{display:grid;gap:2px;min-width:0;flex:1}
+.client-call-body strong{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.client-call-meta{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Het telefoonnummer in het klantoverzicht is een belknop. */
+.client-phone-link{color:var(--accent-ink);text-decoration:none;border-bottom:1px solid transparent}
+.client-phone-link:hover{border-bottom-color:currentColor}

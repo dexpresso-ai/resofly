@@ -12,6 +12,7 @@ import type {
   AuditLog,
   Attachment,
   Client,
+  ClientCall,
   ClientContact,
   ClientFieldDefinition,
   DriveShare,
@@ -157,12 +158,13 @@ import type {
   ContractProject,
   Task,
   TaskAssignee,
+  PhoneMatch,
   Ticket,
   TicketNote,
   UUID,
 } from '../types';
 
-const tables = ['clients', 'client_contacts', 'client_field_definitions', 'projects', 'project_templates', 'project_template_tasks', 'tasks', 'project_members', 'task_assignees', 'contract_projects', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'drive_shares', 'galleries', 'gallery_items', 'gallery_favorites', 'gallery_categories', 'gallery_category_presets', 'saved_reports', 'planner_notes', 'company_settings'] as const;
+const tables = ['clients', 'client_contacts', 'client_calls', 'client_field_definitions', 'projects', 'project_templates', 'project_template_tasks', 'tasks', 'project_members', 'task_assignees', 'contract_projects', 'tickets', 'notes', 'documents', 'content_folders', 'quotes', 'invoices', 'ledger_accounts', 'vat_codes', 'suppliers', 'purchase_invoices', 'fixed_assets', 'vat_returns', 'bank_accounts', 'bank_rules', 'attachments', 'drive_shares', 'galleries', 'gallery_items', 'gallery_favorites', 'gallery_categories', 'gallery_category_presets', 'saved_reports', 'planner_notes', 'company_settings'] as const;
 export type Table = typeof tables[number];
 
 type AttachmentRef = Pick<Attachment, 'id' | 'storage_key'>;
@@ -172,6 +174,7 @@ type MembershipRow = OrganizationMember & { organization: Organization | Organiz
 const tableToEntity: Record<Table, EntityType | null> = {
   clients: 'client',
   client_contacts: null,
+  client_calls: null,
   client_field_definitions: null,
   projects: 'project',
   project_templates: null,
@@ -489,6 +492,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
   const [
     clients,
     clientContacts,
+    clientCalls,
     clientFieldDefinitions,
     projects,
     tasks,
@@ -543,7 +547,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     projectTemplateTasks,
     contractProjects,
   ] = await Promise.all([
-    select<Client>('clients', organizationId), selectClientContacts(organizationId), selectClientFieldDefinitions(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
+    select<Client>('clients', organizationId), selectClientContacts(organizationId), selectClientCalls(organizationId), selectClientFieldDefinitions(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
     selectTicketNotes(organizationId), select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectNoteHandwritingSummaries(organizationId), selectCalendarEventLinks(organizationId), selectTimeEntries(organizationId), select<Quote>('quotes', organizationId), selectQuoteApprovalEvents(organizationId), selectQuoteEmailDeliveries(organizationId), selectQuoteVersions(organizationId), select<Invoice>('invoices', organizationId),
     selectInvoiceWorkflowEvents(organizationId), selectInvoiceEmailDeliveries(organizationId), selectInvoicePaymentRecords(organizationId), selectInvoiceVersions(organizationId),
     selectInvoiceRefunds(organizationId), selectCreditNotes(organizationId), selectInvoiceChargebacks(organizationId), selectDunningNotices(organizationId),
@@ -563,7 +567,7 @@ export async function loadAppData(organizationId: UUID): Promise<AppData> {
     selectProjectTemplateTasks(organizationId),
     selectContractProjects(organizationId),
   ]);
-  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings };
+  return { clients, clientContacts, clientCalls, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, ticketNotes, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, timeEntries, quotes, quoteApprovalEvents, quoteEmailDeliveries, quoteVersions, invoices, invoiceWorkflowEvents, invoiceEmailDeliveries, invoicePaymentRecords, invoiceVersions, invoiceRefunds, creditNotes, invoiceChargebacks, dunningNotices, ledgerAccounts, vatCodes, journalEntries, journalLines, closedPeriods, fiscalYears, suppliers, purchaseInvoices, fixedAssets, assetDepreciations, vatReturns, bankAccounts, bankStatements, bankTransactions, bankRules, bankRequisitions, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings };
 }
 
 const CONTRACT_PROJECTS_MIGRATION_HINT =
@@ -1658,6 +1662,13 @@ async function selectOptional<T>(
 
 export const selectClientContacts = (organizationId: UUID) =>
   selectOptional<ClientContact>('client_contacts', organizationId, { orderBy: 'name', ascending: true, hint: CLIENT_CONTACTS_MIGRATION_HINT });
+
+const CLIENT_CALLS_MIGRATION_HINT =
+  'Voer de migratie 20260918020000_client_calls.sql uit in Supabase om telefoongesprekken te kunnen loggen.';
+
+/** Gelogde telefoongesprekken, nieuwste bovenaan (zoals ze in de lijst staan). */
+export const selectClientCalls = (organizationId: UUID) =>
+  selectOptional<ClientCall>('client_calls', organizationId, { orderBy: 'started_at', ascending: false, hint: CLIENT_CALLS_MIGRATION_HINT });
 export const selectClientFieldDefinitions = (organizationId: UUID) =>
   selectOptional<ClientFieldDefinition>('client_field_definitions', organizationId, { orderBy: 'position', ascending: true, hint: CLIENT_FIELD_DEFINITIONS_MIGRATION_HINT });
 
@@ -3156,6 +3167,47 @@ export async function updateClientContact(id: UUID, values: Record<string, unkno
 export async function deleteClientContact(id: UUID, organizationId: UUID): Promise<void> {
   return deleteRow('client_contacts', id, organizationId);
 }
+
+// ── Telefoongesprekken ───────────────────────────────────────────────────────
+
+/**
+ * Legt een gesprek vast. `phone_e164` wordt door de database gevuld (trigger
+ * client_calls_guard), net als de afgeleide duur en het eindtijdstip — één
+ * plek waar die regels staan.
+ */
+export async function createClientCall(organizationId: UUID, values: Record<string, unknown>): Promise<ClientCall> {
+  return insertRow<ClientCall>('client_calls', organizationId, values);
+}
+
+export async function updateClientCall(id: UUID, values: Record<string, unknown>, organizationId: UUID): Promise<ClientCall> {
+  return updateRow<ClientCall>('client_calls', id, values, organizationId);
+}
+
+export async function deleteClientCall(id: UUID, organizationId: UUID): Promise<void> {
+  return deleteRow('client_calls', id, organizationId);
+}
+
+/**
+ * Wie hoort er bij dit telefoonnummer? Vraagt het de database, zodat ook
+ * contacten meetellen die de app niet geladen heeft (leveranciers bij een
+ * grote administratie). Bestaat de functie nog niet — migratie niet gedraaid —
+ * dan een lege lijst: de app valt terug op `matchPhoneLocally` en blijft
+ * gewoon werken.
+ */
+export async function findContactsByPhone(organizationId: UUID, phone: string): Promise<PhoneMatch[]> {
+  const value = phone.trim();
+  if (!value) return [];
+  const { data, error } = await supabase.rpc('find_contacts_by_phone', {
+    p_organization_id: organizationId,
+    p_phone: value,
+  });
+  if (error) {
+    if (/find_contacts_by_phone|schema cache|does not exist|function/i.test(`${error.message} ${error.details ?? ''}`)) return [];
+    throw new Error(error.message);
+  }
+  return (data ?? []) as PhoneMatch[];
+}
+
 
 export async function updateRow<T>(table: Table, id: UUID, values: Record<string, unknown>, organizationId?: UUID): Promise<T> {
   let query = supabase

@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, FileSignature, FileText, Files, FolderOpen, LayoutDashboard, Mail, Receipt, RotateCcw, Search, Ticket as TicketIcon, Upload, Users } from 'lucide-react';
-import type { AppData, Client, ClientEmail, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, InternalDocument, Invoice, Note, Project, Quote, Ticket } from '../types';
+import { ChevronDown, ChevronRight, FileSignature, FileText, Files, FolderOpen, LayoutDashboard, Mail, Phone, PhoneIncoming, PhoneOutgoing, Receipt, RotateCcw, Search, Ticket as TicketIcon, Upload, Users } from 'lucide-react';
+import type { AppData, Client, ClientCall, ClientEmail, ClientEmailThread, ClientFieldDefinition, ClientStatus, Contract, InternalDocument, Invoice, Note, Project, Quote, Ticket } from '../types';
 import { activeFieldDefinitions, customFieldsSearchText, formatCustomFieldValue } from '../components/CustomFields';
 import { dateNL, euro, formatMinutes, minutesToHours, priorityLabel, total } from '../lib/format';
 import { TICKET_STATUS_LABELS, TICKET_STATUS_ORDER, groupNotesByTicket, ticketLastActivity, ticketMatchesStatus } from '../lib/tickets';
 import { listTime } from '../lib/communication';
+import { callCounterpart, callDirectionLabel, callDurationLabel, callOutcomeLabel, callSubject, formatPhone, telHref } from '../lib/calls';
+import { rememberCall } from '../lib/callBridge';
+import { CallLogDialog } from '../components/CallLogDialog';
 import { Button, Input, Select } from '../components/Ui';
 import { DetailTabs } from '../components/DetailTabs';
 import type { DetailTab } from '../components/DetailTabs';
@@ -554,6 +557,9 @@ export function ClientDetailPage({
     { id: 'communication', label: 'Communicatie', count: unreadCount, unread: true, icon: Mail },
   ];
 
+  /** Bellen vanuit het dossier; null als er geen bruikbaar nummer staat. */
+  const clientTelHref = telHref(client.phone);
+
   return <div className="client-detail-page">
     <section className="client-detail-hero">
       <div className="client-detail-title">
@@ -631,7 +637,14 @@ export function ClientDetailPage({
           <dl className="client-info-list">
             <div><dt>Contactpersoon</dt><dd>{client.contact_name || '—'}</dd></div>
             <div><dt>E-mail</dt><dd>{client.email || '—'}</dd></div>
-            <div><dt>Telefoon</dt><dd>{client.phone || '—'}</dd></div>
+            <div><dt>Telefoon</dt><dd>{clientTelHref
+              ? <a
+                  className="client-phone-link"
+                  href={clientTelHref}
+                  onClick={() => rememberCall({ phone: client.phone ?? '', counterpartName: client.contact_name || client.name, clientId: client.id, contactId: null, supplierId: null })}
+                  title="Bellen — daarna vraagt ResoFly of je het gesprek wilt loggen"
+                >{formatPhone(client.phone)}</a>
+              : (client.phone || '—')}</dd></div>
             <div><dt>Adres</dt><dd>{[client.address_line1, client.address_line2, [client.postal_code, client.city].filter(Boolean).join(' '), client.country].filter(Boolean).join(', ') || '—'}</dd></div>
             <div><dt>Btw-nummer</dt><dd>{client.vat_number || '—'}</dd></div>
             <div><dt>KVK</dt><dd>{client.kvk_number || '—'}</dd></div>
@@ -772,7 +785,7 @@ export function ClientDetailPage({
 
     {activeTab === 'contracts' && <ClientContractsCard contracts={contracts} organizationId={organizationId} />}
 
-    {activeTab === 'communication' && <ClientCommunication client={client} organizationId={organizationId} canWrite={canWrite} onUnreadChanged={onUnreadChanged} />}
+    {activeTab === 'communication' && <ClientCommunication client={client} data={data} organizationId={organizationId} canWrite={canWrite} onUnreadChanged={onUnreadChanged} onChanged={onChanged} />}
     {activeTab === 'files' && <ContentLibrary
       data={data}
       organizationId={organizationId}
@@ -831,7 +844,14 @@ function FinancePanel<T extends Quote | Invoice>({
   </article>;
 }
 
-function ClientCommunication({ client, organizationId, canWrite, onUnreadChanged }: { client: Client; organizationId: string; canWrite: boolean; onUnreadChanged?: () => void }) {
+function ClientCommunication({ client, data, organizationId, canWrite, onUnreadChanged, onChanged }: { client: Client; data: AppData; organizationId: string; canWrite: boolean; onUnreadChanged?: () => void; onChanged: () => void }) {
+  /** Het logvenster: `{ existing: null }` is een nieuw gesprek, een rij is bewerken. */
+  const [loggingCall, setLoggingCall] = useState<{ existing: ClientCall | null } | null>(null);
+  const calls = useMemo(
+    () => data.clientCalls.filter(c => c.client_id === client.id).sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at)),
+    [data.clientCalls, client.id],
+  );
+  const clientPhone = telHref(client.phone);
   const [threads, setThreads] = useState<ClientEmailThread[]>([]);
   const [emails, setEmails] = useState<ClientEmail[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -1018,6 +1038,59 @@ function ClientCommunication({ client, organizationId, canWrite, onUnreadChanged
         })}
       </div>
     </article>
+
+    {/* Telefoongesprekken — hetzelfde dossier, dezelfde tijdlijn-gedachte als
+        de mail erboven. Openen brengt je in het logvenster, waar ook de
+        opname, het transcript en de samenvatting staan. */}
+    <article className="client-panel client-comm-calls">
+      <div className="client-panel-head">
+        <h3>Telefoongesprekken</h3>
+        <span>{calls.length}</span>
+        <Button onClick={() => setLoggingCall({ existing: null })} disabled={!canWrite}>
+          <Phone size={14} /> Gesprek loggen
+        </Button>
+      </div>
+      {calls.length === 0
+        ? <div className="client-empty-line">
+            Nog geen gesprekken met deze klant.{clientPhone ? ' Bel via het nummer in het overzicht, dan vraagt ResoFly daarna of je het gesprek wilt loggen.' : ''}
+          </div>
+        : <ul className="client-call-list">
+            {calls.map(call => <li key={call.id}>
+              <button type="button" className="client-call-row" onClick={() => setLoggingCall({ existing: call })} disabled={!canWrite}>
+                <span className={`client-call-icon ${call.direction}`} aria-hidden="true">
+                  {call.direction === 'inbound' ? <PhoneIncoming size={14} /> : <PhoneOutgoing size={14} />}
+                </span>
+                <span className="client-call-body">
+                  <strong>{callSubject(call)}</strong>
+                  <span className="client-call-meta">
+                    {[
+                      callCounterpart(call),
+                      callDirectionLabel(call.direction),
+                      callOutcomeLabel(call.outcome),
+                      call.outcome === 'answered' && call.duration_seconds ? callDurationLabel(call.duration_seconds) : null,
+                    ].filter(Boolean).join(' · ')}
+                  </span>
+                </span>
+                <time className="client-comm-thread-time" dateTime={call.started_at}>{formatEmailDateTime(call.started_at)}</time>
+              </button>
+            </li>)}
+          </ul>}
+      {!canWrite && <p className="client-empty-line">Je hebt geen schrijfrechten om gesprekken te loggen.</p>}
+    </article>
+
+    {loggingCall && <CallLogDialog
+      organizationId={organizationId}
+      data={data}
+      canWrite={canWrite}
+      existing={loggingCall.existing}
+      draft={loggingCall.existing ? null : {
+        clientId: client.id,
+        phone: client.phone ?? '',
+        counterpartName: client.contact_name || client.name,
+      }}
+      onClose={() => setLoggingCall(null)}
+      onSaved={onChanged}
+    />}
   </div>;
 }
 
