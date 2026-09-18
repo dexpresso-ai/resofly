@@ -226,3 +226,46 @@ alsnog — plus een koppeling aan een centrale waarvan nog niet vaststaat welke 
 Voor route B is één ding nodig dat niet in deze codebase te vinden is: **welke
 telefooncentrale er gebruikt wordt.** Dat bepaalt het webhook-contract, of er een
 gespreksopname beschikbaar is, en of nummerherkenning vóór opnemen haalbaar is.
+
+---
+
+## 8 · Zijn er gratis centrales voor Nederland? (aanvulling, 2026-09-18)
+
+"Gratis" valt uiteen in twee kosten: de **centrale-software** en de **telefoonlijn**.
+
+### Gratis centrale-software — ja, volop
+**FreePBX** (Asterisk), **FusionPBX** (FreeSWITCH) en Issabel zijn open source zonder
+licentiekosten. Voor onze koppeling zijn ze eerder sterker dan een commerciële
+cloudcentrale: volledige toegang tot de gespreksgebeurtenissen (Asterisk AMI/ARI,
+FusionPBX o.a. `mod_xml_curl` en webhooks) zonder dat de API achter een
+abonnementsniveau zit. Kosten verschuiven naar een server en onderhoud.
+
+### Gratis cloudcentrale mét bruikbare API — praktisch niet
+**3CX** is het leerzame voorbeeld: er is een gratis tier, maar de CRM-integratie zit
+er juist níét in — de gratis versie kan alleen een URL openen, geen echte
+API-koppeling met templates. Eind 2025 kwam daar een "Basic Edition" bij, óók zonder
+CRM-integraties. Precies het deel dat wij nodig hebben ontbreekt dus. Dat patroon is
+breder: de centrale is goedkoop, de koppeling zit een tier hoger.
+
+### De lijn kost altijd iets, maar weinig
+Uit zoekresultaten (**niet geverifieerd** — de providerpagina's zijn vanuit deze
+omgeving niet bereikbaar, controleer vóór gebruik): CheapConnect adverteert een
+SIP-trunk zonder abonnements- of aansluitkosten met alleen belkosten per seconde;
+VoiceOne vanaf ~€6,50/mnd voor Asterisk/FreePBX; Message To The Moon levert een
+085-nummer gratis bij de trunk.
+
+### Betaald, maar met webhooks inbegrepen
+VOIPZeker (open API + webhooks, vanaf ~€14,50), Callvoip (Realtime API), MaxiTEL
+(API + webhooks), PBXcomplete (~€29,95 voor 20 gebruikers incl. nummer), naast
+Voys/VoIPGRID uit §3. Voor enkele gebruikers onder de €20/mnd — vermoedelijk
+goedkoper dan de onderhoudstijd van een eigen FreePBX.
+
+### Conclusie
+De prijs van de centrale is niet de beslissende factor. De vraag aan een aanbieder is:
+**vuurt hij bij een inkomende oproep én bij het einde van een gesprek een webhook af
+met nummer, richting en duur?** Een gratis FreePBX doet dat beter dan een gratis 3CX.
+
+En praktisch: **route B is te bouwen en te testen zonder enige provider.** FreePBX in
+een container, of een testscript dat het webhook-formaat nabootst, is genoeg om de
+edge function, de nummerherkenning en de opvangbak te valideren. De keuze voor een
+centrale hoeft pas te vallen bij livegang.
