@@ -2998,8 +2998,15 @@ button.chat-member:hover{background:var(--bg3)}
 /* De pagina vult wat er over is van het scherm. Bewust geen eigen hoogtesom
    (100vh min een optelsom van balken): die klopt niet meer zodra er boven de
    pagina iets verandert — en op Berichten laat de app-shell zijn werkbalk nu
-   helemaal weg. Flex rekent het zelf uit, op elk formaat. */
-.content:has(.comm-page){display:flex;flex-direction:column;min-height:0;overflow:hidden;padding-bottom:18px}
+   helemaal weg. Flex rekent het zelf uit, op elk formaat.
+
+   overflow-y staat op auto en niet op hidden. Normaal valt er niets te
+   scrollen (de pagina past precies), maar op een liggende telefoon is het
+   scherm nog geen 360px hoog — en dan moet de lijst bereikbaar blijven in
+   plaats van weggedrukt te worden achter een rand waar je niet langs kunt.
+   .comm-shell heeft daarom ook een bodem: hij krimpt mee tot 140px en daarna
+   scrollt de pagina. */
+.content:has(.comm-page){display:flex;flex-direction:column;min-height:0;overflow-x:hidden;overflow-y:auto;padding-bottom:18px}
 .comm-page{display:flex;flex-direction:column;gap:10px;flex:1;min-height:0;max-width:1500px;margin:0 auto;width:100%}
 /* Zoeken, filteren en de tabbladen staan in één balk helemaal bovenaan — niet
    meer als losse kop boven een tweede strook, en niet meer in de kop van de
@@ -3020,7 +3027,7 @@ button.chat-member:hover{background:var(--bg3)}
    pagina zijwaarts. */
 .comm-topbar-sub .comm-tabs{flex:0 1 auto;min-width:0;max-width:100%}
 .comm-head-sub{color:var(--muted2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.comm-shell{display:flex;flex:1;min-height:0;border:1px solid var(--border);border-radius:var(--r2);overflow:hidden;background:var(--bg2)}
+.comm-shell{display:flex;flex:1;min-height:140px;border:1px solid var(--border);border-radius:var(--r2);overflow:hidden;background:var(--bg2)}
 .comm-list{display:flex;flex-direction:column;width:380px;min-width:300px;max-width:42%;min-height:0;border-right:1px solid var(--border);background:var(--bg2)}
 .comm-search{display:flex;align-items:center;gap:7px;padding:7px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:9px;color:var(--muted)}
 .comm-search:focus-within{border-color:var(--accent);box-shadow:var(--ring)}
@@ -3144,22 +3151,24 @@ button.chat-member:hover{background:var(--bg3)}
      pagina loopt van de werktabs tot de onderbalk en alleen de lijst of het
      gesprek scrolt. React zet `.is-single` en toont dan óf de lijst óf het
      gesprek (zie Communication.tsx). */
-  .content:has(.comm-page){padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+  .content:has(.comm-page){padding:0;overflow-x:hidden;overflow-y:auto;display:flex;flex-direction:column;min-height:0}
   .comm-page{flex:1;height:auto;min-height:0;gap:0;max-width:none}
-  /* Dezelfde balk, maar gestapeld: titel en knop op de eerste regel, het
-     zoekveld daaronder over de volle breedte, dan de tabbladen. */
-  .comm-topbar{padding:8px 12px 6px;border:0;border-radius:0;background:none;gap:8px}
-  .comm-topbar-main{flex-wrap:wrap;gap:10px}
-  .comm-topbar-title{order:1;flex:1;min-width:0}
-  .comm-topbar-title h2{font-size:18px}
-  .comm-topbar-main>.btn{order:2;min-height:36px}
+  /* Zo min mogelijk chrome boven de gesprekken. De werktab bovenaan zegt al
+     "Berichten" met een icoon; die titel er nóg een keer onder zetten kostte
+     een hele regel. Zoeken, filteren en Nieuw bericht delen nu één regel, de
+     tabbladen de volgende. */
+  .comm-topbar{padding:6px 10px;border:0;border-radius:0;background:none;gap:6px}
+  .comm-topbar-main{gap:8px}
+  /* De titel blijft staan voor schermlezers en de paginastructuur, maar neemt
+     geen ruimte meer in beeld. */
+  .comm-topbar-title{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .comm-topbar-main>.btn{min-height:34px;padding:0 11px}
   .comm-topbar-main .btn-label{display:none}
-  .comm-topbar-main .comm-search-row{order:3;flex:1 1 100%}
-  .comm-topbar-sub{gap:8px}
+  .comm-topbar-sub{gap:6px}
   .comm-topbar-sub .comm-tabs{flex:1 1 100%;min-width:0;max-width:100%}
   .comm-topbar-sub .comm-filters{flex:1 1 100%}
   .comm-page .client-tabs-bar{margin:0;width:auto}
-  .comm-page .client-tab-btn{height:34px;padding:0 12px;font-size:12px}
+  .comm-page .client-tab-btn{height:32px;padding:0 11px;font-size:12px}
   .comm-shell{border:0;border-radius:0;border-top:1px solid var(--border)}
   /* Een geopend gesprek vult het scherm; de terugpijl in de gesprekskop
      brengt je terug naar de lijst mét zoekveld, filters en tabbladen. */
@@ -3168,7 +3177,7 @@ button.chat-member:hover{background:var(--bg3)}
   .comm-shell.is-single{flex-direction:column}
   .comm-shell.is-single .comm-list{width:100%;min-width:0;max-width:none;border-right:0;flex:1}
   .comm-shell.is-single .comm-detail{flex:1}
-  .comm-search{padding:9px 12px;border-radius:11px}
+  .comm-search{padding:6px 10px;border-radius:10px}
   .comm-search input{font-size:15px}
   .comm-row{min-height:64px;gap:12px;padding:10px 8px;border-radius:12px}
   .comm-row-client{font-size:14.5px}
@@ -3179,12 +3188,55 @@ button.chat-member:hover{background:var(--bg3)}
   .comm-detail-actions .btn-label{display:none}
   .comm-detail-scroll{padding:12px 12px 20px}
   .comm-inbox-pane{padding:4px 12px 20px}
-  /* Filters achter de schuifjesknop; het zoekveld houdt de bovenste regel. */
-  .comm-filter-toggle{display:inline-flex}
+  /* Filters achter de schuifjesknop; het zoekveld houdt de bovenste regel.
+     Openklappen zette ze als drie keuzelijsten van 52px ín de balk, en duwde
+     daarmee de gesprekken een derde scherm naar beneden — liggend bleef er
+     van de lijst zelfs niets over. Ze hangen nu als paneel ónder de balk: de
+     lijst blijft staan waar hij staat, of je ze nu openklapt of niet, en de
+     tabstrook houdt zijn eigen regel. Twee kolommen, want één is onnodig
+     hoog en drie is niet meer te lezen.
+     z-index 30 blijft ruim onder de keuzelijst zelf (.select-menu, 300), die
+     dus gewoon over het paneel heen openklapt. */
+  .comm-topbar{position:relative}
+  .comm-filter-toggle{display:inline-flex;width:34px}
   .comm-filters{display:none}
-  .comm-filters.is-open{display:flex}
-  .comm-filters .select-control{flex:1 1 100%}
+  .comm-filters.is-open{
+    display:grid;grid-template-columns:1fr 1fr;gap:6px;align-items:start;
+    position:absolute;left:8px;right:8px;top:100%;z-index:30;
+    padding:8px;border:1px solid var(--border2);border-radius:12px;
+    background:var(--bg2);box-shadow:0 20px 44px rgba(var(--shade-rgb),calc(.55 * var(--shade-k)))
+  }
+  .comm-filters .select-control{flex:none;min-width:0}
+  .comm-filters .select-trigger.comm-filter{min-height:34px;padding-top:5px;padding-bottom:5px;font-size:11.5px}
+  .comm-date-range{grid-column:1/-1}
   .comm-row-status{display:none}
+}
+
+/* Een telefoon die je kantelt is geen klein scherm maar een láág scherm: nog
+   geen 360px hoog, waarvan de werktabs en de onderbalk er al 100 pakken. Een
+   balk die daar staand nog prima past, drukt liggend de hele lijst weg. Dus:
+   alles wat op één regel kan, gaat op één regel — de tabbladen en de filters
+   delen er hier eentje, want in de breedte is er juist rúimte. */
+@media(max-height:560px){
+  .comm-topbar{padding:5px 10px;gap:5px}
+  .comm-topbar-title{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .comm-head-sub{display:none}
+  .comm-topbar-main>.btn{min-height:32px}
+  .comm-topbar-sub{flex-wrap:nowrap;gap:6px}
+  .comm-topbar-sub .comm-tabs{flex:0 1 auto;min-width:0;max-width:100%}
+  /* De keuzelijsten krimpen mee in plaats van naar een tweede regel te
+     wikkelen; drie stuks op één regel is hier 40px winst. */
+  .comm-topbar-sub .comm-filters{flex:1 1 auto;min-width:0;justify-content:flex-end;flex-wrap:nowrap}
+  .comm-filters .select-control{flex:1 1 0;min-width:0}
+  .comm-filters .select-trigger.comm-filter{min-height:30px;font-size:11px}
+  .comm-page .client-tab-btn{height:30px;padding:0 10px;font-size:11.5px}
+  .comm-search{padding:5px 10px}
+  .comm-col-head{padding:5px 10px}
+}
+@media(max-height:560px) and (max-width:760px){
+  /* Liggend is elke rij er een: de gesprekken hoeven hier geen 64px hoog te
+     zijn om nog goed aan te tikken. */
+  .comm-row{min-height:0}
 }
 
 /* ── Bank (afschriften inlezen + automatisch journaliseren) ──────────── */

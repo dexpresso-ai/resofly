@@ -34,6 +34,10 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const VIEWPORTS = {
   phone: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, maxChrome: 112 },
   tablet: { viewport: { width: 820, height: 1180 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, maxChrome: 100 },
+  // Dezelfde telefoon, gekanteld. Een laag scherm is een ander probleem dan
+  // een smal scherm: hier gaat de hoogte op aan koppen en balken, en wat
+  // eronder valt is niet te bereiken als de pagina zelf niet mag scrollen.
+  landscape: { viewport: { width: 740, height: 360 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, maxChrome: 112 },
   desktop: { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false, maxChrome: 130 },
 };
 
@@ -42,7 +46,11 @@ const PAGES = {
   dashboard: 'dashboard', gerrie: 'gerrie', weekplanner: 'weekplanner', calendar: 'calendar', time: 'time',
   clients: 'clients', client: { page: 'client', clientId: seed.clients[0].id },
   projects: 'projects', project: { page: 'project', projectId: seed.projects[0].id },
-  'project-planning': 'project-planning', tickets: 'tickets', chat: 'chat', communication: 'communication', marketing: 'marketing',
+  'project-planning': 'project-planning', tickets: 'tickets', chat: 'chat', marketing: 'marketing',
+  // Berichten opent mét de filters uitgeklapt. Dat is de stand waarin de balk
+  // het hoogst is, en precies daar ging het liggend mis: de lijst werd tot
+  // nul samengedrukt achter een rand waar je niet langs kon scrollen.
+  communication: { page: 'communication', prepare: '.comm-filter-toggle' },
   content: 'content', notes: 'notes', documents: 'documents', stats: 'stats',
   'clients-table': { page: 'clients', storage: { 'resofly.clients.viewMode': 'table' } },
   'projects-table': { page: 'projects', storage: { 'resofly.projects.viewMode': 'table' } },
@@ -91,11 +99,12 @@ const FIRST_ITEM = {
   content: { selector: '.odrv-tr', maxTop: 300 },
   // Teamchat opent op de telefoon in de gesprekslijst (één venster tegelijk).
   chat: { selector: '.chat-conv', maxTop: 260 },
-  // Berichten: idem. Sinds 2026-09-18 staan zoeken, filters en de tabbladen in
-  // één balk bovenaan en laat de app-shell zijn eigen werkbalk hier weg; het
-  // eerste gesprek begint daardoor op 206px in plaats van ~250px. De grens
+  // Berichten: idem. De balk met zoeken, filters en tabbladen is in twee
+  // stappen gekrompen — eerst door hem bovenaan te zetten en de werkbalk van
+  // de app hier weg te laten (206px), daarna door de titel aan de tabstrook
+  // over te laten en de filters als paneel te laten zweven (151px). De grens
   // volgt mee, anders meet deze test niets meer.
-  communication: { selector: '.comm-row', maxTop: 250 },
+  communication: { selector: '.comm-row', maxTop: 185 },
   suppliers: { selector: '.supplier-table tbody tr', maxTop: 320 },
   'public-quote': { selector: '.public-lines', maxTop: 560 },
   'public-invoice': { selector: '.public-lines', maxTop: 700 },
@@ -143,6 +152,13 @@ try {
         // Werkruimte: de shell; publieke pagina: de eigen wortel.
         const shell = await page.waitForSelector(isPublic ? '.public-quote-page, .portal, .galv, .login, .pgal' : '.app', { timeout: 20000 }).catch(() => null);
         await page.waitForTimeout(isPublic ? 1200 : 700);
+        // Een pagina die pas in een bepaalde stand krap wordt (een uitgeklapt
+        // filterpaneel) zet die stand hier zelf aan. Staat de knop er niet op
+        // dit formaat, dan gebeurt er niets.
+        if (spec.prepare) {
+          const knop = page.locator(spec.prepare).first();
+          if (await knop.isVisible().catch(() => false)) { await knop.click(); await page.waitForTimeout(250); }
+        }
         const m = await page.evaluate((firstSel) => {
           const box = (sel) => { const el = document.querySelector(sel); if (!el) return 0; const cs = getComputedStyle(el); if (cs.display === 'none') return 0; return Math.round(el.getBoundingClientRect().height); };
           const content = document.querySelector('.content:not([hidden])');
@@ -153,6 +169,27 @@ try {
             pageOverflow: document.documentElement.scrollWidth - window.innerWidth,
             contentOverflow: content ? content.scrollWidth - content.clientWidth : 0,
             firstTop: first ? Math.round(first.getBoundingClientRect().top) : null,
+            // Is het eerste item ook écht te zién? Een kop of filterbalk die
+            // te hoog wordt, kan de lijst tot nul samendrukken terwijl er
+            // verder niets opvalt: geen fout, geen zijwaartse overloop, en de
+            // chrome-meting telt alleen de vaste balken. We scrollen het item
+            // dus eerst in beeld (ook binnen een eigen scrollgebied) en
+            // knippen zijn rechthoek daarna bij op élke voorouder die
+            // afkapt. Blijft er niets over, dan is het item onbereikbaar.
+            firstVisible: first ? (() => {
+              first.scrollIntoView({ block: 'center', inline: 'nearest' });
+              const r = first.getBoundingClientRect();
+              let top = r.top;
+              let bottom = r.bottom;
+              for (let p = first.parentElement; p; p = p.parentElement) {
+                const cs = getComputedStyle(p);
+                if (cs.overflowY === 'visible' && cs.overflowX === 'visible') continue;
+                const pr = p.getBoundingClientRect();
+                top = Math.max(top, pr.top);
+                bottom = Math.min(bottom, pr.bottom);
+              }
+              return Math.round(Math.max(0, Math.min(bottom, window.innerHeight) - Math.max(top, 0)));
+            })() : null,
           };
         }, FIRST_ITEM[key]?.selector ?? null);
         // Publieke pagina's hebben geen .content-wikkel: meet daar op het document.
@@ -163,6 +200,12 @@ try {
         if (errors.length) problems.push(`js-fout: ${errors[0].slice(0, 90)}`);
         if (m.pageOverflow > 1 || m.contentOverflow > 1) problems.push(`horizontale overloop (${Math.max(m.pageOverflow, m.contentOverflow)}px)`);
         if (m.chrome > vp.maxChrome) problems.push(`chrome ${m.chrome}px > ${vp.maxChrome}px`);
+        // Bereikbaarheid geldt op élk formaat — juist liggend, waar de hoogte
+        // schaars is, gaat dit mis. 12px is ruim onder een normale regel en
+        // ruim boven het gerommel van een afrondingsfout.
+        if (FIRST_ITEM[key] && m.firstVisible != null && m.firstVisible < 12) {
+          problems.push(`eerste item (${FIRST_ITEM[key].selector}) is weggedrukt: ${m.firstVisible}px zichtbaar`);
+        }
         const rule = vpName === 'phone' ? FIRST_ITEM[key] : null;
         if (rule) {
           if (m.firstTop == null) problems.push(`eerste item (${rule.selector}) niet gevonden`);
