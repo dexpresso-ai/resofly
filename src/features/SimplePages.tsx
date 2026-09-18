@@ -2,13 +2,14 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Bell, BookOpen, CalendarCog, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
-import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationRole, Project, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
+import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { BRAND_BODY_FONTS, BRAND_FONTS, CLIENT_THEMES, GALLERY_BACKGROUNDS, brandFont, brandStyle, brandThemeVars, ensureBrandFontsLoaded } from '../lib/branding';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setBusinessAddon, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom } from '../lib/repository';
+import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings } from '../lib/repository';
+import { invoiceInboxAddress } from '../lib/invoiceInbox';
 import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
 import { ProjectTemplatesManager } from './ProjectTemplates';
@@ -526,6 +527,206 @@ function InboundForwardingCard({ organizationId, canAdmin }: { organizationId: s
             onClick={() => {
               if (!window.confirm('Een nieuw adres aanmaken? Je oude adres blijft nog 30 dagen werken, maar die berichten komen in de opvangbak in plaats van direct bij de klant. Vergeet niet je doorstuurregel aan te passen.')) return;
               void run(() => rotateInboundAlias(organizationId), 'Nieuw doorstuuradres aangemaakt. Pas je doorstuurregel aan.');
+            }}
+          >
+            Nieuw adres aanmaken
+          </Button>
+        </div>
+      </>}
+  </section>;
+}
+
+// Hoe je facturen op het factuuradres krijgt. Drie wegen, van laagdrempelig
+// naar automatisch; ze sluiten elkaar niet uit.
+const INVOICE_INBOX_ROUTES: { id: string; label: string; steps: string[] }[] = [
+  {
+    id: 'forward',
+    label: 'Zelf doorsturen (geen instelling nodig)',
+    steps: [
+      'Krijg je een factuur in je eigen postvak? Stuur de mail door naar het adres hierboven — met de bijlage.',
+      'Binnen een minuut staat er een concept-inkoopfactuur klaar onder Inkoopfacturen, met de PDF als bewijsstuk.',
+      'Zet het adres in je contacten als “Facturen ResoFly”, dan is doorsturen twee tikken.',
+    ],
+  },
+  {
+    id: 'gmail',
+    label: 'Gmail / Google Workspace: filter met automatisch doorsturen',
+    steps: [
+      'Voeg het adres hierboven eerst toe als doorstuuradres (tandwiel → “Alle instellingen bekijken” → “Doorsturen en POP/IMAP”). Google stuurt een bevestigingscode; die verschijnt hier zodra hij binnen is.',
+      'Maak daarna een filter (zoekbalk → filteropties): bijvoorbeeld “Heeft bijlage” én de woorden factuur OR invoice.',
+      'Kies bij de actie “Doorsturen naar” en selecteer het adres. Alleen mails die aan het filter voldoen gaan door; de rest niet.',
+    ],
+  },
+  {
+    id: 'microsoft',
+    label: 'Microsoft 365 / Outlook.com: regel',
+    steps: [
+      'Open Outlook op het web → tandwiel → “E-mail” → “Regels” → “Nieuwe regel toevoegen”.',
+      'Voorwaarde: bijvoorbeeld “Heeft bijlage” en “Onderwerp bevat” factuur of invoice.',
+      'Actie: “Omleiden naar” het adres hierboven (niet “Doorsturen naar”: bij omleiden blijft de leverancier de afzender, en herkennen we hem op zijn e-mailadres).',
+    ],
+  },
+  {
+    id: 'suppliers',
+    label: 'Rechtstreeks: geef het adres aan je leveranciers',
+    steps: [
+      'Vul het adres in als factuur-e-mailadres bij leveranciers en diensten (hosting, telecom, software-abonnementen).',
+      'Facturen komen dan zonder omweg binnen; UBL-e-facturen (XML) worden exact uitgelezen, zonder AI.',
+      'Krijg je ze liever óók in je eigen postvak? Kies dan een van de doorstuurroutes hierboven.',
+    ],
+  },
+];
+
+function InvoiceInboxCard({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
+  const [alias, setAlias] = useState<OrganizationInboundAlias | null>(null);
+  const [settings, setSettings] = useState<PurchaseInvoiceInboxSettings | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [route, setRoute] = useState('forward');
+
+  const address = invoiceInboxAddress(alias?.local_part);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    Promise.all([loadInboundAlias(organizationId, 'invoices'), loadPurchaseInvoiceInboxSettings(organizationId)])
+      .then(([row, prefs]) => { if (!cancelled) { setAlias(row); setSettings(prefs); setLoaded(true); } })
+      .catch(err => { if (!cancelled) { setError(err instanceof Error ? err.message : 'Factuur-inbox laden mislukt.'); setLoaded(true); } });
+    return () => { cancelled = true; };
+  }, [organizationId]);
+
+  async function run(fn: () => Promise<OrganizationInboundAlias>, okMessage: string) {
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      setAlias(await fn());
+      setMessage(okMessage);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Actie mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggle(key: 'ai_enabled' | 'auto_create_suppliers' | 'auto_book', value: boolean) {
+    if (!settings) return;
+    const previous = settings;
+    setSettings({ ...settings, [key]: value });
+    setError(null); setMessage(null);
+    try {
+      setSettings(await savePurchaseInvoiceInboxSettings(organizationId, { [key]: value }));
+    } catch (err) {
+      setSettings(previous);
+      setError(err instanceof Error ? err.message : 'Instelling opslaan mislukt.');
+    }
+  }
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError('Kopiëren lukte niet. Selecteer het adres en kopieer het handmatig.');
+    }
+  }
+
+  const lastAgeDays = alias?.last_received_at
+    ? (Date.now() - new Date(alias.last_received_at).getTime()) / 86400000
+    : null;
+  const status: 'none' | 'confirm' | 'ok' | 'stale' =
+    alias?.pending_confirmation_code ? 'confirm'
+    : lastAgeDays == null ? 'none'
+    : lastAgeDays > 45 ? 'stale' : 'ok';
+
+  const steps = INVOICE_INBOX_ROUTES.find(r => r.id === route)?.steps ?? [];
+
+  return <section className="settings-card organization-card inbound-alias-card">
+    <div className="settings-card-head">
+      <div>
+        <h3>Inkoopfacturen per e-mail</h3>
+        <p className="settings-help">
+          Stuur (of laat sturen) je inkoopfacturen naar het adres hieronder. Elke factuur wordt uitgelezen — e-facturen (UBL)
+          exact, PDF's en foto's met AI — de leverancier wordt herkend of aangemaakt, dubbele facturen worden tegengehouden en
+          er staat een <strong>concept-inkoopfactuur klaar</strong> met het origineel als bewijsstuk. Boeken doe je zelf met één klik,
+          of automatisch als je dat hieronder aanzet.
+        </p>
+      </div>
+    </div>
+
+    {message && <div className="success">{message}</div>}
+    {error && <div className="error">{error}</div>}
+
+    {!canAdmin ? <p className="settings-help">Alleen owners en admins beheren het factuuradres en de automatisering.</p>
+      : !loaded ? <p className="settings-help">Factuur-inbox laden…</p>
+      : !alias ? <>
+          <p className="settings-help">Er is nog geen factuuradres aangemaakt voor deze organisatie.</p>
+          <Button variant="primary" disabled={busy} onClick={() => run(() => ensureInboundAlias(organizationId, 'invoices'), 'Factuuradres aangemaakt.')}>
+            {busy ? 'Bezig…' : 'Maak mijn factuuradres aan'}
+          </Button>
+        </>
+      : <>
+        <div className="dns-record inbound-alias-address">
+          <div className="dns-record-field grow">
+            <span className="dns-record-label">Jouw factuuradres</span>
+            <code className="dns-record-value">{address}</code>
+          </div>
+          <Button onClick={copy}>{copied ? 'Gekopieerd' : 'Kopieer'}</Button>
+        </div>
+
+        <div className={`inbound-status inbound-status-${status}`}>
+          {status === 'none' && <>Nog geen factuur binnengekomen op dit adres. Stuur er een factuur-mail naartoe om het te testen; hij verschijnt onder Inkoopfacturen.</>}
+          {status === 'confirm' && <>
+            Je provider vraagt eerst om een bevestiging. De code is <strong>{alias.pending_confirmation_code}</strong>.
+            <span className="inbound-status-note">
+              Deze code komt uit een binnengekomen e-mail. Controleer hem in je eigen postvak voordat je hem gebruikt —
+              wij tonen bewust geen klikbare link.
+            </span>
+          </>}
+          {status === 'ok' && <>Werkt. Laatste factuur binnengekomen op {new Date(alias.last_received_at!).toLocaleString('nl-NL')} ({alias.received_total} in totaal).</>}
+          {status === 'stale' && <>Er kwam al ruim zes weken niets binnen op dit adres. Controleer of je doorstuurregel of filter nog aanstaat.</>}
+        </div>
+
+        {settings && <div className="invoice-inbox-settings">
+          <label className="settings-toggle invoice-inbox-toggle" title="Zonder AI worden alleen UBL-e-facturen (XML) automatisch uitgelezen; PDF's en foto's wachten dan op jou.">
+            <input type="checkbox" checked={settings.ai_enabled} disabled={busy} onChange={e => void toggle('ai_enabled', e.target.checked)} />
+            <span>PDF's en foto's met AI uitlezen<small>UBL-e-facturen gaan altijd, exact en zonder AI. De kosten tellen mee in het AI-verbruik van wie het adres aanmaakte.</small></span>
+          </label>
+          <label className="settings-toggle invoice-inbox-toggle" title="Staat dit uit, dan wacht een factuur van een onbekende leverancier tot jij er een kiest of aanmaakt.">
+            <input type="checkbox" checked={settings.auto_create_suppliers} disabled={busy} onChange={e => void toggle('auto_create_suppliers', e.target.checked)} />
+            <span>Onbekende leverancier automatisch aanmaken<small>Alleen als de naam is uitgelezen en de zekerheid niet laag is. Bekende leveranciers worden herkend op BTW-nummer, IBAN, e-mailadres of naam.</small></span>
+          </label>
+          <label className="settings-toggle invoice-inbox-toggle" title="Alleen bij een bekende leverancier, hoge zekerheid, kloppende totalen en een grootboekrekening op elke regel. Anders blijft het een concept.">
+            <input type="checkbox" checked={settings.auto_book} disabled={busy} onChange={e => void toggle('auto_book', e.target.checked)} />
+            <span>Direct boeken als alles klopt<small>Uitsluitend bij een al bekende leverancier (op BTW-nummer, IBAN of e-mail), hoge zekerheid, geen enkele waarschuwing en een grootboekrekening op elke regel. Twijfel = concept.</small></span>
+          </label>
+        </div>}
+
+        <div className="settings-grid compact">
+          <label>Hoe komen je facturen hier terecht?
+            <Select value={route} onChange={e => setRoute(e.target.value)}>
+              {INVOICE_INBOX_ROUTES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+            </Select>
+          </label>
+        </div>
+        <ol className="inbound-steps">
+          {steps.map((step, i) => <li key={i}>{step}</li>)}
+        </ol>
+        <p className="settings-help">
+          Wat er binnenkomt zie je onder Inkoopfacturen, bovenaan bij “Binnengekomen per e-mail”: klaargezette concepten,
+          dubbele facturen en alles wat je aandacht nodig heeft. Mail zonder factuurbestand of van een geblokkeerde afzender
+          wordt niet verwerkt maar blijft zichtbaar.
+        </p>
+
+        <div className="inbound-alias-actions">
+          <Button
+            variant="danger"
+            disabled={busy}
+            onClick={() => {
+              if (!window.confirm('Een nieuw factuuradres aanmaken? Je oude adres blijft nog 30 dagen werken. Vergeet niet je doorstuurregel en je leveranciers bij te werken.')) return;
+              void run(() => rotateInboundAlias(organizationId, 'invoices'), 'Nieuw factuuradres aangemaakt. Werk je doorstuurregel en leveranciers bij.');
             }}
           >
             Nieuw adres aanmaken
@@ -2409,6 +2610,7 @@ export function Settings({
 
     {activeTab === 'email' && <div className="settings-tab-panel">
     {activeOrganization && <InboundForwardingCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
+    {activeOrganization && <InvoiceInboxCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <SendingDomainCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <PersonalSenderCard organizationId={activeOrganization.id} />}
     {activeOrganization && <EmailTemplatesCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}

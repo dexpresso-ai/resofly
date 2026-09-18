@@ -1093,10 +1093,13 @@ export type ClientEmailLinkSource =
   | 'reply_token' | 'header_thread' | 'client_email' | 'client_contact' | 'manual';
 
 export type InboundAliasStatus = 'active' | 'retiring' | 'revoked';
+/** mail = doorgestuurde klantmail (klantdossier); invoices = inkoopfacturen (factuur-inbox). */
+export type InboundAliasPurpose = 'mail' | 'invoices';
 
 export interface OrganizationInboundAlias extends OrgScopedRow {
   local_part: string;
   label: string;
+  purpose: InboundAliasPurpose;
   forward_from_email: string | null;
   status: InboundAliasStatus;
   retires_at: string | null;
@@ -1145,6 +1148,94 @@ export interface InboundMessage extends OrgScopedRow {
   handled_at: string | null;
   purge_after: string | null;
   created_at: string;
+  updated_at: string;
+}
+
+// ── Inkoopfacturen per e-mail: de factuur-inbox ─────────────────────────────
+
+export type PurchaseInvoiceInboxStatus =
+  | 'received' | 'processing' | 'ready' | 'booked' | 'needs_review'
+  | 'duplicate' | 'rejected' | 'failed' | 'dropped';
+
+export type PurchaseInvoiceInboxAttachmentKind = 'document' | 'copy' | 'other' | 'oversized' | 'unsupported' | 'skipped';
+
+export interface PurchaseInvoiceInboxAttachment {
+  name: string;
+  mime_type: string;
+  size_bytes: number;
+  /** R2-sleutel; null als het bestand niet is opgeslagen (te groot, niet ondersteund). */
+  storage_key: string | null;
+  sha256: string | null;
+  kind: PurchaseInvoiceInboxAttachmentKind;
+  note?: string | null;
+}
+
+/** Het uitgelezen voorstel — zelfde vorm als de handmatige factuurscan (ScanProposal). */
+export interface PurchaseInvoiceInboxProposal {
+  supplier: {
+    matchedId: UUID | null;
+    matchedBy: 'vat' | 'iban' | 'email' | 'name' | null;
+    name: string;
+    vat_number: string | null;
+    kvk_number: string | null;
+    iban: string | null;
+    email: string | null;
+  };
+  supplier_invoice_number: string | null;
+  date: string | null;
+  due_date: string | null;
+  currency: string;
+  notes: string | null;
+  confidence: 'high' | 'medium' | 'low';
+  warnings: string[];
+  lines: Array<{ description: string; amount_cents: number; vat_code: string; vat_rate: number; account_id: UUID | null; account_code: string | null }>;
+  totals: { subtotal_cents: number; vat_cents: number; total_cents: number };
+  extracted_totals: { subtotal_cents: number | null; vat_cents: number | null; total_cents: number | null } | null;
+}
+
+export interface PurchaseInvoiceInboxItem {
+  id: UUID;
+  organization_id: UUID;
+  alias_id: UUID | null;
+  parent_id: UUID | null;
+  rfc_message_id: string | null;
+  sender_email: string | null;
+  sender_name: string | null;
+  subject: string;
+  body_excerpt: string | null;
+  received_at: string;
+  attachments: PurchaseInvoiceInboxAttachment[];
+  status: PurchaseInvoiceInboxStatus;
+  reason: string | null;
+  error_message: string | null;
+  method: 'ai' | 'ubl' | null;
+  confidence: 'high' | 'medium' | 'low' | null;
+  warnings: string[];
+  proposal: PurchaseInvoiceInboxProposal | null;
+  extraction_meta: Record<string, unknown> | null;
+  supplier_id: UUID | null;
+  supplier_match: string | null;
+  supplier_created: boolean;
+  purchase_invoice_id: UUID | null;
+  duplicate_of_purchase_invoice_id: UUID | null;
+  duplicate_of_inbox_id: UUID | null;
+  auto_booked: boolean;
+  attempts: number;
+  processed_at: string | null;
+  handled_by: UUID | null;
+  handled_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PurchaseInvoiceInboxSettings {
+  organization_id: UUID;
+  /** PDF's en foto's met AI uitlezen (UBL-e-facturen gaan altijd, zonder AI). */
+  ai_enabled: boolean;
+  /** Onbekende leverancier met voldoende gegevens automatisch aanmaken. */
+  auto_create_suppliers: boolean;
+  /** Direct boeken als álle voorwaarden kloppen. */
+  auto_book: boolean;
   updated_at: string;
 }
 

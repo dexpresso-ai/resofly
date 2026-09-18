@@ -57,3 +57,12 @@ jobs:
         run: |
           deno check supabase/functions/mcp-oauth/index.ts
           deno check supabase/functions/mcp/index.ts
+
+      # De factuur-inbox: mail-inbound (ontvangst), invoice-inbox (knoppen) en
+      # invoice-extract (de handmatige scan deelt de voorstel-opbouw). Geen
+      # van drie raakt _shared/elevenlabs.ts, dus deze zijn veilig te checken.
+      - name: Deno-typecheck factuur-inbox
+        run: |
+          deno check supabase/functions/mail-inbound/index.ts
+          deno check supabase/functions/invoice-inbox/index.ts
+          deno check supabase/functions/invoice-extract/index.ts

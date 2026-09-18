@@ -167,8 +167,13 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
     return handleInternalOfficeConvertPdf(request, env, context);
   }
 
-  // ── Internal media fetch (shared secret) — laat de edge-functie audiobytes
-  //    server-side ophalen voor transcriptie zonder ze via de browser te sturen.
+  // ── Internal media put/fetch (shared secret) — laat een edge-functie
+  //    server-side objecten wegschrijven (bijlagen van de factuur-inbox) en
+  //    ophalen (audio voor transcriptie, factuurbijlagen om uit te lezen)
+  //    zonder ze via de browser te sturen.
+  if (method === 'POST' && pathname === '/internal/media') {
+    return handleInternalUpload(request, env, context);
+  }
   const mediaKey = matchInternalMediaRoute(pathname);
   if (mediaKey) {
     if (method === 'GET') return handleInternalDownload(request, env, context, mediaKey);

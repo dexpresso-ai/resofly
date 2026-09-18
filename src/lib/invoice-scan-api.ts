@@ -33,9 +33,9 @@ export interface ScanProposalLine {
 }
 
 export interface ScanSupplierProposal {
-  /** Gevonden bestaande leverancier (op BTW-nr/IBAN/naam), anders null. */
+  /** Gevonden bestaande leverancier (op BTW-nr/IBAN/e-mail/naam), anders null. */
   matchedId: UUID | null;
-  matchedBy: 'vat' | 'iban' | 'name' | null;
+  matchedBy: 'vat' | 'iban' | 'email' | 'name' | null;
   name: string;
   vat_number: string | null;
   kvk_number: string | null;

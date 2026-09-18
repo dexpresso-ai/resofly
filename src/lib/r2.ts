@@ -19,9 +19,18 @@ export async function downloadAttachment(att: Attachment): Promise<void> {
     window.open(att.public_url, '_blank', 'noopener,noreferrer');
     return;
   }
+  await downloadStoredFile(att.storage_key, att.name);
+}
+
+/**
+ * Download een object op R2 via de geauthenticeerde Worker-route, ook als er
+ * (nog) geen attachments-rij bij hoort — zoals de bijlagen van de factuur-inbox.
+ * De Worker controleert het lidmaatschap van de organisatie uit de sleutel.
+ */
+export async function downloadStoredFile(storageKey: string, fileName: string): Promise<void> {
   const base = getWorkerBase();
   const token = await getAccessToken();
-  const response = await fetch(`${base}/file/${encodeURIComponent(att.storage_key)}`, {
+  const response = await fetch(`${base}/file/${encodeURIComponent(storageKey)}`, {
     headers: { authorization: `Bearer ${token}` },
   });
   if (!response.ok) throw new Error(`Download mislukt (${response.status})`);
@@ -30,7 +39,7 @@ export async function downloadAttachment(att: Attachment): Promise<void> {
   try {
     const a = document.createElement('a');
     a.href = url;
-    a.download = att.name || 'bestand';
+    a.download = fileName || 'bestand';
     document.body.appendChild(a);
     a.click();
     a.remove();

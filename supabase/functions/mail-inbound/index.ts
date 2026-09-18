@@ -1,5 +1,9 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import {
+  InboxProcessingError, isDocumentAttachment, normalizeDocumentMime, processInboxItem,
+  runInBackground, storeInboxAttachment, type InboxAttachment,
+} from '../_shared/invoiceInbox.ts';
 
 // Inkomende e-mail. Drie soorten post komen op het inbound-domein binnen:
 //
@@ -7,6 +11,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 //   organizer+<token>@  RSVP op een agenda-uitnodiging
 //   <alias>@            doorgestuurde klantmail — het doorstuuradres van een
 //                       organisatie (info@fotograaf.nl -> <alias>@inbound...)
+//   facturen-<alias>@   inkoopfacturen — zelfde aliastabel, purpose='invoices';
+//                       gaat naar de factuur-inbox (purchase_invoice_inbox) en
+//                       wordt op de achtergrond uitgelezen en klaargezet
 //
 // KERNREGEL: de organization_id komt UITSLUITEND uit het ontvangeradres, nooit
 // uit de afzender. De oude resolveBySender() zocht over álle organisaties heen
@@ -58,6 +65,8 @@ type AliasRow = {
   alias_status: string;
   forward_from_email: string | null;
   blocked_senders: string[] | null;
+  purpose: 'mail' | 'invoices' | null;
+  created_by: string | null;
 };
 
 serve(async (req) => {
@@ -155,6 +164,13 @@ async function handleInbound(body: Record<string, unknown>): Promise<Record<stri
     }
   }
 
+  // 5b. Factuur-doorstuuradres: eigen route. Geen klantmatching en geen eis
+  // van doorstuurbewijs (leveranciers mogen er rechtstreeks naartoe mailen);
+  // wél de dropregels en de negeerlijst. Een reply-token wint altijd.
+  if (alias && !origin && alias.purpose === 'invoices') {
+    return await handleInvoiceInbound(body, alias, aliasLocalPart, to, headers, subject, text, headerFrom);
+  }
+
   // 6. Kandidatenlijst: de Worker levert de basis, wij vullen aan met het
   // forward-blok, de SRS-decode en de +tag-gestripte varianten.
   const candidates = buildCandidates(body, text, subject, headerFrom);
@@ -232,6 +248,173 @@ async function handleInbound(body: Record<string, unknown>): Promise<Record<stri
 
   // 13. Altijd 200, ook bij parked/dropped/duplicate.
   return (data && typeof data === 'object') ? (data as Record<string, unknown>) : { outcome: 'unknown' };
+}
+
+// ── Factuur-inbox ──────────────────────────────────────────────────────────
+//
+// Vastleggen -> bijlagen naar R2 -> verwerken op de achtergrond. De Worker
+// wacht alleen op het vastleggen en opslaan; het uitlezen (seconden per
+// bijlage) loopt door nadat het antwoord al terug is.
+
+const MAX_INBOX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // zelfde plafond als de handmatige scan
+
+async function handleInvoiceInbound(
+  body: Record<string, unknown>,
+  alias: AliasRow,
+  aliasLocalPart: string,
+  to: string,
+  headers: Record<string, string>,
+  subject: string,
+  text: string,
+  headerFrom: string,
+): Promise<Record<string, unknown>> {
+  const candidates = buildCandidates(body, text, subject, headerFrom);
+  const verdict = classifyInbound(body, headers, 'alias');
+  let dropReason = verdict.dropReason ?? null;
+
+  // Parkregels (bulk, no-reply, auto-generated) gelden hier bewust NIET:
+  // facturen komen juist vaak van no-reply-adressen en uit boekhoudsystemen.
+  if (!dropReason) {
+    const blocked = (alias.blocked_senders ?? []).map((v) => v.toLowerCase());
+    if (candidates.some((c) => blocked.includes(c.address) || blocked.includes(domainOf(c.address)))) dropReason = 'blocked';
+  }
+
+  const html = typeof body.html === 'string' ? body.html : '';
+  const bodyText = text ? text : (html ? htmlToText(html) : '');
+  const messageId = String(body.messageId || '').trim();
+  const rawHash = String(body.rawHash || '').trim();
+  const dedupKey = buildDedupKey(to || aliasLocalPart, messageId, rawHash);
+  const best = candidates[0] ?? null;
+
+  const { data, error } = await supabaseAdmin.rpc('register_purchase_invoice_inbox', {
+    p_payload: {
+      organization_id: alias.organization_id,
+      alias_id: alias.alias_id,
+      dedup_key: dedupKey,
+      recipient: to || aliasLocalPart,
+      rfc_message_id: messageId || null,
+      sender_email: best?.address ?? null,
+      sender_name: best?.name || String(body.headerFromName || '') || null,
+      subject,
+      body_excerpt: bodyText.slice(0, 4000),
+      received_at: parseDate(body.receivedAt) || new Date().toISOString(),
+      drop_reason: dropReason,
+    },
+  });
+  if (error) throw error;
+  const outcome = (data && typeof data === 'object' ? data : {}) as { outcome?: string; inbox_id?: string; reason?: string };
+  if (outcome.outcome !== 'registered' && outcome.outcome !== 'retry') {
+    return { route: 'invoices', ...outcome };
+  }
+  const inboxId = String(outcome.inbox_id || '');
+  if (!inboxId) return { route: 'invoices', outcome: 'unknown' };
+
+  // Bijlagen naar R2. Mislukt dat, dan blijft de rij zichtbaar als 'failed':
+  // de bytes zijn dan weg en de gebruiker moet de mail opnieuw doorsturen.
+  // We bouncen bewust niet (zie de kernregel bovenaan).
+  let attachments: InboxAttachment[];
+  try {
+    attachments = await storeInvoiceAttachments(alias.organization_id, inboxId, body);
+  } catch (err) {
+    const reason = err instanceof InboxProcessingError ? err.reason : 'storage_failed';
+    console.error('mail-inbound: bijlagen opslaan mislukt', errMsg(err));
+    await supabaseAdmin.from('purchase_invoice_inbox')
+      .update({ status: 'failed', reason, error_message: errMsg(err).slice(0, 1000), processed_at: new Date().toISOString() })
+      .eq('id', inboxId);
+    return { route: 'invoices', outcome: 'failed', reason, inbox_id: inboxId };
+  }
+
+  const hasDocument = attachments.some((a) => a.kind === 'document' && a.storage_key);
+  if (!hasDocument) {
+    // Wel bijlagen genoemd maar niets meegekregen: dat is een oude Worker, geen
+    // lege mail. En een mail boven de parse-limiet van de Worker heeft z'n
+    // bijlagen nooit gezien.
+    const missing = attachments.some((a) => a.kind === 'skipped' && a.note?.includes('niet meegestuurd'));
+    const reason = body.truncated ? 'oversized' : missing ? 'attachments_missing' : 'no_attachment';
+    await supabaseAdmin.from('purchase_invoice_inbox')
+      .update({ attachments, status: 'needs_review', reason, processed_at: new Date().toISOString() })
+      .eq('id', inboxId);
+    return { route: 'invoices', outcome: 'parked', reason, inbox_id: inboxId };
+  }
+
+  const { error: updateError } = await supabaseAdmin.from('purchase_invoice_inbox')
+    .update({ attachments }).eq('id', inboxId);
+  if (updateError) throw updateError;
+
+  await runInBackground(processInboxItem(supabaseAdmin, inboxId, {}), 'mail-inbound');
+  return { route: 'invoices', outcome: outcome.outcome, inbox_id: inboxId, attachments: attachments.length };
+}
+
+/**
+ * Zet de meegestuurde bijlagen (base64, alleen factuurachtige bestanden) op R2
+ * en beschrijft álle bijlagen van de mail, ook die niet zijn meegekomen.
+ */
+async function storeInvoiceAttachments(
+  organizationId: string,
+  inboxId: string,
+  body: Record<string, unknown>,
+): Promise<InboxAttachment[]> {
+  const files = Array.isArray(body.attachments) ? (body.attachments as Array<Record<string, unknown>>) : [];
+  const meta = Array.isArray(body.attachmentMeta) ? (body.attachmentMeta as Array<Record<string, unknown>>) : [];
+  const out: InboxAttachment[] = [];
+
+  // Oude Worker-payload: alleen namen. Dan weten we dat er bijlagen wáren.
+  if (meta.length === 0 && files.length === 0) {
+    const names = Array.isArray(body.attachmentNames) ? body.attachmentNames.map(String) : [];
+    for (const name of names) {
+      out.push({ name, mime_type: 'application/octet-stream', size_bytes: 0, storage_key: null, sha256: null,
+        kind: isDocumentAttachment(name, '') ? 'skipped' : 'other',
+        note: isDocumentAttachment(name, '') ? 'Bijlage niet meegestuurd door de Email Worker (oude versie).' : null });
+    }
+    return out;
+  }
+
+  const fileByIndex = new Map<number, Record<string, unknown>>();
+  for (const f of files) fileByIndex.set(Number(f.index), f);
+
+  for (const m of meta) {
+    const name = String(m.filename || 'bijlage').slice(0, 200);
+    const declaredMime = String(m.mimeType || '').toLowerCase();
+    const size = Number(m.size) || 0;
+    if (m.inline === true) continue; // handtekening-logo's e.d.
+    const file = fileByIndex.get(Number(m.index));
+    const documentLike = isDocumentAttachment(name, declaredMime);
+
+    if (file && typeof file.dataBase64 === 'string' && file.dataBase64) {
+      let bytes: Uint8Array;
+      try {
+        bytes = base64ToBytesSafe(file.dataBase64);
+      } catch {
+        out.push({ name, mime_type: declaredMime, size_bytes: size, storage_key: null, sha256: null, kind: 'skipped', note: 'Bijlage kon niet gedecodeerd worden.' });
+        continue;
+      }
+      if (bytes.byteLength > MAX_INBOX_ATTACHMENT_BYTES) {
+        out.push({ name, mime_type: declaredMime, size_bytes: bytes.byteLength, storage_key: null, sha256: null, kind: 'oversized', note: 'Groter dan 10 MB; niet opgeslagen.' });
+        continue;
+      }
+      const mime = normalizeDocumentMime(name, declaredMime);
+      const stored = await storeInboxAttachment(organizationId, inboxId, { name, mimeType: mime, bytes });
+      out.push({ name, mime_type: mime, size_bytes: bytes.byteLength, storage_key: stored.storage_key, sha256: stored.sha256,
+        kind: documentLike ? 'document' : 'other', note: null });
+      continue;
+    }
+
+    if (m.oversized === true) {
+      out.push({ name, mime_type: declaredMime, size_bytes: size, storage_key: null, sha256: null, kind: 'oversized', note: 'Te groot om mee te sturen; niet opgeslagen.' });
+    } else if (documentLike) {
+      out.push({ name, mime_type: declaredMime, size_bytes: size, storage_key: null, sha256: null, kind: 'skipped', note: 'Bijlage niet meegestuurd door de Email Worker.' });
+    } else {
+      out.push({ name, mime_type: declaredMime, size_bytes: size, storage_key: null, sha256: null, kind: 'unsupported', note: 'Geen factuurbestand (alleen PDF, XML en afbeeldingen worden uitgelezen).' });
+    }
+  }
+  return out.slice(0, 50);
+}
+
+function base64ToBytesSafe(b64: string): Uint8Array {
+  const binary = atob(b64.replace(/\s+/g, ''));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 // ── Transport ──────────────────────────────────────────────────────────────
