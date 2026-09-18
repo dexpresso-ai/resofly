@@ -280,6 +280,28 @@ export const tables = {
     { id: uid('o'), ...base(), client_id: clients[0].id, name: 'Joost Vermeer', email: 'joost@dekorenaar.nl', phone: '06-11223344', role: 'Eigenaar', gives_portal_access: true, is_active: true },
     { id: uid('o'), ...base(), client_id: clients[0].id, name: 'Anja Vermeer', email: 'anja@dekorenaar.nl', phone: null, role: 'Marketing', gives_portal_access: false, is_active: true },
   ],
+  client_calls: [
+    {
+      id: uid('q'), ...base(), client_id: clients[0].id, contact_id: null, supplier_id: null,
+      project_id: null, ticket_id: null, counterpart_name: 'Joost Vermeer',
+      phone_raw: '06-11223344', phone_e164: '+31611223344',
+      direction: 'outbound', outcome: 'answered',
+      started_at: iso(day(-1)), ended_at: iso(day(-1)), duration_seconds: 252,
+      subject: 'Offerte doorgenomen', notes: 'Wil de levering een week opschuiven; nieuwe offerte volgt.',
+      source: 'manual', provider: null, provider_call_id: null, dedup_key: null,
+      follow_up_task_id: null, metadata: {},
+    },
+    {
+      id: uid('q'), ...base(), client_id: null, contact_id: null, supplier_id: null,
+      project_id: null, ticket_id: null, counterpart_name: null,
+      phone_raw: '+31201234567', phone_e164: '+31201234567',
+      direction: 'inbound', outcome: 'missed',
+      started_at: iso(day(0)), ended_at: null, duration_seconds: 0,
+      subject: '', notes: null,
+      source: 'manual', provider: null, provider_call_id: null, dedup_key: null,
+      follow_up_task_id: null, metadata: {},
+    },
+  ],
   client_field_definitions: [], projects, tasks, tickets, ticket_notes: [
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'client', author_user_id: null, author_name: 'Maria Jansen', body: 'Vooral op de pagina met afspraken duurt het lang.', is_internal: false },
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'user', author_user_id: USER, author_name: 'Gerjan', body: 'We kijken naar de afbeeldingen, die zijn te groot.', is_internal: true },

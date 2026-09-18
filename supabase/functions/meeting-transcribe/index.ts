@@ -1,6 +1,11 @@
 // ============================================================
 // meeting-transcribe — opname -> ElevenLabs Scribe -> Claude-notulen.
 //
+// Bedient twee soorten opnames met exact dezelfde pijplijn: een afspraak uit
+// de agenda, en sinds 18 september een telefoongesprek (client_calls). Het
+// verschil zit alleen in de modulepoort: een gespreksopname valt onder
+// Klanten, een afspraakopname onder Agenda. Zie resolveModuleKey().
+//
 // Acties (alle POST, Supabase JWT + org-toegang):
 //  - create    : maak een opname-rij aan (AVG-toestemming verplicht) -> { id }
 //  - start     : koppel de R2-audio, stuur naar Scribe. Webhook-modus -> status
@@ -56,9 +61,9 @@ Deno.serve(async (req) => {
 
     const user = await requireUser(admin, req);
     const role = await requireOrganizationAccess(admin, user.id, organizationId);
-    // Meeting-opnames hangen aan de Agenda-module. Lezen mag met leesrecht;
-    // de acties zelf controleren hieronder al op de schrijfrol.
-    await assertModuleAccess(admin, user.id, organizationId, 'calendar', 'read');
+    // Een afspraakopname hangt aan Agenda, een gespreksopname aan Klanten.
+    // Lezen mag met leesrecht; de acties zelf controleren op de schrijfrol.
+    await assertModuleAccess(admin, user.id, organizationId, await resolveModuleKey(organizationId, action, body), 'read');
 
     switch (action) {
       case 'create': return cors.json(req, await createRecording(organizationId, user.id, role, body));
@@ -87,18 +92,33 @@ async function createRecording(organizationId: string, userId: string, role: Org
   if (provider && !['google', 'microsoft', 'native'].includes(provider)) throw new HttpError('Ongeldige provider.', 400);
   const clientId = body.clientId ? String(body.clientId) : null;
   const projectId = body.projectId ? String(body.projectId) : null;
+  const callId = body.callId ? String(body.callId) : null;
   if (clientId && !isUuid(clientId)) throw new HttpError('Ongeldige klant-id.', 400);
   if (projectId && !isUuid(projectId)) throw new HttpError('Ongeldige project-id.', 400);
+  if (callId && !isUuid(callId)) throw new HttpError('Ongeldige gesprek-id.', 400);
+
+  // Hoort de opname bij een gesprek, dan moet dat gesprek van deze organisatie
+  // zijn — anders zou een opname aan andermans dossier gehangen kunnen worden.
+  if (callId) {
+    const { data: callRow } = await admin.from('client_calls')
+      .select('id').eq('id', callId).eq('organization_id', organizationId).maybeSingle();
+    if (!callRow) throw new HttpError('Gesprek niet gevonden in deze organisatie.', 404);
+  }
 
   const { data, error } = await admin.from('meeting_recordings').insert({
     organization_id: organizationId,
     created_by: userId,
-    provider,
-    source_id: body.sourceId && isUuid(String(body.sourceId)) ? String(body.sourceId) : null,
-    event_ref: body.eventRef ? String(body.eventRef).slice(0, 512) : null,
+    // Een gespreksopname hangt aan het gesprek en nergens anders aan: de
+    // agenda-velden gaan bewust op null. Zonder dit zou een teamlid met alleen
+    // de module Klanten via callId + eventRef alsnog een opname-rij op
+    // andermans agenda-item kunnen zetten.
+    provider: callId ? null : provider,
+    source_id: !callId && body.sourceId && isUuid(String(body.sourceId)) ? String(body.sourceId) : null,
+    event_ref: !callId && body.eventRef ? String(body.eventRef).slice(0, 512) : null,
     event_title_snapshot: body.eventTitle ? String(body.eventTitle).slice(0, 300) : null,
     client_id: clientId,
     project_id: projectId,
+    call_id: callId,
     consent_given: true,
     consent_at: new Date().toISOString(),
     status: 'uploaded',
@@ -265,6 +285,34 @@ async function deleteRecording(organizationId: string, role: Awaited<ReturnType<
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Welke module bewaakt deze aanvraag? Een opname bij een telefoongesprek valt
+ * onder Klanten, een opname bij een afspraak onder Agenda.
+ *
+ * ALLEEN bij 'create' mag de body dit bepalen — daar bestaat de opname nog
+ * niet. Bij elke andere actie beslist de opname-rij zelf, en wordt `callId` uit
+ * de body genegeerd.
+ *
+ * Dat onderscheid is de hele poort. Zou de body ook bij 'delete' of
+ * 'sendSummary' meetellen, dan stuurt iemand met alleen de module Klanten een
+ * willekeurige `callId` mee naast de `recordingId` van een AGENDA-opname, en
+ * loopt hij zo langs het Agenda-recht heen — hij zou andermans notulen kunnen
+ * mailen of verwijderen. De extra lookup is de prijs van een poort die niet te
+ * omzeilen is door een veld toe te voegen of weg te laten.
+ */
+async function resolveModuleKey(organizationId: string, action: string, body: Record<string, unknown>): Promise<'clients' | 'calendar'> {
+  const recordingId = body.recordingId ? String(body.recordingId) : '';
+  if (isUuid(recordingId)) {
+    const { data } = await admin.from('meeting_recordings')
+      .select('call_id').eq('id', recordingId).eq('organization_id', organizationId).maybeSingle();
+    return data?.call_id ? 'clients' : 'calendar';
+  }
+  // Geen bestaande opname: alleen dan telt wat de body zegt, en alleen bij
+  // 'create' — de enige actie die zonder recordingId hoort te werken.
+  if (action === 'create' && body.callId) return 'clients';
+  return 'calendar';
+}
 
 async function loadRecording(organizationId: string, recordingId: string) {
   const { data, error } = await admin.from('meeting_recordings')

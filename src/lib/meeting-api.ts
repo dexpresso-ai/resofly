@@ -14,6 +14,12 @@ export interface CreateRecordingInput {
   eventTitle?: string | null;
   clientId?: UUID | null;
   projectId?: UUID | null;
+  /**
+   * Gevuld als deze opname bij een telefoongesprek hoort in plaats van bij een
+   * agenda-item. De pijplijn erachter is exact dezelfde; alleen de modulepoort
+   * verschuift van Agenda naar Klanten.
+   */
+  callId?: UUID | null;
 }
 
 async function invoke<T>(organizationId: UUID, body: Record<string, unknown>): Promise<T> {
@@ -100,6 +106,25 @@ export async function getRecording(recordingId: UUID): Promise<MeetingRecording 
   const { data, error } = await supabase.from('meeting_recordings').select('*').eq('id', recordingId).maybeSingle();
   if (error) throw new Error(error.message);
   return (data as MeetingRecording | null) ?? null;
+}
+
+/** Alle opnames die aan één telefoongesprek hangen. */
+export async function listRecordingsForCall(organizationId: UUID, callId: UUID): Promise<MeetingRecording[]> {
+  const { data, error } = await supabase.from('meeting_recordings').select('*')
+    .eq('organization_id', organizationId).eq('call_id', callId)
+    .order('created_at', { ascending: false });
+  // De kolom bestaat nog niet (migratie niet gedraaid): geen opnames, geen fout.
+  //
+  // Bewust op de FOUTCODE en niet op de tekst: 42703 is "kolom bestaat niet",
+  // PGRST204 is dezelfde constatering uit de schema-cache van PostgREST. Een
+  // match op het woord "column" zou ook een rechtenfout of een dubbelzinnige
+  // kolomverwijzing opslokken, en dan verdwijnt een bestaande opname — mét
+  // transcript en samenvatting — stilletjes uit beeld als "geen opnames".
+  if (error) {
+    if (error.code === '42703' || error.code === 'PGRST204') return [];
+    throw new Error(error.message);
+  }
+  return (data as MeetingRecording[]) ?? [];
 }
 
 /** Alle opnames die aan een agenda-item hangen (provider + event-referentie). */

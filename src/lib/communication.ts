@@ -1,4 +1,4 @@
-import type { ClientEmailThreadOverview, Priority, Ticket, TicketNote, TicketStatus } from '../types';
+import type { ClientCall, ClientEmailThreadOverview, Priority, Ticket, TicketNote, TicketStatus } from '../types';
 
 /**
  * Pure hulpfuncties voor de pagina Berichten: de gesprekkenlijst (klantmail én
@@ -11,8 +11,8 @@ import type { ClientEmailThreadOverview, Priority, Ticket, TicketNote, TicketSta
 /** De drie tabbladen van de pagina: alles, alleen ongelezen, en de opvangbak. */
 export type CommunicationTab = 'all' | 'unread' | 'inbox';
 
-/** Waar een gesprek vandaan komt: een mailwisseling of een ticket met tijdlijn. */
-export type ConversationKind = 'email' | 'ticket';
+/** Waar een gesprek vandaan komt: een mailwisseling, een ticket met tijdlijn, of een telefoongesprek. */
+export type ConversationKind = 'email' | 'ticket' | 'call';
 
 interface ConversationBase {
   /** Unieke sleutel over beide soorten heen: `email:<threadId>` of `ticket:<ticketId>`. */
@@ -48,7 +48,12 @@ export interface TicketConversation extends ConversationBase {
   priority: Priority;
 }
 
-export type Conversation = EmailConversation | TicketConversation;
+export interface CallConversation extends ConversationBase {
+  kind: 'call';
+  call: ClientCall;
+}
+
+export type Conversation = EmailConversation | TicketConversation | CallConversation;
 
 /** Waarde in het klantfilter voor "alleen tickets zonder klant". */
 export const NO_CLIENT = '__none__';
@@ -226,16 +231,21 @@ export function searchSnippet(text: string | null | undefined, words: readonly s
 }
 
 /**
- * De gesprekken van één klant in twee vensters: de mailwisselingen links, de
- * tickets rechts. Beide houden de volgorde die de lijst al had (nieuwste
- * activiteit bovenaan), zodat je in allebei de vensters op dezelfde manier
- * terugleest.
+ * De gesprekken van één klant in aparte vensters: de mailwisselingen, de
+ * tickets en de telefoongesprekken. Alle drie houden de volgorde die de lijst
+ * al had (nieuwste activiteit bovenaan), zodat je in elk venster op dezelfde
+ * manier terugleest.
  */
-export function splitConversations<T extends Conversation>(items: readonly T[]): { emails: T[]; tickets: T[] } {
+export function splitConversations<T extends Conversation>(items: readonly T[]): { emails: T[]; tickets: T[]; calls: T[] } {
   const emails: T[] = [];
   const tickets: T[] = [];
-  for (const item of items) (item.kind === 'ticket' ? tickets : emails).push(item);
-  return { emails, tickets };
+  const calls: T[] = [];
+  for (const item of items) {
+    if (item.kind === 'ticket') tickets.push(item);
+    else if (item.kind === 'call') calls.push(item);
+    else emails.push(item);
+  }
+  return { emails, tickets, calls };
 }
 
 /** Totaal aantal ongelezen over alle gesprekken (mail-berichten plus tickets met nieuwe klant-activiteit). */

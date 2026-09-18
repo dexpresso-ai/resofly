@@ -151,6 +151,8 @@ import { applyPeriodLocally, applyPlanningLocally, applyTimeLocally, clockLabel,
 import { formatISODate, parseISODate, startOfWeek } from './lib/dates';
 import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat } from './components/GerrieChat';
+import { CallLogDialog, CallReturnPrompt } from './components/CallLogDialog';
+import { watchForReturn, type FinishedCall } from './lib/callBridge';
 import { GerrieCommandCenter } from './features/GerrieCommandCenter';
 import type { GerrieActionHandlers, GerrieProposal } from './lib/gerrie-api';
 import { runRegistryAction } from './lib/actions';
@@ -177,7 +179,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id' | 'notes' | 'due_date' | 'lines'>> }
   | null;
 
-const emptyData: AppData = { clients: [], clientContacts: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], noteHandwriting: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null };
+const emptyData: AppData = { clients: [], clientContacts: [], clientCalls: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], noteHandwriting: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null, creativeStatus: null, businessStatus: null };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 /** Volgnummer voor sprongen naar de pagina Berichten (zie openCommunication). */
@@ -646,6 +648,13 @@ function App() {
   }, [page]);
   /** Het document dat in de editor openstaat — drijft de "Downloaden"-knop (native formaat). */
   const [officeDoc, setOfficeDoc] = useState<InternalDocument | null>(null);
+  // Terug uit een telefoongesprek. `returnedCall` is de vraag ("gesprek
+  // loggen?"), `callDraft` het venster dat daarop volgt. Twee aparte waarden,
+  // zodat wegklikken van de vraag niet hetzelfde is als het venster sluiten.
+  const [returnedCall, setReturnedCall] = useState<FinishedCall | null>(null);
+  const [callDraft, setCallDraft] = useState<FinishedCall | null>(null);
+  useEffect(() => watchForReturn(setReturnedCall), []);
+
   // Mobiel uitschuifmenu (drawer). Op laptop/desktop is de zijbalk een iconenbalk
   // die bij hover openschuift; dit stuurt alleen het mobiele gedrag (≤760px) aan.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -703,6 +712,9 @@ function App() {
     organizationId: activeOrganization?.id ?? null,
     currentUserId,
     resolveClientName: (clientId) => data.clients.find(c => c.id === clientId)?.name ?? '',
+    // Gesprekken zitten in AppData: een gesprek dat een collega logt, is er pas
+    // na een herlaadronde. Stil op de achtergrond, zonder laadscherm.
+    onCallsChanged: () => { void refresh(); },
   });
 
   // De beslislijst: badge op de menuregel Gerrie + toast zodra Gerrie een kaart klaarzet.
@@ -2892,6 +2904,34 @@ function App() {
       ))}
     </main>
     <GerrieChat organizationId={activeOrg.id} {...gerrieActions} />
+    {/* Terug uit een gesprek: één regel met de vraag of het gelogd moet worden.
+        Overal in de app, want je komt terug op de pagina waar je was — niet
+        per se op de pagina waar je op "bellen" tikte. */}
+    {returnedCall && !callDraft && <CallReturnPrompt
+      name={returnedCall.counterpartName}
+      phone={returnedCall.phone}
+      awaySeconds={returnedCall.awaySeconds}
+      onLog={() => { setCallDraft(returnedCall); setReturnedCall(null); }}
+      onDismiss={() => setReturnedCall(null)}
+    />}
+    {callDraft && <CallLogDialog
+      organizationId={activeOrg.id}
+      data={data}
+      canWrite={orgCanWrite && permissions.canWrite('clients')}
+      draft={{
+        direction: 'outbound',
+        source: 'click_to_call',
+        phone: callDraft.phone,
+        counterpartName: callDraft.counterpartName,
+        clientId: callDraft.clientId,
+        contactId: callDraft.contactId,
+        supplierId: callDraft.supplierId,
+        startedAt: callDraft.startedAt,
+        proposedSeconds: callDraft.awaySeconds,
+      }}
+      onClose={() => setCallDraft(null)}
+      onSaved={refresh}
+    />}
     {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeDoc(null); refresh(); }} onDownload={officeDoc ? downloadOfficeDoc : undefined} />}
     {officeOpening && !officeSession && <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 2100, background: 'var(--panel-strong)', border: '1px solid var(--border2)', borderRadius: 10, padding: '8px 14px', fontWeight: 600 }}>Editor openen…</div>}
     {/* Zwevend teamchat-paneel — overal beschikbaar, behalve op de volledige chatpagina. */}
