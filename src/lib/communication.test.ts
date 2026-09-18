@@ -160,16 +160,19 @@ test('periodRange: vandaag, deze week (vanaf maandag), deze maand, 30 dagen en d
 
 test('searchSnippet: een stukje rond de eerste treffer, uit de originele tekst, met puntjes waar geknipt is', () => {
   const text = 'Beste Joost, hierbij de offerte voor de nieuwe lichtbak aan de gevel. We rekenen op levering in oktober. Groet, Studio';
-  const snippet = searchSnippet(text, ['lichtbak'], 20);
+  const snippet = searchSnippet(text, ['lichtbak'], 20, 20);
   assert.ok(snippet, 'er hoort een snippet te zijn');
   assert.ok(snippet.includes('lichtbak'), snippet);
   assert.ok(snippet.startsWith('…') && snippet.endsWith('…'), snippet);
   assert.equal(searchSnippet(text, ['factuur']), null);
   assert.equal(searchSnippet('', ['x']), null);
   // Accenten: gezocht zonder, getoond mét.
-  assert.equal(searchSnippet('Café Résumé belde', ['resume'], 40), 'Café Résumé belde');
+  assert.equal(searchSnippet('Café Résumé belde', ['resume'], 40, 40), 'Café Résumé belde');
+  // Standaard een korte aanloop: het gevonden woord staat vooraan, niet achter de afkapping van de kolom.
+  const lead = searchSnippet('Maria Jansen: Vooral op de pagina met afspraken duurt het lang. Gerjan: We kijken ernaar.', ['afspraken']);
+  assert.ok(lead && lead.indexOf('afspraken') <= 24, String(lead));
   // Een emoji vóór de treffer verschuift de knip niet.
-  assert.ok(searchSnippet('🎉 feest lichtbak klaar', ['lichtbak'], 3)?.includes('lichtbak'));
+  assert.ok(searchSnippet('🎉 feest lichtbak klaar', ['lichtbak'], 3, 3)?.includes('lichtbak'));
 });
 
 test('countUnread telt mail-berichten en tickets samen en negeert negatieve waarden', () => {

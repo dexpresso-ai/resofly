@@ -196,8 +196,13 @@ export function periodRange(period: DatePeriod, now: Date = new Date()): { from:
  * Een stukje tekst rond de eerste treffer, voor de regel "Gevonden: …" in de
  * lijst. Zoekt zonder hoofdletters en accenten, maar knipt uit de originele
  * tekst zodat de lezer ziet wat er echt staat. Niets gevonden → null.
+ *
+ * De aanloop (`before`) is bewust kort: de regel staat in een smalle kolom en
+ * wordt rechts afgekapt, dus het gevonden woord moet vooraan staan — anders
+ * lees je "…Vooral op de pagina met a" en zie je juist níét waarom het gesprek
+ * in de lijst staat. Wat erna komt (`after`) mag langer; dat kapt de kolom af.
  */
-export function searchSnippet(text: string | null | undefined, words: readonly string[], radius = 48): string | null {
+export function searchSnippet(text: string | null | undefined, words: readonly string[], before = 18, after = 64): string | null {
   const source = String(text ?? '').replace(/\s+/g, ' ').trim();
   if (!source || words.length === 0) return null;
   // Per teken normaliseren houdt de posities gelijk: 'é' wordt 'e' (even
@@ -212,8 +217,8 @@ export function searchSnippet(text: string | null | undefined, words: readonly s
     if (at >= 0 && (hitAt < 0 || at < hitAt)) { hitAt = at; hitLen = word.length; }
   }
   if (hitAt < 0) return null;
-  let start = Math.max(0, hitAt - radius);
-  let end = Math.min(source.length, hitAt + hitLen + radius);
+  let start = Math.max(0, hitAt - before);
+  let end = Math.min(source.length, hitAt + hitLen + after);
   // Niet midden in een woord beginnen of eindigen als er een spatie in de buurt is.
   if (start > 0) { const space = source.lastIndexOf(' ', start + 12); if (space > start - 12 && space >= 0 && space < hitAt) start = space + 1; }
   if (end < source.length) { const space = source.indexOf(' ', end - 12); if (space >= 0 && space <= end + 12 && space > hitAt + hitLen) end = space; }
