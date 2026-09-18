@@ -32,8 +32,19 @@ export function useClientEmailUnread(params: {
   organizationId: string | null;
   currentUserId: string | null;
   resolveClientName: (clientId: string) => string;
+  /**
+   * Een collega heeft een telefoongesprek gelogd of gewijzigd. Gesprekken zitten
+   * in AppData, dus alleen `activity` ophogen is niet genoeg — de werkruimte-data
+   * moet opnieuw geladen worden, anders staat het gesprek er pas na Ververs.
+   */
+  onCallsChanged?: () => void;
 }) {
-  const { organizationId, currentUserId, resolveClientName } = params;
+  const { organizationId, currentUserId, resolveClientName, onCallsChanged } = params;
+
+  // Via een ref, zodat een nieuwe functie-identiteit per render niet elke keer
+  // opnieuw abonneert (zelfde reden als resolveRef hieronder).
+  const onCallsRef = useRef(onCallsChanged);
+  onCallsRef.current = onCallsChanged;
   const [unread, setUnread] = useState<ClientEmailUnreadCounts>(EMPTY_COUNTS);
   const [inboxCount, setInboxCount] = useState(0);
   const [activity, setActivity] = useState(0);
@@ -145,6 +156,20 @@ export function useClientEmailUnread(params: {
               subject: (row.subject || '').trim() || '(geen onderwerp)',
             });
           },
+        )
+        .subscribe());
+
+      // Telefoongesprekken, ook op een eigen kanaal en om dezelfde reden als
+      // hierboven: in een omgeving waar migratie 20260918020000 nog niet
+      // gedraaid is, mag dit de meldingen voor klantmail niet mee omtrekken.
+      // Geen toast — een gesprek dat een collega logt is nieuws voor de lijst,
+      // niet iets wat jouw aandacht opeist.
+      channels.push(supabase
+        .channel(`client-calls-${organizationId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'client_calls', filter: `organization_id=eq.${organizationId}` },
+          () => { setActivity(n => n + 1); onCallsRef.current?.(); },
         )
         .subscribe());
     });

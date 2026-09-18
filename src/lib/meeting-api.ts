@@ -114,8 +114,14 @@ export async function listRecordingsForCall(organizationId: UUID, callId: UUID):
     .eq('organization_id', organizationId).eq('call_id', callId)
     .order('created_at', { ascending: false });
   // De kolom bestaat nog niet (migratie niet gedraaid): geen opnames, geen fout.
+  //
+  // Bewust op de FOUTCODE en niet op de tekst: 42703 is "kolom bestaat niet",
+  // PGRST204 is dezelfde constatering uit de schema-cache van PostgREST. Een
+  // match op het woord "column" zou ook een rechtenfout of een dubbelzinnige
+  // kolomverwijzing opslokken, en dan verdwijnt een bestaande opname — mét
+  // transcript en samenvatting — stilletjes uit beeld als "geen opnames".
   if (error) {
-    if (/call_id|schema cache|does not exist|column/i.test(`${error.message} ${error.details ?? ''}`)) return [];
+    if (error.code === '42703' || error.code === 'PGRST204') return [];
     throw new Error(error.message);
   }
   return (data as MeetingRecording[]) ?? [];

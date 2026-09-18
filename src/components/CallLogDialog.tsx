@@ -7,7 +7,7 @@ import {
   CALL_OUTCOME_ORDER, callCounterpart, callDurationLabel, callOutcomeLabel,
   describeMatches, formatPhone, matchPhoneLocally, normalizePhoneE164, telHref,
 } from '../lib/calls';
-import { clearPendingCall, rememberCall } from '../lib/callBridge';
+import { clearPendingCall, rememberCall, setCallDialogOpen } from '../lib/callBridge';
 import { createClientCall, deleteClientCall, findContactsByPhone, updateClientCall } from '../lib/repository';
 import type { AppData, CallDirection, CallOutcome, CallSource, ClientCall, PhoneMatch, UUID } from '../types';
 
@@ -103,6 +103,15 @@ export function CallLogDialog({ organizationId, data, canWrite, existing, draft,
   // De duur is een voorstel zolang hij van de telefoonlink-brug komt: de app
   // weet hoe lang je wég was, niet hoe lang je belde.
   const [durationIsProposal, setDurationIsProposal] = useState(Boolean(draft?.proposedSeconds) && !editing);
+
+  // Zolang dit venster open staat, is het de eigenaar van het lopende gesprek:
+  // de globale vraag "gesprek loggen?" houdt zich stil. Bij sluiten vervalt de
+  // herinnering — dit venster heeft hem afgehandeld, of de gebruiker wilde
+  // hem niet.
+  useEffect(() => {
+    setCallDialogOpen(true);
+    return () => { setCallDialogOpen(false); clearPendingCall(); };
+  }, []);
 
   // ── Timer, voor wie vanuit de app belt ────────────────────────────────────
   const [timerOn, setTimerOn] = useState(false);

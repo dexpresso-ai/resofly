@@ -20,6 +20,7 @@ import {
 } from '../lib/communication';
 import { groupNotesByTicket, ticketConversation, ticketPriorityLabel, ticketStatusLabel } from '../lib/tickets';
 import { callConversation, callCounterpart, callDirectionLabel, callDurationLabel, callOutcomeLabel, formatPhone, telHref } from '../lib/calls';
+import { rememberCall } from '../lib/callBridge';
 import { CallLogDialog } from '../components/CallLogDialog';
 import { MeetingRecorder } from '../components/MeetingRecorder';
 import { dateNL } from '../lib/format';
@@ -1066,7 +1067,23 @@ function CallPane({ item, client, organizationId, canWrite, singlePane, onBack, 
         </div>
       </div>
       <div className="comm-detail-actions">
-        {dial && <Button onClick={() => { window.location.href = dial; }} title={`Bel ${callCounterpart(call)} terug`}>
+        {dial && <Button
+          onClick={() => {
+            // Onthouden vóór de navigatie, net als bij de belknop in het
+            // klantdossier: kom je terug, dan staat de vraag klaar om ook dít
+            // gesprek te loggen. Zonder deze regel zou de vraag ontbreken —
+            // of erger, een oud gesprek beschrijven dat nog in de opslag stond.
+            rememberCall({
+              phone: call.phone_e164 ?? call.phone_raw ?? '',
+              counterpartName: call.counterpart_name,
+              clientId: call.client_id,
+              contactId: call.contact_id,
+              supplierId: call.supplier_id,
+            });
+            window.location.href = dial;
+          }}
+          title={`Bel ${callCounterpart(call)} terug`}
+        >
           <Phone size={14} /> <span className="btn-label">Terugbellen</span>
         </Button>}
         <Button variant="primary" onClick={onEdit} disabled={!canWrite} title="Gesprek bewerken">

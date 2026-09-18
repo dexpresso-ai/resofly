@@ -712,6 +712,9 @@ function App() {
     organizationId: activeOrganization?.id ?? null,
     currentUserId,
     resolveClientName: (clientId) => data.clients.find(c => c.id === clientId)?.name ?? '',
+    // Gesprekken zitten in AppData: een gesprek dat een collega logt, is er pas
+    // na een herlaadronde. Stil op de achtergrond, zonder laadscherm.
+    onCallsChanged: () => { void refresh(); },
   });
 
   // De beslislijst: badge op de menuregel Gerrie + toast zodra Gerrie een kaart klaarzet.

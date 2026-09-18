@@ -63,7 +63,7 @@ Deno.serve(async (req) => {
     const role = await requireOrganizationAccess(admin, user.id, organizationId);
     // Een afspraakopname hangt aan Agenda, een gespreksopname aan Klanten.
     // Lezen mag met leesrecht; de acties zelf controleren op de schrijfrol.
-    await assertModuleAccess(admin, user.id, organizationId, await resolveModuleKey(organizationId, body), 'read');
+    await assertModuleAccess(admin, user.id, organizationId, await resolveModuleKey(organizationId, action, body), 'read');
 
     switch (action) {
       case 'create': return cors.json(req, await createRecording(organizationId, user.id, role, body));
@@ -108,9 +108,13 @@ async function createRecording(organizationId: string, userId: string, role: Org
   const { data, error } = await admin.from('meeting_recordings').insert({
     organization_id: organizationId,
     created_by: userId,
-    provider,
-    source_id: body.sourceId && isUuid(String(body.sourceId)) ? String(body.sourceId) : null,
-    event_ref: body.eventRef ? String(body.eventRef).slice(0, 512) : null,
+    // Een gespreksopname hangt aan het gesprek en nergens anders aan: de
+    // agenda-velden gaan bewust op null. Zonder dit zou een teamlid met alleen
+    // de module Klanten via callId + eventRef alsnog een opname-rij op
+    // andermans agenda-item kunnen zetten.
+    provider: callId ? null : provider,
+    source_id: !callId && body.sourceId && isUuid(String(body.sourceId)) ? String(body.sourceId) : null,
+    event_ref: !callId && body.eventRef ? String(body.eventRef).slice(0, 512) : null,
     event_title_snapshot: body.eventTitle ? String(body.eventTitle).slice(0, 300) : null,
     client_id: clientId,
     project_id: projectId,
@@ -286,18 +290,28 @@ async function deleteRecording(organizationId: string, role: Awaited<ReturnType<
  * Welke module bewaakt deze aanvraag? Een opname bij een telefoongesprek valt
  * onder Klanten, een opname bij een afspraak onder Agenda.
  *
- * Bij 'create' zegt de body het (callId); bij de acties daarna is er alleen een
- * recordingId, en dan bepaalt de opname-rij zelf waar hij bij hoort. Die ene
- * extra lookup is de prijs van een poort die niet te omzeilen is door een veld
- * uit de body weg te laten.
+ * ALLEEN bij 'create' mag de body dit bepalen — daar bestaat de opname nog
+ * niet. Bij elke andere actie beslist de opname-rij zelf, en wordt `callId` uit
+ * de body genegeerd.
+ *
+ * Dat onderscheid is de hele poort. Zou de body ook bij 'delete' of
+ * 'sendSummary' meetellen, dan stuurt iemand met alleen de module Klanten een
+ * willekeurige `callId` mee naast de `recordingId` van een AGENDA-opname, en
+ * loopt hij zo langs het Agenda-recht heen — hij zou andermans notulen kunnen
+ * mailen of verwijderen. De extra lookup is de prijs van een poort die niet te
+ * omzeilen is door een veld toe te voegen of weg te laten.
  */
-async function resolveModuleKey(organizationId: string, body: Record<string, unknown>): Promise<'clients' | 'calendar'> {
-  if (body.callId) return 'clients';
+async function resolveModuleKey(organizationId: string, action: string, body: Record<string, unknown>): Promise<'clients' | 'calendar'> {
   const recordingId = body.recordingId ? String(body.recordingId) : '';
-  if (!isUuid(recordingId)) return 'calendar';
-  const { data } = await admin.from('meeting_recordings')
-    .select('call_id').eq('id', recordingId).eq('organization_id', organizationId).maybeSingle();
-  return data?.call_id ? 'clients' : 'calendar';
+  if (isUuid(recordingId)) {
+    const { data } = await admin.from('meeting_recordings')
+      .select('call_id').eq('id', recordingId).eq('organization_id', organizationId).maybeSingle();
+    return data?.call_id ? 'clients' : 'calendar';
+  }
+  // Geen bestaande opname: alleen dan telt wat de body zegt, en alleen bij
+  // 'create' — de enige actie die zonder recordingId hoort te werken.
+  if (action === 'create' && body.callId) return 'clients';
+  return 'calendar';
 }
 
 async function loadRecording(organizationId: string, recordingId: string) {

@@ -45,6 +45,18 @@ export interface FinishedCall extends PendingCall {
   awaySeconds: number;
 }
 
+/**
+ * Staat het logvenster open? Dan is dat venster de eigenaar van het lopende
+ * gesprek en houdt `watchForReturn` zich stil. Bewust module-state en geen
+ * React-context: de wachter hangt in de app-shell en het venster kan overal
+ * vandaan geopend worden.
+ */
+let dialogOpen = false;
+
+export function setCallDialogOpen(open: boolean): void {
+  dialogOpen = open;
+}
+
 function read(): PendingCall | null {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -95,8 +107,13 @@ export function takeFinishedCall(): FinishedCall | null {
   const pending = read();
   if (!pending) return null;
   const awaySeconds = Math.max(0, Math.round((Date.now() - Date.parse(pending.startedAt)) / 1000));
-  clearPendingCall();
+  // Te kort weg: NIET wissen. Dit is bijna altijd het 'focus'-event dat afgaat
+  // op het moment dat de telefoon zijn "Bellen naar +31…?"-bevestiging toont of
+  // sluit — het gesprek moet dan nog beginnen. Wissen zou precies het gesprek
+  // weggooien dat we wilden vastleggen; de herinnering blijft dus staan tot er
+  // een terugkeer is die er wél een is (of tot MAX_AGE_MS hem laat vervallen).
   if (awaySeconds < MIN_AWAY_SECONDS) return null;
+  clearPendingCall();
   return { ...pending, awaySeconds };
 }
 
@@ -113,6 +130,10 @@ export function takeFinishedCall(): FinishedCall | null {
 export function watchForReturn(onReturn: (call: FinishedCall) => void): () => void {
   const handle = () => {
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    // Staat het logvenster al open, dan handelt dát het gesprek af. Zonder deze
+    // rem zou een gesprek dat vanuit het venster gestart is twee keer gelogd
+    // kunnen worden: één keer via het venster en één keer via deze vraag.
+    if (dialogOpen) return;
     const finished = takeFinishedCall();
     if (finished) onReturn(finished);
   };
