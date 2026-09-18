@@ -75,10 +75,14 @@ geen React Native (gecontroleerd in `package.json` en `index.html`). Dat beteken
   gesproken (contactpersoon uit de lijst), duur (meelopende timer of met de hand),
   uitkomst, notitie, koppeling aan klant/project/ticket, en optioneel meteen een
   terugbeltaak of agenda-item.
-- **De slimme brug:** klik je op een `tel:`-link, dan onthoudt de app dát je belde.
-  Kom je terug in het tabblad (`visibilitychange`), dan staat er *"Gebeld met Bakker BV
-  — gesprek loggen?"* met de duur al ingevuld. Geen permissies, geen integratie, en het
-  vangt in de praktijk het grootste deel van de uitgaande gesprekken.
+- **De brug, en wat hij wél en niet is:** klik je op een `tel:`-link, dan onthoudt de
+  app dát je belde. Kom je terug in het tabblad (`visibilitychange`), dan staat er
+  *"Gebeld met Bakker BV — gesprek loggen?"*. Let op: de app **meet de duur niet**, hij
+  ziet alleen hoe lang het tabblad weg was — bel vier minuten en kijk daarna zes minuten
+  op WhatsApp, en er staat tien minuten. Het is een **voorstel dat je bevestigt**, een
+  bovengrens, geen meting. En **inkomende gesprekken ziet een webapp helemaal niet**.
+  Route A is dus geen koppeling met de telefoon maar een invulhulp voor uitgaande
+  gesprekken — nuttig, en zonder permissies of integratie, maar niet meer dan dat.
 - Gesprekken verschijnen tussen de mail en de tickets op **Berichten** en als tabblad
   in het klantdossier — dezelfde weg die tickets op 17 september aflegden.
 
@@ -269,3 +273,60 @@ En praktisch: **route B is te bouwen en te testen zonder enige provider.** FreeP
 een container, of een testscript dat het webhook-formaat nabootst, is genoeg om de
 edge function, de nummerherkenning en de opvangbak te valideren. De keuze voor een
 centrale hoeft pas te vallen bij livegang.
+
+
+---
+
+## 9 · "ResoFly is webbased — valt dat wel aan mobiele gesprekken te koppelen?" (2026-09-18)
+
+Nee, niet aan de gesprekken op het toestel zelf. Maar **dat komt niet doordat ResoFly
+webbased is**, en dat is de belangrijkste nuance van dit hele onderzoek.
+
+### Native bouwen lost het niet op
+iOS geeft géén enkele app toegang tot het gesprekslog; Android blokkeert via het
+Play-beleid de benodigde permissie voor alles wat geen standaard telefoon-app is
+(§2). Een native ResoFly-app zou hier dus vrijwel niets extra's opleveren. De grens
+ligt bij het besturingssysteem van de telefoon, niet bij de architectuur van de app.
+
+### De oplossing zit in het netwerk, niet in het toestel
+Koppel niet de app aan de telefoon, maar **de telefoon aan de centrale** — dan loopt
+het gesprek via een plek die er wél over mag vertellen:
+
+```
+Nu:       [mobiel] ──── gesprek ────> [klant]
+          ResoFly staat erbuiten en kan er niet bij.
+
+Met VAMO: [mobiel] ──> [centrale] ──> [klant]
+                            │
+                            └── webhook ──> [ResoFly]
+```
+
+**Vast-mobiel integratie (VAMO)** is in Nederland gangbaar: een SIM meldt zich via het
+GSM-netwerk bij de centrale, waarna het mobiele toestel zich gedraagt als een toestel
+van de centrale met een intern nummer. Uitgaande én inkomende gesprekken op die mobiel
+lopen via de centrale, komen in het gesprekslog en vuren dus de webhook af. Het werkt
+op SIM-niveau, dus het toestel of merk maakt niet uit.
+
+Concreet bij **Voys/VoIPGRID**: zij bieden vast/mobiel-integratie én
+"Gespreksnotificaties" — een webhook-achtige API met rijkere gegevens dan de standaard
+vier velden (richting, nummer van de beller, intern account). Ook gesprekstranscripties
+en samenvattingen zijn via die API op te halen, wat een groot deel van route C
+overbodig kan maken.
+
+**Lichter alternatief:** de softphone-app van de provider op de mobiel in plaats van een
+VAMO-SIM. Het gesprek loopt dan ook over de centrale en hetzelfde mechanisme werkt.
+Goedkoper, maar alleen als mensen die app echt gebruiken, en het kost data en batterij.
+
+### Wat onzichtbaar blijft
+Een gesprek op een privétoestel zonder VAMO-SIM en zonder softphone-app, over het
+gewone mobiele netwerk. Alleen handmatig loggen vangt dat. Dat is tegelijk de
+scheidslijn die je om privacyredenen tóch wilt (§5.4): wat niet over de zakelijke
+centrale loopt, hoort niet in het CRM.
+
+### Gevolg voor de afweging
+Dit verandert niets aan het ontwerp van route A of B, maar wel aan wat B **waard** is.
+In §3 stond B impliciet als "vaste lijn automatisch, mobiel handmatig". Met
+vast-mobiel integratie dekt B óók de mobiele gesprekken — vermoedelijk waar het
+meeste belverkeer zit. Daarmee wordt B aanzienlijk interessanter, en komt er een vraag
+bij voor een aanbieder: **biedt hij vast-mobiel integratie, en komen die mobiele
+gesprekken in dezelfde webhook?**
