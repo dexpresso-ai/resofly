@@ -16,11 +16,35 @@ import type { AppData, Note, NoteHandwritingSummary, UUID } from '../types';
 
 // ── Kleine cache van geladen inkt, zodat kaartjes en editor niet steeds opnieuw ophalen ──
 
+/**
+ * Hoeveel inktdocumenten we onthouden. Eén document mag 6 MB zijn, en de sleutel
+ * bevat `updated_at` — dus zonder grens groeide deze Map bij elke opslag met een
+ * nieuwe versie erbij, en bleef élke versie van élke notitie de hele sessie in
+ * het geheugen staan. Twaalf is ruim voor de kaartjes die tegelijk in beeld
+ * staan plus de notitie die openstaat.
+ */
+const INK_CACHE_MAX = 12;
+
 const inkCache = new Map<string, InkDocument | null>();
 const inflight = new Map<string, Promise<InkDocument | null>>();
 
 function cacheKey(noteId: UUID, version: string | null): string {
   return `${noteId}@${version ?? ''}`;
+}
+
+/**
+ * Zet iets in de cache en gooit het oudste eruit zodra het er te veel worden.
+ * Een Map bewaart invoegvolgorde, dus de eerste sleutel is de oudste. Opnieuw
+ * zetten telt als "recent gebruikt" door hem eerst te verwijderen.
+ */
+function rememberInk(key: string, doc: InkDocument | null): void {
+  if (inkCache.has(key)) inkCache.delete(key);
+  inkCache.set(key, doc);
+  while (inkCache.size > INK_CACHE_MAX) {
+    const oldest = inkCache.keys().next();
+    if (oldest.done) break;
+    inkCache.delete(oldest.value);
+  }
 }
 
 /** Laadt het inktdocument van een notitie; `version` (updated_at) maakt de cache vanzelf oud na een wijziging. */
@@ -32,7 +56,7 @@ export function fetchInkDocument(organizationId: UUID, noteId: UUID, version: st
   const promise = loadNoteHandwriting(organizationId, noteId)
     .then(row => {
       const doc = row ? parseInkDocument(row.pages, row.paper) : null;
-      inkCache.set(key, doc);
+      rememberInk(key, doc);
       return doc;
     })
     .finally(() => inflight.delete(key));
@@ -41,7 +65,7 @@ export function fetchInkDocument(organizationId: UUID, noteId: UUID, version: st
 }
 
 export function primeInkCache(noteId: UUID, version: string | null, doc: InkDocument | null): void {
-  inkCache.set(cacheKey(noteId, version), doc);
+  rememberInk(cacheKey(noteId, version), doc);
 }
 
 export function noteHandwritingSummary(data: Pick<AppData, 'noteHandwriting'>, noteId: UUID): NoteHandwritingSummary | null {
@@ -66,20 +90,45 @@ function clockLabel(date: Date): string {
 export function InkThumbnail({ note, summary, width = 220, className = '' }: { note: Pick<Note, 'id' | 'organization_id'>; summary: NoteHandwritingSummary; width?: number; className?: string }) {
   const theme = useInkTheme();
   const [doc, setDoc] = useState<InkDocument | null | undefined>(undefined);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  /** Pas ophalen als dit kaartje echt in beeld komt — zie hieronder waarom. */
+  const [inView, setInView] = useState(false);
+
+  /**
+   * Een miniatuur van 220px haalt het volledige inktdocument op, en dat mag
+   * 6 MB zijn. Op de notitiepagina met dertig handgeschreven notities gebeurde
+   * dat dertig keer tegelijk bij het openen, ook voor de kaartjes die ver onder
+   * de vouw stonden. Nu vraagt elk kaartje pas iets zodra het in beeld schuift,
+   * en daarna nooit meer (`once`).
+   *
+   * Zonder IntersectionObserver — oudere browser, testomgeving — laden we
+   * gewoon meteen; dan is het gedrag als voorheen in plaats van een leeg vlak.
+   */
+  useEffect(() => {
+    if (inView) return;
+    const el = boxRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') { setInView(true); return; }
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) { setInView(true); observer.disconnect(); }
+    }, { rootMargin: '200px' });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [inView]);
 
   useEffect(() => {
+    if (!inView) return;
     let active = true;
     setDoc(undefined);
     fetchInkDocument(note.organization_id, note.id, summary.updated_at)
       .then(loaded => { if (active) setDoc(loaded); })
       .catch(() => { if (active) setDoc(null); });
     return () => { active = false; };
-  }, [note.organization_id, note.id, summary.updated_at]);
+  }, [inView, note.organization_id, note.id, summary.updated_at]);
 
   const url = useMemo(() => (doc ? inkThumbnailDataUrl(doc, theme, width * 2) : null), [doc, theme, width]);
 
   return (
-    <div className={`ink-thumb ${className}`.trim()} style={{ width }} aria-label={handwritingLabel(summary)}>
+    <div ref={boxRef} className={`ink-thumb ${className}`.trim()} style={{ width }} aria-label={handwritingLabel(summary)}>
       {url
         ? <img src={url} alt="" width={width} />
         : <span className={`ink-thumb-placeholder${doc === undefined ? ' is-loading' : ''}`}><PenLine size={14} /></span>}

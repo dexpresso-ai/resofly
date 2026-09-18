@@ -92,6 +92,7 @@ function normalize(value: string | null | undefined): string {
   return String(value ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 }
 
+
 /** De zoektekst in losse, genormaliseerde woorden. */
 export function queryWords(query: string | null | undefined): string[] {
   return normalize(query).split(/\s+/).filter(Boolean);
@@ -100,8 +101,41 @@ export function queryWords(query: string | null | undefined): string[] {
 /** Komen álle woorden ergens in de tekst voor (zonder hoofdletters en accenten)? */
 export function matchesWords(text: string | null | undefined, words: readonly string[]): boolean {
   if (words.length === 0) return true;
-  const haystack = normalize(text);
-  return words.every(word => haystack.includes(word));
+  return matchesFoldedWords(normalize(text), words);
+}
+
+/** Zelfde vraag, maar over tekst die al gevouwen is. */
+export function matchesFoldedWords(folded: string, words: readonly string[]): boolean {
+  if (words.length === 0) return true;
+  return words.every(word => folded.includes(word));
+}
+
+/**
+ * De genormaliseerde zoektekst van één gesprek, één keer berekend.
+ *
+ * Zonder dit vouwde `filterConversations` de volledige `searchText` van élk
+ * gesprek bij élke toetsaanslag opnieuw — en bij een ticket zit daar iedere
+ * notitie in, samen al gauw honderden kilobytes. Elke getypte letter joeg daar
+ * een `normalize('NFD')` plus een regex overheen; dat is de haperende invoer
+ * die je bij een volle werkruimte voelt.
+ *
+ * Een WeakMap op het gesprek zelf, omdat de lijst met gesprekken in
+ * `Communication.tsx` gememoïseerd is: dezelfde objecten blijven bestaan
+ * zolang de onderliggende gegevens niet wijzigen, dus wordt er per gesprek één
+ * keer gevouwen. Verandert er iets, dan komen er nieuwe objecten en verdwijnt
+ * de oude vouwing vanzelf uit het geheugen — geen cache die je moet legen.
+ *
+ * `searchText` blijft het origineel: `searchSnippet` knipt daaruit, zodat de
+ * lezer ziet wat er écht staat.
+ */
+const foldCache = new WeakMap<object, string>();
+
+export function foldedSearchText(item: Pick<Conversation, 'searchText'>): string {
+  const cached = foldCache.get(item);
+  if (cached !== undefined) return cached;
+  const folded = normalize(item.searchText);
+  foldCache.set(item, folded);
+  return folded;
 }
 
 /** Een mailgesprek uit de view client_email_thread_overview als lijstregel. */
@@ -164,7 +198,7 @@ export function filterConversations<T extends Conversation>(items: readonly T[],
     }
     if (words.length === 0) return true;
     if (filter.matchKeys?.has(item.key)) return true;
-    return matchesWords(item.searchText, words);
+    return matchesFoldedWords(foldedSearchText(item), words);
   });
 }
 

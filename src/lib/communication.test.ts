@@ -13,6 +13,7 @@ import type { ClientEmailThreadOverview, Ticket, TicketNote } from '../types.ts'
 import {
   NO_CLIENT, countUnread, emailConversation, filterConversations, initials, listTime, matchesWords, periodRange,
   previewLine, queryWords, replySubject, searchSnippet, senderShortName, sortConversations, splitConversations,
+  foldedSearchText, matchesFoldedWords,
 } from './communication.ts';
 import { groupNotesByTicket, noteAuthorShort, ticketConversation, ticketLastActivity, ticketMatchesStatus } from './tickets.ts';
 
@@ -265,4 +266,27 @@ test('splitConversations: een lege lijst geeft twee lege vensters, geen undefine
   const leeg = splitConversations([]);
   assert.deepEqual(leeg.emails, []);
   assert.deepEqual(leeg.tickets, []);
+});
+
+// ── Zoektekst één keer vouwen ───────────────────────────────────────────────
+
+test('zoeken blijft ongevoelig voor hoofdletters en accenten', () => {
+  const item = { searchText: 'Café Zürich — OFFERTE voor José' };
+  assert.equal(matchesFoldedWords(foldedSearchText(item), queryWords('cafe zurich')), true);
+  assert.equal(matchesFoldedWords(foldedSearchText(item), queryWords('OFFERTE jose')), true);
+  assert.equal(matchesFoldedWords(foldedSearchText(item), queryWords('rotterdam')), false);
+});
+
+test('hetzelfde gesprek wordt maar één keer gevouwen', () => {
+  // De WeakMap hangt aan het object, niet aan de tekst. Dat is precies de
+  // bedoeling: de gesprekkenlijst is gememoïseerd, dus dezelfde objecten
+  // blijven bestaan terwijl iemand letter voor letter typt.
+  const item = { searchText: 'Bakker BV — levering' };
+  const first = foldedSearchText(item);
+  // Muteren van de tekst ná het vouwen verandert de uitkomst niet meer; dat
+  // mag, want een gesprek is onveranderlijk zodra het gebouwd is.
+  (item as { searchText: string }).searchText = 'iets heel anders';
+  assert.equal(foldedSearchText(item), first);
+  // Een nieuw object wordt wél opnieuw gevouwen.
+  assert.equal(foldedSearchText({ searchText: 'iets heel anders' }), 'iets heel anders');
 });
