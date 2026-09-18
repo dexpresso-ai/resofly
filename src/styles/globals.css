@@ -4001,7 +4001,14 @@ button.chat-member:hover{background:var(--bg3)}
 .tab-new:hover{background:var(--bg2);color:var(--text);border-color:var(--muted)}
 .tab-new:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 /* Elk tabblad is een eigen .content-scrollcontainer; alleen het actieve is zichtbaar. */
-.content[hidden]{display:none}
+/* Een verborgen werktabblad is verborgen, punt.
+   `.content[hidden]` is (0,2,0), maar `.content:has(.chat-shell.chat-page)` is
+   (0,3,0) — :has() neemt de zwaarte van zijn argument over — en won dus, waar
+   hij ook stond. Gevolg: open je Teamchat in het ene tabblad en stap je over
+   naar Klanten in het andere, dan stond de chat op een telefoon nog steeds
+   uitgeklapt onder die pagina. `!important` is hier het juiste gereedschap:
+   dit is geen smaakregel maar een harde: wat verborgen is, tekent niet. */
+.content[hidden]{display:none!important}
 /* Houd de tabbalk zichtbaar/klikbaar wanneer er een popup openstaat: elke
    content-overlay (dim + inhoud) begint pas ónder de 42px-hoge tabbalk. Geen
    z-index nodig, dus de mobiele navigatie-drawer (z-index 90) blijft de tabbalk

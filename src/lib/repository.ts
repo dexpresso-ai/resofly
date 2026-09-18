@@ -3437,30 +3437,31 @@ export async function saveNoteHandwriting(organizationId: UUID, noteId: UUID, do
     stroke_count: inkStrokeCount(doc),
     paper: doc.pages[0]?.paper ?? 'lined',
   };
-  const updated = await supabase
-    .from('note_handwriting')
-    .update(payload)
-    .eq('organization_id', organizationId)
-    .eq('note_id', noteId)
-    .select(NOTE_HANDWRITING_SUMMARY_COLUMNS);
-  if (updated.error) {
-    if (isMissingNoteHandwritingTable(updated.error)) throw new Error(NOTE_HANDWRITING_MIGRATION_HINT);
-    throw updated.error;
-  }
-  const existing = (updated.data ?? []) as unknown as NoteHandwritingSummary[];
-  if (existing.length > 0) return existing[0];
-
+  // Eén statement, geen bijwerken-en-anders-invoegen. Dat laatste ging op twee
+  // manieren mis:
+  //
+  // 1. Bij de allereerste opslag met twee overlappende autosaves zagen beide
+  //    updates nul rijen, voegden ze allebei in, en liep de tweede tegen
+  //    note_handwriting_note_id_key aan — de gebruiker las dan "duplicate key
+  //    value violates unique constraint" onder "Opslaan mislukt".
+  // 2. Blokkeerde RLS of de modulepoort de update, dan meldt PostgREST nul
+  //    rijen in plaats van een fout. De code dook dan de insert in en gaf
+  //    opnieuw die unique-melding, in plaats van te zeggen dat het een
+  //    rechtenkwestie was.
   const createdBy = await currentUserId();
-  const inserted = await supabase
+  const saved = await supabase
     .from('note_handwriting')
-    .insert({ ...payload, organization_id: organizationId, note_id: noteId, created_by: createdBy })
+    .upsert(
+      { ...payload, organization_id: organizationId, note_id: noteId, created_by: createdBy },
+      { onConflict: 'note_id' },
+    )
     .select(NOTE_HANDWRITING_SUMMARY_COLUMNS)
     .single();
-  if (inserted.error) {
-    if (isMissingNoteHandwritingTable(inserted.error)) throw new Error(NOTE_HANDWRITING_MIGRATION_HINT);
-    throw inserted.error;
+  if (saved.error) {
+    if (isMissingNoteHandwritingTable(saved.error)) throw new Error(NOTE_HANDWRITING_MIGRATION_HINT);
+    throw saved.error;
   }
-  return inserted.data as unknown as NoteHandwritingSummary;
+  return saved.data as unknown as NoteHandwritingSummary;
 }
 
 export async function deleteNoteHandwriting(organizationId: UUID, noteId: UUID): Promise<void> {

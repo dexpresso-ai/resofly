@@ -15,7 +15,7 @@
  *
  * Opties:
  *   --theme=dark|light|both     standaard dark
- *   --viewports=phone,tablet    standaard phone,tablet (ook: desktop)
+ *   --viewports=phone,tablet    standaard phone,tablet,landscape (ook: desktop)
  *   --pages=dashboard,clients   standaard alle pagina's
  *   --shots=<map>               schrijf per pagina een screenshot weg
  *   --url=http://…              gebruik een draaiende dev-server i.p.v. er zelf een te starten
@@ -114,7 +114,12 @@ const FIRST_ITEM = {
 
 const args = Object.fromEntries(process.argv.slice(2).map(a => { const m = /^--([^=]+)(?:=(.*))?$/.exec(a); return m ? [m[1], m[2] ?? 'true'] : [a, 'true']; }));
 const themes = args.theme === 'both' ? ['dark', 'light'] : [args.theme === 'light' ? 'light' : 'dark'];
-const viewports = (args.viewports ?? 'phone,tablet').split(',').map(v => v.trim()).filter(v => VIEWPORTS[v]);
+// Liggend hoort in de standaardronde. De fix van 18 september op Berichten
+// voegde het formaat toe aan VIEWPORTS en beschreef het als "in de
+// standaardronde", maar deze regel bleef op 'phone,tablet' staan — dus werd de
+// band 761-900px nooit gemeten, en dat is precies waar een gekantelde telefoon
+// zit: geen smal scherm maar een laag scherm, een heel ander probleem.
+const viewports = (args.viewports ?? 'phone,tablet,landscape').split(',').map(v => v.trim()).filter(v => VIEWPORTS[v]);
 const pages = args.pages ? args.pages.split(',').map(p => p.trim()).filter(p => PAGES[p]) : Object.keys(PAGES);
 const shotsDir = args.shots ? path.resolve(args.shots) : null;
 if (shotsDir) fs.mkdirSync(shotsDir, { recursive: true });

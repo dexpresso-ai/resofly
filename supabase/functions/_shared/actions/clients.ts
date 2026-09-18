@@ -631,6 +631,14 @@ export const CLIENT_ACTIONS: ActionDef[] = [
     label: 'Portaaltoegang van contactpersonen aan- of uitzetten',
     module: 'clients',
     kind: 'write',
+    // Naar buiten gericht, dus 'high': met deze handeling kan iemand buiten de
+    // organisatie inloggen op /portal en daar offertes, facturen en tickets
+    // zien. Zonder dit stond hij op 'normal', en dan kon een gekoppelde AI hem
+    // rechtstreeks uitvoeren met alleen "mag rechtstreeks uitvoeren" aan —
+    // zonder dat iemand het goedkeurde en zonder de waarschuwing die bij een
+    // onomkeerbare stap hoort. gallery.publish en ticket_note.set_visibility
+    // staan om exact dezelfde reden op 'high'.
+    risk: 'high',
     description:
       'Geeft één of meer contactpersonen toegang tot het klantportaal, of neemt die toegang weer af. Met toegang kan die persoon inloggen op /portal en de offertes, facturen en tickets van zijn bedrijf zien.',
     keywords: ['portaal', 'toegang', 'portal', 'inloggen', 'contactpersoon'],

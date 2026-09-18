@@ -151,18 +151,35 @@ export function NoteInkSection({ organizationId, noteId, noteTitle, summary, val
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [organizationId, noteId, summary?.updated_at, value === undefined]);
 
+  /**
+   * Volgnummer per opslagpoging. Zonder dit kon een trage PATCH een snellere,
+   * nieuwere overschrijven: streek A vertrekt en blijft twee seconden hangen,
+   * streek A+B vertrekt daarna en landt eerder — en als A alsnog binnenkomt,
+   * staat in de database de tekening ZONDER streek B. Het scherm toonde
+   * ondertussen gewoon A+B en meldde "Opgeslagen", dus je merkte het verlies
+   * pas bij het opnieuw openen. Inktpayloads zijn honderden kilobytes op een
+   * tablet, dus die volgorde draait in de praktijk om.
+   */
+  const saveSeqRef = useRef(0);
+
   const persist = useCallback(async (doc: InkDocument) => {
     if (!noteId) return;
     const issue = inkSizeIssue(doc);
     if (issue) { setSaveState({ kind: 'error', message: issue }); return; }
+    const seq = ++saveSeqRef.current;
     setSaveState({ kind: 'saving' });
     try {
       const saved = await saveNoteHandwriting(organizationId, noteId, doc);
+      // Is er inmiddels een nieuwere opslag gestart of afgerond, dan is dit
+      // antwoord achterhaald: niet de cache vullen, niet "opgeslagen" melden,
+      // en zeker niet dirty op false zetten — die nieuwere ronde doet dat.
+      if (seq !== saveSeqRef.current) return;
       primeInkCache(noteId, saved?.updated_at ?? null, isInkEmpty(doc) ? null : doc);
       dirtyRef.current = false;
       setSaveState({ kind: 'saved', at: new Date() });
       onSavedRef.current?.(saved);
     } catch (err) {
+      if (seq !== saveSeqRef.current) return;
       setSaveState({ kind: 'error', message: err instanceof Error ? err.message : 'Opslaan mislukt.' });
     }
   }, [organizationId, noteId]);

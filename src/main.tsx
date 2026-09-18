@@ -112,6 +112,7 @@ import { Marketing } from './features/Marketing';
 import { RelatedNotes, noteTypeLabels } from './features/Notes';
 import { NoteInkSection, noteHandwritingSummary } from './components/NoteHandwriting';
 import type { InkDocument } from './lib/ink';
+import { inkSizeIssue } from './lib/ink';
 import { documentTypeLabels } from './features/Documents';
 import { ContentLibrary } from './features/ContentLibrary';
 import { clientFolderOptions } from './lib/folders';
@@ -1238,6 +1239,16 @@ function App() {
         // _ink is het handschrift (pen op tablet): undefined = niet aangeraakt,
         // null = weggehaald, document = opslaan. Het is geen kolom van notes.
         const { _calLink, _ink, ...noteValues } = values;
+        // De maat vóór het aanmaken controleren, niet erna. De trigger
+        // validate_note_handwriting weigert boven 6 MB, en als dat pas gebeurt
+        // nadat de notitie is ingevoegd, blijft er een lege notitie achter, valt
+        // het venster niet dicht, en maakt een tweede druk op Opslaan er nóg
+        // een. NoteInkSection doet deze controle al vóór het opslaan; hier
+        // ontbrak hij.
+        if (_ink) {
+          const issue = inkSizeIssue(_ink as InkDocument);
+          if (issue) throw new Error(issue);
+        }
         let savedNote: Note;
         if (edit.item) {
           savedNote = await updateRow<Note>('notes', edit.item.id, noteValues, activeOrg.id);

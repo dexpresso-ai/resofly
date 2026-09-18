@@ -16,7 +16,20 @@ export function isMissingRelation(error: { code?: string; message?: string } | n
   // 42P01 = undefined_table (Postgres), PGRST205 = onbekend in de schema-cache.
   if (error.code === '42P01' || error.code === 'PGRST205') return true;
   const message = String(error.message ?? '').toLowerCase();
-  return message.includes('schema cache') || message.includes('does not exist');
+  if (message.includes('schema cache')) return true;
+  // Bewust de héle zin en niet het losse "does not exist". Postgres gebruikt
+  // diezelfde woorden namelijk ook voor een ontbrekende KOLOM (42703) en een
+  // ontbrekende FUNCTIE (42883), en dat zijn heel andere gevallen:
+  //
+  // - Een ontbrekende kolom betekende dat de pagina AI-koppelingen "nog niet
+  //   beschikbaar in deze omgeving" toonde terwijl er levende koppelingen
+  //   waren — inclusief hun intrekknop, die daarmee onbereikbaar werd.
+  // - Een hernoemde kolom in een view maakte een kapotte deploy visueel
+  //   identiek aan een ongemigreerde: een rustige regel, een lege lijst, en
+  //   niets in de logs.
+  //
+  // Een ontbrekende tabel of view zegt altijd "relation ... does not exist".
+  return /relation\s+\S+\s+does not exist/.test(message);
 }
 
 /**
