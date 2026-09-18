@@ -124,6 +124,44 @@ function safeFileName(name: string): string {
   return name.replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'handschrift';
 }
 
+/**
+ * De lopende streek zoals de live-laag hem tekent.
+ *
+ * `drawStroke` trekt per frame de héle streek opnieuw na: pointsFromFlat,
+ * densifyPoints en een map over de radii, allemaal over alle punten. Een pen
+ * die op 240 Hz bemonstert haalt bij één doorlopende lijn van twintig seconden
+ * — een handtekening, een lange onderstreping, een pagina vullen zonder
+ * optillen — al gauw vijfduizend punten. Dat is per frame vijftienduizend
+ * objecten en twee volledige passes, en dan loopt de inkt zichtbaar achter de
+ * punt van de pen aan.
+ *
+ * Boven een drempel tekent de PREVIEW daarom uit een uitgedund kopietje: elk
+ * n-de punt, plus de laatste punten onverkort zodat de tip exact onder de pen
+ * blijft. `active.points` zelf blijft ongemoeid, dus wat er bij het optillen
+ * wordt vastgelegd is tot op het punt identiek aan voorheen — het verschil
+ * zit alleen in wat je tijdens het trekken ziet, en dat is bij deze
+ * puntdichtheid niet te zien.
+ */
+const LIVE_PREVIEW_MAX_POINTS = 900;
+/** Zoveel punten aan het eind blijven onverkort: daar kijkt de gebruiker naar. */
+const LIVE_PREVIEW_TAIL_POINTS = 120;
+
+function previewStroke(stroke: InkStroke): InkStroke {
+  const total = stroke.points.length / 3;
+  if (total <= LIVE_PREVIEW_MAX_POINTS) return stroke;
+
+  const tailStart = Math.max(0, total - LIVE_PREVIEW_TAIL_POINTS);
+  const step = Math.ceil(tailStart / Math.max(1, LIVE_PREVIEW_MAX_POINTS - LIVE_PREVIEW_TAIL_POINTS));
+  const points: number[] = [];
+  for (let i = 0; i < tailStart; i += step) {
+    points.push(stroke.points[i * 3], stroke.points[i * 3 + 1], stroke.points[i * 3 + 2]);
+  }
+  for (let i = tailStart; i < total; i += 1) {
+    points.push(stroke.points[i * 3], stroke.points[i * 3 + 1], stroke.points[i * 3 + 2]);
+  }
+  return { ...stroke, points };
+}
+
 function replacePage(doc: InkDocument, index: number, page: InkPage): InkDocument {
   const pages = doc.pages.slice();
   pages[index] = page;
@@ -222,7 +260,7 @@ export function InkCanvas({ value, onChange, readOnly = false, title, status, ac
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const k = scale * dpr;
     const active = activeRef.current;
-    if (active && active.points.length >= 3) drawStroke(ctx, active, k, themeRef.current);
+    if (active && active.points.length >= 3) drawStroke(ctx, previewStroke(active), k, themeRef.current);
     const cursor = cursorRef.current;
     if (cursor && toolRef.current === 'eraser') {
       ctx.save();
