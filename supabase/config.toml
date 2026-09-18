@@ -127,6 +127,13 @@ verify_jwt = false
 [functions.invoice-extract]
 verify_jwt = false
 
+# invoice-inbox (inkoopfacturen per e-mail: opnieuw verwerken, klaarzetten, negeren)
+# handelt CORS + auth zelf af, precies als invoice-extract: requireUser() +
+# requireOrganizationAccess() + schrijfrol + module Financiën. De automatische
+# verwerking zelf start in mail-inbound (Email Worker, geen JWT).
+[functions.invoice-inbox]
+verify_jwt = false
+
 # gallery-public: login-loze galerij-deellink (/gallerij/<token>). Toegang loopt via een
 # onraadbaar 32-byte token (sha256-hash in de DB) + optionele pincode met lockout; de
 # functie hardt zelf via een origin-allowlist (zoals contract-public). Daarom geen JWT-eis.

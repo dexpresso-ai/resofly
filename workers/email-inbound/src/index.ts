@@ -10,20 +10,33 @@ export interface Env {
   INBOUND_DOMAIN: string;
 }
 
-// Cloudflare Email Worker. Vangt drie soorten post op het inbound-domein:
+// Cloudflare Email Worker. Vangt vier soorten post op het inbound-domein:
 //   reply+<uuid>@      antwoord op een ResoFly-mail
 //   organizer+<token>@ RSVP op een agenda-uitnodiging
 //   <alias>@           doorgestuurde klantmail (het doorstuuradres van een org)
+//   facturen-<alias>@  inkoopfacturen (het factuur-doorstuuradres van een org)
 //
 // De Worker VERZAMELT feiten uit de MIME en beslist niets: alle beleidsregels
 // (drop/park/matching) staan in de edge function, want die is in seconden te
-// herdeployen en deze Worker niet.
+// herdeployen en deze Worker niet. De enige vormkeuze hier: voor een
+// factuuradres gaan de factuurachtige bijlagen (PDF, XML, afbeelding) als
+// base64 mee, voor de andere routes alleen hun namen en metadata.
 
 const MAX_FULL_PARSE_BYTES = 12 * 1024 * 1024; // daarboven: alleen de kop
 const HEADER_ONLY_BYTES = 256 * 1024;
 const MAX_BODY_CHARS = 128 * 1024;
 
 const ALIAS_LOCAL = /^[a-z0-9][a-z0-9-]{0,23}-[a-z2-7]{16}$/;
+
+// Bijlagen voor de factuur-inbox. Per bestand hetzelfde plafond als de
+// handmatige scan; per mail een totaal zodat de JSON naar de edge function
+// (base64 ≈ ×1.37) ruim onder de request-limiet blijft.
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_BYTES = 14 * 1024 * 1024;
+// Kleinere afbeeldingen zijn logo's en handtekeningen, geen gefotografeerde factuur.
+const MIN_IMAGE_BYTES = 30 * 1024;
+const DOCUMENT_MIME = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/xml', 'text/xml']);
+const DOCUMENT_EXT = /\.(pdf|xml|jpe?g|png|webp|gif)$/i;
 
 // postal-mime: opties horen in de CONSTRUCTOR. `new PostalMime().parse(raw, opts)`
 // compileert niet — de instance-parse neemt alleen het bericht. Met
@@ -126,6 +139,7 @@ async function buildPayload(
   if (envelopeFrom) candidates.push({ address: envelopeFrom, name: '', source: 'envelope', confidence: 'low' });
 
   const attachments = parsed.attachments ?? [];
+  const collected = collectAttachments(attachments, isInvoiceAlias(stripTag(local)));
 
   return {
     to,
@@ -151,6 +165,10 @@ async function buildPayload(
     headers,
     receivedCount: countReceived(parsed),
     attachmentNames: attachments.map((a) => String(a.filename ?? '')).filter(Boolean).slice(0, 20),
+    // Alle bijlagen beschreven (ook wat niet meekomt), plus de bytes voor het
+    // factuuradres. De edge function beslist wat ermee gebeurt.
+    attachmentMeta: collected.meta,
+    attachments: collected.files,
     hasTnef: attachments.some((a) =>
       /ms-tnef/i.test(String(a.mimeType ?? '')) || /winmail\.dat$/i.test(String(a.filename ?? ''))),
     rawSize: message.rawSize,
@@ -185,6 +203,73 @@ async function parseNested(parsed: Email) {
     }
   }
   return null;
+}
+
+/** Het factuur-doorstuuradres begint altijd met "facturen-" (zie de aliasgenerator). */
+function isInvoiceAlias(local: string): boolean {
+  return local.startsWith('facturen-') && ALIAS_LOCAL.test(local);
+}
+
+interface AttachmentMeta {
+  index: number;
+  filename: string;
+  mimeType: string;
+  size: number;
+  /** Inline afbeelding (handtekening, logo) — geen factuur. */
+  inline: boolean;
+  /** Te groot om mee te sturen (per bestand of per mail). */
+  oversized: boolean;
+  /** Bytes zitten in `attachments`. */
+  sent: boolean;
+}
+
+interface AttachmentFile { index: number; filename: string; mimeType: string; size: number; dataBase64: string }
+
+/**
+ * Beschrijft elke bijlage en verzamelt — alleen voor het factuuradres — de
+ * bytes van factuurachtige bestanden. Inline afbeeldingen en kleine plaatjes
+ * (logo's in handtekeningen) blijven weg: die zouden anders elk een AI-call kosten.
+ */
+function collectAttachments(attachments: Attachment[], includeBytes: boolean): { meta: AttachmentMeta[]; files: AttachmentFile[] } {
+  const meta: AttachmentMeta[] = [];
+  const files: AttachmentFile[] = [];
+  let total = 0;
+
+  attachments.forEach((att, index) => {
+    if (meta.length >= 50) return;
+    const filename = String(att.filename ?? '').slice(0, 200) || `bijlage-${index + 1}`;
+    const mimeType = String(att.mimeType ?? '').toLowerCase();
+    const extra = att as Attachment & { disposition?: string | null; contentId?: string | null; related?: boolean };
+    const content = att.content;
+    const size = content instanceof ArrayBuffer ? content.byteLength : typeof content === 'string' ? content.length : 0;
+    const isImage = mimeType.startsWith('image/');
+    const inline = isImage && (extra.disposition === 'inline' || Boolean(extra.contentId) || extra.related === true || size < MIN_IMAGE_BYTES);
+    const documentLike = DOCUMENT_MIME.has(mimeType) || DOCUMENT_EXT.test(filename);
+    const entry: AttachmentMeta = { index, filename, mimeType, size, inline, oversized: size > MAX_ATTACHMENT_BYTES, sent: false };
+
+    if (includeBytes && documentLike && !inline && !entry.oversized && content instanceof ArrayBuffer && size > 0) {
+      if (total + size <= MAX_TOTAL_ATTACHMENT_BYTES) {
+        files.push({ index, filename, mimeType, size, dataBase64: arrayBufferToBase64(content) });
+        entry.sent = true;
+        total += size;
+      } else {
+        entry.oversized = true;
+      }
+    }
+    meta.push(entry);
+  });
+
+  return { meta, files };
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+  }
+  return btoa(binary);
 }
 
 function pickHeaders(parsed: Email): Record<string, string> {

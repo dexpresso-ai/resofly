@@ -97,6 +97,7 @@ import { ClientDetailPage, Clients } from './features/Clients';
 import { useClientEmailUnread, ClientEmailToasts } from './components/ClientEmailNotifications';
 import { CommunicationPage, type CommunicationFocus } from './features/Communication';
 import { useDecisionAlerts, DecisionToasts } from './components/DecisionNotifications';
+import { usePurchaseInvoiceInbox } from './components/PurchaseInvoiceInboxAlerts';
 import type { DecisionTarget } from './lib/decisions-api';
 import { useTicketUnread, TicketToasts } from './components/TicketNotifications';
 import { useTeamChat, TeamChatPage, TeamChatDock } from './components/TeamChat';
@@ -706,6 +707,13 @@ function App() {
 
   // De beslislijst: badge op de menuregel Gerrie + toast zodra Gerrie een kaart klaarzet.
   const decisionAlerts = useDecisionAlerts({ organizationId: activeOrganization?.id ?? null, currentUserId });
+
+  // De factuur-inbox: badge op Financiën → Inkoopfacturen + live herladen van het paneel.
+  const purchaseInbox = usePurchaseInvoiceInbox({
+    organizationId: activeOrganization?.id ?? null,
+    currentUserId,
+    enabled: permissions.canRead('finance'),
+  });
 
   // Ongelezen tickets (per gebruiker) + live meldingen bij nieuwe klant-activiteit.
   const {
@@ -2862,7 +2870,7 @@ function App() {
       onClick={() => setMobileNavOpen(open => !open)}
     >{mobileNavOpen ? <X size={22}/> : <Menu size={22}/>}</button>
     <div className={`sidebar-backdrop${mobileNavOpen ? ' is-open' : ''}`} onClick={() => setMobileNavOpen(false)} aria-hidden="true" />
-    <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onNewEntity={(organizationContext.businessStatus?.active && activeMembership?.role === 'owner') ? createNewEntity : null} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => supabaseAuth.signOut()} messageUnread={clientEmailUnread.total} inboxOpen={inboxCount} ticketUnread={ticketUnreadIds.size} chatUnread={teamChat.unreadTotal} decisionCount={decisionAlerts.count} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })} permissions={permissions} onRefresh={refresh} refreshing={loading} readOnly={!(orgCanWrite && permissions.canWritePage(page))}/>
+    <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onNewEntity={(organizationContext.businessStatus?.active && activeMembership?.role === 'owner') ? createNewEntity : null} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => supabaseAuth.signOut()} messageUnread={clientEmailUnread.total} inboxOpen={inboxCount} ticketUnread={ticketUnreadIds.size} chatUnread={teamChat.unreadTotal} decisionCount={decisionAlerts.count} purchaseInboxOpen={purchaseInbox.count} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })} permissions={permissions} onRefresh={refresh} refreshing={loading} readOnly={!(orgCanWrite && permissions.canWritePage(page))}/>
     <main className="main">
       <TabBar tabs={tabs} activeTabId={activeTab.id} data={data} onSelect={switchTab} onClose={closeTab} onNew={openTab} />
       {projectShift && <ProjectShiftDialog
@@ -2991,7 +2999,8 @@ function App() {
     if (page === 'suppliers') return <SuppliersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       draft={view.pendingDraft?.kind === 'supplier' ? (view.pendingDraft.payload as Partial<Supplier>) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
     if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
-      draft={view.pendingDraft?.kind === 'purchase_invoice' ? purchaseInvoiceSeedFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
+      draft={view.pendingDraft?.kind === 'purchase_invoice' ? purchaseInvoiceSeedFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}
+      inboxActivity={purchaseInbox.activity}/>;
     if (page === 'ledger') return <LedgerPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'bank') return <BankPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'assets') return <AssetsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;

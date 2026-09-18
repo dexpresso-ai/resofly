@@ -741,6 +741,196 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     },
   },
 
+  // ── Factuur-inbox: inkoopfacturen die per e-mail binnenkwamen ─────────────
+  //
+  // De verwerking (uitlezen, leverancier, dubbelcontrole, concept) zit in de
+  // edge functions; hier alleen lezen en de drie knoppen van het scherm. De
+  // uitvoerder in de browser roept dezelfde `invoice-inbox`-functie aan als de
+  // knop, dus wat Gerrie klaarzet doet precies wat een klik zou doen.
+
+  {
+    id: 'purchase_invoice_inbox.list',
+    label: 'Per e-mail binnengekomen inkoopfacturen bekijken',
+    module: 'finance',
+    kind: 'read',
+    description:
+      'Geeft wat er op het factuur-doorstuuradres binnenkwam: per item de status (ontvangen, wordt uitgelezen, concept klaargezet, geboekt, aandacht nodig, dubbel, genegeerd, mislukt), ' +
+      'de reden als er iets te doen is, afzender en onderwerp, de herkende leverancier, het factuurnummer en het totaal, en het id van het klaargezette concept. ' +
+      'Standaard alleen wat open staat (aandacht nodig, dubbel, mislukt, nog bezig); met `scope: all` ook de afgehandelde items. ' +
+      'Klaarzetten, opnieuw verwerken of negeren doe je met `purchase_invoice_inbox.prepare`, `purchase_invoice_inbox.reprocess` en `purchase_invoice_inbox.reject`.',
+    keywords: ['factuur-inbox', 'inkoopfacturen per e-mail', 'binnengekomen facturen', 'factuuradres', 'doorstuuradres facturen', 'aandacht nodig', 'dubbele factuur', 'uitgelezen'],
+    input: {
+      scope: { type: 'string', enum: ['open', 'all'], description: 'open = alleen wat op een mens wacht of nog loopt (standaard); all = alles behalve weggegooide transportfouten.' },
+      limit: { type: 'number', description: 'Maximaal aantal items, standaard 50.' },
+    },
+    async read(ctx, input) {
+      const scope = optChoice(input, 'scope', ['open', 'all'] as const) ?? 'open';
+      const limit = Math.min(Math.max(Math.round(optNum(input, 'limit') ?? 50), 1), 200);
+      let query = orgQuery(ctx, 'purchase_invoice_inbox',
+        'id, status, reason, received_at, sender_email, sender_name, subject, supplier_id, purchase_invoice_id, duplicate_of_purchase_invoice_id, method, confidence, warnings, proposal, attachments, auto_booked')
+        .neq('status', 'dropped').order('received_at', { ascending: false }).limit(limit);
+      if (scope === 'open') query = query.in('status', ['received', 'processing', 'needs_review', 'duplicate', 'failed']);
+      const { data, error } = await query;
+      if (error) throw new ActionError(`Factuur-inbox ophalen mislukt: ${error.message}`);
+      const rows = (data ?? []) as Array<Record<string, unknown>>;
+
+      // Leveranciersnamen in één extra query erbij (geen join over de service-role heen).
+      const supplierIds = [...new Set(rows.map((r) => r.supplier_id).filter((v): v is string => typeof v === 'string'))];
+      const names = new Map<string, string>();
+      if (supplierIds.length) {
+        const { data: sups } = await orgQuery(ctx, 'suppliers', 'id, name').in('id', supplierIds);
+        for (const s of (sups ?? []) as Array<{ id: string; name: string }>) names.set(s.id, s.name);
+      }
+
+      return {
+        items: rows.map((r) => {
+          const proposal = (r.proposal && typeof r.proposal === 'object' ? r.proposal : null) as
+            { supplier?: { name?: string }; supplier_invoice_number?: string | null; totals?: { total_cents?: number } } | null;
+          const total = proposal?.totals?.total_cents;
+          const supplierId = typeof r.supplier_id === 'string' ? r.supplier_id : null;
+          return {
+            inbox_id: r.id,
+            status: r.status,
+            reason: r.reason ?? null,
+            received_at: r.received_at,
+            sender: (r.sender_name as string | null) || (r.sender_email as string | null) || null,
+            sender_email: r.sender_email ?? null,
+            subject: r.subject,
+            supplier_id: supplierId,
+            supplier_name: (supplierId ? names.get(supplierId) : null) ?? proposal?.supplier?.name ?? null,
+            supplier_invoice_number: proposal?.supplier_invoice_number ?? null,
+            total_eur: typeof total === 'number' ? Math.round(total) / 100 : null,
+            method: r.method ?? null,
+            confidence: r.confidence ?? null,
+            warnings: Array.isArray(r.warnings) ? r.warnings : [],
+            attachments: Array.isArray(r.attachments) ? (r.attachments as Array<{ name?: string }>).map((a) => a.name).filter(Boolean) : [],
+            purchase_invoice_id: r.purchase_invoice_id ?? null,
+            duplicate_of_purchase_invoice_id: r.duplicate_of_purchase_invoice_id ?? null,
+            auto_booked: r.auto_booked === true,
+          };
+        }),
+        note: scope === 'open' ? 'Alleen items die open staan; gebruik scope all voor de afgehandelde.' : null,
+      };
+    },
+  },
+
+  {
+    id: 'purchase_invoice_inbox.prepare',
+    label: 'Binnengekomen factuur klaarzetten als concept',
+    module: 'finance',
+    kind: 'write',
+    description:
+      'Zet een per e-mail binnengekomen factuur uit de factuur-inbox klaar als concept-inkoopfactuur, met het uitgelezen voorstel en de bijlage als bewijsstuk. ' +
+      'Nodig als de leverancier niet herkend was (geef dan `supplier_id`, of `create_supplier: true` om hem uit de factuurgegevens aan te maken) of als het item als dubbel is gemarkeerd en je het toch wilt (`allow_duplicate: true`). ' +
+      'Er wordt niets geboekt; boeken gaat daarna met `purchase_invoice.book`. Zoek het item met `purchase_invoice_inbox.list`.',
+    keywords: ['factuur-inbox', 'klaarzetten', 'concept', 'leverancier kiezen', 'toch klaarzetten', 'dubbel', 'inkoopfactuur per e-mail'],
+    input: {
+      inbox_id: { type: 'string', description: 'Id van het inbox-item (uit purchase_invoice_inbox.list).' },
+      supplier_id: { type: 'string', description: 'Bestaande leverancier om aan de factuur te hangen.' },
+      create_supplier: { type: 'boolean', description: 'Maak de leverancier aan uit de uitgelezen factuurgegevens.' },
+      allow_duplicate: { type: 'boolean', description: 'Ook klaarzetten als het item als dubbel is gemarkeerd.' },
+    },
+    required: ['inbox_id'],
+    async plan(ctx, input) {
+      const inboxId = id(input, 'inbox_id');
+      const item = await row<{ status: string; reason: string | null; subject: string; sender_email: string | null; sender_name: string | null; supplier_id: string | null; proposal: Record<string, unknown> | null }>(
+        ctx, 'purchase_invoice_inbox', inboxId, 'status, reason, subject, sender_email, sender_name, supplier_id, proposal', 'Inbox-item');
+      if (!['needs_review', 'duplicate', 'failed', 'received'].includes(item.status)) {
+        throw new ActionError(`Dit item staat op "${item.status}" en kan niet (opnieuw) klaargezet worden.`);
+      }
+      const allowDuplicate = bool(input, 'allow_duplicate', false);
+      if (item.status === 'duplicate' && !allowDuplicate) {
+        throw new ActionError('Dit item is als dubbel gemarkeerd. Geef `allow_duplicate: true` als je toch een (tweede) concept wilt.');
+      }
+      const proposal = item.proposal as { supplier?: { name?: string; matchedId?: string | null }; supplier_invoice_number?: string | null; totals?: { total_cents?: number } } | null;
+      const supplierName = proposal?.supplier?.name?.trim() || null;
+      const supplierId = optId(input, 'supplier_id');
+      const createSupplier = bool(input, 'create_supplier', false);
+      let supplierLabel: string;
+      if (supplierId) {
+        const supplier = await row<{ name: string }>(ctx, 'suppliers', supplierId, 'name', 'Leverancier');
+        supplierLabel = supplier.name;
+      } else if (createSupplier) {
+        if (!supplierName) throw new ActionError('Er is geen leveranciersnaam uitgelezen; geef een `supplier_id`.');
+        supplierLabel = `${supplierName} (nieuw)`;
+      } else if (item.supplier_id || proposal?.supplier?.matchedId) {
+        const known = await row<{ name: string }>(ctx, 'suppliers', item.supplier_id ?? String(proposal?.supplier?.matchedId), 'name', 'Leverancier');
+        supplierLabel = known.name;
+      } else if (item.reason === 'supplier_unknown' || !proposal) {
+        throw new ActionError('De leverancier is niet herkend. Geef een `supplier_id` (zie suppliers) of `create_supplier: true`.');
+      } else {
+        supplierLabel = supplierName ?? 'leverancier volgens de factuur';
+      }
+      const total = proposal?.totals?.total_cents;
+      return {
+        title: `Binnengekomen factuur klaarzetten: ${supplierLabel}`,
+        sub: joinShort([
+          proposal?.supplier_invoice_number ? `nr. ${proposal.supplier_invoice_number}` : null,
+          typeof total === 'number' ? `${euroCents(total)} incl. btw` : null,
+          item.status === 'duplicate' ? 'ondanks de dubbelmelding' : null,
+          'als concept — boeken doe je daarna',
+        ], 160),
+        kind: 'money',
+        payload: { inbox_id: inboxId, supplier_id: supplierId, create_supplier: createSupplier, allow_duplicate: allowDuplicate, label: supplierLabel },
+      };
+    },
+  },
+
+  {
+    id: 'purchase_invoice_inbox.reprocess',
+    label: 'Binnengekomen factuur opnieuw verwerken',
+    module: 'finance',
+    kind: 'write',
+    description:
+      'Leest een per e-mail binnengekomen factuur opnieuw uit en zet hem klaar als dat kan. Voor items die mislukten door een storing, of die wachtten omdat de AI niet beschikbaar was of het tegoed op was. ' +
+      'Een item dat op een leverancierkeuze wacht, help je met `purchase_invoice_inbox.prepare`.',
+    keywords: ['factuur-inbox', 'opnieuw verwerken', 'opnieuw uitlezen', 'mislukt', 'herverwerken'],
+    input: { inbox_id: { type: 'string', description: 'Id van het inbox-item (uit purchase_invoice_inbox.list).' } },
+    required: ['inbox_id'],
+    async plan(ctx, input) {
+      const inboxId = id(input, 'inbox_id');
+      const item = await row<{ status: string; reason: string | null; subject: string; sender_email: string | null; sender_name: string | null }>(
+        ctx, 'purchase_invoice_inbox', inboxId, 'status, reason, subject, sender_email, sender_name', 'Inbox-item');
+      if (!['needs_review', 'failed', 'received'].includes(item.status)) {
+        throw new ActionError(`Dit item staat op "${item.status}" en is niet opnieuw te verwerken.`);
+      }
+      const label = item.sender_name || item.sender_email || item.subject || inboxId.slice(0, 8);
+      return {
+        title: `Binnengekomen factuur opnieuw verwerken: ${label}`,
+        sub: joinShort([item.subject, item.reason ? `nu: ${item.reason}` : null], 140),
+        kind: 'work',
+        payload: { inbox_id: inboxId, label },
+      };
+    },
+  },
+
+  {
+    id: 'purchase_invoice_inbox.reject',
+    label: 'Binnengekomen factuur negeren',
+    module: 'finance',
+    kind: 'write',
+    description:
+      'Legt een item uit de factuur-inbox weg: geen factuur, niet van ons, of al op een andere manier verwerkt. Er wordt niets aangemaakt of verwijderd; het item blijft zichtbaar onder "afgehandeld" en is te herstellen.',
+    keywords: ['factuur-inbox', 'negeren', 'wegleggen', 'geen factuur', 'spam'],
+    input: { inbox_id: { type: 'string', description: 'Id van het inbox-item (uit purchase_invoice_inbox.list).' } },
+    required: ['inbox_id'],
+    async plan(ctx, input) {
+      const inboxId = id(input, 'inbox_id');
+      const item = await row<{ status: string; subject: string; sender_email: string | null; sender_name: string | null }>(
+        ctx, 'purchase_invoice_inbox', inboxId, 'status, subject, sender_email, sender_name', 'Inbox-item');
+      if (!['received', 'needs_review', 'duplicate', 'failed'].includes(item.status)) {
+        throw new ActionError(`Dit item staat op "${item.status}" en kan niet genegeerd worden.`);
+      }
+      const label = item.sender_name || item.sender_email || item.subject || inboxId.slice(0, 8);
+      return {
+        title: `Binnengekomen factuur negeren: ${label}`,
+        sub: joinShort([item.subject, 'blijft zichtbaar onder afgehandeld en is te herstellen'], 140),
+        kind: 'work',
+        payload: { inbox_id: inboxId, label },
+      };
+    },
+  },
+
   // ── Bankrekeningen ────────────────────────────────────────────────────────
   {
     id: 'bank_account.list',

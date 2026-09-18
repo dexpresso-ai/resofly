@@ -39,6 +39,9 @@ import type {
   ClientEmailThreadOverview,
   ClientEmailUnreadCounts,
   OrganizationInboundAlias,
+  InboundAliasPurpose,
+  PurchaseInvoiceInboxItem,
+  PurchaseInvoiceInboxSettings,
   InboundMessage,
   InboundMessageCategory,
   EmailCampaign,
@@ -4010,27 +4013,55 @@ export async function searchClientEmails(
 // rechtencontrole, net als set_bank_transaction_status. Rechtstreeks schrijven
 // op deze tabellen kan niet — er is bewust geen insert/update-policy.
 
-const INBOUND_ALIAS_COLUMNS = 'id,organization_id,created_by,local_part,label,forward_from_email,status,retires_at,blocked_senders,last_received_at,received_total,pending_confirmation_code,pending_confirmation_at,created_at,updated_at';
+const INBOUND_ALIAS_COLUMNS = 'id,organization_id,created_by,local_part,label,purpose,forward_from_email,status,retires_at,blocked_senders,last_received_at,received_total,pending_confirmation_code,pending_confirmation_at,created_at,updated_at';
 const INBOUND_MESSAGE_COLUMNS = 'id,organization_id,created_by,alias_id,route,recipient,sender_email,sender_name,sender_source,sender_confidence,forwarding_evidence,subject,body_text,body_html,rfc_message_id,attachment_names,truncated,received_at,status,reason,category,candidates,suggested_client_id,linked_client_id,client_email_id,handled_at,purge_after,created_at,updated_at';
 
-/** Het actieve doorstuuradres van de organisatie, of null als er nog geen is. */
-export async function loadInboundAlias(organizationId: UUID): Promise<OrganizationInboundAlias | null> {
-  const { data, error } = await supabase
-    .from('organization_inbound_aliases')
-    .select(INBOUND_ALIAS_COLUMNS)
-    .eq('organization_id', organizationId)
-    .eq('status', 'active')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
+/**
+ * Het actieve doorstuuradres van de organisatie, of null als er nog geen is.
+ * Er zijn er twee: 'mail' (klantmail naar het dossier) en 'invoices'
+ * (inkoopfacturen naar de factuur-inbox); ze leven in dezelfde tabel.
+ */
+export async function loadInboundAlias(organizationId: UUID, purpose: InboundAliasPurpose = 'mail'): Promise<OrganizationInboundAlias | null> {
+  const query = (withPurpose: boolean) => {
+    let q = supabase
+      .from('organization_inbound_aliases')
+      .select(withPurpose ? INBOUND_ALIAS_COLUMNS : INBOUND_ALIAS_COLUMNS.replace('purpose,', ''))
+      .eq('organization_id', organizationId)
+      .eq('status', 'active');
+    if (withPurpose) q = q.eq('purpose', purpose);
+    return q.order('created_at', { ascending: false }).limit(1).maybeSingle();
+  };
+  const { data, error } = await query(true);
+  if (error) {
+    // 42703 = de kolom `purpose` bestaat nog niet (migratie 20260918010000 nog
+    // niet gedraaid). Klantmail werkt dan als vanouds; een factuuradres is er nog niet.
+    if (error.code === '42703') {
+      if (purpose !== 'mail') return null;
+      const retry = await query(false);
+      if (retry.error) throw retry.error;
+      return retry.data ? ({ ...(retry.data as object), purpose: 'mail' } as OrganizationInboundAlias) : null;
+    }
+    throw error;
+  }
   return (data ?? null) as OrganizationInboundAlias | null;
 }
 
+const INVOICE_INBOX_MIGRATION_HINT =
+  'Het factuuradres is in deze omgeving nog niet ingeschakeld. Voer de migratie 20260918010000_purchase_invoice_inbox.sql uit in Supabase.';
+
 /** Maak het doorstuuradres aan als het nog niet bestaat (owner/admin). */
-export async function ensureInboundAlias(organizationId: UUID): Promise<OrganizationInboundAlias> {
-  const { data, error } = await supabase.rpc('ensure_organization_inbound_alias', { p_organization_id: organizationId });
-  if (error) throw error;
+export async function ensureInboundAlias(organizationId: UUID, purpose: InboundAliasPurpose = 'mail'): Promise<OrganizationInboundAlias> {
+  const { data, error } = await supabase.rpc('ensure_organization_inbound_alias', { p_organization_id: organizationId, p_purpose: purpose });
+  if (error) {
+    // PGRST202 = de functie kent `p_purpose` nog niet (migratie nog niet gedraaid).
+    if (error.code === 'PGRST202') {
+      if (purpose !== 'mail') throw new NotMigratedError(INVOICE_INBOX_MIGRATION_HINT);
+      const retry = await supabase.rpc('ensure_organization_inbound_alias', { p_organization_id: organizationId });
+      if (retry.error) throw retry.error;
+      return { ...(retry.data as object), purpose: 'mail' } as OrganizationInboundAlias;
+    }
+    throw error;
+  }
   return data as OrganizationInboundAlias;
 }
 
@@ -4039,10 +4070,98 @@ export async function ensureInboundAlias(organizationId: UUID): Promise<Organiza
  * meer automatisch — mail die al onderweg is landt in de opvangbak in plaats van
  * te verdwijnen.
  */
-export async function rotateInboundAlias(organizationId: UUID): Promise<OrganizationInboundAlias> {
-  const { data, error } = await supabase.rpc('rotate_organization_inbound_alias', { p_organization_id: organizationId });
-  if (error) throw error;
+export async function rotateInboundAlias(organizationId: UUID, purpose: InboundAliasPurpose = 'mail'): Promise<OrganizationInboundAlias> {
+  const { data, error } = await supabase.rpc('rotate_organization_inbound_alias', { p_organization_id: organizationId, p_purpose: purpose });
+  if (error) {
+    if (error.code === 'PGRST202') {
+      if (purpose !== 'mail') throw new NotMigratedError(INVOICE_INBOX_MIGRATION_HINT);
+      const retry = await supabase.rpc('rotate_organization_inbound_alias', { p_organization_id: organizationId });
+      if (retry.error) throw retry.error;
+      return { ...(retry.data as object), purpose: 'mail' } as OrganizationInboundAlias;
+    }
+    throw error;
+  }
   return data as OrganizationInboundAlias;
+}
+
+// ── Inkoopfacturen per e-mail: de factuur-inbox ─────────────────────────────
+//
+// Lezen gaat rechtstreeks (RLS: module Financiën). Verwerken, klaarzetten en
+// negeren lopen via de edge function invoice-inbox (zie invoice-inbox-api.ts);
+// alleen de instellingen hebben een eigen RPC.
+
+const PURCHASE_INVOICE_INBOX_COLUMNS =
+  'id,organization_id,alias_id,parent_id,rfc_message_id,sender_email,sender_name,subject,body_excerpt,received_at,attachments,status,reason,error_message,' +
+  'method,confidence,warnings,proposal,extraction_meta,supplier_id,supplier_match,supplier_created,purchase_invoice_id,duplicate_of_purchase_invoice_id,' +
+  'duplicate_of_inbox_id,auto_booked,attempts,processed_at,handled_by,handled_at,purged_at,created_at,updated_at';
+
+const PURCHASE_INVOICE_INBOX_HINT =
+  'Voer de migratie 20260918010000_purchase_invoice_inbox.sql uit in Supabase om de factuur-inbox te activeren.';
+
+/** Alles wat per e-mail binnenkwam (behalve transport-drops), nieuwste eerst. Leeg zolang de migratie ontbreekt. */
+export async function loadPurchaseInvoiceInbox(organizationId: UUID): Promise<PurchaseInvoiceInboxItem[]> {
+  const { data, error } = await supabase
+    .from('purchase_invoice_inbox')
+    .select(PURCHASE_INVOICE_INBOX_COLUMNS)
+    .eq('organization_id', organizationId)
+    .neq('status', 'dropped')
+    .order('received_at', { ascending: false })
+    .limit(200);
+  if (error) {
+    if (isMissingRelation(error)) { console.warn(PURCHASE_INVOICE_INBOX_HINT); return []; }
+    throw error;
+  }
+  return ((data ?? []) as unknown as Array<Record<string, unknown>>).map(normalizeInboxItem);
+}
+
+function normalizeInboxItem(raw: Record<string, unknown>): PurchaseInvoiceInboxItem {
+  return {
+    ...(raw as unknown as PurchaseInvoiceInboxItem),
+    attachments: Array.isArray(raw.attachments) ? (raw.attachments as PurchaseInvoiceInboxItem['attachments']) : [],
+    warnings: Array.isArray(raw.warnings) ? (raw.warnings as string[]) : [],
+    proposal: raw.proposal && typeof raw.proposal === 'object' ? (raw.proposal as PurchaseInvoiceInboxItem['proposal']) : null,
+  };
+}
+
+/** Aantal items dat op een mens wacht (voor een teller op de pagina). */
+export async function loadPurchaseInvoiceInboxOpenCount(organizationId: UUID): Promise<number> {
+  const { count, error } = await supabase
+    .from('purchase_invoice_inbox')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', organizationId)
+    .in('status', ['needs_review', 'duplicate', 'failed']);
+  if (error) {
+    if (isMissingRelation(error)) return 0;
+    throw error;
+  }
+  return count ?? 0;
+}
+
+const INBOX_SETTINGS_DEFAULTS: Omit<PurchaseInvoiceInboxSettings, 'organization_id' | 'updated_at'> = {
+  ai_enabled: true, auto_create_suppliers: true, auto_book: false,
+};
+
+/** Instellingen van de factuur-inbox; ontbrekende rij = de defaults. */
+export async function loadPurchaseInvoiceInboxSettings(organizationId: UUID): Promise<PurchaseInvoiceInboxSettings> {
+  const { data, error } = await supabase
+    .from('purchase_invoice_inbox_settings')
+    .select('organization_id,ai_enabled,auto_create_suppliers,auto_book,updated_at')
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error && !isMissingRelation(error)) throw error;
+  return (data as PurchaseInvoiceInboxSettings | null) ?? { organization_id: organizationId, updated_at: '', ...INBOX_SETTINGS_DEFAULTS };
+}
+
+/** Instellingen wijzigen (owner/admin). Alleen de meegegeven velden veranderen. */
+export async function savePurchaseInvoiceInboxSettings(
+  organizationId: UUID,
+  patch: Partial<Pick<PurchaseInvoiceInboxSettings, 'ai_enabled' | 'auto_create_suppliers' | 'auto_book'>>,
+): Promise<PurchaseInvoiceInboxSettings> {
+  const { data, error } = await supabase.rpc('set_purchase_invoice_inbox_settings', {
+    p_organization_id: organizationId, p_patch: patch,
+  });
+  if (error) throw error;
+  return data as PurchaseInvoiceInboxSettings;
 }
 
 /** Leg vast wélk eigen adres wordt doorgestuurd (info@…), voor herkenning. */

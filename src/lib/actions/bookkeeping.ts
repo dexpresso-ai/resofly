@@ -7,6 +7,8 @@ import {
   updateRow,
 } from '../repository';
 import { purchaseTotals } from '../../features/Bookkeeping';
+import { runInvoiceInboxAction } from '../invoice-inbox-api';
+import { INBOX_STATUS_LABELS, inboxReasonLabel } from '../invoiceInbox';
 import { flag, list, optText, patchOf, text, type ActionExecutor } from './types';
 import type {
   BankAccount, BankRule, FixedAsset, LedgerAccount, PurchaseInvoice, PurchaseInvoiceLine, UUID,
@@ -122,6 +124,34 @@ export const BOOKKEEPING_EXECUTORS: Record<string, ActionExecutor> = {
     const number = optText(payload, 'number');
     const supplier = optText(payload, 'supplier_name');
     return `Inkoopfactuur ${number ?? ''}${supplier ? ` van ${supplier}` : ''} geboekt als ${entry.entry_number ?? 'boekstuk'}`.replace('  ', ' ');
+  },
+
+  // ── Factuur-inbox (inkoopfacturen per e-mail) ─────────────────────────────
+  // Dezelfde edge function als de knoppen op de pagina Inkoopfacturen; de
+  // bevestigingszin zegt wat er daadwerkelijk uitkwam, want klaarzetten kan
+  // alsnog stranden (bijvoorbeeld: toch niets uitgelezen).
+  'purchase_invoice_inbox.prepare': async (payload, ctx) => {
+    const item = await runInvoiceInboxAction(ctx.organizationId, text(payload, 'inbox_id'), {
+      action: 'prepare',
+      supplierId: optText(payload, 'supplier_id'),
+      createSupplier: flag(payload, 'create_supplier'),
+      allowDuplicate: flag(payload, 'allow_duplicate'),
+    });
+    const label = optText(payload, 'label') ?? 'leverancier';
+    if (item.status === 'booked') return `Factuur van ${label} klaargezet en automatisch geboekt`;
+    if (item.status === 'ready') return `Factuur van ${label} klaargezet als concept-inkoopfactuur — kies zo nodig de grootboekrekeningen en boek hem`;
+    return `Factuur van ${label} verwerkt, maar niet klaargezet: ${INBOX_STATUS_LABELS[item.status]}${item.reason ? ` (${inboxReasonLabel(item.reason)})` : ''}`;
+  },
+
+  'purchase_invoice_inbox.reprocess': async (payload, ctx) => {
+    const item = await runInvoiceInboxAction(ctx.organizationId, text(payload, 'inbox_id'), { action: 'process' });
+    const label = optText(payload, 'label') ?? 'het item';
+    return `Binnengekomen factuur van ${label} opnieuw verwerkt: ${INBOX_STATUS_LABELS[item.status]}${item.reason && item.status !== 'ready' && item.status !== 'booked' ? ` (${inboxReasonLabel(item.reason)})` : ''}`;
+  },
+
+  'purchase_invoice_inbox.reject': async (payload, ctx) => {
+    await runInvoiceInboxAction(ctx.organizationId, text(payload, 'inbox_id'), { action: 'reject' });
+    return `Binnengekomen factuur van ${optText(payload, 'label') ?? 'het item'} genegeerd — te herstellen onder Inkoopfacturen`;
   },
 
   // ── Bank ──────────────────────────────────────────────────────────────────

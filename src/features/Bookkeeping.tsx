@@ -1,22 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Calculator, FileDown, FileText, Layers, PenSquare, Plus, RotateCcw, Scale, Sparkles, Trash2, Upload } from 'lucide-react';
+import { BookOpen, Calculator, Download, FileDown, FileText, Inbox, Layers, Mail, PenSquare, Plus, RotateCcw, Scale, Sparkles, Trash2, Upload } from 'lucide-react';
 import type {
-  AccountLedgerRow, AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PurchaseInvoice, PurchaseInvoiceLine, Supplier, TrialBalanceRow, UUID, VatCode,
+  AccountLedgerRow, AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PurchaseInvoice, PurchaseInvoiceInboxItem, PurchaseInvoiceLine, Supplier, TrialBalanceRow, UUID, VatCode,
 } from '../types';
 import { REPORT_GROUPS_BY_TYPE, REPORT_GROUP_LABELS } from '../types';
 import { Modal } from '../components/Modal';
 import { CsvImportModal } from '../components/CsvImportModal';
 import type { ImportColumn } from '../lib/csvImport';
 import { Button, Input, Select, Textarea } from '../components/Ui';
+import { AttachmentList } from '../components/AttachmentList';
+import { formatEmailDateTime } from '../components/ClientEmailMessage';
 import { dateNL, euro, uid } from '../lib/format';
 import {
   bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, insertRow,
-  openingBalancePlugAccount,
+  loadInboundAlias, loadPurchaseInvoiceInbox, openingBalancePlugAccount,
   postManualJournalEntry, reportAccountLedger, reportTrialBalance, reverseJournalEntry, updateRow,
 } from '../lib/repository';
 import { downloadXaf } from '../lib/xaf';
-import { uploadToR2 } from '../lib/r2';
+import { downloadStoredFile, uploadToR2 } from '../lib/r2';
 import { scanInvoice, SCAN_ACCEPT, SCAN_MAX_BYTES, type ScanResult } from '../lib/invoice-scan-api';
+import { runInvoiceInboxAction } from '../lib/invoice-inbox-api';
+import {
+  INBOX_STATUS_LABELS, INBOX_SUPPLIER_MATCH_LABELS, describeAttachment, inboxActionsFor, inboxIsBusy, inboxItemSummary,
+  inboxReasonLabel, splitInboxItems,
+} from '../lib/invoiceInbox';
 
 // Vaste kolommen voor de bulk CSV-import van leveranciers (crediteuren).
 const SUPPLIER_IMPORT_COLUMNS: ImportColumn[] = [
@@ -257,11 +264,13 @@ const purchaseStatusLabel: Record<PurchaseInvoice['status'], string> = {
   draft: 'Concept', booked: 'Geboekt', paid: 'Betaald', cancelled: 'Geannuleerd',
 };
 
-export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged, draft, onDraftConsumed }: PageProps & {
+export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged, draft, onDraftConsumed, inboxActivity = 0 }: PageProps & {
   /** Door een agent klaargezette inkoopfactuur; gebruikt hetzelfde seed-pad als de
    *  AI-factuurscan, dus het formulier hoefde er niets voor te leren. */
   draft?: InvoiceFormSeed | null;
   onDraftConsumed?: () => void;
+  /** Loopt op bij elk realtime-event op de factuur-inbox (App-niveau); het paneel herlaadt dan. */
+  inboxActivity?: number;
 }) {
   const [edit, setEdit] = useState<PurchaseInvoice | 'new' | null>(null);
   const [seed, setSeed] = useState<InvoiceFormSeed | null>(null);
@@ -275,7 +284,16 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
   const [scan, setScan] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Een concept dat vanuit de factuur-inbox wordt geopend maar nog niet in `data`
+  // zit (de verwerking liep net af): onthouden en openen zodra het geladen is.
+  const [pendingOpenId, setPendingOpenId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pendingOpenId) return;
+    const found = data.purchaseInvoices.find(pi => pi.id === pendingOpenId);
+    if (found) { setSeed(null); setEdit(found); setPendingOpenId(null); }
+  }, [pendingOpenId, data.purchaseInvoices]);
   const supplierName = (id: string | null) => data.suppliers.find(s => s.id === id)?.name ?? '—';
+  const viaEmail = (pi: PurchaseInvoice) => (pi.extraction_meta as { channel?: string } | null)?.channel === 'email';
 
   async function book(pi: PurchaseInvoice) {
     if (!canWrite) return;
@@ -297,13 +315,25 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
         </div>
       </div>
       {error && <div className="error">{error}</div>}
+      {!notReady && <PurchaseInvoiceInboxPanel
+        data={data}
+        organizationId={organizationId}
+        canWrite={canWrite}
+        onChanged={onChanged}
+        activity={inboxActivity}
+        onOpenInvoice={id => {
+          const found = data.purchaseInvoices.find(pi => pi.id === id);
+          if (found) { setSeed(null); setEdit(found); }
+          else { setPendingOpenId(id); onChanged(); }
+        }}
+      />}
       {data.purchaseInvoices.length === 0
         ? <div className="empty"><div className="e-big">Nog geen inkoopfacturen</div></div>
         : <div className="bk-table-wrap"><table className="bk-table">
             <thead><tr><th>Nummer</th><th>Leverancier</th><th>Datum</th><th className="bk-num">Excl.</th><th className="bk-num">BTW</th><th className="bk-num">Totaal</th><th>Status</th><th></th></tr></thead>
             <tbody>{data.purchaseInvoices.map(pi => (
               <tr key={pi.id} className="bk-row">
-                <td onClick={() => setEdit(pi)}><strong>{pi.internal_number || '—'}</strong>{pi.supplier_invoice_number && <small className="bk-muted"> · {pi.supplier_invoice_number}</small>}</td>
+                <td onClick={() => setEdit(pi)}><strong>{pi.internal_number || '—'}</strong>{pi.supplier_invoice_number && <small className="bk-muted"> · {pi.supplier_invoice_number}</small>}{viaEmail(pi) && <span className="bk-via-email" title="Per e-mail binnengekomen op je factuuradres"><Mail size={12} /></span>}</td>
                 <td onClick={() => setEdit(pi)}>{supplierName(pi.supplier_id)}</td>
                 <td onClick={() => setEdit(pi)}>{dateNL(pi.date)}</td>
                 <td className="bk-num">{euroCents(pi.subtotal_cents)}</td>
@@ -324,9 +354,215 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
       {edit && <PurchaseInvoiceForm data={data} organizationId={organizationId} canWrite={canWrite}
         invoice={edit === 'new' ? null : edit} seed={edit === 'new' ? seed : null}
         onClose={() => { setEdit(null); setSeed(null); }}
-        onSaved={() => { setEdit(null); setSeed(null); onChanged(); }} />}
+        onSaved={() => { setEdit(null); setSeed(null); onChanged(); }}
+        onRefresh={onChanged} />}
     </div>
   );
+}
+
+// ── Factuur-inbox: wat per e-mail binnenkwam op het factuuradres ─────────────
+
+const CONFIDENCE_WORD: Record<'high' | 'medium' | 'low', string> = { high: 'hoog', medium: 'gemiddeld', low: 'laag' };
+
+/**
+ * De werklijst boven de inkoopfacturen: wat automatisch is klaargezet (of
+ * geboekt), wat dubbel is en wat op een mens wacht. Ververst zichzelf zolang
+ * er nog iets wordt uitgelezen; de knoppen lopen via de edge function
+ * invoice-inbox, en na een nieuw concept wordt de werkruimte opnieuw geladen.
+ */
+function PurchaseInvoiceInboxPanel({ data, organizationId, canWrite, onChanged, onOpenInvoice, activity = 0 }: {
+  data: AppData; organizationId: string; canWrite: boolean; onChanged: () => void; onOpenInvoice: (purchaseInvoiceId: string) => void;
+  /** Realtime-tikker van usePurchaseInvoiceInbox: elke wijziging in de inbox herlaadt de lijst. */
+  activity?: number;
+}) {
+  const [items, setItems] = useState<PurchaseInvoiceInboxItem[]>([]);
+  const [hasAlias, setHasAlias] = useState<boolean | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [showDone, setShowDone] = useState(false);
+  const knownDrafts = useRef<string>('');
+  // `onChanged` (de app-brede refresh) krijgt bij elke render een nieuwe identiteit;
+  // via een ref blijft `reload` stabiel en herlaadt de lijst niet bij elke render.
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
+
+  const reload = useCallback(async () => {
+    const [rows, alias] = await Promise.all([loadPurchaseInvoiceInbox(organizationId), loadInboundAlias(organizationId, 'invoices')]);
+    setItems(rows);
+    setHasAlias(Boolean(alias));
+    // Nieuwe concepten uit de verwerking: de werkruimte weet daar nog niets van.
+    const drafts = rows.filter(r => r.purchase_invoice_id).map(r => r.purchase_invoice_id).sort().join(',');
+    if (knownDrafts.current && drafts !== knownDrafts.current) onChangedRef.current();
+    knownDrafts.current = drafts;
+  }, [organizationId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false); setLoadError(null);
+    reload()
+      .then(() => { if (!cancelled) setLoaded(true); })
+      .catch(err => { if (!cancelled) { setLoadError(err instanceof Error ? err.message : 'Factuur-inbox laden mislukt.'); setLoaded(true); } });
+    return () => { cancelled = true; };
+  }, [reload]);
+
+  // Live: elk realtime-event op de inbox (App-niveau) herlaadt de lijst.
+  useEffect(() => {
+    if (!loaded || activity === 0) return;
+    reload().catch(() => { /* best effort */ });
+  }, [activity, loaded, reload]);
+
+  // Terugval als realtime een event mist: zolang er iets wordt uitgelezen elke
+  // 30 s, anders elke twee minuten.
+  const anyBusy = items.some(inboxIsBusy);
+  useEffect(() => {
+    if (!loaded) return;
+    const handle = window.setInterval(() => { reload().catch(() => { /* best effort */ }); }, anyBusy ? 30_000 : 120_000);
+    return () => window.clearInterval(handle);
+  }, [loaded, anyBusy, reload]);
+
+  const { open, done } = useMemo(() => splitInboxItems(items), [items]);
+
+  if (loaded && !loadError && hasAlias === false && items.length === 0) {
+    return <div className="bk-note pi-inbox-hint">
+      <Inbox size={14} /> Stuur inkoopfacturen door naar je eigen factuuradres en ze staan hier automatisch klaar als concept.
+      Maak het adres aan onder <strong>Instellingen → E-mail → Inkoopfacturen per e-mail</strong>.
+    </div>;
+  }
+  if (!loaded || (items.length === 0 && !loadError)) {
+    return loaded ? <div className="bk-note pi-inbox-hint"><Inbox size={14} /> Nog niets binnengekomen op je factuuradres. Wat je ernaartoe stuurt, verschijnt hier.</div> : null;
+  }
+
+  return <section className="pi-inbox">
+    <div className="pi-inbox-head">
+      <div>
+        <h3><Inbox size={15} /> Binnengekomen per e-mail</h3>
+        <p className="bk-muted">
+          {open.length === 0
+            ? 'Alles is verwerkt.'
+            : `${open.length} item${open.length === 1 ? '' : 's'} ${anyBusy ? 'in behandeling of ' : ''}met aandacht nodig.`}
+          {done.length > 0 && <> {' '}<button type="button" className="bk-link-button" onClick={() => setShowDone(v => !v)}>{showDone ? 'Afgehandeld verbergen' : `Afgehandeld tonen (${done.length})`}</button></>}
+        </p>
+      </div>
+    </div>
+    {loadError && <div className="error">{loadError}</div>}
+    <div className="pi-inbox-list">
+      {open.map(item => <PurchaseInvoiceInboxRow key={item.id} item={item} data={data} organizationId={organizationId} canWrite={canWrite} onChanged={reload} onOpenInvoice={onOpenInvoice} />)}
+      {showDone && done.slice(0, 30).map(item => <PurchaseInvoiceInboxRow key={item.id} item={item} data={data} organizationId={organizationId} canWrite={canWrite} onChanged={reload} onOpenInvoice={onOpenInvoice} />)}
+    </div>
+  </section>;
+}
+
+function PurchaseInvoiceInboxRow({ item, data, organizationId, canWrite, onChanged, onOpenInvoice }: {
+  item: PurchaseInvoiceInboxItem; data: AppData; organizationId: string; canWrite: boolean;
+  onChanged: () => Promise<void>; onOpenInvoice: (purchaseInvoiceId: string) => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [supplierChoice, setSupplierChoice] = useState<string>(item.proposal?.supplier.matchedId ?? (item.proposal?.supplier.name ? '__new__' : ''));
+  const [showDetails, setShowDetails] = useState(false);
+
+  const summary = inboxItemSummary(item);
+  const actions = inboxActionsFor(item);
+  const supplier = item.supplier_id ? data.suppliers.find(s => s.id === item.supplier_id) : null;
+  const duplicateOf = item.duplicate_of_purchase_invoice_id ? data.purchaseInvoices.find(pi => pi.id === item.duplicate_of_purchase_invoice_id) : null;
+  const linked = item.purchase_invoice_id ? data.purchaseInvoices.find(pi => pi.id === item.purchase_invoice_id) : null;
+  const sortedSuppliers = useMemo(() => [...data.suppliers].sort((a, b) => a.name.localeCompare(b.name, 'nl')), [data.suppliers]);
+  const isBusyStatus = inboxIsBusy(item);
+
+  async function act(label: string, fn: () => Promise<unknown>) {
+    setBusy(label); setError(null);
+    try { await fn(); await onChanged(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Actie mislukt.'); }
+    finally { setBusy(null); }
+  }
+
+  async function download(storageKey: string, name: string) {
+    setError(null);
+    try { await downloadStoredFile(storageKey, name); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Download mislukt.'); }
+  }
+
+  const statusClass = `pi-inbox-status pi-inbox-status-${item.status}`;
+
+  return <article className={`inbound-row pi-inbox-row${isBusyStatus ? ' is-busy' : ''}`}>
+    <div className="inbound-row-head">
+      <div className="inbound-row-sender">
+        <strong>{summary.title}</strong>
+        {summary.number && <span className="inbound-row-address">nr. {summary.number}</span>}
+        {summary.totalCents != null && <span className="pi-inbox-total">{euroCents(summary.totalCents)}</span>}
+        <span className={statusClass}>{INBOX_STATUS_LABELS[item.status]}</span>
+        {item.auto_booked && <span className="status-pill">automatisch geboekt</span>}
+      </div>
+      <time title={new Date(item.received_at).toLocaleString('nl-NL')}>{formatEmailDateTime(item.received_at)}</time>
+    </div>
+
+    <div className="inbound-row-subject">
+      {item.subject || '(geen onderwerp)'}
+      <span className="pi-inbox-from"> — van {item.sender_name || item.sender_email || 'onbekende afzender'}{item.sender_name && item.sender_email ? ` <${item.sender_email}>` : ''}</span>
+    </div>
+
+    {item.reason && item.status !== 'ready' && item.status !== 'booked' && <p className="inbound-row-reason">{inboxReasonLabel(item.reason)}</p>}
+    {item.error_message && item.status === 'failed' && <p className="inbound-row-note">{item.error_message}</p>}
+    {duplicateOf && <p className="inbound-row-note">Staat al geregistreerd als <strong>{duplicateOf.internal_number ?? duplicateOf.supplier_invoice_number ?? 'inkoopfactuur'}</strong> ({purchaseStatusLabel[duplicateOf.status]}).</p>}
+    {linked && <p className="inbound-row-note">Concept <strong>{linked.internal_number ?? '—'}</strong> · {purchaseStatusLabel[linked.status]}{supplier ? ` · ${supplier.name}` : ''}{item.supplier_match && INBOX_SUPPLIER_MATCH_LABELS[item.supplier_match] ? ` (leverancier ${INBOX_SUPPLIER_MATCH_LABELS[item.supplier_match]})` : ''}</p>}
+    {!linked && supplier && <p className="inbound-row-note">Leverancier: <strong>{supplier.name}</strong>{item.supplier_match && INBOX_SUPPLIER_MATCH_LABELS[item.supplier_match] ? ` (${INBOX_SUPPLIER_MATCH_LABELS[item.supplier_match]})` : ''}</p>}
+
+    {item.attachments.length > 0 && <div className="pi-inbox-attachments">
+      {item.attachments.map((att, i) => {
+        const d = describeAttachment(att);
+        return <span key={i} className={`pi-inbox-attachment${d.downloadable ? ' is-file' : ''}`}>
+          {d.downloadable
+            ? <button type="button" onClick={() => void download(att.storage_key!, att.name)} title="Downloaden"><Download size={12} /> {d.label}</button>
+            : <span>{d.label}</span>}
+          {d.note && <small> ({d.note})</small>}
+        </span>;
+      })}
+    </div>}
+
+    {(item.warnings.length > 0 || item.proposal) && <button type="button" className="bk-link-button pi-inbox-details-toggle" onClick={() => setShowDetails(v => !v)}>
+      {showDetails ? 'Details verbergen' : `Details${item.warnings.length ? ` · ${item.warnings.length} waarschuwing${item.warnings.length === 1 ? '' : 'en'}` : ''}${item.confidence ? ` · zekerheid ${CONFIDENCE_WORD[item.confidence]}` : ''}${item.method === 'ubl' ? ' · e-factuur (UBL)' : ''}`}
+    </button>}
+    {showDetails && <div className="pi-inbox-details">
+      {item.warnings.length > 0 && <ul className="bk-ai-warnings">{item.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>}
+      {item.proposal && <table className="bk-table pi-inbox-lines">
+        <thead><tr><th>Omschrijving</th><th>BTW</th><th className="bk-num">Excl.</th></tr></thead>
+        <tbody>{item.proposal.lines.map((l, i) => <tr key={i}><td>{l.description || '—'}</td><td>{data.vatCodes.find(v => v.code === l.vat_code)?.label ?? l.vat_code}</td><td className="bk-num">{euroCents(l.amount_cents)}</td></tr>)}</tbody>
+        <tfoot><tr><td colSpan={2}>Totaal incl. BTW</td><td className="bk-num"><strong>{euroCents(item.proposal.totals.total_cents)}</strong></td></tr></tfoot>
+      </table>}
+      {item.body_excerpt && <p className="inbound-row-snippet">{item.body_excerpt.replace(/\s+/g, ' ').trim().slice(0, 300)}</p>}
+    </div>}
+
+    {error && <div className="error">{error}</div>}
+
+    {canWrite && !isBusyStatus && <div className="inbound-row-actions">
+      {actions.open && item.purchase_invoice_id && <Button variant="primary" onClick={() => onOpenInvoice(item.purchase_invoice_id!)}>Open concept</Button>}
+      {actions.prepare && <>
+        <Select value={supplierChoice} onChange={e => setSupplierChoice(e.target.value)} disabled={busy != null}>
+          <option value="">Kies een leverancier…</option>
+          {item.proposal?.supplier.name && <option value="__new__">➕ Nieuwe leverancier: {item.proposal.supplier.name}</option>}
+          {sortedSuppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </Select>
+        <Button variant="primary" disabled={busy != null || !supplierChoice}
+          onClick={() => act('prepare', () => runInvoiceInboxAction(organizationId, item.id, supplierChoice === '__new__' ? { action: 'prepare', createSupplier: true } : { action: 'prepare', supplierId: supplierChoice }))}>
+          {busy === 'prepare' ? 'Bezig…' : 'Klaarzetten als concept'}
+        </Button>
+      </>}
+      {actions.forceDuplicate && <Button disabled={busy != null} onClick={() => {
+        if (!window.confirm('Deze factuur lijkt al geregistreerd. Toch een (tweede) concept klaarzetten?')) return;
+        void act('force', () => runInvoiceInboxAction(organizationId, item.id, { action: 'prepare', allowDuplicate: true }));
+      }}>{busy === 'force' ? 'Bezig…' : 'Toch klaarzetten'}</Button>}
+      {actions.retry && <Button disabled={busy != null} onClick={() => act('retry', () => runInvoiceInboxAction(organizationId, item.id, { action: 'process' }))}>
+        <RotateCcw size={13} /> {busy === 'retry' ? 'Bezig…' : 'Opnieuw verwerken'}
+      </Button>}
+      {actions.reject && <Button disabled={busy != null} onClick={() => act('reject', () => runInvoiceInboxAction(organizationId, item.id, { action: 'reject' }))}>
+        {busy === 'reject' ? 'Bezig…' : 'Negeren'}
+      </Button>}
+      {actions.restore && <Button disabled={busy != null} onClick={() => act('restore', () => runInvoiceInboxAction(organizationId, item.id, { action: 'restore' }))}>
+        {busy === 'restore' ? 'Bezig…' : 'Herstellen en verwerken'}
+      </Button>}
+    </div>}
+    {isBusyStatus && <p className="inbound-row-note">Wordt uitgelezen — dit duurt meestal minder dan een minuut.</p>}
+  </article>;
 }
 
 // ── AI-factuurscan: uitlezen → voorstel → vooringevuld concept ────────────────
@@ -503,9 +739,11 @@ function InvoiceScanModal({ data, organizationId, onClose, onSeed }: {
   );
 }
 
-function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, onClose, onSaved }: {
+function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, onClose, onSaved, onRefresh }: {
   data: AppData; organizationId: string; canWrite: boolean; invoice: PurchaseInvoice | null; seed?: InvoiceFormSeed | null;
   onClose: () => void; onSaved: () => void;
+  /** Werkruimte herladen zonder het formulier te sluiten (na het verwijderen van een bijlage). */
+  onRefresh?: () => void;
 }) {
   const expenseAccounts = useMemo(() => data.ledgerAccounts.filter(a => a.type === 'expense' || a.type === 'asset'), [data.ledgerAccounts]);
   // Vangnetrekening voor regels zonder gekozen grootboek (spiegelt de server-coalesce → 4500).
@@ -594,6 +832,18 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
           {seed.ai.warnings.length > 0 && <ul className="bk-ai-warnings">{seed.ai.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>}
         </div>
       )}
+      {invoice && !seed && (() => {
+        const meta = (invoice.extraction_meta ?? null) as { channel?: string; warnings?: unknown; confidence?: string; sender_email?: string | null; received_at?: string } | null;
+        const warnings = Array.isArray(meta?.warnings) ? (meta!.warnings as unknown[]).map(String) : [];
+        if (!meta || (meta.channel !== 'email' && warnings.length === 0)) return null;
+        return <div className="bk-note bk-ai-note">
+          <strong><Sparkles size={13} /> {meta.channel === 'email' ? 'Per e-mail binnengekomen' : invoice.source === 'import' ? 'E-factuur (UBL)' : 'AI-voorstel'}</strong>
+          {meta.channel === 'email' && <> op je factuuradres{meta.received_at ? ` (${dateNL(meta.received_at.slice(0, 10))})` : ''}{meta.sender_email ? `, van ${meta.sender_email}` : ''}</>}
+          {invoice.status === 'draft' && <> — controleer leverancier, grootboekrekeningen, BTW en bedragen voordat je boekt.</>}
+          {meta.confidence && invoice.source !== 'import' && <> Zekerheid: {CONFIDENCE_LABEL[(meta.confidence as 'high' | 'medium' | 'low')] ?? meta.confidence}.</>}
+          {warnings.length > 0 && <ul className="bk-ai-warnings">{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>}
+        </div>;
+      })()}
       {readOnly && invoice && invoice.status !== 'draft' && <div className="bk-note">Deze factuur is geboekt en kan niet meer worden gewijzigd. Corrigeren kan via een tegenboeking in het grootboek.</div>}
       <div className="bk-grid2">
         <Field label="Leverancier">
@@ -648,6 +898,10 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
         <div className="bk-total-grand"><span>Totaal</span><strong>{euroCents(totals.total_cents)}</strong></div>
       </div>
       <Field label="Notities"><Textarea value={form.notes} onChange={e => set('notes', e.target.value)} disabled={readOnly} rows={2} /></Field>
+      {invoice && data.attachments.some(a => a.entity_type === 'purchase_invoice' && a.entity_id === invoice.id) && <div className="bk-attachments">
+        <span className="bk-attachments-label">Bewijsstukken</span>
+        <AttachmentList attachments={data.attachments} entityType="purchase_invoice" entityId={invoice.id} canDelete={!readOnly} onChanged={onRefresh ?? onSaved} />
+      </div>}
     </Modal>
   );
 }

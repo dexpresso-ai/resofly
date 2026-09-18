@@ -189,7 +189,7 @@ async function ownerCount(ctx: ActionCtx): Promise<number> {
 async function activeAlias(ctx: ActionCtx) {
   const { data, error } = await orgQuery(ctx, 'organization_inbound_aliases',
     'id, local_part, forward_from_email, status, last_received_at, received_total, pending_confirmation_code, created_at')
-    .eq('status', 'active').order('created_at', { ascending: false }).limit(1).maybeSingle();
+    .eq('status', 'active').eq('purpose', 'mail').order('created_at', { ascending: false }).limit(1).maybeSingle();
   if (error) throw new ActionError(`Doorstuuradres ophalen mislukt: ${error.message}`);
   return (data ?? null) as { id: string; local_part: string; forward_from_email: string | null; last_received_at: string | null; received_total: number; pending_confirmation_code: string | null } | null;
 }

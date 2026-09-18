@@ -10645,3 +10645,39 @@ body.ink-sheet-open{overflow:hidden}
 .mcp-connections-heading{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:16px 0 8px}
 .mcp-connections-heading:first-of-type{margin-top:4px}
 .mcp-connections-hint{font-size:12px;line-height:1.55;color:var(--muted2);margin:0 0 10px}
+
+/* ── Factuur-inbox (inkoopfacturen per e-mail) ─────────────────────────── */
+.pi-inbox{display:flex;flex-direction:column;gap:12px;border:1px solid var(--border);border-radius:18px;padding:14px 16px;background:rgba(var(--sheen-rgb),calc(.022 * var(--sheen-k)))}
+.pi-inbox-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.pi-inbox-head h3{margin:0 0 3px;font-size:1rem;display:inline-flex;align-items:center;gap:7px}
+.pi-inbox-head p{margin:0;font-size:.83rem}
+.pi-inbox-list{display:flex;flex-direction:column;gap:10px}
+.pi-inbox-hint{display:flex;align-items:center;gap:8px;margin-bottom:0}
+.pi-inbox-row.is-busy{opacity:.8}
+.pi-inbox-total{font-variant-numeric:tabular-nums;font-weight:700;color:var(--text)}
+.pi-inbox-from{font-weight:500;color:var(--muted)}
+.pi-inbox-status{font-size:11px;font-weight:700;letter-spacing:.03em;border-radius:999px;padding:3px 9px;border:1px solid var(--border);color:var(--muted2)}
+.pi-inbox-status-ready,.pi-inbox-status-booked{border-color:rgba(var(--ok-rgb),.5);color:var(--ok)}
+.pi-inbox-status-needs_review,.pi-inbox-status-duplicate{border-color:rgba(var(--accent-rgb),.5);color:var(--accent-ink);background:rgba(var(--accent-rgb),.1)}
+.pi-inbox-status-failed{border-color:rgba(var(--danger-rgb),.5);color:var(--accent-r)}
+.pi-inbox-status-processing,.pi-inbox-status-received{border-style:dashed}
+.pi-inbox-attachments{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:12px;color:var(--muted2)}
+.pi-inbox-attachment button{appearance:none;border:0;background:transparent;padding:0;font:inherit;color:var(--accent-ink);cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+.pi-inbox-attachment button:hover{text-decoration:underline}
+.pi-inbox-attachment small{color:var(--muted)}
+.pi-inbox-details{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px dashed var(--border);border-radius:12px}
+.pi-inbox-details .bk-ai-warnings{margin:0;padding-left:18px}
+.pi-inbox-lines{font-size:.83rem}
+.pi-inbox-lines tfoot td{border-top:1px solid var(--border);padding-top:6px}
+.pi-inbox-details-toggle{align-self:flex-start}
+.bk-link-button{appearance:none;border:0;background:transparent;padding:0;font:inherit;font-size:inherit;color:var(--accent-ink);cursor:pointer}
+.bk-link-button:hover{text-decoration:underline}
+.bk-via-email{display:inline-flex;vertical-align:middle;margin-left:6px;color:var(--muted)}
+.bk-attachments{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.bk-attachments-label{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.invoice-inbox-settings{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:rgba(var(--sheen-rgb),calc(.03 * var(--sheen-k)))}
+.invoice-inbox-toggle{align-items:flex-start;white-space:normal;font-weight:600}
+.invoice-inbox-toggle input{margin-top:2px;flex-shrink:0}
+.invoice-inbox-toggle span{display:flex;flex-direction:column;gap:2px}
+.invoice-inbox-toggle small{font-weight:400;font-size:11.6px;line-height:1.5;color:var(--muted2)}
+.nav-submenu button .nav-sub-badge{margin-left:auto;font-size:10px;font-weight:700;min-width:18px;height:18px;padding:0 5px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:var(--accent);color:#1a1200;line-height:1}

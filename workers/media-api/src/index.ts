@@ -167,11 +167,17 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
     return handleInternalOfficeConvertPdf(request, env, context);
   }
 
-  // ── Internal media fetch (shared secret) — laat de edge-functie audiobytes
-  //    server-side ophalen voor transcriptie zonder ze via de browser te sturen.
+  // ── Internal media put/fetch (shared secret) — laat een edge-functie
+  //    server-side objecten wegschrijven (bijlagen van de factuur-inbox) en
+  //    ophalen (audio voor transcriptie, factuurbijlagen om uit te lezen)
+  //    zonder ze via de browser te sturen.
+  if (method === 'POST' && pathname === '/internal/media') {
+    return handleInternalUpload(request, env, context);
+  }
   const mediaKey = matchInternalMediaRoute(pathname);
   if (mediaKey) {
     if (method === 'GET') return handleInternalDownload(request, env, context, mediaKey);
+    if (method === 'DELETE') return handleInternalDelete(request, env, context, mediaKey);
     return errorResponse('Method not allowed', 405, context);
   }
 
@@ -405,6 +411,18 @@ async function handleInternalDownload(
   if (!object) throw new HttpError(404, 'Snapshot niet gevonden.');
 
   return streamObject(object, context);
+}
+
+/** Interne opruimroute (factuur-inbox): een object dat al weg is, telt als verwijderd. */
+async function handleInternalDelete(
+  request: Request,
+  env: Env,
+  context: RouteContext,
+  key: string,
+): Promise<Response> {
+  requireInternalSecret(request, env);
+  await env.MEDIA_BUCKET.delete(key);
+  return jsonResponse({ ok: true, key }, 200, context);
 }
 
 // ── Galerij-oplevering (foto/video) ─────────────────────────────────────────

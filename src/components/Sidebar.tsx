@@ -93,6 +93,7 @@ export function Sidebar({
   ticketUnread = 0,
   chatUnread = 0,
   decisionCount = 0,
+  purchaseInboxOpen = 0,
   mobileOpen = false,
   onCloseMobile,
   pinned = false,
@@ -124,6 +125,8 @@ export function Sidebar({
   chatUnread?: number;
   /** Kaarten op de beslislijst die op een beslissing wachten (badge op Gerrie). */
   decisionCount?: number;
+  /** Per e-mail binnengekomen inkoopfacturen die op een mens wachten (badge op Financiën → Inkoopfacturen). */
+  purchaseInboxOpen?: number;
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
   pinned?: boolean;
@@ -176,6 +179,8 @@ export function Sidebar({
     if (tab.id === 'agenda') return permissions.canRead('calendar');
     return true;
   });
+  const purchaseInboxTitle = `${purchaseInboxOpen} per e-mail binnengekomen inkoopfactu${purchaseInboxOpen === 1 ? 'ur' : 'ren'} met aandacht nodig`;
+
   // De badge op Berichten telt wat aandacht vraagt: ongelezen post én post die
   // nog niet aan een klant hangt. De tooltip houdt de twee uit elkaar.
   const messageBadge = messageUnread + inboxOpen;
@@ -280,6 +285,8 @@ export function Sidebar({
               >
                 <Icon size={16}/>
                 <span className="ni-label">{label}</span>
+                {/* Dichtgeklapt draagt de ouder de teller, zodat hij niet uit beeld valt. */}
+                {!financeOpen && purchaseInboxOpen > 0 && <span className="nav-badge" title={purchaseInboxTitle}>{purchaseInboxOpen > 99 ? '99+' : purchaseInboxOpen}</span>}
                 <span className="nav-chevron" aria-hidden="true">{financeOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}</span>
               </button>
             : key === 'projects'
@@ -323,7 +330,7 @@ export function Sidebar({
             <button type="button" className={page === 'contracts' ? 'active' : ''} onClick={() => openFinancePage('contracts')}><FileSignature size={13}/><span>Contracten</span></button>
             <button type="button" className={page === 'invoices' ? 'active' : ''} onClick={() => openFinancePage('invoices')}><Receipt size={13}/><span>Facturen</span></button>
             <button type="button" className={page === 'suppliers' ? 'active' : ''} onClick={() => openFinancePage('suppliers')}><Truck size={13}/><span>Leveranciers</span></button>
-            <button type="button" className={page === 'purchase-invoices' ? 'active' : ''} onClick={() => openFinancePage('purchase-invoices')}><FileText size={13}/><span>Inkoopfacturen</span></button>
+            <button type="button" className={page === 'purchase-invoices' ? 'active' : ''} onClick={() => openFinancePage('purchase-invoices')}><FileText size={13}/><span>Inkoopfacturen</span>{purchaseInboxOpen > 0 && <span className="nav-badge nav-sub-badge" title={purchaseInboxTitle}>{purchaseInboxOpen > 99 ? '99+' : purchaseInboxOpen}</span>}</button>
             <button type="button" className={page === 'ledger' ? 'active' : ''} onClick={() => openFinancePage('ledger')}><BookOpen size={13}/><span>Grootboek</span></button>
             <button type="button" className={page === 'bank' ? 'active' : ''} onClick={() => openFinancePage('bank')}><Landmark size={13}/><span>Bank</span></button>
             <button type="button" className={page === 'assets' ? 'active' : ''} onClick={() => openFinancePage('assets')}><Boxes size={13}/><span>Activa</span></button>
