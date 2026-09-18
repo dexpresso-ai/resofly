@@ -127,7 +127,7 @@ export function describeAttachment(att: PurchaseInvoiceInboxAttachment): { label
 }
 
 /** Welke knoppen horen bij deze status? Eén plek, zodat paneel en tests het eens zijn. */
-export function inboxActionsFor(item: Pick<PurchaseInvoiceInboxItem, 'status' | 'reason' | 'purchase_invoice_id' | 'proposal'>): {
+export function inboxActionsFor(item: Pick<PurchaseInvoiceInboxItem, 'status' | 'reason' | 'purchase_invoice_id' | 'duplicate_of_purchase_invoice_id' | 'proposal'>): {
   open: boolean; prepare: boolean; forceDuplicate: boolean; retry: boolean; reject: boolean; restore: boolean;
 } {
   const hasProposal = Boolean(item.proposal);
@@ -145,7 +145,15 @@ export function inboxActionsFor(item: Pick<PurchaseInvoiceInboxItem, 'status' | 
         restore: false,
       };
     case 'duplicate':
-      return { open: Boolean(item.purchase_invoice_id), prepare: false, forceDuplicate: hasProposal, retry: false, reject: true, restore: false };
+      // Bij een duplicaat is er géén eigen concept — de factuur die er al was,
+      // staat in duplicate_of_purchase_invoice_id. Op purchase_invoice_id
+      // kijken (wat hier eerder gebeurde) zette de knop dus altijd uit, precies
+      // in het geval waarin "laat me die bestaande factuur zien" de enige
+      // zinnige volgende stap is.
+      return {
+        open: Boolean(item.duplicate_of_purchase_invoice_id ?? item.purchase_invoice_id),
+        prepare: false, forceDuplicate: hasProposal, retry: false, reject: true, restore: false,
+      };
     case 'failed':
       return { open: false, prepare: false, forceDuplicate: false, retry: true, reject: true, restore: false };
     case 'rejected':

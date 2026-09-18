@@ -185,11 +185,25 @@ async function ownerCount(ctx: ActionCtx): Promise<number> {
   return count ?? 0;
 }
 
-/** Het actieve doorstuuradres, of null. */
+/** Het actieve doorstuuradres voor klantmail, of null. */
 async function activeAlias(ctx: ActionCtx) {
-  const { data, error } = await orgQuery(ctx, 'organization_inbound_aliases',
-    'id, local_part, forward_from_email, status, last_received_at, received_total, pending_confirmation_code, created_at')
-    .eq('status', 'active').eq('purpose', 'mail').order('created_at', { ascending: false }).limit(1).maybeSingle();
+  const columns = 'id, local_part, forward_from_email, status, last_received_at, received_total, pending_confirmation_code, created_at';
+  const run = (withPurpose: boolean) => {
+    const q = orgQuery(ctx, 'organization_inbound_aliases', columns).eq('status', 'active');
+    return (withPurpose ? q.eq('purpose', 'mail') : q)
+      .order('created_at', { ascending: false }).limit(1).maybeSingle();
+  };
+
+  let { data, error } = await run(true);
+  // 42703 = de kolom `purpose` bestaat nog niet (migratie 20260918010000 is in
+  // deze omgeving nog niet gedraaid). Dezelfde terugval als
+  // repository.loadInboundAlias aan de app-kant: zonder die kolom is er maar
+  // één soort doorstuuradres, en dat is er precies één voor klantmail. Zonder
+  // deze terugval faalden vier Gerrie-handelingen hard op een omgeving waar de
+  // codebase expliciet rekening mee houdt.
+  if (error && (error as { code?: string }).code === '42703') {
+    ({ data, error } = await run(false));
+  }
   if (error) throw new ActionError(`Doorstuuradres ophalen mislukt: ${error.message}`);
   return (data ?? null) as { id: string; local_part: string; forward_from_email: string | null; last_received_at: string | null; received_total: number; pending_confirmation_code: string | null } | null;
 }

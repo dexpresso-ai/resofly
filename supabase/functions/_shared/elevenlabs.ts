@@ -32,7 +32,13 @@ export function elevenlabsUsesWebhook(): boolean {
  * - Synchrone modus: { transcript } (direct geparset).
  */
 export async function requestTranscription(
-  bytes: Uint8Array,
+  // Bewust `Uint8Array<ArrayBuffer>` en niet het kale `Uint8Array`: dat laatste
+  // is onder TypeScript 6 generiek over ArrayBufferLike — inclusief
+  // SharedArrayBuffer — en een Blob wil een view op een échte ArrayBuffer.
+  // Vernauwen lost dat op zonder de bytes te kopiëren; bij een opname van
+  // 150 MB is dat geen detail. De aanroepers maken hun array met
+  // `new Uint8Array(await res.arrayBuffer())` en voldoen daar al aan.
+  bytes: Uint8Array<ArrayBuffer>,
   mime: string,
   filename: string,
 ): Promise<{ requestId: string | null; transcript: NormalizedTranscript | null }> {

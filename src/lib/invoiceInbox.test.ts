@@ -13,7 +13,7 @@ import {
  */
 
 const item = (over: Record<string, unknown>) => ({
-  status: 'received', reason: null, purchase_invoice_id: null, proposal: null,
+  status: 'received', reason: null, purchase_invoice_id: null, duplicate_of_purchase_invoice_id: null, proposal: null,
   received_at: '2026-09-18T08:00:00Z', sender_name: null, sender_email: 'facturen@leverancier.nl', subject: 'Factuur 123',
   ...over,
 } as never);
@@ -64,6 +64,16 @@ test('knoppen per status', () => {
     { open: false, prepare: true, forceDuplicate: false, retry: false, reject: true, restore: false });
   assert.deepEqual(inboxActionsFor(item({ status: 'needs_review', reason: 'ai_unavailable' })),
     { open: false, prepare: false, forceDuplicate: false, retry: true, reject: true, restore: false });
+  // Zoals een duplicaat er in het echt uitziet: applyCandidate maakt géén eigen
+  // concept aan, dus purchase_invoice_id blijft leeg en de bestaande factuur
+  // staat in duplicate_of_purchase_invoice_id. De knop "open" hoort dan juist
+  // aan te staan — dat is de hele handeling die dit geval vraagt.
+  assert.equal(
+    inboxActionsFor(item({ status: 'duplicate', proposal, purchase_invoice_id: null, duplicate_of_purchase_invoice_id: 'pi-bestaand' })).open,
+    true,
+  );
+  // Zonder enige verwijzing valt er niets te openen.
+  assert.equal(inboxActionsFor(item({ status: 'duplicate', proposal })).open, false);
   assert.deepEqual(inboxActionsFor(item({ status: 'duplicate', proposal, purchase_invoice_id: 'pi-9' })),
     { open: true, prepare: false, forceDuplicate: true, retry: false, reject: true, restore: false });
   assert.deepEqual(inboxActionsFor(item({ status: 'failed' })),

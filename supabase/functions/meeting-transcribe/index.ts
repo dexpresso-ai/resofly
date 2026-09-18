@@ -409,7 +409,7 @@ function escapeHtml(value: string): string {
  * deze functie dezelfde worker + hetzelfde gedeelde secret hergebruikt zonder
  * dat er een aparte INTERNAL_UPLOAD_SECRET op de edge-kant gezet hoeft te worden.
  */
-async function fetchAudioBytes(storageKey: string): Promise<Uint8Array> {
+async function fetchAudioBytes(storageKey: string): Promise<Uint8Array<ArrayBuffer>> {
   const base = (Deno.env.get('MEDIA_WORKER_URL') || Deno.env.get('INVOICE_PDF_STORAGE_WORKER_URL') || Deno.env.get('QUOTE_PDF_STORAGE_WORKER_URL') || '').replace(/\/$/, '');
   const secret = Deno.env.get('INTERNAL_UPLOAD_SECRET') || Deno.env.get('INVOICE_PDF_STORAGE_SECRET') || Deno.env.get('QUOTE_PDF_STORAGE_SECRET') || '';
   if (!base || !secret) throw new HttpError('Media-worker niet geconfigureerd (zet MEDIA_WORKER_URL + INTERNAL_UPLOAD_SECRET, of hergebruik de PDF-storage-secrets).', 500);

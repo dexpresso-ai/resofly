@@ -535,7 +535,12 @@ function PurchaseInvoiceInboxRow({ item, data, organizationId, canWrite, onChang
     {error && <div className="error">{error}</div>}
 
     {canWrite && !isBusyStatus && <div className="inbound-row-actions">
-      {actions.open && item.purchase_invoice_id && <Button variant="primary" onClick={() => onOpenInvoice(item.purchase_invoice_id!)}>Open concept</Button>}
+      {/* Bij een duplicaat is er geen eigen concept maar wél een bestaande
+          factuur; dan wijst de knop daarheen, en heet hij ook zo. */}
+      {actions.open && (item.purchase_invoice_id ?? item.duplicate_of_purchase_invoice_id) && <Button
+        variant="primary"
+        onClick={() => onOpenInvoice((item.purchase_invoice_id ?? item.duplicate_of_purchase_invoice_id)!)}
+      >{item.purchase_invoice_id ? 'Open concept' : 'Open bestaande factuur'}</Button>}
       {actions.prepare && <>
         <Select value={supplierChoice} onChange={e => setSupplierChoice(e.target.value)} disabled={busy != null}>
           <option value="">Kies een leverancier…</option>

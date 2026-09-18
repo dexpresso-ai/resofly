@@ -4,13 +4,16 @@ name: Frontend checks
 # staging. De lay-outtest draait tegen een nagebootste backend en heeft dus
 # geen Supabase-secrets nodig.
 #
-# Daarnaast een Deno-typecheck op de edge functions van de MCP-connector. Die
-# draaien op Deno, niet op node: `npm run typecheck` ziet ze niet, en een
-# typefout daarin komt anders pas aan het licht bij het uitrollen — of erger,
-# bij de eerste aanroep door de AI van een klant. Alleen de MCP-functies, geen
-# `supabase/functions/*`: meeting-transcribe heeft een pre-existente typefout
-# (_shared/elevenlabs.ts, Uint8Array → Blob onder TS 6) en zou de hele job rood
-# zetten. Verbreed de lijst zodra die is opgelost.
+# Daarnaast een Deno-typecheck op de edge functions. Die draaien op Deno, niet
+# op node: `npm run typecheck` ziet ze niet, en een typefout daarin komt anders
+# pas aan het licht bij het uitrollen — of erger, bij de eerste aanroep door de
+# AI van een klant.
+#
+# Deze controle dekte lang alleen de MCP-functies, omdat meeting-transcribe een
+# typefout had (_shared/elevenlabs.ts, Uint8Array → Blob onder TS 6) die de hele
+# job rood zette. Die is op 18 september opgelost door het parametertype te
+# vernauwen naar `Uint8Array<ArrayBuffer>`, en de lijst is meteen verbreed naar
+# alle functies die schoon door `deno check` komen — zie de stap hieronder.
 on:
   pull_request:
   push:
@@ -53,10 +56,45 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Deno-typecheck MCP-functies
+      # De lijst hieronder is alles wat schoon door `deno check` komt: 28 van de
+      # 33 edge-functies, gemeten op 18 september. Vijf staan er nog buiten
+      # (bank-sync, client-portal, invoice-public, invoice-workflow,
+      # quote-workflow); die struikelen allemaal over dezelfde TS 6-strengheid
+      # waarbij een kaal `Uint8Array` generiek is over ArrayBufferLike en dus
+      # niet als BodyInit of BufferSource telt. Dat is geen runtime-probleem —
+      # de Edge-runtime draait die code gewoon — maar het houdt ze wel buiten
+      # deze controle. Haal ze er één voor één bij zodra ze schoon zijn.
+      - name: Deno-typecheck edge functions
         run: |
-          deno check supabase/functions/mcp-oauth/index.ts
-          deno check supabase/functions/mcp/index.ts
+          deno check \
+            supabase/functions/annual-accounts/index.ts \
+            supabase/functions/billing/index.ts \
+            supabase/functions/calendar-integrations/index.ts \
+            supabase/functions/campaigns/index.ts \
+            supabase/functions/contract-public/index.ts \
+            supabase/functions/contract-workflow/index.ts \
+            supabase/functions/corporate-tax/index.ts \
+            supabase/functions/email-unsubscribe/index.ts \
+            supabase/functions/file-share-public/index.ts \
+            supabase/functions/file-share/index.ts \
+            supabase/functions/gallery-public/index.ts \
+            supabase/functions/gerrie-agent-runner/index.ts \
+            supabase/functions/gerrie-agent/index.ts \
+            supabase/functions/gerrie-signals/index.ts \
+            supabase/functions/invoice-extract/index.ts \
+            supabase/functions/invoice-inbox/index.ts \
+            supabase/functions/mail-inbound/index.ts \
+            supabase/functions/mail/index.ts \
+            supabase/functions/mcp-oauth/index.ts \
+            supabase/functions/mcp/index.ts \
+            supabase/functions/meeting-booking-public/index.ts \
+            supabase/functions/meeting-booking/index.ts \
+            supabase/functions/meeting-transcribe-webhook/index.ts \
+            supabase/functions/meeting-transcribe/index.ts \
+            supabase/functions/portal-login/index.ts \
+            supabase/functions/quote-public/index.ts \
+            supabase/functions/resend-webhook/index.ts \
+            supabase/functions/web-push/index.ts
 
       # De factuur-inbox: mail-inbound (ontvangst), invoice-inbox (knoppen) en
       # invoice-extract (de handmatige scan deelt de voorstel-opbouw). Geen

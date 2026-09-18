@@ -50,6 +50,23 @@ export type { InboxAttachmentKind };
 
 // ── Types ───────────────────────────────────────────────────────────────────────
 
+/**
+ * Waarom een bijlage niet is uitgelezen. Bewust een apart veld naast `note`:
+ * de routering las eerder de Nederlandse tekst van `note` ("bevat het woord
+ * 'niet meegestuurd'"), en een bijlage die niet te decoderen viel werd dan
+ * gemeld als "geen factuurbestand in de mail" — de gebruiker ging zijn
+ * doorstuurregel nakijken terwijl het een transportfout was die een nieuwe
+ * poging had opgelost. Tekst is om te lezen, dit veld is om op te beslissen.
+ */
+export type InboxAttachmentReason =
+  | 'not_forwarded'   // de Email Worker stuurde de bytes niet mee
+  | 'decode_failed'   // base64 kapot onderweg
+  | 'upload_failed'   // R2 weigerde of was onbereikbaar
+  | 'oversized'       // groter dan de limiet
+  | 'too_many'        // meer bijlagen dan we uitlezen
+  | 'unsupported'     // geen factuurbestandstype
+  | 'copy';           // leesbare kopie naast een e-factuur
+
 export interface InboxAttachment {
   name: string;
   mime_type: string;
@@ -59,6 +76,8 @@ export interface InboxAttachment {
   sha256: string | null;
   kind: InboxAttachmentKind;
   note?: string | null;
+  /** Waarom deze bijlage niet is uitgelezen — voor de routering; `note` is voor de lezer. */
+  reason?: InboxAttachmentReason | null;
 }
 
 export type InboxStatus =
@@ -332,8 +351,8 @@ async function runPipeline(admin: SupabaseClient, row: InboxRow, opts: ProcessOp
   const toExtract = documents.filter((a) => !hasUbl || isXmlFile(a.name, a.mime_type)).slice(0, MAX_DOCUMENTS_PER_MAIL);
   const attachmentsPatch: InboxAttachment[] = row.attachments.map((a) => {
     if (a.kind !== 'document') return a;
-    if (hasUbl && !isXmlFile(a.name, a.mime_type)) return { ...a, kind: 'copy', note: 'Kopie van de e-factuur; niet apart uitgelezen.' };
-    if (!toExtract.includes(a)) return { ...a, kind: 'skipped', note: 'Meer dan vijf bijlagen; deze is niet uitgelezen.' };
+    if (hasUbl && !isXmlFile(a.name, a.mime_type)) return { ...a, kind: 'copy', reason: 'copy', note: 'Kopie van de e-factuur; niet apart uitgelezen.' };
+    if (!toExtract.includes(a)) return { ...a, kind: 'skipped', reason: 'too_many', note: 'Meer dan vijf bijlagen; deze is niet uitgelezen.' };
     return a;
   });
 
@@ -343,10 +362,15 @@ async function runPipeline(admin: SupabaseClient, row: InboxRow, opts: ProcessOp
   let aiBlocked: 'ai_disabled' | 'ai_unavailable' | 'budget_exhausted' | null = null;
 
   for (const att of toExtract) {
-    const bytes = await fetchStoredBytes(att.storage_key!);
     const mime = normalizeDocumentMime(att.name, att.mime_type);
     let result: ProposalResult;
     try {
+      // Bewust BINNEN de try: een hapering van R2 op bijlage twee mag de hele
+      // mail niet afbreken. Deed hij dat wel, dan belandde het item op
+      // 'failed/storage_failed' — en die reden staat niet in RETRYABLE_FAILED,
+      // dus de opruimronde probeerde het nooit opnieuw en elke factuur uit die
+      // mail was weg, terwijl de bytes gewoon in R2 stonden.
+      const bytes = await fetchStoredBytes(att.storage_key!);
       if (isXmlFile(att.name, mime) || looksLikeUblXml(att.name, mime, decodeStart(bytes))) {
         result = await buildUblProposal(admin, organizationId, { fileName: att.name, xmlText: new TextDecoder('utf-8').decode(bytes) }, ctx);
       } else {
@@ -401,18 +425,44 @@ async function runPipeline(admin: SupabaseClient, row: InboxRow, opts: ProcessOp
 
   for (let i = 0; i < rest.length; i += 1) {
     const extra = rest[i];
+    // De sleutel is bewust afleidbaar uit de mail zelf, zodat herverwerken
+    // dezelfde rij terugvindt in plaats van een tweede aan te maken.
+    const siblingKey = `${row.dedup_key}#${extra.attachment.sha256 ?? `n${i + 2}`}`;
     const { data, error } = await admin.from('purchase_invoice_inbox').insert({
       organization_id: organizationId, alias_id: row.alias_id, parent_id: row.id,
-      dedup_key: `${row.dedup_key}#${i + 2}`, recipient: row.recipient, rfc_message_id: row.rfc_message_id,
+      dedup_key: siblingKey, recipient: row.recipient, rfc_message_id: row.rfc_message_id,
       sender_email: row.sender_email, sender_name: row.sender_name, subject: row.subject,
       body_excerpt: row.body_excerpt, received_at: row.received_at,
       attachments: [extra.attachment], status: 'processing', processing_started_at: new Date().toISOString(), attempts: 1,
     }).select(INBOX_COLUMNS).single();
+
+    // Bestaat de rij al, dan is dit een HERVERWERKING van dezelfde mail (de
+    // eerste ronde strandde bijvoorbeeld op een leeg AI-tegoed). Die rij
+    // oppakken in plaats van hem overslaan: het oude gedrag logde de
+    // unique-violation alleen naar de console en gaf de primaire factuur terug
+    // alsof alles goed ging — factuur twee en drie bleven ondertussen op
+    // 'processing' staan en niemand kreeg dat te zien.
+    let sibling: InboxRow;
     if (error) {
-      console.error('invoice-inbox: extra factuur uit dezelfde mail kon niet worden vastgelegd:', error.message);
-      continue;
+      if (error.code !== '23505') {
+        console.error('invoice-inbox: extra factuur uit dezelfde mail kon niet worden vastgelegd:', error.message);
+        continue;
+      }
+      const { data: existing, error: findError } = await admin.from('purchase_invoice_inbox')
+        .select(INBOX_COLUMNS)
+        .eq('organization_id', organizationId).eq('dedup_key', siblingKey).maybeSingle();
+      if (findError || !existing) {
+        console.error('invoice-inbox: bestaande rij voor extra factuur niet gevonden:', findError?.message ?? siblingKey);
+        continue;
+      }
+      sibling = normalizeRow(existing as unknown as Record<string, unknown>);
+      await updateRow(admin, sibling.id, {
+        status: 'processing', reason: null, error_message: null,
+        processing_started_at: new Date().toISOString(), attempts: (sibling.attempts ?? 0) + 1,
+      });
+    } else {
+      sibling = normalizeRow(data as unknown as Record<string, unknown>);
     }
-    const sibling = normalizeRow(data as unknown as Record<string, unknown>);
     try {
       await applyCandidate(admin, sibling, extra.result, { ...env, opts: { ...opts, supplierOverride: null } }, { attachments: [extra.attachment] });
     } catch (err) {
@@ -821,16 +871,44 @@ async function findDuplicate(
 ): Promise<{ reason: 'duplicate_number' | 'duplicate_file'; purchaseInvoiceId?: string; inboxId?: string } | null> {
   const number = normNumber(proposal.supplier_invoice_number);
   if (number) {
-    const { data, error } = await admin.from('purchase_invoices')
-      .select('id, supplier_invoice_number, status')
-      .eq('organization_id', row.organization_id)
-      .eq('supplier_id', supplierId)
-      .neq('status', 'cancelled')
-      .not('supplier_invoice_number', 'is', null)
-      .limit(500);
-    if (error) console.warn('duplicaatcheck (nummer) mislukt:', error.message);
-    const hit = (data ?? []).find((pi) => normNumber(String((pi as { supplier_invoice_number: string | null }).supplier_invoice_number)) === number);
-    if (hit) return { reason: 'duplicate_number', purchaseInvoiceId: String((hit as { id: string }).id) };
+    // Twee dingen die hier eerder misgingen, allebei met dezelfde uitkomst —
+    // een tweede concept voor een factuur die al geboekt is, oftewel een
+    // dubbele kostenboeking zonder waarschuwing:
+    //
+    // 1. Bij een queryfout werd de fout alleen gelogd en liep de code door
+    //    alsof er geen duplicaat was. Een check die niet kán draaien, hoort
+    //    NIET door te laten: hij gooit nu, en het item belandt op
+    //    'processing_error' — een reden die de opruimronde wél opnieuw
+    //    probeert.
+    // 2. Er werd op de nieuwste 500 facturen gefilterd en pas daarna in de app
+    //    vergeleken. Bij een leverancier met meer facturen viel het duplicaat
+    //    stelselmatig buiten beeld. Vergelijken moet met genormaliseerde
+    //    nummers (F-2026/0042 en F20260042 zijn hetzelfde), en dat kan
+    //    PostgREST niet filteren — dus bladeren we erdoorheen.
+    const PAGE = 500;
+    const MAX_PAGES = 40; // 20.000 facturen van één leverancier
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      const from = page * PAGE;
+      const { data, error } = await admin.from('purchase_invoices')
+        .select('id, supplier_invoice_number')
+        .eq('organization_id', row.organization_id)
+        .eq('supplier_id', supplierId)
+        .neq('status', 'cancelled')
+        .not('supplier_invoice_number', 'is', null)
+        .order('id', { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) {
+        throw new InboxProcessingError('processing_error', `Duplicaatcontrole op factuurnummer kon niet draaien: ${error.message}`);
+      }
+      const rows = (data ?? []) as Array<{ id: string; supplier_invoice_number: string | null }>;
+      const hit = rows.find((pi) => normNumber(pi.supplier_invoice_number) === number);
+      if (hit) return { reason: 'duplicate_number', purchaseInvoiceId: String(hit.id) };
+      if (rows.length < PAGE) break;
+      if (page === MAX_PAGES - 1) {
+        throw new InboxProcessingError('processing_error',
+          'Deze leverancier heeft te veel facturen om de duplicaatcontrole af te maken; het item is niet automatisch klaargezet.');
+      }
+    }
   }
 
   const hashes = attachments.filter((a) => a.sha256 && a.kind !== 'other').map((a) => a.sha256!) ;
@@ -842,7 +920,9 @@ async function findDuplicate(
       .in('status', ['ready', 'booked'])
       .contains('attachments', [{ sha256 }])
       .limit(1);
-    if (error) { console.warn('duplicaatcheck (bestand) mislukt:', error.message); break; }
+    if (error) {
+      throw new InboxProcessingError('processing_error', `Duplicaatcontrole op bestand kon niet draaien: ${error.message}`);
+    }
     const hit = (data ?? [])[0] as { id: string; purchase_invoice_id: string | null } | undefined;
     if (hit) return { reason: 'duplicate_file', inboxId: hit.id, purchaseInvoiceId: hit.purchase_invoice_id ?? undefined };
   }
