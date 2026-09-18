@@ -264,11 +264,13 @@ const purchaseStatusLabel: Record<PurchaseInvoice['status'], string> = {
   draft: 'Concept', booked: 'Geboekt', paid: 'Betaald', cancelled: 'Geannuleerd',
 };
 
-export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged, draft, onDraftConsumed }: PageProps & {
+export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged, draft, onDraftConsumed, inboxActivity = 0 }: PageProps & {
   /** Door een agent klaargezette inkoopfactuur; gebruikt hetzelfde seed-pad als de
    *  AI-factuurscan, dus het formulier hoefde er niets voor te leren. */
   draft?: InvoiceFormSeed | null;
   onDraftConsumed?: () => void;
+  /** Loopt op bij elk realtime-event op de factuur-inbox (App-niveau); het paneel herlaadt dan. */
+  inboxActivity?: number;
 }) {
   const [edit, setEdit] = useState<PurchaseInvoice | 'new' | null>(null);
   const [seed, setSeed] = useState<InvoiceFormSeed | null>(null);
@@ -318,6 +320,7 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
         organizationId={organizationId}
         canWrite={canWrite}
         onChanged={onChanged}
+        activity={inboxActivity}
         onOpenInvoice={id => {
           const found = data.purchaseInvoices.find(pi => pi.id === id);
           if (found) { setSeed(null); setEdit(found); }
@@ -367,8 +370,10 @@ const CONFIDENCE_WORD: Record<'high' | 'medium' | 'low', string> = { high: 'hoog
  * er nog iets wordt uitgelezen; de knoppen lopen via de edge function
  * invoice-inbox, en na een nieuw concept wordt de werkruimte opnieuw geladen.
  */
-function PurchaseInvoiceInboxPanel({ data, organizationId, canWrite, onChanged, onOpenInvoice }: {
+function PurchaseInvoiceInboxPanel({ data, organizationId, canWrite, onChanged, onOpenInvoice, activity = 0 }: {
   data: AppData; organizationId: string; canWrite: boolean; onChanged: () => void; onOpenInvoice: (purchaseInvoiceId: string) => void;
+  /** Realtime-tikker van usePurchaseInvoiceInbox: elke wijziging in de inbox herlaadt de lijst. */
+  activity?: number;
 }) {
   const [items, setItems] = useState<PurchaseInvoiceInboxItem[]>([]);
   const [hasAlias, setHasAlias] = useState<boolean | null>(null);
@@ -400,11 +405,18 @@ function PurchaseInvoiceInboxPanel({ data, organizationId, canWrite, onChanged, 
     return () => { cancelled = true; };
   }, [reload]);
 
-  // Zolang er iets wordt uitgelezen elke 5 s kijken; anders rustig aan.
+  // Live: elk realtime-event op de inbox (App-niveau) herlaadt de lijst.
+  useEffect(() => {
+    if (!loaded || activity === 0) return;
+    reload().catch(() => { /* best effort */ });
+  }, [activity, loaded, reload]);
+
+  // Terugval als realtime een event mist: zolang er iets wordt uitgelezen elke
+  // 30 s, anders elke twee minuten.
   const anyBusy = items.some(inboxIsBusy);
   useEffect(() => {
     if (!loaded) return;
-    const handle = window.setInterval(() => { reload().catch(() => { /* best effort */ }); }, anyBusy ? 5000 : 45000);
+    const handle = window.setInterval(() => { reload().catch(() => { /* best effort */ }); }, anyBusy ? 30_000 : 120_000);
     return () => window.clearInterval(handle);
   }, [loaded, anyBusy, reload]);
 

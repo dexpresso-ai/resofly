@@ -21,13 +21,14 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { HttpError } from './edgeAuth.ts';
 import {
-  extractInvoiceFromDocument, SUPPORTED_MIME_TYPES,
-  type AccountRef, type InvoiceConfidence, type VatCodeRef,
+  extractInvoiceFromDocument, extractInvoiceFromText, SUPPORTED_MIME_TYPES,
+  type AccountRef, type InvoiceConfidence, type InvoiceExtraction, type VatCodeRef,
 } from './claudeInvoice.ts';
 import { recordAiUsage } from './claudeSummary.ts';
 import { parseUblDocument, type ParsedUblDocument } from './ubl.ts';
+import { isXmlFile, normEmail, normIban, normName, normVat } from './invoiceInboxRules.ts';
 
-export { SUPPORTED_MIME_TYPES };
+export { SUPPORTED_MIME_TYPES, isXmlFile, normEmail, normIban, normName, normVat };
 
 // ── Voorstel-formaat (spiegel van src/lib/invoice-scan-api.ts) ─────────────────
 
@@ -130,10 +131,6 @@ export async function loadProposalContext(admin: SupabaseClient, organizationId:
 
 // ── Bestandssoort ──────────────────────────────────────────────────────────────
 
-export function isXmlFile(fileName: string, mimeType: string): boolean {
-  return ['application/xml', 'text/xml'].includes(mimeType.toLowerCase()) || fileName.toLowerCase().endsWith('.xml');
-}
-
 export function normalizeBase64(raw: string): string {
   const s = raw.trim();
   const comma = s.indexOf(',');
@@ -174,16 +171,51 @@ export async function buildAiProposal(
   opts: { usageUserId: string | null },
 ): Promise<ProposalResult> {
   const { fileName, mimeType, dataBase64 } = file;
-  const { accounts, vatCodes, suppliers } = ctx;
-
-  const accountRefs: AccountRef[] = accounts.map((a) => ({ code: a.code, name: a.name, type: a.type, subtype: a.subtype }));
-  const vatRefs: VatCodeRef[] = vatCodes.map((v) => ({ code: v.code, label: v.label, rate: v.rate, kind: v.kind }));
-
-  const { extraction, usage, model } = await extractInvoiceFromDocument({ dataBase64, mimeType, accounts: accountRefs, vatCodes: vatRefs });
-
+  const { extraction, usage, model } = await extractInvoiceFromDocument({
+    dataBase64, mimeType, accounts: accountRefs(ctx), vatCodes: vatRefs(ctx),
+  });
   // Verbruik loggen (fail-open: een logfout mag het resultaat niet blokkeren).
   await recordAiUsage(admin, organizationId, opts.usageUserId, model, usage)
     .catch((e) => console.warn('ai_usage log mislukt:', e?.message));
+  return finishAiProposal(extraction, model, ctx, { file_name: fileName });
+}
+
+/**
+ * Factuur in de TEKST van een mail (geen bijlage) -> voorstel via Claude.
+ * Zelfde na-verwerking als een document; de bron staat in extraction_meta.
+ */
+export async function buildAiProposalFromText(
+  admin: SupabaseClient,
+  organizationId: string,
+  input: { text: string; label: string },
+  ctx: ProposalContext,
+  opts: { usageUserId: string | null },
+): Promise<ProposalResult> {
+  const { extraction, usage, model } = await extractInvoiceFromText({
+    text: input.text, accounts: accountRefs(ctx), vatCodes: vatRefs(ctx),
+  });
+  await recordAiUsage(admin, organizationId, opts.usageUserId, model, usage)
+    .catch((e) => console.warn('ai_usage log mislukt:', e?.message));
+  return finishAiProposal(extraction, model, ctx, { file_name: input.label, source: 'email_body' });
+}
+
+const accountRefs = (ctx: ProposalContext): AccountRef[] =>
+  ctx.accounts.map((a) => ({ code: a.code, name: a.name, type: a.type, subtype: a.subtype }));
+const vatRefs = (ctx: ProposalContext): VatCodeRef[] =>
+  ctx.vatCodes.map((v) => ({ code: v.code, label: v.label, rate: v.rate, kind: v.kind }));
+
+/**
+ * Van ruwe AI-uitlezing naar gevalideerd voorstel: rekeningen en btw-codes
+ * alleen als ze echt van deze organisatie zijn, bedragen naar centen,
+ * totalencontrole, leveranciersmatch.
+ */
+function finishAiProposal(
+  extraction: InvoiceExtraction,
+  model: string,
+  ctx: ProposalContext,
+  meta: Record<string, unknown>,
+): ProposalResult {
+  const { accounts, vatCodes, suppliers } = ctx;
 
   // ── Na-verwerking: valideren + omrekenen naar centen ──────────────────────────
   const accountByCode = new Map(accounts.map((a) => [a.code, a.id]));
@@ -298,7 +330,7 @@ export async function buildAiProposal(
       model,
       confidence,
       warnings,
-      file_name: fileName,
+      ...meta,
       scanned_at: new Date().toISOString(),
       extracted_totals: extractedTotals,
       supplier_raw: extraction.supplier,
@@ -566,11 +598,6 @@ export function computePurchaseTotals(
 }
 
 export type SupplierMatchKind = 'vat' | 'iban' | 'email' | 'name';
-
-export const normVat = (s: string | null | undefined) => (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-export const normIban = (s: string | null | undefined) => (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-export const normName = (s: string | null | undefined) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
-export const normEmail = (s: string | null | undefined) => (s || '').toLowerCase().trim();
 
 /**
  * Leverancier herkennen op harde identifiers (BTW-nr, IBAN), dan op e-mailadres,

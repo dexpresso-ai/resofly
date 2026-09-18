@@ -33,11 +33,14 @@ of geeft het rechtstreeks aan leveranciers.
 ## Onderdelen in deze repo
 - `supabase/migrations/20260918010000_purchase_invoice_inbox.sql`
 - `supabase/functions/_shared/invoiceProposal.ts` (uit `invoice-extract` gelicht)
+- `supabase/functions/_shared/invoiceInboxRules.ts` (de regels, import-vrij, met node-tests)
 - `supabase/functions/_shared/invoiceInbox.ts`
 - `supabase/functions/mail-inbound/index.ts` (factuurroute)
 - `supabase/functions/invoice-inbox/index.ts` (+ `supabase/config.toml`)
 - `workers/email-inbound/src/index.ts` (bijlagen meesturen)
-- `workers/media-api/src/index.ts` (`POST /internal/media`)
+- `workers/media-api/src/index.ts` (`POST /internal/media`, `DELETE /internal/media/{key}`)
+- `supabase/functions/_shared/actions/bookkeeping.ts` + `src/lib/actions/bookkeeping.ts` (Gerrie-handelingen)
+- `src/components/PurchaseInvoiceInboxAlerts.tsx` (badge + realtime)
 - Frontend: `src/lib/invoiceInbox.ts`, `src/lib/invoice-inbox-api.ts`,
   instellingenkaart in `SimplePages.tsx`, inbox-paneel in `Bookkeeping.tsx`.
 
@@ -73,13 +76,45 @@ verdwijnt stil. De gebruiker stuurt de mail opnieuw door nadat het is gezet.
 
 ## Stap 3 — Workers opnieuw deployen
 ```bash
-cd workers/media-api && npm run deploy            # nieuwe route POST /internal/media
+cd workers/media-api && npm run deploy            # nieuwe routes POST /internal/media en DELETE /internal/media/{key}
 cd workers/email-inbound && npm run deploy:staging # bijlagen meesturen voor facturen-*
 ```
 Draait de oude Email Worker nog, dan komen facturen wel binnen maar zonder
 bijlagen: het item krijgt reden `attachments_missing` ("is de Email Worker
 bijgewerkt?"). De catch-all-route in Cloudflare hoeft niet te veranderen: het
 factuuradres past in dezelfde alias-syntaxis.
+
+## Stap 3b — Opruimronde (pg_cron + pg_net)
+`invoice-inbox?cron=sweep` pakt items opnieuw op die door een storing bleven
+liggen (nooit gestart, blijven hangen, mislukt terwijl de AI even niet
+beschikbaar was of het tegoed op was; maximaal vier automatische pogingen) en
+ruimt de R2-bestanden op van items die niets opleverden (genegeerd en
+weggegooid na 30 dagen, dubbel na 90 dagen; bewijsstukken van een concept
+nooit). Wat op een mens wacht (leverancier onbekend, geen bijlage) blijft liggen.
+
+Het secret is `INVOICE_INBOX_CRON_SECRET`, met `INVOICE_REMINDER_CRON_SECRET`
+als terugval — meestal is er dus niets nieuws te zetten. Elk kwartier is ruim
+genoeg; de ronde doet hooguit vijf herverwerkingen per keer.
+
+```sql
+select cron.schedule(
+  'purchase-invoice-inbox-sweep',
+  '*/15 * * * *',
+  $$
+  select net.http_post(
+    url    := 'https://<project>.functions.supabase.co/invoice-inbox?cron=sweep',
+    headers:= jsonb_build_object('content-type','application/json','x-cron-secret','<INVOICE_REMINDER_CRON_SECRET>'),
+    body   := '{}'::jsonb
+  );
+  $$
+);
+```
+
+Handmatig testen:
+```bash
+curl -s -X POST "https://<project>.functions.supabase.co/invoice-inbox?cron=sweep" -H "x-cron-secret: <secret>"
+# -> {"ok":true,"sweep":{"checked":…,"retried":[…]},"purge":{"purged":…,"deletedObjects":…}}
+```
 
 ## Stap 4 — Testen
 1. Instellingen → E-mail → *Inkoopfacturen per e-mail* → **Maak mijn factuuradres aan** → Kopieer.
@@ -102,6 +137,18 @@ factuuradres past in dezelfde alias-syntaxis.
 
 Het AI-verbruik telt mee op het maandplafond van wie het factuuradres aanmaakte
 (`organization_inbound_aliases.created_by`), net als Gerrie.
+
+## Wat er verder meedraait
+- **Factuur in de mailtekst** (geen bijlage): ziet de tekst er als een factuur uit
+  (factuurwoorden én meerdere bedragen), dan leest de AI de tekst uit en wordt die
+  als `mailtekst.txt` bewijsstuk bij het concept bewaard. Anders: *Aandacht nodig*.
+- **Badge in de zijbalk**: Financiën → Inkoopfacturen toont het aantal items dat op
+  een mens wacht; dichtgeklapt staat de teller op Financiën zelf.
+- **Live**: het paneel en de badge luisteren op Supabase Realtime
+  (`purchase_invoice_inbox` zit in de publicatie) met een langzame terugvalpoll.
+- **Gerrie / MCP**: `purchase_invoice_inbox.list` (lezen) en de voorstellen
+  `purchase_invoice_inbox.prepare`, `.reprocess` en `.reject`; de uitvoerders roepen
+  dezelfde edge function aan als de knoppen.
 
 ## Aandachtspunten
 - **Meerdere facturen in één mail**: elke uitgelezen factuur krijgt een eigen

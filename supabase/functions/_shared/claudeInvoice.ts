@@ -15,6 +15,7 @@
 
 import { HttpError } from './edgeAuth.ts';
 import type { Usage } from './claudeSummary.ts';
+import { DOCUMENT_MIME_TYPES } from './invoiceInboxRules.ts';
 
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') || '';
 // Standaard hetzelfde model als Gerrie (Sonnet); per secret te overrulen.
@@ -71,14 +72,11 @@ export function invoiceExtractModel(): string {
   return ANTHROPIC_MODEL;
 }
 
-/** Toegestane bestandstypen voor het uitlezen. */
-export const SUPPORTED_MIME_TYPES = [
-  'application/pdf',
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'image/gif',
-];
+/** Toegestane bestandstypen voor het uitlezen (één bron: invoiceInboxRules.ts). */
+export const SUPPORTED_MIME_TYPES = DOCUMENT_MIME_TYPES;
+
+/** Mailtekst die we aan Claude geven: meer is geen factuur meer maar een thread. */
+const MAX_TEXT_CHARS = 30_000;
 
 const TOOL_NAME = 'extract_invoice';
 
@@ -186,12 +184,47 @@ export async function extractInvoiceFromDocument(input: {
   accounts: AccountRef[];
   vatCodes: VatCodeRef[];
 }): Promise<{ extraction: InvoiceExtraction; usage: Usage; model: string }> {
-  if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
   if (!SUPPORTED_MIME_TYPES.includes(input.mimeType)) {
     throw new HttpError(`Bestandstype ${input.mimeType} wordt niet ondersteund. Gebruik PDF, JPG, PNG, WEBP of GIF.`, 400);
   }
+  return await runExtraction(input.accounts, input.vatCodes, [
+    documentBlock(input.dataBase64, input.mimeType),
+    { type: 'text', text: 'Lees deze inkoopfactuur uit en roep de tool extract_invoice aan.' },
+  ]);
+}
 
-  const system = buildSystemPrompt(input.accounts, input.vatCodes);
+/**
+ * Leest een factuur uit die in de TEKST van een e-mail staat (geen bijlage).
+ * De mailtekst gaat als afgebakende data mee; staat er geen factuur in, dan
+ * hoort het model geen regels terug te geven en komt de aanroeper daar op
+ * `looksLikeInvoice` achter.
+ */
+export async function extractInvoiceFromText(input: {
+  text: string;
+  accounts: AccountRef[];
+  vatCodes: VatCodeRef[];
+}): Promise<{ extraction: InvoiceExtraction; usage: Usage; model: string }> {
+  const text = input.text.replace(/\r\n/g, '\n').trim().slice(0, MAX_TEXT_CHARS);
+  if (!text) throw new HttpError('Geen tekst om uit te lezen.', 400);
+  return await runExtraction(input.accounts, input.vatCodes, [
+    {
+      type: 'text',
+      text: 'Hieronder staat de tekst van een ontvangen e-mail. Als die tekst zelf een inkoopfactuur is (leverancier, regels, bedragen), lees die dan uit. ' +
+        'Is het alleen een begeleidend bericht ("zie bijlage") of geen factuur, geef dan GEEN regels (lines leeg) en confidence "low".\n\n' +
+        `<<<EMAIL_TEKST>>>\n${text}\n<<<EINDE_EMAIL_TEKST>>>`,
+    },
+    { type: 'text', text: 'Roep de tool extract_invoice aan met wat je uit deze e-mailtekst kunt uitlezen.' },
+  ]);
+}
+
+async function runExtraction(
+  accounts: AccountRef[],
+  vatCodes: VatCodeRef[],
+  content: Array<Record<string, unknown>>,
+): Promise<{ extraction: InvoiceExtraction; usage: Usage; model: string }> {
+  if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
+
+  const system = buildSystemPrompt(accounts, vatCodes);
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -203,13 +236,7 @@ export async function extractInvoiceFromDocument(input: {
       system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
       tools: [EXTRACT_TOOL],
       tool_choice: { type: 'tool', name: TOOL_NAME },
-      messages: [{
-        role: 'user',
-        content: [
-          documentBlock(input.dataBase64, input.mimeType),
-          { type: 'text', text: 'Lees deze inkoopfactuur uit en roep de tool extract_invoice aan.' },
-        ],
-      }],
+      messages: [{ role: 'user', content }],
     }),
   });
 

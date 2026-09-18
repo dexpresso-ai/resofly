@@ -27,7 +27,7 @@ export const INBOX_STATUS_LABELS: Record<PurchaseInvoiceInboxStatus, string> = {
 /** Waarom een item niet (of niet vanzelf) tot een concept leidde. */
 export const INBOX_REASON_LABELS: Record<string, string> = {
   supplier_unknown: 'Leverancier niet herkend — kies er een of maak hem aan',
-  no_attachment: 'Geen factuurbestand (PDF, XML of afbeelding) in de mail',
+  no_attachment: 'Geen factuurbestand (PDF, XML of afbeelding) in de mail, en de mailtekst zelf is geen factuur',
   attachments_missing: 'De bijlagen zijn niet meegekomen — is de Email Worker bijgewerkt?',
   oversized: 'De mail is te groot om te verwerken (limiet 12 MB)',
   nothing_extracted: 'In de bijlagen is geen factuur herkend',
@@ -113,6 +113,7 @@ export function describeAttachment(att: PurchaseInvoiceInboxAttachment): { label
   const kindNote: Record<PurchaseInvoiceInboxAttachment['kind'], string | null> = {
     document: null,
     copy: 'kopie van de e-factuur',
+    body: 'de factuur stond in de mail zelf',
     other: 'niet uitgelezen',
     oversized: 'te groot',
     unsupported: 'geen factuurbestand',

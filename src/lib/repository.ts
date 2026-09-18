@@ -4093,7 +4093,7 @@ export async function rotateInboundAlias(organizationId: UUID, purpose: InboundA
 const PURCHASE_INVOICE_INBOX_COLUMNS =
   'id,organization_id,alias_id,parent_id,rfc_message_id,sender_email,sender_name,subject,body_excerpt,received_at,attachments,status,reason,error_message,' +
   'method,confidence,warnings,proposal,extraction_meta,supplier_id,supplier_match,supplier_created,purchase_invoice_id,duplicate_of_purchase_invoice_id,' +
-  'duplicate_of_inbox_id,auto_booked,attempts,processed_at,handled_by,handled_at,created_at,updated_at';
+  'duplicate_of_inbox_id,auto_booked,attempts,processed_at,handled_by,handled_at,purged_at,created_at,updated_at';
 
 const PURCHASE_INVOICE_INBOX_HINT =
   'Voer de migratie 20260918010000_purchase_invoice_inbox.sql uit in Supabase om de factuur-inbox te activeren.';

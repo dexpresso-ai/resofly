@@ -1,7 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import {
-  InboxProcessingError, isDocumentAttachment, normalizeDocumentMime, processInboxItem,
+  InboxProcessingError, isDocumentAttachment, looksLikeInvoiceText, normalizeDocumentMime, processInboxItem,
   runInBackground, storeInboxAttachment, type InboxAttachment,
 } from '../_shared/invoiceInbox.ts';
 
@@ -297,6 +297,8 @@ async function handleInvoiceInbound(
       sender_name: best?.name || String(body.headerFromName || '') || null,
       subject,
       body_excerpt: bodyText.slice(0, 4000),
+      // De volledige tekst: voor facturen die in de mail zelf staan (geen bijlage).
+      body_text: bodyText.slice(0, 65536),
       received_at: parseDate(body.receivedAt) || new Date().toISOString(),
       drop_reason: dropReason,
     },
@@ -328,13 +330,17 @@ async function handleInvoiceInbound(
   if (!hasDocument) {
     // Wel bijlagen genoemd maar niets meegekregen: dat is een oude Worker, geen
     // lege mail. En een mail boven de parse-limiet van de Worker heeft z'n
-    // bijlagen nooit gezien.
+    // bijlagen nooit gezien. Staat de factuur in de mailtekst zelf, dan gaat
+    // die alsnog de verwerking in (invoiceInbox.ts leest dan de tekst uit).
     const missing = attachments.some((a) => a.kind === 'skipped' && a.note?.includes('niet meegestuurd'));
-    const reason = body.truncated ? 'oversized' : missing ? 'attachments_missing' : 'no_attachment';
-    await supabaseAdmin.from('purchase_invoice_inbox')
-      .update({ attachments, status: 'needs_review', reason, processed_at: new Date().toISOString() })
-      .eq('id', inboxId);
-    return { route: 'invoices', outcome: 'parked', reason, inbox_id: inboxId };
+    const bodyIsInvoice = !body.truncated && !missing && looksLikeInvoiceText(bodyText);
+    if (!bodyIsInvoice) {
+      const reason = body.truncated ? 'oversized' : missing ? 'attachments_missing' : 'no_attachment';
+      await supabaseAdmin.from('purchase_invoice_inbox')
+        .update({ attachments, status: 'needs_review', reason, processed_at: new Date().toISOString() })
+        .eq('id', inboxId);
+      return { route: 'invoices', outcome: 'parked', reason, inbox_id: inboxId };
+    }
   }
 
   const { error: updateError } = await supabaseAdmin.from('purchase_invoice_inbox')

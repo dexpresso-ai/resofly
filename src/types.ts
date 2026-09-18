@@ -1157,7 +1157,7 @@ export type PurchaseInvoiceInboxStatus =
   | 'received' | 'processing' | 'ready' | 'booked' | 'needs_review'
   | 'duplicate' | 'rejected' | 'failed' | 'dropped';
 
-export type PurchaseInvoiceInboxAttachmentKind = 'document' | 'copy' | 'other' | 'oversized' | 'unsupported' | 'skipped';
+export type PurchaseInvoiceInboxAttachmentKind = 'document' | 'copy' | 'body' | 'other' | 'oversized' | 'unsupported' | 'skipped';
 
 export interface PurchaseInvoiceInboxAttachment {
   name: string;
@@ -1224,6 +1224,8 @@ export interface PurchaseInvoiceInboxItem {
   processed_at: string | null;
   handled_by: UUID | null;
   handled_at: string | null;
+  /** Gevuld zodra de opruimronde de bijlagen van dit (genegeerde/dubbele) item van R2 heeft verwijderd. */
+  purged_at: string | null;
   created_at: string;
   updated_at: string;
 }

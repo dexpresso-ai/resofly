@@ -14,6 +14,12 @@
 // Auth zoals invoice-extract: Supabase JWT + org-lidmaatschap + schrijfrol +
 // de module Financiën. Elke actie controleert dat het item bij de organisatie
 // uit het verzoek hoort; de verwerking zelf zit in _shared/invoiceInbox.ts.
+//
+// Daarnaast één pad zonder gebruiker, voor pg_cron (x-cron-secret):
+//   ?cron=sweep  vastgelopen of tijdelijk mislukte items opnieuw oppakken en
+//                bijlagen van afgedane items van R2 opruimen. Het secret is
+//                INVOICE_INBOX_CRON_SECRET, met INVOICE_REMINDER_CRON_SECRET
+//                als terugval (zelfde patroon als de herinnerings- en dunning-cron).
 // ============================================================
 
 import {
@@ -22,10 +28,13 @@ import {
   type HttpStatus,
 } from '../_shared/edgeAuth.ts';
 import {
-  loadInboxRow, processInboxItem, rejectInboxItem, restoreInboxItem, type InboxRow, type ProcessOptions,
+  loadInboxRow, processInboxItem, purgeInboxAttachments, rejectInboxItem, restoreInboxItem, sweepInbox,
+  type InboxRow, type ProcessOptions,
 } from '../_shared/invoiceInbox.ts';
 
 const admin = createAdminClient();
+
+const CRON_SECRET = Deno.env.get('INVOICE_INBOX_CRON_SECRET') || Deno.env.get('INVOICE_REMINDER_CRON_SECRET') || '';
 
 const ALLOWED_ORIGINS = parseAllowedOrigins([
   Deno.env.get('INVOICE_ALLOWED_ORIGINS'), Deno.env.get('GERRIE_ALLOWED_ORIGINS'), Deno.env.get('APP_PUBLIC_URL'),
@@ -38,6 +47,11 @@ type Action = 'process' | 'prepare' | 'reject' | 'restore';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors.headers(req) });
+
+  // De opruimronde: geen gebruiker, geen CORS — server-naar-server met een secret.
+  const cron = new URL(req.url).searchParams.get('cron');
+  if (cron) return await handleCron(req, cron);
+
   try {
     if (req.method !== 'POST') throw new HttpError('Method not allowed.', 405 as HttpStatus);
     cors.assert(req);
@@ -95,3 +109,29 @@ Deno.serve(async (req) => {
     return cors.json(req, { ok: false, error: clientMessage }, status);
   }
 });
+
+// ── Cron ────────────────────────────────────────────────────────────────────────
+
+async function handleCron(req: Request, cron: string): Promise<Response> {
+  const json = (payload: unknown, status = 200) =>
+    new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
+  if (!CRON_SECRET) return json({ ok: false, error: 'INVOICE_INBOX_CRON_SECRET (of INVOICE_REMINDER_CRON_SECRET) ontbreekt in de Edge Function secrets.' }, 500);
+  const provided = req.headers.get('x-cron-secret') || '';
+  if (!timingSafeEqual(provided, CRON_SECRET)) return json({ ok: false, error: 'Ongeldig of ontbrekend cron-secret.' }, 401);
+  if (cron !== 'sweep') return json({ ok: false, error: `Onbekende cron: ${cron}` }, 400);
+  try {
+    const sweep = await sweepInbox(admin, { limit: 5 });
+    const purge = await purgeInboxAttachments(admin, { limit: 25 });
+    return json({ ok: true, sweep, purge });
+  } catch (err) {
+    console.error('invoice-inbox cron error:', err instanceof Error ? err.message : String(err));
+    return json({ ok: false, error: 'Opruimronde mislukt door een serverfout.' }, 500);
+  }
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i += 1) result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return result === 0;
+}

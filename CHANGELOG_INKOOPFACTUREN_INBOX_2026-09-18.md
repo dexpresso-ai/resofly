@@ -76,6 +76,34 @@ bewijsstuk. Boeken blijft één klik, of gaat vanzelf als je dat aanzet.
 Zie [INKOOPFACTUREN_INBOX_SETUP_2026-09-18.md](INKOOPFACTUREN_INBOX_SETUP_2026-09-18.md) voor
 de deploy (migratie, functions, beide workers, secrets) en de test.
 
+## 4 · Vervolg (zelfde dag): badge, live, mailtekst, opruimronde, Gerrie
+
+- **Badge in de zijbalk.** Financiën → Inkoopfacturen toont hoeveel binnengekomen facturen op een
+  mens wachten (aandacht nodig, dubbel, mislukt). Is het Financiën-menu dichtgeklapt, dan staat de
+  teller op Financiën zelf, zodat hij niet uit beeld valt.
+- **Live in plaats van pollen.** Eén realtime-abonnement op de inbox (App-niveau,
+  `usePurchaseInvoiceInbox`) ververst de badge én het paneel op de pagina; de polling is nu alleen
+  nog een langzame terugval (30 s tijdens het uitlezen, anders twee minuten).
+- **Factuur in de mailtekst.** Zit er geen factuurbestand in de mail maar ziet de tekst er als een
+  factuur uit (factuurwoorden én meerdere bedragen), dan leest de AI de mailtekst uit
+  (`extractInvoiceFromText`) en wordt die tekst als `mailtekst.txt` bewijsstuk bij het concept bewaard.
+  Begeleidende mails ("zie bijlage") worden bewust níét naar de AI gestuurd. De volledige tekst staat
+  nu in `body_text` (max 64k).
+- **Opruimronde** (`invoice-inbox?cron=sweep`, pg_cron elk kwartier): items die door een storing
+  bleven liggen worden opnieuw opgepakt (nooit gestart, blijven hangen, AI tijdelijk weg, tegoed op,
+  limiet van 120/uur; hooguit vier automatische pogingen, vijf per ronde) en de R2-bestanden van
+  genegeerde/weggegooide (30 dagen) en dubbele (90 dagen) items gaan weg. Bewijsstukken van een
+  concept nooit. De media-worker kreeg daarvoor `DELETE /internal/media/{key}`. Zelfde cron-secret
+  als de herinneringen (`INVOICE_REMINDER_CRON_SECRET`), of een eigen `INVOICE_INBOX_CRON_SECRET`.
+- **Gerrie en MCP.** `purchase_invoice_inbox.list` (lezen: status, reden, leverancier, nummer,
+  totaal, concept) en de voorstellen `purchase_invoice_inbox.prepare` (met leverancierkeuze of
+  aanmaken, en `allow_duplicate`), `.reprocess` en `.reject`. De uitvoerders in de browser roepen
+  dezelfde edge function aan als de knoppen; de registry-tests bewaken dat beide kanten kloppen.
+- **Regels apart en getest.** De beslissingen (welke bijlage een factuur kan zijn, wanneer twee
+  bijlagen dezelfde factuur zijn, wanneer er automatisch geboekt mag worden, wat de opruimronde
+  opnieuw mag proberen en wat weg mag) staan nu in `_shared/invoiceInboxRules.ts`, import-vrij,
+  met 7 node-tests.
+
 ## Wat níét verandert
 
 "Factuur scannen" op de pagina Inkoopfacturen, het inkoopfactuurformulier en `book_purchase_invoice`

@@ -32,15 +32,23 @@ import { HttpError } from './edgeAuth.ts';
 import { hasAnthropicKey, SUPPORTED_MIME_TYPES } from './claudeInvoice.ts';
 import { userHasBudget } from './claudeSummary.ts';
 import {
-  buildAiProposal, buildUblProposal, bytesToBase64, computePurchaseTotals, isXmlFile,
-  loadProposalContext, normEmail, normName,
+  buildAiProposal, buildAiProposalFromText, buildUblProposal, bytesToBase64, computePurchaseTotals,
+  loadProposalContext,
   type InvoiceProposal, type ProposalContext, type ProposalResult, type SupplierMatchKind, type SupplierRow,
 } from './invoiceProposal.ts';
 import { looksLikeUblXml } from './ubl.ts';
+import {
+  autoBookEligible, isDocumentAttachment, isXmlFile, looksLikeInvoice, looksLikeInvoiceText, normEmail,
+  normalizeDocumentMime, normNumber, purgeEligible, retryEligibility, safeFileName, sameInvoice,
+  type InboxAttachmentKind,
+} from './invoiceInboxRules.ts';
+
+// De regels zelf staan in invoiceInboxRules.ts (import-vrij, met node-tests);
+// hier opnieuw geëxporteerd zodat mail-inbound en invoice-inbox één ingang hebben.
+export { autoBookEligible, isDocumentAttachment, looksLikeInvoice, looksLikeInvoiceText, normalizeDocumentMime, safeFileName, sameInvoice };
+export type { InboxAttachmentKind };
 
 // ── Types ───────────────────────────────────────────────────────────────────────
-
-export type InboxAttachmentKind = 'document' | 'copy' | 'other' | 'oversized' | 'unsupported' | 'skipped';
 
 export interface InboxAttachment {
   name: string;
@@ -69,6 +77,7 @@ export interface InboxRow {
   sender_name: string | null;
   subject: string;
   body_excerpt: string | null;
+  body_text: string | null;
   received_at: string;
   attachments: InboxAttachment[];
   status: InboxStatus;
@@ -91,6 +100,8 @@ export interface InboxRow {
   processed_at: string | null;
   handled_by: string | null;
   handled_at: string | null;
+  purged_at: string | null;
+  updated_at: string;
 }
 
 export interface InboxSettings {
@@ -126,9 +137,10 @@ const MAX_DOCUMENTS_PER_MAIL = 5;
 const STALE_PROCESSING_MINUTES = 10;
 
 export const INBOX_COLUMNS =
-  'id,organization_id,alias_id,parent_id,dedup_key,recipient,rfc_message_id,sender_email,sender_name,subject,body_excerpt,received_at,' +
+  'id,organization_id,alias_id,parent_id,dedup_key,recipient,rfc_message_id,sender_email,sender_name,subject,body_excerpt,body_text,received_at,' +
   'attachments,status,reason,error_message,method,confidence,warnings,proposal,extraction_meta,supplier_id,supplier_match,supplier_created,' +
-  'purchase_invoice_id,duplicate_of_purchase_invoice_id,duplicate_of_inbox_id,auto_booked,attempts,processing_started_at,processed_at,handled_by,handled_at';
+  'purchase_invoice_id,duplicate_of_purchase_invoice_id,duplicate_of_inbox_id,auto_booked,attempts,processing_started_at,processed_at,handled_by,handled_at,' +
+  'purged_at,updated_at';
 
 // ── Media-worker (R2) ───────────────────────────────────────────────────────────
 // Zelfde terugval-namen als meeting-transcribe, zodat er meestal niets extra's
@@ -141,11 +153,6 @@ export function mediaWorkerConfig(): { url: string; secret: string } | null {
   return { url, secret };
 }
 
-/** Bestandsnaam die in een R2-sleutel past (zie isSafeStorageKey in de media-worker). */
-export function safeFileName(name: string): string {
-  const cleaned = (name || 'bijlage').normalize('NFKD').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[._-]+/, '').slice(0, 120);
-  return cleaned || 'bijlage';
-}
 
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', bytes as BufferSource);
@@ -194,32 +201,6 @@ export async function fetchStoredBytes(storageKey: string): Promise<Uint8Array> 
 function attachmentPublicUrl(storageKey: string): string | null {
   const media = mediaWorkerConfig();
   return media ? `${media.url}/file/${encodeURIComponent(storageKey)}` : null;
-}
-
-// ── Bijlagen classificeren ─────────────────────────────────────────────────────
-
-const DOCUMENT_EXT = /\.(pdf|xml|jpe?g|png|webp|gif)$/i;
-
-/** Kan dit bestand een factuur zijn die we kunnen uitlezen? */
-export function isDocumentAttachment(name: string, mimeType: string): boolean {
-  const mime = (mimeType || '').toLowerCase();
-  if (SUPPORTED_MIME_TYPES.includes(mime)) return true;
-  if (isXmlFile(name, mime)) return true;
-  return DOCUMENT_EXT.test(name || '');
-}
-
-/** MIME-type normaliseren op extensie (mailclients sturen soms application/octet-stream). */
-export function normalizeDocumentMime(name: string, mimeType: string): string {
-  const mime = (mimeType || '').toLowerCase();
-  if (SUPPORTED_MIME_TYPES.includes(mime) || ['application/xml', 'text/xml'].includes(mime)) return mime;
-  const lower = (name || '').toLowerCase();
-  if (lower.endsWith('.pdf')) return 'application/pdf';
-  if (lower.endsWith('.xml')) return 'application/xml';
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-  if (lower.endsWith('.png')) return 'image/png';
-  if (lower.endsWith('.webp')) return 'image/webp';
-  if (lower.endsWith('.gif')) return 'image/gif';
-  return mime || 'application/octet-stream';
 }
 
 // ── Lezen ───────────────────────────────────────────────────────────────────────
@@ -342,11 +323,7 @@ async function runPipeline(admin: SupabaseClient, row: InboxRow, opts: ProcessOp
   }
 
   const documents = row.attachments.filter((a) => a.kind === 'document' && a.storage_key);
-  if (documents.length === 0) {
-    return await updateRow(admin, row.id, {
-      status: 'needs_review', reason: 'no_attachment', processed_at: new Date().toISOString(),
-    });
-  }
+  if (documents.length === 0) return await processBodyText(admin, row, env);
 
   // Zit er een e-factuur (XML) bij, dan is die leidend; PDF's in dezelfde mail
   // zijn vrijwel altijd de leesbare kopie van diezelfde factuur en worden niet
@@ -622,6 +599,153 @@ async function applyCandidate(
   });
 }
 
+/**
+ * Geen factuurbestand in de mail: staat de factuur dan in de mailtekst zelf?
+ * Alleen als de tekst er echt als een factuur uitziet (woorden én meerdere
+ * bedragen) gaat hij naar de AI; de tekst wordt dan als bewijsstuk bewaard.
+ */
+async function processBodyText(admin: SupabaseClient, row: InboxRow, env: PipelineEnv): Promise<InboxRow> {
+  const now = new Date().toISOString();
+  const text = (row.body_text || row.body_excerpt || '').trim();
+  if (!looksLikeInvoiceText(text)) {
+    return await updateRow(admin, row.id, { status: 'needs_review', reason: 'no_attachment', processed_at: now });
+  }
+  const { ctx, settings, budgetUserId } = env;
+  if (!settings.ai_enabled) return await updateRow(admin, row.id, { status: 'needs_review', reason: 'ai_disabled', processed_at: now });
+  if (!hasAnthropicKey()) return await updateRow(admin, row.id, { status: 'needs_review', reason: 'ai_unavailable', processed_at: now });
+  if (budgetUserId && !(await userHasBudget(admin, budgetUserId))) {
+    return await updateRow(admin, row.id, { status: 'needs_review', reason: 'budget_exhausted', processed_at: now });
+  }
+
+  let result: ProposalResult;
+  try {
+    result = await buildAiProposalFromText(admin, row.organization_id, { text, label: 'mailtekst' }, ctx, { usageUserId: budgetUserId });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return await updateRow(admin, row.id, { status: 'failed', reason: 'extraction_failed', error_message: message.slice(0, 1000), processed_at: now });
+  }
+  if (!looksLikeInvoice(result.proposal)) {
+    return await updateRow(admin, row.id, {
+      status: 'needs_review', reason: 'nothing_extracted', proposal: result.proposal, method: 'ai',
+      confidence: result.proposal.confidence, extraction_meta: { ...result.extraction_meta, inbox_log: { source: 'email_body' } },
+      processed_at: now,
+    });
+  }
+
+  // De mailtekst is hier het origineel: bewaren zoals een PDF (bewijsstuk).
+  let attachments = row.attachments;
+  try {
+    const stored = await storeInboxAttachment(row.organization_id, row.id, {
+      name: 'mailtekst.txt', mimeType: 'text/plain', bytes: new TextEncoder().encode(text),
+    });
+    attachments = [...row.attachments, {
+      name: 'mailtekst.txt', mime_type: 'text/plain', size_bytes: text.length,
+      storage_key: stored.storage_key, sha256: stored.sha256, kind: 'body', note: 'De factuur stond in de mail zelf.',
+    }];
+  } catch (err) {
+    console.warn('invoice-inbox: mailtekst als bewijsstuk opslaan mislukt:', err instanceof Error ? err.message : String(err));
+  }
+
+  return await applyCandidate(admin, { ...row, attachments }, result, env, {
+    attachments, extraction_meta_extra: { inbox_log: { source: 'email_body' } },
+  });
+}
+
+// ── De opruimronde (invoice-inbox?cron=sweep) ───────────────────────────────────
+
+export interface SweepResult { checked: number; retried: Array<{ id: string; why: string; status: string }>; skipped: number; errors: string[] }
+
+/**
+ * Pakt items opnieuw op die door een STORING bleven liggen: nooit gestart,
+ * blijven hangen, of mislukt terwijl de AI even niet beschikbaar was. Wat op
+ * een mens wacht blijft liggen. Bewust een klein aantal per ronde: elke poging
+ * kan seconden duren en de functie heeft een wandkloklimiet.
+ */
+export async function sweepInbox(admin: SupabaseClient, opts: { limit?: number } = {}): Promise<SweepResult> {
+  const limit = Math.max(1, Math.min(opts.limit ?? 5, 20));
+  const now = new Date();
+  const { data, error } = await admin.from('purchase_invoice_inbox')
+    .select('id, status, reason, attempts, processing_started_at, updated_at')
+    .in('status', ['received', 'processing', 'failed', 'needs_review'])
+    .order('updated_at', { ascending: true })
+    .limit(200);
+  if (error) throw new HttpError(`Opruimronde: items laden mislukt: ${error.message}`, 500);
+  const rows = (data ?? []) as unknown as Array<{ id: string; status: string; reason: string | null; attempts: number; processing_started_at: string | null; updated_at: string }>;
+
+  const result: SweepResult = { checked: rows.length, retried: [], skipped: 0, errors: [] };
+  for (const row of rows) {
+    if (result.retried.length >= limit) break;
+    const verdict = retryEligibility(row, now);
+    if (!verdict.retry) { result.skipped += 1; continue; }
+    try {
+      const done = await processInboxItem(admin, row.id, {});
+      result.retried.push({ id: row.id, why: verdict.why, status: done.status });
+    } catch (err) {
+      result.errors.push(`${row.id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return result;
+}
+
+export interface PurgeResult { purged: number; deletedObjects: number; errors: string[] }
+
+/**
+ * Ruimt de R2-bestanden op van items die niets hebben opgeleverd (genegeerd,
+ * weggegooid, dubbel) en dat al 30 resp. 90 dagen zijn. De rij blijft staan,
+ * met de namen van de bijlagen; alleen de bytes gaan weg. Bewijsstukken van
+ * een concept komen hier nooit langs (purchase_invoice_id is dan gevuld).
+ */
+export async function purgeInboxAttachments(admin: SupabaseClient, opts: { limit?: number } = {}): Promise<PurgeResult> {
+  const limit = Math.max(1, Math.min(opts.limit ?? 25, 100));
+  const now = new Date();
+  const { data, error } = await admin.from('purchase_invoice_inbox')
+    .select('id, status, purged_at, purchase_invoice_id, updated_at, attachments')
+    .in('status', ['rejected', 'dropped', 'duplicate'])
+    .is('purged_at', null)
+    .is('purchase_invoice_id', null)
+    .order('updated_at', { ascending: true })
+    .limit(200);
+  if (error) throw new HttpError(`Opruimronde: opruimkandidaten laden mislukt: ${error.message}`, 500);
+  const rows = (data ?? []) as unknown as Array<{ id: string; status: string; purged_at: string | null; purchase_invoice_id: string | null; updated_at: string; attachments: InboxAttachment[] }>;
+
+  const result: PurgeResult = { purged: 0, deletedObjects: 0, errors: [] };
+  for (const row of rows) {
+    if (result.purged >= limit) break;
+    const attachments = Array.isArray(row.attachments) ? row.attachments : [];
+    if (!purgeEligible({ ...row, attachments }, now)) continue;
+    try {
+      const kept: InboxAttachment[] = [];
+      for (const att of attachments) {
+        if (att.storage_key) {
+          await deleteStoredObject(att.storage_key);
+          result.deletedObjects += 1;
+          kept.push({ ...att, storage_key: null, note: `Opgeruimd op ${now.toISOString().slice(0, 10)}.` });
+        } else {
+          kept.push(att);
+        }
+      }
+      await updateRow(admin, row.id, { attachments: kept, purged_at: now.toISOString() });
+      result.purged += 1;
+    } catch (err) {
+      result.errors.push(`${row.id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return result;
+}
+
+/** Verwijdert een object op R2 via de media-worker; een al verdwenen object telt als weg. */
+async function deleteStoredObject(storageKey: string): Promise<void> {
+  const media = mediaWorkerConfig();
+  if (!media) throw new InboxProcessingError('storage_unavailable', 'Media-worker niet geconfigureerd (MEDIA_WORKER_URL + INTERNAL_UPLOAD_SECRET).');
+  const res = await fetch(`${media.url}/internal/media/${encodeURIComponent(storageKey)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${media.secret}` },
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new InboxProcessingError('storage_failed', `Bijlage verwijderen mislukt (${res.status}).`);
+  }
+}
+
 // ── Bouwstenen ──────────────────────────────────────────────────────────────────
 
 /** Wiens AI-tegoed draagt de automatische verwerking? De aanmaker van het adres. */
@@ -683,8 +807,6 @@ async function createSupplier(
   return data as SupplierRow;
 }
 
-const normNumber = (s: string | null | undefined) => (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-
 /**
  * Dubbel = zelfde leveranciersfactuurnummer bij dezelfde leverancier (niet
  * geannuleerd), of precies hetzelfde bestand dat al eerder tot een concept
@@ -727,43 +849,8 @@ async function findDuplicate(
   return null;
 }
 
-/** Ziet dit voorstel eruit als een factuur (en niet als een brief of een logo)? */
-export function looksLikeInvoice(proposal: InvoiceProposal): boolean {
-  if (!proposal.lines.length) return false;
-  const total = proposal.totals.total_cents || proposal.extracted_totals?.total_cents || 0;
-  return total !== 0;
-}
 
-/** Dezelfde factuur, twee keer bijgevoegd? Op nummer, anders op leverancier + totaal. */
-export function sameInvoice(a: InvoiceProposal, b: InvoiceProposal): boolean {
-  const na = normNumber(a.supplier_invoice_number);
-  const nb = normNumber(b.supplier_invoice_number);
-  if (na && nb) return na === nb && normName(a.supplier.name) === normName(b.supplier.name);
-  return normName(a.supplier.name) === normName(b.supplier.name)
-    && Math.abs((a.totals.total_cents || 0) - (b.totals.total_cents || 0)) <= 2;
-}
 
-/**
- * Automatisch boeken mag alleen als er niets meer te kiezen of te controleren
- * valt: bekende leverancier (niet zojuist aangemaakt), hoge zekerheid, geen
- * enkele waarschuwing, elke regel met een grootboekrekening, positief totaal.
- */
-export function autoBookEligible(input: {
-  supplierCreated: boolean;
-  supplierMatch: string | null;
-  confidence: 'high' | 'medium' | 'low';
-  warnings: string[];
-  lines: Array<{ account_id: string | null; amount_cents: number }>;
-  totals: { total_cents: number };
-}): { ok: true } | { ok: false; why: string } {
-  if (input.supplierCreated) return { ok: false, why: 'de leverancier is nieuw aangemaakt' };
-  if (!input.supplierMatch || input.supplierMatch === 'name') return { ok: false, why: 'de leverancier is alleen op naam herkend' };
-  if (input.confidence !== 'high') return { ok: false, why: 'de zekerheid van de uitlezing is niet hoog' };
-  if (input.warnings.length) return { ok: false, why: 'er zijn waarschuwingen bij de uitlezing' };
-  if (!input.lines.length || input.lines.some((l) => !l.account_id)) return { ok: false, why: 'niet elke regel heeft een grootboekrekening' };
-  if (input.totals.total_cents <= 0) return { ok: false, why: 'het totaal is niet positief' };
-  return { ok: true };
-}
 
 function decodeStart(bytes: Uint8Array): string {
   try {

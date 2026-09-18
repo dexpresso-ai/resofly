@@ -264,9 +264,11 @@ create table if not exists public.purchase_invoice_inbox (
   sender_name text,
   subject text not null default '',
   body_excerpt text,
+  -- Volledige platte tekst (max 64k): voor facturen die in de mail zelf staan.
+  body_text text,
   received_at timestamptz not null default now(),
 
-  -- [{ name, mime_type, size_bytes, storage_key, sha256, kind: document|other|oversized|unsupported|skipped }]
+  -- [{ name, mime_type, size_bytes, storage_key, sha256, kind: document|copy|body|other|oversized|unsupported|skipped }]
   attachments jsonb not null default '[]'::jsonb,
 
   status text not null default 'received' check (status in
@@ -296,6 +298,8 @@ create table if not exists public.purchase_invoice_inbox (
   notified_at timestamptz,
   handled_by uuid references auth.users(id) on delete set null,
   handled_at timestamptz,
+  -- Wanneer de bijlagen van een genegeerd/dubbel item van R2 zijn opgeruimd.
+  purged_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -313,6 +317,14 @@ create index if not exists idx_purchase_invoice_inbox_org_rfc
 create index if not exists idx_purchase_invoice_inbox_invoice
   on public.purchase_invoice_inbox (purchase_invoice_id)
   where purchase_invoice_id is not null;
+-- De periodieke opruimronde (invoice-inbox?cron=sweep): vastgelopen of tijdelijk
+-- mislukte items opnieuw oppakken, en bijlagen van afgedane items opruimen.
+create index if not exists idx_purchase_invoice_inbox_sweep
+  on public.purchase_invoice_inbox (status, updated_at)
+  where status in ('received', 'processing', 'failed', 'needs_review');
+create index if not exists idx_purchase_invoice_inbox_purge
+  on public.purchase_invoice_inbox (status, updated_at)
+  where purged_at is null and status in ('rejected', 'dropped', 'duplicate');
 
 drop trigger if exists purchase_invoice_inbox_updated on public.purchase_invoice_inbox;
 create trigger purchase_invoice_inbox_updated
@@ -375,13 +387,14 @@ begin
 
   insert into public.purchase_invoice_inbox (
     organization_id, alias_id, dedup_key, recipient, rfc_message_id,
-    sender_email, sender_name, subject, body_excerpt, received_at, status
+    sender_email, sender_name, subject, body_excerpt, body_text, received_at, status
   ) values (
     v_org, (p_payload->>'alias_id')::uuid, v_dedup, coalesce(p_payload->>'recipient', ''),
     nullif(p_payload->>'rfc_message_id', ''),
     nullif(p_payload->>'sender_email', ''), nullif(p_payload->>'sender_name', ''),
     left(coalesce(p_payload->>'subject', ''), 998),
     left(coalesce(p_payload->>'body_excerpt', ''), 4000),
+    nullif(left(coalesce(p_payload->>'body_text', ''), 65536), ''),
     coalesce((p_payload->>'received_at')::timestamptz, now()),
     'received'
   )
