@@ -332,7 +332,11 @@ async function handleInvoiceInbound(
     // lege mail. En een mail boven de parse-limiet van de Worker heeft z'n
     // bijlagen nooit gezien. Staat de factuur in de mailtekst zelf, dan gaat
     // die alsnog de verwerking in (invoiceInbox.ts leest dan de tekst uit).
-    const missing = attachments.some((a) => a.kind === 'skipped' && a.note?.includes('niet meegestuurd'));
+    // Op het gestructureerde veld, niet op de tekst van `note`. Een bijlage die
+    // niet te decoderen viel, telde eerder niet als "ontbrekend" (die note
+    // bevat het woord niet), en de mail werd geparkeerd als "geen
+    // factuurbestand in de mail" — terwijl een nieuwe poging het had opgelost.
+    const missing = attachments.some((a) => a.reason === 'not_forwarded' || a.reason === 'decode_failed' || a.reason === 'upload_failed');
     const bodyIsInvoice = !body.truncated && !missing && looksLikeInvoiceText(bodyText);
     if (!bodyIsInvoice) {
       const reason = body.truncated ? 'oversized' : missing ? 'attachments_missing' : 'no_attachment';
@@ -370,6 +374,7 @@ async function storeInvoiceAttachments(
     for (const name of names) {
       out.push({ name, mime_type: 'application/octet-stream', size_bytes: 0, storage_key: null, sha256: null,
         kind: isDocumentAttachment(name, '') ? 'skipped' : 'other',
+        reason: isDocumentAttachment(name, '') ? 'not_forwarded' : null,
         note: isDocumentAttachment(name, '') ? 'Bijlage niet meegestuurd door de Email Worker (oude versie).' : null });
     }
     return out;
@@ -391,26 +396,37 @@ async function storeInvoiceAttachments(
       try {
         bytes = base64ToBytesSafe(file.dataBase64);
       } catch {
-        out.push({ name, mime_type: declaredMime, size_bytes: size, storage_key: null, sha256: null, kind: 'skipped', note: 'Bijlage kon niet gedecodeerd worden.' });
+        out.push({ name, mime_type: declaredMime, size_bytes: size, storage_key: null, sha256: null, kind: 'skipped', reason: 'decode_failed', note: 'Bijlage kon niet gedecodeerd worden.' });
         continue;
       }
       if (bytes.byteLength > MAX_INBOX_ATTACHMENT_BYTES) {
-        out.push({ name, mime_type: declaredMime, size_bytes: bytes.byteLength, storage_key: null, sha256: null, kind: 'oversized', note: 'Groter dan 10 MB; niet opgeslagen.' });
+        out.push({ name, mime_type: declaredMime, size_bytes: bytes.byteLength, storage_key: null, sha256: null, kind: 'oversized', reason: 'oversized', note: 'Groter dan 10 MB; niet opgeslagen.' });
         continue;
       }
       const mime = normalizeDocumentMime(name, declaredMime);
-      const stored = await storeInboxAttachment(organizationId, inboxId, { name, mimeType: mime, bytes });
-      out.push({ name, mime_type: mime, size_bytes: bytes.byteLength, storage_key: stored.storage_key, sha256: stored.sha256,
-        kind: documentLike ? 'document' : 'other', note: null });
+      try {
+        const stored = await storeInboxAttachment(organizationId, inboxId, { name, mimeType: mime, bytes });
+        out.push({ name, mime_type: mime, size_bytes: bytes.byteLength, storage_key: stored.storage_key, sha256: stored.sha256,
+          kind: documentLike ? 'document' : 'other', note: null, reason: null });
+      } catch (err) {
+        // Bewust per bijlage opvangen in plaats van de hele lus te laten
+        // klappen. Deed hij dat wel, dan schreef de aanroeper alleen
+        // status 'failed' weg en ging de `attachments`-lijst verloren — mét
+        // de R2-sleutels van wat al wél geüpload was. Die objecten waren
+        // daarna nergens meer aan gekoppeld en dus ook niet meer te wissen.
+        console.error(`mail-inbound: bijlage ${name} kon niet naar R2:`, errMsg(err));
+        out.push({ name, mime_type: mime, size_bytes: bytes.byteLength, storage_key: null, sha256: null,
+          kind: 'skipped', reason: 'upload_failed', note: 'Opslaan van deze bijlage is mislukt; opnieuw proberen kan helpen.' });
+      }
       continue;
     }
 
     if (m.oversized === true) {
-      out.push({ name, mime_type: declaredMime, size_bytes: size, storage_key: null, sha256: null, kind: 'oversized', note: 'Te groot om mee te sturen; niet opgeslagen.' });
+      out.push({ name, mime_type: declaredMime, size_bytes: size, storage_key: null, sha256: null, kind: 'oversized', reason: 'oversized', note: 'Te groot om mee te sturen; niet opgeslagen.' });
     } else if (documentLike) {
-      out.push({ name, mime_type: declaredMime, size_bytes: size, storage_key: null, sha256: null, kind: 'skipped', note: 'Bijlage niet meegestuurd door de Email Worker.' });
+      out.push({ name, mime_type: declaredMime, size_bytes: size, storage_key: null, sha256: null, kind: 'skipped', reason: 'not_forwarded', note: 'Bijlage niet meegestuurd door de Email Worker.' });
     } else {
-      out.push({ name, mime_type: declaredMime, size_bytes: size, storage_key: null, sha256: null, kind: 'unsupported', note: 'Geen factuurbestand (alleen PDF, XML en afbeeldingen worden uitgelezen).' });
+      out.push({ name, mime_type: declaredMime, size_bytes: size, storage_key: null, sha256: null, kind: 'unsupported', reason: 'unsupported', note: 'Geen factuurbestand (alleen PDF, XML en afbeeldingen worden uitgelezen).' });
     }
   }
   return out.slice(0, 50);
