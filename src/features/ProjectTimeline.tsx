@@ -200,11 +200,23 @@ export function ProjectTimeline({
           ? 'Alle projecten op één tijdbalk — sleep horizontaal om verder vooruit of terug te kijken.'
           : 'Wie loopt er wanneer? De balken tonen looptijd en voortgang per project.'}</p>
       </div>
+      {/* Elk cijfer draagt twee labels: het volledige voor een breed scherm en een
+          kort voor de telefoon, waar de vier cijfers op één regel staan. Alleen
+          het zichtbare label wordt voorgelezen — `display:none` haalt het andere
+          ook uit de toegankelijkheidsboom. */}
       <div className="ptl-stats">
-        <div><span>Getoond</span><strong>{filteredProjects.length}</strong></div>
-        <div><span>Piek overlap</span><strong>{peakLoad}</strong></div>
-        <div><span>Open taken</span><strong>{openTasks}</strong></div>
-        <div><span>Zonder planning</span><strong>{missingExactPlanning}</strong></div>
+        {[
+          { key: 'shown', label: 'Getoond', short: 'Getoond', value: filteredProjects.length },
+          { key: 'peak', label: 'Piek overlap', short: 'Piek', value: peakLoad },
+          { key: 'open', label: 'Open taken', short: 'Open', value: openTasks },
+          { key: 'unplanned', label: 'Zonder planning', short: 'Ongepland', value: missingExactPlanning },
+        ].map(stat => <div key={stat.key}>
+          <span>
+            <span className="ptl-stat-long">{stat.label}</span>
+            <span className="ptl-stat-short">{stat.short}</span>
+          </span>
+          <strong>{stat.value}</strong>
+        </div>)}
       </div>
     </header>
 

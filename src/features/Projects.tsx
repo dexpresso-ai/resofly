@@ -163,6 +163,59 @@ function projectPhase(project: Project, taskCount: number, progress: number, ove
   return { label: 'Loopt', tone: 'ok' };
 }
 
+/**
+ * De kaart "Projectgegevens" leest de looptijd als één verhaal in plaats van
+ * twee losse datumregels: hoeveel dagen het project duurt, waar vandaag staat
+ * en hoeveel er nog rest. Puur afgeleid — er wordt niets opgeslagen.
+ */
+type ProjectFacts = {
+  startIso: string | null;
+  endIso: string | null;
+  /** Totale looptijd in kalenderdagen (start en einde meegeteld). */
+  totalDays: number | null;
+  /** Hoe ver vandaag in die looptijd zit, 0–100. `null` zonder begin én eind. */
+  elapsedPct: number | null;
+  /** Eén regel onder de balk: "Nog 8 van 21 dagen", "Start over 3 dagen", … */
+  note: string | null;
+  noteTone: ChipTone;
+};
+
+function projectFacts(project: Project, todayIso: string, taskCount: number, progress: number): ProjectFacts {
+  const startIso = project.start_date ? toLocalIsoDate(project.start_date) : null;
+  const endIso = project.end_date ? toLocalIsoDate(project.end_date) : null;
+  const totalDays = startIso && endIso ? dayDiff(endIso, startIso) + 1 : null;
+  const elapsedPct = startIso && endIso && totalDays != null && totalDays > 0
+    ? Math.max(0, Math.min(100, ((dayDiff(todayIso, startIso) + 1) / totalDays) * 100))
+    : null;
+
+  const daysToStart = startIso ? dayDiff(startIso, todayIso) : null;
+  const daysToEnd = endIso ? dayDiff(endIso, todayIso) : null;
+
+  let note: string | null = null;
+  let noteTone: ChipTone = 'muted';
+  if (project.archived) {
+    note = 'Gearchiveerd';
+  } else if (taskCount > 0 && progress === 100) {
+    note = 'Alle taken klaar';
+    noteTone = 'ok';
+  } else if (daysToStart != null && daysToStart > 0) {
+    note = daysToStart === 1 ? 'Start morgen' : `Start over ${daysToStart} dagen`;
+  } else if (daysToEnd != null && daysToEnd < 0) {
+    note = daysToEnd === -1 ? '1 dag over de einddatum' : `${-daysToEnd} dagen over de einddatum`;
+    noteTone = 'danger';
+  } else if (daysToEnd === 0) {
+    note = 'Laatste dag';
+    noteTone = 'warn';
+  } else if (daysToEnd != null) {
+    note = `Nog ${daysToEnd} ${daysToEnd === 1 ? 'dag' : 'dagen'}${totalDays != null ? ` van ${totalDays}` : ''}`;
+    noteTone = daysToEnd <= 7 ? 'warn' : 'ok';
+  } else if (startIso) {
+    note = 'Geen einddatum';
+  }
+
+  return { startIso, endIso, totalDays, elapsedPct, note, noteTone };
+}
+
 type ProjectViewMode = 'cards' | 'table';
 const projectViewStorageKey = 'resofly.projects.viewMode';
 
@@ -1016,6 +1069,7 @@ export function ProjectPage({
   const billingLabel = project.billing_type === 'fixed_price'
     ? 'Aangenomen prijs'
     : `Urenbasis${project.hourly_rate_cents != null ? ` · ${euro(project.hourly_rate_cents / 100)}/u` : ''}`;
+  const facts = projectFacts(project, todayIso, tasks.length, progress);
 
   const switchTab = (tab: ProjectTab) => setActiveTab(tab);
 
@@ -1185,16 +1239,59 @@ export function ProjectPage({
         </div>
 
         <aside className="proj-home-side">
-          <article className="client-panel">
+          {/* Projectgegevens — geen rij labels onder elkaar meer, maar één kaart die
+              leest: wie de klant is, hoe er gefactureerd wordt, waar de looptijd
+              staat en wat er van het urenbudget over is. */}
+          <article className="client-panel proj-facts">
             <div className="client-panel-head"><h3>Projectgegevens</h3></div>
-            <dl className="client-info-list">
-              <div><dt>Klant</dt><dd>{client?.name ?? '—'}</dd></div>
-              <div><dt>Facturatie</dt><dd>{billingLabel}</dd></div>
-              <div><dt>Startdatum</dt><dd>{dateNL(project.start_date)}</dd></div>
-              <div><dt>Einddatum</dt><dd>{dateNL(project.end_date)}</dd></div>
-              {budgetedMinutes != null && <div><dt>Urenbudget</dt><dd>{formatMinutes(trackedMinutes)} van {formatMinutes(budgetedMinutes)}{budgetPct != null ? ` (${Math.round(budgetPct)}%)` : ''}</dd></div>}
-              <div><dt>Aangemaakt</dt><dd>{dateNL(project.created_at)}</dd></div>
-            </dl>
+
+            <div className="proj-facts-client">
+              <span className="proj-facts-avatar" style={client?.color ? { background: client.color } : undefined} aria-hidden="true">
+                {(client?.name ?? '?').slice(0, 2).toUpperCase()}
+              </span>
+              <span className="proj-facts-client-text">
+                <strong className="proj-facts-client-name" title={client?.name ?? undefined}>{client?.name ?? 'Geen klant'}</strong>
+                {/* De facturatiewijze staat onder de klantnaam en niet ernaast: naast
+                    elkaar kapt in een kolom van 340px één van de twee altijd af. */}
+                <span className="proj-facts-billing" title={`Facturatie: ${billingLabel}`}>{billingLabel}</span>
+              </span>
+            </div>
+
+            <div className="proj-facts-run">
+              <div className="proj-facts-dates">
+                <span className="proj-facts-date">
+                  <span className="proj-facts-key">Start</span>
+                  <strong>{facts.startIso ? shortDateNL(facts.startIso, true) : '—'}</strong>
+                </span>
+                <span className="proj-facts-arrow" aria-hidden="true" />
+                <span className="proj-facts-date is-end">
+                  <span className="proj-facts-key">Einde</span>
+                  <strong>{facts.endIso ? shortDateNL(facts.endIso, true) : '—'}</strong>
+                </span>
+              </div>
+              {facts.elapsedPct != null && <div className="proj-facts-track" aria-hidden="true">
+                <span className={`proj-facts-track-fill is-${facts.noteTone}`} style={{ width: `${facts.elapsedPct}%` }} />
+              </div>}
+              {facts.note && <div className={`proj-facts-note is-${facts.noteTone}`}>{facts.note}</div>}
+            </div>
+
+            {budgetedMinutes != null && <div className="proj-facts-budget">
+              <div className="proj-facts-budget-head">
+                <span className="proj-facts-key">Urenbudget</span>
+                <strong>{formatMinutes(trackedMinutes)} <em>van {formatMinutes(budgetedMinutes)}</em></strong>
+              </div>
+              <div className="proj-facts-track" aria-hidden="true">
+                <span
+                  className={`proj-facts-track-fill is-${overBudget ? 'danger' : 'ok'}`}
+                  style={{ width: `${Math.max(2, Math.min(100, budgetPct ?? 0))}%` }}
+                />
+              </div>
+              {budgetPct != null && <div className={`proj-facts-note is-${overBudget ? 'danger' : 'muted'}`}>
+                {Math.round(budgetPct)}% gebruikt{overBudget ? ' — over het budget' : ''}
+              </div>}
+            </div>}
+
+            <div className="proj-facts-foot">Aangemaakt op {dateNL(project.created_at)}</div>
           </article>
 
           <article className="client-panel">

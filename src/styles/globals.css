@@ -1421,6 +1421,27 @@ body::before{
 
 .eyebrow{display:inline-flex;align-items:center;gap:8px;margin-bottom:10px;color:var(--accent-ink);font-size:11px;font-weight:700;letter-spacing:.13em;text-transform:uppercase}.eyebrow::before{content:'';display:inline-block;width:8px;height:8px;border-radius:999px;background:var(--accent);box-shadow:0 0 22px var(--accent)}
 
+/* ── Kruimelpad ───────────────────────────────────────────────────────────
+   Eén regel boven elke pagina: waar je bent en hoe je terugkomt. De streepjes
+   tussen de kruimels staan op elk item behàlve het eerste zichtbare — met
+   `+` in plaats van `:not(:first-child)`, zodat een verborgen menukop (telefoon)
+   ook zijn streepje meeneemt. De terugpijl is er alleen op de telefoon; op een
+   muis klik je gewoon op de kruimel zelf. */
+.crumbs{display:flex;align-items:center;gap:8px;min-width:0;margin-bottom:14px}
+.crumbs-back{display:none;flex:0 0 auto;align-items:center;justify-content:center;width:34px;height:34px;padding:0;border:1px solid var(--border);border-radius:11px;background:var(--bg2);color:var(--muted2);cursor:pointer}
+.crumbs-back:active{background:var(--bg4)}
+.crumbs-list{display:flex;align-items:center;flex-wrap:wrap;gap:1px 2px;min-width:0;list-style:none;margin:0;padding:0}
+.crumbs-item{display:flex;align-items:center;min-width:0}
+.crumbs-item + .crumbs-item::before{content:'';flex:0 0 auto;width:5px;height:5px;margin:0 3px;border-top:1.5px solid var(--border2);border-right:1.5px solid var(--border2);transform:rotate(45deg);opacity:.9}
+.crumbs-link{display:inline-flex;align-items:center;gap:5px;max-width:100%;min-width:0;padding:3px 7px;border:0;border-radius:8px;background:transparent;color:var(--muted);font-family:inherit;font-size:12px;font-weight:600;line-height:1.35;cursor:pointer;transition:background .14s,color .14s}
+.crumbs-link:hover{background:var(--bg3);color:var(--text)}
+.crumbs-link:focus-visible{outline:none;box-shadow:var(--ring)}
+.crumbs-plain{display:inline-flex;min-width:0;padding:3px 7px;font-size:12px;font-weight:600;line-height:1.35;color:var(--muted)}
+.crumbs-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crumbs-item.is-current .crumbs-plain{color:var(--text);font-weight:700}
+.crumbs-item.is-current .crumbs-text{max-width:min(38ch,100%)}
+.crumbs-item.is-section .crumbs-plain{letter-spacing:.02em}
+
 .stat-card,.proj-card,.client-card,.stats-card,.proj-fin-panel,.ticket-stat,.cd-metric,.fin-stat,.kan-col,.ticket-item,.fin-item,.notes-layout,.note-card,.related-notes-panel,.settings-card,.calendar-main-card,.connections-panel,.onboarding-card,.activity-card,.modal,.login-card,.public-quote-card,.project-quote-card{
   border:1px solid var(--border);
   background:linear-gradient(145deg,rgba(var(--sheen-rgb),calc(.065 * var(--sheen-k))),rgba(var(--sheen-rgb),calc(.018 * var(--sheen-k)))),var(--panel);
@@ -7551,6 +7572,7 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .ptl-stats div:last-child{padding-right:0}
 .ptl-stats span{font-size:10px;font-weight:600;letter-spacing:.06em;color:var(--muted);white-space:nowrap}
 .ptl-stats strong{font-size:21px;line-height:1.1;font-weight:700;letter-spacing:-.03em;color:var(--text);font-variant-numeric:tabular-nums}
+.ptl-stat-short{display:none}
 
 /* ── Werkbalk ── */
 .ptl-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -9169,6 +9191,53 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .proj-home-side .client-info-list dd{white-space:normal;overflow:visible;line-height:1.35}
 @media(max-width:1100px){.proj-home{grid-template-columns:1fr}}
 
+/* ── Kaart "Projectgegevens" ──────────────────────────────────────────────
+   Vijf label/waarde-regels onder elkaar vulden een halve telefoonhoogte met
+   witruimte. Nu drie blokjes met een lijntje ertussen: klant + facturatie,
+   looptijd met een balk die laat zien waar vandaag staat, en het urenbudget.
+   De aanmaakdatum is voetnoot geworden — die zoek je zelden op. */
+.proj-facts{display:flex;flex-direction:column;gap:0}
+.proj-facts .client-panel-head{margin-bottom:12px}
+.proj-facts-key{font-size:9.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:var(--muted);line-height:1.2}
+
+/* Klantregel: initialen in de klantkleur, met de naam en de facturatiewijze
+   eronder. Twee regels naast een vierkantje — geen van beide hoeft af te kappen. */
+.proj-facts-client{display:flex;align-items:center;gap:11px;min-width:0}
+.proj-facts-avatar{flex:0 0 auto;width:36px;height:36px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:var(--bg4);color:var(--on-accent);font-size:12.5px;font-weight:700;letter-spacing:.02em}
+.proj-facts-client-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 auto}
+.proj-facts-client-name{font-size:14.5px;font-weight:700;line-height:1.25;letter-spacing:-.015em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.proj-facts-billing{font-size:11.5px;font-weight:600;line-height:1.3;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Looptijd en urenbudget delen dezelfde balk en dezelfde scheidingslijn. */
+.proj-facts-run,.proj-facts-budget{margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
+.proj-facts-dates{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:10px}
+.proj-facts-date{display:flex;flex-direction:column;gap:2px;min-width:0}
+.proj-facts-date strong{font-size:14px;font-weight:700;letter-spacing:-.01em;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.proj-facts-date.is-end{text-align:right;align-items:flex-end}
+/* Het pijltje is getekend, niet getypt: een tekstpijl staat per lettertype net
+   iets anders op de regel en danst mee met de regelhoogte. */
+.proj-facts-arrow{position:relative;width:22px;height:1px;background:var(--border2)}
+.proj-facts-arrow::after{content:'';position:absolute;right:0;top:50%;width:5px;height:5px;border-top:1px solid var(--border2);border-right:1px solid var(--border2);transform:translateY(-50%) rotate(45deg)}
+.proj-facts-track{margin-top:10px;height:5px;border-radius:999px;background:var(--bg4);overflow:hidden}
+.proj-facts-track-fill{display:block;height:100%;border-radius:999px;background:var(--accent);transition:width .25s}
+.proj-facts-track-fill.is-ok{background:var(--accent-g)}
+.proj-facts-track-fill.is-warn{background:var(--accent-o)}
+.proj-facts-track-fill.is-danger{background:var(--accent-r)}
+.proj-facts-note{margin-top:7px;font-size:11.5px;font-weight:600;color:var(--muted)}
+.proj-facts-note.is-ok{color:var(--accent-g)}
+.proj-facts-note.is-warn{color:var(--accent-o)}
+.proj-facts-note.is-danger{color:var(--accent-r)}
+.proj-facts-budget-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.proj-facts-budget-head strong{font-size:13.5px;font-weight:700;letter-spacing:-.01em;white-space:nowrap}
+.proj-facts-budget-head em{font-style:normal;font-weight:600;color:var(--muted)}
+.proj-facts-foot{margin-top:12px;padding-top:10px;border-top:1px solid var(--border);font-size:11px;color:var(--muted)}
+
+@media(max-width:560px){
+  /* Op een telefoon is de zijkolom de volle breedte; alleen de datums worden
+     een halve punt kleiner zodat ze op één regel blijven. */
+  .proj-facts-date strong{font-size:13.5px}
+}
+
 /* Eerstvolgende taken */
 .proj-next-list{display:flex;flex-direction:column;gap:6px}
 .proj-next-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:10px;width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:11px;background:var(--bg3);color:var(--text);font-family:inherit;text-align:left;cursor:pointer;transition:background .15s,border-color .15s}
@@ -10778,3 +10847,72 @@ body.ink-sheet-open{overflow:hidden}
 /* Het telefoonnummer in het klantoverzicht is een belknop. */
 .client-phone-link{color:var(--accent-ink);text-decoration:none;border-bottom:1px solid transparent}
 .client-phone-link:hover{border-bottom-color:currentColor}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   KRUIMELPAD OP DE TELEFOON  (2026-09-19)
+
+   Op een klein scherm is het pad vooral een terugknop. Daarom: een echte
+   pijl met een fatsoenlijk raakvlak vooraan, de menukop weg ("Werk" brengt
+   je nergens), het dashboard als icoon en de rest op één veegbare regel.
+   ═══════════════════════════════════════════════════════════════════════ */
+@media(max-width:760px){
+  /* De hele regel is 28px hoog: de terugpijl en de kruimels zijn even groot,
+     zodat de pijl geen extra hoogte kost. Met de marge erbij is dit blok 36px
+     — de prijs die de mobiele lay-outtest (tests/mobile) inrekent. */
+  .crumbs{gap:2px;margin-bottom:8px}
+  .crumbs-back{display:inline-flex;width:28px;height:28px;border-radius:9px;margin-right:4px}
+  .crumbs-list{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none}
+  .crumbs-list::-webkit-scrollbar{display:none}
+  .crumbs-item{flex:0 0 auto}
+  /* De menukop is oriëntatie voor de muis, ballast voor de duim. */
+  .crumbs-item.is-section{display:none}
+  /* Het huisje zegt genoeg; "Dashboard" erbij kost een derde van de regel. */
+  .crumbs-item.is-home .crumbs-text{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .crumbs-link,.crumbs-plain{display:inline-flex;align-items:center;min-height:28px;padding:0 6px;font-size:12px}
+  /* De huidige pagina mag afbreken in plaats van de regel open te duwen. */
+  .crumbs-item.is-current .crumbs-text{max-width:min(24ch,48vw)}
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   PROJECTPLANNING COMPACT OP DE TELEFOON  (2026-09-19)
+
+   Op het dashboard stond vóór de eerste projectbalk ruim 200px filterwerk:
+   vier cijferblokken van een halve regel hoog, een rij schaalknoppen en de
+   fasechips die over twee regels vielen. (Die chips hóórden al één veegbare
+   regel te zijn, maar de basisregel `.ptl-chips{flex-wrap:wrap}` staat verderop
+   in dit bestand dan de mediaquery die dat regelde en won dus alsnog.)
+
+   Nu: de vier cijfers als één regel "getal + kort label", de schaalknoppen en
+   de fasechips elk op één veegbare regel. Van ~215px naar ~105px, zonder dat
+   er een filter verdwijnt. Raakvlakken blijven 36px hoog.
+
+   Helemaal achteraan, want alles hier overschrijft een eerdere regel.
+   ═══════════════════════════════════════════════════════════════════════ */
+@media(max-width:760px){
+  .ptl{gap:10px}
+  .ptl-head{gap:8px}
+
+  /* Cijfers: geen vier kolommen meer maar één doorlopende regel. `row-reverse`
+     zet het getal vóór zijn label zonder de DOM-volgorde (label, getal) — en
+     dus de voorleesvolgorde — om te gooien. */
+  .ptl-stats{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 14px;width:100%}
+  .ptl-stats div{flex-direction:row-reverse;align-items:baseline;justify-content:flex-start;gap:5px;padding:0;border-left:0;min-width:0}
+  .ptl-stats strong{font-size:15px}
+  .ptl-stats span{font-size:10.5px;white-space:nowrap;line-height:1.3}
+  .ptl-stat-long{display:none}
+  .ptl-stat-short{display:inline}
+
+  /* Werkbalk: iets lagere knoppen, maar met 36px nog altijd te raken. */
+  .ptl-toolbar{gap:6px}
+  .ptl-toggle{min-height:36px;padding:0 12px;font-size:12px}
+  .ptl-scaleswitch button{height:32px;padding:0 12px;font-size:12px}
+
+  /* Fasechips: één veegbare regel. Het kopje "Fase" is weg — de chips zeggen
+     zelf waar ze over gaan, en de groep houdt zijn aria-label. */
+  .ptl-chips{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;gap:6px}
+  .ptl-chips::-webkit-scrollbar{display:none}
+  .ptl-chips>*{flex:0 0 auto}
+  .ptl-chips-label{display:none}
+  .ptl-chip,.ptl-chip-reset{height:36px;min-height:36px;padding:0 12px;font-size:12px}
+  .ptl-chip{gap:6px}
+}
