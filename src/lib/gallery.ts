@@ -5,6 +5,7 @@
 // rechtstreeks naar Cloudflare Stream (basic POST ≤ ~190 MB, anders tus); zonder
 // Stream-configuratie meldt de worker 'r2' en uploaden we de video als bestand.
 import { getAccessToken, getWorkerBase } from './r2-api';
+import type { GalleryZipMedia } from './galleryMedia';
 import type { UUID } from '../types';
 
 export type GalleryTokenBundle = { mediaToken: string; streamTokens: Record<string, string>; exp: number };
@@ -88,10 +89,15 @@ export function galleryFileUrl(key: string, mediaToken: string, opts?: { downloa
   return `${base}/gallery/file/${encodeURIComponent(key)}?token=${encodeURIComponent(mediaToken)}${dl}`;
 }
 
-/** Zip-download van de hele galerij (vereist een token met downloadrecht). */
-export function galleryZipUrl(galleryId: UUID, mediaToken: string): string {
+/**
+ * Zip-download van de hele galerij (vereist een token met downloadrecht).
+ * Foto's én video's; `media` beperkt de zip tot één soort (zie
+ * zipUrlForMedia in galleryMedia.ts voor het afleiden uit een bestaande URL).
+ */
+export function galleryZipUrl(galleryId: UUID, mediaToken: string, media: GalleryZipMedia = 'all'): string {
   const base = getWorkerBase();
-  return `${base}/gallery/zip/${galleryId}?token=${encodeURIComponent(mediaToken)}`;
+  const url = `${base}/gallery/zip/${galleryId}?token=${encodeURIComponent(mediaToken)}`;
+  return media === 'all' ? url : `${url}&media=${media}`;
 }
 
 /**

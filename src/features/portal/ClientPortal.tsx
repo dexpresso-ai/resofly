@@ -547,6 +547,7 @@ function PortalGalleryView({ gallery, account, onBack }: { gallery: PortalGaller
         onToggleFavorite={(item, on) => void toggleFavorite(item, on)}
         onDownloadItem={downloadItem}
         zipUrl={galleryZipUrl(gallery.id, detail.tokens.mediaToken)}
+        downloadQuality={detail.gallery.download_quality}
         emptyText="Deze galerij bevat nog geen media."
       />
     )}

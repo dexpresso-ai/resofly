@@ -32,6 +32,7 @@ import {
   streamDownloadUrl, uploadGalleryFile, uploadGalleryFileVariant, type GalleryTokenBundle,
 } from '../lib/gallery';
 import { GalleryViewer, galleryItemThumbUrl, type GalleryViewerItem } from './GalleryViewer';
+import { formatBytesShort as fmtBytesShort } from '../lib/galleryMedia';
 
 const galleryStatusLabels: Record<Gallery['status'], string> = {
   draft: 'Concept',
@@ -129,13 +130,6 @@ function heroCropRatio(template: GalleryHeroTemplate): string | null {
     case 'cinematic': case 'mosaic': case 'slideshow': return '2 / 1';
     default: return '21 / 9';
   }
-}
-
-function fmtBytesShort(bytes: number): string {
-  if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
-  if (bytes >= 1048576) return `${Math.round(bytes / 1048576)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} kB`;
-  return `${bytes} B`;
 }
 
 async function sha256Hex(value: string): Promise<string> {
@@ -1416,6 +1410,7 @@ export function GalleryTab({
             onReorder={reorderItem}
             onDownloadItem={downloadItem}
             zipUrl={bundle ? galleryZipUrl(openGallery.id, bundle.mediaToken) : undefined}
+            downloadQuality={openGallery.download_quality}
             emptyText={onlyFavorites
               ? 'De klant heeft nog geen favorieten gemarkeerd.'
               : openGallery.format === 'video'

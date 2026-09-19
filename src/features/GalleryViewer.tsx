@@ -11,6 +11,19 @@ import {
   streamThumbnailUrl,
   type GalleryTokenBundle,
 } from '../lib/gallery';
+import {
+  GALLERY_ZIP_MAX_BYTES,
+  formatBytesShort,
+  keyVariant,
+  summarizeZip,
+  videoPlaybackSource,
+  zipBytes,
+  zipTooLarge,
+  zipUrlForMedia,
+  type GalleryMediaItem,
+  type GalleryZipMedia,
+  type GalleryZipSummary,
+} from '../lib/galleryMedia';
 import { currentFullscreenElement, enterFullscreen, leaveFullscreen, onFullscreenChange } from '../lib/fullscreen';
 
 /** Minimale item-vorm — zowel de app (GalleryItem) als het portaal (gesanitiseerd) passen hierin. */
@@ -18,6 +31,10 @@ export type GalleryViewerItem = {
   id: string;
   media_type: 'photo' | 'video';
   file_name: string;
+  /** Voor de vraag of de browser een video rechtstreeks kan afspelen; oudere payloads missen dit. */
+  content_type?: string | null;
+  /** Voor de grootte in het downloadmenu; oudere payloads missen dit. */
+  size_bytes?: number | null;
   category_id?: string | null;
   storage_key: string | null;
   preview_key: string | null;
@@ -96,42 +113,31 @@ export function galleryItemThumbUrl(item: GalleryViewerItem, bundle: GalleryToke
   return null;
 }
 
+// De variant-, afspeel- en zipregels staan in ../lib/galleryMedia.ts (zonder
+// React, zodat ze in node getest worden). `keyVariant` blijft hier bereikbaar
+// voor wie hem via de viewer importeerde.
+export { keyVariant };
+
 /**
- * De variant staat vooraan in de bestandsnaam van de R2-key
- * (`{variant}-{uuid}-{naam}`). `master` = het originele videobestand dat de
- * klant downloadt; dat is nadrukkelijk géén afspeelbaar bestand, en het zit ook
- * niet in de zip. Geëxporteerd omdat alle drie de weergaven ermee bepalen of er
- * iets te zippen valt.
+ * Zit er iets in de zip? Foto's (preview of origineel) en video's met een
+ * bestand in R2 — de master in originele resolutie, of de oude `source`. Alleen
+ * video's die uitsluitend bij Stream staan blijven buiten de zip; die download
+ * de klant per stuk.
  */
-export function keyVariant(key: string | null | undefined): string {
-  if (!key) return '';
-  const fileName = key.slice(key.lastIndexOf('/') + 1);
-  const dash = fileName.indexOf('-');
-  return dash > 0 ? fileName.slice(0, dash) : '';
+export function hasZippableItems(items: GalleryMediaItem[]): boolean {
+  const summary = summarizeZip(items);
+  return summary.photos + summary.videos > 0;
 }
 
 /**
- * Zit er iets in de zip? Video-masters laat de worker er bewust uit — tientallen
- * gigabytes door zijn CRC32-lus halen loopt over de CPU-limiet. Een galerij met
- * alleen video's levert dus een lege zip (en een 404), en dan hoort de knop er
- * niet te staan.
- */
-export function hasZippableItems(items: Array<{ storage_key: string | null; preview_key: string | null }>): boolean {
-  return items.some(item =>
-    Boolean(item.preview_key) || (Boolean(item.storage_key) && keyVariant(item.storage_key) !== 'master'));
-}
-
-/**
- * Kan deze video hier afspelen? Via de Stream-kijkkopie, of — voor video's van
- * vóór die kopie — rechtstreeks uit R2 onder de variant `source`. Een `master`
- * telt niet mee: dat is het archiefbestand voor de download, tientallen
- * gigabytes in een codec die geen browser aankan.
+ * Kan deze video hier afspelen? Via de Stream-kijkkopie, of rechtstreeks uit
+ * R2: de oude `source`-variant, of de `master` zolang er geen kijkkopie is
+ * (Stream niet ingericht, mislukt, of nog bezig). Een geüploade video hoort
+ * meteen te spelen — een galerij met een origineel maar zonder speler is geen
+ * oplevering. Zie videoPlaybackSource voor de volgorde.
  */
 function videoPlayable(item: GalleryViewerItem, bundle: GalleryTokenBundle): boolean {
-  return Boolean(
-    (item.stream_uid && item.stream_status === 'ready' && item.stream_playback_base && bundle.streamTokens[item.stream_uid])
-    || (!item.stream_uid && keyVariant(item.storage_key) === 'source'),
-  );
+  return videoPlaybackSource(item, bundle.streamTokens) !== null;
 }
 
 function itemPreviewUrl(item: GalleryViewerItem, bundle: GalleryTokenBundle): string | null {
@@ -263,6 +269,7 @@ export function GalleryViewer({
   onToggleFavorite,
   onDownloadItem,
   zipUrl,
+  downloadQuality = 'original',
   renderItemActions,
   emptyText = 'Nog geen media in deze galerij.',
 }: {
@@ -297,6 +304,12 @@ export function GalleryViewer({
   onDownloadItem?: (item: GalleryViewerItem) => void;
   /** Zip-download van de hele galerij; afwezig = geen hamburger. */
   zipUrl?: string;
+  /**
+   * Downloadkwaliteit van de galerij ('original' | 'web'). Bij webkwaliteit
+   * zitten de foto's als preview in de zip en is hun grootte in het menu
+   * onbekend; video's gaan altijd in originele resolutie.
+   */
+  downloadQuality?: string;
   /** Extra beheer-acties per item (app: cover kiezen / verwijderen). */
   renderItemActions?: (item: GalleryViewerItem) => React.ReactNode;
   emptyText?: string;
@@ -394,6 +407,9 @@ export function GalleryViewer({
   }, [orderedPhotos]);
 
   const chipSections = sections.filter(s => s.title);
+
+  /** Wat er in de zip zou gaan — voor de knop én de keuzes in het downloadmenu. */
+  const zipSummary = useMemo(() => summarizeZip(items), [items]);
 
   const closeOverlays = useCallback(() => { setLightbox(null); setPlaying(null); setSlideshow(false); }, []);
 
@@ -744,10 +760,6 @@ export function GalleryViewer({
 
   const videoIsPlayable = (item: GalleryViewerItem) => videoPlayable(item, bundle);
 
-  /** Video met een master in R2 maar (nog) geen kijkkopie bij Stream. */
-  const videoIsDownloadOnly = (item: GalleryViewerItem) =>
-    item.media_type === 'video' && !item.stream_uid && keyVariant(item.storage_key) === 'master';
-
   /**
    * De like is de zichtbare waardering: de teller staat er altijd bij zodra
    * iemand geliket heeft, ook voor kijkers die zelf niet mogen reageren (de
@@ -790,7 +802,11 @@ export function GalleryViewer({
       {list.map(item => {
         const thumb = galleryItemThumbUrl(item, bundle);
         const playable = videoIsPlayable(item);
-        const processing = item.stream_uid && item.stream_status !== 'ready' && item.stream_status !== 'error';
+        const processing = Boolean(item.stream_uid && item.stream_status !== 'ready' && item.stream_status !== 'error');
+        const failed = item.stream_status === 'error';
+        // Wel een bestand in R2, maar geen browser die het afspeelt (codec of
+        // container): dan is downloaden het enige wat er te doen valt.
+        const downloadOnly = !playable && !processing && !failed && Boolean(item.storage_key);
         const isSelected = selected?.has(item.id) ?? false;
         return (
           // Bewust een <div> met een aparte afspeelknop erin: als de kaart
@@ -826,9 +842,17 @@ export function GalleryViewer({
                   <span className="galv-video-play"><Play size={22} fill="currentColor" /></span>
                 </button>
               )}
-            {processing && <span className="galv-video-processing">Verwerken…</span>}
-            {item.stream_status === 'error' && <span className="galv-video-processing galv-video-error">Verwerkingsfout</span>}
-            {videoIsDownloadOnly(item) && <span className="galv-video-processing">Alleen downloaden</span>}
+            {/* Speelt de master al terwijl Stream nog aan de kijkkopie werkt,
+                dan hoort de melding in de hoek — niet over de afspeelknop. Is
+                de kijkkopie mislukt maar speelt de master, dan valt er voor de
+                kijker niets te melden: de video doet het gewoon. */}
+            {processing && (
+              <span className={`galv-video-processing${playable ? ' is-corner' : ''}`}>
+                {playable ? 'Kijkkopie wordt gemaakt…' : 'Verwerken…'}
+              </span>
+            )}
+            {failed && !playable && <span className="galv-video-processing galv-video-error">Verwerkingsfout</span>}
+            {downloadOnly && <span className="galv-video-processing">Alleen downloaden</span>}
             <span className="galv-video-meta">
               <span className="galv-video-name">{item.file_name.replace(/\.[A-Za-z0-9]+$/, '')}</span>
               {formatDuration(item.duration_seconds) && <span className="galv-video-dur">{formatDuration(item.duration_seconds)}</span>}
@@ -925,11 +949,11 @@ export function GalleryViewer({
             {bigScreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
           </button>
         )}
-        {allowDownload && zipUrl && (hasZippableItems(items) || items.some(i => i.media_type === 'video')) && (
+        {allowDownload && zipUrl && (zipSummary.photos + zipSummary.videos > 0 || zipSummary.streamOnlyVideos > 0) && (
           <GalleryDownloadMenu
             zipUrl={zipUrl}
-            zippable={hasZippableItems(items)}
-            videoCount={items.filter(i => i.media_type === 'video').length}
+            summary={zipSummary}
+            webQuality={downloadQuality === 'web'}
           />
         )}
       </div>
@@ -1095,32 +1119,17 @@ export function GalleryViewer({
         </div>
       )}
 
-      {/* ── Videospeler (Stream-iframe of native <video> voor R2-fallback) ── */}
+      {/* ── Videospeler (Stream-iframe, of native <video> rechtstreeks uit R2) ── */}
       {playing && (
         <div className="galv-lightbox galv-player" role="dialog" aria-modal="true" onClick={closeOverlays}>
           <button type="button" className="galv-lightbox-close" onClick={closeOverlays} aria-label="Sluiten"><X size={20} /></button>
           <div className="galv-player-stage" onClick={(e) => e.stopPropagation()}>
-            {playing.stream_uid && playing.stream_playback_base && bundle.streamTokens[playing.stream_uid]
-              ? (
-                <iframe
-                  className="galv-player-frame"
-                  src={streamIframeUrl(playing.stream_playback_base, bundle.streamTokens[playing.stream_uid])}
-                  title={playing.file_name}
-                  allow="accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture; fullscreen"
-                  allowFullScreen
-                />
-              )
-              : keyVariant(playing.storage_key) === 'source' && playing.storage_key
-                ? (
-                  <video
-                    className="galv-player-video"
-                    src={galleryFileUrl(playing.storage_key, bundle.mediaToken)}
-                    controls
-                    autoPlay
-                    playsInline
-                  />
-                )
-                : <div className="galv-empty">Deze video is nog niet afspeelbaar.</div>}
+            <GalleryVideoPlayer
+              key={playing.id}
+              item={playing}
+              bundle={bundle}
+              onDownload={allowDownload && onDownloadItem && playing.storage_key ? onDownloadItem : undefined}
+            />
             <div className="galv-lightbox-bar">
               <span className="galv-lightbox-name">{playing.file_name}</span>
               <span className="galv-lightbox-tools">
@@ -1136,20 +1145,127 @@ export function GalleryViewer({
   );
 }
 
+// ── Videospeler ─────────────────────────────────────────────────────────────
+//
+// Kijkkopie bij Stream = de iframe-speler (adaptief, tot 1080p). Anders speelt
+// de browser het bestand rechtstreeks uit R2: de master in originele
+// resolutie, of de oude `source`-fallback. De worker ondersteunt Range-requests,
+// dus spoelen werkt en de browser haalt alleen op wat hij toont.
+//
+// Een container die de browser wel opent maar niet kan decoderen (ProRes in
+// een .mov, HEVC op een Windows-Chrome) faalt pas hier, in de speler. Dan
+// geen zwart vlak maar één melding, met de downloadknop erbij als die mag.
+
+function GalleryVideoPlayer({ item, bundle, onDownload }: {
+  item: GalleryViewerItem;
+  bundle: GalleryTokenBundle;
+  onDownload?: (item: GalleryViewerItem) => void;
+}) {
+  const [failed, setFailed] = useState(false);
+  const source = videoPlaybackSource(item, bundle.streamTokens);
+
+  if (source === 'stream' && item.stream_playback_base && item.stream_uid) {
+    return (
+      <iframe
+        className="galv-player-frame"
+        src={streamIframeUrl(item.stream_playback_base, bundle.streamTokens[item.stream_uid])}
+        title={item.file_name}
+        allow="accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture; fullscreen"
+        allowFullScreen
+      />
+    );
+  }
+
+  if (source === 'file' && item.storage_key && !failed) {
+    return (
+      <video
+        className="galv-player-video"
+        src={galleryFileUrl(item.storage_key, bundle.mediaToken)}
+        poster={galleryItemThumbUrl(item, bundle) ?? undefined}
+        controls
+        autoPlay
+        playsInline
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+
+  return (
+    <div className="galv-player-fallback" role="status">
+      <Film size={28} aria-hidden="true" />
+      <p>
+        {failed
+          ? 'Deze video kan je browser niet afspelen. Download het bestand om hem op je eigen apparaat te bekijken.'
+          : source === null && item.stream_uid && item.stream_status !== 'error'
+            ? 'Deze video wordt nog verwerkt. Probeer het zo meteen opnieuw.'
+            : 'Deze video is in de browser niet af te spelen. Download het bestand om hem te bekijken.'}
+      </p>
+      {onDownload && (
+        <button type="button" className="galv-bb-secondary" onClick={() => onDownload(item)}>
+          <Download size={17} /> Origineel downloaden
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ── Downloadmenu: één doorzichtige hamburger over de opening ────────────────
 //
 // De knop "alles als zip" stond in de kopbalk van elk van de drie weergaven en
 // nam daar een hele regel in beslag. Hij zit nu onder deze hamburger, zodat de
 // opening de volle breedte krijgt. Losse bestanden download je niet hier maar
 // op het bestand zelf — dat schaalt, een menu met 500 regels niet.
+//
+// Video's gaan sinds 2026-09-19 mee in de zip, in originele resolutie. Omdat
+// dat gauw gigabytes zijn, staan naast "alles" ook "alleen de foto's" en
+// "alleen de video's" — en bij elke keuze de grootte, zodat de klant weet waar
+// hij aan begint. Boven de grens van de worker (GALLERY_ZIP_MAX_BYTES) staat
+// de keuze uitgeschakeld in plaats van halverwege stil te vallen.
 
-function GalleryDownloadMenu({ zipUrl, zippable, videoCount }: {
+function GalleryDownloadMenu({ zipUrl, summary, webQuality }: {
   zipUrl: string;
-  zippable: boolean;
-  videoCount: number;
+  summary: GalleryZipSummary;
+  /** Foto's gaan als web-preview in de zip; hun grootte is dan onbekend. */
+  webQuality: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
+
+  const hasPhotos = summary.photos > 0;
+  const hasVideos = summary.videos > 0;
+  const zippable = hasPhotos || hasVideos;
+
+  const count = (n: number, single: string, plural: string) => `${n} ${n === 1 ? single : plural}`;
+
+  /** Grootte-label per keuze; leeg als we hem niet zeker weten. */
+  const sizeLabel = (media: GalleryZipMedia): string => {
+    if (!summary.bytesKnown) return '';
+    // Bij webkwaliteit zijn de foto's kleiner dan hun origineel en is hun
+    // grootte dus onbekend: "alleen de foto's" krijgt geen label, en "alles"
+    // alleen het video-aandeel — met dat woord erbij.
+    if (webQuality && media === 'photos') return '';
+    if (webQuality && media === 'all') {
+      return hasVideos && summary.videoBytes > 0 ? `video’s ${formatBytesShort(summary.videoBytes)}` : '';
+    }
+    const bytes = zipBytes(summary, media);
+    return bytes > 0 ? formatBytesShort(bytes) : '';
+  };
+
+  const choices: Array<{ media: GalleryZipMedia; label: string; detail: string }> = [];
+  if (hasPhotos && hasVideos) {
+    choices.push({
+      media: 'all',
+      label: 'Alles als zip',
+      detail: `${count(summary.photos, 'foto', 'foto’s')} en ${count(summary.videos, 'video', 'video’s')}`,
+    });
+    choices.push({ media: 'photos', label: 'Alleen de foto’s', detail: count(summary.photos, 'foto', 'foto’s') });
+    choices.push({ media: 'videos', label: 'Alleen de video’s', detail: count(summary.videos, 'video', 'video’s') });
+  } else if (hasPhotos) {
+    choices.push({ media: 'all', label: 'Alles als zip', detail: count(summary.photos, 'foto', 'foto’s') });
+  } else if (hasVideos) {
+    choices.push({ media: 'all', label: 'Alle video’s als zip', detail: count(summary.videos, 'video', 'video’s') });
+  }
+  const anyTooLarge = choices.some(choice => zipTooLarge(summary, choice.media));
 
   useEffect(() => {
     if (!open) return;
@@ -1183,22 +1299,58 @@ function GalleryDownloadMenu({ zipUrl, zippable, videoCount }: {
       {open && (
         <div className="galv-menu-panel" role="menu">
           <span className="galv-menu-title">Downloaden</span>
-          {zippable && (
-            <a
-              className="galv-menu-item"
-              href={zipUrl}
-              download
-              role="menuitem"
-              onClick={() => setOpen(false)}
-            >
-              <Download size={15} />
-              {videoCount > 0 ? 'Alle foto’s als zip' : 'Alles als zip'}
-            </a>
-          )}
-          {videoCount > 0 && (
+          {choices.map(choice => {
+            const tooLarge = zipTooLarge(summary, choice.media);
+            const size = sizeLabel(choice.media);
+            const title = `${choice.detail}${size ? ` · ${size}` : ''}`;
+            if (tooLarge) {
+              return (
+                <span
+                  key={choice.media}
+                  className="galv-menu-item is-disabled"
+                  role="menuitem"
+                  aria-disabled="true"
+                  title={`${title} — te groot voor één zip`}
+                >
+                  <Download size={15} />
+                  {choice.label}
+                  {size && <small>{size}</small>}
+                </span>
+              );
+            }
+            return (
+              <a
+                key={choice.media}
+                className="galv-menu-item"
+                href={zipUrlForMedia(zipUrl, choice.media)}
+                download
+                role="menuitem"
+                title={title}
+                onClick={() => setOpen(false)}
+              >
+                <Download size={15} />
+                {choice.label}
+                {size && <small>{size}</small>}
+              </a>
+            );
+          })}
+          {anyTooLarge && (
             <p className="galv-menu-note">
-              Video’s zitten niet in de zip — daar zijn ze te groot voor. Je downloadt ze per stuk,
-              in de originele resolutie, met de knop op de video zelf.
+              Een zip mag hooguit {Math.round(GALLERY_ZIP_MAX_BYTES / 1073741824)} GB zijn. Download grotere
+              selecties per stuk, met de knop op de video zelf.
+            </p>
+          )}
+          {zippable && hasVideos && !anyTooLarge && (
+            <p className="galv-menu-note">
+              Video’s gaan in originele resolutie mee. De zip wordt tijdens het downloaden
+              samengesteld, dus de browser kent de totale grootte vooraf niet.
+            </p>
+          )}
+          {summary.streamOnlyVideos > 0 && (
+            <p className="galv-menu-note">
+              {summary.streamOnlyVideos === 1
+                ? 'Eén video zit niet in de zip; die download je met de knop op de video zelf.'
+                : `${summary.streamOnlyVideos} video’s zitten niet in de zip; die download je met de knop op de video zelf.`}
             </p>
           )}
         </div>

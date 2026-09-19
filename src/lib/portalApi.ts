@@ -212,6 +212,9 @@ export interface PortalGalleryItem {
   id: string;
   media_type: 'photo' | 'video';
   file_name: string;
+  /** Sinds 2026-09-19 in de payload; een oudere edge function laat ze weg. */
+  content_type?: string | null;
+  size_bytes?: number | null;
   category_id: string | null;
   storage_key: string | null;
   preview_key: string | null;

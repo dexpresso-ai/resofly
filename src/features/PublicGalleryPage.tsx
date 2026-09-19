@@ -418,6 +418,7 @@ export function PublicGalleryPage({ token }: { token: string }) {
           onToggleFavorite={(item, on) => void toggleFavorite(item, on)}
           onDownloadItem={downloadItem}
           zipUrl={galleryZipUrl(payload.gallery.id, payload.tokens.mediaToken)}
+          downloadQuality={payload.gallery.download_quality}
           emptyText="Deze galerij bevat nog geen media."
         />
       </section>

@@ -5668,10 +5668,14 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .galv-menu-btn{display:flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:12px;border:1px solid rgba(255,255,255,.26);background:rgba(10,10,10,.62);color:#fff;cursor:pointer;padding:0;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);transition:background .18s ease,border-color .18s ease}
 .galv-menu-btn:hover{background:rgba(10,10,10,.84);border-color:rgba(255,255,255,.5)}
 .galv-menu-btn:focus-visible{outline:2px solid #fff;outline-offset:2px}
-.galv-menu-panel{position:absolute;top:calc(100% + 8px);right:0;min-width:260px;max-width:min(320px,calc(100vw - 28px));display:flex;flex-direction:column;gap:8px;padding:13px;border-radius:14px;border:1px solid var(--gal-border,var(--border));background:var(--gal-bg,var(--panel-strong,#121212));color:var(--gal-text,var(--text));box-shadow:0 20px 50px rgba(0,0,0,.5)}
+.galv-menu-panel{position:absolute;top:calc(100% + 8px);right:0;min-width:300px;max-width:min(340px,calc(100vw - 28px));display:flex;flex-direction:column;gap:8px;padding:13px;border-radius:14px;border:1px solid var(--gal-border,var(--border));background:var(--gal-bg,var(--panel-strong,#121212));color:var(--gal-text,var(--text));box-shadow:0 20px 50px rgba(0,0,0,.5)}
 .galv-menu-title{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--gal-muted,var(--muted2))}
-.galv-menu-item{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:9px;background:var(--gal-surface,var(--bg3));color:inherit;font-size:13px;font-weight:600;text-decoration:none;transition:background .15s ease}
+.galv-menu-item{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:9px;background:var(--gal-surface,var(--bg3));color:inherit;font-size:13px;font-weight:600;text-decoration:none;white-space:nowrap;transition:background .15s ease}
 .galv-menu-item:hover{background:var(--gal-border,var(--bg4))}
+/* Grootte rechts in de regel: bij video's beslist dat of je de zip wilt. */
+.galv-menu-item small{margin-left:auto;padding-left:10px;font-size:11px;font-weight:500;color:var(--gal-muted,var(--muted));white-space:nowrap;font-variant-numeric:tabular-nums}
+.galv-menu-item.is-disabled{opacity:.55;cursor:not-allowed}
+.galv-menu-item.is-disabled:hover{background:var(--gal-surface,var(--bg3))}
 .galv-menu-note{margin:0;font-size:11.5px;line-height:1.55;color:var(--gal-muted,var(--muted))}
 @media(max-width:760px){.galv-actions{top:10px;right:10px}.galv-menu-btn{width:38px;height:38px}}
 
@@ -5751,6 +5755,9 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .galv-video-play{display:flex;align-items:center;justify-content:center;width:46px;height:46px;border-radius:50%;background:rgba(10,10,10,.62);color:#fff;opacity:0;transition:opacity .18s}
 .galv-video-card:hover .galv-video-play,.galv-video-hit:focus-visible .galv-video-play{opacity:1}
 .galv-video-processing{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:11px;font-weight:600;color:var(--accent-ink);background:rgba(10,10,10,.72);border-radius:999px;padding:5px 12px}
+/* Speelt de master al terwijl de kijkkopie nog wordt gemaakt, dan hoort de
+   melding in de hoek en niet over de afspeelknop heen. */
+.galv-video-processing.is-corner{top:8px;left:8px;transform:none;pointer-events:none}
 .galv-video-error{color:var(--accent-r)}
 .galv-video-meta{position:absolute;left:10px;right:10px;bottom:8px;display:flex;align-items:baseline;justify-content:space-between;gap:8px;text-align:left}
 .galv-video-name{font-size:12.5px;font-weight:700;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 1px 6px rgba(0,0,0,.7)}
@@ -5838,6 +5845,11 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .galv-player-stage{width:min(1200px,94vw);display:flex;flex-direction:column}
 .galv-player-frame{width:100%;aspect-ratio:16/9;border:0;border-radius:10px;background:#000}
 .galv-player-video{width:100%;max-height:calc(92vh - 52px);border-radius:10px;background:#000}
+/* De browser kan het bestand niet afspelen (codec): één rustige melding op de
+   plek van de speler, met de uitweg erbij. */
+.galv-player-fallback{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;min-height:min(320px,50vh);padding:28px;border-radius:10px;background:#000;color:#fff;text-align:center;font-size:13.5px;line-height:1.55}
+.galv-player-fallback p{margin:0;max-width:440px;color:rgba(255,255,255,.82)}
+.galv-player-fallback .galv-bb-secondary{margin:0}
 
 @media(max-width:760px){
   /* De rijhoogte schaalt al mee in de TSX; hier alleen de tussenruimte. */
