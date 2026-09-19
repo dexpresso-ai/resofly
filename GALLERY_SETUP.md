@@ -88,9 +88,12 @@ dus CSP-problemen zie je nooit lokaal — altijd op staging natesten.
 4. Deellink maken (met pincode) → incognito openen → pincode → favoriet
    markeren → hartje verschijnt live in de app (realtime).
 5. Portaal: inloggen als contactpersoon → tab Galerijen → bekijken/downloaden.
-6. Video uploaden: met Stream-secrets → "Verwerken…" → speelt af in de
-   Netflix-rij; zonder secrets → speelt af uit R2.
-7. Zip-download; opslagmeter in Instellingen → Abonnement.
+6. Video uploaden: de master speelt meteen af uit R2 (native speler); met
+   Stream-secrets verschijnt "Kijkkopie wordt gemaakt…" in de hoek en schakelt
+   de kaart daarna over op de Stream-speler.
+7. Zip-download: menu rechtsboven → "Alles als zip" (foto's én video's),
+   "Alleen de foto's", "Alleen de video's"; opslagmeter in Instellingen →
+   Abonnement.
 
 ## Grote video's: master in R2, kijkkopie in Stream (2026-08-03)
 
@@ -121,19 +124,51 @@ dat alle parts behalve de laatste even groot zijn, minimaal 5 MiB, maximaal
 **Grenzen:** video max **30 GB** (het plafond dat Stream standaard accepteert;
 hoger kan via Cloudflare-support worden aangevraagd), foto max 4 GB.
 
-**R2-varianten:** `master` = het originele videobestand (download-only),
-`source` = oude R2-fallbackvideo (speelt direct af), `original` = full-res foto,
-`preview`/`thumb` = weergavebestanden. De viewer leidt de variant af uit de key
-om te bepalen of er een afspeelknop hoort te staan.
+**R2-varianten:** `master` = het originele videobestand (download én, zolang
+er geen kijkkopie is, rechtstreeks afspelen), `source` = oude R2-fallbackvideo
+(speelt direct af), `original` = full-res foto, `preview`/`thumb` =
+weergavebestanden. De viewer leidt de variant af uit de key om te bepalen of
+er een afspeelknop hoort te staan (`videoPlaybackSource` in
+`src/lib/galleryMedia.ts`).
 
 **Downloadkwaliteit** geldt alleen voor foto's. Een `master` is bereikbaar met
 elk token dat downloaden toestaat — video's worden altijd in de originele
 resolutie geleverd.
 
-**Zonder Stream-secrets** wordt de master gewoon opgeslagen, maar is er geen
-kijkkopie; het item toont dan "Alleen downloaden". De masters zitten
-**niet** in de zip-download: tientallen gigabytes door de CRC32-lus van een
-Worker halen loopt over de CPU-limiet en levert een stilzwijgend afgekapte zip.
+## Afspelen en downloaden zonder (klare) kijkkopie (2026-09-19)
+
+**Afspelen.** Een geüploade video speelt meteen: zolang er geen speelklare
+kijkkopie bij Stream is — Stream niet ingericht, de kopie mislukt, of nog in
+verwerking — speelt de browser de master rechtstreeks uit R2 via een native
+`<video>` (de worker ondersteunt Range-requests, dus spoelen werkt). Zodra de
+kijkkopie klaar is, neemt de Stream-speler het over. Voorwaarde is een
+container die browsers aankunnen (mp4/m4v/mov/webm/mkv); een codec die de
+browser niet decodeert (ProRes, HEVC op Windows-Chrome) strandt in de speler
+met een nette melding plus downloadknop.
+
+De worker bewaakt het downloadrecht daarbij: met een **kijk-token** (downloads
+uit) mag de master alléén inline worden opgehaald als het item geen klare
+kijkkopie heeft (`masterWatchableInline`, één PostgREST-lookup per key, twee
+minuten gecachet). Staat de kijkkopie er wél, dan blijft de master achter het
+downloadrecht — anders was het kennen van de `storage_key` genoeg om het
+origineel te halen. `dl=1` vereist altijd een download-token.
+
+**Zip.** Video-masters zitten nu **wél** in de zip, in originele resolutie.
+Het downloadmenu biedt "Alles als zip", "Alleen de foto's" en "Alleen de
+video's" (`?media=photos|videos` op `/gallery/zip/<id>`), met de grootte erbij
+zodra de payload `size_bytes` meegeeft (edge functions client-portal en
+gallery-public sinds deze datum). Twee dingen maken dit mogelijk:
+
+- de CRC32-lus in de worker is slicing-by-16 met 32-bits reads geworden
+  (~1,6 GB/s in plaats van ~330 MB/s, gemeten op 256 MB);
+- `limits.cpu_ms = 300000` in `wrangler.toml` (het maximum op Workers Paid;
+  standaard was 30 s).
+
+Boven `GALLERY_ZIP_MAX_BYTES` (150 GiB, in worker én `src/lib/galleryMedia.ts`)
+weigert de worker met een 413 en staat de keuze in het menu uitgeschakeld;
+daarboven download je per stuk. Alleen video's die uitsluitend bij Stream staan
+(oude directe Stream-upload zonder master in R2) blijven buiten de zip; het
+menu meldt dat.
 
 **Kosten:** Stream rekent per **minuut** speelduur (bestandsgrootte telt niet
 mee), R2 per **GB-maand**. Een master van 20 GB kost in Stream evenveel als een

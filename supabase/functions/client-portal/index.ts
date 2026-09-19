@@ -887,6 +887,11 @@ function sanitizeGalleryItem(row: Record<string, unknown>) {
     id: row.id,
     media_type: row.media_type,
     file_name: row.file_name,
+    // Voor de viewer: kan de browser dit videobestand rechtstreeks afspelen,
+    // en hoe groot wordt de zip? Beide zijn geen geheim — de bytes zelf
+    // blijven achter het media-token.
+    content_type: row.content_type ?? null,
+    size_bytes: typeof row.size_bytes === 'number' ? row.size_bytes : Number(row.size_bytes) || 0,
     category_id: row.category_id ?? null,
     storage_key: row.storage_key ?? null,
     preview_key: row.preview_key ?? null,

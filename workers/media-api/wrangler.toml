@@ -9,6 +9,16 @@ compatibility_date = "2026-04-30"
 # Galerij-video via Cloudflare Stream (optioneel — zonder deze vier valt video terug op R2):
 # STREAM_ACCOUNT_ID, STREAM_API_TOKEN (token met Stream:Edit),
 # STREAM_SIGNING_KEY_ID + STREAM_SIGNING_KEY_JWK (uit POST /stream/keys, zie GALLERY_SETUP.md).
+# CPU-tijd per request. Standaard is 30 seconden; de zip-download van een
+# galerij streamt elk bestand door een CRC32-lus, en sinds video-masters ook
+# in de zip zitten (2026-09-19) is dat gauw tientallen gigabytes. Vijf minuten
+# is het maximum op het Workers Paid-plan; samen met de slicing-by-16-CRC
+# (~1,6 GB/s) past daar ruim de 150 GiB-grens uit GALLERY_ZIP_MAX_BYTES in.
+# Deze sleutel is per omgeving, dus hij staat hieronder ook bij staging en
+# production.
+[limits]
+cpu_ms = 300000
+
 [vars]
 APP_ENV = "production"
 ALLOWED_ORIGINS = "https://app.resofly.nl"
@@ -32,6 +42,9 @@ preview_bucket_name = "resofly-media-staging"
 [env.staging]
 name = "resofly-media-api-staging"
 
+[env.staging.limits]
+cpu_ms = 300000
+
 [env.staging.vars]
 APP_ENV = "staging"
 ALLOWED_ORIGINS = "https://staging.resofly.nl,https://staging.resofly.com,https://staging.resofly.pages.dev,http://localhost:5173"
@@ -49,6 +62,9 @@ bucket_name = "resofly-media-staging"
 
 [env.production]
 name = "resofly-media-api"
+
+[env.production.limits]
+cpu_ms = 300000
 
 [env.production.vars]
 APP_ENV = "production"

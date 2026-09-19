@@ -449,11 +449,30 @@ const GALLERY_TOKEN_TTL_MS = 60 * 60 * 1000;
  * Varianten in de R2-key. `original` = full-res foto (alleen te serveren met
  * een downloadtoken op originele kwaliteit), `master` = het onbewerkte
  * videobestand dat de klant downloadt (Cloudflare Stream geeft het bronbestand
- * nooit terug, dus dít is het archief), `source` = video-bestand voor de oude
- * R2-fallback (moet altijd afspeelbaar zijn, ook met een kijk-token),
+ * nooit terug, dus dít is het archief) en dat de browser rechtstreeks afspeelt
+ * zolang er geen kijkkopie bij Stream is, `source` = video-bestand voor de
+ * oude R2-fallback (moet altijd afspeelbaar zijn, ook met een kijk-token),
  * `preview`/`thumb` = de client-side gegenereerde weergavebestanden.
  */
 const GALLERY_VARIANTS = ['original', 'master', 'source', 'preview', 'thumb'];
+
+/**
+ * Hoe lang de worker onthoudt of een master inline bekeken mag worden (zie
+ * masterWatchableInline). Kort: zodra de kijkkopie klaar is, hoort de master
+ * weer achter het downloadrecht te zitten.
+ */
+const GALLERY_MASTER_INLINE_CACHE_TTL_MS = 2 * 60 * 1000;
+
+/**
+ * Bovengrens voor één zip-download. De zip wordt streamend gemaakt en elke
+ * byte gaat door de CRC32-lus; die haalt ruim 1 GB/s (slicing-by-16, zie
+ * crc32Update) en een Worker mag maximaal vijf minuten CPU per request
+ * verbruiken (limits.cpu_ms in wrangler.toml). 150 GiB laat daarbinnen nog
+ * een ruime marge, ook als de CPU van de Worker trager is dan een laptop.
+ * Moet gelijk blijven aan GALLERY_ZIP_MAX_BYTES in src/lib/galleryMedia.ts,
+ * zodat de app de knop al uitschakelt vóórdat de worker hier weigert.
+ */
+const GALLERY_ZIP_MAX_BYTES = 150 * 1024 * 1024 * 1024;
 
 /**
  * Maximale grootte van een video-master. 30 GB is het plafond dat Cloudflare
@@ -577,6 +596,7 @@ type GalleryItemRow = {
   id: string;
   file_name: string;
   media_type: string;
+  size_bytes: number | null;
   storage_key: string | null;
   preview_key: string | null;
   stream_uid: string | null;
@@ -589,7 +609,7 @@ async function fetchGalleryItemRows(
   opts?: { onlyStream?: boolean },
 ): Promise<GalleryItemRow[]> {
   const query = new URLSearchParams({
-    select: 'id,file_name,media_type,storage_key,preview_key,stream_uid',
+    select: 'id,file_name,media_type,size_bytes,storage_key,preview_key,stream_uid',
     gallery_id: `eq.${galleryId}`,
     organization_id: `eq.${organizationId}`,
     order: 'sort_order.asc,created_at.asc',
@@ -602,6 +622,51 @@ async function fetchGalleryItemRows(
   if (!res.ok) throw new HttpError(502, 'Kon galerij-items niet ophalen.');
   const rows = (await res.json()) as GalleryItemRow[];
   return Array.isArray(rows) ? rows : [];
+}
+
+/**
+ * Mag een kijk-token (dl=false) deze video-master inline afspelen? Alleen
+ * wanneer het item geen bruikbare kijkkopie bij Stream heeft: Stream niet
+ * geconfigureerd, de kopie mislukt, of nog in verwerking. Dan is de master het
+ * enige wat er af te spelen valt — precies de rol die de oude `source`-variant
+ * had. Staat de kijkkopie er wél, dan blijft de master achter het
+ * downloadrecht, anders zou "downloaden uit" voor video niets betekenen: het
+ * kennen van de storage_key was dan genoeg om het origineel te halen.
+ *
+ * Eén PostgREST-lookup per key, kort gecachet: een <video> doet tijdens het
+ * afspelen tientallen Range-requests en die hoeven niet allemaal naar de
+ * database. Een onbekende key (item verwijderd, of nog niet aangemaakt) is
+ * niets om te kijken en levert dus `false`.
+ */
+const masterInlineCache = new Map<string, { until: number; allowed: boolean }>();
+
+async function masterWatchableInline(env: Env, key: string): Promise<boolean> {
+  const now = Date.now();
+  const cached = masterInlineCache.get(key);
+  if (cached && cached.until > now) return cached.allowed;
+
+  const query = new URLSearchParams({
+    select: 'stream_uid,stream_status',
+    storage_key: `eq.${key}`,
+    limit: '1',
+  });
+  const res = await fetch(`${supabaseBase(env)}/rest/v1/gallery_items?${query.toString()}`, { headers: serviceHeaders(env) });
+  // Een mislukte lookup weigeren én niet onthouden: de volgende request
+  // probeert het gewoon opnieuw.
+  if (!res.ok) return false;
+  const rows = (await res.json()) as Array<{ stream_uid: string | null; stream_status: string | null }>;
+  const row = Array.isArray(rows) ? rows[0] : undefined;
+  const allowed = Boolean(row) && !(row?.stream_uid && row.stream_status === 'ready');
+
+  // De cache mag niet onbeperkt groeien in een isolate die lang leeft: bij
+  // een paar honderd keys eerst de verlopen regels opruimen, en als dat niet
+  // genoeg is alles weggooien — een extra lookup is goedkoper dan geheugen.
+  if (masterInlineCache.size >= 500) {
+    for (const [k, v] of masterInlineCache) if (v.until <= now) masterInlineCache.delete(k);
+    if (masterInlineCache.size >= 500) masterInlineCache.clear();
+  }
+  masterInlineCache.set(key, { until: now + GALLERY_MASTER_INLINE_CACHE_TTL_MS, allowed });
+  return allowed;
 }
 
 /** Eigendomscheck op een Stream-video via onze eigen DB (werkt ook als Stream-meta ontbreekt). */
@@ -1304,7 +1369,12 @@ async function handleGalleryFile(request: Request, env: Env, context: RouteConte
   // De video-master kent geen webvariant: Stream levert het kijken, R2 levert
   // het origineel. "Downloadkwaliteit" gaat dus alleen over foto's — een
   // web-token mag de master gewoon downloaden zolang downloaden aan staat.
-  if (variant === 'master' && !payload.dl) {
+  //
+  // Met een kijk-token mag de master alleen inline worden bekeken als er geen
+  // kijkkopie bij Stream is (zie masterWatchableInline): zonder Stream is dit
+  // de enige manier om de video af te spelen. Een `dl=1` met een kijk-token is
+  // hierboven al geweigerd.
+  if (variant === 'master' && !payload.dl && !(await masterWatchableInline(env, key))) {
     throw new HttpError(403, 'Downloaden is niet toegestaan voor deze link.');
   }
 
@@ -1401,25 +1471,69 @@ function matchGalleryFileRoute(pathname: string): string | null {
 // 3), omdat de local file header al onderweg is vóór de CRC bekend is. Bestanden
 // of offsets ≥ 4 GiB krijgen zip64-velden.
 
-let crcTable: Uint32Array | null = null;
-function getCrcTable(): Uint32Array {
-  if (crcTable) return crcTable;
-  const table = new Uint32Array(256);
+/**
+ * CRC32 als slicing-by-16: zestien tabellen van 256 woorden, en per stap
+ * zestien bytes (vier 32-bits woorden) in plaats van één. Gemeten op 256 MB
+ * willekeurige data: de oude byte-per-byte lus deed ~330 MB/s, deze ~1,6 GB/s.
+ * Dat verschil is precies waarom video-masters nu wél in de zip kunnen: een
+ * Worker mag vijf minuten CPU per request verbruiken (limits.cpu_ms), en op
+ * deze snelheid past daar honderden gigabytes in.
+ *
+ * De 32-bits reads gaan via een Uint32Array over het uitgelijnde deel van de
+ * chunk; de kop tot de uitlijning en de staart gaan byte-voor-byte. De
+ * tabellen zijn opgebouwd voor little-endian woorden — wat elke CPU is waar
+ * een Worker op draait — en voor de zekerheid valt de lus op een big-endian
+ * host terug op de bytelus.
+ */
+let crcTables: Uint32Array | null = null;
+function getCrcTables(): Uint32Array {
+  if (crcTables) return crcTables;
+  const tables = new Uint32Array(256 * 16);
   for (let n = 0; n < 256; n++) {
     let c = n;
     for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    table[n] = c >>> 0;
+    tables[n] = c >>> 0;
   }
-  crcTable = table;
-  return table;
+  for (let s = 1; s < 16; s++) {
+    for (let n = 0; n < 256; n++) {
+      const prev = tables[(s - 1) * 256 + n];
+      tables[s * 256 + n] = (tables[prev & 0xff] ^ (prev >>> 8)) >>> 0;
+    }
+  }
+  crcTables = tables;
+  return tables;
 }
 
+const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+
 function crc32Update(crc: number, bytes: Uint8Array): number {
-  const table = getCrcTable();
+  const t = getCrcTables();
+  const n = bytes.length;
   let c = crc;
-  for (let i = 0; i < bytes.length; i++) {
-    c = table[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  let i = 0;
+  if (LITTLE_ENDIAN) {
+    // Kop: byte-voor-byte tot de eerstvolgende 4-byte-grens van de buffer.
+    const misalign = bytes.byteOffset & 3;
+    const head = misalign === 0 ? 0 : Math.min(n, 4 - misalign);
+    for (; i < head; i++) c = t[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+    const groups = (n - i) >>> 4;
+    if (groups > 0) {
+      const words = new Uint32Array(bytes.buffer, bytes.byteOffset + i, groups * 4);
+      for (let w = 0; w < words.length; w += 4) {
+        const a = (c ^ words[w]) >>> 0;
+        const b = words[w + 1];
+        const d = words[w + 2];
+        const e = words[w + 3];
+        c = (t[3840 + (a & 0xff)] ^ t[3584 + ((a >>> 8) & 0xff)] ^ t[3328 + ((a >>> 16) & 0xff)] ^ t[3072 + (a >>> 24)]
+          ^ t[2816 + (b & 0xff)] ^ t[2560 + ((b >>> 8) & 0xff)] ^ t[2304 + ((b >>> 16) & 0xff)] ^ t[2048 + (b >>> 24)]
+          ^ t[1792 + (d & 0xff)] ^ t[1536 + ((d >>> 8) & 0xff)] ^ t[1280 + ((d >>> 16) & 0xff)] ^ t[1024 + (d >>> 24)]
+          ^ t[768 + (e & 0xff)] ^ t[512 + ((e >>> 8) & 0xff)] ^ t[256 + ((e >>> 16) & 0xff)] ^ t[e >>> 24]) >>> 0;
+      }
+      i += groups * 16;
+    }
   }
+  // Staart (en op een big-endian host: alles).
+  for (; i < n; i++) c = t[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
   return c >>> 0;
 }
 
@@ -1555,11 +1669,24 @@ function zipCentralDirectory(entries: ZipCentralEntry[], cdOffset: number): Uint
   return parts;
 }
 
-/** Download de hele galerij als streamende zip (originelen of web-previews). */
+/**
+ * Download de hele galerij als streamende zip: foto's als origineel of
+ * web-preview (de downloadkwaliteit van de galerij), video's altijd als de
+ * master in originele resolutie. `?media=photos` of `?media=videos` beperkt de
+ * zip tot één soort; zonder parameter gaat alles mee.
+ *
+ * Alleen video's die nog uitsluitend bij Stream staan (de oude directe
+ * Stream-upload, zonder master in R2) blijven buiten de zip: Stream geeft het
+ * bronbestand niet terug, en de MP4-rendition is een andere host. Die
+ * download de klant per stuk.
+ */
 async function handleGalleryZip(request: Request, env: Env, context: RouteContext, galleryId: string): Promise<Response> {
   const payload = await requireGalleryToken(request, env);
   if (payload.gal !== galleryId) throw new HttpError(403, 'Token hoort niet bij deze galerij.');
   if (!payload.dl) throw new HttpError(403, 'Downloaden is niet toegestaan voor deze link.');
+
+  const mediaParam = context.url.searchParams.get('media');
+  const media: 'all' | 'photos' | 'videos' = mediaParam === 'photos' || mediaParam === 'videos' ? mediaParam : 'all';
 
   const gallery = await fetchGalleryRow(env, galleryId, payload.org);
   const items = await fetchGalleryItemRows(env, galleryId, payload.org);
@@ -1567,13 +1694,15 @@ async function handleGalleryZip(request: Request, env: Env, context: RouteContex
   const useWeb = gallery.download_quality === 'web';
   const used = new Set<string>();
   const entries: Array<{ key: string; zipName: string }> = [];
+  let totalBytes = 0;
   for (const item of items) {
+    if (media === 'photos' && item.media_type !== 'photo') continue;
+    if (media === 'videos' && item.media_type !== 'video') continue;
     const key = useWeb && item.media_type === 'photo' ? item.preview_key || item.storage_key : item.storage_key;
     if (!key || !key.startsWith(`${payload.org}/`)) continue; // Stream-only video's zitten niet in de zip
-    // Video-masters ook niet: tientallen gigabytes door de CRC32-lus van een
-    // Worker halen loopt over de CPU-limiet, en dan levert de zip stilzwijgend
-    // een afgekapt bestand op. Die download de klant per stuk.
-    if (galleryVariantFromKey(key) === 'master') continue;
+    // Voor de grens hieronder telt de grootte van het origineel; een
+    // web-preview is kleiner, dus dat is aan de veilige kant.
+    totalBytes += typeof item.size_bytes === 'number' && item.size_bytes > 0 ? item.size_bytes : 0;
     const base = sanitizeFileName(item.file_name || 'bestand');
     const dot = base.lastIndexOf('.');
     const stem = dot > 0 ? base.slice(0, dot) : base;
@@ -1590,6 +1719,15 @@ async function handleGalleryZip(request: Request, env: Env, context: RouteContex
     entries.push({ key, zipName });
   }
   if (entries.length === 0) throw new HttpError(404, 'Geen downloadbare bestanden in deze galerij.');
+  // Liever meteen een duidelijke weigering dan een zip die halverwege stilvalt
+  // omdat de CPU-tijd van de Worker op is. De app toont dezelfde grens al in
+  // het downloadmenu, dus hier komt alleen nog wie de link zelf in elkaar zet.
+  if (totalBytes > GALLERY_ZIP_MAX_BYTES) {
+    throw new HttpError(
+      413,
+      `Deze selectie is te groot voor één zip (${Math.round(totalBytes / 1073741824)} GB, maximaal ${Math.round(GALLERY_ZIP_MAX_BYTES / 1073741824)} GB). Download de video's per stuk, of alleen de foto's als zip.`,
+    );
+  }
 
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   const writer = writable.getWriter();
@@ -1638,7 +1776,8 @@ async function handleGalleryZip(request: Request, env: Env, context: RouteContex
   })();
   context.waitUntil(pump);
 
-  const zipName = `${sanitizeFileName(gallery.title || 'galerij').replace(/\.[A-Za-z0-9]+$/, '') || 'galerij'}.zip`;
+  const stem = sanitizeFileName(gallery.title || 'galerij').replace(/\.[A-Za-z0-9]+$/, '') || 'galerij';
+  const zipName = `${stem}${media === 'photos' ? '-fotos' : media === 'videos' ? '-videos' : ''}.zip`;
   const headers = new Headers(context.corsHeaders);
   headers.set('Content-Type', 'application/zip');
   headers.set('Cache-Control', 'private, no-store');
