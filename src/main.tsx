@@ -4,6 +4,8 @@ import { Sidebar } from './components/Sidebar';
 import { TabBar } from './components/TabBar';
 import { BottomNav } from './components/BottomNav';
 import { loadPersistedTabs, savePersistedTabs, viewTitle, PAGE_TITLES, type PersistedTab } from './lib/workspaceTabs';
+import { Breadcrumbs } from './components/Breadcrumbs';
+import type { CrumbTarget } from './lib/breadcrumbs';
 import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, MODULE_LABELS, PAGE_MODULE, type ModuleAccess } from './lib/permissions';
 import type { SearchResult } from './components/GlobalSearch';
 import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
@@ -625,6 +627,15 @@ function App() {
   const pendingReport = activeTab.pendingReport;
   const edit = activeTab.edit;
   const setPage = (v: React.SetStateAction<Page>) => patchActiveTab(t => ({ page: applyUpdater(v, t.page) }));
+  /** Een klik in het kruimelpad: springt in één keer naar de hele bestemming, zodat
+   *  er geen tussentoestand bestaat waarin de pagina al klopt maar de context nog niet. */
+  const navigateCrumb = (target: CrumbTarget) => patchActiveTab(() => ({
+    page: target.page as Page,
+    projectId: target.projectId,
+    clientId: target.clientId,
+    galleryId: target.galleryId,
+    statsReportId: null,
+  }));
   const setProjectId = (v: React.SetStateAction<string | null>) => patchActiveTab(t => ({ projectId: applyUpdater(v, t.projectId) }));
   const setClientId = (v: React.SetStateAction<string | null>) => patchActiveTab(t => ({ clientId: applyUpdater(v, t.clientId) }));
   const setStatsReportId = (v: React.SetStateAction<string | null>) => patchActiveTab(t => ({ statsReportId: applyUpdater(v, t.statsReportId) }));
@@ -2908,6 +2919,9 @@ function App() {
           EditModal, zodat een openstaande bewerking bij het wisselen bewaard blijft. */}
       {tabs.map(tab => (
         <section key={tab.id} className="content" hidden={tab.id !== activeTab.id}>
+          {/* Het kruimelpad staat bóven de foutmelding: ook als een pagina stukloopt,
+              blijft de weg terug zichtbaar. */}
+          <Breadcrumbs view={tab} data={data} onNavigate={navigateCrumb} />
           {tab.id === activeTab.id && error && <div className="error">{error}</div>}
           {renderPage(tab)}
           {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} onNoteHandwritingChanged={applyNoteHandwritingSummary} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}

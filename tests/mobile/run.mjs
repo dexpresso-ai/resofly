@@ -74,6 +74,13 @@ const PAGES = {
  * (px vanaf de bovenrand van het scherm). De grenzen liggen zo'n 20% boven
  * de meting van 2026-09-13; een nieuwe kop of knoppenrij erboven trekt de
  * test rood. Alleen voor de telefoon: daar is de ruimte het schaarst.
+ *
+ * 2026-09-19 — het kruimelpad staat sindsdien boven elke pagina-inhoud en kost
+ * op de telefoon 36px (regel van 28px + 8px marge). De grenzen hieronder gingen
+ * daarom met datzelfde bedrag omhoog, zodat de speling tegen ongemerkte groei
+ * blijft wat hij was. Niet opgehoogd: het dashboard (staat bovenaan het pad en
+ * heeft er dus geen), de schermvullende pagina's zonder kruimelpad (agenda,
+ * weekplanner, teamchat, Berichten) en alles buiten de werkruimte.
  */
 const FIRST_ITEM = {
   dashboard: { selector: '.dash-task', maxTop: 280 },
@@ -82,21 +89,21 @@ const FIRST_ITEM = {
   // (twee berichten). Die strook telde tot 2026-09-17 nooit mee: de mock gaf
   // de teller niet door (content-range viel weg door CORS), dus de strook bleef
   // verborgen. Gemeten mét strook: kaarten 274px, tabel 303px.
-  clients: { selector: '.client-card', maxTop: 330 },
-  'clients-table': { selector: '.clients-table tbody tr', maxTop: 365 },
-  projects: { selector: '.project-list-card', maxTop: 285 },
-  'projects-table': { selector: '.projects-table tbody tr', maxTop: 310 },
-  marketing: { selector: '.mk-campaign-table tbody tr', maxTop: 330 },
-  tickets: { selector: '.ticket-item', maxTop: 320 },
-  invoices: { selector: '.quote-table tbody tr', maxTop: 460 },
-  quotes: { selector: '.quote-table tbody tr', maxTop: 460 },
+  clients: { selector: '.client-card', maxTop: 366 },
+  'clients-table': { selector: '.clients-table tbody tr', maxTop: 401 },
+  projects: { selector: '.project-list-card', maxTop: 321 },
+  'projects-table': { selector: '.projects-table tbody tr', maxTop: 346 },
+  marketing: { selector: '.mk-campaign-table tbody tr', maxTop: 366 },
+  tickets: { selector: '.ticket-item', maxTop: 356 },
+  invoices: { selector: '.quote-table tbody tr', maxTop: 496 },
+  quotes: { selector: '.quote-table tbody tr', maxTop: 496 },
   weekplanner: { selector: '.wp-daystrip', maxTop: 600 },
   calendar: { selector: '.tb-scroll', maxTop: 260 },
-  time: { selector: '.tt-kpi', maxTop: 360 },
-  client: { selector: '.client-tabs-bar', maxTop: 480 },
-  project: { selector: '.client-tabs-bar', maxTop: 460 },
-  'project-planning': { selector: '.ptl-board', maxTop: 460 },
-  content: { selector: '.odrv-tr', maxTop: 300 },
+  time: { selector: '.tt-kpi', maxTop: 396 },
+  client: { selector: '.client-tabs-bar', maxTop: 516 },
+  project: { selector: '.client-tabs-bar', maxTop: 496 },
+  'project-planning': { selector: '.ptl-board', maxTop: 496 },
+  content: { selector: '.odrv-tr', maxTop: 336 },
   // Teamchat opent op de telefoon in de gesprekslijst (één venster tegelijk).
   chat: { selector: '.chat-conv', maxTop: 260 },
   // Berichten: idem. De balk met zoeken, filters en tabbladen is in twee
@@ -105,7 +112,7 @@ const FIRST_ITEM = {
   // over te laten en de filters als paneel te laten zweven (151px). De grens
   // volgt mee, anders meet deze test niets meer.
   communication: { selector: '.comm-row', maxTop: 185 },
-  suppliers: { selector: '.supplier-table tbody tr', maxTop: 320 },
+  suppliers: { selector: '.supplier-table tbody tr', maxTop: 356 },
   'public-quote': { selector: '.public-lines', maxTop: 560 },
   'public-invoice': { selector: '.public-lines', maxTop: 700 },
   'public-booking': { selector: '.booking-slot', maxTop: 360 },
