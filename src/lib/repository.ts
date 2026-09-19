@@ -3,7 +3,7 @@ import { supabase, supabaseAuth } from './supabase';
 import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
 import { throwFunctionError } from './functionErrors';
-import { isMissingRelation, NotMigratedError } from './postgrestErrors';
+import { isMissingColumn, isMissingRelation, NotMigratedError } from './postgrestErrors';
 import { inkPageCount, inkStrokeCount, isInkEmpty, serializeInkDocument, type InkDocument } from './ink';
 import type { ReportDefinition } from './reporting';
 import type { ModuleAccess } from './permissions';
@@ -632,6 +632,27 @@ export async function setContractProjects(organizationId: UUID, contractId: UUID
 
 const GALLERY_MIGRATION_HINT =
   'Voer de migratie 20260802000000_gallery_module.sql uit in Supabase om galerij-oplevering te activeren.';
+
+/**
+ * Deellink-velden van een galerij opslaan.
+ *
+ * Apart van `updateRow` om één reden: `share_token` (het leesbare token, sinds
+ * 19 september 2026) hoeft in deze omgeving nog niet te bestaan. De frontend
+ * loopt via Cloudflare Pages vóór op de migratie, en in dat gaatje mag
+ * "Deellink maken" — en zeker "Deellink intrekken" — niet stuk zijn. Kent de
+ * database de kolom nog niet, dan gaat dezelfde opdracht zonder dat veld
+ * alsnog door: de link werkt, hij is alleen nog niet terug te halen.
+ */
+export async function updateGalleryShare(galleryId: UUID, patch: Partial<Gallery>, organizationId: UUID): Promise<Gallery> {
+  try {
+    return await updateRow<Gallery>('galleries', galleryId, patch, organizationId);
+  } catch (error) {
+    if (!isMissingColumn(error as { code?: string; message?: string }, 'share_token')) throw error;
+    const withoutToken = { ...patch };
+    delete withoutToken.share_token;
+    return await updateRow<Gallery>('galleries', galleryId, withoutToken, organizationId);
+  }
+}
 
 /** Galerijen (org-breed; filter client-side op project_id). */
 export async function selectGalleries(organizationId: UUID): Promise<Gallery[]> {

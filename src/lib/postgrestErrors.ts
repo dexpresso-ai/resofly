@@ -33,6 +33,24 @@ export function isMissingRelation(error: { code?: string; message?: string } | n
 }
 
 /**
+ * Hetzelfde gaatje, maar dan één KOLOM: de app is uitgerold en de migratie die
+ * deze kolom toevoegt nog niet gedraaid. Een aanroeper kan dan terugvallen op
+ * dezelfde opdracht zónder dat veld, in plaats van de gebruiker een
+ * PostgREST-zin voor te schotelen.
+ *
+ * Bewust mét de kolomnaam erbij, en bewust alleen op de twee foutcodes: een
+ * 42703 op een kolom die we hier niet verwachten is een écht kapotte query, en
+ * die hoort niet stilletjes te worden opgevangen.
+ */
+export function isMissingColumn(error: { code?: string; message?: string } | null | undefined, column: string): boolean {
+  if (!error) return false;
+  // 42703 = undefined_column (Postgres), PGRST204 = onbekend in de schema-cache
+  // van PostgREST ("Could not find the 'x' column of 'y' in the schema cache").
+  if (error.code !== '42703' && error.code !== 'PGRST204') return false;
+  return String(error.message ?? '').toLowerCase().includes(column.toLowerCase());
+}
+
+/**
  * Deze module bestaat in deze omgeving nog niet in de database. Geen fout om
  * rood van te kleuren: de migratie is simpelweg nog niet gedraaid.
  */

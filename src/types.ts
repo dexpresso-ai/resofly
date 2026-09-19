@@ -679,7 +679,13 @@ export interface Gallery extends OrgScopedRow {
   allow_downloads: boolean;
   download_quality: GalleryDownloadQuality;
   share_enabled: boolean;
-  /** Alleen de SHA-256-hash; het token zelf bestaat alleen op het moment van genereren. */
+  /**
+   * Het deeltoken in leesbare vorm — alleen zichtbaar binnen de organisatie
+   * (RLS), zodat het scherm de deellink altijd kan tonen en kopiëren. Leeg bij
+   * links van vóór 19 september 2026: daarvan bestond alleen de hash nog.
+   */
+  share_token: string | null;
+  /** SHA-256 van het token; hierop zoekt de publieke galerijpagina. */
   share_token_hash: string | null;
   share_pin_hash: string | null;
   share_pin_failed_count: number;

@@ -8,7 +8,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isMissingRelation, NotMigratedError } from './postgrestErrors.ts';
+import { isMissingColumn, isMissingRelation, NotMigratedError } from './postgrestErrors.ts';
 
 test('isMissingRelation herkent de foutcodes van een ontbrekende tabel of view', () => {
   assert.equal(isMissingRelation({ code: '42P01' }), true);
@@ -51,4 +51,28 @@ test('NotMigratedError is als zodanig te herkennen', () => {
   assert.ok(error instanceof Error);
   assert.equal(error.name, 'NotMigratedError');
   assert.match(error.message, /nog niet/);
+});
+
+test('isMissingColumn herkent de twee manieren waarop een kolom kan ontbreken', () => {
+  // Postgres zelf, en dezelfde constatering uit de schema-cache van PostgREST.
+  assert.equal(isMissingColumn({ code: '42703', message: 'column "share_token" of relation "galleries" does not exist' }, 'share_token'), true);
+  assert.equal(isMissingColumn({ code: 'PGRST204', message: "Could not find the 'share_token' column of 'galleries' in the schema cache" }, 'share_token'), true);
+});
+
+test('isMissingColumn geldt alleen voor de kolom waar de aanroeper op rekent', () => {
+  // Anders vangt een terugval op "zonder share_token" ook het geval af waarin
+  // een heel ander veld ontbreekt — en dan verdwijnt een echte fout stilletjes.
+  assert.equal(isMissingColumn({ code: '42703', message: 'column "share_pin_hash" of relation "galleries" does not exist' }, 'share_token'), false);
+  assert.equal(isMissingColumn({ code: '42P01', message: 'relation "public.galleries" does not exist' }, 'share_token'), false);
+  assert.equal(isMissingColumn({ code: '42501', message: 'permission denied for table galleries' }, 'share_token'), false);
+  assert.equal(isMissingColumn(null, 'share_token'), false);
+  assert.equal(isMissingColumn(undefined, 'share_token'), false);
+  assert.equal(isMissingColumn({}, 'share_token'), false);
+});
+
+test('isMissingColumn trapt niet in de zin van een ontbrekende tabel', () => {
+  // Die zin bevat de tabelnaam, dus zonder de codecontrole zou een ontbrekende
+  // tabel hier als "kolom ontbreekt" doorgaan — en dan zou een terugval de
+  // opdracht nog een keer proberen in een database waar de tabel niet bestaat.
+  assert.equal(isMissingColumn({ code: '42P01', message: 'relation "public.galleries" does not exist' }, 'galleries'), false);
 });

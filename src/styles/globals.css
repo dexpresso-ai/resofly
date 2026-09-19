@@ -5385,7 +5385,11 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .gal-share-note{font-size:12px;color:var(--muted2);line-height:1.55;margin:0}
 .gal-share-active{display:flex;align-items:center;gap:6px;color:var(--accent-ink)}
 .gal-share-url{display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:9px;padding:8px 10px;background:var(--bg3)}
-.gal-share-url code{flex:1;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--accent-ink)}
+/* De link blijft staan zolang hij actief is, dus hij staat er ook helemaal:
+   afbreken in plaats van afkappen, zodat je hem kunt lezen en met de hand kunt
+   selecteren als het klembord dwarsligt. */
+.gal-share-url code{flex:1;min-width:0;font-size:11px;line-height:1.5;word-break:break-all;color:var(--accent-ink)}
+.gal-share-url button{flex:none}
 
 /* ── Huisstijl-lettertypen ───────────────────────────────────────────────────
    --brand-heading en --brand-body worden alleen gezet als de beeldmaker een

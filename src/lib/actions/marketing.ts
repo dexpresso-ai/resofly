@@ -1,7 +1,7 @@
 import {
   addContractProject, addSuppression, createFlow, insertRow, removeContractProject,
   removeSuppression, replaceFlowSteps, replaceGalleryCategoryPresets, setGalleryItemOrder,
-  setGalleryItemsCategory, updateCampaign, updateFlow, updateRow,
+  setGalleryItemsCategory, updateCampaign, updateFlow, updateGalleryShare, updateRow,
 } from '../repository';
 import {
   activateFlow, cancelCampaign, cancelFlow, pauseCampaign, pauseFlow, previewCampaignAudience,
@@ -391,25 +391,27 @@ export const MARKETING_EXECUTORS: Record<string, ActionExecutor> = {
     const pin = optText(payload, 'pin');
     const token = randomShareToken();
     const tokenHash = await sha256Hex(token);
-    // De pincode wordt gehasht met het token als zout; de database kent alleen
-    // hashes. Pincode wijzigen betekent dus: een nieuwe link genereren.
+    // Van de pincode bewaart de database alleen een hash, met het token als
+    // zout. Pincode wijzigen betekent dus: een nieuwe link genereren.
     const pinHash = pin ? await sha256Hex(`${token}:${pin}`) : null;
-    const updated = await updateRow<Gallery>('galleries', galleryId, {
+    const updated = await updateGalleryShare(galleryId, {
       share_enabled: true,
+      // Het token zelf gaat mee de galerij in, zodat het scherm de link altijd
+      // kan laten zien — ook na publiceren of herladen.
+      share_token: token,
       share_token_hash: tokenHash,
       share_pin_hash: pinHash,
       share_pin_failed_count: 0,
       share_pin_locked_until: null,
     }, ctx.organizationId);
-    // De link staat hier één keer; daarna is hij nergens meer op te vragen.
     const url = `${window.location.origin}/gallerij/${token}`;
     return `Deellink voor "${updated.title}" aangemaakt: ${url}`
-      + (pin ? ` (pincode ${pin}) — bewaar de link, hij is later niet meer op te halen` : ' — bewaar de link, hij is later niet meer op te halen');
+      + (pin ? ` (pincode ${pin}) — de link blijft ook terug te vinden bij Delen in de galerij` : ' — de link blijft ook terug te vinden bij Delen in de galerij');
   },
 
   'gallery.revoke_share_link': async (payload, ctx) => {
-    const updated = await updateRow<Gallery>('galleries', text(payload, 'gallery_id'), {
-      share_enabled: false, share_token_hash: null, share_pin_hash: null,
+    const updated = await updateGalleryShare(text(payload, 'gallery_id'), {
+      share_enabled: false, share_token: null, share_token_hash: null, share_pin_hash: null,
     }, ctx.organizationId);
     return `Deellink van "${updated.title}" ingetrokken — uitgedeelde links werken niet meer`;
   },

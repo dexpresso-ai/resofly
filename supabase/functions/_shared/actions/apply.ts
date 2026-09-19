@@ -482,7 +482,7 @@ export const DIRECT_APPLIERS: Record<string, DirectApplier> = {
 
   'gallery.revoke_share_link': async (ctx, payload) => {
     const updated = await updateOne<{ title: string }>(ctx, 'galleries', pText(payload, 'gallery_id'), {
-      share_enabled: false, share_token_hash: null, share_pin_hash: null,
+      share_enabled: false, share_token: null, share_token_hash: null, share_pin_hash: null,
     }, 'title', 'Galerij');
     return `Deellink van "${updated.title}" ingetrokken — uitgedeelde links werken niet meer`;
   },

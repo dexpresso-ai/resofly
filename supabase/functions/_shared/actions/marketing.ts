@@ -1512,7 +1512,8 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     kind: 'write',
     description:
       'Zet een gepubliceerde galerij terug op "concept". De klant ziet hem daarna niet meer in het portaal. Er gaat niets verloren — de bestanden, categorieën en favorieten blijven staan. ' +
-      'Een eventueel uitgedeelde deellink blijft wel werken; die trek je apart in met `gallery.revoke_share_link`.',
+      'Ook de publieke deellink loopt hierop dood: die blijft bestaan (en werkt weer zodra je opnieuw publiceert), maar de pagina zegt zolang de galerij op concept staat dat hij niet beschikbaar is. ' +
+      'Wil je de link zelf definitief ongeldig maken, gebruik dan `gallery.revoke_share_link`.',
     keywords: ['terugzetten', 'concept', 'offline halen', 'verbergen', 'depubliceren'],
     input: { gallery_id: { type: 'string' } },
     required: ['gallery_id'],
@@ -1525,7 +1526,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
         title: `Galerij terugzetten naar concept: ${gallery.title}`,
         sub: joinShort([
           'de klant ziet hem niet meer in het portaal',
-          gallery.share_enabled ? 'let op: de publieke deellink blijft wél werken' : null,
+          gallery.share_enabled ? 'ook de publieke deellink toont dan geen galerij meer (de link zelf blijft bestaan)' : null,
         ], 140),
         kind: 'work',
         payload: { gallery_id: galleryId, gallery_title: gallery.title },
@@ -1541,7 +1542,8 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     risk: 'high',
     description:
       'Maakt een geheime link waarmee IEDEREEN die hem heeft de galerij kan bekijken — geen inlog, geen portaal. Met een pincode van 6 tot 8 cijfers zit er nog een slot op. ' +
-      'De link is maar ÉÉN keer te zien: hij staat in de bevestiging en wordt daarna alleen als hashcode bewaard. Bestond er al een deellink, dan werkt die oude vanaf nu niet meer. ' +
+      'De link blijft daarna terug te vinden bij "Delen" in de galerij, dus je hoeft hem niet apart te bewaren. Bestond er al een deellink, dan werkt die oude vanaf nu niet meer. ' +
+      'De pagina is alleen bereikbaar zolang de galerij gepubliceerd is; terugzetten naar concept sluit hem zonder de link kwijt te raken. ' +
       'Denk na voor je dit voorstelt: een publieke link is de meest open manier om een oplevering te delen.',
     keywords: ['deellink', 'link delen', 'publieke link', 'share', 'pincode', 'zonder inloggen'],
     input: {
@@ -1575,7 +1577,7 @@ export const MARKETING_ACTIONS: ActionDef[] = [
     kind: 'write',
     risk: 'high',
     description:
-      'Zet het delen uit en wist de bewaarde link- en pincodehash. Elke link die je eerder hebt uitgedeeld werkt daarna NIET meer — ook die in mails en appjes die je niet terug kunt halen. ' +
+      'Zet het delen uit en wist de bewaarde link en pincodehash. Elke link die je eerder hebt uitgedeeld werkt daarna NIET meer — ook die in mails en appjes die je niet terug kunt halen. ' +
       'ONOMKEERBAAR: dezelfde link komt niet terug, je genereert hoogstens een nieuwe. Het klantportaal is een aparte weg en blijft gewoon werken.',
     keywords: ['deellink intrekken', 'link ongeldig', 'stoppen met delen', 'revoke'],
     input: { gallery_id: { type: 'string' } },

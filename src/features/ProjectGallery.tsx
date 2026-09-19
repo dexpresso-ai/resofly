@@ -21,7 +21,7 @@ import { supabase, supabaseAuth } from '../lib/supabase';
 import {
   deleteRow, fetchOrganizationStorageStatus, insertRow, replaceGalleryCategoryPresets,
   selectGalleryCategories, selectGalleryCategoryPresets, selectGalleryFavorites, selectGalleryItems,
-  setGalleryItemOrder, setGalleryItemsCategory, updateRow,
+  setGalleryItemOrder, setGalleryItemsCategory, updateGalleryShare, updateRow,
 } from '../lib/repository';
 import { deleteR2Object } from '../lib/r2-api';
 import {
@@ -1046,7 +1046,11 @@ export function GalleryTab({
     setBusy(true);
     setError(null);
     try {
-      await updateRow<Gallery>('galleries', gallery.id, patch, organizationId);
+      // Deellink-velden gaan langs updateGalleryShare: die valt terug op een
+      // update zonder `share_token` zolang de migratie in deze omgeving nog
+      // niet gedraaid heeft.
+      if ('share_token' in patch) await updateGalleryShare(gallery.id, patch, organizationId);
+      else await updateRow<Gallery>('galleries', gallery.id, patch, organizationId);
       await onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Opslaan mislukt.');
@@ -2545,7 +2549,9 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
   onPatch: (patch: Partial<Gallery>) => Promise<void>;
 }) {
   const [pin, setPin] = useState('');
-  const [generatedUrl, setGeneratedUrl] = useState<string | null>(null);
+  // Alleen nodig in het gaatje tussen opslaan en het opnieuw inlezen van de
+  // galerij; daarna komt de link uit de galerij zelf.
+  const [freshUrl, setFreshUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -2554,6 +2560,28 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  // Zodra de galerij zelf uitsluitsel geeft — een token, of het delen dat uit
+  // staat — is de noodvoorraad niet meer nodig. Vanaf dat moment wint de
+  // database, zodat een link die een collega intussen heeft vernieuwd of
+  // ingetrokken hier ook klopt.
+  useEffect(() => {
+    if (gallery.share_token || !gallery.share_enabled) setFreshUrl(null);
+  }, [gallery.share_token, gallery.share_enabled]);
+
+  // De link staat bij de galerij en blijft dus staan: na publiceren, na het
+  // sluiten van dit venster en na het herladen van de pagina. Hij verdwijnt
+  // alleen als je hem intrekt.
+  const savedUrl = gallery.share_enabled && gallery.share_token
+    ? `${window.location.origin}/gallerij/${gallery.share_token}`
+    : null;
+  // Net gegenereerd wint: die link is de nieuwste, ook als de galerij nog de
+  // vorige teruggeeft.
+  const shareUrl = freshUrl ?? savedUrl;
+  // Wel een actieve deellink, maar geen token om te tonen: een link van vóór
+  // deze versie, of een omgeving waar de migratie nog moet draaien. Uit een
+  // SHA-256 is het token niet terug te rekenen, dus resteert: nieuwe maken.
+  const tokenLost = gallery.share_enabled && !shareUrl;
 
   async function generate() {
     setError(null);
@@ -2564,12 +2592,14 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
     }
     const token = randomShareToken();
     const tokenHash = await sha256Hex(token);
-    // De pincode wordt gehasht met het (hoog-entropie) token als zout; de
-    // database kent alleen hashes. Pincode wijzigen = nieuwe link genereren.
+    // De pincode wordt gehasht met het (hoog-entropie) token als zout; van de
+    // pincode bewaart de database alleen die hash. Pincode wijzigen = nieuwe
+    // link genereren.
     const pinHash = cleanPin ? await sha256Hex(`${token}:${cleanPin}`) : null;
     try {
       await onPatch({
         share_enabled: true,
+        share_token: token,
         share_token_hash: tokenHash,
         share_pin_hash: pinHash,
         share_pin_failed_count: 0,
@@ -2581,24 +2611,25 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
       setError(e instanceof Error ? e.message : 'Deellink opslaan mislukt. Probeer het opnieuw.');
       return;
     }
-    setGeneratedUrl(`${window.location.origin}/gallerij/${token}`);
+    setFreshUrl(`${window.location.origin}/gallerij/${token}`);
     setCopied(false);
   }
 
   async function revoke() {
     setError(null);
     try {
-      await onPatch({ share_enabled: false, share_token_hash: null, share_pin_hash: null });
-      setGeneratedUrl(null);
+      await onPatch({ share_enabled: false, share_token: null, share_token_hash: null, share_pin_hash: null });
+      setFreshUrl(null);
+      setCopied(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Deellink intrekken mislukt. Probeer het opnieuw.');
     }
   }
 
   async function copyUrl() {
-    if (!generatedUrl) return;
+    if (!shareUrl) return;
     try {
-      await navigator.clipboard.writeText(generatedUrl);
+      await navigator.clipboard.writeText(shareUrl);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -2621,22 +2652,35 @@ function GalleryShareModal({ gallery, busy, onClose, onPatch }: {
             Contactpersonen met portaaltoegang zien gepubliceerde galerijen automatisch in het klantportaal.
             Daarnaast kun je een publieke deellink maken voor wie geen portaal-account heeft.
           </p>
-          {gallery.share_enabled && !generatedUrl && (
+          {shareUrl && (
+            <>
+              <p className="gal-share-note gal-share-active">
+                <Link2 size={13} /> Deellink actief{gallery.share_pin_hash ? ' (met pincode)' : ''} — hij blijft hier staan tot je hem intrekt.
+              </p>
+              <div className="gal-share-url">
+                <code>{shareUrl}</code>
+                <Button onClick={() => void copyUrl()}><Copy size={13} /> {copied ? 'Gekopieerd!' : 'Kopiëren'}</Button>
+              </div>
+              <p className="gal-share-note">
+                {gallery.status === 'published'
+                  ? 'De galerij is gepubliceerd, dus de pagina is bereikbaar. Zet je hem terug naar concept, dan gaat de pagina dicht — deze link blijft staan en werkt weer zodra je opnieuw publiceert.'
+                  : 'Let op: deze galerij is niet gepubliceerd, dus wie de link opent krijgt te zien dat de galerij niet (meer) beschikbaar is. Publiceren zet de pagina open; de link verandert daar niet door.'}
+              </p>
+            </>
+          )}
+          {tokenLost && (
             <p className="gal-share-note gal-share-active">
-              <Link2 size={13} /> Er is al een deellink actief{gallery.share_pin_hash ? ' (met pincode)' : ''}.
-              Om veiligheidsredenen tonen we de link maar één keer — genereer een nieuwe als je hem kwijt bent (de oude vervalt dan).
+              <Link2 size={13} /> Er is een deellink actief{gallery.share_pin_hash ? ' (met pincode)' : ''}, maar die is hier niet meer op te halen:
+              van deze link is alleen een onomkeerbare code bewaard. Genereer een nieuwe om hem weer in beeld te krijgen — de oude vervalt dan.
             </p>
           )}
           <label className="gal-field">
             <span>Pincode (optioneel, 6–8 cijfers)</span>
             <Input inputMode="numeric" placeholder="Bijv. 240826" value={pin} onChange={(e) => setPin(e.target.value)} maxLength={8} />
           </label>
-          {generatedUrl && (
-            <div className="gal-share-url">
-              <code>{generatedUrl}</code>
-              <Button onClick={() => void copyUrl()}><Copy size={13} /> {copied ? 'Gekopieerd!' : 'Kopiëren'}</Button>
-            </div>
-          )}
+          <p className="gal-share-note">
+            De pincode hoort bij de link zelf: toevoegen, wijzigen of weghalen kan alleen met een nieuwe link, en de link die je al hebt uitgedeeld vervalt op dat moment.
+          </p>
           {error && <div className="error">{error}</div>}
         </div>
         <div className="bk-modal-actions gal-modal-actions">
