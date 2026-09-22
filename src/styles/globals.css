@@ -8467,17 +8467,26 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
    De titelkolom neemt wat overblijft (`width:100%` + `max-width:0`, anders
    kapt een tabelcel niet af maar duwt hij de tabel open); status en het
-   menuknopje zijn zo breed als hun inhoud (`width:1%`). Rijen van ±54px:
+   menuknopje zijn zo breed als hun inhoud (`width:1%`). Rijen van 53px:
    tien tickets per scherm in plaats van tweeënhalf. */
 .tk-ctable-card{border:1px solid var(--border);border-radius:16px;background:linear-gradient(145deg,rgba(var(--sheen-rgb),calc(.058 * var(--sheen-k))),rgba(var(--sheen-rgb),calc(.018 * var(--sheen-k)))),rgba(var(--surface-rgb),.86);box-shadow:var(--shadow-soft);overflow:hidden}
 .tk-ctable{width:100%;border-collapse:collapse}
 .tk-ctable thead{background:rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)))}
-.tk-ctable th{padding:0 8px;border-bottom:1px solid var(--border);color:var(--muted);font-size:9.5px;font-weight:700;letter-spacing:.1em;text-align:left;text-transform:uppercase;white-space:nowrap}
+.tk-ctable th{padding:0 8px;border-bottom:1px solid var(--border);color:var(--muted);font-size:9.5px;font-weight:700;letter-spacing:.08em;text-align:left;text-transform:uppercase;white-space:nowrap}
 /* De kop is één regel van 34px; de sorteerknoppen vullen die hele hoogte, zodat
    ze met de duim te raken zijn. */
 .tk-ctable th .th-sort{min-height:34px}
-.tk-ct-sorts{display:inline-flex;align-items:center;gap:6px}
+.tk-ct-sorts{display:inline-flex;align-items:center;gap:5px}
 .tk-ct-sorts>span{color:var(--border2)}
+/* De eerste kop heeft drie sorteerknoppen. Op een smalle telefoon (360px)
+   liep "DATUM" over "STATUS" heen: daar wordt de letter iets kleiner, en past
+   het dan nog niet, dan breekt de kop naar een tweede regel in plaats van te
+   overlappen. (Alleen deze kop: de statuskolom is zo breed als zijn kop.) */
+.tk-ctable th.tk-ct-main .tk-ct-sorts{display:flex;flex-wrap:wrap}
+@media(max-width:374px){
+  .tk-ctable th{font-size:9px;letter-spacing:.05em}
+  .tk-ct-sorts{gap:4px}
+}
 .tk-ctable td{padding:8px;border-bottom:1px solid rgba(var(--sheen-rgb),calc(.065 * var(--sheen-k)));vertical-align:middle}
 .tk-ctable tbody tr:last-child td{border-bottom:0}
 .tk-ctable .tk-ct-main{width:100%;max-width:0;padding-left:12px}
@@ -9845,7 +9854,13 @@ button.task-agenda-when:hover{text-decoration:underline}
   .finance-search-card .finance-search-active-row{order:5;flex:1 0 100%;flex-direction:row;align-items:center;justify-content:space-between;gap:8px;padding:0}
   .finance-search-card .finance-search-active-row span{min-height:26px;padding:3px 9px;font-size:10.5px}
   .finance-search-card .finance-search-active-row button{justify-content:center;padding:5px 10px;font-size:10.5px}
-  .fsa-count{display:inline;font-weight:700}
+  /* De pil is een flexbox, dus de spatie aan het eind van "… taken · " viel
+     weg ("taken ·2 filters actief"). Een marge zet hem terug. Wordt het te
+     krap (360px), dan breekt de pil tússen de twee helften in plaats van
+     elke helft over twee regels te wringen, en blijft de knop één regel. */
+  .fsa-count{display:inline;font-weight:700;margin-right:.3em}
+  .finance-search-card .finance-search-active-row span{flex-wrap:wrap;white-space:nowrap}
+  .finance-search-card .finance-search-active-row button{white-space:nowrap}
 
   /* Weekplanner-kop (`is-bar`): het weeklabel en de uren blijven, want die
      staan nergens anders. De titel niet — die staat op het werktabblad. */
@@ -10483,10 +10498,10 @@ button.task-agenda-when:hover{text-decoration:underline}
   /* De keuzelijsten op 13px. "Invoervelden op 16px" zet élk veld op een
      telefoon op 16px, omdat iOS inzoomt op een invoerveld dat kleiner is —
      maar deze keuzelijst is een knop (Select in Ui.tsx), en op een knop zoomt
-     niets. Op 16px, en
-     in de weekplanner ook nog vet, werd "Alle prioriteiten" breder dan zijn
-     kolom en was het filterblok de grootste letter op het scherm. De hoogte
-     van 44px blijft: dat is duimmaat, geen lettermaat. */
+     niets. Op 16px, en in de weekplanner ook nog vet, werd "Alle
+     prioriteiten" breder dan zijn kolom en was het filterblok de grootste
+     letter op het scherm. De hoogte van 44px blijft: dat is duimmaat, geen
+     lettermaat. */
   .finance-search-card .finance-search-field .select-trigger,
   .finance-search-card .fsh-actions .select-trigger{font-size:13px}
   /* Het zoekveld zelf moet wél 16px blijven (dat ís een invoerveld). Wat

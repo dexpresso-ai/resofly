@@ -63,6 +63,9 @@ TICKET · KLANT · DATUM ↓            STATUS · PRIO
   met de twee acties voluit, en wat ze doen. Bij een ticket dat niet meer om te zetten is, staat er
   geen ⋮.
 - Tik op de rij en het ticket opent, zoals altijd.
+- Op een smalle telefoon (360px) wordt de letter van de kolomkop iets kleiner zodat hij op één
+  regel past; op 320px breekt de eerste kop naar een tweede regel in plaats van over *STATUS*
+  heen te lopen.
 
 De tabel op de telefoon is een eigen onderdeel (`TicketCompactTable` in `Tickets.tsx`); welke er
 staat, beslist `useNarrowViewport` — dezelfde grens van 760px als de mobiele CSS. De oude
@@ -98,15 +101,24 @@ de omhulling van de keuzelijst (`.select-control`), en daar hangt het pijltje aa
 Dezelfde lettermaat voor de filterstrook bij **Uren** (klant, project, declarabel, bron, soort) en
 de sorteerkeuze bij **Projecten**. De hoogte van de velden (44px, duimmaat) is niet veranderd.
 
+**En de telregel eronder:** *"1 van 5 taken ·2 filters actief"* miste een spatie na de punt (de
+pil is een flexbox, en daarin valt een spatie aan het eind van een onderdeel weg). Die staat er nu
+weer. Op een smalle telefoon breekt de pil netjes tussen *"… taken ·"* en *"2 filters actief"*, en
+blijft *Filters wissen* op één regel.
+
 ## Test
 
 - `npm run typecheck` — schoon
 - `npm test` — 332/332
 - `npm run build` — schoon
+- `npm run test:mobile -- --theme=both` — 246 pagina's (licht en donker × telefoon, tablet,
+  liggend), 0 problemen. Na de laatste aanpassingen (tabelkop op 360px, de telregel) nog eens de
+  tien pagina's die ze raken — tickets, tickets-table, weekplanner, Berichten, klanten, projecten,
+  offertes, facturen, campagnes en uren: 60 metingen, 0 problemen.
 - Nieuw in de mobiele lay-outtest (`tests/mobile/run.mjs`): de pagina `tickets-table` (de
   tabelweergave), met als eerste item de eerste tabelrij. Gemeten op 310px (de kolomkop van 34px
-  zit erboven); de grens is 372px, 20% erboven.
-- In de browser nagelopen (licht en donker, telefoon, tablet, laptop en groot scherm): het
+  zit erboven); de grens is 372px, 20% erboven. Berichten bleef op 151px, de weekplanner op 502px.
+- In de browser nagelopen (licht en donker; 320, 360 en 390px breed, tablet, laptop en 1440px): het
   kanaalicoon per soort gesprek, sorteren op klant in de smalle tickettabel, het ⋮-paneel, de brede
   tickettabel zonder overlap, en de filterblokken van weekplanner, projecten en facturen.
 
