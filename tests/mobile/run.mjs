@@ -54,6 +54,7 @@ const PAGES = {
   content: 'content', notes: 'notes', documents: 'documents', stats: 'stats',
   'clients-table': { page: 'clients', storage: { 'resofly.clients.viewMode': 'table' } },
   'projects-table': { page: 'projects', storage: { 'resofly.projects.viewMode': 'table' } },
+  'tickets-table': { page: 'tickets', storage: { 'resofly.tickets.view': 'table' } },
   quotes: 'quotes', invoices: 'invoices', contracts: 'contracts', ledger: 'ledger', bank: 'bank', pnl: 'pnl',
   'vat-returns': 'vat-returns', suppliers: 'suppliers', settings: 'settings', 'meeting-booking': 'meeting-booking', archive: 'archive',
   // Wat een klánt op zijn telefoon opent: geen werkruimte-shell, dus geen
@@ -95,6 +96,11 @@ const FIRST_ITEM = {
   'projects-table': { selector: '.projects-table tbody tr', maxTop: 346 },
   marketing: { selector: '.mk-campaign-table tbody tr', maxTop: 366 },
   tickets: { selector: '.ticket-item', maxTop: 356 },
+  // 2026-09-22 — de tabelweergave is op de telefoon een eigen, smalle tabel
+  // (.tk-ctable) in plaats van een kaartstapel. Gemeten: eerste rij op 310px
+  // (de kolomkop van 34px zit erboven); de grens ligt 20% hoger. Op de tablet
+  // staat de brede tabel en telt deze regel niet.
+  'tickets-table': { selector: '.tk-ctable tbody tr', maxTop: 372 },
   invoices: { selector: '.quote-table tbody tr', maxTop: 496 },
   quotes: { selector: '.quote-table tbody tr', maxTop: 496 },
   weekplanner: { selector: '.wp-daystrip', maxTop: 600 },

@@ -3112,9 +3112,22 @@ button.chat-member:hover{background:var(--bg3)}
 .comm-date-range{display:flex;align-items:center;gap:6px;flex:1 1 100%;font-size:11.5px;color:var(--muted)}
 .comm-date-range .form-input{flex:1;min-width:0;font-size:12px;padding:6px 8px}
 .comm-search-status{font-size:11px;color:var(--muted);padding:0 2px}
-/* Een ticket tussen de mail: een klein label naast de klantnaam, de status
-   als pil in de zijkolom, en een ticket-icoon als het aan geen klant hangt. */
-.comm-row-kind{display:inline-flex;align-items:center;gap:3px;flex-shrink:0;padding:1px 6px;border-radius:999px;border:1px solid var(--border);background:var(--bg3);color:var(--muted2);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+/* Het kanaal van een gesprek: een rond icoontje op de hoek van het
+   klantrondje — blauw een envelop (mail), paars een ticket, groen een hoorn
+   (telefoon). Stond eerst als woordje ("TICKET", "TELEFOON") naast de
+   klantnaam, en mail had niets: je moest lezen om te zien wat wat was, en de
+   klantnaam kapte op de telefoon eerder af. Kleur zegt het kanaal, de vorm
+   het detail (belrichting, of niet gesproken).
+   Het icoon en de rand volgen het vlak van de lijst (--surface), zodat het
+   zich in beide thema's losmaakt van het rondje, welke klantkleur dat ook
+   heeft. Het steekt 5px uit: binnen de 10px tussenruimte naar de tekst. */
+.comm-row-lead{position:relative;display:inline-flex;flex-shrink:0}
+.comm-row-channel{position:absolute;right:-5px;bottom:-5px;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:var(--channel,var(--muted));color:var(--surface);box-shadow:0 0 0 2px var(--surface);pointer-events:none}
+.comm-row-channel.is-email{--channel:var(--info)}
+.comm-row-channel.is-ticket{--channel:var(--note)}
+.comm-row-channel.is-call{--channel:var(--ok)}
+/* Zonder klant: een gestippeld rondje met een poppetje; het kanaal staat
+   gewoon op de hoek, net als bij elke andere regel. */
 .comm-row-avatar.is-plain{background:var(--bg3);border:1px dashed var(--border2);color:var(--muted2)}
 .comm-row-status{font-size:8.5px;padding:2px 6px;letter-spacing:.06em}
 .comm-row-badge.is-dot{min-width:10px;width:10px;height:10px;padding:0;box-shadow:0 0 0 2px rgba(var(--accent-rgb),.22)}
@@ -3204,6 +3217,11 @@ button.chat-member:hover{background:var(--bg3)}
   .comm-row-client{font-size:14.5px}
   .comm-row-subject{font-size:13px}
   .comm-row-preview{font-size:12px}
+  /* Het kanaalicoon iets groter op de telefoon: daar scan je met de duim
+     op afstand, en de rij is hoger (64px). Steekt 6px uit, binnen de 12px
+     tussenruimte. */
+  .comm-row-channel{width:20px;height:20px;right:-6px;bottom:-6px}
+  .comm-row-channel svg{width:12px;height:12px}
   .comm-detail-head{padding:10px 12px;gap:8px}
   .comm-detail-title h3{font-size:15px}
   .comm-detail-actions .btn-label{display:none}
@@ -3758,11 +3776,11 @@ button.chat-member:hover{background:var(--bg3)}
 .tk-pri-label.high{background:rgba(var(--danger-rgb),.15);color:var(--danger)}
 .tk-pri-label.med{background:rgba(var(--warn-rgb),.15);color:var(--accent-o)}
 .tk-pri-label.low{background:rgba(var(--ok-rgb),.15);color:var(--ok)}
-.tk-status.new{background:rgba(var(--info-rgb),.16);color:#9cc3f7}
+.tk-status.new{background:rgba(var(--info-rgb),.16);color:var(--info)}
 .tk-status.review{background:rgba(var(--accent-rgb),.16);color:var(--accent-ink)}
 .tk-status.approved{background:rgba(var(--ok-rgb),.16);color:var(--ok)}
 .tk-status.rejected{background:rgba(var(--danger-rgb),.16);color:var(--danger)}
-.tk-status.converted{background:rgba(var(--info-rgb),.2);color:#cbd5e1}
+.tk-status.converted{background:rgba(var(--info-rgb),.2);color:var(--muted2)}
 .ticket-table td .tk-new-badge{margin-left:8px}
 .tk-converted-pill{margin-left:8px;font-size:9px;font-weight:700;padding:2px 7px;border-radius:999px;background:var(--bg4);color:var(--muted2);text-transform:uppercase;letter-spacing:.06em}
 .ticket-row-actions .btn{white-space:nowrap}
@@ -3780,7 +3798,14 @@ button.chat-member:hover{background:var(--bg3)}
   .ticket-table th:nth-child(3),.ticket-table td:nth-child(3){width:112px}
   .ticket-table th:nth-child(4),.ticket-table td:nth-child(4){width:168px}
   .ticket-table th:nth-child(5),.ticket-table td:nth-child(5){width:128px}
-  .ticket-table th:nth-child(6),.ticket-table td:nth-child(6){width:156px}
+  /* De knoppenkolom is zo breed als zijn knoppen. Hij stond op 156px, maar
+     sinds "Op de planning" naast "Project maken" staat, is dat ±270px — en
+     omdat `.quote-row-actions` de cel een flexbox maakt (rechts uitgelijnd),
+     schoven de knoppen naar links over de datum heen. Hier blijft de cel een
+     gewone tabelcel, zodat de kolom meegroeit. */
+  .ticket-table th:nth-child(6),.ticket-table td:nth-child(6){width:1%}
+  .ticket-table td.ticket-row-actions{display:table-cell;text-align:right}
+  .ticket-table td.ticket-row-actions .btn+.btn{margin-left:4px}
   /* De 190px-afkapping uit .quote-table hoort bij een tabel die krap staat; hier
      is er ruimte, dus mag een klantnaam gewoon uitschrijven. */
   .ticket-table td[data-label="Klant"] span{max-width:100%}
@@ -7090,6 +7115,10 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .projects-filter-select{min-width:150px;width:auto}
   /* Stond op `width:100%` uit het ≤560-blok (regel 1704). */
   .projects-filter-select{width:auto}
+  /* Een filterknop, geen invoerveld: de 16px uit "Invoervelden op 16px"
+     (tegen de iOS-zoom) hoeft hier niet, en maakte de veegregel onnodig
+     breed. Zelfde keuze als in het zoek-/filterblok (blok 26, a). */
+  .tt-filters .select-control .select-trigger{font-size:13px}
 }
 
 /* 19 ── Brede tabellen buiten de boekhouding ──────────────────────────────
@@ -8422,42 +8451,79 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .select-search input{font-size:16px}
 }
 
-/* ── 23 ── Tickets op mobiel: één kaart van drie regels ────────────────────
-   De generieke `.quote-table`-kaartstapel zet elke cel op een eigen regel met
-   het kolomlabel ervoor: zes regels per ticket, ruim 240px, dus anderhalf
-   ticket per telefoonscherm. Voor tickets is dat label overbodig — een titel,
-   een klantnaam, een datum en twee gekleurde pillen lezen zonder dat er
-   "TITEL" en "STATUS" bij staat. Drie regels in plaats van zes:
+/* ── 23 ── Tickets op mobiel ───────────────────────────────────────────────
+   De tabelweergave was hier tot 2026-09-22 een kaart van drie regels per
+   ticket, met twee grote knoppen eronder: ±165px per ticket. Op een telefoon
+   staat nu een eigen, smalle tabel (TicketCompactTable in Tickets.tsx) — zie
+   `.tk-ctable` direct hieronder. De brede `.ticket-table` komt op dit formaat
+   niet meer in beeld, dus die heeft hier geen regels meer nodig.
 
-     titel ................ status
-     klant ............. aangemaakt
-     prioriteit ....... [actieknop]
+   Een échte tabel: kolomkoppen die sorteren, dunne lijnen tussen de rijen,
+   en per ticket twee regels:
 
-   Deze regels staan bewust achteraan het bestand: ze moeten ná de generieke
-   `.quote-table`-mobielregels komen, want die hebben dezelfde specificiteit. */
+     TICKET · KLANT · DATUM ↓            STATUS · PRIO
+     ● Website laadt traag op mobiel    [NIEUW]         ⋮
+       Fysio Centrum Zuid · 23 aug      [HOOG]
+
+   De titelkolom neemt wat overblijft (`width:100%` + `max-width:0`, anders
+   kapt een tabelcel niet af maar duwt hij de tabel open); status en het
+   menuknopje zijn zo breed als hun inhoud (`width:1%`). Rijen van ±54px:
+   tien tickets per scherm in plaats van tweeënhalf. */
+.tk-ctable-card{border:1px solid var(--border);border-radius:16px;background:linear-gradient(145deg,rgba(var(--sheen-rgb),calc(.058 * var(--sheen-k))),rgba(var(--sheen-rgb),calc(.018 * var(--sheen-k)))),rgba(var(--surface-rgb),.86);box-shadow:var(--shadow-soft);overflow:hidden}
+.tk-ctable{width:100%;border-collapse:collapse}
+.tk-ctable thead{background:rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)))}
+.tk-ctable th{padding:0 8px;border-bottom:1px solid var(--border);color:var(--muted);font-size:9.5px;font-weight:700;letter-spacing:.1em;text-align:left;text-transform:uppercase;white-space:nowrap}
+/* De kop is één regel van 34px; de sorteerknoppen vullen die hele hoogte, zodat
+   ze met de duim te raken zijn. */
+.tk-ctable th .th-sort{min-height:34px}
+.tk-ct-sorts{display:inline-flex;align-items:center;gap:6px}
+.tk-ct-sorts>span{color:var(--border2)}
+.tk-ctable td{padding:8px;border-bottom:1px solid rgba(var(--sheen-rgb),calc(.065 * var(--sheen-k)));vertical-align:middle}
+.tk-ctable tbody tr:last-child td{border-bottom:0}
+.tk-ctable .tk-ct-main{width:100%;max-width:0;padding-left:12px}
+.tk-ctable .tk-ct-status,.tk-ctable .tk-ct-actions{width:1%;white-space:nowrap}
+.tk-ctable .tk-ct-actions{padding-right:10px}
+.tk-ct-row{cursor:pointer;-webkit-tap-highlight-color:transparent}
+.tk-ct-row:active td{background:var(--bg3)}
+.tk-ct-row:focus-visible{outline:none}
+.tk-ct-row:focus-visible td{background:rgba(var(--accent-rgb),.1)}
+/* Nieuw sinds je laatste bezoek: een stip vóór de titel en een vettere titel,
+   zoals ongelezen post. Geen woordje "Nieuw" — dat las als de status Nieuw. */
+.tk-ct-row.is-unread td{background:rgba(var(--accent-rgb),.055)}
+.tk-ct-row.is-unread td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+.tk-ct-title,.tk-ct-sub{display:flex;align-items:center;min-width:0}
+.tk-ct-title{gap:6px}
+.tk-ct-title strong{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:13.5px;font-weight:600;line-height:1.35}
+.tk-ct-row.is-unread .tk-ct-title strong{font-weight:700}
+.tk-ct-dot{flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px rgba(var(--accent-rgb),.25)}
+.tk-ct-sub{gap:5px;margin-top:3px;color:var(--muted);font-size:11.5px;line-height:1.3}
+.tk-ct-client{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tk-ct-sub>*:not(.tk-ct-client){flex:0 0 auto;white-space:nowrap}
+/* Status en prioriteit als twee pillen onder elkaar. Kleiner dan elders: de
+   kolomkop zegt al wat ze zijn. */
+.tk-ctable .tk-status,.tk-ctable .tk-pri-label,.tk-ctable .tk-converted-pill{display:block;width:fit-content;padding:2px 7px;font-size:8.5px;line-height:1.35;letter-spacing:.05em}
+.tk-ctable .tk-pri-label,.tk-ctable .tk-converted-pill{margin:3px 0 0}
+/* Het menuknopje: rustig in de rij, 36px om op te tikken. */
+.tk-ct-more{display:inline-flex;align-items:center;justify-content:center;width:32px;height:36px;padding:0;border:0;border-radius:10px;background:transparent;color:var(--muted2);cursor:pointer;transition:background .15s,color .15s}
+.tk-ct-more:hover,.tk-ct-more:active{background:var(--bg4);color:var(--text)}
+.tk-ct-more:focus-visible{outline:none;box-shadow:var(--ring)}
+.tk-ctable-card .quote-table-empty{border-top:1px solid var(--border)}
+/* Het actiepaneel achter ⋮ — een Modal, dus op de telefoon een bodemvenster.
+   Twee regels van 56px, de actie voluit met een korte uitleg eronder. */
+.modal.tk-actions-sheet{width:min(420px,96vw)}
+.tk-actions-sheet .modal-head h3{font-size:15px;line-height:1.35;overflow-wrap:anywhere}
+.tk-actions-sheet .modal-body{padding:8px 10px calc(12px + env(safe-area-inset-bottom))}
+.tk-sheet-actions{display:grid;gap:2px}
+.tk-sheet-item{display:flex;align-items:center;gap:13px;width:100%;min-height:56px;padding:9px 12px;border:0;border-radius:12px;background:none;color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.tk-sheet-item:hover,.tk-sheet-item:active{background:var(--bg3)}
+.tk-sheet-item:focus-visible{outline:none;box-shadow:var(--ring)}
+.tk-sheet-item>svg{flex:0 0 auto;color:var(--accent-ink)}
+.tk-sheet-item span{display:grid;gap:2px;min-width:0}
+.tk-sheet-item strong{font-size:14px;font-weight:600}
+.tk-sheet-item small{font-size:11.5px;color:var(--muted)}
+
 @media(max-width:760px){
-  .ticket-table{border-spacing:0}
-  .ticket-table tr{
-    display:grid;grid-template-columns:minmax(0,1fr) auto;
-    gap:3px 10px;align-items:center;padding:11px 13px;margin-bottom:8px;
-  }
-  .ticket-table tbody tr:last-child{margin-bottom:0}
-  .ticket-table td{display:block;width:auto;padding:0;border-bottom:0;white-space:normal;text-align:left}
-  .ticket-table td::before{display:none}
-  .ticket-table td[data-label="Titel"]{grid-row:1;grid-column:1;font-size:13.5px;line-height:1.35}
-  .ticket-table td[data-label="Status"]{grid-row:1;grid-column:2;justify-self:end}
-  .ticket-table td[data-label="Klant"]{grid-row:2;grid-column:1;font-size:11.5px;color:var(--muted)}
-  .ticket-table td[data-label="Aangemaakt"]{grid-row:2;grid-column:2;justify-self:end;font-size:11px;color:var(--muted);white-space:nowrap}
-  .ticket-table td[data-label="Prioriteit"]{grid-row:3;grid-column:1;margin-top:5px}
-  .ticket-table td.ticket-row-actions{grid-row:3;grid-column:2;justify-self:end;margin-top:5px;padding:0}
-  /* De pillen mogen kleiner: ze staan naast tekst die al vertelt wat ze zijn. */
-  .ticket-table .tk-status{font-size:9px;padding:3px 7px;letter-spacing:.06em}
-  .ticket-table .tk-pri-label{font-size:9px;padding:2px 8px}
-  .ticket-table .tk-converted-pill{margin-left:6px}
-  .ticket-table td .tk-new-badge{margin-left:6px}
-  .ticket-table .ticket-row-actions .btn{padding:7px 12px;font-size:11px}
-
-  /* Dezelfde inhoud in de lijstweergave: titel en status op één regel, meta
+  /* De lijstweergave: titel en status op één regel, meta
      eronder, de knop over de volle breedte. Stond in drie losse blokken
      onder elkaar (regel 6358). */
   .ticket-item{grid-template-columns:minmax(0,1fr) auto;gap:6px 10px;align-items:center;padding:12px 13px}
@@ -8614,10 +8680,6 @@ div.odrv-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
     background:rgba(var(--accent-rgb),.22);color:var(--accent-ink);font-size:10px;text-align:center;
   }
   .finance-search-grid.is-collapsed{display:none}
-  /* "Al omgezet" / "Niet converteerbaar" is een uitgeschakelde knop die
-     herhaalt wat de statuspil ernaast al zegt. Op een telefoon kost dat 40px
-     per kaart zonder dat je er iets mee kunt. */
-  .ticket-table td.ticket-row-actions .btn:disabled{display:none}
 }
 
 /* De velden in het filterraster stonden op `min-height:40px` (regel 1871), en
@@ -9773,7 +9835,10 @@ button.task-agenda-when:hover{text-decoration:underline}
   .finance-search-card .finance-search-grid.is-collapsed{display:none}
   .finance-search-card .finance-search-field{gap:4px;min-width:0}
   .finance-search-card .finance-search-field>span{position:static;width:auto;height:auto;margin:0;overflow:visible;clip-path:none;white-space:normal;font-size:10.5px}
-  .finance-search-card .finance-search-field .select-control,
+  /* De binnenruimte hoort alleen op de knop. Stond hij ook op de omhulling
+     (.select-control), dan kromp de knop 41px in en bleef het pijltje — dat
+     aan de omhulling hangt — er rechts naast staan, buiten het vak. */
+  .finance-search-card .finance-search-field .select-control{width:100%;max-width:none}
   .finance-search-card .finance-search-field .select-trigger{width:100%;max-width:none;border-radius:10px;padding:0 30px 0 11px}
 
   /* Wisregel: één regel, met het aantal dat overblijft. */
@@ -10415,6 +10480,19 @@ button.task-agenda-when:hover{text-decoration:underline}
   .finance-search-card .finance-search-chips{gap:5px;margin:0 -7px;padding:0 7px 1px}
   .finance-search-card .finance-search-chip{min-height:28px;padding:4px 9px 4px 7px;font-size:10.5px}
   .finance-search-card .finance-search-grid{gap:6px}
+  /* De keuzelijsten op 13px. "Invoervelden op 16px" zet élk veld op een
+     telefoon op 16px, omdat iOS inzoomt op een invoerveld dat kleiner is —
+     maar deze keuzelijst is een knop (Select in Ui.tsx), en op een knop zoomt
+     niets. Op 16px, en
+     in de weekplanner ook nog vet, werd "Alle prioriteiten" breder dan zijn
+     kolom en was het filterblok de grootste letter op het scherm. De hoogte
+     van 44px blijft: dat is duimmaat, geen lettermaat. */
+  .finance-search-card .finance-search-field .select-trigger,
+  .finance-search-card .fsh-actions .select-trigger{font-size:13px}
+  /* Het zoekveld zelf moet wél 16px blijven (dat ís een invoerveld). Wat
+     het zwaar maakte, was de vette voorbeeldtekst; een hint hoort niet de
+     grootste letter van het blok te zijn. */
+  .finance-search-card .finance-search-query .form-input::placeholder{font-weight:400}
   /* De knoppenrij (Kaarten/Tabel, importeren, nieuw) en de tussenruimte tussen
      de blokken op de pagina: 16px scheiden is bureaubladmaat, 10px leest hier
      net zo goed. */
@@ -10835,8 +10913,7 @@ body.ink-sheet-open{overflow:hidden}
 .call-return-close:hover{color:var(--text)}
 @media(max-width:760px){.call-return-prompt{bottom:calc(var(--mobile-bar-h,64px) + 12px);left:12px;right:12px;transform:none;max-width:none}}
 
-/* De gespreksregel op Berichten. */
-.comm-row-kind.is-call{color:var(--accent-ink)}
+/* De gespreksregel op Berichten (het kanaalicoon staat bij .comm-row-channel). */
 .comm-call-direction{display:inline-flex;align-items:center;gap:4px}
 .comm-call-number{font-variant-numeric:tabular-nums}
 /* De afloop staat waar bij een ticket de status staat. "Gesproken" is de
