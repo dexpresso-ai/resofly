@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowLeft, ExternalLink, Inbox, Mail, MailOpen, Phone, PhoneIncoming, PhoneOutgoing, Reply, RotateCcw, Search, SlidersHorizontal, SquarePen, Ticket as TicketIcon, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ExternalLink, Inbox, Mail, MailOpen, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Reply, RotateCcw, Search, SlidersHorizontal, SquarePen, Ticket as TicketIcon, User, X } from 'lucide-react';
 import type { AppData, Client, ClientCall, ClientEmail, ClientEmailSearchHit, ClientEmailThreadOverview, Ticket } from '../types';
 import { Button, Input, Select } from '../components/Ui';
 import { DetailTabs } from '../components/DetailTabs';
@@ -19,7 +19,7 @@ import {
   type CallConversation, type CommunicationTab, type Conversation, type ConversationFilter, type ConversationKind, type DatePeriod, type TicketConversation,
 } from '../lib/communication';
 import { groupNotesByTicket, ticketConversation, ticketPriorityLabel, ticketStatusLabel } from '../lib/tickets';
-import { callConversation, callCounterpart, callDirectionLabel, callDurationLabel, callOutcomeLabel, formatPhone, telHref } from '../lib/calls';
+import { callConversation, callCounterpart, callDirectionLabel, callDurationLabel, callOutcomeLabel, callWasAnswered, formatPhone, telHref } from '../lib/calls';
 import { rememberCall } from '../lib/callBridge';
 import { CallLogDialog } from '../components/CallLogDialog';
 import { MeetingRecorder } from '../components/MeetingRecorder';
@@ -690,6 +690,32 @@ function ConversationColumn({ label, icon: Icon, count, empty, children }: {
   </section>;
 }
 
+/**
+ * Langs welke weg een gesprek liep, als icoontje op de hoek van het
+ * klantrondje: een envelop (mail), een ticket, of een hoorn (telefoon). Elk
+ * kanaal heeft zijn eigen kleur, zodat je de lijst op kanaal kunt scannen
+ * zonder te lezen. Bij een telefoongesprek zegt de hoorn ook nog welke kant
+ * het op ging, of dat er niet gesproken is (gemist, voicemail, in gesprek).
+ *
+ * Het rondje zelf is `aria-hidden`; dit icoon staat er daarom naast, met een
+ * eigen naam — een schermlezer hoort het kanaal als eerste woord van de regel.
+ */
+function ChannelBadge({ item }: { item: Conversation }) {
+  let Icon: typeof Mail = Mail;
+  let label = 'E-mail';
+  if (item.kind === 'ticket') {
+    Icon = TicketIcon;
+    label = 'Ticket';
+  } else if (item.kind === 'call') {
+    const answered = callWasAnswered(item.call.outcome);
+    Icon = !answered ? PhoneMissed : item.call.direction === 'inbound' ? PhoneIncoming : PhoneOutgoing;
+    label = `Telefoon, ${callDirectionLabel(item.call.direction).toLowerCase()}${answered ? '' : `, ${callOutcomeLabel(item.call.outcome).toLowerCase()}`}`;
+  }
+  return <span className={`comm-row-channel is-${item.kind}`} role="img" aria-label={label} title={label}>
+    <Icon size={11} strokeWidth={2.4} aria-hidden="true" />
+  </span>;
+}
+
 function ConversationRow({ item, client, active, found, compact = false, onSelect }: {
   item: Conversation;
   client: Client | null;
@@ -697,9 +723,10 @@ function ConversationRow({ item, client, active, found, compact = false, onSelec
   /** Fragment rond de zoektreffer, als die niet al in onderwerp of preview te zien is. */
   found: string | null;
   /**
-   * In de twee vensters van één klant: zonder klantrondje en zonder klantnaam.
+   * In de vensters van één klant: zonder klantrondje en zonder klantnaam.
    * Die staan in elke regel hetzelfde — het is per slot van rekening één klant —
-   * en de smalle kolom kan de ruimte beter aan het onderwerp geven.
+   * en de smalle kolom kan de ruimte beter aan het onderwerp geven. Het kanaal
+   * staat daar al boven het venster, dus ook geen kanaalicoon.
    */
   compact?: boolean;
   onSelect: () => void;
@@ -707,23 +734,21 @@ function ConversationRow({ item, client, active, found, compact = false, onSelec
   const unread = item.unread > 0;
   const isTicket = item.kind === 'ticket';
   const isCall = item.kind === 'call';
-  const inbound = isCall && item.call.direction === 'inbound';
   return <button
     type="button"
     className={`comm-row${active ? ' active' : ''}${unread ? ' unread' : ''}${isTicket ? ' is-ticket' : ''}${isCall ? ' is-call' : ''}${compact ? ' is-compact' : ''}`}
     onClick={onSelect}
     aria-current={active ? 'true' : undefined}
   >
-    {!compact && (item.clientId
-      ? <span className="comm-row-avatar" style={{ background: client?.color || 'var(--bg4)' }} aria-hidden="true">{initials(item.clientName)}</span>
-      : <span className="comm-row-avatar is-plain" aria-hidden="true">{isCall ? <Phone size={16} /> : <TicketIcon size={16} />}</span>)}
+    {!compact && <span className="comm-row-lead">
+      {item.clientId
+        ? <span className="comm-row-avatar" style={{ background: client?.color || 'var(--bg4)' }} aria-hidden="true">{initials(item.clientName)}</span>
+        : <span className="comm-row-avatar is-plain" aria-hidden="true"><User size={16} /></span>}
+      <ChannelBadge item={item} />
+    </span>}
     <span className="comm-row-body">
       <span className="comm-row-top">
         <span className="comm-row-client">{compact ? item.subject : item.clientName}</span>
-        {isTicket && !compact && <span className="comm-row-kind" title="Ticket"><TicketIcon size={11} aria-hidden="true" />Ticket</span>}
-        {isCall && !compact && <span className="comm-row-kind is-call" title={`${callDirectionLabel(item.call.direction)} telefoongesprek`}>
-          {inbound ? <PhoneIncoming size={11} aria-hidden="true" /> : <PhoneOutgoing size={11} aria-hidden="true" />}Telefoon
-        </span>}
         <time className="comm-row-time" dateTime={item.lastAt} title={formatEmailDateTime(item.lastAt)}>{listTime(item.lastAt)}</time>
       </span>
       {!compact && <span className="comm-row-subject">{item.subject}</span>}

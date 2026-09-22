@@ -1,11 +1,14 @@
 ﻿import { useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, List, RotateCcw, Table as TableIcon } from 'lucide-react';
+import { ArrowDown, ArrowUp, CalendarPlus, FolderPlus, List, MoreVertical, RotateCcw, Table as TableIcon } from 'lucide-react';
 import type { AppData, Priority, Ticket, TicketStatus } from '../types';
 import { Button } from '../components/Ui';
+import { Modal } from '../components/Modal';
 import { SearchFilterPanel } from '../components/SearchFilterPanel';
 import type { FilterField } from '../components/SearchFilterPanel';
 import { dateNL, priorityLabel } from '../lib/format';
+import { listTime } from '../lib/communication';
 import { TICKET_OPEN_STATUSES, TICKET_STATUS_LABELS, TICKET_STATUS_ORDER } from '../lib/tickets';
+import { useNarrowViewport } from '../lib/useNarrowViewport';
 
 // Om te zetten naar een project = nog actief te behandelen: dezelfde drie
 // statussen als "Openstaand" (niet afgewezen en niet omgezet). De labels en
@@ -178,10 +181,13 @@ function TicketCardList({ data, tickets, onEdit, onConvert, onPlan, unreadTicket
 function TicketTable({ data, tickets, onEdit, onConvert, onPlan, unreadTicketIds, onReset }: { data: AppData; tickets: Ticket[]; onEdit: (t: Ticket) => void; onConvert: (t: Ticket) => void; onPlan: (t: Ticket) => void; unreadTicketIds: Set<string>; onReset: () => void }) {
   const [sort, setSort] = useState<SortState>({ key: 'created', dir: 'desc' });
   const sorted = useMemo(() => sortTickets(tickets, data, sort), [tickets, data, sort]);
+  const narrow = useNarrowViewport();
 
   const toggleSort = (key: SortKey) => setSort(prev => prev.key === key
     ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
     : { key, dir: key === 'created' ? 'desc' : 'asc' });
+
+  if (narrow) return <TicketCompactTable data={data} tickets={sorted} sort={sort} onSort={toggleSort} onEdit={onEdit} onConvert={onConvert} onPlan={onPlan} unreadTicketIds={unreadTicketIds} onReset={onReset} />;
 
   return <div className="quote-table-card ticket-table-card">
     <div className="quote-table-scroll" role="region" aria-label="Tickets tabel">
@@ -228,13 +234,126 @@ function TicketTable({ data, tickets, onEdit, onConvert, onPlan, unreadTicketIds
   </div>;
 }
 
+/* ── Tickets op de telefoon: een échte tabel ──────────────────────────────
+ * De tabel hierboven heeft zes kolommen en is 820px breed. Op een telefoon
+ * klapte hij om naar losse kaarten van drie regels met twee grote knoppen:
+ * ±165px per ticket, dus nog geen drie tickets per scherm — en het leek niet
+ * meer op de tabel die je had gekozen. Deze variant is wél een tabel, maar
+ * dan met drie kolommen die op een telefoon passen:
+ *
+ *   TICKET · KLANT · DATUM ↓            STATUS · PRIO
+ *   ● Website laadt traag op mobiel    [NIEUW]         ⋮
+ *     Fysio Centrum Zuid · 23 aug      [HOOG]
+ *
+ * Elke kolom houdt twee gegevens onder elkaar, en de kop sorteert op elk van
+ * de vijf — er verdwijnt dus niets van wat de brede tabel kan. "Op de
+ * planning" en "Project maken" zitten achter ⋮: twee knoppen per rij kostten
+ * een kwart van de breedte, en die ging van de titel en de klantnaam af. Het
+ * menu opent als paneel onderin (de Modal is op een telefoon een bodemvenster)
+ * met de twee acties voluit geschreven.
+ *
+ * Een aparte tabel en geen CSS-truc op de brede: die draagt `.quote-table`,
+ * en de kaartstapel die daar op mobiel onder ligt, zou elke regel hier
+ * moeten terugdraaien. Welke van de twee er staat, beslist
+ * `useNarrowViewport` — dezelfde grens (760px) als de mobiele CSS. */
+function TicketCompactTable({ data, tickets, sort, onSort, onEdit, onConvert, onPlan, unreadTicketIds, onReset }: { data: AppData; tickets: Ticket[]; sort: SortState; onSort: (key: SortKey) => void; onEdit: (t: Ticket) => void; onConvert: (t: Ticket) => void; onPlan: (t: Ticket) => void; unreadTicketIds: Set<string>; onReset: () => void }) {
+  const [actionsFor, setActionsFor] = useState<Ticket | null>(null);
+  /** Eerst het paneel dicht, dan de actie: die opent zelf een bevestiging of een andere pagina. */
+  const run = (action: (ticket: Ticket) => void) => {
+    const ticket = actionsFor;
+    setActionsFor(null);
+    if (ticket) action(ticket);
+  };
+
+  return <div className="tk-ctable-card">
+    <table className="tk-ctable" aria-label="Tickets tabel">
+      <thead>
+        <tr>
+          <th className="tk-ct-main">
+            <span className="tk-ct-sorts">
+              <SortButton label="Ticket" sortKey="title" sort={sort} onSort={onSort} />
+              <span aria-hidden="true">·</span>
+              <SortButton label="Klant" sortKey="client" sort={sort} onSort={onSort} />
+              <span aria-hidden="true">·</span>
+              <SortButton label="Datum" sortKey="created" sort={sort} onSort={onSort} />
+            </span>
+          </th>
+          <th className="tk-ct-status">
+            <span className="tk-ct-sorts">
+              <SortButton label="Status" sortKey="status" sort={sort} onSort={onSort} />
+              <span aria-hidden="true">·</span>
+              <SortButton label="Prio" sortKey="priority" sort={sort} onSort={onSort} />
+            </span>
+          </th>
+          <th className="tk-ct-actions" aria-label="Acties" />
+        </tr>
+      </thead>
+      <tbody>
+        {tickets.map(ticket => {
+          const client = data.clients.find(c => c.id === ticket.client_id) ?? null;
+          const canConvert = convertibleStatuses.has(ticket.status) && !ticket.converted_to_project_id;
+          const isUnread = unreadTicketIds.has(ticket.id);
+          return <tr key={ticket.id} className={`tk-ct-row${isUnread ? ' is-unread' : ''}`} tabIndex={0}
+            onClick={() => onEdit(ticket)}
+            onKeyDown={(event) => {
+              // Zelfde regel als de brede tabel: alleen de rij zélf reageert,
+              // anders kaapt Enter de actieknoppen erin.
+              if (event.target !== event.currentTarget) return;
+              if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onEdit(ticket); }
+            }}>
+            <td className="tk-ct-main">
+              <span className="tk-ct-title">
+                {isUnread && <span className="tk-ct-dot" role="img" aria-label="Nieuw" title="Nieuw sinds je laatste bezoek" />}
+                <strong>{ticket.title}</strong>
+              </span>
+              <span className="tk-ct-sub">
+                <span className="tk-ct-client">{client?.name ?? 'Geen klant'}</span>
+                <span aria-hidden="true">·</span>
+                <time dateTime={ticket.created_at} title={dateNL(ticket.created_at)}>{listTime(ticket.created_at)}</time>
+              </span>
+            </td>
+            <td className="tk-ct-status">
+              <span className={`tk-status ${ticket.status}`}>{ticketStatusLabels[ticket.status]}</span>
+              <span className={`tk-pri-label ${ticket.priority}`}>{priorityLabel(ticket.priority)}</span>
+              {ticket.converted_to_project_id && <span className="tk-converted-pill">Project</span>}
+            </td>
+            <td className="tk-ct-actions" onClick={event => event.stopPropagation()}>
+              {canConvert && <button type="button" className="tk-ct-more" onClick={() => setActionsFor(ticket)} aria-haspopup="dialog" aria-label={`Acties voor ${ticket.title}`}>
+                <MoreVertical size={17} aria-hidden="true"/>
+              </button>}
+            </td>
+          </tr>;
+        })}
+      </tbody>
+    </table>
+    {tickets.length === 0 && <TicketEmpty hasTickets={data.tickets.length > 0} onReset={onReset} />}
+    {actionsFor && <Modal title={actionsFor.title} className="tk-actions-sheet" onClose={() => setActionsFor(null)}>
+      <div className="tk-sheet-actions">
+        <button type="button" className="tk-sheet-item" onClick={() => run(onPlan)}>
+          <CalendarPlus size={18} aria-hidden="true"/>
+          <span><strong>Op de planning</strong><small>Maak er meteen een taak van, op vandaag</small></span>
+        </button>
+        <button type="button" className="tk-sheet-item" onClick={() => run(onConvert)}>
+          <FolderPlus size={18} aria-hidden="true"/>
+          <span><strong>Project maken</strong><small>Zet het ticket om naar een project</small></span>
+        </button>
+      </div>
+    </Modal>}
+  </div>;
+}
+
+function SortButton({ label, sortKey, sort, onSort }: { label: string; sortKey: SortKey; sort: SortState; onSort: (key: SortKey) => void }) {
+  const isActive = sort.key === sortKey;
+  return <button type="button" className={`th-sort${isActive ? ' is-active' : ''}`} onClick={() => onSort(sortKey)} aria-label={`Sorteer op ${label}${isActive ? `, nu ${sort.dir === 'asc' ? 'oplopend' : 'aflopend'} gesorteerd` : ''}`}>
+    {label}{isActive && (sort.dir === 'asc' ? <ArrowUp size={12} aria-hidden="true"/> : <ArrowDown size={12} aria-hidden="true"/>)}
+  </button>;
+}
+
 function SortableTh({ label, sortKey, sort, onSort, className }: { label: string; sortKey: SortKey; sort: SortState; onSort: (key: SortKey) => void; className?: string }) {
   const isActive = sort.key === sortKey;
   const ariaSort = isActive ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none';
   return <th className={className} aria-sort={ariaSort}>
-    <button type="button" className={`th-sort${isActive ? ' is-active' : ''}`} onClick={() => onSort(sortKey)} aria-label={`Sorteer op ${label}${isActive ? `, nu ${sort.dir === 'asc' ? 'oplopend' : 'aflopend'} gesorteerd` : ''}`}>
-      {label}{isActive && (sort.dir === 'asc' ? <ArrowUp size={12} aria-hidden="true"/> : <ArrowDown size={12} aria-hidden="true"/>)}
-    </button>
+    <SortButton label={label} sortKey={sortKey} sort={sort} onSort={onSort} />
   </th>;
 }
 
