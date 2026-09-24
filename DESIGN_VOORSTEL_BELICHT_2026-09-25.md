@@ -11,7 +11,7 @@ Een nieuwe look & feel voor de hele werkruimte, ontworpen voor **Nacht** (donker
 
 | wat | waar |
 |---|---|
-| Interactief voorstel: vergelijkschuif Nacht/Dag, klikbaar prototype (5 schermen, ⌘K, Gerrie), kleuren met live contrastberekening, componenten, mobiel en invoerplan | `docs/design-voorstel-belicht/index.html` — dubbelklikken, of `npx serve docs/design-voorstel-belicht` |
+| Interactief voorstel: vergelijkschuif Nacht/Dag, klikbaar prototype (5 schermen, ⌘K, Gerrie), kleuren met live contrastberekening, componenten, mobiel en invoerplan | `docs/design-voorstel-belicht/index.html` (dubbelklikken), of online: https://claude.ai/artifact/SsZ3DrhfMhj3TmoXSXiyeB (privé; deel het via het Share-menu) |
 | Alle tokens en componenten als CSS | `docs/design-voorstel-belicht/belicht.css` |
 | Designcanvas met elk scherm als artboard, Nacht en Dag naast elkaar (reageren per scherm kan daar) | https://claude.ai/artifact/K5C3oMXzXDE4hSEicMNDae — privé; deel het via het Share-menu |
 

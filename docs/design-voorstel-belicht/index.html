@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ResoFly Belicht — designvoorstel</title>
+<title>ResoFly Belicht</title>
 <meta name="description" content="Een nieuwe look &amp; feel voor de ResoFly-werkruimte, ontworpen voor donker (Nacht) én licht (Dag).">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -11,12 +11,15 @@
 <link rel="stylesheet" href="belicht.css">
 <style>
 /* ── De voorstelpagina zelf (alles wat níet in de app komt) ─────────────── */
-html{scroll-behavior:smooth;scroll-padding-top:76px;background:#09090A}
-body{margin:0}
+:root{--page-bg:#F1F0EC;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--page-bg:#09090A;color-scheme:dark}}
+:root[data-theme="dark"]{--page-bg:#09090A;color-scheme:dark}
+html{scroll-behavior:smooth;scroll-padding-top:76px;background:var(--page-bg)}
+body{margin:0;background:var(--page-bg)}
 .page{min-height:100vh;background:var(--canvas);color:var(--ink-1);transition:background-color var(--t-3) var(--ease),color var(--t-3) var(--ease)}
 .wrap{width:min(1320px,calc(100% - 48px));margin:0 auto}
 
-.p-nav{position:sticky;top:0;z-index:60;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--canvas) 80%,transparent);-webkit-backdrop-filter:blur(16px) saturate(1.3);backdrop-filter:blur(16px) saturate(1.3)}
+.p-nav{position:sticky;top:env(safe-area-inset-top,0px);z-index:60;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--canvas) 80%,transparent);-webkit-backdrop-filter:blur(16px) saturate(1.3);backdrop-filter:blur(16px) saturate(1.3)}
 .p-nav-in{display:flex;align-items:center;gap:16px;height:60px}
 .p-brand{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:600;letter-spacing:-.01em}
 .p-brand .serif{font-size:21px;color:var(--gold-ink)}
@@ -234,7 +237,7 @@ body{margin:0}
   .p-theme{margin-left:auto}
   .p-hero{padding-top:56px}
   .p-lead{font-size:16px}
-  .compare,.proto-wrap{width:calc(100% - 24px);border-radius:12px}
+  .compare,.proto-wrap{width:calc(100% - 32px);border-radius:12px}
   .proto{border-radius:12px}
   .princ,.steps{grid-template-columns:1fr}
   .diff-row{grid-template-columns:1fr;gap:6px}
@@ -248,7 +251,8 @@ body{margin:0}
 }
 </style>
 </head>
-<body class="rf page" data-theme="nacht">
+<body>
+<div class="rf page" id="page" data-theme="nacht">
 
 <!-- Iconen (lijnstijl, 24-raster; paden naar Lucide, ISC-licentie) -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
@@ -339,7 +343,7 @@ body{margin:0}
     <div class="wrap">
       <span class="p-chip"><span class="logo">R</span>Designvoorstel · september 2026</span>
       <h1 class="p-title">ResoFly, <span class="serif">opnieuw belicht.</span></h1>
-      <p class="p-lead">Een nieuwe look &amp; feel voor alles wat je in ResoFly doet: rustiger, sneller te lezen en onmiskenbaar van jou. Ontworpen voor twee lichten — <b>Nacht</b> en <b>Dag</b> — vanuit één systeem.</p>
+      <p class="p-lead">Een nieuwe look &amp; feel voor alles wat je in ResoFly doet: rustiger, sneller te lezen en onmiskenbaar van jou. Ontworpen voor twee lichten, <b>Nacht</b> en <b>Dag</b>, vanuit één systeem.</p>
       <div class="p-facts">
         <span class="p-fact"><svg class="i"><use href="#i-moon"></use></svg>Nacht &amp; <svg class="i"><use href="#i-sun"></use></svg>Dag, allebei ontworpen</span>
         <span class="p-fact"><svg class="i"><use href="#i-type"></use></svg>Geist + Instrument Serif</span>
@@ -355,7 +359,7 @@ body{margin:0}
       <span class="cmp-tag cmp-tag--r"><svg class="i"><use href="#i-sun"></use></svg>Dag</span>
       <input class="sr" id="cmpRange" type="range" min="0" max="100" value="50" aria-label="Schuif tussen Nacht en Dag">
     </div>
-    <p class="cmp-cap"><b>Sleep de schuif.</b> Links Nacht, rechts Dag — hetzelfde scherm, dezelfde code, twee lichten.</p>
+    <p class="cmp-cap"><b>Sleep de schuif.</b> Links Nacht, rechts Dag: hetzelfde scherm en dezelfde code in twee lichten.</p>
   </section>
 
   <!-- ── 01 Concept ───────────────────────────────────────────────────── -->
@@ -363,10 +367,10 @@ body{margin:0}
     <div class="wrap">
       <div class="p-head">
         <div>
-          <div class="p-kicker">01 — Concept</div>
+          <div class="p-kicker">Concept</div>
           <h2 class="p-h2">Zes principes, <span class="serif">één gevoel</span></h2>
         </div>
-        <p class="p-sub">ResoFly doet veel: klanten, projecten, uren, agenda, tickets, offertes, facturen, boekhouding en Gerrie. Belicht maakt dat <b>rustig</b>. Niet door dingen weg te laten, maar door elke kleur, lijn en letter een vaste taak te geven.</p>
+        <p class="p-sub">ResoFly doet veel: klanten, projecten, uren, agenda, tickets, offertes, facturen, boekhouding en Gerrie. Belicht maakt dat <b>rustig</b> door elke kleur, lijn en letter een vaste taak te geven.</p>
       </div>
       <div class="princ">
         <article class="pr spot">
@@ -387,7 +391,7 @@ body{margin:0}
         <article class="pr spot">
           <div class="pr-demo"><span class="orb orb-lg"></span><span class="badge badge--ai">Voorstel van Gerrie</span></div>
           <h3>Gerrie is herkenbaar</h3>
-          <p>Alles wat de assistent maakt of voorstelt, draagt het poollicht. Je ziet altijd wat van jou is en wat van hem — en er gaat niets de deur uit zonder jouw klik.</p>
+          <p>Alles wat de assistent maakt of voorstelt, draagt het poollicht. Je ziet altijd wat van jou is en wat van hem. Er gaat niets de deur uit zonder jouw klik.</p>
         </article>
         <article class="pr spot">
           <div class="pr-demo"><div class="demo-duo"><i><svg class="i i-lg"><use href="#i-moon"></use></svg></i><i><svg class="i i-lg"><use href="#i-sun"></use></svg></i></div></div>
@@ -397,7 +401,7 @@ body{margin:0}
         <article class="pr spot">
           <div class="pr-demo"><div class="demo-kbd"><span class="kbd">⌘</span><span class="kbd">K</span></div></div>
           <h3>Alles binnen twee toetsen</h3>
-          <p>Eén opdrachtpalet voor zoeken, springen en maken: een factuur, een taak, uren — of een vraag aan Gerrie. Het menu is er voor wie klikt, ⌘K voor wie vliegt.</p>
+          <p>Eén opdrachtpalet voor zoeken, springen en maken: een factuur, een taak, uren of een vraag aan Gerrie. Het menu blijft er voor wie liever klikt.</p>
         </article>
       </div>
 
@@ -405,7 +409,7 @@ body{margin:0}
       <div class="diff">
         <div class="diff-row"><span></span><span>Nu</span><span>Belicht</span></div>
         <div class="diff-row"><b>Balken bovenin</b><span class="diff-old">114 px: werktabs plus een aparte titelbalk</span><span class="diff-new"><svg class="i"><use href="#i-check"></use></svg>50 px: werktabs, Gerrie en meldingen in één regel; de titel staat in de pagina</span></div>
-        <div class="diff-row"><b>Kerncijfers</b><span class="diff-old">Zes kaarten; bedragen vallen weg („€ 3.690,5…”)</span><span class="diff-new"><svg class="i"><use href="#i-check"></use></svg>Vier kaarten met context — een meter, een vergelijking — en bedragen altijd voluit</span></div>
+        <div class="diff-row"><b>Kerncijfers</b><span class="diff-old">Zes kaarten; bedragen vallen weg („€ 3.690,5…”)</span><span class="diff-new"><svg class="i"><use href="#i-check"></use></svg>Vier kaarten met context (een meter of een vergelijking) en bedragen altijd voluit</span></div>
         <div class="diff-row"><b>Letter</b><span class="diff-old">Poppins, veel kapitalen met spatiëring</span><span class="diff-new"><svg class="i"><use href="#i-check"></use></svg>Geist voor alles, Instrument Serif voor één accent per scherm, Geist Mono voor nummers en tijden</span></div>
         <div class="diff-row"><b>Goud</b><span class="diff-old">Op labels, iconen, randen, gloed én knoppen</span><span class="diff-new"><svg class="i"><use href="#i-check"></use></svg>Alleen hoofdactie, focus en de plek waar je bent</span></div>
         <div class="diff-row"><b>Gerrie</b><span class="diff-old">Hetzelfde goud als de rest van de app</span><span class="diff-new"><svg class="i"><use href="#i-check"></use></svg>Een eigen laag, het poollicht: voorstellen, antwoorden en acties van de assistent</span></div>
@@ -420,7 +424,7 @@ body{margin:0}
     <div class="wrap">
       <div class="p-head">
         <div>
-          <div class="p-kicker">02 — Prototype</div>
+          <div class="p-kicker">Prototype</div>
           <h2 class="p-h2">Klik door de <span class="serif">werkruimte</span></h2>
         </div>
         <p class="p-sub">Vijf schermen, uitgewerkt met de voorbeeldgegevens van Studio Lopik: <b>Dashboard, Agenda, Projecten, Facturen en Gerrie</b>. Gebruik het menu, de werktabs of <span class="kbd">⌘K</span>. Bovenin wissel je tussen Nacht en Dag.</p>
@@ -442,7 +446,7 @@ body{margin:0}
     <div class="wrap">
       <div class="p-head">
         <div>
-          <div class="p-kicker">03 — Systeem</div>
+          <div class="p-kicker">Systeem</div>
           <h2 class="p-h2">Eén systeem, <span class="serif">twee lichten</span></h2>
         </div>
         <p class="p-sub">Alles hieronder is tokens en componenten, klaar om in de bestaande <b>THEMA-TOKENS-laag</b> van ResoFly te schuiven. De contrastwaarden rekent deze pagina zelf uit, live, op de kleuren die je ziet.</p>
@@ -485,11 +489,11 @@ body{margin:0}
         <div class="rf sys-panel" data-theme="dag" data-components></div>
       </div>
 
-      <h3 class="p-h3">Vorm, diepte en beweging<small>Concentrische hoeken, drie hoogtes en drie snelheden. Meer is er niet.</small></h3>
+      <h3 class="p-h3">Vorm, diepte en beweging<small>Concentrische hoeken, drie hoogtes en drie snelheden.</small></h3>
       <div class="shape">
         <div class="card">
           <div class="card-title">Hoeken</div>
-          <p class="card-sub">Hoe groter het vlak, hoe ronder — en binnen elkaar altijd concentrisch.</p>
+          <p class="card-sub">Hoe groter het vlak, hoe ronder. Binnen elkaar altijd concentrisch.</p>
           <div class="radii">
             <div><i style="border-radius:6px;width:28px;height:28px"></i>6</div>
             <div><i style="border-radius:8px;width:34px;height:34px"></i>8</div>
@@ -529,7 +533,7 @@ body{margin:0}
     <div class="wrap">
       <div class="p-head">
         <div>
-          <div class="p-kicker">04 — Mobiel</div>
+          <div class="p-kicker">Mobiel</div>
           <h2 class="p-h2">In je <span class="serif">broekzak</span></h2>
         </div>
         <p class="p-sub">Dezelfde taal op de telefoon: de vijf vaste bestemmingen onder je duim, Gerrie altijd één tik weg en elk raakvlak minstens 44 pixels. Geen nep-statusbalk, gewoon ruimte voor de echte.</p>
@@ -543,10 +547,10 @@ body{margin:0}
     <div class="wrap">
       <div class="p-head">
         <div>
-          <div class="p-kicker">05 — Invoering</div>
+          <div class="p-kicker">Invoering</div>
           <h2 class="p-h2">Van voorstel <span class="serif">naar product</span></h2>
         </div>
-        <p class="p-sub">De werkruimte heeft al een tokenlaag in drie lagen: kanalen, semantiek en een compat-laag die de oude namen doorverwijst. Daardoor kan Belicht <b>in vier stappen</b> binnenkomen, zonder dat er één scherm tegelijk stuk hoeft.</p>
+        <p class="p-sub">De werkruimte heeft al een tokenlaag in drie lagen: kanalen, semantiek en een compat-laag die de oude namen doorverwijst. Daardoor kan Belicht <b>in vier stappen</b> binnenkomen, terwijl alles blijft werken.</p>
       </div>
       <div class="steps">
         <article class="step spot">
@@ -570,7 +574,7 @@ body{margin:0}
         <article class="step spot">
           <span class="step-n">4</span>
           <h3>Buitenkant</h3>
-          <p>Wat je klanten zien: offerte- en factuurpagina's, het klantportaal, e-mails en pdf's — mét hun eigen klantbranding.</p>
+          <p>Wat je klanten zien: offerte- en factuurpagina's, het klantportaal, e-mails en pdf's, met hun eigen klantbranding.</p>
           <ul><li><svg class="i"><use href="#i-check"></use></svg>Zelfde tokens, eigen accent</li><li><svg class="i"><use href="#i-check"></use></svg>Pdf blijft papierwit</li></ul>
         </article>
       </div>
@@ -588,6 +592,8 @@ body{margin:0}
     <span>Designvoorstel · september 2026 · alle schermen met voorbeeldgegevens (Studio Lopik)</span>
   </div>
 </footer>
+
+</div>
 
 <!-- ════════════════════════════════════════════════════════════════════
      Sjablonen. Het script hieronder zet ze op hun plek: twee keer in de
@@ -689,7 +695,7 @@ body{margin:0}
     <span class="orb orb-lg"></span>
     <div>
       <div class="brief-head"><span class="ai-tag">Gerrie · dagstart</span><span class="badge badge--ai badge--sm">Voorstel</span></div>
-      <p class="brief-text">Factuur <b>2026-040</b> van Restaurant Bloem staat <b>10 dagen</b> open (€ 786,50). Karim betaalde de vorige twee binnen twee dagen na een herinnering — zal ik er een voor je klaarzetten?</p>
+      <p class="brief-text">Factuur <b>2026-040</b> van Restaurant Bloem staat <b>10 dagen</b> open (€ 786,50). Karim betaalde de vorige twee binnen twee dagen na een herinnering. Zal ik er een voor je klaarzetten?</p>
       <p class="brief-note"><svg class="i"><use href="#i-shield"></use></svg>Er gaat niets de deur uit zonder jouw akkoord.</p>
     </div>
     <div class="brief-actions">
@@ -1137,7 +1143,7 @@ body{margin:0}
       <div class="msg-ai">
         <span class="orb"></span>
         <div class="msg-ai-body">
-          <p>Staat klaar in je wachtrij. Ik heb <b>variant A en B</b> uit de map Concepten als bijlage toegevoegd en dinsdag 10:00 voorgesteld — daar is jullie allebei agenda vrij.</p>
+          <p>Staat klaar in je wachtrij. Ik heb <b>variant A en B</b> uit de map Concepten als bijlage toegevoegd en dinsdag 10:00 voorgesteld, want dan zijn jullie allebei vrij.</p>
           <div style="display:flex;gap:6px;flex-wrap:wrap"><span class="badge badge--line badge--sm"><svg class="i i-xs"><use href="#i-folder"></use></svg>Concepten</span><span class="badge badge--line badge--sm"><svg class="i i-xs"><use href="#i-file"></use></svg>Notulen kick-off huisstijl</span><span class="badge badge--line badge--sm"><svg class="i i-xs"><use href="#i-calendar"></use></svg>Agenda Joost</span></div>
         </div>
       </div>
@@ -1153,7 +1159,7 @@ body{margin:0}
       <header class="card-head"><div><h2 class="card-title">Wacht op jouw akkoord</h2><p class="card-sub">Gerrie stelt voor, jij vinkt af</p></div><span class="nav-count is-ai">3</span></header>
       <div style="display:flex;flex-direction:column;gap:8px;padding:0 12px 12px">
         <div class="card qcard"><div class="qcard-top"><svg class="i"><use href="#i-mail"></use></svg>Betalingsherinnering</div><div class="qcard-title">Factuur 2026-040 · Restaurant Bloem</div><div class="qcard-why">10 dagen over tijd; Karim betaalt meestal binnen twee dagen na een herinnering.</div><div class="qcard-actions"><button type="button" class="btn btn--primary btn--sm" data-action="approve">Uitvoeren</button><button type="button" class="btn btn--sm btn--ghost">Afwijzen</button></div></div>
-        <div class="card qcard"><div class="qcard-top"><svg class="i"><use href="#i-mail"></use></svg>Mail</div><div class="qcard-title">Kleurenpalet — twee varianten, aan Joost Vermeer</div><div class="qcard-why">Taak staat 4 dagen over tijd; de varianten staan in Concepten.</div><div class="qcard-actions"><button type="button" class="btn btn--primary btn--sm" data-action="approve">Uitvoeren</button><button type="button" class="btn btn--sm btn--ghost">Afwijzen</button></div></div>
+        <div class="card qcard"><div class="qcard-top"><svg class="i"><use href="#i-mail"></use></svg>Mail</div><div class="qcard-title">Kleurenpalet in twee varianten, aan Joost Vermeer</div><div class="qcard-why">Taak staat 4 dagen over tijd; de varianten staan in Concepten.</div><div class="qcard-actions"><button type="button" class="btn btn--primary btn--sm" data-action="approve">Uitvoeren</button><button type="button" class="btn btn--sm btn--ghost">Afwijzen</button></div></div>
         <div class="card qcard"><div class="qcard-top"><svg class="i"><use href="#i-calendar"></use></svg>Taak verplaatsen</div><div class="qcard-title">Drukproef briefpapier → maandag 28 sep</div><div class="qcard-why">De drukkerij levert pas maandag, schreef ze vanochtend.</div><div class="qcard-actions"><button type="button" class="btn btn--primary btn--sm" data-action="approve">Uitvoeren</button><button type="button" class="btn btn--sm btn--ghost">Afwijzen</button></div></div>
       </div>
     </section>
@@ -1305,12 +1311,15 @@ body{margin:0}
   }
 
   // ── Thema van de pagina (en van het prototype) ──────────────────────────
-  const page = document.body;
-  let theme = store.get('belicht.theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'dag' : 'nacht');
+  const page = document.getElementById('page');
+  // Volgorde: eigen keuze op deze pagina, dan het thema van de kijker (een
+  // host kan data-theme op het html-element zetten), dan de instelling van het systeem.
+  const host = document.documentElement.getAttribute('data-theme');
+  let theme = store.get('belicht.theme') || (host === 'light' ? 'dag' : host === 'dark' ? 'nacht' : null) || (matchMedia('(prefers-color-scheme: light)').matches ? 'dag' : 'nacht');
   function setTheme(next) {
     theme = next;
     page.dataset.theme = next;
-    document.documentElement.style.background = next === 'dag' ? '#F1F0EC' : '#09090A';
+    document.documentElement.style.setProperty('--page-bg', next === 'dag' ? '#F1F0EC' : '#09090A');
     $$('[data-set-theme]').forEach(b => b.classList.toggle('is-on', b.dataset.setTheme === next));
     if (proto) {
       proto.frame.dataset.theme = next;
@@ -1344,7 +1353,7 @@ body{margin:0}
       phones.style.setProperty('--pz', String(z));
     }
   }
-  new ResizeObserver(fit).observe(document.body);
+  new ResizeObserver(fit).observe(page);
 
   // ── Vergelijken ─────────────────────────────────────────────────────────
   const compare = $('#compare');
@@ -1441,7 +1450,7 @@ body{margin:0}
     if (nav) {
       const key = NAV_TO_SCREEN[nav.dataset.nav];
       if (key) open(key);
-      else toast(`${nav.textContent.trim().replace(/\d+$/, '')} is in dit voorstel niet uitgewerkt — probeer Dashboard, Agenda, Projecten, Financiën of Gerrie`);
+      else toast(`${nav.textContent.trim().replace(/\d+$/, '')} is in dit voorstel niet uitgewerkt. Probeer Dashboard, Agenda, Projecten, Financiën of Gerrie.`);
       return;
     }
     const go = t.closest('[data-go]');
@@ -1453,7 +1462,7 @@ body{margin:0}
       else if (a === 'theme') switchTheme(theme === 'dag' ? 'nacht' : 'dag', ...pointOf(act));
       else if (a === 'gerrie') open('gerrie');
       else if (a === 'remind') {
-        toast('Herinnering voor 2026-040 staat klaar — keur hem goed bij Gerrie', 'ai');
+        toast('Herinnering voor 2026-040 staat klaar. Keur hem goed bij Gerrie.', 'ai');
         act.innerHTML = icon('i-check') + 'Klaargezet';
         act.disabled = true;
       } else if (a === 'approve') {
@@ -1488,7 +1497,7 @@ body{margin:0}
     'Weekoverzicht': 'Deze week staat er <b>26,5 van 32 uur</b> geschreven en zijn er <b>4 taken</b> over tijd. Het grootste risico is <b>Website Fysio Centrum Zuid</b>: deadline 5 oktober, 72% klaar en al 31 van de 40 uur gebruikt.',
     'Offertes die stilliggen': 'Offerte <b>2026-020</b> aan Van Dijk Installatietechniek (€ 3.327,50) wacht al <b>9 dagen</b> op antwoord. Zal ik Peter een korte opvolgmail klaarzetten?',
     'Uren deze maand': 'In september staat er <b>104,5 uur</b> geschreven, waarvan <b>88 declarabel</b>. De meeste tijd ging naar Website Fysio Centrum Zuid (31 uur).',
-    'Wie moet ik nog bellen?': '<b>Peter van Dijk</b> over de planning — dat staat al 5 dagen open. En <b>Karim</b> van Restaurant Bloem, als de herinnering van vandaag niets oplevert.',
+    'Wie moet ik nog bellen?': '<b>Peter van Dijk</b> over de planning, want dat staat al 5 dagen open. En <b>Karim</b> van Restaurant Bloem, als de herinnering van vandaag niets oplevert.',
   };
   function ask(question) {
     const log = $('[data-log]', proto.frame);
@@ -1501,7 +1510,7 @@ body{margin:0}
     ai.innerHTML = '<span class="orb"></span><div class="msg-ai-body"><span class="typing" aria-label="Gerrie denkt na"><i></i><i></i><i></i></span></div>';
     log.append(me, ai);
     log.scrollTop = log.scrollHeight;
-    const answer = ANSWERS[question] || 'Dit is een voorbeeld: in ResoFly zoekt Gerrie het antwoord op in je eigen klanten, projecten, uren en financiën — en zet hij acties klaar die jij goedkeurt.';
+    const answer = ANSWERS[question] || 'Dit is een voorbeeldantwoord. In ResoFly zoekt Gerrie het op in je eigen klanten, projecten, uren en financiën, en zet hij acties klaar die jij goedkeurt.';
     setTimeout(() => { $('.msg-ai-body', ai).innerHTML = `<p>${answer}</p>`; log.scrollTop = log.scrollHeight; }, reduced ? 0 : 1100);
   }
   proto.frame.addEventListener('click', (e) => {
@@ -1643,7 +1652,7 @@ body{margin:0}
       }
       html += '</div>';
     }
-    html += `<div class="swg"><h5>Poollicht — Gerrie</h5><div class="swr" style="grid-template-columns:minmax(0,1fr) 86px"><span class="aurora-bar"></span><em class="is-dec">alleen AI</em></div></div>`;
+    html += `<div class="swg"><h5>Poollicht (Gerrie)</h5><div class="swr" style="grid-template-columns:minmax(0,1fr) 86px"><span class="aurora-bar"></span><em class="is-dec">alleen AI</em></div></div>`;
     panel.innerHTML = html;
   });
 
