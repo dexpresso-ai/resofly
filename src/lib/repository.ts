@@ -4088,7 +4088,9 @@ export async function searchClientEmails(
 // op deze tabellen kan niet — er is bewust geen insert/update-policy.
 
 const INBOUND_ALIAS_COLUMNS = 'id,organization_id,created_by,local_part,label,purpose,forward_from_email,status,retires_at,blocked_senders,last_received_at,received_total,pending_confirmation_code,pending_confirmation_at,created_at,updated_at';
-const INBOUND_MESSAGE_COLUMNS = 'id,organization_id,created_by,alias_id,route,recipient,sender_email,sender_name,sender_source,sender_confidence,forwarding_evidence,subject,body_text,body_html,rfc_message_id,attachment_names,truncated,received_at,status,reason,category,candidates,suggested_client_id,linked_client_id,client_email_id,handled_at,purge_after,created_at,updated_at';
+// Geen created_by: die kolom bestaat niet op inbound_messages (de mailserver
+// maakt de rij aan, geen gebruiker) en PostgREST weigert dan de hele query.
+const INBOUND_MESSAGE_COLUMNS = 'id,organization_id,alias_id,route,recipient,sender_email,sender_name,sender_source,sender_confidence,forwarding_evidence,subject,body_text,body_html,rfc_message_id,attachment_names,truncated,received_at,status,reason,category,candidates,suggested_client_id,linked_client_id,client_email_id,handled_at,purge_after,created_at,updated_at';
 
 /**
  * Het actieve doorstuuradres van de organisatie, of null als er nog geen is.

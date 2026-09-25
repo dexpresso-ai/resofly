@@ -1183,7 +1183,8 @@ export interface InboundMessageCandidate {
   matched_on: string;
 }
 
-export interface InboundMessage extends OrgScopedRow {
+/** Zonder created_by: deze rijen maakt de mailserver aan, niet een gebruiker. */
+export interface InboundMessage extends Omit<OrgScopedRow, 'created_by'> {
   alias_id: UUID | null;
   route: 'alias' | 'reply_token' | 'organizer_token';
   recipient: string;
