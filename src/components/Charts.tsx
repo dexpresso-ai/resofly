@@ -58,9 +58,9 @@ export function LineChart({ rows, format }: ChartProps) {
           </g>
         );
       })}
-      <path d={areaPath} fill="rgba(255,217,102,.10)" stroke="none" />
-      <polyline points={points} fill="none" stroke="var(--accent)" strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
-      {rows.map((r, i) => <circle key={r.key} cx={x(i)} cy={y(r.value)} r={3.5} fill="var(--accent)" />)}
+      <path d={areaPath} fill="rgba(var(--accent-rgb),.10)" stroke="none" />
+      <polyline points={points} fill="none" stroke="var(--viz-1)" strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+      {rows.map((r, i) => <circle key={r.key} cx={x(i)} cy={y(r.value)} r={3.5} fill="var(--viz-1)" />)}
       {rows.map((r, i) => (i % labelEvery === 0 || i === n - 1)
         ? <text key={`l${r.key}`} x={x(i)} y={H - 12} textAnchor="middle" className="rb-svg-axis">{r.label}</text>
         : null)}

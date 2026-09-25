@@ -1,8 +1,8 @@
 # Designvoorstel — ResoFly Belicht — 2026-09-25
 
 Een nieuwe look & feel voor de hele werkruimte, ontworpen voor **Nacht** (donker) én **Dag**
-(licht). Dit is een voorstel: er is in deze branch **geen app-code gewijzigd**. Alles staat in
-`docs/design-voorstel-belicht/` en is los in een browser te openen.
+(licht). Het voorstel staat in `docs/design-voorstel-belicht/` en is los in een browser te openen;
+sinds dezelfde dag is het ook **ingebouwd in de app** — zie [Ingebouwd](#ingebouwd) onderaan.
 
 > *Eén systeem, twee lichten.* Nacht is een studio in de avond met één warme lamp (het goud);
 > Dag is dezelfde studio bij daglicht: papierwit op warm steen, haarlijnen in plaats van gloed.
@@ -101,7 +101,33 @@ Veilig invoeren kan achter een schakelaar per gebruiker (*Probeer de nieuwe look
 huidige ontwerp. `npm run test:mobile -- --theme=both` meet dan beide thema's; een contrastcheck
 in de CI bewaakt dat elke tekstkleur AA blijft halen.
 
-## Niet gewijzigd
+## Ingebouwd
 
-- Geen app-code, geen database, geen Edge Functions: alleen `docs/design-voorstel-belicht/` en dit document.
-- Het huidige ontwerp blijft precies zoals het is tot er voor stap 1 gekozen wordt.
+Stap 1 en 2 staan in de app, en van stap 3 de gedeelde bouwstenen die op elk scherm terugkomen.
+Belicht is de standaard: Nacht voor wie donker kiest, Dag voor wie licht kiest (de keuze in het
+accountmenu blijft zoals hij was).
+
+| waar | wat |
+|---|---|
+| `src/styles/globals.css` — THEMA-TOKENS | alle tokens hierboven voor Nacht en Dag, plus de nieuwe: `--ai-1..3` (poollicht), `--viz-1/2`, `--well`, `--raised`, `--field`, `--line-3`, `--ink-4`, `--font-sans/serif/mono`, `--t-1..3` |
+| `src/styles/globals.css` — laag BELICHT (onderaan) | werkruimte, knoppen, velden, kaarten, tabbladen, tabellen, pop-ups, labels zonder kapitalen, dashboard, Gerrie in het poollicht |
+| `index.html`, `src/lib/theme.ts`, `public/manifest.webmanifest` | Geist, Geist Mono en Instrument Serif; de grondkleur voor de adresbalk (`#09090A` / `#F1F0EC`) |
+| `src/features/Dashboard.tsx` | de groet met datum en een samenvatting van de dag; bedragen met kleine centen, nooit afgekapt |
+
+**Werkruimte.** Op desktop en tablet staat de zijbalk op de grond en ligt het werkpaneel erop (8 px
+marge, één haarlijn, hoeken van 16 px). Werktabs en de knoppen van de titelbalk delen één regel van
+48 px; de naam van de pagina staat in het actieve tabblad en in de pagina zelf. Menuregels zijn 32 px,
+de smalle balk is 64 px en de iconen staan er precies in het midden. Op de telefoon verandert de
+opbouw niet — alleen kleur, vorm en letter — zodat de gemeten ruimte (`npm run test:mobile`) blijft.
+
+**Gerrie.** De drijvende knop, het chatpaneel, de agent-emblemen en het merkteken van het
+commandocentrum dragen het poollicht; voorstellen krijgen een poolrand. Het goud blijft voor
+hoofdknoppen, focus en de plek waar je bent.
+
+**Buitenkant.** Offerte-, factuur- en contractpagina's en het klantportaal houden hun eigen opzet
+en de huisstijl van de leverancier (`brandThemeVars`); zonder huisstijl staan ze in de Nacht-vlakken.
+Het standaardlettertype voor klanten blijft Poppins en wordt nu op aanvraag geladen.
+
+**Nog niet gebouwd** (staat wel in het voorstel): het opdrachtpalet (⌘K), de knop *Vraag Gerrie*
+in de bovenregel, de nieuwe indeling van het dashboard (dagstart-kaart, agenda van vandaag,
+grafiek per maand) en de e-mails en pdf's.

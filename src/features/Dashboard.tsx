@@ -27,6 +27,39 @@ const SCOPE_STORAGE_KEY = 'resofly-dashboard-scope';
 
 const pl = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+/** De groet boven het dashboard volgt de klok. */
+function greetingFor(date: Date): string {
+  const hour = date.getHours();
+  if (hour < 6) return 'Goedenacht';
+  if (hour < 12) return 'Goedemorgen';
+  if (hour < 18) return 'Goedemiddag';
+  return 'Goedenavond';
+}
+
+/** "Vrijdag 25 september · week 39" */
+function dateLine(date: Date): string {
+  const day = date.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
+  return `${day.charAt(0).toUpperCase()}${day.slice(1)} · week ${isoWeekNumber(date)}`;
+}
+
+/** Eén zin onder de groet: wat er vandaag op je lijst staat en wat over tijd is.
+ *  `null` = die module mag dit teamlid niet zien; dan noemen we hem ook niet. */
+function heroLead({ events, tasks, overdueInvoices }: { events: number | null; tasks: number | null; overdueInvoices: number }): ReactNode {
+  const parts: ReactNode[] = [];
+  if (events != null) parts.push(<b key="events">{pl(events, 'afspraak', 'afspraken')}</b>);
+  if (tasks != null) parts.push(<b key="tasks">{pl(tasks, 'taak', 'taken')}</b>);
+  const today = parts.length === 0
+    ? null
+    : (events ?? 0) + (tasks ?? 0) === 0
+      ? <>Je lijst voor vandaag is leeg.</>
+      : <>Vandaag {(events ?? 0) + (tasks ?? 0) === 1 ? 'staat' : 'staan'} er {parts.length === 2 ? <>{parts[0]} en {parts[1]}</> : parts[0]} op je lijst.</>;
+  const late = overdueInvoices > 0
+    ? <>{overdueInvoices === 1 ? 'Eén factuur is' : `${overdueInvoices} facturen zijn`} over tijd.</>
+    : null;
+  if (!today && !late) return 'Je werk, je agenda en je cijfers in één beeld.';
+  return <>{today}{today && late ? ' ' : null}{late}</>;
+}
+
 /** Telt bij binnenkomst op naar `target`, zodat het belangrijkste cijfer op het
  *  dashboard even de aandacht pakt. Respecteert prefers-reduced-motion (dan
  *  meteen de eindwaarde) en telt opnieuw zodra het doel wijzigt. Geeft `null`
@@ -274,9 +307,13 @@ export function Dashboard({
   return <>
     <section className="workspace-hero">
       <div>
-        <span className="eyebrow">ResoFly cockpit</span>
-        <h1>{activeOrganization?.name ?? 'ResoFly'}</h1>
-        <p>Vandaag, deze week en je projecten — in één beeld, in de volgorde waarin je ze nodig hebt.</p>
+        <span className="eyebrow">{dateLine(now)}</span>
+        <h1>{greetingFor(now)}, <span className="serif">{activeOrganization?.name ?? 'ResoFly'}</span></h1>
+        <p>{heroLead({
+          events: showCalendar ? todaysEvents.length : null,
+          tasks: showProjects ? todayOpenCount : null,
+          overdueInvoices: showFinance ? overdueInvoices.length : 0,
+        })}</p>
       </div>
       <div className="workspace-meta-card">
         <span>Jouw rol</span>
@@ -598,7 +635,7 @@ function Stat({ label, value, sub, tone = 'default', trend, spark, countTo, coun
   const inner = <>
     {hasSpark && <Sparkline values={spark!} tone={tone === 'danger' ? 'danger' : 'accent'} />}
     <div className="sc-label">{label}</div>
-    <div className="sc-val">{shown}</div>
+    <div className="sc-val">{withSmallCents(shown)}</div>
     {(sub || trend != null) && <div className="sc-sub">
       {trend != null && <span className={`sc-trend ${trend >= 0 ? 'up' : 'down'}`}>{trend >= 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}{Math.abs(trend)}%</span>}
       {sub && <span>{sub}</span>}
@@ -607,6 +644,14 @@ function Stat({ label, value, sub, tone = 'default', trend, spark, countTo, coun
   const className = `stat-card stat-card-${tone}${hasSpark ? ' has-spark' : ''}`;
   if (onClick) return <button type="button" className={`${className} stat-card-clickable`} onClick={onClick}>{inner}</button>;
   return <div className={className}>{inner}</div>;
+}
+
+/** "€ 6.909,10" → "€ 6.909" met ",10" een tikje kleiner: het bedrag leest in
+ *  één oogopslag en de centen vallen niet meer van de kaart af. */
+function withSmallCents(value: string | number): ReactNode {
+  if (typeof value !== 'string') return value;
+  const match = /^(.*\d)(,\d{2})$/.exec(value);
+  return match ? <>{match[1]}<small className="sc-cents">{match[2]}</small></> : value;
 }
 
 // Cent-exacte bruto-totalen via de centrale geldmodule, identiek aan de Financiën-module.
