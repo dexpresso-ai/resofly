@@ -1,0 +1,1707 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ResoFly Belicht</title>
+<meta name="description" content="Een nieuwe look &amp; feel voor de ResoFly-werkruimte, ontworpen voor donker (Nacht) én licht (Dag).">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300..800&amp;family=Geist+Mono:wght@400..600&amp;family=Instrument+Serif:ital@0;1&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="belicht.css">
+<style>
+/* ── De voorstelpagina zelf (alles wat níet in de app komt) ─────────────── */
+:root{--page-bg:#F1F0EC;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--page-bg:#09090A;color-scheme:dark}}
+:root[data-theme="dark"]{--page-bg:#09090A;color-scheme:dark}
+html{scroll-behavior:smooth;scroll-padding-top:76px;background:var(--page-bg)}
+body{margin:0;background:var(--page-bg)}
+.page{min-height:100vh;background:var(--canvas);color:var(--ink-1);transition:background-color var(--t-3) var(--ease),color var(--t-3) var(--ease)}
+.wrap{width:min(1320px,calc(100% - 48px));margin:0 auto}
+
+.p-nav{position:sticky;top:env(safe-area-inset-top,0px);z-index:60;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--canvas) 80%,transparent);-webkit-backdrop-filter:blur(16px) saturate(1.3);backdrop-filter:blur(16px) saturate(1.3)}
+.p-nav-in{display:flex;align-items:center;gap:16px;height:60px}
+.p-brand{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:600;letter-spacing:-.01em}
+.p-brand .serif{font-size:21px;color:var(--gold-ink)}
+.p-brand-sep{width:1px;height:18px;background:var(--line-2)}
+.p-links{display:flex;gap:2px;margin-left:auto}
+.p-links a{display:inline-flex;align-items:center;height:32px;padding:0 12px;border-radius:8px;color:var(--ink-2);font-size:13.5px;font-weight:500}
+.p-links a:hover{background:var(--s1);color:var(--ink-1)}
+.p-theme .i{width:14px;height:14px}
+
+.p-hero{position:relative;padding:84px 0 0;text-align:center;overflow-x:clip}
+.p-hero::before{content:'';position:absolute;left:50%;top:-120px;width:1100px;height:620px;transform:translateX(-50%);pointer-events:none;background:radial-gradient(closest-side,rgba(247,197,72,.14),transparent 72%),radial-gradient(420px 260px at 72% 40%,rgba(140,128,255,.10),transparent 70%);filter:blur(8px)}
+.page[data-theme="dag"] .p-hero::before{background:radial-gradient(closest-side,rgba(244,188,46,.22),transparent 72%),radial-gradient(420px 260px at 72% 40%,rgba(110,90,230,.10),transparent 70%)}
+.p-hero>*{position:relative}
+.p-chip{display:inline-flex;align-items:center;gap:8px;height:30px;padding:0 12px 0 5px;border:1px solid var(--line-2);border-radius:99px;background:var(--s1);box-shadow:var(--shadow-1);font-size:13px;color:var(--ink-2)}
+.p-chip .logo{width:20px;height:20px;border-radius:6px;font-size:11px}
+.p-title{margin:22px auto 0;max-width:1000px;font-size:clamp(44px,7.2vw,96px);line-height:.96;font-weight:600;letter-spacing:-.048em;text-wrap:balance}
+.p-title .serif{display:inline-block;font-size:1.1em;letter-spacing:-.02em;color:var(--gold-ink);padding-right:.06em}
+/* Belicht: één lichtveeg over de titel, als een lamp die aangaat. */
+@media (prefers-reduced-motion:no-preference){
+  .p-title .serif{background:linear-gradient(100deg,var(--gold-ink) 0 38%,#FFF3C4 48%,var(--gold-ink) 58% 100%);background-size:260% 100%;background-position:100% 0;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sweep 2.6s .5s cubic-bezier(.3,.7,.2,1) both}
+  .page[data-theme="dag"] .p-title .serif{background-image:linear-gradient(100deg,var(--gold-ink) 0 38%,#F2B92C 48%,var(--gold-ink) 58% 100%)}
+}
+@keyframes sweep{from{background-position:100% 0}to{background-position:0 0}}
+.p-lead{margin:24px auto 0;max-width:700px;font-size:18px;line-height:1.55;color:var(--ink-2);text-wrap:pretty}
+.p-facts{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-top:26px}
+.p-fact{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 14px;border:1px solid var(--line);border-radius:99px;background:var(--s1);font-size:13px;color:var(--ink-2)}
+.p-fact .i{width:14px;height:14px;color:var(--ink-3)}
+.p-fact .orb{width:14px;height:14px}
+.p-fact .orb::after{inset:3px}
+
+/* Vergelijken: twee keer hetzelfde scherm, het bovenste afgeknipt. */
+.compare{position:relative;width:min(1440px,calc(100% - 48px));margin:56px auto 0;aspect-ratio:1440/900;border-radius:20px;overflow:hidden;background:#09090A;box-shadow:0 0 0 1px var(--line-2),0 50px 120px -50px rgba(0,0,0,.75);user-select:none;-webkit-user-select:none}
+.page[data-theme="dag"] .compare{box-shadow:0 0 0 1px var(--line-2),0 50px 120px -50px rgba(28,27,24,.45)}
+.cmp-layer{position:absolute;inset:0}
+.cmp-top{clip-path:inset(0 calc(100% - var(--pos,50%)) 0 0)}
+.frame{width:1440px;height:900px;zoom:var(--z,1)}
+.frame>.rf-app{height:100%}
+.cmp-handle{position:absolute;top:0;bottom:0;left:var(--pos,50%);width:44px;margin-left:-22px;cursor:ew-resize;touch-action:none;z-index:5}
+.cmp-handle::before{content:'';position:absolute;top:0;bottom:0;left:21px;width:2px;background:linear-gradient(180deg,transparent,rgba(255,255,255,.9) 12%,rgba(255,255,255,.9) 88%,transparent);box-shadow:0 0 18px rgba(247,197,72,.55)}
+.cmp-grip{position:absolute;top:50%;left:50%;display:grid;place-items:center;width:44px;height:44px;border-radius:50%;background:#FFFFFF;color:#1C1B18;transform:translate(-50%,-50%);box-shadow:0 0 0 4px rgba(255,255,255,.18),0 10px 30px rgba(0,0,0,.45);transition:transform var(--t-2) var(--spring)}
+.cmp-handle:hover .cmp-grip,.compare.is-drag .cmp-grip{transform:translate(-50%,-50%) scale(1.08)}
+.cmp-grip .i{width:18px;height:18px;stroke-width:2.2}
+.cmp-tag{position:absolute;top:calc(50% - 15px);z-index:4;transition:opacity var(--t-2) var(--ease);display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border-radius:99px;font-size:12.5px;font-weight:600;pointer-events:none;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+.cmp-tag .i{width:14px;height:14px}
+.cmp-tag--l{right:calc(100% - var(--pos,50%) + 34px);background:rgba(9,9,10,.72);color:#F4F3F0;box-shadow:0 0 0 1px rgba(255,255,255,.14)}
+.cmp-tag--r{left:calc(var(--pos,50%) + 34px);background:rgba(255,255,255,.82);color:#1C1B18;box-shadow:0 0 0 1px rgba(28,27,24,.1)}
+.cmp-cap{margin:18px auto 0;font-size:13px;color:var(--ink-3)}
+.cmp-cap b{color:var(--ink-2);font-weight:500}
+
+.p-sec{padding:120px 0 0}
+.p-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:48px;align-items:end;margin-bottom:40px}
+.p-kicker{display:flex;align-items:center;gap:10px;margin-bottom:16px;font-family:var(--font-mono);font-size:12px;color:var(--ink-3)}
+.p-kicker::after{content:'';width:48px;height:1px;background:var(--line-3)}
+.p-h2{font-size:clamp(34px,4.4vw,56px);line-height:1;font-weight:600;letter-spacing:-.04em;text-wrap:balance}
+.p-h2 .serif{font-size:1.12em;letter-spacing:-.015em;color:var(--gold-ink)}
+.p-sub{font-size:16.5px;line-height:1.6;color:var(--ink-2);text-wrap:pretty}
+.p-sub b{color:var(--ink-1);font-weight:600}
+.p-h3{margin:64px 0 18px;font-size:20px;font-weight:600;letter-spacing:-.02em}
+.p-h3 small{display:block;margin-top:4px;font-size:14px;font-weight:400;color:var(--ink-3);letter-spacing:0}
+
+/* Principes */
+.princ{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.pr{display:flex;flex-direction:column;gap:14px;padding:22px;border:1px solid var(--line);border-radius:var(--r-xl);background:var(--s1);box-shadow:var(--shadow-1)}
+.pr-demo{display:flex;align-items:center;justify-content:center;gap:10px;height:128px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);overflow:hidden}
+.pr h3{font-size:17px;font-weight:600;letter-spacing:-.02em}
+.pr p{font-size:14px;line-height:1.6;color:var(--ink-2)}
+.demo-old{font-family:'Poppins',var(--font-sans);font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);text-decoration:line-through;text-decoration-color:var(--danger)}
+.demo-arrow{color:var(--ink-4)}
+.demo-new{font-size:14px;font-weight:500}
+.demo-nums{display:grid;gap:4px;padding:0 18px;font-size:14px;font-weight:500;font-variant-numeric:tabular-nums;text-align:right}
+.demo-nums span{display:flex;justify-content:space-between;gap:28px;color:var(--ink-2)}
+.demo-nums b{font-weight:600;color:var(--ink-1)}
+.demo-nums .tot{margin-top:4px;padding-top:6px;border-top:1px solid var(--line-2)}
+.demo-duo{position:relative;width:88px;height:88px;border-radius:50%;overflow:hidden;box-shadow:0 0 0 1px var(--line-2)}
+.demo-duo i{position:absolute;top:0;bottom:0;width:50%;display:grid;place-items:center}
+.demo-duo i:first-child{left:0;background:#0F0F11;color:#F7C548}
+.demo-duo i:last-child{right:0;background:#FAF9F7;color:#855800}
+.demo-kbd{display:flex;gap:6px}
+.demo-kbd .kbd{height:40px;min-width:40px;justify-content:center;font-size:17px;border-radius:10px}
+
+/* Nu → Belicht */
+.diff{overflow:hidden;border:1px solid var(--line);border-radius:var(--r-xl);background:var(--s1);box-shadow:var(--shadow-1)}
+.diff-row{display:grid;grid-template-columns:200px minmax(0,1fr) minmax(0,1.25fr);gap:24px;align-items:center;padding:16px 22px;border-top:1px solid var(--line);font-size:14px}
+.diff-row:first-child{border-top:0;padding-top:14px;padding-bottom:14px;background:var(--s2);font-size:12.5px;font-weight:500;color:var(--ink-3)}
+.diff-row b{font-weight:600}
+.diff-old{color:var(--ink-3)}
+.diff-new{display:flex;align-items:flex-start;gap:10px;color:var(--ink-1)}
+.diff-new .i{margin-top:2px;color:var(--ok)}
+
+/* Prototype */
+.proto-wrap{width:min(1440px,calc(100% - 48px));margin:0 auto}
+.proto{position:relative;aspect-ratio:1440/900;border-radius:20px;overflow:hidden;box-shadow:0 0 0 1px var(--line-2),0 50px 120px -50px rgba(0,0,0,.7)}
+.page[data-theme="dag"] .proto{box-shadow:0 0 0 1px var(--line-2),0 50px 120px -50px rgba(28,27,24,.4)}
+.proto-hints{display:flex;justify-content:center;gap:22px;flex-wrap:wrap;margin-top:18px;font-size:13px;color:var(--ink-3)}
+.proto-hints span{display:inline-flex;align-items:center;gap:8px}
+
+/* Systeem */
+.duo{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.sys-panel{padding:24px;border:1px solid var(--line);border-radius:var(--r-xl);background:var(--panel);box-shadow:var(--shadow-2)}
+.sys-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.sys-top h4{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600}
+.sys-top h4 .i{color:var(--gold-ink)}
+.sys-top span{font-size:12.5px;color:var(--ink-3)}
+.swg{margin-top:18px}
+.swg:first-of-type{margin-top:0}
+.swg h5{margin:0 0 8px;font-size:12px;font-weight:500;color:var(--ink-3)}
+.swr{display:grid;grid-template-columns:32px minmax(0,1fr) 108px 86px;align-items:center;gap:12px;height:40px;padding:0 8px 0 4px;border-radius:9px;font-size:13px}
+.swr:hover{background:var(--s1)}
+.swr i{width:32px;height:28px;border-radius:7px;box-shadow:inset 0 0 0 1px var(--line-2)}
+.swr code{font-family:var(--font-mono);font-size:11.5px;color:var(--ink-3)}
+.swr em{justify-self:end;font-style:normal;font-size:11.5px;font-weight:600;color:var(--ok);font-variant-numeric:tabular-nums}
+.swr em.is-dec{color:var(--ink-3);font-weight:500}
+.swr .nm{display:flex;flex-direction:column;line-height:1.25}
+.swr .nm small{font-size:11.5px;color:var(--ink-3)}
+.aurora-bar{height:28px;border-radius:7px;background:linear-gradient(115deg,var(--ai-1),var(--ai-2) 52%,var(--ai-3))}
+
+.type{display:grid;grid-template-columns:1.1fr 1fr 1fr;gap:14px}
+.tcard{display:flex;flex-direction:column;justify-content:space-between;gap:18px;min-height:250px;padding:24px;border:1px solid var(--line);border-radius:var(--r-xl);background:var(--s1);box-shadow:var(--shadow-1)}
+.tcard .aa{font-size:96px;line-height:.9;letter-spacing:-.05em;font-weight:600}
+.tcard .aa.serif{font-weight:400;letter-spacing:-.02em;color:var(--gold-ink)}
+.tcard .aa.mono{font-size:72px;letter-spacing:-.04em;font-weight:500}
+.tcard h4{font-size:15px;font-weight:600}
+.tcard p{margin-top:4px;font-size:13.5px;line-height:1.55;color:var(--ink-2)}
+.scale{margin-top:14px;overflow:hidden;border:1px solid var(--line);border-radius:var(--r-xl);background:var(--s1)}
+.scale-row{display:grid;grid-template-columns:150px minmax(0,1fr) 150px;align-items:baseline;gap:24px;padding:16px 22px;border-top:1px solid var(--line)}
+.scale-row:first-child{border-top:0}
+.scale-row>span{font-size:12.5px;color:var(--ink-3)}
+.scale-row code{justify-self:end;font-family:var(--font-mono);font-size:12px;color:var(--ink-3)}
+
+.comp{display:flex;flex-direction:column;gap:22px}
+.comp-block h5{margin:0 0 10px;font-size:12px;font-weight:500;color:var(--ink-3)}
+.comp-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.comp-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+
+.shape{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:14px}
+.shape .card{padding:22px}
+.radii{display:flex;align-items:flex-end;gap:12px;margin-top:16px}
+.radii div{display:flex;flex-direction:column;align-items:center;gap:8px;font-family:var(--font-mono);font-size:11px;color:var(--ink-3)}
+.radii i{display:block;width:52px;height:52px;border:1.5px solid var(--gold-line);border-top-color:var(--gold);border-left-color:var(--gold);background:var(--gold-soft)}
+.elev{display:flex;flex-direction:column;gap:12px;margin-top:16px}
+.elev div{display:flex;align-items:center;justify-content:space-between;height:48px;padding:0 14px;border-radius:12px;font-size:13px}
+.elev small{font-family:var(--font-mono);font-size:11px;color:var(--ink-3)}
+.motion{display:flex;flex-direction:column;gap:14px;margin-top:16px}
+.mtrack{position:relative;height:30px;border-radius:99px;background:var(--well);box-shadow:inset 0 0 0 1px var(--line)}
+.mtrack i{position:absolute;top:5px;left:5px;width:20px;height:20px;border-radius:50%;background:var(--gold);box-shadow:0 4px 12px -2px var(--gold-glow)}
+.mtrack.is-ai i{background:conic-gradient(from 200deg,var(--ai-1),var(--ai-2),var(--ai-3),var(--ai-1))}
+.motion.is-play .mtrack i{left:calc(100% - 25px)}
+.mlabel{display:flex;justify-content:space-between;margin-top:-6px;font-size:12px;color:var(--ink-3)}
+.mlabel code{font-family:var(--font-mono);font-size:11px}
+
+/* Mobiel */
+.phones{display:flex;justify-content:center;gap:48px;flex-wrap:wrap;padding:24px 0 12px}
+.phone-col{display:flex;flex-direction:column;align-items:center;gap:22px}
+.phone-col .cap{font-size:13px;color:var(--ink-3)}
+.phone-col .cap b{color:var(--ink-1);font-weight:600}
+.phone-fit{zoom:var(--pz,1)}
+.phone .ph-scrim{position:absolute;inset:0;background:var(--scrim);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+
+/* Invoering */
+.steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.step{position:relative;display:flex;flex-direction:column;gap:10px;padding:22px;border:1px solid var(--line);border-radius:var(--r-xl);background:var(--s1);box-shadow:var(--shadow-1)}
+.step-n{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:var(--gold-soft);color:var(--gold-ink);font-family:var(--font-mono);font-size:13px;font-weight:600}
+.step h3{font-size:16.5px;font-weight:600;letter-spacing:-.015em}
+.step p{font-size:13.5px;line-height:1.6;color:var(--ink-2)}
+.step ul{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.step li{display:flex;gap:8px;font-size:13px;color:var(--ink-2)}
+.step li .i{width:14px;height:14px;margin-top:2px;color:var(--ok)}
+.safe{display:grid;grid-template-columns:auto minmax(0,1fr);gap:18px;align-items:center;margin-top:14px;padding:20px 22px;border-radius:var(--r-xl)}
+.safe p{font-size:14px;line-height:1.6;color:var(--ink-2)}
+.safe b{color:var(--ink-1);font-weight:600}
+
+.p-foot{margin-top:120px;padding:36px 0 56px;border-top:1px solid var(--line);font-size:13px;color:var(--ink-3)}
+.p-foot-in{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.p-foot .p-brand{font-size:14px}
+
+/* Laag boven het prototype */
+.overlay{position:absolute;inset:0;z-index:40;display:flex;align-items:flex-start;justify-content:center;padding-top:120px;background:var(--scrim);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);animation:fade var(--t-2) var(--ease)}
+.overlay .palette{animation:pop var(--t-2) var(--spring)}
+.toasts{position:absolute;left:50%;bottom:24px;z-index:45;display:flex;flex-direction:column;align-items:center;gap:8px;transform:translateX(-50%);pointer-events:none}
+.toasts .toast{animation:rise var(--t-3) var(--spring)}
+.tip{position:absolute;z-index:30;min-width:190px;padding:10px 12px;border:1px solid var(--line-2);border-radius:10px;background:var(--s1);box-shadow:var(--shadow-pop);font-size:12.5px;pointer-events:none}
+.tip b{display:block;margin-bottom:6px;font-size:12.5px;font-weight:600}
+.tip div{display:flex;justify-content:space-between;gap:16px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.tip div span{display:inline-flex;align-items:center;gap:6px}
+.tip i{width:8px;height:8px;border-radius:2px;display:inline-block}
+@keyframes fade{from{opacity:0}}
+@keyframes pop{from{opacity:0;transform:translateY(-8px) scale(.98)}}
+.chart .tick.is-now{fill:var(--ink-1);font-weight:600}
+/* Thema wisselen: het nieuwe licht breidt zich uit vanaf waar je klikte. */
+::view-transition-old(root),::view-transition-new(root){animation:none;mix-blend-mode:normal}
+::view-transition-old(root){z-index:1}
+::view-transition-new(root){z-index:2}
+/* Schermwissel in het prototype: de inhoud komt even omhoog. */
+.proto .content>*{animation:rise var(--t-3) var(--ease)}
+/* Een zacht zoeklicht dat je cursor volgt over de kaarten van deze pagina. */
+.spot{position:relative;isolation:isolate}
+.spot::before{content:'';position:absolute;inset:0;z-index:-1;border-radius:inherit;opacity:0;transition:opacity var(--t-3) var(--ease);background:radial-gradient(420px circle at var(--mx,50%) var(--my,50%),rgba(247,197,72,.09),transparent 45%)}
+.page[data-theme="dag"] .spot::before{background:radial-gradient(420px circle at var(--mx,50%) var(--my,50%),rgba(244,188,46,.14),transparent 45%)}
+.spot:hover::before{opacity:1}
+.composer-field{width:100%;height:24px;border:0;outline:0;background:transparent;font-size:14px;color:var(--ink-1)}
+.composer-field::placeholder{color:var(--ink-3)}
+.msg-in{animation:rise var(--t-3) var(--spring)}
+.g-log{scroll-behavior:smooth}
+
+@media (max-width:1100px){
+  .p-head{grid-template-columns:1fr;gap:18px}
+  .princ{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .steps{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .type,.shape{grid-template-columns:1fr}
+  .duo{grid-template-columns:1fr}
+  .diff-row{grid-template-columns:140px minmax(0,1fr) minmax(0,1fr)}
+}
+@media (max-width:760px){
+  .p-links{display:none}
+  .p-theme{margin-left:auto}
+  .p-hero{padding-top:56px}
+  .p-lead{font-size:16px}
+  .compare,.proto-wrap{width:calc(100% - 32px);border-radius:12px}
+  .proto{border-radius:12px}
+  .princ,.steps{grid-template-columns:1fr}
+  .diff-row{grid-template-columns:1fr;gap:6px}
+  .diff-row:first-child{display:none}
+  .swr{grid-template-columns:28px minmax(0,1fr) 76px}
+  .swr code{display:none}
+  .scale-row{grid-template-columns:1fr;gap:6px}
+  .scale-row code{justify-self:start}
+  .phones{gap:28px}
+  .p-sec{padding-top:84px}
+}
+</style>
+</head>
+<body>
+<div class="rf page" id="page" data-theme="nacht">
+
+<!-- Iconen (lijnstijl, 24-raster; paden naar Lucide, ISC-licentie) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"></rect><rect x="14" y="3" width="7" height="5" rx="1.5"></rect><rect x="14" y="12" width="7" height="9" rx="1.5"></rect><rect x="3" y="16" width="7" height="5" rx="1.5"></rect></symbol>
+    <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.13-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.13a.5.5 0 0 1 .96 0l1.58 6.13a2 2 0 0 0 1.44 1.44l6.13 1.58a.5.5 0 0 1 0 .96l-6.13 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.13a.5.5 0 0 1-.96 0z"></path><path d="M20 3v4M22 5h-4"></path></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2.5"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></symbol>
+    <symbol id="i-calendar-range" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2.5"></rect><path d="M16 2v4M8 2v4M3 10h18M17 14h-6M13 18H7M7 14h.01M17 18h.01"></path></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"></circle><path d="M12 7v5l3 2"></path></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"></circle><path d="M20 21a8 8 0 0 0-16 0"></path></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></symbol>
+    <symbol id="i-ticket" viewBox="0 0 24 24"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"></path><path d="M13 5v2M13 17v2M13 11v2"></path></symbol>
+    <symbol id="i-receipt" viewBox="0 0 24 24"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"></path><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8M12 17.5v-11"></path></symbol>
+    <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path></symbol>
+    <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></symbol>
+    <symbol id="i-megaphone" viewBox="0 0 24 24"><path d="m3 11 18-5v12L3 14v-3z"></path><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"></path></symbol>
+    <symbol id="i-library" viewBox="0 0 24 24"><path d="m16 6 4 14M12 6v14M8 8v12M4 4v16"></path></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18"></path><path d="M18 17V9M13 17V5M8 17v-3"></path></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7.5"></circle><path d="m20.5 20.5-4.2-4.2"></path></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"></path></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></symbol>
+    <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"></path></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></symbol>
+    <symbol id="i-chevrons-lr" viewBox="0 0 24 24"><path d="m9 7-5 5 5 5M15 7l5 5-5 5"></path></symbol>
+    <symbol id="i-chevrons-ud" viewBox="0 0 24 24"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"></path></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></symbol>
+    <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"></circle><path d="m8.5 12 2.5 2.5 4.5-5"></path></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></symbol>
+    <symbol id="i-arrow-up-right" viewBox="0 0 24 24"><path d="M7 17 17 7M7 7h10v10"></path></symbol>
+    <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M13 5l7 7-7 7"></path></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle><circle cx="5" cy="12" r="1"></circle></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"></path></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="m7 10 5 5 5-5M12 15V3"></path></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z"></path><path d="M22 2 11 13"></path></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"></path></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4M12 17h.01"></path></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><path d="M4 22v-7"></path></symbol>
+    <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"></path></symbol>
+    <symbol id="i-map-pin" viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2.5"></rect><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="m9 12 2 2 4-4"></path></symbol>
+    <symbol id="i-message-dots" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path><path d="M8 12h.01M12 12h.01M16 12h.01"></path></symbol>
+    <symbol id="i-kanban" viewBox="0 0 24 24"><path d="M6 5v11M12 5v6M18 5v14"></path></symbol>
+    <symbol id="i-trend" viewBox="0 0 24 24"><path d="m22 7-8.5 8.5-5-5L2 17"></path><path d="M16 7h6v6"></path></symbol>
+    <symbol id="i-bell-ring" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0M4 2C2.8 3.7 2 5.7 2 8M22 8c0-2.3-.8-4.3-2-6"></path></symbol>
+    <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"></path><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"></path><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"></path></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"></path></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="14" height="14" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></symbol>
+    <symbol id="i-pen" viewBox="0 0 24 24"><path d="M12 20h9"></path><path d="M16.38 3.62a1 1 0 0 1 3 3L7.37 18.64a2 2 0 0 1-.85.5l-2.87.84a.5.5 0 0 1-.62-.62l.84-2.87a2 2 0 0 1 .5-.85z"></path></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></symbol>
+    <symbol id="i-euro" viewBox="0 0 24 24"><path d="M4 10h12M4 14h9"></path><path d="M19 6a7.7 7.7 0 0 0-5.2-2A7.9 7.9 0 0 0 6 12c0 4.4 3.5 8 7.8 8 2 0 3.8-.8 5.2-2"></path></symbol>
+    <symbol id="i-command" viewBox="0 0 24 24"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"></path></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m7 4 13 8-13 8z"></path></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 10 5-10 5L2 7z"></path><path d="m2 17 10 5 10-5M2 12l10 5 10-5"></path></symbol>
+    <symbol id="i-type" viewBox="0 0 24 24"><path d="M4 7V4h16v3M9 20h6M12 4v16"></path></symbol>
+    <symbol id="i-palette" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".5"></circle><circle cx="17.5" cy="10.5" r=".5"></circle><circle cx="8.5" cy="7.5" r=".5"></circle><circle cx="6.5" cy="12.5" r=".5"></circle><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.84-.44-1.13-.29-.29-.44-.65-.44-1.13a1.64 1.64 0 0 1 1.67-1.67h2c3.05 0 5.56-2.5 5.56-5.55C21.97 6.01 17.46 2 12 2z"></path></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="3"></rect><path d="M11 18h2"></path></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2.5"></rect><circle cx="9" cy="9" r="2"></circle><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"></path></symbol>
+  </defs>
+</svg>
+
+<header class="p-nav">
+  <div class="wrap p-nav-in">
+    <div class="p-brand"><span class="logo">R</span>ResoFly<span class="p-brand-sep"></span><span class="serif">Belicht</span></div>
+    <nav class="p-links" aria-label="Secties">
+      <a href="#concept">Concept</a>
+      <a href="#prototype">Prototype</a>
+      <a href="#systeem">Systeem</a>
+      <a href="#mobiel">Mobiel</a>
+      <a href="#invoering">Invoering</a>
+    </nav>
+    <div class="seg p-theme" role="group" aria-label="Thema van deze pagina">
+      <button type="button" data-set-theme="nacht" class="is-on"><svg class="i"><use href="#i-moon"></use></svg>Nacht</button>
+      <button type="button" data-set-theme="dag"><svg class="i"><use href="#i-sun"></use></svg>Dag</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- ── Hero ─────────────────────────────────────────────────────────── -->
+  <section class="p-hero">
+    <div class="wrap">
+      <span class="p-chip"><span class="logo">R</span>Designvoorstel · september 2026</span>
+      <h1 class="p-title">ResoFly, <span class="serif">opnieuw belicht.</span></h1>
+      <p class="p-lead">Een nieuwe look &amp; feel voor alles wat je in ResoFly doet: rustiger, sneller te lezen en onmiskenbaar van jou. Ontworpen voor twee lichten, <b>Nacht</b> en <b>Dag</b>, vanuit één systeem.</p>
+      <div class="p-facts">
+        <span class="p-fact"><svg class="i"><use href="#i-moon"></use></svg>Nacht &amp; <svg class="i"><use href="#i-sun"></use></svg>Dag, allebei ontworpen</span>
+        <span class="p-fact"><svg class="i"><use href="#i-type"></use></svg>Geist + Instrument Serif</span>
+        <span class="p-fact"><span class="orb"></span>Eigen laag voor Gerrie</span>
+        <span class="p-fact"><svg class="i"><use href="#i-check-circle"></use></svg>Alle tekst WCAG AA</span>
+      </div>
+    </div>
+    <div class="compare" id="compare" style="--pos:50%">
+      <div class="cmp-layer" data-compare="dag"></div>
+      <div class="cmp-layer cmp-top" data-compare="nacht"></div>
+      <div class="cmp-handle" id="cmpHandle"><span class="cmp-grip"><svg class="i"><use href="#i-chevrons-lr"></use></svg></span></div>
+      <span class="cmp-tag cmp-tag--l"><svg class="i"><use href="#i-moon"></use></svg>Nacht</span>
+      <span class="cmp-tag cmp-tag--r"><svg class="i"><use href="#i-sun"></use></svg>Dag</span>
+      <input class="sr" id="cmpRange" type="range" min="0" max="100" value="50" aria-label="Schuif tussen Nacht en Dag">
+    </div>
+    <p class="cmp-cap"><b>Sleep de schuif.</b> Links Nacht, rechts Dag: hetzelfde scherm en dezelfde code in twee lichten.</p>
+  </section>
+
+  <!-- ── 01 Concept ───────────────────────────────────────────────────── -->
+  <section class="p-sec" id="concept">
+    <div class="wrap">
+      <div class="p-head">
+        <div>
+          <div class="p-kicker">Concept</div>
+          <h2 class="p-h2">Zes principes, <span class="serif">één gevoel</span></h2>
+        </div>
+        <p class="p-sub">ResoFly doet veel: klanten, projecten, uren, agenda, tickets, offertes, facturen, boekhouding en Gerrie. Belicht maakt dat <b>rustig</b> door elke kleur, lijn en letter een vaste taak te geven.</p>
+      </div>
+      <div class="princ">
+        <article class="pr spot">
+          <div class="pr-demo"><span class="demo-old">Openstaand</span><svg class="i demo-arrow"><use href="#i-arrow-right"></use></svg><span class="demo-new">Openstaand</span></div>
+          <h3>Rust boven ruis</h3>
+          <p>Geen hoofdletters met spatiëring, geen kaart-in-kaart, één haarlijn waar er drie stonden. Je oog gaat naar de inhoud, niet naar de verpakking.</p>
+        </article>
+        <article class="pr spot">
+          <div class="pr-demo"><button type="button" class="btn">Concept opslaan</button><button type="button" class="btn btn--primary"><svg class="i"><use href="#i-send"></use></svg>Versturen</button></div>
+          <h3>Goud betekent iets</h3>
+          <p>Zongoud is de hoofdactie, de focus en de plek waar je bent. Nergens anders. Daardoor wijst het op elk scherm meteen de weg.</p>
+        </article>
+        <article class="pr spot">
+          <div class="pr-demo"><div class="demo-nums"><span>Content september <b>€ 650,00</b></span><span>Btw 21% <b>€ 136,50</b></span><span class="tot">Totaal <b>€ 786,50</b></span></div></div>
+          <h3>Cijfers kloppen altijd</h3>
+          <p>Tabelcijfers die recht onder elkaar staan, bedragen die nooit meer worden afgekapt en centen die net een tikje terugtreden.</p>
+        </article>
+        <article class="pr spot">
+          <div class="pr-demo"><span class="orb orb-lg"></span><span class="badge badge--ai">Voorstel van Gerrie</span></div>
+          <h3>Gerrie is herkenbaar</h3>
+          <p>Alles wat de assistent maakt of voorstelt, draagt het poollicht. Je ziet altijd wat van jou is en wat van hem. Er gaat niets de deur uit zonder jouw klik.</p>
+        </article>
+        <article class="pr spot">
+          <div class="pr-demo"><div class="demo-duo"><i><svg class="i i-lg"><use href="#i-moon"></use></svg></i><i><svg class="i i-lg"><use href="#i-sun"></use></svg></i></div></div>
+          <h3>Twee lichten, één systeem</h3>
+          <p>Nacht en Dag zijn allebei ontworpen, niet omgekeerd. Elke tekstkleur haalt AA op elk vlak waar hij staat, in beide thema's.</p>
+        </article>
+        <article class="pr spot">
+          <div class="pr-demo"><div class="demo-kbd"><span class="kbd">⌘</span><span class="kbd">K</span></div></div>
+          <h3>Alles binnen twee toetsen</h3>
+          <p>Eén opdrachtpalet voor zoeken, springen en maken: een factuur, een taak, uren of een vraag aan Gerrie. Het menu blijft er voor wie liever klikt.</p>
+        </article>
+      </div>
+
+      <h3 class="p-h3">Wat er verandert<small>Gemeten aan de werkruimte zoals die nu is (desktop, 1440 × 900).</small></h3>
+      <div class="diff">
+        <div class="diff-row"><span></span><span>Nu</span><span>Belicht</span></div>
+        <div class="diff-row"><b>Balken bovenin</b><span class="diff-old">114 px: werktabs plus een aparte titelbalk</span><span class="diff-new"><svg class="i"><use href="#i-check"></use></svg>50 px: werktabs, Gerrie en meldingen in één regel; de titel staat in de pagina</span></div>
+        <div class="diff-row"><b>Kerncijfers</b><span class="diff-old">Zes kaarten; bedragen vallen weg („€ 3.690,5…”)</span><span class="diff-new"><svg class="i"><use href="#i-check"></use></svg>Vier kaarten met context (een meter of een vergelijking) en bedragen altijd voluit</span></div>
+        <div class="diff-row"><b>Letter</b><span class="diff-old">Poppins, veel kapitalen met spatiëring</span><span class="diff-new"><svg class="i"><use href="#i-check"></use></svg>Geist voor alles, Instrument Serif voor één accent per scherm, Geist Mono voor nummers en tijden</span></div>
+        <div class="diff-row"><b>Goud</b><span class="diff-old">Op labels, iconen, randen, gloed én knoppen</span><span class="diff-new"><svg class="i"><use href="#i-check"></use></svg>Alleen hoofdactie, focus en de plek waar je bent</span></div>
+        <div class="diff-row"><b>Gerrie</b><span class="diff-old">Hetzelfde goud als de rest van de app</span><span class="diff-new"><svg class="i"><use href="#i-check"></use></svg>Een eigen laag, het poollicht: voorstellen, antwoorden en acties van de assistent</span></div>
+        <div class="diff-row"><b>Vlakken</b><span class="diff-old">Kaarten met gloed en schaduwwolken, raster op de achtergrond</span><span class="diff-new"><svg class="i"><use href="#i-check"></use></svg>Eén werkpaneel op de grond, haarlijnen en licht dat van boven valt</span></div>
+        <div class="diff-row"><b>Menu</b><span class="diff-old">Regels van 44 px, een organisatiekaart bovenin</span><span class="diff-new"><svg class="i"><use href="#i-check"></use></svg>Regels van 32 px, een compacte werkruimtekiezer en ⌘K</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 02 Prototype ─────────────────────────────────────────────────── -->
+  <section class="p-sec" id="prototype">
+    <div class="wrap">
+      <div class="p-head">
+        <div>
+          <div class="p-kicker">Prototype</div>
+          <h2 class="p-h2">Klik door de <span class="serif">werkruimte</span></h2>
+        </div>
+        <p class="p-sub">Vijf schermen, uitgewerkt met de voorbeeldgegevens van Studio Lopik: <b>Dashboard, Agenda, Projecten, Facturen en Gerrie</b>. Gebruik het menu, de werktabs of <span class="kbd">⌘K</span>. Bovenin wissel je tussen Nacht en Dag.</p>
+      </div>
+    </div>
+    <div class="proto-wrap">
+      <div class="proto" id="proto"></div>
+      <div class="proto-hints">
+        <span><span class="kbd">⌘K</span>opdrachtpalet</span>
+        <span><svg class="i i-sm"><use href="#i-check-circle"></use></svg>vink taken af</span>
+        <span><svg class="i i-sm"><use href="#i-chart"></use></svg>wijs een maand aan in de grafiek</span>
+        <span><span class="orb orb-sm" style="width:14px;height:14px"></span>laat Gerrie iets klaarzetten</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 03 Systeem ───────────────────────────────────────────────────── -->
+  <section class="p-sec" id="systeem">
+    <div class="wrap">
+      <div class="p-head">
+        <div>
+          <div class="p-kicker">Systeem</div>
+          <h2 class="p-h2">Eén systeem, <span class="serif">twee lichten</span></h2>
+        </div>
+        <p class="p-sub">Alles hieronder is tokens en componenten, klaar om in de bestaande <b>THEMA-TOKENS-laag</b> van ResoFly te schuiven. De contrastwaarden rekent deze pagina zelf uit, live, op de kleuren die je ziet.</p>
+      </div>
+
+      <h3 class="p-h3" style="margin-top:0">Kleur<small>Neutrale grafiet- en steentinten; goud als enige warme lichtbron. Contrast gemeten op een kaart.</small></h3>
+      <div class="duo" id="colors">
+        <div class="rf sys-panel" data-theme="nacht" data-swatches></div>
+        <div class="rf sys-panel" data-theme="dag" data-swatches></div>
+      </div>
+
+      <h3 class="p-h3">Letter<small>Eén familie voor het werk, één voor het accent, één voor wat je wilt kunnen vergelijken.</small></h3>
+      <div class="type">
+        <div class="tcard spot">
+          <div class="aa">Aa</div>
+          <div><h4>Geist</h4><p>Alles wat je leest en bedient. Strak, compact en met échte tabelcijfers, zodat bedragen in kolommen recht onder elkaar staan.</p></div>
+        </div>
+        <div class="tcard spot">
+          <div class="aa serif">Aa</div>
+          <div><h4>Instrument Serif, cursief</h4><p>Eén accent per scherm: je naam in de groet, een lege staat, een titel die mag ademen. Nooit voor cijfers.</p></div>
+        </div>
+        <div class="tcard spot">
+          <div class="aa mono">2026</div>
+          <div><h4>Geist Mono</h4><p>Factuurnummers, tijden, schattingen en sneltoetsen: alles wat je naast elkaar wilt kunnen leggen.</p></div>
+        </div>
+      </div>
+      <div class="scale">
+        <div class="scale-row"><span>Groet</span><div class="h1 h1-hero">Goedemorgen, <span class="serif">Gerjan</span></div><code>34 / 600 · −3%</code></div>
+        <div class="scale-row"><span>Paginatitel</span><div class="h1">Nieuwe huisstijl De Korenaar</div><code>26 / 600 · −2,2%</code></div>
+        <div class="scale-row"><span>Kerncijfer</span><div class="kpi-value">€ 9.813<small>,10</small></div><code>28 / 600 · proportioneel</code></div>
+        <div class="scale-row"><span>Kaarttitel</span><div style="font-size:14px;font-weight:600">Gefactureerd per maand</div><code>14 / 600</code></div>
+        <div class="scale-row"><span>Tekst</span><div style="font-size:13.5px">Karim betaalde de vorige twee facturen binnen twee dagen na een herinnering.</div><code>13,5 / 400</code></div>
+        <div class="scale-row"><span>Meta</span><div style="font-size:12.5px;color:var(--ink-3)">Restaurant Bloem · Menukaart &amp; social Bloem</div><code>12,5 / 400</code></div>
+        <div class="scale-row"><span>Nummer</span><div class="mono" style="font-size:13px">2026-040 · 11:00 – 12:30 · 1u 30m</div><code>Mono 12,5 / 400</code></div>
+      </div>
+
+      <h3 class="p-h3">Componenten<small>Dezelfde bouwstenen in beide lichten. Hover, klik en tab er gerust doorheen.</small></h3>
+      <div class="duo" id="components">
+        <div class="rf sys-panel" data-theme="nacht" data-components></div>
+        <div class="rf sys-panel" data-theme="dag" data-components></div>
+      </div>
+
+      <h3 class="p-h3">Vorm, diepte en beweging<small>Concentrische hoeken, drie hoogtes en drie snelheden.</small></h3>
+      <div class="shape">
+        <div class="card">
+          <div class="card-title">Hoeken</div>
+          <p class="card-sub">Hoe groter het vlak, hoe ronder. Binnen elkaar altijd concentrisch.</p>
+          <div class="radii">
+            <div><i style="border-radius:6px;width:28px;height:28px"></i>6</div>
+            <div><i style="border-radius:8px;width:34px;height:34px"></i>8</div>
+            <div><i style="border-radius:10px;width:40px;height:40px"></i>10</div>
+            <div><i style="border-radius:14px;width:48px;height:48px"></i>14</div>
+            <div><i style="border-radius:18px;width:56px;height:56px"></i>18</div>
+            <div><i style="border-radius:22px;width:64px;height:64px"></i>22</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Hoogtes</div>
+          <p class="card-sub">Licht valt van boven. Op Nacht een glansrand, op Dag een zachte schaduw.</p>
+          <div class="elev">
+            <div style="background:var(--panel);box-shadow:inset 0 0 0 1px var(--line)">Werkpaneel <small>panel</small></div>
+            <div style="background:var(--s1);box-shadow:var(--shadow-1),0 0 0 1px var(--line)">Kaart <small>shadow-1</small></div>
+            <div style="background:var(--s1);box-shadow:var(--shadow-pop)">Zwevend <small>shadow-pop</small></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title" style="justify-content:space-between;display:flex">Beweging <button type="button" class="btn btn--sm" id="playMotion"><svg class="i"><use href="#i-play"></use></svg>Speel af</button></div>
+          <p class="card-sub">Snel waar je wacht, rustig waar je kijkt.</p>
+          <div class="motion" id="motion">
+            <div class="mtrack"><i style="transition:left 120ms cubic-bezier(.2,.8,.2,1)"></i></div>
+            <div class="mlabel"><span>Hover en vinkjes</span><code>120 ms</code></div>
+            <div class="mtrack"><i style="transition:left 200ms cubic-bezier(.34,1.4,.64,1)"></i></div>
+            <div class="mlabel"><span>Menu's en schakelaars</span><code>200 ms · veer</code></div>
+            <div class="mtrack is-ai"><i style="transition:left 320ms cubic-bezier(.2,.8,.2,1)"></i></div>
+            <div class="mlabel"><span>Panelen en Gerrie</span><code>320 ms</code></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 04 Mobiel ────────────────────────────────────────────────────── -->
+  <section class="p-sec" id="mobiel">
+    <div class="wrap">
+      <div class="p-head">
+        <div>
+          <div class="p-kicker">Mobiel</div>
+          <h2 class="p-h2">In je <span class="serif">broekzak</span></h2>
+        </div>
+        <p class="p-sub">Dezelfde taal op de telefoon: de vijf vaste bestemmingen onder je duim, Gerrie altijd één tik weg en elk raakvlak minstens 44 pixels. Geen nep-statusbalk, gewoon ruimte voor de echte.</p>
+      </div>
+      <div class="phones" id="phones"></div>
+    </div>
+  </section>
+
+  <!-- ── 05 Invoering ─────────────────────────────────────────────────── -->
+  <section class="p-sec" id="invoering">
+    <div class="wrap">
+      <div class="p-head">
+        <div>
+          <div class="p-kicker">Invoering</div>
+          <h2 class="p-h2">Van voorstel <span class="serif">naar product</span></h2>
+        </div>
+        <p class="p-sub">De werkruimte heeft al een tokenlaag in drie lagen: kanalen, semantiek en een compat-laag die de oude namen doorverwijst. Daardoor kan Belicht <b>in vier stappen</b> binnenkomen, terwijl alles blijft werken.</p>
+      </div>
+      <div class="steps">
+        <article class="step spot">
+          <span class="step-n">1</span>
+          <h3>Fundament</h3>
+          <p>De tokens van Nacht en Dag gaan in het THEMA-TOKENS-blok van globals.css. Via de compat-laag volgt vrijwel elk scherm direct.</p>
+          <ul><li><svg class="i"><use href="#i-check"></use></svg>Kleuren, hoeken en schaduwen</li><li><svg class="i"><use href="#i-check"></use></svg>Geist, Instrument Serif, Geist Mono</li></ul>
+        </article>
+        <article class="step spot">
+          <span class="step-n">2</span>
+          <h3>Werkruimte</h3>
+          <p>De omlijsting waar je elke dag in zit: zijbalk, werkpaneel en één balk voor werktabs, Gerrie en meldingen.</p>
+          <ul><li><svg class="i"><use href="#i-check"></use></svg>Compacter menu, werkruimtekiezer</li><li><svg class="i"><use href="#i-check"></use></svg>⌘K-opdrachtpalet</li></ul>
+        </article>
+        <article class="step spot">
+          <span class="step-n">3</span>
+          <h3>Schermen</h3>
+          <p>Eerst waar je het meest bent: dashboard, agenda, projecten, facturen en Gerrie. Daarna module voor module.</p>
+          <ul><li><svg class="i"><use href="#i-check"></use></svg>Kerncijfers met context</li><li><svg class="i"><use href="#i-check"></use></svg>Het poollicht voor Gerrie</li></ul>
+        </article>
+        <article class="step spot">
+          <span class="step-n">4</span>
+          <h3>Buitenkant</h3>
+          <p>Wat je klanten zien: offerte- en factuurpagina's, het klantportaal, e-mails en pdf's, met hun eigen klantbranding.</p>
+          <ul><li><svg class="i"><use href="#i-check"></use></svg>Zelfde tokens, eigen accent</li><li><svg class="i"><use href="#i-check"></use></svg>Pdf blijft papierwit</li></ul>
+        </article>
+      </div>
+      <div class="safe aurora">
+        <span class="orb orb-lg"></span>
+        <p><b>Veilig invoeren.</b> Belicht kan eerst achter een schakelaar per gebruiker ("Probeer de nieuwe look"), naast het huidige ontwerp. De mobiele lay-outtest draait al op beide thema's; een contrastcontrole erbij bewaakt dat elke tekstkleur AA blijft halen.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="p-foot">
+  <div class="wrap p-foot-in">
+    <div class="p-brand"><span class="logo">R</span>ResoFly<span class="p-brand-sep"></span><span class="serif">Belicht</span></div>
+    <span>Designvoorstel · september 2026 · alle schermen met voorbeeldgegevens (Studio Lopik)</span>
+  </div>
+</footer>
+
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════
+     Sjablonen. Het script hieronder zet ze op hun plek: twee keer in de
+     vergelijking bovenaan, één keer in het prototype.
+     ════════════════════════════════════════════════════════════════════ -->
+
+<template id="t-app">
+<div class="rf frame" data-theme="nacht">
+  <div class="rf-app">
+    <aside class="side" aria-label="Hoofdmenu">
+      <button type="button" class="ws">
+        <span class="logo">R</span>
+        <span class="ws-text"><span class="ws-name">Studio Lopik</span><span class="ws-sub">ResoFly · 2 teamleden</span></span>
+        <svg class="i i-sm"><use href="#i-chevrons-ud"></use></svg>
+      </button>
+      <button type="button" class="cmdk" data-action="palette"><svg class="i"><use href="#i-search"></use></svg><span class="cmdk-label">Zoek of spring naar…</span><span class="kbd">⌘K</span></button>
+      <nav class="nav">
+        <div class="nav-group">
+          <div class="nav-label">Overzicht</div>
+          <button type="button" class="nav-item is-active" data-nav="dashboard"><svg class="i"><use href="#i-grid"></use></svg><span class="nav-text">Dashboard</span></button>
+          <button type="button" class="nav-item is-ai" data-nav="gerrie"><svg class="i"><use href="#i-sparkles"></use></svg><span class="nav-text">Gerrie</span><span class="nav-count is-ai">3</span></button>
+        </div>
+        <div class="nav-group">
+          <div class="nav-label">Plannen</div>
+          <button type="button" class="nav-item" data-nav="agenda"><svg class="i"><use href="#i-calendar"></use></svg><span class="nav-text">Agenda</span></button>
+          <button type="button" class="nav-item" data-nav="uren"><svg class="i"><use href="#i-clock"></use></svg><span class="nav-text">Uren</span></button>
+        </div>
+        <div class="nav-group">
+          <div class="nav-label">Werk</div>
+          <button type="button" class="nav-item" data-nav="klanten"><svg class="i"><use href="#i-users"></use></svg><span class="nav-text">Klanten</span></button>
+          <button type="button" class="nav-item" data-nav="projecten"><svg class="i"><use href="#i-folder"></use></svg><span class="nav-text">Projecten</span></button>
+          <button type="button" class="nav-item" data-nav="tickets"><svg class="i"><use href="#i-ticket"></use></svg><span class="nav-text">Tickets</span><span class="nav-count">2</span></button>
+        </div>
+        <div class="nav-group">
+          <div class="nav-label">Financiën</div>
+          <button type="button" class="nav-item" data-nav="financien"><svg class="i"><use href="#i-receipt"></use></svg><span class="nav-text">Financiën</span></button>
+        </div>
+        <div class="nav-group">
+          <div class="nav-label">Communicatie</div>
+          <button type="button" class="nav-item" data-nav="berichten"><svg class="i"><use href="#i-inbox"></use></svg><span class="nav-text">Berichten</span><span class="nav-count">3</span></button>
+          <button type="button" class="nav-item" data-nav="chat"><svg class="i"><use href="#i-message"></use></svg><span class="nav-text">Chat</span><span class="nav-count">2</span></button>
+          <button type="button" class="nav-item" data-nav="marketing"><svg class="i"><use href="#i-megaphone"></use></svg><span class="nav-text">Marketing</span></button>
+        </div>
+        <div class="nav-group">
+          <div class="nav-label">Kennis &amp; inzicht</div>
+          <button type="button" class="nav-item" data-nav="inhoud"><svg class="i"><use href="#i-library"></use></svg><span class="nav-text">Inhoud</span></button>
+          <button type="button" class="nav-item" data-nav="statistieken"><svg class="i"><use href="#i-chart"></use></svg><span class="nav-text">Statistieken</span></button>
+        </div>
+      </nav>
+      <div class="side-foot">
+        <div class="me">
+          <span class="av av-lg av-gl">GL</span>
+          <span class="me-text"><span class="me-name">Gerjan van Lopik</span><span class="me-sub">Owner</span></span>
+          <button type="button" class="icon-btn icon-btn--sm" data-action="theme" aria-label="Wissel tussen Nacht en Dag"><svg class="i i-sm"><use href="#i-moon"></use></svg></button>
+        </div>
+      </div>
+    </aside>
+    <main class="main">
+      <div class="top">
+        <div class="tabs" role="tablist" aria-label="Werktabs">
+          <button type="button" class="tab is-active" data-tab="dashboard"><svg class="i i-sm"><use href="#i-grid"></use></svg><span class="trunc">Dashboard</span><span class="tab-x"><svg class="i i-xs"><use href="#i-x"></use></svg></span></button>
+          <button type="button" class="tab" data-tab="facturen"><svg class="i i-sm"><use href="#i-receipt"></use></svg><span class="trunc">Facturen</span><span class="tab-x"><svg class="i i-xs"><use href="#i-x"></use></svg></span></button>
+          <button type="button" class="tab" data-tab="project"><svg class="i i-sm"><use href="#i-folder"></use></svg><span class="trunc">Nieuwe huisstijl De Korenaar</span><span class="tab-x"><svg class="i i-xs"><use href="#i-x"></use></svg></span></button>
+        </div>
+        <button type="button" class="icon-btn icon-btn--sm" aria-label="Nieuw tabblad"><svg class="i i-sm"><use href="#i-plus"></use></svg></button>
+        <div class="top-actions">
+          <button type="button" class="btn btn--sm btn--ai" data-action="gerrie"><span class="orb orb-sm"></span>Vraag Gerrie<span class="kbd">⌘J</span></button>
+          <span class="top-sep"></span>
+          <button type="button" class="icon-btn" aria-label="Meldingen, 4 nieuw"><svg class="i"><use href="#i-bell"></use></svg><span class="pip-dot"></span></button>
+          <div class="av-stack" aria-label="Online: Sanne en Gerjan"><span class="av av-sb">SB</span><span class="av av-gl">GL</span></div>
+        </div>
+      </div>
+      <div class="content" data-slot="content"></div>
+    </main>
+  </div>
+</div>
+</template>
+
+<!-- ── Dashboard ──────────────────────────────────────────────────────── -->
+<template id="t-dashboard">
+<div class="stack">
+  <header class="ph" style="margin-bottom:6px">
+    <div class="ph-main">
+      <div class="eyebrow"><span class="pip"></span>Vrijdag 25 september · week 39</div>
+      <h1 class="h1 h1-hero">Goedemorgen, <span class="serif">Gerjan</span></h1>
+      <p class="lead">Vandaag staan er <b>3 afspraken</b> en <b>5 taken</b> op je lijst. Eén factuur is over tijd.</p>
+    </div>
+    <div class="ph-actions">
+      <div class="seg" role="group" aria-label="Wiens werk">
+        <button type="button" class="is-on">Mijn werk</button>
+        <button type="button">Team</button>
+      </div>
+      <button type="button" class="btn"><svg class="i"><use href="#i-calendar-range"></use></svg>Weekplanner</button>
+      <button type="button" class="btn btn--primary" data-action="palette"><svg class="i"><use href="#i-plus"></use></svg>Nieuw</button>
+    </div>
+  </header>
+
+  <section class="brief aurora" aria-label="Dagstart van Gerrie">
+    <span class="orb orb-lg"></span>
+    <div>
+      <div class="brief-head"><span class="ai-tag">Gerrie · dagstart</span><span class="badge badge--ai badge--sm">Voorstel</span></div>
+      <p class="brief-text">Factuur <b>2026-040</b> van Restaurant Bloem staat <b>10 dagen</b> open (€ 786,50). Karim betaalde de vorige twee binnen twee dagen na een herinnering. Zal ik er een voor je klaarzetten?</p>
+      <p class="brief-note"><svg class="i"><use href="#i-shield"></use></svg>Er gaat niets de deur uit zonder jouw akkoord.</p>
+    </div>
+    <div class="brief-actions">
+      <button type="button" class="btn btn--ghost" data-go="facturen">Factuur bekijken</button>
+      <button type="button" class="btn btn--ai" data-action="remind"><svg class="i"><use href="#i-sparkles"></use></svg>Herinnering klaarzetten</button>
+    </div>
+  </section>
+
+  <div class="kpis">
+    <article class="card kpi">
+      <div class="kpi-label">Gefactureerd in september<span class="delta delta--up"><svg class="i"><use href="#i-arrow-up-right"></use></svg>33%</span></div>
+      <div class="kpi-value">€ 9.813<small>,10</small></div>
+      <div class="kpi-foot">t.o.v. € 7.400 in augustus</div>
+    </article>
+    <article class="card kpi">
+      <div class="kpi-label">Openstaand<span class="muted" style="font-weight:400">2 facturen</span></div>
+      <div class="kpi-value">€ 3.690<small>,50</small></div>
+      <div class="kpi-foot" style="flex-direction:column;align-items:stretch;gap:8px">
+        <div class="meter" role="img" aria-label="€ 2.904,00 binnen termijn en € 786,50 te laat"><span class="meter-neutral" style="width:78.7%"></span><span class="meter-danger" style="width:21.3%"></span></div>
+        <div class="legend"><span><i style="background:var(--ink-4)"></i>€ 2.904 op tijd</span><span><i style="background:var(--danger)"></i>€ 786 te laat</span></div>
+      </div>
+    </article>
+    <article class="card kpi">
+      <div class="kpi-label">Uren deze week<span class="muted" style="font-weight:400">doel 32 u</span></div>
+      <div class="kpi-value">26,5<small> u</small></div>
+      <div class="kpi-foot" style="flex-direction:column;align-items:stretch;gap:8px">
+        <div class="meter" role="img" aria-label="26,5 van 32 uur"><span class="meter-gold" style="width:82.8%"></span></div>
+        <div class="legend"><span>€ 2.252,50 declarabel</span></div>
+      </div>
+    </article>
+    <article class="card kpi">
+      <div class="kpi-label">Open taken<span class="muted" style="font-weight:400">5 projecten</span></div>
+      <div class="kpi-value">16</div>
+      <div class="kpi-foot"><span class="badge badge--danger badge--sm"><span class="dot"></span>4 te laat</span><span class="badge badge--sm">5 vandaag</span><span class="badge badge--sm">7 later</span></div>
+    </article>
+  </div>
+
+  <div class="grid-12 row-eq">
+    <section class="card span-7" data-tasks>
+      <header class="card-head">
+        <div><h2 class="card-title">Vandaag</h2><p class="card-sub">5 open · zo'n 5,5 uur werk</p></div>
+        <button type="button" class="card-link">Weekplanner<svg class="i"><use href="#i-chevron-right"></use></svg></button>
+      </header>
+      <div class="group-label is-late">Blijft liggen <span class="count">2</span></div>
+      <div class="task">
+        <button type="button" class="check" aria-label="Terugbellen Peter over planning afvinken"><svg class="i"><use href="#i-check"></use></svg></button>
+        <div class="task-main"><div class="task-title">Terugbellen Peter over planning</div><div class="task-meta"><span class="chip"><i class="sw sw-vandijk"></i><span>Campagne winteractie Van Dijk</span></span></div></div>
+        <div class="task-side"><span class="prio" title="Hoge prioriteit"><svg class="i"><use href="#i-flag"></use></svg></span><span class="est">15m</span><span class="due due--late">5 d te laat</span></div>
+      </div>
+      <div class="task">
+        <button type="button" class="check" aria-label="Kleurenpalet afstemmen met Joost afvinken"><svg class="i"><use href="#i-check"></use></svg></button>
+        <div class="task-main"><div class="task-title">Kleurenpalet afstemmen met Joost</div><div class="task-meta"><span class="chip"><i class="sw sw-korenaar"></i><span>Nieuwe huisstijl De Korenaar</span></span></div></div>
+        <div class="task-side"><span class="est">1u</span><span class="due due--late">4 d te laat</span></div>
+      </div>
+      <div class="group-label">Gepland voor vandaag <span class="count">4</span></div>
+      <div class="task">
+        <button type="button" class="check" aria-label="Logo-schetsen uitwerken afvinken"><svg class="i"><use href="#i-check"></use></svg></button>
+        <div class="task-main"><div class="task-title">Logo-schetsen uitwerken</div><div class="task-meta"><span class="chip"><i class="sw sw-korenaar"></i><span>Nieuwe huisstijl De Korenaar</span></span></div></div>
+        <div class="task-side"><span class="prio" title="Hoge prioriteit"><svg class="i"><use href="#i-flag"></use></svg></span><span class="est">2u</span><span class="due due--today">13:00</span></div>
+      </div>
+      <div class="task">
+        <button type="button" class="check" aria-label="Menukaart drukklaar maken afvinken"><svg class="i"><use href="#i-check"></use></svg></button>
+        <div class="task-main"><div class="task-title">Menukaart drukklaar maken</div><div class="task-meta"><span class="chip"><i class="sw sw-bloem"></i><span>Menukaart &amp; social Bloem</span></span></div></div>
+        <div class="task-side"><span class="est">1u 30m</span><span class="due">vandaag</span></div>
+      </div>
+      <div class="task">
+        <button type="button" class="check" aria-label="Kennismakingsgesprek voorbereiden afvinken"><svg class="i"><use href="#i-check"></use></svg></button>
+        <div class="task-main"><div class="task-title">Kennismakingsgesprek voorbereiden</div><div class="task-meta"><span class="chip"><i class="sw sw-zonnetje"></i><span>Onboarding Zonnetje</span></span></div></div>
+        <div class="task-side"><span class="est">45m</span><span class="due">vandaag</span></div>
+      </div>
+      <div class="task is-done">
+        <button type="button" class="check is-done" aria-label="Social posts week 39 is klaar"><svg class="i"><use href="#i-check"></use></svg></button>
+        <div class="task-main"><div class="task-title">Social posts week 39</div><div class="task-meta"><span class="chip"><i class="sw sw-vandijk"></i><span>Campagne winteractie Van Dijk</span></span></div></div>
+        <div class="task-side"><span class="est">1u 30m</span><span class="due">klaar 09:12</span></div>
+      </div>
+    </section>
+
+    <section class="card span-5">
+      <header class="card-head">
+        <div><h2 class="card-title">Agenda</h2><p class="card-sub">3 afspraken en 1 ingeplande taak</p></div>
+        <button type="button" class="card-link" data-go="agenda">Open agenda<svg class="i"><use href="#i-chevron-right"></use></svg></button>
+      </header>
+      <div class="next">
+        <div class="next-time"><b>11:00</b><span>12:30</span></div>
+        <div class="next-main"><div class="next-title">Fotoshoot Bloem</div><div class="next-meta">Over 18 min · Restaurant Bloem, Lopik</div></div>
+        <button type="button" class="icon-btn icon-btn--line" aria-label="Route naar Restaurant Bloem"><svg class="i"><use href="#i-map-pin"></use></svg></button>
+      </div>
+      <div class="day">
+        <div class="day-hour"><span>09:00</span></div>
+        <div class="day-hour"><span>10:00</span></div>
+        <div class="day-hour"><span>11:00</span></div>
+        <div class="day-hour"><span>12:00</span></div>
+        <div class="day-hour"><span>13:00</span></div>
+        <div class="day-hour"><span>14:00</span></div>
+        <div class="day-hour"><span>15:00</span></div>
+        <div class="day-hour"><span>16:00</span></div>
+        <div class="day-ev ev-studio is-past" style="top:20px;height:21px;flex-direction:row;align-items:center;justify-content:flex-start;gap:8px;padding:0 10px"><b>Stand-up met Sanne</b><span>09:30</span></div>
+        <div class="now" style="top:68px"><span>10:42</span></div>
+        <div class="day-ev ev-orange" style="top:81px;height:58px"><b>Fotoshoot Bloem</b><span>11:00 – 12:30 · Restaurant Bloem</span></div>
+        <div class="day-ev ev-task" style="top:161px;height:58px"><b>Logo-schetsen uitwerken</b><span>13:00 – 14:30 · ingeplande taak</span></div>
+        <div class="day-ev ev-studio" style="top:241px;height:38px"><b>Weekafsluiting</b><span>15:00 – 16:00 · Studio</span></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="grid-12 row-eq">
+    <section class="card span-7">
+      <header class="card-head">
+        <div><h2 class="card-title">Gefactureerd per maand</h2><p class="card-sub">Laatste 12 maanden · incl. btw</p></div>
+        <div class="legend"><span><i style="background:var(--viz-1)"></i>Betaald</span><span><i style="background:var(--viz-2)"></i>Openstaand</span></div>
+      </header>
+      <div style="position:relative;padding:0 16px 12px" data-chart>
+        <svg class="chart" viewBox="0 0 624 212" role="img" aria-label="Gefactureerd per maand, oktober 2025 tot en met september 2026. September: € 9.813,10, waarvan € 2.904,00 openstaand.">
+          <line class="gl" x1="46" x2="616" y1="186" y2="186"></line>
+          <line class="gl" x1="46" x2="616" y1="132.67" y2="132.67"></line>
+          <line class="gl" x1="46" x2="616" y1="79.33" y2="79.33"></line>
+          <line class="gl" x1="46" x2="616" y1="26" y2="26"></line>
+          <text class="tick ta-e" x="36" y="190">0</text>
+          <text class="tick ta-e" x="36" y="136.67">4.000</text>
+          <text class="tick ta-e" x="36" y="83.33">8.000</text>
+          <text class="tick ta-e" x="36" y="30">12.000</text>
+          <g class="col" data-i="0"><rect class="col-hit" x="46" y="20" width="47.5" height="166" rx="6"></rect><path class="paid" d="M58.75,186V94a4,4 0 0 1 4,-4h14a4,4 0 0 1 4,4V186Z"></path></g>
+          <g class="col" data-i="1"><rect class="col-hit" x="93.5" y="20" width="47.5" height="166" rx="6"></rect><path class="paid" d="M106.25,186V78a4,4 0 0 1 4,-4h14a4,4 0 0 1 4,4V186Z"></path></g>
+          <g class="col" data-i="2"><rect class="col-hit" x="141" y="20" width="47.5" height="166" rx="6"></rect><path class="paid" d="M153.75,186V108.67a4,4 0 0 1 4,-4h14a4,4 0 0 1 4,4V186Z"></path></g>
+          <g class="col" data-i="3"><rect class="col-hit" x="188.5" y="20" width="47.5" height="166" rx="6"></rect><path class="paid" d="M201.25,186V119.33a4,4 0 0 1 4,-4h14a4,4 0 0 1 4,4V186Z"></path></g>
+          <g class="col" data-i="4"><rect class="col-hit" x="236" y="20" width="47.5" height="166" rx="6"></rect><path class="paid" d="M248.75,186V84.67a4,4 0 0 1 4,-4h14a4,4 0 0 1 4,4V186Z"></path></g>
+          <g class="col" data-i="5"><rect class="col-hit" x="283.5" y="20" width="47.5" height="166" rx="6"></rect><path class="paid" d="M296.25,186V62a4,4 0 0 1 4,-4h14a4,4 0 0 1 4,4V186Z"></path></g>
+          <g class="col" data-i="6"><rect class="col-hit" x="331" y="20" width="47.5" height="166" rx="6"></rect><path class="paid" d="M343.75,186V72.67a4,4 0 0 1 4,-4h14a4,4 0 0 1 4,4V186Z"></path></g>
+          <g class="col" data-i="7"><rect class="col-hit" x="378.5" y="20" width="47.5" height="166" rx="6"></rect><path class="paid" d="M391.25,186V54a4,4 0 0 1 4,-4h14a4,4 0 0 1 4,4V186Z"></path></g>
+          <g class="col" data-i="8"><rect class="col-hit" x="426" y="20" width="47.5" height="166" rx="6"></rect><path class="paid" d="M438.75,186V68.67a4,4 0 0 1 4,-4h14a4,4 0 0 1 4,4V186Z"></path></g>
+          <g class="col" data-i="9"><rect class="col-hit" x="473.5" y="20" width="47.5" height="166" rx="6"></rect><path class="paid" d="M486.25,186V104.67a4,4 0 0 1 4,-4h14a4,4 0 0 1 4,4V186Z"></path></g>
+          <g class="col" data-i="10"><rect class="col-hit" x="521" y="20" width="47.5" height="166" rx="6"></rect><rect class="paid" x="533.75" y="97.82" width="22" height="88.18"></rect><path class="open" d="M533.75,95.82V91.33a4,4 0 0 1 4,-4h14a4,4 0 0 1 4,4V95.82Z"></path></g>
+          <g class="col" data-i="11"><rect class="col-hit" x="568.5" y="20" width="47.5" height="166" rx="6"></rect><rect class="paid" x="581.25" y="93.88" width="22" height="92.12"></rect><path class="open" d="M581.25,91.88V59.16a4,4 0 0 1 4,-4h14a4,4 0 0 1 4,4V91.88Z"></path></g>
+          <text class="lbl ta-m" x="592.25" y="46">€ 9.813</text>
+          <text class="tick ta-m" x="69.75" y="204">okt</text>
+          <text class="tick ta-m" x="117.25" y="204">nov</text>
+          <text class="tick ta-m" x="164.75" y="204">dec</text>
+          <text class="tick ta-m" x="212.25" y="204">jan</text>
+          <text class="tick ta-m" x="259.75" y="204">feb</text>
+          <text class="tick ta-m" x="307.25" y="204">mrt</text>
+          <text class="tick ta-m" x="354.75" y="204">apr</text>
+          <text class="tick ta-m" x="402.25" y="204">mei</text>
+          <text class="tick ta-m" x="449.75" y="204">jun</text>
+          <text class="tick ta-m" x="497.25" y="204">jul</text>
+          <text class="tick ta-m" x="544.75" y="204">aug</text>
+          <text class="tick is-now ta-m" x="592.25" y="204">sep</text>
+        </svg>
+      </div>
+    </section>
+
+    <section class="card span-5">
+      <header class="card-head">
+        <div><h2 class="card-title">Vraagt je aandacht</h2><p class="card-sub">Op volgorde van urgentie</p></div>
+      </header>
+      <button type="button" class="att-row" data-go="facturen"><span class="att-ic att-ic--danger"><svg class="i"><use href="#i-alert"></use></svg></span><span class="att-main"><span class="att-title" style="display:block">Factuur 2026-040 is 10 dagen te laat</span><span class="att-meta" style="display:block">Restaurant Bloem · € 786,50</span></span><span class="badge badge--ai badge--sm">Voorstel klaar</span><svg class="i"><use href="#i-chevron-right"></use></svg></button>
+      <button type="button" class="att-row"><span class="att-ic att-ic--warn"><svg class="i"><use href="#i-file"></use></svg></span><span class="att-main"><span class="att-title" style="display:block">Offerte 2026-020 wacht al 9 dagen</span><span class="att-meta" style="display:block">Van Dijk Installatietechniek · € 3.327,50</span></span><span class="due">9 d</span><svg class="i"><use href="#i-chevron-right"></use></svg></button>
+      <button type="button" class="att-row"><span class="att-ic att-ic--info"><svg class="i"><use href="#i-ticket"></use></svg></span><span class="att-main"><span class="att-title" style="display:block">2 nieuwe tickets</span><span class="att-meta" style="display:block">Website laadt traag op mobiel · Menukaart: prijswijziging</span></span><span class="due">2</span><svg class="i"><use href="#i-chevron-right"></use></svg></button>
+      <button type="button" class="att-row"><span class="att-ic att-ic--note"><svg class="i"><use href="#i-inbox"></use></svg></span><span class="att-main"><span class="att-title" style="display:block">3 inkoopfacturen binnengekomen</span><span class="att-meta" style="display:block">Per e-mail · controleren en boeken</span></span><span class="due">3</span><svg class="i"><use href="#i-chevron-right"></use></svg></button>
+    </section>
+  </div>
+
+  <section class="card">
+    <header class="card-head">
+      <div><h2 class="card-title">Lopende projecten</h2><p class="card-sub">5 projecten · 74 van 168 begrote uren gebruikt</p></div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="seg" role="group" aria-label="Weergave"><button type="button" class="is-on">Lijst</button><button type="button">Tijdlijn</button></div>
+        <button type="button" class="card-link" data-go="project">Alle projecten<svg class="i"><use href="#i-chevron-right"></use></svg></button>
+      </div>
+    </header>
+    <div class="plist-head"><span>Project</span><span>Klant</span><span>Voortgang</span><span>Uren</span><span>Deadline</span><span>Team</span></div>
+    <div class="prow"><span class="prow-name"><i class="sw sw-korenaar"></i><span>Nieuwe huisstijl De Korenaar</span></span><span class="trunc soft">Bakkerij De Korenaar</span><span class="prog"><span class="prog-bar"><i style="width:29%"></i></span>29%</span><span class="num soft">14 / 40 u</span><span class="soft">19 okt</span><span class="av-stack"><span class="av av-gl">GL</span><span class="av av-sb">SB</span></span></div>
+    <div class="prow"><span class="prow-name"><i class="sw sw-fysio"></i><span>Website Fysio Centrum Zuid</span></span><span class="trunc soft">Fysio Centrum Zuid</span><span class="prog"><span class="prog-bar"><i style="width:72%"></i></span>72%</span><span class="num soft">31 / 40 u</span><span><span class="badge badge--warn badge--sm">over 10 d</span></span><span class="av-stack"><span class="av av-gl">GL</span></span></div>
+    <div class="prow"><span class="prow-name"><i class="sw sw-vandijk"></i><span>Campagne winteractie Van Dijk</span></span><span class="trunc soft">Van Dijk Installatietechniek</span><span class="prog"><span class="prog-bar"><i style="width:18%"></i></span>18%</span><span class="num soft">6 / 40 u</span><span class="soft">3 nov</span><span class="av-stack"><span class="av av-gl">GL</span><span class="av av-sb">SB</span></span></div>
+    <div class="prow"><span class="prow-name"><i class="sw sw-bloem"></i><span>Menukaart &amp; social Bloem</span></span><span class="trunc soft">Restaurant Bloem</span><span class="prog"><span class="prog-bar"><i style="width:60%"></i></span>60%</span><span class="num soft">22 / 40 u</span><span class="soft">25 okt</span><span class="av-stack"><span class="av av-sb">SB</span></span></div>
+    <div class="prow"><span class="prow-name"><i class="sw sw-zonnetje"></i><span>Onboarding Zonnetje</span></span><span class="trunc soft">Kinderopvang Zonnetje</span><span class="prog"><span class="prog-bar"><i style="width:10%"></i></span>10%</span><span class="num soft">1 / 8 u</span><span class="soft">9 okt</span><span class="av-stack"><span class="av av-gl">GL</span></span></div>
+  </section>
+</div>
+</template>
+
+<!-- ── Facturen ───────────────────────────────────────────────────────── -->
+<template id="t-facturen">
+<div>
+  <header class="ph">
+    <div class="ph-main">
+      <nav class="crumbs" aria-label="Kruimelpad"><span>Financiën</span><svg class="i"><use href="#i-chevron-right"></use></svg><b>Facturen</b></nav>
+      <h1 class="h1">Facturen</h1>
+    </div>
+    <div class="ph-actions">
+      <button type="button" class="btn"><svg class="i"><use href="#i-download"></use></svg>Exporteren</button>
+      <button type="button" class="btn btn--primary"><svg class="i"><use href="#i-plus"></use></svg>Nieuwe factuur</button>
+    </div>
+  </header>
+  <div class="card sumstrip">
+    <div class="sum"><span class="sum-label"><i class="dot" style="background:var(--ink-3)"></i>Openstaand</span><span class="sum-value">€ 3.690,50</span><span class="sum-sub">2 facturen</span></div>
+    <div class="sum"><span class="sum-label"><i class="dot" style="background:var(--danger)"></i>Te laat</span><span class="sum-value">€ 786,50</span><span class="sum-sub">1 factuur · 10 dagen</span></div>
+    <div class="sum"><span class="sum-label"><i class="dot" style="background:var(--ok)"></i>Betaald in september</span><span class="sum-value">€ 6.909,10</span><span class="sum-sub">2 facturen</span></div>
+    <div class="sum"><span class="sum-label"><i class="dot" style="background:var(--ink-4)"></i>Concept</span><span class="sum-value">€ 423,50</span><span class="sum-sub">1 factuur</span></div>
+  </div>
+  <div class="split">
+    <div style="min-width:0">
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="Status">
+          <button type="button" class="is-on">Alle <span class="count">6</span></button>
+          <button type="button">Concept <span class="count">1</span></button>
+          <button type="button">Openstaand <span class="count">2</span></button>
+          <button type="button">Te laat <span class="count">1</span></button>
+          <button type="button">Betaald <span class="count">3</span></button>
+        </div>
+        <div class="toolbar-spacer"></div>
+        <label class="input" style="width:188px"><svg class="i"><use href="#i-search"></use></svg><input type="search" placeholder="Zoek factuur…" aria-label="Zoek factuur"></label>
+        <button type="button" class="btn"><svg class="i"><use href="#i-sliders"></use></svg>Filters</button>
+      </div>
+      <div class="card tablecard">
+        <table class="table">
+          <thead><tr><th class="th-box"><span class="box" aria-hidden="true"></span></th><th>Nummer</th><th>Klant</th><th>Vervalt</th><th>Status</th><th class="r">Bedrag</th></tr></thead>
+          <tbody>
+            <tr><td><span class="box" aria-hidden="true"></span></td><td><div class="mono">2026-042</div><div class="when">25 sep</div></td><td><div class="cell-client"><span class="av av-lg av-sq" style="background:#F472B6">KZ</span><div><b>Kinderopvang Zonnetje</b><span>Onboarding Zonnetje</span></div></div></td><td><div class="datecol">25 okt</div><div class="when">nog niet verstuurd</div></td><td><span class="badge"><span class="dot"></span>Concept</span></td><td class="r amount">€ 423,50</td></tr>
+            <tr><td><span class="box" aria-hidden="true"></span></td><td><div class="mono">2026-041</div><div class="when">13 sep</div></td><td><div class="cell-client"><span class="av av-lg av-sq" style="background:#FFD966">BK</span><div><b>Bakkerij De Korenaar</b><span>Nieuwe huisstijl De Korenaar</span></div></div></td><td><div class="datecol">13 okt</div><div class="when">over 18 dagen</div></td><td><span class="badge badge--info"><span class="dot"></span>Verzonden</span></td><td class="r amount">€ 2.904,00</td></tr>
+            <tr class="is-selected"><td><span class="box is-on" aria-hidden="true"><svg class="i"><use href="#i-check"></use></svg></span></td><td><div class="mono">2026-040</div><div class="when">16 aug</div></td><td><div class="cell-client"><span class="av av-lg av-sq" style="background:#FF9F43">RB</span><div><b>Restaurant Bloem</b><span>Menukaart &amp; social Bloem</span></div></div></td><td><div class="datecol">15 sep</div><div class="when is-late">10 dagen te laat</div></td><td><span class="badge badge--danger"><span class="dot"></span>Te laat</span></td><td class="r amount">€ 786,50</td></tr>
+            <tr><td><span class="box" aria-hidden="true"></span></td><td><div class="mono">2026-039</div><div class="when">26 aug</div></td><td><div class="cell-client"><span class="av av-lg av-sq" style="background:#34D399">FC</span><div><b>Fysio Centrum Zuid</b><span>Website Fysio Centrum Zuid</span></div></div></td><td><div class="datecol">25 sep</div><div class="when">betaald 22 sep</div></td><td><span class="badge badge--ok"><span class="dot"></span>Betaald</span></td><td class="r amount">€ 6.292,00</td></tr>
+            <tr><td><span class="box" aria-hidden="true"></span></td><td><div class="mono">2026-038</div><div class="when">6 aug</div></td><td><div class="cell-client"><span class="av av-lg av-sq" style="background:#60A5FA">VD</span><div><b>Van Dijk Installatietechniek</b><span>Campagne winteractie Van Dijk</span></div></div></td><td><div class="datecol">5 sep</div><div class="when">betaald 3 sep</div></td><td><span class="badge badge--ok"><span class="dot"></span>Betaald</span></td><td class="r amount">€ 617,10</td></tr>
+            <tr><td><span class="box" aria-hidden="true"></span></td><td><div class="mono">2026-037</div><div class="when">17 jul</div></td><td><div class="cell-client"><span class="av av-lg av-sq" style="background:#FF9F43">RB</span><div><b>Restaurant Bloem</b><span>Menukaart &amp; social Bloem</span></div></div></td><td><div class="datecol">16 aug</div><div class="when">betaald 12 aug</div></td><td><span class="badge badge--ok"><span class="dot"></span>Betaald</span></td><td class="r amount">€ 786,50</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <aside class="card drawer" aria-label="Factuur 2026-040">
+      <div class="drawer-head">
+        <div class="drawer-title"><h3><span class="mono" style="font-size:16px">2026-040</span></h3><div style="display:flex;align-items:center;gap:6px"><span class="badge badge--danger badge--sm"><span class="dot"></span>10 dagen te laat</span><button type="button" class="icon-btn icon-btn--sm" aria-label="Meer acties"><svg class="i i-sm"><use href="#i-more"></use></svg></button></div></div>
+        <p class="drawer-sub">Restaurant Bloem · Karim El Amrani</p>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:10px"><span class="kpi-value" style="font-size:26px">€ 786<small>,50</small></span><span class="muted" style="font-size:12.5px">incl. € 136,50 btw</span></div>
+        <div class="drawer-actions"><button type="button" class="btn btn--primary btn--sm"><svg class="i"><use href="#i-send"></use></svg>Herinnering sturen</button><button type="button" class="btn btn--sm">Betaling registreren</button></div>
+      </div>
+      <div class="drawer-body">
+        <div class="suggest aurora">
+          <span class="ai-tag"><span class="orb orb-sm"></span>Gerrie</span>
+          <p>Karim betaalde de vorige twee facturen binnen twee dagen na een herinnering. Ik heb er een klaargezet, met betaallink.</p>
+          <div class="suggest-actions"><button type="button" class="btn btn--sm btn--ai" data-action="remind">Bekijk voorstel</button><button type="button" class="btn btn--sm btn--ghost">Negeren</button></div>
+        </div>
+        <div class="paper" aria-label="Voorbeeld van de factuur">
+          <div class="paper-top"><span class="paper-brand"><i></i>Studio Lopik</span><div style="text-align:right"><div class="paper-h">Factuur</div><div class="paper-muted">2026-040</div></div></div>
+          <span class="paper-stamp">TE LAAT</span>
+          <div class="paper-cols">
+            <div><div class="paper-muted">Aan</div><b>Restaurant Bloem</b><br>t.a.v. Karim El Amrani<br>Dorpsstraat 14, 3414 AB Lopik</div>
+            <div><div class="paper-muted">Factuurdatum</div>16 augustus 2026<div class="paper-muted" style="margin-top:4px">Vervaldatum</div>15 september 2026</div>
+          </div>
+          <table class="paper-lines"><thead><tr><th>Omschrijving</th><th class="r">Aantal</th><th class="r">Bedrag</th></tr></thead><tbody><tr><td>Content september</td><td class="r">1</td><td class="r">€ 650,00</td></tr></tbody></table>
+          <div class="paper-total"><div><span class="paper-muted">Subtotaal</span><span>€ 650,00</span></div><div><span class="paper-muted">Btw 21%</span><span>€ 136,50</span></div><div class="grand"><span>Totaal</span><span>€ 786,50</span></div></div>
+        </div>
+        <div class="timeline">
+          <div class="tl-item"><span class="tl-dot tl-dot--ai"><svg class="i"><use href="#i-sparkles"></use></svg></span><span class="tl-text">Gerrie zette een herinnering klaar<span>wacht op jouw akkoord</span></span><span class="tl-time">vandaag 08:02</span></div>
+          <div class="tl-item"><span class="tl-dot tl-dot--danger"><svg class="i"><use href="#i-alert"></use></svg></span><span class="tl-text">Vervaldatum verstreken</span><span class="tl-time">15 sep</span></div>
+          <div class="tl-item"><span class="tl-dot"><svg class="i"><use href="#i-eye"></use></svg></span><span class="tl-text">Bekeken door Karim</span><span class="tl-time">18 aug</span></div>
+          <div class="tl-item"><span class="tl-dot"><svg class="i"><use href="#i-send"></use></svg></span><span class="tl-text">Verzonden naar karim@restaurantbloem.nl</span><span class="tl-time">16 aug</span></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+</template>
+
+<!-- ── Project ────────────────────────────────────────────────────────── -->
+<template id="t-project">
+<div>
+  <nav class="crumbs" aria-label="Kruimelpad"><span>Projecten</span><svg class="i"><use href="#i-chevron-right"></use></svg><span>Bakkerij De Korenaar</span><svg class="i"><use href="#i-chevron-right"></use></svg><b>Nieuwe huisstijl</b></nav>
+  <div class="phero">
+    <span class="pmark">NH</span>
+    <div style="min-width:0">
+      <h1 class="h1">Nieuwe huisstijl De Korenaar</h1>
+      <div class="pmeta"><span><i class="sw sw-korenaar"></i>Bakkerij De Korenaar</span><span><svg class="i"><use href="#i-calendar"></use></svg>4 sep – 19 okt</span><span><svg class="i"><use href="#i-clock"></use></svg>Urenbasis · € 85 per uur</span><span><svg class="i"><use href="#i-user"></use></svg>Joost Vermeer</span></div>
+    </div>
+    <div class="ph-actions"><span class="av-stack"><span class="av av-lg av-gl">GL</span><span class="av av-lg av-sb">SB</span></span><button type="button" class="btn"><svg class="i"><use href="#i-pen"></use></svg>Bewerken</button><button type="button" class="btn btn--primary"><svg class="i"><use href="#i-plus"></use></svg>Taak</button></div>
+  </div>
+  <div class="card pstats">
+    <div class="pstat"><div class="pstat-top"><span class="pstat-label">Voortgang</span><span class="pstat-value">29%</span></div><div class="meter"><span class="meter-ink" style="width:29%"></span></div><span class="pstat-sub">2 van 7 taken klaar</span></div>
+    <div class="pstat"><div class="pstat-top"><span class="pstat-label">Uren</span><span class="pstat-value">14<small> / 40 u</small></span></div><div class="meter"><span class="meter-gold" style="width:35%"></span></div><span class="pstat-sub">€ 1.190 geschreven</span></div>
+    <div class="pstat"><div class="pstat-top"><span class="pstat-label">Gefactureerd</span><span class="pstat-value">€ 2.904</span></div><div class="meter"><span class="meter-ink" style="width:41.7%"></span></div><span class="pstat-sub">van offerte 2026-019 · € 6.957,50</span></div>
+    <div class="pstat"><div class="pstat-top"><span class="pstat-label">Deadline</span><span class="pstat-value">19 okt</span></div><div class="meter"><span class="meter-neutral" style="width:47%"></span></div><span class="pstat-sub">nog 24 dagen</span></div>
+  </div>
+  <nav class="utabs" aria-label="Projectonderdelen">
+    <button type="button" class="utab">Overzicht</button>
+    <button type="button" class="utab is-on">Taken <span class="count">7</span></button>
+    <button type="button" class="utab">Planning</button>
+    <button type="button" class="utab">Offertes <span class="count">1</span></button>
+    <button type="button" class="utab">Facturen <span class="count">1</span></button>
+    <button type="button" class="utab">Uren</button>
+    <button type="button" class="utab">Bestanden <span class="count">3</span></button>
+    <button type="button" class="utab">Notities <span class="count">2</span></button>
+    <button type="button" class="utab">Galerij</button>
+  </nav>
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) 288px;gap:16px;margin-top:16px">
+    <div class="board">
+      <div class="col">
+        <div class="col-head"><span class="col-dot" style="background:var(--ink-4)"></span>Te doen <span class="count">3</span><button type="button" class="icon-btn icon-btn--sm" aria-label="Taak toevoegen aan Te doen"><svg class="i i-sm"><use href="#i-plus"></use></svg></button></div>
+        <div class="kcard"><div class="kcard-title">Kleurenpalet afstemmen met Joost</div><div class="kcard-tags"><span class="badge badge--danger badge--sm">4 d te laat</span></div><div class="kcard-foot"><span><svg class="i"><use href="#i-message"></use></svg>2</span><span class="av av-gl">GL</span></div></div>
+        <div class="kcard"><div class="kcard-title">Drukproef briefpapier</div><div class="kcard-tags"><span class="badge badge--line badge--sm">1 okt</span></div><div class="kcard-foot"><span><svg class="i"><use href="#i-paperclip"></use></svg>1</span><span class="av av-sb">SB</span></div></div>
+        <div class="kcard"><div class="kcard-title">Fotoshoot plannen voor de drie vestigingen</div><div class="kcard-tags"><span class="badge badge--line badge--sm">8 okt</span></div><div class="kcard-foot"><span class="av av-gl">GL</span></div></div>
+        <button type="button" class="col-add"><svg class="i i-sm"><use href="#i-plus"></use></svg>Taak</button>
+      </div>
+      <div class="col">
+        <div class="col-head"><span class="col-dot" style="background:var(--gold)"></span>Bezig <span class="count">1</span><button type="button" class="icon-btn icon-btn--sm" aria-label="Taak toevoegen aan Bezig"><svg class="i i-sm"><use href="#i-plus"></use></svg></button></div>
+        <div class="kcard"><div class="kcard-title">Logo-schetsen uitwerken</div><div class="kcard-tags"><span class="badge badge--warn badge--sm"><svg class="i i-xs"><use href="#i-flag"></use></svg>Hoog</span><span class="badge badge--line badge--sm">vandaag</span></div><div class="sub"><i style="width:40%"></i></div><div class="kcard-foot"><span><svg class="i"><use href="#i-check-circle"></use></svg>2/5</span><span><svg class="i"><use href="#i-paperclip"></use></svg>3</span><span class="av av-gl">GL</span></div></div>
+        <div class="kcard is-lift"><div class="kcard-title">Moodboard voor de vestigingen</div><div class="kcard-tags"><span class="badge badge--line badge--sm">2 okt</span></div><div class="kcard-foot"><span><svg class="i"><use href="#i-image"></use></svg>12</span><span class="av av-sb">SB</span></div></div>
+      </div>
+      <div class="col">
+        <div class="col-head"><span class="col-dot" style="background:var(--info)"></span>Bij klant <span class="count">1</span><button type="button" class="icon-btn icon-btn--sm" aria-label="Taak toevoegen aan Bij klant"><svg class="i i-sm"><use href="#i-plus"></use></svg></button></div>
+        <div class="kcard"><div class="kcard-title">Concepten ronde 1 beoordelen</div><div class="kcard-tags"><span class="badge badge--info badge--sm">wacht op Joost</span></div><div class="kcard-foot"><span><svg class="i"><use href="#i-message"></use></svg>4</span><span class="av av-jv">JV</span></div></div>
+      </div>
+      <div class="col">
+        <div class="col-head"><span class="col-dot" style="background:var(--ok)"></span>Klaar <span class="count">2</span><button type="button" class="icon-btn icon-btn--sm" aria-label="Taak toevoegen aan Klaar"><svg class="i i-sm"><use href="#i-plus"></use></svg></button></div>
+        <div class="kcard is-done"><div class="kcard-title">Briefing uitwerken</div><div class="kcard-foot"><span>8 sep</span><span class="av av-gl">GL</span></div></div>
+        <div class="kcard is-done"><div class="kcard-title">Kick-off met Joost</div><div class="kcard-foot"><span>4 sep</span><span class="av av-gl">GL</span></div></div>
+      </div>
+    </div>
+    <div class="side-panel">
+      <section class="card suggest aurora" style="padding:14px">
+        <span class="ai-tag"><span class="orb orb-sm"></span>Gerrie</span>
+        <p>"Kleurenpalet" staat 4 dagen over tijd. Zal ik Joost de twee varianten uit <b>Concepten</b> sturen, met een voorstel voor dinsdag?</p>
+        <div class="suggest-actions"><button type="button" class="btn btn--sm btn--ai">Mail klaarzetten</button></div>
+      </section>
+      <section class="card">
+        <header class="card-head"><h2 class="card-title">Activiteit</h2></header>
+        <div class="feed">
+          <div class="feed-item"><span class="av av-sb">SB</span><div><b>Sanne</b> uploadde huisstijl-schets-v2.pdf<span>2 uur geleden</span></div></div>
+          <div class="feed-item"><span class="av av-jv">JV</span><div><b>Joost</b> accepteerde offerte 2026-019<span>gisteren</span></div></div>
+          <div class="feed-item"><span class="av av-gl">GL</span><div><b>Jij</b> schreef 2 uur op Logo-schetsen<span>gisteren</span></div></div>
+          <div class="feed-item"><span class="orb orb-sm" style="width:24px;height:24px"></span><div><b>Gerrie</b> vatte de kick-off samen<span>4 sep</span></div></div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+</template>
+
+<!-- ── Agenda ─────────────────────────────────────────────────────────── -->
+<template id="t-agenda">
+<div>
+  <header class="ph" style="margin-bottom:16px;align-items:center">
+    <div class="ph-main"><h1 class="h1">Agenda</h1></div>
+    <div class="ph-actions">
+      <div class="seg" role="group" aria-label="Weergave"><button type="button">Dag</button><button type="button">3 dagen</button><button type="button" class="is-on">Week</button><button type="button">Maand</button><button type="button">Lijst</button></div>
+      <button type="button" class="btn"><svg class="i"><use href="#i-link"></use></svg>Boekingslinks</button>
+      <button type="button" class="btn btn--primary"><svg class="i"><use href="#i-plus"></use></svg>Afspraak</button>
+    </div>
+  </header>
+  <div class="cal-wrap">
+    <div class="stack" style="gap:12px">
+      <section class="card minical">
+        <div class="minical-head"><span>September 2026</span><span style="display:flex;gap:2px"><button type="button" class="icon-btn icon-btn--sm" aria-label="Vorige maand"><svg class="i i-sm"><use href="#i-chevron-left"></use></svg></button><button type="button" class="icon-btn icon-btn--sm" aria-label="Volgende maand"><svg class="i i-sm"><use href="#i-chevron-right"></use></svg></button></span></div>
+        <div class="minical-grid">
+          <b>ma</b><b>di</b><b>wo</b><b>do</b><b>vr</b><b>za</b><b>zo</b>
+          <span class="dim">31</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span>
+          <span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span>
+          <span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span><span>20</span>
+          <span class="wk">21</span><span class="wk">22</span><span class="wk">23</span><span class="wk">24</span><span class="today">25</span><span class="wk">26</span><span class="wk">27</span>
+          <span>28</span><span>29</span><span>30</span><span class="dim">1</span><span class="dim">2</span><span class="dim">3</span><span class="dim">4</span>
+        </div>
+      </section>
+      <section class="card">
+        <header class="card-head" style="padding-bottom:6px"><h2 class="card-title">Agenda's</h2></header>
+        <div class="cals">
+          <div class="cals-row"><span class="box is-on" style="background:#F7C548"><svg class="i"><use href="#i-check"></use></svg></span>Studio-agenda</div>
+          <div class="cals-row"><span class="box is-on" style="background:#6CB6FF"><svg class="i"><use href="#i-check"></use></svg></span>Google<small>gerjan@</small></div>
+          <div class="cals-row"><span class="box is-on" style="background:transparent;border-color:var(--line-3);border-style:dashed"></span>Ingeplande taken</div>
+          <div class="cals-row"><span class="box"></span>Feestdagen</div>
+        </div>
+      </section>
+      <section class="card" style="padding:14px;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600"><svg class="i" style="color:var(--gold-ink)"><use href="#i-link"></use></svg>Kennismaking · 30 min</div>
+        <p class="muted" style="font-size:12.5px">2 geboekt deze week · vrij op di en do</p>
+        <button type="button" class="btn btn--sm"><svg class="i"><use href="#i-copy"></use></svg>Link kopiëren</button>
+      </section>
+    </div>
+    <section class="card cal">
+      <div class="cal-bar">
+        <span class="cal-title">21 – 27 september</span><span class="badge badge--line badge--sm">week 39</span>
+        <div style="margin-left:auto;display:flex;gap:6px"><button type="button" class="btn btn--sm">Vandaag</button><button type="button" class="icon-btn icon-btn--sm icon-btn--line" aria-label="Vorige week"><svg class="i i-sm"><use href="#i-chevron-left"></use></svg></button><button type="button" class="icon-btn icon-btn--sm icon-btn--line" aria-label="Volgende week"><svg class="i i-sm"><use href="#i-chevron-right"></use></svg></button></div>
+      </div>
+      <div class="cal-heads"><div></div><div>ma <b>21</b></div><div>di <b>22</b></div><div>wo <b>23</b></div><div>do <b>24</b></div><div class="is-today">vr <b>25</b></div><div class="is-weekend">za <b>26</b></div><div class="is-weekend">zo <b>27</b></div></div>
+      <div class="cal-allday"><span>hele dag</span><div><span class="allday-ev is-task">Social posts week 39</span></div><div></div><div></div><div><span class="allday-ev">Deadline wireframes</span></div><div></div><div></div><div></div></div>
+      <div class="cal-body" style="height:572px">
+        <div class="cal-times"><span style="top:52px">09:00</span><span style="top:104px">10:00</span><span style="top:156px">11:00</span><span style="top:208px">12:00</span><span style="top:260px">13:00</span><span style="top:312px">14:00</span><span style="top:364px">15:00</span><span style="top:416px">16:00</span><span style="top:468px">17:00</span><span style="top:520px">18:00</span></div>
+        <div class="cal-day">
+          <div class="cal-ev ev-gold is-past" style="top:104px;height:50px"><b>Overleg Joost — kleurenpalet</b><span class="t">10:00 – 11:00</span></div>
+          <div class="cal-ev ev-studio is-past" style="top:416px;height:26px;flex-direction:row;gap:6px;align-items:center"><b>Weekstart team</b><span class="t">16:00</span></div>
+        </div>
+        <div class="cal-day">
+          <div class="cal-ev ev-blue is-past" style="top:78px;height:50px"><b>Belafspraak Peter van Dijk</b><span class="t">09:30 – 10:30</span></div>
+          <div class="cal-ev ev-green is-past" style="top:260px;height:102px"><b>Werksessie wireframes</b><span class="t">13:00 – 15:00</span><span>Fysio Centrum Zuid</span></div>
+        </div>
+        <div class="cal-day">
+          <div class="cal-ev ev-pink is-past" style="top:156px;height:50px"><b>Kennismaking Zonnetje</b><span class="t">11:00 – 12:00</span></div>
+          <div class="cal-ev ev-task is-past" style="top:312px;height:76px"><b>Offerte opstellen Zonnetje</b><span class="t">14:00 – 15:30</span><span>ingeplande taak</span></div>
+        </div>
+        <div class="cal-day">
+          <div class="cal-ev ev-green is-past" style="top:286px;height:76px"><b>Presentatie concept website</b><span class="t">13:30 – 15:00</span><span>Fysio Centrum Zuid</span></div>
+        </div>
+        <div class="cal-day is-today">
+          <div class="cal-ev ev-studio is-past" style="top:78px;height:24px;flex-direction:row;gap:6px;align-items:center"><b>Stand-up</b><span class="t">09:30</span></div>
+          <div class="cal-now" style="top:140px"></div>
+          <div class="cal-ev ev-orange" style="top:156px;height:76px"><b>Fotoshoot Bloem</b><span class="t">11:00 – 12:30</span><span>Restaurant Bloem</span></div>
+          <div class="cal-ev ev-task" style="top:260px;height:76px"><b>Logo-schetsen uitwerken</b><span class="t">13:00 – 14:30</span><span>ingeplande taak</span></div>
+          <div class="cal-ev ev-studio" style="top:364px;height:50px"><b>Weekafsluiting</b><span class="t">15:00 – 16:00</span></div>
+        </div>
+        <div class="cal-day is-weekend"></div>
+        <div class="cal-day is-weekend"></div>
+      </div>
+    </section>
+  </div>
+</div>
+</template>
+
+<!-- ── Gerrie ─────────────────────────────────────────────────────────── -->
+<template id="t-gerrie">
+<div class="g-wrap" style="height:100%">
+  <section class="card g-chat">
+    <header class="g-head">
+      <span class="orb orb-lg"></span>
+      <div style="flex:1;min-width:0"><h2>Gerrie</h2><p>Je assistent voor Studio Lopik · leest mee in klanten, projecten, uren en financiën</p></div>
+      <div class="seg" role="group" aria-label="Onderdeel"><button type="button" class="is-on">Gesprek</button><button type="button">Agents</button><button type="button">Beslissingen <span class="count">3</span></button></div>
+    </header>
+    <div class="g-log" data-log>
+      <div class="msg-me">Wat staat er nog open, en wat moet ik vandaag echt doen?</div>
+      <div class="msg-ai">
+        <span class="orb"></span>
+        <div class="msg-ai-body">
+          <p>Twee facturen staan open, samen <b>€ 3.690,50</b>. Eén daarvan is over tijd:</p>
+          <div class="mini-table">
+            <div class="mini-row"><span class="mono">2026-040</span><span class="trunc">Restaurant Bloem</span><span class="badge badge--danger badge--sm">10 d te laat</span><span class="amount num">€ 786,50</span></div>
+            <div class="mini-row"><span class="mono">2026-041</span><span class="trunc">Bakkerij De Korenaar</span><span class="badge badge--sm">vervalt 13 okt</span><span class="amount num">€ 2.904,00</span></div>
+          </div>
+          <p>Vandaag zou ik beginnen met <b>Peter terugbellen</b> (5 dagen te laat, een kwartier) en daarna de <b>logo-schetsen</b>, vóór de fotoshoot om 11:00.</p>
+          <div class="proposal aurora">
+            <div class="proposal-head"><span class="ai-tag"><svg class="i i-sm"><use href="#i-mail"></use></svg>Voorstel · betalingsherinnering</span><span class="badge badge--gold badge--sm">Wacht op jou</span></div>
+            <div class="proposal-body">
+              <div class="mailrow"><span>Aan</span>Karim El Amrani &lt;karim@restaurantbloem.nl&gt;</div>
+              <div class="mailrow"><span>Onderwerp</span>Herinnering: factuur 2026-040</div>
+              <div class="mailrow"><span>Bijlage</span>factuur-2026-040.pdf · betaallink</div>
+            </div>
+            <div class="proposal-actions"><button type="button" class="btn btn--primary btn--sm" data-action="approve"><svg class="i"><use href="#i-send"></use></svg>Goedkeuren en versturen</button><button type="button" class="btn btn--sm">Aanpassen</button><small>Gaat pas weg na jouw klik</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="msg-me">Zet ook een mail klaar aan Joost over de twee kleurvarianten.</div>
+      <div class="msg-ai">
+        <span class="orb"></span>
+        <div class="msg-ai-body">
+          <p>Staat klaar in je wachtrij. Ik heb <b>variant A en B</b> uit de map Concepten als bijlage toegevoegd en dinsdag 10:00 voorgesteld, want dan zijn jullie allebei vrij.</p>
+          <div style="display:flex;gap:6px;flex-wrap:wrap"><span class="badge badge--line badge--sm"><svg class="i i-xs"><use href="#i-folder"></use></svg>Concepten</span><span class="badge badge--line badge--sm"><svg class="i i-xs"><use href="#i-file"></use></svg>Notulen kick-off huisstijl</span><span class="badge badge--line badge--sm"><svg class="i i-xs"><use href="#i-calendar"></use></svg>Agenda Joost</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="sugg"><button type="button" data-ask-chip>Weekoverzicht</button><button type="button" data-ask-chip>Offertes die stilliggen</button><button type="button" data-ask-chip>Uren deze maand</button><button type="button" data-ask-chip>Wie moet ik nog bellen?</button></div>
+    <div class="composer aurora">
+      <input class="composer-field" type="text" placeholder="Vraag Gerrie iets, of typ / voor een actie…" aria-label="Vraag Gerrie iets" data-ask>
+      <div class="composer-bar"><button type="button" class="icon-btn icon-btn--sm" aria-label="Bestand toevoegen"><svg class="i i-sm"><use href="#i-paperclip"></use></svg></button><button type="button" class="icon-btn icon-btn--sm" aria-label="Inspreken"><svg class="i i-sm"><use href="#i-mic"></use></svg></button><span class="badge badge--line badge--sm">Studio Lopik · alle modules</span><button type="button" class="btn btn--primary btn--sm" aria-label="Versturen" data-ask-send><svg class="i"><use href="#i-send"></use></svg></button></div>
+    </div>
+  </section>
+  <div class="stack" style="gap:12px;min-height:0">
+    <section class="card">
+      <header class="card-head"><div><h2 class="card-title">Wacht op jouw akkoord</h2><p class="card-sub">Gerrie stelt voor, jij vinkt af</p></div><span class="nav-count is-ai">3</span></header>
+      <div style="display:flex;flex-direction:column;gap:8px;padding:0 12px 12px">
+        <div class="card qcard"><div class="qcard-top"><svg class="i"><use href="#i-mail"></use></svg>Betalingsherinnering</div><div class="qcard-title">Factuur 2026-040 · Restaurant Bloem</div><div class="qcard-why">10 dagen over tijd; Karim betaalt meestal binnen twee dagen na een herinnering.</div><div class="qcard-actions"><button type="button" class="btn btn--primary btn--sm" data-action="approve">Uitvoeren</button><button type="button" class="btn btn--sm btn--ghost">Afwijzen</button></div></div>
+        <div class="card qcard"><div class="qcard-top"><svg class="i"><use href="#i-mail"></use></svg>Mail</div><div class="qcard-title">Kleurenpalet in twee varianten, aan Joost Vermeer</div><div class="qcard-why">Taak staat 4 dagen over tijd; de varianten staan in Concepten.</div><div class="qcard-actions"><button type="button" class="btn btn--primary btn--sm" data-action="approve">Uitvoeren</button><button type="button" class="btn btn--sm btn--ghost">Afwijzen</button></div></div>
+        <div class="card qcard"><div class="qcard-top"><svg class="i"><use href="#i-calendar"></use></svg>Taak verplaatsen</div><div class="qcard-title">Drukproef briefpapier → maandag 28 sep</div><div class="qcard-why">De drukkerij levert pas maandag, schreef ze vanochtend.</div><div class="qcard-actions"><button type="button" class="btn btn--primary btn--sm" data-action="approve">Uitvoeren</button><button type="button" class="btn btn--sm btn--ghost">Afwijzen</button></div></div>
+      </div>
+    </section>
+    <section class="card">
+      <header class="card-head" style="padding-bottom:10px"><h2 class="card-title">Agents</h2><button type="button" class="card-link">Nieuwe agent<svg class="i"><use href="#i-plus"></use></svg></button></header>
+      <div class="agent-row"><span class="agent-ic"><svg class="i"><use href="#i-receipt"></use></svg></span><div><div class="agent-name">Wekelijks factuuroverzicht</div><div class="agent-when">maandag 08:00</div></div><span class="switch is-on" role="presentation"></span></div>
+      <div class="agent-row"><span class="agent-ic"><svg class="i"><use href="#i-file"></use></svg></span><div><div class="agent-name">Offertes die stilliggen</div><div class="agent-when">elke werkdag 09:00</div></div><span class="switch is-on" role="presentation"></span></div>
+      <div class="agent-row"><span class="agent-ic"><svg class="i"><use href="#i-trend"></use></svg></span><div><div class="agent-name">Maandelijkse omzetsamenvatting</div><div class="agent-when">1e van de maand</div></div><span class="switch" role="presentation"></span></div>
+    </section>
+  </div>
+</div>
+</template>
+
+<!-- ── Componenten (in beide lichten) ─────────────────────────────────── -->
+<template id="t-components">
+<div class="comp">
+  <div class="sys-top"><h4><svg class="i" data-theme-icon><use href="#i-moon"></use></svg><span data-theme-name>Nacht</span></h4><span>Componenten</span></div>
+  <div class="comp-block"><h5>Knoppen</h5>
+    <div class="comp-row"><button type="button" class="btn btn--primary"><svg class="i"><use href="#i-send"></use></svg>Versturen</button><button type="button" class="btn">Concept opslaan</button><button type="button" class="btn btn--ghost">Annuleren</button><button type="button" class="btn btn--ai"><span class="orb orb-sm"></span>Vraag Gerrie</button></div>
+    <div class="comp-row" style="margin-top:10px"><button type="button" class="btn btn--sm"><svg class="i"><use href="#i-download"></use></svg>Exporteren</button><button type="button" class="btn btn--sm btn--danger">Verwijderen</button><button type="button" class="icon-btn icon-btn--line" aria-label="Meer"><svg class="i"><use href="#i-more"></use></svg></button><button type="button" class="icon-btn" aria-label="Meldingen"><svg class="i"><use href="#i-bell"></use></svg><span class="pip-dot"></span></button><button type="button" class="btn btn--sm" disabled>Uitgeschakeld</button></div>
+  </div>
+  <div class="comp-block"><h5>Velden</h5>
+    <div class="comp-grid">
+      <label class="field"><span class="label">Klant</span><span class="input select"><span>Bakkerij De Korenaar</span><svg class="i"><use href="#i-chevron-down"></use></svg></span></label>
+      <label class="field"><span class="label">Bedrag</span><span class="input is-focus"><span class="muted">€</span><input type="text" value="2.904,00" aria-label="Bedrag"></span></label>
+      <label class="field"><span class="label">Zoeken</span><span class="input"><svg class="i"><use href="#i-search"></use></svg><input type="search" placeholder="Klanten, facturen…" aria-label="Zoeken"><span class="kbd">⌘K</span></span></label>
+      <label class="field"><span class="label">Vervaldatum</span><span class="input is-error"><input type="text" value="15-09-2026" aria-label="Vervaldatum"></span><span class="hint" style="color:var(--danger)">Ligt in het verleden</span></label>
+    </div>
+  </div>
+  <div class="comp-block"><h5>Keuzes</h5>
+    <div class="comp-row"><div class="seg" role="group" aria-label="Periode"><button type="button">Dag</button><button type="button" class="is-on">Week</button><button type="button">Maand</button></div><button type="button" class="switch is-on" aria-label="Aan" aria-pressed="true"></button><button type="button" class="switch" aria-label="Uit" aria-pressed="false"></button><span class="box is-on"><svg class="i"><use href="#i-check"></use></svg></span><span class="box"></span><button type="button" class="check is-done" aria-label="Klaar"><svg class="i"><use href="#i-check"></use></svg></button><button type="button" class="check" aria-label="Open"></button></div>
+    <nav class="utabs" style="margin-top:12px" aria-label="Voorbeeld tabbladen"><button type="button" class="utab">Overzicht</button><button type="button" class="utab is-on">Taken <span class="count">7</span></button><button type="button" class="utab">Facturen <span class="count">1</span></button><button type="button" class="utab">Bestanden</button></nav>
+  </div>
+  <div class="comp-block"><h5>Status</h5>
+    <div class="comp-row"><span class="badge"><span class="dot"></span>Concept</span><span class="badge badge--info"><span class="dot"></span>Verzonden</span><span class="badge badge--warn"><span class="dot"></span>Deels betaald</span><span class="badge badge--danger"><span class="dot"></span>Te laat</span><span class="badge badge--ok"><span class="dot"></span>Betaald</span><span class="badge badge--gold">Nieuw</span><span class="badge badge--ai">Voorstel van Gerrie</span></div>
+  </div>
+  <div class="comp-block"><h5>Mensen en projecten</h5>
+    <div class="comp-row"><span class="av-stack"><span class="av av-lg av-gl">GL</span><span class="av av-lg av-sb">SB</span><span class="av av-lg av-jv">JV</span><span class="av av-lg av-mj">MJ</span></span><span class="chip"><i class="sw sw-korenaar"></i>Nieuwe huisstijl De Korenaar</span><span class="chip"><i class="sw sw-fysio"></i>Website Fysio</span><span class="chip"><i class="sw sw-bloem"></i>Menukaart Bloem</span></div>
+  </div>
+  <div class="comp-grid">
+    <div class="comp-block"><h5>Kerncijfer</h5>
+      <article class="card kpi"><div class="kpi-label">Uren deze week<span class="delta delta--up"><svg class="i"><use href="#i-arrow-up-right"></use></svg>8%</span></div><div class="kpi-value">26,5<small> u</small></div><div class="meter"><span class="meter-gold" style="width:82.8%"></span></div></article>
+    </div>
+    <div class="comp-block"><h5>Melding</h5>
+      <div class="toast"><svg class="i"><use href="#i-check-circle"></use></svg><span>Factuur 2026-042 verstuurd</span><button type="button" class="btn btn--ghost btn--sm" style="margin-left:auto">Ongedaan</button></div>
+      <div class="suggest aurora" style="margin-top:10px;padding:12px"><span class="ai-tag"><span class="orb orb-sm"></span>Gerrie</span><p style="margin-top:4px">Ik heb een herinnering klaargezet.</p></div>
+    </div>
+  </div>
+</div>
+</template>
+
+<!-- ── Telefoon ───────────────────────────────────────────────────────── -->
+<template id="t-phone">
+<div class="rf phone" data-theme="nacht">
+  <div class="phone-scroll">
+    <div class="m-top">
+      <span class="logo">R</span>
+      <span class="ws-text"><span class="ws-name">Studio Lopik</span><span class="ws-sub">Vrijdag 25 september</span></span>
+      <button type="button" class="icon-btn" aria-label="Zoeken" style="width:44px;height:44px"><svg class="i i-lg"><use href="#i-search"></use></svg></button>
+      <span class="av av-lg av-gl">GL</span>
+    </div>
+    <h1 class="h1" style="font-size:28px;letter-spacing:-.03em">Goedemorgen, <span class="serif">Gerjan</span></h1>
+    <p class="lead" style="font-size:14px;margin-top:4px">3 afspraken, 5 taken en één factuur over tijd.</p>
+    <section class="brief aurora" style="grid-template-columns:auto minmax(0,1fr);gap:12px;margin-top:16px;padding:14px">
+      <span class="orb"></span>
+      <div>
+        <p class="brief-text" style="font-size:13.5px">Factuur <b>2026-040</b> staat 10 dagen open. Zal ik een herinnering klaarzetten?</p>
+        <button type="button" class="btn btn--ai btn--sm" style="margin-top:10px;height:36px">Klaarzetten</button>
+      </div>
+    </section>
+    <div class="m-kpis">
+      <div class="card m-kpi"><span>Gefactureerd sep</span><b>€ 9.813</b></div>
+      <div class="card m-kpi"><span>Openstaand</span><b>€ 3.690</b></div>
+      <div class="card m-kpi"><span>Uren deze week</span><b>26,5 u</b></div>
+      <div class="card m-kpi"><span>Open taken</span><b>16</b></div>
+    </div>
+    <section class="card">
+      <header class="card-head" style="padding-bottom:8px"><h2 class="card-title">Vandaag</h2><span class="due">5 open</span></header>
+      <div class="m-task"><button type="button" class="check" aria-label="Afvinken"><svg class="i"><use href="#i-check"></use></svg></button><div class="task-main"><div class="task-title">Terugbellen Peter</div><div class="task-meta"><span class="chip"><i class="sw sw-vandijk"></i><span>Van Dijk</span></span></div></div><span class="due due--late">5 d</span></div>
+      <div class="m-task"><button type="button" class="check" aria-label="Afvinken"><svg class="i"><use href="#i-check"></use></svg></button><div class="task-main"><div class="task-title">Logo-schetsen uitwerken</div><div class="task-meta"><span class="chip"><i class="sw sw-korenaar"></i><span>De Korenaar</span></span></div></div><span class="due due--today">13:00</span></div>
+    </section>
+  </div>
+  <button type="button" class="m-fab" aria-label="Vraag Gerrie"><span class="orb"></span></button>
+  <nav class="m-nav" aria-label="Hoofdnavigatie">
+    <button type="button" class="is-on"><svg class="i"><use href="#i-grid"></use></svg>Dashboard</button>
+    <button type="button"><svg class="i"><use href="#i-users"></use></svg>Klanten</button>
+    <button type="button"><svg class="i"><use href="#i-folder"></use></svg>Projecten</button>
+    <button type="button"><svg class="i"><use href="#i-receipt"></use></svg>Financiën</button>
+    <button type="button"><svg class="i"><use href="#i-calendar"></use></svg>Agenda</button>
+  </nav>
+</div>
+</template>
+
+<template id="t-phone-sheet">
+<div class="m-sheet-wrap">
+  <div class="ph-scrim"></div>
+  <div class="m-sheet">
+    <div class="m-grab"></div>
+    <div style="display:flex;align-items:center;gap:10px"><span class="orb"></span><b style="font-size:15px">Gerrie</b><span class="badge badge--ai badge--sm">Voorstel</span><button type="button" class="icon-btn" style="margin-left:auto;width:44px;height:44px" aria-label="Sluiten"><svg class="i"><use href="#i-x"></use></svg></button></div>
+    <p style="margin:10px 0 12px;font-size:14px;line-height:1.55;color:var(--ink-2)">Ik heb een herinnering voor <b style="color:var(--ink-1)">factuur 2026-040</b> klaargezet. Wil je hem lezen voordat hij weggaat?</p>
+    <div class="proposal aurora">
+      <div class="proposal-body">
+        <div class="mailrow"><span>Aan</span>Karim El Amrani</div>
+        <div class="mailrow"><span>Onderwerp</span>Herinnering: factuur 2026-040</div>
+        <div class="mailrow"><span>Bijlage</span>factuur + betaallink</div>
+      </div>
+      <div class="proposal-actions"><button type="button" class="btn btn--primary" style="flex:1;height:44px">Goedkeuren</button><button type="button" class="btn" style="height:44px">Aanpassen</button></div>
+    </div>
+    <div class="composer aurora" style="margin:12px 0 0"><div class="composer-input">Vraag Gerrie iets…</div></div>
+  </div>
+</div>
+</template>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+  const tpl = (id) => document.getElementById(id).content.firstElementChild.cloneNode(true);
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch { /* privé */ } } };
+
+  const SCREENS = {
+    dashboard: { tpl: 't-dashboard', nav: 'dashboard', title: 'Dashboard', icon: 'i-grid' },
+    facturen: { tpl: 't-facturen', nav: 'financien', title: 'Facturen', icon: 'i-receipt' },
+    project: { tpl: 't-project', nav: 'projecten', title: 'Nieuwe huisstijl De Korenaar', icon: 'i-folder' },
+    agenda: { tpl: 't-agenda', nav: 'agenda', title: 'Agenda', icon: 'i-calendar' },
+    gerrie: { tpl: 't-gerrie', nav: 'gerrie', title: 'Gerrie', icon: 'i-sparkles' },
+  };
+  const NAV_TO_SCREEN = { dashboard: 'dashboard', financien: 'facturen', projecten: 'project', agenda: 'agenda', gerrie: 'gerrie' };
+  const icon = (id, cls = 'i') => `<svg class="${cls}"><use href="#${id}"></use></svg>`;
+
+  function fill(app, key) {
+    const s = SCREENS[key];
+    const content = $('[data-slot=content]', app);
+    content.replaceChildren(tpl(s.tpl));
+    content.scrollTop = 0;
+    content.style.overflow = key === 'gerrie' || key === 'agenda' ? 'hidden' : '';
+    $$('.nav-item', app).forEach(b => b.classList.toggle('is-active', b.dataset.nav === s.nav));
+    const log = $('[data-log]', app);
+    if (log) requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
+  }
+
+  function makeApp(theme, key) {
+    const frame = tpl('t-app');
+    frame.dataset.theme = theme;
+    fill(frame, key);
+    return frame;
+  }
+
+  // ── Thema van de pagina (en van het prototype) ──────────────────────────
+  const page = document.getElementById('page');
+  // Volgorde: eigen keuze op deze pagina, dan het thema van de kijker (een
+  // host kan data-theme op het html-element zetten), dan de instelling van het systeem.
+  const host = document.documentElement.getAttribute('data-theme');
+  let theme = store.get('belicht.theme') || (host === 'light' ? 'dag' : host === 'dark' ? 'nacht' : null) || (matchMedia('(prefers-color-scheme: light)').matches ? 'dag' : 'nacht');
+  function setTheme(next) {
+    theme = next;
+    page.dataset.theme = next;
+    document.documentElement.style.setProperty('--page-bg', next === 'dag' ? '#F1F0EC' : '#09090A');
+    $$('[data-set-theme]').forEach(b => b.classList.toggle('is-on', b.dataset.setTheme === next));
+    if (proto) {
+      proto.frame.dataset.theme = next;
+      $$('[data-action=theme] use', proto.frame).forEach(u => u.setAttribute('href', next === 'dag' ? '#i-sun' : '#i-moon'));
+    }
+    store.set('belicht.theme', next);
+  }
+  // Met View Transitions groeit het nieuwe licht als een cirkel vanaf de klik.
+  function switchTheme(next, x, y) {
+    if (next === theme) return;
+    if (!document.startViewTransition || reduced) { setTheme(next); return; }
+    const r = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+    const t = document.startViewTransition(() => setTheme(next));
+    t.ready.then(() => {
+      document.documentElement.animate(
+        { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${r}px at ${x}px ${y}px)`] },
+        { duration: 700, easing: 'cubic-bezier(.2,.8,.2,1)', pseudoElement: '::view-transition-new(root)' }
+      );
+    }).catch(() => {});
+  }
+  const pointOf = (el) => { const r = el.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; };
+  $$('[data-set-theme]').forEach(b => b.addEventListener('click', () => switchTheme(b.dataset.setTheme, ...pointOf(b))));
+
+  // ── Schalen: alles is ontworpen op 1440 × 900 ─────────────────────────────
+  function fit() {
+    $$('[data-fit]').forEach(box => box.style.setProperty('--z', String(box.clientWidth / 1440)));
+    const phones = $('#phones');
+    if (phones) {
+      const w = phones.clientWidth;
+      const z = w < 460 ? Math.max(.62, (w - 24) / 414) : 1;
+      phones.style.setProperty('--pz', String(z));
+    }
+  }
+  new ResizeObserver(fit).observe(page);
+
+  // ── Vergelijken ─────────────────────────────────────────────────────────
+  const compare = $('#compare');
+  compare.dataset.fit = '';
+  const nachtApp = makeApp('nacht', 'dashboard');
+  const dagApp = makeApp('dag', 'dashboard');
+  $('[data-compare=nacht]', compare).append(nachtApp);
+  $('[data-compare=dag]', compare).append(dagApp);
+  $$('button', compare).forEach(b => { if (!b.closest('.cmp-handle')) b.tabIndex = -1; });
+  const range = $('#cmpRange');
+  const setPos = (p) => { const v = Math.min(100, Math.max(0, p)); compare.style.setProperty('--pos', v + '%'); range.value = String(Math.round(v)); };
+  range.addEventListener('input', () => setPos(Number(range.value)));
+  const handle = $('#cmpHandle');
+  let dragging = false;
+  const fromEvent = (e) => { const r = compare.getBoundingClientRect(); return ((e.clientX - r.left) / r.width) * 100; };
+  handle.addEventListener('pointerdown', (e) => { dragging = true; compare.classList.add('is-drag'); handle.setPointerCapture(e.pointerId); e.preventDefault(); });
+  handle.addEventListener('pointermove', (e) => { if (dragging) setPos(fromEvent(e)); });
+  const stop = () => { dragging = false; compare.classList.remove('is-drag'); };
+  handle.addEventListener('pointerup', stop);
+  handle.addEventListener('pointercancel', stop);
+  handle.addEventListener('keydown', (e) => { if (e.key === 'ArrowLeft') setPos(Number(range.value) - 4); if (e.key === 'ArrowRight') setPos(Number(range.value) + 4); });
+  handle.tabIndex = 0;
+  handle.setAttribute('role', 'slider');
+  handle.setAttribute('aria-label', 'Schuif tussen Nacht en Dag');
+  // Samen scrollen: beide kanten tonen altijd hetzelfde stuk van het scherm.
+  const cN = $('[data-slot=content]', nachtApp), cD = $('[data-slot=content]', dagApp);
+  let syncing = false;
+  const sync = (a, b) => a.addEventListener('scroll', () => { if (syncing) return; syncing = true; b.scrollTop = a.scrollTop; requestAnimationFrame(() => { syncing = false; }); });
+  sync(cN, cD); sync(cD, cN);
+  // Eén keer heen en weer, zodat je ziet dat het kan.
+  function intro() {
+    if (reduced) return;
+    const keys = [[0, 50], [700, 70], [1500, 32], [2200, 50]];
+    const t0 = performance.now();
+    const ease = (t) => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    const step = (now) => {
+      if (dragging) return;
+      const t = now - t0;
+      let i = keys.findIndex(k => k[0] > t);
+      if (i === -1) { setPos(50); return; }
+      const [ta, pa] = keys[i - 1], [tb, pb] = keys[i];
+      setPos(pa + (pb - pa) * ease((t - ta) / (tb - ta)));
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  // ── Prototype ─────────────────────────────────────────────────────────
+  const protoBox = $('#proto');
+  protoBox.dataset.fit = '';
+  const proto = { frame: makeApp(theme, 'dashboard'), tabs: ['dashboard', 'facturen', 'project'], active: 'dashboard' };
+  protoBox.append(proto.frame);
+  const appEl = $('.rf-app', proto.frame);
+  const toasts = document.createElement('div');
+  toasts.className = 'toasts';
+  appEl.append(toasts);
+
+  function renderTabs() {
+    const box = $('.tabs', proto.frame);
+    box.innerHTML = proto.tabs.map(k => {
+      const s = SCREENS[k];
+      return `<button type="button" class="tab${k === proto.active ? ' is-active' : ''}" data-tab="${k}" role="tab" aria-selected="${k === proto.active}">${icon(s.icon, 'i i-sm')}<span class="trunc">${s.title}</span><span class="tab-x" data-close="${k}" aria-hidden="true">${icon('i-x', 'i i-xs')}</span></button>`;
+    }).join('');
+  }
+  function open(key) {
+    if (!proto.tabs.includes(key)) proto.tabs.push(key);
+    proto.active = key;
+    fill(proto.frame, key);
+    renderTabs();
+  }
+  function closeTab(key) {
+    if (proto.tabs.length === 1) { toast('De laatste werktab blijft open'); return; }
+    const i = proto.tabs.indexOf(key);
+    proto.tabs.splice(i, 1);
+    if (proto.active === key) open(proto.tabs[Math.max(0, i - 1)]); else renderTabs();
+  }
+  function toast(text, kind = 'ok') {
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.innerHTML = (kind === 'ai' ? '<span class="orb orb-sm"></span>' : icon('i-check-circle')) + `<span>${text}</span>`;
+    toasts.append(el);
+    setTimeout(() => { el.style.transition = 'opacity .3s, transform .3s'; el.style.opacity = '0'; el.style.transform = 'translateY(6px)'; }, 2600);
+    setTimeout(() => el.remove(), 3000);
+  }
+  renderTabs();
+
+  proto.frame.addEventListener('click', (e) => {
+    const t = e.target;
+    const close = t.closest('[data-close]');
+    if (close) { e.stopPropagation(); closeTab(close.dataset.close); return; }
+    const tab = t.closest('[data-tab]');
+    if (tab) { open(tab.dataset.tab); return; }
+    const nav = t.closest('.nav-item');
+    if (nav) {
+      const key = NAV_TO_SCREEN[nav.dataset.nav];
+      if (key) open(key);
+      else toast(`${nav.textContent.trim().replace(/\d+$/, '')} is in dit voorstel niet uitgewerkt. Probeer Dashboard, Agenda, Projecten, Financiën of Gerrie.`);
+      return;
+    }
+    const go = t.closest('[data-go]');
+    if (go) { open(go.dataset.go); return; }
+    const act = t.closest('[data-action]');
+    if (act) {
+      const a = act.dataset.action;
+      if (a === 'palette') openPalette();
+      else if (a === 'theme') switchTheme(theme === 'dag' ? 'nacht' : 'dag', ...pointOf(act));
+      else if (a === 'gerrie') open('gerrie');
+      else if (a === 'remind') {
+        toast('Herinnering voor 2026-040 staat klaar. Keur hem goed bij Gerrie.', 'ai');
+        act.innerHTML = icon('i-check') + 'Klaargezet';
+        act.disabled = true;
+      } else if (a === 'approve') {
+        const card = act.closest('.qcard, .proposal');
+        toast('Goedgekeurd en verstuurd');
+        if (card && card.classList.contains('qcard')) { card.style.transition = 'opacity .3s, transform .3s'; card.style.opacity = '0'; card.style.transform = 'translateX(12px)'; setTimeout(() => card.remove(), 300); }
+        else if (card) { $('.badge', card).className = 'badge badge--ok badge--sm'; $('.badge', card).textContent = 'Verstuurd'; act.disabled = true; }
+      }
+      return;
+    }
+    const check = t.closest('.check');
+    if (check) {
+      const done = !check.classList.contains('is-done');
+      check.classList.toggle('is-done', done);
+      const row = check.closest('.task, .m-task');
+      if (row) row.classList.toggle('is-done', done);
+      if (done) toast('Taak afgevinkt');
+      return;
+    }
+    const segBtn = t.closest('.seg button');
+    if (segBtn) { $$('button', segBtn.parentElement).forEach(b => b.classList.toggle('is-on', b === segBtn)); return; }
+    const utab = t.closest('.utab');
+    if (utab) { $$('.utab', utab.parentElement).forEach(b => b.classList.toggle('is-on', b === utab)); return; }
+    const sw = t.closest('.switch');
+    if (sw) { sw.classList.toggle('is-on'); return; }
+    const row = t.closest('.table tbody tr');
+    if (row) { $$('tr', row.parentElement).forEach(r => { r.classList.toggle('is-selected', r === row); const b = $('.box', r); b.classList.toggle('is-on', r === row); b.innerHTML = r === row ? icon('i-check') : ''; }); return; }
+  });
+
+  // Gerrie: een paar voorbeeldantwoorden, met een typ-indicator ervoor.
+  const ANSWERS = {
+    'Weekoverzicht': 'Deze week staat er <b>26,5 van 32 uur</b> geschreven en zijn er <b>4 taken</b> over tijd. Het grootste risico is <b>Website Fysio Centrum Zuid</b>: deadline 5 oktober, 72% klaar en al 31 van de 40 uur gebruikt.',
+    'Offertes die stilliggen': 'Offerte <b>2026-020</b> aan Van Dijk Installatietechniek (€ 3.327,50) wacht al <b>9 dagen</b> op antwoord. Zal ik Peter een korte opvolgmail klaarzetten?',
+    'Uren deze maand': 'In september staat er <b>104,5 uur</b> geschreven, waarvan <b>88 declarabel</b>. De meeste tijd ging naar Website Fysio Centrum Zuid (31 uur).',
+    'Wie moet ik nog bellen?': '<b>Peter van Dijk</b> over de planning, want dat staat al 5 dagen open. En <b>Karim</b> van Restaurant Bloem, als de herinnering van vandaag niets oplevert.',
+  };
+  function ask(question) {
+    const log = $('[data-log]', proto.frame);
+    if (!log || !question.trim()) return;
+    const me = document.createElement('div');
+    me.className = 'msg-me msg-in';
+    me.textContent = question;
+    const ai = document.createElement('div');
+    ai.className = 'msg-ai msg-in';
+    ai.innerHTML = '<span class="orb"></span><div class="msg-ai-body"><span class="typing" aria-label="Gerrie denkt na"><i></i><i></i><i></i></span></div>';
+    log.append(me, ai);
+    log.scrollTop = log.scrollHeight;
+    const answer = ANSWERS[question] || 'Dit is een voorbeeldantwoord. In ResoFly zoekt Gerrie het op in je eigen klanten, projecten, uren en financiën, en zet hij acties klaar die jij goedkeurt.';
+    setTimeout(() => { $('.msg-ai-body', ai).innerHTML = `<p>${answer}</p>`; log.scrollTop = log.scrollHeight; }, reduced ? 0 : 1100);
+  }
+  proto.frame.addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-ask-chip]');
+    if (chip) ask(chip.textContent.trim());
+    const send = e.target.closest('[data-ask-send]');
+    if (send) { const f = $('[data-ask]', proto.frame); ask(f.value); f.value = ''; }
+  });
+  proto.frame.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.matches('[data-ask]')) { ask(e.target.value); e.target.value = ''; }
+  });
+
+  // Zoeklicht op de kaarten van de pagina.
+  document.addEventListener('pointermove', (e) => {
+    const c = e.target.closest && e.target.closest('.spot');
+    if (!c) return;
+    const r = c.getBoundingClientRect();
+    c.style.setProperty('--mx', (e.clientX - r.left) + 'px');
+    c.style.setProperty('--my', (e.clientY - r.top) + 'px');
+  }, { passive: true });
+
+  // Grafiek: wijs een maand aan.
+  const MONTHS = ['Oktober 2025', 'November 2025', 'December 2025', 'Januari 2026', 'Februari 2026', 'Maart 2026', 'April 2026', 'Mei 2026', 'Juni 2026', 'Juli 2026', 'Augustus 2026', 'September 2026'];
+  const PAID = [7200, 8400, 6100, 5300, 7900, 9600, 8800, 10200, 9100, 6400, 6613.5, 6909.1];
+  const OPEN = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 786.5, 2904];
+  const eur = (n) => '€ ' + n.toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  proto.frame.addEventListener('pointerover', (e) => {
+    const col = e.target.closest && e.target.closest('.chart .col');
+    const wrap = e.target.closest && e.target.closest('[data-chart]');
+    if (!wrap) return;
+    let tip = $('.tip', wrap);
+    if (!col) { if (tip) tip.remove(); return; }
+    const i = Number(col.dataset.i);
+    if (!tip) { tip = document.createElement('div'); tip.className = 'tip'; wrap.append(tip); }
+    tip.innerHTML = `<b>${MONTHS[i]}</b><div><span><i style="background:var(--viz-1)"></i>Betaald</span>${eur(PAID[i])}</div>` + (OPEN[i] ? `<div><span><i style="background:var(--viz-2)"></i>Openstaand</span>${eur(OPEN[i])}</div>` : '') + `<div style="margin-top:4px;color:var(--ink-1);font-weight:600"><span>Totaal</span>${eur(PAID[i] + OPEN[i])}</div>`;
+    const svg = $('svg', wrap);
+    const scale = svg.clientWidth / 624;
+    const x = (46 + 47.5 * i + 23.75) * scale + 16;
+    const left = Math.min(Math.max(x - 95, 8), wrap.clientWidth - 200);
+    tip.style.left = left + 'px';
+    tip.style.top = '-8px';
+  });
+  proto.frame.addEventListener('pointerleave', () => { const tip = $('.tip', proto.frame); if (tip) tip.remove(); });
+
+  // ── Opdrachtpalet ──────────────────────────────────────────────────────
+  const CMDS = [
+    { g: 'Ga naar', l: 'Dashboard', i: 'i-grid', k: 'G D', run: () => open('dashboard') },
+    { g: 'Ga naar', l: 'Facturen', i: 'i-receipt', k: 'G F', run: () => open('facturen') },
+    { g: 'Ga naar', l: 'Nieuwe huisstijl De Korenaar', i: 'i-folder', run: () => open('project') },
+    { g: 'Ga naar', l: 'Agenda', i: 'i-calendar', k: 'G A', run: () => open('agenda') },
+    { g: 'Ga naar', l: 'Gerrie', i: 'i-sparkles', ai: true, k: '⌘J', run: () => open('gerrie') },
+    { g: 'Maak', l: 'Nieuwe factuur', i: 'i-plus', k: 'N F', run: () => toast('Concept 2026-043 aangemaakt') },
+    { g: 'Maak', l: 'Nieuwe taak', i: 'i-plus', k: 'N T', run: () => toast('Taak toegevoegd aan vandaag') },
+    { g: 'Maak', l: 'Uren schrijven', i: 'i-clock', k: 'N U', run: () => toast('Timer gestart op Logo-schetsen uitwerken') },
+    { g: 'Vraag Gerrie', l: 'Welke facturen staan nog open?', i: 'i-sparkles', ai: true, run: () => open('gerrie') },
+    { g: 'Vraag Gerrie', l: 'Vat mijn week samen', i: 'i-sparkles', ai: true, run: () => open('gerrie') },
+    { g: 'Weergave', l: 'Wissel tussen Nacht en Dag', i: 'i-sun', k: '⇧ T', run: () => switchTheme(theme === 'dag' ? 'nacht' : 'dag', innerWidth / 2, innerHeight / 2) },
+  ];
+  let pal = null;
+  function openPalette(prefill = '') {
+    if (pal) return;
+    pal = document.createElement('div');
+    pal.className = 'overlay';
+    pal.innerHTML = `<div class="palette" role="dialog" aria-label="Opdrachtpalet"><div class="palette-input">${icon('i-search')}<input type="text" placeholder="Zoek, spring naar of maak iets…" aria-label="Opdracht" value="${prefill}"><span class="kbd">esc</span></div><div class="palette-list"></div><div class="palette-foot"><span><span class="kbd">↑</span><span class="kbd">↓</span>kiezen</span><span><span class="kbd">↵</span>openen</span><span style="margin-left:auto"><span class="orb orb-sm" style="width:14px;height:14px"></span>Stel gerust een vraag aan Gerrie</span></div></div>`;
+    appEl.append(pal);
+    const input = $('input', pal), list = $('.palette-list', pal);
+    let sel = 0, shown = [];
+    const draw = () => {
+      const q = input.value.trim().toLowerCase();
+      shown = CMDS.filter(c => !q || (c.l + ' ' + c.g).toLowerCase().includes(q));
+      if (q && !shown.some(c => c.ai)) shown.push({ g: 'Vraag Gerrie', l: `“${input.value.trim()}”`, i: 'i-sparkles', ai: true, run: () => open('gerrie') });
+      sel = Math.min(sel, Math.max(0, shown.length - 1));
+      let last = '';
+      list.innerHTML = shown.map((c, n) => {
+        const head = c.g !== last ? `<div class="palette-group">${c.g}</div>` : '';
+        last = c.g;
+        return head + `<button type="button" class="palette-item${n === sel ? ' is-on' : ''}${c.ai ? ' is-ai' : ''}" data-n="${n}">${icon(c.i)}<span>${c.l}</span>${c.k ? `<span class="kbd">${c.k}</span>` : ''}</button>`;
+      }).join('');
+    };
+    const run = (n) => { const c = shown[n]; closePalette(); if (c) c.run(); };
+    input.addEventListener('input', () => { sel = 0; draw(); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') { sel = (sel + 1) % shown.length; draw(); e.preventDefault(); }
+      else if (e.key === 'ArrowUp') { sel = (sel - 1 + shown.length) % shown.length; draw(); e.preventDefault(); }
+      else if (e.key === 'Enter') { run(sel); e.preventDefault(); }
+      else if (e.key === 'Escape') { closePalette(); }
+    });
+    list.addEventListener('click', (e) => { const b = e.target.closest('[data-n]'); if (b) run(Number(b.dataset.n)); });
+    pal.addEventListener('click', (e) => { if (e.target === pal) closePalette(); });
+    draw();
+    input.focus({ preventScroll: true });
+  }
+  function closePalette() { if (pal) { pal.remove(); pal = null; } }
+  document.addEventListener('keydown', (e) => {
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      const r = protoBox.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > innerHeight) protoBox.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center' });
+      pal ? closePalette() : openPalette();
+    } else if (mod && e.key.toLowerCase() === 'j') {
+      e.preventDefault(); open('gerrie');
+    } else if (e.key === 'Escape') closePalette();
+  });
+
+  // ── Kleuren: waarden en contrast live uit de tokens ─────────────────────
+  const GROUPS = [
+    ['Vlakken', [['--canvas', 'Grond'], ['--panel', 'Werkpaneel'], ['--s1', 'Kaart'], ['--s2', 'Verhoogd'], ['--s3', 'Ingedrukt']]],
+    ['Inkt', [['--ink-1', 'Inkt 1', 'koppen en tekst', true], ['--ink-2', 'Inkt 2', 'ondersteunend', true], ['--ink-3', 'Inkt 3', 'meta en labels', true]]],
+    ['Merk', [['--gold', 'Zongoud', 'hoofdactie, focus'], ['--gold-ink', 'Goud als tekst', 'links, actieve plek', true], ['--on-gold', 'Op goud', 'tekst op de knop', 'gold']]],
+    ['Status', [['--ok', 'Gelukt', 'betaald, klaar', true], ['--warn', 'Let op', 'deels, krap', true], ['--danger', 'Te laat', 'fouten, over tijd', true], ['--info', 'Info', 'verzonden', true]]],
+  ];
+  const toRgb = (str) => {
+    const c = document.createElement('canvas').getContext('2d');
+    c.fillStyle = '#000'; c.fillStyle = str.trim();
+    const v = c.fillStyle;
+    if (v.startsWith('#')) return [1, 3, 5].map(i => parseInt(v.slice(i, i + 2), 16));
+    const m = v.match(/[\d.]+/g); return m ? m.slice(0, 3).map(Number) : [0, 0, 0];
+  };
+  const lum = ([r, g, b]) => { const f = (x) => { x /= 255; return x <= .03928 ? x / 12.92 : Math.pow((x + .055) / 1.055, 2.4); }; return .2126 * f(r) + .7152 * f(g) + .0722 * f(b); };
+  const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); };
+  $$('[data-swatches]').forEach(panel => {
+    const cs = getComputedStyle(panel);
+    const name = panel.dataset.theme === 'dag' ? 'Dag' : 'Nacht';
+    let html = `<div class="sys-top"><h4>${icon(panel.dataset.theme === 'dag' ? 'i-sun' : 'i-moon')}${name}</h4><span>contrast op kaart</span></div>`;
+    for (const [g, rows] of GROUPS) {
+      html += `<div class="swg"><h5>${g}</h5>`;
+      for (const [tok, label, sub, text] of rows) {
+        const val = cs.getPropertyValue(tok).trim();
+        let em = '<em class="is-dec">vlak</em>';
+        if (text) {
+          const bg = text === 'gold' ? cs.getPropertyValue('--gold') : cs.getPropertyValue('--s1');
+          const r = ratio(toRgb(val), toRgb(bg));
+          em = `<em>${r >= 4.5 ? 'AA' : r >= 3 ? 'AA groot' : '—'} ${r.toFixed(1).replace('.', ',')}</em>`;
+        } else if (tok === '--gold') {
+          em = '<em class="is-dec">vulling</em>';
+        }
+        html += `<div class="swr"><i style="background:var(${tok})"></i><span class="nm">${label}${sub ? `<small>${sub}</small>` : ''}</span><code>${val.toUpperCase()}</code>${em}</div>`;
+      }
+      html += '</div>';
+    }
+    html += `<div class="swg"><h5>Poollicht (Gerrie)</h5><div class="swr" style="grid-template-columns:minmax(0,1fr) 86px"><span class="aurora-bar"></span><em class="is-dec">alleen AI</em></div></div>`;
+    panel.innerHTML = html;
+  });
+
+  // ── Componenten in beide lichten ────────────────────────────────────────
+  $$('[data-components]').forEach(panel => {
+    const c = tpl('t-components');
+    if (panel.dataset.theme === 'dag') { $('[data-theme-name]', c).textContent = 'Dag'; $('[data-theme-icon] use', c).setAttribute('href', '#i-sun'); }
+    panel.append(c);
+  });
+  $('#components').addEventListener('click', (e) => {
+    const sw = e.target.closest('.switch');
+    if (sw) { sw.classList.toggle('is-on'); sw.setAttribute('aria-pressed', sw.classList.contains('is-on')); }
+    const seg = e.target.closest('.seg button');
+    if (seg) $$('button', seg.parentElement).forEach(b => b.classList.toggle('is-on', b === seg));
+    const ut = e.target.closest('.utab');
+    if (ut) $$('.utab', ut.parentElement).forEach(b => b.classList.toggle('is-on', b === ut));
+    const ck = e.target.closest('.check');
+    if (ck) ck.classList.toggle('is-done');
+  });
+
+  // ── Beweging ───────────────────────────────────────────────────────────
+  $('#playMotion').addEventListener('click', () => { const m = $('#motion'); m.classList.toggle('is-play'); });
+
+  // ── Telefoons ──────────────────────────────────────────────────────────
+  const phones = $('#phones');
+  const addPhone = (theme, caption, sheet) => {
+    const col = document.createElement('div');
+    col.className = 'phone-col';
+    const fitBox = document.createElement('div');
+    fitBox.className = 'phone-fit';
+    const p = tpl('t-phone');
+    p.dataset.theme = theme;
+    if (sheet) p.append(tpl('t-phone-sheet'));
+    fitBox.append(p);
+    col.append(fitBox);
+    const cap = document.createElement('p');
+    cap.className = 'cap';
+    cap.innerHTML = caption;
+    col.append(cap);
+    phones.append(col);
+  };
+  addPhone('nacht', '<b>Nacht</b> · dashboard');
+  addPhone('dag', '<b>Dag</b> · dashboard');
+  addPhone('dag', '<b>Dag</b> · Gerrie zet iets klaar', true);
+
+  setTheme(theme);
+  fit();
+  (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(() => { fit(); setTimeout(intro, 350); });
+})();
+</script>
+</body>
+</html>

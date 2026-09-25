@@ -10,8 +10,9 @@ export type Theme = 'dark' | 'light';
 export const THEME_STORAGE_KEY = 'resofly.theme';
 
 /** De grondkleur per thema, voor de adresbalk op mobiel (`meta[name=theme-color]`).
- *  Gelijk houden aan --bg in globals.css. */
-const THEME_COLOR: Record<Theme, string> = { dark: '#12110E', light: '#F1EEE6' };
+ *  Gelijk houden aan --bg-deep in globals.css (Belicht: de grond van Nacht en Dag)
+ *  en aan het bootstrap-script in index.html. */
+const THEME_COLOR: Record<Theme, string> = { dark: '#09090A', light: '#F1F0EC' };
 
 export function loadTheme(): Theme {
   try {
