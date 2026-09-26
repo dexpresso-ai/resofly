@@ -37,7 +37,15 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const targetUrl = (event.notification.data && event.notification.data.url) || '/';
+  const rawUrl = (event.notification.data && event.notification.data.url) || '/';
+  // Alleen binnen de eigen app navigeren: een melding opent nooit een externe site.
+  let targetUrl = '/';
+  try {
+    const resolved = new URL(rawUrl, self.location.origin);
+    if (resolved.origin === self.location.origin) targetUrl = resolved.pathname + resolved.search + resolved.hash;
+  } catch (_) {
+    // Ongeldige url: gewoon naar de start.
+  }
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {

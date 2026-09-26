@@ -28,6 +28,8 @@ import {
   requireOrganizationAccess,
   requireUser,
   assertWriteRole,
+  assertModuleAccess,
+  isUuid,
 } from '../_shared/edgeAuth.ts';
 import { computeVpb, type LossCarryForward, type VpbCorrection, type VpbInput, type VpbYearRules } from '../_shared/vpb.ts';
 
@@ -80,16 +82,20 @@ serve(async (req) => {
     const organizationId = String(body.organizationId || '');
     const fiscalYearId = String(body.fiscalYearId || '');
     if (!organizationId || !fiscalYearId) throw new HttpError('organizationId en fiscalYearId zijn verplicht.', 400);
+    if (!isUuid(organizationId) || !isUuid(fiscalYearId)) throw new HttpError('Ongeldige organisatie of boekjaar.', 400);
 
     const user = await requireUser(admin, req);
     const role = await requireOrganizationAccess(admin, user.id, organizationId);
+    // Deze functie draait met de service-role: de modulecontrole in de RPC's
+    // (can_read_module) ziet dan geen gebruiker en slaat over. Dus hier: lezen
+    // vraagt leesrecht op Financiën, opslaan en definitief maken schrijfrecht.
+    await assertModuleAccess(admin, user.id, organizationId, 'finance', action === 'inputs' ? 'read' : 'write');
 
     const inputs = await loadInputs(organizationId, fiscalYearId);
     const computation = compute(inputs);
 
     if (action === 'inputs') {
-      // Alleen doorrekenen en tonen. Lezen mag iedereen die in de organisatie zit;
-      // de RPC heeft de modulecontrole al gedaan.
+      // Alleen doorrekenen en tonen.
       return cors.json(req, { ok: true, inputs, computation });
     }
 

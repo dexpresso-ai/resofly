@@ -153,16 +153,22 @@ async function handle(request: Request, env: Env): Promise<Response> {
 async function authenticate(request: Request, env: Env): Promise<Principal | null> {
   const creds = parseBasicAuth(request.headers.get('Authorization'));
   if (!creds) return null;
-  const rows = await rpc<{ id: string; user_id: string; organization_id: string; salt: string; password_hash: string; role: string | null }[]>(
-    env, 'caldav_lookup_app_passwords', { p_email: creds.user },
-  );
+  // De lookup geeft alleen rijen van ACTIEVE leden, met calendar_level = het
+  // effectieve recht op de module Agenda ('read' | 'write'; 'none' komt niet mee).
+  // Een oudere versie van de functie kende calendar_level nog niet: dan geldt de rol.
+  const rows = await rpc<{
+    id: string; user_id: string; organization_id: string; salt: string; password_hash: string;
+    role: string | null; calendar_level?: string | null;
+  }[]>(env, 'caldav_lookup_app_passwords', { p_email: creds.user });
   const normalized = normalizeToken(creds.pass);
   for (const row of rows) {
+    if (!row.role || row.calendar_level === 'none') continue;
     const hash = await sha256Hex(`${row.salt}:${normalized}`);
     if (timingSafeEqualHex(hash, row.password_hash)) {
       // last_used_at bijwerken (best-effort, blokkeert de respons niet).
       void patchLastUsed(env, row.id);
-      const canWrite = row.role === 'owner' || row.role === 'admin' || row.role === 'member';
+      const writeRole = row.role === 'owner' || row.role === 'admin' || row.role === 'member';
+      const canWrite = writeRole && (row.calendar_level ?? 'write') === 'write';
       return { userId: row.user_id, orgId: row.organization_id, email: creds.user, appPasswordId: row.id, canWrite };
     }
   }

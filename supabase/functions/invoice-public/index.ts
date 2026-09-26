@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { sanitizeBranding } from '../_shared/branding.ts';
+import { toPublicTimeline } from '../_shared/publicTimeline.ts';
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -176,7 +177,7 @@ async function getInvoice(token: string, options: { mockPaymentId?: string; mark
     company: sanitizeCompany(companyRow),
     // Nul extra queries: optionalCompany() haalt de hele rij al op.
     branding: sanitizeBranding(companyRow),
-    events: events.map(sanitizeEvent),
+    events: toPublicTimeline('invoice', events),
     payments: payments.map(sanitizePayment),
     versions: versions.map(sanitizeVersion),
     mockPaymentWarning,
@@ -424,14 +425,6 @@ function sanitizeCompany(row: any) {
   };
 }
 
-function sanitizeEvent(row: any) {
-  return {
-    event_type: row.event_type,
-    title: row.title,
-    description: row.description,
-    created_at: row.created_at,
-  };
-}
 
 function sanitizePayment(row: any) {
   return {

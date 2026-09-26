@@ -58,17 +58,18 @@ serve(async (req) => {
     if (lookupError) throw lookupError;
     const known = Array.isArray(clients) && clients.length > 0;
 
-    if (!known) {
-      return json(req, { ok: true, known: false });
-    }
-
-    await ensureAuthUser(email);
+    if (known) await ensureAuthUser(email);
+    // Het antwoord is voor elk adres hetzelfde: anders is deze functie een
+    // opzoekdienst voor "is dit iemands klant?". Een onbekend adres krijgt
+    // gewoon geen inloglink. `known: true` blijft staan voor oudere frontends,
+    // die zonder die vlag niet doorgaan naar het versturen van de link.
     return json(req, { ok: true, known: true });
   } catch (error) {
     const status = error instanceof PortalLoginError ? error.status : 500;
+    // Details alleen in de log; een bezoeker zonder account krijgt geen interne foutteksten.
     const message = error instanceof PortalLoginError
       ? error.message
-      : `Inloggen kon niet worden voorbereid: ${describeError(error)}`.slice(0, 500);
+      : 'Inloggen kon niet worden voorbereid. Probeer het later opnieuw.';
     if (status >= 500) {
       console.error('portal-login error', describeError(error), error instanceof Error ? error.stack : undefined);
     }

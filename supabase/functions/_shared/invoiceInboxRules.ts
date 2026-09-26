@@ -102,7 +102,9 @@ export function sameInvoice(a: ProposalLike, b: ProposalLike): boolean {
  * Automatisch boeken mag alleen als er niets meer te kiezen of te controleren
  * valt: bekende leverancier (niet zojuist aangemaakt, niet alleen op naam),
  * hoge zekerheid, geen enkele waarschuwing, elke regel met een grootboekrekening,
- * positief totaal.
+ * positief totaal — en het IBAN op de factuur is dat van de leverancier. Een
+ * ander rekeningnummer op een verder bekende factuur is hét patroon van
+ * factuurfraude; dat moet een mens zien.
  */
 export function autoBookEligible(input: {
   supplierCreated: boolean;
@@ -111,8 +113,10 @@ export function autoBookEligible(input: {
   warnings: string[];
   lines: Array<{ account_id: string | null; amount_cents: number }>;
   totals: { total_cents: number };
+  ibanMismatch?: boolean;
 }): { ok: true } | { ok: false; why: string } {
   if (input.supplierCreated) return { ok: false, why: 'de leverancier is nieuw aangemaakt' };
+  if (input.ibanMismatch) return { ok: false, why: 'het IBAN op de factuur wijkt af van het IBAN van deze leverancier' };
   if (!input.supplierMatch || input.supplierMatch === 'name') return { ok: false, why: 'de leverancier is alleen op naam herkend' };
   if (input.confidence !== 'high') return { ok: false, why: 'de zekerheid van de uitlezing is niet hoog' };
   if (input.warnings.length) return { ok: false, why: 'er zijn waarschuwingen bij de uitlezing' };

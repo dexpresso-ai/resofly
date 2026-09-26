@@ -172,7 +172,7 @@ async function downloadItem(tokenHash: string, body: Record<string, unknown>) {
       fileName: item.name,
       mimeType: item.mime_type || 'application/octet-stream',
       sizeBytes: item.size_bytes,
-      base64: await fetchStorageBase64(item.storage_key),
+      base64: await fetchStorageBase64(share.organization_id, item.storage_key, item.size_bytes),
     },
   };
 }
@@ -218,12 +218,21 @@ async function loadTextItem(organizationId: string, item: ShareItem): Promise<{ 
   return { title: row.title, html: row.content || '' };
 }
 
-async function fetchStorageBase64(storageKey: string): Promise<string> {
+async function fetchStorageBase64(organizationId: string, storageKey: string, sizeBytes: number | null): Promise<string> {
   if (!MEDIA_WORKER_URL || !MEDIA_INTERNAL_SECRET) {
     throw new ShareError('De bestandsopslag is niet gekoppeld. Neem contact op met de afzender.', 503);
   }
+  // De sleutel komt uit een rij die een teamlid zelf schrijft: hij moet onder de
+  // map van déze organisatie liggen, anders haalt de service-role andermans object op.
+  if (!storageKey.startsWith(`${organizationId}/`) || storageKey.includes('..')) {
+    throw new ShareError('Dit bestand hoort niet bij deze deellink.', 403);
+  }
+  // Te groot weten we meestal al uit de rij: dan niet eerst alles binnenhalen.
+  if (typeof sizeBytes === 'number' && sizeBytes > MAX_DOWNLOAD_BYTES) {
+    throw new ShareError('Dit bestand is te groot om via de deellink te downloaden.', 413);
+  }
   const response = await fetch(`${MEDIA_WORKER_URL}/internal/media/${encodeURIComponent(storageKey)}`, {
-    headers: { Authorization: `Bearer ${MEDIA_INTERNAL_SECRET}` },
+    headers: { Authorization: `Bearer ${MEDIA_INTERNAL_SECRET}`, 'x-organization-id': organizationId },
   });
   if (!response.ok) {
     if (response.status === 404) throw new ShareError('Dit bestand is niet meer beschikbaar.', 404);

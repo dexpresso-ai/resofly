@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Input } from '../components/Ui';
 import { supabase } from '../lib/supabase';
+import { safeHttpUrl } from '../lib/safeUrl';
 
 interface PublicSlot { id: string; starts_at: string; ends_at: string }
 interface PublicLinkData {
@@ -154,7 +155,9 @@ export function PublicBookingPage({ token }: { token: string }) {
           <section className="public-quote-card">
             <h2>Ingepland</h2>
             <ul>{result.confirmed.map(c => <li key={c.slot_id}>{fmtDay(c.starts_at)} · {fmtTime(c.starts_at)}–{fmtTime(c.ends_at)}</li>)}</ul>
-            {result.meeting_url && <p><strong>Videocall:</strong> <a href={result.meeting_url}>{result.meeting_url}</a></p>}
+            {result.meeting_url && <p><strong>Videocall:</strong> {safeHttpUrl(result.meeting_url)
+              ? <a href={safeHttpUrl(result.meeting_url)!} target="_blank" rel="noopener noreferrer">{result.meeting_url}</a>
+              : result.meeting_url}</p>}
             {result.invite_message && <p style={{ whiteSpace: 'pre-wrap' }}>{result.invite_message}</p>}
           </section>
         )}

@@ -322,7 +322,9 @@ async function handleUserUpload(request: Request, env: Env, context: RouteContex
   }
   if (!request.body) throw new HttpError(400, 'Lege upload.');
 
-  await requireMembership(env, organizationId, userId);
+  const role = await requireMembership(env, organizationId, userId);
+  if (role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten in deze organisatie.');
+  await requireModuleLevel(env, organizationId, userId, moduleForSegment(entityType), 'write');
   // Accountbreed opslagquotum (GB per abonnement) geldt voor álle gebruikersuploads.
   await assertStorageCapacity(env, organizationId, declaredSize);
 
@@ -356,7 +358,9 @@ async function handleUserDownload(
   key: string,
 ): Promise<Response> {
   const userId = await requireUser(request, env);
-  await requireMembership(env, organizationFromKey(key), userId);
+  const organizationId = organizationFromKey(key);
+  await requireMembership(env, organizationId, userId);
+  await requireModuleLevel(env, organizationId, userId, moduleForSegment(keySegment(key)), 'read');
 
   const object = await env.MEDIA_BUCKET.get(key);
   if (!object) throw new HttpError(404, 'Bestand niet gevonden.');
@@ -371,7 +375,12 @@ async function handleUserDelete(
   key: string,
 ): Promise<Response> {
   const userId = await requireUser(request, env);
-  await requireMembership(env, organizationFromKey(key), userId);
+  const organizationId = organizationFromKey(key);
+  const role = await requireMembership(env, organizationId, userId);
+  if (role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten in deze organisatie.');
+  const segment = keySegment(key);
+  if (IMMUTABLE_KEY_SEGMENTS.has(segment)) throw new HttpError(403, 'Een vastgelegd bewijsstuk kan niet worden verwijderd.');
+  await requireModuleLevel(env, organizationId, userId, moduleForSegment(segment), 'write');
 
   await env.MEDIA_BUCKET.delete(key);
   return jsonResponse({ ok: true }, 200, context);
@@ -382,6 +391,7 @@ async function handleInternalUpload(request: Request, env: Env, context: RouteCo
 
   const key = (request.headers.get('x-storage-key') || '').trim();
   if (!key || !isSafeStorageKey(key)) throw new HttpError(400, 'Ongeldige of ontbrekende X-Storage-Key.');
+  assertInternalKeyOrg(request, key);
   if (!request.body) throw new HttpError(400, 'Lege upload.');
 
   const contentType = (request.headers.get('content-type') || 'application/pdf').trim();
@@ -406,6 +416,7 @@ async function handleInternalDownload(
   key: string,
 ): Promise<Response> {
   requireInternalSecret(request, env);
+  assertInternalKeyOrg(request, key);
 
   const object = await env.MEDIA_BUCKET.get(key);
   if (!object) throw new HttpError(404, 'Snapshot niet gevonden.');
@@ -421,6 +432,7 @@ async function handleInternalDelete(
   key: string,
 ): Promise<Response> {
   requireInternalSecret(request, env);
+  assertInternalKeyOrg(request, key);
   await env.MEDIA_BUCKET.delete(key);
   return jsonResponse({ ok: true, key }, 200, context);
 }
@@ -1417,10 +1429,11 @@ async function handleGalleryFile(request: Request, env: Env, context: RouteConte
   // maar antwoorden wel met dezelfde headers als een GET zou geven.
   if (request.method === 'HEAD') {
     const headers = new Headers(context.corsHeaders);
-    headers.set('Content-Type', head.httpMetadata?.contentType || 'application/octet-stream');
+    headers.set('Content-Type', inlineSafeType(head.httpMetadata?.contentType) || 'application/octet-stream');
     headers.set('Accept-Ranges', 'bytes');
     headers.set('Cache-Control', 'private, max-age=900');
     headers.set('X-Request-Id', context.requestId);
+    setFileSecurityHeaders(headers);
     if (head.httpEtag) headers.set('ETag', head.httpEtag);
     headers.set('Content-Length', String(totalSize));
     return new Response(null, { status: 200, headers });
@@ -1432,17 +1445,23 @@ async function handleGalleryFile(request: Request, env: Env, context: RouteConte
   );
   if (!object) throw new HttpError(404, 'Bestand niet gevonden.');
 
+  // Het type komt van de uploader: alleen beeld/video/audio mag inline, de rest
+  // gaat als download de deur uit (anders kon een galerij html of svg serveren).
+  const safeType = inlineSafeType(object.httpMetadata?.contentType);
   const headers = new Headers(context.corsHeaders);
-  headers.set('Content-Type', object.httpMetadata?.contentType || 'application/octet-stream');
+  headers.set('Content-Type', safeType || 'application/octet-stream');
   headers.set('Accept-Ranges', 'bytes');
   // Tokens zijn kortlevend; previews/thumbs mogen binnen die sessie gecachet worden.
   headers.set('Cache-Control', 'private, max-age=900');
   headers.set('X-Request-Id', context.requestId);
+  setFileSecurityHeaders(headers);
   if (object.httpEtag) headers.set('ETag', object.httpEtag);
   const name = object.customMetadata?.name;
   headers.set(
     'Content-Disposition',
-    wantsDownload && name ? `attachment; filename*=UTF-8''${encodeURIComponent(name)}` : 'inline',
+    (wantsDownload || !safeType) && name
+      ? `attachment; filename*=UTF-8''${encodeURIComponent(name)}`
+      : safeType ? 'inline' : 'attachment',
   );
 
   if (isRanged) {
@@ -1699,7 +1718,7 @@ async function handleGalleryZip(request: Request, env: Env, context: RouteContex
     if (media === 'photos' && item.media_type !== 'photo') continue;
     if (media === 'videos' && item.media_type !== 'video') continue;
     const key = useWeb && item.media_type === 'photo' ? item.preview_key || item.storage_key : item.storage_key;
-    if (!key || !key.startsWith(`${payload.org}/`)) continue; // Stream-only video's zitten niet in de zip
+    if (!key || !key.startsWith(`${payload.org}/gallery/${payload.gal}/`)) continue; // Stream-only video's zitten niet in de zip
     // Voor de grens hieronder telt de grootte van het origineel; een
     // web-preview is kleiner, dus dat is aan de veilige kant.
     totalBytes += typeof item.size_bytes === 'number' && item.size_bytes > 0 ? item.size_bytes : 0;
@@ -1945,10 +1964,12 @@ async function fetchUserName(request: Request, env: Env, fallback: string): Prom
 /** Rol van de gebruiker binnen de organisatie, of null als geen (actief) lid. */
 async function membershipRole(env: Env, organizationId: string, userId: string): Promise<string | null> {
   if (!isUuid(organizationId)) return null;
+  // Een verwijderd teamlid houdt zijn rij (status 'disabled'): alleen 'active' telt.
   const query = new URLSearchParams({
     select: 'role',
     organization_id: `eq.${organizationId}`,
     user_id: `eq.${userId}`,
+    status: 'eq.active',
     limit: '1',
   });
   const res = await fetch(`${supabaseBase(env)}/rest/v1/organization_members?${query.toString()}`, { headers: serviceHeaders(env) });
@@ -2025,6 +2046,8 @@ type OfficeTarget = {
   edit_version: number;
   /** Gezet als het doel inhoudelijk bevroren is (getekend/ingetrokken contract). */
   locked?: boolean;
+  /** Module waarin dit bestand valt (null = alleen lidmaatschap). */
+  module: string | null;
 };
 
 /** Contractstatussen waarin de inhoud nog bewerkt mag worden. Spiegelt de
@@ -2057,6 +2080,7 @@ async function fetchOfficeTarget(env: Env, kind: OfficeKind, id: string): Promis
     // Naam zoals de gebruiker hem in de editor-titelbalk ziet: nummer + onderwerp.
     const label = [row.number, row.title].map((v) => (v || '').trim()).filter(Boolean).join(' - ') || 'Contract';
     const safeLabel = label.replace(/[\\/]+/g, ' ').trim() || 'Contract';
+    assertKeyInOrg(row.body_storage_key, row.organization_id);
     return {
       organization_id: row.organization_id,
       storage_key: row.body_storage_key,
@@ -2065,6 +2089,7 @@ async function fetchOfficeTarget(env: Env, kind: OfficeKind, id: string): Promis
       size_bytes: row.body_size_bytes ?? 0,
       edit_version: row.edit_version ?? 1,
       locked: !CONTRACT_EDITABLE_STATUSES.has(row.status || ''),
+      module: 'finance',
     };
   }
   if (kind === 'd') {
@@ -2082,6 +2107,7 @@ async function fetchOfficeTarget(env: Env, kind: OfficeKind, id: string): Promis
     const mime = row.mime_type || OFFICE_NEW_MIME.docx;
     const ext = OFFICE_MIME_EXT[mime] || 'docx';
     const title = (row.title || 'Document').replace(/[\\/]+/g, ' ').trim() || 'Document';
+    assertKeyInOrg(row.storage_key, row.organization_id);
     return {
       organization_id: row.organization_id,
       storage_key: row.storage_key,
@@ -2089,9 +2115,11 @@ async function fetchOfficeTarget(env: Env, kind: OfficeKind, id: string): Promis
       mime_type: mime,
       size_bytes: row.size_bytes ?? 0,
       edit_version: row.edit_version ?? 1,
+      module: 'content',
     };
   }
   const att = await fetchAttachment(env, id);
+  assertKeyInOrg(att.storage_key, att.organization_id);
   return {
     organization_id: att.organization_id,
     storage_key: att.storage_key,
@@ -2099,6 +2127,7 @@ async function fetchOfficeTarget(env: Env, kind: OfficeKind, id: string): Promis
     mime_type: att.mime_type,
     size_bytes: att.size_bytes,
     edit_version: att.edit_version ?? 1,
+    module: moduleForSegment(att.entity_type),
   };
 }
 
@@ -2255,9 +2284,13 @@ async function handleOfficeSession(request: Request, env: Env, context: RouteCon
   const target = await fetchOfficeTarget(env, kind, id);
   const role = await membershipRole(env, target.organization_id, userId);
   if (!role) throw new HttpError(403, 'Geen toegang tot dit bestand.');
+  // Modulerecht op wat het bestand is (contract = Financiën, document = Inhoud,
+  // bijlage = de module van de entiteit): 'none' = niet openen, 'read' = bekijken.
+  const level = target.module ? await moduleLevel(env, target.organization_id, userId, target.module) : 'write';
+  if (level === 'none') throw new HttpError(403, 'Geen toegang tot deze module.');
   // Een bevroren doel (getekend/ingetrokken contract) opent alleen-lezen: de
   // klant heeft dan een exemplaar met precies deze inhoud in handen.
-  const canWrite = role !== 'viewer' && !target.locked;
+  const canWrite = role !== 'viewer' && level === 'write' && !target.locked;
 
   const ext = OFFICE_MIME_EXT[target.mime_type] || fileExt(target.name);
   if (!ext) throw new HttpError(415, 'Dit bestandstype kan niet online bewerkt worden.');
@@ -2295,6 +2328,7 @@ async function handleOfficeNew(request: Request, env: Env, context: RouteContext
 
   const role = await membershipRole(env, organizationId, userId);
   if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  await requireModuleLevel(env, organizationId, userId, 'content', 'write');
 
   const templateKey = `_office-templates/blank.${docType}`;
   const template = await env.MEDIA_BUCKET.get(templateKey);
@@ -2341,6 +2375,7 @@ async function handleOfficeDocumentUpload(request: Request, env: Env, context: R
 
   const role = await membershipRole(env, organizationId, userId);
   if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  await requireModuleLevel(env, organizationId, userId, 'content', 'write');
   if (!request.body) throw new HttpError(400, 'Lege upload.');
 
   const buf = await request.arrayBuffer();
@@ -2374,6 +2409,7 @@ async function handleOfficeDocumentNew(request: Request, env: Env, context: Rout
 
   const role = await membershipRole(env, organizationId, userId);
   if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  await requireModuleLevel(env, organizationId, userId, 'content', 'write');
 
   const templateKey = `_office-templates/blank.${docType}`;
   const template = await env.MEDIA_BUCKET.get(templateKey);
@@ -2413,6 +2449,7 @@ async function handleOfficeContractUpload(request: Request, env: Env, context: R
 
   const role = await membershipRole(env, organizationId, userId);
   if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  await requireModuleLevel(env, organizationId, userId, 'finance', 'write');
   if (!request.body) throw new HttpError(400, 'Lege upload.');
 
   const buf = await request.arrayBuffer();
@@ -2435,6 +2472,7 @@ async function handleOfficeContractDownload(request: Request, env: Env, context:
   const userId = await requireUser(request, env);
   const target = await fetchOfficeTarget(env, 'c', id);
   await requireMembership(env, target.organization_id, userId);
+  await requireModuleLevel(env, target.organization_id, userId, target.module, 'read');
 
   const object = await env.MEDIA_BUCKET.get(target.storage_key);
   if (!object) throw new HttpError(404, 'Bestand niet gevonden.');
@@ -2444,6 +2482,7 @@ async function handleOfficeContractDownload(request: Request, env: Env, context:
   headers.set('Content-Length', String(object.size));
   headers.set('Cache-Control', 'private, no-store');
   headers.set('X-Request-Id', context.requestId);
+  setFileSecurityHeaders(headers);
   headers.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(target.name)}`);
   return new Response(object.body, { status: 200, headers });
 }
@@ -2516,6 +2555,7 @@ async function handleOfficeDocumentDownload(request: Request, env: Env, context:
   const userId = await requireUser(request, env);
   const target = await fetchOfficeTarget(env, 'd', id);
   await requireMembership(env, target.organization_id, userId);
+  await requireModuleLevel(env, target.organization_id, userId, target.module, 'read');
 
   const object = await env.MEDIA_BUCKET.get(target.storage_key);
   if (!object) throw new HttpError(404, 'Bestand niet gevonden.');
@@ -2525,6 +2565,7 @@ async function handleOfficeDocumentDownload(request: Request, env: Env, context:
   headers.set('Content-Length', String(object.size));
   headers.set('Cache-Control', 'private, no-store');
   headers.set('X-Request-Id', context.requestId);
+  setFileSecurityHeaders(headers);
   // target.name volgt de actuele documenttitel (niet de upload-naam van destijds).
   headers.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(target.name)}`);
   return new Response(object.body, { status: 200, headers });
@@ -2567,6 +2608,7 @@ async function handleWopiGetFile(request: Request, env: Env, context: RouteConte
   headers.set('Content-Length', String(object.size));
   headers.set('Cache-Control', 'no-store');
   headers.set('X-Request-Id', context.requestId);
+  setFileSecurityHeaders(headers);
   return new Response(object.body, { status: 200, headers });
 }
 
@@ -2581,6 +2623,11 @@ async function handleWopiPutFile(request: Request, env: Env, context: RouteConte
   // zijn (contract verstuurd, getekend of ingetrokken). Opnieuw controleren vóór
   // we R2 overschrijven — daarna is het origineel weg.
   if (target.locked) throw new HttpError(409, 'Dit contract is definitief en kan niet meer worden gewijzigd.');
+  // Zelfde reden: is de bewerker intussen uit het team gehaald, teruggezet naar
+  // lezen of zijn modulerecht kwijt, dan schrijft een open sessie niet meer.
+  const role = await membershipRole(env, token.org, token.uid);
+  if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  await requireModuleLevel(env, token.org, token.uid, target.module, 'write');
   if (!request.body) throw new HttpError(400, 'Lege PutFile.');
 
   // Buffer de body zodat we de grootte kunnen afdwingen vóór het overschrijven van R2. Een
@@ -2593,7 +2640,8 @@ async function handleWopiPutFile(request: Request, env: Env, context: RouteConte
   }
 
   const object = await env.MEDIA_BUCKET.put(target.storage_key, buf, {
-    httpMetadata: { contentType: target.mime_type || 'application/octet-stream' },
+    // mime_type komt uit de database-rij; alleen een bekend office-type overnemen.
+    httpMetadata: { contentType: OFFICE_MIME_EXT[target.mime_type] ? target.mime_type : 'application/octet-stream' },
     customMetadata: {
       name: target.name,
       organizationId: target.organization_id,
@@ -2671,17 +2719,19 @@ async function requireUser(request: Request, env: Env): Promise<string> {
   return user.id;
 }
 
-/** Ensure the user is a member of the organization that owns the object. */
-async function requireMembership(env: Env, organizationId: string, userId: string): Promise<void> {
+/** Ensure the user is an ACTIVE member of the organization that owns the object; returns the role. */
+async function requireMembership(env: Env, organizationId: string, userId: string): Promise<string> {
   if (!isUuid(organizationId)) throw new HttpError(403, 'Geen toegang tot dit bestand.');
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
     throw new HttpError(500, 'Server niet geconfigureerd (Supabase).');
   }
 
+  // Een verwijderd teamlid houdt zijn rij (status 'disabled'): alleen 'active' telt.
   const query = new URLSearchParams({
-    select: 'user_id',
+    select: 'user_id,role',
     organization_id: `eq.${organizationId}`,
     user_id: `eq.${userId}`,
+    status: 'eq.active',
     limit: '1',
   });
   const response = await fetch(
@@ -2696,10 +2746,10 @@ async function requireMembership(env: Env, organizationId: string, userId: strin
   );
   if (!response.ok) throw new HttpError(502, 'Kon lidmaatschap niet verifiëren.');
 
-  const rows = (await response.json()) as unknown[];
-  if (!Array.isArray(rows) || rows.length === 0) {
-    throw new HttpError(403, 'Geen toegang tot dit bestand.');
-  }
+  const rows = (await response.json()) as Array<{ role?: string }>;
+  const role = Array.isArray(rows) ? rows[0]?.role : undefined;
+  if (!role) throw new HttpError(403, 'Geen toegang tot dit bestand.');
+  return role;
 }
 
 function requireInternalSecret(request: Request, env: Env): void {
@@ -2723,6 +2773,88 @@ function isSafeStorageKey(key: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._\-/]*$/.test(key);
 }
 
+/**
+ * Een opslagsleutel moet onder de map van zijn eigen organisatie liggen. Sleutels
+ * in de database (attachments, documents, contracts, galerij) schrijft een teamlid
+ * deels zelf; zonder deze check kon zo'n rij naar het object van een andere
+ * organisatie wijzen, dat deze Worker dan met de service-role las of overschreef.
+ */
+function assertKeyInOrg(key: string, organizationId: string): void {
+  if (!isSafeStorageKey(key) || !isUuid(organizationId) || organizationFromKey(key) !== organizationId) {
+    throw new HttpError(403, 'Geen toegang tot dit bestand.');
+  }
+}
+
+/** Interne routes: stuurt de aanroeper X-Organization-Id mee, dan moet de sleutel
+ *  daaronder vallen. Wordt verplicht zodra alle edge functions hem meesturen. */
+function assertInternalKeyOrg(request: Request, key: string): void {
+  const organizationId = (request.headers.get('x-organization-id') || '').trim();
+  if (organizationId) assertKeyInOrg(key, organizationId);
+}
+
+/** Bewijsstukken (factuur-, offerte-, contract- en jaarrekening-PDF's) zijn
+ *  onveranderlijk en dus nooit via de app te verwijderen. */
+const IMMUTABLE_KEY_SEGMENTS = new Set(['invoice-pdfs', 'quote-pdfs', 'contract-pdfs', 'annual-account-pdfs']);
+
+/**
+ * Module per entity type / tweede sleutelsegment: spiegel van
+ * public.attachment_module, aangevuld met de vaste mappen die deze Worker en de
+ * edge functions aanmaken. Opnames (meeting_recording) staan er bewust niet in:
+ * die hangen aan Agenda óf Klanten, en meeting-transcribe weegt dat zelf.
+ */
+const SEGMENT_MODULE: Record<string, string> = {
+  client: 'clients',
+  project: 'projects', task: 'projects', subtask: 'projects', gallery: 'projects',
+  ticket: 'tickets',
+  note: 'content', document: 'content', folder: 'content',
+  quote: 'finance', invoice: 'finance', supplier: 'finance', purchase_invoice: 'finance',
+  fixed_asset: 'finance', annual_account: 'finance', contract: 'finance',
+  'invoice-pdfs': 'finance', 'quote-pdfs': 'finance', 'contract-pdfs': 'finance',
+  'annual-account-pdfs': 'finance', purchase_invoice_inbox: 'finance',
+  chat_message: 'chat',
+};
+
+function moduleForSegment(segment: string): string | null {
+  return SEGMENT_MODULE[segment] ?? null;
+}
+
+function keySegment(key: string): string {
+  return key.split('/')[1] ?? '';
+}
+
+/** 403 tenzij het teamlid de module op het gevraagde niveau mag. Zonder module
+ *  (onbekend segment) volstaat het lidmaatschap dat de aanroeper al controleerde. */
+async function requireModuleLevel(
+  env: Env,
+  organizationId: string,
+  userId: string,
+  module: string | null,
+  need: 'read' | 'write',
+): Promise<void> {
+  if (!module) return;
+  const level = await moduleLevel(env, organizationId, userId, module);
+  const ok = need === 'read' ? level !== 'none' : level === 'write';
+  if (!ok) {
+    throw new HttpError(403, need === 'read' ? 'Geen toegang tot deze module.' : 'Geen schrijfrechten in deze module.');
+  }
+}
+
+/** Beeld, video en audio mogen inline; al het andere (html, svg, xml, …) niet —
+ *  dat zou op dit origin scripts kunnen draaien. */
+const INLINE_MEDIA_TYPE = /^(image\/(jpeg|png|webp|gif|avif|heic|heif)|video\/[a-z0-9.+-]+|audio\/[a-z0-9.+-]+)$/;
+
+function inlineSafeType(type: string | undefined | null): string | null {
+  const value = (type || '').split(';')[0].trim().toLowerCase();
+  return INLINE_MEDIA_TYPE.test(value) ? value : null;
+}
+
+/** Elke bestandsrespons: geen MIME-sniffing, en een document dat toch in de
+ *  browser opent, draait in een sandbox zonder scripts. */
+function setFileSecurityHeaders(headers: Headers): void {
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Content-Security-Policy', 'sandbox');
+}
+
 function streamObject(object: R2ObjectBody, context: RouteContext): Response {
   const headers = new Headers(context.corsHeaders);
   object.writeHttpMetadata(headers);
@@ -2733,6 +2865,7 @@ function streamObject(object: R2ObjectBody, context: RouteContext): Response {
   const name = object.customMetadata?.name;
   if (name) headers.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
   if (object.httpEtag) headers.set('ETag', object.httpEtag);
+  setFileSecurityHeaders(headers);
 
   return new Response(object.body, { status: 200, headers });
 }

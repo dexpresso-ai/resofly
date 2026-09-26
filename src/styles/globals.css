@@ -3081,7 +3081,7 @@ button.chat-member:hover{background:var(--bg3)}
 .client-comm-status.inbound{color:var(--accent-g);background:rgba(var(--ok-rgb),.12);border-color:rgba(var(--ok-rgb),.28)}
 .client-comm-status.neutral{color:var(--muted2);background:rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)))}
 .client-comm-message-from{font-size:11px;color:var(--muted);margin-bottom:8px;word-break:break-all}
-.client-comm-body{font-size:13px;line-height:1.6;color:var(--text)}
+.client-comm-body{font-size:13px;line-height:1.6;color:var(--text);position:relative;overflow:auto;contain:layout}
 .client-comm-body p{margin:0 0 8px}
 .client-comm-body-plain{white-space:pre-wrap}
 .client-comm-error{margin-top:8px;font-size:12px;color:var(--accent-r)}
@@ -10817,6 +10817,11 @@ body.ink-sheet-open{overflow:hidden}
 
 .mcp-consent{width:520px;gap:16px}
 .mcp-consent h1{font-size:24px;line-height:1.2}
+
+/* Waar de toegang heen gaat staat los van de naam die de client zelf koos. */
+.mcp-consent .mcp-consent-target{font-size:13px;line-height:1.5;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:10px 13px}
+.mcp-consent .mcp-consent-target strong{color:var(--text);word-break:break-all}
+.mcp-consent .mcp-consent-warning{font-size:12.5px;line-height:1.55;background:rgba(var(--warn-rgb),.12);border:1px solid rgba(var(--warn-rgb),.35);color:var(--accent-o);border-radius:10px;padding:10px 13px}
 
 .mcp-consent-list{list-style:none;display:flex;flex-direction:column;gap:10px;margin:2px 0}
 .mcp-consent-list li{display:flex;gap:11px;align-items:flex-start;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:11px 13px}

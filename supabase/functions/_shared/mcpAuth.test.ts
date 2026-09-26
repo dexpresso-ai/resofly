@@ -5,7 +5,7 @@ import {
   isNotification, isValidCodeVerifier, parseToken, protectedResourceMetadata, redirectUriAllowed, scopeAllows,
   sha256Hex, verifyPkce, verifyToken, base64Url, randomBytes,
   signAuthRequest, verifyAuthRequest, AUTH_REQUEST_TTL_SECONDS, ISSUABLE_SCOPES, narrowScopes, type AuthRequest,
-  openCorsHeaders, normalizeScopes, CONSENT_SCOPES,
+  openCorsHeaders, normalizeScopes, CONSENT_SCOPES, describeRedirectTarget, isKnownAiRedirect,
 } from './mcpAuth.ts';
 
 /**
@@ -414,4 +414,28 @@ test('de MCP-server mag zijn eigen headers erbij zetten zonder de rest kwijt te 
 
 test('zonder extra headers blijft Expose-Headers weg', () => {
   assert.equal('Access-Control-Expose-Headers' in openCorsHeaders(), false);
+});
+
+// ── Bestemming op het toestemmingsscherm ─────────────────────────────────────
+// De naam kiest de client zelf; wat het scherm als bestemming toont, komt uit
+// de redirect-URI. Een lookalike-domein mag nooit als bekende dienst tellen.
+
+test('toestemmingsscherm: bestemming leesbaar', () => {
+  assert.equal(describeRedirectTarget('https://claude.ai/api/mcp/auth_callback'), 'claude.ai');
+  assert.equal(describeRedirectTarget('http://localhost:33418/callback'), 'deze computer');
+  assert.equal(describeRedirectTarget('http://127.0.0.1:5000/cb'), 'deze computer');
+  assert.equal(describeRedirectTarget('com.example.app://oauth'), 'een app (com.example.app)');
+  assert.equal(describeRedirectTarget('geen url'), 'een onbekend adres');
+});
+
+test('toestemmingsscherm: alleen bekende AI-diensten gelden als geverifieerd', () => {
+  assert.equal(isKnownAiRedirect('https://claude.ai/api/mcp/auth_callback'), true);
+  assert.equal(isKnownAiRedirect('https://chatgpt.com/connector_platform_oauth_redirect'), true);
+  assert.equal(isKnownAiRedirect('https://platform.openai.com/cb'), true);
+  assert.equal(isKnownAiRedirect('http://localhost:33418/callback'), true);
+  assert.equal(isKnownAiRedirect('https://claude.ai.evil.example/cb'), false);
+  assert.equal(isKnownAiRedirect('https://evilclaude.ai/cb'), false);
+  assert.equal(isKnownAiRedirect('http://claude.ai/cb'), false);
+  assert.equal(isKnownAiRedirect('https://example.com/cb'), false);
+  assert.equal(isKnownAiRedirect('claude://oauth'), false);
 });

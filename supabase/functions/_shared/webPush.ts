@@ -159,6 +159,27 @@ export interface PushOutcome {
   detail?: string;
 }
 
+// Push-diensten waar browsers hun abonnementen laten eindigen. De endpoints komen
+// uit push_subscriptions, die de frontend zelf via RLS schrijft — zonder deze lijst
+// zou de service-role een POST doen naar elke URL die een lid daar neerzet.
+const PUSH_SERVICE_HOSTS = ['fcm.googleapis.com', 'android.googleapis.com'];
+// Subdomeinen (op een punt-grens) van deze domeinen, bv. updates.push.services.mozilla.com.
+const PUSH_SERVICE_DOMAINS = ['push.services.mozilla.com', 'push.apple.com', 'notify.windows.com'];
+
+/** true als `endpoint` een https-URL is op een bekende push-dienst. */
+export function isAllowedPushEndpoint(endpoint: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:') return false;
+  const host = url.hostname.toLowerCase();
+  if (PUSH_SERVICE_HOSTS.includes(host)) return true;
+  return PUSH_SERVICE_DOMAINS.some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
 /**
  * Verstuur één versleuteld pushbericht. `payload` wordt als JSON verstuurd (de
  * service worker leest title/body/url/tag).
@@ -174,6 +195,10 @@ export async function sendWebPush(
     audience = new URL(subscription.endpoint).origin;
   } catch {
     return { result: 'gone', status: 0, detail: 'Ongeldig endpoint' };
+  }
+  // Onbekende host of geen https → als 'gone' melden, dan ruimt de dispatcher het abonnement op.
+  if (!isAllowedPushEndpoint(subscription.endpoint)) {
+    return { result: 'gone', status: 0, detail: 'Endpoint hoort niet bij een bekende push-dienst' };
   }
 
   // Deze functie mag NOOIT throwen: het ondertekenen/versleutelen kan gooien bij een
@@ -194,6 +219,10 @@ export async function sendWebPush(
         Urgency: 'normal',
       },
       body,
+      // Geen redirects volgen (een 3xx telt als 'error') en niet eindeloos wachten
+      // op één trage push-dienst: dat houdt de hele drain-batch op.
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10_000),
     });
   } catch (err) {
     return { result: 'error', status: 0, detail: err instanceof Error ? err.message : 'verzendfout' };

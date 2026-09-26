@@ -36,8 +36,8 @@ export async function runSummaryForRecording(admin: SupabaseClient, recordingId:
 
   // Klant/project-namen als context voor betere notulen.
   const [clientName, projectName] = await Promise.all([
-    rec.client_id ? lookupName(admin, 'clients', String(rec.client_id)) : Promise.resolve(null),
-    rec.project_id ? lookupName(admin, 'projects', String(rec.project_id)) : Promise.resolve(null),
+    rec.client_id ? lookupName(admin, 'clients', String(rec.organization_id), String(rec.client_id)) : Promise.resolve(null),
+    rec.project_id ? lookupName(admin, 'projects', String(rec.organization_id), String(rec.project_id)) : Promise.resolve(null),
   ]);
 
   try {
@@ -61,7 +61,8 @@ export async function runSummaryForRecording(admin: SupabaseClient, recordingId:
   }
 }
 
-async function lookupName(admin: SupabaseClient, table: 'clients' | 'projects', id: string): Promise<string | null> {
-  const { data } = await admin.from(table).select('name').eq('id', id).maybeSingle();
+async function lookupName(admin: SupabaseClient, table: 'clients' | 'projects', organizationId: string, id: string): Promise<string | null> {
+  // Alleen namen uit de eigen organisatie als context naar Claude.
+  const { data } = await admin.from(table).select('name').eq('id', id).eq('organization_id', organizationId).maybeSingle();
   return (data?.name as string | undefined) ?? null;
 }

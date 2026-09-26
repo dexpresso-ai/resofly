@@ -177,6 +177,47 @@ export function isAcceptableRedirectUri(uri: string): boolean {
   return /^[a-z][a-z0-9+.-]*:$/.test(parsed.protocol) && !['file:', 'javascript:', 'data:', 'vbscript:'].includes(parsed.protocol);
 }
 
+// ── Wie krijgt de toegang? ───────────────────────────────────────────────────
+//
+// De naam op het toestemmingsscherm kiest de client zelf bij de (open)
+// registratie; die zegt dus niets over wie er achter zit. Waar de code na
+// "Koppelen" heen gaat, staat wél vast: in de redirect-URI. Het scherm laat die
+// bestemming zien, en waarschuwt als het geen AI-dienst is die we kennen.
+
+/** AI-diensten waarvan we de koppeling kennen (de host zelf of een subdomein). */
+const KNOWN_AI_REDIRECT_HOSTS = ['claude.ai', 'claude.com', 'chatgpt.com', 'openai.com'];
+
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+}
+
+/** Leesbare bestemming voor het scherm: de host, "deze computer" of het app-schema. */
+export function describeRedirectTarget(uri: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(String(uri || ''));
+  } catch {
+    return 'een onbekend adres';
+  }
+  if (parsed.protocol === 'https:') return parsed.hostname;
+  if (parsed.protocol === 'http:' && isLoopbackHostname(parsed.hostname)) return 'deze computer';
+  return `een app (${parsed.protocol.replace(/:$/, '')})`;
+}
+
+/** true voor https bij een bekende AI-dienst, of een adres op de computer van de gebruiker zelf. */
+export function isKnownAiRedirect(uri: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(String(uri || ''));
+  } catch {
+    return false;
+  }
+  if (parsed.protocol === 'http:') return isLoopbackHostname(parsed.hostname);
+  if (parsed.protocol !== 'https:') return false;
+  const host = parsed.hostname.toLowerCase();
+  return KNOWN_AI_REDIRECT_HOSTS.some((known) => host === known || host.endsWith(`.${known}`));
+}
+
 // ── Scopes ───────────────────────────────────────────────────────────────────
 //
 // Vier niveaus, elk een stap verder van "kijkt mee" naar "doet het zelf":

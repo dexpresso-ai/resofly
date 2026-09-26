@@ -39,22 +39,30 @@ serve(async (req) => {
     .select('id, status').eq('elevenlabs_request_id', requestId).maybeSingle();
   if (error) { console.error('webhook lookup mislukt:', error.message); return json({ ok: false }, 200); }
   if (!rec) return json({ ok: true, note: 'Geen opname voor dit request_id — genegeerd.' }, 200);
+  // Alleen een opname die nog op haar transcript wacht. Een herhaalde of nagekomen
+  // webhook mag een al verwerkt (en misschien door de gebruiker gecorrigeerd)
+  // transcript niet overschrijven en geen tweede notulenronde starten.
+  if (rec.status !== 'transcribing') return json({ ok: true, note: 'Opname wacht niet (meer) op een transcript — genegeerd.' }, 200);
 
   // Mislukte transcriptie afgehandeld door ElevenLabs?
   const status = String(payload.status ?? (payload.data as Record<string, unknown> | undefined)?.status ?? 'ok');
   if (status === 'error' || status === 'failed') {
-    await admin.from('meeting_recordings').update({ status: 'error', error_message: 'ElevenLabs meldde een transcriptiefout.' }).eq('id', rec.id);
+    await admin.from('meeting_recordings').update({ status: 'error', error_message: 'ElevenLabs meldde een transcriptiefout.' })
+      .eq('id', rec.id).eq('status', 'transcribing');
     return json({ ok: true }, 200);
   }
 
   const transcript = normalizeTranscript(payload);
-  await admin.from('meeting_recordings').update({
+  // Voorwaardelijk op 'transcribing': bij twee gelijktijdige leveringen wint er één.
+  const { data: claimed, error: updateError } = await admin.from('meeting_recordings').update({
     transcript_text: transcript.text,
     transcript_json: transcript.segments,
     language: transcript.language,
     status: 'transcribed',
     error_message: null,
-  }).eq('id', rec.id);
+  }).eq('id', rec.id).eq('status', 'transcribing').select('id');
+  if (updateError) { console.error('webhook opslaan mislukt:', updateError.message); return json({ ok: false }, 200); }
+  if (!claimed?.length) return json({ ok: true, note: 'Opname is intussen al verwerkt — genegeerd.' }, 200);
 
   // Notulen genereren (budget + opslag + usage-logging zit in de pijplijn).
   await runSummaryForRecording(admin, String(rec.id));

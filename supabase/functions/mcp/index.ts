@@ -266,6 +266,10 @@ async function authenticate(req: Request): Promise<Session> {
     throw new Error('Deze gebruiker heeft in deze organisatie geen toegang meer tot Gerrie, dus deze koppeling werkt niet meer.');
   }
 
+  // Elke aanroep telt: hier één, en een batch boekt de rest erbij (zie boven).
+  // Zonder deze regel stond de limiet van 120 per minuut alleen nog op papier.
+  await chargeRateLimit(String(grant.id), 1);
+
   return {
     grantId: String(grant.id),
     userId: String(grant.user_id),
@@ -1247,7 +1251,11 @@ function moduleLevel(session: Session, module: string): 'none' | 'read' | 'write
  * 'lezen' kan via zijn AI dus geen factuur klaarzetten — hetzelfde antwoord als
  * hij in het scherm zou krijgen.
  */
-function actionPermitted(session: Session, action: { module: string; kind: 'read' | 'write' }): boolean {
+function actionPermitted(session: Session, action: { module: string; kind: 'read' | 'write'; adminOnly?: boolean }): boolean {
+  // Team- en instellingshandelingen: alleen als de gebruiker achter deze koppeling
+  // zelf owner/admin is. Anders zou een lid ze klaarzetten voor een owner die ze
+  // met zijn eigen rechten uitvoert.
+  if (action.adminOnly && session.role !== 'owner' && session.role !== 'admin') return false;
   const level = moduleLevel(session, action.module);
   if (action.kind === 'write') return mayPropose(session) && level === 'write';
   return level !== 'none';

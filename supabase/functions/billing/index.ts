@@ -132,6 +132,14 @@ serve(async (req) => {
     // maar élke billing-actie hoort thuis bij de moeder van de administratie-
     // boom: één abonnement per klant, ook met een holding en een werk-BV.
     const billingOrgId = await billingRootOrganization(organizationId);
+    // Wie owner/admin is van alleen een administratie eronder, mag niet aan het
+    // abonnement van de moeder komen: dat wordt apart gecontroleerd.
+    if (billingOrgId !== organizationId) {
+      const rootRole = await requireOrganizationAccess(user.id, billingOrgId).catch(() => null);
+      if (!rootRole || !['owner', 'admin'].includes(rootRole)) {
+        throw new BillingHttpError('Het abonnement hoort bij de moederorganisatie. Alleen owners/admins daarvan mogen het wijzigen.', 403);
+      }
+    }
 
     switch (action) {
       case 'startSubscriptionCheckout':

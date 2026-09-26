@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { sanitizeEmailHtml } from '../lib/sanitizeHtml';
+import { sanitizeRichContentHtml } from '../lib/sanitizeHtml';
 
 /** Leesvenster voor een gedeelde notitie of tekstdocument. Sluit op Escape en op
  *  een klik buiten het venster, net als de rest van de app. */
@@ -17,7 +17,7 @@ export function ReadModal({ title, html, onClose }: { title: string; html: strin
         <button className="modal-close" aria-label="Sluiten" onClick={onClose}>×</button>
       </header>
       <div className="modal-body">
-        <div className="rich-text-viewer" dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(html) }} />
+        <div className="rich-text-viewer" dangerouslySetInnerHTML={{ __html: sanitizeRichContentHtml(html) }} />
       </div>
     </section>
   </div>;

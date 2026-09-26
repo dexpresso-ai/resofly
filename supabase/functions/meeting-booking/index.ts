@@ -135,6 +135,13 @@ async function assertUsableSource(organizationId: string, userId: string, source
   return source;
 }
 
+/** Valideert dat de gekoppelde klant bij deze organisatie hoort. */
+async function assertOrgClient(organizationId: string, clientId: string): Promise<void> {
+  if (!isUuid(clientId)) throw new HttpError('Ongeldige klant.', 422);
+  const { data, error } = await supabaseAdmin.from('clients').select('id').eq('organization_id', organizationId).eq('id', clientId).maybeSingle();
+  if (error || !data) throw new HttpError('Klant niet gevonden.', 404);
+}
+
 async function connectionNeedsReconnect(source: CalendarSourceRow | null): Promise<boolean> {
   if (!source || source.provider === 'native' || !source.connection_id) return false;
   const { data } = await supabaseAdmin.from('calendar_connections').select('status').eq('id', source.connection_id).maybeSingle();
@@ -151,7 +158,7 @@ async function listLinks(organizationId: string) {
   const clientIds = [...new Set(rows.map(r => r.client_id).filter(Boolean))] as string[];
   const sourceIds = [...new Set(rows.map(r => r.source_id).filter(Boolean))] as string[];
   const [clientsRes, sourcesRes, countsRes] = await Promise.all([
-    clientIds.length ? supabaseAdmin.from('clients').select('id,name,contact_name,email').in('id', clientIds) : Promise.resolve({ data: [] }),
+    clientIds.length ? supabaseAdmin.from('clients').select('id,name,contact_name,email').eq('organization_id', organizationId).in('id', clientIds) : Promise.resolve({ data: [] }),
     sourceIds.length ? supabaseAdmin.from('calendar_sources').select('*').in('id', sourceIds) : Promise.resolve({ data: [] }),
     supabaseAdmin.from('meeting_bookings').select('booking_link_id,status').eq('organization_id', organizationId).in('status', ['pending', 'confirmed']),
   ]);
@@ -245,7 +252,7 @@ function normalizeLinkInput(body: Record<string, unknown>): Record<string, unkno
 async function createLink(organizationId: string, userId: string, body: Record<string, unknown>) {
   const source = await assertUsableSource(organizationId, userId, String(body.sourceId || ''));
   const clientId = body.clientId ? String(body.clientId) : null;
-  if (clientId && !isUuid(clientId)) throw new HttpError('Ongeldige klant.', 422);
+  if (clientId) await assertOrgClient(organizationId, clientId);
 
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
@@ -278,7 +285,7 @@ async function updateLink(organizationId: string, linkId: string, patchBody: Rec
   }
   if (patchBody.clientId !== undefined) {
     const clientId = patchBody.clientId ? String(patchBody.clientId) : null;
-    if (clientId && !isUuid(clientId)) throw new HttpError('Ongeldige klant.', 422);
+    if (clientId) await assertOrgClient(organizationId, clientId);
     patch.client_id = clientId;
   }
   if (Object.keys(patch).length === 0) throw new HttpError('Geen geldige wijziging aangeleverd.', 422);
@@ -411,7 +418,7 @@ async function sendLinkMail(organizationId: string, linkId: string, body: Record
   let recipientEmail = String(body.recipientEmail || '').trim().toLowerCase();
   let recipientName = String(body.recipientName || '').trim();
   if ((!recipientEmail || !recipientName) && link.client_id) {
-    const { data: client } = await supabaseAdmin.from('clients').select('name,contact_name,email').eq('id', link.client_id).maybeSingle();
+    const { data: client } = await supabaseAdmin.from('clients').select('name,contact_name,email').eq('organization_id', organizationId).eq('id', link.client_id).maybeSingle();
     if (client) {
       recipientEmail = recipientEmail || String(client.email || '').trim().toLowerCase();
       recipientName = recipientName || String(client.contact_name || client.name || '').trim();

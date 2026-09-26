@@ -61,6 +61,14 @@ export interface McpConsentRequest {
   clientName: string;
   clientUri: string | null;
   logoUri: string | null;
+  /**
+   * Waar de toegang na "Koppelen" heen gaat (host van de redirect-URI, of "deze
+   * computer"). De naam hierboven kiest de client zelf; dit adres niet.
+   * null = oudere server die het nog niet meestuurt.
+   */
+  redirectHost: string | null;
+  /** Bestemming hoort bij een AI-dienst die we kennen (of bij deze computer). */
+  verified: boolean;
   /** Wat deze client ten hoogste kan krijgen; de gebruiker kiest daarbinnen. */
   scope: string;
   /** Mag deze koppeling überhaupt wijzigingen klaarzetten? */
@@ -173,6 +181,8 @@ export async function loadConsentRequest(request: string): Promise<McpConsentReq
     clientName: String(payload.client_name || 'Een AI-client'),
     clientUri: payload.client_uri ? String(payload.client_uri) : null,
     logoUri: payload.logo_uri ? String(payload.logo_uri) : null,
+    redirectHost: payload.redirect_host ? String(payload.redirect_host) : null,
+    verified: payload.verified === true,
     scope: String(payload.scope || 'read'),
     mayPropose: Boolean(payload.may_propose),
     mayEnableExecute: Boolean(payload.may_enable_execute),

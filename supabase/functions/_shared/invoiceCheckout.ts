@@ -160,7 +160,7 @@ export async function createPortalInvoiceCheckout(
       providerPaymentId = String(molliePayload.id || '').trim();
       checkoutUrl = String(((molliePayload._links as Record<string, { href?: string }> | undefined)?.checkout?.href) || '').trim();
       providerStatus = String(molliePayload.status || 'open');
-      metadata = { mollie: molliePayload, source: 'client_portal', ...contactMetadata(actorContact) };
+      metadata = { mollie: withoutWebhookSecret(molliePayload), source: 'client_portal', ...contactMetadata(actorContact) };
       if (!providerPaymentId || !checkoutUrl) {
         return await failAndReturn(supabaseAdmin, payment.id, organizationId, actorUserId, 502, 'Mollie gaf geen payment-id of checkout-url terug.');
       }
@@ -356,16 +356,29 @@ async function recordPaymentReuseAccess(
   }
 }
 
+/**
+ * Alleen een echte Mollie-checkout (https op mollie.com) hergebruiken: deze link
+ * gaat rechtstreeks naar de klant. De oude regex liet elke host door die met
+ * "mollie." begon of een /invoice/-pad had. In mock-modus wordt er daardoor
+ * steeds een nieuwe (nep)betaling gemaakt; dat is alleen lokaal/test.
+ */
 function isReusableCheckoutUrl(value: string | null | undefined): boolean {
   if (!value) return false;
   try {
     const url = new URL(value);
-    if (!['http:', 'https:'].includes(url.protocol)) return false;
-    if (/\/invoice\/[^/?#]+/.test(url.pathname)) return true;
-    return /(^|\.)mollie\./i.test(url.hostname) || /checkout\.mollie/i.test(url.hostname);
+    if (url.protocol !== 'https:') return false;
+    const host = url.hostname.toLowerCase();
+    return host === 'mollie.com' || host.endsWith('.mollie.com');
   } catch {
     return false;
   }
+}
+
+/** Het Mollie-antwoord bevat onze webhookUrl, met het webhook-secret erin. Die
+ *  hoort niet in metadata die elk lid met Financiën-leesrecht kan inzien. */
+function withoutWebhookSecret(payload: Record<string, unknown>): Record<string, unknown> {
+  const { webhookUrl: _webhookUrl, ...rest } = payload;
+  return rest;
 }
 
 function sanitizeIdempotencyKey(value: string): string {

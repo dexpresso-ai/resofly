@@ -98,7 +98,11 @@ export async function resolveSenderIdentity(
     // dan het bestaande gedrag: de globale fallback ongewijzigd.
     if (!fromEmail) return fallback;
 
-    const from = fromName ? `${fromName} <${fromEmail}>` : fromEmail;
+    // De naam vult een teamlid zelf in: zonder aanhalingstekens, hoekhaken,
+    // komma's of regeleinden, en tussen quotes, zodat hij nooit een tweede adres
+    // in de From-header kan worden.
+    const safeName = fromName ? fromName.replace(/["<>,\\\r\n\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim() : '';
+    const from = safeName ? `"${safeName}" <${fromEmail}>` : fromEmail;
     return { from, replyTo: fallbackReplyTo || undefined, domainId, fromEmail };
   } catch (_error) {
     return fallback;

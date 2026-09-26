@@ -38,7 +38,7 @@ import {
 } from './invoiceProposal.ts';
 import { looksLikeUblXml } from './ubl.ts';
 import {
-  autoBookEligible, isDocumentAttachment, isXmlFile, looksLikeInvoice, looksLikeInvoiceText, normEmail,
+  autoBookEligible, isDocumentAttachment, isXmlFile, looksLikeInvoice, looksLikeInvoiceText, normEmail, normIban,
   normalizeDocumentMime, normNumber, purgeEligible, retryEligibility, safeFileName, sameInvoice,
   type InboxAttachmentKind,
 } from './invoiceInboxRules.ts';
@@ -532,6 +532,15 @@ async function applyCandidate(
     }
   }
 
+  // Ander rekeningnummer dan we van deze leverancier kennen? Dan nooit vanzelf
+  // boeken, en de controleur ziet het meteen.
+  const invoiceIban = normIban(proposal.supplier.iban);
+  const knownIban = normIban(supplier.iban);
+  const ibanMismatch = Boolean(invoiceIban && knownIban && invoiceIban !== knownIban);
+  if (ibanMismatch) {
+    warnings.push(`Let op: het IBAN op deze factuur (${invoiceIban}) wijkt af van het IBAN dat bij ${supplier.name} bekend is (${knownIban}). Controleer dit bij de leverancier voordat je betaalt.`);
+  }
+
   // 2. Dubbel? ─────────────────────────────────────────────────────────────────
   if (!opts.allowDuplicate) {
     const dup = await findDuplicate(admin, row, proposal, supplier.id, extra.attachments ?? row.attachments);
@@ -624,7 +633,7 @@ async function applyCandidate(
   let status: InboxStatus = 'ready';
   let autoBooked = false;
   if (settings.auto_book) {
-    const eligible = autoBookEligible({ supplierCreated, supplierMatch, confidence: proposal.confidence, warnings, lines, totals });
+    const eligible = autoBookEligible({ supplierCreated, supplierMatch, confidence: proposal.confidence, warnings, lines, totals, ibanMismatch });
     if (eligible.ok) {
       const { error: bookError } = await admin.rpc('book_purchase_invoice', {
         p_organization_id: organizationId, p_purchase_invoice_id: purchaseInvoiceId, p_created_by: budgetUserId,

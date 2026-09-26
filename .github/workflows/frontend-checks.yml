@@ -38,6 +38,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # De CSP-hash in public/_headers moet bij het inline thema-script horen;
+      # anders blokkeert de browser dat script stil op Cloudflare Pages.
+      - name: CSP-hash van het inline script
+        run: node scripts/check-csp-hash.mjs
+
       - name: Unit tests
         run: npm test
 

@@ -47,6 +47,13 @@ const cors = makeCors(ALLOWED_ORIGINS, ALLOW_LOCAL_DEV);
 // ElevenLabs ~$0.40/uur audio — aparte meter, los van het AI-tokenbudget.
 const ELEVENLABS_USD_PER_HOUR = Number(Deno.env.get('ELEVENLABS_USD_PER_HOUR') || '0.40');
 
+// Grootste audiobestand dat we uit R2 in het geheugen laden en naar Scribe sturen.
+const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
+
+// Deze acties wijzigen iets of versturen mail — daarvoor is schrijfrecht op de
+// module nodig, niet alleen leesrecht.
+const WRITE_ACTIONS = new Set(['create', 'start', 'summarize', 'update', 'sendSummary', 'delete']);
+
 // Supabase Edge Runtime heeft een ingebouwde `Deno.serve` — geen deno.land/std
 // nodig, wat het bundelen niet meer laat afhangen van een externe fetch.
 Deno.serve(async (req) => {
@@ -62,8 +69,10 @@ Deno.serve(async (req) => {
     const user = await requireUser(admin, req);
     const role = await requireOrganizationAccess(admin, user.id, organizationId);
     // Een afspraakopname hangt aan Agenda, een gespreksopname aan Klanten.
-    // Lezen mag met leesrecht; de acties zelf controleren op de schrijfrol.
-    await assertModuleAccess(admin, user.id, organizationId, await resolveModuleKey(organizationId, action, body), 'read');
+    // Alle acties hieronder schrijven (of mailen) en vragen dus schrijfrecht op
+    // die module; alleen een leesactie zou met leesrecht volstaan.
+    const moduleKey = await resolveModuleKey(organizationId, action, body);
+    await assertModuleAccess(admin, user.id, organizationId, moduleKey, WRITE_ACTIONS.has(action) ? 'write' : 'read');
 
     switch (action) {
       case 'create': return cors.json(req, await createRecording(organizationId, user.id, role, body));
@@ -104,6 +113,11 @@ async function createRecording(organizationId: string, userId: string, role: Org
       .select('id').eq('id', callId).eq('organization_id', organizationId).maybeSingle();
     if (!callRow) throw new HttpError('Gesprek niet gevonden in deze organisatie.', 404);
   }
+  // Hetzelfde voor klant, project en agenda: alleen koppelen aan rijen van deze organisatie.
+  const sourceId = !callId && body.sourceId && isUuid(String(body.sourceId)) ? String(body.sourceId) : null;
+  if (clientId) await assertOrgRow('clients', organizationId, clientId, 'Klant');
+  if (projectId) await assertOrgRow('projects', organizationId, projectId, 'Project');
+  if (sourceId) await assertOrgRow('calendar_sources', organizationId, sourceId, 'Agenda');
 
   const { data, error } = await admin.from('meeting_recordings').insert({
     organization_id: organizationId,
@@ -113,7 +127,7 @@ async function createRecording(organizationId: string, userId: string, role: Org
     // de module Klanten via callId + eventRef alsnog een opname-rij op
     // andermans agenda-item kunnen zetten.
     provider: callId ? null : provider,
-    source_id: !callId && body.sourceId && isUuid(String(body.sourceId)) ? String(body.sourceId) : null,
+    source_id: sourceId,
     event_ref: !callId && body.eventRef ? String(body.eventRef).slice(0, 512) : null,
     event_title_snapshot: body.eventTitle ? String(body.eventTitle).slice(0, 300) : null,
     client_id: clientId,
@@ -136,16 +150,22 @@ async function startTranscription(organizationId: string, role: Awaited<ReturnTy
   if (!isUuid(recordingId)) throw new HttpError('Ongeldige recordingId.', 400);
   if (!storageKey || !storageKey.startsWith(`${organizationId}/`)) throw new HttpError('Ongeldige storageKey.', 400);
 
-  await loadRecording(organizationId, recordingId); // org-check (gooit bij onbekende opname)
+  const rec = await loadRecording(organizationId, recordingId); // org-check (gooit bij onbekende opname)
+  // Alleen een verse opname gaat naar Scribe: een tweede 'start' op een opname die
+  // al loopt of klaar is, kost opnieuw geld en overschrijft het transcript.
+  if (rec.status !== 'uploaded') throw new HttpError('Deze opname wordt al verwerkt of is al verwerkt.', 409);
   const durationSeconds = numOrNull(body.durationSeconds);
   const sizeBytes = numOrNull(body.sizeBytes);
   const mimeType = body.mimeType ? String(body.mimeType) : 'audio/webm';
 
-  await admin.from('meeting_recordings').update({
+  // Voorwaardelijk op 'uploaded', zodat twee gelijktijdige starts er maar één laten winnen.
+  const { data: claimed, error: claimError } = await admin.from('meeting_recordings').update({
     storage_key: storageKey, mime_type: mimeType, size_bytes: sizeBytes, duration_seconds: durationSeconds,
     status: 'transcribing', error_message: null,
     transcription_cost_usd: durationSeconds ? round4((durationSeconds / 3600) * ELEVENLABS_USD_PER_HOUR) : 0,
-  }).eq('id', recordingId).eq('organization_id', organizationId);
+  }).eq('id', recordingId).eq('organization_id', organizationId).eq('status', 'uploaded').select('id');
+  if (claimError) throw new HttpError('Opname bijwerken mislukt.', 500);
+  if (!claimed?.length) throw new HttpError('Deze opname wordt al verwerkt of is al verwerkt.', 409);
 
   try {
     const bytes = await fetchAudioBytes(storageKey);
@@ -321,6 +341,12 @@ async function loadRecording(organizationId: string, recordingId: string) {
   return data;
 }
 
+/** Gooit een 404 als de klant/het project/de agenda niet bij deze organisatie hoort. */
+async function assertOrgRow(table: 'clients' | 'projects' | 'calendar_sources', organizationId: string, id: string, label: string): Promise<void> {
+  const { data } = await admin.from(table).select('id').eq('id', id).eq('organization_id', organizationId).maybeSingle();
+  if (!data) throw new HttpError(`${label} niet gevonden in deze organisatie.`, 404);
+}
+
 async function loadRecordingForMail(organizationId: string, recordingId: string) {
   const { data, error } = await admin.from('meeting_recordings')
     .select('id, event_title_snapshot, transcript_text')
@@ -417,7 +443,34 @@ async function fetchAudioBytes(storageKey: string): Promise<Uint8Array<ArrayBuff
     headers: { authorization: `Bearer ${secret}` },
   });
   if (!res.ok) throw new HttpError(`Audio ophalen uit R2 mislukt (${res.status}).`, 502);
-  return new Uint8Array(await res.arrayBuffer());
+
+  // Grens vóór het inlezen: eerst op de opgegeven lengte, daarna tijdens het lezen
+  // (de lengte kan ontbreken of niet kloppen), zodat een te groot object nooit
+  // helemaal in het geheugen belandt.
+  const tooLarge = () => new HttpError(`Het audiobestand is te groot (maximaal ${MAX_AUDIO_BYTES / (1024 * 1024)} MB).`, 413);
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_AUDIO_BYTES) {
+    await res.body?.cancel().catch(() => undefined);
+    throw tooLarge();
+  }
+  if (!res.body) return new Uint8Array(new ArrayBuffer(0));
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_AUDIO_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(new ArrayBuffer(total));
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
 }
 
 function numOrNull(v: unknown): number | null {

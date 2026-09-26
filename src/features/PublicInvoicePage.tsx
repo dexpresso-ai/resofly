@@ -5,6 +5,7 @@ import { dateNL, euro, total, lineGross } from '../lib/format';
 import type { FinanceLine } from '../types';
 import { PublicBrandFooter, PublicBrandMark, usePublicBrandTheme } from '../components/PublicBrand';
 import type { BrandingPayload } from '../lib/branding';
+import { safeCheckoutUrl } from '../lib/safeUrl';
 
 // Supabase functions.invoke geeft een non-2xx terug als FunctionsHttpError, waarvan
 // .message altijd de generieke "Edge Function returned a non-2xx status code" is.
@@ -102,6 +103,8 @@ export function PublicInvoicePage({ token }: { token: string }) {
     return records.find(record => record.status === 'open' && record.checkout_url) || records.find(record => record.checkout_url) || null;
   }, [payload?.payments]);
   const isPaid = invoice?.status === 'paid' || Boolean(invoice?.paid_at);
+  // Alleen een echte Mollie-link (of in testmodus deze eigen site) wordt een knop.
+  const checkoutHref = safeCheckoutUrl(payment?.checkout_url, window.location.origin);
 
   async function downloadPdf() {
     if (!payload?.invoice) return;
@@ -146,9 +149,9 @@ export function PublicInvoicePage({ token }: { token: string }) {
         <strong className="public-invoice-amount">{euro(totals.total)}</strong>
         <div className="public-decision-actions public-invoice-actions">
           <Button onClick={downloadPdf} disabled={downloading}>{downloading ? 'PDF maken…' : 'PDF downloaden'}</Button>
-          <Button variant="primary" disabled={isPaid || !payment?.checkout_url} onClick={() => payment?.checkout_url && window.open(payment.checkout_url, '_blank', 'noopener,noreferrer')}>{isPaid ? 'Betaald' : 'Betaal nu'}</Button>
+          <Button variant="primary" disabled={isPaid || !checkoutHref} onClick={() => checkoutHref && window.open(checkoutHref, '_blank', 'noopener,noreferrer')}>{isPaid ? 'Betaald' : 'Betaal nu'}</Button>
         </div>
-        {!payment?.checkout_url && !isPaid && <p className="muted">Er is nog geen actieve betaallink beschikbaar. Neem contact op met {companyName}.</p>}
+        {!checkoutHref && !isPaid && <p className="muted">Er is nog geen actieve betaallink beschikbaar. Neem contact op met {companyName}.</p>}
       </article>
       <article className="public-quote-card">
         <h2>Factuurgegevens</h2>

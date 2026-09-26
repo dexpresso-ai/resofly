@@ -88,6 +88,13 @@ export interface ActionPlan {
    * hem zichtbaar maken voor de klant is dat niet.
    */
   risk?: 'normal' | 'high';
+  /**
+   * Alleen voor owners/admins (team, rollen, bedrijfs- en mailinstellingen). De
+   * database eist dat al (can_admin_org), maar een voorstel van een lid wordt
+   * uitgevoerd door wie het goedkeurt — meestal een owner. Daarom weegt de
+   * registry de rol van degene NAMENS WIE de AI werkt, vóór het klaarzetten.
+   */
+  adminOnly?: boolean;
 }
 
 /** Invoer klopt niet; de tekst gaat terug naar het model zodat het zichzelf corrigeert. */

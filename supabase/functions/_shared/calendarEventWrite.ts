@@ -337,7 +337,7 @@ export async function getEventAttendees(organizationId: string, requesterUserId:
   if (!src) return [];
   if (src.user_id !== requesterUserId && src.visibility !== 'organization') throw new Error('Geen toegang tot deze afspraak.');
   const { data } = await supabaseAdmin.from('calendar_event_attendees')
-    .select('*').eq('event_id', eventId).order('created_at', { ascending: true });
+    .select('*').eq('organization_id', organizationId).eq('event_id', eventId).order('created_at', { ascending: true });
   return (data ?? []) as AttendeeRow[];
 }
 
@@ -345,7 +345,7 @@ export async function getEventAttendees(organizationId: string, requesterUserId:
 // REQUEST naar de huidige genodigden, CANCEL naar wie eraf is.
 export async function applyAttendees(organizationId: string, source: CalendarSourceRow, eventRow: NativeEventRow, input: Record<string, unknown>): Promise<void> {
   const desired = parseAttendeesInput(input);
-  const { data: existingRows } = await supabaseAdmin.from('calendar_event_attendees').select('*').eq('event_id', eventRow.id);
+  const { data: existingRows } = await supabaseAdmin.from('calendar_event_attendees').select('*').eq('organization_id', organizationId).eq('event_id', eventRow.id);
   const existing = (existingRows ?? []) as AttendeeRow[];
   if (desired.length === 0 && existing.length === 0) return;
 
@@ -371,7 +371,7 @@ export async function applyAttendees(organizationId: string, source: CalendarSou
   }
   if (removed.length) await supabaseAdmin.from('calendar_event_attendees').delete().in('id', removed.map(r => r.id));
 
-  const { data: currentRows } = await supabaseAdmin.from('calendar_event_attendees').select('*').eq('event_id', eventRow.id);
+  const { data: currentRows } = await supabaseAdmin.from('calendar_event_attendees').select('*').eq('organization_id', organizationId).eq('event_id', eventRow.id);
   const current = (currentRows ?? []) as AttendeeRow[];
 
   if (!RESEND_API_KEY) return; // geen verzendconfiguratie: alleen opslaan
@@ -395,7 +395,7 @@ export async function applyAttendees(organizationId: string, source: CalendarSou
 
 export async function sendEventCancellations(organizationId: string, _source: CalendarSourceRow, eventRow: NativeEventRow): Promise<void> {
   if (!eventRow.organizer_token || !RESEND_API_KEY) return;
-  const { data: rows } = await supabaseAdmin.from('calendar_event_attendees').select('*').eq('event_id', eventRow.id);
+  const { data: rows } = await supabaseAdmin.from('calendar_event_attendees').select('*').eq('organization_id', organizationId).eq('event_id', eventRow.id);
   const attendees = (rows ?? []) as AttendeeRow[];
   if (!attendees.length) return;
   const ctx = await buildOrganizerContext(organizationId, eventRow.organizer_token);

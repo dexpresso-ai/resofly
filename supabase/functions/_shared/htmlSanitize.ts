@@ -41,3 +41,13 @@ export function sanitizeContractHtml(html: string | null | undefined): string {
   if (!input.trim()) return '';
   return filter.process(input);
 }
+
+/**
+ * Vrije klantmail uit de app (mail → sendClientEmail). Dezelfde editor, dus
+ * dezelfde whitelist. De browser saneert al, maar de edge function verstuurt
+ * en bewaart wat er binnenkomt — en de opgeslagen body verschijnt later bij
+ * collega's op de pagina Berichten.
+ */
+export function sanitizeEmailBodyHtml(html: string | null | undefined): string {
+  return sanitizeContractHtml(html);
+}

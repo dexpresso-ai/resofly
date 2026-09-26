@@ -46,6 +46,7 @@ import type { AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLin
 import { getNoteTypeLabel } from './Notes';
 import { TimeEntryModal } from './TimeTracking';
 import { calendarEventKey, calendarEventLinkMatchesEvent } from '../lib/calendar-links';
+import { safeHttpUrl } from '../lib/safeUrl';
 
 /* ── Constants & helpers ─────────────────────────────────────────────── */
 
@@ -2979,8 +2980,8 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
               <ExternalLink size={12} className="event-detail-map-ext" />
             </a>
           ) : null}
-          {event.meeting_url && (
-            <a className="event-detail-meta-card event-detail-join-link" href={event.meeting_url} target="_blank" rel="noreferrer" title="Deelnemen aan de videocall">
+          {safeHttpUrl(event.meeting_url) && (
+            <a className="event-detail-meta-card event-detail-join-link" href={safeHttpUrl(event.meeting_url)!} target="_blank" rel="noreferrer" title="Deelnemen aan de videocall">
               <Video size={15} />
               <span>Deelnemen · {detectMeetingKind(event.meeting_url).label}</span>
               <ExternalLink size={12} className="event-detail-map-ext" />
@@ -3202,7 +3203,7 @@ function CalendarEventDetailPanel({ event, organizationId, data, sourceColors, c
 
         <div className="event-detail-actions">
           {editing && <Button type="button" variant="primary" disabled={!dirty || saving} onClick={saveEdits}>{saving ? 'Opslaan…' : 'Opslaan'}</Button>}
-          {event.html_link && <a className={`btn ${editing ? 'btn-ghost' : 'btn-primary'}`} href={event.html_link} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open in agenda</a>}
+          {safeHttpUrl(event.html_link) && <a className={`btn ${editing ? 'btn-ghost' : 'btn-primary'}`} href={safeHttpUrl(event.html_link)!} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open in agenda</a>}
           {editable && <button type="button" className="btn btn-danger" onClick={() => onDeleteEvent(event)}><Trash2 size={14} /> Verwijderen</button>}
           <button type="button" className="btn btn-ghost" onClick={onClose}>Sluiten</button>
         </div>

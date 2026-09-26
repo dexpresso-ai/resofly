@@ -287,3 +287,34 @@ test('de eigenaar krijgt ook bericht als er niets meer te keuren valt', () => {
   assert.ok(!/notification_outbox_event_type_check/.test(migration),
     'dit push-type bestaat al; de CHECKs hoeven niet opnieuw geschreven te worden.');
 });
+
+test('elke aanroep telt mee voor de aanroeplimiet', () => {
+  // Commit 148520e haalde de telling uit authenticate(); de batch boekte daarna
+  // nog "de rest" (length - 1) af, zodat een losse aanroep nergens meer telde en
+  // het plafond van 120 per minuut alleen nog op papier stond.
+  const authenticate = mcpSource.slice(
+    mcpSource.indexOf('async function authenticate('),
+    mcpSource.indexOf('class RateLimited'),
+  );
+  assert.match(authenticate, /await chargeRateLimit\(String\(grant\.id\), 1\)/,
+    'authenticate() moet elke aanroep afboeken op de koppeling.');
+  assert.match(mcpSource, /chargeRateLimit\(session\.grantId, body\.length - 1\)/,
+    'een batch boekt de overige aanroepen erbij, bovenop die ene uit authenticate().');
+});
+
+test('team- en instellingshandelingen alleen namens owners/admins', () => {
+  // De database eist can_admin_org, maar een voorstel van een lid voert de owner
+  // uit die het goedkeurt — met zijn eigen rechten. Dus weegt de registry de rol
+  // van wie de AI vertegenwoordigt, in de MCP-server én in Gerrie.
+  const adminSource = readFileSync(join(actionsDir, 'admin.ts'), 'utf8');
+  for (const id of ['team.invite', 'team.set_role', 'team.set_module_access', 'team.disable', 'settings.save_company', 'email_template.save', 'inbound_alias.rotate']) {
+    const at = adminSource.indexOf(`id: '${id}'`);
+    assert.ok(at >= 0, `${id} ontbreekt in admin.ts`);
+    assert.match(adminSource.slice(at, at + 120), /adminOnly: true/, `${id} moet adminOnly zijn`);
+  }
+  const coreSource = readFileSync(join(here, 'gerrieCore.ts'), 'utf8');
+  for (const [name, src] of [['mcp/index.ts', mcpSource], ['gerrieCore.ts', coreSource]] as const) {
+    const fn = src.slice(src.indexOf('function actionPermitted('), src.indexOf('function actionPermitted(') + 600);
+    assert.match(fn, /action.adminOnly && [a-z]+.role !== 'owner' && [a-z]+.role !== 'admin'/, `${name}: actionPermitted weegt adminOnly niet`);
+  }
+});

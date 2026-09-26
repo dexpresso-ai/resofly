@@ -263,13 +263,14 @@ export interface CreatePortalTicketInput {
  * (clients.email) zodat de magische link werkt ook al staat zelf-registratie uit.
  * Geeft `known: false` als het e-mailadres niet als klant bekend is.
  */
-export async function requestPortalLogin(email: string): Promise<{ known: boolean }> {
+/** Zet (alleen voor bekende klantadressen) het account klaar. Het antwoord zegt
+ *  bewust niet óf een adres bekend is. */
+export async function requestPortalLogin(email: string): Promise<void> {
   const { data, error } = await supabasePortal.functions.invoke('portal-login', {
     body: { action: 'requestLogin', email },
   });
   if (error) throw new Error(await extractFunctionError(error, 'Inloggen voorbereiden mislukt'));
   if (!data?.ok) throw new Error(data?.error || 'Inloggen voorbereiden mislukt');
-  return { known: Boolean(data.known) };
 }
 
 export async function fetchPortalData(): Promise<PortalData> {

@@ -162,17 +162,15 @@ function PortalLogin({ branding }: { branding: BrandingPayload | null }) {
     try {
       const cleanEmail = email.trim();
       // Eerst server-side het account klaarzetten voor bekende klanten (zelf-
-      // registratie staat uit). Onbekende e-mailadressen krijgen geen link.
-      const { known } = await requestPortalLogin(cleanEmail);
-      if (!known) {
-        setError('Dit e-mailadres is bij ons niet als klant bekend. Neem contact op met je leverancier om toegang tot het portaal te krijgen.');
-        return;
-      }
+      // registratie staat uit). Onbekende e-mailadressen krijgen geen link — en
+      // we zeggen niet welke dat zijn, anders is dit scherm een opzoekdienst.
+      await requestPortalLogin(cleanEmail);
       const { error } = await supabasePortalAuth.signInWithOtp({
         email: cleanEmail,
         options: { emailRedirectTo: `${window.location.origin}/portal`, shouldCreateUser: false },
       });
-      if (error) setError(error.message); else setSent(true);
+      // "Signups not allowed" = onbekend adres: zelfde melding als bij een bekend adres.
+      if (error && !/signup|not allowed|not found/i.test(error.message)) setError(error.message); else setSent(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Inloggen mislukt');
     } finally {
@@ -194,7 +192,7 @@ function PortalLogin({ branding }: { branding: BrandingPayload | null }) {
         onKeyDown={e => { if (e.key === 'Enter' && email.trim()) void signIn(); }}
       />
       <Button variant="primary" onClick={signIn} disabled={!email.trim() || busy}>{busy ? 'Versturen…' : 'Stuur inloglink'}</Button>
-      {sent && <p className="success">Check je mailbox. Open de link in dezelfde browser als waar je deze pagina hebt geopend.</p>}
+      {sent && <p className="success">Als dit adres bij ons bekend is, ontvang je zo een inloglink. Open die in dezelfde browser als waar je deze pagina hebt geopend. Geen mail? Neem contact op met je leverancier.</p>}
       {error && <p className="error">{error}</p>}
       <PortalFooter branding={branding} />
     </div>

@@ -125,9 +125,16 @@ function numOrNull(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// Venster rond de ondertekende tijd (`t`, unix-seconden): ouder dan 30 minuten
+// (de tolerantie van ElevenLabs zelf) of meer dan 5 minuten in de toekomst →
+// afwijzen, zodat een onderschepte webhook niet later opnieuw af te spelen is.
+const WEBHOOK_MAX_AGE_SECONDS = 30 * 60;
+const WEBHOOK_MAX_FUTURE_SECONDS = 5 * 60;
+
 /**
  * Verifieert de HMAC-signatuur van een ElevenLabs-webhook (header `ElevenLabs-Signature`,
- * formaat `t=<unix>,v0=<hexhmac>` over `"<t>.<rawBody>"`). Geeft true bij een geldige match.
+ * formaat `t=<unix>,v0=<hexhmac>` over `"<t>.<rawBody>"`). Geeft true bij een geldige match
+ * binnen het tijdvenster.
  */
 export async function verifyWebhookSignature(rawBody: string, signatureHeader: string | null): Promise<boolean> {
   if (!ELEVENLABS_WEBHOOK_SECRET) return false;
@@ -140,6 +147,9 @@ export async function verifyWebhookSignature(rawBody: string, signatureHeader: s
   const timestamp = parts['t'];
   const provided = parts['v0'];
   if (!timestamp || !provided) return false;
+  if (!/^\d{1,12}$/.test(timestamp)) return false;
+  const ageSeconds = Math.floor(Date.now() / 1000) - Number(timestamp);
+  if (ageSeconds > WEBHOOK_MAX_AGE_SECONDS || ageSeconds < -WEBHOOK_MAX_FUTURE_SECONDS) return false;
 
   const key = await crypto.subtle.importKey(
     'raw', new TextEncoder().encode(ELEVENLABS_WEBHOOK_SECRET),

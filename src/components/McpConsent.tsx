@@ -38,7 +38,11 @@ export function McpConsent({ request, organizations, defaultOrganizationId }: {
       .then(result => {
         if (cancelled) return;
         setInfo(result);
-        setLabel(result.clientName);
+        // Een onbekende bestemming krijgt geen vooringevulde naam (die koos de
+        // client zelf) en start op alleen meelezen.
+        const unverified = result.redirectHost !== null && !result.verified;
+        setLabel(unverified ? '' : result.clientName);
+        if (unverified) setAllowPropose(false);
       })
       .catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : 'Dit koppelverzoek is niet geldig.'); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -92,6 +96,19 @@ export function McpConsent({ request, organizations, defaultOrganizationId }: {
           {info.clientName} vraagt toegang tot je ResoFly-werkruimte. Daarna kun je die AI vragen stellen over je eigen
           klanten, projecten, uren en administratie.
         </p>
+
+        {info.redirectHost && (
+          <p className="mcp-consent-target">
+            Na koppelen krijgt <strong>{info.redirectHost}</strong> toegang tot je werkruimte.
+          </p>
+        )}
+        {info.redirectHost && !info.verified && (
+          <p className="mcp-consent-warning" role="alert">
+            <strong>Niet geverifieerd.</strong> Dit adres hoort niet bij een AI-dienst die wij kennen. De naam
+            &ldquo;{info.clientName}&rdquo; heeft de aanvrager zelf gekozen. Koppel alleen als je deze koppeling zelf
+            bent begonnen en het adres herkent.
+          </p>
+        )}
 
         <ul className="mcp-consent-list">
           <li>

@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { loadBranding } from '../_shared/branding.ts';
+import { toPublicTimeline } from '../_shared/publicTimeline.ts';
 
 type QuoteLine = { id?: string; description: string; quantity: number; unit_price: number; vat?: number };
 type PublicQuote = {
@@ -108,7 +109,7 @@ async function getPublicQuote(tokenHash: string) {
     loadBranding(supabaseAdmin, quote.organization_id),
     loadQuoteEvents(quote.organization_id, quote.id),
   ]);
-  return { quote: publicQuotePayload(quote), client, project, company, branding, events };
+  return { quote: publicQuotePayload(quote), client, project, company, branding, events: toPublicTimeline('quote', events) };
 }
 
 async function decidePublicQuote(kind: 'accept' | 'reject', tokenHash: string, body: Record<string, unknown>) {
@@ -141,7 +142,7 @@ async function decidePublicQuote(kind: 'accept' | 'reject', tokenHash: string, b
     loadBranding(supabaseAdmin, quote.organization_id),
     loadQuoteEvents(quote.organization_id, quote.id),
   ]);
-  return { quote: publicQuotePayload(quote), client, project, company, branding, events };
+  return { quote: publicQuotePayload(quote), client, project, company, branding, events: toPublicTimeline('quote', events) };
 }
 
 async function loadQuoteByTokenHash(tokenHash: string): Promise<PublicQuote> {
@@ -200,7 +201,7 @@ async function loadCompanySettings(organizationId: string) {
 async function loadQuoteEvents(organizationId: string, quoteId: string) {
   const { data, error } = await supabaseAdmin
     .from('quote_approval_events')
-    .select('id,event_type,title,description,metadata,created_at')
+    .select('id,event_type,created_at')
     .eq('organization_id', organizationId)
     .eq('quote_id', quoteId)
     .order('created_at', { ascending: true });

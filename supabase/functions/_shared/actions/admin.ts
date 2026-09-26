@@ -340,6 +340,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'team.invite',
+    adminOnly: true,
     label: 'Teamlid uitnodigen met rol en modulerechten',
     module: 'stats',
     kind: 'write',
@@ -399,6 +400,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'team.revoke_invitation',
+    adminOnly: true,
     label: 'Teamuitnodiging intrekken',
     module: 'stats',
     kind: 'write',
@@ -425,6 +427,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'team.set_role',
+    adminOnly: true,
     label: 'Rol van een teamlid wijzigen',
     module: 'stats',
     kind: 'write',
@@ -470,6 +473,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'team.set_module_access',
+    adminOnly: true,
     label: 'Modulerechten van een teamlid opslaan',
     module: 'stats',
     kind: 'write',
@@ -507,6 +511,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'team.disable',
+    adminOnly: true,
     label: 'Teamlid uitschakelen',
     module: 'stats',
     kind: 'write',
@@ -574,6 +579,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'branding.save',
+    adminOnly: true,
     label: 'Huisstijl van de klantpagina\'s opslaan',
     module: 'clients',
     kind: 'write',
@@ -663,6 +669,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'settings.save_company',
+    adminOnly: true,
     label: 'Bedrijfsgegevens voor de factuur opslaan',
     module: 'finance',
     kind: 'write',
@@ -707,6 +714,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'settings.set_legal_form',
+    adminOnly: true,
     label: 'Rechtsvorm van de administratie wijzigen',
     module: 'finance',
     kind: 'write',
@@ -737,6 +745,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'settings.save_invoice_layout',
+    adminOnly: true,
     label: 'Factuurstijl, betaalinstructies en footertekst opslaan',
     module: 'finance',
     kind: 'write',
@@ -781,6 +790,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'settings.save_bookkeeping',
+    adminOnly: true,
     label: 'Boekhoudinstellingen opslaan (KOR, btw-periode, knipdatum, boekjaar)',
     module: 'finance',
     kind: 'write',
@@ -853,6 +863,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'settings.set_default_hourly_rate',
+    adminOnly: true,
     label: 'Standaard uurtarief van de organisatie instellen',
     module: 'finance',
     kind: 'write',
@@ -915,6 +926,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'email_template.save',
+    adminOnly: true,
     label: 'Tekst van een uitgaande e-mail aanpassen',
     module: 'clients',
     kind: 'write',
@@ -971,6 +983,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'email_template.reset',
+    adminOnly: true,
     label: 'E-mailtekst terugzetten naar de standaardtekst',
     module: 'clients',
     kind: 'write',
@@ -1111,6 +1124,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'inbound_alias.create',
+    adminOnly: true,
     label: 'Doorstuuradres voor klantmail aanmaken',
     module: 'clients',
     kind: 'write',
@@ -1133,6 +1147,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'inbound_alias.set_forward_from',
+    adminOnly: true,
     label: 'Vastleggen vanaf welk eigen adres wordt doorgestuurd',
     module: 'clients',
     kind: 'write',
@@ -1158,6 +1173,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'inbound_alias.rotate',
+    adminOnly: true,
     label: 'Nieuw doorstuuradres aanmaken (het oude vervalt)',
     module: 'clients',
     kind: 'write',

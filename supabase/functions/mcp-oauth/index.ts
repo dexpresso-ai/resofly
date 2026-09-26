@@ -41,6 +41,7 @@ import {
   isAcceptableRedirectUri, isValidCodeChallenge, parseToken, protectedResourceMetadata, redirectUriAllowed,
   sha256Hex, signAuthRequest, verifyAuthRequest, verifyPkce, verifyToken,
   base64Url, randomBytes, openCorsHeaders, parseScopes, CONSENT_SCOPES, SCOPE_EXECUTE, SCOPE_READ,
+  describeRedirectTarget, isKnownAiRedirect,
   type AuthRequest, type McpDiscoveryUrls,
 } from '../_shared/mcpAuth.ts';
 
@@ -261,6 +262,10 @@ async function handleConsent(url: URL): Promise<Response> {
     client_name: client.client_name,
     client_uri: client.client_uri,
     logo_uri: client.logo_uri,
+    // De naam hierboven kiest de client zelf; dit is waar de code na "Koppelen"
+    // écht heen gaat. Het scherm toont het, en waarschuwt bij een onbekende dienst.
+    redirect_host: describeRedirectTarget(request.redirectUri),
+    verified: isKnownAiRedirect(request.redirectUri),
     // Wat deze client ten HOOGSTE kan krijgen. Het scherm laat de gebruiker
     // daarbinnen kiezen; ruimer wordt het bij /approve alsnog teruggeknipt.
     scope: request.scope,
@@ -486,7 +491,20 @@ async function refresh(form: URLSearchParams): Promise<Response> {
   if (!await verifyToken(parsed.verifier, String(row.salt), String(row.verifier_hash))) {
     return oauthError('invalid_grant', 'Dit refresh token klopt niet.');
   }
-  if (row.revoked_at) return oauthError('invalid_grant', 'Dit refresh token is ingetrokken.');
+  if (row.revoked_at) {
+    // Een al gebruikt (geroteerd) refresh token dat later terugkomt, is het
+    // klassieke teken van een gelekt token: iemand ververst met een kopie. Dan
+    // gaat de hele koppeling op slot (alle tokens van deze grant), zodat ook de
+    // tokens die inmiddels uit die kopie zijn gemaakt vervallen. Binnen een
+    // minuut na roteren is het vrijwel altijd de client zelf die na een time-out
+    // opnieuw probeert; dan alleen weigeren.
+    const sinceRevokedMs = Date.now() - new Date(row.revoked_at).getTime();
+    if (sinceRevokedMs > 60_000) {
+      await admin.from('mcp_tokens').update({ revoked_at: new Date().toISOString() })
+        .eq('grant_id', row.grant_id).is('revoked_at', null);
+    }
+    return oauthError('invalid_grant', 'Dit refresh token is al gebruikt of ingetrokken.');
+  }
   if (new Date(row.expires_at).getTime() < Date.now()) return oauthError('invalid_grant', 'Dit refresh token is verlopen.');
 
   const grant = await loadGrant(String(row.grant_id));
@@ -495,7 +513,13 @@ async function refresh(form: URLSearchParams): Promise<Response> {
 
   // Rotatie: het gebruikte refresh token gaat eruit en er komt een nieuw paar.
   // Zo is een token dat iemand ooit onderschepte na één keer verversen dood.
-  await admin.from('mcp_tokens').update({ revoked_at: new Date().toISOString() }).eq('id', row.id);
+  // Voorwaardelijk op "nog niet ingetrokken": bij twee gelijktijdige verversingen
+  // met hetzelfde token krijgt er maar één een nieuw paar.
+  const { data: claimed, error: claimError } = await admin.from('mcp_tokens')
+    .update({ revoked_at: new Date().toISOString() })
+    .eq('id', row.id).is('revoked_at', null).select('id');
+  if (claimError) throw new HttpError(`Token roteren mislukt: ${claimError.message}`, 500);
+  if (!claimed?.length) return oauthError('invalid_grant', 'Dit refresh token is net al gebruikt.');
   return openJson(await issueTokens(String(row.grant_id), grant.scope));
 }
 

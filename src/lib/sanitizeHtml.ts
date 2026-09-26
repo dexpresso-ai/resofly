@@ -33,11 +33,27 @@ function ensureHooks(): void {
  * links, opmaak, afbeeldingen) blijven behouden.
  */
 export function sanitizeEmailHtml(html: string | null | undefined): string {
+  // Mail van buiten mag ook geen class/id dragen: anders kan de afzender de
+  // eigen CSS-klassen van de app hergebruiken (schermvullende overlay, een
+  // nagemaakt inlogvenster) of met een id elementen van de app overschaduwen.
+  return sanitize(html, ['style', 'class', 'id']);
+}
+
+/**
+ * Zelfde sanitisatie, maar klassen blijven staan: voor inhoud uit de eigen
+ * editor (gedeelde notities, tekstdocumenten), waar klassen o.a. de
+ * afvinklijstjes opmaken. Niet gebruiken voor HTML van buiten.
+ */
+export function sanitizeRichContentHtml(html: string | null | undefined): string {
+  return sanitize(html, ['style', 'id']);
+}
+
+function sanitize(html: string | null | undefined, forbidAttr: string[]): string {
   if (!html) return '';
   ensureHooks();
   return DOMPurify.sanitize(String(html), {
     FORBID_TAGS: ['style', 'link', 'base', 'meta', 'form', 'input', 'button', 'textarea', 'select', 'iframe', 'object', 'embed', 'svg', 'math'],
-    FORBID_ATTR: ['style'],
+    FORBID_ATTR: forbidAttr,
     ALLOW_DATA_ATTR: false,
     // Alleen veilige URL-schema's in href/src; blokkeert o.a. javascript: en data:.
     ALLOWED_URI_REGEXP: /^(?:https?:|mailto:|tel:|cid:|#)/i,

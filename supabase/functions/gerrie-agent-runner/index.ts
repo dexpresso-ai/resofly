@@ -128,14 +128,14 @@ Deno.serve(async (req) => {
     const action = String(body.action || '');
     switch (action) {
       case 'create': return json(req, await createAgent(organizationId, user.id, body));
-      case 'update': return json(req, await updateAgent(organizationId, body));
+      case 'update': return json(req, await updateAgent(organizationId, user.id, body));
       case 'set_status': return json(req, await setStatus(organizationId, String(body.id || ''), String(body.status || '')));
       // 'delete' bestaat alleen nog als oude naam voor archiveren: een agent met
       // historie gooien we niet weg (zie archiveAgent).
       case 'delete':
       case 'archive': return json(req, await archiveAgent(organizationId, String(body.id || '')));
       case 'restore': return json(req, await restoreAgent(organizationId, String(body.id || '')));
-      case 'run_now': return json(req, await runNow(organizationId, String(body.id || '')));
+      case 'run_now': return json(req, await runNow(organizationId, user.id, String(body.id || '')));
       case 'reply': return json(req, await replyToRun(organizationId, user.id, role, body));
       // Alles wat een agent MAG kunnen, afgeleid uit de echte tooldefinities en
       // gefilterd op de modulerechten van dit teamlid. De bouwer hoeft dus geen
@@ -599,7 +599,20 @@ async function createAgent(orgId: string, userId: string, body: Record<string, u
   return { id: data.id as string, status: activate ? 'active' : 'draft', next_run_at: nextRunAt };
 }
 
-async function updateAgent(orgId: string, body: Record<string, unknown>): Promise<{ ok: true }> {
+/**
+ * Een routine draait als haar maker (run_as_user_id): met diens rechten,
+ * privé-agenda's, gesprekken en AI-tegoed. Aanpassen, handmatig starten en erop
+ * antwoorden doet daarom alleen die persoon; een owner/admin kan de routine van
+ * een collega wel pauzeren of archiveren.
+ */
+function assertRoutineOwner(agent: Record<string, unknown>, userId: string): void {
+  const runAs = agent.run_as_user_id ? String(agent.run_as_user_id) : String(agent.created_by || '');
+  if (runAs && runAs !== userId) {
+    throw new HttpError('Deze routine draait namens een collega. Alleen die kan hem aanpassen, handmatig starten of erop antwoorden; jij kunt hem wel pauzeren of archiveren.', 403);
+  }
+}
+
+async function updateAgent(orgId: string, userId: string, body: Record<string, unknown>): Promise<{ ok: true }> {
   const id = String(body.id || '');
   if (!isUuid(id)) throw new HttpError('Ongeldig id.', 400);
   const fields = sanitizeAgentFields(body);
@@ -608,6 +621,7 @@ async function updateAgent(orgId: string, body: Record<string, unknown>): Promis
     .select('*').eq('id', id).eq('organization_id', orgId).maybeSingle();
   if (exErr) throw new HttpError(`Agent ophalen mislukt: ${exErr.message}`, 500);
   if (!existing) throw new HttpError('Agent niet gevonden.', 404);
+  assertRoutineOwner(existing, userId);
 
   const patch: Record<string, unknown> = { ...fields };
   // Draait de agent al? Herbereken de volgende run met het nieuwe schema.
@@ -672,12 +686,13 @@ async function restoreAgent(orgId: string, id: string): Promise<{ ok: true }> {
   return { ok: true };
 }
 
-async function runNow(orgId: string, id: string): Promise<Record<string, unknown>> {
+async function runNow(orgId: string, userId: string, id: string): Promise<Record<string, unknown>> {
   if (!isUuid(id)) throw new HttpError('Ongeldig id.', 400);
   if (!ANTHROPIC_API_KEY) throw new HttpError('ANTHROPIC_API_KEY ontbreekt in de Edge Function secrets.', 500);
   const { data: agent, error } = await supabaseAdmin.from('ai_agents').select('*').eq('id', id).eq('organization_id', orgId).maybeSingle();
   if (error) throw new HttpError(`Agent ophalen mislukt: ${error.message}`, 500);
   if (!agent) throw new HttpError('Agent niet gevonden.', 404);
+  assertRoutineOwner(agent, userId);
   if (String(agent.status) === 'archived') throw new HttpError('Deze agent is gearchiveerd. Zet hem eerst terug als je hem weer wilt laten draaien.', 400);
   if (!String(agent.instruction || '').trim()) throw new HttpError('Deze agent heeft nog geen opdracht.', 400);
   // Handmatige run: eigen occurrence-key, verandert het schema NIET.
@@ -711,6 +726,7 @@ async function replyToRun(orgId: string, userId: string, role: OrganizationRole,
     .select('*').eq('id', run.agent_id).eq('organization_id', orgId).maybeSingle();
   if (agErr) throw new HttpError(`Agent ophalen mislukt: ${agErr.message}`, 500);
   if (!agent) throw new HttpError('Agent niet gevonden.', 404);
+  assertRoutineOwner(agent, userId);
   const mode = String(agent.mode || 'report') === 'propose' ? 'propose' : 'report';
   const modelKind = resolveModelKind(agent.model_kind);
 

@@ -2483,7 +2483,9 @@ function actionCtxFor(ctx: GerrieContext): ActionCtx {
 }
 
 /** Mag dit teamlid deze handeling? Lezen vraagt leesrecht, wijzigen vraagt schrijfrecht. */
-function actionPermitted(ctx: GerrieContext, action: { module: string; kind: 'read' | 'write' }): boolean {
+function actionPermitted(ctx: GerrieContext, action: { module: string; kind: 'read' | 'write'; adminOnly?: boolean }): boolean {
+  // Team- en instellingshandelingen alleen voor owners/admins (zie ActionDef.adminOnly).
+  if (action.adminOnly && ctx.role !== 'owner' && ctx.role !== 'admin') return false;
   const level = moduleLevel(ctx, action.module);
   return action.kind === 'write' ? level === 'write' : level !== 'none';
 }

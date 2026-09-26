@@ -2,6 +2,7 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
+import { sanitizeEmailBodyHtml } from '../_shared/htmlSanitize.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
@@ -666,7 +667,9 @@ async function sendClientEmail(
     throw new MailHttpError('Vul een onderwerp in.', 422);
   }
 
-  const bodyHtmlInput = String(body.bodyHtml || '').trim();
+  // Ook hier saneren: wat hier binnenkomt, gaat de deur uit én staat later bij
+  // collega's op de pagina Berichten.
+  const bodyHtmlInput = sanitizeEmailBodyHtml(String(body.bodyHtml || '').trim());
   const bodyTextInput = String(body.bodyText || '').trim();
   if (!bodyHtmlInput && !bodyTextInput) {
     throw new MailHttpError('De e-mail heeft geen inhoud.', 422);

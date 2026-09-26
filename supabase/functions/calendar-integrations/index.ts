@@ -511,7 +511,9 @@ async function searchContacts(organizationId: string, requesterUserId: string, s
   if (!source) return { contacts: [], needsReconnect: false };
   const calendarSource = source as CalendarSourceRow;
   if (calendarSource.provider === 'native' || !calendarSource.connection_id) return { contacts: [], needsReconnect: false };
-  if (calendarSource.user_id !== requesterUserId && calendarSource.visibility !== 'organization') return { contacts: [], needsReconnect: false };
+  // Het adresboek is persoonlijk: ook als iemand zijn agenda met het team deelt,
+  // doorzoekt een collega niet met diens Google-/Microsoft-token zijn contacten.
+  if (calendarSource.user_id !== requesterUserId) return { contacts: [], needsReconnect: false };
   const connection = await getConnection(organizationId, calendarSource.connection_id);
   if (connection.status !== 'active') return { contacts: [], needsReconnect: true };
   try {

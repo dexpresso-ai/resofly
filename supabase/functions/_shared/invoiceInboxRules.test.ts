@@ -60,6 +60,16 @@ test('automatisch boeken alleen als er niets te kiezen valt', () => {
   assert.equal(autoBookEligible({ ...ok, totals: { total_cents: 0 } }).ok, false);
 });
 
+test('ander IBAN dan bekend bij de leverancier: nooit vanzelf boeken', () => {
+  // Hét patroon van factuurfraude: een echte leverancier, een echt ogende
+  // factuur, en alleen het rekeningnummer is anders.
+  const ok = { supplierCreated: false, supplierMatch: 'vat', confidence: 'high' as const, warnings: [], lines: [{ account_id: 'a', amount_cents: 100 }], totals: { total_cents: 121 } };
+  assert.deepEqual(autoBookEligible({ ...ok, ibanMismatch: false }), { ok: true });
+  const blocked = autoBookEligible({ ...ok, ibanMismatch: true });
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.ok ? '' : blocked.why, /IBAN/);
+});
+
 test('de opruimronde pakt alleen storingen opnieuw op, en niet eindeloos', () => {
   const now = new Date('2026-09-18T12:00:00Z');
   const ago = (minutes: number) => new Date(now.getTime() - minutes * 60_000).toISOString();

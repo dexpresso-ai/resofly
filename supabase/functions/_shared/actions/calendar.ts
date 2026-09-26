@@ -184,7 +184,7 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
     module: 'calendar',
     kind: 'read',
     description:
-      "Geeft ALLE agenda's van de organisatie met de instellingen die `list_calendars` niet toont: staat de agenda aan (sync_enabled), is hij privé of gedeeld met het team (visibility), mag erin geschreven worden, van wie hij is, en bij een agenda-via-link wanneer de feed voor het laatst is opgehaald en of dat foutliep. " +
+      "Geeft je eigen agenda's plus de agenda's die met het team gedeeld zijn, met de instellingen die `list_calendars` niet toont: staat de agenda aan (sync_enabled), is hij privé of gedeeld met het team (visibility), mag erin geschreven worden, van wie hij is, en bij een agenda-via-link wanneer de feed voor het laatst is opgehaald en of dat foutliep. " +
       "Gebruik dit vóór `calendar_source.set_sharing`, `calendar_source.update_native` of `calendar_source.refresh_ics`. Voor het simpelweg kiezen van een agenda om iets in te plannen is `list_calendars` genoeg.",
     keywords: ['agenda', "agenda's", 'kalender', 'bron', 'delen', 'privé', 'zichtbaar', 'sync', 'ics', 'ical', 'abonnement', 'feed', 'google', 'outlook', 'microsoft'],
     input: {
@@ -198,33 +198,40 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       const provider = optChoice(input, 'provider', ['native', 'google', 'microsoft', 'ics'] as const);
       if (provider) query = query.eq('provider', provider);
       if (bool(input, 'mine_only', false)) query = query.eq('user_id', ctx.userId);
+      // Zelfde grens als de RLS op calendar_sources: je eigen agenda's en wat met
+      // het team gedeeld is. De service-role omzeilt die policy, dus hier expliciet.
+      query = query.or(`user_id.eq.${ctx.userId},visibility.eq.organization`);
       const { data, error } = await query;
       if (error) throw new ActionError(`Agenda's ophalen mislukt: ${error.message}`);
       const rows: Array<Record<string, unknown>> = data ?? [];
 
-      const { data: connections } = await orgQuery(ctx, 'calendar_connections', 'id, provider, provider_account_email, status, last_error');
+      // Koppelingen (account-e-mail, fouten) zijn persoonlijk: alleen de eigen.
+      const { data: connections } = await orgQuery(ctx, 'calendar_connections', 'id, provider, provider_account_email, status, last_error')
+        .eq('user_id', ctx.userId);
       const byConnection = new Map<string, Record<string, unknown>>(
         (connections ?? []).map((c: Record<string, unknown>) => [String(c.id), c]));
 
       return {
         calendars: rows.map((s) => {
-          const connection = s.connection_id ? byConnection.get(String(s.connection_id)) : null;
+          const mine = String(s.user_id) === ctx.userId;
+          const connection = mine && s.connection_id ? byConnection.get(String(s.connection_id)) : null;
           return {
             source_id: s.id,
             name: s.name,
             provider: s.provider,
-            is_mine: String(s.user_id) === ctx.userId,
+            is_mine: mine,
             shown_in_agenda: s.sync_enabled,
             shared_with_team: s.visibility === 'organization',
             can_write: s.write_enabled,
             is_primary: s.is_primary,
             timezone: s.timezone,
-            // Alleen bij een agenda via een iCal/ICS-link.
-            feed_url: s.feed_url ?? null,
+            // Alleen bij een agenda via een iCal/ICS-link, en alleen de eigen: die
+            // link is een sleutel tot de hele privé-agenda van de eigenaar.
+            feed_url: mine ? s.feed_url ?? null : null,
             feed_last_synced_at: s.feed_last_synced_at ?? null,
             feed_last_error: s.feed_last_error ?? null,
             // Bij Google/Microsoft: het gekoppelde account en of de koppeling nog leeft.
-            connection_id: s.connection_id ?? null,
+            connection_id: mine ? s.connection_id ?? null : null,
             account_email: connection ? connection.provider_account_email : null,
             connection_status: connection ? connection.status : null,
             connection_error: connection ? connection.last_error : null,

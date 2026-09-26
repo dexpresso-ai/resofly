@@ -124,7 +124,8 @@ async function getPublicLink(tokenHash: string) {
 
   let prefill: { name: string | null; email: string | null } | null = null;
   if (link.client_id) {
-    const { data: client } = await supabaseAdmin.from('clients').select('name,contact_name,email').eq('id', link.client_id).maybeSingle();
+    const { data: client } = await supabaseAdmin.from('clients').select('name,contact_name,email')
+      .eq('organization_id', link.organization_id).eq('id', link.client_id).maybeSingle();
     if (client) prefill = { name: (client.contact_name || client.name || null) as string | null, email: (client.email || null) as string | null };
   }
 

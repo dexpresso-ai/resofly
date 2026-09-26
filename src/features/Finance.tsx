@@ -8,6 +8,7 @@ import { SearchFilterPanel } from '../components/SearchFilterPanel';
 import type { FilterField } from '../components/SearchFilterPanel';
 import { dateNL, euro, total, lineGross } from '../lib/format';
 import { exportFinancePDF } from '../lib/pdf';
+import { safeCheckoutUrl } from '../lib/safeUrl';
 
 export type RefundInput = { amountCents: number; reason: string; createCreditNote: boolean; idempotencyKey: string; kind: 'manual' | 'mollie' };
 
@@ -1011,7 +1012,7 @@ function InvoiceStatusStrip({ invoice, delivery, payment }: { invoice: Invoice; 
     {delivery?.recipient_email && <small>{delivery.recipient_email}</small>}
     {delivery?.attachment_file_name && <small>PDF: {delivery.attachment_file_name}</small>}
     <CreditCard size={14}/><span>{payment ? paymentStatusLabel(payment.status) : 'Nog geen betaallink'}</span>
-    {payment?.provider_checkout_url && <a href={payment.provider_checkout_url} target="_blank" rel="noreferrer">Open betaallink</a>}
+    {safeCheckoutUrl(payment?.provider_checkout_url, window.location.origin) && <a href={safeCheckoutUrl(payment?.provider_checkout_url, window.location.origin)!} target="_blank" rel="noreferrer">Open betaallink</a>}
     {invoice.public_token_expires_at && <small>Publieke link tot {dateNL(invoice.public_token_expires_at)}</small>}
   </div>;
 }

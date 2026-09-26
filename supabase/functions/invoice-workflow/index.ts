@@ -352,9 +352,10 @@ type ReminderSettingsRow = {
 
 // Cron-ingang: door pg_cron (via pg_net) dagelijks aangeroepen met een gedeeld
 // secret. Markeert te-late facturen en stuurt de openstaande herinneringen.
-async function handleReminderCron(req: Request, url: URL): Promise<Response> {
+async function handleReminderCron(req: Request, _url: URL): Promise<Response> {
   if (!INVOICE_REMINDER_CRON_SECRET) return json(req, { ok: false, error: 'INVOICE_REMINDER_CRON_SECRET ontbreekt in de Edge Function secrets.' }, 500);
-  const provided = req.headers.get('x-cron-secret') || url.searchParams.get('secret') || '';
+  // Alleen via de header: een secret in de URL belandt in toegangslogs.
+  const provided = req.headers.get('x-cron-secret') || '';
   if (!timingSafeEqual(provided, INVOICE_REMINDER_CRON_SECRET)) return json(req, { ok: false, error: 'Invalid cron secret' }, 401);
   try {
     const summary = await runInvoiceReminderBatch();
@@ -718,9 +719,10 @@ async function computeDunningClaim(organizationId: string, invoice: InvoiceRow, 
 }
 
 // Cron: stelt aanmaningen VOOR (status 'proposed'). Verstuurt nooit zelf.
-async function handleDunningCron(req: Request, url: URL): Promise<Response> {
+async function handleDunningCron(req: Request, _url: URL): Promise<Response> {
   if (!INVOICE_REMINDER_CRON_SECRET) return json(req, { ok: false, error: 'INVOICE_REMINDER_CRON_SECRET ontbreekt in de Edge Function secrets.' }, 500);
-  const provided = req.headers.get('x-cron-secret') || url.searchParams.get('secret') || '';
+  // Alleen via de header: een secret in de URL belandt in toegangslogs.
+  const provided = req.headers.get('x-cron-secret') || '';
   if (!timingSafeEqual(provided, INVOICE_REMINDER_CRON_SECRET)) return json(req, { ok: false, error: 'Invalid cron secret' }, 401);
   try {
     const summary = await runDunningBatch();
@@ -1145,7 +1147,7 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
       providerPaymentId = String(molliePayload.id || '').trim();
       checkoutUrl = String(((molliePayload._links as Record<string, { href?: string }> | undefined)?.checkout?.href) || '').trim();
       providerStatus = String(molliePayload.status || 'open');
-      metadata = { mollie: molliePayload };
+      metadata = { mollie: withoutWebhookSecret(molliePayload) };
       if (!providerPaymentId || !checkoutUrl) throw new WorkflowHttpError('Mollie gaf geen payment-id of checkout-url terug.', 502);
     }
 
@@ -1764,9 +1766,20 @@ async function handleMollieWebhook(req: Request, url: URL, body: Record<string, 
   const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) return json(req, { ok: false, error: 'Mollie payment ophalen mislukt.' }, 502);
 
+  // Wij zetten bij het aanmaken zelf metadata op de Mollie-betaling. Wijst die naar
+  // een andere betaalrij, factuur of organisatie dan de rij die we hier vonden, dan
+  // hoort deze betaling daar niet bij. (Oudere betalingen zonder die velden gaan door.)
+  const mollieMeta = (payload.metadata && typeof payload.metadata === 'object') ? payload.metadata as Record<string, unknown> : {};
+  const metaMismatch = (key: string, expected: string) => typeof mollieMeta[key] === 'string' && mollieMeta[key] !== expected;
+  if (metaMismatch('organizationId', record.organization_id) || metaMismatch('invoiceId', record.invoice_id)
+      || (eventId === molliePaymentId && metaMismatch('paymentRecordId', record.id))) {
+    console.warn('invoice-workflow webhook: Mollie-metadata hoort niet bij deze betaalrij; genegeerd');
+    return json(req, { ok: true, ignored: true });
+  }
+
   const status = normalizeMollieStatus(String(payload.status || 'open'));
   const paidAt = typeof payload.paidAt === 'string' ? payload.paidAt : null;
-  const { error } = await supabaseAdmin.rpc('update_invoice_payment_status', { p_provider_payment_id: molliePaymentId, p_status: status, p_paid_at: paidAt, p_metadata: { mollie: payload } });
+  const { error } = await supabaseAdmin.rpc('update_invoice_payment_status', { p_provider_payment_id: molliePaymentId, p_status: status, p_paid_at: paidAt, p_metadata: { mollie: withoutWebhookSecret(payload) } });
   if (error) return json(req, { ok: false, error: error.message }, 500);
 
   // Refunds + chargebacks reconciliëren (Fase 2/3). Fouten hier mogen de webhook niet
@@ -2646,3 +2659,10 @@ function isValidInvoiceRedirectUrl(candidate: string, expectedPublicUrl: string)
 function normalizeMollieStatus(status: string): string { if (status === 'paid') return 'paid'; if (status === 'expired') return 'expired'; if (status === 'canceled' || status === 'failed') return status; if (status === 'authorized') return 'authorized'; if (status === 'pending') return 'pending'; return 'open'; }
 function timingSafeEqual(a: string, b: string): boolean { const enc = new TextEncoder(); const left = enc.encode(a); const right = enc.encode(b); if (left.length !== right.length) return false; let out = 0; for (let i = 0; i < left.length; i++) out |= left[i] ^ right[i]; return out === 0; }
 function requiredEnv(name: string): string { const value = Deno.env.get(name); if (!value) throw new Error(`Missing required env var: ${name}`); return value; }
+
+/** Het Mollie-antwoord bevat onze webhookUrl, met het webhook-secret erin. Die hoort
+ *  niet in metadata die elk lid met Financiën-leesrecht kan inzien. */
+function withoutWebhookSecret(payload: Record<string, unknown>): Record<string, unknown> {
+  const { webhookUrl: _webhookUrl, ...rest } = payload;
+  return rest;
+}

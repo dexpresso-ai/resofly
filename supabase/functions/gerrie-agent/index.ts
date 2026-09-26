@@ -20,6 +20,7 @@ import {
   requireUser, requireOrganizationAccess, describeError, parseAllowedOrigins, auditActionName,
 } from '../_shared/gerrieCore.ts';
 import type { Emit, HttpStatus } from '../_shared/gerrieCore.ts';
+import { getModuleLevel } from '../_shared/edgeAuth.ts';
 
 // Toegestane frontend-origins (CORS + harde origin-controle). Alleen HTTP-schil.
 const GERRIE_ALLOWED_ORIGINS = parseAllowedOrigins([
@@ -40,6 +41,12 @@ Deno.serve(async (req) => {
     // Auth + org-toegang. Lezen mag elk actief lid (ook viewer).
     const user = await requireUser(req);
     const role = await requireOrganizationAccess(user.id, organizationId);
+    // Staat de module Gerrie voor dit teamlid dicht, dan is de assistent er niet —
+    // ook niet via een directe aanroep. De RLS op de ai_*-tabellen weegt dat al,
+    // maar deze functie draait met de service-role en komt daar niet langs.
+    if (await getModuleLevel(supabaseAdmin, user.id, organizationId, 'gerrie') === 'none') {
+      throw new HttpError('Je hebt in deze organisatie geen toegang tot Gerrie.', 403);
+    }
 
     // Een uitgevoerde/mislukte actie loggen — gewone JSON, geen AI-call nodig.
     if (String(body.action || '') === 'confirm') {
@@ -92,6 +99,14 @@ Deno.serve(async (req) => {
     const modelKind = resolveModelKind(body.modelKind);
     if (!message) throw new HttpError('Leeg bericht.', 400);
     if (message.length > 4000) throw new HttpError('Bericht is te lang.', 400);
+    // Een gesprek is persoonlijk (RLS per gebruiker), maar deze functie draait met
+    // de service-role: dus hier zelf nagaan dat het meegegeven gesprek van jou is,
+    // anders lees en schrijf je in de geschiedenis van een collega.
+    if (conversationId) {
+      const { data: conversation } = await supabaseAdmin.from('ai_conversations')
+        .select('id').eq('id', conversationId).eq('organization_id', organizationId).eq('created_by', user.id).maybeSingle();
+      if (!conversation) throw new HttpError('Dit gesprek bestaat niet (meer).', 404);
+    }
 
     // Alles is gevalideerd -> open de SSE-stream en doe het werk asynchroon.
     return streamResponse(req, async (emit) => {

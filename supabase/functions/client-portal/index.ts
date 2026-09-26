@@ -678,8 +678,13 @@ async function downloadSharedFile(user: { id: string; email: string }, body: Rec
     throw new PortalError('Het bestand staat in private opslag, maar de storage-koppeling ontbreekt.', 500);
   }
 
+  // De sleutel komt uit een rij die een teamlid zelf schrijft: hij moet onder de
+  // map van déze organisatie liggen, anders haalt de service-role andermans object op.
+  if (!item.storage_key.startsWith(`${share.organization_id}/`) || item.storage_key.includes('..')) {
+    throw new PortalError('Dit bestand hoort niet bij deze deling.', 403);
+  }
   const response = await fetch(`${MEDIA_WORKER_URL}/internal/media/${encodeURIComponent(item.storage_key)}`, {
-    headers: { Authorization: `Bearer ${MEDIA_INTERNAL_SECRET}` },
+    headers: { Authorization: `Bearer ${MEDIA_INTERNAL_SECRET}`, 'x-organization-id': String(share.organization_id) },
   });
   if (!response.ok) {
     if (response.status === 404) throw new PortalError('Dit bestand is niet meer beschikbaar.', 404);
