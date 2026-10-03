@@ -39,7 +39,7 @@ Voor de meting zijn 180 vragen gebruikt zoals iemand ze stelt, verdeeld over all
 
 Daarna volgde een tweede set van 60 andere formuleringen. Die is pas geschreven nadat de woorden gekozen waren, en leverde nog één trefwoord op ("reactie" bij offertes). Het aantal gevonden vragen ging van 36 naar 59 en het aantal op plek 1 van 12 naar 42.
 
-In de eerste set missen er nog twee: "wie heeft er een afspraak geboekt" en "wie zitten er in het team". Woorden als "wie", "een" en "het" tellen bij het zoeken gewoon mee, waardoor handelingen met zo'n woord in hun label winnen. Dat los je niet op met trefwoorden, maar in het zoeken zelf, met een lijst stopwoorden.
+In de eerste set missen er nog twee: "wie heeft er een afspraak geboekt" en "wie zitten er in het team". Woorden als "wie", "een" en "het" tellen bij het zoeken gewoon mee, waardoor handelingen met zo'n woord in hun label winnen. Dat los je niet op met trefwoorden, maar in het zoeken zelf, met een lijst stopwoorden. Die is er inmiddels: zie [CHANGELOG_ZOEKEN_STOPWOORDEN_2026-10-03.md](CHANGELOG_ZOEKEN_STOPWOORDEN_2026-10-03.md).
 
 ## De registry blijft vindbaar
 

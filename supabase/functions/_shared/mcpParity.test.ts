@@ -282,6 +282,12 @@ const SEARCH_CASES: Array<[string, string]> = [
   ['contract opstellen', 'propose_contract'],
   ['nieuwsbrief maken', 'propose_campaign'],
   ['bankmutaties bekijken', 'list_bank_transactions'],
+  // Vragen vol vulwoorden, die sinds STOPWORDS (actions/registry.ts) niet meer
+  // meetellen. Bij de eerste moest daarvoor "betaald" bij de trefwoorden: verder
+  // raakte list_invoices alleen "facturen", en dat doen er veel. Bij de tweede won
+  // eerst wat toevallig "een" of "heeft" in zijn label had.
+  ['welke facturen zijn nog niet betaald', 'list_invoices'],
+  ['wie heeft er een afspraak geboekt', 'list_bookings'],
 ];
 
 test('de kerntools zijn te vinden met de woorden van de gebruiker', () => {

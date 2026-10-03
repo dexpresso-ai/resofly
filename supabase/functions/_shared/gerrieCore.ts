@@ -2308,7 +2308,7 @@ const TOOL_LABELS: Record<string, string> = {
 const TOOL_KEYWORDS: Record<string, string[]> = {
   // Lezen
   search_clients: ['klant', 'zoeken', 'vinden', 'klantgegevens', 'gegevens', 'klantenlijst', 'relatie', 'opdrachtgever', 'bedrijf'],
-  list_invoices: ['factuur', 'verkoopfactuur', 'onbetaald', 'openstaand', 'te laat', 'verlopen', 'vervallen', 'achterstallig', 'verstuurd'],
+  list_invoices: ['factuur', 'verkoopfactuur', 'betaald', 'onbetaald', 'openstaand', 'te laat', 'verlopen', 'vervallen', 'achterstallig', 'verstuurd'],
   list_quotes: ['offerte', 'prijsopgave', 'geaccepteerd', 'afgewezen', 'reactie', 'verlopen', 'verstuurd'],
   get_financial_summary: ['omzet', 'cijfers', 'cashflow', 'gefactureerd', 'ontvangen', 'verdiend', 'inkomsten', 'financiën'],
   list_projects: ['project', 'lopend', 'actief', 'opdracht', 'opdrachten', 'klus', 'klussen'],

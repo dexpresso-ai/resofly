@@ -301,7 +301,7 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       'Zet de status van een factuur met de hand. Dit is ook de manier om een BETALING TE REGISTREREN die buiten Mollie om binnenkwam: zet hem op "paid" en de factuur verdwijnt uit de debiteurenstand en uit de herinneringsflow. ' +
       'draft = concept, sent = verzonden, overdue = te laat, paid = betaald, cancelled = geannuleerd, void = ongeldig gemaakt, written_off = afgeboekt (oninbaar). ' +
       'Let op: "void" en "written_off" zijn feitelijk eindstations, en de bedragen zelf verander je hiermee niet. Zoek de factuur met `list_invoices`.',
-    keywords: ['status', 'betaald', 'betaling registreren', 'markeren', 'voldaan', 'geannuleerd', 'afboeken', 'oninbaar', 'storneren', 'debiteuren'],
+    keywords: ['factuur', 'status', 'betaald', 'op betaald zetten', 'betaling registreren', 'markeren', 'voldaan', 'geannuleerd', 'afboeken', 'oninbaar', 'storneren', 'debiteuren'],
     input: {
       invoice_id: { type: 'string', description: 'Id van de factuur (exact, uit list_invoices).' },
       status: { type: 'string', enum: [...INVOICE_STATUS], description: 'De nieuwe status.' },

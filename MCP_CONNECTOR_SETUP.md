@@ -49,7 +49,8 @@ klaarzetten" is één samengesteld woord, en "factuur maken" vond `propose_invoi
 daardoor niet. Sinds oktober 2026 hebben de kerntools daarom eigen trefwoorden,
 net als de handelingen in de registry (`TOOL_KEYWORDS` in `gerrieCore.ts`). Een
 trefwoord telt even zwaar als het label: houd het bij het eigen onderwerp, anders
-duwt het een handeling die beter past omlaag.
+duwt het een handeling die beter past omlaag. Vulwoorden als "een", "van" en
+"heeft" tellen bij het zoeken niet mee (`STOPWORDS` in `actions/registry.ts`).
 
 Twee dingen krijgt een gekoppelde AI bewust niet:
 
