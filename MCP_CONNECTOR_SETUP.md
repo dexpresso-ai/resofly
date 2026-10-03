@@ -44,6 +44,13 @@ gegevens bijgekomen: een kerntool loopt langs exact dezelfde `runGerrieTool` en
 `buildProposal` als de chat, met dezelfde rol- en modulecontrole. Er is alleen een
 tweede manier bijgekomen om die ene weg te vínden.
 
+Vinden gaat op woorden, en daar schoot het label tekort. "Conceptfactuur
+klaarzetten" is één samengesteld woord, en "factuur maken" vond `propose_invoice`
+daardoor niet. Sinds oktober 2026 hebben de kerntools daarom eigen trefwoorden,
+net als de handelingen in de registry (`TOOL_KEYWORDS` in `gerrieCore.ts`). Een
+trefwoord telt even zwaar als het label: houd het bij het eigen onderwerp, anders
+duwt het een handeling die beter past omlaag.
+
 Twee dingen krijgt een gekoppelde AI bewust niet:
 
 - **`propose_create_agent`** — een agent bouwen die daarna vanzelf draait en zelf
@@ -54,7 +61,8 @@ Twee dingen krijgt een gekoppelde AI bewust niet:
   scherm en betekenen niets aan de andere kant van een JSON-RPC-verbinding.
 
 `mcpParity.test.ts` bewaakt allebei, en bewaakt ook dat elke tool waar een
-omschrijving naar verwijst via de MCP te bereiken is.
+omschrijving naar verwijst via de MCP te bereiken is, dat de kerntools met
+gewone woorden te vinden zijn en dat ze de registry daarbij niet verdringen.
 
 ### De drie standen
 

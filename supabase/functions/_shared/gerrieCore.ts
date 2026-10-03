@@ -2287,6 +2287,95 @@ const TOOL_LABELS: Record<string, string> = {
 };
 
 /**
+ * Zoekwoorden per kerntool, voor `find_actions` van een gekoppelde AI (MCP en de
+ * openbare API).
+ *
+ * In de chat staan deze tools gewoon in Gerrie's lijst. Een gekoppelde AI moet ze
+ * eerst VINDEN, en zoekt dan met de woorden van de gebruiker — en daar is het label
+ * alleen te smal voor. "Conceptfactuur klaarzetten" is één samengesteld woord, en
+ * het zoeken vergelijkt op het begin van een woord: "factuur maken" vond
+ * `propose_invoice` daardoor niet — en wat het model niet vindt, bestaat voor hem
+ * niet. De handelingen in de registry hebben om dezelfde reden allemaal `keywords`.
+ *
+ * Schrijf de woorden die iemand gebruikt, niet hoe de code heet: het werkwoord
+ * ("maken", "opstellen", "sturen"), het losse woord naast de samenstelling
+ * ("factuur" naast "conceptfactuur") en een meervoud dat van de stam afwijkt
+ * ("taak" en "taken"). Laat "klaarzetten" weg, dat staat in elk label en zegt
+ * niets. En houd ze bij het eigen onderwerp: een trefwoord telt net zo zwaar als
+ * het label, dus een woord dat eigenlijk bij een ándere handeling hoort, duwt die
+ * omlaag. mcpParity.test.ts toetst beide kanten.
+ */
+const TOOL_KEYWORDS: Record<string, string[]> = {
+  // Lezen
+  search_clients: ['klant', 'zoeken', 'vinden', 'klantgegevens', 'gegevens', 'klantenlijst', 'relatie', 'opdrachtgever', 'bedrijf'],
+  list_invoices: ['factuur', 'verkoopfactuur', 'onbetaald', 'openstaand', 'te laat', 'verlopen', 'vervallen', 'achterstallig', 'verstuurd'],
+  list_quotes: ['offerte', 'prijsopgave', 'geaccepteerd', 'afgewezen', 'reactie', 'verlopen', 'verstuurd'],
+  get_financial_summary: ['omzet', 'cijfers', 'cashflow', 'gefactureerd', 'ontvangen', 'verdiend', 'inkomsten', 'financiën'],
+  list_projects: ['project', 'lopend', 'actief', 'opdracht', 'opdrachten', 'klus', 'klussen'],
+  list_tasks: ['taak', 'takenlijst', 'todo', 'te doen', 'subtaken', 'werkvoorraad'],
+  list_tickets: ['ticket', 'open', 'supportvraag', 'support', 'melding', 'klacht', 'storing', 'helpdesk', 'servicedesk'],
+  list_due_reminders: ['herinnering', 'betalingsherinnering', 'beurt', 'te laat', 'achterstallig', 'wanbetaler'],
+  list_calendars: ['agenda', 'gekoppeld', 'google', 'outlook', 'microsoft', 'agendakoppeling'],
+  suggest_meeting_slots: ['vrij', 'tijd', 'beschikbaar', 'beschikbaarheid', 'wanneer', 'tijdstip', 'tijdslot', 'gaatje', 'ruimte', 'reistijd'],
+  list_time_entries: ['uren', 'uur', 'urenregistratie', 'gewerkt', 'geschreven', 'tijdregistratie', 'declarabel', 'urenoverzicht'],
+  list_contracts: ['contract', 'overeenkomst', 'ondertekend', 'getekend', 'handtekening', 'tekenen'],
+  list_contract_templates: ['contractsjabloon', 'sjabloon', 'sjablonen', 'template', 'standaardcontract', 'modelcontract', 'voorbeeldcontract'],
+  list_campaigns: ['campagne', 'nieuwsbrief', 'mailing', 'e-mailstroom', 'follow-up', 'verstuurd'],
+  list_galleries: ['galerij', 'fotogalerij', 'oplevering', 'foto', 'beelden', 'video', 'deellink', 'gepubliceerd'],
+  list_content: ['notitie', 'document', 'aantekening', 'klant', 'dossier', 'klantdossier', 'verslag', 'memo'],
+  list_bookings: ['boeking', 'geboekt', 'afspraken', 'boekingslink', 'calendly', 'reservering', 'ingepland'],
+  list_suppliers: ['leverancier', 'crediteur', 'leverancierslijst'],
+  list_purchase_invoices: ['inkoopfactuur', 'leveranciersfactuur', 'kosten', 'uitgaven', 'rekeningen', 'betalen', 'onbetaald', 'bonnetjes'],
+  list_ledger_accounts: ['grootboek', 'grootboekrekening', 'rekeningschema', 'rekeningcode', 'kostenrekening', 'omzetrekening'],
+  list_journal_entries: ['journaalpost', 'memoriaal', 'memoriaalboeking', 'boekstuk', 'grootboekmutaties', 'debet', 'credit'],
+  list_bank_transactions: ['bank', 'banktransactie', 'bankmutaties', 'mutaties', 'afschrift', 'bankafschrift', 'betalingen', 'ontvangsten', 'binnengekomen'],
+  list_vat_returns: ['btw-aangifte', 'aangifte', 'omzetbelasting', 'kwartaal'],
+  list_fiscal_years: ['boekjaar', 'jaarafsluiting', 'afgesloten', 'gebroken boekjaar'],
+  list_calendar_events: ['agenda', 'afspraak', 'afspraken', 'planning', 'meeting', 'vergadering', 'overleg', 'agenda-item', 'vandaag', 'morgen'],
+  list_client_contacts: ['contactpersoon', 'contact', 'aanspreekpunt', 'telefoonnummer', 'e-mailadres', 'portaaltoegang'],
+  list_team_members: ['team', 'teamlid', 'collega', 'medewerker', 'personeel', 'gebruikers'],
+  // Klaarzetten
+  propose_client: ['klant', 'nieuwe klant', 'toevoegen', 'aanmaken', 'lead', 'prospect', 'relatie', 'opdrachtgever', 'invoeren'],
+  propose_edit_client: ['klant', 'klantgegevens', 'wijzigen', 'aanpassen', 'bijwerken', 'adres', 'e-mailadres', 'telefoonnummer', 'inactief'],
+  propose_invoice: ['factuur', 'verkoopfactuur', 'factureren', 'uren factureren', 'nieuwe factuur', 'concept', 'maken', 'aanmaken', 'opstellen', 'schrijven'],
+  propose_edit_invoice: ['factuur', 'conceptfactuur', 'wijzigen', 'aanpassen', 'bijwerken', 'factuurregel', 'bedrag', 'vervaldatum'],
+  propose_quote: ['offerte', 'prijsopgave', 'prijsvoorstel', 'begroting', 'nieuwe offerte', 'concept', 'maken', 'aanmaken', 'opstellen', 'schrijven', 'uitbrengen'],
+  propose_edit_quote: ['offerte', 'conceptofferte', 'wijzigen', 'aanpassen', 'bijwerken', 'offerteregel', 'prijs', 'bedrag', 'geldigheid'],
+  propose_send_invoices: ['facturen', 'versturen', 'sturen', 'mailen', 'meerdere', 'tegelijk', 'batch', 'conceptfacturen'],
+  propose_send_quotes: ['offertes', 'versturen', 'sturen', 'mailen', 'meerdere', 'tegelijk', 'batch'],
+  propose_send_invoice: ['factuur', 'versturen', 'sturen', 'opsturen', 'verzenden', 'mailen'],
+  propose_send_quote: ['offerte', 'versturen', 'sturen', 'opsturen', 'verzenden', 'mailen'],
+  propose_send_client_email: ['mail', 'mailen', 'mailtje', 'emailen', 'bericht', 'sturen', 'versturen', 'schrijven', 'klant'],
+  propose_send_reminders: ['herinnering', 'betalingsherinnering', 'versturen', 'sturen', 'openstaand', 'te laat', 'achterstallig', 'wanbetaler', 'beurt'],
+  propose_convert_quote: ['offerte', 'factuur', 'omzetten', 'factureren', 'geaccepteerd', 'akkoord', 'doorzetten', 'overzetten'],
+  propose_project: ['project', 'nieuw project', 'aanmaken', 'maken', 'starten', 'opzetten', 'opdracht', 'nieuwe opdracht', 'klus'],
+  propose_edit_project: ['project', 'wijzigen', 'aanpassen', 'bijwerken', 'projectstatus', 'afronden', 'afsluiten', 'archiveren', 'deadline', 'einddatum', 'hernoemen'],
+  propose_task: ['taak', 'nieuwe taak', 'todo', 'aanmaken', 'toevoegen', 'maken', 'klusje'],
+  propose_create_tasks: ['taken', 'takenlijst', 'meerdere', 'actiepunten', 'notulen', 'lijst', 'tegelijk', 'aanmaken'],
+  propose_edit_task: ['taak', 'wijzigen', 'aanpassen', 'afvinken', 'afronden', 'klaar', 'gedaan', 'prioriteit', 'deadline', 'verzetten', 'inplannen', 'subtaak', 'subtaken'],
+  propose_week_action: ['weekplanner', 'weekplanning', 'actiepunt', 'week', 'checklist', 'todo'],
+  propose_calendar_event: ['afspraak', 'nieuwe afspraak', 'inplannen', 'plannen', 'maken', 'meeting', 'vergadering', 'overleg', 'call', 'videocall', 'bijeenkomst'],
+  propose_time_entry: ['uren', 'uur', 'schrijven', 'registreren', 'boeken', 'invullen', 'loggen', 'tijd', 'tijdregistratie', 'urenregistratie', 'gewerkt'],
+  propose_edit_time_entry: ['uren', 'uur', 'urenregistratie', 'corrigeren', 'aanpassen', 'wijzigen', 'verbeteren', 'declarabel'],
+  propose_edit_calendar_event: ['afspraak', 'verzetten', 'verplaatsen', 'verschuiven', 'aanpassen', 'locatie', 'meeting'],
+  propose_cancel_calendar_event: ['afspraak', 'afzeggen', 'annuleren', 'verwijderen', 'schrappen', 'cancelen', 'meeting'],
+  propose_client_contact: ['contactpersoon', 'nieuwe contactpersoon', 'contact', 'aanspreekpunt', 'toevoegen', 'aanmaken'],
+  propose_edit_client_contact: ['contactpersoon', 'wijzigen', 'aanpassen', 'bijwerken', 'telefoonnummer', 'e-mailadres', 'functie', 'portaaltoegang'],
+  propose_project_team: ['projectteam', 'team', 'teamlid', 'teamleden', 'collega', 'project', 'toevoegen', 'meewerken', 'bezetting'],
+  propose_task_assign: ['taak', 'toewijzen', 'toekennen', 'collega', 'teamlid', 'delegeren', 'overdragen', 'verdelen'],
+  propose_supplier: ['leverancier', 'crediteur', 'nieuwe leverancier', 'toevoegen', 'aanmaken', 'invoeren'],
+  propose_purchase_invoice: ['inkoopfactuur', 'leveranciersfactuur', 'leverancier', 'kosten', 'uitgave', 'bon', 'bonnetje', 'invoeren', 'inboeken'],
+  propose_contract: ['contract', 'overeenkomst', 'samenwerkingsovereenkomst', 'opdrachtbevestiging', 'nieuw contract', 'opstellen', 'maken', 'aanmaken', 'schrijven'],
+  propose_campaign: ['campagne', 'nieuwsbrief', 'mailing', 'e-mailcampagne', 'opstellen', 'maken', 'schrijven', 'concept', 'marketing'],
+  propose_note: ['notitie', 'aantekening', 'memo', 'verslag', 'gespreksverslag', 'noteren', 'opschrijven', 'vastleggen', 'toevoegen', 'maken'],
+  propose_document: ['document', 'werkdocument', 'handleiding', 'procedure', 'werkinstructie', 'opstellen', 'maken', 'schrijven'],
+  propose_ticket: ['ticket', 'nieuw ticket', 'melding', 'supportvraag', 'support', 'storing', 'klacht', 'probleem', 'aanmaken', 'vastleggen', 'openen'],
+  propose_edit_ticket: ['ticket', 'wijzigen', 'aanpassen', 'status', 'prioriteit', 'afsluiten', 'sluiten', 'oplossen', 'opgelost', 'afgehandeld', 'heropenen'],
+  propose_ticket_note: ['ticket', 'reageren', 'reactie', 'antwoord', 'beantwoorden', 'notitie', 'interne notitie'],
+  propose_report: ['rapportage', 'rapport', 'grafiek', 'diagram', 'statistieken', 'analyse', 'dashboard', 'overzicht'],
+};
+
+/**
  * Tools die een GEPLANDE agent nooit mag, ongeacht wat iemand aanvinkt.
  * Een onbewaakte agent hoort geen nieuwe agents te laten maken — dat is een
  * chat-handeling waar een mens bij zit.
@@ -2453,6 +2542,7 @@ const GERRIE_CORE_ACTIONS: ActionDef[] = (TOOL_DEFINITIONS as unknown as RawTool
     module: TOOL_MODULE[t.name] ?? TOOL_MODULE_FALLBACK,
     kind: t.name.startsWith('propose_') ? 'write' as const : 'read' as const,
     description: t.description,
+    keywords: TOOL_KEYWORDS[t.name],
     input: t.input_schema?.properties ?? {},
     required: t.input_schema?.required ?? [],
   }));
