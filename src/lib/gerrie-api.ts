@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { isMissingColumn } from './postgrestErrors';
 import type { ReportDefinition } from './reporting';
 import type { UUID } from '../types';
 
@@ -884,12 +885,13 @@ export interface AgentApproval {
    *
    * 'agent' — een geplande Gerrie-agent, ons eigen model binnen onze eigen app.
    * 'mcp'   — de eigen AI van een teamlid, gekoppeld van buitenaf.
+   * 'api'   — andere software, via een API-sleutel (webshop, Zapier, …).
    *
    * Dat onderscheid hoort zichtbaar te zijn en niet weggepoetst: een voorstel
-   * van een model dat niet van ons is, lees je met andere ogen dan een voorstel
-   * van een agent die iemand hier zelf heeft ingericht.
+   * van een model of programma dat niet van ons is, lees je met andere ogen dan
+   * een voorstel van een agent die iemand hier zelf heeft ingericht.
    */
-  source: 'agent' | 'mcp';
+  source: 'agent' | 'mcp' | 'api';
 }
 
 /**
@@ -907,22 +909,35 @@ export interface AgentApproval {
  * neutraal label in plaats van de hele kaart te laten mislukken.
  */
 export async function listPendingAgentApprovals(organizationId: UUID, limit = 30): Promise<AgentApproval[]> {
-  // Twee soorten voorstellen wachten hier: die van een geplande agent, en die van
-  // een gekoppelde AI (MCP). Allebei zijn ze headless klaargezet terwijl er
-  // niemand keek — precies waarvoor deze wachtrij bestaat.
-  const { data, error } = await supabase.from('ai_action_audit')
-    .select('id, params, created_at, agent_id, agent_run_id, mcp_grant_id, result')
+  // Drie soorten voorstellen wachten hier: die van een geplande agent, die van
+  // een gekoppelde AI (MCP) en die van een API-sleutel. Alle drie zijn ze
+  // headless klaargezet terwijl er niemand keek — precies waarvoor deze wachtrij
+  // bestaat.
+  const pending = (columns: string, sources: string) => supabase.from('ai_action_audit')
+    .select(columns)
     .eq('organization_id', organizationId)
     .eq('status', 'proposed')
-    .or('agent_run_id.not.is.null,mcp_grant_id.not.is.null')
+    .or(sources)
     .order('created_at', { ascending: false })
     .limit(limit);
+  let { data, error } = await pending(
+    'id, params, created_at, agent_id, agent_run_id, mcp_grant_id, api_key_id, result',
+    'agent_run_id.not.is.null,mcp_grant_id.not.is.null,api_key_id.not.is.null',
+  );
+  // De app loopt vóór op de database: zonder de API-migratie bestaat de kolom
+  // api_key_id nog niet. Dan de wachtrij zoals hij was, in plaats van leeg.
+  if (error && isMissingColumn(error, 'api_key_id')) {
+    ({ data, error } = await pending(
+      'id, params, created_at, agent_id, agent_run_id, mcp_grant_id, result',
+      'agent_run_id.not.is.null,mcp_grant_id.not.is.null',
+    ));
+  }
   if (error) throw new Error(error.message);
 
-  const rows = (data ?? []) as Array<{
+  const rows = (data ?? []) as unknown as Array<{
     id: string; params: unknown; created_at: string;
     agent_id: string | null; agent_run_id: string | null;
-    mcp_grant_id: string | null; result: { via?: string } | null;
+    mcp_grant_id: string | null; api_key_id?: string | null; result: { via?: string } | null;
   }>;
   const valid = rows.filter((r) => r.params && typeof (r.params as GerrieProposal).type === 'string');
   if (valid.length === 0) return [];
@@ -940,20 +955,24 @@ export async function listPendingAgentApprovals(organizationId: UUID, limit = 30
   return valid.map((r) => {
     const meta = r.agent_id ? names.get(r.agent_id) : undefined;
     const fromMcp = Boolean(r.mcp_grant_id);
-    // De naam van de koppeling staat in de rij zelf en niet in mcp_grants: die
-    // tabel geeft via RLS alleen je EIGEN koppelingen, en deze wachtrij is van
-    // het hele team. Zonder die kopie stond hier bij het voorstel van een
-    // collega geen afzender.
+    const fromApi = !fromMcp && Boolean(r.api_key_id);
+    // De naam van de koppeling of sleutel staat in de rij zelf en niet in
+    // mcp_grants/api_keys: die tabellen geven via RLS niet altijd de rijen van
+    // collega's, en deze wachtrij is van het hele team. Zonder die kopie stond
+    // hier bij het voorstel van een collega geen afzender.
+    const external = fromMcp || fromApi;
     return {
       auditId: String(r.id),
       proposal: r.params as GerrieProposal,
       createdAt: r.created_at,
       runId: (r.agent_run_id as UUID | null) ?? null,
       agentId: (r.agent_id as UUID | null) ?? null,
-      agentName: fromMcp ? (r.result?.via?.trim() || 'Een gekoppelde AI') : (meta?.name ?? 'Gerrie-agent'),
-      agentIcon: fromMcp ? null : (meta?.icon ?? null),
-      agentHue: fromMcp ? null : (meta?.hue ?? null),
-      source: fromMcp ? 'mcp' as const : 'agent' as const,
+      agentName: fromMcp
+        ? (r.result?.via?.trim() || 'Een gekoppelde AI')
+        : fromApi ? (r.result?.via?.trim() || 'Een API-koppeling') : (meta?.name ?? 'Gerrie-agent'),
+      agentIcon: external ? null : (meta?.icon ?? null),
+      agentHue: external ? null : (meta?.hue ?? null),
+      source: fromMcp ? 'mcp' as const : fromApi ? 'api' as const : 'agent' as const,
     };
   });
 }

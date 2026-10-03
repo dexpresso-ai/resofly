@@ -10895,6 +10895,29 @@ body.ink-sheet-open{overflow:hidden}
 .mcp-connections-heading:first-of-type{margin-top:4px}
 .mcp-connections-hint{font-size:12px;line-height:1.55;color:var(--muted2);margin:0 0 10px}
 
+/* ── API & webhooks (Instellingen) ──────────────────────────────────────
+   Leunt bewust op de kaart van de AI-koppelingen (.mcp-connections-*,
+   .mcp-connection-switch) en op .dns-record: het is dezelfde soort keuze — wie
+   mag er van buiten bij, en hoe ver — en dat hoort er hetzelfde uit te zien. */
+.api-integrations .dns-record{margin-bottom:8px}
+.api-key-form{display:flex;flex-direction:column;gap:12px;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px 14px}
+.api-key-access{display:flex;flex-direction:column;gap:9px;border:0;margin:0;padding:0;min-width:0}
+.api-key-access legend{font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px;padding:0}
+.api-key-modules{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
+.api-key-modules label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted2)}
+/* De net aangemaakte sleutel: één keer te zien, dus het mag opvallen. */
+.api-key-fresh{display:flex;flex-direction:column;gap:10px;margin:8px 0 4px}
+.api-key-fresh .dns-record{background:var(--bg2);margin-bottom:0}
+.api-key-fresh .mcp-connections-hint{margin:0}
+.api-link-button{background:none;border:0;padding:0;color:var(--accent-ink);font:inherit;text-decoration:underline;cursor:pointer}
+.api-request-log{display:flex;flex-direction:column;gap:8px;overflow-x:auto}
+.api-request-log table{width:100%;border-collapse:collapse;font-size:12px}
+.api-request-log th{text-align:left;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:6px 8px;border-bottom:1px solid var(--border)}
+.api-request-log td{padding:6px 8px;border-bottom:1px solid var(--border);color:var(--muted2);vertical-align:top}
+.api-request-log td code{font-size:11.5px;word-break:break-all}
+.api-request-log tr.is-error td{color:var(--accent-r)}
+.api-request-log-actions{display:flex;gap:8px}
+
 /* ── Factuur-inbox (inkoopfacturen per e-mail) ─────────────────────────── */
 .pi-inbox{display:flex;flex-direction:column;gap:12px;border:1px solid var(--border);border-radius:18px;padding:14px 16px;background:rgba(var(--sheen-rgb),calc(.022 * var(--sheen-k)))}
 .pi-inbox-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}

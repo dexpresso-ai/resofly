@@ -29,6 +29,11 @@ const TOKEN_PREFIX = 'rsfmcp';
 const SELECTOR_BYTES = 16;
 const VERIFIER_BYTES = 32;
 
+// Dezelfde vorm dient ook de API-sleutels van de openbare API (`rsfapi.…`, zie
+// publicApi.ts). Het voorvoegsel is daar geen versiering: een sleutel van de
+// ene deur hoort bij de andere al op de vorm te stranden, nog vóór er een
+// database aan te pas komt.
+
 export interface NewToken {
   /** Wat de client krijgt. Bestaat hierna nergens meer in leesbare vorm. */
   plain: string;
@@ -40,22 +45,22 @@ export interface NewToken {
   hash: string;
 }
 
-export async function createToken(): Promise<NewToken> {
+export async function createToken(prefix = TOKEN_PREFIX): Promise<NewToken> {
   const selector = base64Url(randomBytes(SELECTOR_BYTES));
   const verifier = base64Url(randomBytes(VERIFIER_BYTES));
   const salt = base64Url(randomBytes(16));
-  return { plain: `${TOKEN_PREFIX}.${selector}.${verifier}`, selector, verifier, salt, hash: await hashVerifier(verifier, salt) };
+  return { plain: `${prefix}.${selector}.${verifier}`, selector, verifier, salt, hash: await hashVerifier(verifier, salt) };
 }
 
 /**
  * Splitst een aangeboden token. Geeft null bij alles wat niet klopt — een
  * ontbrekend deel, een verkeerd voorvoegsel, of een extra punt erin.
  */
-export function parseToken(plain: string): { selector: string; verifier: string } | null {
+export function parseToken(plain: string, expectedPrefix = TOKEN_PREFIX): { selector: string; verifier: string } | null {
   const parts = String(plain || '').trim().split('.');
   if (parts.length !== 3) return null;
   const [prefix, selector, verifier] = parts;
-  if (prefix !== TOKEN_PREFIX) return null;
+  if (prefix !== expectedPrefix) return null;
   if (!selector || !verifier) return null;
   if (!isBase64Url(selector) || !isBase64Url(verifier)) return null;
   return { selector, verifier };

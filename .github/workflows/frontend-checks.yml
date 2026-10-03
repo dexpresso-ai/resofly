@@ -62,7 +62,8 @@ jobs:
           deno-version: v2.x
 
       # De lijst hieronder is alles wat schoon door `deno check` komt: 28 van de
-      # 33 edge-functies, gemeten op 18 september. Vijf staan er nog buiten
+      # 33 edge-functies, gemeten op 18 september, plus wat er sindsdien bij kwam
+      # (de openbare API: api en api-admin). Vijf staan er nog buiten
       # (bank-sync, client-portal, invoice-public, invoice-workflow,
       # quote-workflow); die struikelen allemaal over dezelfde TS 6-strengheid
       # waarbij een kaal `Uint8Array` generiek is over ArrayBufferLike en dus
@@ -73,6 +74,8 @@ jobs:
         run: |
           deno check \
             supabase/functions/annual-accounts/index.ts \
+            supabase/functions/api-admin/index.ts \
+            supabase/functions/api/index.ts \
             supabase/functions/billing/index.ts \
             supabase/functions/calendar-integrations/index.ts \
             supabase/functions/campaigns/index.ts \

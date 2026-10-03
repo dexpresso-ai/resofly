@@ -170,12 +170,12 @@ export function Sidebar({
     return () => { document.removeEventListener('mousedown', onPointer); document.removeEventListener('keydown', onKey); };
   }, [userMenuOpen]);
 
-  // AI-gebruik is alleen zichtbaar voor owners/admins, en de agenda-instellingen
+  // AI-gebruik en API-sleutels zijn alleen zichtbaar voor owners/admins, en de agenda-instellingen
   // alleen als de agenda-module openstaat — zelfde regels als op de
   // instellingenpagina zelf.
   const canAdmin = activeRole === 'owner' || activeRole === 'admin';
   const settingsTabs = SETTINGS_TABS.filter(tab => {
-    if (tab.id === 'ai') return canAdmin;
+    if (tab.id === 'ai' || tab.id === 'api') return canAdmin;
     if (tab.id === 'agenda') return permissions.canRead('calendar');
     return true;
   });

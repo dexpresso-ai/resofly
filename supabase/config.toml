@@ -183,3 +183,26 @@ verify_jwt = false
 # aanrichten: dit is de actuele stand.
 [functions.mcp]
 verify_jwt = false
+
+# api is de openbare API: hier praat andere software (een webshop, een urenapp,
+# Zapier/Make/n8n). De aanroeper heeft geen Supabase-sessie; hij authenticeert
+# met een API-sleutel (`rsfapi.…`) die een owner/admin aanmaakt. Die sleutel
+# wordt bij elke aanroep gecontroleerd (gesalte SHA-256 in api_key_secrets) en
+# teruggeleid naar één teamlid in één organisatie; rol en modulerechten komen
+# per aanroep vers uit organization_members, met de beperking van de sleutel
+# erbovenop.
+#
+# Wat deze functie zonder JWT-controle kan: lezen wat het teamlid mag lezen;
+# wijzigingen KLAARZETTEN in de goedkeurwachtrij; en — alleen als de sleutel
+# met toegangsniveau execute/execute_high is aangemaakt — handelingen met een
+# server-uitvoerder (DIRECT_APPLIERS) rechtstreeks uitvoeren. Precies dezelfde
+# grenzen als de MCP hieronder.
+[functions.api]
+verify_jwt = false
+
+# api-admin beheert de API vanuit de app (sleutels aanmaken). Aangeroepen door
+# ingelogde owners/admins: de functie verifieert zelf requireUser() +
+# requireOrganizationAccess() + rol owner/admin, plus een origin-allowlist. Zelfde
+# patroon als de andere app-functies die CORS-preflight zelf afhandelen.
+[functions.api-admin]
+verify_jwt = false

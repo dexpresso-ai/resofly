@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowRight, Bot, CalendarClock, Check, ChevronRight, ClipboardCheck, Coins, Link2, ListChecks, Loader2, Mail, RefreshCw, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bot, CalendarClock, Check, ChevronRight, ClipboardCheck, Coins, Link2, ListChecks, Loader2, Mail, RefreshCw, Sparkles, Webhook, X } from 'lucide-react';
 import { confirmGerrieAction, listPendingAgentApprovals, type AgentApproval } from '../lib/gerrie-api';
 import type { GerrieActionHandlers } from '../lib/gerrie-api';
 import { executeProposal, openProposal, proposalLabel, type ProposalKind } from '../lib/gerrie-proposals';
@@ -161,6 +161,10 @@ export function AgentApprovals({
                       <span className="ag-queue-mcp" title={`Klaargezet door ${item.agentName}, een gekoppelde AI`}>
                         <Link2 size={16} aria-hidden="true" />
                       </span>
+                    ) : item.source === 'api' ? (
+                      <span className="ag-queue-mcp" title={`Klaargezet door de API-sleutel "${item.agentName}"`}>
+                        <Webhook size={16} aria-hidden="true" />
+                      </span>
                     ) : (
                       <AgentGlyph
                         agent={{ id: item.agentId ?? undefined, name: item.agentName, icon: item.agentIcon, hue: item.agentHue }}
@@ -175,7 +179,7 @@ export function AgentApprovals({
                       </div>
                       <div className="ag-queue-meta">
                         <span className="ag-queue-agent">
-                          {item.agentName}{item.source === 'mcp' && ' · gekoppelde AI'}
+                          {item.agentName}{item.source === 'mcp' && ' · gekoppelde AI'}{item.source === 'api' && ' · API-koppeling'}
                         </span>
                         {info.sub && <span className="ag-queue-sub">{info.sub}</span>}
                         <span className="ag-queue-when">{relativeTime(item.createdAt)}</span>

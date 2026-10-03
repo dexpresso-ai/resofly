@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, BookOpen, CalendarCog, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users } from 'lucide-react';
+import { Bell, BookOpen, CalendarCog, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
@@ -15,6 +15,7 @@ import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholder
 import { ProjectTemplatesManager } from './ProjectTemplates';
 import { ClientFieldsManager } from './ClientFields';
 import { McpConnections } from '../components/McpConnections';
+import { ApiIntegrations } from '../components/ApiIntegrations';
 import { LEVEL_LABELS, MODULES, parseModuleAccess, type ModuleAccess, type ModuleLevel } from '../lib/permissions';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
@@ -77,7 +78,7 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   viewer: 'Viewer',
 };
 
-export type SettingsTab = 'organisatie' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'email';
+export type SettingsTab = 'organisatie' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'api' | 'email';
 
 /**
  * Rechtenraster: per module kiezen tussen geen toegang, alleen lezen en
@@ -139,6 +140,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'betalen', label: 'Online betalen', Icon: CreditCard, description: 'Koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
   { id: 'abonnement', label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
   { id: 'ai', label: 'AI', Icon: Sparkles, description: 'Koppel je eigen AI (Claude, ChatGPT) aan deze werkruimte, en bekijk het verbruik en de kosten van Gerrie per gebruiker.' },
+  { id: 'api', label: 'API & webhooks', Icon: Webhook, description: 'Koppel andere software aan ResoFly — een webshop, je urenapp, Zapier, Make of n8n — met een API-sleutel.' },
   { id: 'email', label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails aan, en verstuur een testmail om je configuratie te controleren.' },
 ];
 
@@ -1321,14 +1323,20 @@ export function Settings({
   // Het AI-tabblad staat voor IEDER teamlid open, ook al is het verbruikscijfer
   // erbinnen alleen voor owners en admins: je eigen AI koppel je persoonlijk,
   // met je eigen rechten, en dan hoor je hem ook zelf te kunnen loskoppelen.
+  //
+  // API & webhooks staat daarentegen alleen open voor owners en admins: een
+  // API-sleutel is een deur naar de hele organisatie, en die geeft niet elk
+  // teamlid uit (api-admin weigert het ook).
   const hasCalendarSettings = Boolean(calendarSettings);
   const visibleTabs = SETTINGS_TABS.filter(tab => {
     if (tab.id === 'agenda') return hasCalendarSettings;
+    if (tab.id === 'api') return canAdminOrganization;
     return true;
   });
   useEffect(() => {
     if (activeTab === 'agenda' && !hasCalendarSettings) setActiveTab('organisatie');
-  }, [activeTab, hasCalendarSettings]);
+    if (activeTab === 'api' && !canAdminOrganization) setActiveTab('organisatie');
+  }, [activeTab, hasCalendarSettings, canAdminOrganization]);
   const canManageRoles = activeMembership?.role === 'owner';
   const activeOwnerCount = organizationContext.teamMembers.filter(member => member.role === 'owner' && member.status === 'active').length;
   const licenseUsage = organizationContext.licenseUsage;
@@ -2606,6 +2614,12 @@ export function Settings({
       {canAdminOrganization
         ? (activeOrganization ? <AiUsagePanel organizationId={activeOrganization.id} members={organizationContext.teamMembers} /> : <p className="settings-help">Geen actieve organisatie geselecteerd.</p>)
         : <p className="settings-help">Alleen owners en admins kunnen het verbruik van Gerrie inzien.</p>}
+    </div>}
+
+    {activeTab === 'api' && <div className="settings-tab-panel">
+      {activeOrganization
+        ? <ApiIntegrations organizationId={activeOrganization.id} canAdmin={canAdminOrganization} teamMembers={organizationContext.teamMembers} />
+        : <p className="settings-help">Geen actieve organisatie geselecteerd.</p>}
     </div>}
 
     {activeTab === 'email' && <div className="settings-tab-panel">
