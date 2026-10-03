@@ -152,9 +152,11 @@ De zevende, uit de herkontrole:
 | `audit_logs_mask_private_calendar` | Trigger: een afspraak, koppeling of agenda in een privé-agenda krijgt in het auditlog een neutraal label ("Privé-afspraak", "Privé-agenda"); bestaande regels worden net zo opgeschoond. |
 | `organization_license_usage()` | Werkt nu ook voor de service role (`team.license_usage`, de plan-stap van `team.invite`); anon kan hem niet aanroepen. |
 
-Op **staging** gebeurt dit vanzelf: de workflow *Deploy Supabase (staging)*
-draait `supabase db push` en `supabase functions deploy` bij elke push naar
-`staging`.
+Op **staging** hoort dit vanzelf te gaan: de workflow *Deploy Supabase
+(staging)* draait `supabase db push` en `supabase functions deploy` bij elke
+push naar `staging` — zodra het GitHub-secret `SUPABASE_DB_PASSWORD` staat. Tot
+dan: `SUPABASE_STAGING_LAPTOP.md` (database, functies, secrets en controle,
+vanaf je laptop).
 
 ## 2. Functies uitrollen
 
