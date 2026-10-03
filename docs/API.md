@@ -31,7 +31,19 @@ curl -s "$RESOFLY_API/v1/actions?q=openstaande%20facturen" -H "Authorization: Be
 curl -s -X POST "$RESOFLY_API/v1/actions/search_clients" \
   -H "Authorization: Bearer $RESOFLY_KEY" -H "Content-Type: application/json" \
   -d '{"query": "jansen"}'
+
+# Of een vast adres: klanten zoeken
+curl -s "$RESOFLY_API/v1/clients?q=jansen" -H "Authorization: Bearer $RESOFLY_KEY"
 ```
+
+Er zijn twee manieren om met gegevens te werken, en ze vullen elkaar aan:
+
+- **Vaste adressen** voor klanten, contactpersonen, projecten, taken, tickets
+  (met reacties) en uren: `GET /v1/clients`, `POST /v1/tasks`,
+  `PATCH /v1/time_entries/{id}`. Een vaste vorm, gewone filters — wat een
+  webshop of een koppelplatform verwacht.
+- **Handelingen** voor al het andere wat de app kan, van een factuur op betaald
+  zetten tot een herinnering versturen: `POST /v1/actions/{id}`.
 
 ## Aanmelden
 
@@ -182,9 +194,105 @@ Je ziet alleen de voorstellen van je eigen sleutel. `status` is één van:
 | `cancelled` | Geannuleerd, bijvoorbeeld omdat de sleutel is ingetrokken. |
 | `approved` | Goedgekeurd, nog niet uitgevoerd (zelden te zien). |
 
+## Vaste adressen: klanten, projecten, taken, tickets en uren
+
+| Adres | Module | Lezen | Aanmaken | Wijzigen |
+|---|---|---|---|---|
+| `/v1/clients` | `clients` | ✓ | ✓ | ✓ |
+| `/v1/contacts` | `clients` | ✓ | ✓ | ✓ |
+| `/v1/projects` | `projects` | ✓ | ✓ | ✓ |
+| `/v1/tasks` | `projects` | ✓ | ✓ | ✓ |
+| `/v1/tickets` | `tickets` | ✓ | ✓ | ✓ |
+| `/v1/tickets/{ticket_id}/notes` | `tickets` | ✓ | ✓ | — |
+| `/v1/time_entries` | `time` | ✓ | ✓ | ✓ |
+
+Elk adres heeft een lijst (`GET /v1/clients`), één item (`GET /v1/clients/{id}`),
+aanmaken (`POST /v1/clients`) en wijzigen (`PATCH /v1/clients/{id}`). Reacties op
+een ticket kun je toevoegen maar niet wijzigen. **Verwijderen kan niet via de
+API**: dat gaat in de app, waar je ziet wat er aan vastzit. Een klant zet je op
+`"status": "inactive"`, een project op `"archived": true`, een contactpersoon op
+`"is_active": false`.
+
+De velden, hun types en de toegestane waarden staan in het OpenAPI-document
+(`/v1/openapi.json`, schema's `Client`, `ClientCreate`, `ClientUpdate`, enzovoort).
+
+### Lezen
+
+```bash
+curl -s "$RESOFLY_API/v1/tasks?project_id=…&status=todo&sort=planned_date&limit=50" \
+  -H "Authorization: Bearer $RESOFLY_KEY"
+```
+
+```json
+{ "data": [ { "id": "…", "title": "Homepage", "status": "todo", "…": "…" } ], "has_more": true, "next_offset": 50 }
+```
+
+| Parameter | |
+|---|---|
+| `q` | Zoeken (klanten: naam, contactpersoon, e-mail, klantnummer; taken en tickets: titel en omschrijving). |
+| filters | Per adres, bijvoorbeeld `status`, `client_id`, `project_id`, `from`/`to` (uren), `is_active` (contactpersonen). |
+| `updated_since`, `created_since` | Alleen wat sinds dat tijdstip veranderde of bijkwam (ISO 8601) — om bij te houden wat er nieuw is. |
+| `sort` | Bijvoorbeeld `-created_at` (standaard), `name`, `-updated_at`. |
+| `limit`, `offset` | Pagineren (standaard 25, max 100). Is `has_more` waar, vraag dan de volgende pagina op met `offset=next_offset`. |
+
+Een onbekende parameter of filterwaarde geeft 400: liever een fout dan een lijst
+die er goed uitziet en niet klopt. Lezen vraagt leesrecht in de module.
+
+### Aanmaken en wijzigen
+
+```bash
+curl -s -X POST "$RESOFLY_API/v1/clients" \
+  -H "Authorization: Bearer $RESOFLY_KEY" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"name": "Jansen BV", "email": "info@jansen.nl", "city": "Utrecht", "tags": ["webshop"]}'
+```
+
+Antwoord: **201** met de nieuwe klant (inclusief het klantnummer dat ResoFly
+toekende) en een `Location`-header. Wijzigen met `PATCH` geeft **200** met de
+klant zoals hij nu is; alleen de velden die je meestuurt veranderen, en `null`
+maakt een veld leeg.
+
+- **Toegangsniveau `execute` nodig**, en schrijfrecht in de module (voor de
+  sleutel én voor het teamlid erachter). Een vast adres voert altijd meteen uit;
+  een sleutel die alleen mag klaarzetten, krijgt 403 `insufficient_scope` en
+  kan via `POST /v1/actions/{id}` een voorstel klaarzetten.
+- **Het gebeurt als het teamlid achter de sleutel**, met precies de regels van de
+  app: dezelfde controles op dubbele klanten en contactpersonen, dezelfde
+  verwijzingscontroles, en in het logboek van ResoFly op naam van dat teamlid.
+- **Een onbekend veld is een fout** (422 met `details.field`), net als een veld
+  dat ResoFly zelf beheert, zoals `client_code`. Zo merk je een tikfout meteen.
+- **Verwijzingen** (`client_id`, `project_id`, `task_id`) moeten in dezelfde
+  organisatie bestaan. Hangt een project aan een klant, dan volgt de klant van
+  een taak het project — net als in de app.
+- Een **dubbele** klant (zelfde e-mailadres of klantnummer) of contactpersoon
+  (zelfde e-mailadres bij dezelfde klant) geeft 409 `conflict`.
+
+### Wat ResoFly zelf invult
+
+| Bij | Wat |
+|---|---|
+| Een nieuwe klant | Het klantnummer. Er gaat **geen** welkomstmail naar de klant (die stuur je in de app). |
+| Een contactpersoon | Portaaltoegang staat uit; die geef je in de app. |
+| Nieuwe uren | Ze zijn van het teamlid achter de sleutel. Laat je `entry_date`, `billable` of `hourly_rate_cents` weg, dan kiest ResoFly wat de app ook kiest: vandaag (Nederlandse tijd); niet declarabel bij een project met een vaste prijs of bij indirecte uren; het tarief van het project, anders het standaardtarief. Uren uit de agenda volgen hun afspraak en zijn niet via de API te wijzigen. |
+| Een reactie op een ticket | Het teamlid achter de sleutel is de schrijver. Een reactie is **standaard intern**; met `"is_internal": false` ziet de klant hem in het portaal. Er gaat geen e-mail naar de klant. |
+| Een ticket | De status `converted` (omgezet naar een project) zet de app; via de API kies je uit `new`, `review`, `approved` en `rejected`. |
+
+### Voorbeeld: een urenapp
+
+```js
+// Uren boeken op een project, en daarna alles van deze week ophalen.
+await resofly('/v1/time_entries', {
+  method: 'POST',
+  body: { project_id: '…', minutes: 90, description: 'Ontwerp homepage' },
+  idempotencyKey: crypto.randomUUID(),
+});
+const { data } = await resofly('/v1/time_entries?from=2026-09-28&to=2026-10-04&sort=entry_date');
+```
+
 ## Veilig herhalen — `Idempotency-Key`
 
-Een netwerkfout halverwege? Stuur bij elke schrijf-aanroep een eigen
+Een netwerkfout halverwege? Stuur bij elke schrijf-aanroep (een handeling, of
+`POST`/`PATCH` op een vast adres) een eigen
 `Idempotency-Key` mee (1–255 tekens, bijvoorbeeld een UUID). Binnen 24 uur
 krijgt dezelfde sleutel met dezelfde inhoud het **eerste antwoord** terug, met
 `Idempotent-Replayed: true`, in plaats van een tweede uitvoering.
@@ -452,16 +560,16 @@ Elke fout heeft dezelfde vorm, met een vaste `code` voor je programma en een
 
 | HTTP | `code` | Wanneer |
 |---|---|---|
-| 400 | `invalid_request` | Geen geldige JSON, een onbekende parameter-waarde. |
+| 400 | `invalid_request` | Geen geldige JSON, een onbekende parameter of parameterwaarde. `details.field` noemt hem. |
 | 401 | `unauthorized` | Geen, een onbekende, ingetrokken of verlopen sleutel. |
 | 403 | `insufficient_scope` | De sleutel mag alleen lezen. |
 | 403 | `forbidden` | De module staat dicht, of het is een handeling voor owners/admins. |
 | 404 | `not_found`, `unknown_action` | Onbekend adres, onbekende handeling, of een voorstel of webhook van een andere sleutel. |
 | 405 | `method_not_allowed` | Zie de `Allow`-header. |
 | 409 | `idempotency_in_progress` | Zie hierboven. |
-| 409 | `conflict` | Een webhook testen die uit staat, of het maximum aantal webhooks is bereikt. |
+| 409 | `conflict` | Bestaat al (een dubbele klant of contactpersoon), een webhook testen die uit staat, of het maximum aantal webhooks is bereikt. |
 | 413 | `payload_too_large` | Invoer groter dan 1 MB. |
-| 422 | `invalid_input` | De invoer klopt niet, of een id bestaat niet in deze organisatie. `message` zegt wat. |
+| 422 | `invalid_input` | De invoer klopt niet, of een id bestaat niet in deze organisatie. `message` zegt wat, `details.field` welk veld. |
 | 422 | `idempotency_conflict` | Zie hierboven. |
 | 429 | `rate_limited` | Te veel verzoeken; wacht `Retry-After` seconden. |
 | 429 | `queue_full` | 50 voorstellen van deze sleutel wachten nog op goedkeuring. |

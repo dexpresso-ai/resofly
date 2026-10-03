@@ -379,6 +379,8 @@ export interface OpenApiOptions {
   actions: CatalogAction[];
   /** Uitleg voor mensen; leeg laat het veld weg. */
   docsUrl?: string;
+  /** Wat er verder in hoort (de vaste adressen uit apiResources.ts). */
+  extra?: { tags: Array<{ name: string; description: string }>; paths: Record<string, unknown>; schemas: Record<string, unknown> };
 }
 
 const JSON_CONTENT = 'application/json';
@@ -404,6 +406,7 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
     { name: 'Handelingen', description: 'Alles wat de app kan, als handeling met een eigen invoerschema.' },
     { name: 'Voorstellen', description: 'Wijzigingen die op goedkeuring in ResoFly wachten.' },
     { name: 'Webhooks', description: 'Laat ResoFly een ondertekend bericht sturen als er iets gebeurt.' },
+    ...(opts.extra?.tags ?? []),
     ...modules.map((m) => ({
       name: `module:${m}`,
       description: `Handelingen in de module ${MODULE_LABEL[m as ModuleKey] ?? m}.`,
@@ -547,6 +550,8 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
     },
   });
 
+  if (opts.extra) Object.assign(paths, opts.extra.paths);
+
   // Elke handeling ook als eigen pad, met zijn eigen invoerschema. Dat maakt het
   // document groot, maar het is precies wat een koppelplatform nodig heeft om er
   // een formulier van te maken.
@@ -604,6 +609,7 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
         },
       },
       schemas: {
+        ...(opts.extra?.schemas ?? {}),
         Error: {
           type: 'object',
           required: ['error'],

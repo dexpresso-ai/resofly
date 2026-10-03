@@ -190,3 +190,72 @@ eindpunt van een beperkte sleutel (financiële gebeurtenissen overgeslagen met d
 reden), intrekken van de sleutel (eindpunten weg), en een traag eindpunt naast
 een snel: het snelle kreeg zijn 12 berichten binnen 0,1 seconde, het trage
 hooguit 4 tegelijk.
+
+## Fase 3 — vaste adressen voor klanten, projecten, taken, tickets en uren
+
+Met `/v1/actions` kon een koppeling al alles wat de app kan. Nu zijn er ook vaste
+adressen met een vaste vorm, voor de zeven onderwerpen waar koppelingen het
+meest mee doen — wat een webshop of een stap "Create client" in Zapier verwacht:
+
+| Adres | Lezen | Aanmaken | Wijzigen |
+|---|---|---|---|
+| `/v1/clients`, `/v1/contacts` | ✓ | ✓ | ✓ |
+| `/v1/projects`, `/v1/tasks` | ✓ | ✓ | ✓ |
+| `/v1/tickets` | ✓ | ✓ | ✓ |
+| `/v1/tickets/{ticket_id}/notes` | ✓ | ✓ | — |
+| `/v1/time_entries` | ✓ | ✓ | ✓ |
+
+Lijsten met zoeken, filters, sorteren, pagineren en `updated_since` om bij te
+houden wat er veranderde. Verwijderen bewust niet: dat gaat in de app.
+
+### De regels van de app, niet een kopie ervan
+
+Het belangrijkste besluit: aanmaken en wijzigen gebeurt **niet met de
+service-role**, maar in de database als het teamlid achter de sleutel
+(`api_rest_write`, migratie 20261003020000). Daardoor geldt alles wat de app
+afdwingt vanzelf ook hier:
+
+- de module-poort (`enforce_module_write_access`) — die doet onder de
+  service-role niets, omdat hij op `auth.uid()` leunt;
+- de controles op dubbele klanten en contactpersonen, en dat een project, taak,
+  ticket of contactpersoon alleen naar rijen in de eigen organisatie verwijst;
+- klantnummers uit `create_client_with_next_code`, net als in het scherm;
+- `audit_logs` op naam van het teamlid, in plaats van "onbekend".
+
+Wat de app er in de browser zelf bij doet, doet de API ook: nieuwe uren krijgen
+— als je ze weglaat — de datum van vandaag (Nederlandse tijd), declarabel zoals
+de app kiest (niet bij een vaste prijs of indirecte uren) en het tarief van het
+project of anders het standaardtarief. Een reactie krijgt het teamlid als
+schrijver, en is standaard intern. Een ticket dat een teamlid aanmaakt, stuurt
+geen "nieuw ticket"-melding naar het team. Er gaat geen welkomstmail naar een
+nieuwe klant en geen e-mail bij een reactie — net als bij Gerrie.
+
+### Wat mag
+
+Lezen vraagt leesrecht in de module. Aanmaken en wijzigen vraagt toegangsniveau
+`execute` én schrijfrecht in de module, voor de sleutel en voor het teamlid
+erachter: een vast adres voert uit, het zet niets klaar. Wat de app zelf beheert
+(klantnummer, portaaltoegang, de schrijver van een reactie, wiens uren het zijn)
+is niet te zetten — dat weigeren zowel de API als de database.
+
+### Wat de tests bewaken
+
+- `apiResources.test.ts` (9) — de motor: invoer controleren en normaliseren,
+  onbekende velden en parameters als fout, filters, sorteren, pagineren.
+- `apiResourceSpecs.test.ts` (10) — de zeven resources naast de database: de
+  toegestane waarden zijn die van de CHECK-constraints, wat alleen-lezen is
+  weigert de database ook, dezelfde modules als de webhooks, elk pad vindt de
+  goede resource, elke operationId komt één keer voor.
+- `apiResourceServer.test.ts` (11) — de grenzen in de functies: elke leesquery
+  filtert op de organisatie, de store schrijft nooit zelf, `api_rest_write`
+  controleert vóór het wisselt en is `security invoker`, en `execute` plus
+  schrijfrecht worden getoetst vóór er iets gebeurt. Ook deze regels zijn
+  gecontroleerd door ze in de code stuk te maken.
+
+Nagemeten: `npm test` 462 groen, `npm run typecheck` en `npm run build` groen,
+`deno check` groen. End-to-end tegen een verse database met de echte functie:
+55 van 55 — van een klant met klantnummer en auditlog op naam van het teamlid,
+via dubbele klanten (409), een sleutel die alleen mag klaarzetten (403), rijen
+van een andere organisatie (404), een sleutel waarvan de maker viewer werd en
+een sleutel zonder de module uren (403), tot de afgeleide waarden bij uren en een
+reactie die standaard intern is.

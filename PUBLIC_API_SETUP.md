@@ -89,8 +89,8 @@ bericht faalt, of `410 Gone` antwoordt, zet zichzelf uit, met de reden erbij.
 supabase db push
 ```
 
-Dat draait `20261003000000_public_api.sql` en `20261003010000_webhooks.sql`
-(beide veilig om te herhalen). De eerste:
+Dat draait `20261003000000_public_api.sql`, `20261003010000_webhooks.sql` en
+`20261003020000_api_rest.sql` (alle drie veilig om te herhalen). De eerste:
 
 | Onderdeel | Wat |
 |---|---|
@@ -113,6 +113,12 @@ De tweede, voor webhooks:
 | `webhook_capture()` | De trigger (`zz_webhook_capture`) op klanten, contactpersonen, projecten, taken, tickets, ticketnotities, uren, offertes, facturen, contracten en afspraken. Een fout hierin blokkeert het opslaan nooit. |
 | `claim_webhook_deliveries()`, `finish_webhook_delivery()` | Claimen (`for update skip locked`, hooguit 4 tegelijk per eindpunt) en afronden. Alleen voor de service role. |
 | Triggers | Eindpunten in `audit_logs`; een sleutel intrekken verwijdert de eindpunten van die sleutel. |
+
+De derde, voor de vaste adressen (`/v1/clients`, `/v1/tasks`, …):
+
+| Onderdeel | Wat |
+|---|---|
+| `api_rest_write()` | Aanmaken en wijzigen via een vast adres. Alleen voor de service role. Wisselt binnen de transactie naar het teamlid achter de sleutel (rol `authenticated`, diens id in de claims) en schrijft dan — met de RLS, triggers en het auditlog van de app. Weigert kolommen die de app zelf beheert. |
 
 Op **staging** gebeurt dit vanzelf: de workflow *Deploy Supabase (staging)*
 draait `supabase db push` en `supabase functions deploy` bij elke push naar
@@ -304,6 +310,17 @@ niet allemaal dezelfde lege teller lezen. En hooguit 50 openstaande voorstellen
 per sleutel: een wachtrij waar niemand meer doorheen komt, is een wachtrij
 waarin iemand op Uitvoeren klikt zonder te lezen.
 
+**Vaste adressen schrijven als het teamlid, niet als de server.** Lezen gaat
+met de service-role en het org-filter (wat RLS voor deze tabellen ook vraagt).
+Aanmaken en wijzigen loopt via `api_rest_write`, dat in de database wisselt naar
+het teamlid achter de sleutel. Daardoor gelden de regels van de app zelf en niet
+een nagebouwde versie: de module-poort (`enforce_module_write_access`, die bij de
+service-role niets doet), de controle op dubbele klanten en contactpersonen, de
+verwijzingscontroles, en `audit_logs` op naam van het teamlid. Klantnummers komen
+uit `create_client_with_next_code`, precies als bij aanmaken in het scherm.
+Daarbovenop vraagt de functie `api` toegangsniveau `execute` en schrijfrecht in
+de module, voor de sleutel én voor het teamlid.
+
 **Webhooks gaan alleen naar buiten.** Alleen `https`, geen gebruikersnaam of
 wachtwoord in het adres, en niets in een intern netwerk: geen `localhost` of
 namen op `.local`, `.internal`, `.lan` en dergelijke, en geen privé- of
@@ -354,6 +371,11 @@ wachtrij in ResoFly af.
 
 **"Nog niet beschikbaar in deze omgeving" op het instellingenscherm** — de
 frontend staat er al, de migratie nog niet. Draai `supabase db push`.
+
+**403 op een vast adres terwijl de sleutel `execute` heeft** — het teamlid
+achter de sleutel mag niet schrijven in die module (rol of modulerechten in
+ResoFly), of de sleutel zelf zet de module op alleen lezen. De melding zegt
+welke van de twee.
 
 **"Webhooks staan in deze omgeving nog niet aan"** — `WEBHOOK_SECRET_ENCRYPTION_KEY`
 ontbreekt in de Edge Function secrets (zie stap 3).

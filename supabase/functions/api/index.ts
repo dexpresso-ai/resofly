@@ -32,6 +32,14 @@
 //     ONS `plan()` of `buildProposal`, niet uit de aanroeper: die levert invoer,
 //     wij bepalen wat er precies gebeurt.
 //
+// VASTE ADRESSEN
+// Naast /v1/actions staan klanten, contactpersonen, projecten, taken, tickets
+// (met reacties) en uren als gewone REST-resources: /v1/clients, /v1/tasks
+// enzovoort (apiResourceSpecs.ts). Lezen met de service-role en het org-filter;
+// aanmaken en wijzigen RECHTSTREEKS met toegangsniveau `execute`, en dan niet
+// met de service-role maar als het teamlid achter de sleutel (api_rest_write in
+// de database): met de RLS, triggers en het auditlog van de app zelf.
+//
 // WIE ER AAN DE ANDERE KANT ZIT
 // Een sleutel werkt namens het teamlid dat hem aanmaakte, met de rol en de
 // modulerechten die dat teamlid NU heeft (vers uit organization_members, bij
@@ -62,6 +70,11 @@ import {
   createEndpoint, deleteEndpoint, getEndpoint, listDeliveries, listEndpoints, testEndpoint, updateEndpoint,
   visibleEvents, WebhookInputError, type EndpointOwner,
 } from '../_shared/webhookAdmin.ts';
+import {
+  normalizeInput, parseListParams, resourceOpenApi, ResourceInputError, type ResourceSpec,
+} from '../_shared/apiResources.ts';
+import { matchResource, RESOURCE_LIST, RESOURCES } from '../_shared/apiResourceSpecs.ts';
+import { createRow, getRow, listRows, ResourceStoreError, updateRow, type StoreCtx } from '../_shared/apiResourceStore.ts';
 import {
   actionInputSchema, apiRoute, API_VERSION, auditStatusesFor, buildOpenApi, effectiveModuleAccess,
   effectiveModuleLevel, errorBody, hasKeyRestrictions, isModuleKey, isValidIdempotencyKey, levelOfScope,
@@ -292,6 +305,9 @@ async function handle(
     return await handleWebhooks(req, url, route, method, caller, requestId);
   }
 
+  const resource = matchResource(route);
+  if (resource) return await handleResource(req, url, route, method, caller, requestId, meta, resource);
+
   throw new ApiError(404, 'not_found', `Onbekend adres "${route}". Wat er bestaat, staat in ${PUBLIC_BASE}/v1/openapi.json.`);
 }
 
@@ -316,6 +332,7 @@ function openApiDocument(): Record<string, unknown> {
       serverUrl: PUBLIC_BASE,
       actions: [...ACTIONS, ...GERRIE_CORE_ACTIONS].map(toCatalogAction),
       docsUrl: DOCS_URL || undefined,
+      extra: resourceOpenApi(RESOURCE_LIST),
     });
   }
   return openApiCache;
@@ -891,6 +908,160 @@ function webhookEncryptionKey(): string {
   return WEBHOOK_ENCRYPTION_KEY;
 }
 
+// ── Vaste adressen: klanten, contactpersonen, projecten, taken, tickets, uren ─
+//
+// GET /v1/clients, POST /v1/clients, GET|PATCH /v1/clients/{id} — en zo voor
+// elke resource in apiResourceSpecs.ts; reacties op een ticket onder
+// /v1/tickets/{ticket_id}/notes. Lezen vraagt leesrecht in de module.
+//
+// Aanmaken en wijzigen gebeurt hier RECHTSTREEKS (201/200): een vast adres dat
+// soms 202 "klaargezet" antwoordt, is geen vast adres meer. Het vraagt daarom
+// toegangsniveau `execute` plus schrijfrecht in de module. Een sleutel die
+// alleen mag klaarzetten, hoort waar dat wél kan: POST /v1/actions/{id}.
+//
+// Het wegschrijven gebeurt als het teamlid achter de sleutel (api_rest_write in
+// de database): dezelfde RLS, dezelfde triggers en hetzelfde auditlog als een
+// wijziging in de app — de app-regels gelden, ze worden hier niet nagebouwd.
+
+async function handleResource(
+  req: Request, url: URL, route: string, method: string, caller: Caller, requestId: string, meta: RequestMeta,
+  match: { spec: ResourceSpec; id: string | null; parentId: string | null },
+): Promise<Response> {
+  const { spec, id, parentId } = match;
+  meta.actionId = `rest:${spec.name}`;
+  const level = moduleLevel(caller, spec.module);
+  if (level === 'none') {
+    throw new ApiError(403, 'forbidden',
+      `Deze sleutel mag geen ${spec.labelPlural.toLowerCase()} lezen: de module ${MODULE_LABEL[spec.module]} staat dicht voor de sleutel of voor het teamlid erachter.`);
+  }
+  const ctx = storeContext(caller);
+
+  return await resourceErrors(async () => {
+    // Een reactie bestaat alleen onder een ticket van DEZE organisatie.
+    if (spec.parent && parentId !== null) await getRow(ctx, RESOURCES[spec.parent.resource], parentId);
+
+    if (id === null) {
+      if (method === 'GET') {
+        let params: ReturnType<typeof parseListParams>;
+        try {
+          params = parseListParams(spec, url.searchParams);
+        } catch (error) {
+          if (error instanceof ResourceInputError) {
+            throw new ApiError(400, 'invalid_request', error.message, error.field ? { field: error.field } : undefined);
+          }
+          throw error;
+        }
+        return json(await listRows(ctx, spec, params, parentId ?? undefined), 200, requestId);
+      }
+      if (method === 'POST' && spec.create) {
+        assertMayWrite(caller, spec, level);
+        const rawBody = await readBody(req);
+        const input = parseInput(rawBody);
+        return await withIdempotency(req, caller, route, rawBody, requestId, () => resourceErrors(async () => {
+          const values = normalizeResourceInput(spec, input, 'create');
+          if (spec.parent && parentId !== null) values[spec.parent.column] = parentId;
+          const row = await createRow(ctx, spec, values);
+          await recordResourceWrite(caller, spec, 'create', row, values);
+          return { status: 201, body: row, headers: { Location: `${PUBLIC_BASE}${route}/${String(row.id)}` } };
+        }));
+      }
+      throw methodNotAllowed(spec.create ? 'GET, POST' : 'GET');
+    }
+
+    if (method === 'GET') return json(await getRow(ctx, spec, id, parentId ?? undefined), 200, requestId);
+    if (method === 'PATCH' && spec.update) {
+      assertMayWrite(caller, spec, level);
+      const rawBody = await readBody(req);
+      const input = parseInput(rawBody);
+      return await withIdempotency(req, caller, route, rawBody, requestId, () => resourceErrors(async () => {
+        const values = normalizeResourceInput(spec, input, 'update');
+        const row = await updateRow(ctx, spec, id, values, parentId ?? undefined);
+        await recordResourceWrite(caller, spec, 'update', row, values);
+        return { status: 200, body: row };
+      }));
+    }
+    throw methodNotAllowed(spec.update ? 'GET, PATCH' : 'GET');
+  });
+}
+
+/**
+ * Wijzigen via een vast adres: alleen met `execute`, en alleen met schrijfrecht
+ * in de module (van de sleutel én van het teamlid erachter).
+ */
+function assertMayWrite(caller: Caller, spec: ResourceSpec, level: ModuleLevel): void {
+  if (!mayExecute(caller)) {
+    throw new ApiError(403, 'insufficient_scope', mayPropose(caller)
+      ? `Rechtstreeks wijzigen via /v1/${spec.path} vraagt toegangsniveau "execute". Deze sleutel mag wijzigingen alleen klaarzetten; dat kan via POST /v1/actions/{id}.`
+      : `Deze sleutel mag alleen lezen. ${spec.labelPlural} aanmaken of wijzigen vraagt toegangsniveau "execute".`);
+  }
+  if (level !== 'write') {
+    throw new ApiError(403, 'forbidden',
+      `Deze sleutel mag ${spec.labelPlural.toLowerCase()} lezen, maar niet wijzigen: in de module ${MODULE_LABEL[spec.module]} is er alleen leesrecht.`);
+  }
+}
+
+/** De invoer volgens de spec; wat niet klopt, wordt een 422 met het veld erbij. */
+function normalizeResourceInput(spec: ResourceSpec, input: Record<string, unknown>, mode: 'create' | 'update'): Record<string, unknown> {
+  try {
+    return normalizeInput(spec, input, mode);
+  } catch (error) {
+    if (error instanceof ResourceInputError) {
+      throw new ApiError(422, 'invalid_input', error.message, error.field ? { field: error.field } : undefined);
+    }
+    throw error;
+  }
+}
+
+/** Fouten van de store als ApiError, met de juiste code — ook binnen withIdempotency. */
+async function resourceErrors<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof ResourceStoreError) {
+      const code: ApiErrorCode = error.status === 403 ? 'forbidden'
+        : error.status === 404 ? 'not_found'
+        : error.status === 409 ? 'conflict'
+        : 'invalid_input';
+      throw new ApiError(error.status, code, error.message, error.field ? { field: error.field } : undefined);
+    }
+    throw error;
+  }
+}
+
+/** Lezen met de service-role, schrijven als het teamlid — beide met de organisatie uit de sleutel. */
+function storeContext(caller: Caller): StoreCtx {
+  return { db: admin, organizationId: caller.organizationId, userId: caller.userId };
+}
+
+/**
+ * Een wijziging via een vast adres in het auditlog, naast de uitvoeringen van
+ * handelingen: herleidbaar tot de sleutel, met wat er werd gezet. De rij zelf
+ * staat bovendien in audit_logs, op naam van het teamlid (dat doet de database).
+ */
+async function recordResourceWrite(
+  caller: Caller, spec: ResourceSpec, op: 'create' | 'update', row: Record<string, unknown>, values: Record<string, unknown>,
+): Promise<void> {
+  const what = String(row.name ?? row.title ?? row.subject ?? '').trim()
+    || String(row.description ?? row.body ?? '').trim().slice(0, 60)
+    || String(row.id);
+  const title = `${spec.label} ${op === 'create' ? 'aangemaakt' : 'gewijzigd'}: ${what}`;
+  const { error } = await admin.from('ai_action_audit').insert({
+    organization_id: caller.organizationId,
+    user_id: caller.userId,
+    action: `api:rest:${spec.name}.${op}`,
+    params: {
+      type: 'action', action_id: `rest:${spec.name}.${op}`, title, sub: Object.keys(values).join(', '),
+      kind: op, risk: 'normal', payload: { id: row.id, values },
+    },
+    status: 'auto_executed',
+    api_key_id: caller.keyId,
+    result: { ok: true, detail: title, via: caller.keyName, api_key_id: caller.keyId },
+  });
+  // Net als bij een handeling: een audit die niet wegkomt, maakt een gelukte
+  // wijziging niet alsnog ongedaan.
+  if (error) console.error('[api] wijziging vastleggen mislukt:', error.message);
+}
+
 // ── Idempotentie ─────────────────────────────────────────────────────────────
 
 /**
@@ -917,7 +1088,7 @@ async function withIdempotency(
   if (!isValidIdempotencyKey(key)) {
     throw new ApiError(400, 'invalid_request', 'Een Idempotency-Key bestaat uit 1 tot 255 zichtbare tekens zonder spaties.');
   }
-  const hash = await requestFingerprint('POST', route, rawBody);
+  const hash = await requestFingerprint(req.method, route, rawBody);
 
   const claimed = await claimIdempotencyKey(caller.keyId, key, hash);
   if (!claimed) {
