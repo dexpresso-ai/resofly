@@ -69,4 +69,4 @@ De trefwoorden zijn Nederlands. Een Engelse zoekvraag als "create invoice" vindt
 
 ## Uitrollen
 
-Alleen de edge functions `mcp`, `api`, `gerrie-agent`, `gerrie-agent-runner` en `gerrie-signals` moeten opnieuw uitgerold worden. Er zijn geen migraties of secrets bij. De stappen voor staging en productie staan in [ZOEKEN_SETUP_2026-10-03.md](ZOEKEN_SETUP_2026-10-03.md).
+Deze wijziging zit in de edge functions `mcp`, `api`, `gerrie-agent`, `gerrie-agent-runner` en `gerrie-signals`. Er zijn geen migraties, secrets of cron-taken bij. Ze gaat mee met de gewone uitrol van staging, zie [SUPABASE_STAGING_LAPTOP.md](SUPABASE_STAGING_LAPTOP.md). Hoe je controleert dat het werkt, staat in [ZOEKEN_SETUP_2026-10-03.md](ZOEKEN_SETUP_2026-10-03.md).
