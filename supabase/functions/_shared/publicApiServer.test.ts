@@ -162,11 +162,31 @@ test('een ECHTE sleutel die geweigerd wordt, ziet de organisatie terug — een g
   // Pas na de verifier hoort de sleutel bij een organisatie; daarvoor geen logregel.
   const known = auth.indexOf('const known = {');
   assert.ok(known > auth.indexOf('verifyToken('), 'een geraden sleutel zou anders het logboek van een organisatie kunnen vullen');
-  assert.match(auth, /throw new AuthError\('Deze API-sleutel klopt niet\.'\);/);
+  assert.match(auth, /throw new AuthError\(found\?\.api_key_id \? 'Deze API-sleutel klopt niet\.' : 'Deze API-sleutel is niet bekend\.'\);/);
   assert.match(auth, /throw new AuthError\('Deze API-sleutel is ingetrokken\.', known\);/);
   const log = fn(api, 'async function logRejectedKey(');
   assert.ok(log.indexOf("rpc('api_consume_rate_limit'") < log.indexOf("from('api_request_log')"),
     'ook een ingetrokken sleutel kan het logboek niet onbeperkt volschrijven');
+});
+
+test('mislukte sleutels tellen per afzender; een geldige sleutel komt altijd door', () => {
+  const auth = fn(api, 'async function authenticate(');
+  assert.match(auth, /admin\.rpc\('api_key_lookup', \{ p_selector: parsed\.selector, p_client: client \}\)/);
+  const verified = auth.indexOf('const verified =');
+  const blocked = auth.indexOf('if (blockedFor > 0) throw tooManyFailures(blockedFor);');
+  // De pauze geldt alleen binnen `if (!verified)`: een geldige sleutel vanaf een
+  // gedeeld adres (Zapier, Make) heeft geen last van een buurman.
+  const gate = auth.indexOf('\n  if (!verified) {\n', verified);
+  assert.ok(verified > 0 && gate > verified && blocked > gate, 'de blokkade hoort alleen mislukte pogingen te raken');
+  assert.equal((auth.match(/retry_after/g) ?? []).length, 2, 'retry_after hoort alleen binnen `if (!verified)` gelezen te worden (plus het type)');
+  assert.match(auth, /Number\(found\?\.retry_after \?\? 0\) \|\| await noteAuthFailure\(client\)/, 'al geblokkeerd: niet nog eens tellen');
+  // Het adres wordt gehasht; cf-connecting-ip gaat voor x-forwarded-for.
+  const fingerprint = fn(api, 'async function clientFingerprint(');
+  assert.match(fingerprint, /req\.headers\.get\('cf-connecting-ip'\) \|\| /);
+  assert.match(fingerprint, /return await sha256Hex\(`api-auth:\$\{address\}`\);/);
+  const limiter = fn(api, 'function tooManyFailures(');
+  assert.match(limiter, /new ApiError\(429, 'rate_limited'/);
+  assert.match(limiter, /'Retry-After': String\(seconds\)/);
 });
 
 test('invoer: een plafond ook zonder Content-Length, en niet te diep genest', () => {

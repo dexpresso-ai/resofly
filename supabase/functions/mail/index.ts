@@ -1314,10 +1314,10 @@ function corsHeaders(req: Request): HeadersInit {
       ? origin
       : MAIL_ALLOW_LOCAL_DEV && !origin
         ? '*'
-        : 'null';
+        : '';
 
   return {
-    'Access-Control-Allow-Origin': allowOrigin,
+    ...(allowOrigin ? { 'Access-Control-Allow-Origin': allowOrigin } : {}),
     'Access-Control-Allow-Headers':
       'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -1337,6 +1337,8 @@ function json(req: Request, payload: unknown, status = 200): Response {
 
 function assertAllowedOrigin(req: Request): void {
   const origin = req.headers.get('origin') || '';
+  // Een pagina zonder herkomst (sandbox-iframe, data:, file:) is nooit de app.
+  if (origin === 'null') throw new MailHttpError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403);
 
   if (!origin && MAIL_ALLOW_LOCAL_DEV) {
     return;

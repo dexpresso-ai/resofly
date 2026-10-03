@@ -32,7 +32,7 @@ import { ActionError, type ActionCtx, type ActionDef, type ActionPlan } from '..
 // ============================================================
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
-type HttpStatus = 400 | 401 | 403 | 404 | 422 | 429 | 500 | 502;
+type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502;
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -5065,18 +5065,42 @@ async function recordUsage(organizationId: string, conversationId: string, messa
   });
 }
 
-/** Logt een door de gebruiker bevestigde actie als uitgevoerd/mislukt in de audit. */
-async function confirmAction(_userId: string, organizationId: string, role: OrganizationRole, body: Record<string, unknown>): Promise<{ ok: boolean }> {
+/** Wat de browser over een voorstel kan melden. */
+const DECISION_OUTCOMES = ['claim', 'executed', 'failed', 'rejected'] as const;
+
+/**
+ * Een beslissing over een voorstel vastleggen. De browser voert een voorstel
+ * uit (onder de sessie van het teamlid, met RLS) en meldt het hier:
+ *   'claim'    — vóór het uitvoeren: vastzetten, zodat niemand anders het
+ *                tegelijk ook uitvoert;
+ *   'executed' / 'failed' — daarna, de uitkomst;
+ *   'rejected' — afgewezen.
+ * Wat nog open staat, wie erover beslist (een teamlid alleen over zijn eigen
+ * chatvoorstel, owners/admins over de goedkeurwachtrij) en wie het al aan het
+ * uitvoeren is: dat weegt de database (ai_action_decide), met naam en tijd van
+ * wie besliste. Een afgehandeld voorstel verandert daarna niet meer.
+ */
+async function confirmAction(userId: string, organizationId: string, role: OrganizationRole, body: Record<string, unknown>): Promise<{ ok: boolean; status: string }> {
   if (!['owner', 'admin', 'member'].includes(role)) throw new HttpError('Geen schrijfrechten.', 403);
   const auditId = String(body.auditId || '');
   if (!isUuid(auditId)) throw new HttpError('Ongeldig auditId.', 400);
-  const status = String(body.outcome || '') === 'failed' ? 'failed' : 'executed';
-  const detail = body.detail ? String(body.detail).slice(0, 500) : null;
-  const { error } = await supabaseAdmin.from('ai_action_audit')
-    .update({ status, result: detail ? { detail } : { ok: status === 'executed' } })
-    .eq('id', auditId).eq('organization_id', organizationId);
-  if (error) throw new HttpError(`Audit bijwerken mislukt: ${error.message}`, 500);
-  return { ok: true };
+  const outcome = String(body.outcome || '');
+  if (!(DECISION_OUTCOMES as readonly string[]).includes(outcome)) {
+    throw new HttpError(`Onbekende uitkomst; kies uit ${DECISION_OUTCOMES.join(', ')}.`, 400);
+  }
+  const detail = body.detail === undefined || body.detail === null ? null : String(body.detail).slice(0, 500);
+  const { data, error } = await supabaseAdmin.rpc('ai_action_decide', {
+    p_audit_id: auditId, p_organization_id: organizationId, p_user_id: userId, p_outcome: outcome, p_detail: detail,
+  });
+  if (error) {
+    // De zinnen uit ai_action_decide zijn voor de gebruiker geschreven; een
+    // onverwachte databasefout niet.
+    const status: HttpStatus = error.code === 'RS409' ? 409 : error.code === '42501' ? 403
+      : error.code === 'P0002' ? 404 : error.code === '22023' ? 400 : 500;
+    if (status === 500) console.error('[gerrie] beslissing vastleggen mislukt:', error.message);
+    throw new HttpError(status === 500 ? 'De beslissing kon niet worden vastgelegd. Probeer het opnieuw.' : error.message, status);
+  }
+  return { ok: true, status: String((data as { status?: unknown } | null)?.status ?? '') };
 }
 
 /**
@@ -5163,10 +5187,13 @@ function parseAllowedOrigins(values: Array<string | null | undefined>): string[]
   for (const value of values) {
     if (!value) continue;
     for (const rawPart of value.split(',')) {
+      // Alleen echte webherkomsten: "null" of "*" zou elke pagina toelaten.
       const part = rawPart.trim().replace(/\/$/, '');
-      if (!part) continue;
-      if (part.startsWith('http://') || part.startsWith('https://')) { try { origins.add(new URL(part).origin); } catch { origins.add(part); } }
-      else origins.add(part);
+      if (!/^https?:\/\//i.test(part)) continue;
+      try {
+        const origin = new URL(part).origin;
+        if (origin !== 'null') origins.add(origin);
+      } catch { /* geen geldig adres */ }
     }
   }
   return [...origins];

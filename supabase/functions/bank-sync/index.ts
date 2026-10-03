@@ -411,14 +411,16 @@ async function requireOrganizationAccess(userId: string, organizationId: string)
 function corsHeaders(req: Request): HeadersInit {
   const origin = req.headers.get('origin') || '';
   const allowOrigin = BANK_ALLOWED_ORIGINS.includes(origin) || (BANK_ALLOW_LOCAL_DEV && isLocalOrigin(origin))
-    ? origin : BANK_ALLOW_LOCAL_DEV && !origin ? '*' : 'null';
-  return { 'Access-Control-Allow-Origin': allowOrigin, 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', Vary: 'Origin' };
+    ? origin : BANK_ALLOW_LOCAL_DEV && !origin ? '*' : '';
+  return { ...(allowOrigin ? { 'Access-Control-Allow-Origin': allowOrigin } : {}), 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', Vary: 'Origin' };
 }
 function json(req: Request, payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status, headers: { ...corsHeaders(req), 'Content-Type': 'application/json' } });
 }
 function assertAllowedOrigin(req: Request): void {
   const origin = req.headers.get('origin') || '';
+  // Een pagina zonder herkomst (sandbox-iframe, data:, file:) is nooit de app.
+  if (origin === 'null') throw new HttpError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403);
   if (!origin && BANK_ALLOW_LOCAL_DEV) return;
   if (BANK_ALLOWED_ORIGINS.includes(origin)) return;
   if (BANK_ALLOW_LOCAL_DEV && isLocalOrigin(origin)) return;

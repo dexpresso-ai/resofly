@@ -211,11 +211,17 @@ test('filteren op een API-status vindt precies de rijen die zo vertaald worden',
   }
 });
 
-test('"afgewezen" is dezelfde zin als die de goedkeurwachtrij schrijft', () => {
+test('"afgewezen" is dezelfde zin als die de goedkeurwachtrij en de database schrijven', () => {
+  // De app stuurt een afwijzing als deze zin (dat verstaat ook een oudere
+  // server), en ai_action_decide schrijft hem in de audit. Een andere zin, en
+  // de API toont een afwijzing als mislukking.
+  const client = readFileSync(new URL('../../../src/lib/gerrie-api.ts', import.meta.url), 'utf8');
+  assert.ok(client.includes(`const REJECTED_DETAIL = '${REJECTED_BY_USER_DETAIL}';`));
   const approvals = readFileSync(new URL('../../../src/components/AgentApprovals.tsx', import.meta.url), 'utf8');
-  const fn = approvals.slice(approvals.indexOf('function reject('));
-  assert.ok(fn.slice(0, 300).includes(`'${REJECTED_BY_USER_DETAIL}'`),
-    'AgentApprovals.reject() schrijft een andere zin; dan ziet de API een afwijzing als mislukking.');
+  assert.match(approvals.slice(approvals.indexOf('async function reject('), approvals.indexOf('async function reject(') + 400),
+    /await rejectGerrieAction\(organizationId, item\.auditId\);/);
+  const migration = readFileSync(new URL('../../migrations/20261003040000_approvals_auth_limits.sql', import.meta.url), 'utf8');
+  assert.ok(migration.includes(`v_rejected constant text := '${REJECTED_BY_USER_DETAIL}';`));
 });
 
 // ── Idempotentie en fouten ───────────────────────────────────────────────────

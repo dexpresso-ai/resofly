@@ -582,17 +582,107 @@ export async function streamGerrieReply(req: GerrieRequest): Promise<GerrieResul
  * mislukt, zodat de audit (ai_action_audit) de status bijwerkt. Best-effort:
  * fouten worden genegeerd — het mag de UX nooit blokkeren.
  */
-export async function confirmGerrieAction(organizationId: UUID, auditId: string, outcome: 'executed' | 'failed', detail?: string): Promise<void> {
+/**
+ * Wat er met een voorstel gebeurde. De server (ai_action_decide) beslist of dat
+ * mag: alleen wat nog open staat, alleen wie erover gaat — en legt vast wie het
+ * besliste. Een afgehandeld voorstel verandert daarna niet meer.
+ */
+type DecisionOutcome = 'claim' | 'executed' | 'failed' | 'rejected';
+
+/** Zo heet een afwijzing in de audit; de API toont het als `rejected`. */
+const REJECTED_DETAIL = 'Afgewezen door gebruiker.';
+
+async function postDecision(organizationId: UUID, auditId: string, outcome: DecisionOutcome, detail?: string): Promise<void> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error('Je sessie is verlopen. Log opnieuw in.');
+  // Een afwijzing gaat als "mislukt, afgewezen door gebruiker": dat verstaat
+  // de server sinds jaar en dag. Zo klopt het ook als de app al vernieuwd is
+  // en de server (nog) niet.
+  const body = outcome === 'rejected'
+    ? { action: 'confirm', organizationId, auditId, outcome: 'failed', detail: REJECTED_DETAIL }
+    : { action: 'confirm', organizationId, auditId, outcome, detail };
+  const res = await fetch(`${FUNCTIONS_BASE}/gerrie-agent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: ANON_KEY },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = 'De beslissing kon niet worden vastgelegd. Probeer het zo opnieuw.';
+    try { const payload = await res.json(); if (payload?.error) message = String(payload.error); } catch { /* geen JSON */ }
+    throw new Error(message);
+  }
+}
+
+/**
+ * De uitkomst NA het uitvoeren. Best-effort: het werk is dan al gebeurd, en een
+ * melding die niet aankomt, mag dat niet alsnog als fout laten zien.
+ */
+export async function confirmGerrieAction(organizationId: UUID, auditId: string, outcome: 'executed' | 'failed' | 'rejected', detail?: string): Promise<void> {
   try {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    if (!token) return;
-    await fetch(`${FUNCTIONS_BASE}/gerrie-agent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: ANON_KEY },
-      body: JSON.stringify({ action: 'confirm', organizationId, auditId, outcome, detail }),
-    });
-  } catch { /* best-effort logging */ }
+    await postDecision(organizationId, auditId, outcome, detail);
+  } catch { /* best-effort */ }
+}
+
+/**
+ * Vastzetten VÓÓR het uitvoeren. Klikken twee mensen tegelijk op Akkoord, dan
+ * voert maar één het uit; de ander krijgt een duidelijke fout in plaats van een
+ * tweede factuur of mail. Gooit als het niet mag of al gebeurd is.
+ */
+export async function claimGerrieAction(organizationId: UUID, auditId: string): Promise<void> {
+  await postDecision(organizationId, auditId, 'claim');
+}
+
+/** Afwijzen. Gooit als het niet kan (al afgehandeld, of iemand anders is het aan het uitvoeren). */
+export async function rejectGerrieAction(organizationId: UUID, auditId: string): Promise<void> {
+  await postDecision(organizationId, auditId, 'rejected');
+}
+
+/**
+ * Eén voorstel uitvoeren zoals het hoort: vastzetten, uitvoeren, de uitkomst
+ * melden. Mislukt het vastzetten, dan gebeurt er niets.
+ */
+export async function runGerrieDecision<T>(organizationId: UUID, auditId: string | undefined | null, run: () => Promise<T>): Promise<T> {
+  if (!auditId) return await run();
+  await claimGerrieAction(organizationId, auditId);
+  try {
+    const result = await run();
+    void confirmGerrieAction(organizationId, auditId, 'executed');
+    return result;
+  } catch (e) {
+    void confirmGerrieAction(organizationId, auditId, 'failed', e instanceof Error ? e.message : undefined);
+    throw e;
+  }
+}
+
+/**
+ * Voor een reeks (mails, facturen, herinneringen) die per regel wordt
+ * uitgevoerd: elke handler zet het voorstel eerst (opnieuw) vast. Zo blijft het
+ * van deze gebruiker zolang hij er regels uit verstuurt.
+ */
+/**
+ * De uitkomst van een reeks: iets verstuurd = uitgevoerd; niets verstuurd en
+ * niets mislukt = afgewezen (alles bewust overgeslagen); anders mislukt — dan
+ * kan het nog een keer.
+ */
+export function batchDecision(result: { sent: number; skipped: number; failed?: number }): { outcome: 'executed' | 'failed' | 'rejected'; detail: string } {
+  const failed = result.failed ?? 0;
+  const detail = `${result.sent} verstuurd, ${result.skipped} overgeslagen${failed ? `, ${failed} mislukt` : ''}.`;
+  if (result.sent > 0) return { outcome: 'executed', detail };
+  return { outcome: failed > 0 ? 'failed' : 'rejected', detail };
+}
+
+export function claimingHandlers(organizationId: UUID, auditId: string, handlers: GerrieActionHandlers): GerrieActionHandlers {
+  return new Proxy(handlers, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== 'function') return value;
+      return async (...args: unknown[]) => {
+        await claimGerrieAction(organizationId, auditId);
+        return (value as (...params: unknown[]) => unknown).apply(target, args);
+      };
+    },
+  });
 }
 
 /**

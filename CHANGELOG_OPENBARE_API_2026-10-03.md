@@ -363,7 +363,64 @@ gerrie-agent. End-to-end tegen een verse database: kern 33/33, vaste adressen
 77/77, aanvalsronde 52/52, webhooks 27/27 — de webhooks via de vastgepinde
 verbinding naar een echte TLS-ontvanger.
 
-Wat bewust buiten deze ronde bleef (geen deel van de API, of een eigen
-afweging): het goedkeuren in de app (`confirmAction`) zet de status van een
-voorstel vanuit de browser; `edgeAuth` staat de origin `null` toe; en er is geen
-throttling per IP-adres voor sleutels die niet bestaan.
+Wat buiten deze ronde bleef, is in de derde ronde opgepakt.
+
+## Derde ronde — goedkeuren, herkomst, gokken en opruimen
+
+Migratie `20261003040000_approvals_auth_limits.sql`.
+
+**Goedkeuren beslist de database.** De browser voert een voorstel uit (onder de
+sessie van het teamlid, met RLS) en meldde daarna via `gerrie-agent` de
+uitkomst — en die melding zette met de service-role elke auditregel van de
+organisatie op elke status. Een teamlid kon zo over voorstellen uit de
+goedkeurwachtrij beslissen, een rechtstreekse uitvoering van een API-sleutel
+achteraf op "afgewezen" zetten, of een ingetrokken voorstel op "uitgevoerd".
+Wie besliste, werd niet bewaard. Nu:
+- `ai_action_decide()` beslist: alleen wat nog open staat (voorgesteld, of een
+  uitvoering die mislukte), een teamlid alleen over zijn eigen chatvoorstel,
+  owners/admins over de wachtrij — met naam en tijd van wie besliste;
+- de app zet een voorstel eerst VAST (10 minuten), voert het dan uit en meldt
+  daarna de uitkomst; klikken twee beheerders tegelijk op Akkoord, dan voert
+  maar één het uit en krijgt de ander "Iemand anders voert dit voorstel op dit
+  moment uit" (goedkeurwachtrij, commandocentrum, chat en de afvinkborden);
+- een trigger houdt een afgehandelde auditregel en het voorstel zelf (`params`)
+  vast, ook voor de service-role;
+- afwijzen laat zien als het niet kan, in plaats van de regel stil te laten
+  verdwijnen.
+
+**Geen verzoeken zonder herkomst.** `Origin: null` (sandbox-iframe, data:- of
+file:-pagina) wordt in alle functies geweigerd, ook lokaal, en
+`Access-Control-Allow-Origin: null` gaat nergens meer mee — zonder toegestane
+origin geen header. De regels staan in `_shared/origins.ts` (gebruikt door
+`makeCors`); de functies met een eigen kopie volgen dezelfde twee regels.
+Toegestane origins uit de instellingen tellen alleen als echt http(s)-adres.
+
+**Gokken naar sleutels.** Een sleutel die niet bestaat of niet klopt, telt per
+afzender (gehasht adres, `cf-connecting-ip` voor `x-forwarded-for`). Na 60
+binnen 10 minuten: 15 minuten 429 met `Retry-After` voor mislukte pogingen,
+zonder verder te tellen. Een geldige sleutel werkt vanaf dat adres gewoon door
+— Zapier en Make delen adressen. De sleutel en de stand van de afzender komen in
+één ronde uit de database (`api_key_lookup`).
+
+**Opruimen.** De migratie plant `api_purge_expired()` en
+`webhook_purge_expired()` dagelijks in (`resofly-api-purge`, 03:17 UTC) als
+pg_cron aan staat; anders een melding en geen fout. Opnieuw draaien vervangt de
+taak. Ook oude tellingen van mislukte sleutels gaan weg.
+
+### Wat de tests bewaken
+
+- `approvals.test.ts` (8) — de regels van `ai_action_decide` en de trigger, dat
+  `gerrie-agent` niet zelf in `ai_action_audit` schrijft (en geen functie
+  auditregels bijwerkt), dat de app overal vastzet vóór het uitvoeren, en de
+  opruimtaak.
+- `origins.test.ts` (5) — de origin-regels, en dat geen enkele functie `null`
+  terugstuurt of `Origin: null` binnenlaat.
+- Uitbreidingen in `publicApiServer.test.ts` (de afzenderlimiet raakt alleen
+  mislukte pogingen) en `publicApi.test.ts` (de zin voor "afgewezen" is overal
+  dezelfde). Gecontroleerd met 9 mutaties, alle gevangen.
+
+End-to-end: beslissen via de echte `gerrie-agent` (25/25: eigen chatvoorstel,
+wachtrij alleen voor owners/admins, vastzetten tegen een collega, mislukt →
+afgewezen → definitief, een rechtstreekse uitvoering blijft staan, origin
+null, de afzenderlimiet), de goedkeurwachtrij in de app zelf (11/11), en de
+eerdere suites opnieuw op een verse database.

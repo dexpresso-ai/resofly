@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { streamGerrieReply, confirmGerrieAction, loadGerrieBudget, type GerrieStatus, type GerrieActionHandlers, type GerrieProposal } from '../lib/gerrie-api';
+import {
+  streamGerrieReply, batchDecision, claimingHandlers, confirmGerrieAction, loadGerrieBudget, runGerrieDecision,
+  type GerrieStatus, type GerrieActionHandlers, type GerrieProposal,
+} from '../lib/gerrie-api';
 import { euro, formatMinutes } from '../lib/format';
 import { supabase } from '../lib/supabase';
 import { AgentBatchBoard, asBatchProposal } from './AgentBatchBoard';
@@ -299,16 +302,10 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
 
   function toggleDictation() { if (listening) stopDictation(); else startDictation(); }
 
-  // Meld een uitgevoerde/mislukte actie terug voor de audit (best-effort).
+  // Eerst vastzetten (zo voert een tweede tabblad het niet ook uit), dan
+  // uitvoeren, dan de uitkomst in de audit.
   async function runConfirmed<T>(auditId: string | undefined, action: () => Promise<T>): Promise<T> {
-    try {
-      const result = await action();
-      if (auditId) void confirmGerrieAction(organizationId, auditId, 'executed');
-      return result;
-    } catch (e) {
-      if (auditId) void confirmGerrieAction(organizationId, auditId, 'failed', e instanceof Error ? e.message : undefined);
-      throw e;
-    }
+    return await runGerrieDecision(organizationId, auditId, action);
   }
 
   /** Icoon per soort voorstel — dezelfde indeling als de goedkeurwachtrij. */
@@ -446,9 +443,12 @@ export function GerrieChat({ organizationId, ...handlers }: { organizationId: UU
       return <AgentBatchBoard
         proposal={batch}
         canWrite
-        handlers={{ onApplyProposal, onSendClientEmail, onSendInvoice, onSendQuote, onSendReminders }}
-        onResolved={({ sent, skipped }) => {
-          if (auditId) void confirmGerrieAction(organizationId, auditId, sent > 0 ? 'executed' : 'failed', `${sent} verstuurd, ${skipped} overgeslagen.`);
+        handlers={auditId
+          ? claimingHandlers(organizationId, auditId, { onApplyProposal, onSendClientEmail, onSendInvoice, onSendQuote, onSendReminders })
+          : { onApplyProposal, onSendClientEmail, onSendInvoice, onSendQuote, onSendReminders }}
+        onResolved={(result) => {
+          const decision = batchDecision(result);
+          if (auditId) void confirmGerrieAction(organizationId, auditId, decision.outcome, decision.detail);
         }}
       />;
     }

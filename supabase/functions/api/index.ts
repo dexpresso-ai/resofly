@@ -64,7 +64,7 @@ import {
 } from '../_shared/gerrieCore.ts';
 import { severityForProposal } from '../_shared/signalRules.ts';
 import {
-  parseScopes, scopeAllows, verifyToken, SCOPE_EXECUTE, SCOPE_EXECUTE_HIGH, SCOPE_PROPOSE, SCOPE_READ,
+  parseScopes, scopeAllows, sha256Hex, verifyToken, SCOPE_EXECUTE, SCOPE_EXECUTE_HIGH, SCOPE_PROPOSE, SCOPE_READ,
 } from '../_shared/mcpAuth.ts';
 import {
   createEndpoint, deleteEndpoint, getEndpoint, listDeliveries, listEndpoints, testEndpoint, updateEndpoint,
@@ -105,6 +105,16 @@ const RATE_MAX_CALLS = envInt('API_RATE_LIMIT_PER_MINUTE', 300, 10, 6000);
  * een koppeling in één keer een stapel kan aanleveren — maar er is een plafond.
  */
 const MAX_OPEN_PROPOSALS = 50;
+
+/**
+ * Mislukte pogingen per afzender: zoveel binnen het venster, dan een pauze.
+ * Ruim genoeg voor een koppeling die even met een oude sleutel blijft proberen,
+ * krap genoeg voor iemand die sleutels gokt of de database wil bezighouden.
+ * Een GELDIGE sleutel werkt altijd door, ook vanaf een geblokkeerd adres.
+ */
+const AUTH_FAILURE_WINDOW_SECONDS = 600;
+const AUTH_FAILURE_MAX = envInt('API_AUTH_FAILURE_LIMIT', 60, 5, 10_000);
+const AUTH_FAILURE_BLOCK_SECONDS = 900;
 
 /** Groter dan dit is geen invoer voor een handeling meer. */
 const MAX_BODY_BYTES = 1_000_000;
@@ -223,14 +233,21 @@ async function authenticate(req: Request): Promise<Caller> {
   const parsed = parseApiKey(presented);
   if (!parsed) throw new ApiError(401, 'unauthorized', 'Deze API-sleutel heeft niet de juiste vorm. Een sleutel begint met "rsfapi.".');
 
-  const { data: secrets, error: secretError } = await admin.from('api_key_secrets')
-    .select('api_key_id, verifier_hash, salt').eq('selector', parsed.selector).limit(1);
-  if (secretError) throw new Error(`Sleutel opzoeken mislukt: ${secretError.message}`);
-  const secret = secrets?.[0] as { api_key_id: string; verifier_hash: string; salt: string } | undefined;
-  if (!secret) throw new AuthError('Deze API-sleutel is niet bekend.');
-  if (!await verifyToken(parsed.verifier, String(secret.salt), String(secret.verifier_hash))) {
-    throw new AuthError('Deze API-sleutel klopt niet.');
+  // De sleutel en de stand van deze afzender in één ronde (api_key_lookup).
+  const client = await clientFingerprint(req);
+  const { data: rows, error: lookupError } = await admin.rpc('api_key_lookup', { p_selector: parsed.selector, p_client: client });
+  if (lookupError) throw new Error(`Sleutel opzoeken mislukt: ${lookupError.message}`);
+  const found = (rows as Array<{ api_key_id: string | null; verifier_hash: string | null; salt: string | null; retry_after: number | null }> | null)?.[0];
+  const verified = Boolean(found?.api_key_id)
+    && await verifyToken(parsed.verifier, String(found?.salt ?? ''), String(found?.verifier_hash ?? ''));
+  if (!verified) {
+    // Een sleutel die niet bestaat of niet klopt, telt mee voor deze afzender;
+    // boven de grens volgt een pauze (429). Al geblokkeerd: niet nog eens tellen.
+    const blockedFor = Number(found?.retry_after ?? 0) || await noteAuthFailure(client);
+    if (blockedFor > 0) throw tooManyFailures(blockedFor);
+    throw new AuthError(found?.api_key_id ? 'Deze API-sleutel klopt niet.' : 'Deze API-sleutel is niet bekend.');
   }
+  const secret = { api_key_id: String(found!.api_key_id) };
 
   const { data: keys, error: keyError } = await admin.from('api_keys')
     .select('id, organization_id, user_id, name, scope, module_access, expires_at, revoked_at, created_at, organizations(name)')
@@ -278,6 +295,39 @@ async function authenticate(req: Request): Promise<Caller> {
     memberModuleAccess: member.module_access ?? {},
     rateRemaining: RATE_MAX_CALLS - used,
   };
+}
+
+/**
+ * Wie er aanklopt, zoals het netwerk het zegt: het adres dat Cloudflare zag
+ * (cf-connecting-ip, niet door de aanroeper te zetten), anders het eerste uit
+ * x-forwarded-for. Gehasht: het adres zelf komt niet in api_auth_failures.
+ * Kan het eerste x-forwarded-for-adres vervalst zijn? Dan blokkeert iemand
+ * hooguit de mislukte pogingen van een ander — een geldige sleutel werkt door.
+ */
+async function clientFingerprint(req: Request): Promise<string> {
+  const address = (req.headers.get('cf-connecting-ip') || (req.headers.get('x-forwarded-for') || '').split(',')[0] || 'onbekend')
+    .trim().slice(0, 64);
+  return await sha256Hex(`api-auth:${address}`);
+}
+
+/** Telt een mislukte poging; geeft de seconden tot het weer mag (0 = niet geblokkeerd). */
+async function noteAuthFailure(client: string): Promise<number> {
+  const { data, error } = await admin.rpc('api_note_auth_failure', {
+    p_client: client,
+    p_window_seconds: AUTH_FAILURE_WINDOW_SECONDS,
+    p_max_failures: AUTH_FAILURE_MAX,
+    p_block_seconds: AUTH_FAILURE_BLOCK_SECONDS,
+  });
+  // Tellen is een vangnet; lukt het niet, dan gewoon een 401.
+  if (error) { console.error('[api] mislukte poging tellen mislukt:', error.message); return 0; }
+  return Number(data) || 0;
+}
+
+function tooManyFailures(seconds: number): ApiError {
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  return new ApiError(429, 'rate_limited',
+    `Te veel mislukte pogingen met een API-sleutel vanaf dit adres. Probeer het over ${minutes} ${minutes === 1 ? 'minuut' : 'minuten'} opnieuw, met een geldige sleutel.`,
+    undefined, { 'Retry-After': String(seconds) });
 }
 
 /**

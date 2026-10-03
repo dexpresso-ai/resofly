@@ -188,9 +188,9 @@ function corsHeaders(req: Request): HeadersInit {
   const origin = req.headers.get('origin') || '';
   const allowOrigin = ALLOWED_RETURN_ORIGINS.includes(origin)
     ? origin
-    : (MOLLIE_ALLOW_MOCK && ALLOWED_RETURN_ORIGINS.length === 0 ? '*' : 'null');
+    : (MOLLIE_ALLOW_MOCK && ALLOWED_RETURN_ORIGINS.length === 0 ? '*' : '');
   return {
-    'Access-Control-Allow-Origin': allowOrigin,
+    ...(allowOrigin ? { 'Access-Control-Allow-Origin': allowOrigin } : {}),
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Vary': 'Origin',
@@ -206,6 +206,8 @@ function json(req: Request, payload: unknown, status = 200): Response {
 
 function assertAllowedRequestOrigin(req: Request): void {
   const origin = req.headers.get('origin');
+  // Een pagina zonder herkomst (sandbox-iframe, data:, file:) is nooit de app.
+  if (origin === 'null') throw new BillingHttpError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403);
   if (!origin || ALLOWED_RETURN_ORIGINS.length === 0) {
     if (MOLLIE_ALLOW_MOCK) return;
     throw new BillingHttpError('BILLING_ALLOWED_RETURN_ORIGINS is verplicht in productie en moet de frontend-origin bevatten.', 500);

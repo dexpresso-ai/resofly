@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Sparkles, Send, Check, X, AlertTriangle, Wand2, Clock, Plus, Play, Pause, Archive, ArchiveRestore, Pencil, RotateCw, Loader2, ChevronDown, ChevronRight, ChevronUp, CornerDownLeft, ClipboardCheck, BellRing, Eye, Mailbox, Users2, Gauge, BookOpen, ScrollText } from 'lucide-react';
 import {
-  streamGerrieReply, loadGerrieBudget, confirmGerrieAction,
+  streamGerrieReply, loadGerrieBudget, confirmGerrieAction, runGerrieDecision, rejectGerrieAction, claimingHandlers, batchDecision,
   listRoutines, listRoutineRuns, saveRoutine, setRoutineStatus, archiveRoutine, restoreRoutine, runRoutineNow, listRunProposals,
   loadRunTranscript, listRunEvents, listRunDecisions, replyToRun, listPendingAgentApprovals, listRoutineToolsSafe, routineToolLabel, routineToolIsRead,
   type GerrieActionHandlers, type GerrieProposal,
@@ -162,21 +162,24 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
   function stopRun(id: string) { controllers.current.get(id)?.abort(); }
 
   async function approve(run: RunResult) {
-    if (!run.proposal) return;
+    const proposal = run.proposal;
+    if (!proposal) return;
     patchRun(run.id, { resolution: 'executing' });
     try {
-      await executeProposal(run.proposal, handlers);
-      if (run.auditId) void confirmGerrieAction(organizationId, run.auditId, 'executed');
+      // Vastzetten, uitvoeren, uitkomst melden (zie runGerrieDecision).
+      await runGerrieDecision(organizationId, run.auditId, () => executeProposal(proposal, handlers));
       patchRun(run.id, { resolution: 'executed' });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Uitvoeren mislukt.';
-      if (run.auditId) void confirmGerrieAction(organizationId, run.auditId, 'failed', msg);
-      patchRun(run.id, { resolution: 'error', error: msg });
+      patchRun(run.id, { resolution: 'error', error: e instanceof Error ? e.message : 'Uitvoeren mislukt.' });
     }
   }
-  function reject(run: RunResult) {
-    if (run.auditId) void confirmGerrieAction(organizationId, run.auditId, 'failed', 'Afgewezen door gebruiker.');
-    patchRun(run.id, { resolution: 'rejected' });
+  async function reject(run: RunResult) {
+    try {
+      if (run.auditId) await rejectGerrieAction(organizationId, run.auditId);
+      patchRun(run.id, { resolution: 'rejected' });
+    } catch (e) {
+      patchRun(run.id, { resolution: 'error', error: e instanceof Error ? e.message : 'Afwijzen mislukt.' });
+    }
   }
 
   const activeCount = runs.filter((r) => r.status === 'running').length;
@@ -277,7 +280,7 @@ export function GerrieCommandCenter({ organizationId, canWrite, openAgentId = nu
                   organizationId={organizationId}
                   onStop={() => stopRun(run.id)}
                   onApprove={() => void approve(run)}
-                  onReject={() => reject(run)}
+                  onReject={() => void reject(run)}
                   onResolved={() => patchRun(run.id, { resolution: 'executed' })}
                 />
               ))}
@@ -335,9 +338,10 @@ function RunCard({ run, canWrite, handlers, organizationId, onStop, onApprove, o
           <AgentBatchBoard
             proposal={batch}
             canWrite={canWrite}
-            handlers={handlers}
-            onResolved={({ sent, skipped }) => {
-              if (run.auditId) void confirmGerrieAction(organizationId, run.auditId, sent > 0 ? 'executed' : 'failed', `${sent} verstuurd, ${skipped} overgeslagen.`);
+            handlers={run.auditId ? claimingHandlers(organizationId, run.auditId, handlers) : handlers}
+            onResolved={(result) => {
+              const decision = batchDecision(result);
+              if (run.auditId) void confirmGerrieAction(organizationId, run.auditId, decision.outcome, decision.detail);
               onResolved();
             }}
           />
@@ -1333,20 +1337,24 @@ function RunDetail({ run, organizationId, canWrite, handlers, onApprovalsChanged
   async function approve(auditId: string, p: GerrieProposal) {
     setPstate((s) => ({ ...s, [auditId]: 'busy' }));
     try {
-      await executeProposal(p, handlers);
-      void confirmGerrieAction(organizationId, auditId, 'executed');
+      await runGerrieDecision(organizationId, auditId, () => executeProposal(p, handlers));
       setPstate((s) => ({ ...s, [auditId]: 'done' }));
       onApprovalsChanged?.();
     } catch (e) {
       const m = e instanceof Error ? e.message : 'Uitvoeren mislukt.';
-      void confirmGerrieAction(organizationId, auditId, 'failed', m);
       setPstate((s) => ({ ...s, [auditId]: 'error' })); setPmsg((x) => ({ ...x, [auditId]: m }));
       onApprovalsChanged?.();
     }
   }
-  function reject(auditId: string) {
-    void confirmGerrieAction(organizationId, auditId, 'failed', 'Afgewezen door gebruiker.');
-    setPstate((s) => ({ ...s, [auditId]: 'rejected' }));
+  async function reject(auditId: string) {
+    setPstate((s) => ({ ...s, [auditId]: 'busy' }));
+    try {
+      await rejectGerrieAction(organizationId, auditId);
+      setPstate((s) => ({ ...s, [auditId]: 'rejected' }));
+    } catch (e) {
+      setPstate((s) => ({ ...s, [auditId]: 'error' }));
+      setPmsg((x) => ({ ...x, [auditId]: e instanceof Error ? e.message : 'Afwijzen mislukt.' }));
+    }
     onApprovalsChanged?.();
   }
 
@@ -1378,16 +1386,17 @@ function RunDetail({ run, organizationId, canWrite, handlers, onApprovalsChanged
                     <AgentBatchBoard
                       proposal={batch}
                       canWrite={canWrite}
-                      handlers={handlers}
-                      onResolved={({ sent, skipped }) => {
-                        void confirmGerrieAction(organizationId, auditId, sent > 0 ? 'executed' : 'failed', `${sent} verstuurd, ${skipped} overgeslagen.`);
-                        setPstate((s) => ({ ...s, [auditId]: sent > 0 ? 'done' : 'rejected' }));
+                      handlers={claimingHandlers(organizationId, auditId, handlers)}
+                      onResolved={(result) => {
+                        const decision = batchDecision(result);
+                        void confirmGerrieAction(organizationId, auditId, decision.outcome, decision.detail);
+                        setPstate((s) => ({ ...s, [auditId]: decision.outcome === 'executed' ? 'done' : 'rejected' }));
                         onApprovalsChanged?.();
                       }}
                     />
                   ) : (
                     <div className="cc-approve-actions">
-                      <button className="cc-btn tiny ghost" disabled={st === 'busy'} onClick={() => reject(auditId)}>Afwijzen</button>
+                      <button className="cc-btn tiny ghost" disabled={st === 'busy'} onClick={() => void reject(auditId)}>Afwijzen</button>
                       {info.openable && canWrite && (
                         <button className="cc-btn tiny ghost" disabled={st === 'busy'} onClick={() => openProposal(proposal, handlers)}>Openen</button>
                       )}

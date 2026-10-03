@@ -475,6 +475,8 @@ function parseAllowedOrigins(values: Array<string | null>): string[] {
 
 function assertAllowedOrigin(req: Request) {
   const origin = req.headers.get('origin') || '';
+  // Een pagina zonder herkomst (sandbox-iframe, data:, file:) is nooit de app.
+  if (origin === 'null') throw new PublicInvoiceError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403);
   if (!origin) return;
   if (allowedOrigins.includes(origin)) return;
   throw new PublicInvoiceError('Deze frontend-origin is niet toegestaan voor publieke factuurpagina.', 403);

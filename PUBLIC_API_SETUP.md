@@ -90,8 +90,9 @@ supabase db push
 ```
 
 Dat draait `20261003000000_public_api.sql`, `20261003010000_webhooks.sql`,
-`20261003020000_api_rest.sql` en `20261003030000_api_hardening.sql` (alle vier
-veilig om te herhalen). De eerste:
+`20261003020000_api_rest.sql`, `20261003030000_api_hardening.sql` en
+`20261003040000_approvals_auth_limits.sql` (alle vijf veilig om te herhalen).
+De eerste:
 
 | Onderdeel | Wat |
 |---|---|
@@ -128,6 +129,15 @@ vervallen als het teamlid de organisatie verlaat, reacties horen bij een ticket
 van dezelfde organisatie, en bij de webhooks: geen adres in `audit_logs`, eerlijk
 claimen per eindpunt (één ronde tegelijk), en per onderwerp een vaste lijst
 velden in een bericht (`webhook_payload_columns`, dezelfde als de API).
+
+De vijfde:
+
+| Onderdeel | Wat |
+|---|---|
+| `ai_action_decide()` | Beslissen over een voorstel (goedkeurwachtrij, chat, commandocentrum): eerst vastzetten (`claim`, 10 minuten), dan `executed`, `failed` of `rejected`. Alleen wat nog open staat; een teamlid alleen over zijn eigen chatvoorstel, owners/admins over de wachtrij; met naam en tijd van wie besliste. Alleen voor de service role (`gerrie-agent`). |
+| `ai_action_audit_guard_update` | Trigger: een afgehandelde auditregel (uitgevoerd, rechtstreeks uitgevoerd, ingetrokken, afgewezen) verandert niet meer, en wat er voorgesteld werd (`params`) nooit — ook niet via de service role. |
+| `api_auth_failures`, `api_key_lookup()`, `api_note_auth_failure()` | Mislukte API-sleutels per afzender (gehasht adres). Na 60 binnen 10 minuten: 15 minuten 429 voor mislukte pogingen. Een geldige sleutel werkt altijd door. |
+| pg_cron `resofly-api-purge` | Dagelijks om 03:17 UTC `api_purge_expired()` en `webhook_purge_expired()` — als pg_cron aan staat. Anders een melding, en geen fout. |
 
 Op **staging** gebeurt dit vanzelf: de workflow *Deploy Supabase (staging)*
 draait `supabase db push` en `supabase functions deploy` bij elke push naar
@@ -168,6 +178,7 @@ Optioneel:
 | `API_DOCS_URL` | Link naar de handleiding in het OpenAPI-document. | — |
 | `API_RATE_LIMIT_PER_MINUTE` | Aanroepen per minuut per sleutel (10–6000). | `300` |
 | `API_ADMIN_ALLOWED_ORIGINS` | Extra origins voor `api-admin`, kommagescheiden. | — |
+| `API_AUTH_FAILURE_LIMIT` | Mislukte sleutels per afzender per 10 minuten voordat er een pauze van 15 minuten volgt (5–10000). | `60` |
 | `WEBHOOK_DNS_OVERRIDES` | **Alleen voor een testomgeving**: vaste IP-adressen voor namen die niet in de DNS staan, `naam=ip[,ip];naam2=ip`. Ook die adressen worden gekeurd (een naam op 127.0.0.1 zetten kan niet). In productie leeg laten. | — |
 
 Voor **webhooks** zijn twee secrets nodig. Zonder deze twee werkt de API
@@ -216,12 +227,17 @@ iets klaarstaands komt in elke ronde aan bod (ook naast een eindpunt met een
 grote achterstand), en rondes claimen één voor één, zodat twee overlappende
 rondes samen nooit meer dan 4 tegelijk naar één eindpunt sturen.
 
-Opruimen van de API zelf (verlopen `Idempotency-Key`s, logregels ouder dan 30
-dagen) doet de functie `api` af en toe zelf. Een dagelijkse job is netter:
+Opruimen (verlopen `Idempotency-Key`s, logregels en webhookberichten ouder dan
+30 dagen, oude tellingen van mislukte sleutels) plant de vijfde migratie zelf
+in als pg_cron aan staat: de taak `resofly-api-purge`, dagelijks om 03:17 UTC.
+Stond pg_cron toen nog uit, draai dan na het aanzetten de migratie opnieuw, of:
 
 ```sql
-select cron.schedule('api-purge-expired', '17 3 * * *', $$ select public.api_purge_expired(); $$);
+select cron.schedule('resofly-api-purge', '17 3 * * *',
+  'select public.api_purge_expired(); select public.webhook_purge_expired();');
 ```
+
+Zonder die taak ruimt de functie `api` af en toe zelf op.
 
 Controleren / verwijderen:
 
@@ -328,6 +344,29 @@ per sleutel (instelbaar), afgeboekt in de database zodat parallelle verzoeken
 niet allemaal dezelfde lege teller lezen. En hooguit 50 openstaande voorstellen
 per sleutel: een wachtrij waar niemand meer doorheen komt, is een wachtrij
 waarin iemand op Uitvoeren klikt zonder te lezen.
+
+**Gokken naar sleutels loont niet.** Een sleutel die niet bestaat of niet klopt,
+telt per afzender (het adres dat Cloudflare zag, gehasht opgeslagen). Na 60 van
+zulke pogingen binnen 10 minuten krijgt die afzender 15 minuten lang een 429 op
+mislukte pogingen — zonder verder te tellen of op te zoeken. Een GELDIGE sleutel
+werkt ook dan gewoon: koppelplatforms als Zapier en Make delen adressen, en een
+koppeling hoort geen last te hebben van een buurman met een verkeerde sleutel.
+Een ingetrokken of verlopen sleutel valt hier niet onder; die staat in het
+verzoeklog van de eigen organisatie, met de gewone aanroeplimiet.
+
+**Goedkeuren beslist de database.** De browser voert een voorstel uit onder de
+sessie van het teamlid (met RLS) en meldt daarna de uitkomst. Wat er dan in de
+audit komt, bepaalt `ai_action_decide`: alleen wat nog open staat, alleen wie
+erover gaat (een teamlid over zijn eigen chatvoorstel, owners/admins over de
+goedkeurwachtrij), met naam en tijd. Vóór het uitvoeren zet de app het voorstel
+vast, zodat twee beheerders die tegelijk op Akkoord klikken het niet allebei
+uitvoeren. En een afgehandelde regel — ook een rechtstreekse uitvoering van een
+sleutel — is niet meer achteraf op "afgewezen" of "mislukt" te zetten.
+
+**Geen verzoeken zonder herkomst.** Alle functies weigeren `Origin: null` (een
+sandbox-iframe, een data:- of file:-pagina) en sturen nooit
+`Access-Control-Allow-Origin: null` terug; zonder toegestane origin gaat de
+header niet mee (`_shared/origins.ts`, bewaakt door `origins.test.ts`).
 
 **Vaste adressen schrijven als het teamlid, niet als de server.** Lezen gaat
 met de service-role en het org-filter (wat RLS voor deze tabellen ook vraagt).

@@ -614,7 +614,7 @@ Elke fout heeft dezelfde vorm, met een vaste `code` voor je programma en een
 | 413 | `payload_too_large` | Invoer groter dan 1 MB (ook zonder `Content-Length`). |
 | 422 | `invalid_input` | De invoer klopt niet, of een id bestaat niet in deze organisatie. `message` zegt wat, `details.field` welk veld. |
 | 422 | `idempotency_conflict` | Zie hierboven. |
-| 429 | `rate_limited` | Te veel verzoeken, of een webhook net getest; wacht `Retry-After` seconden. |
+| 429 | `rate_limited` | Te veel verzoeken, een webhook net getest, of te veel mislukte sleutels vanaf je adres; wacht `Retry-After` seconden. |
 | 429 | `queue_full` | 50 voorstellen van deze sleutel wachten nog op goedkeuring. |
 | 500 | `internal_error` | Aan onze kant misgegaan. Geef het `request_id` door. |
 
@@ -630,6 +630,9 @@ Elk antwoord heeft een `X-Request-Id`-header, en `Cache-Control: no-store`
 - **Bladeren tot offset 10.000** per lijst.
 - **20 webhooks** per sleutel (alle sleutels samen 100), **50** uit de app per organisatie.
 - **Eén test per 10 seconden** per webhook.
+- **60 mislukte sleutels** (onbekend of onjuist) per 10 minuten vanaf één adres;
+  daarna 15 minuten een 429 voor mislukte pogingen. Een geldige sleutel werkt
+  vanaf dat adres gewoon door.
 - Lijsten binnen een handeling hebben hun eigen `limit`-veld; zie het schema.
 
 ## Voorbeelden
