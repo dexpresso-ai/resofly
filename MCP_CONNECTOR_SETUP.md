@@ -276,8 +276,26 @@ staan er twee dingen klaar die hij in zijn AI-app uit een menu pakt.
 **Standaardvragen** (`prompts`) — vijf opdrachten die deze koppeling goed aankan:
 weekoverzicht, klant doorlichten (met de naam als invulveld), openstaande
 facturen nalopen, notulen opvolgen, en je dag voorbereiden. In Claude verschijnen
-ze als keuzes; de opdracht die eronder zit stuurt het model langs `find_actions`
-en `run_action`, met de instructie niets te verzinnen.
+ze als keuzes. De opdracht die eronder zit komt als bericht in het gesprek van de
+gebruiker te staan, en is daarom gewone taal: zoek alles op in ResoFly en verzin
+niets. Toolnamen staan er niet in; hoe het model zoekt, staat in de omschrijvingen
+van de tools.
+
+### Gewone taal
+
+Een gebruiker ziet geen technische namen: geen `propose_invoice`, geen
+`client_id`, geen `draft`. De serverinstructies nemen daarvoor dezelfde regels over
+als Gerrie's systeemprompt (`PLAIN_LANGUAGE_RULES` in `_shared/plainLanguage.ts`).
+De omschrijvingen van de tools herhalen het kort, voor AI-apps die de
+serverinstructies niet aan het model doorgeven. En elke tool heeft een `title`
+("Zoeken wat er kan", "Gegevens ophalen", "Klaarzetten ter goedkeuring"), die een
+AI-app kan tonen in plaats van de naam.
+
+Wat ResoFly niet in de hand heeft: het eigen scherm van de AI-app. Claude laat een
+aanroep openklappen, en daarin staan het id en de ruwe gegevens gewoon. Dat is het
+venster van de app, niet het antwoord van het model.
+`plainLanguage.test.ts` en `mcpCatalog.test.ts` bewaken dat wat wij zelf tonen
+(labels, titels, standaardvragen en bronnen) geen technische namen bevat.
 
 **Bronnen** (`resources`) — dingen die hij aanhecht vóórdat hij iets vraagt: zijn
 postvak, recente klantmail, de planning van deze week, de openstaande posten, de

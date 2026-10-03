@@ -8,6 +8,7 @@ import {
 import { ACTIONS } from '../_shared/actions/index.ts';
 import { getAction, searchActions } from '../_shared/actions/registry.ts';
 import { ActionError, type ActionCtx, type ActionDef, type ActionPlan } from '../_shared/actions/types.ts';
+import { PLAIN_LANGUAGE_RULES } from './plainLanguage.ts';
 
 // ============================================================
 // gerrie-agent — Gerrie, de AI-assistent, gekoppeld aan Claude (Anthropic).
@@ -783,6 +784,8 @@ function buildSystemPrompt(ctx: GerrieContext): string {
     '- Kun je een gevraagde actie (nog) niet uitvoeren? Zeg dat duidelijk en leg kort uit wat wél kan.',
     '- Gebruik altijd de actie die bij de vraag past: een FACTUUR maak je met `propose_invoice`, een OFFERTE met `propose_quote`. Verwissel ze nooit en presenteer het ene nooit als het andere. Vraagt de gebruiker een offerte na een factuur (of andersom), gebruik dan dezelfde klant/regels maar wél het juiste type.',
     '- Geef ALTIJD een kort tekstantwoord, ook bij een voorstel, en benoem daarin wat je hebt klaargezet (factuur, offerte of klant). Laat de gebruiker nooit zonder reactie zitten.',
+    '',
+    ...PLAIN_LANGUAGE_RULES,
     '',
     'Stijl:',
     '- Antwoord altijd in het Nederlands, vriendelijk en professioneel, zonder overbodige uitweidingen.',

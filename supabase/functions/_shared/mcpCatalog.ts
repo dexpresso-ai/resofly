@@ -125,7 +125,7 @@ export const MCP_RESOURCE_TEMPLATES: McpResource[] = [
     uri: 'resofly://project/{project_id}',
     name: 'project',
     title: 'Projectoverzicht',
-    description: 'Alles van één project op een rij: fases, taken, uren, budget en team. Zoek het project-id eerst op met find_actions.',
+    description: 'Alles van één project op een rij: fases, taken, uren, budget en team.',
     module: 'projects',
     actionId: 'project.dashboard',
   },
@@ -184,13 +184,17 @@ export interface McpPrompt {
 
 /**
  * De opdrachten zijn geschreven voor een model dat ONZE app niet kent. Ze zeggen
- * daarom steeds hetzelfde drietal: zoek eerst op wat er is, gebruik de exacte
- * id's, en verzin niets. Dat is geen wantrouwen maar ervaring: een model dat
- * zelf een factuurnummer invult, doet dat overtuigend.
+ * daarom steeds hetzelfde: zoek het op in ResoFly, en verzin niets. Dat is geen
+ * wantrouwen maar ervaring: een model dat zelf een factuurnummer invult, doet dat
+ * overtuigend.
+ *
+ * Zonder toolnamen. De opdracht komt als bericht in het gesprek van de gebruiker
+ * te staan, en die hoort geen `find_actions` te lezen (zie plainLanguage.ts). HOE
+ * het model zoekt, staat in de omschrijvingen van de tools.
  */
 const WERKWIJZE =
-  'Zoek eerst met find_actions op de woorden hieronder en gebruik daarna run_action met de exacte id\'s die je terugkrijgt. ' +
-  'Vind je iets niet, zeg dat dan — verzin geen bedragen, namen of id\'s.';
+  'Zoek alles op in ResoFly en gebruik precies wat je daar vindt. ' +
+  'Vind je iets niet, zeg dat dan — verzin geen bedragen, namen of nummers.';
 
 export const MCP_PROMPTS: McpPrompt[] = [
   {
