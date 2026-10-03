@@ -10,6 +10,10 @@
 // ============================================================
 
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { corsAllowOrigin, originRefusal } from './origins.ts';
+
+// De regels voor toegestane origins staan in origins.ts (los te testen).
+export { normalizeOrigin, OPAQUE_ORIGIN, parseAllowedOrigins } from './origins.ts';
 
 export type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 413 | 422 | 429 | 500 | 502;
@@ -137,43 +141,26 @@ export interface Cors {
 }
 
 export function makeCors(allowedOrigins: string[], allowLocalDev: boolean): Cors {
-  const isLocal = (origin: string) => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
   const headers = (req: Request): HeadersInit => {
-    const origin = req.headers.get('origin') || '';
-    const allowOrigin = allowedOrigins.includes(origin) || (allowLocalDev && isLocal(origin))
-      ? origin : allowLocalDev && !origin ? '*' : 'null';
-    return {
-      'Access-Control-Allow-Origin': allowOrigin,
+    const result: Record<string, string> = {
       'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
       Vary: 'Origin',
     };
+    // Alleen een toegestane origin krijgt hem terug; geen match = geen header
+    // (nooit "null", zie origins.ts).
+    const allowOrigin = corsAllowOrigin(req.headers.get('origin') || '', allowedOrigins, allowLocalDev);
+    if (allowOrigin) result['Access-Control-Allow-Origin'] = allowOrigin;
+    return result;
   };
   return {
     headers,
     assert(req: Request) {
-      const origin = req.headers.get('origin') || '';
-      if (!origin && allowLocalDev) return;
-      if (allowedOrigins.includes(origin)) return;
-      if (allowLocalDev && isLocal(origin)) return;
-      if (allowedOrigins.length === 0 && allowLocalDev) return;
-      if (allowedOrigins.length === 0) throw new HttpError('Toegestane origins ontbreken in de configuratie.', 500);
-      throw new HttpError('Deze frontend-origin is niet toegestaan.', 403);
+      const refusal = originRefusal(req.headers.get('origin') || '', allowedOrigins, allowLocalDev);
+      if (refusal) throw new HttpError(refusal.message, refusal.status);
     },
     json(req: Request, payload: unknown, status = 200): Response {
       return new Response(JSON.stringify(payload), { status, headers: { ...headers(req), 'Content-Type': 'application/json' } });
     },
   };
-}
-
-export function parseAllowedOrigins(values: Array<string | null | undefined>): string[] {
-  const origins = new Set<string>();
-  for (const value of values) {
-    if (!value) continue;
-    for (const part of value.split(',')) {
-      const trimmed = part.trim().replace(/\/$/, '');
-      if (trimmed) origins.add(trimmed);
-    }
-  }
-  return [...origins];
 }

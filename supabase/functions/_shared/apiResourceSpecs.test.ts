@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { buildOpenApi } from './publicApi.ts';
 import { resourceOpenApi, writableFields } from './apiResources.ts';
-import { matchResource, refineTaskPlanning, refineTimeEntryType, RESOURCE_LIST, RESOURCES } from './apiResourceSpecs.ts';
+import { matchResource, refineTaskPlanning, refineTimeEntry, refineTimeEntryType, RESOURCE_LIST, RESOURCES } from './apiResourceSpecs.ts';
 import { WEBHOOK_EVENTS } from './webhooks.ts';
 
 /**
@@ -18,11 +18,21 @@ import { WEBHOOK_EVENTS } from './webhooks.ts';
 
 const MIGRATIONS_DIR = new URL('../../migrations/', import.meta.url);
 const FRESH = readFileSync(new URL('../../FRESH_INSTALL_COMPLETE_SCHEMA.sql', import.meta.url), 'utf8');
-const REST_MIGRATION = readFileSync(new URL('20261003020000_api_rest.sql', MIGRATIONS_DIR), 'utf8');
-
 const migrations = readdirSync(MIGRATIONS_DIR)
   .filter((name) => /^\d{14}_.+\.sql$/.test(name)).sort()
   .map((name) => readFileSync(new URL(name, MIGRATIONS_DIR), 'utf8'));
+
+/** De LAATSTE definitie van een functie in de migraties: die geldt. */
+function latestFunction(name: string): string {
+  const marker = `create or replace function public.${name}(`;
+  for (const sql of [...migrations].reverse()) {
+    const start = sql.indexOf(marker);
+    if (start >= 0) return sql.slice(start, sql.indexOf('\n$$;', start));
+  }
+  throw new Error(`${name} staat in geen enkele migratie`);
+}
+
+const REST_MIGRATION = latestFunction('api_rest_write');
 
 const quoted = (text: string) => [...text.matchAll(/'([^']*)'/g)].map((m) => m[1]);
 
@@ -209,4 +219,12 @@ test('uren: een categorie hoort alleen bij indirecte uren', () => {
   const switched: Record<string, unknown> = { entry_type: 'direct' };
   refineTimeEntryType(switched, 'update');
   assert.equal(switched.indirect_category, null, 'wie naar direct wisselt, verliest de categorie — net als in de app');
+});
+
+test('uren: de eindtijd ligt niet vóór de begintijd', () => {
+  assert.doesNotThrow(() => refineTimeEntry({ started_at: '2026-10-03T07:00:00.000Z', ended_at: '2026-10-03T08:30:00.000Z' }, 'create'));
+  assert.throws(() => refineTimeEntry({ started_at: '2026-10-03T08:00:00.000Z', ended_at: '2026-10-03T07:00:00.000Z' }, 'create'), /ended_at/);
+  // De typeregel loopt mee.
+  assert.throws(() => refineTimeEntry({ indirect_category: 'admin' }, 'create'), /indirect/);
+  assert.equal(RESOURCES.time_entries.refine, refineTimeEntry);
 });

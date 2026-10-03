@@ -32,7 +32,7 @@ import { ActionError, type ActionCtx, type ActionDef, type ActionPlan } from '..
 // ============================================================
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
-type HttpStatus = 400 | 401 | 403 | 404 | 422 | 429 | 500 | 502;
+type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502;
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -144,7 +144,7 @@ interface EditQuoteProposal { type: 'edit_quote'; id: string; number: string; cl
 interface EditClientProposal { type: 'edit_client'; id: string; name: string; changes: { name?: string; contact_name?: string | null; email?: string | null; phone?: string | null; notes?: string | null; status?: string } }
 // Herinneringen zijn óók een reeks die je regel voor regel afvinkt; bedrag en
 // dagen-te-laat staan erbij zodat je per factuur kunt besluiten, niet per stapel.
-interface SendRemindersProposal { type: 'send_reminders'; invoices: Array<{ id: string; number: string; client_name: string; level: number; total_eur: number; days_overdue: number }>; total: number }
+interface SendRemindersProposal { type: 'send_reminders'; invoices: Array<{ id: string; number: string; client_name: string; level: number; total_eur: number; days_overdue: number; recipient_email: string | null }>; total: number }
 interface ProposalSubtask { label: string; done: boolean }
 interface ProjectProposal { type: 'project'; name: string; client_id: string | null; client_name: string; description: string | null; start_date: string | null; end_date: string | null }
 interface EditProjectProposal { type: 'edit_project'; id: string; name: string; changes: { name?: string; client_id?: string | null; description?: string | null; start_date?: string | null; end_date?: string | null; archived?: boolean } }
@@ -2569,7 +2569,11 @@ function auditActionName(proposal: Proposal): string {
 
 /** De omgeving voor een handeling. organization_id komt uit de sessie, nooit uit het model. */
 function actionCtxFor(ctx: GerrieContext): ActionCtx {
-  return { organizationId: ctx.organizationId, userId: ctx.userId, role: ctx.role, today: ctx.today, db: supabaseAdmin };
+  return {
+    organizationId: ctx.organizationId, userId: ctx.userId, role: ctx.role, today: ctx.today, db: supabaseAdmin,
+    canRead: (module: string) => moduleLevel(ctx, module) !== 'none',
+    canWrite: (module: string) => moduleLevel(ctx, module) === 'write',
+  };
 }
 
 /** Mag dit teamlid deze handeling? Lezen vraagt leesrecht, wijzigen vraagt schrijfrecht. */
@@ -2649,7 +2653,7 @@ async function buildActionProposal(ctx: GerrieContext, input: Record<string, unk
       proposal: {
         type: 'action', action_id: action.id,
         title: plan.title, sub, kind: plan.kind,
-        risk: (plan.risk ?? action.risk) === 'high' ? 'high' : 'normal',
+        risk: plan.risk === 'high' || action.risk === 'high' ? 'high' : 'normal',
         payload: plan.payload,
       },
     };
@@ -2691,7 +2695,7 @@ async function runTool(ctx: GerrieContext, name: string, input: Record<string, u
   switch (name) {
     case 'find_actions': return findActionsTool(ctx, input);
     case 'run_action': return runActionTool(ctx, input);
-    case 'search_clients': return searchClients(orgId, input, limit);
+    case 'search_clients': return searchClients(orgId, input, limit, moduleLevel(ctx, 'finance') !== 'none');
     case 'list_invoices': return listInvoices(orgId, input, limit);
     case 'list_quotes': return listQuotes(orgId, input, limit);
     case 'get_financial_summary': return getFinancialSummary(ctx, input);
@@ -2836,7 +2840,7 @@ async function suggestMeetingSlots(ctx: GerrieContext, input: Record<string, unk
 
 async function listTasks(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('tasks', orgId).order('created_at', { ascending: false }).limit(limit);
-  if (input.project_id) query = query.eq('project_id', String(input.project_id));
+  if (input.project_id) query = query.eq('project_id', idFilter(input, 'project_id'));
   if (input.status) query = query.eq('status', String(input.status));
   if (input.planned_only) query = query.not('planned_date', 'is', null);
   const { data, error } = await query;
@@ -3358,7 +3362,7 @@ async function buildEditTaskProposal(ctx: GerrieContext, input: Record<string, u
   return { ok: true, proposal: { type: 'edit_task', id: String(task.id), title: String(task.title), project_id: task.project_id ? String(task.project_id) : null, changes } };
 }
 
-interface DueReminder { id: string; number: string; client_id: string | null; client_name: string; reminder_level: number; next_level: number; days_overdue: number; total_eur: number }
+interface DueReminder { id: string; number: string; client_id: string | null; client_name: string; client_email: string | null; reminder_level: number; next_level: number; days_overdue: number; total_eur: number }
 
 /**
  * Berekent welke facturen vandaag aan de beurt zijn voor hun VOLGENDE herinnering,
@@ -3387,14 +3391,18 @@ async function computeDueReminders(orgId: string, levelFilter: number | null): P
     if (daysOverdue < offsets[level]) continue;
     const nextLevel = level + 1;
     if (levelFilter && nextLevel !== levelFilter) continue;
-    due.push({ id: String(r.id), number: String(r.number), client_id: r.client_id ? String(r.client_id) : null, client_name: '', reminder_level: level, next_level: nextLevel, days_overdue: daysOverdue, total_eur: invoiceTotal(r) });
+    due.push({ id: String(r.id), number: String(r.number), client_id: r.client_id ? String(r.client_id) : null, client_name: '', client_email: null, reminder_level: level, next_level: nextLevel, days_overdue: daysOverdue, total_eur: invoiceTotal(r) });
   }
 
   const clientIds = [...new Set(due.map((d) => d.client_id).filter(Boolean))] as string[];
   if (clientIds.length) {
-    const { data: clients } = await supabaseAdmin.from('clients').select('id, name').eq('organization_id', orgId).in('id', clientIds);
-    const nameById = new Map<string, string>((clients ?? []).map((c: Record<string, unknown>) => [String(c.id), String(c.name)]));
-    for (const d of due) if (d.client_id) d.client_name = nameById.get(d.client_id) ?? '';
+    const { data: clients } = await supabaseAdmin.from('clients').select('id, name, email').eq('organization_id', orgId).in('id', clientIds);
+    const byId = new Map<string, Record<string, unknown>>((clients ?? []).map((c: Record<string, unknown>) => [String(c.id), c]));
+    for (const d of due) {
+      const client = d.client_id ? byId.get(d.client_id) : undefined;
+      d.client_name = client ? String(client.name ?? '') : '';
+      d.client_email = client?.email ? String(client.email) : null;
+    }
   }
   return due.sort((a, b) => b.days_overdue - a.days_overdue);
 }
@@ -3411,7 +3419,9 @@ async function buildSendRemindersProposal(ctx: GerrieContext, input: Record<stri
       type: 'send_reminders',
       // Bedrag en dagen-te-laat gaan mee: de gebruiker vinkt per factuur af en
       // hoort dan te zien waar het over gaat zonder eerst weg te klikken.
-      invoices: due.map((d) => ({ id: d.id, number: d.number, client_name: d.client_name, level: d.next_level, total_eur: d.total_eur, days_overdue: d.days_overdue })),
+      // En het adres: dat hoort op de kaart, en de uitvoerder stuurt alleen daarheen
+      // (is het sindsdien veranderd, dan weigert de server — zie approvedRecipient.ts).
+      invoices: due.map((d) => ({ id: d.id, number: d.number, client_name: d.client_name, level: d.next_level, total_eur: d.total_eur, days_overdue: d.days_overdue, recipient_email: d.client_email })),
       total: due.length,
     },
   };
@@ -3868,13 +3878,13 @@ function orgTable(table: string, orgId: string) {
  * schreef, schreef je ook niet ná die datum — dat is precies de groep die je zoekt
  * als je vraagt wie je al een tijd niet hebt gesproken.
  */
-async function searchClients(orgId: string, input: Record<string, unknown>, limit: number) {
+async function searchClients(orgId: string, input: Record<string, unknown>, limit: number, seeMoney: boolean) {
   let query = orgTable('clients', orgId).order('name', { ascending: true }).limit(limit);
   if (input.status) query = query.eq('status', String(input.status));
   if (input.client_kind) query = query.eq('client_kind', String(input.client_kind));
   if (input.city) query = query.ilike('city', `%${escapeLike(String(input.city))}%`);
-  const q = String(input.query || '').trim();
-  if (q) query = query.or(`name.ilike.%${escapeLike(q)}%,contact_name.ilike.%${escapeLike(q)}%,email.ilike.%${escapeLike(q)}%`);
+  const q = orSearchTerm(String(input.query || ''));
+  if (q) query = query.or(`name.ilike.%${q}%,contact_name.ilike.%${q}%,email.ilike.%${q}%`);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
 
@@ -3903,7 +3913,8 @@ async function searchClients(orgId: string, input: Record<string, unknown>, limi
     clients: rows.map((c) => ({
       id: c.id, name: c.name, client_code: c.client_code, contact_name: c.contact_name,
       email: c.email, phone: c.phone, city: c.city, client_kind: c.client_kind,
-      status: c.status, value_eur: c.value_eur, tags: c.tags,
+      // De klantwaarde hoort bij Financiën: zonder leesrecht daar null, zoals in de API.
+      status: c.status, value_eur: seeMoney ? c.value_eur : null, tags: c.tags,
     })),
   };
 }
@@ -3911,7 +3922,7 @@ async function searchClients(orgId: string, input: Record<string, unknown>, limi
 async function listInvoices(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('invoices', orgId).order('date', { ascending: false }).limit(limit);
   if (input.status) query = query.eq('status', String(input.status));
-  if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   const from = isoDate(input.from);
   const to = isoDate(input.to);
   if (from) query = query.gte('date', from);
@@ -3947,7 +3958,7 @@ async function listInvoices(orgId: string, input: Record<string, unknown>, limit
 async function listQuotes(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('quotes', orgId).order('date', { ascending: false }).limit(limit);
   if (input.status) query = query.eq('status', String(input.status));
-  if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   const from = isoDate(input.from);
   const to = isoDate(input.to);
   if (from) query = query.gte('date', from);
@@ -4015,7 +4026,7 @@ async function getFinancialSummary(ctx: GerrieContext, input: Record<string, unk
 
 async function listProjects(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('projects', orgId).order('created_at', { ascending: false }).limit(limit);
-  if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   if (!input.include_archived) query = query.eq('archived', false);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
@@ -4030,7 +4041,7 @@ async function listProjects(orgId: string, input: Record<string, unknown>, limit
 async function listTickets(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('tickets', orgId).order('created_at', { ascending: false }).limit(limit);
   if (input.status) query = query.eq('status', String(input.status));
-  if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   if (input.priority) query = query.eq('priority', String(input.priority));
   const from = isoDate(input.from);
   const to = isoDate(input.to);
@@ -4072,8 +4083,8 @@ async function listTimeEntries(ctx: GerrieContext, input: Record<string, unknown
   const to = isoDate(input.to);
   if (from) query = query.gte('entry_date', from);
   if (to) query = query.lte('entry_date', to);
-  if (input.project_id) query = query.eq('project_id', String(input.project_id));
-  if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.project_id) query = query.eq('project_id', idFilter(input, 'project_id'));
+  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   if (input.billable_only === true) query = query.eq('billable', true);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
@@ -4264,7 +4275,7 @@ function buildCampaignProposal(input: Record<string, unknown>): ProposalResult {
 
 async function listContracts(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('contracts', orgId).order('date', { ascending: false }).limit(limit);
-  if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   if (input.status) query = query.eq('status', String(input.status));
   const { data, error } = await query;
   if (error) throw new Error(error.message);
@@ -4337,7 +4348,7 @@ async function listCampaigns(orgId: string, input: Record<string, unknown>, limi
 
 async function listGalleries(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('galleries', orgId).order('created_at', { ascending: false }).limit(limit);
-  if (input.project_id) query = query.eq('project_id', String(input.project_id));
+  if (input.project_id) query = query.eq('project_id', idFilter(input, 'project_id'));
   if (input.status) query = query.eq('status', String(input.status));
   const { data, error } = await query;
   if (error) throw new Error(error.message);
@@ -4362,8 +4373,8 @@ async function listContent(orgId: string, input: Record<string, unknown>, limit:
 
   async function fetchFrom(table: 'notes' | 'documents') {
     let query = orgTable(table, orgId).order('updated_at', { ascending: false }).limit(limit);
-    if (input.client_id) query = query.eq('client_id', String(input.client_id));
-    if (input.project_id) query = query.eq('project_id', String(input.project_id));
+    if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
+    if (input.project_id) query = query.eq('project_id', idFilter(input, 'project_id'));
     if (needle) query = query.ilike('title', `%${escapeLike(needle)}%`);
     const { data, error } = await query;
     if (error) throw new Error(error.message);
@@ -4476,7 +4487,7 @@ async function listSuppliers(orgId: string, input: Record<string, unknown>, limi
 
 async function listPurchaseInvoices(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('purchase_invoices', orgId).order('date', { ascending: false }).limit(limit);
-  if (input.supplier_id) query = query.eq('supplier_id', String(input.supplier_id));
+  if (input.supplier_id) query = query.eq('supplier_id', idFilter(input, 'supplier_id'));
   if (input.status) query = query.eq('status', String(input.status));
   const from = isoDate(input.from);
   const to = isoDate(input.to);
@@ -4608,7 +4619,7 @@ async function listBankTransactions(orgId: string, input: Record<string, unknown
 async function listVatReturns(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('vat_returns', orgId).order('period_start', { ascending: false }).limit(limit);
   const year = Math.floor(num(input.year));
-  if (Number.isFinite(year) && year > 1900) query = query.eq('year', year);
+  if (Number.isFinite(year) && year > 1900 && year < 10_000) query = query.eq('year', year);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
   return {
@@ -4692,9 +4703,12 @@ async function resolveEventRef(ctx: GerrieContext, input: Record<string, unknown
   const sourceId = String(input.source_id || '').trim();
   if (!isUuid(sourceId)) return { ok: false, error: 'Ongeldig source_id. Zoek het item eerst met list_calendar_events.' };
   const { data: source, error } = await supabaseAdmin.from('calendar_sources')
-    .select('id, name, provider').eq('organization_id', ctx.organizationId).eq('id', sourceId).maybeSingle();
+    .select('id, name, provider, user_id, visibility').eq('organization_id', ctx.organizationId).eq('id', sourceId).maybeSingle();
   if (error) return { ok: false, error: `Agenda ophalen mislukt: ${error.message}` };
-  if (!source) return { ok: false, error: 'Deze agenda bestaat niet in deze organisatie.' };
+  // Andermans privé-agenda bestaat hier niet (zoals de RLS): geen naam in een melding.
+  if (!source || (String(source.user_id) !== ctx.userId && source.visibility !== 'organization')) {
+    return { ok: false, error: 'Deze agenda bestaat niet in deze organisatie.' };
+  }
   if (String(source.provider) === 'ics') return { ok: false, error: `"${String(source.name)}" is een abonnement via een link en kan niet gewijzigd worden.` };
 
   const eventId = String(input.event_id || '').trim();
@@ -5152,18 +5166,51 @@ async function recordUsage(organizationId: string, conversationId: string, messa
   });
 }
 
-/** Logt een door de gebruiker bevestigde actie als uitgevoerd/mislukt in de audit. */
-async function confirmAction(_userId: string, organizationId: string, role: OrganizationRole, body: Record<string, unknown>): Promise<{ ok: boolean }> {
+/** Wat de browser over een voorstel kan melden. */
+const DECISION_OUTCOMES = ['claim', 'executed', 'failed', 'rejected'] as const;
+
+/**
+ * Een beslissing over een voorstel vastleggen. De browser voert een voorstel
+ * uit (onder de sessie van het teamlid, met RLS) en meldt het hier:
+ *   'claim'    — vóór het uitvoeren: vastzetten, zodat niemand anders het
+ *                tegelijk ook uitvoert;
+ *   'executed' / 'failed' — daarna, de uitkomst;
+ *   'rejected' — afgewezen.
+ * Wat nog open staat, wie erover beslist (een teamlid alleen over zijn eigen
+ * chatvoorstel, owners/admins over de goedkeurwachtrij) en wie het al aan het
+ * uitvoeren is: dat weegt de database (ai_action_decide), met naam en tijd van
+ * wie besliste. Een afgehandeld voorstel verandert daarna niet meer.
+ */
+async function confirmAction(
+  userId: string, organizationId: string, role: OrganizationRole, body: Record<string, unknown>,
+): Promise<{ ok: boolean; status: string; stale_claim?: { by: string; until: string } }> {
   if (!['owner', 'admin', 'member'].includes(role)) throw new HttpError('Geen schrijfrechten.', 403);
   const auditId = String(body.auditId || '');
   if (!isUuid(auditId)) throw new HttpError('Ongeldig auditId.', 400);
-  const status = String(body.outcome || '') === 'failed' ? 'failed' : 'executed';
-  const detail = body.detail ? String(body.detail).slice(0, 500) : null;
-  const { error } = await supabaseAdmin.from('ai_action_audit')
-    .update({ status, result: detail ? { detail } : { ok: status === 'executed' } })
-    .eq('id', auditId).eq('organization_id', organizationId);
-  if (error) throw new HttpError(`Audit bijwerken mislukt: ${error.message}`, 500);
-  return { ok: true };
+  const outcome = String(body.outcome || '');
+  if (!(DECISION_OUTCOMES as readonly string[]).includes(outcome)) {
+    throw new HttpError(`Onbekende uitkomst; kies uit ${DECISION_OUTCOMES.join(', ')}.`, 400);
+  }
+  const detail = body.detail === undefined || body.detail === null ? null : String(body.detail).slice(0, 500);
+  const { data, error } = await supabaseAdmin.rpc('ai_action_decide', {
+    p_audit_id: auditId, p_organization_id: organizationId, p_user_id: userId, p_outcome: outcome, p_detail: detail,
+  });
+  if (error) {
+    // De zinnen uit ai_action_decide zijn voor de gebruiker geschreven; een
+    // onverwachte databasefout niet.
+    const status: HttpStatus = error.code === 'RS409' ? 409 : error.code === '42501' ? 403
+      : error.code === 'P0002' ? 404 : error.code === '22023' ? 400 : 500;
+    if (status === 500) console.error('[gerrie] beslissing vastleggen mislukt:', error.message);
+    throw new HttpError(status === 500 ? 'De beslissing kon niet worden vastgelegd. Probeer het opnieuw.' : error.message, status);
+  }
+  const result = (data ?? {}) as { status?: unknown; stale_claim?: { by?: unknown; until?: unknown } | null };
+  return {
+    ok: true,
+    status: String(result.status ?? ''),
+    // Een eerdere uitvoering die nooit een uitkomst meldde: misschien is het al
+    // gebeurd. De app vraagt dat na vóór hij opnieuw uitvoert.
+    ...(result.stale_claim ? { stale_claim: { by: String(result.stale_claim.by ?? ''), until: String(result.stale_claim.until ?? '') } } : {}),
+  };
 }
 
 /**
@@ -5250,10 +5297,13 @@ function parseAllowedOrigins(values: Array<string | null | undefined>): string[]
   for (const value of values) {
     if (!value) continue;
     for (const rawPart of value.split(',')) {
+      // Alleen echte webherkomsten: "null" of "*" zou elke pagina toelaten.
       const part = rawPart.trim().replace(/\/$/, '');
-      if (!part) continue;
-      if (part.startsWith('http://') || part.startsWith('https://')) { try { origins.add(new URL(part).origin); } catch { origins.add(part); } }
-      else origins.add(part);
+      if (!/^https?:\/\//i.test(part)) continue;
+      try {
+        const origin = new URL(part).origin;
+        if (origin !== 'null') origins.add(origin);
+      } catch { /* geen geldig adres */ }
     }
   }
   return [...origins];
@@ -5264,7 +5314,10 @@ function clampLimit(value: unknown): number {
 }
 function isoDate(value: unknown): string | null {
   const s = String(value || '').trim();
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  // Ook een echte kalenderdag: 2026-02-30 bestaat niet, en Postgres zou dat met een fout (500) zeggen.
+  const date = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === s ? s : null;
 }
 function todayIso(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Amsterdam' });
@@ -5273,6 +5326,27 @@ function daysBetween(fromIso: string, toIso: string): number {
   return Math.floor((Date.parse(toIso) - Date.parse(fromIso)) / 86400000);
 }
 function escapeLike(value: string): string { return value.replace(/[%_,]/g, (m) => `\\${m}`).slice(0, 80); }
+/**
+ * Een zoekterm voor BINNEN een `.or()`-filter. Daar is een komma het begin van
+ * een volgende voorwaarde (een backslash ervoor helpt niet), en haakjes,
+ * aanhalingstekens en de backslash betekenen er ook iets: die gaan eruit.
+ * Zoeken is zoeken, geen manier om een eigen filter mee te sturen.
+ */
+function orSearchTerm(value: string): string {
+  return escapeLike(value.replace(/[,()"\\\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim());
+}
+/**
+ * Een id uit de invoer als filter. Klopt de vorm niet, dan een 400 met uitleg
+ * in plaats van een databasefout (500). Bewust ruimer dan isUuid: elke uuid die
+ * Postgres kent, ook de niet-v4 id's van oudere rijen.
+ */
+function idFilter(input: Record<string, unknown>, key: string): string {
+  const value = String(input[key] ?? '').trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)) {
+    throw new HttpError(`"${key}" moet een geldig id zijn. Zoek het eerst op en gebruik het exacte id.`, 400);
+  }
+  return value;
+}
 function isUuid(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
 function describeError(error: unknown): string { if (error instanceof Error) return error.message; try { return JSON.stringify(error); } catch { return String(error); } }
 function requiredEnv(name: string): string { const value = Deno.env.get(name); if (!value) throw new Error(`Missing required env var: ${name}`); return value; }

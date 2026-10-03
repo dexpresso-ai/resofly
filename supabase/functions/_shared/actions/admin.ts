@@ -45,6 +45,50 @@ const MODULE_LABELS: Record<string, string> = {
   finance: 'Financiën', chat: 'Teamchat', gerrie: 'Gerrie (AI)',
 };
 
+/**
+ * Bij welke module hoort een regel uit het auditlog? Spiegelt
+ * public.audit_entity_module() (migratie 20261003060000); auditVisibility.test.ts
+ * houdt de twee gelijk. `null` = iedereen in de organisatie, 'admin' = alleen
+ * owners en admins. Wat hier niet in staat, is ook voor owners en admins.
+ */
+export const AUDIT_ENTITY_MODULE: Readonly<Record<string, string | null>> = {
+  member: null, organization: null,
+  api_key: 'admin', webhook_endpoint: 'admin', invitation: 'admin', calendar_connection: 'admin', subscription: 'admin',
+  billing_profile: 'admin', billing_event: 'admin', payment: 'admin', license_change: 'admin', license_event: 'admin',
+  annual_account: 'finance', annual_account_filing: 'finance', annual_account_signature: 'finance', bank_account: 'finance',
+  bank_rule: 'finance', company_settings: 'finance', contract: 'finance', contract_note: 'finance', contract_project: 'finance',
+  contract_template: 'finance', corporate_tax_return: 'finance', credit_note: 'finance', dividend_distribution: 'finance',
+  fiscal_year: 'finance', fiscal_year_size_input: 'finance', fixed_asset: 'finance', invoice: 'finance', journal_entry: 'finance',
+  ledger_account: 'finance', purchase_invoice: 'finance', quote: 'finance', result_appropriation: 'finance',
+  share_transaction: 'finance', shareholder: 'finance', supplier: 'finance', vat_return: 'finance',
+  calendar_event: 'calendar', calendar_event_link: 'calendar', calendar_source: 'calendar', note_calendar_link: 'calendar',
+  client: 'clients', client_call: 'clients', client_contact: 'clients',
+  project: 'projects', project_member: 'projects', project_template: 'projects', project_template_task: 'projects',
+  task: 'projects', task_assignee: 'projects',
+  ticket: 'tickets', ticket_note: 'tickets',
+  time_entry: 'time',
+  attachment: 'content', content_folder: 'content', document: 'content', drive_share: 'content', note: 'content',
+  note_handwriting: 'content',
+  saved_report: 'stats',
+};
+
+/**
+ * Welke soorten auditregels mag de aanroeper zien? `'all'` voor een owner of admin
+ * zonder modulebeperking; anders precies de lijst — dezelfde regel als de RLS op
+ * audit_logs, die hier niet meedoet (de handelingen lezen met de service-role).
+ * Een sleutel of koppeling MET modulebeperking telt als gewoon teamlid, net als bij
+ * de kerntools van Gerrie: geen sleutels, webhooks of betalingen, en per module
+ * alleen wat hij mag lezen.
+ */
+export function visibleAuditEntityTypes(ctx: Pick<ActionCtx, 'role' | 'canRead'>): 'all' | string[] {
+  const elevated = ctx.role === 'owner' || ctx.role === 'admin';
+  const unrestricted = !ctx.canRead || MODULE_KEYS.every((module) => ctx.canRead!(module));
+  if (elevated && unrestricted) return 'all';
+  return Object.entries(AUDIT_ENTITY_MODULE)
+    .filter(([, module]) => module === null || (module !== 'admin' && (ctx.canRead ? ctx.canRead(module) : elevated)))
+    .map(([entityType]) => entityType);
+}
+
 const MODULE_LEVELS = ['none', 'read', 'write'] as const;
 const LEVEL_LABELS: Record<string, string> = { none: 'geen toegang', read: 'alleen lezen', write: 'volledig' };
 
@@ -262,6 +306,8 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'team.list_invitations',
+    // Net als in de app (RLS): alleen owners en admins zien wie er is uitgenodigd.
+    adminOnly: true,
     label: 'Openstaande teamuitnodigingen bekijken',
     module: 'stats',
     kind: 'read',
@@ -314,10 +360,11 @@ export const ADMIN_ACTIONS: ActionDef[] = [
     module: 'stats',
     kind: 'read',
     description:
-      'Geeft de server-side gelogde wijzigingen binnen deze organisatie: wat er is aangemaakt, bijgewerkt of verwijderd, wie er is uitgenodigd, welke rol is gewijzigd, en gebeurtenissen rond plan en betaling. De log is alleen-lezen en wordt door database-triggers gevuld — hij is de enige plek waar je terugziet wie wat wanneer deed.',
+      'Geeft de server-side gelogde wijzigingen binnen deze organisatie: wat er is aangemaakt, bijgewerkt of verwijderd, wie er is uitgenodigd, welke rol is gewijzigd, en gebeurtenissen rond plan en betaling. De log is alleen-lezen en wordt door database-triggers gevuld — hij is de enige plek waar je terugziet wie wat wanneer deed. ' +
+      'Je ziet alleen regels over modules die je mag lezen; sleutels, webhooks, uitnodigingen en betalingen alleen als owner of admin.',
     keywords: ['audit', 'log', 'logboek', 'historie', 'geschiedenis', 'wie deed wat', 'wijzigingen', 'activiteit'],
     input: {
-      entity_type: { type: 'string', description: 'Alleen dit soort rijen, bijvoorbeeld "invoice" of "organization_member".' },
+      entity_type: { type: 'string', description: 'Alleen dit soort rijen, bijvoorbeeld "invoice", "client" of "member".' },
       action: { type: 'string', description: 'Alleen deze soort gebeurtenis: created, updated, deleted, invited, accepted, revoked, role_changed, disabled.' },
       since: { type: 'string', description: 'Alleen vanaf deze datum (JJJJ-MM-DD).' },
       limit: { type: 'number', description: 'Maximaal aantal regels (standaard 25, hoogstens 100).' },
@@ -326,8 +373,13 @@ export const ADMIN_ACTIONS: ActionDef[] = [
       const limit = Math.min(Math.max(Number(input.limit) || 25, 1), 100);
       let query = orgQuery(ctx, 'audit_logs', 'id, actor_user_id, action, entity_type, entity_id, entity_label, metadata, created_at')
         .order('created_at', { ascending: false }).limit(limit);
+      const visible = visibleAuditEntityTypes(ctx);
       const entityType = optStr(input, 'entity_type', 60);
+      if (entityType && visible !== 'all' && !visible.includes(entityType)) {
+        throw new ActionError(`Regels over "${entityType}" zijn niet zichtbaar met jouw rechten.`);
+      }
       if (entityType) query = query.eq('entity_type', entityType);
+      else if (visible !== 'all') query = query.in('entity_type', visible);
       const action = optStr(input, 'action', 60);
       if (action) query = query.eq('action', action);
       const since = optIsoDate(input, 'since');

@@ -259,3 +259,398 @@ via dubbele klanten (409), een sleutel die alleen mag klaarzetten (403), rijen
 van een andere organisatie (404), een sleutel waarvan de maker viewer werd en
 een sleutel zonder de module uren (403), tot de afgeleide waarden bij uren en een
 reactie die standaard intern is.
+
+## Veiligheidstest — twee rondes bevindingen
+
+Na fase 3 is de hele laag aangevallen: een aanvalsronde tegen de lokale stack
+(sleutels, routes, invoer, filters, idempotentie, gelijktijdigheid,
+webhook-adressen) en drie losse code-reviews (sleutels en rechten, webhooks,
+vaste adressen). Geen kritieke bevindingen; wel deze, allemaal dichtgezet.
+
+### Eerste ronde (aanvalsronde)
+
+- Een punt aan het eind van een webhooknaam (`localhost.`) glipte langs de
+  adrescontrole; een naam die naar binnen wijst (`127.0.0.1.nip.io`) werd alleen
+  bij de bezorging gevangen. Nu bij aanmaken, wijzigen en elke bezorging, met
+  DNS-over-HTTPS als de runtime zelf geen DNS kan opvragen.
+- Een NUL-teken in de invoer gaf een 500; nu 400. Uren met een eindtijd vóór de
+  begintijd worden geweigerd. Ingebouwde namen (`constructor`) zijn onbekende
+  velden. Keuzelijst-filters met meer waarden (`?status=new,review`).
+
+### Tweede ronde (reviews)
+
+**Het klantportaal is "naar buiten".** Met alleen `execute` kon een sleutel
+zonder Financiën het e-mailadres van een klant of van een contactpersoon met
+portaaltoegang op zijn eigen adres zetten — en zo via het portaal facturen
+inzien. Wat het portaal raakt, vraagt nu `execute_high`: in de database
+(`api_rest_write`, `p_allow_outward`, fout `RS403` → 403 `insufficient_scope`)
+voor de vaste adressen, en als risico `high` voor `ticket.set_client` en
+`client_contact.set_active` bij de handelingen.
+
+**Rechten per veld.** Een uurtarief of klantwaarde hoort bij Financiën. Zonder
+leesrecht daar komt het veld als `null` terug (ook in het dashboard van een
+project en in webhookberichten); zetten vraagt schrijfrecht in Financiën. Een
+verwijzing naar een module die de sleutel niet mag lezen (uren op een project
+zonder leesrecht in projecten) is een 403, vóór er iets wordt opgezocht.
+
+**Sleutels.** Een ingetrokken of verlopen sleutel kan geen voorstel meer
+neerzetten, ook niet in de race met het intrekken (trigger met `FOR SHARE`).
+Wie de organisatie verlaat, verliest zijn sleutels. Een sleutel die nog gebruikt
+wordt terwijl hij ingetrokken is, staat in het verzoeklog van de organisatie
+(met dezelfde aanroeplimiet, zodat dat log niet vol te schrijven is). Alleen een
+sleutel van de vorm die wij uitgeven wordt opgezocht.
+
+**Invoer en antwoorden.** Een body zonder `Content-Length` wordt ook begrensd
+(1 MB, gestreamd), JSON hooguit 32 niveaus diep, getallen alleen in gewone
+notatie, een lijst met teksten bevat teksten. Bladeren gaat tot offset 10.000,
+met een fout in plaats van stil afkappen. E-mailfilters negeren hoofdletters.
+Antwoorden krijgen `Cache-Control: no-store`. Postgres-meldingen met tabel- en
+constraintnamen gaan niet meer letterlijk naar buiten, ook niet uit een
+handeling. In `ai_action_audit` staan bij een wijziging via een vast adres de
+veldnamen, niet de waarden (die staan al in `audit_logs`).
+
+**Idempotentie.** De zoekparameters tellen mee (`?mode=queue` is een ander
+verzoek), een herhaling krijgt de `Location`-header terug, en een poging die
+nooit afkwam houdt de sleutel hooguit 5 minuten vast in plaats van een dag.
+
+**Webhooks.**
+- *DNS-rebinding*: de bezorger zoekt de naam één keer op, keurt de adressen en
+  verbindt met precies zo'n adres (`webhookTransport.ts`: `Deno.connect` +
+  `Deno.startTls`, certificaat gecontroleerd tegen de naam). Een naam die
+  tussendoor omslaat naar 127.0.0.1, komt niet meer binnen. Heeft een naam geen
+  adres, dan wordt er niet verstuurd maar later opnieuw geprobeerd.
+- Van een antwoord wordt hooguit 4 kB gelezen (was: alles, daarna afgekapt — een
+  antwoord van een gigabyte kon de bezorger laten omvallen).
+- Het webhook-adres (vaak zelf een geheim, zoals bij Zapier) stond als label in
+  `audit_logs`, dat elk teamlid leest. Nu de omschrijving; bestaande regels zijn
+  opgeschoond.
+- Claimen is eerlijk per eindpunt: één eindpunt met een grote achterstand vulde
+  de kandidatenlijst, en dan kwamen andere organisaties niet aan de beurt. Rondes
+  claimen één voor één (`pg_advisory_xact_lock`).
+- Een bericht bevat per onderwerp een vaste lijst velden — die van de API —
+  in plaats van "alles behalve geheimen". Interne velden (reacties onder een
+  taak, interne goedkeuring, de contracttekst) gaan niet meer mee, en een
+  wijziging aan een veld buiten de lijst is geen gebeurtenis.
+- Testen kan één keer per 10 seconden per eindpunt; het testbericht noemt niet
+  meer het e-mailadres van wie er klikte. Webhooks uit de app en van sleutels
+  hebben aparte ruimte (50, en 20 per sleutel / 100 samen). Aan- of uitzetten in
+  de app kan de foutteller en de reden van uitzetten niet meer invullen. IPv6:
+  ook 6to4, Teredo, site-local en lokale NAT64 tellen als intern.
+- De app ziet het als intrekken, hernoemen, aan/uitzetten of verwijderen niets
+  raakte (RLS), in plaats van "gelukt" te melden.
+
+### Wat de tests bewaken
+
+- `webhookTransport.test.ts` (13) — het verzoek (geen header-injectie) en het
+  lezen van een antwoord: chunked, zonder lengte, 1xx, en nooit meer dan het
+  plafond — ook niet bij een opgegeven lengte van een gigabyte.
+- `webhookPinning.test.ts` (10) — de echte `deliver()` met een nagespeelde DNS
+  en verbinding: er wordt verbonden met het gekeurde adres en niet opnieuw
+  opgezocht, een intern adres zet het eindpunt uit, geen adres is later opnieuw,
+  een time-out krijgt geen tweede bericht via een ander adres, en tarieven gaan
+  als `null` naar een sleutel zonder Financiën.
+- `apiResourceStore.test.ts` (6) — databasefouten als zin, zonder interne namen.
+- Uitbreidingen in `apiResources`, `publicApi`, `publicApiServer`,
+  `apiResourceServer`, `webhookDns` en `webhooksServer` — onder meer dat de
+  velden in een webhookbericht precies die van de API zijn, en dat de
+  invarianttests de LAATSTE definitie van een SQL-functie lezen. De nieuwe regels
+  zijn gecontroleerd door ze in de code stuk te maken (13 mutaties, alle
+  gevangen).
+
+Nagemeten: `npm test` 534 groen, `npm run typecheck` en `npm run build` groen,
+`deno check` groen voor api, api-admin, webhooks, mcp, mcp-oauth en
+gerrie-agent. End-to-end tegen een verse database: kern 33/33, vaste adressen
+77/77, aanvalsronde 52/52, webhooks 27/27 — de webhooks via de vastgepinde
+verbinding naar een echte TLS-ontvanger.
+
+Wat buiten deze ronde bleef, is in de derde ronde opgepakt.
+
+## Derde ronde — goedkeuren, herkomst, gokken en opruimen
+
+Migratie `20261003040000_approvals_auth_limits.sql`.
+
+**Goedkeuren beslist de database.** De browser voert een voorstel uit (onder de
+sessie van het teamlid, met RLS) en meldde daarna via `gerrie-agent` de
+uitkomst — en die melding zette met de service-role elke auditregel van de
+organisatie op elke status. Een teamlid kon zo over voorstellen uit de
+goedkeurwachtrij beslissen, een rechtstreekse uitvoering van een API-sleutel
+achteraf op "afgewezen" zetten, of een ingetrokken voorstel op "uitgevoerd".
+Wie besliste, werd niet bewaard. Nu:
+- `ai_action_decide()` beslist: alleen wat nog open staat (voorgesteld, of een
+  uitvoering die mislukte), een teamlid alleen over zijn eigen chatvoorstel,
+  owners/admins over de wachtrij — met naam en tijd van wie besliste;
+- de app zet een voorstel eerst VAST (10 minuten), voert het dan uit en meldt
+  daarna de uitkomst; klikken twee beheerders tegelijk op Akkoord, dan voert
+  maar één het uit en krijgt de ander "Iemand anders voert dit voorstel op dit
+  moment uit" (goedkeurwachtrij, commandocentrum, chat en de afvinkborden);
+- een trigger houdt een afgehandelde auditregel en het voorstel zelf (`params`)
+  vast, ook voor de service-role;
+- afwijzen laat zien als het niet kan, in plaats van de regel stil te laten
+  verdwijnen.
+
+**Geen verzoeken zonder herkomst.** `Origin: null` (sandbox-iframe, data:- of
+file:-pagina) wordt in alle functies geweigerd, ook lokaal, en
+`Access-Control-Allow-Origin: null` gaat nergens meer mee — zonder toegestane
+origin geen header. De regels staan in `_shared/origins.ts` (gebruikt door
+`makeCors`); de functies met een eigen kopie volgen dezelfde twee regels.
+Toegestane origins uit de instellingen tellen alleen als echt http(s)-adres.
+
+**Gokken naar sleutels.** Een sleutel die niet bestaat of niet klopt, telt per
+afzender (gehasht adres, `cf-connecting-ip` voor `x-forwarded-for`). Na 60
+binnen 10 minuten: 15 minuten 429 met `Retry-After` voor mislukte pogingen,
+zonder verder te tellen. Een geldige sleutel werkt vanaf dat adres gewoon door
+— Zapier en Make delen adressen. De sleutel en de stand van de afzender komen in
+één ronde uit de database (`api_key_lookup`).
+
+**Opruimen.** De migratie plant `api_purge_expired()` en
+`webhook_purge_expired()` dagelijks in (`resofly-api-purge`, 03:17 UTC) als
+pg_cron aan staat; anders een melding en geen fout. Opnieuw draaien vervangt de
+taak. Ook oude tellingen van mislukte sleutels gaan weg.
+
+### Wat de tests bewaken
+
+- `approvals.test.ts` (8) — de regels van `ai_action_decide` en de trigger, dat
+  `gerrie-agent` niet zelf in `ai_action_audit` schrijft (en geen functie
+  auditregels bijwerkt), dat de app overal vastzet vóór het uitvoeren, en de
+  opruimtaak.
+- `origins.test.ts` (5) — de origin-regels, en dat geen enkele functie `null`
+  terugstuurt of `Origin: null` binnenlaat.
+- Uitbreidingen in `publicApiServer.test.ts` (de afzenderlimiet raakt alleen
+  mislukte pogingen) en `publicApi.test.ts` (de zin voor "afgewezen" is overal
+  dezelfde). Gecontroleerd met 9 mutaties, alle gevangen.
+
+End-to-end: beslissen via de echte `gerrie-agent` (25/25: eigen chatvoorstel,
+wachtrij alleen voor owners/admins, vastzetten tegen een collega, mislukt →
+afgewezen → definitief, een rechtstreekse uitvoering blijft staan, origin
+null, de afzenderlimiet), de goedkeurwachtrij in de app zelf (11/11), en de
+eerdere suites opnieuw op een verse database.
+
+## Vierde ronde — volledige controle op functies en veiligheid
+
+Migratie `20261003050000_full_api_check.sql`.
+
+Aanpak: een contracttest (elk pad en elke handeling uit het OpenAPI-document
+aangeroepen en het antwoord tegen het schema gelegd: 1181 controles), fuzzing
+(zes rondes, ruim 10.000 verzoeken met rommel in parameters, invoer, koppen en
+paden; eis: nooit een 5xx en nooit iets van een andere organisatie), een
+controle van elke opgevraagde kolom tegen het schema, en drie onafhankelijke
+reviews (sleutels en rechten; webhooks, goedkeuren en CORS; vaste adressen en
+invoer). Geen kritieke of hoge bevindingen. Wat er wél uitkwam:
+
+**Het klantportaal (middel).** Een project of ticket naar een andere klant
+verhuizen vroeg al `execute_high`, maar iets nieuws vóór een klant aanmaken
+niet: een sleutel met gewoon `execute` kon een ticket met een vals
+rekeningnummer in het portaal van een klant zetten. Nu vraagt alles wat tekst
+in het portaal zet of verandert `execute_high`: een ticket of project mét klant
+aanmaken, de titel/omschrijving (ticket) of naam/omschrijving (project) wijzigen
+als er een klant aan hangt, een taak in, uit of binnen een project van een klant
+aanmaken, verplaatsen of hernoemen, en een nieuwe klant met het e-mailadres van
+iemand die al op het portaal inlogt. Zonder klant, of status en datums, blijft
+gewoon met `execute`. Ook: een instelling van een **gepubliceerde** galerij
+wijzigen is naar buiten gericht (risico hoog).
+
+**Financiën via handelingen (middel).** De vaste adressen schermden het
+uurtarief en de klantwaarde al af voor een sleutel zonder Financiën, maar
+`client.update_details`, `project.update_billing` en `time_entry.update_details`
+konden ze zetten (en "er verandert niets" verried het huidige tarief), en
+`project.dashboard` en `search_clients` lieten ze zien. Nu heeft elke handeling
+`canWrite` naast `canRead`, en weigert `assertFieldWritable` zo'n veld meteen.
+
+**Portaaltoegang klaarzetten (middel).** Tussen klaarzetten en goedkeuren kon
+het e-mailadres van de contactpersoon nog veranderen. Het adres staat nu op de
+kaart én in het voorstel, en de uitvoerder geeft alleen toegang zolang het
+adres nog precies zo is — in één update.
+
+**De Beslissingen-feed (middel).** De feed zette de auditregel van een
+voorstel nog zelf om, zonder vastzetten en zonder naam. Nu volgt hij dezelfde
+weg als de goedkeurwachtrij (`runGerrieDecision`), beslist een kaart niet over
+een lopende uitvoering van een ander heen, en staat erbij wie besliste. In
+`ai_action_decide` geldt voor een kaart de regel van de feed zelf: wie de
+module van de kaart mag schrijven.
+
+**Een uitkomst die niet aankomt (laag).** Werd een voorstel uitgevoerd maar
+kwam de melding niet aan, dan stond het na tien minuten weer open. De app
+schrijft een uitkomst nu eerst weg (en probeert het drie keer), en stuurt wat
+bleef liggen mee vóór de volgende claim. Liep een eerdere poging af zonder
+uitkomst, dan vraagt de app eerst of het echt opnieuw moet (`stale_claim`).
+
+**Ingetrokken sleutels (laag).** Intrekken annuleert nu ook een mislukte
+uitvoering die opnieuw mocht; een voorstel van een ingetrokken sleutel zet
+niemand meer vast (afwijzen mag wel); wat iemand op dat moment uitvoert, maakt
+hij af. Een auditregel hoort altijd bij de organisatie van zijn sleutel.
+
+**Gokken naar sleutels (laag).** Naast de telling per afzender (die leunt op
+headers) nu ook een grens voor alle afzenders samen (`API_AUTH_FAILURE_GLOBAL_LIMIT`,
+standaard 1000 per 10 minuten). "Bestaat niet" en "klopt niet" zijn één zin.
+
+**Kleinere dingen.**
+- `search_clients`: een komma in de zoekterm voegde een eigen filter toe
+  (binnen de eigen organisatie); nu niet meer.
+- `team.list_invitations` alleen voor owners en admins, zoals in de app.
+- Webhooks: hooguit vijf 1xx-tussenantwoorden, een buffer die niet bij elke byte
+  alles kopieert, en de wachttijd tussen testberichten per sleutel in plaats
+  van per eindpunt. `invoice-public` stuurt geen `Access-Control-Allow-Origin: *`
+  meer bij een vreemde herkomst.
+- Invoer: een id, adres, datum of keuze is tekst (geen lijst); een tijdstip
+  moet bestaan (geen 30 februari of uur 24); gehele getallen passen in hun
+  kolom; een half UTF-16-teken is een 400; een dubbele parameter en een
+  `limit`/`offset` die geen geheel getal is, zijn een 400 (ook bij
+  `/v1/actions`); een `_` in `q` zoekt letterlijk; een taak met een klant die
+  niet bij zijn project hoort, is een fout in plaats van een stille correctie;
+  een reactie zonder `is_internal` is intern. Kerntools met een ongeldige id,
+  datum of jaartal geven 422 in plaats van 500.
+- OpenAPI: velden uit een andere module kunnen `null` zijn, een keuzelijst die
+  leeg mag zijn noemt `null`, wijzig-schema's hebben geen standaardwaarden meer
+  (een SDK zou weggelaten velden anders terugzetten), en de antwoorden kloppen
+  weer met wat de API stuurt (`Me`, `ActionList`, `WebhookTestResult`,
+  bezorgingen, 400/409/413).
+
+**Functionele fouten die de controle vond.**
+- `quote.history`, `quote.submit_internal_approval` en `quote.approve_internal`
+  vroegen `quotes.total_amount` op — die kolom bestaat alleen per versie. Ze
+  werkten dus nooit (500). Nu niet meer, en `actionColumns.test.ts` legt elke
+  opgevraagde kolom naast het schema.
+- Het bedrag op een goedkeurkaart rekende de btw honderd keer te klein
+  (€ 1.002,10 in plaats van € 1.210). Nu cent voor cent gelijk aan de app.
+
+**Bewust zo gelaten.** Een verzoek dat al door de sleutelcontrole was op het
+moment van intrekken, maakt zijn werk af (het venster is één verzoek; elk
+volgend verzoek wordt geweigerd). Een voorstel van een *verlopen* sleutel mag
+nog goedgekeurd worden: verlopen is geen wantrouwen, intrekken wel.
+
+### Wat de tests bewaken
+
+- `actionFieldAccess.test.ts` (9) — met een nep-database: Financiën via
+  handelingen, geen raadspel met het tarief, het dashboard, portaaltoegang met
+  e-mailadres, uitnodigingen, de galerij, het bedrag op de kaart tegen
+  `computeTotals` (500 willekeurige gevallen) en echte kalenderdatums.
+- `actionColumns.test.ts` — elke opgevraagde kolom bestaat in het schema.
+- Uitbreidingen in `approvals.test.ts` (de feed, ingetrokken sleutels, de
+  outbox), `apiResourceServer.test.ts` (de portaalregels), `apiResources.test.ts`
+  (strikte invoer, tijdstippen, lijsten, OpenAPI), `webhookTransport.test.ts`
+  (1xx-vloed, byte voor byte) en `publicApi.test.ts` (paginering).
+- Gecontroleerd met mutaties (de nieuwe controles weghalen): alle gevangen.
+
+End-to-end op een verse database: kern 33/33, vaste adressen 86/86, aanvallen
+65/65, webhooks 27/27, beslissen 42/42, de goedkeurwachtrij in de app 11/11,
+contracttest 1181/1181 zonder afwijkingen, fuzzing zonder vondsten.
+
+## Vijfde ronde — herkontrole: dezelfde fouten op andere plekken
+
+Migratie `20261003060000_recheck_audit_and_licenses.sql`.
+
+Aanpak: elke bevinding uit de vorige rondes opnieuw nagelopen op twee vragen —
+is de fix volledig, en zit dezelfde soort fout nog ergens anders? Wat er uitkwam:
+
+**Agenda via een link (hoog).** Webhooks verbonden al met een gecontroleerd
+IP-adres, maar het ophalen van een `.ics`-agenda gebruikte nog gewoon `fetch()`,
+dat de naam zelf opnieuw opzoekt. Een DNS-server die bij de controle een
+openbaar adres gaf en bij het ophalen `127.0.0.1` of `169.254.169.254`, glipte
+er zo langs (DNS-rebinding) — en wat daar antwoordde, kwam in de agenda van de
+aanvrager. Lukte het opzoeken bij de controle niet, dan werd er tóch opgehaald.
+Nu haalt `pinnedGet` op over dezelfde verbinding als de webhooks: één keer
+opzoeken, élk adres keuren, precies met zo'n adres verbinden (TLS controleert
+het certificaat nog steeds tegen de naam), elke omleiding opnieuw keuren, en
+niet op te zoeken is niet ophalen. Stuurt een server de feed toch gecomprimeerd
+(wat `fetch()` vroeger zelf uitpakte), dan pakt de ophaler hem uit met dezelfde
+limiet van 5 MB op wat eruit komt — een zip-bom loopt daarop stuk.
+
+**Het auditlog (middel).** Elk lid las elke regel, en het label van een regel is
+de naam, titel of het e-mailadres uit de rij die veranderde. Zo zag een teamlid
+zonder Financiën factuurnummers en boekingsomschrijvingen, zag iedereen de
+e-mailadressen van uitnodigingen en de namen van API-sleutels, en de titels van
+afspraken in andermans privé-agenda. Nu hoort elke regel bij een module en leest
+een teamlid alleen wat hij in die module mag lezen; sleutels, webhooks,
+uitnodigingen, agendakoppelingen, abonnement en betalingen zijn voor owners en
+admins; en een afspraak of agenda in een privé-agenda heet in het log
+"Privé-afspraak" of "Privé-agenda" (bestaande regels zijn opgeschoond).
+`audit.list` leest met de service-role en volgt daarom dezelfde lijst zelf; een
+sleutel met modulebeperking telt daarbij als gewoon teamlid.
+
+**Privé-agenda's (middel).** Dezelfde soort fout als in de vorige ronde (een
+melding vóór de controle): met het id van andermans privé-agenda — dat
+koppelingen tonen — gaven `calendar_source.set_sharing`, `update_native`,
+`refresh_ics`, `booking_link.create`/`update` en Gerrie's afspraak wijzigen of
+afzeggen de naam van die agenda prijs in een foutmelding. `note.list_event_links`
+en `note.unlink_from_event` toonden koppelingen met privé-afspraken,
+`meeting_recording.send_summary` haalde de genodigden uit andermans
+privé-afspraak, en `calendar_source.subscribe_ics` noemde de naam van de
+privé-agenda van een collega met dezelfde link. Nu bestaat andermans
+privé-agenda voor je niet: "niet gevonden", dezelfde zin als bij een id dat er
+niet is. `booking_link.update` controleert bovendien al bij het klaarzetten wat
+de boekingsfunctie bij het uitvoeren controleert (de agenda is van de eigenaar
+van de link, of gedeeld).
+
+**Naar buiten zonder dat de kaart het zei (middel).**
+- Een notitie of document naar een **gedeelde map** verplaatsen, er een map in
+  maken of hem hernoemen: de ontvanger ziet het meteen (een deling is live, ook
+  voor submappen). Nu risico hoog, met de ontvanger op de kaart.
+- `finance.link_project`: een factuur of offerte zonder eigen klant aan een
+  project mét klant hangen, zet hem in het klantportaal van die klant. Nu risico
+  hoog, met de naam van die klant.
+
+**De ontvanger vastpinnen (middel).** Bij een betalingsherinnering, aanmaning,
+creditnota, portaal-welkomstmail, losse klantmail en een reeks herinneringen
+stond het adres op de goedkeurkaart, maar bij het versturen nam de server het
+adres uit het klantdossier van dát moment. Wie tussen klaarzetten en goedkeuren
+het adres wijzigde, kreeg de post. Nu geeft de app het goedgekeurde adres mee
+(`expectedRecipientEmail`) en weigert de server als het veranderde: 409, er is
+niets verstuurd (`_shared/approvedRecipient.ts`). Een reeks herinneringen toont
+nu ook per regel naar welk adres hij gaat.
+
+**Goedkeuren: de outbox (laag).** Een uitkomst die bleef liggen, werd na
+uitloggen of wisselen van account onder de naam van de volgende gebruiker
+afgeleverd. Nu onthoudt elke uitkomst wie besliste, en levert alleen die hem af.
+
+**De licentietelling (functioneel).** `team.license_usage` (en de plan-stap van
+`team.invite`) faalde altijd: `organization_license_usage` controleerde het
+lidmaatschap via `auth.uid()`, die er voor de service-role niet is. Nu mag de
+service-role erbij; `anon` kan hem niet meer aanroepen.
+
+**Nagelopen en in orde.** Alle overige plekken waar de server iets ophaalt (alleen
+vaste providers en eigen workers; web push heeft een allowlist); de
+portaalregels van de handelingen (een ticket aan een klant hangen of omzetten
+was al risico hoog; Gerrie's project- en taakwijzigingen hebben geen
+server-uitvoerder en gaan altijd via een mens in de app); de uren in
+`time.hour_criterion` (uren zijn in de app org-breed leesbaar voor wie Uren mag
+zien); elke opgevraagde kolom tegen het schema; leesacties die gegevens uit een
+andere module meenemen.
+
+**Bewust zo gelaten.** Opnames van vergaderingen zijn org-breed leesbaar (zoals in
+de app). `client_email.recent_inbound` zet leesmarkeringen, zoals het scherm.
+Een sleutel met `execute` kan een contactpersoon met een willekeurig adres
+toevoegen, die een latere campagne "met contactpersonen" ook krijgt; een
+campagne versturen blijft mensenwerk in de app, en wie hem verstuurt ziet de
+doelgroep.
+
+### Wat de tests bewaken
+
+- `pinnedGet.test.ts` (8) — vastgepind op het gekeurde adres, DNS-rebinding en
+  metadata-adressen geweigerd, niet op te zoeken is niet ophalen, IPv4 eerst,
+  een GET zonder `Content-Length`, uitpakken met een limiet (ook een zip-bom),
+  en de agenda-ophaler gebruikt geen losse `fetch()` meer.
+- `auditVisibility.test.ts` (8) — de indeling in SQL en in `audit.list` is
+  dezelfde, elke soort regel die ergens gelogd wordt is bewust ingedeeld, de
+  leesregel, het maskeren, de licentietelling, en `audit.list` per rol (ook een
+  beperkte sleutel van een admin).
+- `recheckFixes.test.ts` (13) — met een nep-database die de filters echt
+  toepast: gedeelde mappen (ook hoger in de boom; verlopen en ingetrokken
+  delingen niet), het klantportaal via een project, privé-agenda's ("niet
+  gevonden", zelfde zin als een onbekend id), boekingslinks, koppelingen met
+  notities, notulen mailen, dubbele agenda-links, Gerrie, en de outbox.
+- `approvedRecipient.test.ts` (7) — de vergelijking, en dat elke verzendweg het
+  adres controleert vóór er iets de deur uit gaat.
+- Gecontroleerd met mutaties (de nieuwe controles weghalen): alle gevangen.
+
+Live nagelopen: de leesregel van het auditlog per rol (owner, admin, teamlid
+zonder Financiën, viewer), het maskeren bij aanmaken, wijzigen en verwijderen,
+de licentietelling als service-role, lid en buitenstaander, `audit.list` met een
+beperkte sleutel, de agenda-link (goede feed, rebinding, interne naam, interne
+omleiding, een gecomprimeerde feed en een zip-bom), en de klantmail en
+portaal-welkomstmail met een gewijzigd adres (409, niets verstuurd).
+
+End-to-end op een verse database: kern 33/33, vaste adressen 86/86, aanvallen
+65/65, webhooks 27/27, beslissen 42/42, de goedkeurwachtrij in de app 11/11,
+contracttest 1181/1181, gerichte fuzzing op de aangepaste handelingen (1318
+verzoeken) en een brede ronde (1749 verzoeken) zonder vondsten. Unit-tests
+608/608.

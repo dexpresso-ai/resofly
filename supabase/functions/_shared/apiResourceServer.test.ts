@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 
 /**
  * Bewaakt de grenzen van de vaste adressen (/v1/clients en verder): de functie
  * `api`, de store (apiResourceStore.ts) en de schrijffunctie in de database
- * (api_rest_write, migratie 20261003020000).
+ * (api_rest_write, de laatste migratie die hem definieert).
  *
  * Als TEKST gelezen, net als publicApiServer.test.ts: de serverkant leunt op
  * Deno-imports. Grof, maar het vangt precies de fout die we willen voorkomen.
@@ -22,7 +22,18 @@ const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf
 
 const store = read('./apiResourceStore.ts');
 const api = read('../api/index.ts');
-const migration = read('../../migrations/20261003020000_api_rest.sql');
+/** De laatste migratie die deze functie (her)definieert: die geldt. */
+function latestMigrationWith(marker: string): string {
+  const dir = new URL('../../migrations/', import.meta.url);
+  const files = readdirSync(dir).filter((file) => file.endsWith('.sql')).sort().reverse();
+  for (const file of files) {
+    const text = readFileSync(new URL(file, dir), 'utf8');
+    if (text.includes(marker)) return text;
+  }
+  throw new Error(`${marker} staat in geen enkele migratie`);
+}
+
+const migration = latestMigrationWith('create or replace function public.api_rest_write(');
 
 function fn(source: string, header: string): string {
   const start = source.indexOf(header);
@@ -45,8 +56,23 @@ test('elke leesquery in de store filtert op de organisatie uit de sleutel', () =
 });
 
 test('de organisatie komt uit de sleutel, nooit uit de invoer', () => {
-  assert.match(fn(api, 'function storeContext('), /organizationId: caller\.organizationId, userId: caller\.userId/);
+  assert.match(fn(api, 'function storeContext('), /organizationId: caller\.organizationId,\s*\n\s*userId: caller\.userId,/);
   assert.doesNotMatch(store, /(values|input|params)\s*(\.|\[\s*['"])organization_?[iI]d/);
+});
+
+test('de store weet wat de sleutel mag lezen, en of hij naar buiten mag', () => {
+  const context = fn(api, 'function storeContext(');
+  assert.match(context, /canRead: \(module: string\) => moduleLevel\(caller, module\) !== 'none',/);
+  assert.match(context, /allowOutward: mayExecuteHigh\(caller\),/);
+  // Elke rij die de store teruggeeft, gaat langs presentRow MET de leesrechten.
+  assert.equal((store.match(/presentRow\(spec, [a-z]+( as unknown as Record<string, unknown>)?, ctx\.canRead\)/g) ?? []).length, 4);
+  assert.doesNotMatch(store, /presentRow\(spec, [^)]*\)(?<!ctx\.canRead\))/);
+});
+
+test('een verwijzing naar een module die de sleutel niet mag lezen, kan niet — vóór het opzoeken', () => {
+  const refs = fn(store, 'export async function assertReferences(');
+  const guard = refs.indexOf('if (ctx.canRead && !ctx.canRead(ref.module))');
+  assert.ok(guard > 0 && guard < refs.indexOf('.from(ref.table)'), 'de controle hoort vóór de query: anders verraadt het antwoord of de rij bestaat');
 });
 
 test('een verwijzing naar een andere rij moet in dezelfde organisatie bestaan', () => {
@@ -83,8 +109,19 @@ test('api_rest_write: alleen voor de service role, en pas daarna als het teamlid
   for (const write of ["'insert into public.%1$I", "'update public.%1$I"]) {
     assert.ok(body.indexOf(write) > switchRole, `${write} staat vóór de wissel en draait dus zonder RLS`);
   }
-  assert.match(migration, /revoke all on function public\.api_rest_write\(uuid, uuid, text, jsonb, uuid\) from public, anon, authenticated;/);
-  assert.match(migration, /grant execute on function public\.api_rest_write\(uuid, uuid, text, jsonb, uuid\) to service_role;/);
+  assert.match(migration, /revoke all on function public\.api_rest_write\(uuid, uuid, text, jsonb, uuid, boolean\) from public, anon, authenticated;/);
+  assert.match(migration, /grant execute on function public\.api_rest_write\(uuid, uuid, text, jsonb, uuid, boolean\) to service_role;/);
+  // De oude versie met vijf parameters gaat weg: anders bleef die aan te roepen, zonder de portaalregels.
+  assert.match(migration, /drop function if exists public\.api_rest_write\(uuid, uuid, text, jsonb, uuid\);/);
+});
+
+test('api_rest_write: wat het portaal raakt, vraagt execute_high — standaard nee', () => {
+  const body = migration.slice(migration.indexOf('create or replace function public.api_rest_write('));
+  assert.match(body, /p_allow_outward boolean default false/);
+  assert.ok((body.match(/using errcode = 'RS403'/g) ?? []).length >= 4, 'e-mail klant, contact met portaal, andere klant, zichtbare reactie');
+  const outward = body.indexOf("using errcode = 'RS403'");
+  assert.ok(outward > 0 && outward < body.indexOf("'insert into public.%1$I"), 'de controle hoort vóór het schrijven');
+  assert.match(fn(store, 'async function write('), /p_allow_outward: ctx\.allowOutward === true,/);
 });
 
 test('api_rest_write: de organisatie en wie-en-wanneer komen nooit uit de invoer', () => {
@@ -111,7 +148,11 @@ test('aanmaken en wijzigen vragen `execute` en schrijfrecht, getoetst vóór het
     const at = handler.indexOf(call);
     const guard = handler.lastIndexOf('assertMayWrite(caller, spec, level);', at);
     assert.ok(at > 0 && guard > 0 && guard < at, `${call} zonder assertMayWrite ervoor`);
+    // Een veld uit een andere module (een tarief) vraagt schrijfrecht in DIE module.
+    const fields = handler.lastIndexOf('assertFieldsWritable(caller, spec, values);', at);
+    assert.ok(fields > guard && fields < at, `${call} zonder assertFieldsWritable ervoor`);
   }
+  assert.match(fn(api, 'function assertFieldsWritable('), /fieldsOutsideWrite\(spec, values, \(module\) => moduleLevel\(caller, module\) === 'write'\)/);
   const guard = fn(api, 'function assertMayWrite(');
   assert.match(guard, /if \(!mayExecute\(caller\)\)/);
   assert.match(guard, /if \(level !== 'write'\)/);
@@ -124,10 +165,39 @@ test('aanmaken en wijzigen zijn veilig te herhalen en komen in het auditlog', ()
   const audit = fn(api, 'async function recordResourceWrite(');
   assert.match(audit, /api_key_id: caller\.keyId/);
   assert.match(audit, /organization_id: caller\.organizationId/);
+  // Welke velden, niet wat erin stond: geen tweede kopie van persoonsgegevens.
+  assert.match(audit, /payload: \{ id: row\.id, fields \}/);
+  assert.doesNotMatch(audit, /payload: \{[^}]*values/);
 });
 
 test('een reactie hoort bij een ticket uit DEZE organisatie, en het ticket komt uit het pad', () => {
   const handler = fn(api, 'async function handleResource(');
   assert.match(handler, /if \(spec\.parent && parentId !== null\) await getRow\(ctx, RESOURCES\[spec\.parent\.resource\], parentId\);/);
   assert.match(handler, /if \(spec\.parent && parentId !== null\) values\[spec\.parent\.column\] = parentId;/);
+});
+
+test('api_rest_write: ook iets NIEUWS in het klantportaal zetten vraagt execute_high', () => {
+  const body = migration.slice(migration.indexOf('create or replace function public.api_rest_write('));
+  const outward = body.slice(body.indexOf('if not coalesce(p_allow_outward, false) then'), body.indexOf('-- ── Per resource'));
+  assert.ok(outward.length > 0);
+  // Een ticket of project mét klant aanmaken: dat staat meteen in het portaal.
+  assert.match(outward, /p_row_id is null and p_resource in \('projects', 'tickets'\) and nullif\(p_values ->> 'client_id', ''\) is not null then/);
+  // Tekst die de klant al ziet, wijzigen.
+  assert.match(outward, /p_resource = 'tickets' and nullif\(v_existing ->> 'client_id', ''\) is not null\s*\n\s*and \(\(p_values \? 'title'/);
+  assert.match(outward, /p_resource = 'projects' and nullif\(v_existing ->> 'client_id', ''\) is not null\s*\n\s*and \(\(p_values \? 'name'/);
+  // Taken in een project van een klant: aanmaken, verplaatsen, hernoemen.
+  assert.match(outward, /if \(p_row_id is null and v_new_portal_client is not null\)/);
+  assert.match(outward, /and \(v_old_portal_client is not null or v_new_portal_client is not null\)\)/);
+  // Een nieuwe klant met het adres van iemand die al op het portaal inlogt (alleen binnen deze organisatie).
+  assert.match(outward, /cc\.organization_id = p_organization_id and cc\.gives_portal_access and cc\.is_active/);
+  assert.ok((outward.match(/using errcode = 'RS403'/g) ?? []).length >= 9);
+  // Een reactie zonder is_internal is intern — vóór de controle, zodat die klopt.
+  const internal = body.indexOf("p_values := jsonb_build_object('is_internal', true) || p_values;");
+  assert.ok(internal > 0 && internal < body.indexOf('if not coalesce(p_allow_outward, false) then'));
+});
+
+test('api_rest_write: een taak met een klant van een ander project is een fout, geen stille correctie', () => {
+  const body = migration.slice(migration.indexOf('create or replace function public.api_rest_write('));
+  assert.match(body, /if p_resource = 'tasks' and nullif\(p_values ->> 'client_id', ''\) is not null then/);
+  assert.match(body, /if v_project_client is not null and v_project_client <> \(p_values ->> 'client_id'\)::uuid then/);
 });

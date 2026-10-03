@@ -1,5 +1,5 @@
 import {
-  ActionError, bool, euroCents, id, ids, isoDate, joinShort, optChoice, optId,
+  ActionError, assertFieldWritable, bool, euroCents, id, ids, isoDate, joinShort, optChoice, optId,
   optIsoDate, optNum, optStr, orgQuery, row, str,
   type ActionCtx, type ActionDef,
 } from './types.ts';
@@ -162,6 +162,7 @@ export const PROJECTS_ACTIONS: ActionDef[] = [
 
       const rate = optNum(input, 'hourly_rate_euro');
       if (rate !== null) {
+        assertFieldWritable(ctx, 'finance', 'hourly_rate_euro', 'Financiën');
         if (rate < 0) throw new ActionError('Een uurtarief kan niet negatief zijn.');
         const cents = rate === 0 ? null : Math.round(rate * 100);
         patch.hourly_rate_cents = cents;
@@ -935,10 +936,16 @@ export const PROJECTS_ACTIONS: ActionDef[] = [
       }>(ctx, 'projects', projectId,
         'name, client_id, archived, start_date, end_date, billing_type, hourly_rate_cents, budgeted_minutes', 'Project');
 
+      // Facturen horen bij Financiën en uren bij Urenregistratie. Wie die niet
+      // mag lezen (het teamlid, of de sleutel van een koppeling), krijgt dat deel
+      // van het dashboard niet — net als in de app, waar RLS het weghoudt.
+      const seeMoney = ctx.canRead?.('finance') !== false;
+      const seeHours = ctx.canRead?.('time') !== false;
+      const none = Promise.resolve({ data: [], error: null });
       const [taskRes, invoiceRes, timeRes] = await Promise.all([
         orgQuery(ctx, 'tasks', 'id, title, status, end_date, planned_date, planned_end_date').eq('project_id', projectId).limit(1000),
-        orgQuery(ctx, 'invoices', 'id, number, status, lines').eq('project_id', projectId).limit(500),
-        orgQuery(ctx, 'time_entries', 'minutes, billable, hourly_rate_cents').eq('project_id', projectId).limit(2000),
+        seeMoney ? orgQuery(ctx, 'invoices', 'id, number, status, lines').eq('project_id', projectId).limit(500) : none,
+        seeHours ? orgQuery(ctx, 'time_entries', 'minutes, billable, hourly_rate_cents').eq('project_id', projectId).limit(2000) : none,
       ]);
       if (taskRes.error) throw new ActionError(`Taken ophalen mislukt: ${taskRes.error.message}`);
       if (invoiceRes.error) throw new ActionError(`Facturen ophalen mislukt: ${invoiceRes.error.message}`);
@@ -988,7 +995,8 @@ export const PROJECTS_ACTIONS: ActionDef[] = [
           phase_label: PHASE_LABELS[phase],
           billing_type: project.billing_type,
           billing_label: BILLING_LABELS[project.billing_type] ?? project.billing_type,
-          hourly_rate_cents: project.hourly_rate_cents,
+          // Het tarief hoort bij Financiën, net als de bedragen hieronder.
+          hourly_rate_cents: seeMoney ? project.hourly_rate_cents : null,
         },
         tasks: {
           total: tasks.length,
@@ -998,27 +1006,33 @@ export const PROJECTS_ACTIONS: ActionDef[] = [
           overdue_titles: overdueTasks.slice(0, 10).map((t) => t.title),
           progress_pct: tasks.length > 0 ? Math.round((doneTasks / tasks.length) * 100) : 0,
         },
-        hours: {
-          tracked_minutes: trackedMinutes,
-          tracked_hours: Math.round((trackedMinutes / 60) * 100) / 100,
-          billable_value_cents: trackedValueCents,
-          budgeted_minutes: budgetedMinutes,
-          budget_used_pct: budgetPct,
-          over_budget: budgetPct !== null && budgetPct > 100,
-        },
-        money: {
-          invoiced_total_cents: invoicedTotalCents,
-          invoiced_excl_vat_cents: invoicedSubtotalCents,
-          invoice_count: invoices.length,
-          effective_hourly_rate_cents: effectiveRateCents,
-        },
+        hours: seeHours
+          ? {
+            tracked_minutes: trackedMinutes,
+            tracked_hours: Math.round((trackedMinutes / 60) * 100) / 100,
+            billable_value_cents: seeMoney ? trackedValueCents : null,
+            budgeted_minutes: budgetedMinutes,
+            budget_used_pct: budgetPct,
+            over_budget: budgetPct !== null && budgetPct > 100,
+          }
+          : null,
+        money: seeMoney && seeHours
+          ? {
+            invoiced_total_cents: invoicedTotalCents,
+            invoiced_excl_vat_cents: invoicedSubtotalCents,
+            invoice_count: invoices.length,
+            effective_hourly_rate_cents: effectiveRateCents,
+          }
+          : seeMoney
+            ? { invoiced_total_cents: invoicedTotalCents, invoiced_excl_vat_cents: invoicedSubtotalCents, invoice_count: invoices.length, effective_hourly_rate_cents: null }
+            : null,
         summary: joinShort([
           `${doneTasks}/${tasks.length} taken klaar`,
           overdueTasks.length > 0 ? `${overdueTasks.length} te laat` : null,
-          `${Math.round((trackedMinutes / 60) * 10) / 10} uur geboekt`,
-          budgetPct !== null ? `${budgetPct}% van het budget` : null,
-          `gefactureerd ${euroCents(invoicedSubtotalCents)} excl. btw`,
-          effectiveRateCents !== null ? `effectief ${euroCents(effectiveRateCents)}/uur` : null,
+          seeHours ? `${Math.round((trackedMinutes / 60) * 10) / 10} uur geboekt` : null,
+          seeHours && budgetPct !== null ? `${budgetPct}% van het budget` : null,
+          seeMoney ? `gefactureerd ${euroCents(invoicedSubtotalCents)} excl. btw` : null,
+          seeMoney && seeHours && effectiveRateCents !== null ? `effectief ${euroCents(effectiveRateCents)}/uur` : null,
         ], 220),
       };
     },

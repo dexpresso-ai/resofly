@@ -86,19 +86,28 @@ function toNumber(value: unknown): number {
  * gerrieCore. Zou je hier gewoon `qty * prijs * (1 + btw)` doen, dan wijkt het
  * bedrag op de goedkeurkaart een cent af van het bedrag op de factuur.
  */
-function linesTotalEur(lines: unknown): number {
+export function linesTotalEur(lines: unknown): number {
   const list = Array.isArray(lines) ? lines as Array<Record<string, unknown>> : [];
   const baseByRate = new Map<number, number>();
   let subtotalCents = 0;
   for (const line of list) {
-    const netCents = Math.round(toNumber(line.quantity) * toNumber(line.unit_price) * 100);
+    const netCents = toCents(toNumber(line.quantity) * toNumber(line.unit_price));
     subtotalCents += netCents;
     const rate = toNumber(line.vat);
     baseByRate.set(rate, (baseByRate.get(rate) ?? 0) + netCents);
   }
+  // De btw per tarief in EURO's uitrekenen en dan naar centen — zonder die
+  // laatste stap was de btw honderd keer te klein (€ 1.002,10 in plaats van € 1.210).
   let vatCents = 0;
-  for (const [rate, base] of baseByRate.entries()) vatCents += Math.round((base / 100) * (rate / 100));
+  for (const [rate, base] of baseByRate.entries()) vatCents += toCents((base / 100) * (rate / 100));
   return (subtotalCents + vatCents) / 100;
+}
+
+/** Euro's naar centen, precies zoals `toCents` in src/lib/money.ts (ook bij 1,005 en negatief). */
+function toCents(euros: number): number {
+  if (!Number.isFinite(euros)) return 0;
+  const scaled = euros * 100;
+  return scaled >= 0 ? Math.round(scaled + 1e-6) : -Math.round(Math.abs(scaled) + 1e-6);
 }
 
 /** Het bedrag dat het scherm toont: de opgeslagen som als die er is, anders uit de regels. */
@@ -167,8 +176,9 @@ export const FINANCE_ACTIONS: ActionDef[] = [
     required: ['quote_id'],
     async plan(ctx, input) {
       const quoteId = id(input, 'quote_id');
-      const quote = await row<{ number: string; status: string; client_id: string | null; lines: unknown; total_amount: number | null }>(
-        ctx, 'quotes', quoteId, 'number, status, client_id, lines, total_amount', 'Offerte');
+      // Een offerte heeft geen opgeslagen totaal (dat staat per versie); het bedrag komt uit de regels.
+      const quote = await row<{ number: string; status: string; client_id: string | null; lines: unknown }>(
+        ctx, 'quotes', quoteId, 'number, status, client_id, lines', 'Offerte');
       if (QUOTE_LOCKED_STATUS.includes(quote.status)) {
         throw new ActionError(`Offerte ${quote.number} staat op "${QUOTE_STATUS_LABELS[quote.status] ?? quote.status}" en kan niet meer intern worden ingediend.`);
       }
@@ -198,8 +208,9 @@ export const FINANCE_ACTIONS: ActionDef[] = [
     async plan(ctx, input) {
       requireAdmin(ctx, 'een offerte intern goedkeuren');
       const quoteId = id(input, 'quote_id');
-      const quote = await row<{ number: string; status: string; client_id: string | null; lines: unknown; total_amount: number | null }>(
-        ctx, 'quotes', quoteId, 'number, status, client_id, lines, total_amount', 'Offerte');
+      // Een offerte heeft geen opgeslagen totaal (dat staat per versie); het bedrag komt uit de regels.
+      const quote = await row<{ number: string; status: string; client_id: string | null; lines: unknown }>(
+        ctx, 'quotes', quoteId, 'number, status, client_id, lines', 'Offerte');
       if (!['pending_internal_approval', 'internally_approved', 'draft'].includes(quote.status)) {
         throw new ActionError(`Offerte ${quote.number} staat op "${QUOTE_STATUS_LABELS[quote.status] ?? quote.status}" en kan niet intern worden goedgekeurd.`);
       }
@@ -272,12 +283,17 @@ export const FINANCE_ACTIONS: ActionDef[] = [
         throw new ActionError(projectId ? `${label} ${doc.number} hangt al aan dat project.` : `${label} ${doc.number} hangt al aan geen enkel project.`);
       }
       let projectName: string | null = null;
+      let portalClient: string | undefined;
       if (projectId) {
         const project = await row<{ name: string; client_id: string | null }>(ctx, 'projects', projectId, 'name, client_id', 'Project');
         if (project.client_id && doc.client_id && project.client_id !== doc.client_id) {
           throw new ActionError(`Project "${project.name}" hoort bij een andere klant dan ${label.toLowerCase()} ${doc.number}.`);
         }
         projectName = project.name;
+        // Het klantportaal toont ook documenten via het project van de klant
+        // (scopeToClient). Een document zonder eigen klant aan een project MET
+        // klant hangen, zet het dus in diens portaal: naar buiten gericht.
+        if (project.client_id && !doc.client_id) portalClient = (await clientNameOf(ctx, project.client_id)) ?? 'de klant van het project';
       }
       return {
         title: projectName
@@ -285,6 +301,10 @@ export const FINANCE_ACTIONS: ActionDef[] = [
           : `${label} ${doc.number} losmaken van het project`,
         sub: joinShort([await clientNameOf(ctx, doc.client_id), projectName ? 'telt daarna mee in de projectrapportage' : 'telt daarna nergens meer in mee']),
         kind: 'work',
+        ...(portalClient !== undefined ? {
+          risk: 'high' as const,
+          warning: `${label} ${doc.number} heeft geen eigen klant; aan dit project gekoppeld staat hij in het klantportaal van ${portalClient}.`,
+        } : {}),
         payload: { document: documentKind, document_id: documentId, project_id: projectId, number: doc.number, project_name: projectName },
       };
     },
@@ -889,11 +909,11 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       const quote = await row<{
         number: string; status: string; internal_approval_status: string; internal_rejection_note: string | null;
         client_id: string | null; project_id: string | null; date: string | null; valid_until: string | null;
-        lines: unknown; total_amount: number | null; sent_at: string | null; accepted_at: string | null;
+        lines: unknown; sent_at: string | null; accepted_at: string | null;
         client_decision_at: string | null; client_decision_by_name: string | null; client_decision_note: string | null;
       }>(ctx, 'quotes', quoteId,
         'number, status, internal_approval_status, internal_rejection_note, client_id, project_id, date, valid_until, ' +
-        'lines, total_amount, sent_at, accepted_at, client_decision_at, client_decision_by_name, client_decision_note', 'Offerte');
+        'lines, sent_at, accepted_at, client_decision_at, client_decision_by_name, client_decision_note', 'Offerte');
 
       const [versions, events, deliveries] = await Promise.all([
         orgQuery(ctx, 'quote_versions', 'id, version_number, snapshot_reason, status_at_snapshot, internal_approval_status_at_snapshot, subtotal_amount, vat_amount, total_amount, created_at')

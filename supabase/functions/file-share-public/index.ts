@@ -310,6 +310,8 @@ function parseAllowedOrigins(values: Array<string | null | undefined>): string[]
 
 function assertAllowedOrigin(req: Request) {
   const origin = req.headers.get('origin') || '';
+  // Een pagina zonder herkomst (sandbox-iframe, data:, file:) is nooit de app.
+  if (origin === 'null') throw new ShareError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403);
   if (!origin) return; // server-to-server / curl: geen browser-origin om te toetsen
   if (allowedOrigins.length === 0) return;
   if (allowedOrigins.includes(origin)) return;
@@ -322,9 +324,9 @@ function corsHeaders(req: Request): Record<string, string> {
   const allow = !origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)
     || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
     ? (origin || '*')
-    : 'null';
+    : '';
   return {
-    'Access-Control-Allow-Origin': allow,
+    ...(allow ? { 'Access-Control-Allow-Origin': allow } : {}),
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     Vary: 'Origin',

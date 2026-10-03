@@ -93,6 +93,9 @@ export const TICKETS_ACTIONS: ActionDef[] = [
           clientId ? 'de klant ziet dit ticket daarna in zijn portaal' : (oldName ? `${oldName} ziet het ticket daarna niet meer in het portaal` : null),
         ], 160),
         kind: 'work',
+        // Aan een klant hangen = die klant ziet het ticket (en zijn reacties) in
+        // het portaal: dat is naar buiten. Losmaken verbergt alleen.
+        risk: clientId ? 'high' : 'normal',
         payload: { ticket_id: ticketId, ticket_title: ticket.title, client_id: clientId, client_name: newName },
       };
     },

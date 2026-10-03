@@ -18,6 +18,9 @@
 // @ts-ignore — esm.sh levert de typedefs niet mee; runtime-import is voldoende.
 import ICAL from 'https://esm.sh/ical.js@2.1.0';
 import { type CalendarSourceRow, supabaseAdmin, normalizeAllDayEventRange } from './calendarCore.ts';
+import { ContentTooLargeError, decodeContentEncoding, pinnedGet } from './pinnedGet.ts';
+import { resolveForDelivery } from './webhookDelivery.ts';
+import { pinnedTransport } from './webhookTransport.ts';
 
 const MAX_FEED_BYTES = 5 * 1024 * 1024;      // 5 MB harde limiet op de feed
 const FETCH_TIMEOUT_MS = 15_000;
@@ -179,55 +182,50 @@ export function isDisallowedIp(ip: string): boolean {
 
 type FetchResult = { status: number; body: string; etag: string | null };
 
+/**
+ * Haalt de feed op over een VASTGEPINDE verbinding (pinnedGet.ts): de naam
+ * wordt één keer opgezocht, elk adres gekeurd, en daarna wordt precies met zo'n
+ * adres verbonden. Met gewoon fetch() zocht de runtime de naam zelf nog eens op
+ * — een DNS-server die dan een intern adres gaf (DNS-rebinding), kwam langs de
+ * controle in assertSafeFeedUrl, die bovendien stil oversloeg als opzoeken niet
+ * lukte. Nu: niet op te zoeken = niet ophalen. Elke omleiding wordt opnieuw gekeurd.
+ */
 async function fetchIcsFeed(startUrl: string, priorEtag: string | null): Promise<FetchResult> {
   let current = await assertSafeFeedUrl(startUrl);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-      const headers: Record<string, string> = {
-        Accept: 'text/calendar, text/plain;q=0.9, */*;q=0.5',
-        'User-Agent': 'ResoFly-Calendar/1.0 (+ics-subscription)',
-      };
-      if (priorEtag && hop === 0) headers['If-None-Match'] = priorEtag;
-      const res = await fetch(current, { redirect: 'manual', signal: controller.signal, headers });
-      if (res.status === 304) { await res.body?.cancel(); return { status: 304, body: '', etag: priorEtag }; }
-      if (res.status >= 300 && res.status < 400) {
-        const location = res.headers.get('location');
-        await res.body?.cancel();
-        if (!location) throw new Error('De agenda-link stuurde een ongeldige omleiding.');
-        if (hop === MAX_REDIRECTS) throw new Error('De agenda-link stuurt te vaak door.');
-        current = await assertSafeFeedUrl(new URL(location, current).toString());
-        continue;
-      }
-      if (!res.ok) { await res.body?.cancel(); throw new Error(`De agenda-link gaf status ${res.status}.`); }
-      const body = await readCapped(res, MAX_FEED_BYTES);
-      return { status: 200, body, etag: res.headers.get('etag') };
+  const deadline = Date.now() + FETCH_TIMEOUT_MS;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const headers: Record<string, string> = {
+      Accept: 'text/calendar, text/plain;q=0.9, */*;q=0.5',
+      'User-Agent': 'ResoFly-Calendar/1.0 (+ics-subscription)',
+    };
+    if (priorEtag && hop === 0) headers['If-None-Match'] = priorEtag;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error('De agenda-link antwoordde niet op tijd.');
+    // Eén byte boven de limiet lezen: zo weten we of de feed te groot is.
+    const res = await pinnedGet(new URL(current), {
+      headers, timeoutMs: remaining, maxBodyBytes: MAX_FEED_BYTES + 1,
+      resolve: resolveForDelivery, isAllowedAddress: (address) => !isDisallowedIp(address), transport: pinnedTransport,
+    });
+    if (res.status === 304) return { status: 304, body: '', etag: priorEtag };
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers?.get('location');
+      if (!location) throw new Error('De agenda-link stuurde een ongeldige omleiding.');
+      if (hop === MAX_REDIRECTS) throw new Error('De agenda-link stuurt te vaak door.');
+      current = await assertSafeFeedUrl(new URL(location, current).toString());
+      continue;
     }
-    throw new Error('De agenda-link stuurt te vaak door.');
-  } finally {
-    clearTimeout(timer);
+    if (res.status < 200 || res.status >= 300) throw new Error(`De agenda-link gaf status ${res.status}.`);
+    if (res.body.byteLength > MAX_FEED_BYTES) throw new Error('De agenda is te groot (limiet 5 MB).');
+    // We vragen om ongecomprimeerd, maar niet elke server luistert (fetch() pakte
+    // dat vroeger zelf uit): uitpakken, met dezelfde limiet op wat eruit komt.
+    const body = await decodeContentEncoding(res.body, res.headers?.get('content-encoding'), MAX_FEED_BYTES)
+      .catch((error: unknown) => {
+        if (error instanceof ContentTooLargeError) throw new Error('De agenda is te groot (limiet 5 MB).');
+        throw new Error(`De agenda-link stuurde een gecomprimeerd bestand dat niet uit te pakken is (${error instanceof Error ? error.message : 'onbekend'}).`);
+      });
+    return { status: 200, body: new TextDecoder('utf-8').decode(body), etag: res.headers?.get('etag') ?? null };
   }
-}
-
-async function readCapped(res: Response, maxBytes: number): Promise<string> {
-  const reader = res.body?.getReader();
-  if (!reader) return '';
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      total += value.byteLength;
-      if (total > maxBytes) { await reader.cancel(); throw new Error('De agenda is te groot (limiet 5 MB).'); }
-      chunks.push(value);
-    }
-  }
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const c of chunks) { merged.set(c, offset); offset += c.byteLength; }
-  return new TextDecoder('utf-8').decode(merged);
+  throw new Error('De agenda-link stuurt te vaak door.');
 }
 
 async function sha256Hex(text: string): Promise<string> {

@@ -17,9 +17,9 @@
 // ============================================================
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
-import { sendTestEvent, type DeliveryOutcome } from './webhookDelivery.ts';
+import { sendTestEvent, webhookAddressProblem, type DeliveryOutcome } from './webhookDelivery.ts';
 import {
-  createWebhookSecret, encryptSecret, modulesOf, normalizeEventList, WEBHOOK_EVENTS, webhookUrlProblem,
+  createWebhookSecret, encryptSecret, modulesOf, normalizeEventList, PING_EVENT, WEBHOOK_EVENTS,
 } from './webhooks.ts';
 
 /** Van wie is dit eindpunt? Bepaalt wat je ziet en wat je mag. */
@@ -35,7 +35,7 @@ export interface EndpointOwner {
 
 /** Invoer die niet klopt. De functie zet dit om naar een 400/404/409/422. */
 export class WebhookInputError extends Error {
-  constructor(message: string, public status: 400 | 404 | 409 | 422 = 422) {
+  constructor(message: string, public status: 400 | 404 | 409 | 422 | 429 = 422) {
     super(message);
     this.name = 'WebhookInputError';
   }
@@ -43,8 +43,15 @@ export class WebhookInputError extends Error {
 
 export const ENDPOINT_COLUMNS = 'id, organization_id, url, description, events, active, created_by, api_key_id, disabled_reason, consecutive_failures, failing_since, last_success_at, last_failure_at, created_at, updated_at';
 
-const MAX_ENDPOINTS_PER_ORG = 50;
+// Twee aparte potten. Eindpunten uit de app (van de organisatie) en eindpunten
+// die koppelingen via hun sleutel aanmelden, tellen los: een koppeling die er
+// veel aanmeldt, kan de beheerder zo nooit de ruimte afnemen voor die van zichzelf.
+const MAX_ORG_ENDPOINTS = 50;
 const MAX_ENDPOINTS_PER_KEY = 20;
+const MAX_KEY_ENDPOINTS_PER_ORG = 100;
+
+/** Zo lang na een testbericht kan er geen volgende naar hetzelfde eindpunt. */
+const TEST_COOLDOWN_MS = 10_000;
 
 export interface EndpointInput {
   url?: unknown;
@@ -82,7 +89,7 @@ export async function getEndpoint(admin: SupabaseClient, owner: EndpointOwner, e
 export async function createEndpoint(
   admin: SupabaseClient, owner: EndpointOwner, input: EndpointInput, encryptionKey: string,
 ): Promise<{ endpoint: Record<string, unknown>; secret: string }> {
-  const url = checkUrl(input.url);
+  const url = await checkUrl(input.url);
   const events = checkEvents(input.events, owner);
   const description = checkDescription(input.description);
 
@@ -117,7 +124,7 @@ export async function updateEndpoint(
 ): Promise<Record<string, unknown>> {
   await getEndpoint(admin, owner, endpointId);
   const patch: Record<string, unknown> = {};
-  if (input.url !== undefined) patch.url = checkUrl(input.url);
+  if (input.url !== undefined) patch.url = await checkUrl(input.url);
   if (input.events !== undefined) patch.events = checkEvents(input.events, owner);
   if (input.description !== undefined) patch.description = checkDescription(input.description);
   if (input.active !== undefined) {
@@ -178,6 +185,25 @@ export async function testEndpoint(
 ): Promise<DeliveryOutcome & { deliveryId: string; eventId: string }> {
   const endpoint = await getEndpoint(admin, owner, endpointId);
   if (!endpoint.active) throw new WebhookInputError('Deze webhook staat uit. Zet hem eerst aan om te testen.', 409);
+  // Een test gaat meteen de deur uit, buiten de wachtrij en de herhaalpogingen
+  // om. Even wachten tussen twee tests houdt dat een test, en geen manier om
+  // vanaf onze servers in een lus een adres te bestoken. Per EIGENAAR (deze
+  // sleutel, of de organisatie in de app), niet per eindpunt: anders gaven
+  // twintig eindpunten naar hetzelfde adres twintig berichten per keer.
+  let siblings = admin.from('webhook_endpoints').select('id').eq('organization_id', owner.organizationId);
+  siblings = owner.apiKeyId ? siblings.eq('api_key_id', owner.apiKeyId) : siblings.is('api_key_id', null);
+  const { data: own, error: ownError } = await siblings.limit(500);
+  if (ownError) throw new Error(`Eindpunten ophalen mislukt: ${ownError.message}`);
+  const scope = [...new Set([String(endpoint.id), ...(own ?? []).map((row: { id: unknown }) => String(row.id))])];
+  const { count, error } = await admin.from('webhook_events')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', owner.organizationId).eq('type', PING_EVENT)
+    .in('payload->>endpoint_id', scope)
+    .gte('created_at', new Date(Date.now() - TEST_COOLDOWN_MS).toISOString());
+  if (error) throw new Error(`Testberichten tellen mislukt: ${error.message}`);
+  if ((count ?? 0) > 0) {
+    throw new WebhookInputError(`Er is net een testbericht verstuurd. Probeer het over ${TEST_COOLDOWN_MS / 1000} seconden opnieuw.`, 429);
+  }
   return await sendTestEvent(admin, {
     id: String(endpoint.id),
     organization_id: String(endpoint.organization_id),
@@ -193,9 +219,15 @@ export function visibleEvents(owner: EndpointOwner): Array<{ type: string; modul
 
 // ── Controles ────────────────────────────────────────────────────────────────
 
-function checkUrl(raw: unknown): string {
+/**
+ * Het adres zoals het nu is: https, niets in een intern netwerk, en een naam
+ * die niet naar binnen wijst. Dat laatste kijkt de bezorging bij elke poging
+ * opnieuw; hier hoort de aanmaker het meteen, in plaats van een eindpunt dat
+ * bij de eerste bezorging uitgaat.
+ */
+async function checkUrl(raw: unknown): Promise<string> {
   const url = String(raw ?? '').trim();
-  const problem = webhookUrlProblem(url);
+  const problem = await webhookAddressProblem(url);
   if (problem) throw new WebhookInputError(problem, 422);
   return url;
 }
@@ -224,18 +256,25 @@ function checkDescription(raw: unknown): string {
 }
 
 async function assertRoom(admin: SupabaseClient, owner: EndpointOwner): Promise<void> {
-  const { count, error } = await admin.from('webhook_endpoints')
-    .select('id', { count: 'exact', head: true }).eq('organization_id', owner.organizationId);
-  if (error) throw new Error(`Webhooks tellen mislukt: ${error.message}`);
-  if ((count ?? 0) >= MAX_ENDPOINTS_PER_ORG) {
-    throw new WebhookInputError(`Deze organisatie heeft al ${count} webhooks. Verwijder er eerst een die niet meer gebruikt wordt.`, 409);
-  }
-  if (owner.apiKeyId) {
-    const { count: keyCount, error: keyError } = await admin.from('webhook_endpoints')
-      .select('id', { count: 'exact', head: true }).eq('api_key_id', owner.apiKeyId);
-    if (keyError) throw new Error(`Webhooks tellen mislukt: ${keyError.message}`);
-    if ((keyCount ?? 0) >= MAX_ENDPOINTS_PER_KEY) {
-      throw new WebhookInputError(`Deze sleutel heeft al ${keyCount} webhooks. Verwijder er eerst een.`, 409);
+  if (!owner.apiKeyId) {
+    const { count, error } = await admin.from('webhook_endpoints')
+      .select('id', { count: 'exact', head: true }).eq('organization_id', owner.organizationId).is('api_key_id', null);
+    if (error) throw new Error(`Webhooks tellen mislukt: ${error.message}`);
+    if ((count ?? 0) >= MAX_ORG_ENDPOINTS) {
+      throw new WebhookInputError(`Deze organisatie heeft al ${count} webhooks. Verwijder er eerst een die niet meer gebruikt wordt.`, 409);
     }
+    return;
+  }
+  const { count: keyCount, error: keyError } = await admin.from('webhook_endpoints')
+    .select('id', { count: 'exact', head: true }).eq('organization_id', owner.organizationId).eq('api_key_id', owner.apiKeyId);
+  if (keyError) throw new Error(`Webhooks tellen mislukt: ${keyError.message}`);
+  if ((keyCount ?? 0) >= MAX_ENDPOINTS_PER_KEY) {
+    throw new WebhookInputError(`Deze sleutel heeft al ${keyCount} webhooks. Verwijder er eerst een.`, 409);
+  }
+  const { count: allKeys, error: allError } = await admin.from('webhook_endpoints')
+    .select('id', { count: 'exact', head: true }).eq('organization_id', owner.organizationId).not('api_key_id', 'is', null);
+  if (allError) throw new Error(`Webhooks tellen mislukt: ${allError.message}`);
+  if ((allKeys ?? 0) >= MAX_KEY_ENDPOINTS_PER_ORG) {
+    throw new WebhookInputError(`De API-sleutels van deze organisatie hebben samen al ${allKeys} webhooks. Verwijder er eerst een.`, 409);
   }
 }

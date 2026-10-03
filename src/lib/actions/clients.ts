@@ -1,5 +1,5 @@
 import {
-  insertRow, linkInboundMessage, sendClientPortalWelcomeEmail, setInboundMessageStatus,
+  grantClientContactPortalAccess, insertRow, linkInboundMessage, sendClientPortalWelcomeEmail, setInboundMessageStatus,
   updateClientContact, updateRow,
 } from '../repository';
 import { flag, list, optText, patchOf, text, type ActionExecutor } from './types';
@@ -25,7 +25,8 @@ export const CLIENT_EXECUTORS: Record<string, ActionExecutor> = {
 
   'client.send_portal_welcome': async (payload, ctx) => {
     const clientId = text(payload, 'client_id');
-    const result = await sendClientPortalWelcomeEmail(ctx.organizationId, clientId);
+    // Het adres op de goedgekeurde kaart: is dat sindsdien veranderd, dan verstuurt de server niets.
+    const result = await sendClientPortalWelcomeEmail(ctx.organizationId, clientId, { expectedRecipientEmail: optText(payload, 'email') ?? undefined });
     const to = result.recipientEmail ?? optText(payload, 'email') ?? 'de klant';
     return `Portaaluitnodiging verstuurd naar ${to}`;
   },
@@ -43,10 +44,24 @@ export const CLIENT_EXECUTORS: Record<string, ActionExecutor> = {
     // Per contactpersoon, zodat een mislukte rij de rest niet meesleept en je aan de
     // melding ziet hoeveel er wél goed gingen.
     const failed: string[] = [];
+    const changed: string[] = [];
     const names = Array.isArray(payload.names) ? (payload.names as unknown[]).map(String) : [];
+    // Voorstellen van vóór deze regel hebben geen adressen; die gaan zoals voorheen.
+    const emails = Array.isArray(payload.emails) ? payload.emails as Array<string | null> : null;
     for (let i = 0; i < contactIds.length; i += 1) {
-      try { await updateClientContact(contactIds[i], { gives_portal_access: grant }, ctx.organizationId); }
-      catch { failed.push(names[i] ?? contactIds[i]); }
+      try {
+        if (grant && emails) {
+          // Wie in het portaal kan, volgt uit het e-mailadres. Is dat sinds het
+          // voorstel veranderd, dan keurde niemand de nieuwe ontvanger goed.
+          if (!await grantClientContactPortalAccess(contactIds[i], ctx.organizationId, emails[i] ?? null)) changed.push(names[i] ?? contactIds[i]);
+        } else {
+          await updateClientContact(contactIds[i], { gives_portal_access: grant }, ctx.organizationId);
+        }
+      } catch { failed.push(names[i] ?? contactIds[i]); }
+    }
+    if (changed.length) {
+      throw new Error(`Het e-mailadres van ${changed.join(', ')} is veranderd sinds dit voorstel; die ${changed.length === 1 ? 'kreeg' : 'kregen'} geen toegang. Zet het opnieuw klaar als het nieuwe adres klopt.`
+        + (failed.length ? ` Daarnaast mislukt: ${failed.join(', ')}.` : ''));
     }
     if (failed.length) throw new Error(`${contactIds.length - failed.length} bijgewerkt, ${failed.length} mislukt (${failed.join(', ')}).`);
     return `${contactIds.length} contactperso${contactIds.length === 1 ? 'on' : 'nen'} ${grant ? 'heeft' : 'heeft geen'} portaaltoegang`;

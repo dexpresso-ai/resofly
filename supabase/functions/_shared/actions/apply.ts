@@ -108,11 +108,14 @@ function clean(values: Record<string, unknown>): Record<string, unknown> {
  */
 async function updateOne<T = Record<string, unknown>>(
   ctx: ActionCtx, table: string, rowId: string, values: Record<string, unknown>, select = '*', label = 'Rij',
+  /** Kolommen die NOG zo moeten zijn, anders gebeurt er niets (bv. het e-mailadres op de goedgekeurde kaart). */
+  unchanged: Record<string, string | null> = {},
 ): Promise<T> {
-  const { data, error } = await ctx.db.from(table)
+  let query = ctx.db.from(table)
     .update({ ...clean(values), updated_at: new Date().toISOString() })
-    .eq('organization_id', ctx.organizationId).eq('id', rowId)
-    .select(select).maybeSingle();
+    .eq('organization_id', ctx.organizationId).eq('id', rowId);
+  for (const [column, value] of Object.entries(unchanged)) query = value === null ? query.is(column, null) : query.eq(column, value);
+  const { data, error } = await query.select(select).maybeSingle();
   if (error) throw new ActionError(`${label} bijwerken mislukt: ${error.message}`);
   if (!data) throw new ActionError(`${label} niet gevonden in deze organisatie.`);
   return data as T;
@@ -191,12 +194,15 @@ export const DIRECT_APPLIERS: Record<string, DirectApplier> = {
     const contactIds = pList(payload, 'contact_ids');
     const grant = pFlag(payload, 'gives_portal_access');
     const names = pStrings(payload, 'names');
+    const emails = Array.isArray(payload.emails) ? payload.emails as Array<string | null> : null;
     // Per contactpersoon, zodat een mislukte rij de rest niet meesleept — net als
     // in de browser, en met dezelfde melding erover.
     const failed: string[] = [];
     for (let i = 0; i < contactIds.length; i += 1) {
       try {
-        await updateOne(ctx, 'client_contacts', contactIds[i], { gives_portal_access: grant }, 'id', 'Contactpersoon');
+        // Toegang geven alleen zolang het e-mailadres nog is wat er op de kaart stond.
+        await updateOne(ctx, 'client_contacts', contactIds[i], { gives_portal_access: grant }, 'id', 'Contactpersoon',
+          grant && emails ? { email: emails[i] ?? null } : {});
       } catch { failed.push(names[i] ?? contactIds[i]); }
     }
     if (failed.length) throw new ActionError(`${contactIds.length - failed.length} bijgewerkt, ${failed.length} mislukt (${failed.join(', ')}).`);

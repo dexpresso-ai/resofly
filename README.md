@@ -82,6 +82,13 @@ VITE_R2_PUBLIC_BASE_URL=
 
 Laat `VITE_R2_PUBLIC_BASE_URL` leeg voor private CRM-documenten. Downloads gaan dan via de Worker met auth-check. Vul alleen een publieke URL in voor assets die echt publiek mogen zijn.
 
+## Supabase staging bijwerken
+
+De app op staging bouwt Cloudflare Pages vanzelf bij een push naar `staging`.
+De database en de edge functions zet je met `SUPABASE_STAGING_LAPTOP.md`
+vanaf je laptop bij, tot het GitHub-secret `SUPABASE_DB_PASSWORD` staat
+(daarna doet de workflow *Deploy Supabase (staging)* het).
+
 ## Cloudflare deployment
 
 Deze codebase bevat nu een aparte Cloudflare Worker/R2 deployment foundation in `workers/media-api`. Deze nieuwe Worker is bedoeld als veilige basis voor toekomstige private R2 uploads, downloads en deletes, maar bevat bewust nog géén Sprint 3-klantportaalfunctionaliteit.

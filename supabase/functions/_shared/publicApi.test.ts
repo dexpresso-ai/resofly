@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createToken, verifyToken } from './mcpAuth.ts';
 import {
-  ACCESS_LEVELS, actionInputSchema, apiKeyHint, apiRoute, auditStatusesFor, buildOpenApi, createApiKey,
+  ACCESS_LEVELS, actionInputSchema, apiKeyHint, apiRoute, auditStatusesFor, buildOpenApi, containsNul, createApiKey,
   effectiveModuleAccess, effectiveModuleLevel, errorBody, hasKeyRestrictions, isValidIdempotencyKey, keyModuleCap,
-  levelOfScope, matchRoute, memberModuleLevel, MODULE_KEYS, normalizeKeyModuleAccess, operationIdFor, pageParams,
-  parseApiKey, presentedApiKey, proposalStatus, PROPOSAL_STATUSES, REJECTED_BY_USER_DETAIL, requestFingerprint,
-  scopeForLevel, type CatalogAction,
+  InvalidParamError, levelOfScope, matchRoute, memberModuleLevel, MODULE_KEYS, normalizeKeyModuleAccess, operationIdFor, pageParams,
+  parseApiKey, presentedApiKey, proposalStatus, PROPOSAL_STATUSES, publicActionError, REJECTED_BY_USER_DETAIL,
+  requestFingerprint, scopeForLevel, tooDeep, type CatalogAction,
 } from './publicApi.ts';
 
 /**
@@ -47,6 +47,16 @@ test('een misvormde sleutel levert niets op', () => {
   for (const bad of ['', 'rsfapi', 'rsfapi.alleen', 'rsfapi.a.b.c', 'rsfapi..b', 'rsfapi.a.', 'RSFAPI.a.b', 'rsfapi.a b.c']) {
     assert.equal(parseApiKey(bad), null, `"${bad}" hoort geweigerd te worden`);
   }
+});
+
+test('een sleutel heeft precies de lengte die wij uitgeven; al het andere zoeken we niet eens op', async () => {
+  const key = await createApiKey();
+  const [, selector, verifier] = key.plain.split('.');
+  assert.equal(selector.length, 22);
+  assert.equal(verifier.length, 43);
+  assert.equal(parseApiKey(`rsfapi.${selector}x.${verifier}`), null);
+  assert.equal(parseApiKey(`rsfapi.${selector}.${verifier.slice(1)}`), null);
+  assert.equal(parseApiKey(`rsfapi.${'a'.repeat(5000)}.${verifier}`), null);
 });
 
 test('de hint op het scherm verraadt niets van het geheim', async () => {
@@ -172,10 +182,14 @@ test('routes met parameters', () => {
 
 test('limit en offset hebben grenzen', () => {
   assert.deepEqual(pageParams(new URLSearchParams('')), { limit: 25, offset: 0 });
-  assert.deepEqual(pageParams(new URLSearchParams('limit=5000&offset=-3')), { limit: 100, offset: 0 });
-  assert.deepEqual(pageParams(new URLSearchParams('limit=abc&offset=10')), { limit: 25, offset: 10 });
+  assert.deepEqual(pageParams(new URLSearchParams('limit=5000&offset=3')), { limit: 100, offset: 3 }, 'te groot wordt de grens');
   assert.deepEqual(pageParams(new URLSearchParams('limit=0')), { limit: 1, offset: 0 });
   assert.deepEqual(pageParams(new URLSearchParams('limit=400'), { maxLimit: 500 }), { limit: 400, offset: 0 });
+  // Rommel is een fout met het veld erbij, geen stille standaardwaarde.
+  for (const [query, field] of [['limit=abc', 'limit'], ['offset=-3', 'offset'], ['limit=1.5', 'limit'], ['offset=Infinity', 'offset']]) {
+    assert.throws(() => pageParams(new URLSearchParams(query)),
+      (error: unknown) => error instanceof InvalidParamError && error.field === field, query);
+  }
 });
 
 // ── Voorstellen ──────────────────────────────────────────────────────────────
@@ -201,11 +215,17 @@ test('filteren op een API-status vindt precies de rijen die zo vertaald worden',
   }
 });
 
-test('"afgewezen" is dezelfde zin als die de goedkeurwachtrij schrijft', () => {
+test('"afgewezen" is dezelfde zin als die de goedkeurwachtrij en de database schrijven', () => {
+  // De app stuurt een afwijzing als deze zin (dat verstaat ook een oudere
+  // server), en ai_action_decide schrijft hem in de audit. Een andere zin, en
+  // de API toont een afwijzing als mislukking.
+  const client = readFileSync(new URL('../../../src/lib/gerrie-api.ts', import.meta.url), 'utf8');
+  assert.ok(client.includes(`const REJECTED_DETAIL = '${REJECTED_BY_USER_DETAIL}';`));
   const approvals = readFileSync(new URL('../../../src/components/AgentApprovals.tsx', import.meta.url), 'utf8');
-  const fn = approvals.slice(approvals.indexOf('function reject('));
-  assert.ok(fn.slice(0, 300).includes(`'${REJECTED_BY_USER_DETAIL}'`),
-    'AgentApprovals.reject() schrijft een andere zin; dan ziet de API een afwijzing als mislukking.');
+  assert.match(approvals.slice(approvals.indexOf('async function reject('), approvals.indexOf('async function reject(') + 400),
+    /await rejectGerrieAction\(organizationId, item\.auditId\);/);
+  const migration = readFileSync(new URL('../../migrations/20261003040000_approvals_auth_limits.sql', import.meta.url), 'utf8');
+  assert.ok(migration.includes(`v_rejected constant text := '${REJECTED_BY_USER_DETAIL}';`));
 });
 
 // ── Idempotentie en fouten ───────────────────────────────────────────────────
@@ -224,6 +244,33 @@ test('de vingerafdruk van een verzoek hangt af van methode, route én inhoud', a
   assert.equal(a, await requestFingerprint('post', '/v1/actions/x', '{"a":1}'));
   assert.notEqual(a, await requestFingerprint('POST', '/v1/actions/y', '{"a":1}'));
   assert.notEqual(a, await requestFingerprint('POST', '/v1/actions/x', '{"a":2}'));
+  // ?mode=queue is een ander verzoek dan zonder: dezelfde sleutel mag er niet het antwoord van de ander voor krijgen.
+  assert.notEqual(a, await requestFingerprint('POST', '/v1/actions/x', '{"a":1}', '?mode=queue'));
+  assert.equal(a, await requestFingerprint('POST', '/v1/actions/x', '{"a":1}', ''));
+});
+
+test('te diep geneste invoer wordt herkend, zonder zelf om te vallen', () => {
+  let deep: Record<string, unknown> = {};
+  const root = deep;
+  for (let i = 0; i < 10_000; i += 1) { deep.a = {}; deep = deep.a as Record<string, unknown>; }
+  assert.equal(tooDeep(root), true);
+  assert.equal(tooDeep({ a: [{ b: { c: [1, 2, 3] } }] }), false);
+  assert.equal(tooDeep('tekst'), false);
+});
+
+test('een databasefout in een handeling: de zin voor de koppeling, de details voor ons logboek', () => {
+  assert.deepEqual(publicActionError('Klant ophalen mislukt: canceling statement due to statement timeout'),
+    { status: 500, message: 'Klant ophalen mislukt.' });
+  assert.deepEqual(publicActionError('Taak opslaan mislukt: new row for relation "tasks" violates check constraint "x"'),
+    { status: 422, message: 'Taak opslaan mislukt: de invoer past niet bij de regels van ResoFly.' });
+  assert.deepEqual(publicActionError('Het bericht koppelen mislukte: permission denied for table mails'),
+    { status: 500, message: 'Het bericht koppelen mislukte.' });
+  // Een eigen zin blijft een eigen zin.
+  for (const own of ['Deze factuur is al betaald.', 'Versturen mislukt: het e-mailadres ontbreekt.', 'Ongeldige syntaxis in de zoekopdracht.']) {
+    assert.deepEqual(publicActionError(own), { status: 422, message: own });
+  }
+  assert.equal(publicActionError('duplicate key value violates unique constraint "a"').status, 422);
+  assert.doesNotMatch(publicActionError('duplicate key value violates unique constraint "a"').message, /constraint/);
 });
 
 test('een fout heeft altijd dezelfde vorm', () => {
@@ -273,4 +320,23 @@ test('een handeling zonder verplichte velden heeft ook geen lege required-lijst'
   // Een lege `required: []` keuren sommige validators af.
   assert.equal('required' in actionInputSchema(SAMPLE[1]), false);
   assert.deepEqual(actionInputSchema(SAMPLE[0]).required, ['invoice_id', 'status']);
+});
+
+// ── Bevindingen uit de veiligheidstest (oktober 2026) ────────────────────────
+
+test('een API-sleutel in X-Api-Key telt, ook als een platform zelf een andere Authorization zet', () => {
+  const headers = (init: Record<string, string>) => new Headers(init);
+  assert.equal(presentedApiKey(headers({ authorization: 'Bearer eyJhbGciOiJIUzI1NiJ9.anon.sig', 'x-api-key': 'rsfapi.sel.ver' })), 'rsfapi.sel.ver');
+  assert.equal(presentedApiKey(headers({ authorization: 'Bearer rsfapi.a.b', 'x-api-key': 'rsfapi.c.d' })), 'rsfapi.a.b', 'Bearer gaat voor als het een API-sleutel is');
+  assert.equal(presentedApiKey(headers({ authorization: 'bearer   rsfapi.a.b  ' })), 'rsfapi.a.b');
+  assert.equal(presentedApiKey(headers({ authorization: 'Bearer eyJ.x.y' })), 'eyJ.x.y', 'zonder X-Api-Key: wat er staat, zodat de foutmelding klopt');
+  assert.equal(presentedApiKey(headers({})), '');
+});
+
+test('een NUL-teken in de invoer wordt gevonden, hoe diep ook', () => {
+  assert.equal(containsNul({ name: 'gewoon', tags: ['a', 'b'], extra: { x: 1 } }), false);
+  assert.equal(containsNul({ name: 'a\u0000b' }), true);
+  assert.equal(containsNul({ lines: [{ text: 'ok' }, { text: 'n\u0000' }] }), true);
+  assert.equal(containsNul({ ['k\u0000']: 1 }), true, 'ook in een veldnaam');
+  assert.equal(containsNul(null), false);
 });

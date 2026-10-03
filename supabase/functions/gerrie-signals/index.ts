@@ -594,9 +594,9 @@ function assertCronSecret(req: Request): void {
 function corsHeaders(req: Request): HeadersInit {
   const origin = req.headers.get('origin') || '';
   const allowOrigin = ALLOWED_ORIGINS.includes(origin) || (ALLOW_LOCAL_DEV && isLocalOrigin(origin))
-    ? origin : ALLOW_LOCAL_DEV && !origin ? '*' : 'null';
+    ? origin : ALLOW_LOCAL_DEV && !origin ? '*' : '';
   return {
-    'Access-Control-Allow-Origin': allowOrigin,
+    ...(allowOrigin ? { 'Access-Control-Allow-Origin': allowOrigin } : {}),
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     Vary: 'Origin',
@@ -610,6 +610,8 @@ function plainJson(payload: unknown, status = 200): Response {
 }
 function assertAllowedOrigin(req: Request): void {
   const origin = req.headers.get('origin') || '';
+  // Een pagina zonder herkomst (sandbox-iframe, data:, file:) is nooit de app.
+  if (origin === 'null') throw new HttpError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403);
   if (!origin && ALLOW_LOCAL_DEV) return;
   if (ALLOWED_ORIGINS.includes(origin)) return;
   if (ALLOW_LOCAL_DEV && isLocalOrigin(origin)) return;

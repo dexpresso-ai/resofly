@@ -64,22 +64,22 @@ import {
 } from '../_shared/gerrieCore.ts';
 import { severityForProposal } from '../_shared/signalRules.ts';
 import {
-  parseScopes, scopeAllows, verifyToken, SCOPE_EXECUTE, SCOPE_EXECUTE_HIGH, SCOPE_PROPOSE, SCOPE_READ,
+  parseScopes, scopeAllows, sha256Hex, verifyToken, SCOPE_EXECUTE, SCOPE_EXECUTE_HIGH, SCOPE_PROPOSE, SCOPE_READ,
 } from '../_shared/mcpAuth.ts';
 import {
   createEndpoint, deleteEndpoint, getEndpoint, listDeliveries, listEndpoints, testEndpoint, updateEndpoint,
   visibleEvents, WebhookInputError, type EndpointOwner,
 } from '../_shared/webhookAdmin.ts';
 import {
-  normalizeInput, parseListParams, resourceOpenApi, ResourceInputError, type ResourceSpec,
+  fieldsOutsideWrite, normalizeInput, parseListParams, resourceOpenApi, ResourceInputError, type ResourceSpec,
 } from '../_shared/apiResources.ts';
 import { matchResource, RESOURCE_LIST, RESOURCES } from '../_shared/apiResourceSpecs.ts';
 import { createRow, getRow, listRows, ResourceStoreError, updateRow, type StoreCtx } from '../_shared/apiResourceStore.ts';
 import {
-  actionInputSchema, apiRoute, API_VERSION, auditStatusesFor, buildOpenApi, effectiveModuleAccess,
-  effectiveModuleLevel, errorBody, hasKeyRestrictions, isModuleKey, isValidIdempotencyKey, levelOfScope,
-  matchRoute, MODULE_LABEL, pageParams, parseApiKey, presentedApiKey, proposalStatus, PROPOSAL_STATUSES,
-  REJECTED_BY_USER_DETAIL, requestFingerprint,
+  actionInputSchema, apiRoute, API_VERSION, auditStatusesFor, buildOpenApi, containsLoneSurrogate, containsNul, effectiveModuleAccess,
+  effectiveModuleLevel, errorBody, hasKeyRestrictions, InvalidParamError, isModuleKey, isValidIdempotencyKey, levelOfScope,
+  matchRoute, MAX_JSON_DEPTH, MODULE_LABEL, pageParams, parseApiKey, presentedApiKey, proposalStatus, PROPOSAL_STATUSES,
+  publicActionError, REJECTED_BY_USER_DETAIL, requestFingerprint, tooDeep,
   type ApiErrorCode, type CatalogAction, type ModuleKey, type ModuleLevel, type ProposalStatus,
 } from '../_shared/publicApi.ts';
 
@@ -106,11 +106,34 @@ const RATE_MAX_CALLS = envInt('API_RATE_LIMIT_PER_MINUTE', 300, 10, 6000);
  */
 const MAX_OPEN_PROPOSALS = 50;
 
+/**
+ * Mislukte pogingen per afzender: zoveel binnen het venster, dan een pauze.
+ * Ruim genoeg voor een koppeling die even met een oude sleutel blijft proberen,
+ * krap genoeg voor iemand die sleutels gokt of de database wil bezighouden.
+ * Een GELDIGE sleutel werkt altijd door, ook vanaf een geblokkeerd adres.
+ */
+const AUTH_FAILURE_WINDOW_SECONDS = 600;
+const AUTH_FAILURE_MAX = envInt('API_AUTH_FAILURE_LIMIT', 60, 5, 10_000);
+const AUTH_FAILURE_BLOCK_SECONDS = 900;
+/**
+ * En voor alle afzenders samen. De telling per afzender leunt op headers die
+ * buiten Cloudflare te vervalsen zijn; deze niet. Ook hier: een geldige sleutel
+ * werkt altijd door.
+ */
+const AUTH_FAILURE_GLOBAL_MAX = envInt('API_AUTH_FAILURE_GLOBAL_LIMIT', 1000, 50, 1_000_000);
+
 /** Groter dan dit is geen invoer voor een handeling meer. */
 const MAX_BODY_BYTES = 1_000_000;
 
 /** Hoe lang een Idempotency-Key geldt. */
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Een claim zonder antwoord die ouder is dan dit, hoort bij een poging die
+ * nooit afkwam (de functie werd gestopt of liep vast). Langer dan een functie
+ * kan draaien, dus nooit een poging die nog loopt.
+ */
+const IDEMPOTENCY_LEASE_MS = 5 * 60 * 1000;
 
 Deno.serve(async (req) => {
   const started = Date.now();
@@ -132,9 +155,15 @@ Deno.serve(async (req) => {
   try {
     caller = await authenticate(req);
   } catch (error) {
-    // Niet in api_request_log: daar hoort een organisatie bij, en die is er nu
-    // juist niet. De functielogs hebben hem wel.
-    return failure(error, requestId).response;
+    // Een onbekende sleutel hoort bij geen organisatie, en komt dus niet in
+    // api_request_log (de functielogs hebben hem wel). Een BEKENDE sleutel die
+    // geweigerd wordt — ingetrokken, verlopen, verkeerde verifier — wel: dat
+    // wil de beheerder van die organisatie kunnen terugzien.
+    const failed = failure(error, requestId);
+    if (error instanceof AuthError && error.known) {
+      await logRejectedKey(req, route, method, error.known, failed.response.status, requestId, started);
+    }
+    return failed.response;
   }
 
   const meta: RequestMeta = { actionId: null, errorCode: null };
@@ -150,8 +179,27 @@ Deno.serve(async (req) => {
   response.headers.set('RateLimit-Limit', String(RATE_MAX_CALLS));
   response.headers.set('RateLimit-Remaining', String(Math.max(0, caller.rateRemaining)));
   await logRequest(req, route, method, caller, meta, response.status, requestId, started);
+  // Af en toe opruimen (verlopen Idempotency-Keys, oude logregels), na het
+  // antwoord en buiten elke vergrendeling. Een dagelijkse cron-job op
+  // api_purge_expired() doet hetzelfde; dit vangt het op als die er niet is.
+  if (Math.random() < PURGE_CHANCE) inBackground(purgeExpired());
   return response;
 });
+
+/** Eén op de zoveel aanroepen ruimt op. */
+const PURGE_CHANCE = 0.005;
+
+async function purgeExpired(): Promise<void> {
+  const { error } = await admin.rpc('api_purge_expired');
+  if (error) console.error('[api] opruimen mislukt:', error.message);
+}
+
+/** Laat werk doorlopen nadat het antwoord weg is (EdgeRuntime.waitUntil), waar dat kan. */
+function inBackground(task: Promise<unknown>): void {
+  const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void } }).EdgeRuntime;
+  if (runtime?.waitUntil) runtime.waitUntil(task);
+  else task.catch(() => {});
+}
 
 // ── Wie klopt hier aan? ──────────────────────────────────────────────────────
 
@@ -191,24 +239,36 @@ async function authenticate(req: Request): Promise<Caller> {
   const parsed = parseApiKey(presented);
   if (!parsed) throw new ApiError(401, 'unauthorized', 'Deze API-sleutel heeft niet de juiste vorm. Een sleutel begint met "rsfapi.".');
 
-  const { data: secrets, error: secretError } = await admin.from('api_key_secrets')
-    .select('api_key_id, verifier_hash, salt').eq('selector', parsed.selector).limit(1);
-  if (secretError) throw new Error(`Sleutel opzoeken mislukt: ${secretError.message}`);
-  const secret = secrets?.[0] as { api_key_id: string; verifier_hash: string; salt: string } | undefined;
-  if (!secret) throw new ApiError(401, 'unauthorized', 'Deze API-sleutel is niet bekend.');
-  if (!await verifyToken(parsed.verifier, String(secret.salt), String(secret.verifier_hash))) {
-    throw new ApiError(401, 'unauthorized', 'Deze API-sleutel klopt niet.');
+  // De sleutel en de stand van deze afzender in één ronde (api_key_lookup).
+  const client = await clientFingerprint(req);
+  const { data: rows, error: lookupError } = await admin.rpc('api_key_lookup', { p_selector: parsed.selector, p_client: client });
+  if (lookupError) throw new Error(`Sleutel opzoeken mislukt: ${lookupError.message}`);
+  const found = (rows as Array<{ api_key_id: string | null; verifier_hash: string | null; salt: string | null; retry_after: number | null }> | null)?.[0];
+  const verified = Boolean(found?.api_key_id)
+    && await verifyToken(parsed.verifier, String(found?.salt ?? ''), String(found?.verifier_hash ?? ''));
+  if (!verified) {
+    // Een sleutel die niet bestaat of niet klopt, telt mee voor deze afzender;
+    // boven de grens volgt een pauze (429). Al geblokkeerd: niet nog eens tellen.
+    const blockedFor = Number(found?.retry_after ?? 0) || await noteAuthFailure(client);
+    if (blockedFor > 0) throw tooManyFailures(blockedFor);
+    // Eén zin voor "bestaat niet" en "klopt niet": het antwoord zegt niet of
+    // een selector bij een echte sleutel hoort.
+    throw new AuthError('Deze API-sleutel klopt niet.');
   }
+  const secret = { api_key_id: String(found!.api_key_id) };
 
   const { data: keys, error: keyError } = await admin.from('api_keys')
     .select('id, organization_id, user_id, name, scope, module_access, expires_at, revoked_at, created_at, organizations(name)')
     .eq('id', secret.api_key_id).limit(1);
   if (keyError) throw new Error(`Sleutel opzoeken mislukt: ${keyError.message}`);
   const key = keys?.[0] as Record<string, unknown> | undefined;
-  if (!key) throw new ApiError(401, 'unauthorized', 'Deze API-sleutel bestaat niet meer.');
-  if (key.revoked_at) throw new ApiError(401, 'unauthorized', 'Deze API-sleutel is ingetrokken.');
+  if (!key) throw new AuthError('Deze API-sleutel bestaat niet meer.');
+  // Vanaf hier is de sleutel echt (de verifier klopt): wie hem nog gebruikt
+  // terwijl hij niet meer mag, ziet de organisatie terug in het logboek.
+  const known = { keyId: String(key.id), organizationId: String(key.organization_id) };
+  if (key.revoked_at) throw new AuthError('Deze API-sleutel is ingetrokken.', known);
   if (key.expires_at && new Date(String(key.expires_at)).getTime() < Date.now()) {
-    throw new ApiError(401, 'unauthorized', 'Deze API-sleutel is verlopen. Maak onder Instellingen → API & webhooks een nieuwe aan.');
+    throw new AuthError('Deze API-sleutel is verlopen. Maak onder Instellingen → API & webhooks een nieuwe aan.', known);
   }
 
   // De rol en de modulerechten komen VERS uit organization_members. Zet een
@@ -220,8 +280,9 @@ async function authenticate(req: Request): Promise<Caller> {
   if (memberError) throw new Error(`Lidmaatschap opzoeken mislukt: ${memberError.message}`);
   const member = members?.[0] as { role?: string; module_access?: Record<string, unknown> } | undefined;
   if (!member?.role) {
-    throw new ApiError(401, 'unauthorized',
-      'Het teamlid namens wie deze sleutel werkt, is geen actief lid meer van de organisatie. Laat een owner of admin een nieuwe sleutel aanmaken.');
+    throw new AuthError(
+      'Het teamlid namens wie deze sleutel werkt, is geen actief lid meer van de organisatie. Laat een owner of admin een nieuwe sleutel aanmaken.',
+      known);
   }
 
   // Elke aanroep telt, en wel hier: ná de controle dat de sleutel deugt, zodat
@@ -242,6 +303,41 @@ async function authenticate(req: Request): Promise<Caller> {
     memberModuleAccess: member.module_access ?? {},
     rateRemaining: RATE_MAX_CALLS - used,
   };
+}
+
+/**
+ * Wie er aanklopt, zoals het netwerk het zegt: het adres dat Cloudflare zag
+ * (cf-connecting-ip, niet door de aanroeper te zetten), anders het eerste uit
+ * x-forwarded-for. Gehasht: het adres zelf komt niet in api_auth_failures.
+ * Kan het eerste x-forwarded-for-adres vervalst zijn? Dan ontloopt iemand de
+ * telling per afzender, maar niet die over alle afzenders samen
+ * (AUTH_FAILURE_GLOBAL_MAX) — en een geldige sleutel werkt altijd door.
+ */
+async function clientFingerprint(req: Request): Promise<string> {
+  const address = (req.headers.get('cf-connecting-ip') || (req.headers.get('x-forwarded-for') || '').split(',')[0] || 'onbekend')
+    .trim().slice(0, 64);
+  return await sha256Hex(`api-auth:${address}`);
+}
+
+/** Telt een mislukte poging; geeft de seconden tot het weer mag (0 = niet geblokkeerd). */
+async function noteAuthFailure(client: string): Promise<number> {
+  const { data, error } = await admin.rpc('api_note_auth_failure', {
+    p_client: client,
+    p_window_seconds: AUTH_FAILURE_WINDOW_SECONDS,
+    p_max_failures: AUTH_FAILURE_MAX,
+    p_block_seconds: AUTH_FAILURE_BLOCK_SECONDS,
+    p_global_max: AUTH_FAILURE_GLOBAL_MAX,
+  });
+  // Tellen is een vangnet; lukt het niet, dan gewoon een 401.
+  if (error) { console.error('[api] mislukte poging tellen mislukt:', error.message); return 0; }
+  return Number(data) || 0;
+}
+
+function tooManyFailures(seconds: number): ApiError {
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  return new ApiError(429, 'rate_limited',
+    `Te veel mislukte pogingen met een API-sleutel. Probeer het over ${minutes} ${minutes === 1 ? 'minuut' : 'minuten'} opnieuw, met een geldige sleutel.`,
+    undefined, { 'Retry-After': String(seconds) });
 }
 
 /**
@@ -319,7 +415,16 @@ function serviceInfo(): Record<string, unknown> {
     version: API_VERSION,
     openapi: `${PUBLIC_BASE}/v1/openapi.json`,
     documentation: DOCS_URL || null,
-    authentication: 'Stuur je API-sleutel mee als "Authorization: Bearer rsfapi.…". Een sleutel maak je aan onder Instellingen → API & webhooks.',
+    authentication: 'Stuur je API-sleutel mee als "Authorization: Bearer rsfapi.…" (of als "X-Api-Key: rsfapi.…" als je platform de Authorization-header zelf vult). Een sleutel maak je aan onder Instellingen → API & webhooks.',
+    // Wat er is, zonder eerst het hele OpenAPI-document te hoeven lezen.
+    endpoints: {
+      me: `${PUBLIC_BASE}/v1/me`,
+      actions: `${PUBLIC_BASE}/v1/actions`,
+      proposals: `${PUBLIC_BASE}/v1/proposals`,
+      events: `${PUBLIC_BASE}/v1/events`,
+      webhooks: `${PUBLIC_BASE}/v1/webhooks`,
+      ...Object.fromEntries(RESOURCE_LIST.map((spec) => [spec.name, `${PUBLIC_BASE}/v1/${spec.path}`])),
+    },
   };
 }
 
@@ -644,7 +749,7 @@ async function buildRegistryProposal(action: ActionDef, input: Record<string, un
     title: plan.title,
     sub: plan.warning ? `⚠️ ${plan.warning}${plan.sub ? ` — ${plan.sub}` : ''}` : plan.sub,
     kind: plan.kind,
-    risk: (plan.risk ?? action.risk) === 'high' ? 'high' : 'normal',
+    risk: plan.risk === 'high' || action.risk === 'high' ? 'high' : 'normal',
     payload: plan.payload,
   };
 }
@@ -866,8 +971,9 @@ async function handleWebhooks(
   } catch (error) {
     if (error instanceof WebhookInputError) {
       const code: ApiErrorCode = error.status === 404 ? 'not_found' : error.status === 409 ? 'conflict'
-        : error.status === 400 ? 'invalid_request' : 'invalid_input';
-      throw new ApiError(error.status, code, error.message);
+        : error.status === 429 ? 'rate_limited' : error.status === 400 ? 'invalid_request' : 'invalid_input';
+      throw new ApiError(error.status, code, error.message, undefined,
+        error.status === 429 ? { 'Retry-After': '10' } : undefined);
     }
     throw error;
   }
@@ -959,6 +1065,7 @@ async function handleResource(
         const input = parseInput(rawBody);
         return await withIdempotency(req, caller, route, rawBody, requestId, () => resourceErrors(async () => {
           const values = normalizeResourceInput(spec, input, 'create');
+          assertFieldsWritable(caller, spec, values);
           if (spec.parent && parentId !== null) values[spec.parent.column] = parentId;
           const row = await createRow(ctx, spec, values);
           await recordResourceWrite(caller, spec, 'create', row, values);
@@ -975,6 +1082,7 @@ async function handleResource(
       const input = parseInput(rawBody);
       return await withIdempotency(req, caller, route, rawBody, requestId, () => resourceErrors(async () => {
         const values = normalizeResourceInput(spec, input, 'update');
+        assertFieldsWritable(caller, spec, values);
         const row = await updateRow(ctx, spec, id, values, parentId ?? undefined);
         await recordResourceWrite(caller, spec, 'update', row, values);
         return { status: 200, body: row };
@@ -1000,6 +1108,21 @@ function assertMayWrite(caller: Caller, spec: ResourceSpec, level: ModuleLevel):
   }
 }
 
+/**
+ * Een veld uit een andere module (een uurtarief hoort bij Financiën) zet je
+ * alleen met schrijfrecht in DIE module. Zonder dat recht ziet de sleutel het
+ * veld als null; zetten zou een gat zijn naast het lezen.
+ */
+function assertFieldsWritable(caller: Caller, spec: ResourceSpec, values: Record<string, unknown>): void {
+  const blocked = fieldsOutsideWrite(spec, values, (module) => moduleLevel(caller, module) === 'write');
+  if (blocked.length === 0) return;
+  const modules = [...new Set(blocked.map((name) => spec.fields[name].module!))]
+    .map((module) => (isModuleKey(module) ? MODULE_LABEL[module] : module));
+  throw new ApiError(403, 'forbidden',
+    `${blocked.map((name) => `"${name}"`).join(', ')} hoort bij ${modules.join(', ')}, en daar mag deze sleutel niet schrijven. Laat het veld weg.`,
+    { field: blocked[0] });
+}
+
 /** De invoer volgens de spec; wat niet klopt, wordt een 422 met het veld erbij. */
 function normalizeResourceInput(spec: ResourceSpec, input: Record<string, unknown>, mode: 'create' | 'update'): Record<string, unknown> {
   try {
@@ -1018,7 +1141,8 @@ async function resourceErrors<T>(run: () => Promise<T>): Promise<T> {
     return await run();
   } catch (error) {
     if (error instanceof ResourceStoreError) {
-      const code: ApiErrorCode = error.status === 403 ? 'forbidden'
+      const code: ApiErrorCode = error.code === 'insufficient_scope' ? 'insufficient_scope'
+        : error.status === 403 ? 'forbidden'
         : error.status === 404 ? 'not_found'
         : error.status === 409 ? 'conflict'
         : 'invalid_input';
@@ -1030,7 +1154,15 @@ async function resourceErrors<T>(run: () => Promise<T>): Promise<T> {
 
 /** Lezen met de service-role, schrijven als het teamlid — beide met de organisatie uit de sleutel. */
 function storeContext(caller: Caller): StoreCtx {
-  return { db: admin, organizationId: caller.organizationId, userId: caller.userId };
+  return {
+    db: admin,
+    organizationId: caller.organizationId,
+    userId: caller.userId,
+    canRead: (module: string) => moduleLevel(caller, module) !== 'none',
+    // Een reactie die de klant ziet of een ander adres voor iemand met
+    // portaaltoegang: net als bij handelingen pas met execute_high.
+    allowOutward: mayExecuteHigh(caller),
+  };
 }
 
 /**
@@ -1041,17 +1173,20 @@ function storeContext(caller: Caller): StoreCtx {
 async function recordResourceWrite(
   caller: Caller, spec: ResourceSpec, op: 'create' | 'update', row: Record<string, unknown>, values: Record<string, unknown>,
 ): Promise<void> {
-  const what = String(row.name ?? row.title ?? row.subject ?? '').trim()
-    || String(row.description ?? row.body ?? '').trim().slice(0, 60)
-    || String(row.id);
+  const what = String(row.name ?? row.title ?? row.subject ?? '').trim().slice(0, 120) || String(row.id);
   const title = `${spec.label} ${op === 'create' ? 'aangemaakt' : 'gewijzigd'}: ${what}`;
+  // Welke velden, niet wat erin stond: de rij zelf (en elke wijziging, met
+  // oude en nieuwe waarde) staat al in audit_logs. Hier geen tweede kopie van
+  // e-mailadressen, notities of tarieven in een tabel met een eigen leeskring.
+  const fields = Object.keys(values);
+  const outward = spec.name === 'ticket_notes' && row.is_internal === false;
   const { error } = await admin.from('ai_action_audit').insert({
     organization_id: caller.organizationId,
     user_id: caller.userId,
     action: `api:rest:${spec.name}.${op}`,
     params: {
-      type: 'action', action_id: `rest:${spec.name}.${op}`, title, sub: Object.keys(values).join(', '),
-      kind: op, risk: 'normal', payload: { id: row.id, values },
+      type: 'action', action_id: `rest:${spec.name}.${op}`, title, sub: fields.join(', '),
+      kind: op, risk: outward ? 'high' : 'normal', payload: { id: row.id, fields },
     },
     status: 'auto_executed',
     api_key_id: caller.keyId,
@@ -1088,25 +1223,29 @@ async function withIdempotency(
   if (!isValidIdempotencyKey(key)) {
     throw new ApiError(400, 'invalid_request', 'Een Idempotency-Key bestaat uit 1 tot 255 zichtbare tekens zonder spaties.');
   }
-  const hash = await requestFingerprint(req.method, route, rawBody);
+  const hash = await requestFingerprint(req.method, route, rawBody, new URL(req.url).search);
 
   const claimed = await claimIdempotencyKey(caller.keyId, key, hash);
   if (!claimed) {
     const { data, error } = await admin.from('api_idempotency_keys')
-      .select('request_hash, status, response').eq('api_key_id', caller.keyId).eq('idempotency_key', key).maybeSingle();
+      .select('request_hash, status, response, response_headers').eq('api_key_id', caller.keyId).eq('idempotency_key', key).maybeSingle();
     if (error) throw new Error(`Idempotency-Key opzoeken mislukt: ${error.message}`);
-    if (!data || data.status === null) {
-      throw new ApiError(409, 'idempotency_in_progress', 'Een verzoek met deze Idempotency-Key is nog bezig. Probeer het zo opnieuw.');
-    }
-    if (data.request_hash !== hash) {
+    if (data && data.request_hash !== hash) {
       throw new ApiError(422, 'idempotency_conflict', 'Deze Idempotency-Key is al gebruikt voor een ander verzoek. Gebruik per verzoek een eigen sleutel.');
     }
-    return json(data.response as Record<string, unknown>, Number(data.status), requestId, { 'Idempotent-Replayed': 'true' });
+    if (!data || data.status === null) {
+      throw new ApiError(409, 'idempotency_in_progress', 'Een verzoek met deze Idempotency-Key is nog bezig. Probeer het zo opnieuw.',
+        undefined, { 'Retry-After': '2' });
+    }
+    return json(data.response as Record<string, unknown>, Number(data.status), requestId, {
+      ...replayHeaders(data.response_headers),
+      'Idempotent-Replayed': 'true',
+    });
   }
 
   try {
     const outcome = await run();
-    await storeIdempotentResponse(caller.keyId, key, outcome.status, outcome.body);
+    await storeIdempotentResponse(caller.keyId, key, outcome.status, outcome.body, outcome.headers);
     return json(outcome.body, outcome.status, requestId, outcome.headers);
   } catch (error) {
     const apiError = asApiError(error);
@@ -1121,28 +1260,48 @@ async function withIdempotency(
 }
 
 /**
- * Probeert de sleutel te claimen. Een verlopen rij (ouder dan 24 uur) die het
- * opruimen nog niet heeft gehaald, telt niet meer: die gaat eerst weg.
+ * Probeert de sleutel te claimen. Wat niet meer telt, gaat eerst weg: een rij
+ * ouder dan 24 uur die het opruimen nog niet haalde, en een claim zonder
+ * antwoord van een poging die nooit afkwam (IDEMPOTENCY_LEASE_MS). Zonder dat
+ * laatste bleef zo'n sleutel een dag lang "nog bezig" zeggen.
  */
 async function claimIdempotencyKey(keyId: string, key: string, hash: string): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const { error } = await admin.from('api_idempotency_keys').insert({ api_key_id: keyId, idempotency_key: key, request_hash: hash });
     if (!error) return true;
     if (error.code !== '23505') throw new Error(`Idempotency-Key vastleggen mislukt: ${error.message}`);
-    const { data: stale } = await admin.from('api_idempotency_keys')
+    // Twee losse deletes in plaats van één met `or`: PostgREST kan een
+    // logische boom bij een DELETE met `select` niet altijd aan.
+    const { data: expired } = await admin.from('api_idempotency_keys')
       .delete()
       .eq('api_key_id', keyId).eq('idempotency_key', key)
       .lt('created_at', new Date(Date.now() - IDEMPOTENCY_TTL_MS).toISOString())
       .select('api_key_id');
-    if (!stale || stale.length === 0) return false;
+    if (expired && expired.length > 0) continue;
+    const { data: abandoned } = await admin.from('api_idempotency_keys')
+      .delete()
+      .eq('api_key_id', keyId).eq('idempotency_key', key)
+      .is('status', null)
+      .lt('created_at', new Date(Date.now() - IDEMPOTENCY_LEASE_MS).toISOString())
+      .select('api_key_id');
+    if (!abandoned || abandoned.length === 0) return false;
   }
   return false;
 }
 
-async function storeIdempotentResponse(keyId: string, key: string, status: number, body: Record<string, unknown>): Promise<void> {
+async function storeIdempotentResponse(
+  keyId: string, key: string, status: number, body: Record<string, unknown>, headers?: Record<string, string>,
+): Promise<void> {
   const { error } = await admin.from('api_idempotency_keys')
-    .update({ status, response: body }).eq('api_key_id', keyId).eq('idempotency_key', key);
+    .update({ status, response: body, response_headers: replayHeaders(headers) })
+    .eq('api_key_id', keyId).eq('idempotency_key', key);
   if (error) console.error('[api] idempotent antwoord bewaren mislukt:', error.message);
+}
+
+/** Welke headers een herhaling terugkrijgt: alleen Location, de rest hoort bij dit ene antwoord. */
+function replayHeaders(headers: unknown): Record<string, string> {
+  const location = (headers as { Location?: unknown } | null)?.Location;
+  return typeof location === 'string' && location.startsWith(PUBLIC_BASE) ? { Location: location } : {};
 }
 
 // ── Rechten ──────────────────────────────────────────────────────────────────
@@ -1203,6 +1362,10 @@ function actionContext(caller: Caller): ActionCtx {
     role: caller.role,
     today: today(),
     db: admin,
+    // De modulebeperking van de sleutel geldt ook voor wat een handeling uit
+    // een andere module meeneemt (bedragen, uren) — lezend én schrijvend.
+    canRead: (module: string) => moduleLevel(caller, module) !== 'none',
+    canWrite: (module: string) => moduleLevel(caller, module) === 'write',
   };
 }
 
@@ -1245,12 +1408,34 @@ function resolveAction(actionId: string): { action: ActionDef; core: boolean } |
 
 // ── Invoer ───────────────────────────────────────────────────────────────────
 
+/**
+ * De inhoud, met een plafond dat ook geldt als er geen Content-Length is
+ * (chunked): er wordt nooit meer dan MAX_BODY_BYTES in het geheugen gelezen.
+ */
 async function readBody(req: Request): Promise<string> {
   const declared = Number(req.headers.get('content-length') || '0');
   if (declared > MAX_BODY_BYTES) throw tooLarge();
-  const text = await req.text();
-  if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) throw tooLarge();
-  return text;
+  if (!req.body) return '';
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
 }
 
 function tooLarge(): ApiError {
@@ -1268,6 +1453,15 @@ function parseInput(raw: string): Record<string, unknown> {
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new ApiError(400, 'invalid_request', 'Stuur de invoer als JSON-object met de velden uit het schema, bijvoorbeeld {"invoice_id": "…"}.');
+  }
+  if (tooDeep(parsed)) {
+    throw new ApiError(400, 'invalid_request', `De invoer is dieper genest dan ${MAX_JSON_DEPTH} niveaus.`);
+  }
+  if (containsNul(parsed)) {
+    throw new ApiError(400, 'invalid_request', 'De invoer bevat een NUL-teken (\\u0000); dat kan ResoFly niet opslaan.');
+  }
+  if (containsLoneSurrogate(parsed)) {
+    throw new ApiError(400, 'invalid_request', 'De invoer bevat een half teken (een losse UTF-16-surrogaat, zoals \\ud800); stuur geldige UTF-8.');
   }
   return parsed as Record<string, unknown>;
 }
@@ -1287,6 +1481,14 @@ class ApiError extends Error {
   }
 }
 
+/** Een geweigerde sleutel. `known`: de sleutel bestaat, dus de organisatie mag het zien. */
+class AuthError extends ApiError {
+  constructor(message: string, public known?: { keyId: string; organizationId: string }) {
+    super(401, 'unauthorized', message);
+    this.name = 'AuthError';
+  }
+}
+
 function methodNotAllowed(allowed: string): ApiError {
   return new ApiError(405, 'method_not_allowed', `Deze methode kan hier niet. Toegestaan: ${allowed}.`, undefined, { Allow: allowed });
 }
@@ -1299,7 +1501,16 @@ function methodNotAllowed(allowed: string): ApiError {
  */
 function asApiError(error: unknown): ApiError {
   if (error instanceof ApiError) return error;
-  if (error instanceof ActionError) return new ApiError(422, 'invalid_input', error.message);
+  if (error instanceof InvalidParamError) return new ApiError(400, 'invalid_request', error.message, { field: error.field });
+  if (error instanceof ActionError) {
+    // Een handeling zegt soms "X ophalen mislukt: <databasetekst>". Die tekst is
+    // voor ons logboek; de koppeling krijgt de zin zonder de interne details.
+    const outward = publicActionError(error.message);
+    if (outward.message !== error.message) console.error('[api] handeling mislukt:', error.message);
+    return outward.status === 500
+      ? new ApiError(500, 'internal_error', `${outward.message} Probeer het opnieuw; blijft het misgaan, geef dan het request_id door aan ResoFly.`)
+      : new ApiError(422, 'invalid_input', outward.message);
+  }
   const status = (error as { status?: unknown } | null)?.status;
   if (typeof status === 'number' && status >= 400 && status < 500) {
     const message = error instanceof Error ? error.message : 'Dit verzoek kan niet.';
@@ -1336,7 +1547,16 @@ function corsHeaders(): Record<string, string> {
 function json(payload: unknown, status: number, requestId: string, extra: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: { ...corsHeaders(), 'Content-Type': 'application/json; charset=utf-8', 'X-Request-Id': requestId, ...extra },
+    headers: {
+      ...corsHeaders(),
+      'Content-Type': 'application/json; charset=utf-8',
+      // Antwoorden met gegevens van een organisatie horen in geen enkele
+      // tussenliggende cache. Het open OpenAPI-document zet dit zelf ruimer.
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Request-Id': requestId,
+      ...extra,
+    },
   });
 }
 
@@ -1365,6 +1585,37 @@ async function logRequest(
     user_agent: (req.headers.get('user-agent') || '').slice(0, 200) || null,
   });
   if (error) console.error('[api] verzoek loggen mislukt:', error.message);
+}
+
+/**
+ * Een echte maar geweigerde sleutel (ingetrokken, verlopen, teamlid weg) in
+ * api_request_log, zodat de organisatie ziet dat hij nog gebruikt wordt. Met
+ * dezelfde teller als een werkende sleutel: wie een ingetrokken sleutel heeft,
+ * kan het logboek daarmee niet onbeperkt volschrijven.
+ */
+async function logRejectedKey(
+  req: Request, route: string, method: string, known: { keyId: string; organizationId: string },
+  status: number, requestId: string, started: number,
+): Promise<void> {
+  const { data: used } = await admin.rpc('api_consume_rate_limit', {
+    p_key_id: known.keyId, p_cost: 1, p_window_seconds: RATE_WINDOW_SECONDS, p_max_calls: RATE_MAX_CALLS,
+  });
+  if (used === null || Number(used) < 0) return;
+  const forwarded = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || '';
+  const { error } = await admin.from('api_request_log').insert({
+    organization_id: known.organizationId,
+    api_key_id: known.keyId,
+    request_id: requestId,
+    method,
+    path: route.slice(0, 300),
+    action_id: null,
+    status,
+    error_code: 'unauthorized',
+    duration_ms: Date.now() - started,
+    ip: forwarded.split(',')[0].trim().slice(0, 64) || null,
+    user_agent: (req.headers.get('user-agent') || '').slice(0, 200) || null,
+  });
+  if (error) console.error('[api] geweigerde sleutel loggen mislukt:', error.message);
 }
 
 // ── Kleine hulpjes ───────────────────────────────────────────────────────────

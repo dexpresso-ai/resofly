@@ -40,7 +40,7 @@ Bij het aanmaken kiest de owner/admin één van vier treden:
 | Alleen lezen | `read` | Geweigerd (403 `insufficient_scope`). |
 | Lezen en klaarzetten | `+ propose` | Een kaart in de goedkeurwachtrij (202). Er gebeurt pas iets als een mens klikt. |
 | Lezen en rechtstreeks uitvoeren | `+ execute` | Het gebeurt meteen (200) — als ResoFly het op de server kan en het niet onomkeerbaar is. Anders alsnog klaargezet, met de reden erbij. |
-| Alles rechtstreeks uitvoeren | `+ execute_high` | Ook post naar klanten, boekingen, aangiftes en publieke links gaan er rechtstreeks door. |
+| Alles rechtstreeks uitvoeren | `+ execute_high` | Ook post naar klanten, boekingen, aangiftes en publieke links gaan er rechtstreeks door — en wat het klantportaal raakt (een reactie die de klant ziet, het e-mailadres van een klant, een ticket of project naar een andere klant). |
 
 Daarnaast kan de sleutel **modules dichter zetten** dan de maker zelf heeft
 (een webshop hoeft niet in de boekhouding), en een **vervaldatum** krijgen.
@@ -89,8 +89,11 @@ bericht faalt, of `410 Gone` antwoordt, zet zichzelf uit, met de reden erbij.
 supabase db push
 ```
 
-Dat draait `20261003000000_public_api.sql`, `20261003010000_webhooks.sql` en
-`20261003020000_api_rest.sql` (alle drie veilig om te herhalen). De eerste:
+Dat draait `20261003000000_public_api.sql`, `20261003010000_webhooks.sql`,
+`20261003020000_api_rest.sql`, `20261003030000_api_hardening.sql`,
+`20261003040000_approvals_auth_limits.sql`, `20261003050000_full_api_check.sql` en
+`20261003060000_recheck_audit_and_licenses.sql` (alle zeven veilig om te herhalen).
+De eerste:
 
 | Onderdeel | Wat |
 |---|---|
@@ -120,9 +123,40 @@ De derde, voor de vaste adressen (`/v1/clients`, `/v1/tasks`, …):
 |---|---|
 | `api_rest_write()` | Aanmaken en wijzigen via een vast adres. Alleen voor de service role. Wisselt binnen de transactie naar het teamlid achter de sleutel (rol `authenticated`, diens id in de claims) en schrijft dan — met de RLS, triggers en het auditlog van de app. Weigert kolommen die de app zelf beheert. |
 
-Op **staging** gebeurt dit vanzelf: de workflow *Deploy Supabase (staging)*
-draait `supabase db push` en `supabase functions deploy` bij elke push naar
-`staging`.
+De vierde zet de bevindingen uit de veiligheidstest dicht (zie de kop van het
+bestand): wat het klantportaal raakt vraagt `execute_high` (`p_allow_outward`),
+strengere regels voor uren, geen voorstel van een ingetrokken sleutel, sleutels
+vervallen als het teamlid de organisatie verlaat, reacties horen bij een ticket
+van dezelfde organisatie, en bij de webhooks: geen adres in `audit_logs`, eerlijk
+claimen per eindpunt (één ronde tegelijk), en per onderwerp een vaste lijst
+velden in een bericht (`webhook_payload_columns`, dezelfde als de API).
+
+De vijfde:
+
+| Onderdeel | Wat |
+|---|---|
+| `ai_action_decide()` | Beslissen over een voorstel (goedkeurwachtrij, chat, commandocentrum): eerst vastzetten (`claim`, 10 minuten), dan `executed`, `failed` of `rejected`. Alleen wat nog open staat; een teamlid alleen over zijn eigen chatvoorstel, owners/admins over de wachtrij; met naam en tijd van wie besliste. Alleen voor de service role (`gerrie-agent`). |
+| `ai_action_audit_guard_update` | Trigger: een afgehandelde auditregel (uitgevoerd, rechtstreeks uitgevoerd, ingetrokken, afgewezen) verandert niet meer, en wat er voorgesteld werd (`params`) nooit — ook niet via de service role. |
+| `api_auth_failures`, `api_key_lookup()`, `api_note_auth_failure()` | Mislukte API-sleutels per afzender (gehasht adres). Na 60 binnen 10 minuten: 15 minuten 429 voor mislukte pogingen. Een geldige sleutel werkt altijd door. |
+| pg_cron `resofly-api-purge` | Dagelijks om 03:17 UTC `api_purge_expired()` en `webhook_purge_expired()` — als pg_cron aan staat. Anders een melding, en geen fout. |
+
+De zesde zet de bevindingen van de volledige controle dicht: alles wat tekst in
+het klantportaal zet of verandert vraagt `execute_high`, strikte invoer, en
+`ai_action_decide` voor de Beslissingen-feed (zie de changelog).
+
+De zevende, uit de herkontrole:
+
+| Onderdeel | Wat |
+|---|---|
+| `audit_entity_module()` + RLS op `audit_logs` | Een regel hoort bij een module; een teamlid leest hem alleen met leesrecht in die module. Sleutels, webhooks, uitnodigingen, agendakoppelingen, abonnement en betalingen alleen owners/admins. `audit.list` gebruikt dezelfde lijst (`AUDIT_ENTITY_MODULE`). |
+| `audit_logs_mask_private_calendar` | Trigger: een afspraak, koppeling of agenda in een privé-agenda krijgt in het auditlog een neutraal label ("Privé-afspraak", "Privé-agenda"); bestaande regels worden net zo opgeschoond. |
+| `organization_license_usage()` | Werkt nu ook voor de service role (`team.license_usage`, de plan-stap van `team.invite`); anon kan hem niet aanroepen. |
+
+Op **staging** hoort dit vanzelf te gaan: de workflow *Deploy Supabase
+(staging)* draait `supabase db push` en `supabase functions deploy` bij elke
+push naar `staging` — zodra het GitHub-secret `SUPABASE_DB_PASSWORD` staat. Tot
+dan: `SUPABASE_STAGING_LAPTOP.md` (database, functies, secrets en controle,
+vanaf je laptop).
 
 ## 2. Functies uitrollen
 
@@ -159,6 +193,9 @@ Optioneel:
 | `API_DOCS_URL` | Link naar de handleiding in het OpenAPI-document. | — |
 | `API_RATE_LIMIT_PER_MINUTE` | Aanroepen per minuut per sleutel (10–6000). | `300` |
 | `API_ADMIN_ALLOWED_ORIGINS` | Extra origins voor `api-admin`, kommagescheiden. | — |
+| `API_AUTH_FAILURE_LIMIT` | Mislukte sleutels per afzender per 10 minuten voordat er een pauze van 15 minuten volgt (5–10000). | `60` |
+| `API_AUTH_FAILURE_GLOBAL_LIMIT` | Mislukte sleutels van alle afzenders samen per 10 minuten (50–1000000). De telling per afzender leunt op `cf-connecting-ip`/`x-forwarded-for`; buiten Cloudflare zijn die te vervalsen, deze grens niet. Een geldige sleutel merkt er niets van. | `1000` |
+| `WEBHOOK_DNS_OVERRIDES` | **Alleen voor een testomgeving**: vaste IP-adressen voor namen die niet in de DNS staan, `naam=ip[,ip];naam2=ip`. Ook die adressen worden gekeurd (een naam op 127.0.0.1 zetten kan niet). In productie leeg laten. | — |
 
 Voor **webhooks** zijn twee secrets nodig. Zonder deze twee werkt de API
 gewoon, maar kan niemand een webhook aanmaken (het scherm zegt dat ook):
@@ -201,8 +238,22 @@ select cron.schedule(
 
 Een ronde bezorgt tot er niets meer klaarstaat of 40 seconden voorbij zijn, met
 8 bezorgingen tegelijk en hooguit 4 per eindpunt — zodat één eindpunt dat niet
-antwoordt, de webhooks van andere organisaties niet ophoudt. Twee rondes die
-elkaar overlappen, pakken nooit dezelfde bezorging.
+antwoordt, de webhooks van andere organisaties niet ophoudt. Elk eindpunt met
+iets klaarstaands komt in elke ronde aan bod (ook naast een eindpunt met een
+grote achterstand), en rondes claimen één voor één, zodat twee overlappende
+rondes samen nooit meer dan 4 tegelijk naar één eindpunt sturen.
+
+Opruimen (verlopen `Idempotency-Key`s, logregels en webhookberichten ouder dan
+30 dagen, oude tellingen van mislukte sleutels) plant de vijfde migratie zelf
+in als pg_cron aan staat: de taak `resofly-api-purge`, dagelijks om 03:17 UTC.
+Stond pg_cron toen nog uit, draai dan na het aanzetten de migratie opnieuw, of:
+
+```sql
+select cron.schedule('resofly-api-purge', '17 3 * * *',
+  'select public.api_purge_expired(); select public.webhook_purge_expired();');
+```
+
+Zonder die taak ruimt de functie `api` af en toe zelf op.
 
 Controleren / verwijderen:
 
@@ -310,6 +361,29 @@ niet allemaal dezelfde lege teller lezen. En hooguit 50 openstaande voorstellen
 per sleutel: een wachtrij waar niemand meer doorheen komt, is een wachtrij
 waarin iemand op Uitvoeren klikt zonder te lezen.
 
+**Gokken naar sleutels loont niet.** Een sleutel die niet bestaat of niet klopt,
+telt per afzender (het adres dat Cloudflare zag, gehasht opgeslagen). Na 60 van
+zulke pogingen binnen 10 minuten krijgt die afzender 15 minuten lang een 429 op
+mislukte pogingen — zonder verder te tellen of op te zoeken. Een GELDIGE sleutel
+werkt ook dan gewoon: koppelplatforms als Zapier en Make delen adressen, en een
+koppeling hoort geen last te hebben van een buurman met een verkeerde sleutel.
+Een ingetrokken of verlopen sleutel valt hier niet onder; die staat in het
+verzoeklog van de eigen organisatie, met de gewone aanroeplimiet.
+
+**Goedkeuren beslist de database.** De browser voert een voorstel uit onder de
+sessie van het teamlid (met RLS) en meldt daarna de uitkomst. Wat er dan in de
+audit komt, bepaalt `ai_action_decide`: alleen wat nog open staat, alleen wie
+erover gaat (een teamlid over zijn eigen chatvoorstel, owners/admins over de
+goedkeurwachtrij), met naam en tijd. Vóór het uitvoeren zet de app het voorstel
+vast, zodat twee beheerders die tegelijk op Akkoord klikken het niet allebei
+uitvoeren. En een afgehandelde regel — ook een rechtstreekse uitvoering van een
+sleutel — is niet meer achteraf op "afgewezen" of "mislukt" te zetten.
+
+**Geen verzoeken zonder herkomst.** Alle functies weigeren `Origin: null` (een
+sandbox-iframe, een data:- of file:-pagina) en sturen nooit
+`Access-Control-Allow-Origin: null` terug; zonder toegestane origin gaat de
+header niet mee (`_shared/origins.ts`, bewaakt door `origins.test.ts`).
+
 **Vaste adressen schrijven als het teamlid, niet als de server.** Lezen gaat
 met de service-role en het org-filter (wat RLS voor deze tabellen ook vraagt).
 Aanmaken en wijzigen loopt via `api_rest_write`, dat in de database wisselt naar
@@ -325,9 +399,17 @@ de module, voor de sleutel én voor het teamlid.
 wachtwoord in het adres, en niets in een intern netwerk: geen `localhost` of
 namen op `.local`, `.internal`, `.lan` en dergelijke, en geen privé- of
 gereserveerde IP-adressen (10.x, 192.168.x, 169.254.x, fc00::/7 en verwanten —
-ook verpakt in IPv6). Bij elke bezorging opnieuw gekeurd, inclusief waar de naam
-op dat moment naartoe wijst; een doorverwijzing wordt niet gevolgd, en na 10
-seconden zonder antwoord geven we op.
+ook verpakt in IPv6). Bij het aanmelden en bij elke bezorging opnieuw gekeurd, inclusief
+waar de naam op dat moment naartoe wijst — met de DNS van de runtime, of als die
+dat niet kan via DNS-over-HTTPS (Cloudflare, met Google als terugval). Lukt het
+opzoeken niet, dan wordt er niet blind verstuurd maar later opnieuw geprobeerd.
+Een doorverwijzing wordt niet gevolgd, en na 10 seconden zonder antwoord geven
+we op. **De verbinding ligt vast op het gekeurde adres**
+(`_shared/webhookTransport.ts`): de bezorger zoekt de naam één keer op, keurt de
+adressen, en verbindt met precies zo'n adres (`Deno.connect` + `Deno.startTls`,
+met het certificaat gecontroleerd tegen de naam). Een naam die tussen de controle
+en het versturen omslaat (DNS-rebinding), komt dus niet binnen. Van het antwoord
+leest de bezorger hooguit 4 kB, hoe groot het ook is.
 
 **Ondertekend, met de tijd erin.** Elk bericht draagt
 `ResoFly-Signature: t=<unix-tijd>,v1=<HMAC-SHA256>` over `<t>.<body>`, met het
@@ -340,10 +422,19 @@ bezorging opnieuw gewogen: is de sleutel niet ingetrokken of verlopen, is de
 maker nog actief lid, en mag die combinatie de module van de gebeurtenis lezen?
 Zo niet, dan wordt de bezorging overgeslagen, met de reden erbij.
 
-**Geen geheimen in een bericht.** Kolommen die op token, hash, secret, password
-of pin lijken, opslagsleutels en base64-bestanden gaan nooit mee — een patroon,
-geen lijst, zodat een nieuwe kolom `share_token` er vanzelf buiten blijft.
-Velden boven de 32 kB vallen eruit en staan in `_omitted`.
+**Geen geheimen in een bericht.** Per onderwerp gaat er een vaste lijst velden
+mee (`webhook_payload_columns`): voor klanten, contactpersonen, projecten, taken,
+tickets, reacties en uren precies die van de API (`webhooksServer.test.ts` legt
+ze naast elkaar), voor offertes, facturen, contracten en afspraken wat een
+koppeling nodig heeft. Een nieuwe kolom gaat dus niet vanzelf mee naar buiten.
+Daarbovenop blijven kolommen die op token, hash, secret, password of pin lijken,
+opslagsleutels en base64-bestanden er altijd buiten, en vallen velden boven de
+32 kB eruit (`_omitted`). Mag de sleutel van een eindpunt Financiën niet lezen,
+dan gaan tarieven en klantwaarde als `null` mee — net als via de API.
+
+**Het adres van een webhook is zelf vaak een geheim** (Zapier en Make zetten er
+een token in). Het staat daarom niet in `audit_logs`: daar staat de omschrijving,
+of "Webhook" — en ook die regels leest alleen een owner of admin.
 
 ## Als het niet werkt
 

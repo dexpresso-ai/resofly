@@ -16,7 +16,7 @@
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import {
-  presentRow, ResourceInputError, selectColumns, type ListParams, type ResourceName, type ResourceSpec,
+  MAX_OFFSET, presentRow, ResourceInputError, selectColumns, type ListParams, type ResourceName, type ResourceSpec,
 } from './apiResources.ts';
 import { RESOURCES } from './apiResourceSpecs.ts';
 
@@ -25,17 +25,32 @@ export interface StoreCtx {
   db: SupabaseClient;
   organizationId: string;
   userId: string;
+  /**
+   * Mag de sleutel deze module lezen? Velden uit een andere module (een tarief
+   * bij Financiën) komen anders als null terug, en een koppeling naar een rij
+   * in zo'n module kan niet. Zonder: alles.
+   */
+  canRead?: (module: string) => boolean;
+  /**
+   * Mag deze sleutel iets doen wat naar buiten gaat of het klantportaal raakt
+   * (een reactie die de klant ziet, een ander e-mailadres bij een contact met
+   * portaaltoegang)? Dat vraagt `execute_high`, net als bij handelingen.
+   */
+  allowOutward?: boolean;
 }
 
 /** Een fout met een HTTP-status, voor de functie om door te geven. */
 export class ResourceStoreError extends Error {
   status: 403 | 404 | 409 | 422;
   field?: string;
-  constructor(status: 403 | 404 | 409 | 422, message: string, field?: string) {
+  /** Bij een 403: ligt het aan het toegangsniveau van de sleutel (en niet aan de modulerechten)? */
+  code?: 'insufficient_scope';
+  constructor(status: 403 | 404 | 409 | 422, message: string, field?: string, code?: 'insufficient_scope') {
     super(message);
     this.name = 'ResourceStoreError';
     this.status = status;
     this.field = field;
+    this.code = code;
   }
 }
 
@@ -52,9 +67,10 @@ export async function listRows(
     query = query.eq(spec.parent.column, parentId);
   }
   for (const filter of params.filters) {
-    if (filter.op === 'gte') query = query.gte(filter.column, filter.value);
-    else if (filter.op === 'lte') query = query.lte(filter.column, filter.value);
-    else query = query.eq(filter.column, filter.value);
+    if (filter.op === 'in') query = query.in(filter.column, filter.value as string[]);
+    else if (filter.op === 'gte') query = query.gte(filter.column, filter.value as string);
+    else if (filter.op === 'lte') query = query.lte(filter.column, filter.value as string);
+    else query = query.eq(filter.column, filter.value as string | boolean);
   }
   if (params.q) {
     query = query.or(spec.search.map((column) => `${column}.ilike.%${params.q}%`).join(','));
@@ -67,10 +83,13 @@ export async function listRows(
   if (error) throw new Error(`${spec.labelPlural} ophalen mislukt: ${error.message}`);
   const rows = (data ?? []) as unknown as Record<string, unknown>[];
   const hasMore = rows.length > params.limit;
+  const nextOffset = params.offset + params.limit;
   return {
-    data: rows.slice(0, params.limit).map((row) => presentRow(spec, row)),
+    data: rows.slice(0, params.limit).map((row) => presentRow(spec, row, ctx.canRead)),
     has_more: hasMore,
-    next_offset: hasMore ? params.offset + params.limit : null,
+    // Voorbij MAX_OFFSET bladeren kan niet; dan is er wel meer, maar geen
+    // volgende pagina. Filters of updated_since brengen je verder.
+    next_offset: hasMore && nextOffset <= MAX_OFFSET ? nextOffset : null,
   };
 }
 
@@ -83,7 +102,7 @@ export async function getRow(ctx: StoreCtx, spec: ResourceSpec, id: string, pare
   const { data, error } = await query.maybeSingle();
   if (error) throw new Error(`${spec.label} ophalen mislukt: ${error.message}`);
   if (!data) throw notFound(spec);
-  return presentRow(spec, data as unknown as Record<string, unknown>);
+  return presentRow(spec, data as unknown as Record<string, unknown>, ctx.canRead);
 }
 
 /**
@@ -100,6 +119,13 @@ export async function assertReferences(ctx: StoreCtx, spec: ResourceSpec, values
     const value = values[name];
     if (!target || value === null || value === undefined) continue;
     const ref = RESOURCES[target];
+    // Koppelen aan iets wat de sleutel niet mag zien, kan niet: anders zegt het
+    // antwoord alsnog of die rij bestaat, en hangt er iets aan wat niemand met
+    // deze rechten in de app kon kiezen.
+    if (ctx.canRead && !ctx.canRead(ref.module)) {
+      throw new ResourceStoreError(403,
+        `"${name}" verwijst naar ${ref.labelPlural.toLowerCase()}, en die mag deze sleutel niet lezen.`, name);
+    }
     const { data, error } = await ctx.db.from(ref.table).select('id')
       .eq('organization_id', ctx.organizationId).eq('id', String(value)).maybeSingle();
     if (error) throw new Error(`${ref.label} controleren mislukt: ${error.message}`);
@@ -118,7 +144,7 @@ export async function createRow(
   await assertReferences(ctx, spec, values);
   const row = await write(ctx, spec, values, null);
   if (!row) throw new Error(`${spec.label} aanmaken gaf geen rij terug.`);
-  return presentRow(spec, row);
+  return presentRow(spec, row, ctx.canRead);
 }
 
 /** Wijzigen, als het teamlid achter de sleutel. Een id uit een andere organisatie bestaat niet. */
@@ -131,7 +157,7 @@ export async function updateRow(
   await assertReferences(ctx, spec, values);
   const row = await write(ctx, spec, values, id);
   if (!row) throw notFound(spec);
-  return presentRow(spec, row);
+  return presentRow(spec, row, ctx.canRead);
 }
 
 async function write(
@@ -143,6 +169,7 @@ async function write(
     p_resource: spec.name,
     p_values: values,
     p_row_id: rowId,
+    p_allow_outward: ctx.allowOutward === true,
   });
   if (error) throw translateDbError(spec, error);
   return (data as Record<string, unknown> | null) ?? null;
@@ -171,10 +198,13 @@ const CONSTRAINT_MESSAGES: Record<string, { field: string; message: string }> = 
 /**
  * Een databasefout als zin voor de koppeling. De regels zijn die van de app;
  * hun eigen meldingen (uit triggers, in het Nederlands) gaan ongewijzigd door.
+ * De kale meldingen van Postgres zelf (met tabel- en constraintnamen) niet:
+ * die worden een zin, met hooguit de naam van het veld.
  */
 export function translateDbError(spec: ResourceSpec, error: { code?: string; message?: string; details?: string | null }): ResourceStoreError | Error {
   const message = String(error.message || 'onbekende fout');
   const constraint = message.match(/constraint "([^"]+)"/)?.[1];
+  const column = message.match(/column "([^"]+)"/)?.[1];
   const known = constraint ? CONSTRAINT_MESSAGES[constraint] : undefined;
   if (known && (error.code === '23514' || error.code === '23505')) {
     return new ResourceStoreError(error.code === '23505' ? 409 : 422, known.message, known.field);
@@ -183,6 +213,10 @@ export function translateDbError(spec: ResourceSpec, error: { code?: string; mes
     return new ResourceStoreError(422, `De invoer past niet bij de regels van ResoFly (${constraint}).`);
   }
   switch (error.code) {
+    case 'RS403':
+      // api_rest_write: iets wat naar buiten gaat of het portaal raakt, zonder
+      // execute_high. Dat ligt aan het toegangsniveau, niet aan de rechten.
+      return new ResourceStoreError(403, message, undefined, 'insufficient_scope');
     case '42501':
       // Een eigen melding uit de app (een trigger als enforce_module_write_access)
       // gaat door; de kale RLS-melding van Postgres wordt een zin.
@@ -192,17 +226,28 @@ export function translateDbError(spec: ResourceSpec, error: { code?: string; mes
     case 'P0002':
       return new ResourceStoreError(404, `${spec.label} niet gevonden in deze organisatie.`);
     case '23505':
-      return new ResourceStoreError(409, `Dit bestaat al: ${message}`);
+      return new ResourceStoreError(409, /^duplicate key value/i.test(message)
+        ? `Dit bestaat al in deze organisatie: ${spec.label.toLowerCase()} met dezelfde waarde.`
+        : message);
     case '23503':
       return new ResourceStoreError(422, 'De invoer verwijst naar iets wat niet bestaat.');
     case '23502':
-      return new ResourceStoreError(422, `Er ontbreekt een verplicht veld: ${message}`);
+      return column
+        ? new ResourceStoreError(422, `"${column}" is verplicht en mag niet leeg zijn.`, column)
+        : new ResourceStoreError(422, 'Er ontbreekt een verplicht veld.');
+    case '22P02': {
+      const type = message.match(/for type ([a-z][a-z ]*)/i)?.[1];
+      return new ResourceStoreError(422, /^invalid input/i.test(message)
+        ? `Een waarde heeft niet de juiste vorm${type ? ` (${type})` : ''}.`
+        : message);
+    }
     case '23514':
-    case '22P02':
     case '22007':
     case '22008':
     case '22003':
     case '22023':
+    case '22P05':
+    case '22021':
     case 'P0001':
       return new ResourceStoreError(422, message);
     default:

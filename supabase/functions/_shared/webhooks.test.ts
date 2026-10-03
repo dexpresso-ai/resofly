@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
   createWebhookSecret, decryptSecret, encryptSecret, eventMatches, isPrivateAddress, MAX_DELIVERY_ATTEMPTS, modulesOf,
   nextRetryDelay, normalizeEventList, PING_EVENT, RETRY_DELAYS_SECONDS, signatureHeader, signPayload, verifySignature,
-  WEBHOOK_ENTITIES, WEBHOOK_EVENTS, webhookBody, webhookEvent, webhookUrlProblem,
+  WEBHOOK_ENTITIES, WEBHOOK_EVENTS, webhookBody, webhookEvent, webhookUrlProblem, parseDohAnswer,
 } from './webhooks.ts';
 import { MODULE_KEYS } from './publicApi.ts';
 
@@ -243,4 +243,24 @@ test('geheimen en grote bestanden gaan nooit mee in een bericht', () => {
   for (const column of ['id', 'name', 'status', 'email', 'total_amount', 'is_pinned', 'pinned', 'spinner']) {
     assert.ok(!hidden(column), `${column} hoort gewoon mee te gaan`);
   }
+});
+
+// ── Bevindingen uit de veiligheidstest (oktober 2026) ────────────────────────
+
+test('een punt aan het eind van de naam glipt niet langs de controle', () => {
+  for (const url of ['https://localhost./x', 'https://foo.internal./x', 'https://intranet./x', 'https://127.0.0.1./x', 'https://./x']) {
+    assert.ok(webhookUrlProblem(url), `${url} hoort geweigerd te worden`);
+  }
+  assert.equal(webhookUrlProblem('https://hooks.example.com./x'), null, 'een gewone naam met een punt erachter mag');
+});
+
+test('het antwoord van DNS-over-HTTPS: adressen, "bestaat niet", of een fout', () => {
+  const cloudflare = { Status: 0, Answer: [{ name: 'x.nip.io.', type: 5, data: 'alias.' }, { name: 'x.nip.io.', type: 1, data: '127.0.0.1' }] };
+  assert.deepEqual(parseDohAnswer(cloudflare, 'A'), ['127.0.0.1'], 'alleen A-records, geen CNAME');
+  assert.deepEqual(parseDohAnswer({ Status: 0, Answer: [{ type: 28, data: '::1' }] }, 'AAAA'), ['::1']);
+  assert.deepEqual(parseDohAnswer({ Status: 3 }, 'A'), [], 'NXDOMAIN: geen adressen');
+  assert.deepEqual(parseDohAnswer({ Status: 0 }, 'A'), []);
+  assert.throws(() => parseDohAnswer({ Status: 2 }, 'A'), /DNS-status 2/, 'SERVFAIL is geen "geen adressen"');
+  assert.throws(() => parseDohAnswer('<html>', 'A'), /Onleesbaar/);
+  assert.throws(() => parseDohAnswer(null, 'A'), /Onleesbaar/);
 });

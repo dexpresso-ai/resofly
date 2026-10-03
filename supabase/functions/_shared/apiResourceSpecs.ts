@@ -67,7 +67,8 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
       notes: { type: 'text', description: 'Notities.', nullable: true, maxLength: 10_000 },
       tags: { type: 'text_array', description: 'Labels (hooguit 30).', maxLength: 60, maxItems: 30 },
       color: { type: 'color', description: 'Kleur in de app, als #RRGGBB.', default: '#FFD966' },
-      value_eur: { type: 'number', description: 'Geschatte waarde in euro.', minimum: 0 },
+      // numeric(12,2) in de database: tot tien miljard.
+      value_eur: { type: 'number', description: 'Geschatte waarde in euro. Zonder leesrecht in Financiën: null.', minimum: 0, maximum: 9_999_999_999, module: 'finance' },
       follow_up: { type: 'date', description: 'Datum om op terug te komen.', nullable: true },
       custom_fields: { type: 'object', description: 'Eigen velden, zoals ingesteld onder Instellingen → Klanten.' },
       created_by: CREATED_BY,
@@ -77,7 +78,7 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
     filters: {
       status: { column: 'status', op: 'eq', type: 'enum', values: CLIENT_STATUSES, description: 'Alleen klanten met deze status.' },
       client_kind: { column: 'client_kind', op: 'eq', type: 'enum', values: CLIENT_KINDS, description: 'Zakelijk of particulier.' },
-      email: { column: 'email', op: 'eq', type: 'text', description: 'Precies dit e-mailadres (kleine letters).' },
+      email: { column: 'email', op: 'eq', type: 'text', description: 'Precies dit e-mailadres (hoofdletters maken niet uit).', lowercase: true },
     },
     search: ['name', 'contact_name', 'email', 'client_code'],
     sort: ['-created_at', 'created_at', 'name', '-name', '-updated_at', 'updated_at'],
@@ -111,7 +112,7 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
     filters: {
       client_id: { column: 'client_id', op: 'eq', type: 'uuid', description: 'Alleen contactpersonen van deze klant.' },
       is_active: { column: 'is_active', op: 'eq_bool', type: 'boolean', description: 'Alleen actieve (true) of inactieve (false).' },
-      email: { column: 'email', op: 'eq', type: 'text', description: 'Precies dit e-mailadres (kleine letters).' },
+      email: { column: 'email', op: 'eq', type: 'text', description: 'Precies dit e-mailadres (hoofdletters maken niet uit).', lowercase: true },
     },
     search: ['name', 'email'],
     sort: ['-created_at', 'created_at', 'name', '-name', '-updated_at', 'updated_at'],
@@ -137,7 +138,10 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
       start_date: { type: 'date', description: 'Startdatum.', nullable: true },
       end_date: { type: 'date', description: 'Einddatum.', nullable: true },
       billing_type: { type: 'enum', description: 'Per uur of vaste prijs.', values: PROJECT_BILLING_TYPES, default: 'hourly' },
-      hourly_rate_cents: { type: 'integer', description: 'Uurtarief in centen (8750 = € 87,50).', nullable: true, minimum: 0 },
+      hourly_rate_cents: {
+        type: 'integer', description: 'Uurtarief in centen (8750 = € 87,50). Zonder leesrecht in Financiën: null.',
+        nullable: true, minimum: 0, module: 'finance',
+      },
       budgeted_minutes: { type: 'integer', description: 'Begroot aantal minuten.', nullable: true, minimum: 0 },
       color: { type: 'color', description: 'Kleur in de app, als #RRGGBB.', default: '#FFD966' },
       contract_id: { type: 'uuid', description: 'Het contract waar dit project onder valt; koppel je in de app.', readOnly: true, nullable: true },
@@ -298,8 +302,9 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
         description: 'Declarabel. Weggelaten: zoals de app het kiest — niet bij een project met een vaste prijs of bij indirecte uren, anders wel.',
       },
       hourly_rate_cents: {
-        type: 'integer', description: 'Uurtarief in centen. Weggelaten: het tarief van het project, anders het standaardtarief van de organisatie.',
-        nullable: true, minimum: 0,
+        type: 'integer',
+        description: 'Uurtarief in centen. Weggelaten: het tarief van het project, anders het standaardtarief van de organisatie. Zonder leesrecht in Financiën: null.',
+        nullable: true, minimum: 0, module: 'finance',
       },
       entry_type: { type: 'enum', description: 'Direct (voor een klant of project) of indirect (eigen organisatie).', values: TIME_ENTRY_TYPES, default: 'direct' },
       indirect_category: { type: 'enum', description: 'Bij indirecte uren: waaraan.', values: INDIRECT_CATEGORIES, nullable: true },
@@ -322,7 +327,7 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
     sort: ['-entry_date', 'entry_date', ...TIME_SORTS],
     create: true,
     update: true,
-    refine: refineTimeEntryType,
+    refine: refineTimeEntry,
   },
 };
 
@@ -354,6 +359,16 @@ export function refineTaskPlanning(values: Record<string, unknown>, mode: 'creat
     if (end !== undefined && end !== null) {
       throw new ResourceInputError('Een begintijd kan alleen bij een taak op één dag, niet samen met "planned_end_date".', 'planned_start_minute');
     }
+  }
+}
+
+/** De regels voor uren: het type (hieronder) en een eindtijd die niet vóór de begintijd ligt. */
+export function refineTimeEntry(values: Record<string, unknown>, mode: 'create' | 'update'): void {
+  refineTimeEntryType(values, mode);
+  const start = values.started_at;
+  const end = values.ended_at;
+  if (typeof start === 'string' && typeof end === 'string' && Date.parse(end) < Date.parse(start)) {
+    throw new ResourceInputError('"ended_at" ligt op of na "started_at".', 'ended_at');
   }
 }
 

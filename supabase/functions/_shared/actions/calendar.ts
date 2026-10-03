@@ -1,5 +1,5 @@
 import {
-  ActionError, bool, id, isoDate, joinShort, optChoice, optId, optIsoDate, optNum, optStr,
+  ActionError, assertFieldWritable, bool, id, isoDate, joinShort, optChoice, optId, optIsoDate, optNum, optStr,
   orgQuery, row, str,
   type ActionCtx, type ActionDef,
 } from './types.ts';
@@ -104,6 +104,21 @@ async function source(ctx: ActionCtx, sourceId: string): Promise<SourceRow> {
 }
 
 /**
+ * Een agenda die de aanroeper mag zien: zijn eigen, of een die met de organisatie
+ * gedeeld is — dezelfde grens als de RLS op calendar_sources. Andermans
+ * privé-agenda bestaat voor hem niet: geen naam en geen soort in een melding, en
+ * hetzelfde antwoord als bij een id dat er niet is (anders verklapt de melding al
+ * dat hij bestaat). Het id kan iemand immers kennen: koppelingen tonen het.
+ */
+async function visibleSource(ctx: ActionCtx, sourceId: string): Promise<SourceRow> {
+  const src = await source(ctx, sourceId);
+  if (src.user_id !== ctx.userId && src.visibility !== 'organization') {
+    throw new ActionError('Agenda niet gevonden in deze organisatie.');
+  }
+  return src;
+}
+
+/**
  * De agenda-edge-functions laten naam, kleur, delen en verversen alleen toe aan
  * degene die de agenda heeft aangemaakt of gekoppeld. Dat hier al afvangen scheelt
  * een voorstel dat bij het akkoord alsnog stukloopt.
@@ -130,15 +145,39 @@ const NATIVE_EVENT_FIELDS =
  */
 async function nativeEvent(ctx: ActionCtx, eventId: string): Promise<{ event: NativeEventRow; src: SourceRow }> {
   const event = await row<NativeEventRow>(ctx, 'calendar_events', eventId, NATIVE_EVENT_FIELDS, 'Afspraak');
-  if (event.deleted_at) throw new ActionError('Die afspraak is al afgezegd.');
   const src = await source(ctx, event.source_id);
+  // Eerst of je deze agenda mag zien — pas daarna meldingen die iets over de
+  // afspraak of de agenda (de naam) verklappen. Een afspraak in andermans
+  // privé-agenda bestaat voor jou niet, net als in de app (RLS).
+  if (src.user_id !== ctx.userId && src.visibility !== 'organization') {
+    throw new ActionError('Afspraak niet gevonden in deze organisatie.');
+  }
+  if (event.deleted_at) throw new ActionError('Die afspraak is al afgezegd.');
   if (src.provider !== 'native') {
     throw new ActionError(`"${src.name}" is een ${src.provider === 'ics' ? 'alleen-lezen agenda via een link' : 'externe agenda'}; items daarin zijn hier niet te bewerken.`);
   }
-  if (src.user_id !== ctx.userId && src.visibility !== 'organization') {
-    throw new ActionError(`"${src.name}" is een privé-agenda van iemand anders.`);
-  }
   return { event, src };
+}
+
+/**
+ * Mag de aanroeper deze koppeling tussen een notitie en een afspraak zien? Zoals
+ * de app (RLS op note_calendar_links): de module Agenda lezen, en de agenda is
+ * NU gedeeld (en de afspraak was dat ook) — of het is je eigen agenda.
+ */
+async function visibleEventLinks<T extends { calendar_source_id: unknown; visibility_snapshot?: unknown; is_private_masked_snapshot?: unknown }>(
+  ctx: ActionCtx, links: T[],
+): Promise<T[]> {
+  if (ctx.canRead?.('calendar') === false || links.length === 0) return [];
+  const ids = [...new Set(links.map((link) => String(link.calendar_source_id)))];
+  const { data, error } = await orgQuery(ctx, 'calendar_sources', 'id, user_id, visibility').in('id', ids);
+  if (error) throw new ActionError(`Agenda's ophalen mislukt: ${error.message}`);
+  const sources = new Map(((data ?? []) as Array<{ id: string; user_id: string | null; visibility: string }>).map((s) => [String(s.id), s]));
+  return links.filter((link) => {
+    const src = sources.get(String(link.calendar_source_id));
+    if (!src) return false;
+    if (src.user_id === ctx.userId) return true;
+    return src.visibility === 'organization' && link.visibility_snapshot === 'organization' && link.is_private_masked_snapshot !== true;
+  });
 }
 
 /** Genodigden van een ResoFly-afspraak, zodat een bewerking ze niet per ongeluk wist. */
@@ -153,13 +192,13 @@ async function attendeesOf(ctx: ActionCtx, eventId: string): Promise<Array<{ ema
 }
 
 interface BookingLinkRow {
-  id: string; title: string; status: string; client_id: string | null; source_id: string | null;
+  id: string; title: string; status: string; client_id: string | null; source_id: string | null; user_id: string | null;
   max_total_bookings: number; max_per_week: number; auto_conference: boolean;
   meeting_url: string | null; public_token_hash: string | null;
 }
 
 const BOOKING_LINK_FIELDS =
-  'id, title, status, client_id, source_id, max_total_bookings, max_per_week, auto_conference, meeting_url, public_token_hash';
+  'id, title, status, client_id, source_id, user_id, max_total_bookings, max_per_week, auto_conference, meeting_url, public_token_hash';
 
 async function bookingLink(ctx: ActionCtx, linkId: string): Promise<BookingLinkRow> {
   return await row<BookingLinkRow>(ctx, 'meeting_booking_links', linkId, BOOKING_LINK_FIELDS, 'Boekingslink');
@@ -292,7 +331,7 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
     required: ['source_id'],
     async plan(ctx, input) {
       const sourceId = id(input, 'source_id');
-      const src = await source(ctx, sourceId);
+      const src = await visibleSource(ctx, sourceId);
       if (src.provider !== 'native') throw new ActionError(`"${src.name}" is geen eigen ResoFly-agenda; gebruik hiervoor \`calendar_source.set_sharing\`.`);
       assertOwner(ctx, src);
 
@@ -345,7 +384,7 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
     required: ['source_id'],
     async plan(ctx, input) {
       const sourceId = id(input, 'source_id');
-      const src = await source(ctx, sourceId);
+      const src = await visibleSource(ctx, sourceId);
       assertOwner(ctx, src);
 
       const patch: Record<string, unknown> = {};
@@ -429,9 +468,11 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       if (color && !/^#[0-9a-f]{6}$/i.test(color)) throw new ActionError('Geef de kleur als hexcode, bijvoorbeeld #0891b2.');
       const visibility = optChoice(input, 'visibility', VISIBILITY) ?? 'private';
 
+      // Alleen je eigen agenda's: een link die een collega privé heeft, mag
+      // jij ook hebben — en de naam van diens agenda hoort hier niet terug te komen.
       const { data: existing } = await orgQuery(ctx, 'calendar_sources', 'id, name')
-        .eq('provider', 'ics').eq('feed_url', normalized).maybeSingle();
-      if (existing) throw new ActionError(`Deze link staat al in de lijst als "${existing.name}".`);
+        .eq('provider', 'ics').eq('feed_url', normalized).eq('user_id', ctx.userId).limit(1).maybeSingle();
+      if (existing) throw new ActionError(`Deze link staat al in je lijst als "${existing.name}".`);
 
       return {
         title: `Agenda via link toevoegen: ${name}`,
@@ -455,7 +496,7 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
     required: ['source_id'],
     async plan(ctx, input) {
       const sourceId = id(input, 'source_id');
-      const src = await source(ctx, sourceId);
+      const src = await visibleSource(ctx, sourceId);
       if (src.provider !== 'ics') throw new ActionError(`"${src.name}" is geen agenda via een link.`);
       assertOwner(ctx, src);
       let host: string | null = null;
@@ -506,8 +547,12 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
 
       // De afgeleide urenpost hangt aan de koppeling; die erbij zetten scheelt een
       // tweede vraag als iemand wil weten of het loggen ook echt gebeurd is.
-      const { data: entries } = await orgQuery(ctx, 'time_entries', 'calendar_event_link_id, minutes, billable')
-        .in('calendar_event_link_id', rows.map((r) => String(r.id)));
+      // Uren horen bij Urenregistratie: wie die module niet mag lezen, krijgt de
+      // koppelingen zonder de geboekte minuten.
+      const { data: entries } = ctx.canRead?.('time') === false
+        ? { data: [] as Array<Record<string, unknown>> }
+        : await orgQuery(ctx, 'time_entries', 'calendar_event_link_id, minutes, billable')
+          .in('calendar_event_link_id', rows.map((r) => String(r.id)));
       const byLink = new Map<string, Record<string, unknown>>(
         (entries ?? []).map((e: Record<string, unknown>) => [String(e.calendar_event_link_id), e]));
 
@@ -879,8 +924,13 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
     required: ['link_id'],
     async plan(ctx, input) {
       const linkId = id(input, 'link_id');
-      const link = await row<{ note_id: string; event_title_snapshot: string | null; event_starts_at: string }>(
-        ctx, 'note_calendar_links', linkId, 'note_id, event_title_snapshot, event_starts_at', 'Koppeling');
+      const link = await row<{
+        note_id: string; event_title_snapshot: string | null; event_starts_at: string;
+        calendar_source_id: string; visibility_snapshot: string; is_private_masked_snapshot: boolean;
+      }>(ctx, 'note_calendar_links', linkId,
+        'note_id, event_title_snapshot, event_starts_at, calendar_source_id, visibility_snapshot, is_private_masked_snapshot', 'Koppeling');
+      // Een koppeling met een afspraak die je niet mag zien, bestaat voor jou niet.
+      if ((await visibleEventLinks(ctx, [link])).length === 0) throw new ActionError('Koppeling niet gevonden in deze organisatie.');
       const note = await row<{ title: string }>(ctx, 'notes', link.note_id, 'title', 'Notitie');
       return {
         title: `Notitie loskoppelen: ${note.title}`,
@@ -906,9 +956,10 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
     },
     async read(ctx, input) {
       const limit = Math.min(Math.max(Number(input.limit) || 25, 1), 100);
+      // Ruimer ophalen: wat de aanroeper niet mag zien, valt hieronder nog weg.
       let query = orgQuery(ctx, 'note_calendar_links',
-        'id, note_id, provider, calendar_source_id, provider_event_id, event_starts_at, event_title_snapshot')
-        .order('event_starts_at', { ascending: false }).limit(limit);
+        'id, note_id, provider, calendar_source_id, provider_event_id, event_starts_at, event_title_snapshot, visibility_snapshot, is_private_masked_snapshot')
+        .order('event_starts_at', { ascending: false }).limit(Math.min(limit * 4, 400));
       const noteId = optId(input, 'note_id');
       if (noteId) query = query.eq('note_id', noteId);
       const eventId = optId(input, 'native_event_id');
@@ -918,7 +969,7 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       }
       const { data, error } = await query;
       if (error) throw new ActionError(`Koppelingen ophalen mislukt: ${error.message}`);
-      const rows: Array<Record<string, unknown>> = data ?? [];
+      const rows = (await visibleEventLinks(ctx, (data ?? []) as Array<Record<string, unknown> & { calendar_source_id: unknown }>)).slice(0, limit);
       if (rows.length === 0) return { count: 0, links: [] };
       const { data: notes } = await orgQuery(ctx, 'notes', 'id, title').in('id', rows.map((r) => String(r.note_id)));
       const titles = new Map((notes ?? []).map((n: Record<string, unknown>) => [String(n.id), String(n.title)]));
@@ -1003,13 +1054,11 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
     required: ['source_id'],
     async plan(ctx, input) {
       const sourceId = id(input, 'source_id');
-      const src = await source(ctx, sourceId);
+      // Eerst of je de agenda mag zien; pas daarna meldingen met zijn naam.
+      const src = await visibleSource(ctx, sourceId);
       if (src.provider === 'ics') throw new ActionError(`"${src.name}" is een alleen-lezen agenda via een link; daar kan niet in geboekt worden.`);
       if (src.provider !== 'native' && !src.write_enabled) {
         throw new ActionError(`In "${src.name}" mag ResoFly niet schrijven. Zet dat eerst aan met \`calendar_source.set_sharing\`.`);
-      }
-      if (src.user_id !== ctx.userId && src.visibility !== 'organization') {
-        throw new ActionError(`"${src.name}" is een privé-agenda van iemand anders.`);
       }
 
       const title = optStr(input, 'title', 160) ?? 'Afspraak inplannen';
@@ -1117,7 +1166,12 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       }
       const sourceId = optId(input, 'source_id');
       if (sourceId && sourceId !== link.source_id) {
-        const src = await source(ctx, sourceId);
+        const src = await visibleSource(ctx, sourceId);
+        // Zoals meeting-booking bij het uitvoeren: de agenda is van wie de link
+        // heeft gemaakt, of gedeeld. Anders landen boekingen in andermans privé-agenda.
+        if (src.user_id !== link.user_id && src.visibility !== 'organization') {
+          throw new ActionError(`"${src.name}" is een privé-agenda en de boekingslink is van iemand anders; kies een agenda die met de organisatie gedeeld is.`);
+        }
         if (src.provider === 'ics') throw new ActionError(`"${src.name}" is alleen-lezen; daar kan niet in geboekt worden.`);
         if (src.provider !== 'native' && !src.write_enabled) throw new ActionError(`In "${src.name}" mag ResoFly niet schrijven.`);
         patch.sourceId = sourceId;
@@ -1535,8 +1589,14 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       } else if (recording.provider === 'native' && recording.event_ref) {
         // Native opnames dragen de iCalendar-UID van de afspraak; daarmee vinden we
         // de genodigden terug zonder dat het model ze hoeft over te typen.
-        const { data: events } = await orgQuery(ctx, 'calendar_events', 'id').eq('uid', recording.event_ref).limit(1);
-        const eventId = events && events.length ? String(events[0].id) : null;
+        // Alleen van een afspraak in een agenda die je mag zien: anders kwamen de
+        // genodigden van andermans privé-afspraak op de kaart (en in het antwoord).
+        const { data: events } = await orgQuery(ctx, 'calendar_events', 'id, source_id').eq('uid', recording.event_ref).limit(5);
+        let eventId: string | null = null;
+        for (const candidate of (events ?? []) as Array<{ id: string; source_id: string }>) {
+          const src = await source(ctx, candidate.source_id);
+          if (src.user_id === ctx.userId || src.visibility === 'organization') { eventId = String(candidate.id); break; }
+        }
         if (eventId) recipients = (await attendeesOf(ctx, eventId)).map((a) => a.email);
       }
       if (recipients.length === 0 && Array.isArray(recording.summary_recipients)) {
@@ -1697,6 +1757,7 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
 
       const rate = optNum(input, 'hourly_rate_eur');
       if (rate !== null) {
+        assertFieldWritable(ctx, 'finance', 'hourly_rate_eur', 'Financiën');
         if (rate < 0) throw new ActionError('Een uurtarief kan niet negatief zijn.');
         const cents = Math.round(rate * 100);
         if (cents !== (entry.hourly_rate_cents ?? 0)) {

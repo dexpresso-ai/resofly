@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ArrowRight, Bot, CalendarClock, Check, ChevronRight, ClipboardCheck, Coins, Link2, ListChecks, Loader2, Mail, RefreshCw, Sparkles, Webhook, X } from 'lucide-react';
-import { confirmGerrieAction, listPendingAgentApprovals, type AgentApproval } from '../lib/gerrie-api';
+import {
+  batchDecision, claimingHandlers, confirmGerrieAction, listPendingAgentApprovals, rejectGerrieAction, runGerrieDecision,
+  type AgentApproval,
+} from '../lib/gerrie-api';
 import type { GerrieActionHandlers } from '../lib/gerrie-api';
 import { executeProposal, openProposal, proposalLabel, type ProposalKind } from '../lib/gerrie-proposals';
 import { AgentGlyph } from './AgentGlyph';
@@ -91,22 +94,30 @@ export function AgentApprovals({
   async function approve(item: AgentApproval) {
     setRowState((s) => ({ ...s, [item.auditId]: 'busy' }));
     try {
-      await executeProposal(item.proposal, handlers);
-      void confirmGerrieAction(organizationId, item.auditId, 'executed');
+      // Eerst vastzetten: klikt een collega tegelijk op Akkoord, dan voert maar
+      // één van beiden het uit. Daarna uitvoeren en de uitkomst melden.
+      await runGerrieDecision(organizationId, item.auditId, () => executeProposal(item.proposal, handlers));
       // Ook een "openen"-voorstel (dat een formulier opent) verlaat de wachtrij:
       // de beslissing is genomen, het scherm neemt het over.
       drop(item.auditId);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Uitvoeren mislukt.';
-      void confirmGerrieAction(organizationId, item.auditId, 'failed', msg);
       setRowState((s) => ({ ...s, [item.auditId]: 'error' }));
       setRowError((s) => ({ ...s, [item.auditId]: msg }));
     }
   }
 
-  function reject(item: AgentApproval) {
-    void confirmGerrieAction(organizationId, item.auditId, 'failed', 'Afgewezen door gebruiker.');
-    drop(item.auditId);
+  async function reject(item: AgentApproval) {
+    setRowState((s) => ({ ...s, [item.auditId]: 'busy' }));
+    try {
+      await rejectGerrieAction(organizationId, item.auditId);
+      drop(item.auditId);
+    } catch (e) {
+      // Al afgehandeld, of iemand anders voert het nu uit: laat het zien in
+      // plaats van de regel stil te laten verdwijnen.
+      setRowState((s) => ({ ...s, [item.auditId]: 'error' }));
+      setRowError((s) => ({ ...s, [item.auditId]: e instanceof Error ? e.message : 'Afwijzen mislukt.' }));
+    }
   }
 
   const count = items.length;
@@ -192,20 +203,17 @@ export function AgentApprovals({
                         <AgentBatchBoard
                           proposal={batch}
                           canWrite={canWrite}
-                          handlers={handlers}
-                          onResolved={({ sent, skipped }) => {
-                            void confirmGerrieAction(
-                              organizationId, item.auditId,
-                              sent > 0 ? 'executed' : 'failed',
-                              `${sent} verstuurd, ${skipped} overgeslagen.`,
-                            );
+                          handlers={claimingHandlers(organizationId, item.auditId, handlers)}
+                          onResolved={(result) => {
+                            const decision = batchDecision(result);
+                            void confirmGerrieAction(organizationId, item.auditId, decision.outcome, decision.detail);
                             drop(item.auditId);
                           }}
                         />
                       )}
                     </div>
                     {!batch && <div className="ag-queue-actions">
-                      <button type="button" className="ag-btn ag-btn-ghost" disabled={state === 'busy'} onClick={() => reject(item)}>
+                      <button type="button" className="ag-btn ag-btn-ghost" disabled={state === 'busy'} onClick={() => void reject(item)}>
                         <X size={13} /> Afwijzen
                       </button>
                       {/* Akkoord voert het uit. Wie de regels eerst wil nalopen, opent het

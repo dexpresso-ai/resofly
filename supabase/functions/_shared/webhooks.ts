@@ -253,7 +253,9 @@ export function webhookUrlProblem(raw: string): string | null {
   }
   if (url.protocol !== 'https:') return 'Een webhook-adres moet met https:// beginnen: het bericht reist anders onversleuteld.';
   if (url.username || url.password) return 'Zet geen gebruikersnaam of wachtwoord in het adres; gebruik de handtekening om berichten te controleren.';
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  // Een punt aan het eind ("localhost.", "foo.internal.") is dezelfde naam in
+  // DNS, maar zou anders langs de controles hieronder glippen.
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   if (!host) return 'Dit adres heeft geen servernaam.';
   if (host === 'localhost' || BLOCKED_SUFFIXES.some((suffix) => host.endsWith(suffix))) {
     return 'Dit adres wijst naar een intern netwerk. Gebruik een adres dat vanaf internet bereikbaar is.';
@@ -266,7 +268,7 @@ export function webhookUrlProblem(raw: string): string | null {
   return null;
 }
 
-function isIpLiteral(host: string): boolean {
+export function isIpLiteral(host: string): boolean {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':');
 }
 
@@ -335,13 +337,40 @@ function isPrivateIpv6(g: number[]): boolean {
   // Een IPv4-adres erin verpakt: dan telt dat adres.
   const embedded = () => isPrivateIpv4([g[6] >> 8, g[6] & 0xff, g[7] >> 8, g[7] & 0xff]);
   if (zeroUpTo(5) && g[5] === 0xffff) return embedded();                       // ::ffff:0:0/96
+  if (zeroUpTo(4) && g[4] === 0xffff && g[5] === 0) return embedded();         // ::ffff:0:0:0/96 (vertaald)
   if (zeroUpTo(6)) return embedded();                                          // ::/96 (oud)
-  if (g[0] === 0x64 && g[1] === 0xff9b && zeroUpTo(0) && g.slice(2, 6).every((x) => x === 0)) return embedded(); // NAT64
-  return (g[0] & 0xfe00) === 0xfc00                                            // unique local fc00::/7
+  if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) return embedded(); // NAT64
+  // Tunnels en vertalers met een IPv4-adres erin (6to4, Teredo, NAT64 voor
+  // eigen gebruik): daarachter kan elk adres zitten, ook een intern. Een echt
+  // webhook-eindpunt staat er niet achter.
+  return g[0] === 0x2002                                                       // 6to4 2002::/16
+    || (g[0] === 0x2001 && g[1] === 0x0000)                                    // Teredo 2001::/32
+    || (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 0x0001)                   // NAT64 lokaal 64:ff9b:1::/48
+    || (g[0] & 0xfe00) === 0xfc00                                              // unique local fc00::/7
     || (g[0] & 0xffc0) === 0xfe80                                              // link-local fe80::/10
+    || (g[0] & 0xffc0) === 0xfec0                                              // site-local fec0::/10 (oud)
     || (g[0] & 0xff00) === 0xff00                                              // multicast
     || (g[0] === 0x2001 && g[1] === 0x0db8)                                    // documentatie
     || (g[0] === 0x0100 && g.slice(1, 4).every((x) => x === 0));               // discard 100::/64
+}
+
+/**
+ * Het antwoord van DNS-over-HTTPS (het JSON-formaat van Cloudflare en Google)
+ * als lijst adressen van het gevraagde type. Status 3 is "bestaat niet": geen
+ * adressen. Elke andere status, of een antwoord dat niet klopt, is een fout —
+ * dan weten we het niet, en dat is iets anders dan "geen adressen".
+ */
+export function parseDohAnswer(body: unknown, type: 'A' | 'AAAA'): string[] {
+  const answer = body as { Status?: unknown; Answer?: unknown } | null;
+  if (!answer || typeof answer !== 'object' || typeof answer.Status !== 'number') {
+    throw new Error('Onleesbaar DNS-antwoord.');
+  }
+  if (answer.Status === 3) return [];
+  if (answer.Status !== 0) throw new Error(`DNS-status ${answer.Status}.`);
+  const wanted = type === 'A' ? 1 : 28;
+  return (Array.isArray(answer.Answer) ? answer.Answer : [])
+    .filter((record: { type?: unknown; data?: unknown }) => record?.type === wanted && typeof record.data === 'string')
+    .map((record: { data: string }) => record.data);
 }
 
 // ── Opnieuw proberen ─────────────────────────────────────────────────────────

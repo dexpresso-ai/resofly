@@ -118,7 +118,7 @@ export interface GerrieSendRemindersProposal {
   type: 'send_reminders';
   /** Bedrag en dagen-te-laat zijn later toegevoegd; voorstellen van vóór die
    *  wijziging staan nog in de wachtrij, vandaar optioneel. */
-  invoices: Array<{ id: UUID; number: string; client_name: string; level: number; total_eur?: number; days_overdue?: number }>;
+  invoices: Array<{ id: UUID; number: string; client_name: string; level: number; total_eur?: number; days_overdue?: number; recipient_email?: string | null }>;
   total: number;
 }
 export interface GerrieProposalSubtask { label: string; done: boolean }
@@ -578,21 +578,230 @@ export async function streamGerrieReply(req: GerrieRequest): Promise<GerrieResul
 }
 
 /**
- * Meldt aan de backend dat een voorgestelde actie daadwerkelijk is uitgevoerd of
- * mislukt, zodat de audit (ai_action_audit) de status bijwerkt. Best-effort:
- * fouten worden genegeerd — het mag de UX nooit blokkeren.
+ * Wat er met een voorstel gebeurde. De server (ai_action_decide) beslist of dat
+ * mag: alleen wat nog open staat, alleen wie erover gaat — en legt vast wie het
+ * besliste. Een afgehandeld voorstel verandert daarna niet meer.
  */
-export async function confirmGerrieAction(organizationId: UUID, auditId: string, outcome: 'executed' | 'failed', detail?: string): Promise<void> {
+type DecisionOutcome = 'claim' | 'executed' | 'failed' | 'rejected';
+
+/** Zo heet een afwijzing in de audit; de API toont het als `rejected`. */
+const REJECTED_DETAIL = 'Afgewezen door gebruiker.';
+
+/** Een eerdere uitvoering die nooit een uitkomst meldde: de claim liep af. */
+interface StaleClaim { by: string; until: string }
+
+/** Een weigering van de server, met zijn status: een 4xx is een antwoord, geen storing. */
+class DecisionError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/**
+ * Wie een voorstel vastzette (claim), per voorstel: de uitkomst die daarop volgt,
+ * hoort bij die persoon — ook als er intussen iemand anders inlogde.
+ */
+const claimedBy = new Map<string, string | null>();
+
+async function postDecision(
+  organizationId: UUID, auditId: string, outcome: DecisionOutcome, detail?: string,
+): Promise<{ stale_claim?: StaleClaim }> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error('Je sessie is verlopen. Log opnieuw in.');
+  if (outcome === 'claim') claimedBy.set(auditId, data.session?.user?.id ?? null);
+  // Een afwijzing gaat als "mislukt, afgewezen door gebruiker": dat verstaat
+  // de server sinds jaar en dag. Zo klopt het ook als de app al vernieuwd is
+  // en de server (nog) niet.
+  const body = outcome === 'rejected'
+    ? { action: 'confirm', organizationId, auditId, outcome: 'failed', detail: REJECTED_DETAIL }
+    : { action: 'confirm', organizationId, auditId, outcome, detail };
+  const res = await fetch(`${FUNCTIONS_BASE}/gerrie-agent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: ANON_KEY },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = 'De beslissing kon niet worden vastgelegd. Probeer het zo opnieuw.';
+    try { const payload = await res.json(); if (payload?.error) message = String(payload.error); } catch { /* geen JSON */ }
+    throw new DecisionError(message, res.status);
+  }
+  try { return (await res.json()) ?? {}; } catch { return {}; }
+}
+
+// ── Uitkomsten die nog moeten aankomen ──────────────────────────────────────
+//
+// Het voorstel is uitgevoerd, maar de melding daarvan kwam niet aan (netwerk
+// weg, tabblad dicht). Dan staat het na tien minuten weer open in de wachtrij,
+// en voert iemand het een tweede keer uit. Daarom: eerst opschrijven, dan
+// versturen. Wat niet aankwam, gaat alsnog mee vóór de volgende claim.
+
+const OUTBOX_KEY = 'resofly.gerrie.decision-outbox';
+const OUTBOX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface PendingOutcome {
+  /** Wie het uitvoerde. Een ander account op dezelfde browser verstuurt hem niet op eigen naam. */
+  userId: string | null;
+  organizationId: string;
+  auditId: string;
+  outcome: 'executed' | 'failed' | 'rejected';
+  detail?: string;
+  at: number;
+}
+
+function readOutbox(): PendingOutcome[] {
   try {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    if (!token) return;
-    await fetch(`${FUNCTIONS_BASE}/gerrie-agent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, apikey: ANON_KEY },
-      body: JSON.stringify({ action: 'confirm', organizationId, auditId, outcome, detail }),
-    });
-  } catch { /* best-effort logging */ }
+    const parsed: unknown = JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]');
+    return Array.isArray(parsed)
+      ? (parsed as PendingOutcome[]).filter((e) => e && typeof e.auditId === 'string' && Date.now() - Number(e.at) < OUTBOX_MAX_AGE_MS)
+      : [];
+  } catch { return []; }
+}
+
+function writeOutbox(entries: PendingOutcome[]): void {
+  try {
+    if (entries.length > 0) localStorage.setItem(OUTBOX_KEY, JSON.stringify(entries.slice(-50)));
+    else localStorage.removeItem(OUTBOX_KEY);
+  } catch { /* geen opslag (privévenster): dan alleen de pogingen in reportOutcome */ }
+}
+
+function forgetOutcome(auditId: string): void {
+  writeOutbox(readOutbox().filter((e) => e.auditId !== auditId));
+}
+
+/**
+ * Eén uitkomst versturen. True: de server heeft hem, of wil hem nooit (al
+ * afgehandeld, mag niet). Alleen namens wie het uitvoerde: is er intussen een
+ * ander account ingelogd (gedeelde computer), dan blijft hij liggen.
+ */
+async function deliverOutcome(entry: PendingOutcome): Promise<boolean> {
+  const { data } = await supabase.auth.getSession();
+  if (!entry.userId || data.session?.user?.id !== entry.userId) return false;
+  try {
+    await postDecision(entry.organizationId, entry.auditId, entry.outcome, entry.detail);
+    return true;
+  } catch (e) {
+    return e instanceof DecisionError && e.status >= 400 && e.status < 500 && e.status !== 401 && e.status !== 429;
+  }
+}
+
+/**
+ * Wat eerder bleef liggen, alsnog versturen — alleen wat van de ingelogde
+ * gebruiker zelf is. Van een ander account (gedeelde computer) blijft het
+ * liggen tot die weer inlogt: anders kwam "besloten door" op de verkeerde naam.
+ */
+export async function flushDecisionOutbox(): Promise<void> {
+  for (const entry of readOutbox()) {
+    if (await deliverOutcome(entry)) forgetOutcome(entry.auditId);
+  }
+}
+
+async function reportOutcome(entry: PendingOutcome): Promise<void> {
+  // Synchroon opgeschreven, vóór de eerste await: ook een tabblad dat nu dichtgaat, verliest hem niet.
+  writeOutbox([...readOutbox().filter((e) => e.auditId !== entry.auditId), entry]);
+  for (const wait of [0, 1500, 5000]) {
+    if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+    if (await deliverOutcome(entry)) { forgetOutcome(entry.auditId); return; }
+  }
+  // Blijft in de outbox; flushDecisionOutbox stuurt hem vóór de volgende claim.
+}
+
+/**
+ * De uitkomst NA het uitvoeren. Het werk is dan al gebeurd: een melding die niet
+ * aankomt, laat dat niet alsnog als fout zien — maar gaat ook niet verloren.
+ */
+export async function confirmGerrieAction(organizationId: UUID, auditId: string, outcome: 'executed' | 'failed' | 'rejected', detail?: string): Promise<void> {
+  // Na een uitvoering ging de claim van DIT voorstel altijd vooraf: wie die deed,
+  // is degene die het uitvoerde. Zonder claim (een reeks waarin alles werd
+  // overgeslagen) is er niets uitgevoerd en beslist wie nu is ingelogd.
+  const userId = claimedBy.has(auditId)
+    ? claimedBy.get(auditId) ?? null
+    : (await supabase.auth.getSession()).data.session?.user?.id ?? null;
+  claimedBy.delete(auditId);
+  await reportOutcome({ userId, organizationId, auditId, outcome, detail, at: Date.now() });
+}
+
+/**
+ * Vastzetten VÓÓR het uitvoeren. Klikken twee mensen tegelijk op Akkoord, dan
+ * voert maar één het uit; de ander krijgt een duidelijke fout in plaats van een
+ * tweede factuur of mail. Gooit als het niet mag of al gebeurd is.
+ *
+ * Eerst gaan de uitkomsten mee die nog lagen: was dit voorstel eigenlijk al
+ * uitgevoerd, dan weet de server dat vóór hij het opnieuw vastzet. Liep een
+ * eerdere poging af zonder uitkomst (ander apparaat, tabblad dicht), dan vraagt
+ * de app eerst of het echt opnieuw moet — `quiet` slaat dat over voor de
+ * volgende regels van een reeks die al liep.
+ */
+export async function claimGerrieAction(organizationId: UUID, auditId: string, options: { quiet?: boolean } = {}): Promise<void> {
+  await flushDecisionOutbox();
+  const response = await postDecision(organizationId, auditId, 'claim');
+  const stale = response.stale_claim;
+  if (!stale || options.quiet || typeof window === 'undefined') return;
+  const started = new Date(new Date(stale.until).getTime() - 10 * 60_000);
+  const when = Number.isNaN(started.getTime()) ? 'eerder' : started.toLocaleString('nl-NL', { dateStyle: 'short', timeStyle: 'short' });
+  const again = window.confirm(
+    `Dit voorstel is al eens gestart (${when}), maar er kwam nooit een uitkomst binnen. Misschien is het toen al uitgevoerd — kijk dat eerst na.\n\nToch nu uitvoeren?`);
+  if (!again) {
+    await confirmGerrieAction(organizationId, auditId, 'failed', 'Niet opnieuw uitgevoerd: eerst nagaan of een eerdere poging al gelukt was.');
+    throw new Error('Niet uitgevoerd. Kijk eerst na of het eerder al gebeurd is; daarna kun je het opnieuw proberen.');
+  }
+}
+
+/** Afwijzen. Gooit als het niet kan (al afgehandeld, of iemand anders is het aan het uitvoeren). */
+export async function rejectGerrieAction(organizationId: UUID, auditId: string): Promise<void> {
+  await postDecision(organizationId, auditId, 'rejected');
+}
+
+/**
+ * Eén voorstel uitvoeren zoals het hoort: vastzetten, uitvoeren, de uitkomst
+ * melden. Mislukt het vastzetten, dan gebeurt er niets.
+ */
+export async function runGerrieDecision<T>(organizationId: UUID, auditId: string | undefined | null, run: () => Promise<T>): Promise<T> {
+  if (!auditId) return await run();
+  await claimGerrieAction(organizationId, auditId);
+  try {
+    const result = await run();
+    void confirmGerrieAction(organizationId, auditId, 'executed');
+    return result;
+  } catch (e) {
+    void confirmGerrieAction(organizationId, auditId, 'failed', e instanceof Error ? e.message : undefined);
+    throw e;
+  }
+}
+
+/**
+ * Voor een reeks (mails, facturen, herinneringen) die per regel wordt
+ * uitgevoerd: elke handler zet het voorstel eerst (opnieuw) vast. Zo blijft het
+ * van deze gebruiker zolang hij er regels uit verstuurt.
+ */
+/**
+ * De uitkomst van een reeks: iets verstuurd = uitgevoerd; niets verstuurd en
+ * niets mislukt = afgewezen (alles bewust overgeslagen); anders mislukt — dan
+ * kan het nog een keer.
+ */
+export function batchDecision(result: { sent: number; skipped: number; failed?: number }): { outcome: 'executed' | 'failed' | 'rejected'; detail: string } {
+  const failed = result.failed ?? 0;
+  const detail = `${result.sent} verstuurd, ${result.skipped} overgeslagen${failed ? `, ${failed} mislukt` : ''}.`;
+  if (result.sent > 0) return { outcome: 'executed', detail };
+  return { outcome: failed > 0 ? 'failed' : 'rejected', detail };
+}
+
+export function claimingHandlers(organizationId: UUID, auditId: string, handlers: GerrieActionHandlers): GerrieActionHandlers {
+  let claimed = false;
+  return new Proxy(handlers, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== 'function') return value;
+      return async (...args: unknown[]) => {
+        // De eerste regel vraagt na als een eerdere poging zonder uitkomst bleef; de volgende niet elk opnieuw.
+        await claimGerrieAction(organizationId, auditId, { quiet: claimed });
+        claimed = true;
+        return (value as (...params: unknown[]) => unknown).apply(target, args);
+      };
+    },
+  });
 }
 
 /**

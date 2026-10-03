@@ -475,6 +475,8 @@ function parseAllowedOrigins(values: Array<string | null>): string[] {
 
 function assertAllowedOrigin(req: Request) {
   const origin = req.headers.get('origin') || '';
+  // Een pagina zonder herkomst (sandbox-iframe, data:, file:) is nooit de app.
+  if (origin === 'null') throw new PublicInvoiceError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403);
   if (!origin) return;
   if (allowedOrigins.includes(origin)) return;
   throw new PublicInvoiceError('Deze frontend-origin is niet toegestaan voor publieke factuurpagina.', 403);
@@ -482,9 +484,11 @@ function assertAllowedOrigin(req: Request) {
 
 function corsHeaders(req: Request): HeadersInit {
   const origin = req.headers.get('origin') || '';
-  const allowOrigin = allowedOrigins.includes(origin) ? origin : '*';
+  // Alleen een toegestane webherkomst krijgt de header. Een andere site leest
+  // dan niets mee — ook de foutmelding niet (voorheen viel dit terug op *).
+  const allowOrigin = /^https?:\/\//.test(origin) && allowedOrigins.includes(origin) ? origin : '';
   return {
-    'Access-Control-Allow-Origin': allowOrigin,
+    ...(allowOrigin ? { 'Access-Control-Allow-Origin': allowOrigin } : {}),
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     Vary: 'Origin',

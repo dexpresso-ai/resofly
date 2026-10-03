@@ -53,8 +53,10 @@ Stuur de sleutel mee in elke aanroep:
 Authorization: Bearer rsfapi.<selector>.<verifier>
 ```
 
-Kan je platform de `Authorization`-header niet zelf vullen, gebruik dan
-`X-Api-Key: rsfapi.…`.
+Kan je platform de `Authorization`-header niet zelf vullen, of zet het daar al
+iets anders in (sommige platforms en Supabase-clients sturen automatisch hun
+eigen token mee), gebruik dan `X-Api-Key: rsfapi.…`. Staat er in
+`Authorization` geen API-sleutel, dan telt `X-Api-Key`.
 
 Een sleutel werkt **namens het teamlid dat hem aanmaakte**, met diens rechten
 van dat moment. Wordt dat teamlid viewer, dan kan de sleutel alleen nog lezen;
@@ -73,7 +75,7 @@ Bij het aanmaken kiest de beheerder een toegangsniveau. Het staat in
 | `read` | ja | nee — 403 `insufficient_scope` |
 | `propose` | ja | wordt **klaargezet** in de goedkeurwachtrij van ResoFly (202) |
 | `execute` | ja | wordt **rechtstreeks uitgevoerd** (200) als dat kan; anders klaargezet |
-| `execute_high` | ja | ook onomkeerbare handelingen (post naar klanten, boekingen) rechtstreeks |
+| `execute_high` | ja | ook onomkeerbare handelingen (post naar klanten, boekingen) en wat het klantportaal raakt, rechtstreeks |
 
 Daarnaast kan een sleutel per module beperkt zijn (bijvoorbeeld Financiën
 "alleen lezen"). `GET /v1/me` geeft onder `modules` het raster dat voor deze
@@ -230,13 +232,22 @@ curl -s "$RESOFLY_API/v1/tasks?project_id=…&status=todo&sort=planned_date&limi
 | Parameter | |
 |---|---|
 | `q` | Zoeken (klanten: naam, contactpersoon, e-mail, klantnummer; taken en tickets: titel en omschrijving). |
-| filters | Per adres, bijvoorbeeld `status`, `client_id`, `project_id`, `from`/`to` (uren), `is_active` (contactpersonen). |
-| `updated_since`, `created_since` | Alleen wat sinds dat tijdstip veranderde of bijkwam (ISO 8601) — om bij te houden wat er nieuw is. |
+| filters | Per adres, bijvoorbeeld `status`, `client_id`, `project_id`, `from`/`to` (uren), `is_active` (contactpersonen). Bij een keuzelijst mag je er meer tegelijk vragen: `?status=new,review,approved`. |
+| `updated_since`, `created_since` | Alleen wat sinds dat tijdstip veranderde of bijkwam: een tijdstip mét tijdzone (`2026-10-03T09:00:00Z`, `…+02:00`) of een datum (`2026-10-03`, middernacht UTC). Codeer een `+` in de querystring als `%2B`; een ongecodeerde `+` (die als spatie aankomt) verstaan we ook. |
 | `sort` | Bijvoorbeeld `-created_at` (standaard), `name`, `-updated_at`. |
-| `limit`, `offset` | Pagineren (standaard 25, max 100). Is `has_more` waar, vraag dan de volgende pagina op met `offset=next_offset`. |
+| `limit`, `offset` | Pagineren (standaard 25, max 100; een grotere `limit` wordt 100). Is `has_more` waar, vraag dan de volgende pagina op met `offset=next_offset`. Bladeren gaat tot `offset=10000`; daarna 400. Is er meer, dan is `next_offset` daar `null`: verfijn met filters, of houd met `updated_since` bij wat er veranderde. |
 
-Een onbekende parameter of filterwaarde geeft 400: liever een fout dan een lijst
-die er goed uitziet en niet klopt. Lezen vraagt leesrecht in de module.
+Een onbekende parameter, een filterwaarde die niet klopt, een parameter die er
+twee keer in staat, of een `limit`/`offset` die geen geheel getal is (`abc`,
+`-5`) geeft 400 met `details.field`: liever een fout dan een lijst die er goed
+uitziet en niet klopt. Meer waarden tegelijk gaan met komma's
+(`?status=new,review`). In `q` is een `_` gewoon een liggend streepje. Een
+e-mailfilter (`?email=`) maakt geen onderscheid tussen hoofd- en kleine letters.
+Lezen vraagt leesrecht in de module.
+
+**Velden uit een andere module.** De waarde van een klant (`value_eur`) en een
+uurtarief (`hourly_rate_cents` bij projecten en uren) horen bij Financiën. Mag de
+sleutel Financiën niet lezen, dan staan ze er wel, maar als `null`.
 
 ### Aanmaken en wijzigen
 
@@ -261,9 +272,44 @@ maakt een veld leeg.
   verwijzingscontroles, en in het logboek van ResoFly op naam van dat teamlid.
 - **Een onbekend veld is een fout** (422 met `details.field`), net als een veld
   dat ResoFly zelf beheert, zoals `client_code`. Zo merk je een tikfout meteen.
+  Tekst met een NUL-teken (`\u0000`) of een half UTF-16-teken (`\ud800`) kan
+  ResoFly niet opslaan (400).
+- **Een id, e-mailadres, datum, tijdstip of keuze is tekst.** Een lijst of object
+  wordt niet stilletjes tekst (`["a@b.nl"]` geeft 422). Een tijdstip heeft een
+  tijdzone en moet bestaan: `2026-02-30T10:00:00Z` of `T24:00` geeft 422 in
+  plaats van een stille sprong naar een andere dag.
 - **Verwijzingen** (`client_id`, `project_id`, `task_id`) moeten in dezelfde
-  organisatie bestaan. Hangt een project aan een klant, dan volgt de klant van
-  een taak het project — net als in de app.
+  organisatie bestaan, en in een module die de sleutel mag lezen (anders 403).
+  Hangt een project aan een klant, dan volgt de klant van een taak het
+  project — net als in de app. Bij uren gaat het project van de taak voor; een
+  `project_id` of `client_id` die daar niet bij past, is een fout (422).
+- **Wat het klantportaal raakt, vraagt `execute_high`.** De klant ziet in het
+  portaal zijn tickets, zijn projecten met hun taken (titel, status, datums) en
+  de reacties die niet intern zijn. Alles wat dáár tekst zet of verandert, is
+  net zo goed een bericht naar buiten:
+  - een ticket of project **mét klant aanmaken** (zonder klant kan het wel);
+  - de titel of omschrijving van een ticket, of de naam of omschrijving van een
+    project, wijzigen als er een klant aan hangt (status, prioriteit en datums
+    wel);
+  - een taak aanmaken in, verplaatsen naar of uit, of hernoemen binnen een
+    project met een klant;
+  - een reactie die de klant ziet (`"is_internal": false`);
+  - het e-mailadres van een klant, en een nieuwe klant met het e-mailadres van
+    iemand die al op het portaal inlogt;
+  - het e-mailadres of "actief" van een contactpersoon met portaaltoegang;
+  - een project of ticket naar een andere klant verhuizen.
+
+  Met alleen `execute` geeft dat 403 `insufficient_scope`. Via
+  `POST /v1/actions/{id}` wordt zoiets een voorstel in de goedkeurwachtrij.
+- **Een veld uit Financiën zetten** (`value_eur`, `hourly_rate_cents`) vraagt
+  schrijfrecht in Financiën; anders 403 met `details.field`. Laat het veld dan
+  weg.
+- **Getallen** mogen als getal of als tekst in gewone notatie (`"87,50"` mag,
+  `"6e1"` of `"0x3C"` niet), en passen in hun kolom (gehele getallen tot
+  2.147.483.647, `value_eur` tot tien miljard); anders 422 met het veld. Een lijst
+  met teksten (`tags`) bevat teksten.
+- **Een taak met een `client_id` die niet bij zijn project hoort**, geeft 422 in
+  plaats van een stille correctie; laat `client_id` weg, de klant volgt het project.
 - Een **dubbele** klant (zelfde e-mailadres of klantnummer) of contactpersoon
   (zelfde e-mailadres bij dezelfde klant) geeft 409 `conflict`.
 
@@ -304,9 +350,14 @@ curl -s -X POST "$RESOFLY_API/v1/actions/invoice.set_status" \
   -d '{"invoice_id": "…", "status": "paid"}'
 ```
 
-- Zelfde sleutel, **andere** inhoud: 422 `idempotency_conflict`.
-- De eerste poging is nog bezig: 409 `idempotency_in_progress` — probeer het zo opnieuw.
+- Zelfde sleutel, **ander** verzoek (andere inhoud, ander adres of andere
+  zoekparameters zoals `?mode=queue`): 422 `idempotency_conflict`.
+- De eerste poging is nog bezig: 409 `idempotency_in_progress` met
+  `Retry-After` — probeer het zo opnieuw. Kwam een poging nooit af (de
+  verbinding viel weg en onze kant stopte), dan is de sleutel na 5 minuten weer
+  vrij.
 - Liep de eerste poging aan onze kant mis (5xx), dan mag een herhaling het opnieuw proberen.
+- Een herhaling krijgt ook de `Location`-header van het eerste antwoord terug.
 
 ## Webhooks — ResoFly geeft een seintje
 
@@ -388,7 +439,15 @@ verdwijnt als de sleutel wordt ingetrokken. Vraag je uitdrukkelijk om een
 gebeurtenis uit een module die dicht staat, dan krijg je 422.
 
 Het adres moet `https://` zijn en vanaf internet bereikbaar: geen `localhost`,
-geen intern netwerk, geen privé-IP-adres.
+geen intern netwerk, geen privé-IP-adres — en ook geen naam die naar zo'n adres
+wijst (dat wordt bij het aanmelden én bij elke bezorging opgezocht). ResoFly
+verbindt met precies het IP-adres dat bij die controle werd goedgekeurd, en
+controleert het certificaat tegen de naam in je adres. Heeft de naam op dat
+moment geen IP-adres, dan proberen we het later opnieuw.
+
+Een organisatie heeft ruimte voor 50 eindpunten uit de app; daarnaast kan elke
+sleutel er 20 aanmelden (alle sleutels samen 100). Een koppeling kan zo nooit
+de ruimte van de beheerder opmaken.
 
 ### Wat er binnenkomt
 
@@ -419,9 +478,17 @@ En deze body:
 }
 ```
 
-- `data.object` is de rij zoals hij **nu** is (bij `*.deleted`: zoals hij was).
+- `data.object` is de rij zoals hij **nu** is (bij `*.deleted`: zoals hij was),
+  met **dezelfde velden als via de API** (`GET /v1/clients/{id}` enzovoort).
+  Offertes, facturen, contracten en afspraken hebben een vaste lijst velden;
+  interne zaken (reacties onder een taak, interne goedkeuring, de contracttekst,
+  bestanden en tokens) gaan niet mee.
 - Bij een wijziging staat in `changed` welke velden er veranderden en in
-  `previous` wat ze waren.
+  `previous` wat ze waren. Een wijziging aan een veld dat niet in het bericht
+  staat, geeft geen gebeurtenis.
+- Mag de sleutel van een eindpunt Financiën niet lezen, dan staan
+  `value_eur` en `hourly_rate_cents` er als `null` in — net als via de API — en
+  komt er geen bericht als alleen zo'n veld veranderde.
 - Er gaan nooit geheimen mee: velden die op token, hash, secret, password of pin
   lijken vallen eruit, net als opslagsleutels en base64-bestanden.
 - Een veld groter dan 32 kB (een lange contracttekst) valt eruit en staat in
@@ -547,7 +614,9 @@ ander:
 ```
 
 Een testbericht wordt niet opnieuw geprobeerd. Een eindpunt dat uit staat, kan
-niet getest worden (409).
+niet getest worden (409), en tussen twee tests zit minstens 10 seconden (429) —
+per sleutel, niet per eindpunt: twintig eindpunten naar hetzelfde adres geven
+geen twintig berichten tegelijk.
 
 ## Fouten
 
@@ -560,30 +629,36 @@ Elke fout heeft dezelfde vorm, met een vaste `code` voor je programma en een
 
 | HTTP | `code` | Wanneer |
 |---|---|---|
-| 400 | `invalid_request` | Geen geldige JSON, een onbekende parameter of parameterwaarde. `details.field` noemt hem. |
-| 401 | `unauthorized` | Geen, een onbekende, ingetrokken of verlopen sleutel. |
-| 403 | `insufficient_scope` | De sleutel mag alleen lezen. |
+| 400 | `invalid_request` | Geen geldige JSON, een onbekende of dubbele parameter, een parameterwaarde die niet klopt (ook `limit=abc`), of een ongeldige `Idempotency-Key`. `details.field` noemt hem. |
+| 401 | `unauthorized` | Geen sleutel, een sleutel die niet klopt (onbekend of onjuist: één en dezelfde zin), of een ingetrokken of verlopen sleutel. Wordt een ingetrokken of verlopen sleutel nog gebruikt, dan ziet de beheerder dat in het verzoeklog. |
+| 403 | `insufficient_scope` | De sleutel mag alleen lezen, of iets raakt het klantportaal en vraagt `execute_high`. |
 | 403 | `forbidden` | De module staat dicht, of het is een handeling voor owners/admins. |
 | 404 | `not_found`, `unknown_action` | Onbekend adres, onbekende handeling, of een voorstel of webhook van een andere sleutel. |
 | 405 | `method_not_allowed` | Zie de `Allow`-header. |
 | 409 | `idempotency_in_progress` | Zie hierboven. |
 | 409 | `conflict` | Bestaat al (een dubbele klant of contactpersoon), een webhook testen die uit staat, of het maximum aantal webhooks is bereikt. |
-| 413 | `payload_too_large` | Invoer groter dan 1 MB. |
+| 413 | `payload_too_large` | Invoer groter dan 1 MB (ook zonder `Content-Length`). |
 | 422 | `invalid_input` | De invoer klopt niet, of een id bestaat niet in deze organisatie. `message` zegt wat, `details.field` welk veld. |
 | 422 | `idempotency_conflict` | Zie hierboven. |
-| 429 | `rate_limited` | Te veel verzoeken; wacht `Retry-After` seconden. |
+| 429 | `rate_limited` | Te veel verzoeken, een webhook net getest, of te veel mislukte sleutels (vanaf je adres, of van iedereen samen); wacht `Retry-After` seconden. |
 | 429 | `queue_full` | 50 voorstellen van deze sleutel wachten nog op goedkeuring. |
 | 500 | `internal_error` | Aan onze kant misgegaan. Geef het `request_id` door. |
 
-Elk antwoord heeft een `X-Request-Id`-header.
+Elk antwoord heeft een `X-Request-Id`-header, en `Cache-Control: no-store`
+(behalve het openbare OpenAPI-document).
 
 ## Limieten
 
 - **300 aanroepen per minuut per sleutel** (je beheerder kan dat aanpassen).
   `RateLimit-Limit` en `RateLimit-Remaining` staan in elk antwoord.
-- **1 MB** invoer per verzoek.
+- **1 MB** invoer per verzoek, hooguit **32 niveaus** diep genest.
 - **50 openstaande voorstellen** per sleutel.
-- **20 webhooks** per sleutel, **50** per organisatie.
+- **Bladeren tot offset 10.000** per lijst.
+- **20 webhooks** per sleutel (alle sleutels samen 100), **50** uit de app per organisatie.
+- **Eén test per 10 seconden** per sleutel (in de app: per organisatie).
+- **60 mislukte sleutels** (onbekend of onjuist) per 10 minuten vanaf één adres,
+  en **1000** van alle adressen samen; daarboven 15 minuten een 429 voor
+  mislukte pogingen. Een geldige sleutel werkt altijd gewoon door.
 - Lijsten binnen een handeling hebben hun eigen `limit`-veld; zie het schema.
 
 ## Voorbeelden

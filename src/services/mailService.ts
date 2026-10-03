@@ -197,7 +197,11 @@ export interface SendClientEmailResult {
  */
 export async function sendClientEmail(
   organizationId: UUID,
-  input: { clientId: UUID; subject: string; bodyHtml: string; bodyText?: string; threadId?: UUID | null },
+  input: {
+    clientId: UUID; subject: string; bodyHtml: string; bodyText?: string; threadId?: UUID | null;
+    /** Bij een goedgekeurd voorstel: het adres op de kaart. De server weigert als het sindsdien veranderde. */
+    expectedRecipientEmail?: string;
+  },
 ): Promise<SendClientEmailResult> {
   const { data, error } = await supabase.functions.invoke('mail', {
     body: {
@@ -208,6 +212,7 @@ export async function sendClientEmail(
       bodyHtml: input.bodyHtml,
       bodyText: input.bodyText,
       threadId: input.threadId ?? undefined,
+      expectedRecipientEmail: input.expectedRecipientEmail,
     },
   });
   if (error) await throwFunctionError(error, 'E-mail versturen mislukt.');

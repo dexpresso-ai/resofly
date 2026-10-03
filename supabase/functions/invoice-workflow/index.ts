@@ -7,6 +7,7 @@ import { renderEmailTemplate, type EmailTemplateContent, type EmailTemplateConte
 import { calculateDunningClaim, type DunningClaim, type InterestKind, type RatePeriod } from '../_shared/dunning.ts';
 import { decryptSecret, encryptSecret, mollieKeySuffix, validateMollieApiKey } from '../_shared/mollieSecrets.ts';
 import { buildUblXml, deriveSalesLineCategory, validateUblInput, type UblDocumentInput, type UblLine, type VatKindRef } from '../_shared/ubl.ts';
+import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/approvedRecipient.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 type InvoiceLine = { id?: string; description: string; quantity: number; unit_price: number; vat?: number; vat_code?: string | null };
@@ -425,12 +426,13 @@ async function sendInvoiceReminderEmail(userId: string, organizationId: string, 
     includePaymentLink,
     recipientEmail: body.recipientEmail ? String(body.recipientEmail) : undefined,
     recipientName: body.recipientName ? String(body.recipientName) : undefined,
+    expectedRecipientEmail: body.expectedRecipientEmail,
   });
 }
 
 // Gedeelde verzendkern voor cron én handmatig. Hergebruikt de factuur-PDF-snapshot,
 // publieke token en (optioneel) de Mollie-betaallink-logica van de gewone verzending.
-async function deliverInvoiceReminder(input: { organizationId: string; invoiceId: string; level: number; daysOverdue?: number | null; actorUserId: string | null; includePaymentLink: boolean; recipientEmail?: string; recipientName?: string }) {
+async function deliverInvoiceReminder(input: { organizationId: string; invoiceId: string; level: number; daysOverdue?: number | null; actorUserId: string | null; includePaymentLink: boolean; recipientEmail?: string; recipientName?: string; expectedRecipientEmail?: unknown }) {
   const { organizationId, invoiceId, actorUserId, includePaymentLink } = input;
   const level = Math.min(3, Math.max(1, Math.round(input.level))) as 1 | 2 | 3;
   if (!RESEND_API_KEY) throw new WorkflowHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
@@ -452,6 +454,8 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
   const recipientEmail = String(input.recipientEmail || client.email || '').trim().toLowerCase();
   const recipientName = String(input.recipientName || client.contact_name || client.name || '').trim();
   if (!isEmail(recipientEmail)) throw new WorkflowHttpError('Vul een geldig klant-e-mailadres in voordat je een herinnering verstuurt.', 422);
+  // Goedgekeurd op een ander adres dan waar hij nu heen zou gaan: niet versturen.
+  if (approvedRecipientChanged(input.expectedRecipientEmail, recipientEmail)) throw new WorkflowHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
 
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
@@ -802,6 +806,7 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
   const recipientEmail = String(body.recipientEmail || client.email || '').trim().toLowerCase();
   const recipientName = String(body.recipientName || client.contact_name || client.name || '').trim();
   if (!isEmail(recipientEmail)) throw new WorkflowHttpError('Vul een geldig klant-e-mailadres in voordat je een aanmaning verstuurt.', 422);
+  if (approvedRecipientChanged(body.expectedRecipientEmail, recipientEmail)) throw new WorkflowHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
 
   // 14-dagen-termijn vanaf de verzenddatum (benadering van "de dag na ontvangst").
   const deadlineDate = new Date(Date.parse(`${calcDate}T00:00:00Z`) + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -1691,6 +1696,7 @@ async function sendCreditNoteEmail(userId: string, organizationId: string, body:
   const [client, company] = await Promise.all([loadClient(organizationId, invoice.client_id), loadCompanySettings(organizationId)]);
   const recipientEmail = String(body.recipientEmail || client.email || '').trim().toLowerCase();
   const recipientName = String(body.recipientName || '').trim() || null;
+  if (approvedRecipientChanged(body.expectedRecipientEmail, recipientEmail)) throw new WorkflowHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
   const result = await deliverCreditNoteEmail({ organizationId, userId, creditNote, invoice, client, company, recipientEmail, recipientName });
   return { sent: true, ...result };
 }
@@ -2618,9 +2624,9 @@ function randomToken(): string { const bytes = crypto.getRandomValues(new Uint8A
 function btoaUrlBytes(bytes: Uint8Array): string { let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''); }
 function parsePositiveInt(value: string | null, fallback: number): number { const parsed = Number.parseInt(String(value ?? ''), 10); return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback; }
 function parseAllowedOrigins(values: Array<string | null>): string[] { const origins = new Set<string>(); for (const value of values) { if (!value) continue; for (const rawPart of value.split(',')) { const part = rawPart.trim().replace(/\/$/, ''); if (!part) continue; if (part.startsWith('http://') || part.startsWith('https://')) { try { origins.add(new URL(part).origin); } catch { origins.add(part); } } else origins.add(part); } } return [...origins]; }
-function corsHeaders(req: Request): HeadersInit { const origin = req.headers.get('origin') || ''; const allowOrigin = INVOICE_ALLOWED_ORIGINS.includes(origin) || (INVOICE_ALLOW_LOCAL_DEV && isLocalOrigin(origin)) ? origin : INVOICE_ALLOW_LOCAL_DEV && !origin ? '*' : 'null'; return { 'Access-Control-Allow-Origin': allowOrigin, 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', Vary: 'Origin' }; }
+function corsHeaders(req: Request): HeadersInit { const origin = req.headers.get('origin') || ''; const allowOrigin = INVOICE_ALLOWED_ORIGINS.includes(origin) || (INVOICE_ALLOW_LOCAL_DEV && isLocalOrigin(origin)) ? origin : INVOICE_ALLOW_LOCAL_DEV && !origin ? '*' : ''; return { ...(allowOrigin ? { 'Access-Control-Allow-Origin': allowOrigin } : {}), 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', Vary: 'Origin' }; }
 function json(req: Request, payload: unknown, status = 200): Response { return new Response(JSON.stringify(payload), { status, headers: { ...corsHeaders(req), 'Content-Type': 'application/json' } }); }
-function assertAllowedOrigin(req: Request): void { const origin = req.headers.get('origin') || ''; if (!origin && INVOICE_ALLOW_LOCAL_DEV) return; if (INVOICE_ALLOWED_ORIGINS.includes(origin)) return; if (INVOICE_ALLOW_LOCAL_DEV && isLocalOrigin(origin)) return; if (INVOICE_ALLOWED_ORIGINS.length === 0 && INVOICE_ALLOW_LOCAL_DEV) return; if (INVOICE_ALLOWED_ORIGINS.length === 0) throw new WorkflowHttpError('INVOICE_ALLOWED_ORIGINS of APP_PUBLIC_URL is verplicht in productie.', 500); throw new WorkflowHttpError('Deze frontend-origin is niet toegestaan voor invoice workflow-acties.', 403); }
+function assertAllowedOrigin(req: Request): void { const origin = req.headers.get('origin') || ''; if (origin === 'null') throw new WorkflowHttpError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403); if (!origin && INVOICE_ALLOW_LOCAL_DEV) return; if (INVOICE_ALLOWED_ORIGINS.includes(origin)) return; if (INVOICE_ALLOW_LOCAL_DEV && isLocalOrigin(origin)) return; if (INVOICE_ALLOWED_ORIGINS.length === 0 && INVOICE_ALLOW_LOCAL_DEV) return; if (INVOICE_ALLOWED_ORIGINS.length === 0) throw new WorkflowHttpError('INVOICE_ALLOWED_ORIGINS of APP_PUBLIC_URL is verplicht in productie.', 500); throw new WorkflowHttpError('Deze frontend-origin is niet toegestaan voor invoice workflow-acties.', 403); }
 function isLocalOrigin(origin: string): boolean { return ['http://localhost:5173', 'http://127.0.0.1:5173'].includes(origin); }
 async function requireUser(req: Request): Promise<{ id: string; email?: string }> { const auth = req.headers.get('Authorization') || ''; const token = auth.replace(/^Bearer\s+/i, ''); if (!token) throw new WorkflowHttpError('Niet ingelogd: Authorization header ontbreekt.', 401); const { data, error } = await supabaseAdmin.auth.getUser(token); if (error || !data.user) throw new WorkflowHttpError('Niet ingelogd of ongeldig sessietoken.', 401); return { id: data.user.id, email: data.user.email || undefined }; }
 async function requireOrganizationAccess(userId: string, organizationId: string): Promise<OrganizationRole> { if (!isUuid(organizationId)) throw new WorkflowHttpError('Ongeldige organisatie.', 400); const { data, error } = await supabaseAdmin.from('organization_members').select('role').eq('organization_id', organizationId).eq('user_id', userId).eq('status', 'active').limit(1); if (error) throwSupabaseError('organization_members lookup', error); const role = data?.[0]?.role as OrganizationRole | undefined; if (!role) throw new WorkflowHttpError('Geen toegang tot deze organisatie.', 403); return role; }

@@ -70,7 +70,8 @@ export function AgentBatchBoard({ proposal, canWrite, handlers, onResolved, disa
     const items: ChecklistItem[] = proposal.invoices.map((inv) => ({
       key: inv.id,
       title: inv.client_name || inv.number,
-      subtitle: `Factuur ${inv.number}`,
+      // Naar wie hij gaat hoort op de regel die je afvinkt (oudere voorstellen hebben het adres niet).
+      subtitle: inv.recipient_email ? `Factuur ${inv.number} · ${inv.recipient_email}` : `Factuur ${inv.number}`,
       meta: [
         `${inv.level}e herinnering`,
         typeof inv.days_overdue === 'number' ? `${inv.days_overdue} dagen te laat` : '',

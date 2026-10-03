@@ -3,6 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { sanitizeEmailBodyHtml } from '../_shared/htmlSanitize.ts';
+import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/approvedRecipient.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
@@ -303,6 +304,10 @@ async function sendClientPortalWelcome(
       'Deze klant heeft geen geldig e-mailadres, dus er kan geen welkomstmail worden verstuurd.',
       422,
     );
+  }
+  // Goedgekeurd op een ander adres (zie _shared/approvedRecipient.ts): niet versturen.
+  if (approvedRecipientChanged(body.expectedRecipientEmail, recipientEmail)) {
+    throw new MailHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
   }
 
   const organization = await loadOrganization(organizationId);
@@ -679,6 +684,9 @@ async function sendClientEmail(
   const recipientEmail = String(client.email || '').trim().toLowerCase();
   if (!isEmail(recipientEmail)) {
     throw new MailHttpError('Deze klant heeft geen geldig e-mailadres.', 422);
+  }
+  if (approvedRecipientChanged(body.expectedRecipientEmail, recipientEmail)) {
+    throw new MailHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
   }
 
   const organization = await loadOrganization(organizationId);
@@ -1314,10 +1322,10 @@ function corsHeaders(req: Request): HeadersInit {
       ? origin
       : MAIL_ALLOW_LOCAL_DEV && !origin
         ? '*'
-        : 'null';
+        : '';
 
   return {
-    'Access-Control-Allow-Origin': allowOrigin,
+    ...(allowOrigin ? { 'Access-Control-Allow-Origin': allowOrigin } : {}),
     'Access-Control-Allow-Headers':
       'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -1337,6 +1345,8 @@ function json(req: Request, payload: unknown, status = 200): Response {
 
 function assertAllowedOrigin(req: Request): void {
   const origin = req.headers.get('origin') || '';
+  // Een pagina zonder herkomst (sandbox-iframe, data:, file:) is nooit de app.
+  if (origin === 'null') throw new MailHttpError('Verzoeken zonder herkomst (origin "null") worden niet geaccepteerd.', 403);
 
   if (!origin && MAIL_ALLOW_LOCAL_DEV) {
     return;

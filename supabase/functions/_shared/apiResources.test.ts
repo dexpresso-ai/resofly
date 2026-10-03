@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  filtersOf, isIsoDate, normalizeInput, parseListParams, presentRow, ResourceInputError, selectColumns, writableFields,
-  type ResourceSpec,
+  fieldsOutsideWrite, filtersOf, isExactDateTime, isIsoDate, MAX_OFFSET, normalizeInput, parseListParams, presentRow,
+  ResourceInputError, resourceOpenApi, selectColumns, writableFields, type ResourceSpec,
 } from './apiResources.ts';
 
 /**
@@ -32,7 +32,7 @@ const spec: ResourceSpec = {
     at: { type: 'datetime', description: 'tijdstip', nullable: true },
     start: { type: 'time', description: 'begin', nullable: true },
     minutes: { type: 'integer', description: 'minuten', minimum: 0, maximum: 1440 },
-    rate: { type: 'number', description: 'tarief', minimum: 0, nullable: true },
+    rate: { type: 'number', description: 'tarief', minimum: 0, nullable: true, module: 'finance' },
     billable: { type: 'boolean', description: 'declarabel' },
     tags: { type: 'text_array', description: 'labels', maxLength: 20 },
     extra: { type: 'object', description: 'eigen velden' },
@@ -44,6 +44,7 @@ const spec: ResourceSpec = {
     parent_id: { column: 'parent_id', op: 'eq', type: 'uuid', description: 'ouder' },
     from: { column: 'day', op: 'gte', type: 'date', description: 'vanaf' },
     billable: { column: 'billable', op: 'eq_bool', type: 'boolean', description: 'declarabel' },
+    email: { column: 'email', op: 'eq', type: 'text', description: 'mail', lowercase: true },
   },
   search: ['name', 'email'],
   sort: ['-created_at', 'created_at', 'name', '-updated_at'],
@@ -186,4 +187,144 @@ test('een antwoord bevat precies de velden uit de spec, en niets anders', () => 
   assert.equal(shown.note, null);
   assert.ok(!('public_token_hash' in shown));
   assert.equal(selectColumns(spec), Object.keys(spec.fields).join(', '));
+});
+
+// ── Bevindingen uit de veiligheidstest (oktober 2026) ────────────────────────
+
+test('namen van ingebouwde objecteigenschappen zijn gewoon onbekende velden', () => {
+  for (const name of ['constructor', 'toString', 'hasOwnProperty', '__proto__', 'valueOf']) {
+    const input = JSON.parse(`{"name": "x", "${name}": 1}`);
+    rejects(() => normalizeInput(spec, input, 'create'), /Onbekend veld/, name);
+  }
+});
+
+test('stuurtekens in q en in tekstfilters', () => {
+  const textSpec: ResourceSpec = { ...spec, filters: { ...spec.filters, email: { column: 'email', op: 'eq', type: 'text', description: 'mail' } } };
+  assert.equal(parseListParams(textSpec, new URLSearchParams({ q: 'jan\u0000sen\tbv' })).q, 'jan sen bv');
+  rejects(() => parseListParams(textSpec, new URLSearchParams({ email: 'a\u0000@b.nl' })), /stuurtekens/, 'email');
+  assert.deepEqual(parseListParams(textSpec, new URLSearchParams({ email: 'a,b(c)@d.nl' })).filters, [{ column: 'email', op: 'eq', value: 'a,b(c)@d.nl' }]);
+});
+
+test('een keuzelijst-filter met meer waarden tegelijk', () => {
+  assert.deepEqual(parseListParams(spec, new URLSearchParams({ status: 'active,archived,active' })).filters,
+    [{ column: 'status', op: 'in', value: ['active', 'archived'] }]);
+  rejects(() => parseListParams(spec, new URLSearchParams({ status: 'active,weg' })), /Filter "status"/);
+  // Een id of datum blijft één waarde.
+  rejects(() => parseListParams(spec, new URLSearchParams({ parent_id: 'a,b' })), /uuid/);
+});
+
+// ── Tweede ronde ─────────────────────────────────────────────────────────────
+
+test('een getal is een getal: "87,50" wel, "0x3C", "6e1" of "Infinity" niet', () => {
+  assert.equal(normalizeInput(spec, { name: 'a', rate: '87,50' }, 'create').rate, 87.5);
+  assert.equal(normalizeInput(spec, { name: 'a', minutes: ' 90 ' }, 'create').minutes, 90);
+  for (const bad of ['0x3C', '6e1', 'Infinity', '1_000', '1.2.3', '--1', 'tien']) {
+    rejects(() => normalizeInput(spec, { name: 'a', rate: bad }, 'create'), /getal/, 'rate');
+  }
+  rejects(() => normalizeInput(spec, { name: 'a', minutes: '' }, 'create'), /leeg/, 'minutes');
+});
+
+test('een lijst met teksten bevat teksten (of getallen), geen objecten', () => {
+  assert.deepEqual(normalizeInput(spec, { name: 'a', tags: ['x', 2, null, ' x '] }, 'create').tags, ['x', '2']);
+  rejects(() => normalizeInput(spec, { name: 'a', tags: [{ a: 1 }] }, 'create'), /lijst met teksten/, 'tags');
+  rejects(() => normalizeInput(spec, { name: 'a', tags: [['geneste']] }, 'create'), /lijst met teksten/, 'tags');
+});
+
+test('bladeren gaat tot MAX_OFFSET; daarna een fout met de uitweg, geen stille lege pagina', () => {
+  assert.equal(parseListParams(spec, new URLSearchParams({ offset: String(MAX_OFFSET) })).offset, MAX_OFFSET);
+  rejects(() => parseListParams(spec, new URLSearchParams({ offset: String(MAX_OFFSET + 1) })), /updated_since/, 'offset');
+  rejects(() => parseListParams(spec, new URLSearchParams({ offset: '99999999999999999999' })), /offset/, 'offset');
+});
+
+test('een e-mailfilter vergelijkt in kleine letters (zo staan adressen opgeslagen)', () => {
+  const params = parseListParams(spec, new URLSearchParams({ email: 'Info@Bedrijf.NL' }));
+  assert.deepEqual(params.filters, [{ column: 'email', op: 'eq', value: 'info@bedrijf.nl' }]);
+});
+
+test('een veld uit een module die je niet mag lezen, komt als null terug', () => {
+  const row = { id: '1', name: 'a', rate: 95 };
+  assert.equal(presentRow(spec, row).rate, 95, 'zonder rechtencheck: alles');
+  assert.equal(presentRow(spec, row, () => true).rate, 95);
+  const hidden = presentRow(spec, row, (module) => module !== 'finance');
+  assert.equal(hidden.rate, null);
+  assert.equal(hidden.name, 'a');
+  assert.ok('rate' in hidden, 'het veld blijft bestaan, zodat een koppeling niet denkt dat het schema veranderde');
+});
+
+test('een veld uit een module waar je niet mag schrijven, kun je niet zetten', () => {
+  const noFinance = (module: string) => module !== 'finance';
+  assert.deepEqual(fieldsOutsideWrite(spec, { name: 'a', rate: 1 }, noFinance), ['rate']);
+  assert.deepEqual(fieldsOutsideWrite(spec, { name: 'a' }, noFinance), []);
+  assert.deepEqual(fieldsOutsideWrite(spec, { name: 'a', rate: 1 }, () => true), []);
+});
+
+// ── Uit de volledige controle ────────────────────────────────────────────────
+
+test('een id, adres, datum of keuze is tekst: een lijst of object wordt niet stil tekst', () => {
+  rejects(() => normalizeInput(spec, { name: 'a', email: ['a@b.nl'] }, 'create'), /e-mailadres/, 'email');
+  rejects(() => normalizeInput(spec, { name: 'a', parent_id: ['c0000000-0000-0000-0000-00000000000b'] }, 'create'), /uuid/, 'parent_id');
+  rejects(() => normalizeInput(spec, { name: 'a', status: ['active'] }, 'create'), /een van deze/, 'status');
+  rejects(() => normalizeInput(spec, { name: 'a', day: { y: 2026 } }, 'create'), /datum/, 'day');
+  rejects(() => normalizeInput(spec, { name: 'a', at: 1_759_480_000_000 }, 'create'), /tijdstip/, 'at');
+  rejects(() => normalizeInput(spec, { name: 'a', start: 900 }, 'create'), /UU:MM/, 'start');
+  assert.equal(normalizeInput(spec, { name: 'a', email: ' A@B.nl ' }, 'create').email, 'a@b.nl');
+});
+
+test('een tijdstip moet bestaan: geen 30 februari, geen uur 24, geen tijdzone van +15', () => {
+  assert.ok(isExactDateTime('2026-10-03T09:00:00+02:00'));
+  assert.ok(isExactDateTime('2026-10-03T09:00Z'));
+  assert.ok(isExactDateTime('2028-02-29T23:59:59.123Z'), 'schrikkeldag');
+  assert.ok(!isExactDateTime('2026-02-30T10:00:00Z'), '30 februari rolde door naar 2 maart');
+  assert.ok(!isExactDateTime('2026-10-03T24:00:00Z'), 'uur 24 rolde door naar de volgende dag');
+  assert.ok(!isExactDateTime('2026-10-03T09:60:00Z'));
+  assert.ok(!isExactDateTime('2026-10-03T09:00:00+15:00'));
+  assert.ok(!isExactDateTime('2026-10-03T09:00:00'), 'zonder tijdzone');
+  rejects(() => normalizeInput(spec, { name: 'a', at: '2026-02-30T10:00:00Z' }, 'create'), /bestaand tijdstip/, 'at');
+  assert.equal(normalizeInput(spec, { name: 'a', at: '2026-10-03T09:00:00+02:00' }, 'create').at, '2026-10-03T07:00:00.000Z');
+});
+
+test('een geheel getal past in de kolom, ook zonder eigen maximum', () => {
+  const wide: ResourceSpec = { ...spec, fields: { ...spec.fields, budget: { type: 'integer', description: 'begroot', nullable: true } } };
+  rejects(() => normalizeInput(wide, { name: 'a', budget: 3e10 }, 'create'), /hooguit 2147483647/, 'budget');
+  assert.equal(normalizeInput(wide, { name: 'a', budget: 2_147_483_647 }, 'create').budget, 2_147_483_647);
+});
+
+test('lijsten: dubbele parameters en onleesbare paginering zijn een fout, _ zoekt letterlijk', () => {
+  rejects(() => parseListParams(spec, new URLSearchParams('status=active&status=archived')), /meer dan één keer/, 'status');
+  rejects(() => parseListParams(spec, new URLSearchParams({ limit: 'abc' })), /"limit" moet een geheel getal \(1 tot 100\)/, 'limit');
+  rejects(() => parseListParams(spec, new URLSearchParams({ offset: '-1' })), /"offset" moet een geheel getal \(0 of meer\)/, 'offset');
+  rejects(() => parseListParams(spec, new URLSearchParams({ offset: 'Infinity' })), /offset/, 'offset');
+  assert.equal(parseListParams(spec, new URLSearchParams({ limit: '500' })).limit, 100, 'te groot wordt de grens');
+  assert.equal(parseListParams(spec, new URLSearchParams({ limit: '0' })).limit, 1);
+  assert.equal(parseListParams(spec, new URLSearchParams({ q: 'J_nsen' })).q, 'J\\_nsen', 'een _ is geen jokerteken');
+});
+
+test('een tijdstipfilter: een datum mag, een + die een spatie werd ook, een niet-bestaand tijdstip niet', () => {
+  const at = (value: string) => parseListParams(spec, new URLSearchParams({ updated_since: value })).filters[0]?.value;
+  assert.equal(at('2026-10-03'), '2026-10-03T00:00:00.000Z');
+  assert.equal(at('2026-10-03T09:00:00+02:00'), '2026-10-03T07:00:00.000Z');
+  assert.equal(at('2026-10-03T09:00:00 02:00'), '2026-10-03T07:00:00.000Z', 'een ongecodeerde + komt als spatie binnen');
+  rejects(() => at('2026-02-30T00:00:00Z'), /ISO 8601/, 'updated_since');
+  rejects(() => at('2026-10-03T09:00:00'), /ISO 8601/, 'updated_since');
+});
+
+test('OpenAPI: wijzigen kent geen standaardwaarden, en een veld uit een andere module kan null zijn', () => {
+  const withDefaults: ResourceSpec = {
+    ...spec,
+    fields: { ...spec.fields, status: { ...spec.fields.status, default: 'active' }, billable: { ...spec.fields.billable, default: true } },
+  };
+  const { schemas } = resourceOpenApi([withDefaults]);
+  const update = JSON.stringify(schemas.ProefUpdate);
+  assert.doesNotMatch(update, /"default"/, 'een SDK zou weggelaten velden anders terugzetten');
+  assert.match(JSON.stringify(schemas.ProefCreate), /"default":"active"/, 'bij aanmaken wél');
+  const rate = (schemas.Proef as { properties: Record<string, { type: unknown }> }).properties.rate;
+  assert.deepEqual(rate.type, ['number', 'null']);
+  // Ook een veld dat zelf niet leeg kan zijn: zonder leesrecht in die module komt het als null.
+  const strict: ResourceSpec = { ...spec, fields: { ...spec.fields, rate: { ...spec.fields.rate, nullable: false } } };
+  const strictRate = (resourceOpenApi([strict]).schemas.Proef as { properties: Record<string, { type: unknown }> }).properties.rate;
+  assert.deepEqual(strictRate.type, ['number', 'null']);
+  // Een keuzelijst die leeg mag zijn, noemt null ook bij de toegestane waarden.
+  const nullableEnum: ResourceSpec = { ...spec, fields: { ...spec.fields, status: { ...spec.fields.status, nullable: true } } };
+  const status = (resourceOpenApi([nullableEnum]).schemas.Proef as { properties: Record<string, { enum: unknown[] }> }).properties.status;
+  assert.ok(status.enum.includes(null));
 });
