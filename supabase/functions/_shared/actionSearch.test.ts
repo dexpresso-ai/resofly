@@ -77,6 +77,55 @@ test('elke vraag vindt zijn handeling binnen de eerste zes treffers', () => {
   assert.deepEqual(missed, [], `deze vragen vinden hun handeling niet:\n  ${missed.join('\n  ')}`);
 });
 
+/**
+ * Stopwoorden tellen niet mee.
+ *
+ * Het model zoekt met de woorden van de gebruiker, en daar zitten woorden tussen die
+ * niets zeggen over de handeling. Die horen de uitslag niet te verschuiven: met een
+ * vulzin van alleen zulke woorden eromheen hoort er precies hetzelfde uit te komen.
+ */
+const FILLER: Array<(query: string) => string> = [
+  (query) => `kun je ${query} voor mij`,
+  (query) => `ik wil graag dat je ${query} als het kan`,
+];
+
+test('een vulzin van stopwoorden verandert de uitslag niet', () => {
+  const shifted: string[] = [];
+  for (const [query] of CASES) {
+    const bare = searchActions(query, { limit: 6 }).map((a) => a.id).join(', ');
+    for (const frame of FILLER) {
+      const framed = searchActions(frame(query), { limit: 6 }).map((a) => a.id).join(', ');
+      if (framed !== bare) shifted.push(`"${frame(query)}" → ${framed}\n    zonder vulwoorden → ${bare}`);
+    }
+  }
+  assert.deepEqual(shifted, [], `met vulwoorden komt hier iets anders uit:\n  ${shifted.join('\n  ')}`);
+});
+
+test('een vraag van alleen stopwoorden zoekt toch op die woorden', () => {
+  // Anders blijft er geen zoekwoord over en komt er een willekeurige lijst terug.
+  assert.equal(searchActions('wat zit erin', { limit: 6 })[0]?.id, 'gallery.list_items');
+});
+
+/**
+ * Een paar gewone woorden staan bewust NIET in de lijst, omdat ze kiezen wélke
+ * handeling het is. Zonder "niet" wint goedkeuren van afwijzen, en zonder "uit"
+ * wint een nieuwe bankregel van het uitzetten van automatisch boeken.
+ */
+test('woorden die de handeling kiezen, tellen wel mee', () => {
+  const PAIRS: Array<[string, string, string]> = [
+    ['offerte niet akkoord', 'quote.reject_internal', 'quote.approve_internal'],
+    ['automatisch boeken uit', 'bank_rule.update', 'bank_rule.create'],
+  ];
+  for (const [query, wins, over] of PAIRS) {
+    const found = searchActions(query, { limit: 12 }).map((a) => a.id);
+    const rank = (id: string) => (found.includes(id) ? found.indexOf(id) : found.length);
+    assert.ok(
+      found.includes(wins) && rank(wins) < rank(over),
+      `"${query}" hoort ${wins} boven ${over} te zetten, kreeg: ${found.slice(0, 5).join(', ')}`,
+    );
+  }
+});
+
 test('zoeken zonder treffer levert een lege lijst, geen willekeurige handelingen', () => {
   assert.deepEqual(searchActions('zzzqqq onbekendwoord', { limit: 6 }), []);
 });

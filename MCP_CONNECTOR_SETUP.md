@@ -44,6 +44,14 @@ gegevens bijgekomen: een kerntool loopt langs exact dezelfde `runGerrieTool` en
 `buildProposal` als de chat, met dezelfde rol- en modulecontrole. Er is alleen een
 tweede manier bijgekomen om die ene weg te vínden.
 
+Vinden gaat op woorden, en daar schoot het label tekort. "Conceptfactuur
+klaarzetten" is één samengesteld woord, en "factuur maken" vond `propose_invoice`
+daardoor niet. Sinds oktober 2026 hebben de kerntools daarom eigen trefwoorden,
+net als de handelingen in de registry (`TOOL_KEYWORDS` in `gerrieCore.ts`). Een
+trefwoord telt even zwaar als het label: houd het bij het eigen onderwerp, anders
+duwt het een handeling die beter past omlaag. Vulwoorden als "een", "van" en
+"heeft" tellen bij het zoeken niet mee (`STOPWORDS` in `actions/registry.ts`).
+
 Twee dingen krijgt een gekoppelde AI bewust niet:
 
 - **`propose_create_agent`** — een agent bouwen die daarna vanzelf draait en zelf
@@ -54,7 +62,8 @@ Twee dingen krijgt een gekoppelde AI bewust niet:
   scherm en betekenen niets aan de andere kant van een JSON-RPC-verbinding.
 
 `mcpParity.test.ts` bewaakt allebei, en bewaakt ook dat elke tool waar een
-omschrijving naar verwijst via de MCP te bereiken is.
+omschrijving naar verwijst via de MCP te bereiken is, dat de kerntools met
+gewone woorden te vinden zijn en dat ze de registry daarbij niet verdringen.
 
 ### De drie standen
 
@@ -267,8 +276,26 @@ staan er twee dingen klaar die hij in zijn AI-app uit een menu pakt.
 **Standaardvragen** (`prompts`) — vijf opdrachten die deze koppeling goed aankan:
 weekoverzicht, klant doorlichten (met de naam als invulveld), openstaande
 facturen nalopen, notulen opvolgen, en je dag voorbereiden. In Claude verschijnen
-ze als keuzes; de opdracht die eronder zit stuurt het model langs `find_actions`
-en `run_action`, met de instructie niets te verzinnen.
+ze als keuzes. De opdracht die eronder zit komt als bericht in het gesprek van de
+gebruiker te staan, en is daarom gewone taal: zoek alles op in ResoFly en verzin
+niets. Toolnamen staan er niet in; hoe het model zoekt, staat in de omschrijvingen
+van de tools.
+
+### Gewone taal
+
+Een gebruiker ziet geen technische namen: geen `propose_invoice`, geen
+`client_id`, geen `draft`. De serverinstructies nemen daarvoor dezelfde regels over
+als Gerrie's systeemprompt (`PLAIN_LANGUAGE_RULES` in `_shared/plainLanguage.ts`).
+De omschrijvingen van de tools herhalen het kort, voor AI-apps die de
+serverinstructies niet aan het model doorgeven. En elke tool heeft een `title`
+("Zoeken wat er kan", "Gegevens ophalen", "Klaarzetten ter goedkeuring"), die een
+AI-app kan tonen in plaats van de naam.
+
+Wat ResoFly niet in de hand heeft: het eigen scherm van de AI-app. Claude laat een
+aanroep openklappen, en daarin staan het id en de ruwe gegevens gewoon. Dat is het
+venster van de app, niet het antwoord van het model.
+`plainLanguage.test.ts` en `mcpCatalog.test.ts` bewaken dat wat wij zelf tonen
+(labels, titels, standaardvragen en bronnen) geen technische namen bevat.
 
 **Bronnen** (`resources`) — dingen die hij aanhecht vóórdat hij iets vraagt: zijn
 postvak, recente klantmail, de planning van deze week, de openstaande posten, de

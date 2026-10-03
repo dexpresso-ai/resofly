@@ -7,6 +7,7 @@ import {
   MCP_PROMPTS, MCP_RESOURCES, MCP_RESOURCE_TEMPLATES, findPrompt,
   matchTemplate, templateField, type McpResource,
 } from './mcpCatalog.ts';
+import { technicalNames } from './plainLanguage.ts';
 
 /**
  * Bewaakt dat de catalogus blijft kloppen met de handelingenregistry.
@@ -156,10 +157,38 @@ test('elke standaardvraag levert een bruikbare opdracht op', () => {
     const args = Object.fromEntries(prompt.arguments.map((a) => [a.name, 'proefwaarde']));
     const text = prompt.build(args);
     assert.ok(text.length > 80, `de opdracht van "${prompt.name}" is verdacht kort`);
-    // Elke opdracht hoort het model naar de registry te sturen; anders gaat het
-    // gokken op wat de app kan.
-    assert.match(text, /find_actions/, `"${prompt.name}" vertelt het model niet hoe het moet zoeken`);
+    // Elke opdracht hoort het model te laten opzoeken in plaats van gokken op wat
+    // de app kan, en het niets te laten verzinnen.
+    assert.match(text, /Zoek alles op in ResoFly/, `"${prompt.name}" vertelt het model niet dat het moet opzoeken`);
+    assert.match(text, /verzin geen/, `"${prompt.name}" verbiedt het model niet om iets te verzinnen`);
   }
+});
+
+/**
+ * Wat een gebruiker in zijn AI-app ziet, is gewone taal.
+ *
+ * De opdracht van een standaardvraag komt als bericht in zijn gesprek te staan;
+ * titels en omschrijvingen staan in het menu waaruit hij kiest. Daar hoort geen
+ * `find_actions` of `project_id` in (zie plainLanguage.ts). Hoe het model zoekt,
+ * staat in de omschrijvingen van de tools.
+ */
+test('standaardvragen en bronnen tonen de gebruiker geen technische namen', () => {
+  const leaks: string[] = [];
+  const check = (where: string, text: string) => {
+    const found = technicalNames(text);
+    if (found.length) leaks.push(`${where}: ${found.join(', ')}`);
+  };
+  for (const prompt of MCP_PROMPTS) {
+    check(`${prompt.name} (titel)`, prompt.title);
+    check(`${prompt.name} (omschrijving)`, prompt.description);
+    for (const arg of prompt.arguments) check(`${prompt.name} (veld ${arg.name})`, arg.description);
+    check(`${prompt.name} (opdracht)`, prompt.build(Object.fromEntries(prompt.arguments.map((a) => [a.name, 'Jansen']))));
+  }
+  for (const resource of [...MCP_RESOURCES, ...MCP_RESOURCE_TEMPLATES]) {
+    check(`${resource.name} (titel)`, resource.title);
+    check(`${resource.name} (omschrijving)`, resource.description);
+  }
+  assert.deepEqual(leaks, [], `hier ziet een gebruiker een technische naam:\n  ${leaks.join('\n  ')}`);
 });
 
 test('een ingevuld veld komt echt in de opdracht terecht', () => {

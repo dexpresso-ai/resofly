@@ -94,6 +94,8 @@ function extraIndex(extra: ActionDef[]): IndexEntry[] {
  * "memoriaalboeking maken" liep anders stuk omdat "maken" op vijftig handelingen past
  * en ze daarmee allemaal op dezelfde score zet — de echte treffer verdronk in de
  * alfabetische volgorde. Hoe minder handelingen een woord raakt, hoe meer het zegt.
+ * Een woord dat níets zegt over de handeling, zoals een lidwoord of een voorzetsel,
+ * telt helemaal niet mee (zie STOPWORDS).
  *
  * Het antwoord draagt per handeling het volledige invoerschema mee, want daarmee kan
  * het model hem meteen aanroepen. Dat maakt een ruime uitslag duur, dus de standaard
@@ -110,7 +112,7 @@ export function searchActions(
   } = {},
 ): ActionSummary[] {
   const limit = Math.min(Math.max(opts.limit ?? 6, 1), 25);
-  const terms = tokens(query);
+  const terms = queryTerms(query);
 
   // Eerst samenvoegen, dan pas filteren en wegen. Andersom zou het gewicht van een
   // zoekwoord per lijst verschillen, en dan is een score uit de ene lijst niet meer
@@ -152,6 +154,54 @@ export function searchActions(
  */
 function tokens(text: string): string[] {
   return text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length > 2);
+}
+
+/**
+ * Woorden die in een vraag staan maar niets zeggen over WELKE handeling er bedoeld is.
+ *
+ * Elk woord uit de vraag telt, ook een lidwoord dat toevallig in een label staat.
+ * "een" staat in 76 labels ("Reageren op een ticket"), "van" in 61. Zo'n woord gaf
+ * die handelingen een voorsprong die nergens op sloeg. Twee vulzinnen als "kun je …
+ * voor mij" om de 48 vaste zoekvragen van actionSearch.test.ts heen verschoven samen
+ * 89 van de 96 uitslagen. Korter dan drie tekens valt al weg in `tokens()`. Dit zijn
+ * de langere: lidwoorden, voorzetsels, voornaamwoorden, hulpwerkwoorden en vulwoorden.
+ *
+ * Bewust NIET in de lijst, hoe gewoon ze ook klinken: woorden waarvan de betekenis de
+ * handeling kiest, en die daarom met opzet in de trefwoorden staan. "niet", "geen" en
+ * "zonder" ('niet akkoord' is afwijzen, 'zonder project'), "nog" ('nog te betalen'),
+ * "weer" ('weer openen'), "uit" ('automatisch boeken uit'), "alle" (alles in één keer),
+ * "mijn" (de eigen afzender, het eigen lijstje), "wie", "hoeveel" en "wanneer" (een
+ * vraag naar personen, aantallen of tijd), "zelf" en "toch".
+ */
+const STOPWORDS = new Set([
+  // lidwoorden en aanwijzende woorden
+  'een', 'het', 'der', 'den', 'des', 'deze', 'die', 'dit', 'dat', 'elk', 'elke', 'ieder', 'iedere',
+  'welk', 'welke', 'zulke', 'ander', 'andere',
+  // voorzetsels
+  'van', 'voor', 'naar', 'met', 'bij', 'aan', 'tot', 'over', 'onder', 'door', 'via', 'per', 'tegen',
+  'vanaf', 'sinds', 'tussen', 'binnen', 'rond',
+  // voornaamwoorden en verwijswoorden
+  'jij', 'hij', 'zij', 'wij', 'mij', 'jou', 'jouw', 'hem', 'hen', 'hun', 'haar', 'ons', 'onze', 'zijn',
+  'zich', 'men', 'iemand', 'iets', 'niets', 'daar', 'hier', 'waar', 'erin', 'erop', 'ervan', 'eraan',
+  'wat', 'hoe', 'waarom',
+  // hulp- en koppelwerkwoorden
+  'ben', 'bent', 'was', 'waren', 'wordt', 'worden', 'werd', 'heb', 'hebt', 'heeft', 'hebben', 'had',
+  'kan', 'kun', 'kunt', 'kunnen', 'kon', 'mag', 'mogen', 'moet', 'moeten', 'wil', 'wilt', 'willen',
+  'zal', 'zou', 'zullen', 'gaat', 'gaan', 'staat', 'staan', 'zit', 'zitten', 'komt', 'komen',
+  // voegwoorden en vulwoorden
+  'ook', 'wel', 'maar', 'want', 'dus', 'als', 'dan', 'omdat', 'toen', 'even', 'eens', 'graag',
+  'gewoon', 'aub', 'svp', 'alsjeblieft', 'alstublieft',
+]);
+
+/**
+ * De woorden uit een vraag waarop gezocht wordt: zonder stopwoorden, tenzij er dan
+ * niets overblijft. Een vraag die alleen uit zulke woorden bestaat, levert anders
+ * geen enkel zoekwoord op en dus een willekeurige lijst.
+ */
+function queryTerms(query: string): string[] {
+  const all = tokens(query);
+  const meaningful = all.filter((term) => !STOPWORDS.has(term));
+  return meaningful.length > 0 ? meaningful : all;
 }
 
 /**

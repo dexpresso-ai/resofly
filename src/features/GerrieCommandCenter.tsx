@@ -4,12 +4,14 @@ import {
   streamGerrieReply, loadGerrieBudget, confirmGerrieAction, runGerrieDecision, rejectGerrieAction, claimingHandlers, batchDecision,
   listRoutines, listRoutineRuns, saveRoutine, setRoutineStatus, archiveRoutine, restoreRoutine, runRoutineNow, listRunProposals,
   loadRunTranscript, listRunEvents, listRunDecisions, replyToRun, listPendingAgentApprovals, listRoutineToolsSafe, routineToolLabel, routineToolIsRead,
+  registryActionLabel,
   type GerrieActionHandlers, type GerrieProposal,
   type GerrieRoutine, type GerrieRoutineRun, type GerrieRoutineInput, type GerrieRunMessage, type GerrieAgentProposal,
   type GerrieRunEvent, type GerrieRunDecision, type RoutineTool,
   type RoutineMode, type RoutineScheduleKind, type RoutineStatus, type RoutineRunStatus, type AgentEmailMode,
 } from '../lib/gerrie-api';
 import { STANDARD_MERGE_TOKENS } from '../lib/mergeTokens';
+import { decisionStatusLabel, stepInputSummary } from '../lib/agentLogText';
 import { executeProposal, openProposal, proposalLabel } from '../lib/gerrie-proposals';
 import { AgentApprovals } from '../components/AgentApprovals';
 import { AgentBuilder } from '../components/AgentBuilder';
@@ -403,11 +405,7 @@ function fmtTime(iso: string): string {
 
 /** De afloop van een voorstel in gewone taal: wát, en hoe het is afgelopen. */
 function decisionLabel(d: GerrieRunDecision): string {
-  const what = routineToolLabel(d.action);
-  if (d.status === 'executed' || d.status === 'auto_executed') return `${what} — uitgevoerd`;
-  if (d.status === 'cancelled') return `${what} — geannuleerd`;
-  if (d.status === 'failed') return `${what} — afgewezen of mislukt`;
-  return `${what} — ${d.status}`;
+  return `${routineToolLabel(d.action)} — ${decisionStatusLabel(d.status)}`;
 }
 
 /**
@@ -419,20 +417,16 @@ function logDetail(ev: GerrieRunEvent): string {
   const parts: string[] = [];
   if (ev.kind === 'start') {
     parts.push(d.mode === 'propose' ? 'mag voorstellen doen' : 'alleen lezen');
-    if (Array.isArray(d.tools)) parts.push(`${(d.tools as unknown[]).length} tools`);
+    if (Array.isArray(d.tools)) parts.push(`${(d.tools as unknown[]).length} mogelijkheden`);
   } else if (ev.kind === 'finish') {
     if (typeof d.tokens === 'number') parts.push(`${d.tokens.toLocaleString('nl-NL')} tokens`);
     if (typeof d.cost_usd === 'number' && d.cost_usd > 0) parts.push(`$ ${Number(d.cost_usd).toFixed(4)}`);
   } else if (ev.kind === 'delivery') {
     if (typeof d.note === 'string') parts.push(d.note);
   } else {
+    // Gewone taal: "alleen te laat", niet "overdue_only: true"; id's vallen weg.
     const input = d.input && typeof d.input === 'object' ? (d.input as Record<string, unknown>) : null;
-    if (input) {
-      for (const [k, v] of Object.entries(input)) {
-        if (parts.length >= 3) break;
-        parts.push(`${k}: ${Array.isArray(v) ? `${v.length}` : String(v).slice(0, 40)}`);
-      }
-    }
+    if (input) parts.push(...stepInputSummary(input, registryActionLabel));
   }
   return parts.join(' · ');
 }

@@ -41,8 +41,21 @@ function toolDefinitionNames(): string[] {
 }
 
 function toolLabels(): Map<string, string> {
-  const rows = [...section('const TOOL_LABELS').matchAll(/^\s{2}([a-z_]+): '(.+)',$/gm)];
-  return new Map(rows.map((m) => [m[1], m[2].replace(/\\'/g, "'")]));
+  // Ook dubbele aanhalingstekens: "Agenda's bekijken" staat er zo, en zou anders
+  // hier stil terugvallen op de tool-naam.
+  const rows = [...section('const TOOL_LABELS').matchAll(/^\s{2}([a-z_]+): (['"])(.+)\2,$/gm)];
+  return new Map(rows.map((m) => [m[1], m[3].replace(/\\'/g, "'")]));
+}
+
+/** De zoekwoorden per kerntool, uit TOOL_KEYWORDS; elke regel is één tool. */
+function toolKeywords(): Map<string, string[]> {
+  const block = section('const TOOL_KEYWORDS');
+  const rows = [...block.matchAll(/^\s{2}([a-z_]+): \[(.*)\],$/gm)];
+  // Een tool die over meer regels staat, leest deze regex niet. Dan liever hier
+  // hard stuk dan verderop een "geen trefwoorden" die niet klopt.
+  const keys = [...block.matchAll(/^\s{2}([a-z_]+):/gm)].length;
+  assert.equal(rows.length, keys, 'zet in TOOL_KEYWORDS elke tool op één regel, anders kan deze test hem niet lezen');
+  return new Map(rows.map((m) => [m[1], [...m[2].matchAll(/(['"])(.*?)\1/g)].map((k) => k[2])]));
 }
 
 /**
@@ -93,6 +106,24 @@ function hiddenToolNames(): Set<string> {
 function visibleCoreTools(): string[] {
   const hidden = hiddenToolNames();
   return toolDefinitionNames().filter((name) => !hidden.has(name));
+}
+
+/** Wat de MCP als `extra` meegeeft aan searchActions (GERRIE_CORE_ACTIONS); hier uit de bron opgebouwd. */
+function coreToolsAsActions() {
+  const labels = toolLabels();
+  const modules = toolModules();
+  const descriptions = toolDescriptions();
+  const keywords = toolKeywords();
+  return visibleCoreTools().map((name) => ({
+    id: name,
+    label: labels.get(name) ?? name,
+    module: modules.get(name) ?? 'stats',
+    kind: name.startsWith('propose_') ? 'write' as const : 'read' as const,
+    description: descriptions.get(name) ?? '',
+    keywords: keywords.get(name),
+    input: {},
+    required: [],
+  }));
 }
 
 function registrySource(): string {
@@ -179,42 +210,91 @@ test('elke kerntool die de MCP aanbiedt, hangt aan een module die rechten kan af
 });
 
 /**
+ * Een gekoppelde AI vindt een kerntool alleen via woorden, en het label alleen is
+ * daar te smal voor (zie TOOL_KEYWORDS). Een tool zonder trefwoorden valt hier dus
+ * op, zoals een tool zonder label dat doet in toolCatalog.test.ts. Andersom zijn
+ * trefwoorden voor een tool die de MCP niet aanbiedt werk dat nergens landt.
+ */
+test('elke kerntool die de MCP aanbiedt, heeft trefwoorden', () => {
+  const keywords = toolKeywords();
+  const visible = visibleCoreTools();
+  const missing = visible.filter((name) => !keywords.get(name)?.length);
+  assert.deepEqual(
+    missing, [],
+    `deze kerntools hebben niets in TOOL_KEYWORDS en zijn dus alleen te vinden op de woorden van hun label: ${missing.join(', ')}`,
+  );
+
+  const offered = new Set(visible);
+  const stray = [...keywords.keys()].filter((name) => !offered.has(name));
+  assert.deepEqual(stray, [], `deze trefwoorden horen bij een tool die de MCP niet (meer) aanbiedt: ${stray.join(', ')}`);
+});
+
+/**
  * `find_actions` moet ze ook echt VINDEN.
  *
  * Bereikbaar zijn is niet genoeg: de MCP kent geen vaste toollijst, dus een tool die
  * je met de woorden van een gebruiker niet terugvindt bestaat voor het model niet.
- * De vragen hieronder staan zoals iemand ze stelt. Faalt er een, verbeter dan het
- * label of de omschrijving van die tool; verlaag de lat hier niet.
+ * De vragen hieronder staan zoals iemand ze stelt. Faalt er een, voeg dan een
+ * trefwoord toe in TOOL_KEYWORDS; verlaag de lat hier niet. De lat is twaalf: zoveel
+ * geeft `find_actions` standaard terug.
  */
 const SEARCH_CASES: Array<[string, string]> = [
   ['reageren op een ticket', 'propose_ticket_note'],
   ['mailtje sturen naar een klant', 'propose_send_client_email'],
   ['welke tickets staan er open', 'list_tickets'],
   ['klant opzoeken', 'search_clients'],
-  ['conceptfactuur klaarzetten', 'propose_invoice'],
   // Bewust "schrijven op een project" en niet "urenregistratie klaarzetten":
   // "klaarzetten" is ONS woord (elk propose-label eindigt erop) en zegt dus niets,
   // en dan verdringt de veelgebruikte helft van het woordenpaar de juiste tool.
   ['uren schrijven op een project', 'propose_time_entry'],
+  // Hier stond eerst "conceptfactuur klaarzetten", de woorden van het label zelf.
+  // Die vond hem wel, en zo viel niet op dat "factuur maken" niets opleverde.
+  ['factuur maken', 'propose_invoice'],
+  ['factuur opstellen', 'propose_invoice'],
+  ['nieuwe factuur voor een klant', 'propose_invoice'],
+  ['uren factureren', 'propose_invoice'],
+  ['offerte maken', 'propose_quote'],
+  ['offerte opstellen', 'propose_quote'],
+  ['prijsopgave maken', 'propose_quote'],
+  ['factuur aanpassen', 'propose_edit_invoice'],
+  ['offerte aanpassen', 'propose_edit_quote'],
+  ['factuur sturen', 'propose_send_invoice'],
+  ['offerte sturen', 'propose_send_quote'],
+  ['herinneringen sturen voor openstaande facturen', 'propose_send_reminders'],
+  ['omzet deze maand', 'get_financial_summary'],
+  ['klant toevoegen', 'propose_client'],
+  ['klant bijwerken', 'propose_edit_client'],
+  ['uren corrigeren', 'propose_edit_time_entry'],
+  ['hoeveel uur heb ik gewerkt', 'list_time_entries'],
+  ['mijn takenlijst', 'list_tasks'],
+  ['projectstatus aanpassen', 'propose_edit_project'],
+  ['collega aan een project toevoegen', 'propose_project_team'],
+  ['afspraak inplannen', 'propose_calendar_event'],
+  ['meeting plannen', 'propose_calendar_event'],
+  ['afspraak verzetten', 'propose_edit_calendar_event'],
+  ['afspraak annuleren', 'propose_cancel_calendar_event'],
+  ['wanneer heb ik tijd', 'suggest_meeting_slots'],
+  ['afspraken deze week', 'list_calendar_events'],
+  ['supportvraag vastleggen', 'propose_ticket'],
+  ['notitie toevoegen bij een klant', 'propose_note'],
+  ['bonnetje invoeren', 'propose_purchase_invoice'],
+  ['crediteur aanmaken', 'propose_supplier'],
+  ['contract opstellen', 'propose_contract'],
+  ['nieuwsbrief maken', 'propose_campaign'],
+  ['bankmutaties bekijken', 'list_bank_transactions'],
+  // Vragen vol vulwoorden, die sinds STOPWORDS (actions/registry.ts) niet meer
+  // meetellen. Bij de eerste moest daarvoor "betaald" bij de trefwoorden: verder
+  // raakte list_invoices alleen "facturen", en dat doen er veel. Bij de tweede won
+  // eerst wat toevallig "een" of "heeft" in zijn label had.
+  ['welke facturen zijn nog niet betaald', 'list_invoices'],
+  ['wie heeft er een afspraak geboekt', 'list_bookings'],
 ];
 
 test('de kerntools zijn te vinden met de woorden van de gebruiker', () => {
-  const labels = toolLabels();
-  const modules = toolModules();
-  const descriptions = toolDescriptions();
-  // Wat de MCP als `extra` meegeeft aan searchActions; hier uit de bron opgebouwd.
-  const extra = visibleCoreTools().map((name) => ({
-    id: name,
-    label: labels.get(name) ?? name,
-    module: modules.get(name) ?? 'stats',
-    kind: name.startsWith('propose_') ? 'write' as const : 'read' as const,
-    description: descriptions.get(name) ?? '',
-    input: {},
-    required: [],
-  }));
+  const extra = coreToolsAsActions();
   assert.ok(
     extra.every((a) => a.description.length > 0),
-    'elke kerntool hoort een omschrijving te hebben; zonder die tekst zoekt het model op het label alleen',
+    'elke kerntool hoort een omschrijving te hebben; zonder die tekst zoekt het model alleen op label en trefwoorden',
   );
 
   const missed: string[] = [];
@@ -223,6 +303,36 @@ test('de kerntools zijn te vinden met de woorden van de gebruiker', () => {
     if (!found.includes(expected)) missed.push(`"${query}" → ${expected} (kreeg: ${found.slice(0, 5).join(', ') || 'niets'})`);
   }
   assert.deepEqual(missed, [], `deze vragen vinden hun tool niet:\n  ${missed.join('\n  ')}`);
+});
+
+/** De vragen uit actionSearch.test.ts, als tekst gelezen zodat er één lijst blijft. */
+function registrySearchCases(): Array<[string, string]> {
+  const source = readFileSync(join(here, 'actionSearch.test.ts'), 'utf8');
+  const start = source.indexOf('const CASES');
+  assert.ok(start >= 0, 'kon CASES niet vinden in actionSearch.test.ts');
+  const block = source.slice(start, source.indexOf('\n];', start));
+  return [...block.matchAll(/^\s{2}\['([^']+)', '([^']+)'\],$/gm)].map((m) => [m[1], m[2]]);
+}
+
+/**
+ * En andersom: de kerntools mogen de registry niet verdringen.
+ *
+ * In de MCP zoeken beide lijsten samen, en een trefwoord weegt net zo zwaar als een
+ * label. Een kerntool met te ruime trefwoorden schuift zich zo voor een handeling die
+ * beter bij de vraag past. Elke vraag uit actionSearch.test.ts hoort daarom ook mét
+ * de kerntools erbij binnen de twaalf te blijven die `find_actions` teruggeeft.
+ */
+test('met de kerntools erbij vindt elke registry-vraag nog zijn handeling', () => {
+  const cases = registrySearchCases();
+  assert.ok(cases.length > 20, `verwacht de vragen uit actionSearch.test.ts, kreeg er ${cases.length}`);
+  const extra = coreToolsAsActions();
+
+  const missed: string[] = [];
+  for (const [query, expected] of cases) {
+    const found = searchActions(query, { extra, limit: 12 }).map((a) => a.id);
+    if (!found.includes(expected)) missed.push(`"${query}" → ${expected} (kreeg: ${found.slice(0, 5).join(', ')})`);
+  }
+  assert.deepEqual(missed, [], `met de kerntools erbij vinden deze vragen hun handeling niet meer:\n  ${missed.join('\n  ')}`);
 });
 
 test('zonder `extra` blijft find_actions precies de registry doorzoeken', () => {

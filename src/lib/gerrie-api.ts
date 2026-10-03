@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { isMissingColumn } from './postgrestErrors';
 import type { ReportDefinition } from './reporting';
+import { fallbackToolLabel } from './agentLogText';
 import type { UUID } from '../types';
 
 /**
@@ -1325,15 +1326,18 @@ export function routineToolIsRead(name: string): boolean {
   return !name.startsWith('propose_');
 }
 
-/** Menselijk label bij een tool-naam; valt netjes terug op de naam zelf. */
+/**
+ * Menselijk label bij een tool-naam. Kent de catalogus hem niet (offline, oude
+ * functie-versie), dan een algemeen label: een gebruiker ziet nooit de technische
+ * naam, ook niet half vertaald ("gallery publish").
+ */
 export function routineToolLabel(name: string): string {
-  const known = toolLabels.get(name);
-  if (known) return known;
-  // Een handeling uit de registry ('action:gallery.publish'): zonder catalogus is
-  // 'gallery publish' nog altijd leesbaarder dan het rauwe id.
-  if (name.startsWith('action:')) return name.slice('action:'.length).replace(/[._]/g, ' ');
-  // Ook een audit-actie ('propose_send_reminders') komt hier langs.
-  return name.replace(/^propose_/, '').replace(/_/g, ' ');
+  return toolLabels.get(name) ?? fallbackToolLabel(name);
+}
+
+/** Het label van een handeling uit de registry ('inbox.list'), als de catalogus hem kent. */
+export function registryActionLabel(actionId: string): string | null {
+  return toolLabels.get(`action:${actionId}`) ?? null;
 }
 
 /**
