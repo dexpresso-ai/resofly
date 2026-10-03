@@ -49,6 +49,11 @@ export class TransportError extends Error {
 
 /** Groter dan dit is geen kop van een antwoord meer. */
 const MAX_HEAD_BYTES = 32 * 1024;
+/**
+ * Zoveel 1xx-tussenantwoorden (100 Continue, 103 Early Hints) slaan we over;
+ * daarna is het geen antwoord meer maar een eindpunt dat ons bezighoudt.
+ */
+const MAX_INTERIM_RESPONSES = 5;
 
 const CRLF = new Uint8Array([13, 10]);
 const CRLFCRLF = new Uint8Array([13, 10, 13, 10]);
@@ -79,14 +84,24 @@ export function buildRequestHead(url: URL, headers: Record<string, string>, body
 
 /**
  * Leest een HTTP/1.1-antwoord uit een bron van brokken (`next` geeft null aan
- * het eind). Slaat 1xx-tussenantwoorden over, en leest van de inhoud nooit meer
- * dan `maxBody` bytes — ook niet bij chunked of zonder Content-Length.
+ * het eind). Slaat hooguit MAX_INTERIM_RESPONSES 1xx-tussenantwoorden over, en
+ * leest van de inhoud nooit meer dan `maxBody` bytes — ook niet bij chunked of
+ * zonder Content-Length.
+ *
+ * De buffer groeit door te verdubbelen en wordt van voren af gelezen: een
+ * eindpunt dat byte voor byte antwoordt, kost zo geen kopie van alles wat er al
+ * lag bij elke byte, en het zoeken naar het eind van de kop begint waar het
+ * vorige keer ophield.
  */
 export async function readHttpResponse(
   next: () => Promise<Uint8Array | null>, maxBody: number,
 ): Promise<PinnedResponse> {
-  let buffer: Uint8Array = new Uint8Array(0);
+  let store = new Uint8Array(4096);
+  let start = 0;
+  let end = 0;
   let ended = false;
+  const size = () => end - start;
+  const view = () => store.subarray(start, end);
   const pull = async (): Promise<boolean> => {
     if (ended) return false;
     const chunk = await next();
@@ -94,22 +109,33 @@ export async function readHttpResponse(
       ended = true;
       return false;
     }
-    buffer = concat(buffer, chunk);
+    if (end + chunk.length > store.length) {
+      const live = end - start;
+      const grown = new Uint8Array(Math.max(store.length, (live + chunk.length) * 2));
+      grown.set(store.subarray(start, end));
+      store = grown;
+      start = 0;
+      end = live;
+    }
+    store.set(chunk, end);
+    end += chunk.length;
     return true;
   };
 
   let status = 0;
   let headers = new Map<string, string>();
-  for (;;) {
-    let end = indexOf(buffer, CRLFCRLF);
-    while (end < 0) {
-      if (buffer.length > MAX_HEAD_BYTES) throw new TransportError('De kop van het antwoord is te groot.');
+  for (let interim = 0; ; interim += 1) {
+    if (interim > MAX_INTERIM_RESPONSES) throw new TransportError('Te veel tussenantwoorden (1xx) van het eindpunt.');
+    let headEnd = indexOf(view(), CRLFCRLF);
+    while (headEnd < 0) {
+      if (size() > MAX_HEAD_BYTES) throw new TransportError('De kop van het antwoord is te groot.');
+      const searched = Math.max(0, size() - CRLFCRLF.length + 1);
       if (!await pull()) throw new TransportError('Het eindpunt sloot de verbinding zonder (volledig) antwoord.');
-      end = indexOf(buffer, CRLFCRLF);
+      headEnd = indexOf(view(), CRLFCRLF, searched);
     }
-    if (end > MAX_HEAD_BYTES) throw new TransportError('De kop van het antwoord is te groot.');
-    const head = parseResponseHead(latin1(buffer.subarray(0, end)));
-    buffer = buffer.subarray(end + 4);
+    if (headEnd > MAX_HEAD_BYTES) throw new TransportError('De kop van het antwoord is te groot.');
+    const head = parseResponseHead(latin1(view().subarray(0, headEnd)));
+    start += headEnd + 4;
     // 100 Continue, 103 Early Hints: tussenberichten, het echte antwoord volgt.
     if (head.status >= 100 && head.status < 200 && head.status !== 101) continue;
     status = head.status;
@@ -125,34 +151,34 @@ export async function readHttpResponse(
   const declared = headers.get('content-length');
   const length = declared !== undefined && /^\d+$/.test(declared) ? Number(declared) : null;
   const limit = length === null ? maxBody : Math.min(length, maxBody);
-  while (buffer.length < limit && await pull()) { /* lezen tot genoeg of het eind */ }
-  return { status, body: buffer.slice(0, limit) };
+  while (size() < limit && await pull()) { /* lezen tot genoeg of het eind */ }
+  return { status, body: view().slice(0, limit) };
 
   async function readChunked(): Promise<Uint8Array> {
     const parts: Uint8Array[] = [];
     let total = 0;
     for (;;) {
-      let lineEnd = indexOf(buffer, CRLF);
+      let lineEnd = indexOf(view(), CRLF);
       while (lineEnd < 0) {
-        if (buffer.length > 1024) throw new TransportError('Onleesbaar antwoord (chunked).');
+        if (size() > 1024) throw new TransportError('Onleesbaar antwoord (chunked).');
         if (!await pull()) return join(parts, total);
-        lineEnd = indexOf(buffer, CRLF);
+        lineEnd = indexOf(view(), CRLF);
       }
-      const sizeText = latin1(buffer.subarray(0, lineEnd)).split(';')[0].trim();
+      const sizeText = latin1(view().subarray(0, lineEnd)).split(';')[0].trim();
       if (!/^[0-9a-f]{1,8}$/i.test(sizeText)) throw new TransportError('Onleesbaar antwoord (chunked).');
-      const size = parseInt(sizeText, 16);
-      buffer = buffer.subarray(lineEnd + 2);
-      if (size === 0) return join(parts, total);
-      const want = Math.min(size, maxBody - total);
-      while (buffer.length < want && await pull()) { /* de brok binnenhalen */ }
-      const piece = buffer.slice(0, Math.min(want, buffer.length));
+      const chunkSize = parseInt(sizeText, 16);
+      start += lineEnd + 2;
+      if (chunkSize === 0) return join(parts, total);
+      const want = Math.min(chunkSize, maxBody - total);
+      while (size() < want && await pull()) { /* de brok binnenhalen */ }
+      const piece = view().slice(0, Math.min(want, size()));
       parts.push(piece);
       total += piece.length;
       if (total >= maxBody || piece.length < want) return join(parts, total);
       // De brok is helemaal binnen: hem en zijn CRLF overslaan.
-      while (buffer.length < size + 2 && await pull()) { /* tot en met de CRLF */ }
-      if (buffer.length < size + 2) return join(parts, total);
-      buffer = buffer.subarray(size + 2);
+      while (size() < chunkSize + 2 && await pull()) { /* tot en met de CRLF */ }
+      if (size() < chunkSize + 2) return join(parts, total);
+      start += chunkSize + 2;
     }
   }
 }
@@ -281,8 +307,8 @@ function join(parts: Uint8Array[], total: number): Uint8Array {
   return out;
 }
 
-function indexOf(haystack: Uint8Array, needle: Uint8Array): number {
-  outer: for (let i = 0; i <= haystack.length - needle.length; i += 1) {
+function indexOf(haystack: Uint8Array, needle: Uint8Array, from = 0): number {
+  outer: for (let i = Math.max(0, from); i <= haystack.length - needle.length; i += 1) {
     for (let j = 0; j < needle.length; j += 1) {
       if (haystack[i + j] !== needle[j]) continue outer;
     }

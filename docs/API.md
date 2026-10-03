@@ -233,13 +233,17 @@ curl -s "$RESOFLY_API/v1/tasks?project_id=…&status=todo&sort=planned_date&limi
 |---|---|
 | `q` | Zoeken (klanten: naam, contactpersoon, e-mail, klantnummer; taken en tickets: titel en omschrijving). |
 | filters | Per adres, bijvoorbeeld `status`, `client_id`, `project_id`, `from`/`to` (uren), `is_active` (contactpersonen). Bij een keuzelijst mag je er meer tegelijk vragen: `?status=new,review,approved`. |
-| `updated_since`, `created_since` | Alleen wat sinds dat tijdstip veranderde of bijkwam (ISO 8601) — om bij te houden wat er nieuw is. |
+| `updated_since`, `created_since` | Alleen wat sinds dat tijdstip veranderde of bijkwam: een tijdstip mét tijdzone (`2026-10-03T09:00:00Z`, `…+02:00`) of een datum (`2026-10-03`, middernacht UTC). Codeer een `+` in de querystring als `%2B`; een ongecodeerde `+` (die als spatie aankomt) verstaan we ook. |
 | `sort` | Bijvoorbeeld `-created_at` (standaard), `name`, `-updated_at`. |
-| `limit`, `offset` | Pagineren (standaard 25, max 100). Is `has_more` waar, vraag dan de volgende pagina op met `offset=next_offset`. Bladeren gaat tot `offset=10000`; daarna 400. Is er meer, dan is `next_offset` daar `null`: verfijn met filters, of houd met `updated_since` bij wat er veranderde. |
+| `limit`, `offset` | Pagineren (standaard 25, max 100; een grotere `limit` wordt 100). Is `has_more` waar, vraag dan de volgende pagina op met `offset=next_offset`. Bladeren gaat tot `offset=10000`; daarna 400. Is er meer, dan is `next_offset` daar `null`: verfijn met filters, of houd met `updated_since` bij wat er veranderde. |
 
-Een onbekende parameter of filterwaarde geeft 400: liever een fout dan een lijst
-die er goed uitziet en niet klopt. Een e-mailfilter (`?email=`) maakt geen
-onderscheid tussen hoofd- en kleine letters. Lezen vraagt leesrecht in de module.
+Een onbekende parameter, een filterwaarde die niet klopt, een parameter die er
+twee keer in staat, of een `limit`/`offset` die geen geheel getal is (`abc`,
+`-5`) geeft 400 met `details.field`: liever een fout dan een lijst die er goed
+uitziet en niet klopt. Meer waarden tegelijk gaan met komma's
+(`?status=new,review`). In `q` is een `_` gewoon een liggend streepje. Een
+e-mailfilter (`?email=`) maakt geen onderscheid tussen hoofd- en kleine letters.
+Lezen vraagt leesrecht in de module.
 
 **Velden uit een andere module.** De waarde van een klant (`value_eur`) en een
 uurtarief (`hourly_rate_cents` bij projecten en uren) horen bij Financiën. Mag de
@@ -268,23 +272,44 @@ maakt een veld leeg.
   verwijzingscontroles, en in het logboek van ResoFly op naam van dat teamlid.
 - **Een onbekend veld is een fout** (422 met `details.field`), net als een veld
   dat ResoFly zelf beheert, zoals `client_code`. Zo merk je een tikfout meteen.
-  Tekst met een NUL-teken (`\u0000`) kan ResoFly niet opslaan (400).
+  Tekst met een NUL-teken (`\u0000`) of een half UTF-16-teken (`\ud800`) kan
+  ResoFly niet opslaan (400).
+- **Een id, e-mailadres, datum, tijdstip of keuze is tekst.** Een lijst of object
+  wordt niet stilletjes tekst (`["a@b.nl"]` geeft 422). Een tijdstip heeft een
+  tijdzone en moet bestaan: `2026-02-30T10:00:00Z` of `T24:00` geeft 422 in
+  plaats van een stille sprong naar een andere dag.
 - **Verwijzingen** (`client_id`, `project_id`, `task_id`) moeten in dezelfde
   organisatie bestaan, en in een module die de sleutel mag lezen (anders 403).
   Hangt een project aan een klant, dan volgt de klant van een taak het
   project — net als in de app. Bij uren gaat het project van de taak voor; een
   `project_id` of `client_id` die daar niet bij past, is een fout (422).
-- **Wat het klantportaal raakt, vraagt `execute_high`**: een reactie die de
-  klant ziet (`"is_internal": false`), het e-mailadres van een klant, het
-  e-mailadres of "actief" van een contactpersoon met portaaltoegang, en een
-  project of ticket naar een andere klant verhuizen. Met alleen `execute` geeft
-  dat 403 `insufficient_scope`. Via `POST /v1/actions/{id}` wordt zoiets een
-  voorstel in de goedkeurwachtrij.
+- **Wat het klantportaal raakt, vraagt `execute_high`.** De klant ziet in het
+  portaal zijn tickets, zijn projecten met hun taken (titel, status, datums) en
+  de reacties die niet intern zijn. Alles wat dáár tekst zet of verandert, is
+  net zo goed een bericht naar buiten:
+  - een ticket of project **mét klant aanmaken** (zonder klant kan het wel);
+  - de titel of omschrijving van een ticket, of de naam of omschrijving van een
+    project, wijzigen als er een klant aan hangt (status, prioriteit en datums
+    wel);
+  - een taak aanmaken in, verplaatsen naar of uit, of hernoemen binnen een
+    project met een klant;
+  - een reactie die de klant ziet (`"is_internal": false`);
+  - het e-mailadres van een klant, en een nieuwe klant met het e-mailadres van
+    iemand die al op het portaal inlogt;
+  - het e-mailadres of "actief" van een contactpersoon met portaaltoegang;
+  - een project of ticket naar een andere klant verhuizen.
+
+  Met alleen `execute` geeft dat 403 `insufficient_scope`. Via
+  `POST /v1/actions/{id}` wordt zoiets een voorstel in de goedkeurwachtrij.
 - **Een veld uit Financiën zetten** (`value_eur`, `hourly_rate_cents`) vraagt
   schrijfrecht in Financiën; anders 403 met `details.field`. Laat het veld dan
   weg.
 - **Getallen** mogen als getal of als tekst in gewone notatie (`"87,50"` mag,
-  `"6e1"` of `"0x3C"` niet). Een lijst met teksten (`tags`) bevat teksten.
+  `"6e1"` of `"0x3C"` niet), en passen in hun kolom (gehele getallen tot
+  2.147.483.647, `value_eur` tot tien miljard); anders 422 met het veld. Een lijst
+  met teksten (`tags`) bevat teksten.
+- **Een taak met een `client_id` die niet bij zijn project hoort**, geeft 422 in
+  plaats van een stille correctie; laat `client_id` weg, de klant volgt het project.
 - Een **dubbele** klant (zelfde e-mailadres of klantnummer) of contactpersoon
   (zelfde e-mailadres bij dezelfde klant) geeft 409 `conflict`.
 
@@ -589,8 +614,9 @@ ander:
 ```
 
 Een testbericht wordt niet opnieuw geprobeerd. Een eindpunt dat uit staat, kan
-niet getest worden (409), en tussen twee tests naar hetzelfde eindpunt zit
-minstens 10 seconden (429 met `Retry-After`).
+niet getest worden (409), en tussen twee tests zit minstens 10 seconden (429) —
+per sleutel, niet per eindpunt: twintig eindpunten naar hetzelfde adres geven
+geen twintig berichten tegelijk.
 
 ## Fouten
 
@@ -603,8 +629,8 @@ Elke fout heeft dezelfde vorm, met een vaste `code` voor je programma en een
 
 | HTTP | `code` | Wanneer |
 |---|---|---|
-| 400 | `invalid_request` | Geen geldige JSON, een onbekende parameter of parameterwaarde. `details.field` noemt hem. |
-| 401 | `unauthorized` | Geen, een onbekende, ingetrokken of verlopen sleutel. Wordt een ingetrokken of verlopen sleutel nog gebruikt, dan ziet de beheerder dat in het verzoeklog. |
+| 400 | `invalid_request` | Geen geldige JSON, een onbekende of dubbele parameter, een parameterwaarde die niet klopt (ook `limit=abc`), of een ongeldige `Idempotency-Key`. `details.field` noemt hem. |
+| 401 | `unauthorized` | Geen sleutel, een sleutel die niet klopt (onbekend of onjuist: één en dezelfde zin), of een ingetrokken of verlopen sleutel. Wordt een ingetrokken of verlopen sleutel nog gebruikt, dan ziet de beheerder dat in het verzoeklog. |
 | 403 | `insufficient_scope` | De sleutel mag alleen lezen, of iets raakt het klantportaal en vraagt `execute_high`. |
 | 403 | `forbidden` | De module staat dicht, of het is een handeling voor owners/admins. |
 | 404 | `not_found`, `unknown_action` | Onbekend adres, onbekende handeling, of een voorstel of webhook van een andere sleutel. |
@@ -614,7 +640,7 @@ Elke fout heeft dezelfde vorm, met een vaste `code` voor je programma en een
 | 413 | `payload_too_large` | Invoer groter dan 1 MB (ook zonder `Content-Length`). |
 | 422 | `invalid_input` | De invoer klopt niet, of een id bestaat niet in deze organisatie. `message` zegt wat, `details.field` welk veld. |
 | 422 | `idempotency_conflict` | Zie hierboven. |
-| 429 | `rate_limited` | Te veel verzoeken, een webhook net getest, of te veel mislukte sleutels vanaf je adres; wacht `Retry-After` seconden. |
+| 429 | `rate_limited` | Te veel verzoeken, een webhook net getest, of te veel mislukte sleutels (vanaf je adres, of van iedereen samen); wacht `Retry-After` seconden. |
 | 429 | `queue_full` | 50 voorstellen van deze sleutel wachten nog op goedkeuring. |
 | 500 | `internal_error` | Aan onze kant misgegaan. Geef het `request_id` door. |
 
@@ -629,10 +655,10 @@ Elk antwoord heeft een `X-Request-Id`-header, en `Cache-Control: no-store`
 - **50 openstaande voorstellen** per sleutel.
 - **Bladeren tot offset 10.000** per lijst.
 - **20 webhooks** per sleutel (alle sleutels samen 100), **50** uit de app per organisatie.
-- **Eén test per 10 seconden** per webhook.
-- **60 mislukte sleutels** (onbekend of onjuist) per 10 minuten vanaf één adres;
-  daarna 15 minuten een 429 voor mislukte pogingen. Een geldige sleutel werkt
-  vanaf dat adres gewoon door.
+- **Eén test per 10 seconden** per sleutel (in de app: per organisatie).
+- **60 mislukte sleutels** (onbekend of onjuist) per 10 minuten vanaf één adres,
+  en **1000** van alle adressen samen; daarboven 15 minuten een 429 voor
+  mislukte pogingen. Een geldige sleutel werkt altijd gewoon door.
 - Lijsten binnen een handeling hebben hun eigen `limit`-veld; zie het schema.
 
 ## Voorbeelden

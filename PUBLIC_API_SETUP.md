@@ -90,8 +90,9 @@ supabase db push
 ```
 
 Dat draait `20261003000000_public_api.sql`, `20261003010000_webhooks.sql`,
-`20261003020000_api_rest.sql`, `20261003030000_api_hardening.sql` en
-`20261003040000_approvals_auth_limits.sql` (alle vijf veilig om te herhalen).
+`20261003020000_api_rest.sql`, `20261003030000_api_hardening.sql`,
+`20261003040000_approvals_auth_limits.sql` en `20261003050000_full_api_check.sql`
+(alle zes veilig om te herhalen).
 De eerste:
 
 | Onderdeel | Wat |
@@ -179,6 +180,7 @@ Optioneel:
 | `API_RATE_LIMIT_PER_MINUTE` | Aanroepen per minuut per sleutel (10–6000). | `300` |
 | `API_ADMIN_ALLOWED_ORIGINS` | Extra origins voor `api-admin`, kommagescheiden. | — |
 | `API_AUTH_FAILURE_LIMIT` | Mislukte sleutels per afzender per 10 minuten voordat er een pauze van 15 minuten volgt (5–10000). | `60` |
+| `API_AUTH_FAILURE_GLOBAL_LIMIT` | Mislukte sleutels van alle afzenders samen per 10 minuten (50–1000000). De telling per afzender leunt op `cf-connecting-ip`/`x-forwarded-for`; buiten Cloudflare zijn die te vervalsen, deze grens niet. Een geldige sleutel merkt er niets van. | `1000` |
 | `WEBHOOK_DNS_OVERRIDES` | **Alleen voor een testomgeving**: vaste IP-adressen voor namen die niet in de DNS staan, `naam=ip[,ip];naam2=ip`. Ook die adressen worden gekeurd (een naam op 127.0.0.1 zetten kan niet). In productie leeg laten. | — |
 
 Voor **webhooks** zijn twee secrets nodig. Zonder deze twee werkt de API

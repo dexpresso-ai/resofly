@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ArrowRight, BellOff, CalendarClock, Check, ChevronRight, Clock, Coins, ListChecks, Loader2, Mail, RefreshCw, Sparkles, X } from 'lucide-react';
 import { supabase, supabaseAuth } from '../lib/supabase';
 import { isDue, listDecisions, muteDecision, resolveDecision, type AiDecision, type DecisionKind, type DecisionTarget } from '../lib/decisions-api';
-import type { GerrieActionHandlers } from '../lib/gerrie-api';
+import { batchDecision, claimingHandlers, confirmGerrieAction, runGerrieDecision, type GerrieActionHandlers } from '../lib/gerrie-api';
 import { executeProposal, isFormBackedProposal, openProposal, proposalVerb } from '../lib/gerrie-proposals';
 import { AgentBatchBoard, asBatchProposal } from './AgentBatchBoard';
 import type { UUID } from '../types';
@@ -13,8 +13,9 @@ import type { UUID } from '../types';
  * Elke kaart draagt een voorstel (offerte-opvolgmail, taken uit notulen, mail
  * koppelen, …) én de feiten waarom ("Waarom"). Akkoord voert het voorstel uit
  * langs precies dezelfde weg als de chat en de goedkeurwachtrij
- * (`executeProposal`), en pas daarna gaat de kaart dicht. Later en Niet meer
- * lopen via de RPC's; er is geen tweede schrijfweg.
+ * (`runGerrieDecision`: vastzetten, `executeProposal`, de uitkomst melden), en
+ * pas daarna gaat de kaart dicht. Later en Niet meer lopen via de RPC's; er is
+ * geen tweede schrijfweg.
  *
  * Twee gedaantes, zoals AgentApprovals:
  *   variant="dashboard" — bovenaan het startscherm; verdwijnt als er niets wacht.
@@ -122,7 +123,8 @@ export function DecisionFeed({
     if (!d.proposal) return;
     setRowState((s) => ({ ...s, [d.id]: 'busy' }));
     try {
-      await executeProposal(d.proposal, handlers);
+      // Eerst vastzetten: klikken twee mensen tegelijk, dan voert maar één het uit.
+      await runGerrieDecision(organizationId, d.audit_id, () => executeProposal(d.proposal!, handlers));
       await resolveDecision(d.id, 'done', null, 'akkoord');
       drop(d.id);
     } catch (e) { fail(d.id, e); }
@@ -217,8 +219,13 @@ export function DecisionFeed({
                         <AgentBatchBoard
                           proposal={batch}
                           canWrite={allowed}
-                          handlers={handlers}
-                          onResolved={({ sent, skipped }) => {
+                          handlers={d.audit_id ? claimingHandlers(organizationId, d.audit_id, handlers) : handlers}
+                          onResolved={(result) => {
+                            const { sent, skipped } = result;
+                            if (d.audit_id) {
+                              const { outcome, detail } = batchDecision(result);
+                              void confirmGerrieAction(organizationId, d.audit_id, outcome, detail);
+                            }
                             void resolveDecision(d.id, sent > 0 ? 'done' : 'dismissed', null, `${sent} uitgevoerd, ${skipped} overgeslagen`)
                               .catch(() => { /* kaart blijft dan staan tot de volgende verversing */ });
                             drop(d.id);

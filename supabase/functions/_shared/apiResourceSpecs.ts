@@ -67,7 +67,8 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
       notes: { type: 'text', description: 'Notities.', nullable: true, maxLength: 10_000 },
       tags: { type: 'text_array', description: 'Labels (hooguit 30).', maxLength: 60, maxItems: 30 },
       color: { type: 'color', description: 'Kleur in de app, als #RRGGBB.', default: '#FFD966' },
-      value_eur: { type: 'number', description: 'Geschatte waarde in euro. Zonder leesrecht in Financiën: null.', minimum: 0, module: 'finance' },
+      // numeric(12,2) in de database: tot tien miljard.
+      value_eur: { type: 'number', description: 'Geschatte waarde in euro. Zonder leesrecht in Financiën: null.', minimum: 0, maximum: 9_999_999_999, module: 'finance' },
       follow_up: { type: 'date', description: 'Datum om op terug te komen.', nullable: true },
       custom_fields: { type: 'object', description: 'Eigen velden, zoals ingesteld onder Instellingen → Klanten.' },
       created_by: CREATED_BY,

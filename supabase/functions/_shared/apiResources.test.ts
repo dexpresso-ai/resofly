@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  fieldsOutsideWrite, filtersOf, isIsoDate, MAX_OFFSET, normalizeInput, parseListParams, presentRow, ResourceInputError,
-  selectColumns, writableFields, type ResourceSpec,
+  fieldsOutsideWrite, filtersOf, isExactDateTime, isIsoDate, MAX_OFFSET, normalizeInput, parseListParams, presentRow,
+  ResourceInputError, resourceOpenApi, selectColumns, writableFields, type ResourceSpec,
 } from './apiResources.ts';
 
 /**
@@ -256,4 +256,75 @@ test('een veld uit een module waar je niet mag schrijven, kun je niet zetten', (
   assert.deepEqual(fieldsOutsideWrite(spec, { name: 'a', rate: 1 }, noFinance), ['rate']);
   assert.deepEqual(fieldsOutsideWrite(spec, { name: 'a' }, noFinance), []);
   assert.deepEqual(fieldsOutsideWrite(spec, { name: 'a', rate: 1 }, () => true), []);
+});
+
+// ── Uit de volledige controle ────────────────────────────────────────────────
+
+test('een id, adres, datum of keuze is tekst: een lijst of object wordt niet stil tekst', () => {
+  rejects(() => normalizeInput(spec, { name: 'a', email: ['a@b.nl'] }, 'create'), /e-mailadres/, 'email');
+  rejects(() => normalizeInput(spec, { name: 'a', parent_id: ['c0000000-0000-0000-0000-00000000000b'] }, 'create'), /uuid/, 'parent_id');
+  rejects(() => normalizeInput(spec, { name: 'a', status: ['active'] }, 'create'), /een van deze/, 'status');
+  rejects(() => normalizeInput(spec, { name: 'a', day: { y: 2026 } }, 'create'), /datum/, 'day');
+  rejects(() => normalizeInput(spec, { name: 'a', at: 1_759_480_000_000 }, 'create'), /tijdstip/, 'at');
+  rejects(() => normalizeInput(spec, { name: 'a', start: 900 }, 'create'), /UU:MM/, 'start');
+  assert.equal(normalizeInput(spec, { name: 'a', email: ' A@B.nl ' }, 'create').email, 'a@b.nl');
+});
+
+test('een tijdstip moet bestaan: geen 30 februari, geen uur 24, geen tijdzone van +15', () => {
+  assert.ok(isExactDateTime('2026-10-03T09:00:00+02:00'));
+  assert.ok(isExactDateTime('2026-10-03T09:00Z'));
+  assert.ok(isExactDateTime('2028-02-29T23:59:59.123Z'), 'schrikkeldag');
+  assert.ok(!isExactDateTime('2026-02-30T10:00:00Z'), '30 februari rolde door naar 2 maart');
+  assert.ok(!isExactDateTime('2026-10-03T24:00:00Z'), 'uur 24 rolde door naar de volgende dag');
+  assert.ok(!isExactDateTime('2026-10-03T09:60:00Z'));
+  assert.ok(!isExactDateTime('2026-10-03T09:00:00+15:00'));
+  assert.ok(!isExactDateTime('2026-10-03T09:00:00'), 'zonder tijdzone');
+  rejects(() => normalizeInput(spec, { name: 'a', at: '2026-02-30T10:00:00Z' }, 'create'), /bestaand tijdstip/, 'at');
+  assert.equal(normalizeInput(spec, { name: 'a', at: '2026-10-03T09:00:00+02:00' }, 'create').at, '2026-10-03T07:00:00.000Z');
+});
+
+test('een geheel getal past in de kolom, ook zonder eigen maximum', () => {
+  const wide: ResourceSpec = { ...spec, fields: { ...spec.fields, budget: { type: 'integer', description: 'begroot', nullable: true } } };
+  rejects(() => normalizeInput(wide, { name: 'a', budget: 3e10 }, 'create'), /hooguit 2147483647/, 'budget');
+  assert.equal(normalizeInput(wide, { name: 'a', budget: 2_147_483_647 }, 'create').budget, 2_147_483_647);
+});
+
+test('lijsten: dubbele parameters en onleesbare paginering zijn een fout, _ zoekt letterlijk', () => {
+  rejects(() => parseListParams(spec, new URLSearchParams('status=active&status=archived')), /meer dan één keer/, 'status');
+  rejects(() => parseListParams(spec, new URLSearchParams({ limit: 'abc' })), /"limit" moet een geheel getal \(1 tot 100\)/, 'limit');
+  rejects(() => parseListParams(spec, new URLSearchParams({ offset: '-1' })), /"offset" moet een geheel getal \(0 of meer\)/, 'offset');
+  rejects(() => parseListParams(spec, new URLSearchParams({ offset: 'Infinity' })), /offset/, 'offset');
+  assert.equal(parseListParams(spec, new URLSearchParams({ limit: '500' })).limit, 100, 'te groot wordt de grens');
+  assert.equal(parseListParams(spec, new URLSearchParams({ limit: '0' })).limit, 1);
+  assert.equal(parseListParams(spec, new URLSearchParams({ q: 'J_nsen' })).q, 'J\\_nsen', 'een _ is geen jokerteken');
+});
+
+test('een tijdstipfilter: een datum mag, een + die een spatie werd ook, een niet-bestaand tijdstip niet', () => {
+  const at = (value: string) => parseListParams(spec, new URLSearchParams({ updated_since: value })).filters[0]?.value;
+  assert.equal(at('2026-10-03'), '2026-10-03T00:00:00.000Z');
+  assert.equal(at('2026-10-03T09:00:00+02:00'), '2026-10-03T07:00:00.000Z');
+  assert.equal(at('2026-10-03T09:00:00 02:00'), '2026-10-03T07:00:00.000Z', 'een ongecodeerde + komt als spatie binnen');
+  rejects(() => at('2026-02-30T00:00:00Z'), /ISO 8601/, 'updated_since');
+  rejects(() => at('2026-10-03T09:00:00'), /ISO 8601/, 'updated_since');
+});
+
+test('OpenAPI: wijzigen kent geen standaardwaarden, en een veld uit een andere module kan null zijn', () => {
+  const withDefaults: ResourceSpec = {
+    ...spec,
+    fields: { ...spec.fields, status: { ...spec.fields.status, default: 'active' }, billable: { ...spec.fields.billable, default: true } },
+  };
+  const { schemas } = resourceOpenApi([withDefaults]);
+  const update = JSON.stringify(schemas.ProefUpdate);
+  assert.doesNotMatch(update, /"default"/, 'een SDK zou weggelaten velden anders terugzetten');
+  assert.match(JSON.stringify(schemas.ProefCreate), /"default":"active"/, 'bij aanmaken wél');
+  const rate = (schemas.Proef as { properties: Record<string, { type: unknown }> }).properties.rate;
+  assert.deepEqual(rate.type, ['number', 'null']);
+  // Ook een veld dat zelf niet leeg kan zijn: zonder leesrecht in die module komt het als null.
+  const strict: ResourceSpec = { ...spec, fields: { ...spec.fields, rate: { ...spec.fields.rate, nullable: false } } };
+  const strictRate = (resourceOpenApi([strict]).schemas.Proef as { properties: Record<string, { type: unknown }> }).properties.rate;
+  assert.deepEqual(strictRate.type, ['number', 'null']);
+  // Een keuzelijst die leeg mag zijn, noemt null ook bij de toegestane waarden.
+  const nullableEnum: ResourceSpec = { ...spec, fields: { ...spec.fields, status: { ...spec.fields.status, nullable: true } } };
+  const status = (resourceOpenApi([nullableEnum]).schemas.Proef as { properties: Record<string, { enum: unknown[] }> }).properties.status;
+  assert.ok(status.enum.includes(null));
 });

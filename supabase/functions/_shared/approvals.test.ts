@@ -46,7 +46,46 @@ test('alleen de server legt een beslissing vast, met de rol vers uit organizatio
 });
 
 test('een teamlid beslist alleen over zijn eigen chatvoorstel; de wachtrij is van owners en admins', () => {
-  assert.match(decide, /if v_role not in \('owner', 'admin'\)\s*\n\s*and \(v_row\.agent_id is not null or v_row\.agent_run_id is not null or v_row\.mcp_grant_id is not null\s*\n\s*or v_row\.api_key_id is not null or v_row\.signal_id is not null\s*\n\s*or v_row\.user_id is distinct from p_user_id\) then/);
+  const member = decide.slice(decide.indexOf("if v_role not in ('owner', 'admin') then"));
+  assert.ok(member.length > 0, 'de regel voor teamleden staat er');
+  // Agents, gekoppelde AI en API-sleutels: alleen owners en admins.
+  assert.match(member, /elsif v_row\.agent_id is not null or v_row\.agent_run_id is not null or v_row\.mcp_grant_id is not null\s*\n\s*or v_row\.api_key_id is not null or v_row\.signal_id is not null\s*\n\s*or v_row\.user_id is distinct from p_user_id then\s*\n\s*raise exception 'Over dit voorstel beslist een owner of admin\.'/);
+  // Een kaart uit de Beslissingen-feed: dezelfde regel als de feed (ai_decision_resolve).
+  assert.match(member, /if v_row\.signal_id is not null and v_row\.agent_id is null and v_row\.agent_run_id is null\s*\n\s*and v_row\.mcp_grant_id is null and v_row\.api_key_id is null then/);
+  assert.match(member, /coalesce\(nullif\(v_access ->> 'gerrie', ''\), 'write'\) = 'none'/);
+  assert.match(member, /coalesce\(nullif\(v_access ->> v_module, ''\), 'write'\) <> 'write'/);
+});
+
+test('de Beslissingen-feed beslist niet over een lopende uitvoering heen, en zegt wie besliste', () => {
+  const resolve = latest('ai_decision_resolve');
+  assert.match(resolve, /if v_claimer is not null and v_claimer <> auth\.uid\(\) and v_until > now\(\) then/);
+  assert.match(resolve, /'decided_by', auth\.uid\(\), 'decided_at', now\(\)/);
+  const mute = latest('ai_decision_mute');
+  assert.match(mute, /coalesce\(nullif\(a\.result ->> 'claimed_until', ''\)::timestamptz, '-infinity'::timestamptz\) <= now\(\)/,
+    'dempen laat een lopende uitvoering met rust');
+  // En de app zet ook in de feed eerst vast.
+  const feed = read('../../../src/components/DecisionFeed.tsx');
+  assert.match(feed, /await runGerrieDecision\(organizationId, d\.audit_id, \(\) => executeProposal\(d\.proposal!, handlers\)\);/);
+  assert.match(feed, /handlers=\{d\.audit_id \? claimingHandlers\(organizationId, d\.audit_id, handlers\) : handlers\}/);
+});
+
+test('een ingetrokken sleutel: niets meer vastzetten, en ook wat opnieuw mocht gaat dicht', () => {
+  assert.match(decide, /raise exception 'De API-sleutel achter dit voorstel is ingetrokken; het wordt niet meer uitgevoerd\.'/);
+  const revoke = latest('api_keys_on_revoke');
+  assert.match(revoke, /and \(status = 'proposed' or \(status = 'failed' and coalesce\(result ->> 'decision', ''\) = 'failed'\)\)/);
+  assert.match(revoke, /coalesce\(nullif\(result ->> 'claimed_until', ''\)::timestamptz, '-infinity'::timestamptz\) <= now\(\)/,
+    'wat iemand nu uitvoert, maakt hij af');
+  const valid = latest('ai_action_audit_api_key_valid');
+  assert.match(valid, /k\.organization_id = new\.organization_id/, 'ook een rechtstreekse uitvoering hoort bij de organisatie van de sleutel');
+});
+
+test('een uitkomst die niet aankwam, gaat niet verloren', () => {
+  const confirm = client.slice(client.indexOf('async function reportOutcome('));
+  assert.ok(confirm.indexOf('writeOutbox(') < confirm.indexOf('await deliverOutcome('), 'eerst opschrijven, dan versturen');
+  const claim = client.slice(client.indexOf('export async function claimGerrieAction('));
+  assert.ok(claim.indexOf('await flushDecisionOutbox();') < claim.indexOf("await postDecision(organizationId, auditId, 'claim')"),
+    'wat nog lag, gaat mee vóór een nieuwe claim');
+  assert.match(claim, /response\.stale_claim/, 'een eerdere poging zonder uitkomst wordt nagevraagd');
 });
 
 test('alleen wat nog open staat; afgewezen en uitgevoerd zijn definitief', () => {

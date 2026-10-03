@@ -1,5 +1,5 @@
 import {
-  ActionError, bool, euroCents, id, ids, isoDate, joinShort, optChoice, optId,
+  ActionError, assertFieldWritable, bool, euroCents, id, ids, isoDate, joinShort, optChoice, optId,
   optIsoDate, optNum, optStr, orgQuery, row, str,
   type ActionCtx, type ActionDef,
 } from './types.ts';
@@ -162,6 +162,7 @@ export const PROJECTS_ACTIONS: ActionDef[] = [
 
       const rate = optNum(input, 'hourly_rate_euro');
       if (rate !== null) {
+        assertFieldWritable(ctx, 'finance', 'hourly_rate_euro', 'Financiën');
         if (rate < 0) throw new ActionError('Een uurtarief kan niet negatief zijn.');
         const cents = rate === 0 ? null : Math.round(rate * 100);
         patch.hourly_rate_cents = cents;
@@ -994,7 +995,8 @@ export const PROJECTS_ACTIONS: ActionDef[] = [
           phase_label: PHASE_LABELS[phase],
           billing_type: project.billing_type,
           billing_label: BILLING_LABELS[project.billing_type] ?? project.billing_type,
-          hourly_rate_cents: project.hourly_rate_cents,
+          // Het tarief hoort bij Financiën, net als de bedragen hieronder.
+          hourly_rate_cents: seeMoney ? project.hourly_rate_cents : null,
         },
         tasks: {
           total: tasks.length,

@@ -175,3 +175,29 @@ test('een reactie hoort bij een ticket uit DEZE organisatie, en het ticket komt 
   assert.match(handler, /if \(spec\.parent && parentId !== null\) await getRow\(ctx, RESOURCES\[spec\.parent\.resource\], parentId\);/);
   assert.match(handler, /if \(spec\.parent && parentId !== null\) values\[spec\.parent\.column\] = parentId;/);
 });
+
+test('api_rest_write: ook iets NIEUWS in het klantportaal zetten vraagt execute_high', () => {
+  const body = migration.slice(migration.indexOf('create or replace function public.api_rest_write('));
+  const outward = body.slice(body.indexOf('if not coalesce(p_allow_outward, false) then'), body.indexOf('-- ── Per resource'));
+  assert.ok(outward.length > 0);
+  // Een ticket of project mét klant aanmaken: dat staat meteen in het portaal.
+  assert.match(outward, /p_row_id is null and p_resource in \('projects', 'tickets'\) and nullif\(p_values ->> 'client_id', ''\) is not null then/);
+  // Tekst die de klant al ziet, wijzigen.
+  assert.match(outward, /p_resource = 'tickets' and nullif\(v_existing ->> 'client_id', ''\) is not null\s*\n\s*and \(\(p_values \? 'title'/);
+  assert.match(outward, /p_resource = 'projects' and nullif\(v_existing ->> 'client_id', ''\) is not null\s*\n\s*and \(\(p_values \? 'name'/);
+  // Taken in een project van een klant: aanmaken, verplaatsen, hernoemen.
+  assert.match(outward, /if \(p_row_id is null and v_new_portal_client is not null\)/);
+  assert.match(outward, /and \(v_old_portal_client is not null or v_new_portal_client is not null\)\)/);
+  // Een nieuwe klant met het adres van iemand die al op het portaal inlogt (alleen binnen deze organisatie).
+  assert.match(outward, /cc\.organization_id = p_organization_id and cc\.gives_portal_access and cc\.is_active/);
+  assert.ok((outward.match(/using errcode = 'RS403'/g) ?? []).length >= 9);
+  // Een reactie zonder is_internal is intern — vóór de controle, zodat die klopt.
+  const internal = body.indexOf("p_values := jsonb_build_object('is_internal', true) || p_values;");
+  assert.ok(internal > 0 && internal < body.indexOf('if not coalesce(p_allow_outward, false) then'));
+});
+
+test('api_rest_write: een taak met een klant van een ander project is een fout, geen stille correctie', () => {
+  const body = migration.slice(migration.indexOf('create or replace function public.api_rest_write('));
+  assert.match(body, /if p_resource = 'tasks' and nullif\(p_values ->> 'client_id', ''\) is not null then/);
+  assert.match(body, /if v_project_client is not null and v_project_client <> \(p_values ->> 'client_id'\)::uuid then/);
+});

@@ -146,3 +146,47 @@ test('de kop: status en headers, dubbele samengevoegd', () => {
   assert.equal(head.headers.get('set-cookie'), 'a=1, b=2');
   assert.throws(() => parseResponseHead('HTTP/2 200'), TransportError);
 });
+
+// ── Een eindpunt dat ons bezig wil houden ────────────────────────────────────
+
+test('eindeloos "100 Continue": na een handvol tussenantwoorden is het afgelopen', async () => {
+  let sent = 0;
+  // Na 200 houdt de bron op, zodat een lezer zonder grens hier faalt in plaats van hangt.
+  const flood = {
+    next: async () => {
+      if (sent >= 200) return null;
+      sent += 1;
+      return encoder.encode('HTTP/1.1 100 Continue\r\n\r\n');
+    },
+  };
+  await assert.rejects(readHttpResponse(flood.next, 1000), (error: unknown) =>
+    error instanceof TransportError && /tussenantwoorden/.test(error.message));
+  assert.ok(sent <= 10, `het bleef lezen: ${sent} tussenantwoorden`);
+  // Een paar is gewoon HTTP: 100 Continue en 103 Early Hints vóór het echte antwoord.
+  const normal = source(['HTTP/1.1 100 Continue\r\n\r\n', 'HTTP/1.1 103 Early Hints\r\nLink: </a>\r\n\r\n', 'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok']);
+  const response = await readHttpResponse(normal.next, 1000);
+  assert.equal(response.status, 200);
+  assert.equal(decoder.decode(response.body), 'ok');
+});
+
+test('byte voor byte: een grote kop kost geen kwadratisch rekenwerk, en het antwoord klopt', async () => {
+  const head = `HTTP/1.1 200 OK\r\nX-Opvulling: ${'a'.repeat(30_000)}\r\nContent-Length: 5\r\n\r\nhallo`;
+  const bytes = encoder.encode(head);
+  let index = 0;
+  const drip = { next: async () => (index < bytes.length ? bytes.subarray(index, ++index) : null) };
+  const started = performance.now();
+  const response = await readHttpResponse(drip.next, 1000);
+  const elapsed = performance.now() - started;
+  assert.equal(response.status, 200);
+  assert.equal(decoder.decode(response.body), 'hallo');
+  assert.ok(elapsed < 1500, `30 kB byte voor byte duurde ${Math.round(elapsed)} ms`);
+});
+
+test('chunked in brokjes van één byte: dezelfde inhoud', async () => {
+  const text = 'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nwiki\r\n5\r\npedia\r\n0\r\n\r\n';
+  const bytes = encoder.encode(text);
+  let index = 0;
+  const drip = { next: async () => (index < bytes.length ? bytes.subarray(index, ++index) : null) };
+  const response = await readHttpResponse(drip.next, 1000);
+  assert.equal(decoder.decode(response.body), 'wikipedia');
+});

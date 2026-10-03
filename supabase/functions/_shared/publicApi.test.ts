@@ -5,7 +5,7 @@ import { createToken, verifyToken } from './mcpAuth.ts';
 import {
   ACCESS_LEVELS, actionInputSchema, apiKeyHint, apiRoute, auditStatusesFor, buildOpenApi, containsNul, createApiKey,
   effectiveModuleAccess, effectiveModuleLevel, errorBody, hasKeyRestrictions, isValidIdempotencyKey, keyModuleCap,
-  levelOfScope, matchRoute, memberModuleLevel, MODULE_KEYS, normalizeKeyModuleAccess, operationIdFor, pageParams,
+  InvalidParamError, levelOfScope, matchRoute, memberModuleLevel, MODULE_KEYS, normalizeKeyModuleAccess, operationIdFor, pageParams,
   parseApiKey, presentedApiKey, proposalStatus, PROPOSAL_STATUSES, publicActionError, REJECTED_BY_USER_DETAIL,
   requestFingerprint, scopeForLevel, tooDeep, type CatalogAction,
 } from './publicApi.ts';
@@ -182,10 +182,14 @@ test('routes met parameters', () => {
 
 test('limit en offset hebben grenzen', () => {
   assert.deepEqual(pageParams(new URLSearchParams('')), { limit: 25, offset: 0 });
-  assert.deepEqual(pageParams(new URLSearchParams('limit=5000&offset=-3')), { limit: 100, offset: 0 });
-  assert.deepEqual(pageParams(new URLSearchParams('limit=abc&offset=10')), { limit: 25, offset: 10 });
+  assert.deepEqual(pageParams(new URLSearchParams('limit=5000&offset=3')), { limit: 100, offset: 3 }, 'te groot wordt de grens');
   assert.deepEqual(pageParams(new URLSearchParams('limit=0')), { limit: 1, offset: 0 });
   assert.deepEqual(pageParams(new URLSearchParams('limit=400'), { maxLimit: 500 }), { limit: 400, offset: 0 });
+  // Rommel is een fout met het veld erbij, geen stille standaardwaarde.
+  for (const [query, field] of [['limit=abc', 'limit'], ['offset=-3', 'offset'], ['limit=1.5', 'limit'], ['offset=Infinity', 'offset']]) {
+    assert.throws(() => pageParams(new URLSearchParams(query)),
+      (error: unknown) => error instanceof InvalidParamError && error.field === field, query);
+  }
 });
 
 // ── Voorstellen ──────────────────────────────────────────────────────────────

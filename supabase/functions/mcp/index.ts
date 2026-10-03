@@ -661,6 +661,7 @@ async function runAction(args: Record<string, unknown>, session: Session): Promi
     today: today(),
     db: admin,
     canRead: (module: string) => moduleLevel(session, module) !== 'none',
+    canWrite: (module: string) => moduleLevel(session, module) === 'write',
   };
 
   try {
@@ -839,6 +840,7 @@ function actionContext(session: Session): ActionCtx {
     today: today(),
     db: admin,
     canRead: (module: string) => moduleLevel(session, module) !== 'none',
+    canWrite: (module: string) => moduleLevel(session, module) === 'write',
   };
 }
 
@@ -1159,6 +1161,7 @@ async function readResource(params: Record<string, unknown>, session: Session): 
     today: today(),
     db: admin,
     canRead: (module: string) => moduleLevel(session, module) !== 'none',
+    canWrite: (module: string) => moduleLevel(session, module) === 'write',
   };
 
   try {

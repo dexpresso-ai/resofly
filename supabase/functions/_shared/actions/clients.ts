@@ -1,5 +1,5 @@
 import {
-  ActionError, bool, choice, id, ids, joinShort, optChoice, optId,
+  ActionError, assertFieldWritable, bool, choice, id, ids, joinShort, optChoice, optId,
   optIsoDate, optNum, optStr, orgQuery, row, str,
   type ActionDef,
 } from './types.ts';
@@ -61,7 +61,9 @@ export const CLIENT_ACTIONS: ActionDef[] = [
       put('kvk_number', optStr(input, 'kvk_number', 40));
       put('client_kind', optChoice(input, 'client_kind', CLIENT_KIND));
       put('status', optChoice(input, 'status', CLIENT_STATUS));
-      put('value_eur', optNum(input, 'value_eur'));
+      const value = optNum(input, 'value_eur');
+      if (value !== null) assertFieldWritable(ctx, 'finance', 'value_eur', 'Financiën');
+      put('value_eur', value);
       put('follow_up', optIsoDate(input, 'follow_up'));
 
       const color = optStr(input, 'color', 9);
@@ -660,9 +662,17 @@ export const CLIENT_ACTIONS: ActionDef[] = [
       if (changing.length === 0) throw new ActionError(`Die contactpersonen hebben al ${grant ? 'wel' : 'geen'} portaaltoegang.`);
       return {
         title: `Portaaltoegang ${grant ? 'geven' : 'intrekken'} voor ${changing.length} contactperso${changing.length === 1 ? 'on' : 'nen'}`,
-        sub: joinShort(changing.map((r) => String(r.name))),
+        // Wie er straks kan inloggen, volgt uit het e-mailadres: dat hoort op de
+        // kaart die iemand goedkeurt, niet alleen de naam.
+        sub: joinShort(changing.map((r) => (grant && r.email ? `${r.name} (${r.email})` : String(r.name))), 170),
         kind: 'work',
-        payload: { contact_ids: changing.map((r) => String(r.id)), names: changing.map((r) => String(r.name)), gives_portal_access: grant },
+        payload: {
+          contact_ids: changing.map((r) => String(r.id)), names: changing.map((r) => String(r.name)), gives_portal_access: grant,
+          // Het adres zoals het goedgekeurd werd. De uitvoerder geeft alleen
+          // toegang zolang het nog zo is — anders keurde niemand de nieuwe
+          // ontvanger goed (een koppeling kan het adres intussen wijzigen).
+          ...(grant ? { emails: changing.map((r) => (r.email == null ? null : String(r.email))) } : {}),
+        },
       };
     },
   },

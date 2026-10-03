@@ -76,8 +76,8 @@ import {
 import { matchResource, RESOURCE_LIST, RESOURCES } from '../_shared/apiResourceSpecs.ts';
 import { createRow, getRow, listRows, ResourceStoreError, updateRow, type StoreCtx } from '../_shared/apiResourceStore.ts';
 import {
-  actionInputSchema, apiRoute, API_VERSION, auditStatusesFor, buildOpenApi, containsNul, effectiveModuleAccess,
-  effectiveModuleLevel, errorBody, hasKeyRestrictions, isModuleKey, isValidIdempotencyKey, levelOfScope,
+  actionInputSchema, apiRoute, API_VERSION, auditStatusesFor, buildOpenApi, containsLoneSurrogate, containsNul, effectiveModuleAccess,
+  effectiveModuleLevel, errorBody, hasKeyRestrictions, InvalidParamError, isModuleKey, isValidIdempotencyKey, levelOfScope,
   matchRoute, MAX_JSON_DEPTH, MODULE_LABEL, pageParams, parseApiKey, presentedApiKey, proposalStatus, PROPOSAL_STATUSES,
   publicActionError, REJECTED_BY_USER_DETAIL, requestFingerprint, tooDeep,
   type ApiErrorCode, type CatalogAction, type ModuleKey, type ModuleLevel, type ProposalStatus,
@@ -115,6 +115,12 @@ const MAX_OPEN_PROPOSALS = 50;
 const AUTH_FAILURE_WINDOW_SECONDS = 600;
 const AUTH_FAILURE_MAX = envInt('API_AUTH_FAILURE_LIMIT', 60, 5, 10_000);
 const AUTH_FAILURE_BLOCK_SECONDS = 900;
+/**
+ * En voor alle afzenders samen. De telling per afzender leunt op headers die
+ * buiten Cloudflare te vervalsen zijn; deze niet. Ook hier: een geldige sleutel
+ * werkt altijd door.
+ */
+const AUTH_FAILURE_GLOBAL_MAX = envInt('API_AUTH_FAILURE_GLOBAL_LIMIT', 1000, 50, 1_000_000);
 
 /** Groter dan dit is geen invoer voor een handeling meer. */
 const MAX_BODY_BYTES = 1_000_000;
@@ -245,7 +251,9 @@ async function authenticate(req: Request): Promise<Caller> {
     // boven de grens volgt een pauze (429). Al geblokkeerd: niet nog eens tellen.
     const blockedFor = Number(found?.retry_after ?? 0) || await noteAuthFailure(client);
     if (blockedFor > 0) throw tooManyFailures(blockedFor);
-    throw new AuthError(found?.api_key_id ? 'Deze API-sleutel klopt niet.' : 'Deze API-sleutel is niet bekend.');
+    // Eén zin voor "bestaat niet" en "klopt niet": het antwoord zegt niet of
+    // een selector bij een echte sleutel hoort.
+    throw new AuthError('Deze API-sleutel klopt niet.');
   }
   const secret = { api_key_id: String(found!.api_key_id) };
 
@@ -301,8 +309,9 @@ async function authenticate(req: Request): Promise<Caller> {
  * Wie er aanklopt, zoals het netwerk het zegt: het adres dat Cloudflare zag
  * (cf-connecting-ip, niet door de aanroeper te zetten), anders het eerste uit
  * x-forwarded-for. Gehasht: het adres zelf komt niet in api_auth_failures.
- * Kan het eerste x-forwarded-for-adres vervalst zijn? Dan blokkeert iemand
- * hooguit de mislukte pogingen van een ander — een geldige sleutel werkt door.
+ * Kan het eerste x-forwarded-for-adres vervalst zijn? Dan ontloopt iemand de
+ * telling per afzender, maar niet die over alle afzenders samen
+ * (AUTH_FAILURE_GLOBAL_MAX) — en een geldige sleutel werkt altijd door.
  */
 async function clientFingerprint(req: Request): Promise<string> {
   const address = (req.headers.get('cf-connecting-ip') || (req.headers.get('x-forwarded-for') || '').split(',')[0] || 'onbekend')
@@ -317,6 +326,7 @@ async function noteAuthFailure(client: string): Promise<number> {
     p_window_seconds: AUTH_FAILURE_WINDOW_SECONDS,
     p_max_failures: AUTH_FAILURE_MAX,
     p_block_seconds: AUTH_FAILURE_BLOCK_SECONDS,
+    p_global_max: AUTH_FAILURE_GLOBAL_MAX,
   });
   // Tellen is een vangnet; lukt het niet, dan gewoon een 401.
   if (error) { console.error('[api] mislukte poging tellen mislukt:', error.message); return 0; }
@@ -326,7 +336,7 @@ async function noteAuthFailure(client: string): Promise<number> {
 function tooManyFailures(seconds: number): ApiError {
   const minutes = Math.max(1, Math.ceil(seconds / 60));
   return new ApiError(429, 'rate_limited',
-    `Te veel mislukte pogingen met een API-sleutel vanaf dit adres. Probeer het over ${minutes} ${minutes === 1 ? 'minuut' : 'minuten'} opnieuw, met een geldige sleutel.`,
+    `Te veel mislukte pogingen met een API-sleutel. Probeer het over ${minutes} ${minutes === 1 ? 'minuut' : 'minuten'} opnieuw, met een geldige sleutel.`,
     undefined, { 'Retry-After': String(seconds) });
 }
 
@@ -1353,8 +1363,9 @@ function actionContext(caller: Caller): ActionCtx {
     today: today(),
     db: admin,
     // De modulebeperking van de sleutel geldt ook voor wat een handeling uit
-    // een andere module meeneemt (bedragen, uren).
+    // een andere module meeneemt (bedragen, uren) — lezend én schrijvend.
     canRead: (module: string) => moduleLevel(caller, module) !== 'none',
+    canWrite: (module: string) => moduleLevel(caller, module) === 'write',
   };
 }
 
@@ -1449,6 +1460,9 @@ function parseInput(raw: string): Record<string, unknown> {
   if (containsNul(parsed)) {
     throw new ApiError(400, 'invalid_request', 'De invoer bevat een NUL-teken (\\u0000); dat kan ResoFly niet opslaan.');
   }
+  if (containsLoneSurrogate(parsed)) {
+    throw new ApiError(400, 'invalid_request', 'De invoer bevat een half teken (een losse UTF-16-surrogaat, zoals \\ud800); stuur geldige UTF-8.');
+  }
   return parsed as Record<string, unknown>;
 }
 
@@ -1487,6 +1501,7 @@ function methodNotAllowed(allowed: string): ApiError {
  */
 function asApiError(error: unknown): ApiError {
   if (error instanceof ApiError) return error;
+  if (error instanceof InvalidParamError) return new ApiError(400, 'invalid_request', error.message, { field: error.field });
   if (error instanceof ActionError) {
     // Een handeling zegt soms "X ophalen mislukt: <databasetekst>". Die tekst is
     // voor ons logboek; de koppeling krijgt de zin zonder de interne details.

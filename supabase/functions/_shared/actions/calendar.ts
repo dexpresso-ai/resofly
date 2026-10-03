@@ -1,5 +1,5 @@
 import {
-  ActionError, bool, id, isoDate, joinShort, optChoice, optId, optIsoDate, optNum, optStr,
+  ActionError, assertFieldWritable, bool, id, isoDate, joinShort, optChoice, optId, optIsoDate, optNum, optStr,
   orgQuery, row, str,
   type ActionCtx, type ActionDef,
 } from './types.ts';
@@ -1701,6 +1701,7 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
 
       const rate = optNum(input, 'hourly_rate_eur');
       if (rate !== null) {
+        assertFieldWritable(ctx, 'finance', 'hourly_rate_eur', 'Financiën');
         if (rate < 0) throw new ActionError('Een uurtarief kan niet negatief zijn.');
         const cents = Math.round(rate * 100);
         if (cents !== (entry.hourly_rate_cents ?? 0)) {

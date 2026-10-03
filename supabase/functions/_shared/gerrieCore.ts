@@ -2482,6 +2482,7 @@ function actionCtxFor(ctx: GerrieContext): ActionCtx {
   return {
     organizationId: ctx.organizationId, userId: ctx.userId, role: ctx.role, today: ctx.today, db: supabaseAdmin,
     canRead: (module: string) => moduleLevel(ctx, module) !== 'none',
+    canWrite: (module: string) => moduleLevel(ctx, module) === 'write',
   };
 }
 
@@ -2604,7 +2605,7 @@ async function runTool(ctx: GerrieContext, name: string, input: Record<string, u
   switch (name) {
     case 'find_actions': return findActionsTool(ctx, input);
     case 'run_action': return runActionTool(ctx, input);
-    case 'search_clients': return searchClients(orgId, input, limit);
+    case 'search_clients': return searchClients(orgId, input, limit, moduleLevel(ctx, 'finance') !== 'none');
     case 'list_invoices': return listInvoices(orgId, input, limit);
     case 'list_quotes': return listQuotes(orgId, input, limit);
     case 'get_financial_summary': return getFinancialSummary(ctx, input);
@@ -2749,7 +2750,7 @@ async function suggestMeetingSlots(ctx: GerrieContext, input: Record<string, unk
 
 async function listTasks(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('tasks', orgId).order('created_at', { ascending: false }).limit(limit);
-  if (input.project_id) query = query.eq('project_id', String(input.project_id));
+  if (input.project_id) query = query.eq('project_id', idFilter(input, 'project_id'));
   if (input.status) query = query.eq('status', String(input.status));
   if (input.planned_only) query = query.not('planned_date', 'is', null);
   const { data, error } = await query;
@@ -3781,13 +3782,13 @@ function orgTable(table: string, orgId: string) {
  * schreef, schreef je ook niet ná die datum — dat is precies de groep die je zoekt
  * als je vraagt wie je al een tijd niet hebt gesproken.
  */
-async function searchClients(orgId: string, input: Record<string, unknown>, limit: number) {
+async function searchClients(orgId: string, input: Record<string, unknown>, limit: number, seeMoney: boolean) {
   let query = orgTable('clients', orgId).order('name', { ascending: true }).limit(limit);
   if (input.status) query = query.eq('status', String(input.status));
   if (input.client_kind) query = query.eq('client_kind', String(input.client_kind));
   if (input.city) query = query.ilike('city', `%${escapeLike(String(input.city))}%`);
-  const q = String(input.query || '').trim();
-  if (q) query = query.or(`name.ilike.%${escapeLike(q)}%,contact_name.ilike.%${escapeLike(q)}%,email.ilike.%${escapeLike(q)}%`);
+  const q = orSearchTerm(String(input.query || ''));
+  if (q) query = query.or(`name.ilike.%${q}%,contact_name.ilike.%${q}%,email.ilike.%${q}%`);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
 
@@ -3816,7 +3817,8 @@ async function searchClients(orgId: string, input: Record<string, unknown>, limi
     clients: rows.map((c) => ({
       id: c.id, name: c.name, client_code: c.client_code, contact_name: c.contact_name,
       email: c.email, phone: c.phone, city: c.city, client_kind: c.client_kind,
-      status: c.status, value_eur: c.value_eur, tags: c.tags,
+      // De klantwaarde hoort bij Financiën: zonder leesrecht daar null, zoals in de API.
+      status: c.status, value_eur: seeMoney ? c.value_eur : null, tags: c.tags,
     })),
   };
 }
@@ -3824,7 +3826,7 @@ async function searchClients(orgId: string, input: Record<string, unknown>, limi
 async function listInvoices(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('invoices', orgId).order('date', { ascending: false }).limit(limit);
   if (input.status) query = query.eq('status', String(input.status));
-  if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   const from = isoDate(input.from);
   const to = isoDate(input.to);
   if (from) query = query.gte('date', from);
@@ -3860,7 +3862,7 @@ async function listInvoices(orgId: string, input: Record<string, unknown>, limit
 async function listQuotes(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('quotes', orgId).order('date', { ascending: false }).limit(limit);
   if (input.status) query = query.eq('status', String(input.status));
-  if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   const from = isoDate(input.from);
   const to = isoDate(input.to);
   if (from) query = query.gte('date', from);
@@ -3928,7 +3930,7 @@ async function getFinancialSummary(ctx: GerrieContext, input: Record<string, unk
 
 async function listProjects(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('projects', orgId).order('created_at', { ascending: false }).limit(limit);
-  if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   if (!input.include_archived) query = query.eq('archived', false);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
@@ -3943,7 +3945,7 @@ async function listProjects(orgId: string, input: Record<string, unknown>, limit
 async function listTickets(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('tickets', orgId).order('created_at', { ascending: false }).limit(limit);
   if (input.status) query = query.eq('status', String(input.status));
-  if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   if (input.priority) query = query.eq('priority', String(input.priority));
   const from = isoDate(input.from);
   const to = isoDate(input.to);
@@ -3985,8 +3987,8 @@ async function listTimeEntries(ctx: GerrieContext, input: Record<string, unknown
   const to = isoDate(input.to);
   if (from) query = query.gte('entry_date', from);
   if (to) query = query.lte('entry_date', to);
-  if (input.project_id) query = query.eq('project_id', String(input.project_id));
-  if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.project_id) query = query.eq('project_id', idFilter(input, 'project_id'));
+  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   if (input.billable_only === true) query = query.eq('billable', true);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
@@ -4177,7 +4179,7 @@ function buildCampaignProposal(input: Record<string, unknown>): ProposalResult {
 
 async function listContracts(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('contracts', orgId).order('date', { ascending: false }).limit(limit);
-  if (input.client_id) query = query.eq('client_id', String(input.client_id));
+  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   if (input.status) query = query.eq('status', String(input.status));
   const { data, error } = await query;
   if (error) throw new Error(error.message);
@@ -4250,7 +4252,7 @@ async function listCampaigns(orgId: string, input: Record<string, unknown>, limi
 
 async function listGalleries(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('galleries', orgId).order('created_at', { ascending: false }).limit(limit);
-  if (input.project_id) query = query.eq('project_id', String(input.project_id));
+  if (input.project_id) query = query.eq('project_id', idFilter(input, 'project_id'));
   if (input.status) query = query.eq('status', String(input.status));
   const { data, error } = await query;
   if (error) throw new Error(error.message);
@@ -4275,8 +4277,8 @@ async function listContent(orgId: string, input: Record<string, unknown>, limit:
 
   async function fetchFrom(table: 'notes' | 'documents') {
     let query = orgTable(table, orgId).order('updated_at', { ascending: false }).limit(limit);
-    if (input.client_id) query = query.eq('client_id', String(input.client_id));
-    if (input.project_id) query = query.eq('project_id', String(input.project_id));
+    if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
+    if (input.project_id) query = query.eq('project_id', idFilter(input, 'project_id'));
     if (needle) query = query.ilike('title', `%${escapeLike(needle)}%`);
     const { data, error } = await query;
     if (error) throw new Error(error.message);
@@ -4389,7 +4391,7 @@ async function listSuppliers(orgId: string, input: Record<string, unknown>, limi
 
 async function listPurchaseInvoices(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('purchase_invoices', orgId).order('date', { ascending: false }).limit(limit);
-  if (input.supplier_id) query = query.eq('supplier_id', String(input.supplier_id));
+  if (input.supplier_id) query = query.eq('supplier_id', idFilter(input, 'supplier_id'));
   if (input.status) query = query.eq('status', String(input.status));
   const from = isoDate(input.from);
   const to = isoDate(input.to);
@@ -4521,7 +4523,7 @@ async function listBankTransactions(orgId: string, input: Record<string, unknown
 async function listVatReturns(orgId: string, input: Record<string, unknown>, limit: number) {
   let query = orgTable('vat_returns', orgId).order('period_start', { ascending: false }).limit(limit);
   const year = Math.floor(num(input.year));
-  if (Number.isFinite(year) && year > 1900) query = query.eq('year', year);
+  if (Number.isFinite(year) && year > 1900 && year < 10_000) query = query.eq('year', year);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
   return {
@@ -5080,7 +5082,9 @@ const DECISION_OUTCOMES = ['claim', 'executed', 'failed', 'rejected'] as const;
  * uitvoeren is: dat weegt de database (ai_action_decide), met naam en tijd van
  * wie besliste. Een afgehandeld voorstel verandert daarna niet meer.
  */
-async function confirmAction(userId: string, organizationId: string, role: OrganizationRole, body: Record<string, unknown>): Promise<{ ok: boolean; status: string }> {
+async function confirmAction(
+  userId: string, organizationId: string, role: OrganizationRole, body: Record<string, unknown>,
+): Promise<{ ok: boolean; status: string; stale_claim?: { by: string; until: string } }> {
   if (!['owner', 'admin', 'member'].includes(role)) throw new HttpError('Geen schrijfrechten.', 403);
   const auditId = String(body.auditId || '');
   if (!isUuid(auditId)) throw new HttpError('Ongeldig auditId.', 400);
@@ -5100,7 +5104,14 @@ async function confirmAction(userId: string, organizationId: string, role: Organ
     if (status === 500) console.error('[gerrie] beslissing vastleggen mislukt:', error.message);
     throw new HttpError(status === 500 ? 'De beslissing kon niet worden vastgelegd. Probeer het opnieuw.' : error.message, status);
   }
-  return { ok: true, status: String((data as { status?: unknown } | null)?.status ?? '') };
+  const result = (data ?? {}) as { status?: unknown; stale_claim?: { by?: unknown; until?: unknown } | null };
+  return {
+    ok: true,
+    status: String(result.status ?? ''),
+    // Een eerdere uitvoering die nooit een uitkomst meldde: misschien is het al
+    // gebeurd. De app vraagt dat na vóór hij opnieuw uitvoert.
+    ...(result.stale_claim ? { stale_claim: { by: String(result.stale_claim.by ?? ''), until: String(result.stale_claim.until ?? '') } } : {}),
+  };
 }
 
 /**
@@ -5204,7 +5215,10 @@ function clampLimit(value: unknown): number {
 }
 function isoDate(value: unknown): string | null {
   const s = String(value || '').trim();
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  // Ook een echte kalenderdag: 2026-02-30 bestaat niet, en Postgres zou dat met een fout (500) zeggen.
+  const date = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === s ? s : null;
 }
 function todayIso(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Amsterdam' });
@@ -5213,6 +5227,27 @@ function daysBetween(fromIso: string, toIso: string): number {
   return Math.floor((Date.parse(toIso) - Date.parse(fromIso)) / 86400000);
 }
 function escapeLike(value: string): string { return value.replace(/[%_,]/g, (m) => `\\${m}`).slice(0, 80); }
+/**
+ * Een zoekterm voor BINNEN een `.or()`-filter. Daar is een komma het begin van
+ * een volgende voorwaarde (een backslash ervoor helpt niet), en haakjes,
+ * aanhalingstekens en de backslash betekenen er ook iets: die gaan eruit.
+ * Zoeken is zoeken, geen manier om een eigen filter mee te sturen.
+ */
+function orSearchTerm(value: string): string {
+  return escapeLike(value.replace(/[,()"\\\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim());
+}
+/**
+ * Een id uit de invoer als filter. Klopt de vorm niet, dan een 400 met uitleg
+ * in plaats van een databasefout (500). Bewust ruimer dan isUuid: elke uuid die
+ * Postgres kent, ook de niet-v4 id's van oudere rijen.
+ */
+function idFilter(input: Record<string, unknown>, key: string): string {
+  const value = String(input[key] ?? '').trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)) {
+    throw new HttpError(`"${key}" moet een geldig id zijn. Zoek het eerst op en gebruik het exacte id.`, 400);
+  }
+  return value;
+}
 function isUuid(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
 function describeError(error: unknown): string { if (error instanceof Error) return error.message; try { return JSON.stringify(error); } catch { return String(error); } }
 function requiredEnv(name: string): string { const value = Deno.env.get(name); if (!value) throw new Error(`Missing required env var: ${name}`); return value; }

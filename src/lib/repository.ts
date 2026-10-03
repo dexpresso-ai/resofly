@@ -3185,6 +3185,23 @@ export async function updateClientContact(id: UUID, values: Record<string, unkno
   return updateRow<ClientContact>('client_contacts', id, values, organizationId);
 }
 
+/**
+ * Portaaltoegang geven, maar alleen zolang het e-mailadres nog is wat er op de
+ * goedgekeurde kaart stond — in één update, zodat er niets tussen kan komen.
+ * False als het adres intussen veranderde (of de contactpersoon weg is).
+ */
+export async function grantClientContactPortalAccess(id: UUID, organizationId: UUID, expectedEmail: string | null): Promise<boolean> {
+  let query = supabase
+    .from('client_contacts')
+    .update({ gives_portal_access: true, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('organization_id', organizationId);
+  query = expectedEmail === null ? query.is('email', null) : query.eq('email', expectedEmail);
+  const { data, error } = await query.select('id');
+  if (error) throw error;
+  return (data ?? []).length > 0;
+}
+
 export async function deleteClientContact(id: UUID, organizationId: UUID): Promise<void> {
   return deleteRow('client_contacts', id, organizationId);
 }

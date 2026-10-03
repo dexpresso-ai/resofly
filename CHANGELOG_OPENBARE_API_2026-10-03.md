@@ -424,3 +424,113 @@ wachtrij alleen voor owners/admins, vastzetten tegen een collega, mislukt →
 afgewezen → definitief, een rechtstreekse uitvoering blijft staan, origin
 null, de afzenderlimiet), de goedkeurwachtrij in de app zelf (11/11), en de
 eerdere suites opnieuw op een verse database.
+
+## Vierde ronde — volledige controle op functies en veiligheid
+
+Migratie `20261003050000_full_api_check.sql`.
+
+Aanpak: een contracttest (elk pad en elke handeling uit het OpenAPI-document
+aangeroepen en het antwoord tegen het schema gelegd: 1181 controles), fuzzing
+(zes rondes, ruim 10.000 verzoeken met rommel in parameters, invoer, koppen en
+paden; eis: nooit een 5xx en nooit iets van een andere organisatie), een
+controle van elke opgevraagde kolom tegen het schema, en drie onafhankelijke
+reviews (sleutels en rechten; webhooks, goedkeuren en CORS; vaste adressen en
+invoer). Geen kritieke of hoge bevindingen. Wat er wél uitkwam:
+
+**Het klantportaal (middel).** Een project of ticket naar een andere klant
+verhuizen vroeg al `execute_high`, maar iets nieuws vóór een klant aanmaken
+niet: een sleutel met gewoon `execute` kon een ticket met een vals
+rekeningnummer in het portaal van een klant zetten. Nu vraagt alles wat tekst
+in het portaal zet of verandert `execute_high`: een ticket of project mét klant
+aanmaken, de titel/omschrijving (ticket) of naam/omschrijving (project) wijzigen
+als er een klant aan hangt, een taak in, uit of binnen een project van een klant
+aanmaken, verplaatsen of hernoemen, en een nieuwe klant met het e-mailadres van
+iemand die al op het portaal inlogt. Zonder klant, of status en datums, blijft
+gewoon met `execute`. Ook: een instelling van een **gepubliceerde** galerij
+wijzigen is naar buiten gericht (risico hoog).
+
+**Financiën via handelingen (middel).** De vaste adressen schermden het
+uurtarief en de klantwaarde al af voor een sleutel zonder Financiën, maar
+`client.update_details`, `project.update_billing` en `time_entry.update_details`
+konden ze zetten (en "er verandert niets" verried het huidige tarief), en
+`project.dashboard` en `search_clients` lieten ze zien. Nu heeft elke handeling
+`canWrite` naast `canRead`, en weigert `assertFieldWritable` zo'n veld meteen.
+
+**Portaaltoegang klaarzetten (middel).** Tussen klaarzetten en goedkeuren kon
+het e-mailadres van de contactpersoon nog veranderen. Het adres staat nu op de
+kaart én in het voorstel, en de uitvoerder geeft alleen toegang zolang het
+adres nog precies zo is — in één update.
+
+**De Beslissingen-feed (middel).** De feed zette de auditregel van een
+voorstel nog zelf om, zonder vastzetten en zonder naam. Nu volgt hij dezelfde
+weg als de goedkeurwachtrij (`runGerrieDecision`), beslist een kaart niet over
+een lopende uitvoering van een ander heen, en staat erbij wie besliste. In
+`ai_action_decide` geldt voor een kaart de regel van de feed zelf: wie de
+module van de kaart mag schrijven.
+
+**Een uitkomst die niet aankomt (laag).** Werd een voorstel uitgevoerd maar
+kwam de melding niet aan, dan stond het na tien minuten weer open. De app
+schrijft een uitkomst nu eerst weg (en probeert het drie keer), en stuurt wat
+bleef liggen mee vóór de volgende claim. Liep een eerdere poging af zonder
+uitkomst, dan vraagt de app eerst of het echt opnieuw moet (`stale_claim`).
+
+**Ingetrokken sleutels (laag).** Intrekken annuleert nu ook een mislukte
+uitvoering die opnieuw mocht; een voorstel van een ingetrokken sleutel zet
+niemand meer vast (afwijzen mag wel); wat iemand op dat moment uitvoert, maakt
+hij af. Een auditregel hoort altijd bij de organisatie van zijn sleutel.
+
+**Gokken naar sleutels (laag).** Naast de telling per afzender (die leunt op
+headers) nu ook een grens voor alle afzenders samen (`API_AUTH_FAILURE_GLOBAL_LIMIT`,
+standaard 1000 per 10 minuten). "Bestaat niet" en "klopt niet" zijn één zin.
+
+**Kleinere dingen.**
+- `search_clients`: een komma in de zoekterm voegde een eigen filter toe
+  (binnen de eigen organisatie); nu niet meer.
+- `team.list_invitations` alleen voor owners en admins, zoals in de app.
+- Webhooks: hooguit vijf 1xx-tussenantwoorden, een buffer die niet bij elke byte
+  alles kopieert, en de wachttijd tussen testberichten per sleutel in plaats
+  van per eindpunt. `invoice-public` stuurt geen `Access-Control-Allow-Origin: *`
+  meer bij een vreemde herkomst.
+- Invoer: een id, adres, datum of keuze is tekst (geen lijst); een tijdstip
+  moet bestaan (geen 30 februari of uur 24); gehele getallen passen in hun
+  kolom; een half UTF-16-teken is een 400; een dubbele parameter en een
+  `limit`/`offset` die geen geheel getal is, zijn een 400 (ook bij
+  `/v1/actions`); een `_` in `q` zoekt letterlijk; een taak met een klant die
+  niet bij zijn project hoort, is een fout in plaats van een stille correctie;
+  een reactie zonder `is_internal` is intern. Kerntools met een ongeldige id,
+  datum of jaartal geven 422 in plaats van 500.
+- OpenAPI: velden uit een andere module kunnen `null` zijn, een keuzelijst die
+  leeg mag zijn noemt `null`, wijzig-schema's hebben geen standaardwaarden meer
+  (een SDK zou weggelaten velden anders terugzetten), en de antwoorden kloppen
+  weer met wat de API stuurt (`Me`, `ActionList`, `WebhookTestResult`,
+  bezorgingen, 400/409/413).
+
+**Functionele fouten die de controle vond.**
+- `quote.history`, `quote.submit_internal_approval` en `quote.approve_internal`
+  vroegen `quotes.total_amount` op — die kolom bestaat alleen per versie. Ze
+  werkten dus nooit (500). Nu niet meer, en `actionColumns.test.ts` legt elke
+  opgevraagde kolom naast het schema.
+- Het bedrag op een goedkeurkaart rekende de btw honderd keer te klein
+  (€ 1.002,10 in plaats van € 1.210). Nu cent voor cent gelijk aan de app.
+
+**Bewust zo gelaten.** Een verzoek dat al door de sleutelcontrole was op het
+moment van intrekken, maakt zijn werk af (het venster is één verzoek; elk
+volgend verzoek wordt geweigerd). Een voorstel van een *verlopen* sleutel mag
+nog goedgekeurd worden: verlopen is geen wantrouwen, intrekken wel.
+
+### Wat de tests bewaken
+
+- `actionFieldAccess.test.ts` (9) — met een nep-database: Financiën via
+  handelingen, geen raadspel met het tarief, het dashboard, portaaltoegang met
+  e-mailadres, uitnodigingen, de galerij, het bedrag op de kaart tegen
+  `computeTotals` (500 willekeurige gevallen) en echte kalenderdatums.
+- `actionColumns.test.ts` — elke opgevraagde kolom bestaat in het schema.
+- Uitbreidingen in `approvals.test.ts` (de feed, ingetrokken sleutels, de
+  outbox), `apiResourceServer.test.ts` (de portaalregels), `apiResources.test.ts`
+  (strikte invoer, tijdstippen, lijsten, OpenAPI), `webhookTransport.test.ts`
+  (1xx-vloed, byte voor byte) en `publicApi.test.ts` (paginering).
+- Gecontroleerd met mutaties (de nieuwe controles weghalen): alle gevangen.
+
+End-to-end op een verse database: kern 33/33, vaste adressen 86/86, aanvallen
+65/65, webhooks 27/27, beslissen 42/42, de goedkeurwachtrij in de app 11/11,
+contracttest 1181/1181 zonder afwijkingen, fuzzing zonder vondsten.

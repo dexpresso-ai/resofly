@@ -262,6 +262,8 @@ export const ADMIN_ACTIONS: ActionDef[] = [
 
   {
     id: 'team.list_invitations',
+    // Net als in de app (RLS): alleen owners en admins zien wie er is uitgenodigd.
+    adminOnly: true,
     label: 'Openstaande teamuitnodigingen bekijken',
     module: 'stats',
     kind: 'read',

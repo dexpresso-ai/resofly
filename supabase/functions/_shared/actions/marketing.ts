@@ -1460,10 +1460,15 @@ export const MARKETING_ACTIONS: ActionDef[] = [
       }
       if (Object.keys(patch).length === 0) throw new ActionError('Geef minstens één instelling die moet veranderen.');
 
+      const published = gallery.status === 'published';
       return {
         title: `Galerij-instellingen opslaan: ${gallery.title}`,
-        sub: joinShort([...described, gallery.status === 'published' ? 'de galerij staat GEPUBLICEERD — de klant merkt dit meteen' : null], 150),
+        sub: joinShort([...described, published ? 'de galerij staat GEPUBLICEERD — de klant merkt dit meteen' : null], 150),
         kind: 'work',
+        // Bij een gepubliceerde galerij is elke wijziging naar buiten gericht
+        // (downloads aan, langer bereikbaar, andere tekst): net als publiceren
+        // zelf alleen rechtstreeks met execute_high, anders via een akkoord.
+        risk: published ? 'high' : 'normal',
         payload: { gallery_id: galleryId, gallery_title: gallery.title, patch },
       };
     },

@@ -187,15 +187,22 @@ export async function testEndpoint(
   if (!endpoint.active) throw new WebhookInputError('Deze webhook staat uit. Zet hem eerst aan om te testen.', 409);
   // Een test gaat meteen de deur uit, buiten de wachtrij en de herhaalpogingen
   // om. Even wachten tussen twee tests houdt dat een test, en geen manier om
-  // vanaf onze servers in een lus een adres te bestoken.
+  // vanaf onze servers in een lus een adres te bestoken. Per EIGENAAR (deze
+  // sleutel, of de organisatie in de app), niet per eindpunt: anders gaven
+  // twintig eindpunten naar hetzelfde adres twintig berichten per keer.
+  let siblings = admin.from('webhook_endpoints').select('id').eq('organization_id', owner.organizationId);
+  siblings = owner.apiKeyId ? siblings.eq('api_key_id', owner.apiKeyId) : siblings.is('api_key_id', null);
+  const { data: own, error: ownError } = await siblings.limit(500);
+  if (ownError) throw new Error(`Eindpunten ophalen mislukt: ${ownError.message}`);
+  const scope = [...new Set([String(endpoint.id), ...(own ?? []).map((row: { id: unknown }) => String(row.id))])];
   const { count, error } = await admin.from('webhook_events')
     .select('id', { count: 'exact', head: true })
     .eq('organization_id', owner.organizationId).eq('type', PING_EVENT)
-    .eq('payload->>endpoint_id', String(endpoint.id))
+    .in('payload->>endpoint_id', scope)
     .gte('created_at', new Date(Date.now() - TEST_COOLDOWN_MS).toISOString());
   if (error) throw new Error(`Testberichten tellen mislukt: ${error.message}`);
   if ((count ?? 0) > 0) {
-    throw new WebhookInputError(`Er is net een testbericht naar deze webhook gestuurd. Probeer het over ${TEST_COOLDOWN_MS / 1000} seconden opnieuw.`, 429);
+    throw new WebhookInputError(`Er is net een testbericht verstuurd. Probeer het over ${TEST_COOLDOWN_MS / 1000} seconden opnieuw.`, 429);
   }
   return await sendTestEvent(admin, {
     id: String(endpoint.id),

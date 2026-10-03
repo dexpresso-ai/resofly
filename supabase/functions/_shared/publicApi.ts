@@ -122,6 +122,17 @@ export function containsNul(value: unknown, depth = 0): boolean {
     .some(([key, item]) => key.includes('\u0000') || containsNul(item, depth + 1));
 }
 
+/** Een halve UTF-16-teken (\ud800 zonder zijn tweede helft): geen tekst die de database aanneemt. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/** Zit er ergens — ook in een veldnaam — een losse surrogaat in? Dan een 400, niet een 500 van de database. */
+export function containsLoneSurrogate(value: unknown, depth = 0): boolean {
+  if (typeof value === 'string') return LONE_SURROGATE.test(value);
+  if (depth > 32 || !value || typeof value !== 'object') return false;
+  return Object.entries(value as Record<string, unknown>)
+    .some(([key, item]) => LONE_SURROGATE.test(key) || containsLoneSurrogate(item, depth + 1));
+}
+
 // ── Wat een sleutel mag ──────────────────────────────────────────────────────
 //
 // Dezelfde vier treden als een AI-koppeling (zie mcpAuth.ts), en om dezelfde
@@ -304,13 +315,33 @@ export function clampInt(raw: string | null | undefined, min: number, max: numbe
   return Math.min(Math.max(Math.trunc(value), min), max);
 }
 
-/** `?limit=` en `?offset=`, met een harde bovengrens. */
+/** Een parameter in de querystring die niet klopt: een 400, met het veld erbij. */
+export class InvalidParamError extends Error {
+  field: string;
+  constructor(message: string, field: string) {
+    super(message);
+    this.name = 'InvalidParamError';
+    this.field = field;
+  }
+}
+
+/**
+ * `?limit=` en `?offset=`: een geheel getal, of weglaten. Te groot wordt de
+ * grens (limit=5000 geeft het maximum, met has_more); "abc" of -3 is een fout —
+ * net als bij de vaste adressen.
+ */
 export function pageParams(
   params: URLSearchParams, { defaultLimit = 25, maxLimit = 100 }: { defaultLimit?: number; maxLimit?: number } = {},
 ): { limit: number; offset: number } {
+  const number = (name: string, range: string, min: number, max: number, fallback: number): number => {
+    const raw = (params.get(name) ?? '').trim();
+    if (!raw) return fallback;
+    if (!/^\d{1,15}$/.test(raw)) throw new InvalidParamError(`"${name}" moet een geheel getal ${range} zijn.`, name);
+    return Math.min(Math.max(Number(raw), min), max);
+  };
   return {
-    limit: clampInt(params.get('limit'), 1, maxLimit, defaultLimit),
-    offset: clampInt(params.get('offset'), 0, 1_000_000, 0),
+    limit: number('limit', `(1 tot ${maxLimit})`, 1, maxLimit, defaultLimit),
+    offset: number('offset', '(0 of meer)', 0, 1_000_000, 0),
   };
 }
 
@@ -461,9 +492,21 @@ function jsonResponse(description: string, schemaName: string): Record<string, u
 }
 
 const ERROR_RESPONSES: Record<string, unknown> = {
+  400: jsonResponse('Het verzoek zelf klopt niet: geen geldige JSON, een onbekende parameterwaarde of een ongeldige Idempotency-Key.', 'Error'),
   401: jsonResponse('Geen of een ongeldige API-sleutel.', 'Error'),
   403: jsonResponse('De sleutel mag dit niet (scope of modulerecht).', 'Error'),
   429: jsonResponse('Te veel verzoeken; wacht het aantal seconden uit `Retry-After`.', 'Error'),
+};
+
+/** Wat er bij een verzoek MET invoer nog bij kan komen. */
+const BODY_ERRORS: Record<string, unknown> = {
+  413: jsonResponse('De invoer is te groot.', 'Error'),
+};
+
+/** En bij een schrijfverzoek, dat een Idempotency-Key kan dragen. */
+const WRITE_ERRORS: Record<string, unknown> = {
+  ...BODY_ERRORS,
+  409: jsonResponse('Een verzoek met dezelfde Idempotency-Key is nog bezig; probeer het na `Retry-After` opnieuw.', 'Error'),
 };
 
 export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
@@ -498,7 +541,8 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
           { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Zoekterm in gewone woorden, bijvoorbeeld "openstaande facturen".' },
           { name: 'module', in: 'query', schema: { type: 'string', enum: [...MODULE_KEYS] } },
           { name: 'kind', in: 'query', schema: { type: 'string', enum: ['read', 'write'] } },
-          { $ref: '#/components/parameters/Limit' },
+          // Ruimer dan de rest: de catalogus in één keer ophalen moet kunnen.
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 500, default: 100 } },
           { $ref: '#/components/parameters/Offset' },
         ],
         responses: { 200: jsonResponse('Een pagina uit de catalogus.', 'ActionList'), ...ERROR_RESPONSES },
@@ -530,6 +574,7 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
           202: jsonResponse('Klaargezet voor goedkeuring.', 'Queued'),
           404: jsonResponse('Onbekende handeling.', 'Error'),
           422: jsonResponse('De invoer klopt niet; `message` zegt wat er mis is.', 'Error'),
+          ...WRITE_ERRORS,
           ...ERROR_RESPONSES,
         },
       },
@@ -581,7 +626,7 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
         summary: 'Een webhook aanmaken',
         description: 'Geeft het ondertekengeheim (`secret`) één keer terug. Elk bericht draagt `ResoFly-Signature: t=<tijd>,v1=<HMAC-SHA256 van "<tijd>.<body>">`.',
         requestBody: { required: true, content: { [JSON_CONTENT]: { schema: ref('WebhookInput') } } },
-        responses: { 201: jsonResponse('Aangemaakt, met het geheim.', 'WebhookCreated'), 422: jsonResponse('Adres of gebeurtenissen kloppen niet.', 'Error'), ...ERROR_RESPONSES },
+        responses: { 201: jsonResponse('Aangemaakt, met het geheim.', 'WebhookCreated'), 422: jsonResponse('Adres of gebeurtenissen kloppen niet.', 'Error'), ...BODY_ERRORS, ...ERROR_RESPONSES },
       },
     },
     '/v1/webhooks/{webhook_id}': {
@@ -593,7 +638,7 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
       patch: {
         tags: ['Webhooks'], operationId: 'updateWebhook', summary: 'Adres, gebeurtenissen, omschrijving of aan/uit wijzigen',
         requestBody: { required: true, content: { [JSON_CONTENT]: { schema: ref('WebhookInput') } } },
-        responses: { 200: jsonResponse('Gewijzigd.', 'Webhook'), 404: jsonResponse('Niet gevonden.', 'Error'), 422: jsonResponse('Klopt niet.', 'Error'), ...ERROR_RESPONSES },
+        responses: { 200: jsonResponse('Gewijzigd.', 'Webhook'), 404: jsonResponse('Niet gevonden.', 'Error'), 422: jsonResponse('Klopt niet.', 'Error'), ...BODY_ERRORS, ...ERROR_RESPONSES },
       },
       delete: {
         tags: ['Webhooks'], operationId: 'deleteWebhook', summary: 'Een webhook verwijderen',
@@ -642,9 +687,10 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
             200: jsonResponse('Uitgevoerd.', 'ActionResult'),
             202: jsonResponse('Klaargezet voor goedkeuring.', 'Queued'),
             422: jsonResponse('De invoer klopt niet.', 'Error'),
+            ...WRITE_ERRORS,
             ...ERROR_RESPONSES,
           }
-          : { 200: jsonResponse('De gegevens.', 'ActionResult'), 422: jsonResponse('De invoer klopt niet.', 'Error'), ...ERROR_RESPONSES },
+          : { 200: jsonResponse('De gegevens.', 'ActionResult'), 422: jsonResponse('De invoer klopt niet.', 'Error'), ...BODY_ERRORS, ...ERROR_RESPONSES },
       },
     };
   }
@@ -705,13 +751,27 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
               properties: {
                 id: { type: 'string', format: 'uuid' }, name: { type: 'string' },
                 access: { type: 'string', enum: [...ACCESS_LEVELS] }, scopes: { type: 'array', items: { type: 'string' } },
+                module_restrictions: {
+                  type: 'object', additionalProperties: { type: 'string', enum: ['none', 'read', 'write'] },
+                  description: 'Modules die deze sleutel extra beperkt, bovenop de rechten van het teamlid.',
+                },
                 expires_at: { type: ['string', 'null'], format: 'date-time' },
+                created_at: { type: 'string', format: 'date-time' },
               },
             },
             acting_as: { type: 'object', properties: { user_id: { type: 'string', format: 'uuid' }, role: { type: 'string' } } },
             modules: { type: 'object', additionalProperties: { type: 'string', enum: ['none', 'read', 'write'] } },
             today: { type: 'string', format: 'date' },
             timezone: { type: 'string' },
+            rate_limit: {
+              type: 'object',
+              properties: { limit: { type: 'integer' }, remaining: { type: 'integer' }, window_seconds: { type: 'integer' } },
+            },
+            counts: {
+              type: 'object',
+              description: 'Hoeveel handelingen deze sleutel kan gebruiken; `direct_write_actions` voert hij zelf uit, de rest van de schrijf-handelingen wacht op een akkoord.',
+              properties: { read_actions: { type: 'integer' }, write_actions: { type: 'integer' }, direct_write_actions: { type: 'integer' } },
+            },
           },
         },
         Action: {
@@ -728,6 +788,7 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
           properties: {
             data: { type: 'array', items: ref('Action') },
             total: { type: 'integer' }, has_more: { type: 'boolean' },
+            query: { type: 'string', description: 'Alleen bij `?q=`: de zoekterm, en dan staan de beste treffers bovenaan.' },
           },
         },
         ActionResult: {
@@ -804,6 +865,8 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
           properties: {
             status: { type: 'string', enum: ['delivered', 'failed', 'skipped'] },
             http_status: { type: ['integer', 'null'] }, error: { type: ['string', 'null'] }, duration_ms: { type: 'integer' },
+            delivery_id: { type: 'string', format: 'uuid', description: 'Terug te vinden onder /deliveries.' },
+            event_id: { type: 'string', format: 'uuid', description: 'Staat ook in het bericht zelf, als `id`.' },
           },
         },
         DeliveryList: {
@@ -818,7 +881,10 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
                   status: { type: 'string', enum: ['pending', 'sending', 'delivered', 'failed', 'skipped'] },
                   attempts: { type: 'integer' }, response_status: { type: ['integer', 'null'] }, error: { type: ['string', 'null'] },
                   event_id: { type: 'string', format: 'uuid' }, event_type: { type: 'string' },
+                  event_created_at: { type: ['string', 'null'], format: 'date-time', description: 'Wanneer de gebeurtenis zelf plaatsvond.' },
                   created_at: { type: 'string', format: 'date-time' }, delivered_at: { type: ['string', 'null'], format: 'date-time' },
+                  last_attempt_at: { type: ['string', 'null'], format: 'date-time' },
+                  next_attempt_at: { type: ['string', 'null'], format: 'date-time', description: 'Bij `pending`: wanneer de volgende poging komt.' },
                 },
               },
             },

@@ -67,6 +67,13 @@ export interface ActionCtx {
    * laten ze weg. Ontbreekt hij, dan geldt alleen de module van de handeling.
    */
   canRead?: (module: string) => boolean;
+  /**
+   * Mag de aanroeper in deze module schrijven? Voor handelingen met een veld dat
+   * bij een ándere module hoort (een uurtarief of klantwaarde hoort bij
+   * Financiën): zie `assertFieldWritable`. Ontbreekt hij, dan geldt alleen de
+   * module van de handeling.
+   */
+  canWrite?: (module: string) => boolean;
 }
 
 /**
@@ -186,10 +193,14 @@ export function optChoice<T extends string>(input: Record<string, unknown>, key:
   return choice(input, key, allowed);
 }
 
-/** Verplichte datum YYYY-MM-DD. */
+/** Verplichte datum YYYY-MM-DD — een echte kalenderdag (geen 30 februari). */
 export function isoDate(input: Record<string, unknown>, key: string): string {
   const value = String(input[key] ?? '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new ActionError(`"${key}" moet een datum zijn als JJJJ-MM-DD.`);
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
+    throw new ActionError(`"${key}" is geen bestaande datum (${value}).`);
+  }
   return value;
 }
 
@@ -235,6 +246,18 @@ export async function row<T = Record<string, unknown>>(
 /** Lijst binnen de organisatie, met een harde bovengrens op het aantal rijen. */
 export function orgQuery(ctx: ActionCtx, table: string, select = '*') {
   return ctx.db.from(table).select(select).eq('organization_id', ctx.organizationId);
+}
+
+/**
+ * Een veld uit een ándere module dan de handeling zetten mag alleen wie daar
+ * ook mag schrijven — net als bij de vaste adressen van de API. Roep dit aan
+ * zodra het veld in de invoer staat, vóór je iets vergelijkt: anders verraadt
+ * "er verandert niets" alsnog de huidige waarde.
+ */
+export function assertFieldWritable(ctx: ActionCtx, module: string, field: string, moduleLabel: string): void {
+  if (ctx.canWrite?.(module) === false) {
+    throw new ActionError(`"${field}" hoort bij ${moduleLabel}, en daar mag je niet schrijven. Laat het veld weg.`);
+  }
 }
 
 /** Maakt een `%zoekterm%` veilig voor ILIKE. */

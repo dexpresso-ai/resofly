@@ -578,11 +578,6 @@ export async function streamGerrieReply(req: GerrieRequest): Promise<GerrieResul
 }
 
 /**
- * Meldt aan de backend dat een voorgestelde actie daadwerkelijk is uitgevoerd of
- * mislukt, zodat de audit (ai_action_audit) de status bijwerkt. Best-effort:
- * fouten worden genegeerd — het mag de UX nooit blokkeren.
- */
-/**
  * Wat er met een voorstel gebeurde. De server (ai_action_decide) beslist of dat
  * mag: alleen wat nog open staat, alleen wie erover gaat — en legt vast wie het
  * besliste. Een afgehandeld voorstel verandert daarna niet meer.
@@ -592,7 +587,21 @@ type DecisionOutcome = 'claim' | 'executed' | 'failed' | 'rejected';
 /** Zo heet een afwijzing in de audit; de API toont het als `rejected`. */
 const REJECTED_DETAIL = 'Afgewezen door gebruiker.';
 
-async function postDecision(organizationId: UUID, auditId: string, outcome: DecisionOutcome, detail?: string): Promise<void> {
+/** Een eerdere uitvoering die nooit een uitkomst meldde: de claim liep af. */
+interface StaleClaim { by: string; until: string }
+
+/** Een weigering van de server, met zijn status: een 4xx is een antwoord, geen storing. */
+class DecisionError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function postDecision(
+  organizationId: UUID, auditId: string, outcome: DecisionOutcome, detail?: string,
+): Promise<{ stale_claim?: StaleClaim }> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new Error('Je sessie is verlopen. Log opnieuw in.');
@@ -610,27 +619,108 @@ async function postDecision(organizationId: UUID, auditId: string, outcome: Deci
   if (!res.ok) {
     let message = 'De beslissing kon niet worden vastgelegd. Probeer het zo opnieuw.';
     try { const payload = await res.json(); if (payload?.error) message = String(payload.error); } catch { /* geen JSON */ }
-    throw new Error(message);
+    throw new DecisionError(message, res.status);
+  }
+  try { return (await res.json()) ?? {}; } catch { return {}; }
+}
+
+// ── Uitkomsten die nog moeten aankomen ──────────────────────────────────────
+//
+// Het voorstel is uitgevoerd, maar de melding daarvan kwam niet aan (netwerk
+// weg, tabblad dicht). Dan staat het na tien minuten weer open in de wachtrij,
+// en voert iemand het een tweede keer uit. Daarom: eerst opschrijven, dan
+// versturen. Wat niet aankwam, gaat alsnog mee vóór de volgende claim.
+
+const OUTBOX_KEY = 'resofly.gerrie.decision-outbox';
+const OUTBOX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface PendingOutcome {
+  organizationId: string;
+  auditId: string;
+  outcome: 'executed' | 'failed' | 'rejected';
+  detail?: string;
+  at: number;
+}
+
+function readOutbox(): PendingOutcome[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]');
+    return Array.isArray(parsed)
+      ? (parsed as PendingOutcome[]).filter((e) => e && typeof e.auditId === 'string' && Date.now() - Number(e.at) < OUTBOX_MAX_AGE_MS)
+      : [];
+  } catch { return []; }
+}
+
+function writeOutbox(entries: PendingOutcome[]): void {
+  try {
+    if (entries.length > 0) localStorage.setItem(OUTBOX_KEY, JSON.stringify(entries.slice(-50)));
+    else localStorage.removeItem(OUTBOX_KEY);
+  } catch { /* geen opslag (privévenster): dan alleen de pogingen in reportOutcome */ }
+}
+
+function forgetOutcome(auditId: string): void {
+  writeOutbox(readOutbox().filter((e) => e.auditId !== auditId));
+}
+
+/** Eén uitkomst versturen. True: de server heeft hem, of wil hem nooit (al afgehandeld, mag niet). */
+async function deliverOutcome(entry: PendingOutcome): Promise<boolean> {
+  try {
+    await postDecision(entry.organizationId, entry.auditId, entry.outcome, entry.detail);
+    return true;
+  } catch (e) {
+    return e instanceof DecisionError && e.status >= 400 && e.status < 500 && e.status !== 401 && e.status !== 429;
   }
 }
 
+/** Wat eerder bleef liggen, alsnog versturen. */
+export async function flushDecisionOutbox(): Promise<void> {
+  for (const entry of readOutbox()) {
+    if (await deliverOutcome(entry)) forgetOutcome(entry.auditId);
+  }
+}
+
+async function reportOutcome(entry: PendingOutcome): Promise<void> {
+  // Synchroon opgeschreven, vóór de eerste await: ook een tabblad dat nu dichtgaat, verliest hem niet.
+  writeOutbox([...readOutbox().filter((e) => e.auditId !== entry.auditId), entry]);
+  for (const wait of [0, 1500, 5000]) {
+    if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+    if (await deliverOutcome(entry)) { forgetOutcome(entry.auditId); return; }
+  }
+  // Blijft in de outbox; flushDecisionOutbox stuurt hem vóór de volgende claim.
+}
+
 /**
- * De uitkomst NA het uitvoeren. Best-effort: het werk is dan al gebeurd, en een
- * melding die niet aankomt, mag dat niet alsnog als fout laten zien.
+ * De uitkomst NA het uitvoeren. Het werk is dan al gebeurd: een melding die niet
+ * aankomt, laat dat niet alsnog als fout zien — maar gaat ook niet verloren.
  */
 export async function confirmGerrieAction(organizationId: UUID, auditId: string, outcome: 'executed' | 'failed' | 'rejected', detail?: string): Promise<void> {
-  try {
-    await postDecision(organizationId, auditId, outcome, detail);
-  } catch { /* best-effort */ }
+  await reportOutcome({ organizationId, auditId, outcome, detail, at: Date.now() });
 }
 
 /**
  * Vastzetten VÓÓR het uitvoeren. Klikken twee mensen tegelijk op Akkoord, dan
  * voert maar één het uit; de ander krijgt een duidelijke fout in plaats van een
  * tweede factuur of mail. Gooit als het niet mag of al gebeurd is.
+ *
+ * Eerst gaan de uitkomsten mee die nog lagen: was dit voorstel eigenlijk al
+ * uitgevoerd, dan weet de server dat vóór hij het opnieuw vastzet. Liep een
+ * eerdere poging af zonder uitkomst (ander apparaat, tabblad dicht), dan vraagt
+ * de app eerst of het echt opnieuw moet — `quiet` slaat dat over voor de
+ * volgende regels van een reeks die al liep.
  */
-export async function claimGerrieAction(organizationId: UUID, auditId: string): Promise<void> {
-  await postDecision(organizationId, auditId, 'claim');
+export async function claimGerrieAction(organizationId: UUID, auditId: string, options: { quiet?: boolean } = {}): Promise<void> {
+  await flushDecisionOutbox();
+  const response = await postDecision(organizationId, auditId, 'claim');
+  const stale = response.stale_claim;
+  if (!stale || options.quiet || typeof window === 'undefined') return;
+  const started = new Date(new Date(stale.until).getTime() - 10 * 60_000);
+  const when = Number.isNaN(started.getTime()) ? 'eerder' : started.toLocaleString('nl-NL', { dateStyle: 'short', timeStyle: 'short' });
+  const again = window.confirm(
+    `Dit voorstel is al eens gestart (${when}), maar er kwam nooit een uitkomst binnen. Misschien is het toen al uitgevoerd — kijk dat eerst na.\n\nToch nu uitvoeren?`);
+  if (!again) {
+    await confirmGerrieAction(organizationId, auditId, 'failed', 'Niet opnieuw uitgevoerd: eerst nagaan of een eerdere poging al gelukt was.');
+    throw new Error('Niet uitgevoerd. Kijk eerst na of het eerder al gebeurd is; daarna kun je het opnieuw proberen.');
+  }
 }
 
 /** Afwijzen. Gooit als het niet kan (al afgehandeld, of iemand anders is het aan het uitvoeren). */
@@ -673,12 +763,15 @@ export function batchDecision(result: { sent: number; skipped: number; failed?: 
 }
 
 export function claimingHandlers(organizationId: UUID, auditId: string, handlers: GerrieActionHandlers): GerrieActionHandlers {
+  let claimed = false;
   return new Proxy(handlers, {
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver);
       if (typeof value !== 'function') return value;
       return async (...args: unknown[]) => {
-        await claimGerrieAction(organizationId, auditId);
+        // De eerste regel vraagt na als een eerdere poging zonder uitkomst bleef; de volgende niet elk opnieuw.
+        await claimGerrieAction(organizationId, auditId, { quiet: claimed });
+        claimed = true;
         return (value as (...params: unknown[]) => unknown).apply(target, args);
       };
     },

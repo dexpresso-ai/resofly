@@ -162,7 +162,7 @@ test('een ECHTE sleutel die geweigerd wordt, ziet de organisatie terug — een g
   // Pas na de verifier hoort de sleutel bij een organisatie; daarvoor geen logregel.
   const known = auth.indexOf('const known = {');
   assert.ok(known > auth.indexOf('verifyToken('), 'een geraden sleutel zou anders het logboek van een organisatie kunnen vullen');
-  assert.match(auth, /throw new AuthError\(found\?\.api_key_id \? 'Deze API-sleutel klopt niet\.' : 'Deze API-sleutel is niet bekend\.'\);/);
+  assert.match(auth, /throw new AuthError\('Deze API-sleutel klopt niet\.'\);/, 'één zin voor onbekend en onjuist');
   assert.match(auth, /throw new AuthError\('Deze API-sleutel is ingetrokken\.', known\);/);
   const log = fn(api, 'async function logRejectedKey(');
   assert.ok(log.indexOf("rpc('api_consume_rate_limit'") < log.indexOf("from('api_request_log')"),
