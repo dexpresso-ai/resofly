@@ -660,6 +660,7 @@ async function runAction(args: Record<string, unknown>, session: Session): Promi
     role: session.role,
     today: today(),
     db: admin,
+    canRead: (module: string) => moduleLevel(session, module) !== 'none',
   };
 
   try {
@@ -837,6 +838,7 @@ function actionContext(session: Session): ActionCtx {
     role: session.role,
     today: today(),
     db: admin,
+    canRead: (module: string) => moduleLevel(session, module) !== 'none',
   };
 }
 
@@ -963,7 +965,7 @@ async function buildRegistryProposal(
     title: plan.title,
     sub: plan.warning ? `\u26A0\uFE0F ${plan.warning}${plan.sub ? ` — ${plan.sub}` : ''}` : plan.sub,
     kind: plan.kind,
-    risk: (plan.risk ?? action.risk) === 'high' ? 'high' : 'normal',
+    risk: plan.risk === 'high' || action.risk === 'high' ? 'high' : 'normal',
     payload: plan.payload,
   };
 }
@@ -1156,6 +1158,7 @@ async function readResource(params: Record<string, unknown>, session: Session): 
     role: session.role,
     today: today(),
     db: admin,
+    canRead: (module: string) => moduleLevel(session, module) !== 'none',
   };
 
   try {

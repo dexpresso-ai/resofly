@@ -2479,7 +2479,10 @@ function auditActionName(proposal: Proposal): string {
 
 /** De omgeving voor een handeling. organization_id komt uit de sessie, nooit uit het model. */
 function actionCtxFor(ctx: GerrieContext): ActionCtx {
-  return { organizationId: ctx.organizationId, userId: ctx.userId, role: ctx.role, today: ctx.today, db: supabaseAdmin };
+  return {
+    organizationId: ctx.organizationId, userId: ctx.userId, role: ctx.role, today: ctx.today, db: supabaseAdmin,
+    canRead: (module: string) => moduleLevel(ctx, module) !== 'none',
+  };
 }
 
 /** Mag dit teamlid deze handeling? Lezen vraagt leesrecht, wijzigen vraagt schrijfrecht. */
@@ -2559,7 +2562,7 @@ async function buildActionProposal(ctx: GerrieContext, input: Record<string, unk
       proposal: {
         type: 'action', action_id: action.id,
         title: plan.title, sub, kind: plan.kind,
-        risk: (plan.risk ?? action.risk) === 'high' ? 'high' : 'normal',
+        risk: plan.risk === 'high' || action.risk === 'high' ? 'high' : 'normal',
         payload: plan.payload,
       },
     };

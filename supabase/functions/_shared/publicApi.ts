@@ -34,8 +34,19 @@ export async function createApiKey(): Promise<NewToken> {
   return await createToken(API_KEY_PREFIX);
 }
 
+/**
+ * Een selector is 16 willekeurige bytes (22 tekens), een verifier 32 (43
+ * tekens). Wat langer of korter is, kan geen sleutel van ons zijn en hoeft dus
+ * ook niet in de database te worden opgezocht.
+ */
+const SELECTOR_LENGTH = 22;
+const VERIFIER_LENGTH = 43;
+
 export function parseApiKey(plain: string): { selector: string; verifier: string } | null {
-  return parseToken(plain, API_KEY_PREFIX);
+  if (String(plain || '').length > 200) return null;
+  const parsed = parseToken(plain, API_KEY_PREFIX);
+  if (!parsed || parsed.selector.length !== SELECTOR_LENGTH || parsed.verifier.length !== VERIFIER_LENGTH) return null;
+  return parsed;
 }
 
 /**
@@ -70,6 +81,40 @@ export function presentedApiKey(headers: Headers): string {
  * (niet in text, niet in jsonb) en geeft dan een fout die anders als een 500
  * terugkomt. Beter meteen een 400 met de reden.
  */
+/**
+ * Dieper genest dan dit is geen invoer voor een handeling of een klant, en kan
+ * een recursieve controle laten omvallen. Een eerlijke koppeling komt er nooit.
+ */
+export const MAX_JSON_DEPTH = 32;
+
+export function tooDeep(value: unknown, max = MAX_JSON_DEPTH, depth = 0): boolean {
+  if (!value || typeof value !== 'object') return false;
+  if (depth >= max) return true;
+  return Object.values(value as Record<string, unknown>).some((item) => tooDeep(item, max, depth + 1));
+}
+
+/**
+ * Een foutmelding van een handeling voor buiten. Een handeling meldt "Klant
+ * ophalen mislukt: <wat de database zei>"; dat tweede deel is voor ons logboek,
+ * niet voor een koppeling (tabel- en kolomnamen, interne details). Wat op een
+ * fout in de invoer wijst, blijft een 422 met een zin; wat op een storing wijst,
+ * wordt een 500 — dan mag de koppeling het gewoon opnieuw proberen.
+ */
+export function publicActionError(message: string): { status: 422 | 500; message: string } {
+  const text = String(message || '');
+  const split = text.match(/^(.*?\bmislukte?):\s*(.+)$/s);
+  const [head, tail] = split ? [split[1], split[2]] : ['Dit', text];
+  if (!(split ? DATABASE_TEXT : STRONG_DATABASE_TEXT).test(tail)) return { status: 422, message: text };
+  if (INPUT_PROBLEM.test(tail)) {
+    return { status: 422, message: split ? `${head}: de invoer past niet bij de regels van ResoFly.` : 'De invoer past niet bij de regels van ResoFly.' };
+  }
+  return { status: 500, message: split ? `${head}.` : 'Er ging iets mis aan onze kant.' };
+}
+
+const DATABASE_TEXT = /violates|relation "|column "|syntax error|permission denied|duplicate key|invalid input|statement timeout|canceling statement|could not|does not exist|JWT|PGRST|schema cache|connection|fetch failed|timed? ?out/i;
+const STRONG_DATABASE_TEXT = /violates|relation "|column "|duplicate key|invalid input syntax|PGRST|permission denied for|canceling statement/i;
+const INPUT_PROBLEM = /violates (check|not-null|unique|foreign key)|duplicate key|invalid input/i;
+
 export function containsNul(value: unknown, depth = 0): boolean {
   if (typeof value === 'string') return value.includes('\u0000');
   if (depth > 32 || !value || typeof value !== 'object') return false;
@@ -323,8 +368,12 @@ export function isValidIdempotencyKey(value: string): boolean {
   return /^[\x21-\x7e]{1,255}$/.test(String(value || ''));
 }
 
-export async function requestFingerprint(method: string, route: string, body: string): Promise<string> {
-  return await sha256Hex(`${String(method).toUpperCase()} ${route}\n${body}`);
+/**
+ * Wat een verzoek uniek maakt voor een Idempotency-Key: methode, pad MET de
+ * zoekparameters (`?mode=queue` is een ander verzoek dan zonder) en de inhoud.
+ */
+export async function requestFingerprint(method: string, route: string, body: string, search = ''): Promise<string> {
+  return await sha256Hex(`${String(method).toUpperCase()} ${route}${search}\n${body}`);
 }
 
 // ── Fouten ───────────────────────────────────────────────────────────────────
@@ -620,7 +669,10 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
       },
       parameters: {
         Limit: { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 25 } },
-        Offset: { name: 'offset', in: 'query', schema: { type: 'integer', minimum: 0, default: 0 } },
+        Offset: {
+          name: 'offset', in: 'query', description: 'Hoeveel er overgeslagen worden. Bij de vaste adressen hooguit 10000; verder geeft 400.',
+          schema: { type: 'integer', minimum: 0, default: 0 },
+        },
         IdempotencyKey: {
           name: 'Idempotency-Key', in: 'header', required: false, schema: { type: 'string', maxLength: 255 },
           description: 'Maakt een herhaald verzoek veilig: dezelfde sleutel binnen 24 uur geeft het eerste antwoord terug in plaats van een tweede uitvoering.',

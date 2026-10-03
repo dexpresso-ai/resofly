@@ -134,19 +134,26 @@ export async function createApiKey(organizationId: UUID, input: NewApiKeyInput):
  * zetten, en annuleert wat die sleutel nog in de goedkeurwachtrij had staan.
  */
 export async function revokeApiKey(keyId: UUID): Promise<void> {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('api_keys')
     .update({ revoked_at: new Date().toISOString() })
     .eq('id', keyId)
-    .is('revoked_at', null);
+    .is('revoked_at', null)
+    .select('id');
   if (error) throw new Error(`Intrekken is niet gelukt: ${error.message}`);
+  // RLS laat een update die niet mag, stil niets raken. Dan niet "ingetrokken"
+  // melden terwijl de sleutel gewoon blijft werken.
+  if (!data || data.length === 0) {
+    throw new Error('Intrekken is niet gelukt: de sleutel is al ingetrokken, of je hebt er de rechten niet voor.');
+  }
 }
 
 export async function renameApiKey(keyId: UUID, name: string): Promise<void> {
   const clean = name.trim().replace(/\s+/g, ' ').slice(0, 80);
   if (!clean) throw new Error('Een sleutel heeft een naam nodig.');
-  const { error } = await supabase.from('api_keys').update({ name: clean }).eq('id', keyId);
+  const { data, error } = await supabase.from('api_keys').update({ name: clean }).eq('id', keyId).select('id');
   if (error) throw new Error(error.message || 'Hernoemen is niet gelukt.');
+  if (!data || data.length === 0) throw new Error('Hernoemen is niet gelukt: de sleutel bestaat niet meer, of je hebt er de rechten niet voor.');
 }
 
 /** Eén regel uit het verzoeklog. */
@@ -294,13 +301,15 @@ export async function updateWebhook(
 
 /** Aan of uit, rechtstreeks via RLS. Weer aanzetten wist de foutreeks (database-trigger). */
 export async function setWebhookActive(webhookId: UUID, active: boolean): Promise<void> {
-  const { error } = await supabase.from('webhook_endpoints').update({ active }).eq('id', webhookId);
+  const { data, error } = await supabase.from('webhook_endpoints').update({ active }).eq('id', webhookId).select('id');
   if (error) throw new Error(error.message || 'De webhook kon niet worden aan- of uitgezet.');
+  if (!data || data.length === 0) throw new Error('De webhook kon niet worden aan- of uitgezet: hij bestaat niet meer, of je hebt er de rechten niet voor.');
 }
 
 export async function deleteWebhook(webhookId: UUID): Promise<void> {
-  const { error } = await supabase.from('webhook_endpoints').delete().eq('id', webhookId);
+  const { data, error } = await supabase.from('webhook_endpoints').delete().eq('id', webhookId).select('id');
   if (error) throw new Error(`Verwijderen is niet gelukt: ${error.message}`);
+  if (!data || data.length === 0) throw new Error('Verwijderen is niet gelukt: de webhook bestaat niet meer, of je hebt er de rechten niet voor.');
 }
 
 /** Een nieuw geheim; het oude werkt meteen niet meer. */

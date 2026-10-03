@@ -60,6 +60,13 @@ export interface ActionCtx {
   /** Vandaag in Europe/Amsterdam, als YYYY-MM-DD. */
   today: string;
   db: Db;
+  /**
+   * Mag de aanroeper deze module lezen? Voor handelingen die naast hun eigen
+   * module ook iets uit een ándere laten zien (een projectdashboard met
+   * gefactureerde bedragen en geboekte uren): wat de aanroeper niet mag lezen,
+   * laten ze weg. Ontbreekt hij, dan geldt alleen de module van de handeling.
+   */
+  canRead?: (module: string) => boolean;
 }
 
 /**

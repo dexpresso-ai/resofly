@@ -53,6 +53,12 @@ export interface FieldSpec {
   references?: ResourceName;
   /** Standaardwaarde zoals de app hem zet; alleen voor de documentatie. */
   default?: unknown;
+  /**
+   * Het veld hoort (ook) bij een andere module, zoals een tarief bij
+   * Financiën. Wie die module niet mag lezen, krijgt het veld als null; wie er
+   * niet mag schrijven, kan het niet zetten.
+   */
+  module?: ModuleKey;
 }
 
 export interface FilterSpec {
@@ -63,6 +69,8 @@ export interface FilterSpec {
   type: 'uuid' | 'enum' | 'date' | 'datetime' | 'boolean' | 'text';
   values?: readonly string[];
   description: string;
+  /** De waarde in kleine letters vergelijken (e-mailadressen staan zo opgeslagen). */
+  lowercase?: boolean;
 }
 
 export type ResourceName = 'clients' | 'contacts' | 'projects' | 'tasks' | 'tickets' | 'ticket_notes' | 'time_entries';
@@ -239,7 +247,10 @@ function normalizeValue(name: string, field: FieldSpec, raw: unknown): unknown {
     }
     case 'integer':
     case 'number': {
-      const value = typeof raw === 'number' ? raw : (typeof raw === 'string' ? Number(raw.trim().replace(',', '.')) : NaN);
+      // Een getal, of een tekst die er een is in gewone notatie ("87,50" mag;
+      // "0x3C" of "6e1" niet: dat is geen bedrag of aantal dat iemand bedoelt).
+      const text = typeof raw === 'string' ? raw.trim().replace(',', '.') : '';
+      const value = typeof raw === 'number' ? raw : (/^-?\d+(\.\d+)?$/.test(text) ? Number(text) : NaN);
       if (!Number.isFinite(value)) fail(field.type === 'integer' ? 'een geheel getal' : 'een getal');
       if (field.type === 'integer' && !Number.isInteger(value)) fail('een geheel getal');
       if (field.minimum !== undefined && value < field.minimum) fail(`minstens ${field.minimum}`);
@@ -259,6 +270,9 @@ function normalizeValue(name: string, field: FieldSpec, raw: unknown): unknown {
     }
     case 'text_array': {
       if (!Array.isArray(raw)) fail('een lijst met teksten');
+      if ((raw as unknown[]).some((item) => item !== null && typeof item !== 'string' && typeof item !== 'number')) {
+        fail('een lijst met teksten');
+      }
       const items = [...new Set((raw as unknown[]).map((item) => String(item ?? '').trim()).filter(Boolean))];
       const maxItems = field.maxItems ?? 50;
       if (items.length > maxItems) fail(`een lijst van hooguit ${maxItems}`);
@@ -283,6 +297,9 @@ export interface ListParams {
   limit: number;
   offset: number;
 }
+
+/** Zo ver mag je bladeren; daarna filters of updated_since. */
+export const MAX_OFFSET = 10_000;
 
 /** Filters die elke resource heeft: wat er sinds een moment veranderde of bijkwam. */
 export const COMMON_FILTERS: Record<string, FilterSpec> = {
@@ -316,8 +333,14 @@ export function parseListParams(spec: ResourceSpec, params: URLSearchParams): Li
     q: null,
     sort: parseSort(spec, params.get('sort')),
     limit: clamp(params.get('limit'), 1, 100, 25),
-    offset: clamp(params.get('offset'), 0, 100_000, 0),
+    offset: clamp(params.get('offset'), 0, Number.MAX_SAFE_INTEGER, 0),
   };
+  // Verder bladeren dan dit wordt traag en is zelden wat iemand wil. Stil
+  // afkappen gaf eindeloos dezelfde pagina terug; nu een fout met een uitweg.
+  if (result.offset > MAX_OFFSET) {
+    throw new ResourceInputError(
+      `Bladeren kan tot offset ${MAX_OFFSET}. Haal minder tegelijk op met filters, of houd bij wat er veranderde met updated_since.`, 'offset');
+  }
 
   const q = (params.get('q') || '').trim();
   if (q) {
@@ -354,7 +377,10 @@ function parseFilterValue(name: string, filter: FilterSpec, raw: string): string
       return /^\d{4}-\d{2}-\d{2}/.test(raw) && !Number.isNaN(date.getTime()) ? date.toISOString() : fail('een tijdstip in ISO 8601');
     }
     case 'boolean': return raw === 'true' ? true : raw === 'false' ? false : fail('true of false');
-    case 'text': return /[\u0000-\u001f\u007f]/.test(raw) ? fail('tekst zonder stuurtekens') : raw.slice(0, 200);
+    case 'text': {
+      if (/[\u0000-\u001f\u007f]/.test(raw)) return fail('tekst zonder stuurtekens');
+      return filter.lowercase ? raw.slice(0, 200).toLowerCase() : raw.slice(0, 200);
+    }
   }
 }
 
@@ -380,9 +406,28 @@ export function selectColumns(spec: ResourceSpec): string {
   return Object.keys(spec.fields).join(', ');
 }
 
-/** Alleen de velden uit de spec, in de volgorde van de spec. */
-export function presentRow(spec: ResourceSpec, row: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.keys(spec.fields).map((name) => [name, row[name] ?? null]));
+/**
+ * Alleen de velden uit de spec, in de volgorde van de spec. Een veld dat bij
+ * een module hoort die de aanroeper niet mag lezen (een tarief bij Financiën),
+ * komt terug als null.
+ */
+export function presentRow(
+  spec: ResourceSpec, row: Record<string, unknown>, canRead?: (module: string) => boolean,
+): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(spec.fields).map(([name, field]) => [
+    name,
+    field.module && canRead && !canRead(field.module) ? null : (row[name] ?? null),
+  ]));
+}
+
+/** De velden in deze invoer die bij een module horen die de aanroeper niet mag schrijven. */
+export function fieldsOutsideWrite(
+  spec: ResourceSpec, values: Record<string, unknown>, canWrite: (module: string) => boolean,
+): string[] {
+  return Object.keys(values).filter((name) => {
+    const module = spec.fields[name]?.module;
+    return Boolean(module && !canWrite(module));
+  });
 }
 
 // ── OpenAPI ──────────────────────────────────────────────────────────────────
@@ -452,7 +497,10 @@ export function resourceOpenApi(specs: ResourceSpec[]): {
       properties: {
         data: { type: 'array', items: schemaRef(spec.schemaName) },
         has_more: { type: 'boolean' },
-        next_offset: { type: ['integer', 'null'], description: 'Geef dit mee als `offset` voor de volgende pagina.' },
+        next_offset: {
+          type: ['integer', 'null'],
+          description: 'Geef dit mee als `offset` voor de volgende pagina. Null als er geen is, ook voorbij offset 10000 (verfijn dan met filters of updated_since).',
+        },
       },
     };
     const inputProps = (mode: 'create' | 'update') => Object.fromEntries(

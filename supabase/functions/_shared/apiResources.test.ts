@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  filtersOf, isIsoDate, normalizeInput, parseListParams, presentRow, ResourceInputError, selectColumns, writableFields,
-  type ResourceSpec,
+  fieldsOutsideWrite, filtersOf, isIsoDate, MAX_OFFSET, normalizeInput, parseListParams, presentRow, ResourceInputError,
+  selectColumns, writableFields, type ResourceSpec,
 } from './apiResources.ts';
 
 /**
@@ -32,7 +32,7 @@ const spec: ResourceSpec = {
     at: { type: 'datetime', description: 'tijdstip', nullable: true },
     start: { type: 'time', description: 'begin', nullable: true },
     minutes: { type: 'integer', description: 'minuten', minimum: 0, maximum: 1440 },
-    rate: { type: 'number', description: 'tarief', minimum: 0, nullable: true },
+    rate: { type: 'number', description: 'tarief', minimum: 0, nullable: true, module: 'finance' },
     billable: { type: 'boolean', description: 'declarabel' },
     tags: { type: 'text_array', description: 'labels', maxLength: 20 },
     extra: { type: 'object', description: 'eigen velden' },
@@ -44,6 +44,7 @@ const spec: ResourceSpec = {
     parent_id: { column: 'parent_id', op: 'eq', type: 'uuid', description: 'ouder' },
     from: { column: 'day', op: 'gte', type: 'date', description: 'vanaf' },
     billable: { column: 'billable', op: 'eq_bool', type: 'boolean', description: 'declarabel' },
+    email: { column: 'email', op: 'eq', type: 'text', description: 'mail', lowercase: true },
   },
   search: ['name', 'email'],
   sort: ['-created_at', 'created_at', 'name', '-updated_at'],
@@ -210,4 +211,49 @@ test('een keuzelijst-filter met meer waarden tegelijk', () => {
   rejects(() => parseListParams(spec, new URLSearchParams({ status: 'active,weg' })), /Filter "status"/);
   // Een id of datum blijft één waarde.
   rejects(() => parseListParams(spec, new URLSearchParams({ parent_id: 'a,b' })), /uuid/);
+});
+
+// ── Tweede ronde ─────────────────────────────────────────────────────────────
+
+test('een getal is een getal: "87,50" wel, "0x3C", "6e1" of "Infinity" niet', () => {
+  assert.equal(normalizeInput(spec, { name: 'a', rate: '87,50' }, 'create').rate, 87.5);
+  assert.equal(normalizeInput(spec, { name: 'a', minutes: ' 90 ' }, 'create').minutes, 90);
+  for (const bad of ['0x3C', '6e1', 'Infinity', '1_000', '1.2.3', '--1', 'tien']) {
+    rejects(() => normalizeInput(spec, { name: 'a', rate: bad }, 'create'), /getal/, 'rate');
+  }
+  rejects(() => normalizeInput(spec, { name: 'a', minutes: '' }, 'create'), /leeg/, 'minutes');
+});
+
+test('een lijst met teksten bevat teksten (of getallen), geen objecten', () => {
+  assert.deepEqual(normalizeInput(spec, { name: 'a', tags: ['x', 2, null, ' x '] }, 'create').tags, ['x', '2']);
+  rejects(() => normalizeInput(spec, { name: 'a', tags: [{ a: 1 }] }, 'create'), /lijst met teksten/, 'tags');
+  rejects(() => normalizeInput(spec, { name: 'a', tags: [['geneste']] }, 'create'), /lijst met teksten/, 'tags');
+});
+
+test('bladeren gaat tot MAX_OFFSET; daarna een fout met de uitweg, geen stille lege pagina', () => {
+  assert.equal(parseListParams(spec, new URLSearchParams({ offset: String(MAX_OFFSET) })).offset, MAX_OFFSET);
+  rejects(() => parseListParams(spec, new URLSearchParams({ offset: String(MAX_OFFSET + 1) })), /updated_since/, 'offset');
+  rejects(() => parseListParams(spec, new URLSearchParams({ offset: '99999999999999999999' })), /offset/, 'offset');
+});
+
+test('een e-mailfilter vergelijkt in kleine letters (zo staan adressen opgeslagen)', () => {
+  const params = parseListParams(spec, new URLSearchParams({ email: 'Info@Bedrijf.NL' }));
+  assert.deepEqual(params.filters, [{ column: 'email', op: 'eq', value: 'info@bedrijf.nl' }]);
+});
+
+test('een veld uit een module die je niet mag lezen, komt als null terug', () => {
+  const row = { id: '1', name: 'a', rate: 95 };
+  assert.equal(presentRow(spec, row).rate, 95, 'zonder rechtencheck: alles');
+  assert.equal(presentRow(spec, row, () => true).rate, 95);
+  const hidden = presentRow(spec, row, (module) => module !== 'finance');
+  assert.equal(hidden.rate, null);
+  assert.equal(hidden.name, 'a');
+  assert.ok('rate' in hidden, 'het veld blijft bestaan, zodat een koppeling niet denkt dat het schema veranderde');
+});
+
+test('een veld uit een module waar je niet mag schrijven, kun je niet zetten', () => {
+  const noFinance = (module: string) => module !== 'finance';
+  assert.deepEqual(fieldsOutsideWrite(spec, { name: 'a', rate: 1 }, noFinance), ['rate']);
+  assert.deepEqual(fieldsOutsideWrite(spec, { name: 'a' }, noFinance), []);
+  assert.deepEqual(fieldsOutsideWrite(spec, { name: 'a', rate: 1 }, () => true), []);
 });

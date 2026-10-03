@@ -506,8 +506,12 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
 
       // De afgeleide urenpost hangt aan de koppeling; die erbij zetten scheelt een
       // tweede vraag als iemand wil weten of het loggen ook echt gebeurd is.
-      const { data: entries } = await orgQuery(ctx, 'time_entries', 'calendar_event_link_id, minutes, billable')
-        .in('calendar_event_link_id', rows.map((r) => String(r.id)));
+      // Uren horen bij Urenregistratie: wie die module niet mag lezen, krijgt de
+      // koppelingen zonder de geboekte minuten.
+      const { data: entries } = ctx.canRead?.('time') === false
+        ? { data: [] as Array<Record<string, unknown>> }
+        : await orgQuery(ctx, 'time_entries', 'calendar_event_link_id, minutes, billable')
+          .in('calendar_event_link_id', rows.map((r) => String(r.id)));
       const byLink = new Map<string, Record<string, unknown>>(
         (entries ?? []).map((e: Record<string, unknown>) => [String(e.calendar_event_link_id), e]));
 

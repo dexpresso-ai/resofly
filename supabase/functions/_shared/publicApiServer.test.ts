@@ -157,6 +157,49 @@ test('elk voorstel en elke uitvoering staat in het auditlog, herleidbaar tot de 
   assert.match(fn(api, 'async function executeWrite('), /await recordExecution\(caller, proposal, 'failed', message\)/);
 });
 
+test('een ECHTE sleutel die geweigerd wordt, ziet de organisatie terug — een geraden niet', () => {
+  const auth = fn(api, 'async function authenticate(');
+  // Pas na de verifier hoort de sleutel bij een organisatie; daarvoor geen logregel.
+  const known = auth.indexOf('const known = {');
+  assert.ok(known > auth.indexOf('verifyToken('), 'een geraden sleutel zou anders het logboek van een organisatie kunnen vullen');
+  assert.match(auth, /throw new AuthError\('Deze API-sleutel klopt niet\.'\);/);
+  assert.match(auth, /throw new AuthError\('Deze API-sleutel is ingetrokken\.', known\);/);
+  const log = fn(api, 'async function logRejectedKey(');
+  assert.ok(log.indexOf("rpc('api_consume_rate_limit'") < log.indexOf("from('api_request_log')"),
+    'ook een ingetrokken sleutel kan het logboek niet onbeperkt volschrijven');
+});
+
+test('invoer: een plafond ook zonder Content-Length, en niet te diep genest', () => {
+  const body = fn(api, 'async function readBody(');
+  assert.doesNotMatch(body, /req\.text\(\)|req\.json\(\)|arrayBuffer\(\)/, 'alles inlezen en dan pas meten laat een chunked body het geheugen vullen');
+  assert.match(body, /if \(size > MAX_BODY_BYTES\) \{/);
+  assert.ok(fn(api, 'function parseInput(').indexOf('tooDeep(parsed)') > 0);
+  const adminBody = fn(apiAdmin, 'async function readBody(');
+  assert.match(adminBody, /if \(size > MAX_BODY_BYTES\) \{/);
+  assert.doesNotMatch(apiAdmin, /await req\.json\(\)/);
+});
+
+test('antwoorden met gegevens worden niet gecachet', () => {
+  const json = fn(api, 'function json(');
+  assert.match(json, /'Cache-Control': 'no-store',/);
+  assert.ok(json.indexOf("'Cache-Control': 'no-store'") < json.indexOf('...extra'), 'alleen het open OpenAPI-document zet dit ruimer');
+});
+
+test('een Idempotency-Key: het hele verzoek telt, en een vastgelopen poging houdt hem niet vast', () => {
+  const idem = fn(api, 'async function withIdempotency(');
+  assert.match(idem, /requestFingerprint\(req\.method, route, rawBody, new URL\(req\.url\)\.search\)/);
+  const claim = fn(api, 'async function claimIdempotencyKey(');
+  assert.match(claim, /\.is\('status', null\)\s*\n\s*\.lt\('created_at', new Date\(Date\.now\(\) - IDEMPOTENCY_LEASE_MS\)/);
+  // Langer dan een functie kan draaien: anders wordt een poging die nog loopt, dubbel uitgevoerd.
+  assert.match(api, /const IDEMPOTENCY_LEASE_MS = 5 \* 60 \* 1000;/);
+});
+
+test('een databasefout in een handeling gaat niet letterlijk naar de koppeling', () => {
+  const asApi = fn(api, 'function asApiError(');
+  assert.match(asApi, /const outward = publicActionError\(error\.message\);/);
+  assert.doesNotMatch(asApi, /new ApiError\(422, 'invalid_input', error\.message\)/);
+});
+
 test('elke aanroep met een geldige sleutel komt in het verzoeklog', () => {
   assert.match(api, /await logRequest\(req, route, method, caller, meta, response\.status, requestId, started\)/);
   const log = fn(api, 'async function logRequest(');

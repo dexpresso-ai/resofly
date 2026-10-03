@@ -6,8 +6,8 @@ import {
   ACCESS_LEVELS, actionInputSchema, apiKeyHint, apiRoute, auditStatusesFor, buildOpenApi, containsNul, createApiKey,
   effectiveModuleAccess, effectiveModuleLevel, errorBody, hasKeyRestrictions, isValidIdempotencyKey, keyModuleCap,
   levelOfScope, matchRoute, memberModuleLevel, MODULE_KEYS, normalizeKeyModuleAccess, operationIdFor, pageParams,
-  parseApiKey, presentedApiKey, proposalStatus, PROPOSAL_STATUSES, REJECTED_BY_USER_DETAIL, requestFingerprint,
-  scopeForLevel, type CatalogAction,
+  parseApiKey, presentedApiKey, proposalStatus, PROPOSAL_STATUSES, publicActionError, REJECTED_BY_USER_DETAIL,
+  requestFingerprint, scopeForLevel, tooDeep, type CatalogAction,
 } from './publicApi.ts';
 
 /**
@@ -47,6 +47,16 @@ test('een misvormde sleutel levert niets op', () => {
   for (const bad of ['', 'rsfapi', 'rsfapi.alleen', 'rsfapi.a.b.c', 'rsfapi..b', 'rsfapi.a.', 'RSFAPI.a.b', 'rsfapi.a b.c']) {
     assert.equal(parseApiKey(bad), null, `"${bad}" hoort geweigerd te worden`);
   }
+});
+
+test('een sleutel heeft precies de lengte die wij uitgeven; al het andere zoeken we niet eens op', async () => {
+  const key = await createApiKey();
+  const [, selector, verifier] = key.plain.split('.');
+  assert.equal(selector.length, 22);
+  assert.equal(verifier.length, 43);
+  assert.equal(parseApiKey(`rsfapi.${selector}x.${verifier}`), null);
+  assert.equal(parseApiKey(`rsfapi.${selector}.${verifier.slice(1)}`), null);
+  assert.equal(parseApiKey(`rsfapi.${'a'.repeat(5000)}.${verifier}`), null);
 });
 
 test('de hint op het scherm verraadt niets van het geheim', async () => {
@@ -224,6 +234,33 @@ test('de vingerafdruk van een verzoek hangt af van methode, route én inhoud', a
   assert.equal(a, await requestFingerprint('post', '/v1/actions/x', '{"a":1}'));
   assert.notEqual(a, await requestFingerprint('POST', '/v1/actions/y', '{"a":1}'));
   assert.notEqual(a, await requestFingerprint('POST', '/v1/actions/x', '{"a":2}'));
+  // ?mode=queue is een ander verzoek dan zonder: dezelfde sleutel mag er niet het antwoord van de ander voor krijgen.
+  assert.notEqual(a, await requestFingerprint('POST', '/v1/actions/x', '{"a":1}', '?mode=queue'));
+  assert.equal(a, await requestFingerprint('POST', '/v1/actions/x', '{"a":1}', ''));
+});
+
+test('te diep geneste invoer wordt herkend, zonder zelf om te vallen', () => {
+  let deep: Record<string, unknown> = {};
+  const root = deep;
+  for (let i = 0; i < 10_000; i += 1) { deep.a = {}; deep = deep.a as Record<string, unknown>; }
+  assert.equal(tooDeep(root), true);
+  assert.equal(tooDeep({ a: [{ b: { c: [1, 2, 3] } }] }), false);
+  assert.equal(tooDeep('tekst'), false);
+});
+
+test('een databasefout in een handeling: de zin voor de koppeling, de details voor ons logboek', () => {
+  assert.deepEqual(publicActionError('Klant ophalen mislukt: canceling statement due to statement timeout'),
+    { status: 500, message: 'Klant ophalen mislukt.' });
+  assert.deepEqual(publicActionError('Taak opslaan mislukt: new row for relation "tasks" violates check constraint "x"'),
+    { status: 422, message: 'Taak opslaan mislukt: de invoer past niet bij de regels van ResoFly.' });
+  assert.deepEqual(publicActionError('Het bericht koppelen mislukte: permission denied for table mails'),
+    { status: 500, message: 'Het bericht koppelen mislukte.' });
+  // Een eigen zin blijft een eigen zin.
+  for (const own of ['Deze factuur is al betaald.', 'Versturen mislukt: het e-mailadres ontbreekt.', 'Ongeldige syntaxis in de zoekopdracht.']) {
+    assert.deepEqual(publicActionError(own), { status: 422, message: own });
+  }
+  assert.equal(publicActionError('duplicate key value violates unique constraint "a"').status, 422);
+  assert.doesNotMatch(publicActionError('duplicate key value violates unique constraint "a"').message, /constraint/);
 });
 
 test('een fout heeft altijd dezelfde vorm', () => {

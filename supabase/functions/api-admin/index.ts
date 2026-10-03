@@ -26,7 +26,7 @@ import {
 } from '../_shared/edgeAuth.ts';
 import {
   ACCESS_LEVELS, apiKeyHint, containsNul, createApiKey, MODULE_KEYS, MODULE_LABEL, normalizeKeyModuleAccess, scopeForLevel,
-  type AccessLevel,
+  tooDeep, type AccessLevel,
 } from '../_shared/publicApi.ts';
 import {
   createEndpoint, deleteEndpoint, rotateSecret, testEndpoint, updateEndpoint, visibleEvents, WebhookInputError,
@@ -46,6 +46,9 @@ const cors = makeCors(ALLOWED_ORIGINS, ALLOW_LOCAL_DEV);
 const PUBLIC_BASE = (Deno.env.get('API_PUBLIC_URL') || `${Deno.env.get('SUPABASE_URL') || ''}/functions/v1/api`).replace(/\/+$/, '');
 const WEBHOOK_ENCRYPTION_KEY = Deno.env.get('WEBHOOK_SECRET_ENCRYPTION_KEY') || '';
 
+/** Groter dan dit is geen verzoek uit het instellingenscherm. */
+const MAX_BODY_BYTES = 64_000;
+
 /** Meer actieve sleutels dan dit is geen overzicht meer, maar een lek dat nog moet gebeuren. */
 const MAX_ACTIVE_KEYS = 50;
 
@@ -61,11 +64,13 @@ Deno.serve(async (req) => {
     const user = await requireUser(admin, req);
     let body: Record<string, unknown>;
     try {
-      body = await req.json();
-    } catch {
+      body = JSON.parse(await readBody(req));
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
       throw new HttpError('De inhoud van dit verzoek is geen geldige JSON.', 400);
     }
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError('Stuur een JSON-object.', 400);
+    if (tooDeep(body)) throw new HttpError('De invoer is te diep genest.', 400);
     if (containsNul(body)) throw new HttpError('De invoer bevat een NUL-teken; dat kan ResoFly niet opslaan.', 400);
     const organizationId = String(body.organizationId || '');
     const role = await requireOrganizationAccess(admin, user.id, organizationId);
@@ -96,7 +101,9 @@ Deno.serve(async (req) => {
         return cors.json(req, { ok: true });
       case 'testWebhook':
         assertAdmin(role);
-        return cors.json(req, { result: await testEndpoint(admin, owner, webhookId, { encryptionKey: encryptionKey(), sentBy: user.email ?? user.id }) });
+        // Geen e-mailadres in het testbericht: dat gaat naar een systeem buiten
+        // ResoFly, en wie er op Testen klikte, hoeft daar niet te staan.
+        return cors.json(req, { result: await testEndpoint(admin, owner, webhookId, { encryptionKey: encryptionKey(), sentBy: 'Instellingen → API & webhooks' }) });
       default:
         throw new HttpError('Onbekende actie.', 400);
     }
@@ -112,6 +119,39 @@ Deno.serve(async (req) => {
     return cors.json(req, { error: 'Er ging iets mis aan onze kant. Probeer het opnieuw.' }, 500);
   }
 });
+
+/** De inhoud, met een plafond dat ook zonder Content-Length geldt. */
+async function readBody(req: Request): Promise<string> {
+  const tooLarge = () => new HttpError(`De invoer is groter dan ${Math.round(MAX_BODY_BYTES / 1000)} kB.`, 413);
+  if (Number(req.headers.get('content-length') || '0') > MAX_BODY_BYTES) throw tooLarge();
+  if (!req.body) return '';
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+/** Een databasefout hoort in de logs; het scherm krijgt een zin. */
+function serverError(message: string, detail: string | undefined): HttpError {
+  console.error('[api-admin]', message, detail ?? '');
+  return new HttpError(`${message} Probeer het opnieuw.`, 500);
+}
 
 function assertAdmin(role: OrganizationRole): void {
   if (role !== 'owner' && role !== 'admin') {
@@ -170,7 +210,7 @@ async function createKey(userId: string, organizationId: string, body: Record<st
   const { count, error: countError } = await admin.from('api_keys')
     .select('id', { count: 'exact', head: true })
     .eq('organization_id', organizationId).is('revoked_at', null);
-  if (countError) throw new HttpError(`Sleutels tellen mislukt: ${countError.message}`, 500);
+  if (countError) throw serverError('Sleutels tellen mislukte.', countError.message);
   if ((count ?? 0) >= MAX_ACTIVE_KEYS) {
     throw new HttpError(`Deze organisatie heeft al ${count} actieve sleutels. Trek eerst sleutels in die niet meer gebruikt worden.`, 409);
   }
@@ -185,7 +225,7 @@ async function createKey(userId: string, organizationId: string, body: Record<st
     module_access: moduleAccess,
     expires_at: days ? new Date(Date.now() + days * 86_400_000).toISOString() : null,
   }).select(KEY_COLUMNS).single();
-  if (error || !key) throw new HttpError(`De sleutel kon niet worden aangemaakt: ${error?.message ?? 'onbekende fout'}`, 500);
+  if (error || !key) throw serverError('De sleutel kon niet worden aangemaakt.', error?.message);
 
   const { error: secretError } = await admin.from('api_key_secrets').insert({
     api_key_id: key.id,
@@ -197,7 +237,7 @@ async function createKey(userId: string, organizationId: string, body: Record<st
     // Een sleutel zonder geheim kan nooit werken; liever helemaal niet dan een
     // regel in de lijst die niets doet.
     await admin.from('api_keys').delete().eq('id', key.id);
-    throw new HttpError(`De sleutel kon niet worden aangemaakt: ${secretError.message}`, 500);
+    throw serverError('De sleutel kon niet worden aangemaakt.', secretError.message);
   }
 
   return { key, secret: token.plain };

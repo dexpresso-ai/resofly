@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { RESOURCE_LIST } from './apiResourceSpecs.ts';
 import { MAX_DELIVERY_ATTEMPTS, RETRY_DELAYS_SECONDS } from './webhooks.ts';
 
 /**
@@ -30,6 +31,22 @@ const webhookAdmin = read('./webhookAdmin.ts');
 const api = read('../api/index.ts');
 const apiAdmin = read('../api-admin/index.ts');
 const migration = read('../../migrations/20261003010000_webhooks.sql');
+const transport = read('./webhookTransport.ts');
+
+/** Alle migraties op volgorde; de LAATSTE definitie van iets is wat geldt. */
+const migrationDir = new URL('../../migrations/', import.meta.url);
+const migrations = readdirSync(migrationDir).filter((name) => /^\d{14}_.+\.sql$/.test(name)).sort()
+  .map((name) => readFileSync(new URL(name, migrationDir), 'utf8'));
+
+function latest(marker: string, end = '\n$$;'): string {
+  for (const sql of [...migrations].reverse()) {
+    const start = sql.indexOf(marker);
+    if (start >= 0) return sql.slice(start, sql.indexOf(end, start) + end.length);
+  }
+  throw new Error(`${marker} staat in geen enkele migratie`);
+}
+
+const claimFunction = latest('create or replace function public.claim_webhook_deliveries(');
 const ui = read('../../../src/components/WebhookEndpoints.tsx');
 const config = read('../../config.toml');
 const ci = read('../../../.github/workflows/frontend-checks.yml');
@@ -51,7 +68,7 @@ function numberConst(source: string, name: string): number {
 
 /** De standaardwaarde van een parameter van een SQL-functie. */
 function sqlDefault(name: string): number {
-  const match = migration.match(new RegExp(`${name} integer default (\\d+)`));
+  const match = claimFunction.match(new RegExp(`${name} integer default (\\d+)`));
   assert.ok(match, `${name} niet gevonden in de migratie`);
   return Number(match[1]);
 }
@@ -88,10 +105,17 @@ test('de bezorger en de database tellen dezelfde pogingen en hetzelfde plafond',
 });
 
 test('het plafond per eindpunt telt mee wat al onderweg is, ook uit een andere ronde', () => {
-  const claim = migration.slice(migration.indexOf('create or replace function public.claim_webhook_deliveries('));
-  assert.match(claim, /row_number\(\) over \(partition by due\.ep order by due\.due_at, due\.id\) \+ coalesce\(f\.n, 0\) as slot/);
-  assert.match(claim, /where r\.slot <= greatest\(1, coalesce\(p_per_endpoint, 4\)\)/);
+  const claim = claimFunction;
+  // Per eindpunt zijn eigen vroegste, min wat er al onderweg is — niet eerst de
+  // duizend vroegste van iedereen (dan verdringt één achterstand de rest).
+  assert.match(claim, /cross join lateral \(/);
+  assert.match(claim, /where d\.endpoint_id = e\.id/);
+  assert.match(claim, /limit greatest\(0, greatest\(1, coalesce\(p_per_endpoint, 4\)\) - coalesce\(f\.n, 0\)\)/);
+  assert.doesNotMatch(claim, /limit 1000/);
   assert.match(claim, /for update of d skip locked/);
+  // Eén ronde tegelijk: anders tellen twee rondes allebei "nog niets onderweg".
+  const lock = claim.indexOf("perform pg_advisory_xact_lock(hashtext('public.claim_webhook_deliveries'));");
+  assert.ok(lock > 0 && lock < claim.indexOf('return query'));
 });
 
 test('een ronde is klaar lang voordat een hangende bezorging wordt teruggepakt', () => {
@@ -124,18 +148,39 @@ test('een nieuw of gewijzigd adres wordt meteen gekeurd, inclusief waar de naam 
 
 test('elke bezorging keurt het adres opnieuw, en pas daarna gaat er iets de deur uit', () => {
   const body = fn(delivery, 'export async function deliver(');
-  const send = body.indexOf('await fetch(delivery.url');
+  const send = body.indexOf('await sendPinned(');
   assert.ok(send > 0);
-  assert.ok(body.indexOf('webhookUrlProblem(delivery.url)') < send, 'het adres wordt niet gekeurd voor het versturen');
-  assert.ok(body.indexOf('privateResolution(delivery.url)') < send, 'de naam wordt niet opgezocht voor het versturen');
-  assert.match(body, /disable: problem/, 'een adres dat naar binnen wijst, hoort het eindpunt uit te zetten, niet acht keer opnieuw te proberen.');
+  assert.ok(body.indexOf('await deliveryTarget(delivery.url, options.resolve)') > 0
+    && body.indexOf('await deliveryTarget(delivery.url, options.resolve)') < send, 'het adres wordt niet gekeurd voor het versturen');
+  assert.match(body, /disable: target\.problem/, 'een adres dat naar binnen wijst, hoort het eindpunt uit te zetten, niet acht keer opnieuw te proberen.');
+  const target = fn(delivery, 'export async function deliveryTarget(');
+  assert.match(target, /const problem = webhookUrlProblem\(rawUrl\);/);
+  assert.match(target, /if \(addresses\.some\(isPrivateAddress\)\)/);
+  assert.match(target, /if \(addresses\.length === 0\)/, 'geen adres is geen vrijbrief om toch te versturen');
+});
+
+test('er wordt verbonden met het gekeurde adres, niet met de naam (DNS-rebinding)', () => {
+  // Geen fetch naar het webhook-adres: die zou de naam zelf nog eens opzoeken.
+  assert.doesNotMatch(delivery, /fetch\(delivery\.url|fetch\(target/);
+  assert.doesNotMatch(transport, /[^.\w]fetch\([^)]/);
+  assert.match(fn(delivery, 'async function sendPinned('), /return await transport\(\{ url: target\.url, address, headers, body,/);
+  assert.match(fn(delivery, 'async function sendPinned('), /if \(!\(error instanceof TransportError && error\.kind === 'connect'\)\) throw error;/,
+    'een eindpunt dat wel opnam, krijgt geen tweede bericht via een ander adres');
+  const pinned = transport.slice(transport.indexOf('export const pinnedTransport'));
+  assert.match(pinned, /net\.connect\(\{ hostname: request\.address, port,/);
+  assert.match(pinned, /net\.startTls\(tcp, \{ hostname: serverName \}\)/, 'TLS hoort het certificaat tegen de NAAM te controleren');
 });
 
 test('een doorverwijzing wordt niet gevolgd, en niemand wacht eindeloos', () => {
   const body = fn(delivery, 'export async function deliver(');
-  assert.match(body, /redirect: 'manual'/, 'een doorverwijzing kan naar een adres wijzen dat niemand heeft gekeurd.');
-  assert.match(body, /signal: AbortSignal\.timeout\(TIMEOUT_MS\)/);
+  assert.match(body, /response\.status >= 300 && response\.status < 400\s*\n\s*\? `HTTP \$\{response\.status\}: een doorverwijzing volgen we niet/);
+  assert.doesNotMatch(transport, /location/i, 'de verbinding hoort niets met een Location-header te doen');
+  assert.match(fn(delivery, 'async function sendPinned('), /const deadline = Date\.now\(\) \+ TIMEOUT_MS;/);
+  assert.match(fn(delivery, 'async function sendPinned('), /timeoutMs: remaining, maxBodyBytes: RESPONSE_READ_BYTES/);
   assert.ok(numberConst(delivery, 'TIMEOUT_MS') <= 30_000);
+  assert.match(delivery, /const RESPONSE_READ_BYTES = 4 \* RESPONSE_PREVIEW_BYTES;/);
+  assert.ok(numberConst(delivery, 'RESPONSE_PREVIEW_BYTES') <= 4_000, 'van een antwoord lezen we alleen het begin');
+  assert.doesNotMatch(delivery, /response\.text\(\)|response\.json\(\)\s*;?\s*\n[^\n]*preview/);
   // Een DNS-opzoeking die te lang duurt, is geen vrijbrief om toch te versturen;
   // en zonder eigen DNS in de runtime vragen we het via DNS-over-HTTPS.
   const resolution = fn(delivery, 'export async function resolveHostAddresses(');
@@ -149,21 +194,75 @@ test('ondertekend wordt precies wat er verstuurd wordt', () => {
   assert.match(body, /signPayload\(secret, timestamp, body\)/);
   assert.match(body, /'ResoFly-Signature': signature/);
   assert.match(body, /'ResoFly-Event-Id': delivery\.event_id/);
-  assert.match(body, /\n\s*body,\n/, 'de fetch hoort dezelfde body te versturen als die ondertekend is');
+  assert.match(body, /'ResoFly-Signature': signature,\n\s*\}, body\);/, 'verstuurd hoort dezelfde body te worden als die ondertekend is');
 });
 
 // ── Wat mag ──────────────────────────────────────────────────────────────────
 
 test('een eindpunt van een sleutel krijgt alleen wat die sleutel NU mag lezen', () => {
   const body = fn(delivery, 'export async function deliver(');
-  assert.ok(body.indexOf('keyRefusal(') >= 0 && body.indexOf('keyRefusal(') < body.indexOf('await fetch('),
+  const send = body.indexOf('await sendPinned(');
+  assert.ok(body.indexOf('keyRefusal(') >= 0 && body.indexOf('keyRefusal(') < send,
     'de rechten van de sleutel worden niet gewogen voordat het bericht vertrekt');
+  // Velden uit een module die de sleutel niet mag lezen (een tarief), gaan als null mee.
+  assert.ok(body.indexOf('redactForKey(delivery.event_type, payload, canRead)') > 0
+    && body.indexOf('redactForKey(delivery.event_type, payload, canRead)') < send);
+  assert.match(body, /data: payload,/);
+  assert.doesNotMatch(body, /data: delivery\.event_payload/);
   const load = fn(delivery, 'async function loadKeyAccess(');
   assert.match(load, /key\.revoked_at/);
   assert.match(load, /key\.expires_at/);
   assert.match(load, /from\('organization_members'\)[\s\S]{0,200}\.eq\('status', 'active'\)/);
-  assert.match(fn(delivery, 'async function keyRefusal('),
-    /effectiveModuleLevel\(access\.role, access\.memberAccess, access\.keyAccess, delivery\.event_module\)/);
+  assert.match(fn(delivery, 'function keyRefusal('),
+    /effectiveModuleLevel\(access\.role, access\.memberAccess, access\.keyAccess, module\)/);
+});
+
+test('een bericht bevat per onderwerp precies de velden van de API', () => {
+  const columns = latest('create or replace function public.webhook_payload_columns(');
+  for (const spec of RESOURCE_LIST) {
+    const list = columns.match(new RegExp(`when '${spec.event}' then array\\[([^\\]]*)\\]`));
+    assert.ok(list, `${spec.event} ontbreekt in webhook_payload_columns`);
+    const names = [...list[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    assert.deepEqual(names, Object.keys(spec.fields), `${spec.event}: het bericht en de API horen dezelfde velden te hebben`);
+  }
+  assert.match(columns, /else array\['id'\]/, 'een onderwerp zonder lijst krijgt alleen het id, niet alles');
+  const capture = latest('create or replace function public.webhook_capture()');
+  assert.match(capture, /v_allowed text\[\] := public\.webhook_payload_columns\(TG_ARGV\[0\]\);/);
+  assert.match(capture, /and k = any\(v_allowed\)/, 'een wijziging buiten de lijst is geen gebeurtenis');
+  assert.match(capture, /'object', public\.webhook_public_row\(v_entity, v_row\)/);
+  assert.match(capture, /'previous', public\.webhook_public_row\(v_entity,/);
+  // De lijst gaat óók nog langs het filter op geheimen en grootte.
+  assert.match(latest('create or replace function public.webhook_public_row(p_entity text, p_row jsonb)'),
+    /select public\.webhook_public_row\(coalesce\(/);
+});
+
+test('het adres van een webhook staat niet in het auditlog (dat leest elk teamlid)', () => {
+  for (const trigger of ['webhook_endpoints_audit_write', 'webhook_endpoints_audit_update']) {
+    const definition = latest(`create trigger ${trigger}`, ';');
+    assert.match(definition, /execute function public\.webhook_endpoint_audit\(\);/, `${trigger} zet de URL als label`);
+  }
+  const audit = latest('create or replace function public.webhook_endpoint_audit()');
+  assert.match(audit, /coalesce\(nullif\(btrim\(v_row ->> 'description'\), ''\), 'Webhook'\)/);
+  assert.doesNotMatch(audit, /'url'/);
+});
+
+test('aan- of uitzetten in de app vult geen teller of reden in', () => {
+  const guard = latest('create or replace function public.webhook_endpoints_guard_update()');
+  assert.match(guard, /if old\.active and not new\.active then\s*\n\s*new\.consecutive_failures := old\.consecutive_failures;\s*\n\s*new\.failing_since := old\.failing_since;\s*\n\s*new\.disabled_reason := old\.disabled_reason;/);
+});
+
+test('een test gaat niet in een lus de deur uit, en noemt niet wie er klikte', () => {
+  const test = fn(webhookAdmin, 'export async function testEndpoint(');
+  const cooldown = test.indexOf('TEST_COOLDOWN_MS');
+  assert.ok(cooldown > 0 && cooldown < test.indexOf('sendTestEvent('));
+  assert.ok(numberConst(webhookAdmin, 'TEST_COOLDOWN_MS') >= 5_000);
+  assert.doesNotMatch(apiAdmin, /sentBy: user\.email/);
+});
+
+test('koppelingen kunnen de webhookruimte van de organisatie niet opmaken', () => {
+  const room = fn(webhookAdmin, 'async function assertRoom(');
+  assert.match(room, /\.eq\('organization_id', owner\.organizationId\)\.is\('api_key_id', null\)/);
+  assert.match(room, /\.not\('api_key_id', 'is', null\)/);
 });
 
 test('een koppeling ziet en beheert alleen haar eigen eindpunten', () => {
@@ -233,7 +332,7 @@ test('claimen en afronden kan alleen de bezorger', () => {
   assert.match(migration, /grant execute on function public\.claim_webhook_deliveries\(integer, integer, integer\) to service_role;/);
   assert.match(migration, /revoke all on function public\.finish_webhook_delivery\([^)]*\) from public, anon, authenticated;/);
   for (const name of ['claim_webhook_deliveries', 'finish_webhook_delivery']) {
-    const body = migration.slice(migration.indexOf(`create or replace function public.${name}(`));
+    const body = latest(`create or replace function public.${name}(`);
     assert.match(body.slice(0, 2500), /if auth\.role\(\) is distinct from 'service_role' then/, `${name} controleert de rol niet zelf`);
   }
 });

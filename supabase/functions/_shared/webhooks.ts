@@ -268,7 +268,7 @@ export function webhookUrlProblem(raw: string): string | null {
   return null;
 }
 
-function isIpLiteral(host: string): boolean {
+export function isIpLiteral(host: string): boolean {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':');
 }
 
@@ -337,10 +337,18 @@ function isPrivateIpv6(g: number[]): boolean {
   // Een IPv4-adres erin verpakt: dan telt dat adres.
   const embedded = () => isPrivateIpv4([g[6] >> 8, g[6] & 0xff, g[7] >> 8, g[7] & 0xff]);
   if (zeroUpTo(5) && g[5] === 0xffff) return embedded();                       // ::ffff:0:0/96
+  if (zeroUpTo(4) && g[4] === 0xffff && g[5] === 0) return embedded();         // ::ffff:0:0:0/96 (vertaald)
   if (zeroUpTo(6)) return embedded();                                          // ::/96 (oud)
-  if (g[0] === 0x64 && g[1] === 0xff9b && zeroUpTo(0) && g.slice(2, 6).every((x) => x === 0)) return embedded(); // NAT64
-  return (g[0] & 0xfe00) === 0xfc00                                            // unique local fc00::/7
+  if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) return embedded(); // NAT64
+  // Tunnels en vertalers met een IPv4-adres erin (6to4, Teredo, NAT64 voor
+  // eigen gebruik): daarachter kan elk adres zitten, ook een intern. Een echt
+  // webhook-eindpunt staat er niet achter.
+  return g[0] === 0x2002                                                       // 6to4 2002::/16
+    || (g[0] === 0x2001 && g[1] === 0x0000)                                    // Teredo 2001::/32
+    || (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 0x0001)                   // NAT64 lokaal 64:ff9b:1::/48
+    || (g[0] & 0xfe00) === 0xfc00                                              // unique local fc00::/7
     || (g[0] & 0xffc0) === 0xfe80                                              // link-local fe80::/10
+    || (g[0] & 0xffc0) === 0xfec0                                              // site-local fec0::/10 (oud)
     || (g[0] & 0xff00) === 0xff00                                              // multicast
     || (g[0] === 0x2001 && g[1] === 0x0db8)                                    // documentatie
     || (g[0] === 0x0100 && g.slice(1, 4).every((x) => x === 0));               // discard 100::/64

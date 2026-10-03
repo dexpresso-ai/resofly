@@ -259,3 +259,111 @@ via dubbele klanten (409), een sleutel die alleen mag klaarzetten (403), rijen
 van een andere organisatie (404), een sleutel waarvan de maker viewer werd en
 een sleutel zonder de module uren (403), tot de afgeleide waarden bij uren en een
 reactie die standaard intern is.
+
+## Veiligheidstest — twee rondes bevindingen
+
+Na fase 3 is de hele laag aangevallen: een aanvalsronde tegen de lokale stack
+(sleutels, routes, invoer, filters, idempotentie, gelijktijdigheid,
+webhook-adressen) en drie losse code-reviews (sleutels en rechten, webhooks,
+vaste adressen). Geen kritieke bevindingen; wel deze, allemaal dichtgezet.
+
+### Eerste ronde (aanvalsronde)
+
+- Een punt aan het eind van een webhooknaam (`localhost.`) glipte langs de
+  adrescontrole; een naam die naar binnen wijst (`127.0.0.1.nip.io`) werd alleen
+  bij de bezorging gevangen. Nu bij aanmaken, wijzigen en elke bezorging, met
+  DNS-over-HTTPS als de runtime zelf geen DNS kan opvragen.
+- Een NUL-teken in de invoer gaf een 500; nu 400. Uren met een eindtijd vóór de
+  begintijd worden geweigerd. Ingebouwde namen (`constructor`) zijn onbekende
+  velden. Keuzelijst-filters met meer waarden (`?status=new,review`).
+
+### Tweede ronde (reviews)
+
+**Het klantportaal is "naar buiten".** Met alleen `execute` kon een sleutel
+zonder Financiën het e-mailadres van een klant of van een contactpersoon met
+portaaltoegang op zijn eigen adres zetten — en zo via het portaal facturen
+inzien. Wat het portaal raakt, vraagt nu `execute_high`: in de database
+(`api_rest_write`, `p_allow_outward`, fout `RS403` → 403 `insufficient_scope`)
+voor de vaste adressen, en als risico `high` voor `ticket.set_client` en
+`client_contact.set_active` bij de handelingen.
+
+**Rechten per veld.** Een uurtarief of klantwaarde hoort bij Financiën. Zonder
+leesrecht daar komt het veld als `null` terug (ook in het dashboard van een
+project en in webhookberichten); zetten vraagt schrijfrecht in Financiën. Een
+verwijzing naar een module die de sleutel niet mag lezen (uren op een project
+zonder leesrecht in projecten) is een 403, vóór er iets wordt opgezocht.
+
+**Sleutels.** Een ingetrokken of verlopen sleutel kan geen voorstel meer
+neerzetten, ook niet in de race met het intrekken (trigger met `FOR SHARE`).
+Wie de organisatie verlaat, verliest zijn sleutels. Een sleutel die nog gebruikt
+wordt terwijl hij ingetrokken is, staat in het verzoeklog van de organisatie
+(met dezelfde aanroeplimiet, zodat dat log niet vol te schrijven is). Alleen een
+sleutel van de vorm die wij uitgeven wordt opgezocht.
+
+**Invoer en antwoorden.** Een body zonder `Content-Length` wordt ook begrensd
+(1 MB, gestreamd), JSON hooguit 32 niveaus diep, getallen alleen in gewone
+notatie, een lijst met teksten bevat teksten. Bladeren gaat tot offset 10.000,
+met een fout in plaats van stil afkappen. E-mailfilters negeren hoofdletters.
+Antwoorden krijgen `Cache-Control: no-store`. Postgres-meldingen met tabel- en
+constraintnamen gaan niet meer letterlijk naar buiten, ook niet uit een
+handeling. In `ai_action_audit` staan bij een wijziging via een vast adres de
+veldnamen, niet de waarden (die staan al in `audit_logs`).
+
+**Idempotentie.** De zoekparameters tellen mee (`?mode=queue` is een ander
+verzoek), een herhaling krijgt de `Location`-header terug, en een poging die
+nooit afkwam houdt de sleutel hooguit 5 minuten vast in plaats van een dag.
+
+**Webhooks.**
+- *DNS-rebinding*: de bezorger zoekt de naam één keer op, keurt de adressen en
+  verbindt met precies zo'n adres (`webhookTransport.ts`: `Deno.connect` +
+  `Deno.startTls`, certificaat gecontroleerd tegen de naam). Een naam die
+  tussendoor omslaat naar 127.0.0.1, komt niet meer binnen. Heeft een naam geen
+  adres, dan wordt er niet verstuurd maar later opnieuw geprobeerd.
+- Van een antwoord wordt hooguit 4 kB gelezen (was: alles, daarna afgekapt — een
+  antwoord van een gigabyte kon de bezorger laten omvallen).
+- Het webhook-adres (vaak zelf een geheim, zoals bij Zapier) stond als label in
+  `audit_logs`, dat elk teamlid leest. Nu de omschrijving; bestaande regels zijn
+  opgeschoond.
+- Claimen is eerlijk per eindpunt: één eindpunt met een grote achterstand vulde
+  de kandidatenlijst, en dan kwamen andere organisaties niet aan de beurt. Rondes
+  claimen één voor één (`pg_advisory_xact_lock`).
+- Een bericht bevat per onderwerp een vaste lijst velden — die van de API —
+  in plaats van "alles behalve geheimen". Interne velden (reacties onder een
+  taak, interne goedkeuring, de contracttekst) gaan niet meer mee, en een
+  wijziging aan een veld buiten de lijst is geen gebeurtenis.
+- Testen kan één keer per 10 seconden per eindpunt; het testbericht noemt niet
+  meer het e-mailadres van wie er klikte. Webhooks uit de app en van sleutels
+  hebben aparte ruimte (50, en 20 per sleutel / 100 samen). Aan- of uitzetten in
+  de app kan de foutteller en de reden van uitzetten niet meer invullen. IPv6:
+  ook 6to4, Teredo, site-local en lokale NAT64 tellen als intern.
+- De app ziet het als intrekken, hernoemen, aan/uitzetten of verwijderen niets
+  raakte (RLS), in plaats van "gelukt" te melden.
+
+### Wat de tests bewaken
+
+- `webhookTransport.test.ts` (13) — het verzoek (geen header-injectie) en het
+  lezen van een antwoord: chunked, zonder lengte, 1xx, en nooit meer dan het
+  plafond — ook niet bij een opgegeven lengte van een gigabyte.
+- `webhookPinning.test.ts` (10) — de echte `deliver()` met een nagespeelde DNS
+  en verbinding: er wordt verbonden met het gekeurde adres en niet opnieuw
+  opgezocht, een intern adres zet het eindpunt uit, geen adres is later opnieuw,
+  een time-out krijgt geen tweede bericht via een ander adres, en tarieven gaan
+  als `null` naar een sleutel zonder Financiën.
+- `apiResourceStore.test.ts` (6) — databasefouten als zin, zonder interne namen.
+- Uitbreidingen in `apiResources`, `publicApi`, `publicApiServer`,
+  `apiResourceServer`, `webhookDns` en `webhooksServer` — onder meer dat de
+  velden in een webhookbericht precies die van de API zijn, en dat de
+  invarianttests de LAATSTE definitie van een SQL-functie lezen. De nieuwe regels
+  zijn gecontroleerd door ze in de code stuk te maken (13 mutaties, alle
+  gevangen).
+
+Nagemeten: `npm test` 534 groen, `npm run typecheck` en `npm run build` groen,
+`deno check` groen voor api, api-admin, webhooks, mcp, mcp-oauth en
+gerrie-agent. End-to-end tegen een verse database: kern 33/33, vaste adressen
+77/77, aanvalsronde 52/52, webhooks 27/27 — de webhooks via de vastgepinde
+verbinding naar een echte TLS-ontvanger.
+
+Wat bewust buiten deze ronde bleef (geen deel van de API, of een eigen
+afweging): het goedkeuren in de app (`confirmAction`) zet de status van een
+voorstel vanuit de browser; `edgeAuth` staat de origin `null` toe; en er is geen
+throttling per IP-adres voor sleutels die niet bestaan.

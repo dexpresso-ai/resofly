@@ -12,17 +12,25 @@
 // ============================================================
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { RESOURCE_LIST } from './apiResourceSpecs.ts';
 import { effectiveModuleLevel } from './publicApi.ts';
 import {
-  decryptSecret, isPrivateAddress, MAX_DELIVERY_ATTEMPTS, nextRetryDelay, parseDohAnswer, PING_EVENT, signatureHeader,
-  signPayload, webhookBody, webhookUrlProblem,
+  decryptSecret, isIpLiteral, isPrivateAddress, MAX_DELIVERY_ATTEMPTS, nextRetryDelay, parseDohAnswer, PING_EVENT,
+  signatureHeader, signPayload, webhookBody, webhookUrlProblem,
 } from './webhooks.ts';
+import { pinnedTransport, TransportError, type PinnedResponse, type WebhookTransport } from './webhookTransport.ts';
 
 /** Hoe lang we op een eindpunt wachten. Wie langer nodig heeft, hoort eerst te antwoorden en daarna te werken. */
 const TIMEOUT_MS = 10_000;
 
-/** Hoeveel van het antwoord we bewaren, om bij een fout te kunnen zien wat het eindpunt zei. */
+/** Hoeveel van het antwoord we bewaren (tekens), om bij een fout te kunnen zien wat het eindpunt zei. */
 const RESPONSE_PREVIEW_BYTES = 1000;
+
+/** Zoveel bytes lezen we er hooguit voor: genoeg voor 1000 tekens, ook in UTF-8. */
+const RESPONSE_READ_BYTES = 4 * RESPONSE_PREVIEW_BYTES;
+
+/** Bij "geen verbinding" proberen we hooguit zoveel adressen van dezelfde naam. */
+const MAX_ADDRESSES_TRIED = 3;
 
 const USER_AGENT = 'ResoFly-Webhooks/1.0 (+https://resofly.nl)';
 
@@ -60,6 +68,10 @@ export interface DeliverOptions {
   keyCache?: KeyAccessCache;
   /** Een testbericht: geen nieuwe poging bij een fout, maar wel vastgelegd. */
   noRetry?: boolean;
+  /** Hoe het bericht verstuurd wordt; standaard over een vastgepinde verbinding. Voor tests. */
+  transport?: WebhookTransport;
+  /** Hoe een naam wordt opgezocht; standaard resolveForDelivery. Voor tests. */
+  resolve?: (host: string) => Promise<string[]>;
 }
 
 /**
@@ -74,28 +86,44 @@ export async function deliver(admin: SupabaseClient, delivery: ClaimedDelivery, 
     // 1. Mag dit eindpunt deze gebeurtenis horen? Alleen een eindpunt van een
     //    API-sleutel kan "nee" krijgen: dan gelden de rechten van die sleutel,
     //    van NU — net als bij een gewone API-aanroep.
+    let payload = delivery.event_payload;
     if (delivery.api_key_id && delivery.event_type !== PING_EVENT) {
-      const reason = await keyRefusal(admin, delivery, options.keyCache);
+      const access = await keyAccess(admin, delivery.api_key_id, options.keyCache);
+      const reason = keyRefusal(access, delivery.event_module);
       if (reason) {
         await skip(admin, delivery.delivery_id, reason);
         return { status: 'skipped', httpStatus: null, error: reason, durationMs: elapsed() };
       }
+      // Een veld uit een module die de sleutel niet mag lezen (een tarief bij
+      // Financiën), gaat ook hier als null mee — net als via de API. Veranderde
+      // er alleen zo'n veld, dan is er voor deze sleutel niets gebeurd.
+      const canRead = (module: string) => access.ok && effectiveModuleLevel(access.role, access.memberAccess, access.keyAccess, module) !== 'none';
+      const redacted = redactForKey(delivery.event_type, payload, canRead);
+      if (!redacted) {
+        const why = 'Alleen velden veranderden die de API-sleutel van dit eindpunt niet mag lezen.';
+        await skip(admin, delivery.delivery_id, why);
+        return { status: 'skipped', httpStatus: null, error: why, durationMs: elapsed() };
+      }
+      payload = redacted;
     }
 
-    // 2. Is het adres (nog) een adres waar wij naartoe mogen bellen? Bij het
-    //    aanmaken gecontroleerd, maar een naam die toen naar buiten wees, kan nu
-    //    naar binnen wijzen. Is dat zo, dan zetten we het eindpunt uit in plaats
-    //    van het acht keer opnieuw te proberen.
-    let problem: string | null;
+    // 2. Waar gaat het naartoe? Het adres zelf, en waar de naam NU naar wijst.
+    //    Een naam die bij het aanmaken naar buiten wees, kan nu naar binnen
+    //    wijzen: dan zetten we het eindpunt uit in plaats van het acht keer te
+    //    proberen. De adressen die hier worden goedgekeurd, zijn ook de ENIGE
+    //    waarmee we verbinden (webhookTransport.ts) — er wordt niet nog eens
+    //    opgezocht, dus een naam die tussendoor omslaat, komt niet binnen.
+    let target: Awaited<ReturnType<typeof deliveryTarget>>;
     try {
-      problem = webhookUrlProblem(delivery.url) ?? await privateResolution(delivery.url);
+      target = await deliveryTarget(delivery.url, options.resolve);
     } catch (error) {
-      // Het opzoeken duurde te lang: niet blind versturen, maar later opnieuw.
+      // Het opzoeken lukte niet op tijd: niet blind versturen, maar later opnieuw.
       return await failed(admin, delivery, options, null, error instanceof Error ? error.message : String(error), null, elapsed);
     }
-    if (problem) {
-      await finish(admin, delivery.delivery_id, { ok: false, error: problem, retryIn: null, disable: problem });
-      return { status: 'failed', httpStatus: null, error: problem, durationMs: elapsed() };
+    if ('problem' in target) {
+      if (!target.disable) return await failed(admin, delivery, options, null, target.problem, null, elapsed);
+      await finish(admin, delivery.delivery_id, { ok: false, error: target.problem, retryIn: null, disable: target.problem });
+      return { status: 'failed', httpStatus: null, error: target.problem, durationMs: elapsed() };
     }
 
     if (!delivery.secret_encrypted) {
@@ -112,37 +140,31 @@ export async function deliver(admin: SupabaseClient, delivery: ClaimedDelivery, 
       type: delivery.event_type,
       created_at: delivery.event_created_at,
       organization_id: delivery.organization_id,
-      data: delivery.event_payload,
+      data: payload,
     });
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = signatureHeader(timestamp, await signPayload(secret, timestamp, body));
 
-    let response: Response;
+    // Een doorverwijzing volgen we niet (dat doet deze verbinding ook niet):
+    // dan belde ons verzoek ineens naar een adres dat niemand controleerde.
+    let response: PinnedResponse;
     try {
-      response = await fetch(delivery.url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': USER_AGENT,
-          'ResoFly-Event': delivery.event_type,
-          'ResoFly-Event-Id': delivery.event_id,
-          'ResoFly-Delivery-Id': delivery.delivery_id,
-          'ResoFly-Signature': signature,
-        },
-        body,
-        // Een doorverwijzing volgen we niet: dan belt ons verzoek ineens naar een
-        // adres dat niemand heeft gecontroleerd.
-        redirect: 'manual',
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
+      response = await sendPinned(options.transport ?? pinnedTransport, target, {
+        'Content-Type': 'application/json',
+        'User-Agent': USER_AGENT,
+        'ResoFly-Event': delivery.event_type,
+        'ResoFly-Event-Id': delivery.event_id,
+        'ResoFly-Delivery-Id': delivery.delivery_id,
+        'ResoFly-Signature': signature,
+      }, body);
     } catch (error) {
-      const message = error instanceof Error && error.name === 'TimeoutError'
+      const message = error instanceof TransportError && error.kind === 'timeout'
         ? `Geen antwoord binnen ${TIMEOUT_MS / 1000} seconden.`
         : `Kon het eindpunt niet bereiken: ${error instanceof Error ? error.message : String(error)}`;
       return await failed(admin, delivery, options, null, message, null, elapsed);
     }
 
-    const preview = await readPreview(response);
+    const preview = previewText(response.body);
     if (response.status >= 200 && response.status < 300) {
       await finish(admin, delivery.delivery_id, { ok: true, httpStatus: response.status, body: preview });
       return { status: 'delivered', httpStatus: response.status, error: null, durationMs: elapsed() };
@@ -200,25 +222,65 @@ async function skip(admin: SupabaseClient, deliveryId: string, reason: string): 
   if (error) console.error('[webhooks] overslaan vastleggen mislukt:', deliveryId, error.message);
 }
 
+type KeyAccess = NonNullable<ReturnType<KeyAccessCache['get']>>;
+
+/** Wat de sleutel van dit eindpunt NU mag, één keer per ronde opgezocht. */
+async function keyAccess(admin: SupabaseClient, keyId: string, cache?: KeyAccessCache): Promise<KeyAccess> {
+  let access = cache?.get(keyId);
+  if (!access) {
+    access = await loadKeyAccess(admin, keyId);
+    cache?.set(keyId, access);
+  }
+  return access;
+}
+
 /**
  * Waarom een eindpunt van een API-sleutel deze gebeurtenis NIET mag horen, of
  * null als het mag. Dezelfde regels als een API-aanroep: de sleutel is niet
  * ingetrokken of verlopen, de maker is nog actief lid, en de module van de
  * gebeurtenis staat voor die twee samen niet dicht.
  */
-async function keyRefusal(admin: SupabaseClient, delivery: ClaimedDelivery, cache?: KeyAccessCache): Promise<string | null> {
-  const keyId = delivery.api_key_id!;
-  let access = cache?.get(keyId);
-  if (!access) {
-    access = await loadKeyAccess(admin, keyId);
-    cache?.set(keyId, access);
-  }
+function keyRefusal(access: KeyAccess, module: string): string | null {
   if (!access.ok) return access.reason;
-  const level = effectiveModuleLevel(access.role, access.memberAccess, access.keyAccess, delivery.event_module);
-  return level === 'none' ? `De API-sleutel van dit eindpunt mag de module "${delivery.event_module}" niet lezen.` : null;
+  const level = effectiveModuleLevel(access.role, access.memberAccess, access.keyAccess, module);
+  return level === 'none' ? `De API-sleutel van dit eindpunt mag de module "${module}" niet lezen.` : null;
 }
 
-async function loadKeyAccess(admin: SupabaseClient, keyId: string): Promise<NonNullable<ReturnType<KeyAccessCache['get']>>> {
+/** Per onderwerp de velden die bij een andere module horen, uit de API-specs (`module` op een veld). */
+const FIELD_MODULES: Record<string, Record<string, string>> = Object.fromEntries(RESOURCE_LIST.map((spec) => [
+  spec.event,
+  Object.fromEntries(Object.entries(spec.fields).flatMap(([name, field]) => (field.module ? [[name, field.module]] : []))),
+]));
+
+/**
+ * Het bericht zoals deze sleutel het mag zien: velden uit een module die hij
+ * niet mag lezen, als null in `object`, en weg uit `changed` en `previous`.
+ * Null als er daarna niets veranderd blijkt (alleen zulke velden wijzigden).
+ */
+export function redactForKey(
+  eventType: string, payload: Record<string, unknown>, canRead: (module: string) => boolean,
+): Record<string, unknown> | null {
+  const fields = FIELD_MODULES[eventType.split('.')[0]] ?? {};
+  const hidden = Object.keys(fields).filter((name) => !canRead(fields[name]));
+  if (hidden.length === 0) return payload;
+  const result: Record<string, unknown> = { ...payload };
+  const object = payload.object as Record<string, unknown> | undefined;
+  if (object && typeof object === 'object') {
+    result.object = Object.fromEntries(Object.entries(object).map(([name, value]) => [name, hidden.includes(name) ? null : value]));
+  }
+  if (Array.isArray(payload.changed)) {
+    const changed = (payload.changed as unknown[]).filter((name) => !hidden.includes(String(name)));
+    if (changed.length === 0) return null;
+    result.changed = changed;
+  }
+  const previous = payload.previous as Record<string, unknown> | undefined;
+  if (previous && typeof previous === 'object') {
+    result.previous = Object.fromEntries(Object.entries(previous).filter(([name]) => !hidden.includes(name)));
+  }
+  return result;
+}
+
+async function loadKeyAccess(admin: SupabaseClient, keyId: string): Promise<KeyAccess> {
   const { data: key } = await admin.from('api_keys')
     .select('organization_id, user_id, module_access, expires_at, revoked_at').eq('id', keyId).maybeSingle();
   if (!key || key.revoked_at) return { ok: false, reason: 'De API-sleutel van dit eindpunt is ingetrokken.' };
@@ -299,45 +361,104 @@ export async function resolveHostAddresses(host: string, fetcher: typeof fetch =
 }
 
 /**
- * Wijst de naam van dit adres NU naar een intern adres? Een naam die tussen
- * deze controle en het versturen van antwoord verandert (DNS-rebinding), houdt
- * dit niet tegen — het vangt de naam die gewoon naar binnen wijst
- * (127.0.0.1.nip.io en dergelijke).
+ * Vaste antwoorden voor namen die in een testomgeving niet in de DNS staan:
+ * `WEBHOOK_DNS_OVERRIDES="hooks.test.nl=203.0.113.10;andere.nl=198.51.100.7"`.
+ * Alleen voor lokaal testen. Ook deze adressen gaan langs isPrivateAddress: een
+ * naam vastzetten op 127.0.0.1 kan hiermee dus niet.
+ */
+const DNS_OVERRIDES = parseDnsOverrides(
+  (globalThis as { Deno?: { env?: { get?: (name: string) => string | undefined } } }).Deno?.env?.get?.('WEBHOOK_DNS_OVERRIDES'),
+);
+
+export function parseDnsOverrides(raw: string | undefined): Map<string, string[]> {
+  const overrides = new Map<string, string[]>();
+  for (const entry of String(raw || '').split(';')) {
+    const [name, list] = entry.split('=');
+    const host = String(name || '').trim().toLowerCase().replace(/\.+$/, '');
+    const addresses = String(list || '').split(',').map((part) => part.trim()).filter(Boolean);
+    if (host && addresses.length > 0) overrides.set(host, addresses);
+  }
+  return overrides;
+}
+
+/** Waar een naam nu naartoe wijst, zoals de bezorging hem opzoekt (met de vaste antwoorden voor tests). */
+export async function resolveForDelivery(host: string): Promise<string[]> {
+  return DNS_OVERRIDES.get(host) ?? await resolveHostAddresses(host);
+}
+
+/**
+ * Het doel van een bezorging: de URL en de adressen waarmee we mogen verbinden.
+ * Of een probleem, met `disable` als het eindpunt uit moet (het wijst naar
+ * binnen) en niet als het later opnieuw kan (de naam heeft nu geen adres).
  *
  * Gooit DnsTimeout als het opzoeken niet lukt: liever een poging later dan
  * versturen zonder te weten waarheen.
  */
-async function privateResolution(rawUrl: string, fetcher: typeof fetch = fetch): Promise<string | null> {
-  const host = new URL(rawUrl).hostname.replace(/^\[|\]$/g, '').replace(/\.+$/, '');
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':')) return null; // al gecontroleerd
-  const addresses = await resolveHostAddresses(host, fetcher);
-  return addresses.some(isPrivateAddress)
-    ? `${host} wijst naar een intern adres. Webhooks gaan alleen naar adressen die vanaf internet bereikbaar zijn.`
-    : null;
+export async function deliveryTarget(
+  rawUrl: string, resolve: (host: string) => Promise<string[]> = resolveForDelivery,
+): Promise<{ url: URL; addresses: string[] } | { problem: string; disable: boolean }> {
+  const problem = webhookUrlProblem(rawUrl);
+  if (problem) return { problem, disable: true };
+  const url = new URL(String(rawUrl).trim());
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
+  // Een IP-adres in de URL zelf: dat keurde webhookUrlProblem al.
+  if (isIpLiteral(host)) return { url, addresses: [host] };
+  const addresses = [...new Set((await resolve(host)).map((address) => address.trim().toLowerCase()).filter(Boolean))];
+  if (addresses.some(isPrivateAddress)) {
+    return { problem: `${host} wijst naar een intern adres. Webhooks gaan alleen naar adressen die vanaf internet bereikbaar zijn.`, disable: true };
+  }
+  if (addresses.length === 0) {
+    return { problem: `${host} heeft nu geen IP-adres (DNS). Klopt de naam? We proberen het later opnieuw.`, disable: false };
+  }
+  // IPv4 eerst: niet elke runtime komt via IPv6 naar buiten.
+  return { url, addresses: [...addresses.filter((a) => !a.includes(':')), ...addresses.filter((a) => a.includes(':'))] };
+}
+
+/**
+ * Verstuurt naar de goedgekeurde adressen, één voor één zolang er geen
+ * verbinding komt. Een eindpunt dat wel opnam maar een fout gaf, krijgt geen
+ * tweede bericht via een ander adres. Alles samen binnen TIMEOUT_MS.
+ */
+async function sendPinned(
+  transport: WebhookTransport, target: { url: URL; addresses: string[] }, headers: Record<string, string>, body: string,
+): Promise<PinnedResponse> {
+  const deadline = Date.now() + TIMEOUT_MS;
+  let lastError: unknown = null;
+  for (const address of target.addresses.slice(0, MAX_ADDRESSES_TRIED)) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    try {
+      return await transport({ url: target.url, address, headers, body, timeoutMs: remaining, maxBodyBytes: RESPONSE_READ_BYTES });
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof TransportError && error.kind === 'connect')) throw error;
+    }
+  }
+  throw lastError ?? new TransportError(`Geen antwoord binnen ${TIMEOUT_MS / 1000} seconden.`, 'timeout');
 }
 
 /**
  * Voor het aanmaken en wijzigen van een eindpunt: het adres zelf, en waar de
- * naam nu naartoe wijst. Lukt het opzoeken niet, dan geen oordeel — bij elke
- * bezorging wordt opnieuw gekeken, en dan wordt er niet blind verstuurd.
+ * naam nu naartoe wijst. Lukt het opzoeken niet, of heeft de naam (nog) geen
+ * adres, dan geen oordeel — bij elke bezorging wordt opnieuw gekeken, en dan
+ * wordt er niet blind verstuurd.
  */
-export async function webhookAddressProblem(rawUrl: string, fetcher: typeof fetch = fetch): Promise<string | null> {
-  const problem = webhookUrlProblem(rawUrl);
-  if (problem) return problem;
+export async function webhookAddressProblem(
+  rawUrl: string, resolve: (host: string) => Promise<string[]> = resolveForDelivery,
+): Promise<string | null> {
   try {
-    return await privateResolution(rawUrl, fetcher);
+    const target = await deliveryTarget(rawUrl, resolve);
+    return 'problem' in target && target.disable ? target.problem : null;
   } catch {
     return null;
   }
 }
 
-async function readPreview(response: Response): Promise<string | null> {
-  try {
-    const text = await response.text();
-    return text ? text.slice(0, RESPONSE_PREVIEW_BYTES) : null;
-  } catch {
-    return null;
-  }
+/** Het begin van het antwoord als tekst, of null als er niets was. */
+function previewText(bytes: Uint8Array): string | null {
+  if (bytes.length === 0) return null;
+  const text = new TextDecoder().decode(bytes).slice(0, RESPONSE_PREVIEW_BYTES);
+  return text || null;
 }
 
 /**

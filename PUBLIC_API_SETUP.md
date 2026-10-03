@@ -40,7 +40,7 @@ Bij het aanmaken kiest de owner/admin één van vier treden:
 | Alleen lezen | `read` | Geweigerd (403 `insufficient_scope`). |
 | Lezen en klaarzetten | `+ propose` | Een kaart in de goedkeurwachtrij (202). Er gebeurt pas iets als een mens klikt. |
 | Lezen en rechtstreeks uitvoeren | `+ execute` | Het gebeurt meteen (200) — als ResoFly het op de server kan en het niet onomkeerbaar is. Anders alsnog klaargezet, met de reden erbij. |
-| Alles rechtstreeks uitvoeren | `+ execute_high` | Ook post naar klanten, boekingen, aangiftes en publieke links gaan er rechtstreeks door. |
+| Alles rechtstreeks uitvoeren | `+ execute_high` | Ook post naar klanten, boekingen, aangiftes en publieke links gaan er rechtstreeks door — en wat het klantportaal raakt (een reactie die de klant ziet, het e-mailadres van een klant, een ticket of project naar een andere klant). |
 
 Daarnaast kan de sleutel **modules dichter zetten** dan de maker zelf heeft
 (een webshop hoeft niet in de boekhouding), en een **vervaldatum** krijgen.
@@ -89,8 +89,9 @@ bericht faalt, of `410 Gone` antwoordt, zet zichzelf uit, met de reden erbij.
 supabase db push
 ```
 
-Dat draait `20261003000000_public_api.sql`, `20261003010000_webhooks.sql` en
-`20261003020000_api_rest.sql` (alle drie veilig om te herhalen). De eerste:
+Dat draait `20261003000000_public_api.sql`, `20261003010000_webhooks.sql`,
+`20261003020000_api_rest.sql` en `20261003030000_api_hardening.sql` (alle vier
+veilig om te herhalen). De eerste:
 
 | Onderdeel | Wat |
 |---|---|
@@ -119,6 +120,14 @@ De derde, voor de vaste adressen (`/v1/clients`, `/v1/tasks`, …):
 | Onderdeel | Wat |
 |---|---|
 | `api_rest_write()` | Aanmaken en wijzigen via een vast adres. Alleen voor de service role. Wisselt binnen de transactie naar het teamlid achter de sleutel (rol `authenticated`, diens id in de claims) en schrijft dan — met de RLS, triggers en het auditlog van de app. Weigert kolommen die de app zelf beheert. |
+
+De vierde zet de bevindingen uit de veiligheidstest dicht (zie de kop van het
+bestand): wat het klantportaal raakt vraagt `execute_high` (`p_allow_outward`),
+strengere regels voor uren, geen voorstel van een ingetrokken sleutel, sleutels
+vervallen als het teamlid de organisatie verlaat, reacties horen bij een ticket
+van dezelfde organisatie, en bij de webhooks: geen adres in `audit_logs`, eerlijk
+claimen per eindpunt (één ronde tegelijk), en per onderwerp een vaste lijst
+velden in een bericht (`webhook_payload_columns`, dezelfde als de API).
 
 Op **staging** gebeurt dit vanzelf: de workflow *Deploy Supabase (staging)*
 draait `supabase db push` en `supabase functions deploy` bij elke push naar
@@ -159,6 +168,7 @@ Optioneel:
 | `API_DOCS_URL` | Link naar de handleiding in het OpenAPI-document. | — |
 | `API_RATE_LIMIT_PER_MINUTE` | Aanroepen per minuut per sleutel (10–6000). | `300` |
 | `API_ADMIN_ALLOWED_ORIGINS` | Extra origins voor `api-admin`, kommagescheiden. | — |
+| `WEBHOOK_DNS_OVERRIDES` | **Alleen voor een testomgeving**: vaste IP-adressen voor namen die niet in de DNS staan, `naam=ip[,ip];naam2=ip`. Ook die adressen worden gekeurd (een naam op 127.0.0.1 zetten kan niet). In productie leeg laten. | — |
 
 Voor **webhooks** zijn twee secrets nodig. Zonder deze twee werkt de API
 gewoon, maar kan niemand een webhook aanmaken (het scherm zegt dat ook):
@@ -201,8 +211,17 @@ select cron.schedule(
 
 Een ronde bezorgt tot er niets meer klaarstaat of 40 seconden voorbij zijn, met
 8 bezorgingen tegelijk en hooguit 4 per eindpunt — zodat één eindpunt dat niet
-antwoordt, de webhooks van andere organisaties niet ophoudt. Twee rondes die
-elkaar overlappen, pakken nooit dezelfde bezorging.
+antwoordt, de webhooks van andere organisaties niet ophoudt. Elk eindpunt met
+iets klaarstaands komt in elke ronde aan bod (ook naast een eindpunt met een
+grote achterstand), en rondes claimen één voor één, zodat twee overlappende
+rondes samen nooit meer dan 4 tegelijk naar één eindpunt sturen.
+
+Opruimen van de API zelf (verlopen `Idempotency-Key`s, logregels ouder dan 30
+dagen) doet de functie `api` af en toe zelf. Een dagelijkse job is netter:
+
+```sql
+select cron.schedule('api-purge-expired', '17 3 * * *', $$ select public.api_purge_expired(); $$);
+```
 
 Controleren / verwijderen:
 
@@ -330,9 +349,12 @@ waar de naam op dat moment naartoe wijst — met de DNS van de runtime, of als d
 dat niet kan via DNS-over-HTTPS (Cloudflare, met Google als terugval). Lukt het
 opzoeken niet, dan wordt er niet blind verstuurd maar later opnieuw geprobeerd.
 Een doorverwijzing wordt niet gevolgd, en na 10 seconden zonder antwoord geven
-we op. Wat dit niet tegenhoudt: een naam die tussen de controle en het versturen
-van antwoord verandert (DNS-rebinding); daarvoor zou de runtime het adres moeten
-kunnen vastpinnen.
+we op. **De verbinding ligt vast op het gekeurde adres**
+(`_shared/webhookTransport.ts`): de bezorger zoekt de naam één keer op, keurt de
+adressen, en verbindt met precies zo'n adres (`Deno.connect` + `Deno.startTls`,
+met het certificaat gecontroleerd tegen de naam). Een naam die tussen de controle
+en het versturen omslaat (DNS-rebinding), komt dus niet binnen. Van het antwoord
+leest de bezorger hooguit 4 kB, hoe groot het ook is.
 
 **Ondertekend, met de tijd erin.** Elk bericht draagt
 `ResoFly-Signature: t=<unix-tijd>,v1=<HMAC-SHA256>` over `<t>.<body>`, met het
@@ -345,10 +367,19 @@ bezorging opnieuw gewogen: is de sleutel niet ingetrokken of verlopen, is de
 maker nog actief lid, en mag die combinatie de module van de gebeurtenis lezen?
 Zo niet, dan wordt de bezorging overgeslagen, met de reden erbij.
 
-**Geen geheimen in een bericht.** Kolommen die op token, hash, secret, password
-of pin lijken, opslagsleutels en base64-bestanden gaan nooit mee — een patroon,
-geen lijst, zodat een nieuwe kolom `share_token` er vanzelf buiten blijft.
-Velden boven de 32 kB vallen eruit en staan in `_omitted`.
+**Geen geheimen in een bericht.** Per onderwerp gaat er een vaste lijst velden
+mee (`webhook_payload_columns`): voor klanten, contactpersonen, projecten, taken,
+tickets, reacties en uren precies die van de API (`webhooksServer.test.ts` legt
+ze naast elkaar), voor offertes, facturen, contracten en afspraken wat een
+koppeling nodig heeft. Een nieuwe kolom gaat dus niet vanzelf mee naar buiten.
+Daarbovenop blijven kolommen die op token, hash, secret, password of pin lijken,
+opslagsleutels en base64-bestanden er altijd buiten, en vallen velden boven de
+32 kB eruit (`_omitted`). Mag de sleutel van een eindpunt Financiën niet lezen,
+dan gaan tarieven en klantwaarde als `null` mee — net als via de API.
+
+**Het adres van een webhook is zelf vaak een geheim** (Zapier en Make zetten er
+een token in). Het staat daarom niet in `audit_logs`, dat elk teamlid leest: daar
+staat de omschrijving, of "Webhook".
 
 ## Als het niet werkt
 

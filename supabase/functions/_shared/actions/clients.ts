@@ -182,8 +182,8 @@ export const CLIENT_ACTIONS: ActionDef[] = [
     required: ['contact_id', 'is_active'],
     async plan(ctx, input) {
       const contactId = id(input, 'contact_id');
-      const contact = await row<{ name: string; client_id: string; is_active: boolean }>(
-        ctx, 'client_contacts', contactId, 'name, client_id, is_active', 'Contactpersoon');
+      const contact = await row<{ name: string; client_id: string; is_active: boolean; gives_portal_access: boolean }>(
+        ctx, 'client_contacts', contactId, 'name, client_id, is_active, gives_portal_access', 'Contactpersoon');
       const active = bool(input, 'is_active', true);
       if (contact.is_active === active) throw new ActionError(`${contact.name} staat al ${active ? 'actief' : 'inactief'}.`);
       const client = await row<{ name: string }>(ctx, 'clients', contact.client_id, 'name', 'Klant');
@@ -191,6 +191,8 @@ export const CLIENT_ACTIONS: ActionDef[] = [
         title: `${contact.name} op ${active ? 'actief' : 'inactief'} zetten`,
         sub: `${client.name}${active ? '' : ' — hij krijgt geen post meer en verliest portaaltoegang'}`,
         kind: 'work',
+        // Weer actief met portaaltoegang = weer binnen in het klantportaal.
+        risk: active && contact.gives_portal_access ? 'high' : 'normal',
         payload: { contact_id: contactId, client_id: contact.client_id, name: contact.name, is_active: active },
       };
     },

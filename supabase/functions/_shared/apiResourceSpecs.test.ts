@@ -18,11 +18,21 @@ import { WEBHOOK_EVENTS } from './webhooks.ts';
 
 const MIGRATIONS_DIR = new URL('../../migrations/', import.meta.url);
 const FRESH = readFileSync(new URL('../../FRESH_INSTALL_COMPLETE_SCHEMA.sql', import.meta.url), 'utf8');
-const REST_MIGRATION = readFileSync(new URL('20261003020000_api_rest.sql', MIGRATIONS_DIR), 'utf8');
-
 const migrations = readdirSync(MIGRATIONS_DIR)
   .filter((name) => /^\d{14}_.+\.sql$/.test(name)).sort()
   .map((name) => readFileSync(new URL(name, MIGRATIONS_DIR), 'utf8'));
+
+/** De LAATSTE definitie van een functie in de migraties: die geldt. */
+function latestFunction(name: string): string {
+  const marker = `create or replace function public.${name}(`;
+  for (const sql of [...migrations].reverse()) {
+    const start = sql.indexOf(marker);
+    if (start >= 0) return sql.slice(start, sql.indexOf('\n$$;', start));
+  }
+  throw new Error(`${name} staat in geen enkele migratie`);
+}
+
+const REST_MIGRATION = latestFunction('api_rest_write');
 
 const quoted = (text: string) => [...text.matchAll(/'([^']*)'/g)].map((m) => m[1]);
 
