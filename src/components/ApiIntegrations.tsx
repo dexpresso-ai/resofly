@@ -5,6 +5,7 @@ import {
   listApiRequests, PublicApiNotAvailableError, revokeApiKey,
   type ApiAccessLevel, type ApiKey, type ApiRequestLogEntry,
 } from '../lib/public-api';
+import { WebhookEndpoints } from './WebhookEndpoints';
 import type { OrganizationMember, UUID } from '../types';
 
 /**
@@ -170,6 +171,7 @@ export function ApiIntegrations({ organizationId, canAdmin, teamMembers }: {
   }
 
   return (
+    <>
     <div className="settings-card api-integrations">
       <h3>API-sleutels</h3>
       <p className="mcp-connections-intro">
@@ -335,6 +337,8 @@ export function ApiIntegrations({ organizationId, canAdmin, teamMembers }: {
         </>
       )}
     </div>
+    <WebhookEndpoints organizationId={organizationId} canAdmin={canAdmin} apiKeys={keys} />
+    </>
   );
 }
 

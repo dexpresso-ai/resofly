@@ -206,3 +206,12 @@ verify_jwt = false
 # patroon als de andere app-functies die CORS-preflight zelf afhandelen.
 [functions.api-admin]
 verify_jwt = false
+
+# webhooks bezorgt uitgaande webhooks: pg_cron roept hem elke minuut aan
+# (?cron=dispatch, geauthenticeerd via het gedeelde WEBHOOK_CRON_SECRET in de
+# header x-cron-secret — geen Supabase JWT, net als web-push en campaigns). Hij
+# claimt bezorgingen, ondertekent ze met het geheim van het eindpunt
+# (versleuteld met WEBHOOK_SECRET_ENCRYPTION_KEY) en verstuurt ze; zonder geldig
+# cron-secret doet hij niets.
+[functions.webhooks]
+verify_jwt = false

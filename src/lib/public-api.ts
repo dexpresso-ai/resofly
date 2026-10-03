@@ -178,3 +178,141 @@ export async function listApiRequests(organizationId: UUID, limit = 50): Promise
   }
   return (data ?? []) as ApiRequestLogEntry[];
 }
+
+// ── Webhooks ─────────────────────────────────────────────────────────────────
+//
+// Zelfde tweedeling als bij de sleutels. Aanmaken, adres of gebeurtenissen
+// wijzigen, het geheim vernieuwen en testen lopen via `api-admin`: daar wordt
+// het adres gecontroleerd (geen intern netwerk) en het geheim versleuteld.
+// Zien, aan/uit en verwijderen gaan rechtstreeks via RLS, zodat "stop hiermee"
+// het altijd doet.
+
+export interface WebhookEndpoint {
+  id: UUID;
+  organization_id: UUID;
+  url: string;
+  description: string;
+  /** Exacte types, `onderwerp.*` of `*`. */
+  events: string[];
+  active: boolean;
+  created_by: UUID | null;
+  /** Gezet = aangemaakt door een koppeling via de API, met die sleutel. */
+  api_key_id: UUID | null;
+  disabled_reason: string | null;
+  consecutive_failures: number;
+  failing_since: string | null;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WebhookDelivery {
+  id: UUID;
+  status: 'pending' | 'sending' | 'delivered' | 'failed' | 'skipped';
+  attempts: number;
+  next_attempt_at: string;
+  last_attempt_at: string | null;
+  response_status: number | null;
+  error: string | null;
+  created_at: string;
+  delivered_at: string | null;
+  event_type: string | null;
+}
+
+export interface WebhookEventInfo {
+  type: string;
+  module: string;
+  label: string;
+}
+
+export interface WebhookTestResult {
+  status: 'delivered' | 'retrying' | 'failed' | 'skipped';
+  httpStatus: number | null;
+  error: string | null;
+  durationMs: number;
+}
+
+const ENDPOINT_COLUMNS = 'id, organization_id, url, description, events, active, created_by, api_key_id, disabled_reason, consecutive_failures, failing_since, last_success_at, last_failure_at, created_at, updated_at';
+
+async function invokeApiAdmin<T>(organizationId: UUID, body: Record<string, unknown>, fallback: string): Promise<T> {
+  const { data, error } = await supabase.functions.invoke('api-admin', { body: { ...body, organizationId } });
+  if (error) await throwFunctionError(error, fallback);
+  if (data?.error) throw new Error(String(data.error));
+  return data as T;
+}
+
+/** De gebeurtenissen waarop een webhook kan, en of webhooks in deze omgeving aan staan. */
+export async function loadWebhookCatalog(organizationId: UUID): Promise<{ events: WebhookEventInfo[]; ready: boolean }> {
+  const data = await invokeApiAdmin<{ events?: WebhookEventInfo[]; webhooksReady?: boolean }>(
+    organizationId, { action: 'catalog' }, 'De lijst met gebeurtenissen kon niet worden opgehaald.');
+  return { events: data.events ?? [], ready: data.webhooksReady === true };
+}
+
+export async function listWebhooks(organizationId: UUID): Promise<WebhookEndpoint[]> {
+  const { data, error } = await supabase
+    .from('webhook_endpoints')
+    .select(ENDPOINT_COLUMNS)
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false });
+  if (error) {
+    if (isMissingRelation(error)) throw new PublicApiNotAvailableError();
+    throw new Error(`De webhooks konden niet worden opgehaald: ${error.message}`);
+  }
+  return (data ?? []) as WebhookEndpoint[];
+}
+
+export async function listWebhookDeliveries(organizationId: UUID, endpointId: UUID, limit = 20): Promise<WebhookDelivery[]> {
+  const { data, error } = await supabase
+    .from('webhook_deliveries')
+    .select('id, status, attempts, next_attempt_at, last_attempt_at, response_status, error, created_at, delivered_at, webhook_events(type)')
+    .eq('organization_id', organizationId)
+    .eq('endpoint_id', endpointId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`De bezorgingen konden niet worden opgehaald: ${error.message}`);
+  return (data ?? []).map((row) => {
+    const event = (row as { webhook_events?: { type?: string } | null }).webhook_events;
+    return { ...(row as unknown as WebhookDelivery), event_type: event?.type ?? null };
+  });
+}
+
+/** Een nieuwe webhook. `secret` (whsec_…) zie je maar één keer. */
+export async function createWebhook(
+  organizationId: UUID, input: { url: string; events: string[]; description: string },
+): Promise<{ endpoint: WebhookEndpoint; secret: string }> {
+  return await invokeApiAdmin(organizationId, { action: 'createWebhook', ...input }, 'De webhook kon niet worden aangemaakt.');
+}
+
+export async function updateWebhook(
+  organizationId: UUID, webhookId: UUID, patch: { url?: string; events?: string[]; description?: string },
+): Promise<WebhookEndpoint> {
+  const data = await invokeApiAdmin<{ endpoint: WebhookEndpoint }>(
+    organizationId, { action: 'updateWebhook', webhookId, ...patch }, 'De webhook kon niet worden gewijzigd.');
+  return data.endpoint;
+}
+
+/** Aan of uit, rechtstreeks via RLS. Weer aanzetten wist de foutreeks (database-trigger). */
+export async function setWebhookActive(webhookId: UUID, active: boolean): Promise<void> {
+  const { error } = await supabase.from('webhook_endpoints').update({ active }).eq('id', webhookId);
+  if (error) throw new Error(error.message || 'De webhook kon niet worden aan- of uitgezet.');
+}
+
+export async function deleteWebhook(webhookId: UUID): Promise<void> {
+  const { error } = await supabase.from('webhook_endpoints').delete().eq('id', webhookId);
+  if (error) throw new Error(`Verwijderen is niet gelukt: ${error.message}`);
+}
+
+/** Een nieuw geheim; het oude werkt meteen niet meer. */
+export async function rotateWebhookSecret(organizationId: UUID, webhookId: UUID): Promise<string> {
+  const data = await invokeApiAdmin<{ secret: string }>(
+    organizationId, { action: 'rotateWebhookSecret', webhookId }, 'Het geheim kon niet worden vernieuwd.');
+  return data.secret;
+}
+
+/** Stuurt meteen een testbericht en geeft terug hoe het eindpunt antwoordde. */
+export async function testWebhook(organizationId: UUID, webhookId: UUID): Promise<WebhookTestResult> {
+  const data = await invokeApiAdmin<{ result: WebhookTestResult }>(
+    organizationId, { action: 'testWebhook', webhookId }, 'Het testbericht kon niet worden verstuurd.');
+  return data.result;
+}

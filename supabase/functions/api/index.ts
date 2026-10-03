@@ -59,6 +59,10 @@ import {
   parseScopes, scopeAllows, verifyToken, SCOPE_EXECUTE, SCOPE_EXECUTE_HIGH, SCOPE_PROPOSE, SCOPE_READ,
 } from '../_shared/mcpAuth.ts';
 import {
+  createEndpoint, deleteEndpoint, getEndpoint, listDeliveries, listEndpoints, testEndpoint, updateEndpoint,
+  visibleEvents, WebhookInputError, type EndpointOwner,
+} from '../_shared/webhookAdmin.ts';
+import {
   actionInputSchema, apiRoute, API_VERSION, auditStatusesFor, buildOpenApi, effectiveModuleAccess,
   effectiveModuleLevel, errorBody, hasKeyRestrictions, isModuleKey, isValidIdempotencyKey, levelOfScope,
   matchRoute, MODULE_LABEL, pageParams, parseApiKey, presentedApiKey, proposalStatus, PROPOSAL_STATUSES,
@@ -71,6 +75,7 @@ const admin = createAdminClient();
 /** De basis tot en met de functie, zoals een klant hem aanroept. Achter een eigen domein: API_PUBLIC_URL. */
 const PUBLIC_BASE = (Deno.env.get('API_PUBLIC_URL') || `${requiredEnv('SUPABASE_URL')}/functions/v1/api`).replace(/\/+$/, '');
 const DOCS_URL = (Deno.env.get('API_DOCS_URL') || '').trim();
+const WEBHOOK_ENCRYPTION_KEY = Deno.env.get('WEBHOOK_SECRET_ENCRYPTION_KEY') || '';
 
 const TZ = 'Europe/Amsterdam';
 
@@ -281,6 +286,10 @@ async function handle(
   if (proposal) {
     if (method !== 'GET') throw methodNotAllowed('GET');
     return json(await getProposal(proposal.id, caller), 200, requestId);
+  }
+
+  if (route === '/v1/events' || route === '/v1/webhooks' || route.startsWith('/v1/webhooks/')) {
+    return await handleWebhooks(req, url, route, method, caller, requestId);
   }
 
   throw new ApiError(404, 'not_found', `Onbekend adres "${route}". Wat er bestaat, staat in ${PUBLIC_BASE}/v1/openapi.json.`);
@@ -772,6 +781,114 @@ function proposalTitle(proposal: Proposal): string {
 
 function isIrreversible(proposal: Proposal): boolean {
   return severityForProposal(proposal.type, proposal.type === 'action' ? proposal.risk : null) === 'high';
+}
+
+// ── Webhooks ─────────────────────────────────────────────────────────────────
+//
+// Het "REST hooks"-patroon van Zapier en Make: een koppeling meldt zelf een
+// adres aan, en ResoFly stuurt daar een ondertekend bericht naartoe als er iets
+// gebeurt. Een eindpunt dat zo ontstaat, hoort bij DEZE sleutel: de koppeling
+// ziet en beheert alleen haar eigen eindpunten, krijgt alleen gebeurtenissen uit
+// modules die de sleutel mag lezen (ook dat weegt de bezorger elke keer
+// opnieuw), en het eindpunt verdwijnt als de sleutel wordt ingetrokken.
+//
+// Lezen is genoeg om een webhook aan te maken: hij levert niets af wat de
+// sleutel niet ook zelf had kunnen opvragen — alleen sneller.
+
+async function handleWebhooks(
+  req: Request, url: URL, route: string, method: string, caller: Caller, requestId: string,
+): Promise<Response> {
+  const owner = webhookOwner(caller);
+  try {
+    if (route === '/v1/events') {
+      if (method !== 'GET') throw methodNotAllowed('GET');
+      return json({ data: visibleEvents(owner) }, 200, requestId);
+    }
+
+    if (route === '/v1/webhooks') {
+      if (method === 'GET') return json({ data: (await listEndpoints(admin, owner)).map(presentEndpoint) }, 200, requestId);
+      if (method === 'POST') {
+        const input = parseInput(await readBody(req));
+        const created = await createEndpoint(admin, owner, input, webhookEncryptionKey());
+        return json({ webhook: presentEndpoint(created.endpoint), secret: created.secret }, 201, requestId,
+          { Location: `${PUBLIC_BASE}/v1/webhooks/${created.endpoint.id}` });
+      }
+      throw methodNotAllowed('GET, POST');
+    }
+
+    const test = matchRoute(route, '/v1/webhooks/:id/test');
+    if (test) {
+      if (method !== 'POST') throw methodNotAllowed('POST');
+      const result = await testEndpoint(admin, owner, test.id, { encryptionKey: webhookEncryptionKey(), sentBy: `API-sleutel "${caller.keyName}"` });
+      return json({
+        status: result.status, http_status: result.httpStatus, error: result.error, duration_ms: result.durationMs,
+        delivery_id: result.deliveryId, event_id: result.eventId,
+      }, 200, requestId);
+    }
+
+    const deliveries = matchRoute(route, '/v1/webhooks/:id/deliveries');
+    if (deliveries) {
+      if (method !== 'GET') throw methodNotAllowed('GET');
+      const { limit } = pageParams(url.searchParams);
+      return json({ data: await listDeliveries(admin, owner, deliveries.id, limit) }, 200, requestId);
+    }
+
+    const one = matchRoute(route, '/v1/webhooks/:id');
+    if (one) {
+      if (method === 'GET') return json(presentEndpoint(await getEndpoint(admin, owner, one.id)), 200, requestId);
+      if (method === 'PATCH') {
+        const input = parseInput(await readBody(req));
+        return json(presentEndpoint(await updateEndpoint(admin, owner, one.id, input)), 200, requestId);
+      }
+      if (method === 'DELETE') {
+        await deleteEndpoint(admin, owner, one.id);
+        return new Response(null, { status: 204, headers: { ...corsHeaders(), 'X-Request-Id': requestId } });
+      }
+      throw methodNotAllowed('GET, PATCH, DELETE');
+    }
+  } catch (error) {
+    if (error instanceof WebhookInputError) {
+      const code: ApiErrorCode = error.status === 404 ? 'not_found' : error.status === 409 ? 'conflict'
+        : error.status === 400 ? 'invalid_request' : 'invalid_input';
+      throw new ApiError(error.status, code, error.message);
+    }
+    throw error;
+  }
+
+  throw new ApiError(404, 'not_found', `Onbekend adres "${route}".`);
+}
+
+/** Van wie een eindpunt is als een sleutel hem aanmaakt: van die sleutel, met diens leesrechten. */
+function webhookOwner(caller: Caller): EndpointOwner {
+  return {
+    organizationId: caller.organizationId,
+    userId: caller.userId,
+    apiKeyId: caller.keyId,
+    canRead: (module: string) => moduleLevel(caller, module) !== 'none',
+  };
+}
+
+/** Wat een koppeling van een eindpunt ziet. Nooit het geheim. */
+function presentEndpoint(endpoint: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: endpoint.id,
+    url: endpoint.url,
+    description: endpoint.description,
+    events: endpoint.events,
+    active: endpoint.active,
+    disabled_reason: endpoint.disabled_reason ?? null,
+    consecutive_failures: endpoint.consecutive_failures ?? 0,
+    last_success_at: endpoint.last_success_at ?? null,
+    last_failure_at: endpoint.last_failure_at ?? null,
+    created_at: endpoint.created_at,
+  };
+}
+
+function webhookEncryptionKey(): string {
+  if (!WEBHOOK_ENCRYPTION_KEY) {
+    throw new ApiError(503, 'internal_error', 'Webhooks staan in deze omgeving nog niet aan. Neem contact op met ResoFly.');
+  }
+  return WEBHOOK_ENCRYPTION_KEY;
 }
 
 // ── Idempotentie ─────────────────────────────────────────────────────────────

@@ -6,6 +6,10 @@ een koppelplatform als **Zapier**, **Make** of **n8n**. Gewone HTTP en JSON,
 met een API-sleutel die een owner of admin aanmaakt onder **Instellingen → API &
 webhooks**.
 
+Andersom kan ResoFly zelf een seintje geven: met **webhooks** stuurt ResoFly een
+ondertekend bericht naar een adres van de klant zodra er iets gebeurt — een
+factuur betaald, een nieuwe klant, een ticket van het portaal.
+
 Voor ontwikkelaars die ertegen bouwen staat de handleiding in
 [`docs/API.md`](docs/API.md). Dit document gaat over uitrollen en beheren.
 
@@ -59,13 +63,34 @@ alleen afknijpen.
 Een sleutel is wel van de **organisatie**: owners en admins zien alle sleutels
 en kunnen elke sleutel intrekken, ook die van een collega die uit dienst ging.
 
+### Webhooks
+
+Een eindpunt is een https-adres plus een lijst gebeurtenissen (`invoice.paid`,
+`client.*`, of `*` voor alles; de catalogus staat in
+`supabase/functions/_shared/webhooks.ts`). Er zijn twee soorten:
+
+| | Aangemaakt in de app | Aangemaakt via de API (`POST /v1/webhooks`) |
+|---|---|---|
+| Door | Owner/admin, Instellingen → API & webhooks | Een koppeling met een API-sleutel (Zapier, Make, n8n) |
+| Hoort bij | De organisatie | Die sleutel — verdwijnt als de sleutel wordt ingetrokken |
+| Krijgt | Alle gebeurtenissen waarop hij is ingeschreven | Alleen uit modules die de sleutel **nu** mag lezen |
+
+Hoe het loopt: een trigger op elf kerntabellen legt elke wijziging vast als
+gebeurtenis — alleen als er in die organisatie een actief eindpunt is dat hem
+wil horen, dus een organisatie zonder webhooks merkt er niets van. De functie
+`webhooks` (elke minuut via pg_cron) ondertekent en verstuurt ze. Lukt het niet,
+dan opnieuw na 1 min, 5 min, 30 min, 2 uur, 6 uur, 12 uur, 24 uur en 24 uur —
+negen pogingen, bijna drie dagen. Een eindpunt dat een hele dag lang bij elk
+bericht faalt, of `410 Gone` antwoordt, zet zichzelf uit, met de reden erbij.
+
 ## 1. Database
 
 ```bash
 supabase db push
 ```
 
-Dat draait `20261003000000_public_api.sql` (veilig om te herhalen):
+Dat draait `20261003000000_public_api.sql` en `20261003010000_webhooks.sql`
+(beide veilig om te herhalen). De eerste:
 
 | Onderdeel | Wat |
 |---|---|
@@ -77,6 +102,18 @@ Dat draait `20261003000000_public_api.sql` (veilig om te herhalen):
 | `api_consume_rate_limit()` | De aanroeplimiet, in één statement met een rijvergrendeling. |
 | Triggers | Alleen hernoemen/intrekken vanuit de app; intrekken is definitief en annuleert openstaande voorstellen; aanmaken/hernoemen/intrekken komt in `audit_logs`. |
 
+De tweede, voor webhooks:
+
+| Onderdeel | Wat |
+|---|---|
+| `webhook_endpoints` | De eindpunten. RLS: owners/admins lezen, zetten aan/uit, wijzigen de omschrijving en verwijderen. Adres en gebeurtenissen wijzigen gaat via `api-admin` (daar wordt het adres gekeurd). |
+| `webhook_endpoint_secrets` | Het ondertekengeheim, versleuteld (AES-GCM). Geen policies. |
+| `webhook_events` | Wat er gebeurde, zonder geheimen (alles wat op token, hash, secret, password of pin lijkt valt eruit). 30 dagen. |
+| `webhook_deliveries` | Per eindpunt een bezorging: status, pogingen, het antwoord van het eindpunt. |
+| `webhook_capture()` | De trigger (`zz_webhook_capture`) op klanten, contactpersonen, projecten, taken, tickets, ticketnotities, uren, offertes, facturen, contracten en afspraken. Een fout hierin blokkeert het opslaan nooit. |
+| `claim_webhook_deliveries()`, `finish_webhook_delivery()` | Claimen (`for update skip locked`, hooguit 4 tegelijk per eindpunt) en afronden. Alleen voor de service role. |
+| Triggers | Eindpunten in `audit_logs`; een sleutel intrekken verwijdert de eindpunten van die sleutel. |
+
 Op **staging** gebeurt dit vanzelf: de workflow *Deploy Supabase (staging)*
 draait `supabase db push` en `supabase functions deploy` bij elke push naar
 `staging`.
@@ -86,14 +123,16 @@ draait `supabase db push` en `supabase functions deploy` bij elke push naar
 ```bash
 supabase functions deploy api --no-verify-jwt
 supabase functions deploy api-admin --no-verify-jwt
+supabase functions deploy webhooks --no-verify-jwt
 ```
 
 `--no-verify-jwt` staat met de reden in `supabase/config.toml`: `api` wordt
 aangeroepen door software zonder Supabase-sessie en authenticeert zelf met de
 API-sleutel; `api-admin` controleert zelf de ingelogde gebruiker, de
-organisatie, de rol (owner/admin) en de origin.
+organisatie, de rol (owner/admin) en de origin; `webhooks` wordt aangeroepen
+door pg_cron en doet niets zonder het cron-secret.
 
-Beide functies lopen bij elke pull request mee in `deno check` (job
+Alle drie lopen bij elke pull request mee in `deno check` (job
 *edge-functions* in `frontend-checks.yml`).
 
 ## 3. Instellingen (Edge Function secrets)
@@ -115,7 +154,61 @@ Optioneel:
 | `API_RATE_LIMIT_PER_MINUTE` | Aanroepen per minuut per sleutel (10–6000). | `300` |
 | `API_ADMIN_ALLOWED_ORIGINS` | Extra origins voor `api-admin`, kommagescheiden. | — |
 
-## 4. Controleren dat het staat
+Voor **webhooks** zijn twee secrets nodig. Zonder deze twee werkt de API
+gewoon, maar kan niemand een webhook aanmaken (het scherm zegt dat ook):
+
+| Secret | Waarvoor |
+|---|---|
+| `WEBHOOK_SECRET_ENCRYPTION_KEY` | Versleutelt de ondertekengeheimen van de eindpunten. Nodig in `api`, `api-admin` en `webhooks`. Lang en willekeurig: `openssl rand -base64 32`. |
+| `WEBHOOK_CRON_SECRET` | De deur van de bezorger (header `x-cron-secret`). Zelfde soort waarde. |
+
+```bash
+supabase secrets set WEBHOOK_SECRET_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+supabase secrets set WEBHOOK_CRON_SECRET="$(openssl rand -base64 32)"
+```
+
+**Bewaar `WEBHOOK_SECRET_ENCRYPTION_KEY` goed en verander hem niet zomaar.**
+Raakt hij kwijt of verandert hij, dan zijn de bestaande geheimen niet meer te
+ontsleutelen: elke bezorging mislukt dan, tot er per eindpunt een nieuw geheim is
+aangemaakt (knop *Nieuw geheim*) en de ontvanger dat heeft overgenomen.
+
+## 4. De bezorger inplannen (pg_cron)
+
+Eenmalig in de SQL-editor, met `pg_cron` en `pg_net` aan
+(`create extension if not exists pg_cron; create extension if not exists pg_net;`).
+Vervang `<REF>` en `<WEBHOOK_CRON_SECRET>`:
+
+```sql
+select cron.schedule(
+  'webhooks-dispatch',
+  '* * * * *',                       -- elke minuut
+  $$
+  select net.http_post(
+    url     := 'https://<REF>.functions.supabase.co/webhooks?cron=dispatch',
+    headers := jsonb_build_object('Content-Type','application/json','x-cron-secret','<WEBHOOK_CRON_SECRET>'),
+    body    := '{}'::jsonb,
+    timeout_milliseconds := 90000    -- een ronde mag tot een minuut duren
+  );
+  $$
+);
+```
+
+Een ronde bezorgt tot er niets meer klaarstaat of 40 seconden voorbij zijn, met
+8 bezorgingen tegelijk en hooguit 4 per eindpunt — zodat één eindpunt dat niet
+antwoordt, de webhooks van andere organisaties niet ophoudt. Twee rondes die
+elkaar overlappen, pakken nooit dezelfde bezorging.
+
+Controleren / verwijderen:
+
+```sql
+select jobid, jobname, schedule, active from cron.job where jobname = 'webhooks-dispatch';
+select status, return_message, start_time from cron.job_run_details
+ where jobid = (select jobid from cron.job where jobname = 'webhooks-dispatch')
+ order by start_time desc limit 10;
+-- verwijderen: select cron.unschedule('webhooks-dispatch');
+```
+
+## 5. Controleren dat het staat
 
 ```bash
 # Open: wat de API is (200)
@@ -139,7 +232,24 @@ curl -s https://<PROJECT>.supabase.co/functions/v1/api/v1/me \
 Je hoort de organisatie, de sleutel, het teamlid en het raster met modules
 terug te krijgen.
 
-## 5. Een eigen domein ervoor (optioneel)
+De bezorger:
+
+```bash
+# Zonder of met een verkeerd secret: 401
+curl -si -X POST "https://<REF>.functions.supabase.co/webhooks?cron=dispatch" -H "x-cron-secret: fout"
+
+# Met het goede secret: een telling van deze ronde
+curl -s -X POST "https://<REF>.functions.supabase.co/webhooks?cron=dispatch" \
+  -H "x-cron-secret: <WEBHOOK_CRON_SECRET>"
+# {"ok":true,"delivered":0,"retrying":0,"failed":0,"skipped":0,"ms":41}
+```
+
+En in de app: maak onder **Instellingen → API & webhooks** een webhook aan naar
+een testadres (bijvoorbeeld een eigen
+[webhook.site](https://webhook.site)-adres) en klik op **Testen**. Je ziet
+meteen wat het eindpunt antwoordde; onder **Bezorgingen** staat elke poging.
+
+## 6. Een eigen domein ervoor (optioneel)
 
 De Supabase-URL werkt, maar `https://api.jouwdomein.nl` leest prettiger. Zet er
 een Cloudflare Worker of route voor die alles doorstuurt naar
@@ -194,6 +304,30 @@ niet allemaal dezelfde lege teller lezen. En hooguit 50 openstaande voorstellen
 per sleutel: een wachtrij waar niemand meer doorheen komt, is een wachtrij
 waarin iemand op Uitvoeren klikt zonder te lezen.
 
+**Webhooks gaan alleen naar buiten.** Alleen `https`, geen gebruikersnaam of
+wachtwoord in het adres, en niets in een intern netwerk: geen `localhost` of
+namen op `.local`, `.internal`, `.lan` en dergelijke, en geen privé- of
+gereserveerde IP-adressen (10.x, 192.168.x, 169.254.x, fc00::/7 en verwanten —
+ook verpakt in IPv6). Bij elke bezorging opnieuw gekeurd, inclusief waar de naam
+op dat moment naartoe wijst; een doorverwijzing wordt niet gevolgd, en na 10
+seconden zonder antwoord geven we op.
+
+**Ondertekend, met de tijd erin.** Elk bericht draagt
+`ResoFly-Signature: t=<unix-tijd>,v1=<HMAC-SHA256>` over `<t>.<body>`, met het
+geheim van het eindpunt. Dat geheim ziet de owner/admin (of de koppeling) één
+keer, bij het aanmaken of vernieuwen; in de database staat het versleuteld,
+in een tabel zonder policies.
+
+**Een eindpunt van een sleutel krijgt niet meer dan die sleutel.** Bij elke
+bezorging opnieuw gewogen: is de sleutel niet ingetrokken of verlopen, is de
+maker nog actief lid, en mag die combinatie de module van de gebeurtenis lezen?
+Zo niet, dan wordt de bezorging overgeslagen, met de reden erbij.
+
+**Geen geheimen in een bericht.** Kolommen die op token, hash, secret, password
+of pin lijken, opslagsleutels en base64-bestanden gaan nooit mee — een patroon,
+geen lijst, zodat een nieuwe kolom `share_token` er vanzelf buiten blijft.
+Velden boven de 32 kB vallen eruit en staan in `_omitted`.
+
 ## Als het niet werkt
 
 **401 "Deze API-sleutel is niet bekend"** — de sleutel is verkeerd gekopieerd
@@ -220,3 +354,23 @@ wachtrij in ResoFly af.
 
 **"Nog niet beschikbaar in deze omgeving" op het instellingenscherm** — de
 frontend staat er al, de migratie nog niet. Draai `supabase db push`.
+
+**"Webhooks staan in deze omgeving nog niet aan"** — `WEBHOOK_SECRET_ENCRYPTION_KEY`
+ontbreekt in de Edge Function secrets (zie stap 3).
+
+**Er komt niets aan, en Bezorgingen blijft op "staat klaar"** — de bezorger draait
+niet. Kijk in `cron.job_run_details` (stap 4) en roep hem met de hand aan (stap
+5). Een 401 daar: het secret in de cron-job en `WEBHOOK_CRON_SECRET` verschillen.
+
+**Elke bezorging mislukt met "Bezorgen mislukte aan onze kant"** — vaak een
+`WEBHOOK_SECRET_ENCRYPTION_KEY` die veranderd is sinds het geheim werd gemaakt.
+Maak per eindpunt een nieuw geheim aan en geef het aan de ontvanger.
+
+**"Automatisch uitgezet"** — het eindpunt faalde een dag lang bij elk bericht,
+of antwoordde `410 Gone`. De reden staat bij het eindpunt. Herstel het eindpunt
+en zet het weer aan; de foutteller begint dan opnieuw. Wat er klaarstond terwijl
+het uit stond, is overgeslagen — haal dat zo nodig op via de API.
+
+**"Overgeslagen: de API-sleutel van dit eindpunt mag de module … niet lezen"** —
+de sleutel achter dit eindpunt (of zijn maker) mag die module niet (meer) zien.
+Dat is de grens die het hoort te zijn.

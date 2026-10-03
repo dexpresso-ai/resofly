@@ -13,6 +13,11 @@
 //
 // Alleen owners en admins: een API-sleutel is een deur naar de hele
 // organisatie, en die geeft niet elk teamlid zomaar uit.
+//
+// Webhooks: aanmaken, adres of gebeurtenissen wijzigen, het geheim vernieuwen
+// en testen gaan hierlangs (het adres wordt gecontroleerd, het geheim
+// versleuteld — zie _shared/webhookAdmin.ts). Zien, aan/uit en verwijderen kan
+// ook rechtstreeks via RLS.
 // ============================================================
 
 import {
@@ -23,6 +28,10 @@ import {
   ACCESS_LEVELS, apiKeyHint, createApiKey, MODULE_KEYS, MODULE_LABEL, normalizeKeyModuleAccess, scopeForLevel,
   type AccessLevel,
 } from '../_shared/publicApi.ts';
+import {
+  createEndpoint, deleteEndpoint, rotateSecret, testEndpoint, updateEndpoint, visibleEvents, WebhookInputError,
+  type EndpointOwner,
+} from '../_shared/webhookAdmin.ts';
 
 const admin = createAdminClient();
 
@@ -35,6 +44,7 @@ const ALLOW_LOCAL_DEV = (Deno.env.get('API_ADMIN_ALLOW_LOCAL_DEV') || 'false').t
 const cors = makeCors(ALLOWED_ORIGINS, ALLOW_LOCAL_DEV);
 
 const PUBLIC_BASE = (Deno.env.get('API_PUBLIC_URL') || `${Deno.env.get('SUPABASE_URL') || ''}/functions/v1/api`).replace(/\/+$/, '');
+const WEBHOOK_ENCRYPTION_KEY = Deno.env.get('WEBHOOK_SECRET_ENCRYPTION_KEY') || '';
 
 /** Meer actieve sleutels dan dit is geen overzicht meer, maar een lek dat nog moet gebeuren. */
 const MAX_ACTIVE_KEYS = 50;
@@ -58,20 +68,46 @@ Deno.serve(async (req) => {
     const organizationId = String(body.organizationId || '');
     const role = await requireOrganizationAccess(admin, user.id, organizationId);
 
+    // Een eindpunt dat hier wordt aangemaakt, is van de organisatie: geen
+    // sleutel, en alle gebeurtenissen (owner/admin mag alles lezen).
+    const owner: EndpointOwner = { organizationId, userId: user.id, apiKeyId: null, canRead: null };
+    const webhookId = String(body.webhookId || '');
+
     switch (String(body.action || '')) {
       case 'catalog':
         return cors.json(req, catalog());
       case 'createKey':
         assertAdmin(role);
         return cors.json(req, await createKey(user.id, organizationId, body));
+      case 'createWebhook':
+        assertAdmin(role);
+        return cors.json(req, await createEndpoint(admin, owner, body, encryptionKey()));
+      case 'updateWebhook':
+        assertAdmin(role);
+        return cors.json(req, { endpoint: await updateEndpoint(admin, owner, webhookId, body) });
+      case 'rotateWebhookSecret':
+        assertAdmin(role);
+        return cors.json(req, { secret: await rotateSecret(admin, owner, webhookId, encryptionKey()) });
+      case 'deleteWebhook':
+        assertAdmin(role);
+        await deleteEndpoint(admin, owner, webhookId);
+        return cors.json(req, { ok: true });
+      case 'testWebhook':
+        assertAdmin(role);
+        return cors.json(req, { result: await testEndpoint(admin, owner, webhookId, { encryptionKey: encryptionKey(), sentBy: user.email ?? user.id }) });
       default:
         throw new HttpError('Onbekende actie.', 400);
     }
   } catch (error) {
-    const status = error instanceof HttpError ? error.status : 500;
-    if (status === 500) console.error('[api-admin]', error instanceof Error ? error.message : error);
-    const message = error instanceof Error ? error.message : 'Er ging iets mis.';
-    return cors.json(req, { error: status === 500 ? 'Er ging iets mis aan onze kant. Probeer het opnieuw.' : message }, status);
+    if (error instanceof WebhookInputError) return cors.json(req, { error: error.message }, error.status);
+    // Een HttpError is een zin die we zelf schreven, ook bij een 500 ("de sleutel
+    // ontbreekt"); al het andere is onverwacht en gaat alleen naar de logs.
+    if (error instanceof HttpError) {
+      if (error.status >= 500) console.error('[api-admin]', error.message);
+      return cors.json(req, { error: error.message }, error.status);
+    }
+    console.error('[api-admin]', error instanceof Error ? error.message : error);
+    return cors.json(req, { error: 'Er ging iets mis aan onze kant. Probeer het opnieuw.' }, 500);
   }
 });
 
@@ -88,7 +124,17 @@ function catalog(): Record<string, unknown> {
     openApiUrl: `${PUBLIC_BASE}/v1/openapi.json`,
     accessLevels: ACCESS_LEVELS,
     modules: MODULE_KEYS.map((key) => ({ key, label: MODULE_LABEL[key] })),
+    events: visibleEvents({ organizationId: '', userId: null, apiKeyId: null, canRead: null }),
+    webhooksReady: Boolean(WEBHOOK_ENCRYPTION_KEY),
   };
+}
+
+/** Zonder deze sleutel kan geen geheim versleuteld worden; dan liever een duidelijke fout dan een half eindpunt. */
+function encryptionKey(): string {
+  if (!WEBHOOK_ENCRYPTION_KEY) {
+    throw new HttpError('Webhooks staan in deze omgeving nog niet aan: WEBHOOK_SECRET_ENCRYPTION_KEY ontbreekt in de Edge Function secrets.', 500);
+  }
+  return WEBHOOK_ENCRYPTION_KEY;
 }
 
 /**

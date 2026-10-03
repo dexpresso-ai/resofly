@@ -323,6 +323,7 @@ export type ApiErrorCode =
   | 'invalid_request'
   | 'invalid_input'
   | 'method_not_allowed'
+  | 'conflict'
   | 'idempotency_conflict'
   | 'idempotency_in_progress'
   | 'payload_too_large'
@@ -402,6 +403,7 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
     { name: 'Algemeen', description: 'Sleutel, organisatie en rechten.' },
     { name: 'Handelingen', description: 'Alles wat de app kan, als handeling met een eigen invoerschema.' },
     { name: 'Voorstellen', description: 'Wijzigingen die op goedkeuring in ResoFly wachten.' },
+    { name: 'Webhooks', description: 'Laat ResoFly een ondertekend bericht sturen als er iets gebeurt.' },
     ...modules.map((m) => ({
       name: `module:${m}`,
       description: `Handelingen in de module ${MODULE_LABEL[m as ModuleKey] ?? m}.`,
@@ -485,6 +487,65 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
       },
     },
   };
+
+  const webhookId = { name: 'webhook_id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } };
+  Object.assign(paths, {
+    '/v1/events': {
+      get: {
+        tags: ['Webhooks'],
+        operationId: 'listEvents',
+        summary: 'Gebeurtenissen waarop je een webhook kunt zetten',
+        responses: { 200: jsonResponse('De catalogus, beperkt tot wat deze sleutel mag lezen.', 'EventList'), ...ERROR_RESPONSES },
+      },
+    },
+    '/v1/webhooks': {
+      get: {
+        tags: ['Webhooks'],
+        operationId: 'listWebhooks',
+        summary: 'Webhooks die deze sleutel heeft aangemaakt',
+        responses: { 200: jsonResponse('De eindpunten.', 'WebhookList'), ...ERROR_RESPONSES },
+      },
+      post: {
+        tags: ['Webhooks'],
+        operationId: 'createWebhook',
+        summary: 'Een webhook aanmaken',
+        description: 'Geeft het ondertekengeheim (`secret`) één keer terug. Elk bericht draagt `ResoFly-Signature: t=<tijd>,v1=<HMAC-SHA256 van "<tijd>.<body>">`.',
+        requestBody: { required: true, content: { [JSON_CONTENT]: { schema: ref('WebhookInput') } } },
+        responses: { 201: jsonResponse('Aangemaakt, met het geheim.', 'WebhookCreated'), 422: jsonResponse('Adres of gebeurtenissen kloppen niet.', 'Error'), ...ERROR_RESPONSES },
+      },
+    },
+    '/v1/webhooks/{webhook_id}': {
+      parameters: [webhookId],
+      get: {
+        tags: ['Webhooks'], operationId: 'getWebhook', summary: 'Eén webhook',
+        responses: { 200: jsonResponse('Het eindpunt.', 'Webhook'), 404: jsonResponse('Niet gevonden.', 'Error'), ...ERROR_RESPONSES },
+      },
+      patch: {
+        tags: ['Webhooks'], operationId: 'updateWebhook', summary: 'Adres, gebeurtenissen, omschrijving of aan/uit wijzigen',
+        requestBody: { required: true, content: { [JSON_CONTENT]: { schema: ref('WebhookInput') } } },
+        responses: { 200: jsonResponse('Gewijzigd.', 'Webhook'), 404: jsonResponse('Niet gevonden.', 'Error'), 422: jsonResponse('Klopt niet.', 'Error'), ...ERROR_RESPONSES },
+      },
+      delete: {
+        tags: ['Webhooks'], operationId: 'deleteWebhook', summary: 'Een webhook verwijderen',
+        responses: { 204: { description: 'Verwijderd.' }, 404: jsonResponse('Niet gevonden.', 'Error'), ...ERROR_RESPONSES },
+      },
+    },
+    '/v1/webhooks/{webhook_id}/test': {
+      parameters: [webhookId],
+      post: {
+        tags: ['Webhooks'], operationId: 'testWebhook', summary: 'Meteen een testbericht (`ping`) sturen',
+        responses: { 200: jsonResponse('Hoe het eindpunt antwoordde.', 'WebhookTestResult'), 404: jsonResponse('Niet gevonden.', 'Error'), ...ERROR_RESPONSES },
+      },
+    },
+    '/v1/webhooks/{webhook_id}/deliveries': {
+      parameters: [webhookId],
+      get: {
+        tags: ['Webhooks'], operationId: 'listWebhookDeliveries', summary: 'De laatste bezorgingen van een webhook',
+        parameters: [{ $ref: '#/components/parameters/Limit' }],
+        responses: { 200: jsonResponse('Bezorgingen, nieuwste eerst.', 'DeliveryList'), 404: jsonResponse('Niet gevonden.', 'Error'), ...ERROR_RESPONSES },
+      },
+    },
+  });
 
   // Elke handeling ook als eigen pad, met zijn eigen invoerschema. Dat maakt het
   // document groot, maar het is precies wat een koppelplatform nodig heeft om er
@@ -627,6 +688,65 @@ export function buildOpenApi(opts: OpenApiOptions): Record<string, unknown> {
         ProposalList: {
           type: 'object',
           properties: { data: { type: 'array', items: ref('Proposal') }, has_more: { type: 'boolean' } },
+        },
+        EventList: {
+          type: 'object',
+          properties: {
+            data: {
+              type: 'array',
+              items: { type: 'object', properties: { type: { type: 'string', example: 'invoice.paid' }, module: { type: 'string' }, label: { type: 'string' } } },
+            },
+          },
+        },
+        WebhookInput: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', format: 'uri', description: 'Alleen https, en een adres dat vanaf internet bereikbaar is.' },
+            events: { type: 'array', items: { type: 'string' }, description: 'Exacte types (`invoice.paid`), een onderwerp (`invoice.*`) of alles (`*`).' },
+            description: { type: 'string', maxLength: 200 },
+            active: { type: 'boolean' },
+          },
+        },
+        Webhook: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' }, url: { type: 'string' }, description: { type: 'string' },
+            events: { type: 'array', items: { type: 'string' } }, active: { type: 'boolean' },
+            disabled_reason: { type: ['string', 'null'] }, consecutive_failures: { type: 'integer' },
+            last_success_at: { type: ['string', 'null'], format: 'date-time' },
+            last_failure_at: { type: ['string', 'null'], format: 'date-time' },
+            created_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        WebhookList: { type: 'object', properties: { data: { type: 'array', items: ref('Webhook') } } },
+        WebhookCreated: {
+          type: 'object',
+          properties: { webhook: ref('Webhook'), secret: { type: 'string', description: 'Het ondertekengeheim (`whsec_…`). Alleen nu te zien.' } },
+        },
+        WebhookTestResult: {
+          type: 'object',
+          properties: {
+            status: { type: 'string', enum: ['delivered', 'failed', 'skipped'] },
+            http_status: { type: ['integer', 'null'] }, error: { type: ['string', 'null'] }, duration_ms: { type: 'integer' },
+          },
+        },
+        DeliveryList: {
+          type: 'object',
+          properties: {
+            data: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string', format: 'uuid' },
+                  status: { type: 'string', enum: ['pending', 'sending', 'delivered', 'failed', 'skipped'] },
+                  attempts: { type: 'integer' }, response_status: { type: ['integer', 'null'] }, error: { type: ['string', 'null'] },
+                  event_id: { type: 'string', format: 'uuid' }, event_type: { type: 'string' },
+                  created_at: { type: 'string', format: 'date-time' }, delivered_at: { type: ['string', 'null'], format: 'date-time' },
+                },
+              },
+            },
+          },
         },
       },
     },

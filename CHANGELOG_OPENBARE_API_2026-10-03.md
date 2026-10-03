@@ -99,3 +99,94 @@ volledige schema en PostgREST 12: sleutels aanmaken als owner (en geweigerd als
 member), lezen, klaarzetten, uitvoeren, de terugval naar de wachtrij, een id van
 een andere organisatie, de modulebeperking, idempotentie, de aanroeplimiet,
 intrekken en verlopen, en een maker die geen lid meer is.
+
+## Fase 2 — webhooks: ResoFly geeft zelf een seintje
+
+Met fase 1 kan andere software iets **vragen**. Maar een koppeling wil ook horen
+**dát** er iets gebeurde — een factuur betaald, een nieuwe klant, een ticket van
+het portaal — zonder elke minuut alles opnieuw op te vragen. Daarvoor zijn er nu
+webhooks: ResoFly stuurt een ondertekend JSON-bericht naar een adres van de
+klant.
+
+### Wat er gebeurt
+
+- **39 gebeurtenissen** over klanten, contactpersonen, projecten, taken, tickets
+  (en reacties), uren, offertes, facturen, contracten en afspraken. Naast
+  `created`/`updated`/`deleted` de statusovergangen waar een koppeling echt op
+  wacht: `invoice.paid`, `quote.accepted`, `contract.signed`, `task.completed`,
+  `booking.cancelled` en meer. Inschrijven op een type, op `invoice.*` of op `*`.
+- **Een trigger op elf kerntabellen** legt het vast — alleen als er in die
+  organisatie een actief eindpunt is dat het wil horen. Een organisatie zonder
+  webhooks betaalt er één indexopzoeking voor; een fout in de trigger blokkeert
+  het opslaan nooit.
+- **Een bezorger** (functie `webhooks`, elke minuut via pg_cron) ondertekent en
+  verstuurt, met 8 bezorgingen tegelijk en hooguit 4 per eindpunt — zodat één
+  eindpunt dat niet antwoordt de webhooks van andere organisaties niet ophoudt.
+- **Opnieuw proberen** na 1 min, 5 min, 30 min, 2 uur, 6 uur, 12 uur, 24 uur en
+  24 uur: negen pogingen, bijna drie dagen. Een eindpunt dat een dag lang niets
+  dan fouten geeft, of `410 Gone` antwoordt, zet zichzelf uit, met de reden.
+
+### Twee soorten eindpunten
+
+| | In de app | Via de API (`POST /v1/webhooks`) |
+|---|---|---|
+| Voor | Een owner/admin die zelf een adres instelt | Zapier, Make, n8n (het "REST hooks"-patroon) |
+| Hoort bij | De organisatie | De sleutel — verdwijnt bij intrekken |
+| Krijgt | Alles waarop hij is ingeschreven | Alleen uit modules die de sleutel **nu** mag lezen |
+
+Nieuwe adressen in de API: `GET /v1/events`, `GET|POST /v1/webhooks`,
+`GET|PATCH|DELETE /v1/webhooks/{id}`, `POST /v1/webhooks/{id}/test` en
+`GET /v1/webhooks/{id}/deliveries`. Ze staan ook in het OpenAPI-document.
+
+### Wat de grenzen bewaakt
+
+- **Alleen naar buiten.** Alleen `https`, niets in een intern netwerk — ook niet
+  verpakt in IPv6 (`[::ffff:10.0.0.1]`, dat de URL-parser herschrijft tot
+  `::ffff:a00:1`, NAT64, documentatieblokken). Bij elke bezorging opnieuw
+  gekeurd, ook waar de naam op dat moment naartoe wijst; een DNS-opzoeking die
+  te lang duurt is geen vrijbrief. Doorverwijzingen volgen we niet; na 10
+  seconden geven we op.
+- **Ondertekend, met de tijd erin.** `ResoFly-Signature: t=…,v1=…`, een
+  HMAC-SHA256 over `<t>.<body>`. Het geheim is één keer te zien en staat
+  versleuteld (AES-GCM) in een tabel zonder policies.
+- **Geen geheimen in een bericht.** Een patroon, geen lijst: alles wat op
+  token, hash, secret, password of pin lijkt, plus opslagsleutels en
+  base64-bestanden. Een wijziging die alleen zulke kolommen raakt, is ook geen
+  gebeurtenis.
+- **Wie wat mag.** In de app beheren alleen owners en admins webhooks; aan- en
+  uitzetten en verwijderen kan ook rechtstreeks via RLS, zodat "stop hiermee"
+  werkt als er verderop iets stuk is. Een koppeling ziet alleen haar eigen
+  eindpunten.
+
+### Wat de gebruiker ziet
+
+Onder **Instellingen → API & webhooks**, onder de sleutels: een webhook
+aanmaken (adres, omschrijving, gebeurtenissen per module of "Alles"), het
+geheim één keer met uitleg over de handtekening, en per eindpunt de stand
+(aan, uit, automatisch uit met de reden), **Testen** met het antwoord van het
+eindpunt, **Bezorgingen** met elke poging, **Nieuw geheim** en **Verwijderen**.
+
+### Wat de tests bewaken
+
+- `webhooks.test.ts` (19) — de catalogus tegen de triggers en statusovergangen
+  in de migratie, de jokers, de handtekening (ook: gewijzigde body, verkeerd
+  geheim, te oud), het versleutelen, de adressen (met een volledige
+  IPv6-ontleding), het herhaalschema en welke kolommen nooit meegaan.
+- `webhooksServer.test.ts` (20) — de grenzen in de functies zelf: niets zonder
+  cron-secret, niets claimen zonder versleutelsleutel, het adres keuren vóór het
+  versturen, geen doorverwijzingen, ondertekenen wat er verstuurd wordt, de
+  rechten van de sleutel vóór elke bezorging, eigen eindpunten per sleutel,
+  alleen owners/admins in de app, het geheim alleen versleuteld, en dat een
+  ronde klaar is lang voordat een hangende bezorging wordt teruggepakt. Elk van
+  deze regels is gecontroleerd door hem in de code stuk te maken.
+
+Nagemeten: `npm test` 432 groen, `npm run typecheck` en `npm run build` groen,
+`deno check` op `api`, `api-admin`, `webhooks`, `mcp`, `mcp-oauth` en
+`gerrie-agent` groen. De migratie is op een verse database gedraaid en het
+geheel end-to-end getest met een lokale ontvanger over https: echte berichten en
+`ping`, handtekeningen gecontroleerd zoals een ontvanger dat doet, een eindpunt
+dat 500 geeft (opnieuw), `410` (uit), een doorverwijzing (niet gevolgd), een
+eindpunt van een beperkte sleutel (financiële gebeurtenissen overgeslagen met de
+reden), intrekken van de sleutel (eindpunten weg), en een traag eindpunt naast
+een snel: het snelle kreeg zijn 12 berichten binnen 0,1 seconde, het trage
+hooguit 4 tegelijk.
