@@ -116,6 +116,12 @@ test('wat geclaimd is, wordt ook na het budget nog bezorgd', () => {
 
 // ── Waarheen ─────────────────────────────────────────────────────────────────
 
+test('een nieuw of gewijzigd adres wordt meteen gekeurd, inclusief waar de naam naartoe wijst', () => {
+  assert.match(fn(webhookAdmin, 'async function checkUrl('), /const problem = await webhookAddressProblem\(url\);/);
+  assert.match(fn(webhookAdmin, 'export async function createEndpoint('), /const url = await checkUrl\(input\.url\);/);
+  assert.match(fn(webhookAdmin, 'export async function updateEndpoint('), /patch\.url = await checkUrl\(input\.url\);/);
+});
+
 test('elke bezorging keurt het adres opnieuw, en pas daarna gaat er iets de deur uit', () => {
   const body = fn(delivery, 'export async function deliver(');
   const send = body.indexOf('await fetch(delivery.url');
@@ -130,9 +136,12 @@ test('een doorverwijzing wordt niet gevolgd, en niemand wacht eindeloos', () => 
   assert.match(body, /redirect: 'manual'/, 'een doorverwijzing kan naar een adres wijzen dat niemand heeft gekeurd.');
   assert.match(body, /signal: AbortSignal\.timeout\(TIMEOUT_MS\)/);
   assert.ok(numberConst(delivery, 'TIMEOUT_MS') <= 30_000);
-  // Een DNS-opzoeking die te lang duurt, is geen vrijbrief om toch te versturen.
-  const resolution = fn(delivery, 'async function privateResolution(');
+  // Een DNS-opzoeking die te lang duurt, is geen vrijbrief om toch te versturen;
+  // en zonder eigen DNS in de runtime vragen we het via DNS-over-HTTPS.
+  const resolution = fn(delivery, 'export async function resolveHostAddresses(');
   assert.match(resolution, /if \(error instanceof DnsTimeout\) throw error;/);
+  assert.match(resolution, /for \(const provider of DOH_PROVIDERS\)/);
+  assert.match(resolution, /throw new DnsTimeout\(host\);\s*$/, 'geen enkele aanbieder antwoordde: dan niet versturen');
 });
 
 test('ondertekend wordt precies wat er verstuurd wordt', () => {

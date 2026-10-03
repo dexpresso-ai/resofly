@@ -151,7 +151,9 @@ export function normalizeInput(
   const values: Record<string, unknown> = {};
 
   for (const [name, raw] of Object.entries(input)) {
-    const field = spec.fields[name];
+    // Object.hasOwn: "constructor" of "toString" zijn geen velden, ook al
+    // bestaan ze op elk object.
+    const field = Object.hasOwn(spec.fields, name) ? spec.fields[name] : undefined;
     if (!field) {
       throw new ResourceInputError(
         `Onbekend veld "${name}". Velden die je kunt zetten: ${[...allowed].join(', ')}.`, name);
@@ -274,7 +276,8 @@ function normalizeValue(name: string, field: FieldSpec, raw: unknown): unknown {
 // ── Lijsten ──────────────────────────────────────────────────────────────────
 
 export interface ListParams {
-  filters: Array<{ column: string; op: FilterSpec['op']; value: string | boolean }>;
+  /** `in`: een van deze waarden (een enum-filter met komma's, zoals ?status=new,review). */
+  filters: Array<{ column: string; op: FilterSpec['op'] | 'in'; value: string | boolean | string[] }>;
   q: string | null;
   sort: { column: string; ascending: boolean };
   limit: number;
@@ -321,12 +324,18 @@ export function parseListParams(spec: ResourceSpec, params: URLSearchParams): Li
     if (spec.search.length === 0) throw new ResourceInputError('Zoeken met q kan hier niet.', 'q');
     // Tekens die in een PostgREST-filter iets betekenen, gaan eruit: zoeken is
     // zoeken, geen manier om een eigen filter mee te smokkelen.
-    result.q = q.replace(/[,()*%\\"]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) || null;
+    result.q = q.replace(/[,()*%\\"\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) || null;
   }
 
   for (const [name, filter] of Object.entries(filters)) {
     const raw = params.get(name);
     if (raw === null || raw.trim() === '') continue;
+    // Bij een keuzelijst mag je er meer tegelijk vragen: ?status=new,review.
+    if (filter.type === 'enum' && filter.op === 'eq' && raw.includes(',')) {
+      const values = [...new Set(raw.split(',').map((part) => part.trim()).filter(Boolean))];
+      result.filters.push({ column: filter.column, op: 'in', value: values.map((value) => String(parseFilterValue(name, filter, value))) });
+      continue;
+    }
     result.filters.push({ column: filter.column, op: filter.op, value: parseFilterValue(name, filter, raw.trim()) });
   }
   return result;
@@ -345,7 +354,7 @@ function parseFilterValue(name: string, filter: FilterSpec, raw: string): string
       return /^\d{4}-\d{2}-\d{2}/.test(raw) && !Number.isNaN(date.getTime()) ? date.toISOString() : fail('een tijdstip in ISO 8601');
     }
     case 'boolean': return raw === 'true' ? true : raw === 'false' ? false : fail('true of false');
-    case 'text': return raw.slice(0, 200);
+    case 'text': return /[\u0000-\u001f\u007f]/.test(raw) ? fail('tekst zonder stuurtekens') : raw.slice(0, 200);
   }
 }
 
@@ -470,8 +479,11 @@ export function resourceOpenApi(specs: ResourceSpec[]): {
       ? [{ name: spec.parent.param, in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }]
       : [];
     const filterParams = Object.entries(filtersOf(spec)).map(([name, filter]) => ({
-      name, in: 'query', description: filter.description,
-      schema: filter.type === 'enum' ? { type: 'string', enum: [...(filter.values ?? [])] }
+      name, in: 'query',
+      description: filter.type === 'enum' && filter.op === 'eq'
+        ? `${filter.description} Meer waarden tegelijk met komma's, bijvoorbeeld \`${(filter.values ?? []).slice(0, 2).join(',')}\`.`
+        : filter.description,
+      schema: filter.type === 'enum' ? { type: 'string', pattern: `^(${(filter.values ?? []).join('|')})(,(${(filter.values ?? []).join('|')}))*$` }
         : filter.type === 'boolean' ? { type: 'boolean' }
         : filter.type === 'uuid' ? { type: 'string', format: 'uuid' }
         : filter.type === 'date' ? { type: 'string', format: 'date' }

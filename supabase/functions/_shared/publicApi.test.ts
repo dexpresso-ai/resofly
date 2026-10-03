@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createToken, verifyToken } from './mcpAuth.ts';
 import {
-  ACCESS_LEVELS, actionInputSchema, apiKeyHint, apiRoute, auditStatusesFor, buildOpenApi, createApiKey,
+  ACCESS_LEVELS, actionInputSchema, apiKeyHint, apiRoute, auditStatusesFor, buildOpenApi, containsNul, createApiKey,
   effectiveModuleAccess, effectiveModuleLevel, errorBody, hasKeyRestrictions, isValidIdempotencyKey, keyModuleCap,
   levelOfScope, matchRoute, memberModuleLevel, MODULE_KEYS, normalizeKeyModuleAccess, operationIdFor, pageParams,
   parseApiKey, presentedApiKey, proposalStatus, PROPOSAL_STATUSES, REJECTED_BY_USER_DETAIL, requestFingerprint,
@@ -273,4 +273,23 @@ test('een handeling zonder verplichte velden heeft ook geen lege required-lijst'
   // Een lege `required: []` keuren sommige validators af.
   assert.equal('required' in actionInputSchema(SAMPLE[1]), false);
   assert.deepEqual(actionInputSchema(SAMPLE[0]).required, ['invoice_id', 'status']);
+});
+
+// ── Bevindingen uit de veiligheidstest (oktober 2026) ────────────────────────
+
+test('een API-sleutel in X-Api-Key telt, ook als een platform zelf een andere Authorization zet', () => {
+  const headers = (init: Record<string, string>) => new Headers(init);
+  assert.equal(presentedApiKey(headers({ authorization: 'Bearer eyJhbGciOiJIUzI1NiJ9.anon.sig', 'x-api-key': 'rsfapi.sel.ver' })), 'rsfapi.sel.ver');
+  assert.equal(presentedApiKey(headers({ authorization: 'Bearer rsfapi.a.b', 'x-api-key': 'rsfapi.c.d' })), 'rsfapi.a.b', 'Bearer gaat voor als het een API-sleutel is');
+  assert.equal(presentedApiKey(headers({ authorization: 'bearer   rsfapi.a.b  ' })), 'rsfapi.a.b');
+  assert.equal(presentedApiKey(headers({ authorization: 'Bearer eyJ.x.y' })), 'eyJ.x.y', 'zonder X-Api-Key: wat er staat, zodat de foutmelding klopt');
+  assert.equal(presentedApiKey(headers({})), '');
+});
+
+test('een NUL-teken in de invoer wordt gevonden, hoe diep ook', () => {
+  assert.equal(containsNul({ name: 'gewoon', tags: ['a', 'b'], extra: { x: 1 } }), false);
+  assert.equal(containsNul({ name: 'a\u0000b' }), true);
+  assert.equal(containsNul({ lines: [{ text: 'ok' }, { text: 'n\u0000' }] }), true);
+  assert.equal(containsNul({ ['k\u0000']: 1 }), true, 'ook in een veldnaam');
+  assert.equal(containsNul(null), false);
 });

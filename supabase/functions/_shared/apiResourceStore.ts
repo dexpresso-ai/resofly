@@ -52,9 +52,10 @@ export async function listRows(
     query = query.eq(spec.parent.column, parentId);
   }
   for (const filter of params.filters) {
-    if (filter.op === 'gte') query = query.gte(filter.column, filter.value);
-    else if (filter.op === 'lte') query = query.lte(filter.column, filter.value);
-    else query = query.eq(filter.column, filter.value);
+    if (filter.op === 'in') query = query.in(filter.column, filter.value as string[]);
+    else if (filter.op === 'gte') query = query.gte(filter.column, filter.value as string);
+    else if (filter.op === 'lte') query = query.lte(filter.column, filter.value as string);
+    else query = query.eq(filter.column, filter.value as string | boolean);
   }
   if (params.q) {
     query = query.or(spec.search.map((column) => `${column}.ilike.%${params.q}%`).join(','));
@@ -203,6 +204,8 @@ export function translateDbError(spec: ResourceSpec, error: { code?: string; mes
     case '22008':
     case '22003':
     case '22023':
+    case '22P05':
+    case '22021':
     case 'P0001':
       return new ResourceStoreError(422, message);
     default:

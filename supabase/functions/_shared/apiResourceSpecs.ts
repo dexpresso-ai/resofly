@@ -322,7 +322,7 @@ export const RESOURCES: Record<ResourceName, ResourceSpec> = {
     sort: ['-entry_date', 'entry_date', ...TIME_SORTS],
     create: true,
     update: true,
-    refine: refineTimeEntryType,
+    refine: refineTimeEntry,
   },
 };
 
@@ -354,6 +354,16 @@ export function refineTaskPlanning(values: Record<string, unknown>, mode: 'creat
     if (end !== undefined && end !== null) {
       throw new ResourceInputError('Een begintijd kan alleen bij een taak op één dag, niet samen met "planned_end_date".', 'planned_start_minute');
     }
+  }
+}
+
+/** De regels voor uren: het type (hieronder) en een eindtijd die niet vóór de begintijd ligt. */
+export function refineTimeEntry(values: Record<string, unknown>, mode: 'create' | 'update'): void {
+  refineTimeEntryType(values, mode);
+  const start = values.started_at;
+  const end = values.ended_at;
+  if (typeof start === 'string' && typeof end === 'string' && Date.parse(end) < Date.parse(start)) {
+    throw new ResourceInputError('"ended_at" ligt op of na "started_at".', 'ended_at');
   }
 }
 

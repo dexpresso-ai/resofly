@@ -17,9 +17,9 @@
 // ============================================================
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
-import { sendTestEvent, type DeliveryOutcome } from './webhookDelivery.ts';
+import { sendTestEvent, webhookAddressProblem, type DeliveryOutcome } from './webhookDelivery.ts';
 import {
-  createWebhookSecret, encryptSecret, modulesOf, normalizeEventList, WEBHOOK_EVENTS, webhookUrlProblem,
+  createWebhookSecret, encryptSecret, modulesOf, normalizeEventList, WEBHOOK_EVENTS,
 } from './webhooks.ts';
 
 /** Van wie is dit eindpunt? Bepaalt wat je ziet en wat je mag. */
@@ -82,7 +82,7 @@ export async function getEndpoint(admin: SupabaseClient, owner: EndpointOwner, e
 export async function createEndpoint(
   admin: SupabaseClient, owner: EndpointOwner, input: EndpointInput, encryptionKey: string,
 ): Promise<{ endpoint: Record<string, unknown>; secret: string }> {
-  const url = checkUrl(input.url);
+  const url = await checkUrl(input.url);
   const events = checkEvents(input.events, owner);
   const description = checkDescription(input.description);
 
@@ -117,7 +117,7 @@ export async function updateEndpoint(
 ): Promise<Record<string, unknown>> {
   await getEndpoint(admin, owner, endpointId);
   const patch: Record<string, unknown> = {};
-  if (input.url !== undefined) patch.url = checkUrl(input.url);
+  if (input.url !== undefined) patch.url = await checkUrl(input.url);
   if (input.events !== undefined) patch.events = checkEvents(input.events, owner);
   if (input.description !== undefined) patch.description = checkDescription(input.description);
   if (input.active !== undefined) {
@@ -193,9 +193,15 @@ export function visibleEvents(owner: EndpointOwner): Array<{ type: string; modul
 
 // ── Controles ────────────────────────────────────────────────────────────────
 
-function checkUrl(raw: unknown): string {
+/**
+ * Het adres zoals het nu is: https, niets in een intern netwerk, en een naam
+ * die niet naar binnen wijst. Dat laatste kijkt de bezorging bij elke poging
+ * opnieuw; hier hoort de aanmaker het meteen, in plaats van een eindpunt dat
+ * bij de eerste bezorging uitgaat.
+ */
+async function checkUrl(raw: unknown): Promise<string> {
   const url = String(raw ?? '').trim();
-  const problem = webhookUrlProblem(url);
+  const problem = await webhookAddressProblem(url);
   if (problem) throw new WebhookInputError(problem, 422);
   return url;
 }

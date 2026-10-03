@@ -25,7 +25,7 @@ import {
   type OrganizationRole,
 } from '../_shared/edgeAuth.ts';
 import {
-  ACCESS_LEVELS, apiKeyHint, createApiKey, MODULE_KEYS, MODULE_LABEL, normalizeKeyModuleAccess, scopeForLevel,
+  ACCESS_LEVELS, apiKeyHint, containsNul, createApiKey, MODULE_KEYS, MODULE_LABEL, normalizeKeyModuleAccess, scopeForLevel,
   type AccessLevel,
 } from '../_shared/publicApi.ts';
 import {
@@ -65,6 +65,8 @@ Deno.serve(async (req) => {
     } catch {
       throw new HttpError('De inhoud van dit verzoek is geen geldige JSON.', 400);
     }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError('Stuur een JSON-object.', 400);
+    if (containsNul(body)) throw new HttpError('De invoer bevat een NUL-teken; dat kan ResoFly niet opslaan.', 400);
     const organizationId = String(body.organizationId || '');
     const role = await requireOrganizationAccess(admin, user.id, organizationId);
 

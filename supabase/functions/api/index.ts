@@ -76,7 +76,7 @@ import {
 import { matchResource, RESOURCE_LIST, RESOURCES } from '../_shared/apiResourceSpecs.ts';
 import { createRow, getRow, listRows, ResourceStoreError, updateRow, type StoreCtx } from '../_shared/apiResourceStore.ts';
 import {
-  actionInputSchema, apiRoute, API_VERSION, auditStatusesFor, buildOpenApi, effectiveModuleAccess,
+  actionInputSchema, apiRoute, API_VERSION, auditStatusesFor, buildOpenApi, containsNul, effectiveModuleAccess,
   effectiveModuleLevel, errorBody, hasKeyRestrictions, isModuleKey, isValidIdempotencyKey, levelOfScope,
   matchRoute, MODULE_LABEL, pageParams, parseApiKey, presentedApiKey, proposalStatus, PROPOSAL_STATUSES,
   REJECTED_BY_USER_DETAIL, requestFingerprint,
@@ -319,7 +319,16 @@ function serviceInfo(): Record<string, unknown> {
     version: API_VERSION,
     openapi: `${PUBLIC_BASE}/v1/openapi.json`,
     documentation: DOCS_URL || null,
-    authentication: 'Stuur je API-sleutel mee als "Authorization: Bearer rsfapi.…". Een sleutel maak je aan onder Instellingen → API & webhooks.',
+    authentication: 'Stuur je API-sleutel mee als "Authorization: Bearer rsfapi.…" (of als "X-Api-Key: rsfapi.…" als je platform de Authorization-header zelf vult). Een sleutel maak je aan onder Instellingen → API & webhooks.',
+    // Wat er is, zonder eerst het hele OpenAPI-document te hoeven lezen.
+    endpoints: {
+      me: `${PUBLIC_BASE}/v1/me`,
+      actions: `${PUBLIC_BASE}/v1/actions`,
+      proposals: `${PUBLIC_BASE}/v1/proposals`,
+      events: `${PUBLIC_BASE}/v1/events`,
+      webhooks: `${PUBLIC_BASE}/v1/webhooks`,
+      ...Object.fromEntries(RESOURCE_LIST.map((spec) => [spec.name, `${PUBLIC_BASE}/v1/${spec.path}`])),
+    },
   };
 }
 
@@ -1268,6 +1277,9 @@ function parseInput(raw: string): Record<string, unknown> {
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new ApiError(400, 'invalid_request', 'Stuur de invoer als JSON-object met de velden uit het schema, bijvoorbeeld {"invoice_id": "…"}.');
+  }
+  if (containsNul(parsed)) {
+    throw new ApiError(400, 'invalid_request', 'De invoer bevat een NUL-teken (\\u0000); dat kan ResoFly niet opslaan.');
   }
   return parsed as Record<string, unknown>;
 }

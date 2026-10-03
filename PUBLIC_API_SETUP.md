@@ -325,9 +325,14 @@ de module, voor de sleutel én voor het teamlid.
 wachtwoord in het adres, en niets in een intern netwerk: geen `localhost` of
 namen op `.local`, `.internal`, `.lan` en dergelijke, en geen privé- of
 gereserveerde IP-adressen (10.x, 192.168.x, 169.254.x, fc00::/7 en verwanten —
-ook verpakt in IPv6). Bij elke bezorging opnieuw gekeurd, inclusief waar de naam
-op dat moment naartoe wijst; een doorverwijzing wordt niet gevolgd, en na 10
-seconden zonder antwoord geven we op.
+ook verpakt in IPv6). Bij het aanmelden en bij elke bezorging opnieuw gekeurd, inclusief
+waar de naam op dat moment naartoe wijst — met de DNS van de runtime, of als die
+dat niet kan via DNS-over-HTTPS (Cloudflare, met Google als terugval). Lukt het
+opzoeken niet, dan wordt er niet blind verstuurd maar later opnieuw geprobeerd.
+Een doorverwijzing wordt niet gevolgd, en na 10 seconden zonder antwoord geven
+we op. Wat dit niet tegenhoudt: een naam die tussen de controle en het versturen
+van antwoord verandert (DNS-rebinding); daarvoor zou de runtime het adres moeten
+kunnen vastpinnen.
 
 **Ondertekend, met de tijd erin.** Elk bericht draagt
 `ResoFly-Signature: t=<unix-tijd>,v1=<HMAC-SHA256>` over `<t>.<body>`, met het

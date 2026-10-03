@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { buildOpenApi } from './publicApi.ts';
 import { resourceOpenApi, writableFields } from './apiResources.ts';
-import { matchResource, refineTaskPlanning, refineTimeEntryType, RESOURCE_LIST, RESOURCES } from './apiResourceSpecs.ts';
+import { matchResource, refineTaskPlanning, refineTimeEntry, refineTimeEntryType, RESOURCE_LIST, RESOURCES } from './apiResourceSpecs.ts';
 import { WEBHOOK_EVENTS } from './webhooks.ts';
 
 /**
@@ -209,4 +209,12 @@ test('uren: een categorie hoort alleen bij indirecte uren', () => {
   const switched: Record<string, unknown> = { entry_type: 'direct' };
   refineTimeEntryType(switched, 'update');
   assert.equal(switched.indirect_category, null, 'wie naar direct wisselt, verliest de categorie — net als in de app');
+});
+
+test('uren: de eindtijd ligt niet vóór de begintijd', () => {
+  assert.doesNotThrow(() => refineTimeEntry({ started_at: '2026-10-03T07:00:00.000Z', ended_at: '2026-10-03T08:30:00.000Z' }, 'create'));
+  assert.throws(() => refineTimeEntry({ started_at: '2026-10-03T08:00:00.000Z', ended_at: '2026-10-03T07:00:00.000Z' }, 'create'), /ended_at/);
+  // De typeregel loopt mee.
+  assert.throws(() => refineTimeEntry({ indirect_category: 'admin' }, 'create'), /indirect/);
+  assert.equal(RESOURCES.time_entries.refine, refineTimeEntry);
 });

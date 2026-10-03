@@ -51,12 +51,30 @@ export function apiKeyHint(selector: string): string {
  * De sleutel uit een verzoek. `Authorization: Bearer …` is de standaard; een
  * aparte `X-Api-Key` staat er voor koppelplatforms die de Authorization-header
  * zelf willen vullen of hem niet laten aanpassen.
+ *
+ * Zet zo'n platform (of een Supabase-client) zelf een Authorization met iets
+ * anders dan een API-sleutel — een anon-JWT bijvoorbeeld — dan telt de
+ * `X-Api-Key`. Anders zou een geldige sleutel geweigerd worden omdat er een
+ * andere header naast stond.
  */
 export function presentedApiKey(headers: Headers): string {
   const authorization = (headers.get('authorization') || '').trim();
-  const bearer = /^Bearer\s+(.+)$/i.exec(authorization);
-  if (bearer) return bearer[1].trim();
-  return (headers.get('x-api-key') || '').trim();
+  const bearer = /^Bearer\s+(.+)$/i.exec(authorization)?.[1].trim() ?? '';
+  const header = (headers.get('x-api-key') || '').trim();
+  if (bearer.startsWith(`${API_KEY_PREFIX}.`)) return bearer;
+  return header || bearer;
+}
+
+/**
+ * Bevat de invoer ergens een NUL-teken (U+0000)? Postgres kan dat niet opslaan
+ * (niet in text, niet in jsonb) en geeft dan een fout die anders als een 500
+ * terugkomt. Beter meteen een 400 met de reden.
+ */
+export function containsNul(value: unknown, depth = 0): boolean {
+  if (typeof value === 'string') return value.includes('\u0000');
+  if (depth > 32 || !value || typeof value !== 'object') return false;
+  return Object.entries(value as Record<string, unknown>)
+    .some(([key, item]) => key.includes('\u0000') || containsNul(item, depth + 1));
 }
 
 // ── Wat een sleutel mag ──────────────────────────────────────────────────────

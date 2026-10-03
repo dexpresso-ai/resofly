@@ -14,8 +14,8 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { effectiveModuleLevel } from './publicApi.ts';
 import {
-  decryptSecret, isPrivateAddress, MAX_DELIVERY_ATTEMPTS, nextRetryDelay, PING_EVENT, signatureHeader, signPayload,
-  webhookBody, webhookUrlProblem,
+  decryptSecret, isPrivateAddress, MAX_DELIVERY_ATTEMPTS, nextRetryDelay, parseDohAnswer, PING_EVENT, signatureHeader,
+  signPayload, webhookBody, webhookUrlProblem,
 } from './webhooks.ts';
 
 /** Hoe lang we op een eindpunt wachten. Wie langer nodig heeft, hoort eerst te antwoorden en daarna te werken. */
@@ -235,6 +235,13 @@ async function loadKeyAccess(admin: SupabaseClient, keyId: string): Promise<NonN
 /** Zo lang mag het opzoeken van een naam duren, per soort record. */
 const DNS_TIMEOUT_MS = 3_000;
 
+/**
+ * DNS-over-HTTPS, voor een omgeving zonder eigen DNS-opvraging (Deno.resolveDns
+ * bestaat niet in elke Edge-runtime). Twee aanbieders: valt er één uit, dan
+ * staan de webhooks niet stil.
+ */
+const DOH_PROVIDERS = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve'];
+
 class DnsTimeout extends Error {
   constructor(host: string) {
     super(`Het adres ${host} kon niet op tijd worden opgezocht (DNS). We proberen het later opnieuw.`);
@@ -242,41 +249,86 @@ class DnsTimeout extends Error {
   }
 }
 
+type DnsType = 'A' | 'AAAA';
+
 /**
- * Wijst de naam van dit adres NU naar een intern adres? Best effort: kan de
- * omgeving geen DNS opvragen (geen rechten, geen ondersteuning), dan laten we
- * het bij de controle op de naam zelf. En een naam die tussen deze controle en
- * het versturen van antwoord verandert (DNS-rebinding), houdt dit niet tegen —
- * het vangt de naam die gewoon naar binnen wijst.
- *
- * Duurt het opzoeken te lang, dan gooit dit een DnsTimeout: liever een poging
- * later dan versturen zonder te weten waarheen.
+ * Waar wijst deze naam NU naartoe? Met de DNS van de runtime als die er is,
+ * anders via DNS-over-HTTPS. Gooit DnsTimeout als het niet lukt om het te weten:
+ * "geen antwoord" is iets anders dan "geen adressen".
  */
-async function privateResolution(rawUrl: string): Promise<string | null> {
-  const host = new URL(rawUrl).hostname.replace(/^\[|\]$/g, '');
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':')) return null; // al gecontroleerd
-  const resolve = (Deno as unknown as { resolveDns?: (name: string, type: 'A' | 'AAAA') => Promise<string[]> }).resolveDns;
-  if (typeof resolve !== 'function') return null;
-  const addresses: string[] = [];
-  for (const type of ['A', 'AAAA'] as const) {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+export async function resolveHostAddresses(host: string, fetcher: typeof fetch = fetch): Promise<string[]> {
+  const native = (globalThis as { Deno?: { resolveDns?: (name: string, type: DnsType) => Promise<string[]> } }).Deno?.resolveDns;
+  if (typeof native === 'function') {
+    const addresses: string[] = [];
+    for (const type of ['A', 'AAAA'] as const) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        addresses.push(...await Promise.race([
+          native(host, type),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new DnsTimeout(host)), DNS_TIMEOUT_MS);
+          }),
+        ]));
+      } catch (error) {
+        if (error instanceof DnsTimeout) throw error;
+        // Geen records van dit type (of de naam bestaat niet): geen adressen.
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    return addresses;
+  }
+
+  for (const provider of DOH_PROVIDERS) {
     try {
-      addresses.push(...await Promise.race([
-        resolve(host, type),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new DnsTimeout(host)), DNS_TIMEOUT_MS);
-        }),
-      ]));
-    } catch (error) {
-      if (error instanceof DnsTimeout) throw error;
-      // Geen records van dit type, of DNS niet beschikbaar: geen oordeel.
-    } finally {
-      clearTimeout(timer);
+      const addresses: string[] = [];
+      for (const type of ['A', 'AAAA'] as const) {
+        const response = await fetcher(`${provider}?name=${encodeURIComponent(host)}&type=${type}`, {
+          headers: { accept: 'application/dns-json' },
+          signal: AbortSignal.timeout(DNS_TIMEOUT_MS),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        addresses.push(...parseDohAnswer(await response.json(), type));
+      }
+      return addresses;
+    } catch {
+      // Volgende aanbieder.
     }
   }
+  throw new DnsTimeout(host);
+}
+
+/**
+ * Wijst de naam van dit adres NU naar een intern adres? Een naam die tussen
+ * deze controle en het versturen van antwoord verandert (DNS-rebinding), houdt
+ * dit niet tegen — het vangt de naam die gewoon naar binnen wijst
+ * (127.0.0.1.nip.io en dergelijke).
+ *
+ * Gooit DnsTimeout als het opzoeken niet lukt: liever een poging later dan
+ * versturen zonder te weten waarheen.
+ */
+async function privateResolution(rawUrl: string, fetcher: typeof fetch = fetch): Promise<string | null> {
+  const host = new URL(rawUrl).hostname.replace(/^\[|\]$/g, '').replace(/\.+$/, '');
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':')) return null; // al gecontroleerd
+  const addresses = await resolveHostAddresses(host, fetcher);
   return addresses.some(isPrivateAddress)
     ? `${host} wijst naar een intern adres. Webhooks gaan alleen naar adressen die vanaf internet bereikbaar zijn.`
     : null;
+}
+
+/**
+ * Voor het aanmaken en wijzigen van een eindpunt: het adres zelf, en waar de
+ * naam nu naartoe wijst. Lukt het opzoeken niet, dan geen oordeel — bij elke
+ * bezorging wordt opnieuw gekeken, en dan wordt er niet blind verstuurd.
+ */
+export async function webhookAddressProblem(rawUrl: string, fetcher: typeof fetch = fetch): Promise<string | null> {
+  const problem = webhookUrlProblem(rawUrl);
+  if (problem) return problem;
+  try {
+    return await privateResolution(rawUrl, fetcher);
+  } catch {
+    return null;
+  }
 }
 
 async function readPreview(response: Response): Promise<string | null> {

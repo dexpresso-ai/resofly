@@ -53,8 +53,10 @@ Stuur de sleutel mee in elke aanroep:
 Authorization: Bearer rsfapi.<selector>.<verifier>
 ```
 
-Kan je platform de `Authorization`-header niet zelf vullen, gebruik dan
-`X-Api-Key: rsfapi.…`.
+Kan je platform de `Authorization`-header niet zelf vullen, of zet het daar al
+iets anders in (sommige platforms en Supabase-clients sturen automatisch hun
+eigen token mee), gebruik dan `X-Api-Key: rsfapi.…`. Staat er in
+`Authorization` geen API-sleutel, dan telt `X-Api-Key`.
 
 Een sleutel werkt **namens het teamlid dat hem aanmaakte**, met diens rechten
 van dat moment. Wordt dat teamlid viewer, dan kan de sleutel alleen nog lezen;
@@ -230,7 +232,7 @@ curl -s "$RESOFLY_API/v1/tasks?project_id=…&status=todo&sort=planned_date&limi
 | Parameter | |
 |---|---|
 | `q` | Zoeken (klanten: naam, contactpersoon, e-mail, klantnummer; taken en tickets: titel en omschrijving). |
-| filters | Per adres, bijvoorbeeld `status`, `client_id`, `project_id`, `from`/`to` (uren), `is_active` (contactpersonen). |
+| filters | Per adres, bijvoorbeeld `status`, `client_id`, `project_id`, `from`/`to` (uren), `is_active` (contactpersonen). Bij een keuzelijst mag je er meer tegelijk vragen: `?status=new,review,approved`. |
 | `updated_since`, `created_since` | Alleen wat sinds dat tijdstip veranderde of bijkwam (ISO 8601) — om bij te houden wat er nieuw is. |
 | `sort` | Bijvoorbeeld `-created_at` (standaard), `name`, `-updated_at`. |
 | `limit`, `offset` | Pagineren (standaard 25, max 100). Is `has_more` waar, vraag dan de volgende pagina op met `offset=next_offset`. |
@@ -261,6 +263,7 @@ maakt een veld leeg.
   verwijzingscontroles, en in het logboek van ResoFly op naam van dat teamlid.
 - **Een onbekend veld is een fout** (422 met `details.field`), net als een veld
   dat ResoFly zelf beheert, zoals `client_code`. Zo merk je een tikfout meteen.
+  Tekst met een NUL-teken (`\u0000`) kan ResoFly niet opslaan (400).
 - **Verwijzingen** (`client_id`, `project_id`, `task_id`) moeten in dezelfde
   organisatie bestaan. Hangt een project aan een klant, dan volgt de klant van
   een taak het project — net als in de app.
@@ -388,7 +391,8 @@ verdwijnt als de sleutel wordt ingetrokken. Vraag je uitdrukkelijk om een
 gebeurtenis uit een module die dicht staat, dan krijg je 422.
 
 Het adres moet `https://` zijn en vanaf internet bereikbaar: geen `localhost`,
-geen intern netwerk, geen privé-IP-adres.
+geen intern netwerk, geen privé-IP-adres — en ook geen naam die naar zo'n adres
+wijst (dat wordt bij het aanmelden én bij elke bezorging opgezocht).
 
 ### Wat er binnenkomt
 

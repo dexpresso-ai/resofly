@@ -187,3 +187,27 @@ test('een antwoord bevat precies de velden uit de spec, en niets anders', () => 
   assert.ok(!('public_token_hash' in shown));
   assert.equal(selectColumns(spec), Object.keys(spec.fields).join(', '));
 });
+
+// ── Bevindingen uit de veiligheidstest (oktober 2026) ────────────────────────
+
+test('namen van ingebouwde objecteigenschappen zijn gewoon onbekende velden', () => {
+  for (const name of ['constructor', 'toString', 'hasOwnProperty', '__proto__', 'valueOf']) {
+    const input = JSON.parse(`{"name": "x", "${name}": 1}`);
+    rejects(() => normalizeInput(spec, input, 'create'), /Onbekend veld/, name);
+  }
+});
+
+test('stuurtekens in q en in tekstfilters', () => {
+  const textSpec: ResourceSpec = { ...spec, filters: { ...spec.filters, email: { column: 'email', op: 'eq', type: 'text', description: 'mail' } } };
+  assert.equal(parseListParams(textSpec, new URLSearchParams({ q: 'jan\u0000sen\tbv' })).q, 'jan sen bv');
+  rejects(() => parseListParams(textSpec, new URLSearchParams({ email: 'a\u0000@b.nl' })), /stuurtekens/, 'email');
+  assert.deepEqual(parseListParams(textSpec, new URLSearchParams({ email: 'a,b(c)@d.nl' })).filters, [{ column: 'email', op: 'eq', value: 'a,b(c)@d.nl' }]);
+});
+
+test('een keuzelijst-filter met meer waarden tegelijk', () => {
+  assert.deepEqual(parseListParams(spec, new URLSearchParams({ status: 'active,archived,active' })).filters,
+    [{ column: 'status', op: 'in', value: ['active', 'archived'] }]);
+  rejects(() => parseListParams(spec, new URLSearchParams({ status: 'active,weg' })), /Filter "status"/);
+  // Een id of datum blijft één waarde.
+  rejects(() => parseListParams(spec, new URLSearchParams({ parent_id: 'a,b' })), /uuid/);
+});
