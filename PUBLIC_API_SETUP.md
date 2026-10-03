@@ -91,8 +91,8 @@ supabase db push
 
 Dat draait `20261003000000_public_api.sql`, `20261003010000_webhooks.sql`,
 `20261003020000_api_rest.sql`, `20261003030000_api_hardening.sql`,
-`20261003040000_approvals_auth_limits.sql` en `20261003050000_full_api_check.sql`
-(alle zes veilig om te herhalen).
+`20261003040000_approvals_auth_limits.sql`, `20261003050000_full_api_check.sql` en
+`20261003060000_recheck_audit_and_licenses.sql` (alle zeven veilig om te herhalen).
 De eerste:
 
 | Onderdeel | Wat |
@@ -139,6 +139,18 @@ De vijfde:
 | `ai_action_audit_guard_update` | Trigger: een afgehandelde auditregel (uitgevoerd, rechtstreeks uitgevoerd, ingetrokken, afgewezen) verandert niet meer, en wat er voorgesteld werd (`params`) nooit — ook niet via de service role. |
 | `api_auth_failures`, `api_key_lookup()`, `api_note_auth_failure()` | Mislukte API-sleutels per afzender (gehasht adres). Na 60 binnen 10 minuten: 15 minuten 429 voor mislukte pogingen. Een geldige sleutel werkt altijd door. |
 | pg_cron `resofly-api-purge` | Dagelijks om 03:17 UTC `api_purge_expired()` en `webhook_purge_expired()` — als pg_cron aan staat. Anders een melding, en geen fout. |
+
+De zesde zet de bevindingen van de volledige controle dicht: alles wat tekst in
+het klantportaal zet of verandert vraagt `execute_high`, strikte invoer, en
+`ai_action_decide` voor de Beslissingen-feed (zie de changelog).
+
+De zevende, uit de herkontrole:
+
+| Onderdeel | Wat |
+|---|---|
+| `audit_entity_module()` + RLS op `audit_logs` | Een regel hoort bij een module; een teamlid leest hem alleen met leesrecht in die module. Sleutels, webhooks, uitnodigingen, agendakoppelingen, abonnement en betalingen alleen owners/admins. `audit.list` gebruikt dezelfde lijst (`AUDIT_ENTITY_MODULE`). |
+| `audit_logs_mask_private_calendar` | Trigger: een afspraak, koppeling of agenda in een privé-agenda krijgt in het auditlog een neutraal label ("Privé-afspraak", "Privé-agenda"); bestaande regels worden net zo opgeschoond. |
+| `organization_license_usage()` | Werkt nu ook voor de service role (`team.license_usage`, de plan-stap van `team.invite`); anon kan hem niet aanroepen. |
 
 Op **staging** gebeurt dit vanzelf: de workflow *Deploy Supabase (staging)*
 draait `supabase db push` en `supabase functions deploy` bij elke push naar
@@ -419,8 +431,8 @@ opslagsleutels en base64-bestanden er altijd buiten, en vallen velden boven de
 dan gaan tarieven en klantwaarde als `null` mee — net als via de API.
 
 **Het adres van een webhook is zelf vaak een geheim** (Zapier en Make zetten er
-een token in). Het staat daarom niet in `audit_logs`, dat elk teamlid leest: daar
-staat de omschrijving, of "Webhook".
+een token in). Het staat daarom niet in `audit_logs`: daar staat de omschrijving,
+of "Webhook" — en ook die regels leest alleen een owner of admin.
 
 ## Als het niet werkt
 

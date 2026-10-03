@@ -144,7 +144,7 @@ interface EditQuoteProposal { type: 'edit_quote'; id: string; number: string; cl
 interface EditClientProposal { type: 'edit_client'; id: string; name: string; changes: { name?: string; contact_name?: string | null; email?: string | null; phone?: string | null; notes?: string | null; status?: string } }
 // Herinneringen zijn óók een reeks die je regel voor regel afvinkt; bedrag en
 // dagen-te-laat staan erbij zodat je per factuur kunt besluiten, niet per stapel.
-interface SendRemindersProposal { type: 'send_reminders'; invoices: Array<{ id: string; number: string; client_name: string; level: number; total_eur: number; days_overdue: number }>; total: number }
+interface SendRemindersProposal { type: 'send_reminders'; invoices: Array<{ id: string; number: string; client_name: string; level: number; total_eur: number; days_overdue: number; recipient_email: string | null }>; total: number }
 interface ProposalSubtask { label: string; done: boolean }
 interface ProjectProposal { type: 'project'; name: string; client_id: string | null; client_name: string; description: string | null; start_date: string | null; end_date: string | null }
 interface EditProjectProposal { type: 'edit_project'; id: string; name: string; changes: { name?: string; client_id?: string | null; description?: string | null; start_date?: string | null; end_date?: string | null; archived?: boolean } }
@@ -3272,7 +3272,7 @@ async function buildEditTaskProposal(ctx: GerrieContext, input: Record<string, u
   return { ok: true, proposal: { type: 'edit_task', id: String(task.id), title: String(task.title), project_id: task.project_id ? String(task.project_id) : null, changes } };
 }
 
-interface DueReminder { id: string; number: string; client_id: string | null; client_name: string; reminder_level: number; next_level: number; days_overdue: number; total_eur: number }
+interface DueReminder { id: string; number: string; client_id: string | null; client_name: string; client_email: string | null; reminder_level: number; next_level: number; days_overdue: number; total_eur: number }
 
 /**
  * Berekent welke facturen vandaag aan de beurt zijn voor hun VOLGENDE herinnering,
@@ -3301,14 +3301,18 @@ async function computeDueReminders(orgId: string, levelFilter: number | null): P
     if (daysOverdue < offsets[level]) continue;
     const nextLevel = level + 1;
     if (levelFilter && nextLevel !== levelFilter) continue;
-    due.push({ id: String(r.id), number: String(r.number), client_id: r.client_id ? String(r.client_id) : null, client_name: '', reminder_level: level, next_level: nextLevel, days_overdue: daysOverdue, total_eur: invoiceTotal(r) });
+    due.push({ id: String(r.id), number: String(r.number), client_id: r.client_id ? String(r.client_id) : null, client_name: '', client_email: null, reminder_level: level, next_level: nextLevel, days_overdue: daysOverdue, total_eur: invoiceTotal(r) });
   }
 
   const clientIds = [...new Set(due.map((d) => d.client_id).filter(Boolean))] as string[];
   if (clientIds.length) {
-    const { data: clients } = await supabaseAdmin.from('clients').select('id, name').eq('organization_id', orgId).in('id', clientIds);
-    const nameById = new Map<string, string>((clients ?? []).map((c: Record<string, unknown>) => [String(c.id), String(c.name)]));
-    for (const d of due) if (d.client_id) d.client_name = nameById.get(d.client_id) ?? '';
+    const { data: clients } = await supabaseAdmin.from('clients').select('id, name, email').eq('organization_id', orgId).in('id', clientIds);
+    const byId = new Map<string, Record<string, unknown>>((clients ?? []).map((c: Record<string, unknown>) => [String(c.id), c]));
+    for (const d of due) {
+      const client = d.client_id ? byId.get(d.client_id) : undefined;
+      d.client_name = client ? String(client.name ?? '') : '';
+      d.client_email = client?.email ? String(client.email) : null;
+    }
   }
   return due.sort((a, b) => b.days_overdue - a.days_overdue);
 }
@@ -3325,7 +3329,9 @@ async function buildSendRemindersProposal(ctx: GerrieContext, input: Record<stri
       type: 'send_reminders',
       // Bedrag en dagen-te-laat gaan mee: de gebruiker vinkt per factuur af en
       // hoort dan te zien waar het over gaat zonder eerst weg te klikken.
-      invoices: due.map((d) => ({ id: d.id, number: d.number, client_name: d.client_name, level: d.next_level, total_eur: d.total_eur, days_overdue: d.days_overdue })),
+      // En het adres: dat hoort op de kaart, en de uitvoerder stuurt alleen daarheen
+      // (is het sindsdien veranderd, dan weigert de server — zie approvedRecipient.ts).
+      invoices: due.map((d) => ({ id: d.id, number: d.number, client_name: d.client_name, level: d.next_level, total_eur: d.total_eur, days_overdue: d.days_overdue, recipient_email: d.client_email })),
       total: due.length,
     },
   };
@@ -4607,9 +4613,12 @@ async function resolveEventRef(ctx: GerrieContext, input: Record<string, unknown
   const sourceId = String(input.source_id || '').trim();
   if (!isUuid(sourceId)) return { ok: false, error: 'Ongeldig source_id. Zoek het item eerst met list_calendar_events.' };
   const { data: source, error } = await supabaseAdmin.from('calendar_sources')
-    .select('id, name, provider').eq('organization_id', ctx.organizationId).eq('id', sourceId).maybeSingle();
+    .select('id, name, provider, user_id, visibility').eq('organization_id', ctx.organizationId).eq('id', sourceId).maybeSingle();
   if (error) return { ok: false, error: `Agenda ophalen mislukt: ${error.message}` };
-  if (!source) return { ok: false, error: 'Deze agenda bestaat niet in deze organisatie.' };
+  // Andermans privé-agenda bestaat hier niet (zoals de RLS): geen naam in een melding.
+  if (!source || (String(source.user_id) !== ctx.userId && source.visibility !== 'organization')) {
+    return { ok: false, error: 'Deze agenda bestaat niet in deze organisatie.' };
+  }
   if (String(source.provider) === 'ics') return { ok: false, error: `"${String(source.name)}" is een abonnement via een link en kan niet gewijzigd worden.` };
 
   const eventId = String(input.event_id || '').trim();

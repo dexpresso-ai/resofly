@@ -3157,12 +3157,18 @@ export async function createClientWithServerCode(organizationId: UUID, values: R
  * Server-side via de `mail`-edge function (Resend), zodat de API-key niet in de
  * browser staat. De klant moet een e-mailadres hebben.
  */
-export async function sendClientPortalWelcomeEmail(organizationId: UUID, clientId: UUID): Promise<{ providerEmailId?: string; recipientEmail?: string }> {
+export async function sendClientPortalWelcomeEmail(
+  organizationId: UUID,
+  clientId: UUID,
+  /** Het adres dat op de goedgekeurde kaart stond; de server weigert als het sindsdien veranderde. */
+  options: { expectedRecipientEmail?: string } = {},
+): Promise<{ providerEmailId?: string; recipientEmail?: string }> {
   const { data, error } = await supabase.functions.invoke('mail', {
     body: {
       action: 'sendClientPortalWelcome',
       organizationId,
       clientId,
+      expectedRecipientEmail: options.expectedRecipientEmail,
     },
   });
   if (error) await throwFunctionError(error, 'Welkomstmail verzenden mislukt.');
@@ -3717,7 +3723,7 @@ export async function sendInvoiceEmailViaResend(organizationId: UUID, invoiceId:
 export async function sendInvoiceReminderEmail(
   organizationId: UUID,
   invoiceId: UUID,
-  input: { level?: 1 | 2 | 3; recipientEmail?: string; recipientName?: string; includePaymentLink?: boolean } = {},
+  input: { level?: 1 | 2 | 3; recipientEmail?: string; recipientName?: string; includePaymentLink?: boolean; expectedRecipientEmail?: string } = {},
 ): Promise<{ level?: number; publicUrl?: string; providerEmailId?: string; paymentLinkIncluded?: boolean; paymentLinkError?: string | null; recipientEmail?: string }> {
   const { data, error } = await supabase.functions.invoke('invoice-workflow', {
     body: { action: 'sendInvoiceReminderEmail', organizationId, invoiceId, ...input },
@@ -3816,7 +3822,7 @@ export async function proposeInvoiceDunningNotice(organizationId: UUID, invoiceI
 export async function sendInvoiceDunningNotice(
   organizationId: UUID,
   noticeId: UUID,
-  input: { recipientEmail?: string; recipientName?: string } = {},
+  input: { recipientEmail?: string; recipientName?: string; expectedRecipientEmail?: string } = {},
 ): Promise<{ deadlineDate?: string; totalClaimCents?: number; recipientEmail?: string }> {
   const { data, error } = await supabase.functions.invoke('invoice-workflow', {
     body: { action: 'sendDunningNotice', organizationId, noticeId, ...input },
@@ -4726,9 +4732,14 @@ export async function downloadCreditNotePdf(organizationId: UUID, creditNoteId: 
  * Mail de creditfactuur-PDF naar de klant via de Edge Function (Resend). Optioneel
  * een afwijkend e-mailadres; standaard gaat hij naar het klant-e-mailadres.
  */
-export async function sendCreditNoteEmail(organizationId: UUID, creditNoteId: UUID, recipientEmail?: string): Promise<{ providerEmailId: string; recipientEmail: string }> {
+export async function sendCreditNoteEmail(
+  organizationId: UUID,
+  creditNoteId: UUID,
+  recipientEmail?: string,
+  options: { expectedRecipientEmail?: string } = {},
+): Promise<{ providerEmailId: string; recipientEmail: string }> {
   const { data, error } = await supabase.functions.invoke('invoice-workflow', {
-    body: { action: 'sendCreditNoteEmail', organizationId, creditNoteId, recipientEmail },
+    body: { action: 'sendCreditNoteEmail', organizationId, creditNoteId, recipientEmail, expectedRecipientEmail: options.expectedRecipientEmail },
   });
   if (error) throw error;
   if (!data?.ok) throw new Error(data?.error || 'Creditfactuur mailen mislukt');

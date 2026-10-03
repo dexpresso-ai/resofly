@@ -534,3 +534,123 @@ nog goedgekeurd worden: verlopen is geen wantrouwen, intrekken wel.
 End-to-end op een verse database: kern 33/33, vaste adressen 86/86, aanvallen
 65/65, webhooks 27/27, beslissen 42/42, de goedkeurwachtrij in de app 11/11,
 contracttest 1181/1181 zonder afwijkingen, fuzzing zonder vondsten.
+
+## Vijfde ronde — herkontrole: dezelfde fouten op andere plekken
+
+Migratie `20261003060000_recheck_audit_and_licenses.sql`.
+
+Aanpak: elke bevinding uit de vorige rondes opnieuw nagelopen op twee vragen —
+is de fix volledig, en zit dezelfde soort fout nog ergens anders? Wat er uitkwam:
+
+**Agenda via een link (hoog).** Webhooks verbonden al met een gecontroleerd
+IP-adres, maar het ophalen van een `.ics`-agenda gebruikte nog gewoon `fetch()`,
+dat de naam zelf opnieuw opzoekt. Een DNS-server die bij de controle een
+openbaar adres gaf en bij het ophalen `127.0.0.1` of `169.254.169.254`, glipte
+er zo langs (DNS-rebinding) — en wat daar antwoordde, kwam in de agenda van de
+aanvrager. Lukte het opzoeken bij de controle niet, dan werd er tóch opgehaald.
+Nu haalt `pinnedGet` op over dezelfde verbinding als de webhooks: één keer
+opzoeken, élk adres keuren, precies met zo'n adres verbinden (TLS controleert
+het certificaat nog steeds tegen de naam), elke omleiding opnieuw keuren, en
+niet op te zoeken is niet ophalen. Stuurt een server de feed toch gecomprimeerd
+(wat `fetch()` vroeger zelf uitpakte), dan pakt de ophaler hem uit met dezelfde
+limiet van 5 MB op wat eruit komt — een zip-bom loopt daarop stuk.
+
+**Het auditlog (middel).** Elk lid las elke regel, en het label van een regel is
+de naam, titel of het e-mailadres uit de rij die veranderde. Zo zag een teamlid
+zonder Financiën factuurnummers en boekingsomschrijvingen, zag iedereen de
+e-mailadressen van uitnodigingen en de namen van API-sleutels, en de titels van
+afspraken in andermans privé-agenda. Nu hoort elke regel bij een module en leest
+een teamlid alleen wat hij in die module mag lezen; sleutels, webhooks,
+uitnodigingen, agendakoppelingen, abonnement en betalingen zijn voor owners en
+admins; en een afspraak of agenda in een privé-agenda heet in het log
+"Privé-afspraak" of "Privé-agenda" (bestaande regels zijn opgeschoond).
+`audit.list` leest met de service-role en volgt daarom dezelfde lijst zelf; een
+sleutel met modulebeperking telt daarbij als gewoon teamlid.
+
+**Privé-agenda's (middel).** Dezelfde soort fout als in de vorige ronde (een
+melding vóór de controle): met het id van andermans privé-agenda — dat
+koppelingen tonen — gaven `calendar_source.set_sharing`, `update_native`,
+`refresh_ics`, `booking_link.create`/`update` en Gerrie's afspraak wijzigen of
+afzeggen de naam van die agenda prijs in een foutmelding. `note.list_event_links`
+en `note.unlink_from_event` toonden koppelingen met privé-afspraken,
+`meeting_recording.send_summary` haalde de genodigden uit andermans
+privé-afspraak, en `calendar_source.subscribe_ics` noemde de naam van de
+privé-agenda van een collega met dezelfde link. Nu bestaat andermans
+privé-agenda voor je niet: "niet gevonden", dezelfde zin als bij een id dat er
+niet is. `booking_link.update` controleert bovendien al bij het klaarzetten wat
+de boekingsfunctie bij het uitvoeren controleert (de agenda is van de eigenaar
+van de link, of gedeeld).
+
+**Naar buiten zonder dat de kaart het zei (middel).**
+- Een notitie of document naar een **gedeelde map** verplaatsen, er een map in
+  maken of hem hernoemen: de ontvanger ziet het meteen (een deling is live, ook
+  voor submappen). Nu risico hoog, met de ontvanger op de kaart.
+- `finance.link_project`: een factuur of offerte zonder eigen klant aan een
+  project mét klant hangen, zet hem in het klantportaal van die klant. Nu risico
+  hoog, met de naam van die klant.
+
+**De ontvanger vastpinnen (middel).** Bij een betalingsherinnering, aanmaning,
+creditnota, portaal-welkomstmail, losse klantmail en een reeks herinneringen
+stond het adres op de goedkeurkaart, maar bij het versturen nam de server het
+adres uit het klantdossier van dát moment. Wie tussen klaarzetten en goedkeuren
+het adres wijzigde, kreeg de post. Nu geeft de app het goedgekeurde adres mee
+(`expectedRecipientEmail`) en weigert de server als het veranderde: 409, er is
+niets verstuurd (`_shared/approvedRecipient.ts`). Een reeks herinneringen toont
+nu ook per regel naar welk adres hij gaat.
+
+**Goedkeuren: de outbox (laag).** Een uitkomst die bleef liggen, werd na
+uitloggen of wisselen van account onder de naam van de volgende gebruiker
+afgeleverd. Nu onthoudt elke uitkomst wie besliste, en levert alleen die hem af.
+
+**De licentietelling (functioneel).** `team.license_usage` (en de plan-stap van
+`team.invite`) faalde altijd: `organization_license_usage` controleerde het
+lidmaatschap via `auth.uid()`, die er voor de service-role niet is. Nu mag de
+service-role erbij; `anon` kan hem niet meer aanroepen.
+
+**Nagelopen en in orde.** Alle overige plekken waar de server iets ophaalt (alleen
+vaste providers en eigen workers; web push heeft een allowlist); de
+portaalregels van de handelingen (een ticket aan een klant hangen of omzetten
+was al risico hoog; Gerrie's project- en taakwijzigingen hebben geen
+server-uitvoerder en gaan altijd via een mens in de app); de uren in
+`time.hour_criterion` (uren zijn in de app org-breed leesbaar voor wie Uren mag
+zien); elke opgevraagde kolom tegen het schema; leesacties die gegevens uit een
+andere module meenemen.
+
+**Bewust zo gelaten.** Opnames van vergaderingen zijn org-breed leesbaar (zoals in
+de app). `client_email.recent_inbound` zet leesmarkeringen, zoals het scherm.
+Een sleutel met `execute` kan een contactpersoon met een willekeurig adres
+toevoegen, die een latere campagne "met contactpersonen" ook krijgt; een
+campagne versturen blijft mensenwerk in de app, en wie hem verstuurt ziet de
+doelgroep.
+
+### Wat de tests bewaken
+
+- `pinnedGet.test.ts` (8) — vastgepind op het gekeurde adres, DNS-rebinding en
+  metadata-adressen geweigerd, niet op te zoeken is niet ophalen, IPv4 eerst,
+  een GET zonder `Content-Length`, uitpakken met een limiet (ook een zip-bom),
+  en de agenda-ophaler gebruikt geen losse `fetch()` meer.
+- `auditVisibility.test.ts` (8) — de indeling in SQL en in `audit.list` is
+  dezelfde, elke soort regel die ergens gelogd wordt is bewust ingedeeld, de
+  leesregel, het maskeren, de licentietelling, en `audit.list` per rol (ook een
+  beperkte sleutel van een admin).
+- `recheckFixes.test.ts` (13) — met een nep-database die de filters echt
+  toepast: gedeelde mappen (ook hoger in de boom; verlopen en ingetrokken
+  delingen niet), het klantportaal via een project, privé-agenda's ("niet
+  gevonden", zelfde zin als een onbekend id), boekingslinks, koppelingen met
+  notities, notulen mailen, dubbele agenda-links, Gerrie, en de outbox.
+- `approvedRecipient.test.ts` (7) — de vergelijking, en dat elke verzendweg het
+  adres controleert vóór er iets de deur uit gaat.
+- Gecontroleerd met mutaties (de nieuwe controles weghalen): alle gevangen.
+
+Live nagelopen: de leesregel van het auditlog per rol (owner, admin, teamlid
+zonder Financiën, viewer), het maskeren bij aanmaken, wijzigen en verwijderen,
+de licentietelling als service-role, lid en buitenstaander, `audit.list` met een
+beperkte sleutel, de agenda-link (goede feed, rebinding, interne naam, interne
+omleiding, een gecomprimeerde feed en een zip-bom), en de klantmail en
+portaal-welkomstmail met een gewijzigd adres (409, niets verstuurd).
+
+End-to-end op een verse database: kern 33/33, vaste adressen 86/86, aanvallen
+65/65, webhooks 27/27, beslissen 42/42, de goedkeurwachtrij in de app 11/11,
+contracttest 1181/1181, gerichte fuzzing op de aangepaste handelingen (1318
+verzoeken) en een brede ronde (1749 verzoeken) zonder vondsten. Unit-tests
+608/608.

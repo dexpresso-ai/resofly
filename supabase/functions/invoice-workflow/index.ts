@@ -7,6 +7,7 @@ import { renderEmailTemplate, type EmailTemplateContent, type EmailTemplateConte
 import { calculateDunningClaim, type DunningClaim, type InterestKind, type RatePeriod } from '../_shared/dunning.ts';
 import { decryptSecret, encryptSecret, mollieKeySuffix, validateMollieApiKey } from '../_shared/mollieSecrets.ts';
 import { buildUblXml, deriveSalesLineCategory, validateUblInput, type UblDocumentInput, type UblLine, type VatKindRef } from '../_shared/ubl.ts';
+import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/approvedRecipient.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 type InvoiceLine = { id?: string; description: string; quantity: number; unit_price: number; vat?: number; vat_code?: string | null };
@@ -425,12 +426,13 @@ async function sendInvoiceReminderEmail(userId: string, organizationId: string, 
     includePaymentLink,
     recipientEmail: body.recipientEmail ? String(body.recipientEmail) : undefined,
     recipientName: body.recipientName ? String(body.recipientName) : undefined,
+    expectedRecipientEmail: body.expectedRecipientEmail,
   });
 }
 
 // Gedeelde verzendkern voor cron én handmatig. Hergebruikt de factuur-PDF-snapshot,
 // publieke token en (optioneel) de Mollie-betaallink-logica van de gewone verzending.
-async function deliverInvoiceReminder(input: { organizationId: string; invoiceId: string; level: number; daysOverdue?: number | null; actorUserId: string | null; includePaymentLink: boolean; recipientEmail?: string; recipientName?: string }) {
+async function deliverInvoiceReminder(input: { organizationId: string; invoiceId: string; level: number; daysOverdue?: number | null; actorUserId: string | null; includePaymentLink: boolean; recipientEmail?: string; recipientName?: string; expectedRecipientEmail?: unknown }) {
   const { organizationId, invoiceId, actorUserId, includePaymentLink } = input;
   const level = Math.min(3, Math.max(1, Math.round(input.level))) as 1 | 2 | 3;
   if (!RESEND_API_KEY) throw new WorkflowHttpError('RESEND_API_KEY ontbreekt in de Edge Function secrets.', 500);
@@ -452,6 +454,8 @@ async function deliverInvoiceReminder(input: { organizationId: string; invoiceId
   const recipientEmail = String(input.recipientEmail || client.email || '').trim().toLowerCase();
   const recipientName = String(input.recipientName || client.contact_name || client.name || '').trim();
   if (!isEmail(recipientEmail)) throw new WorkflowHttpError('Vul een geldig klant-e-mailadres in voordat je een herinnering verstuurt.', 422);
+  // Goedgekeurd op een ander adres dan waar hij nu heen zou gaan: niet versturen.
+  if (approvedRecipientChanged(input.expectedRecipientEmail, recipientEmail)) throw new WorkflowHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
 
   const token = randomToken();
   const tokenHash = await sha256Hex(token);
@@ -802,6 +806,7 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
   const recipientEmail = String(body.recipientEmail || client.email || '').trim().toLowerCase();
   const recipientName = String(body.recipientName || client.contact_name || client.name || '').trim();
   if (!isEmail(recipientEmail)) throw new WorkflowHttpError('Vul een geldig klant-e-mailadres in voordat je een aanmaning verstuurt.', 422);
+  if (approvedRecipientChanged(body.expectedRecipientEmail, recipientEmail)) throw new WorkflowHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
 
   // 14-dagen-termijn vanaf de verzenddatum (benadering van "de dag na ontvangst").
   const deadlineDate = new Date(Date.parse(`${calcDate}T00:00:00Z`) + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -1691,6 +1696,7 @@ async function sendCreditNoteEmail(userId: string, organizationId: string, body:
   const [client, company] = await Promise.all([loadClient(organizationId, invoice.client_id), loadCompanySettings(organizationId)]);
   const recipientEmail = String(body.recipientEmail || client.email || '').trim().toLowerCase();
   const recipientName = String(body.recipientName || '').trim() || null;
+  if (approvedRecipientChanged(body.expectedRecipientEmail, recipientEmail)) throw new WorkflowHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
   const result = await deliverCreditNoteEmail({ organizationId, userId, creditNote, invoice, client, company, recipientEmail, recipientName });
   return { sent: true, ...result };
 }

@@ -102,7 +102,8 @@ export const FINANCE_EXECUTORS: Record<string, ActionExecutor> = {
 
   'invoice.send_reminder': async (payload, ctx) => {
     const level = int(payload, 'level') as 1 | 2 | 3;
-    const result = await sendInvoiceReminderEmail(ctx.organizationId, text(payload, 'invoice_id'), { level });
+    // Het adres op de goedgekeurde kaart: is dat sindsdien veranderd, dan verstuurt de server niets.
+    const result = await sendInvoiceReminderEmail(ctx.organizationId, text(payload, 'invoice_id'), { level, expectedRecipientEmail: optText(payload, 'email') ?? undefined });
     const number = optText(payload, 'number') ?? '';
     const to = result.recipientEmail ?? optText(payload, 'email') ?? 'de klant';
     const sentLevel = result.level ?? level;
@@ -119,7 +120,7 @@ export const FINANCE_EXECUTORS: Record<string, ActionExecutor> = {
   },
 
   'dunning.send': async (payload, ctx) => {
-    const result = await sendInvoiceDunningNotice(ctx.organizationId, text(payload, 'notice_id'));
+    const result = await sendInvoiceDunningNotice(ctx.organizationId, text(payload, 'notice_id'), { expectedRecipientEmail: optText(payload, 'email') ?? undefined });
     const number = optText(payload, 'invoice_number') ?? '';
     const to = result.recipientEmail ?? optText(payload, 'email') ?? 'de klant';
     const total = typeof result.totalClaimCents === 'number' ? ` van ${euroCents(result.totalClaimCents)}` : '';
@@ -150,7 +151,7 @@ export const FINANCE_EXECUTORS: Record<string, ActionExecutor> = {
   },
 
   'credit_note.send': async (payload, ctx) => {
-    const result = await sendCreditNoteEmail(ctx.organizationId, text(payload, 'credit_note_id'));
+    const result = await sendCreditNoteEmail(ctx.organizationId, text(payload, 'credit_note_id'), undefined, { expectedRecipientEmail: optText(payload, 'email') ?? undefined });
     const number = optText(payload, 'number') ?? '';
     const to = result.recipientEmail ?? optText(payload, 'email') ?? 'de klant';
     return `Creditnota ${number} gemaild naar ${to}`.replace('  ', ' ');

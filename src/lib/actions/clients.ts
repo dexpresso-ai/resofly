@@ -25,7 +25,8 @@ export const CLIENT_EXECUTORS: Record<string, ActionExecutor> = {
 
   'client.send_portal_welcome': async (payload, ctx) => {
     const clientId = text(payload, 'client_id');
-    const result = await sendClientPortalWelcomeEmail(ctx.organizationId, clientId);
+    // Het adres op de goedgekeurde kaart: is dat sindsdien veranderd, dan verstuurt de server niets.
+    const result = await sendClientPortalWelcomeEmail(ctx.organizationId, clientId, { expectedRecipientEmail: optText(payload, 'email') ?? undefined });
     const to = result.recipientEmail ?? optText(payload, 'email') ?? 'de klant';
     return `Portaaluitnodiging verstuurd naar ${to}`;
   },

@@ -1,7 +1,7 @@
 import {
   ActionError, assertFieldWritable, bool, choice, id, ids, joinShort, optChoice, optId,
   optIsoDate, optNum, optStr, orgQuery, row, str,
-  type ActionDef,
+  type ActionCtx, type ActionDef,
 } from './types.ts';
 
 /**
@@ -13,6 +13,30 @@ import {
  * de fiscale gegevens die een e-factuur nodig heeft, de eigen velden die je in een
  * mailing als variabele gebruikt, en de opvangbak.
  */
+
+/**
+ * Is deze map — of een map erboven — nu gedeeld (drive_shares)? Een gedeelde
+ * map toont zijn hele inhoud live aan de ontvanger (drive_share_items): wat
+ * erin komt, ziet een klant of buitenstaander meteen. Geeft de ontvanger terug,
+ * of null.
+ */
+export async function activeFolderShare(ctx: ActionCtx, folderId: string): Promise<{ recipient: string } | null> {
+  const now = new Date().toISOString();
+  const seen = new Set<string>();
+  let current: string | null = folderId;
+  for (let depth = 0; current && depth < 25 && !seen.has(current); depth += 1) {
+    seen.add(current);
+    const { data, error } = await orgQuery(ctx, 'drive_shares', 'recipient_name, recipient_email, expires_at')
+      .eq('item_type', 'folder').eq('item_id', current).is('revoked_at', null).limit(20);
+    if (error) throw new ActionError(`Delingen ophalen mislukt: ${error.message}`);
+    const active = ((data ?? []) as Array<{ recipient_name: string | null; recipient_email: string | null; expires_at: string | null }>)
+      .find((share) => !share.expires_at || share.expires_at > now);
+    if (active) return { recipient: active.recipient_name || active.recipient_email || 'iemand buiten de organisatie' };
+    const folder: { parent_id: string | null } = await row<{ parent_id: string | null }>(ctx, 'content_folders', current, 'parent_id', 'Map');
+    current = folder.parent_id;
+  }
+  return null;
+}
 
 const CLIENT_STATUS = ['active', 'prospect', 'inactive'] as const;
 const CLIENT_KIND = ['business', 'consumer'] as const;
@@ -540,10 +564,12 @@ export const CLIENT_ACTIONS: ActionDef[] = [
         const project = await row<{ client_id: string | null }>(ctx, 'projects', projectId, 'client_id', 'Project');
         if (project.client_id && project.client_id !== clientId) throw new ActionError('Dat project hoort bij een andere klant.');
       }
+      const share = parentId ? await activeFolderShare(ctx, parentId) : null;
       return {
         title: `Map aanmaken: ${name}`,
         sub: joinShort([client.name, parentName ? `in ${parentName}` : null]),
         kind: 'work',
+        ...(share ? { risk: 'high' as const, warning: `De bovenliggende map is gedeeld met ${share.recipient}: die ziet de nieuwe map ook.` } : {}),
         payload: { client_id: clientId, name, parent_id: parentId, project_id: projectId },
       };
     },
@@ -563,10 +589,12 @@ export const CLIENT_ACTIONS: ActionDef[] = [
       const name = str(input, 'name', 120);
       const folder = await row<{ name: string }>(ctx, 'content_folders', folderId, 'name', 'Map');
       if (folder.name === name) throw new ActionError('De map heet al zo.');
+      const share = await activeFolderShare(ctx, folderId);
       return {
         title: `Map hernoemen: ${folder.name}`,
         sub: `wordt "${name}"`,
         kind: 'work',
+        ...(share ? { risk: 'high' as const, warning: `Deze map is gedeeld met ${share.recipient}: die ziet de nieuwe naam.` } : {}),
         payload: { folder_id: folderId, name, was: folder.name },
       };
     },
@@ -600,10 +628,14 @@ export const CLIENT_ACTIONS: ActionDef[] = [
         }
         folderName = folder.name;
       }
+      // Naar een gedeelde map: dan ziet de ontvanger het meteen. Naar buiten
+      // gericht, dus alleen rechtstreeks met execute_high, anders via een akkoord.
+      const share = folderId ? await activeFolderShare(ctx, folderId) : null;
       return {
         title: `${kind === 'note' ? 'Notitie' : 'Document'} verplaatsen: ${item.title}`,
         sub: `naar ${folderName}`,
         kind: 'work',
+        ...(share ? { risk: 'high' as const, warning: `De map is gedeeld met ${share.recipient}: na het verplaatsen ziet die dit ook.` } : {}),
         payload: { kind, item_id: itemId, folder_id: folderId, title: item.title, folder_name: folderName },
       };
     },

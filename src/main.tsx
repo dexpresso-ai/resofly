@@ -2686,7 +2686,8 @@ function App() {
       let sent = 0;
       const failed: string[] = [];
       for (const inv of p.invoices) {
-        try { await sendInvoiceReminderEmail(activeOrg.id, inv.id); sent += 1; }
+        // Het adres op de kaart (voorstellen van vóór die regel hebben er geen).
+        try { await sendInvoiceReminderEmail(activeOrg.id, inv.id, { expectedRecipientEmail: inv.recipient_email ?? undefined }); sent += 1; }
         catch { failed.push(inv.number); }
       }
       scheduleRefresh();
@@ -2702,6 +2703,8 @@ function App() {
         subject: item.subject,
         bodyHtml: plainTextToEmailHtml(item.body),
         bodyText: item.body,
+        // Naar het adres dat op de kaart stond, of niet.
+        expectedRecipientEmail: item.recipient_email,
       });
       await refreshClientEmailUnread();
     },

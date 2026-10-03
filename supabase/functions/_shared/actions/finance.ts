@@ -283,12 +283,17 @@ export const FINANCE_ACTIONS: ActionDef[] = [
         throw new ActionError(projectId ? `${label} ${doc.number} hangt al aan dat project.` : `${label} ${doc.number} hangt al aan geen enkel project.`);
       }
       let projectName: string | null = null;
+      let portalClient: string | undefined;
       if (projectId) {
         const project = await row<{ name: string; client_id: string | null }>(ctx, 'projects', projectId, 'name, client_id', 'Project');
         if (project.client_id && doc.client_id && project.client_id !== doc.client_id) {
           throw new ActionError(`Project "${project.name}" hoort bij een andere klant dan ${label.toLowerCase()} ${doc.number}.`);
         }
         projectName = project.name;
+        // Het klantportaal toont ook documenten via het project van de klant
+        // (scopeToClient). Een document zonder eigen klant aan een project MET
+        // klant hangen, zet het dus in diens portaal: naar buiten gericht.
+        if (project.client_id && !doc.client_id) portalClient = (await clientNameOf(ctx, project.client_id)) ?? 'de klant van het project';
       }
       return {
         title: projectName
@@ -296,6 +301,10 @@ export const FINANCE_ACTIONS: ActionDef[] = [
           : `${label} ${doc.number} losmaken van het project`,
         sub: joinShort([await clientNameOf(ctx, doc.client_id), projectName ? 'telt daarna mee in de projectrapportage' : 'telt daarna nergens meer in mee']),
         kind: 'work',
+        ...(portalClient !== undefined ? {
+          risk: 'high' as const,
+          warning: `${label} ${doc.number} heeft geen eigen klant; aan dit project gekoppeld staat hij in het klantportaal van ${portalClient}.`,
+        } : {}),
         payload: { document: documentKind, document_id: documentId, project_id: projectId, number: doc.number, project_name: projectName },
       };
     },

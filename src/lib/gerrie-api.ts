@@ -118,7 +118,7 @@ export interface GerrieSendRemindersProposal {
   type: 'send_reminders';
   /** Bedrag en dagen-te-laat zijn later toegevoegd; voorstellen van vóór die
    *  wijziging staan nog in de wachtrij, vandaar optioneel. */
-  invoices: Array<{ id: UUID; number: string; client_name: string; level: number; total_eur?: number; days_overdue?: number }>;
+  invoices: Array<{ id: UUID; number: string; client_name: string; level: number; total_eur?: number; days_overdue?: number; recipient_email?: string | null }>;
   total: number;
 }
 export interface GerrieProposalSubtask { label: string; done: boolean }
@@ -599,12 +599,19 @@ class DecisionError extends Error {
   }
 }
 
+/**
+ * Wie een voorstel vastzette (claim), per voorstel: de uitkomst die daarop volgt,
+ * hoort bij die persoon — ook als er intussen iemand anders inlogde.
+ */
+const claimedBy = new Map<string, string | null>();
+
 async function postDecision(
   organizationId: UUID, auditId: string, outcome: DecisionOutcome, detail?: string,
 ): Promise<{ stale_claim?: StaleClaim }> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new Error('Je sessie is verlopen. Log opnieuw in.');
+  if (outcome === 'claim') claimedBy.set(auditId, data.session?.user?.id ?? null);
   // Een afwijzing gaat als "mislukt, afgewezen door gebruiker": dat verstaat
   // de server sinds jaar en dag. Zo klopt het ook als de app al vernieuwd is
   // en de server (nog) niet.
@@ -635,6 +642,8 @@ const OUTBOX_KEY = 'resofly.gerrie.decision-outbox';
 const OUTBOX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface PendingOutcome {
+  /** Wie het uitvoerde. Een ander account op dezelfde browser verstuurt hem niet op eigen naam. */
+  userId: string | null;
   organizationId: string;
   auditId: string;
   outcome: 'executed' | 'failed' | 'rejected';
@@ -662,8 +671,14 @@ function forgetOutcome(auditId: string): void {
   writeOutbox(readOutbox().filter((e) => e.auditId !== auditId));
 }
 
-/** Eén uitkomst versturen. True: de server heeft hem, of wil hem nooit (al afgehandeld, mag niet). */
+/**
+ * Eén uitkomst versturen. True: de server heeft hem, of wil hem nooit (al
+ * afgehandeld, mag niet). Alleen namens wie het uitvoerde: is er intussen een
+ * ander account ingelogd (gedeelde computer), dan blijft hij liggen.
+ */
 async function deliverOutcome(entry: PendingOutcome): Promise<boolean> {
+  const { data } = await supabase.auth.getSession();
+  if (!entry.userId || data.session?.user?.id !== entry.userId) return false;
   try {
     await postDecision(entry.organizationId, entry.auditId, entry.outcome, entry.detail);
     return true;
@@ -672,7 +687,11 @@ async function deliverOutcome(entry: PendingOutcome): Promise<boolean> {
   }
 }
 
-/** Wat eerder bleef liggen, alsnog versturen. */
+/**
+ * Wat eerder bleef liggen, alsnog versturen — alleen wat van de ingelogde
+ * gebruiker zelf is. Van een ander account (gedeelde computer) blijft het
+ * liggen tot die weer inlogt: anders kwam "besloten door" op de verkeerde naam.
+ */
 export async function flushDecisionOutbox(): Promise<void> {
   for (const entry of readOutbox()) {
     if (await deliverOutcome(entry)) forgetOutcome(entry.auditId);
@@ -694,7 +713,14 @@ async function reportOutcome(entry: PendingOutcome): Promise<void> {
  * aankomt, laat dat niet alsnog als fout zien — maar gaat ook niet verloren.
  */
 export async function confirmGerrieAction(organizationId: UUID, auditId: string, outcome: 'executed' | 'failed' | 'rejected', detail?: string): Promise<void> {
-  await reportOutcome({ organizationId, auditId, outcome, detail, at: Date.now() });
+  // Na een uitvoering ging de claim van DIT voorstel altijd vooraf: wie die deed,
+  // is degene die het uitvoerde. Zonder claim (een reeks waarin alles werd
+  // overgeslagen) is er niets uitgevoerd en beslist wie nu is ingelogd.
+  const userId = claimedBy.has(auditId)
+    ? claimedBy.get(auditId) ?? null
+    : (await supabase.auth.getSession()).data.session?.user?.id ?? null;
+  claimedBy.delete(auditId);
+  await reportOutcome({ userId, organizationId, auditId, outcome, detail, at: Date.now() });
 }
 
 /**

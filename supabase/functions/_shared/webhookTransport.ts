@@ -10,16 +10,19 @@
 // zo'n goedgekeurd adres. TLS controleert het certificaat nog steeds tegen de
 // naam (SNI), dus wie het adres niet echt bezit, komt niet door de handshake.
 //
-// Het HTTP-deel is bewust klein: één POST, `Connection: close`, en van het
-// antwoord alleen de status en de eerste paar kB. Meer hebben we niet nodig, en
-// zo kan een eindpunt ons ook niet met een eindeloos antwoord vol laten lopen.
-// De leesfuncties zijn puur en los getest (webhookTransport.test.ts).
+// Het HTTP-deel is bewust klein: één POST (of een GET, voor een agenda-link:
+// pinnedGet.ts), `Connection: close`, en van het antwoord de status, de koppen
+// en hooguit maxBodyBytes van de inhoud. Zo kan een eindpunt ons ook niet met
+// een eindeloos antwoord vol laten lopen. De leesfuncties zijn puur en los
+// getest (webhookTransport.test.ts).
 // ============================================================
 
 export interface PinnedRequest {
   url: URL;
   /** Het gecontroleerde IP-adres waarmee verbonden wordt. */
   address: string;
+  /** Standaard POST (een webhook); GET haalt iets op, zonder inhoud. */
+  method?: 'GET' | 'POST';
   headers: Record<string, string>;
   body: string;
   /** Hoe lang het geheel mag duren: verbinden, versturen en het antwoord lezen. */
@@ -32,6 +35,8 @@ export interface PinnedResponse {
   status: number;
   /** Het begin van de inhoud, hooguit maxBodyBytes. */
   body: Uint8Array;
+  /** De koppen, met namen in kleine letters. Een omleiding volgt deze verbinding nooit; dat beslist de aanroeper. */
+  headers?: Map<string, string>;
 }
 
 /** Hoe een bericht de deur uit gaat. In productie pinnedTransport; in tests een nabootsing. */
@@ -64,9 +69,9 @@ const CRLFCRLF = new Uint8Array([13, 10, 13, 10]);
  * De kop van het verzoek. Geen header-waarde met een regeleinde: alles komt van
  * ons, maar een regeleinde zou er een tweede verzoek van kunnen maken.
  */
-export function buildRequestHead(url: URL, headers: Record<string, string>, bodyBytes: number): string {
+export function buildRequestHead(url: URL, headers: Record<string, string>, bodyBytes: number, method: 'GET' | 'POST' = 'POST'): string {
   const lines = [
-    `POST ${url.pathname || '/'}${url.search} HTTP/1.1`,
+    `${method} ${url.pathname || '/'}${url.search} HTTP/1.1`,
     `Host: ${url.host}`,
   ];
   for (const [name, value] of Object.entries(headers)) {
@@ -76,7 +81,8 @@ export function buildRequestHead(url: URL, headers: Record<string, string>, body
     if (/^(host|content-length|connection|transfer-encoding)$/i.test(name)) continue;
     lines.push(`${name}: ${value}`);
   }
-  lines.push(`Content-Length: ${bodyBytes}`, 'Accept-Encoding: identity', 'Connection: close');
+  if (method === 'POST' || bodyBytes > 0) lines.push(`Content-Length: ${bodyBytes}`);
+  lines.push('Accept-Encoding: identity', 'Connection: close');
   return `${lines.join('\r\n')}\r\n\r\n`;
 }
 
@@ -143,16 +149,16 @@ export async function readHttpResponse(
     break;
   }
 
-  if (status === 101 || status === 204 || status === 304) return { status, body: new Uint8Array(0) };
+  if (status === 101 || status === 204 || status === 304) return { status, body: new Uint8Array(0), headers };
 
   if (/\bchunked\b/i.test(headers.get('transfer-encoding') ?? '')) {
-    return { status, body: await readChunked() };
+    return { status, body: await readChunked(), headers };
   }
   const declared = headers.get('content-length');
   const length = declared !== undefined && /^\d+$/.test(declared) ? Number(declared) : null;
   const limit = length === null ? maxBody : Math.min(length, maxBody);
   while (size() < limit && await pull()) { /* lezen tot genoeg of het eind */ }
-  return { status, body: view().slice(0, limit) };
+  return { status, body: view().slice(0, limit), headers };
 
   async function readChunked(): Promise<Uint8Array> {
     const parts: Uint8Array[] = [];
@@ -262,8 +268,9 @@ export const pinnedTransport: WebhookTransport = async (request) => {
     if (timedOut) throw new TransportError('timeout', 'timeout');
 
     const encoder = new TextEncoder();
-    const body = encoder.encode(request.body);
-    await writeAll(tls, concat(encoder.encode(buildRequestHead(url, request.headers, body.byteLength)), body));
+    const method = request.method ?? 'POST';
+    const body = method === 'GET' ? new Uint8Array(0) : encoder.encode(request.body);
+    await writeAll(tls, concat(encoder.encode(buildRequestHead(url, request.headers, body.byteLength, method)), body));
 
     const chunk = new Uint8Array(16 * 1024);
     const response = await readHttpResponse(async () => {

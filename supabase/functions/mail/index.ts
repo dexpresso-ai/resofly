@@ -3,6 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { sanitizeEmailBodyHtml } from '../_shared/htmlSanitize.ts';
+import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/approvedRecipient.ts';
 
 type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
@@ -303,6 +304,10 @@ async function sendClientPortalWelcome(
       'Deze klant heeft geen geldig e-mailadres, dus er kan geen welkomstmail worden verstuurd.',
       422,
     );
+  }
+  // Goedgekeurd op een ander adres (zie _shared/approvedRecipient.ts): niet versturen.
+  if (approvedRecipientChanged(body.expectedRecipientEmail, recipientEmail)) {
+    throw new MailHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
   }
 
   const organization = await loadOrganization(organizationId);
@@ -679,6 +684,9 @@ async function sendClientEmail(
   const recipientEmail = String(client.email || '').trim().toLowerCase();
   if (!isEmail(recipientEmail)) {
     throw new MailHttpError('Deze klant heeft geen geldig e-mailadres.', 422);
+  }
+  if (approvedRecipientChanged(body.expectedRecipientEmail, recipientEmail)) {
+    throw new MailHttpError(RECIPIENT_CHANGED_MESSAGE, 409);
   }
 
   const organization = await loadOrganization(organizationId);
