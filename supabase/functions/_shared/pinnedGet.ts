@@ -102,7 +102,8 @@ export async function decodeContentEncoding(body: Uint8Array, encoding: string |
   if (!kind || kind === 'identity') return body;
   const format = kind === 'gzip' || kind === 'x-gzip' ? 'gzip' : kind === 'deflate' ? 'deflate' : null;
   if (!format) throw new Error(`onbekende compressie "${kind.slice(0, 40)}"`);
-  const reader = new Blob([body]).stream().pipeThrough(new DecompressionStream(format)).getReader();
+  // Een kopie op een gewone ArrayBuffer: Blob wil geen Uint8Array over ArrayBufferLike (TS 6).
+  const reader = new Blob([new Uint8Array(body)]).stream().pipeThrough(new DecompressionStream(format)).getReader();
   const parts: Uint8Array[] = [];
   let total = 0;
   try {
