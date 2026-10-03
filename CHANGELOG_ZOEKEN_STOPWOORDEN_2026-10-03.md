@@ -55,3 +55,7 @@ De volledige suite is groen. `deno check` op `mcp`, `api`, `gerrie-agent` en `ge
 ## Wat nog openstaat
 
 De gebiedende wijs raakt het hele werkwoord niet. "maak" deelt te weinig letters met "maken", "stuur" met "sturen" en "plan" met "plannen". "maak een factuur voor jansen" vindt `propose_invoice` daardoor op plek 10, alleen via "factuur". Dat is geen stopwoordenkwestie. Het vraagt om het zoeken naar werkwoordsvormen, of om die vormen als trefwoord.
+
+## Uitrollen
+
+Alleen de edge functions `mcp`, `api`, `gerrie-agent`, `gerrie-agent-runner` en `gerrie-signals` moeten opnieuw uitgerold worden. Er zijn geen migraties of secrets bij. De stappen voor staging en productie staan in [ZOEKEN_SETUP_2026-10-03.md](ZOEKEN_SETUP_2026-10-03.md).

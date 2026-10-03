@@ -66,3 +66,7 @@ De volledige suite is groen. `deno check` op `mcp`, `api`, `gerrie-agent` en `ge
 ## Eén ding om te weten
 
 De trefwoorden zijn Nederlands. Een Engelse zoekvraag als "create invoice" vindt `propose_invoice` niet. "create" zit in de id van tientallen registry-handelingen, en die winnen. De MCP-instructies vragen het model om met de woorden van de gebruiker te zoeken, dus bij een Nederlandse gebruiker speelt dit niet. Wie de AI in het Engels aanspreekt, merkt het wel.
+
+## Uitrollen
+
+Alleen de edge functions `mcp`, `api`, `gerrie-agent`, `gerrie-agent-runner` en `gerrie-signals` moeten opnieuw uitgerold worden. Er zijn geen migraties of secrets bij. De stappen voor staging en productie staan in [ZOEKEN_SETUP_2026-10-03.md](ZOEKEN_SETUP_2026-10-03.md).
