@@ -112,3 +112,12 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+      # Na elke deploy: antwoorden de functies in de echte runtime, en passen de
+      # cron-taak van de bezorger en zijn secret bij elkaar? Verandert niets.
+      - name: Rooktest
+        run: |
+          command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client; }
+          bash scripts/supabase-smoke-test.sh
+        env:
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}

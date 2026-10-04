@@ -291,6 +291,12 @@ select cron.schedule('resofly-api-purge', '17 3 * * *',
 
 ## 8. Controleren dat alles werkt
 
+De workflow doet na elke deploy zelf een rooktest (`scripts/supabase-smoke-test.sh`):
+antwoordt de API, weigert hij zonder sleutel, en draait de bezorger met het
+secret uit zijn cron-taak. Vanaf de laptop kan dat ook:
+`SUPABASE_PROJECT_ID=enzghpduqwaojcxgwarr SUPABASE_DB_PASSWORD='…' bash scripts/supabase-smoke-test.sh`.
+Daarna de controles hieronder, die een mens moet doen.
+
 Op Windows: gebruik `curl.exe` in plaats van `curl`.
 
 ```bash
