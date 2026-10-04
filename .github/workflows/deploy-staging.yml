@@ -9,7 +9,18 @@ on:
       - "supabase/functions/**"
       - "supabase/config.toml"
       - ".github/workflows/deploy-staging.yml"
-  workflow_dispatch: {}
+  # Handmatig (Actions → Deploy Supabase (staging) → Run workflow), met twee
+  # vinkjes voor wat niet bij elke push hoort:
+  workflow_dispatch:
+    inputs:
+      include_all:
+        description: "Ook een oudere migratie toepassen die ooit is overgeslagen (db push --include-all)"
+        type: boolean
+        default: false
+      setup_webhooks:
+        description: "Eenmalig: de webhook-secrets zetten als ze ontbreken, en de bezorger en de opruimtaak inplannen (pg_cron)"
+        type: boolean
+        default: false
 
 env:
   SUPABASE_PROJECT_ID: enzghpduqwaojcxgwarr
@@ -57,18 +68,37 @@ jobs:
           fi
           echo "Beide secrets zijn aanwezig (lengte: token ${#SUPABASE_ACCESS_TOKEN}, wachtwoord ${#SUPABASE_DB_PASSWORD})."
 
+      # Met het wachtwoord, zodat het koppelen meteen de databaseverbinding
+      # test (en niet om een wachtwoord vraagt dat er in CI niet is).
       - name: Link Supabase project
         run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
 
+      # --yes: niet wachten op een bevestiging die in CI niemand geeft.
+      # --include-all alleen met het vinkje: een overgeslagen oudere migratie
+      # toepassen is een bewuste keuze (de melding noemt het bestand).
       - name: Push database migrations
-        run: supabase db push
+        run: supabase db push --yes ${{ inputs.include_all && '--include-all' || '' }}
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
 
+      # --use-api: Supabase bundelt de functies zelf, zonder Docker. Dezelfde weg
+      # als SUPABASE_STAGING_LAPTOP.md, zodat CI en laptop hetzelfde doen.
       - name: Deploy edge functions
-        run: supabase functions deploy --project-ref "$SUPABASE_PROJECT_ID"
+        run: supabase functions deploy --project-ref "$SUPABASE_PROJECT_ID" --use-api
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      # Eenmalig per omgeving, alleen met het vinkje: zie het script. Zet alleen
+      # wat ontbreekt en laat geen enkele waarde in het log zien.
+      - name: Webhooks inrichten (eenmalig)
+        if: ${{ inputs.setup_webhooks }}
+        run: |
+          command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client; }
+          bash scripts/supabase-setup-webhooks.sh
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}

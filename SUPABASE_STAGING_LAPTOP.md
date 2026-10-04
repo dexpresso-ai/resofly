@@ -8,6 +8,10 @@ en sinds half september alleen nog op het ontbrekende secret
 [stap 9](#9-daarna-voortaan-automatisch-via-github)), doe je het met deze
 handleiding vanaf je laptop. Reken op 15 minuten de eerste keer, 5 daarna.
 
+> **Liever helemaal niet vanaf de laptop?** Zet het secret in GitHub (stap 9)
+> en start de workflow met het vinkje *setup_webhooks*. Dan doet één run alles
+> uit deze handleiding: de database, de functies en de eenmalige stap 7.
+
 > **Doe het kort na een push naar `staging`.** De app op staging draait dan al
 > de nieuwe code, maar praat nog met de oude database en functies. Tot je
 > stap 5 en 6 gedaan hebt, werken onder meer goedkeuren in Gerrie, API-sleutels
@@ -187,7 +191,22 @@ zoals `verify_jwt = false`. Daar hoef je dus niets voor op te geven.
 
 ## 7. Eenmalig: secrets en de webhookbezorger
 
-Dit hoeft maar één keer per omgeving. Kijk eerst wat er al staat:
+Dit hoeft maar één keer per omgeving.
+
+**Snelste weg: het script.** Dat doet alles uit deze stap, zet alleen wat
+ontbreekt, overschrijft nooit de encryptiesleutel en laat geen waarde zien.
+Het heeft `psql` nodig (macOS: `brew install libpq && brew link --force libpq`)
+en draait in bash (op Windows: Git Bash of WSL):
+
+```bash
+SUPABASE_PROJECT_ID=enzghpduqwaojcxgwarr SUPABASE_DB_PASSWORD='…' bash scripts/supabase-setup-webhooks.sh
+```
+
+Meldt het dat `pg_cron` of `pg_net` ontbreekt: zet die aan onder
+**Database → Extensions** en draai het opnieuw. Via GitHub doet het vinkje
+*setup_webhooks* hetzelfde (stap 9).
+
+**Met de hand**, als je het liever zelf ziet. Kijk eerst wat er al staat:
 
 ```bash
 supabase secrets list --project-ref enzghpduqwaojcxgwarr
@@ -322,11 +341,15 @@ Eén secret, en elke push naar `staging` doet stap 5 en 6 vanzelf:
 
 Niet onder *Environments* en niet op het tabblad *Variables*: daar ziet de
 workflow hem niet. Daarna: **Actions → Deploy Supabase (staging) → Run
-workflow** (branch `staging`). De stap "Controleer de secrets" moet dan groen
-worden.
+workflow** (branch `staging`). Bij handmatig starten zijn er twee vinkjes:
 
-De workflow doet geen `--include-all`. Meldt stap 4 hier ooit een
-overgeslagen oudere migratie, los die dan één keer vanaf je laptop op (stap 5).
+| Vinkje | Wanneer |
+|---|---|
+| *setup_webhooks* | De eerste keer: doet stap 7 met `scripts/supabase-setup-webhooks.sh`. Daarna mag hij aan blijven; hij zet alleen wat ontbreekt. |
+| *include_all* | Alleen als de vorige run stopte op `Found local migration files to be inserted before the last migration…` (zie stap 4). |
+
+Bij een gewone push naar `staging` doet de workflow stap 5 en 6, zonder de
+vinkjes.
 
 ## Productie (later)
 
