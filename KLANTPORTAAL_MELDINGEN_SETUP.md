@@ -13,7 +13,11 @@ Wat de code al levert:
   triggers op `tickets`/`ticket_notes` en de claimfunctie (plus: een wijziging
   via de openbare API met een sleutel zonder `execute_high` mailt de klant niet);
 - de edge function `portal-notify` (`verify_jwt = false`, zie `supabase/config.toml`);
-- de nieuwe acties in `client-portal` en de schermen in het portaal.
+- de nieuwe acties in `client-portal` en de schermen in het portaal;
+- in `resend-webhook`: een harde bounce of spamklacht op een melding zet het
+  adres op de suppressielijst (`email_suppressions`, bron `portal-notify`),
+  zodat de volgende melding het overslaat. Dat gaat via de Resend-webhook die
+  er al is (`RESEND_SETUP.md`: `email.bounced` en `email.complained`).
 
 Wat er per omgeving (staging/productie) één keer moet: een secret en een
 pg_cron-taak die de function elke minuut aanroept. Die staan bewust niet in de

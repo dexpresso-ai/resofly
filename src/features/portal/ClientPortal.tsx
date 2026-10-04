@@ -1785,7 +1785,8 @@ function SettingsTab({ account, supplierName, onBack }: { account: PortalAccount
       <p className="portal-muted">
         {state.isPrimary
           ? `Berichten van ${supplierName} krijg je gewoon per e-mail, en ze staan ook onder Berichten. Daar zit geen schakelaar op: dat zijn geen meldingen, maar de berichten zelf.`
-          : `Berichten van ${supplierName} staan onder Berichten. Per e-mail gaan ze naar het hoofdadres van ${clientName}.`}
+          : `Antwoorden van ${supplierName} op jouw berichten staan onder Berichten. Per e-mail gaan ze naar het hoofdadres van ${clientName}.`}
+        {state.otherPortalUsers > 0 ? ' Je ziet daar alleen je eigen gesprekken, niet die van je collega’s op dit portaal.' : ''}
       </p>
     </section>
 

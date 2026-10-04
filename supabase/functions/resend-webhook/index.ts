@@ -52,6 +52,7 @@ async function handleResendEvent(req: Request, payload: Record<string, unknown>)
       await handleClientEmailEvent(clientEmail, type, eventType, occurredAt, providerEventId, providerEmailId, payload, data);
       return;
     }
+    if (await suppressPortalNotificationAddress(eventType, data)) return;
     console.warn('No quote/invoice/client email delivery found for Resend email id', providerEmailId);
     return;
   }
@@ -433,6 +434,55 @@ function timingSafeEqual(a: string, b: string): boolean {
   let result = 0;
   for (let i = 0; i < a.length; i += 1) result |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return result === 0;
+}
+
+/**
+ * Klantmeldingen over tickets (portal-notify) staan nergens als bericht in de
+ * database; ze herkennen we aan hun tags. Een harde bounce of spamklacht
+ * daarop zet het adres op de suppressielijst van de organisatie — zoals bij
+ * campagnes — zodat de volgende melding niet weer tegen een dood of klagend
+ * adres aanloopt (portal-notify slaat bounced/complained over).
+ */
+async function suppressPortalNotificationAddress(eventType: string, data: Record<string, unknown>): Promise<boolean> {
+  if (eventType !== 'bounced' && eventType !== 'complained') return false;
+  const tags = readResendTags(data.tags);
+  if (tags.template_key !== 'portal_ticket_update') return false;
+  const organizationId = String(tags.organization_id || '');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(organizationId)) return false;
+  // Een tijdelijke bounce (mailbox vol, server even weg) is geen dood adres.
+  const bounce = (data.bounce && typeof data.bounce === 'object' ? data.bounce : {}) as Record<string, unknown>;
+  if (eventType === 'bounced' && /transient|temporary|soft/i.test(String(bounce.type ?? ''))) return true;
+
+  const recipients = (Array.isArray(data.to) ? data.to : [data.to])
+    .map((value) => String(value ?? '').match(/[^\s<>"']+@[^\s<>"']+/)?.[0]?.toLowerCase() ?? '')
+    .filter((email) => email.length > 0);
+  for (const email of recipients) {
+    const { error } = await supabaseAdmin
+      .from('email_suppressions')
+      .upsert({
+        organization_id: organizationId,
+        email,
+        reason: eventType === 'complained' ? 'complained' : 'bounced',
+        source: 'portal-notify',
+      }, { onConflict: 'organization_id,email', ignoreDuplicates: true });
+    if (error) throw error;
+  }
+  return true;
+}
+
+/** Resend levert tags als object ({ naam: waarde }) of als lijst ([{ name, value }]). */
+function readResendTags(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (Array.isArray(raw)) {
+    for (const tag of raw) {
+      if (tag && typeof tag === 'object' && 'name' in tag) {
+        out[String((tag as { name: unknown }).name)] = String((tag as { value?: unknown }).value ?? '');
+      }
+    }
+  } else if (raw && typeof raw === 'object') {
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) out[key] = String(value ?? '');
+  }
+  return out;
 }
 
 function parseDate(value: string): string | null {

@@ -55,15 +55,24 @@ op de pagina Berichten, maar nergens in het portaal. Drie dingen zijn daarom ver
 - **Antwoorden en een nieuw bericht** kan in het portaal. Dat wordt een inkomend bericht in het
   klantdossier, in hetzelfde gesprek — precies alsof de klant had gemaild: het team krijgt de
   bestaande melding, de teller op Berichten loopt op, Gerrie ziet het in de beslislijst. In het
-  bericht staat "Geschreven in het klantportaal". Hooguit 20 berichten per 10 minuten per persoon.
-- **Wat de klant wél en níét ziet:** alleen berichten tussen het team en de eigen
-  portaalgebruikers van die klant (hoofdadres en contactpersonen met portaaltoegang). Nooit
-  nieuwsbrieven of automatische stromen (het hele gesprek blijft weg), nooit post van een derde
-  die het team uit de opvangbak aan het dossier koppelde, nooit een mail die niet verstuurd is,
-  nooit een verwijderd bericht.
+  bericht staat "Geschreven in het klantportaal". Hooguit 20 berichten per 10 minuten per persoon
+  (en 10 tickets en 30 reacties op tickets: die gaan ook per mail naar collega's op het portaal).
+- **Ieder ziet het eigen gesprek.** Op één portaal kunnen meer mensen van een klant inloggen (het
+  hoofdadres en contactpersonen met portaaltoegang, bv. de boekhouding). Elk van hen ziet alleen:
+  wat die persoon zelf stuurde, wat het team die persoon stuurde, en wat het team daarna
+  antwoordde in een gesprek waar die persoon aan meedeed (vanaf het eigen eerste bericht). Het
+  team mailt altijd naar het hoofdadres; zo ziet een contactpersoon die iets vroeg toch het
+  antwoord, maar nooit de mailgeschiedenis van het hoofdadres of van een collega.
+- **Nooit in het portaal:** nieuwsbrieven of automatische stromen (het hele gesprek blijft weg,
+  herkend aan de mail én aan de campagne- en stroomtabellen), post van een derde die het team uit
+  de opvangbak aan het dossier koppelde, mail die een teamlid naar het doorstuuradres
+  doorstuurde (als bijlage of inline: de tekst is dan de notitie van dat teamlid), mail die niet
+  verstuurd is, en verwijderde berichten. Het onderwerp komt van het eerste bericht dat de klant
+  wél ziet.
 - **Tickets** ook netter: gesorteerd op laatste activiteit, met aantal reacties, "laatst …" en de
-  stip met "Nieuw antwoord van …". In het ticketgesprek staan **statuswijzigingen als regel**
-  tussen de berichten. Ctrl/Cmd+Enter verstuurt.
+  stip met "Nieuw antwoord van …" — ook bij een interne notitie die later zichtbaar wordt gemaakt
+  (dan telt het moment van zichtbaar maken). In het ticketgesprek staan **statuswijzigingen als
+  regel** tussen de berichten (alleen die van de huidige klant). Ctrl/Cmd+Enter verstuurt.
 - **Overzicht:** een kaart *Nieuw voor jou* met tickets die een nieuw antwoord hebben en nieuwe
   berichten; het telletje op de tabs Berichten en Tickets krijgt de merkkleur als er iets nieuws
   is. Openen = gelezen, meteen (ook vóór "Ververs").
@@ -77,7 +86,9 @@ op de pagina Berichten, maar nergens in het portaal. Drie dingen zijn daarom ver
   notitie in het portaal komt én gemaild wordt (of, als het uitstaat, alleen in het portaal).
 - **Berichten / klantdossier:** een bericht uit het portaal heeft het herkomstlabel *Geschreven in
   het klantportaal*. Beantwoorden gaat zoals altijd per mail naar het hoofdadres van de klant; in
-  het portaal staat het antwoord in hetzelfde gesprek.
+  het portaal staat het antwoord in hetzelfde gesprek. Schreef een contactpersoon het bericht,
+  dan zegt het label dat erbij: het antwoord komt niet in de mailbox van die contactpersoon, wel
+  in het portaal.
 
 ## 5 · Onder de motorkap
 
@@ -98,6 +109,9 @@ op de pagina Berichten, maar nergens in het portaal. Drie dingen zijn daarom ver
     5 min in `sending` hangen, geeft het na 5 pogingen op.
   - `portal_ticket_overview` en `portal_client_message_overview`: lichte overzichten (aantallen,
     laatste regel, afgekapte preview) zodat het portaal geen volledige mailteksten hoeft te laden.
+    Het berichtenoverzicht krijgt de adressen van de portaalgebruikers mee en filtert vóór de
+    limiet (nieuwsbrieven duwen geen echte gesprekken uit de lijst); wie wat ziet, beslist
+    `_shared/portalMessages.ts` per persoon.
   - Alle security-definer-functies dicht voor `anon`/`authenticated`.
   - **Openbare API:** een sleutel zonder `execute_high` mag de status van een ticket van een
     klant wijzigen (dat mocht al), maar dat levert geen mail aan de klant op: `api_rest_write`
@@ -108,9 +122,13 @@ op de pagina Berichten, maar nergens in het portaal. Drie dingen zijn daarom ver
 - **Edge function `portal-notify`** (nieuw, `verify_jwt = false`): `POST ?cron=drain` met
   `x-cron-secret`. Bepaalt per ticket wie een mail krijgt (`_shared/portalNotify.ts`), controleert
   vlak voor het versturen opnieuw de organisatieschakelaar, het antwoord en de suppressielijst,
-  verstuurt met een idempotency-sleutel per ontvanger, houdt per gebeurtenis bij wie hem al kreeg
-  (een nieuwe poging slaat die over), gaat rustig met de Resend-limiet om en schuift wat niet
-  binnen 90 s lukt door naar de volgende minuut.
+  verstuurt met een idempotency-sleutel per ontvanger, legt meteen na elke verzending per
+  gebeurtenis vast wie hem kreeg (een nieuwe poging, ook na een fout of crash verderop, slaat die
+  over), gaat rustig met de Resend-limiet om en schuift wat niet binnen 90 s lukt door naar de
+  volgende minuut.
+- **`resend-webhook`:** een harde bounce of spamklacht op zo'n melding (herkend aan de tags) zet
+  het adres op de suppressielijst van de organisatie, zoals bij campagnes; de volgende melding
+  slaat het dan over.
 - **`client-portal`:** nieuwe acties `getNotificationSettings`, `updateNotificationSettings`,
   `getMessageThreads`, `getMessageThread`, `sendMessage`; `getPortalData` geeft per ticket de
   laatste activiteit en de stip mee, plus het aantal (nieuwe) gesprekken; `getTicketThread` geeft
@@ -122,8 +140,8 @@ op de pagina Berichten, maar nergens in het portaal. Drie dingen zijn daarom ver
   `lib/portalApi.ts` (nieuwe aanroepen), `features/portal/ClientPortal.tsx` (tab Berichten,
   Instellingen, stippen, deeplinks), `components/TicketTimeline.tsx`, `ClientEmailMessage.tsx`,
   `SimplePages.tsx` (schakelaar), `lib/repository.ts`.
-- **Tests:** `_shared/portalNotify.test.ts` (16), `_shared/portalMessages.test.ts` (6) en
-  `lib/portalConversations.test.ts` (7) — `npm test` telt er nu 637. De mobiele lay-outtest
+- **Tests:** `_shared/portalNotify.test.ts` (16), `_shared/portalMessages.test.ts` (8) en
+  `lib/portalConversations.test.ts` (7) — `npm test` telt er nu 639. De mobiele lay-outtest
   meet ook Berichten en Instellingen in het portaal (geopend via de deeplink), en de mock heeft
   een ticket met een nieuw antwoord, zodat de stip en de kaart *Nieuw voor jou* meegemeten worden.
 - **CI:** `portal-notify` staat in de Deno-typecheck. `scripts/supabase-setup-webhooks.sh` zet

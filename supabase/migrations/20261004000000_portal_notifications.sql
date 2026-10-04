@@ -394,7 +394,9 @@ grant execute on function public.claim_portal_ticket_activity(integer, integer) 
 
 -- Per ticket van één klant: hoeveel zichtbare notities, wanneer en van wie de
 -- laatste (met een stukje tekst), en wanneer het team voor het laatst
--- antwoordde. Interne notities tellen nergens mee.
+-- antwoordde. Interne notities tellen nergens mee. "Wanneer" is het moment
+-- waarop de klant de notitie kon zien: een interne notitie die later zichtbaar
+-- wordt gemaakt, is op dát moment nieuw (de 'reply'-activiteit legt het vast).
 create or replace function public.portal_ticket_overview(p_organization_id uuid, p_client_id uuid)
 returns table (
   ticket_id uuid,
@@ -412,7 +414,7 @@ set search_path = public
 as $$
   select t.id,
          coalesce(s.note_count, 0)::integer,
-         l.created_at,
+         l.visible_at,
          l.author_type,
          l.author_name,
          left(l.body, 400),
@@ -420,15 +422,19 @@ as $$
     from public.tickets t
     left join lateral (
       select count(*) as note_count,
-             max(n.created_at) filter (where n.author_type <> 'client') as last_team_note_at
+             max(greatest(n.created_at, coalesce(a.created_at, n.created_at)))
+               filter (where n.author_type <> 'client') as last_team_note_at
         from public.ticket_notes n
+        left join public.portal_ticket_activity a on a.note_id = n.id and a.kind = 'reply'
        where n.organization_id = t.organization_id and n.ticket_id = t.id and n.is_internal = false
     ) s on true
     left join lateral (
-      select n.created_at, n.author_type, n.author_name, n.body
+      select greatest(n.created_at, coalesce(a.created_at, n.created_at)) as visible_at,
+             n.author_type, n.author_name, n.body
         from public.ticket_notes n
+        left join public.portal_ticket_activity a on a.note_id = n.id and a.kind = 'reply'
        where n.organization_id = t.organization_id and n.ticket_id = t.id and n.is_internal = false
-       order by n.created_at desc
+       order by 1 desc, n.created_at desc, n.id desc
        limit 1
     ) l on true
    where t.organization_id = p_organization_id
@@ -438,22 +444,32 @@ $$;
 revoke all on function public.portal_ticket_overview(uuid, uuid) from public, anon, authenticated;
 grant execute on function public.portal_ticket_overview(uuid, uuid) to service_role;
 
--- Alle (niet-verwijderde) mailberichten van één klant, zonder de volledige
--- tekst: wie, wanneer, welke kant op, herkomst en een stukje tekst. Welke
--- daarvan de klant in het portaal ziet, beslist client-portal
--- (_shared/portalMessages.ts): alleen gesprekken met de eigen
--- portaalgebruikers van de klant, nooit campagnes of stromen.
-create or replace function public.portal_client_message_overview(p_organization_id uuid, p_client_id uuid)
+-- De mailberichten van één klant die in een portaal kúnnen staan, zonder de
+-- volledige tekst: wie, wanneer, welke kant op en een stukje tekst. Alleen van
+-- en aan de portaalgebruikers van de klant (p_emails, genormaliseerd door
+-- client-portal), echt verzonden, niet verwijderd, niet doorgestuurd door een
+-- teamlid (dan is de tekst de notitie van dat teamlid: alleen 'header_from'
+-- is de afzender zelf), en nooit uit een gesprek met een campagne of stroom —
+-- volgens de mail zelf én volgens de campagne- en stroomtabellen, zoals
+-- pick_client_email_thread. Eerst filteren, dan de limiet: anders duwen
+-- nieuwsbrieven echte gesprekken uit de lijst. Wie wat ziet, beslist
+-- client-portal per persoon (_shared/portalMessages.ts).
+create or replace function public.portal_client_message_overview(
+  p_organization_id uuid,
+  p_client_id uuid,
+  p_emails text[]
+)
 returns table (
   id uuid,
   thread_id uuid,
-  thread_subject text,
+  subject text,
   direction text,
   status text,
   from_email text,
   from_name text,
   to_email text,
   source text,
+  sender_source text,
   preview text,
   occurred_at timestamptz,
   created_at timestamptz
@@ -465,13 +481,14 @@ set search_path = public
 as $$
   select e.id,
          e.thread_id,
-         t.subject,
+         e.subject,
          e.direction,
          e.status,
          e.from_email,
          e.from_name,
          e.to_email,
          coalesce(e.metadata ->> 'source', ''),
+         coalesce(e.metadata ->> 'sender_source', ''),
          -- Het portaal toont hooguit 160 tekens (na het samenvouwen van witruimte).
          left(coalesce(nullif(btrim(e.body_text), ''), ''), 320),
          coalesce(e.received_at, e.sent_at, e.created_at),
@@ -482,12 +499,28 @@ as $$
    where e.organization_id = p_organization_id
      and e.client_id = p_client_id
      and e.deleted_at is null
+     and (
+       (e.direction = 'outbound'
+        and coalesce(e.status, '') not in ('queued', 'failed')
+        and lower(btrim(coalesce(e.to_email, ''))) = any(coalesce(p_emails, '{}'::text[])))
+       or
+       (e.direction = 'inbound'
+        and coalesce(e.metadata ->> 'sender_source', '') in ('', 'header_from')
+        and lower(btrim(coalesce(e.from_email, ''))) = any(coalesce(p_emails, '{}'::text[])))
+     )
+     and not exists (
+       select 1 from public.client_emails m
+        where m.organization_id = e.organization_id and m.thread_id = e.thread_id
+          and coalesce(m.metadata ->> 'source', '') in ('campaign', 'flow'))
+     and not exists (select 1 from public.email_campaign_recipients r where r.thread_id = e.thread_id)
+     and not exists (select 1 from public.email_flow_enrollments f where f.thread_id = e.thread_id)
+     and not exists (select 1 from public.email_flow_sends fs where fs.thread_id = e.thread_id)
    order by e.created_at desc
    limit 2000;
 $$;
 
-revoke all on function public.portal_client_message_overview(uuid, uuid) from public, anon, authenticated;
-grant execute on function public.portal_client_message_overview(uuid, uuid) to service_role;
+revoke all on function public.portal_client_message_overview(uuid, uuid, text[]) from public, anon, authenticated;
+grant execute on function public.portal_client_message_overview(uuid, uuid, text[]) to service_role;
 
 comment on column public.client_emails.link_source is
   'reply_token | header_thread | client_email | client_contact | manual | portal — waarom dit bericht in dit dossier staat. portal = door de klant zelf geschreven in het klantportaal (geverifieerde login).';

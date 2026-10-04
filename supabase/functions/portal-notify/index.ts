@@ -254,7 +254,10 @@ async function processTicket(
 
   for (const item of plan.skipped) await skip([item.id], item.reason);
 
-  const delivered = new Map<string, Set<string>>();
+  // Wie elke gebeurtenis al kreeg. Meteen na elke verzending vastgelegd, niet
+  // pas aan het eind: gaat er daarna iets mis (of valt de functie om), dan
+  // weet de volgende poging nog steeds wie niet nog een mail moet krijgen.
+  const notified = new Map(fresh.map((row) => [row.id, new Set(row.notified_emails ?? [])]));
   const failedIds = new Set<string>();
   let lastError: string | null = null;
   let sent = 0;
@@ -284,11 +287,9 @@ async function processTicket(
         `portal-ticket-${await sha256Hex(`${mail.person.email}|${[...mail.activityIds].sort().join(',')}`)}`,
       );
       sent += 1;
-      for (const id of mail.activityIds) {
-        const set = delivered.get(id) ?? new Set<string>();
-        set.add(mail.person.email);
-        delivered.set(id, set);
-      }
+      for (const id of mail.activityIds) notified.get(id)?.add(mail.person.email);
+      await recordNotified(mail.activityIds, notified)
+        .catch((recordError) => console.error('portal-notify notified_emails niet vastgelegd', ticketId, describe(recordError)));
     } catch (err) {
       failed += 1;
       lastError = clip(describe(err));
@@ -301,13 +302,13 @@ async function processTicket(
   const skippedIds = new Set(plan.skipped.map((item) => item.id));
   for (const row of fresh) {
     if (skippedIds.has(row.id)) continue;
-    const notified = [...new Set([...(row.notified_emails ?? []), ...(delivered.get(row.id) ?? [])])];
+    const emails = [...(notified.get(row.id) ?? [])];
     if (failedIds.has(row.id)) {
-      await updateActivity([row.id], { notify_status: 'queued', notified_emails: notified, last_error: lastError });
+      await updateActivity([row.id], { notify_status: 'queued', notified_emails: emails, last_error: lastError });
     } else {
       await updateActivity([row.id], {
         notify_status: 'done',
-        notified_emails: notified,
+        notified_emails: emails,
         last_error: null,
         processed_at: new Date().toISOString(),
       });
@@ -457,6 +458,14 @@ async function updateActivity(ids: string[], patch: Record<string, unknown>): Pr
   if (!ids.length) return;
   const { error } = await admin.from('portal_ticket_activity').update(patch).in('id', ids);
   if (error) throw new Error(error.message);
+}
+
+/** Legt per gebeurtenis vast wie hem tot nu toe kreeg (status blijft 'sending'). */
+async function recordNotified(ids: string[], notified: Map<string, Set<string>>): Promise<void> {
+  for (const id of ids) {
+    const emails = notified.get(id);
+    if (emails) await updateActivity([id], { notified_emails: [...emails] });
+  }
 }
 
 function skip(ids: string[], reason: string): Promise<void> {

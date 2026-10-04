@@ -14,7 +14,7 @@ import {
 import {
   htmlToPlainText,
   isUnreadSince,
-  portalThreads,
+  portalThreadsFor,
   previewText,
   replySubject,
   type PortalMessageRow,
@@ -80,8 +80,12 @@ const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 const PORTAL_READS_SINCE = '2026-10-04T00:00:00Z';
 
 // Een klant die berichten stuurt, laat bij het team een melding afgaan. Meer
-// dan dit per tien minuten is geen gesprek meer.
+// dan dit per tien minuten is geen gesprek meer. Een ticket of een reactie
+// erop gaat bovendien (in de huisstijl van de leverancier) per mail naar de
+// andere portaalgebruikers van de klant; daar geldt dus ook een rem.
 const MESSAGE_RATE_LIMIT = 20;
+const TICKET_RATE_LIMIT = 10;
+const TICKET_NOTE_RATE_LIMIT = 30;
 const MESSAGE_RATE_WINDOW_MINUTES = 10;
 
 class PortalError extends Error {
@@ -202,6 +206,7 @@ async function createTicket(user: { id: string; email: string }, body: Record<st
   if (!client) throw new PortalError('Geen toegang tot deze klant.', 403);
 
   const contact = await resolveActingContact(client, user.email);
+  await assertPortalWriteRate('tickets', client.organization_id, user.id, TICKET_RATE_LIMIT, 'tickets aangemaakt');
 
   const { data, error } = await supabaseAdmin
     .from('tickets')
@@ -254,14 +259,19 @@ async function getTicketThread(user: { id: string; email: string }, body: Record
   if (notesError) throw notesError;
 
   // Statuswijzigingen als regels in het gesprek ("Status: In behandeling").
+  // Alleen van de huidige klant: hing het ticket eerder aan een ander dossier,
+  // dan is die geschiedenis niet van deze klant.
   // Optioneel: zonder de migratie van 2026-10-04 blijft de tijdlijn zoals hij was.
-  const statusRows = await optionalRows(supabaseAdmin
-    .from('portal_ticket_activity')
-    .select('id,old_status,new_status,created_at')
-    .eq('organization_id', ticket.organization_id)
-    .eq('ticket_id', ticket.id)
-    .eq('kind', 'status')
-    .order('created_at', { ascending: true }), 'portal_ticket_activity');
+  const statusRows = ticket.client_id
+    ? await optionalRows(supabaseAdmin
+      .from('portal_ticket_activity')
+      .select('id,old_status,new_status,created_at')
+      .eq('organization_id', ticket.organization_id)
+      .eq('ticket_id', ticket.id)
+      .eq('client_id', ticket.client_id)
+      .eq('kind', 'status')
+      .order('created_at', { ascending: true }), 'portal_ticket_activity')
+    : [];
 
   // Openen = lezen: de stip "nieuw antwoord" gaat weg.
   if (ticket.client_id) await markPortalRead(user.email, ticket.client_id, ticket.organization_id, 'ticket', ticket.id);
@@ -306,6 +316,7 @@ async function addTicketNote(user: { id: string; email: string }, body: Record<s
   const client = clients.find((row) => row.id === ticket.client_id) || null;
   const contact = client ? await resolveActingContact(client, user.email) : null;
   const authorName = contact?.name || client?.contact_name || client?.name || user.email;
+  await assertPortalWriteRate('ticket_notes', ticket.organization_id, user.id, TICKET_NOTE_RATE_LIMIT, 'reacties geplaatst');
 
   const { data, error: insertError } = await supabaseAdmin
     .from('ticket_notes')
@@ -327,6 +338,33 @@ async function addTicketNote(user: { id: string; email: string }, body: Record<s
   if (ticket.client_id) await markPortalRead(user.email, ticket.client_id, ticket.organization_id, 'ticket', ticket.id);
 
   return { note: sanitizeTicketNote(data) };
+}
+
+/**
+ * Een rem op stortvloeden vanuit één portaallogin (created_by = de
+ * portaalgebruiker): elk ticket en elke reactie laat bij het team een melding
+ * afgaan en gaat per mail naar de andere portaalgebruikers van de klant.
+ */
+async function assertPortalWriteRate(
+  table: 'tickets' | 'ticket_notes',
+  organizationId: string,
+  userId: string,
+  limit: number,
+  what: string,
+): Promise<void> {
+  const since = new Date(Date.now() - MESSAGE_RATE_WINDOW_MINUTES * 60_000).toISOString();
+  let query = supabaseAdmin
+    .from(table)
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', organizationId)
+    .eq('created_by', userId)
+    .gte('created_at', since);
+  if (table === 'ticket_notes') query = query.eq('author_type', 'client');
+  const { count, error } = await query;
+  if (error) throw error;
+  if ((count ?? 0) >= limit) {
+    throw new PortalError(`Je hebt de afgelopen ${MESSAGE_RATE_WINDOW_MINUTES} minuten al veel ${what}. Probeer het zo nog eens.`, 429);
+  }
 }
 
 /**
@@ -1128,16 +1166,21 @@ async function loadPortalReads(clientId: string, email: string): Promise<Map<str
 
 // ── Berichten: de mailgesprekken met de leverancier ───────────────────
 //
-// De klant ziet alleen het gesprek tussen het team en de eigen
-// portaalgebruikers (nooit marketing, nooit post van derden die het team aan
-// het dossier koppelde) — zie _shared/portalMessages.ts. Antwoorden en een
-// nieuw gesprek beginnen kan ook: dat wordt een inkomend bericht in het dossier,
-// precies alsof er gemaild was, met de melding voor het team die daarbij hoort.
+// Ieder ziet alleen het eigen gesprek met het team: wat die persoon zelf
+// stuurde, wat het team die persoon stuurde, en de antwoorden van het team in
+// een gesprek waar die persoon aan meedeed. Nooit de mail van een collega op
+// hetzelfde portaal, nooit marketing, post van derden of doorgestuurde mail —
+// zie _shared/portalMessages.ts. Antwoorden en een nieuw gesprek beginnen kan
+// ook: dat wordt een inkomend bericht in het dossier, precies alsof er gemaild
+// was, met de melding voor het team die daarbij hoort.
 
-async function loadMessageRows(client: ClientRow): Promise<PortalMessageRow[]> {
+async function loadMessageRows(client: ClientRow, people: PortalPerson[]): Promise<PortalMessageRow[]> {
+  const emails = [...new Set(people.map((person) => person.email))];
+  if (!emails.length) return [];
   const { data, error } = await supabaseAdmin.rpc('portal_client_message_overview', {
     p_organization_id: client.organization_id,
     p_client_id: client.id,
+    p_emails: emails,
   });
   if (error) {
     if (isMissingRelationError(error)) return [];
@@ -1146,17 +1189,18 @@ async function loadMessageRows(client: ClientRow): Promise<PortalMessageRow[]> {
   return (data || []) as PortalMessageRow[];
 }
 
-function visibleThreadsFor(rows: PortalMessageRow[], people: PortalPerson[]): PortalThreadSummary[] {
-  return portalThreads(rows, new Set(people.map((person) => person.email)));
+function threadsFor(rows: PortalMessageRow[], me: PortalPerson, people: PortalPerson[]): PortalThreadSummary[] {
+  return portalThreadsFor(rows, me.email, new Set(people.map((person) => person.email)));
 }
 
-function threadForPortal(thread: PortalThreadSummary, me: PortalPerson, reads: Map<string, string>) {
+function threadForPortal(thread: PortalThreadSummary, reads: Map<string, string>) {
   return {
     id: thread.id,
     subject: thread.subject,
     messageCount: thread.messageCount,
     lastMessageAt: thread.lastMessageAt,
-    lastFrom: thread.lastDirection === 'outbound' ? 'team' : (thread.lastFromEmail === me.email ? 'me' : 'colleague'),
+    // Inkomend is altijd van deze persoon zelf: post van collega's ziet niemand anders.
+    lastFrom: thread.lastDirection === 'outbound' ? 'team' : 'me',
     lastFromName: thread.lastFromName,
     lastPreview: thread.lastPreview,
     unread: isUnreadSince(thread.lastTeamMessageAt, reads.get(`thread:${thread.id}`), PORTAL_READS_SINCE),
@@ -1165,8 +1209,8 @@ function threadForPortal(thread: PortalThreadSummary, me: PortalPerson, reads: M
 
 async function getMessageThreads(user: { id: string; email: string }, body: Record<string, unknown>) {
   const { client, person, people } = await requirePortalPerson(user, body.clientId);
-  const [rows, reads] = await Promise.all([loadMessageRows(client), loadPortalReads(client.id, person.email)]);
-  return { threads: visibleThreadsFor(rows, people).map((thread) => threadForPortal(thread, person, reads)) };
+  const [rows, reads] = await Promise.all([loadMessageRows(client, people), loadPortalReads(client.id, person.email)]);
+  return { threads: threadsFor(rows, person, people).map((thread) => threadForPortal(thread, reads)) };
 }
 
 type EmailBodyRow = {
@@ -1198,7 +1242,7 @@ async function getMessageThread(user: { id: string; email: string }, body: Recor
   const { client, person, people } = await requirePortalPerson(user, thread.client_id);
   if (client.organization_id !== thread.organization_id) throw new PortalError('Geen toegang tot dit gesprek.', 403);
 
-  const summary = visibleThreadsFor(await loadMessageRows(client), people).find((candidate) => candidate.id === thread.id);
+  const summary = threadsFor(await loadMessageRows(client, people), person, people).find((candidate) => candidate.id === thread.id);
   if (!summary) throw new PortalError('Dit gesprek is niet (meer) beschikbaar in het portaal.', 404);
 
   // Het hele gesprek ophalen en hier filteren, niet met .in(id, …): een lang
@@ -1252,10 +1296,11 @@ async function sendMessage(user: { id: string; email: string }, body: Record<str
     throw new PortalError(`Je hebt de afgelopen ${MESSAGE_RATE_WINDOW_MINUTES} minuten al veel berichten gestuurd. Probeer het zo nog eens.`, 429);
   }
 
-  const rows = await loadMessageRows(client);
+  const rows = await loadMessageRows(client, people);
   const requestedThreadId = String(body.threadId || '').trim();
   let threadId: string;
   let subject: string;
+  let threadSubject: string;
   let isNewThread = false;
 
   if (requestedThreadId) {
@@ -1268,11 +1313,15 @@ async function sendMessage(user: { id: string; email: string }, body: Record<str
       .eq('client_id', client.id)
       .maybeSingle();
     if (error) throw error;
-    if (!thread || !visibleThreadsFor(rows, people).some((candidate) => candidate.id === thread.id)) {
+    // Alleen in een eigen gesprek; het onderwerp zoals déze persoon het ziet
+    // (het gesprek kan met post van een ander begonnen zijn).
+    const mine = thread ? threadsFor(rows, person, people).find((candidate) => candidate.id === thread.id) : undefined;
+    if (!thread || !mine) {
       throw new PortalError('Dit gesprek is niet (meer) beschikbaar in het portaal.', 404);
     }
     threadId = String(thread.id);
-    subject = replySubject(thread.subject);
+    threadSubject = mine.subject;
+    subject = replySubject(mine.subject);
   } else {
     subject = String(body.subject || '').replace(/\s+/g, ' ').trim();
     if (!subject) throw new PortalError('Geef je bericht een onderwerp.', 400);
@@ -1291,6 +1340,7 @@ async function sendMessage(user: { id: string; email: string }, body: Record<str
       .single();
     if (error) throw error;
     threadId = String(thread.id);
+    threadSubject = subject;
     isNewThread = true;
   }
 
@@ -1347,7 +1397,7 @@ async function sendMessage(user: { id: string; email: string }, body: Record<str
   const supplierName = (company?.trade_name as string | null) || (company?.company_name as string | null) || 'Je leverancier';
   return {
     threadId,
-    subject: isNewThread ? subject : String(rows.find((row) => row.thread_id === threadId)?.thread_subject || subject),
+    subject: threadSubject,
     message: sanitizePortalMessage(inserted as EmailBodyRow, person, people, supplierName),
   };
 }
@@ -1421,19 +1471,19 @@ async function buildAccount(client: ClientRow, email: string) {
   // Wat er nieuw is sinds deze persoon het laatst keek: antwoorden van het team
   // op tickets, en mail van het team in de gesprekken. Alles optioneel — zonder
   // de migratie van 2026-10-04 is er gewoon niets "nieuw".
-  const [overview, reads, messageRows, portalContacts] = await Promise.all([
+  const peoplePromise = loadPortalContacts(client).then((contacts) => portalPeople(client, contacts));
+  const [overview, reads, people, messageRows] = await Promise.all([
     optionalRpc('portal_ticket_overview', { p_organization_id: orgId, p_client_id: client.id }),
     loadPortalReads(client.id, email),
-    loadMessageRows(client).catch((error) => {
+    peoplePromise,
+    peoplePromise.then((portalUsers) => loadMessageRows(client, portalUsers)).catch((error) => {
       console.warn('client-portal berichtenoverzicht overgeslagen', error instanceof Error ? error.message : error);
       return [] as PortalMessageRow[];
     }),
-    loadPortalContacts(client),
   ]);
   const overviewByTicket = new Map(overview.map((row) => [String(row.ticket_id), row]));
-  const people = portalPeople(client, portalContacts);
   const me = people.find((person) => person.email === normalizeEmail(email)) ?? null;
-  const threads = me ? visibleThreadsFor(messageRows, people).map((thread) => threadForPortal(thread, me, reads)) : [];
+  const threads = me ? threadsFor(messageRows, me, people).map((thread) => threadForPortal(thread, reads)) : [];
 
   return {
     id: client.id,

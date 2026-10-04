@@ -46,8 +46,12 @@ export function inboundOriginLabel(msg: ClientEmail): string | null {
     case 'client_contact': return viaAlias ? 'Binnengekomen via je doorstuuradres, herkend op een contactpersoon' : 'Automatisch gekoppeld op een contactpersoon';
     case 'manual': return 'Handmatig gekoppeld vanuit de opvangbak';
     // Ingelogd met de eigen e-maillink: geen gok, wel goed om te weten dat
-    // dit niet per mail kwam (je antwoord gaat wél per mail terug).
-    case 'portal': return 'Geschreven in het klantportaal';
+    // dit niet per mail kwam. Een antwoord gaat zoals altijd per mail naar
+    // het hoofdadres van de klant; schreef een contactpersoon dit, dan komt
+    // het antwoord niet in de mailbox van die contactpersoon, wel in het portaal.
+    case 'portal': return (msg.metadata as { client_contact_id?: string | null } | null)?.client_contact_id
+      ? 'Geschreven in het klantportaal door een contactpersoon. Je antwoord gaat per mail naar het hoofdadres van de klant; de schrijver ziet het in het portaal.'
+      : 'Geschreven in het klantportaal';
     case 'header_thread': return 'Gekoppeld aan een lopend gesprek';
     case 'reply_token': return null; // antwoord op onze eigen mail: vanzelfsprekend
     default: return viaAlias ? 'Binnengekomen via je doorstuuradres' : null;
