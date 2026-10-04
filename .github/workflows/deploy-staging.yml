@@ -66,6 +66,16 @@ jobs:
             echo "SUPABASE_ACCESS_TOKEN maak je op https://supabase.com/dashboard/account/tokens"
             exit 1
           fi
+          # De CLI wil een persoonlijk toegangstoken (sbp_…), geen API-sleutel van
+          # het project (anon, service_role, sb_secret_…). Die laatste lijkt er
+          # op, maar daarmee zegt de CLI alleen "Invalid access token format".
+          case "$SUPABASE_ACCESS_TOKEN" in
+            sbp_*) ;;
+            *)
+              echo "::error title=SUPABASE_ACCESS_TOKEN klopt niet::Dit is geen persoonlijk Supabase-token (dat begint met sbp_). Maak er een op https://supabase.com/dashboard/account/tokens en zet het als dit secret."
+              exit 1
+              ;;
+          esac
           echo "Beide secrets zijn aanwezig (lengte: token ${#SUPABASE_ACCESS_TOKEN}, wachtwoord ${#SUPABASE_DB_PASSWORD})."
 
       # Met het wachtwoord, zodat het koppelen meteen de databaseverbinding
