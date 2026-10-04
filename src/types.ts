@@ -1041,6 +1041,13 @@ export interface InvoiceReminderSettings {
   updated_at?: string;
 }
 
+/** Klantportaal per organisatie. Geen rij = standaard: klanten krijgen e-mail over hun tickets. */
+export interface OrganizationPortalSettings {
+  organization_id: UUID;
+  ticket_emails_enabled: boolean;
+  updated_at?: string | null;
+}
+
 export type DunningNoticeStatus = 'proposed' | 'confirmed' | 'sent' | 'failed' | 'cancelled';
 
 export interface DunningNotice {
@@ -1151,7 +1158,9 @@ export interface ClientEmail extends OrgScopedRow {
 // ── Doorstuuradres: mail die de klant naar je eigen adres stuurt ────────────
 
 export type ClientEmailLinkSource =
-  | 'reply_token' | 'header_thread' | 'client_email' | 'client_contact' | 'manual';
+  | 'reply_token' | 'header_thread' | 'client_email' | 'client_contact' | 'manual'
+  /** Door de klant zelf geschreven in het klantportaal (geverifieerde login). */
+  | 'portal';
 
 export type InboundAliasStatus = 'active' | 'retiring' | 'revoked';
 /** mail = doorgestuurde klantmail (klantdossier); invoices = inkoopfacturen (factuur-inbox). */

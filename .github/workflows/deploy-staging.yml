@@ -18,7 +18,7 @@ on:
         type: boolean
         default: false
       setup_webhooks:
-        description: "Eenmalig: de webhook-secrets zetten als ze ontbreken, en de bezorger en de opruimtaak inplannen (pg_cron)"
+        description: "Eenmalig: de webhook-secrets zetten als ze ontbreken, en de bezorger, de opruimtaak en de klantmeldingen inplannen (pg_cron)"
         type: boolean
         default: false
 

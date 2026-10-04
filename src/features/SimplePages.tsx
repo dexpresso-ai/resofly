@@ -2,13 +2,13 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Bell, BookOpen, CalendarCog, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
-import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
+import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationPortalSettings, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { BRAND_BODY_FONTS, BRAND_FONTS, CLIENT_THEMES, GALLERY_BACKGROUNDS, brandFont, brandStyle, brandThemeVars, ensureBrandFontsLoaded } from '../lib/branding';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setBusinessAddon, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings } from '../lib/repository';
+import { deleteInvoiceMollieKey, loadInvoiceMollieStatus, saveInvoiceMollieKey, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings } from '../lib/repository';
 import { invoiceInboxAddress } from '../lib/invoiceInbox';
 import { loadGerrieUsage, type GerrieUsageRow } from '../lib/gerrie-api';
 import { EMAIL_TEMPLATES, EMAIL_FIELD_LABELS, EMAIL_FIELD_HINTS, fillPlaceholders, type EmailField } from '../lib/emailTemplateContent';
@@ -141,7 +141,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'abonnement', label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
   { id: 'ai', label: 'AI', Icon: Sparkles, description: 'Koppel je eigen AI (Claude, ChatGPT) aan deze werkruimte, en bekijk het verbruik en de kosten van Gerrie per gebruiker.' },
   { id: 'api', label: 'API & webhooks', Icon: Webhook, description: 'Koppel andere software aan ResoFly — een webshop, je urenapp, Zapier, Make of n8n — met een API-sleutel.' },
-  { id: 'email', label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails aan, en verstuur een testmail om je configuratie te controleren.' },
+  { id: 'email', label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails aan, bepaal of klanten e-mail krijgen over hun tickets, en verstuur een testmail om je configuratie te controleren.' },
 ];
 
 export function CalendarPage() {
@@ -994,6 +994,66 @@ function PersonalSenderCard({ organizationId }: { organizationId: string }) {
         {hasRow && <Button variant="danger" onClick={clear} disabled={busy}>Verwijderen</Button>}
       </div>
     </>}
+  </section>;
+}
+
+/**
+ * Klanten mailen over hun tickets (klantportaal). Iedere klant kiest in het
+ * portaal zelf welke meldingen er komen; hier zet een owner/admin het voor de
+ * hele organisatie aan of uit. Uit = niemand krijgt een ticketmail, maar het
+ * portaal toont alles nog gewoon.
+ */
+function PortalNotificationsCard({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
+  // undefined = laden, null = migratie nog niet gedraaid.
+  const [settings, setSettings] = useState<OrganizationPortalSettings | null | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSettings(undefined); setError(null); setMessage(null);
+    loadOrganizationPortalSettings(organizationId)
+      .then(result => { if (!cancelled) setSettings(result); })
+      .catch(e => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Laden mislukt.'); setSettings(null); } });
+    return () => { cancelled = true; };
+  }, [organizationId]);
+
+  async function toggle(enabled: boolean) {
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      setSettings(await saveOrganizationPortalSettings(organizationId, { ticket_emails_enabled: enabled }));
+      setMessage(enabled
+        ? 'Klanten krijgen weer e-mail over hun tickets (volgens hun eigen keuzes in het portaal).'
+        : 'Klanten krijgen geen e-mail meer over hun tickets. In het portaal zien ze alles nog wel.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Opslaan mislukt.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <section className="settings-card organization-card">
+    <div className="settings-card-head">
+      <div>
+        <h3>Meldingen aan klanten</h3>
+        <p className="settings-help">Je klanten krijgen een e-mail als er een ticket voor hen is aangemaakt (of als ze er zelf een indienen), als de status verandert en als je een voor de klant zichtbare notitie plaatst — met een link die meteen het ticket in het klantportaal opent. Iedere klant zet dit in het portaal zelf aan of uit, per soort melding, en kiest of het over alle tickets gaat of alleen over de eigen. Hier zet je het voor je hele organisatie uit.</p>
+      </div>
+    </div>
+    {message && <div className="success">{message}</div>}
+    {error && <div className="error">{error}</div>}
+    {settings === undefined ? <p className="settings-help">Laden…</p>
+      : settings === null ? <p className="settings-help">Nog niet beschikbaar in deze omgeving: de databasemigratie voor klantmeldingen (20261004000000) moet nog draaien.</p>
+      : <div className="billing-control-row">
+          <div>
+            <strong>Klanten e-mailen over hun tickets</strong>
+            <p className="settings-help">{canAdmin ? 'Staat dit uit, dan zien klanten nieuwe antwoorden en statuswijzigingen alleen nog als ze in het portaal kijken.' : 'Alleen owners en admins kunnen dit aanpassen.'}</p>
+          </div>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={settings.ticket_emails_enabled} disabled={!canAdmin || busy} onChange={e => void toggle(e.target.checked)} />
+            {settings.ticket_emails_enabled ? 'Aan' : 'Uit'}
+          </label>
+        </div>}
   </section>;
 }
 
@@ -2627,6 +2687,7 @@ export function Settings({
     {activeOrganization && <InvoiceInboxCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <SendingDomainCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <PersonalSenderCard organizationId={activeOrganization.id} />}
+    {activeOrganization && <PortalNotificationsCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <EmailTemplatesCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     <section className="settings-card organization-card">
       <div className="settings-card-head">

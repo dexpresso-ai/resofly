@@ -67,6 +67,9 @@ const PAGES = {
   'public-gallery': { path: '/gallerij/demo-token' },
   'portal-login': { path: '/portal' },
   portal: { path: '/portal', portal: true },
+  // Via de deeplink uit de meldingsmail, zoals een klant er ook binnenkomt.
+  'portal-messages': { path: '/portal?view=berichten', portal: true },
+  'portal-settings': { path: '/portal?view=instellingen', portal: true },
   login: { path: '/', login: true },
 };
 
@@ -123,6 +126,11 @@ const FIRST_ITEM = {
   'public-invoice': { selector: '.public-lines', maxTop: 700 },
   'public-booking': { selector: '.booking-slot', maxTop: 360 },
   portal: { selector: '.portal-row', maxTop: 380 },
+  // 2026-10-04 — Berichten en Instellingen in het portaal, geopend via de
+  // deeplink uit de meldingsmail. Gemeten: eerste gesprek 204px, eerste
+  // schakelaar 267px; de grenzen liggen zo'n 20% hoger.
+  'portal-messages': { selector: '.portal-conv', maxTop: 245 },
+  'portal-settings': { selector: '.portal-toggle-row', maxTop: 320 },
 };
 
 const args = Object.fromEntries(process.argv.slice(2).map(a => { const m = /^--([^=]+)(?:=(.*))?$/.exec(a); return m ? [m[1], m[2] ?? 'true'] : [a, 'true']; }));

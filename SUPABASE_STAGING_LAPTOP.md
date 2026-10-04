@@ -289,6 +289,12 @@ select cron.schedule('resofly-api-purge', '17 3 * * *',
   'select public.api_purge_expired(); select public.webhook_purge_expired();');
 ```
 
+**Klantmeldingen over tickets** (sinds 2026-10-04). Het script plant ook de
+taak `portal-notify-drain` in en zet daarvoor `PORTAL_NOTIFY_CRON_SECRET`, zodra
+de migratie `20261004000000` op de database staat. Met de hand gaat het precies
+zoals de webhookbezorger hierboven; de stappen staan in
+`KLANTPORTAAL_MELDINGEN_SETUP.md`.
+
 ## 8. Controleren dat alles werkt
 
 De workflow doet na elke deploy zelf een rooktest (`scripts/supabase-smoke-test.sh`):
@@ -388,9 +394,10 @@ staging. Doe productie pas als staging met stap 8 helemaal groen is.
 - **Functies:** onder andere `api`, `api-admin`, `webhooks`, `mcp`,
   `gerrie-agent`, `calendar-integrations`, `invoice-workflow` en `mail`. Stap 6
   rolt ze allemaal uit.
-- **Secrets:** `WEBHOOK_SECRET_ENCRYPTION_KEY` en `WEBHOOK_CRON_SECRET` (stap 7).
-- **Cron:** `webhooks-dispatch` (stap 7) en `resofly-api-purge` (via de
-  migratie, als pg_cron aan staat).
+- **Secrets:** `WEBHOOK_SECRET_ENCRYPTION_KEY` en `WEBHOOK_CRON_SECRET` (stap 7), en
+  sinds 2026-10-04 `PORTAL_NOTIFY_CRON_SECRET` voor de klantmeldingen.
+- **Cron:** `webhooks-dispatch` en `portal-notify-drain` (stap 7), en
+  `resofly-api-purge` (via de migratie, als pg_cron aan staat).
 - **Cloudflare:** de app bouwt vanzelf. Aan de workers (`cloudflare-worker/`,
   `workers/`) is in deze release niets veranderd.
 

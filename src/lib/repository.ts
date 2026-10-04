@@ -32,6 +32,7 @@ import type {
   InvoiceWorkflowEvent,
   InvoiceMollieSettingsStatus,
   InvoiceReminderSettings,
+  OrganizationPortalSettings,
   DunningNotice,
   SendingDomain,
   ClientEmail,
@@ -3773,6 +3774,64 @@ export async function saveInvoiceReminderSettings(
     .single();
   if (error) throw error;
   return data as InvoiceReminderSettings;
+}
+
+// ── Klantportaal: e-mailmeldingen aan klanten ───────────────────────────────
+
+/**
+ * Mailt ResoFly klanten van deze organisatie over hun tickets? Geen rij = aan.
+ * `null` = de migratie van 2026-10-04 staat hier nog niet: dan bestaat de
+ * schakelaar (en de meldingen) nog niet.
+ */
+export async function loadOrganizationPortalSettings(organizationId: UUID): Promise<OrganizationPortalSettings | null> {
+  const { data, error } = await supabase
+    .from('organization_portal_settings')
+    .select('organization_id,ticket_emails_enabled,updated_at')
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) {
+    if (isMissingRelation(error)) return null;
+    throw error;
+  }
+  return (data as OrganizationPortalSettings | null) ?? { organization_id: organizationId, ticket_emails_enabled: true };
+}
+
+/** Alleen owners/admins (RLS). */
+export async function saveOrganizationPortalSettings(
+  organizationId: UUID,
+  input: Pick<OrganizationPortalSettings, 'ticket_emails_enabled'>,
+): Promise<OrganizationPortalSettings> {
+  const { data: userData } = await supabaseAuth.getUser();
+  const { data, error } = await supabase
+    .from('organization_portal_settings')
+    .upsert({
+      organization_id: organizationId,
+      ticket_emails_enabled: input.ticket_emails_enabled,
+      updated_by: userData.user?.id ?? null,
+    }, { onConflict: 'organization_id' })
+    .select('organization_id,ticket_emails_enabled,updated_at')
+    .single();
+  if (error) throw error;
+  ticketEmailsEnabledCache.delete(organizationId);
+  return data as OrganizationPortalSettings;
+}
+
+const ticketEmailsEnabledCache = new Map<UUID, Promise<boolean | null>>();
+
+/**
+ * Voor het tijdlijnvak van een ticket: krijgt de klant van een zichtbare
+ * notitie ook een e-mail? Eén keer per organisatie per sessie gevraagd; een
+ * wijziging in Instellingen leegt de cache. `null` = (nog) onbekend.
+ */
+export function ticketEmailsEnabled(organizationId: UUID): Promise<boolean | null> {
+  let pending = ticketEmailsEnabledCache.get(organizationId);
+  if (!pending) {
+    pending = loadOrganizationPortalSettings(organizationId)
+      .then(settings => (settings ? settings.ticket_emails_enabled : null))
+      .catch(() => null);
+    ticketEmailsEnabledCache.set(organizationId, pending);
+  }
+  return pending;
 }
 
 /**

@@ -10,6 +10,9 @@
 #     bewijst dat de taak en WEBHOOK_CRON_SECRET bij elkaar passen. Alleen als
 #     de taak er is (scripts/supabase-setup-webhooks.sh) en SUPABASE_DB_PASSWORD
 #     gezet is; anders overgeslagen.
+#   - portal-notify (klantmeldingen) op dezelfde manier: zonder secret 401, met
+#     het secret uit de taak 'portal-notify-drain' 200. Een 500 met "ontbreekt"
+#     betekent dat RESEND_API_KEY/RESEND_FROM_EMAIL of APP_PUBLIC_URL er niet staat.
 #
 # Draait in de workflow "Deploy Supabase (staging)" na elke deploy, en kan ook
 # vanaf een laptop: SUPABASE_PROJECT_ID=enzghpduqwaojcxgwarr bash scripts/supabase-smoke-test.sh
@@ -57,6 +60,23 @@ SQL
       -X POST "$base/webhooks?cron=dispatch" -H "x-cron-secret: $secret" -H 'Content-Type: application/json' --data '{}'
   else
     echo "-      de bezorger met cron-secret: overgeslagen (nog geen cron-taak 'webhooks-dispatch')"
+  fi
+
+  # Klantmeldingen: pas te controleren zodra de taak (en dus het secret) er is.
+  notify_secret="$(PGPASSWORD="$SUPABASE_DB_PASSWORD" PGSSLMODE="${PGSSLMODE:-require}" PGCONNECT_TIMEOUT=20 \
+    psql "$pooler" -X -q -t -A -v ON_ERROR_STOP=1 <<'SQL'
+select case when to_regclass('cron.job') is null then ''
+            else coalesce((select substring(command from 'x-cron-secret'', ''([^'']*)''')
+                             from cron.job where jobname = 'portal-notify-drain'), '') end;
+SQL
+)"
+  if [ -n "$notify_secret" ]; then
+    mask "$notify_secret"
+    check "portal-notify weigert de wachtrij zonder cron-secret" 401 'cron-secret' -X POST "$base/portal-notify?cron=drain"
+    check "portal-notify draait met het secret uit de cron-taak" 200 '"ok":true' \
+      -X POST "$base/portal-notify?cron=drain" -H "x-cron-secret: $notify_secret" -H 'Content-Type: application/json' --data '{}'
+  else
+    echo "-      klantmeldingen (portal-notify): overgeslagen (nog geen cron-taak 'portal-notify-drain')"
   fi
 else
   echo "-      de bezorger met cron-secret: overgeslagen (geen SUPABASE_DB_PASSWORD of psql)"

@@ -83,7 +83,16 @@ function edgeFunction(name, body) {
   if (name === 'meeting-booking-public') return pub.bookingPublic;
   if (name === 'file-share-public') return pub.sharePublic;
   if (name === 'gallery-public') return pub.galleryPublic;
-  if (name === 'client-portal') return pub.portalData;
+  if (name === 'client-portal') {
+    switch (body?.action) {
+      case 'getMessageThreads': return pub.portalThreads;
+      case 'getMessageThread': return pub.portalThread;
+      case 'getTicketThread': return pub.portalTicketThread;
+      case 'getNotificationSettings': return pub.portalSettings;
+      case 'updateNotificationSettings': return { ok: true, settings: body.settings };
+      default: return pub.portalData;
+    }
+  }
   if (name === 'portal-login') return { ok: true, known: true };
   if (name === 'gerrie-agent') return { ok: true, budget: { remaining_cents: 5000 }, remaining: 5000, tools: [], proposals: [], usage: [] };
   return { ok: true };

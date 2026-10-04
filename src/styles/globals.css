@@ -142,6 +142,8 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .ticket-timeline-composer-actions .btn{width:auto;min-width:160px}
 .ticket-visibility-toggle{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--accent-g);cursor:pointer;user-select:none}
 .ticket-visibility-toggle input{width:15px;height:15px;accent-color:var(--accent-o)}
+/* Wat er met een zichtbare notitie gebeurt: portaal + e-mailmelding (klantportaal, 2026-10-04). */
+.ticket-timeline-mailhint{margin:0;font-size:11px;line-height:1.45;color:var(--muted)}
 .ticket-visibility-toggle.is-internal{color:var(--accent-o)}
 .ticket-timeline-empty{font-size:11px;color:var(--muted);border:1px dashed var(--border);border-radius:7px;padding:14px;text-align:center}
 .ticket-timeline-list{list-style:none;display:flex;flex-direction:column;gap:2px;position:relative;padding-left:18px}
@@ -2760,6 +2762,92 @@ button.chat-member:hover{background:var(--bg3)}
 .portal-bank-facts{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:13px}
 .portal-bank-facts span{color:var(--muted)}
 .portal-bank-facts strong{font-weight:600}
+
+/* ── Klantportaal: berichten, meldingen en instellingen ───────────────────
+ * De tab Berichten (mailgesprekken en tickets door elkaar), de stip voor iets
+ * nieuws van de leverancier, statusregels in het ticketgesprek en de eigen
+ * meldingsinstellingen. Alles op de tokens: licht/donker en de merkkleur van
+ * de leverancier gaan vanzelf mee. */
+.portal-login-next{font-size:13px;color:var(--accent-ink);font-weight:600}
+.portal-settings-btn svg{flex-shrink:0}
+/* Met drie knoppen in de kopbalk mag de naam inschuiven, het logo niet. */
+.portal-brand .brand-icon,.portal-brand .portal-mark{flex-shrink:0}
+.portal-tab-badge.is-new{background:var(--accent);color:var(--on-accent);font-weight:700}
+.portal-unread-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.18);flex-shrink:0}
+.portal-row-number .portal-unread-dot{margin-right:8px;vertical-align:1px}
+.portal-ticket.is-unread{border-color:rgba(var(--accent-rgb),.45);background:rgba(var(--accent-rgb),.05)}
+.portal-ticket-fresh{color:var(--text)}
+.portal-ticket-fresh strong{color:var(--accent-ink);font-weight:700}
+.portal-new-card{border-color:rgba(var(--accent-rgb),.4)}
+.portal-hint{font-size:12.5px;color:var(--muted2);margin:-4px 0 12px;line-height:1.5}
+.portal-link{background:none;border:0;padding:0;font:inherit;color:var(--accent-ink);font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.portal-card-intro{margin:-6px 0 12px}
+.portal-thread-composer-actions{gap:10px;align-items:center;flex-wrap:wrap}
+.portal-composer-hint{margin-right:auto;font-size:12px;color:var(--muted)}
+
+.portal-thread-event{align-self:center;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;justify-content:center;font-size:11.5px;color:var(--muted2);padding:4px 12px;border-radius:99px;background:var(--bg3);border:1px dashed var(--border2)}
+.portal-thread-event strong{color:var(--text);font-weight:700}
+.portal-thread-event time{font-size:10.5px;color:var(--muted)}
+
+.portal-conv-list{display:flex;flex-direction:column;gap:6px}
+.portal-conv{display:flex;align-items:flex-start;gap:12px;width:100%;padding:12px 14px;text-align:left;font:inherit;color:inherit;background:var(--bg3);border:1px solid var(--border);border-radius:10px;cursor:pointer;transition:border-color .14s,background .14s}
+.portal-conv:hover{border-color:var(--border2);background:var(--bg4)}
+.portal-conv.is-unread{border-color:rgba(var(--accent-rgb),.45);background:rgba(var(--accent-rgb),.05)}
+.portal-conv-icon{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;flex-shrink:0;background:var(--bg5);color:var(--muted2)}
+.portal-conv-icon.is-ticket{background:rgba(var(--accent-rgb),.14);color:var(--accent-ink)}
+.portal-conv-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.portal-conv-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px;min-width:0}
+.portal-conv-title{font-size:13.5px;font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.portal-conv.is-unread .portal-conv-title{font-weight:800}
+.portal-conv-time{font-size:11px;color:var(--muted);white-space:nowrap;flex-shrink:0}
+.portal-conv-bottom{display:flex;align-items:center;gap:8px;min-width:0}
+.portal-conv-kind{font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);flex-shrink:0}
+.portal-conv-preview{flex:1;min-width:0;font-size:12.5px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.portal-conv-bottom .portal-status{flex-shrink:0}
+
+/* Een bericht van een collega (zelfde klant, niet jij): aan de kant van de
+   klant, maar zonder jouw accentkleur. */
+.portal-thread-item.is-colleague{background:var(--bg3);border-color:var(--border2)}
+.portal-msg-html{font-size:13px;line-height:1.6;color:var(--text);overflow-wrap:anywhere}
+.portal-msg-html p{margin:0 0 8px;white-space:normal}
+.portal-msg-html p:last-child{margin-bottom:0}
+.portal-msg-html ul,.portal-msg-html ol{margin:0 0 8px;padding-left:20px}
+.portal-msg-html a{color:var(--accent-ink);text-decoration:underline}
+.portal-msg-html blockquote{margin:8px 0;padding-left:10px;border-left:3px solid var(--border2);color:var(--muted2)}
+.portal-msg-html img{max-width:100%;height:auto}
+.portal-msg-html table{max-width:100%;border-collapse:collapse}
+.portal-quote-toggle{margin-top:6px;background:none;border:0;padding:0;font:inherit;font-size:11.5px;color:var(--muted2);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.portal-thread-item p.portal-msg-quoted{margin-top:6px;padding-left:10px;border-left:3px solid var(--border2);color:var(--muted2);font-size:12px}
+.portal-message-form{margin-top:12px}
+
+.portal-settings-status{font-size:12px;color:var(--muted);font-weight:600}
+.portal-settings-section{padding:14px 0;border-top:1px solid var(--border)}
+.portal-settings-section:first-of-type{border-top:0;padding-top:0}
+.portal-settings-section h3{font-size:13.5px;font-weight:700;margin-bottom:6px}
+.portal-settings-section>.portal-muted{font-size:12.5px;line-height:1.55}
+.portal-settings-note{margin-top:10px;padding:10px 12px;border-radius:9px;background:rgba(var(--warn-rgb),.12);border:1px solid rgba(var(--warn-rgb),.32);font-size:12.5px;line-height:1.5;color:var(--text)}
+.portal-toggle-list{display:flex;flex-direction:column;margin-top:10px;border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.portal-toggle-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 14px;background:var(--bg3)}
+.portal-toggle-row+.portal-toggle-row{border-top:1px solid var(--border)}
+.portal-toggle-text{display:flex;flex-direction:column;gap:3px;min-width:0}
+.portal-toggle-text label{font-size:13px;font-weight:700;cursor:pointer}
+.portal-toggle-text small{font-size:12px;color:var(--muted2);line-height:1.45}
+.portal-switch{position:relative;flex-shrink:0;display:inline-flex;align-items:center;gap:8px;padding:0;border:0;background:none;cursor:pointer;font:inherit;color:inherit}
+.portal-switch::before{content:'';width:40px;height:22px;border-radius:99px;background:var(--bg5);border:1px solid var(--border2);box-sizing:border-box;transition:background .15s,border-color .15s}
+.portal-switch-knob{position:absolute;left:3px;top:50%;width:16px;height:16px;margin-top:-8px;border-radius:50%;background:var(--muted2);transition:transform .15s,background .15s}
+.portal-switch.is-on::before{background:var(--accent);border-color:var(--accent)}
+.portal-switch.is-on .portal-switch-knob{transform:translateX(18px);background:var(--on-accent)}
+.portal-switch:focus-visible{outline:none}
+.portal-switch:focus-visible::before{outline:2px solid var(--accent);outline-offset:2px}
+.portal-switch-text{font-size:11px;font-weight:700;color:var(--muted2);min-width:22px;text-align:left}
+.portal-choice-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+.portal-choice{display:flex;align-items:flex-start;gap:10px;padding:11px 13px;border:1px solid var(--border);border-radius:10px;background:var(--bg3);cursor:pointer;transition:border-color .14s,background .14s}
+.portal-choice:hover{border-color:var(--border2)}
+.portal-choice.is-selected{border-color:rgba(var(--accent-rgb),.55);background:rgba(var(--accent-rgb),.07)}
+.portal-choice input{margin-top:2px;accent-color:var(--accent);width:16px;height:16px;flex-shrink:0}
+.portal-choice span{display:flex;flex-direction:column;gap:3px;min-width:0}
+.portal-choice strong{font-size:13px;font-weight:700}
+.portal-choice small{font-size:12px;color:var(--muted2);line-height:1.45}
 
 /* ───────────────────────── Boekhouding (fase 1) ───────────────────────── */
 .bk-page{display:flex;flex-direction:column;gap:16px;max-width:1180px}
@@ -10371,6 +10459,17 @@ button.task-agenda-when:hover{text-decoration:underline}
   .portal-ticket-form{padding:12px;gap:8px}
   .portal-project{padding:10px 12px}
   .portal-empty{padding:28px 16px}
+  /* Berichten en instellingen: compacter, duimformaat voor de knoppen; het
+     soortlabel ("Ticket"/"E-mail") laat het icoon al zien. */
+  .portal-settings-btn .portal-btn-label{display:none}
+  .portal-conv{padding:10px 11px;gap:10px}
+  .portal-conv-icon{width:28px;height:28px}
+  .portal-conv-kind{display:none}
+  .portal-thread-composer-actions .btn{flex:1 1 auto;min-height:44px}
+  .portal-composer-hint{flex:1 1 100%}
+  .portal-toggle-row{padding:11px 12px;gap:12px}
+  .portal-switch-text{display:none}
+  .portal-choice{padding:10px 11px}
 
   /* Galerij: de drie knoppen (diavoorstelling, volledig scherm, menu) lagen
      over de gecentreerde titel heen. Op de telefoon staan ze als eigen rij

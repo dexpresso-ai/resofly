@@ -6,6 +6,7 @@ import { renderFileSharedEmail } from './fileShared.ts';
 import { renderInvoiceDunningWik14Email } from './invoiceDunningWik14.ts';
 import { renderInvoiceReminderEmail } from './invoiceReminder.ts';
 import { renderInvoiceSentEmail } from './invoiceSent.ts';
+import { renderPortalTicketUpdateEmail } from './portalTicketUpdate.ts';
 import { renderQuoteSentEmail } from './quoteSent.ts';
 import { renderResendTestEmail } from './testResend.ts';
 import type { EmailTemplateInputMap, EmailTemplateKey, RenderedEmailTemplate } from './types.ts';
@@ -34,6 +35,8 @@ export function renderEmailTemplate<K extends EmailTemplateKey>(templateKey: K, 
       return renderContractSignedInternalEmail(data as EmailTemplateInputMap['contract.signed.internal']);
     case 'file.shared':
       return renderFileSharedEmail(data as EmailTemplateInputMap['file.shared']);
+    case 'portal.ticketUpdate':
+      return renderPortalTicketUpdateEmail(data as EmailTemplateInputMap['portal.ticketUpdate']);
     default: {
       const exhaustiveCheck: never = templateKey;
       throw new Error(`Unknown email template: ${exhaustiveCheck}`);

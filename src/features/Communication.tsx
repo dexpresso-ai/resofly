@@ -1041,6 +1041,7 @@ function TicketPane({ item, client, organizationId, currentUserId, canWrite, sin
           notes={notes}
           canWrite={canWrite}
           onChanged={onChanged}
+          clientId={ticket.client_id}
         />
         {!canWrite && <p className="client-empty-line">Je hebt geen schrijfrechten voor tickets; je kunt de tijdlijn wel lezen.</p>}
       </article>

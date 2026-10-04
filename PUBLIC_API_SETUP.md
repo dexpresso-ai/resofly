@@ -152,6 +152,13 @@ De zevende, uit de herkontrole:
 | `audit_logs_mask_private_calendar` | Trigger: een afspraak, koppeling of agenda in een privé-agenda krijgt in het auditlog een neutraal label ("Privé-afspraak", "Privé-agenda"); bestaande regels worden net zo opgeschoond. |
 | `organization_license_usage()` | Werkt nu ook voor de service role (`team.license_usage`, de plan-stap van `team.invite`); anon kan hem niet aanroepen. |
 
+Later raakt `20261004000000_portal_notifications.sql` (e-mailmeldingen van het
+klantportaal) `api_rest_write()` nog één keer: zonder `execute_high` zet hij
+voor de transactie de markering `resofly.portal_notify = 'quiet'`. Een
+statuswijziging van een ticket mag dan nog steeds en staat in het portaal, maar
+de klant krijgt er geen e-mail van (`portal_ticket_activity_quiet`, zie
+`KLANTPORTAAL_MELDINGEN_SETUP.md`).
+
 Op **staging** hoort dit vanzelf te gaan: de workflow *Deploy Supabase
 (staging)* draait `supabase db push` en `supabase functions deploy` bij elke
 push naar `staging` — zodra het GitHub-secret `SUPABASE_DB_PASSWORD` staat. Tot

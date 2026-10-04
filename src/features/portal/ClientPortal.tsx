@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { LifeBuoy, Mail, Settings } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../../components/Ui';
 import { isSupabaseConfigured } from '../../lib/supabase';
 import { supabasePortalAuth } from '../../lib/supabasePortal';
@@ -13,26 +14,49 @@ import {
   fetchPortalData,
   fetchPortalGalleryDetail,
   fetchPortalInvoicePaymentInfo,
+  fetchPortalMessageThread,
+  fetchPortalMessageThreads,
+  fetchPortalNotificationSettings,
   fetchPortalProjectDetail,
   fetchPortalSharedFiles,
   fetchPortalTicketThread,
   requestPortalLogin,
+  sendPortalMessage,
   togglePortalGalleryFavorite,
+  updatePortalNotificationSettings,
   type PortalAccount,
   type PortalContract,
   type PortalGallery,
   type PortalGalleryDetail,
   type PortalInvoice,
   type PortalInvoicePaymentInfo,
+  type PortalMessage,
+  type PortalMessageThreadSummary,
+  type PortalNotificationSettings,
+  type PortalNotificationState,
   type PortalProject,
   type PortalShare,
   type PortalSharedItem,
   type PortalQuote,
   type PortalTask,
   type PortalTicket,
+  type PortalTicketEvent,
   type PortalTicketNote,
   type PortalTicketThread,
 } from '../../lib/portalApi';
+import {
+  isThreadUnread,
+  isTicketUnread,
+  parsePortalLink,
+  PORTAL_LINK_MAX_AGE_MS,
+  portalConversations,
+  revalidatePortalLink,
+  seenKey,
+  splitQuotedReply,
+  type PortalLink,
+} from '../../lib/portalConversations';
+import { listTime } from '../../lib/communication';
+import { sanitizeEmailHtml } from '../../lib/sanitizeHtml';
 import { dateNL, euro, lineGross, priorityLabel, total } from '../../lib/format';
 import type { FinanceLine, Priority } from '../../types';
 import { GalleryViewer, type GalleryViewerItem } from '../GalleryViewer';
@@ -40,7 +64,61 @@ import { galleryFileUrl, galleryRefreshDelayMs, galleryZipUrl, streamDownloadUrl
 import { applyBrandTheme, brandStyle, ensureBrandFontsLoaded, sanitizeStoredBranding, type BrandingPayload } from '../../lib/branding';
 import { ReadModal } from '../../components/ReadModal';
 
-type PortalTab = 'overview' | 'invoices' | 'quotes' | 'contracts' | 'files' | 'tickets' | 'projects' | 'galleries';
+type PortalTab = 'overview' | 'messages' | 'tickets' | 'invoices' | 'quotes' | 'contracts' | 'files' | 'projects' | 'galleries' | 'settings';
+
+/**
+ * Deeplinks uit de meldingsmail: /portal?dossier=…&ticket=… opent meteen het
+ * juiste dossier en ticket, ?view=instellingen de meldingsinstellingen. Is de
+ * bezoeker nog niet ingelogd, dan gaat de link via de magische inloglink
+ * verloren (die keert terug op /portal). Daarom bewaart dit apparaat hem kort,
+ * en haalt hem meteen uit de adresbalk: een ververs mag niet opnieuw springen.
+ */
+const LINK_MEMORY_KEY = 'resofly.portal.link';
+
+function capturePortalLink(): void {
+  try {
+    const link = parsePortalLink(window.location.search);
+    if (!link) return;
+    window.localStorage.setItem(LINK_MEMORY_KEY, JSON.stringify({ link, at: Date.now() }));
+    const url = new URL(window.location.href);
+    for (const key of ['dossier', 'ticket', 'bericht', 'view']) url.searchParams.delete(key);
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  } catch {
+    // Geen opslag (privémodus): dan opent het portaal gewoon op het overzicht.
+  }
+}
+
+function peekPortalLink(): PortalLink | null {
+  try {
+    const raw = window.localStorage.getItem(LINK_MEMORY_KEY);
+    if (!raw) return null;
+    const stored = JSON.parse(raw) as { link?: unknown; at?: unknown };
+    if (typeof stored.at !== 'number' || Date.now() - stored.at > PORTAL_LINK_MAX_AGE_MS) {
+      window.localStorage.removeItem(LINK_MEMORY_KEY);
+      return null;
+    }
+    return revalidatePortalLink(stored.link);
+  } catch {
+    return null;
+  }
+}
+
+function forgetPortalLink(): void {
+  try {
+    window.localStorage.removeItem(LINK_MEMORY_KEY);
+  } catch {
+    // Niets aan te doen.
+  }
+}
+
+/** Met welk tabblad (en wat er open staat) een dossier opent. */
+function viewFromLink(link: PortalLink | null): { tab: PortalTab; ticketId: string | null; threadId: string | null } {
+  if (!link) return { tab: 'overview', ticketId: null, threadId: null };
+  if (link.ticket) return { tab: 'tickets', ticketId: link.ticket, threadId: null };
+  if (link.thread) return { tab: 'messages', ticketId: null, threadId: link.thread };
+  if (link.view) return { tab: link.view, ticketId: null, threadId: null };
+  return { tab: 'overview', ticketId: null, threadId: null };
+}
 
 /**
  * Het loginscherm weet nog niet bij wélke leverancier deze bezoeker hoort — dat
@@ -112,6 +190,10 @@ function PortalFooter({ branding }: { branding: BrandingPayload | null | undefin
  * edge function, die de toegang afleidt uit het geverifieerde e-mailadres.
  */
 export function ClientPortal() {
+  // Vóór alles: een deeplink uit de meldingsmail veiligstellen. In de
+  // initializer (en niet in een effect) zodat het dashboard hem bij zijn eerste
+  // render al vindt; effecten van kinderen draaien vóór die van de ouder.
+  useState(() => { capturePortalLink(); return true; });
   const [sessionReady, setSessionReady] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
   // Begint bij de huisstijl die dit apparaat onthield en gaat over op de echte
@@ -156,6 +238,7 @@ function PortalLogin({ branding }: { branding: BrandingPayload | null }) {
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingLink] = useState(peekPortalLink);
 
   async function signIn() {
     setError(null); setBusy(true);
@@ -184,6 +267,11 @@ function PortalLogin({ branding }: { branding: BrandingPayload | null }) {
       <p className="eyebrow login-eyebrow">Facturen • Offertes • Tickets • Projecten</p>
       <h1>Inloggen</h1>
       <p>Vul je e-mailadres in. Je ontvangt een veilige inloglink in je mailbox — geen wachtwoord nodig.</p>
+      {pendingLink && <p className="portal-login-next">
+        {pendingLink.ticket ? 'Na het inloggen openen we meteen het ticket uit je e-mail.'
+          : pendingLink.view === 'settings' ? 'Na het inloggen kom je meteen bij je meldingsinstellingen.'
+            : 'Na het inloggen gaan we meteen verder waar je e-mail over ging.'}
+      </p>}
       <Input
         type="email"
         value={email}
@@ -208,6 +296,14 @@ function PortalDashboard({ branding, onBranding }: {
   const [activeAccountId, setActiveAccountId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // De deeplink uit de meldingsmail, tot het dossier hem heeft overgenomen.
+  const [link, setLink] = useState<PortalLink | null>(peekPortalLink);
+  const linkRef = useRef(link);
+  linkRef.current = link;
+  const linkUsed = useCallback(() => { forgetPortalLink(); setLink(null); }, []);
+  // De knop Instellingen in de kopbalk: elke klik opent de instellingen van het
+  // gekozen dossier (een teller, zodat ook een tweede klik iets doet).
+  const [settingsRequest, setSettingsRequest] = useState(0);
 
   async function load() {
     setLoading(true); setError(null);
@@ -215,7 +311,13 @@ function PortalDashboard({ branding, onBranding }: {
       const data = await fetchPortalData();
       setAccounts(data.accounts);
       setEmail(data.email);
-      setActiveAccountId(prev => prev && data.accounts.some(a => a.id === prev) ? prev : (data.accounts[0]?.id ?? null));
+      const wanted = linkRef.current?.dossier;
+      // Een link naar een dossier dat (deze login) niet (meer) heeft: vergeten.
+      if (wanted && !data.accounts.some(a => a.id === wanted)) linkUsed();
+      setActiveAccountId(prev => {
+        if (wanted && data.accounts.some(a => a.id === wanted)) return wanted;
+        return prev && data.accounts.some(a => a.id === prev) ? prev : (data.accounts[0]?.id ?? null);
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Portaalgegevens laden mislukt');
     } finally {
@@ -257,8 +359,11 @@ function PortalDashboard({ branding, onBranding }: {
             {accounts.map(a => <option key={a.id} value={a.id}>{a.company?.trade_name || a.company?.company_name || a.client?.name || 'Dossier'}</option>)}
           </Select>
         )}
+        {activeAccount && <Button className="portal-settings-btn" onClick={() => setSettingsRequest(n => n + 1)} aria-label="Instellingen" title="Meldingen en instellingen">
+          <Settings size={15} aria-hidden="true" /><span className="portal-btn-label">Instellingen</span>
+        </Button>}
         <Button onClick={load}>{loading ? 'Laden…' : 'Ververs'}</Button>
-        <Button onClick={() => { forgetBranding(); void supabasePortalAuth.signOut(); }}>Uitloggen</Button>
+        <Button onClick={() => { forgetBranding(); forgetPortalLink(); void supabasePortalAuth.signOut(); }}>Uitloggen</Button>
       </div>
     </header>
 
@@ -266,7 +371,16 @@ function PortalDashboard({ branding, onBranding }: {
       {error && <div className="error">{error}</div>}
       {loading && !accounts && <div className="portal-boot"><span className="boot-spinner" aria-hidden="true" /><span>Gegevens laden…</span></div>}
       {!loading && accounts && accounts.length === 0 && <PortalEmpty email={email} />}
-      {activeAccount && <PortalAccountView key={activeAccount.id} account={activeAccount} supplierName={companyName} onTicketCreated={load} />}
+      {activeAccount && <PortalAccountView
+        key={activeAccount.id}
+        account={activeAccount}
+        email={email}
+        supplierName={companyName}
+        onTicketCreated={load}
+        link={link && (!link.dossier || link.dossier === activeAccount.id) ? link : null}
+        onLinkUsed={linkUsed}
+        settingsRequest={settingsRequest}
+      />}
       <PortalFooter branding={branding} />
     </section>
   </main>;
@@ -279,9 +393,75 @@ function PortalEmpty({ email }: { email: string }) {
   </div>;
 }
 
-function PortalAccountView({ account, supplierName, onTicketCreated }: { account: PortalAccount; supplierName: string; onTicketCreated: () => void }) {
-  const [tab, setTab] = useState<PortalTab>('overview');
+function PortalAccountView({ account, email, supplierName, onTicketCreated, link, onLinkUsed, settingsRequest }: {
+  account: PortalAccount;
+  email: string;
+  supplierName: string;
+  onTicketCreated: () => void;
+  /** Deeplink uit de meldingsmail; bepaalt alleen waar dit dossier opent. */
+  link: PortalLink | null;
+  onLinkUsed: () => void;
+  /** Telt op bij elke klik op Instellingen in de kopbalk. */
+  settingsRequest: number;
+}) {
+  const [initial] = useState(() => viewFromLink(link));
+  const [tab, setTab] = useState<PortalTab>(initial.tab);
   const [openDoc, setOpenDoc] = useState<{ type: 'quote' | 'invoice'; id: string } | null>(null);
+  const [openTicketId, setOpenTicketId] = useState<string | null>(initial.ticketId);
+  const [openConversation, setOpenConversation] = useState<OpenConversation | null>(
+    initial.threadId ? { kind: 'thread', id: initial.threadId } : null,
+  );
+
+  // Wat je hier net opende telt meteen als gelezen — de server weet het al,
+  // maar de gegevens van dit scherm pas na "Ververs".
+  const [seen, setSeen] = useState<Set<string>>(() => new Set());
+  const markSeen = useCallback((kind: 'ticket' | 'thread', id: string) => {
+    setSeen(prev => {
+      const key = seenKey(kind, id);
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  }, []);
+
+  // De mailgesprekken: pas geladen als Berichten openstaat, en opnieuw na
+  // "Ververs" (dan komt er een nieuw account-object binnen).
+  const [threads, setThreads] = useState<PortalMessageThreadSummary[] | null>(null);
+  const [threadsError, setThreadsError] = useState<string | null>(null);
+  const loadThreads = useCallback(async () => {
+    setThreadsError(null);
+    try {
+      setThreads(await fetchPortalMessageThreads(account.id));
+    } catch (e) {
+      setThreadsError(e instanceof Error ? e.message : 'Berichten laden mislukt');
+      setThreads(prev => prev ?? []);
+    }
+  }, [account.id]);
+  useEffect(() => { setThreads(null); }, [account]);
+  useEffect(() => { if (tab === 'messages' && threads === null) void loadThreads(); }, [tab, threads, loadThreads]);
+
+  // De deeplink is gebruikt zodra dit dossier ermee geopend is.
+  useEffect(() => { if (link) onLinkUsed(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Alleen een klik ná het openen van dit dossier telt; wie van dossier wisselt
+  // na een eerdere klik, begint gewoon op het overzicht.
+  const settingsBaseline = useRef(settingsRequest);
+  useEffect(() => {
+    if (settingsRequest === settingsBaseline.current) return;
+    // Een open factuur of offerte gaat vóór de tabs; die moet dus eerst dicht.
+    setOpenDoc(null);
+    setTab('settings');
+  }, [settingsRequest]);
+
+  const unreadTickets = account.tickets.filter(t => isTicketUnread(t, seen));
+  const unreadThreads = threads ? threads.filter(t => isThreadUnread(t, seen)).length : (account.messages?.unread ?? 0);
+
+  function openTab(next: PortalTab) {
+    setTab(next);
+    if (next === 'tickets') setOpenTicketId(null);
+    if (next === 'messages') setOpenConversation(null);
+  }
 
   if (openDoc?.type === 'quote') {
     const quote = account.quotes.find(q => q.id === openDoc.id);
@@ -299,22 +479,31 @@ function PortalAccountView({ account, supplierName, onTicketCreated }: { account
   const openTickets = account.tickets.filter(t => !['approved', 'rejected', 'converted'].includes(t.status));
   const ongoingProjects = account.projects.filter(p => !p.archived);
 
-  const tabs: Array<{ id: PortalTab; label: string; count?: number }> = [
+  // `fresh` = iets nieuws van de leverancier dat je hier nog niet opende; dat
+  // telletje krijgt de accentkleur, een gewoon aantal blijft grijs.
+  const tabs: Array<{ id: PortalTab; label: string; count?: number; fresh?: number }> = [
     { id: 'overview', label: 'Overzicht' },
+    { id: 'messages', label: 'Berichten', fresh: unreadTickets.length + unreadThreads },
+    { id: 'tickets', label: 'Tickets', count: account.tickets.length, fresh: unreadTickets.length },
     { id: 'invoices', label: 'Facturen', count: account.invoices.length },
     { id: 'quotes', label: 'Offertes', count: account.quotes.length },
     { id: 'contracts', label: 'Contracten', count: account.contracts?.length ?? 0 },
     { id: 'files', label: 'Bestanden', count: account.sharedFileCount ?? 0 },
-    { id: 'tickets', label: 'Tickets', count: account.tickets.length },
     { id: 'projects', label: 'Projecten', count: ongoingProjects.length },
-    { id: 'galleries', label: 'Galerijen', count: account.galleries?.length ?? 0 },
+    // Galerijen horen bij de creatieve module; zonder galerij is het een lege tab.
+    ...((account.galleries?.length ?? 0) > 0 || tab === 'galleries'
+      ? [{ id: 'galleries' as const, label: 'Galerijen', count: account.galleries?.length ?? 0 }]
+      : []),
   ];
 
   return <div className="portal-account">
     <div className="portal-tabs" role="tablist">
       {tabs.map(t => (
-        <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} className={`portal-tab${tab === t.id ? ' active' : ''}`} onClick={() => setTab(t.id)}>
-          {t.label}{typeof t.count === 'number' && t.count > 0 && <span className="portal-tab-badge">{t.count}</span>}
+        <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} className={`portal-tab${tab === t.id ? ' active' : ''}`} onClick={() => openTab(t.id)}>
+          {t.label}
+          {t.fresh
+            ? <span className="portal-tab-badge is-new" title={`${t.fresh} nieuw`}>{t.fresh}</span>
+            : typeof t.count === 'number' && t.count > 0 && <span className="portal-tab-badge">{t.count}</span>}
         </button>
       ))}
     </div>
@@ -323,9 +512,34 @@ function PortalAccountView({ account, supplierName, onTicketCreated }: { account
       <div className="portal-kpis">
         <PortalKpi label="Openstaand" value={euro(openTotal)} sub={`${openInvoices.length} factuur${openInvoices.length === 1 ? '' : 'en'}`} tone={openInvoices.length ? 'warning' : undefined} />
         <PortalKpi label="Vervallen" value={euro(overdueTotal)} sub={`${overdueInvoices.length} factuur${overdueInvoices.length === 1 ? '' : 'en'}`} tone={overdueInvoices.length ? 'danger' : undefined} />
-        <PortalKpi label="Open tickets" value={String(openTickets.length)} sub={`${account.tickets.length} totaal`} />
+        <PortalKpi label="Open tickets" value={String(openTickets.length)} sub={unreadTickets.length ? `${unreadTickets.length} met nieuw antwoord` : `${account.tickets.length} totaal`} />
         <PortalKpi label="Lopende projecten" value={String(ongoingProjects.length)} sub={`${account.projects.length} totaal`} />
       </div>
+
+      {(unreadTickets.length > 0 || unreadThreads > 0) && <article className="portal-card portal-new-card">
+        <div className="portal-card-head"><h2>Nieuw voor jou</h2></div>
+        <div className="portal-rows">
+          {unreadTickets.slice(0, 3).map(t => (
+            <button key={t.id} type="button" className="portal-row portal-row-clickable" onClick={() => { setTab('tickets'); setOpenTicketId(t.id); }}>
+              <div className="portal-row-main">
+                <span className="portal-row-number"><span className="portal-unread-dot" aria-hidden="true" />{t.title}</span>
+                <span className="portal-muted">{ticketNewLabel(t, supplierName)}{t.last_activity_at ? ` · ${listTime(t.last_activity_at)}` : ''}</span>
+              </div>
+              <span className="portal-row-chevron" aria-hidden="true">›</span>
+            </button>
+          ))}
+          {unreadTickets.length > 3 && <button type="button" className="portal-more" onClick={() => openTab('tickets')}>Nog {unreadTickets.length - 3} ticket{unreadTickets.length - 3 === 1 ? '' : 's'} met een nieuw antwoord →</button>}
+          {unreadThreads > 0 && (
+            <button type="button" className="portal-row portal-row-clickable" onClick={() => openTab('messages')}>
+              <div className="portal-row-main">
+                <span className="portal-row-number"><span className="portal-unread-dot" aria-hidden="true" />{unreadThreads === 1 ? 'Nieuw bericht' : `${unreadThreads} nieuwe berichten`}</span>
+                <span className="portal-muted">Van {supplierName}, onder Berichten</span>
+              </div>
+              <span className="portal-row-chevron" aria-hidden="true">›</span>
+            </button>
+          )}
+        </div>
+      </article>}
 
       <article className="portal-card">
         <div className="portal-card-head"><h2>Recente facturen</h2>{account.invoices.length > 0 && <button type="button" className="portal-more" onClick={() => setTab('invoices')}>Alle facturen →</button>}</div>
@@ -358,13 +572,41 @@ function PortalAccountView({ account, supplierName, onTicketCreated }: { account
 
     {tab === 'files' && <SharedFilesTab account={account} />}
 
-    {tab === 'tickets' && <TicketsTab account={account} supplierName={supplierName} onTicketCreated={onTicketCreated} />}
+    {tab === 'messages' && <MessagesTab
+      account={account}
+      email={email}
+      supplierName={supplierName}
+      threads={threads}
+      threadsError={threadsError}
+      onReloadThreads={loadThreads}
+      seen={seen}
+      markSeen={markSeen}
+      open={openConversation}
+      onOpen={setOpenConversation}
+      onTicketChanged={onTicketCreated}
+      onOpenSettings={() => openTab('settings')}
+    />}
+
+    {tab === 'tickets' && <TicketsTab
+      account={account}
+      supplierName={supplierName}
+      onTicketCreated={onTicketCreated}
+      openTicketId={openTicketId}
+      onOpenTicket={setOpenTicketId}
+      seen={seen}
+      markSeen={markSeen}
+      onOpenSettings={() => openTab('settings')}
+    />}
 
     {tab === 'projects' && <ProjectsTab account={account} />}
 
     {tab === 'galleries' && <GalleriesTab account={account} />}
+
+    {tab === 'settings' && <SettingsTab account={account} supplierName={supplierName} onBack={() => openTab('overview')} />}
   </div>;
 }
+
+type OpenConversation = { kind: 'thread' | 'ticket'; id: string } | { kind: 'new' };
 
 // ── Galerijen (foto/video-oplevering) ───────────────────────────────────────
 
@@ -920,7 +1162,16 @@ function PortalContactCard({ account }: { account: PortalAccount }) {
   </article>;
 }
 
-function TicketsTab({ account, supplierName, onTicketCreated }: { account: PortalAccount; supplierName: string; onTicketCreated: () => void }) {
+function TicketsTab({ account, supplierName, onTicketCreated, openTicketId, onOpenTicket, seen, markSeen, onOpenSettings }: {
+  account: PortalAccount;
+  supplierName: string;
+  onTicketCreated: () => void;
+  openTicketId: string | null;
+  onOpenTicket: (id: string | null) => void;
+  seen: ReadonlySet<string>;
+  markSeen: (kind: 'ticket' | 'thread', id: string) => void;
+  onOpenSettings: () => void;
+}) {
   const [showForm, setShowForm] = useState(account.tickets.length === 0);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -928,7 +1179,12 @@ function TicketsTab({ account, supplierName, onTicketCreated }: { account: Porta
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createdId, setCreatedId] = useState<string | null>(null);
-  const [openTicketId, setOpenTicketId] = useState<string | null>(null);
+
+  // Laatste activiteit bovenaan: een ticket met een nieuw antwoord komt vanzelf naar boven.
+  const tickets = useMemo(
+    () => [...account.tickets].sort((a, b) => activityMs(b) - activityMs(a)),
+    [account.tickets],
+  );
 
   async function submit() {
     if (!title.trim()) { setError('Geef een korte titel op.'); return; }
@@ -946,7 +1202,15 @@ function TicketsTab({ account, supplierName, onTicketCreated }: { account: Porta
   }
 
   if (openTicketId) {
-    return <PortalTicketDetail ticketId={openTicketId} supplierName={supplierName} onBack={() => setOpenTicketId(null)} onChanged={onTicketCreated} />;
+    return <PortalTicketDetail
+      ticketId={openTicketId}
+      supplierName={supplierName}
+      backLabel="← Terug naar tickets"
+      onBack={() => onOpenTicket(null)}
+      onChanged={onTicketCreated}
+      onOpened={() => markSeen('ticket', openTicketId)}
+      onOpenSettings={onOpenSettings}
+    />;
   }
 
   return <article className="portal-card">
@@ -972,40 +1236,111 @@ function TicketsTab({ account, supplierName, onTicketCreated }: { account: Porta
     </div>}
 
     {!showForm && error && <p className="error">{error}</p>}
+    {createdId && !showForm && <p className="portal-hint">
+      Je ticket is verstuurd. Een antwoord zie je hier terug; bij <button type="button" className="portal-link" onClick={onOpenSettings}>Instellingen</button> kies je of je daar ook een e-mail van krijgt.
+    </p>}
     {account.tickets.length === 0 && !showForm && <p className="portal-muted">Je hebt nog geen tickets. Maak er een aan om een vraag of melding door te geven.</p>}
 
     <div className="portal-rows">
-      {account.tickets.map(t => <TicketRow key={t.id} ticket={t} highlight={t.id === createdId} onOpen={() => setOpenTicketId(t.id)} />)}
+      {tickets.map(t => <TicketRow
+        key={t.id}
+        ticket={t}
+        supplierName={supplierName}
+        unread={isTicketUnread(t, seen)}
+        highlight={t.id === createdId}
+        onOpen={() => onOpenTicket(t.id)}
+      />)}
     </div>
   </article>;
 }
 
-function TicketRow({ ticket, highlight, onOpen }: { ticket: PortalTicket; highlight?: boolean; onOpen: () => void }) {
-  return <button type="button" className={`portal-row portal-ticket portal-row-clickable${highlight ? ' is-new' : ''}`} onClick={onOpen}>
+function activityMs(ticket: PortalTicket): number {
+  return Date.parse(ticket.last_activity_at || ticket.created_at) || 0;
+}
+
+/** "Nieuw antwoord van Studio Lopik" — of, zonder antwoorden, een ticket dat zij voor je aanmaakten. */
+function ticketNewLabel(ticket: PortalTicket, supplierName: string): string {
+  return (ticket.reply_count ?? 0) > 0 ? `Nieuw antwoord van ${supplierName}` : `Nieuw ticket van ${supplierName}`;
+}
+
+function TicketRow({ ticket, supplierName, unread, highlight, onOpen }: {
+  ticket: PortalTicket;
+  supplierName: string;
+  unread: boolean;
+  highlight?: boolean;
+  onOpen: () => void;
+}) {
+  const replies = ticket.reply_count ?? 0;
+  const lastActivity = ticket.last_activity_at && ticket.last_activity_at !== ticket.created_at ? ticket.last_activity_at : null;
+  return <button type="button" className={`portal-row portal-ticket portal-row-clickable${highlight ? ' is-new' : ''}${unread ? ' is-unread' : ''}`} onClick={onOpen}>
     <div className="portal-row-main">
-      <span className="portal-row-number">{ticket.title}</span>
-      <span className="portal-muted">{dateNL(ticket.created_at)} · Prioriteit {priorityLabel(ticket.priority)}</span>
-      {ticket.description && <p className="portal-ticket-desc">{ticket.description}</p>}
+      <span className="portal-row-number">{unread && <span className="portal-unread-dot" title={ticketNewLabel(ticket, supplierName)} />}{ticket.title}</span>
+      <span className="portal-muted">
+        {dateNL(ticket.created_at)} · Prioriteit {priorityLabel(ticket.priority)}
+        {replies > 0 ? ` · ${replies} ${replies === 1 ? 'reactie' : 'reacties'}` : ''}
+        {lastActivity ? ` · laatst ${listTime(lastActivity)}` : ''}
+      </span>
+      {unread
+        ? <p className="portal-ticket-desc portal-ticket-fresh">
+            <strong>{ticketNewLabel(ticket, supplierName)}</strong>
+            {ticket.last_reply_from === 'team' && ticket.last_reply_preview ? `: ${ticket.last_reply_preview}` : ''}
+          </p>
+        : ticket.description && <p className="portal-ticket-desc">{ticket.description}</p>}
     </div>
     <span className={`portal-status ticket-${ticket.status}`}>{ticketStatusLabels[ticket.status] ?? ticket.status}</span>
     <span className="portal-row-chevron" aria-hidden="true">›</span>
   </button>;
 }
 
+/** Ctrl/Cmd+Enter verstuurt, zoals in elk mailprogramma; Enter alleen is een nieuwe regel. */
+function submitOnCtrlEnter(action: () => void) {
+  return (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      action();
+    }
+  };
+}
+
+function formatThreadTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 // ── Ticketdetail met tijdlijn ────────────────────────────────────────
 
-function PortalTicketDetail({ ticketId, supplierName, onBack, onChanged }: { ticketId: string; supplierName: string; onBack: () => void; onChanged: () => void }) {
+type TicketTimelineEntry =
+  | { kind: 'note'; at: string; note: PortalTicketNote }
+  | { kind: 'event'; at: string; event: PortalTicketEvent };
+
+function PortalTicketDetail({ ticketId, supplierName, backLabel, onBack, onChanged, onOpened, onOpenSettings }: {
+  ticketId: string;
+  supplierName: string;
+  backLabel: string;
+  onBack: () => void;
+  onChanged: () => void;
+  /** Het ticket is geopend (en telt dus als gelezen). */
+  onOpened: () => void;
+  onOpenSettings: () => void;
+}) {
   const [thread, setThread] = useState<PortalTicketThread | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [posting, setPosting] = useState(false);
+  const openedRef = useRef(onOpened);
+  openedRef.current = onOpened;
 
   useEffect(() => {
     let active = true;
     setLoading(true); setError(null);
     fetchPortalTicketThread(ticketId)
-      .then(result => { if (active) setThread(result); })
+      .then(result => {
+        if (!active) return;
+        setThread(result);
+        openedRef.current();
+      })
       .catch(e => { if (active) setError(e instanceof Error ? e.message : 'Ticket laden mislukt'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -1013,7 +1348,7 @@ function PortalTicketDetail({ ticketId, supplierName, onBack, onChanged }: { tic
 
   async function submit() {
     const body = draft.trim();
-    if (!body) return;
+    if (!body || posting) return;
     setPosting(true); setError(null);
     try {
       const note = await addPortalTicketNote(ticketId, body);
@@ -1027,9 +1362,18 @@ function PortalTicketDetail({ ticketId, supplierName, onBack, onChanged }: { tic
     }
   }
 
+  // Reacties en statuswijzigingen in één tijdlijn, oudste eerst.
+  const timeline = useMemo<TicketTimelineEntry[]>(() => {
+    if (!thread) return [];
+    return [
+      ...thread.notes.map((note): TicketTimelineEntry => ({ kind: 'note', at: note.created_at, note })),
+      ...thread.events.map((event): TicketTimelineEntry => ({ kind: 'event', at: event.created_at, event })),
+    ].sort((a, b) => (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0));
+  }, [thread]);
+
   return <article className="portal-card portal-detail">
     <div className="portal-detail-head">
-      <button type="button" className="portal-back" onClick={onBack}>← Terug naar tickets</button>
+      <button type="button" className="portal-back" onClick={onBack}>{backLabel}</button>
     </div>
 
     {loading && !thread && <div className="portal-boot"><span className="boot-spinner" aria-hidden="true" /><span>Ticket laden…</span></div>}
@@ -1044,13 +1388,18 @@ function PortalTicketDetail({ ticketId, supplierName, onBack, onChanged }: { tic
       {thread.ticket.description && <p className="portal-detail-desc">{thread.ticket.description}</p>}
 
       <div className="portal-thread">
-        {thread.notes.length === 0 && <p className="portal-muted">Nog geen berichten. Stel hieronder je vraag of voeg informatie toe.</p>}
-        {thread.notes.map(note => <PortalThreadItem key={note.id} note={note} supplierName={supplierName} />)}
+        {timeline.length === 0 && <p className="portal-muted">Nog geen berichten. Stel hieronder je vraag of voeg informatie toe.</p>}
+        {timeline.map(entry => entry.kind === 'note'
+          ? <PortalThreadItem key={entry.note.id} note={entry.note} supplierName={supplierName} />
+          : <PortalThreadEvent key={entry.event.id} event={entry.event} />)}
       </div>
 
       <div className="portal-thread-composer">
-        <Textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Typ een bericht aan ons team…" rows={3} maxLength={5000} disabled={posting} />
+        <Textarea value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={submitOnCtrlEnter(submit)} placeholder={`Typ een bericht aan ${supplierName}…`} rows={3} maxLength={5000} disabled={posting} />
         <div className="portal-thread-composer-actions">
+          <span className="portal-composer-hint">
+            E-mail bij een antwoord? <button type="button" className="portal-link" onClick={onOpenSettings}>Instellingen</button>
+          </span>
           <Button variant="primary" onClick={submit} disabled={posting || !draft.trim()}>{posting ? 'Versturen…' : 'Bericht versturen'}</Button>
         </div>
       </div>
@@ -1065,9 +1414,409 @@ function PortalThreadItem({ note, supplierName }: { note: PortalTicketNote; supp
       {/* De leverancier ondertekent met zijn eigen naam; "Support team" was
           hier het enige wat nog niet van hem was. */}
       <strong>{fromClient ? (note.author_name || 'U') : supplierName}</strong>
-      <span>{new Date(note.created_at).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+      <span>{formatThreadTime(note.created_at)}</span>
     </div>
     <p>{note.body}</p>
+  </div>;
+}
+
+/** Een statuswijziging als rustige regel tussen de berichten. */
+function PortalThreadEvent({ event }: { event: PortalTicketEvent }) {
+  const label = ticketStatusLabels[event.new_status ?? ''] ?? event.new_status ?? '';
+  return <div className="portal-thread-event" role="note">
+    <span>Status gewijzigd naar <strong>{label}</strong></span>
+    <time dateTime={event.created_at}>{formatThreadTime(event.created_at)}</time>
+  </div>;
+}
+
+// ── Berichten: mailgesprekken en tickets op één plek ─────────────────
+//
+// Wat de leverancier je mailde en wat je zelf terugschreef, plus je tickets —
+// nieuwste activiteit bovenaan, zoals de pagina Berichten van het team. Een
+// antwoord of nieuw bericht dat je hier schrijft komt bij de leverancier
+// binnen als bericht van jou, in hetzelfde gesprek; het antwoord krijg je per
+// e-mail én zie je hier.
+
+function MessagesTab({ account, email, supplierName, threads, threadsError, onReloadThreads, seen, markSeen, open, onOpen, onTicketChanged, onOpenSettings }: {
+  account: PortalAccount;
+  email: string;
+  supplierName: string;
+  threads: PortalMessageThreadSummary[] | null;
+  threadsError: string | null;
+  onReloadThreads: () => Promise<void>;
+  seen: ReadonlySet<string>;
+  markSeen: (kind: 'ticket' | 'thread', id: string) => void;
+  open: OpenConversation | null;
+  onOpen: (value: OpenConversation | null) => void;
+  onTicketChanged: () => void;
+  onOpenSettings: () => void;
+}) {
+  if (open?.kind === 'ticket') {
+    return <PortalTicketDetail
+      ticketId={open.id}
+      supplierName={supplierName}
+      backLabel="← Terug naar berichten"
+      onBack={() => onOpen(null)}
+      onChanged={onTicketChanged}
+      onOpened={() => markSeen('ticket', open.id)}
+      onOpenSettings={onOpenSettings}
+    />;
+  }
+  if (open?.kind === 'thread') {
+    return <PortalMessageThreadView
+      threadId={open.id}
+      supplierName={supplierName}
+      onBack={() => onOpen(null)}
+      onOpened={() => markSeen('thread', open.id)}
+      onSent={() => { void onReloadThreads(); }}
+    />;
+  }
+  if (open?.kind === 'new') {
+    return <PortalNewMessage
+      account={account}
+      email={email}
+      supplierName={supplierName}
+      onCancel={() => onOpen(null)}
+      onSent={threadId => { void onReloadThreads(); onOpen({ kind: 'thread', id: threadId }); }}
+    />;
+  }
+
+  const conversations = threads ? portalConversations(account.tickets, threads, supplierName, seen) : null;
+
+  return <article className="portal-card">
+    <div className="portal-card-head">
+      <h2>Berichten</h2>
+      <Button variant="primary" onClick={() => onOpen({ kind: 'new' })}>+ Nieuw bericht</Button>
+    </div>
+    <p className="portal-muted portal-card-intro">Je gesprekken met {supplierName} — e-mails en tickets, nieuwste bovenaan.</p>
+    {threadsError && <p className="error">{threadsError}</p>}
+    {!conversations && <div className="portal-boot"><span className="boot-spinner" aria-hidden="true" /><span>Berichten laden…</span></div>}
+    {conversations && conversations.length === 0 && <p className="portal-muted">Nog geen berichten. Stel je vraag met “Nieuw bericht”, of maak een ticket aan als je de voortgang wilt volgen.</p>}
+    {conversations && conversations.length > 0 && <div className="portal-conv-list">
+      {conversations.map(c => (
+        <button
+          key={`${c.kind}:${c.id}`}
+          type="button"
+          className={`portal-conv${c.unread ? ' is-unread' : ''}`}
+          onClick={() => onOpen({ kind: c.kind, id: c.id })}
+        >
+          <span className={`portal-conv-icon is-${c.kind}`} aria-hidden="true">
+            {c.kind === 'ticket' ? <LifeBuoy size={16} /> : <Mail size={16} />}
+          </span>
+          <span className="portal-conv-main">
+            <span className="portal-conv-top">
+              <strong className="portal-conv-title">{c.title}</strong>
+              <time className="portal-conv-time" dateTime={c.lastAt}>{listTime(c.lastAt)}</time>
+            </span>
+            <span className="portal-conv-bottom">
+              <span className="portal-conv-kind">{c.kind === 'ticket' ? 'Ticket' : 'E-mail'}</span>
+              <span className="portal-conv-preview">{c.preview}</span>
+              {c.kind === 'ticket' && <span className={`portal-status ticket-${c.status}`}>{ticketStatusLabels[c.status] ?? c.status}</span>}
+              {c.unread && <span className="portal-unread-dot" title="Nieuw" />}
+            </span>
+          </span>
+        </button>
+      ))}
+    </div>}
+  </article>;
+}
+
+function PortalMessageThreadView({ threadId, supplierName, onBack, onOpened, onSent }: {
+  threadId: string;
+  supplierName: string;
+  onBack: () => void;
+  onOpened: () => void;
+  onSent: () => void;
+}) {
+  const [data, setData] = useState<{ thread: { id: string; clientId: string; subject: string }; messages: PortalMessage[] } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const composerRef = useRef<HTMLDivElement | null>(null);
+  const openedRef = useRef(onOpened);
+  openedRef.current = onOpened;
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true); setError(null);
+    fetchPortalMessageThread(threadId)
+      .then(result => {
+        if (!active) return;
+        setData(result);
+        openedRef.current();
+      })
+      .catch(e => { if (active) setError(e instanceof Error ? e.message : 'Gesprek laden mislukt'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [threadId]);
+
+  async function send() {
+    const body = draft.trim();
+    if (!body || !data || sending) return;
+    setSending(true); setError(null);
+    try {
+      const result = await sendPortalMessage({ clientId: data.thread.clientId, threadId: data.thread.id, body });
+      setData(prev => prev ? { ...prev, messages: [...prev.messages, result.message] } : prev);
+      setDraft('');
+      onSent();
+      window.requestAnimationFrame(() => composerRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Bericht versturen mislukt');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return <article className="portal-card portal-detail">
+    <div className="portal-detail-head">
+      <button type="button" className="portal-back" onClick={onBack}>← Terug naar berichten</button>
+    </div>
+    {loading && !data && <div className="portal-boot"><span className="boot-spinner" aria-hidden="true" /><span>Gesprek laden…</span></div>}
+    {error && <p className="error">{error}</p>}
+    {data && <>
+      <div className="portal-detail-title"><h2>{data.thread.subject}</h2></div>
+      <p className="portal-muted">Gesprek met {supplierName} · {data.messages.length} bericht{data.messages.length === 1 ? '' : 'en'}</p>
+      <div className="portal-thread">
+        {data.messages.map(message => <PortalMessageBubble key={message.id} message={message} />)}
+      </div>
+      <div className="portal-thread-composer" ref={composerRef}>
+        <Textarea value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={submitOnCtrlEnter(send)} placeholder={`Antwoord aan ${supplierName}…`} rows={3} maxLength={5000} disabled={sending} />
+        <div className="portal-thread-composer-actions">
+          <span className="portal-composer-hint">Je antwoord komt meteen bij {supplierName} binnen.</span>
+          <Button variant="primary" onClick={send} disabled={sending || !draft.trim()}>{sending ? 'Versturen…' : 'Antwoord versturen'}</Button>
+        </div>
+      </div>
+    </>}
+  </article>;
+}
+
+/**
+ * Eén bericht in een mailgesprek. Van de leverancier: de opmaak zoals verstuurd, door
+ * dezelfde sanering als inkomende mail in de app. Van de klantkant: platte
+ * tekst, met de geciteerde eerdere mail ingeklapt — anders staat onder elk
+ * antwoord de hele geschiedenis nog eens.
+ */
+function PortalMessageBubble({ message }: { message: PortalMessage }) {
+  const [showQuoted, setShowQuoted] = useState(false);
+  const html = message.fromTeam && message.bodyHtml ? sanitizeEmailHtml(message.bodyHtml) : '';
+  const parts = html ? null : splitQuotedReply(message.bodyText);
+  const side = message.fromTeam ? 'is-team' : message.mine ? 'is-mine' : 'is-mine is-colleague';
+  return <div className={`portal-thread-item ${side}`}>
+    <div className="portal-thread-meta">
+      <strong>{message.mine ? 'Jij' : message.authorName}</strong>
+      <span>{formatThreadTime(message.at)}{message.viaPortal ? ' · via het portaal' : ' · per e-mail'}</span>
+    </div>
+    {html
+      ? <div className="portal-msg-html" dangerouslySetInnerHTML={{ __html: html }} />
+      : <>
+          <p>{parts?.main}</p>
+          {parts?.quoted && <>
+            <button type="button" className="portal-quote-toggle" aria-expanded={showQuoted} onClick={() => setShowQuoted(v => !v)}>
+              {showQuoted ? 'Eerdere berichten verbergen' : 'Eerdere berichten tonen'}
+            </button>
+            {showQuoted && <p className="portal-msg-quoted">{parts.quoted}</p>}
+          </>}
+        </>}
+  </div>;
+}
+
+function PortalNewMessage({ account, email, supplierName, onCancel, onSent }: {
+  account: PortalAccount;
+  email: string;
+  supplierName: string;
+  onCancel: () => void;
+  onSent: (threadId: string) => void;
+}) {
+  const [subject, setSubject] = useState('');
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function send() {
+    if (!subject.trim() || !body.trim() || busy) return;
+    setBusy(true); setError(null);
+    try {
+      const result = await sendPortalMessage({ clientId: account.id, subject: subject.trim(), body: body.trim() });
+      onSent(result.threadId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Bericht versturen mislukt');
+      setBusy(false);
+    }
+  }
+
+  return <article className="portal-card portal-detail">
+    <div className="portal-detail-head">
+      <button type="button" className="portal-back" onClick={onCancel}>← Terug naar berichten</button>
+    </div>
+    <div className="portal-detail-title"><h2>Nieuw bericht aan {supplierName}</h2></div>
+    <p className="portal-muted">
+      Je bericht komt meteen bij {supplierName} binnen.{' '}
+      {/* Een antwoord van het team gaat per mail naar het hoofdadres van de klant;
+          een extra contactpersoon ziet het hier. */}
+      {account.actingContact
+        ? 'Het antwoord zie je hier terug, onder Berichten.'
+        : `Het antwoord krijg je per e-mail${email ? ` op ${email}` : ''}, en je ziet het hier terug.`}
+    </p>
+    <div className="portal-ticket-form portal-message-form">
+      <label className="portal-field"><span>Onderwerp</span><Input value={subject} onChange={e => setSubject(e.target.value)} placeholder="Waar gaat je bericht over?" maxLength={200} disabled={busy} /></label>
+      <label className="portal-field"><span>Bericht</span><Textarea value={body} onChange={e => setBody(e.target.value)} onKeyDown={submitOnCtrlEnter(send)} placeholder="Typ je bericht…" rows={6} maxLength={5000} disabled={busy} /></label>
+      <p className="portal-muted">Wil je de voortgang van een vraag of probleem kunnen volgen? Maak dan liever een ticket aan.</p>
+      {error && <p className="error">{error}</p>}
+      <div className="portal-ticket-form-actions">
+        <Button variant="primary" onClick={send} disabled={busy || !subject.trim() || !body.trim()}>{busy ? 'Versturen…' : 'Bericht versturen'}</Button>
+      </div>
+    </div>
+  </article>;
+}
+
+// ── Instellingen: eigen e-mailmeldingen ──────────────────────────────
+//
+// Iedereen die op het portaal kan, kiest dit zelf, per dossier. Het geldt
+// alleen voor de ingelogde persoon; een collega op hetzelfde portaal houdt
+// eigen keuzes. Elke wijziging wordt meteen opgeslagen.
+
+function SettingsTab({ account, supplierName, onBack }: { account: PortalAccount; supplierName: string; onBack: () => void }) {
+  const [state, setState] = useState<PortalNotificationState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setState(null); setError(null);
+    fetchPortalNotificationSettings(account.id)
+      .then(result => { if (active) setState(result); })
+      .catch(e => { if (active) setError(e instanceof Error ? e.message : 'Instellingen laden mislukt'); });
+    return () => { active = false; };
+  }, [account.id]);
+
+  async function change(patch: Partial<PortalNotificationSettings>) {
+    if (!state) return;
+    const previous = state.settings;
+    const next = { ...previous, ...patch };
+    setState({ ...state, settings: next });
+    setSaving(true); setSaved(false); setError(null);
+    try {
+      const stored = await updatePortalNotificationSettings(account.id, next);
+      setState(prev => prev ? { ...prev, settings: stored } : prev);
+      setSaved(true);
+    } catch (e) {
+      setState(prev => prev ? { ...prev, settings: previous } : prev);
+      setError(e instanceof Error ? e.message : 'Opslaan mislukt');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const clientName = account.client?.name || 'dit dossier';
+
+  const back = <div className="portal-detail-head"><button type="button" className="portal-back" onClick={onBack}>← Terug naar overzicht</button></div>;
+
+  if (!state) {
+    return <article className="portal-card">
+      {back}
+      <div className="portal-card-head"><h2>Instellingen</h2></div>
+      {error ? <p className="error">{error}</p> : <div className="portal-boot"><span className="boot-spinner" aria-hidden="true" /><span>Instellingen laden…</span></div>}
+    </article>;
+  }
+
+  const s = state.settings;
+  return <article className="portal-card portal-settings">
+    {back}
+    <div className="portal-card-head">
+      <h2>Instellingen</h2>
+      <span className="portal-settings-status" aria-live="polite">{saving ? 'Opslaan…' : saved ? 'Opgeslagen' : ''}</span>
+    </div>
+
+    <section className="portal-settings-section">
+      <h3>E-mailmeldingen over tickets</h3>
+      <p className="portal-muted">
+        We sturen ze naar <strong>{state.email}</strong>. Wat je hier kiest geldt alleen voor jou
+        {state.otherPortalUsers > 0 ? ', niet voor je collega’s op dit portaal' : ''}.
+      </p>
+      {!state.orgEnabled && <p className="portal-settings-note">
+        {supplierName} verstuurt op dit moment geen e-mailmeldingen over tickets. Je keuzes blijven bewaard; nieuwe antwoorden zie je hier in het portaal.
+      </p>}
+      <div className="portal-toggle-list">
+        <PortalToggleRow
+          label="Nieuw ticket"
+          description="Een bevestiging als je een ticket indient, en een bericht als er een ticket voor je wordt aangemaakt."
+          checked={s.ticketCreated}
+          onChange={value => void change({ ticketCreated: value })}
+        />
+        <PortalToggleRow
+          label="Statuswijziging"
+          description="Als de status van een ticket verandert, bijvoorbeeld naar ‘In behandeling’ of ‘Goedgekeurd’."
+          checked={s.ticketStatus}
+          onChange={value => void change({ ticketStatus: value })}
+        />
+        <PortalToggleRow
+          label="Nieuw antwoord"
+          description={`Als ${supplierName}${state.otherPortalUsers > 0 ? ' of een collega' : ''} reageert op een ticket. Het antwoord staat in de e-mail.`}
+          checked={s.ticketReply}
+          onChange={value => void change({ ticketReply: value })}
+        />
+      </div>
+    </section>
+
+    <section className="portal-settings-section">
+      <h3>Over welke tickets?</h3>
+      <div className="portal-choice-list" role="radiogroup" aria-label="Over welke tickets wil je e-mail krijgen?">
+        <label className={`portal-choice${s.scope === 'all' ? ' is-selected' : ''}`}>
+          <input type="radio" name={`portal-scope-${account.id}`} checked={s.scope === 'all'} onChange={() => void change({ scope: 'all' })} />
+          <span>
+            <strong>Alle tickets van {clientName}</strong>
+            <small>Ook tickets die {supplierName}{state.otherPortalUsers > 0 ? ' of een collega' : ''} aanmaakt.</small>
+          </span>
+        </label>
+        <label className={`portal-choice${s.scope === 'own' ? ' is-selected' : ''}`}>
+          <input type="radio" name={`portal-scope-${account.id}`} checked={s.scope === 'own'} onChange={() => void change({ scope: 'own' })} />
+          <span>
+            <strong>Alleen tickets die ik zelf heb ingediend</strong>
+            <small>Andere tickets zie je wel hier in het portaal, maar je krijgt er geen e-mail over.</small>
+          </span>
+        </label>
+      </div>
+    </section>
+
+    <section className="portal-settings-section">
+      <h3>Berichten</h3>
+      <p className="portal-muted">
+        {state.isPrimary
+          ? `Berichten van ${supplierName} krijg je gewoon per e-mail, en ze staan ook onder Berichten. Daar zit geen schakelaar op: dat zijn geen meldingen, maar de berichten zelf.`
+          : `Berichten van ${supplierName} staan onder Berichten. Per e-mail gaan ze naar het hoofdadres van ${clientName}.`}
+      </p>
+    </section>
+
+    {error && <p className="error">{error}</p>}
+  </article>;
+}
+
+function PortalToggleRow({ label, description, checked, onChange }: {
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  const id = useId();
+  return <div className="portal-toggle-row">
+    <span className="portal-toggle-text">
+      <label htmlFor={id}>{label}</label>
+      <small id={`${id}-hint`}>{description}</small>
+    </span>
+    <button
+      id={id}
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-describedby={`${id}-hint`}
+      className={`portal-switch${checked ? ' is-on' : ''}`}
+      onClick={() => onChange(!checked)}
+    >
+      <span className="portal-switch-knob" aria-hidden="true" />
+      <span className="portal-switch-text">{checked ? 'Aan' : 'Uit'}</span>
+    </button>
   </div>;
 }
 

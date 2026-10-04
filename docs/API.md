@@ -299,6 +299,11 @@ maakt een veld leeg.
   - het e-mailadres of "actief" van een contactpersoon met portaaltoegang;
   - een project of ticket naar een andere klant verhuizen.
 
+  De status van een ticket van een klant wijzigen kan met `execute`; de klant
+  ziet de nieuwe status in het portaal. Een e-mailmelding daarover (de
+  klantmeldingen van het portaal) gaat alleen uit als de sleutel
+  `execute_high` heeft.
+
   Met alleen `execute` geeft dat 403 `insufficient_scope`. Via
   `POST /v1/actions/{id}` wordt zoiets een voorstel in de goedkeurwachtrij.
 - **Een veld uit Financiën zetten** (`value_eur`, `hourly_rate_cents`) vraagt

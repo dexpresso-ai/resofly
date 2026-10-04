@@ -98,6 +98,26 @@ export interface PortalTicket {
   priority: Priority | string;
   created_at: string;
   updated_at: string;
+  // Sinds 2026-10-04 in de payload; een oudere edge function laat ze weg.
+  /** Laatste activiteit: het ticket zelf of de laatste zichtbare reactie. */
+  last_activity_at?: string;
+  /** Aantal zichtbare reacties op de tijdlijn. */
+  reply_count?: number;
+  last_reply_from?: 'team' | 'client' | null;
+  /** Naam bij een reactie van de klantkant (jij of een collega). */
+  last_reply_author?: string | null;
+  last_reply_preview?: string | null;
+  /** Er is een antwoord van de leverancier dat je hier nog niet geopend hebt. */
+  unread?: boolean;
+}
+
+/** Een statuswijziging, als regel in het gesprek van een ticket. */
+export interface PortalTicketEvent {
+  id: string;
+  kind: 'status';
+  old_status: string | null;
+  new_status: string | null;
+  created_at: string;
 }
 
 export interface PortalTicketNote {
@@ -126,6 +146,62 @@ export interface PortalProjectDetail {
 export interface PortalTicketThread {
   ticket: PortalTicket;
   notes: PortalTicketNote[];
+  events: PortalTicketEvent[];
+}
+
+export type PortalNotifyScope = 'all' | 'own';
+
+/** Welke e-mailmeldingen deze portaalgebruiker voor dit dossier wil krijgen. */
+export interface PortalNotificationSettings {
+  ticketCreated: boolean;
+  ticketStatus: boolean;
+  ticketReply: boolean;
+  /** 'all' = alle tickets van het dossier; 'own' = alleen die je zelf indiende. */
+  scope: PortalNotifyScope;
+}
+
+export interface PortalNotificationState {
+  email: string;
+  /** Hoofdadres van het dossier (en geen extra contactpersoon). */
+  isPrimary: boolean;
+  /** Hoeveel anderen er nog op het portaal van dit dossier kunnen. */
+  otherPortalUsers: number;
+  /** Verstuurt de leverancier überhaupt meldingen? */
+  orgEnabled: boolean;
+  settings: PortalNotificationSettings;
+  defaults: PortalNotificationSettings;
+}
+
+/** Eén mailgesprek met de leverancier, voor de lijst onder Berichten. */
+export interface PortalMessageThreadSummary {
+  id: string;
+  subject: string;
+  messageCount: number;
+  lastMessageAt: string;
+  /** Wie schreef het laatste bericht: de leverancier, jij of een collega. */
+  lastFrom: 'team' | 'me' | 'colleague';
+  lastFromName: string | null;
+  lastPreview: string;
+  unread: boolean;
+}
+
+export interface PortalMessage {
+  id: string;
+  fromTeam: boolean;
+  /** Door jou geschreven. */
+  mine: boolean;
+  authorName: string;
+  /** Geschreven in het portaal (en dus niet per e-mail). */
+  viaPortal: boolean;
+  /** Alleen bij berichten van de leverancier; altijd nog saneren vóór weergave. */
+  bodyHtml: string | null;
+  bodyText: string;
+  at: string;
+}
+
+export interface PortalMessageThread {
+  thread: { id: string; clientId: string; subject: string };
+  messages: PortalMessage[];
 }
 
 export interface PortalActingContact {
@@ -152,6 +228,8 @@ export interface PortalAccount {
   galleries: PortalGallery[];
   /** Aantal met deze contactpersoon gedeelde mappen/bestanden — voedt het tabbladtelletje. */
   sharedFileCount?: number;
+  /** Mailgesprekken met de leverancier: hoeveel, en hoeveel met nieuws (sinds 2026-10-04). */
+  messages?: { threads: number; unread: number };
 }
 
 /** Eén ding binnen een deling: een bestand, notitie of document. */
@@ -303,7 +381,11 @@ export async function fetchPortalTicketThread(ticketId: string): Promise<PortalT
   });
   if (error) throw new Error(await extractFunctionError(error, 'Ticket laden mislukt'));
   if (!data?.ok) throw new Error(data?.error || 'Ticket laden mislukt');
-  return { ticket: data.ticket as PortalTicket, notes: Array.isArray(data.notes) ? data.notes : [] };
+  return {
+    ticket: data.ticket as PortalTicket,
+    notes: Array.isArray(data.notes) ? data.notes : [],
+    events: Array.isArray(data.events) ? data.events : [],
+  };
 }
 
 export async function addPortalTicketNote(ticketId: string, body: string): Promise<PortalTicketNote> {
@@ -443,6 +525,70 @@ export async function downloadPortalSharedItem(
     };
   }
   throw new Error('Downloaden mislukt');
+}
+
+/** Je eigen meldingskeuzes voor één dossier, plus of de leverancier meldingen verstuurt. */
+export async function fetchPortalNotificationSettings(clientId: string): Promise<PortalNotificationState> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'getNotificationSettings', clientId },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Instellingen laden mislukt'));
+  if (!data?.ok || !data.settings) throw new Error(data?.error || 'Instellingen laden mislukt');
+  return {
+    email: String(data.email || ''),
+    isPrimary: data.isPrimary === true,
+    otherPortalUsers: Number(data.otherPortalUsers) || 0,
+    orgEnabled: data.orgEnabled !== false,
+    settings: data.settings as PortalNotificationSettings,
+    defaults: (data.defaults ?? data.settings) as PortalNotificationSettings,
+  };
+}
+
+/** Sla (een deel van) je meldingskeuzes op; geeft de opgeslagen stand terug. */
+export async function updatePortalNotificationSettings(
+  clientId: string,
+  settings: Partial<PortalNotificationSettings>,
+): Promise<PortalNotificationSettings> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'updateNotificationSettings', clientId, settings },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Instellingen opslaan mislukt'));
+  if (!data?.ok || !data.settings) throw new Error(data?.error || 'Instellingen opslaan mislukt');
+  return data.settings as PortalNotificationSettings;
+}
+
+/** De mailgesprekken met de leverancier, nieuwste eerst. */
+export async function fetchPortalMessageThreads(clientId: string): Promise<PortalMessageThreadSummary[]> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'getMessageThreads', clientId },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Berichten laden mislukt'));
+  if (!data?.ok) throw new Error(data?.error || 'Berichten laden mislukt');
+  return Array.isArray(data.threads) ? data.threads as PortalMessageThreadSummary[] : [];
+}
+
+/** Eén gesprek met alle berichten. Openen telt als gelezen. */
+export async function fetchPortalMessageThread(threadId: string): Promise<PortalMessageThread> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'getMessageThread', threadId },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Gesprek laden mislukt'));
+  if (!data?.ok || !data.thread) throw new Error(data?.error || 'Gesprek laden mislukt');
+  return { thread: data.thread, messages: Array.isArray(data.messages) ? data.messages : [] };
+}
+
+/** Antwoord in een gesprek (threadId) of begin een nieuw gesprek (subject). */
+export async function sendPortalMessage(input: { clientId: string; threadId?: string | null; subject?: string; body: string }): Promise<{
+  threadId: string;
+  subject: string;
+  message: PortalMessage;
+}> {
+  const { data, error } = await supabasePortal.functions.invoke('client-portal', {
+    body: { action: 'sendMessage', clientId: input.clientId, threadId: input.threadId ?? null, subject: input.subject ?? '', body: input.body },
+  });
+  if (error) throw new Error(await extractFunctionError(error, 'Bericht versturen mislukt'));
+  if (!data?.ok || !data.message) throw new Error(data?.error || 'Bericht versturen mislukt');
+  return { threadId: String(data.threadId), subject: String(data.subject || ''), message: data.message as PortalMessage };
 }
 
 // Supabase functions.invoke geeft een non-2xx terug als FunctionsHttpError, waarvan

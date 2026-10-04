@@ -30,12 +30,41 @@ const items = Array.from({ length: 8 }, (_, i) => ({ id: `g${i + 1}`, media_type
 items.push({ id: 'g9', media_type: 'video', file_name: 'aftermovie.mp4', content_type: 'video/mp4', size_bytes: 734003200, category_id: 'cat2', storage_key: 'gal/video/master-9-aftermovie.mp4', preview_key: null, thumb_key: 'gal/thumb/9.jpg', width: 1920, height: 1080, duration_seconds: 94, stream_uid: null, stream_status: null, stream_playback_base: null });
 export const galleryPublic = { ok: true, gallery: { id: 'gal1', title: 'Fotoshoot Bloem · september', description: 'De selectie van de shoot in het restaurant.', format: 'photo', hero_template: 'classic', published_at: iso(day(-1)), allow_downloads: true, download_quality: 'web', cover_item_id: 'g2', cover_preview_key: null, cover_focus_x: 0.5, cover_focus_y: 0.4, expires_at: null }, items, categories: [{ id: 'cat1', name: 'Gerechten' }, { id: 'cat2', name: 'Sfeer' }], branding, tokens: { mediaToken: 'media-token', streamTokens: {}, exp: Math.floor(Date.now() / 1000) + 3600 }, myFavoriteIds: [], myLikeIds: [], likeCounts: {} };
 const c0 = seed.clients[0];
+const portalTickets = seed.tickets.filter(t => t.client_id === c0.id).map((t, i) => ({
+  id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, created_at: t.created_at, updated_at: t.updated_at,
+  last_activity_at: iso(day(0, 9)), reply_count: 2, last_reply_from: 'team', last_reply_author: null,
+  last_reply_preview: 'De eerste schetsen staan klaar; welke variant spreekt je het meest aan?', unread: i === 0,
+}));
 export const portalData = { ok: true, email: c0.email, accounts: [{
   id: 'acc1', organizationId: seed.ids.ORG, company, branding, client: { id: c0.id, name: c0.name, contact_name: c0.contact_name, email: c0.email, phone: c0.phone }, actingContact: { name: 'Joost Vermeer', email: c0.email },
   projects: seed.projects.filter(p => p.client_id === c0.id).map(p => ({ id: p.id, name: p.name, description: p.description, color: p.color, archived: false, start_date: p.start_date, end_date: p.end_date, created_at: p.created_at })),
   invoices: seed.invoices.filter(i => i.client_id === c0.id).map(i => ({ id: i.id, number: i.number, date: i.date, due_date: i.due_date, status: i.status, lines: i.lines, notes: null, sent_at: i.sent_at, paid_at: i.paid_at, project_id: i.project_id })),
   quotes: seed.quotes.filter(x => x.client_id === c0.id).map(x => ({ id: x.id, number: x.number, date: x.date, valid_until: x.valid_until, status: x.status, lines: x.lines, notes: null, sent_at: x.sent_at, accepted_at: x.accepted_at, project_id: x.project_id })),
   contracts: [{ id: 'c1', number: 'C-2026-003', title: 'Samenwerkingsovereenkomst huisstijl', status: 'signed', date: dkey(day(-40)), valid_until: null, signed_at: iso(day(-38)) }],
-  tickets: seed.tickets.filter(t => t.client_id === c0.id).map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, created_at: t.created_at, updated_at: t.updated_at })),
+  // Eén ticket met een nieuw antwoord van de leverancier: de stip, de kaart
+  // "Nieuw voor jou" en het accenttelletje op de tabs worden zo ook gemeten.
+  tickets: portalTickets,
   galleries: [], sharedFileCount: 3,
+  messages: { threads: 2, unread: 1 },
 }] };
+
+// Klantportaal: Berichten, het ticketgesprek en de meldingsinstellingen.
+export const portalThreads = { ok: true, threads: [
+  { id: 'th1', subject: 'Drukproef flyer herfstactie', messageCount: 3, lastMessageAt: iso(day(0, 9)), lastFrom: 'team', lastFromName: 'Gerjan van Lopik', lastPreview: 'De drukproef zit erbij. Kloppen de kleuren voor jullie?', unread: true },
+  { id: 'th2', subject: 'Planning fotoshoot oktober', messageCount: 2, lastMessageAt: iso(day(-3, 14)), lastFrom: 'me', lastFromName: 'Joost Vermeer', lastPreview: 'Dinsdag de 14e past ons goed, vanaf tien uur.', unread: false },
+] };
+export const portalThread = { ok: true, thread: { id: 'th1', clientId: c0.id, subject: 'Drukproef flyer herfstactie' }, messages: [
+  { id: 'm1', fromTeam: true, mine: false, authorName: 'Gerjan van Lopik', viaPortal: false, bodyHtml: '<p>Hoi Joost,</p><p>De drukproef zit erbij. Kloppen de kleuren voor jullie?</p>', bodyText: 'Hoi Joost, de drukproef zit erbij.', at: iso(day(-1, 10)) },
+  { id: 'm2', fromTeam: false, mine: true, authorName: 'Joost Vermeer', viaPortal: true, bodyHtml: null, bodyText: 'Het oranje mag iets warmer.\n\nOp ma 5 okt 2026 om 10:00 schreef Gerjan van Lopik <gerjan@studiolopik.nl>:\n> De drukproef zit erbij.', at: iso(day(-1, 12)) },
+  { id: 'm3', fromTeam: true, mine: false, authorName: 'Gerjan van Lopik', viaPortal: false, bodyHtml: '<p>Aangepast! Zie de nieuwe versie.</p>', bodyText: 'Aangepast!', at: iso(day(0, 9)) },
+] };
+const t0 = portalTickets[0];
+export const portalTicketThread = { ok: true, ticket: t0, notes: [
+  { id: 'n1', ticket_id: t0.id, author_type: 'client', author_name: 'Joost Vermeer', body: 'Graag twee varianten: één rustig, één opvallend.', created_at: iso(day(-2, 11)) },
+  { id: 'n2', ticket_id: t0.id, author_type: 'user', author_name: null, body: 'De eerste schetsen staan klaar; welke variant spreekt je het meest aan?', created_at: iso(day(0, 9)) },
+], events: [
+  { id: 'e1', kind: 'status', old_status: 'new', new_status: 'review', created_at: iso(day(-1, 16)) },
+] };
+export const portalSettings = { ok: true, email: c0.email, isPrimary: true, otherPortalUsers: 1, orgEnabled: true,
+  settings: { ticketCreated: true, ticketStatus: true, ticketReply: true, scope: 'all' },
+  defaults: { ticketCreated: true, ticketStatus: true, ticketReply: true, scope: 'all' } };

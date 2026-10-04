@@ -63,7 +63,8 @@ jobs:
 
       # De lijst hieronder is alles wat schoon door `deno check` komt: 28 van de
       # 33 edge-functies, gemeten op 18 september, plus wat er sindsdien bij kwam
-      # (de openbare API: api, api-admin en webhooks). Vijf staan er nog buiten
+      # (de openbare API: api, api-admin en webhooks; de klantmeldingen:
+      # portal-notify). Vijf staan er nog buiten
       # (bank-sync, client-portal, invoice-public, invoice-workflow,
       # quote-workflow); die struikelen allemaal over dezelfde TS 6-strengheid
       # waarbij een kaal `Uint8Array` generiek is over ArrayBufferLike en dus
@@ -100,6 +101,7 @@ jobs:
             supabase/functions/meeting-transcribe-webhook/index.ts \
             supabase/functions/meeting-transcribe/index.ts \
             supabase/functions/portal-login/index.ts \
+            supabase/functions/portal-notify/index.ts \
             supabase/functions/quote-public/index.ts \
             supabase/functions/resend-webhook/index.ts \
             supabase/functions/web-push/index.ts \

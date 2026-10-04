@@ -12,7 +12,8 @@ export type EmailTemplateKey =
   | 'contract.sent'
   | 'contract.signed.client'
   | 'contract.signed.internal'
-  | 'file.shared';
+  | 'file.shared'
+  | 'portal.ticketUpdate';
 
 // De per-organisatie tekstsleutels in de email_templates-tabel. Herinneringen
 // hebben een sleutel per niveau; de overige sleutels komen overeen met de
@@ -290,6 +291,34 @@ export type FileSharedEmailInput = {
   content?: EmailTemplateContent | null;
 };
 
+/**
+ * Melding aan een klant over een ticket (klantportaal): ontvangen, nieuw
+ * ticket, antwoord of status — of een paar daarvan samen. Wat erin zit bepaalt
+ * _shared/portalNotify.ts; de tekst is (nog) niet per organisatie aan te passen.
+ */
+export type PortalTicketUpdateEmailInput = {
+  companyName: string;
+  accentColor?: string | null;
+  /** Afsluittekst uit de huisstijl van de leverancier. */
+  footerText?: string | null;
+  recipientName?: string | null;
+  ticket: { title: string; statusLabel: string };
+  /** Diende de ontvanger het ticket zelf in? Dan "je ticket", anders "het ticket". */
+  ownTicket: boolean;
+  /** Ontvangstbevestiging van een ticket dat de ontvanger net zelf indiende. */
+  confirmation: boolean;
+  /** Een nieuw ticket dat iemand anders (het team of een collega) aanmaakte. */
+  newTicket: boolean;
+  /** Naam van de collega die het indiende; leeg als het team het aanmaakte. */
+  createdBy?: string | null;
+  /** Netto statuswijziging; `sentence` leest als "in behandeling genomen". */
+  status?: { fromLabel: string | null; toLabel: string; sentence: string } | null;
+  /** Antwoorden van anderen, oudste eerst. Platte tekst. */
+  replies: Array<{ authorName: string; fromTeam: boolean; body: string; at: string }>;
+  ticketUrl: string;
+  settingsUrl: string;
+};
+
 export type EmailTemplateInputMap = {
   'test.resend': TestResendEmailInput;
   'quote.sent': QuoteSentEmailInput;
@@ -301,4 +330,5 @@ export type EmailTemplateInputMap = {
   'contract.signed.client': ContractSignedClientEmailInput;
   'contract.signed.internal': ContractSignedInternalEmailInput;
   'file.shared': FileSharedEmailInput;
+  'portal.ticketUpdate': PortalTicketUpdateEmailInput;
 };

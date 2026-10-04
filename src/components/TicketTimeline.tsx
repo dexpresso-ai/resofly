@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { TicketNote } from '../types';
 import { Button, Textarea } from './Ui';
-import { createTicketNote, deleteTicketNote, setTicketNoteInternal } from '../lib/repository';
+import { createTicketNote, deleteTicketNote, setTicketNoteInternal, ticketEmailsEnabled } from '../lib/repository';
 
 /**
  * De tijdlijn van een ticket: notities van het team (zichtbaar voor de klant
@@ -13,18 +13,27 @@ import { createTicketNote, deleteTicketNote, setTicketNoteInternal } from '../li
  * dit ticket); na een wijziging vraagt `onChanged` de werkruimte-data opnieuw
  * op, zodat elke plek die dezelfde tijdlijn toont meteen bij is.
  */
-export function TicketTimeline({ ticketId, organizationId, currentUserId, notes, canWrite, onChanged }: {
+export function TicketTimeline({ ticketId, organizationId, currentUserId, notes, canWrite, onChanged, clientId = null }: {
   ticketId: string;
   organizationId: string;
   currentUserId: string | null;
   notes: TicketNote[];
   canWrite: boolean;
   onChanged: () => void;
+  /** De klant van het ticket; alleen dan gaat een zichtbare notitie ook naar buiten. */
+  clientId?: string | null;
 }) {
   const [draft, setDraft] = useState('');
   const [internal, setInternal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Krijgt de klant van een zichtbare notitie ook een e-mail? (Instellingen → E-mail)
+  const [emailsOn, setEmailsOn] = useState<boolean | null>(null);
+  useEffect(() => {
+    let active = true;
+    if (clientId && canWrite) void ticketEmailsEnabled(organizationId).then(value => { if (active) setEmailsOn(value); });
+    return () => { active = false; };
+  }, [organizationId, clientId, canWrite]);
 
   const sorted = useMemo(
     () => [...notes].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
@@ -74,6 +83,11 @@ export function TicketTimeline({ ticketId, organizationId, currentUserId, notes,
             </label>
             <Button variant="primary" onClick={add} disabled={busy || !draft.trim()}>{busy ? 'Plaatsen…' : (internal ? 'Plaats interne notitie' : 'Plaats notitie')}</Button>
           </div>
+          {clientId && !internal && <p className="ticket-timeline-mailhint">
+            {emailsOn === false
+              ? 'De klant ziet dit in het klantportaal. E-mailmeldingen aan klanten staan uit (Instellingen → E-mail).'
+              : 'De klant ziet dit in het klantportaal en krijgt er ook een e-mail van, tenzij de klant dat in het portaal heeft uitgezet.'}
+          </p>}
         </div>
         {error && <p className="error">{error}</p>}
       </div>}

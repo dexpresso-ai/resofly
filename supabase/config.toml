@@ -207,6 +207,14 @@ verify_jwt = false
 [functions.api-admin]
 verify_jwt = false
 
+# portal-notify mailt klanten over hun tickets (nieuw ticket, statuswijziging,
+# antwoord), volgens hun eigen keuzes in het klantportaal. pg_cron roept hem
+# elke minuut aan (?cron=drain, geauthenticeerd via PORTAL_NOTIFY_CRON_SECRET in
+# de header x-cron-secret — geen Supabase JWT, net als web-push en webhooks).
+# Zonder geldig cron-secret doet hij niets; andere paden kent hij niet.
+[functions.portal-notify]
+verify_jwt = false
+
 # webhooks bezorgt uitgaande webhooks: pg_cron roept hem elke minuut aan
 # (?cron=dispatch, geauthenticeerd via het gedeelde WEBHOOK_CRON_SECRET in de
 # header x-cron-secret — geen Supabase JWT, net als web-push en campaigns). Hij
