@@ -479,6 +479,7 @@ export function ProjectsListPage({
       className="is-wide"
       ariaLabel="Projecten zoeken en filteren"
       header={{
+        page: 'projects',
         eyebrow: 'Projecthub',
         title: 'Projecten',
         meta: `${totalActive} actief · ${totalArchived} gearchiveerd`,

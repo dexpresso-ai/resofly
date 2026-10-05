@@ -1853,6 +1853,7 @@ export function WeekPlanner({
       className="is-wide is-bar"
       ariaLabel="Weekplanner zoeken en filteren"
       header={{
+        page: 'weekplanner',
         title: isCurrentWeek ? 'Deze week' : `Week ${isoWeekNumber(anchor)}`,
         meta: <>
           {weekLabel}

@@ -6,6 +6,7 @@ import type {
 } from '../types';
 import { Modal } from '../components/Modal';
 import { Button, Input, Select, Textarea } from '../components/Ui';
+import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import { SetupBanner } from './Bookkeeping';
 import { parseBankFile } from '../lib/bankImport';
@@ -36,7 +37,7 @@ export function BankPage({ data, organizationId, canWrite, onChanged }: PageProp
   return (
     <div className="bk-page">
       <div className="bk-head">
-        <div><h2>Bank</h2><p>Lees je bankafschriften in en boek ze automatisch — W&amp;V en balans werken direct bij.</p></div>
+        <div><PageIcon page="bank" /><h2>Bank</h2><p>Lees je bankafschriften in en boek ze automatisch — W&amp;V en balans werken direct bij.</p></div>
       </div>
       <div className="bk-tabs">
         <button className={tab === 'reconcile' ? 'is-active' : ''} onClick={() => setTab('reconcile')}><Banknote size={15} /> Af te letteren</button>

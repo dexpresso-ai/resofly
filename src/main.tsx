@@ -11,7 +11,7 @@ import type { SearchResult } from './components/GlobalSearch';
 import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
 import { RichTextEditor, sanitizeRichText } from './components/RichTextEditor';
 import { Modal } from './components/Modal';
-import { Menu, X } from 'lucide-react';
+import { CheckCircle2, FileText, FolderOpen, Menu, Receipt, Users, X } from 'lucide-react';
 import { isSupabaseConfigured, supabase, supabaseAuth } from './lib/supabase';
 import { signOutOnThisDevice } from './lib/signOut';
 import {
@@ -170,6 +170,9 @@ import type {
 import { CustomFieldsSection, normalizeCustomFieldValues } from './components/CustomFields';
 import { euro, total, uid, lineGross } from './lib/format';
 import './styles/globals.css';
+// Na globals.css: de Cockpit-laag (look & feel naar Value Backlog) moet van
+// alle eerdere regels winnen.
+import './styles/cockpit.css';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
 type EditMode =
@@ -672,8 +675,43 @@ function App() {
   // die bij hover openschuift; dit stuurt alleen het mobiele gedrag (≤760px) aan.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   // Laptop/desktop: menu vastzetten (blijft uitgeklapt, content schuift mee).
-  // Keuze onthouden tussen sessies.
-  const [sidebarPinned, setSidebarPinned] = useState(() => localStorage.getItem('brandcore.sidebarPinned') === '1');
+  // Keuze onthouden tussen sessies. Wie nog nooit gekozen heeft, krijgt op een
+  // breed scherm het uitgeklapte menu (de Cockpit-opbouw); smaller blijft het de
+  // iconenbalk, want daar kost een vaste zijbalk te veel werkruimte.
+  const [sidebarPinned, setSidebarPinned] = useState(() => {
+    const stored = localStorage.getItem('brandcore.sidebarPinned');
+    if (stored === '1' || stored === '0') return stored === '1';
+    return typeof window !== 'undefined' && window.matchMedia?.('(min-width: 1280px)').matches === true;
+  });
+  // Het werkvlak. De bovenregel krijgt pas een haarlijn en schaduw als de inhoud
+  // eronder schuift (`is-scrolled`), en een nieuwe pagina schuift zacht in.
+  const [mainEl, setMainEl] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!mainEl) return;
+    const update = () => {
+      const pane = mainEl.querySelector<HTMLElement>(':scope > .content:not([hidden])');
+      mainEl.classList.toggle('is-scrolled', Boolean(pane && pane.scrollTop > 4));
+    };
+    update();
+    // Scroll bubbelt niet, maar loopt wél langs de capture-fase van de voorouders.
+    mainEl.addEventListener('scroll', update, { capture: true, passive: true });
+    return () => mainEl.removeEventListener('scroll', update, { capture: true });
+  }, [mainEl, activeTabId]);
+  const viewKey = `${activeTab.id}:${activeTab.page}:${activeTab.projectId ?? ''}:${activeTab.clientId ?? ''}:${activeTab.galleryId ?? ''}`;
+  useEffect(() => {
+    if (!mainEl || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    const pane = mainEl.querySelector<HTMLElement>(':scope > .content:not([hidden])');
+    if (!pane) return;
+    // Alleen de inhoud zelf, niet een openstaand venster: een transform maakt
+    // een `position:fixed`-kind tijdelijk relatief aan zijn ouder.
+    for (const child of Array.from(pane.children)) {
+      if (!(child instanceof HTMLElement) || child.classList.contains('modal-bg') || typeof child.animate !== 'function') continue;
+      child.animate(
+        [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
+        { duration: 300, easing: 'cubic-bezier(.16,1,.3,1)' },
+      );
+    }
+  }, [mainEl, viewKey]);
   const [loading, setLoading] = useState(false);
   // Wanneer dit een tekst bevat, draait er een schermvullende laad-overlay. Wordt
   // gezet bij trage Resend-verzendacties (offerte/factuur/creditfactuur) zodat de
@@ -2909,7 +2947,7 @@ function App() {
     >{mobileNavOpen ? <X size={22}/> : <Menu size={22}/>}</button>
     <div className={`sidebar-backdrop${mobileNavOpen ? ' is-open' : ''}`} onClick={() => setMobileNavOpen(false)} aria-hidden="true" />
     <Sidebar page={page} data={data} organizations={organizationContext.organizations} activeOrganizationId={activeOrg.id} activeRole={activeMembership?.role ?? null} onOrganization={switchOrganization} onNewOrganization={createNewOrganization} onNewEntity={(organizationContext.businessStatus?.active && activeMembership?.role === 'owner') ? createNewEntity : null} onPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} onSearchNavigate={handleSearchNavigate} userEmail={currentUserEmail ?? activeMembership?.email ?? null} onOpenSettings={openSettings} onSignOut={() => void signOutOnThisDevice()} messageUnread={clientEmailUnread.total} inboxOpen={inboxCount} ticketUnread={ticketUnreadIds.size} chatUnread={teamChat.unreadTotal} decisionCount={decisionAlerts.count} purchaseInboxOpen={purchaseInbox.count} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} pinned={sidebarPinned} onTogglePin={() => setSidebarPinned(pinned => { const next = !pinned; localStorage.setItem('brandcore.sidebarPinned', next ? '1' : '0'); return next; })} permissions={permissions} onRefresh={refresh} refreshing={loading} readOnly={!(orgCanWrite && permissions.canWritePage(page))}/>
-    <main className="main">
+    <main className="main" ref={setMainEl}>
       <TabBar tabs={tabs} activeTabId={activeTab.id} data={data} onSelect={switchTab} onClose={closeTab} onNew={openTab} />
       {projectShift && <ProjectShiftDialog
         shift={projectShift}
@@ -3119,7 +3157,23 @@ function Login() {
     const { error } = await supabaseAuth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo, shouldCreateUser: false } });
     if (error) setError(error.message); else setSent(true);
   }
-  return <main className="login"><div className="login-card"><div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div><p className="eyebrow login-eyebrow">Tickets • Projecten • Serviceflows</p><h1>Je <span className="serif">werkruimte</span></h1><p>Login met je e-mailadres om je CRM/project-app te gebruiken.</p><Input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="jij@bedrijf.nl"/><Button variant="primary" onClick={signIn} disabled={!email}>Stuur magic link</Button>{sent && <p className="success">Check je mailbox. Open de link in dezelfde browser als waar je deze pagina hebt geopend.</p>}{error && <p className="error">{error}</p>}</div></main>;
+  // Op een groot scherm staat links het verhaal (het merk en de weg van klant
+  // tot betaling), rechts het formulier; op de telefoon alleen het formulier.
+  return <main className="login"><div className="login-shell">
+    <section className="login-story">
+      <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly<small>Werkruimte</small></span></div>
+      <h2>Van eerste mail<br /><span>tot betaalde factuur.</span></h2>
+      <p>Klanten, projecten, agenda, uren, offertes en facturen in één werkruimte — met Gerrie, die meedenkt en klaarzet.</p>
+      <ol className="login-flow" aria-hidden="true">
+        <li className="is-done"><span><Users /></span><small>Klant</small></li>
+        <li className="is-done"><span><FileText /></span><small>Offerte</small></li>
+        <li className="is-done"><span><FolderOpen /></span><small>Project</small></li>
+        <li className="is-now"><span><Receipt /></span><small>Factuur</small></li>
+        <li><span><CheckCircle2 /></span><small>Betaald</small></li>
+      </ol>
+    </section>
+    <div className="login-card"><div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div><p className="eyebrow login-eyebrow">Tickets • Projecten • Serviceflows</p><h1>Je <span className="serif">werkruimte</span></h1><p>Login met je e-mailadres om je CRM/project-app te gebruiken.</p><Input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="jij@bedrijf.nl"/><Button variant="primary" onClick={signIn} disabled={!email}>Stuur magic link</Button>{sent && <p className="success">Check je mailbox. Open de link in dezelfde browser als waar je deze pagina hebt geopend.</p>}{error && <p className="error">{error}</p>}</div>
+  </div></main>;
 }
 
 function formatMeetingLabel(ev: CalendarExternalEvent): string {

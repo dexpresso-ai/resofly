@@ -18,6 +18,7 @@ import type { ImportColumn } from '../lib/csvImport';
 import { RichTextEditor } from '../components/RichTextEditor';
 import { InboundInboxTab } from '../components/InboundInbox';
 import { ClientEmailMessageCard, formatEmailDateTime } from '../components/ClientEmailMessage';
+import { PageIcon } from '../components/PageIcon';
 import { createClientWithServerCode, deleteClientEmail, loadClientEmails, loadClientEmailThreads, loadClientEmailReadIds, loadInboundOpenCount, loadMySenderIdentity, loadSendingDomains, markClientEmailsRead } from '../lib/repository';
 import { resolveEffectiveSender, sendClientEmail, type EffectiveSender } from '../services/mailService';
 import { supabase } from '../lib/supabase';
@@ -221,6 +222,7 @@ export function Clients({
   return <div className="clients-page">
     <div className="clients-page-head">
       <div>
+        <PageIcon page="clients" />
         <p className="eyebrow">CRM</p>
         <h2>Klanten</h2>
         <span>{rows.length} klant{rows.length === 1 ? '' : 'en'} in deze werkruimte</span>
@@ -562,6 +564,8 @@ export function ClientDetailPage({
 
   return <div className="client-detail-page">
     <section className="client-detail-hero">
+      {/* De kleur van de klant als gloed in de donkere kop (cockpit.css). */}
+      <span className="client-detail-glow" style={{ background: client.color }} aria-hidden="true" />
       <div className="client-detail-title">
         <Button onClick={onBack}>← Terug naar klanten</Button>
         <div className="client-title-row">

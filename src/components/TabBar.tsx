@@ -10,8 +10,8 @@ type TabLike = { id: string; page: string; projectId: string | null; clientId: s
 
 // Icoon per pagina — op de telefoon draagt het icoon een tabblad dat níét actief
 // is helemaal alleen (zie globals.css ≤760px), op desktop staat het vóór het
-// tekstlabel.
-const PAGE_ICON: Record<string, typeof LayoutDashboard> = {
+// tekstlabel. Dezelfde iconen staan in de tegel van de paginakop (PageIcon).
+export const PAGE_ICON: Record<string, typeof LayoutDashboard> = {
   // Drie pagina's deelden hier hetzelfde Calendar-icoon. Op de telefoon toont
   // een werktab alléén het icoon, dus die waren onderling niet te
   // onderscheiden. Nu elk een eigen vorm.

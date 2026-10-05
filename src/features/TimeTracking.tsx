@@ -4,6 +4,7 @@ import { CalendarDays, ChevronLeft, ChevronRight, Clock, Pencil, Play, Plus, Squ
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { BarChart, LineChart } from '../components/Charts';
+import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, formatMinutes, minutesToHours } from '../lib/format';
 import { addDays, formatISODate, parseISODate, startOfWeek } from '../lib/dates';
 import { createTimeEntry, deleteTimeEntry, updateTimeEntry } from '../lib/repository';
@@ -488,6 +489,7 @@ export function TimeTracking({ data, organizationId, currentUserId, teamMembers,
       {/* Hero / bedieningsbalk */}
       <section className="tt-hero">
         <div className="tt-hero-text">
+          <PageIcon page="time" />
           <h2>Urenregistratie</h2>
           <p>Uren uit je agenda, handmatig of via de timer — gebundeld met inzichten per project, klant en teamlid.</p>
         </div>

@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Check, RotateCcw, Search, SlidersHorizontal } from 'lucide-react';
 import { Select } from './Ui';
+import { PageIcon } from './PageIcon';
 
 /* ── Eén zoek- en filterblok voor élke tabel ───────────────────────────────
  * Tickets, klanten, offertes, facturen, projecten en campagnes hadden alle
@@ -35,6 +36,9 @@ export type SearchFilterHeader = {
    *  zoekveld zegt al wat het filter overlaat. */
   meta?: ReactNode;
   actions?: ReactNode;
+  /** De pagina waar dit blok de kop van is: zijn icoon staat in een tegel
+   *  links van de titel (vanaf 1025px, zie PageIcon). */
+  page?: string;
 };
 
 /** Een snelfilter: één vinkje dat een veelgebruikte vraag beantwoordt. Het
@@ -117,6 +121,7 @@ export function SearchFilterPanel({
   return <section className={`finance-search-card${header ? ' has-head' : ''} ${className}`.trim()} aria-label={ariaLabel}>
     {header && <div className="finance-search-head">
       <div className="fsh-text">
+        {header.page && <PageIcon page={header.page} />}
         {header.eyebrow && <p className="eyebrow">{header.eyebrow}</p>}
         <h2>{header.title}</h2>
         {header.meta && <span>{header.meta}</span>}

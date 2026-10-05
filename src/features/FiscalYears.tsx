@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { CalendarClock, Lock, Plus, Scale, Unlock } from 'lucide-react';
 import type { AppData, FiscalYearListRow, ResultAppropriationRow } from '../types';
 import { Button, Skeleton } from '../components/Ui';
+import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import {
   appropriateResult, closeFiscalYear, ensureDefaultLedgerAccounts, listFiscalYears,
@@ -199,7 +200,7 @@ export function FiscalYearsPage({ data, organizationId, canWrite, canAdmin, busi
   return (
     <div className="bk-page">
       <div className="bk-head">
-        <div>
+        <div><PageIcon page="fiscal-years" />
           <h2>Boekjaren</h2>
           <p>
             Open een nieuw boekjaar, sluit een lopend boekjaar af (resultaat naar {resultLabel}) en bekijk voorgaande jaren.
