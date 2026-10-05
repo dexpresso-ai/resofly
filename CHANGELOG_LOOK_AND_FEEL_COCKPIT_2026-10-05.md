@@ -20,10 +20,9 @@ niet in het navy en mint van House of Bèta.
 - **De kleuren.** Grafiet, zongoud (`#F7C548` / op licht `#855800` als tekst) en
   het poollicht van Gerrie. Alle teksttokens uit Belicht blijven staan, dus ook
   hun contrast (WCAG AA).
-- **De letters.** Geist, Instrument Serif als accent, Geist Mono voor cijfers.
-  Value Backlog gebruikt Poppins, maar dat is de huisletter van House of Bèta;
-  wat we overnemen is de hiërarchie (zware, strakke titels en kleine kapitalen
-  met lucht als bovenregel), niet de letter.
+- **De letter is wél veranderd**, in een vervolgvraag dezelfde dag: de
+  werkruimte staat nu helemaal in Poppins (was Geist met Instrument Serif en
+  Geist Mono). Zie [Vervolg: alles in Poppins](#vervolg-alles-in-poppins).
 - **Nacht en Dag.** Beide thema's zijn ontworpen. Op Dag blijft het werkvlak licht;
   alleen de commandovlakken zijn donker, precies zoals bij Value Backlog.
 - **De gemeten opbouw van de telefoon.** Hoogtes, marges en lettergroottes
@@ -90,7 +89,7 @@ voor hun titel gekregen.
 - **Paginakoppen** groot en stevig (28px, 800), de bovenregel in kleine
   gouden kapitalen, en vanaf 1025px het **icoon van de pagina in een donkere
   tegel** links van de titel — hetzelfde icoon als in de werktab (`PageIcon`).
-  Staat op Klanten, Projecten, Weekplanner, Offertes, Facturen, Contracten,
+  Staat op Klanten, Projecten, Offertes, Facturen, Contracten,
   Leveranciers, Inkoopfacturen, Grootboek, Bank, Activa, W&V, Omzetbelasting,
   VPB, DGA, Aandeelhouders, Boekjaren, Jaarrekening, Uren, Marketing en
   Instellingen. De kop van Klanten staat nu vrij op het werkvlak, net als de rest.
@@ -146,6 +145,38 @@ telefoon alleen het formulier. Ook het laadscherm is donker.
   (1440×900) en telefoon (390×844) in Nacht en Dag naast de oude versie gelegd,
   plus de interacties: de smalle balk bij hover, het accountmenu, een venster,
   het uitschuifmenu en de bovenregel bij het scrollen.
+
+## Vervolg: alles in Poppins
+
+> Alles, dus ook balken mogen Poppins zijn.
+
+De hele werkruimte staat nu in **Poppins**, net als Value Backlog — en het is
+ook gewoon de huisletter van ResoFly: in `BRAND_FONTS` heet Poppins al *"De
+huisstijl van ResoFly"*, de standaardletter van alles wat de klant ziet.
+
+- **Alles**: zijbalk, werktabs, bovenregel, dock, koppen, kaarten, tabellen,
+  knoppen, velden, pop-ups en keuzelijsten. Ook de rol van *Geist Mono*
+  (tijden, nummers, schattingen) en die van *Instrument Serif* (het accent in
+  de groet en op het inlogscherm) zijn Poppins. Het accent is daarmee geen
+  andere letter meer maar een andere kleur: *Studio Lopik* staat in goud in de
+  groet, *werkruimte* in diep amber op het inlogscherm.
+- **Hoe**: `cockpit.css` zet `--font-sans`, `--font-mono` en `--font-serif` op
+  Poppins zodra de werkruimte, het inlogscherm of het laadscherm in beeld is
+  (`:root:has(.app, main.login:not(.portal), div.boot)`). `index.html` laadt
+  Poppins (300–800, cursief 400 en 600 — dezelfde set als de klantpagina's).
+- **Wat niet verandert**: de publieke pagina's en het klantportaal kiezen hun
+  eigen letter (de huisstijl van de leverancier) en zijn pixel voor pixel gelijk
+  gebleven. Na `'Poppins'` staat dezelfde terugvalreeks als voorheen, dus de
+  lay-outtest (die geen webfonts laadt) meet precies hetzelfde.
+- **Bijgesteld voor de bredere letter**: titels iets minder strak gespatieerd
+  (−0,022em), tabelkoppen in kapitalen met minder lucht (0,06em), en de regel
+  *Owner · + administratie · + organisatie* onder de organisatiekeuze iets
+  kleiner (hij paste net niet meer). De weekplanner houdt zijn compacte
+  kopbalk zonder icoontegel: met de tegel werd de kop twee regels en viel de
+  knoppenrij eronder half weg.
+- **Om te weten**: Poppins van Google Fonts heeft geen tabelcijfers (`tnum`).
+  Bedragen onder elkaar lijnen rechts uit, maar niet cijfer voor cijfer — net
+  als in Value Backlog.
 
 ## Nog niet gedaan
 
