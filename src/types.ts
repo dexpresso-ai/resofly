@@ -3030,7 +3030,11 @@ export type EmailTemplateKey =
   | 'contract.signed.client'
   | 'meetingBooking.linkSent'
   | 'meetingBooking.confirmed'
-  | 'file.shared';
+  | 'file.shared'
+  | 'portal.ticket.received'
+  | 'portal.ticket.created'
+  | 'portal.ticket.reply'
+  | 'portal.ticket.status';
 
 export interface EmailTemplate extends OrgScopedRow {
   template_key: EmailTemplateKey;

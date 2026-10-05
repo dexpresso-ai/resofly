@@ -28,7 +28,20 @@ export type EmailTemplateContentKey =
   | 'creditNote.sent'
   | 'contract.sent'
   | 'contract.signed.client'
-  | 'file.shared';
+  | 'file.shared'
+  | PortalTicketTemplateKey;
+
+/**
+ * De aanpasbare teksten van de klantmelding over een ticket (portal-notify),
+ * één per soort melding — dezelfde soorten die de klant in het portaal aan of
+ * uit zet. Eén mail kan meer bevatten (een antwoord én een statuswijziging);
+ * de tekst volgt dan de belangrijkste: ontvangen > nieuw ticket > antwoord > status.
+ */
+export type PortalTicketTemplateKey =
+  | 'portal.ticket.received'
+  | 'portal.ticket.created'
+  | 'portal.ticket.reply'
+  | 'portal.ticket.status';
 
 export type RenderedEmailTemplate = {
   templateKey: EmailTemplateKey;
@@ -317,6 +330,10 @@ export type PortalTicketUpdateEmailInput = {
   replies: Array<{ authorName: string; fromTeam: boolean; body: string; at: string }>;
   ticketUrl: string;
   settingsUrl: string;
+  /** Naam van het klantdossier (plaatshouder {{client_name}}). */
+  clientName?: string | null;
+  /** Eigen teksten van de organisatie per soort melding (email_templates); ontbreekt = de standaardtekst. */
+  content?: Partial<Record<PortalTicketTemplateKey, EmailTemplateContent | null>> | null;
 };
 
 export type EmailTemplateInputMap = {

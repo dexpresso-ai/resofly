@@ -16,7 +16,7 @@ export type EmailPlaceholder = { token: string; label: string; example: string }
 export type EmailTemplateMeta = {
   key: EmailTemplateKey;
   label: string;
-  group: 'offerte' | 'factuur' | 'herinnering' | 'creditfactuur' | 'contract' | 'booking' | 'bestanden';
+  group: 'offerte' | 'factuur' | 'herinnering' | 'creditfactuur' | 'contract' | 'booking' | 'bestanden' | 'tickets';
   description: string;
   fields: EmailField[];
   defaults: Record<EmailField, string>;
@@ -48,11 +48,22 @@ const PLACEHOLDERS: Record<string, Omit<EmailPlaceholder, 'token'>> = {
   item_kind: { label: 'Soort item', example: 'Map' },
   item_kind_lower: { label: 'Soort item (kleine letter)', example: 'map' },
   client_name: { label: 'Klantnaam', example: 'Jansen Bouw BV' },
+  ticket_title: { label: 'Titel van het ticket', example: 'Website laadt traag op mobiel' },
+  ticket_status: { label: 'Huidige status', example: 'In behandeling' },
+  previous_status: { label: 'Vorige status', example: 'Nieuw' },
+  status_sentence: { label: 'Statuswijziging als zinsdeel', example: 'in behandeling genomen' },
+  created_by: { label: 'Wie het ticket aanmaakte (jouw bedrijf of een collega van de klant)', example: 'ResoFly' },
+  reply_author: { label: 'Wie het laatst reageerde', example: 'ResoFly' },
+  new_replies: { label: '“Nieuw antwoord” of “2 nieuwe antwoorden”', example: 'Nieuw antwoord' },
+  reply_count: { label: 'Aantal nieuwe antwoorden', example: '1' },
 };
 
 function placeholders(...tokens: string[]): EmailPlaceholder[] {
   return tokens.map(token => ({ token, ...PLACEHOLDERS[token] }));
 }
+
+/** Wat voor alle ticketmeldingen geldt, onder de omschrijving in de editor. */
+const TICKET_MAIL_NOTE = 'Gebeurt er vlak na elkaar meer (een antwoord én een statuswijziging), dan komt dat in één mail met de tekst van de belangrijkste melding. De klant zet deze meldingen zelf aan of uit in het portaal; onderaan staat altijd de link “Meldingen beheren”.';
 
 export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
   {
@@ -208,6 +219,65 @@ export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
       cta_label: 'Bekijk {{item_kind_lower}}',
     },
     placeholders: placeholders('recipient_name', 'sender_name', 'company_name', 'item_name', 'item_kind', 'item_kind_lower', 'client_name', 'valid_until'),
+  },
+  // Klantmeldingen over tickets (portal-notify). Spiegelt PORTAL_TICKET_DEFAULTS
+  // en PORTAL_TICKET_PLACEHOLDERS in _shared/emailTemplates/portalTicketUpdate.ts;
+  // emailTemplateContent.test.ts houdt ze gelijk.
+  {
+    key: 'portal.ticket.received',
+    label: 'Ticketmelding · ontvangen (bevestiging)',
+    group: 'tickets',
+    description: `De bevestiging die iemand krijgt na het indienen van een ticket in het klantportaal. ${TICKET_MAIL_NOTE}`,
+    fields: ['subject', 'intro', 'closing', 'cta_label'],
+    defaults: {
+      subject: 'Ticket ontvangen: {{ticket_title}}',
+      intro: 'Beste {{recipient_name}},\nBedankt voor je bericht. {{company_name}} heeft je ticket ‘{{ticket_title}}’ ontvangen. Je krijgt een e-mail zodra er een antwoord is of de status verandert.',
+      closing: '',
+      cta_label: 'Bekijk het ticket',
+    },
+    placeholders: placeholders('recipient_name', 'company_name', 'client_name', 'ticket_title', 'ticket_status'),
+  },
+  {
+    key: 'portal.ticket.created',
+    label: 'Ticketmelding · nieuw ticket',
+    group: 'tickets',
+    description: `Als jouw team een ticket voor de klant aanmaakt, of een collega bij de klant er een indient. ${TICKET_MAIL_NOTE}`,
+    fields: ['subject', 'intro', 'closing', 'cta_label'],
+    defaults: {
+      subject: 'Nieuw ticket: {{ticket_title}}',
+      intro: 'Beste {{recipient_name}},\n{{created_by}} heeft het ticket ‘{{ticket_title}}’ aangemaakt.',
+      closing: '',
+      cta_label: 'Bekijk het ticket',
+    },
+    placeholders: placeholders('recipient_name', 'company_name', 'client_name', 'ticket_title', 'ticket_status', 'created_by'),
+  },
+  {
+    key: 'portal.ticket.reply',
+    label: 'Ticketmelding · nieuw antwoord',
+    group: 'tickets',
+    description: `Als er een antwoord op een ticket staat dat de klant mag zien. De antwoorden zelf komen automatisch onder je tekst. ${TICKET_MAIL_NOTE}`,
+    fields: ['subject', 'intro', 'closing', 'cta_label'],
+    defaults: {
+      subject: '{{new_replies}}: {{ticket_title}}',
+      intro: 'Beste {{recipient_name}},\n{{reply_author}} heeft gereageerd op het ticket ‘{{ticket_title}}’.',
+      closing: '',
+      cta_label: 'Lees en reageer in het portaal',
+    },
+    placeholders: placeholders('recipient_name', 'company_name', 'client_name', 'ticket_title', 'ticket_status', 'reply_author', 'new_replies', 'reply_count'),
+  },
+  {
+    key: 'portal.ticket.status',
+    label: 'Ticketmelding · statuswijziging',
+    group: 'tickets',
+    description: `Als de status van een ticket verandert, bijvoorbeeld naar “In behandeling” of “Goedgekeurd”. ${TICKET_MAIL_NOTE}`,
+    fields: ['subject', 'intro', 'closing', 'cta_label'],
+    defaults: {
+      subject: 'Ticket {{status_sentence}}: {{ticket_title}}',
+      intro: 'Beste {{recipient_name}},\nHet ticket ‘{{ticket_title}}’ is {{status_sentence}}.',
+      closing: '',
+      cta_label: 'Bekijk het ticket',
+    },
+    placeholders: placeholders('recipient_name', 'company_name', 'client_name', 'ticket_title', 'ticket_status', 'previous_status', 'status_sentence'),
   },
 ];
 

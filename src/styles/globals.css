@@ -239,7 +239,8 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .invoice-preview-body{padding:12px 14px;display:flex;flex-direction:column;gap:6px}
 .invoice-preview-header-row{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
 @media(max-width:900px){.invoice-style-grid{grid-template-columns:1fr}}
-@media(max-width:900px){.settings-head{flex-direction:column}.settings-grid{grid-template-columns:1fr}}
+/* minmax(0,1fr): een lange optie in een keuzelijst ("Ticketmelding · ontvangen (bevestiging) • aangepast") kort af met … in plaats van de kolom — en daarmee de pagina — breder te maken. */
+@media(max-width:900px){.settings-head{flex-direction:column}.settings-grid{grid-template-columns:minmax(0,1fr)}}
 
 /* Calendar integrations */
 .calendar-page{display:flex;flex-direction:column;gap:16px}

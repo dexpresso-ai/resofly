@@ -128,6 +128,10 @@ const EMAIL_TEMPLATES: Array<{ key: string; label: string; fields: string[] }> =
   { key: 'meetingBooking.linkSent', label: 'Boekingslink versturen', fields: ['subject', 'intro', 'cta_label'] },
   { key: 'meetingBooking.confirmed', label: 'Boeking bevestigd', fields: ['subject', 'intro', 'closing'] },
   { key: 'file.shared', label: 'Bestand gedeeld', fields: ['subject', 'intro', 'closing', 'cta_label'] },
+  { key: 'portal.ticket.received', label: 'Ticketmelding · ontvangen (bevestiging)', fields: ['subject', 'intro', 'closing', 'cta_label'] },
+  { key: 'portal.ticket.created', label: 'Ticketmelding · nieuw ticket', fields: ['subject', 'intro', 'closing', 'cta_label'] },
+  { key: 'portal.ticket.reply', label: 'Ticketmelding · nieuw antwoord', fields: ['subject', 'intro', 'closing', 'cta_label'] },
+  { key: 'portal.ticket.status', label: 'Ticketmelding · statuswijziging', fields: ['subject', 'intro', 'closing', 'cta_label'] },
 ];
 const EMAIL_TEMPLATE_KEYS = EMAIL_TEMPLATES.map((t) => t.key);
 const EMAIL_FIELDS = ['subject', 'intro', 'closing', 'cta_label'] as const;
@@ -949,7 +953,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
     module: 'clients',
     kind: 'read',
     description:
-      'Geeft per soort uitgaande mail (offerte, factuur, herinnering niveau 1 tot 3, creditfactuur, contract, boeking) of de tekst is aangepast en wat er dan staat. Een veld dat leeg is, valt terug op de ingebouwde standaardtekst. ' +
+      'Geeft per soort uitgaande mail (offerte, factuur, herinnering niveau 1 tot 3, creditfactuur, contract, boeking, gedeeld bestand, en de meldingen aan klanten over hun tickets) of de tekst is aangepast en wat er dan staat. Een veld dat leeg is, valt terug op de ingebouwde standaardtekst. ' +
       'Ook staat er per mail welke velden hij kent — niet elke mail heeft een afsluiting of een knop.',
     keywords: ['e-mailtekst', 'mailtekst', 'sjabloon', 'template', 'onderwerp', 'aanhef', 'afsluiting', 'knoptekst'],
     input: {},
@@ -971,7 +975,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
             cta_label: saved?.cta_label ?? null,
           };
         }),
-        placeholders_note: 'Plaatshouders zoals {{recipient_name}}, {{company_name}}, {{invoice_number}} en {{quote_number}} worden bij het versturen ingevuld.',
+        placeholders_note: 'Plaatshouders zoals {{recipient_name}}, {{company_name}}, {{invoice_number}} en {{quote_number}} worden bij het versturen ingevuld; bij de ticketmeldingen onder meer {{ticket_title}}, {{ticket_status}}, {{reply_author}} en {{status_sentence}}.',
       };
     },
   },

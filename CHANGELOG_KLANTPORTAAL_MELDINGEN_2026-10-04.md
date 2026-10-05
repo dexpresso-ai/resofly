@@ -161,5 +161,5 @@ op de pagina Berichten, maar nergens in het portaal. Drie dingen zijn daarom ver
 
 De mail die het team een klant stuurt (Berichten, klantdossier) gaat zoals altijd naar het
 hoofdadres van de klant. De pushmeldingen voor het team, de ticketpagina en het bewerkvenster
-van een ticket werken zoals ze werkten. De e-mailteksten van deze melding zijn (nog) niet per
-organisatie aan te passen.
+van een ticket werken zoals ze werkten. (Sinds 2026-10-05 zijn de teksten van deze meldingen per
+organisatie aan te passen, zie `CHANGELOG_KLANTMELDINGEN_TEKSTEN_2026-10-05.md`.)

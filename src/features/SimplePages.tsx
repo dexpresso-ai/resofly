@@ -141,7 +141,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'abonnement', label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
   { id: 'ai', label: 'AI', Icon: Sparkles, description: 'Koppel je eigen AI (Claude, ChatGPT) aan deze werkruimte, en bekijk het verbruik en de kosten van Gerrie per gebruiker.' },
   { id: 'api', label: 'API & webhooks', Icon: Webhook, description: 'Koppel andere software aan ResoFly — een webshop, je urenapp, Zapier, Make of n8n — met een API-sleutel.' },
-  { id: 'email', label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails aan, bepaal of klanten e-mail krijgen over hun tickets, en verstuur een testmail om je configuratie te controleren.' },
+  { id: 'email', label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails en van de ticketmeldingen aan klanten aan, bepaal of klanten e-mail krijgen over hun tickets, en verstuur een testmail om je configuratie te controleren.' },
 ];
 
 export function CalendarPage() {
@@ -1003,7 +1003,7 @@ function PersonalSenderCard({ organizationId }: { organizationId: string }) {
  * hele organisatie aan of uit. Uit = niemand krijgt een ticketmail, maar het
  * portaal toont alles nog gewoon.
  */
-function PortalNotificationsCard({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
+function PortalNotificationsCard({ organizationId, canAdmin, onEditTexts }: { organizationId: string; canAdmin: boolean; onEditTexts?: () => void }) {
   // undefined = laden, null = migratie nog niet gedraaid.
   const [settings, setSettings] = useState<OrganizationPortalSettings | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
@@ -1038,7 +1038,9 @@ function PortalNotificationsCard({ organizationId, canAdmin }: { organizationId:
       <div>
         <h3>Meldingen aan klanten</h3>
         <p className="settings-help">Je klanten krijgen een e-mail als er een ticket voor hen is aangemaakt (of als ze er zelf een indienen), als de status verandert en als je een voor de klant zichtbare notitie plaatst — met een link die meteen het ticket in het klantportaal opent. Iedere klant zet dit in het portaal zelf aan of uit, per soort melding, en kiest of het over alle tickets gaat of alleen over de eigen. Hier zet je het voor je hele organisatie uit.</p>
+        <p className="settings-help">De teksten van deze mails pas je aan bij <strong>E-mailteksten aanpassen</strong>, onder “Ticketmelding”.</p>
       </div>
+      {onEditTexts && <Button onClick={onEditTexts}>Teksten aanpassen</Button>}
     </div>
     {message && <div className="success">{message}</div>}
     {error && <div className="error">{error}</div>}
@@ -1070,7 +1072,24 @@ function formFromTemplate(meta: typeof EMAIL_TEMPLATES[number], row: EmailTempla
   };
 }
 
-function EmailTemplatesCard({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
+/** Vraag om een bepaalde e-mail in de editor te openen (nonce: ook twee keer dezelfde). */
+type EmailTemplateFocus = { key: EmailTemplateKey; nonce: number };
+
+/** "Meldingen aan klanten" en de e-mailteksten, met een knop van het één naar het ander. */
+function ClientMailCards({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
+  const [focus, setFocus] = useState<EmailTemplateFocus | null>(null);
+  return <>
+    <PortalNotificationsCard
+      organizationId={organizationId}
+      canAdmin={canAdmin}
+      onEditTexts={() => setFocus(prev => ({ key: 'portal.ticket.reply', nonce: (prev?.nonce ?? 0) + 1 }))}
+    />
+    <EmailTemplatesCard organizationId={organizationId} canAdmin={canAdmin} focus={focus} />
+  </>;
+}
+
+function EmailTemplatesCard({ organizationId, canAdmin, focus }: { organizationId: string; canAdmin: boolean; focus?: EmailTemplateFocus | null }) {
+  const cardRef = useRef<HTMLElement>(null);
   const [rows, setRows] = useState<Record<string, EmailTemplate>>({});
   const [loaded, setLoaded] = useState(false);
   const [activeKey, setActiveKey] = useState<EmailTemplateKey>(EMAIL_TEMPLATES[0].key);
@@ -1081,6 +1100,14 @@ function EmailTemplatesCard({ organizationId, canAdmin }: { organizationId: stri
 
   const meta = EMAIL_TEMPLATES.find(t => t.key === activeKey) ?? EMAIL_TEMPLATES[0];
   const isCustomized = Boolean(rows[activeKey]);
+
+  // Geopend vanuit een andere kaart (bv. "Meldingen aan klanten"): die e-mail
+  // kiezen en de editor in beeld brengen.
+  useEffect(() => {
+    if (!focus) return;
+    setActiveKey(focus.key);
+    cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [focus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1145,7 +1172,7 @@ function EmailTemplatesCard({ organizationId, canAdmin }: { organizationId: stri
     }
   }
 
-  return <section className="settings-card organization-card email-templates-card">
+  return <section ref={cardRef} className="settings-card organization-card email-templates-card">
     <div className="settings-card-head">
       <div>
         <h3>E-mailteksten aanpassen</h3>
@@ -1209,9 +1236,12 @@ function EmailTemplatesCard({ organizationId, canAdmin }: { organizationId: stri
               ? 'de gekozen tijden, de videocall-link en je begeleidende tekst'
               : meta.group === 'bestanden'
                 ? 'het overzicht in: wat er is gedeeld, jouw bericht en tot wanneer de link geldig is'
-                : `het overzicht in: bedrag, datums${meta.group === 'offerte' ? ' en geldigheid' : ''}`}.</p>
+                : meta.group === 'tickets'
+                  ? `het ticket in: titel en status${meta.key === 'portal.ticket.reply' ? ', en de antwoorden zelf' : ''}`
+                  : `het overzicht in: bedrag, datums${meta.group === 'offerte' ? ' en geldigheid' : ''}`}.</p>
             {form.closing.trim() && fillPlaceholders(form.closing).split('\n').map((line, i) => <p key={`c${i}`}>{line || ' '}</p>)}
             {meta.fields.includes('cta_label') && <p><span className="email-preview-cta">{fillPlaceholders(form.cta_label || meta.defaults.cta_label)}</span></p>}
+            {meta.group === 'tickets' && <p className="email-preview-structural">— Onderaan staat altijd: “Je krijgt deze e-mail omdat meldingen over tickets aanstaan in je klantportaal. Meldingen beheren”.</p>}
           </div>
         </div>
       </div>
@@ -2687,8 +2717,7 @@ export function Settings({
     {activeOrganization && <InvoiceInboxCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <SendingDomainCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     {activeOrganization && <PersonalSenderCard organizationId={activeOrganization.id} />}
-    {activeOrganization && <PortalNotificationsCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
-    {activeOrganization && <EmailTemplatesCard organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
+    {activeOrganization && <ClientMailCards organizationId={activeOrganization.id} canAdmin={canAdminOrganization} />}
     <section className="settings-card organization-card">
       <div className="settings-card-head">
         <div>

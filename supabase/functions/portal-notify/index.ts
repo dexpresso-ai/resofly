@@ -15,7 +15,9 @@
 //     schakelaar nog aan, bestaat het antwoord nog en is het nog zichtbaar,
 //     is het adres niet gebounced.
 //  4. Verstuurt één mail per ontvanger per ticket, in de huisstijl van de
-//     leverancier en vanaf het verzenddomein van de organisatie (resolveSenderIdentity).
+//     leverancier, met de eigen teksten van de organisatie als die er zijn
+//     (email_templates, Instellingen → E-mail) en vanaf het verzenddomein van
+//     de organisatie (resolveSenderIdentity).
 //
 // Mislukt een verzending, dan gaat de activiteit terug in de wachtrij; wie de
 // mail al kreeg staat in notified_emails en krijgt hem niet nog eens. Na vijf
@@ -27,7 +29,8 @@
 import { createAdminClient, HttpError } from '../_shared/edgeAuth.ts';
 import { BRANDING_COLUMNS, sanitizeBranding } from '../_shared/branding.ts';
 import { renderEmailTemplate } from '../_shared/emailTemplates/index.ts';
-import type { PortalTicketUpdateEmailInput } from '../_shared/emailTemplates/types.ts';
+import { PORTAL_TICKET_TEMPLATE_KEYS } from '../_shared/emailTemplates/portalTicketUpdate.ts';
+import type { EmailTemplateContent, PortalTicketTemplateKey, PortalTicketUpdateEmailInput } from '../_shared/emailTemplates/types.ts';
 import { sanitizeTagValue, sendViaResend } from '../_shared/resend.ts';
 import { resolveSenderIdentity, type SenderIdentity } from '../_shared/sendingDomain.ts';
 import {
@@ -91,6 +94,8 @@ type OrgContext = {
   footerText: string | null;
   sender: SenderIdentity;
   replyTo: string | undefined;
+  /** Eigen teksten per soort melding (Instellingen → E-mail); ontbreekt = standaardtekst. */
+  texts: Partial<Record<PortalTicketTemplateKey, EmailTemplateContent>>;
 };
 
 Deno.serve(async (req) => {
@@ -264,7 +269,7 @@ async function processTicket(
   let failed = 0;
 
   for (const mail of plan.mails) {
-    const input = emailInput(mail, ticket, client.id, org, notesById);
+    const input = emailInput(mail, ticket, client, org, notesById);
     const rendered = renderEmailTemplate('portal.ticketUpdate', input);
     try {
       await paceSend();
@@ -322,7 +327,7 @@ async function processTicket(
 function emailInput(
   mail: PlannedPortalMail,
   ticket: TicketRow,
-  clientId: string,
+  client: { id: string; name: string | null },
   org: OrgContext,
   notesById: Map<string, NoteRow>,
 ): PortalTicketUpdateEmailInput {
@@ -364,8 +369,10 @@ function emailInput(
       }
       : null,
     replies,
-    ticketUrl: portalTicketUrl(PORTAL_BASE_URL, clientId, ticket.id),
-    settingsUrl: portalSettingsUrl(PORTAL_BASE_URL, clientId),
+    ticketUrl: portalTicketUrl(PORTAL_BASE_URL, client.id, ticket.id),
+    settingsUrl: portalSettingsUrl(PORTAL_BASE_URL, client.id),
+    clientName: String(client.name ?? '').trim() || null,
+    content: org.texts,
   };
 }
 
@@ -393,6 +400,7 @@ async function loadOrgContext(organizationId: string, cache: Map<string, OrgCont
   }
 
   const sender = await resolveSenderIdentity(admin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+  const texts = await loadTicketEmailTexts(organizationId);
   const context: OrgContext = {
     enabled: setting?.ticket_emails_enabled !== false,
     companyName,
@@ -401,9 +409,39 @@ async function loadOrgContext(organizationId: string, cache: Map<string, OrgCont
     sender,
     // Antwoordt de klant toch op de mail, dan komt dat bij het bedrijf uit.
     replyTo: normalizeEmail(company?.email) || sender.replyTo,
+    texts,
   };
   cache.set(organizationId, context);
   return context;
+}
+
+/**
+ * De eigen teksten van de organisatie voor deze meldingen (email_templates).
+ * Een fout hier is niet fataal: dan gaat de melding met de standaardtekst.
+ */
+async function loadTicketEmailTexts(organizationId: string): Promise<Partial<Record<PortalTicketTemplateKey, EmailTemplateContent>>> {
+  const { data, error } = await admin
+    .from('email_templates')
+    .select('template_key,enabled,subject,intro,closing,cta_label')
+    .eq('organization_id', organizationId)
+    .in('template_key', PORTAL_TICKET_TEMPLATE_KEYS);
+  if (error) {
+    console.warn('portal-notify email_templates overgeslagen', error.message);
+    return {};
+  }
+  const texts: Partial<Record<PortalTicketTemplateKey, EmailTemplateContent>> = {};
+  for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+    const key = String(row.template_key) as PortalTicketTemplateKey;
+    if (!PORTAL_TICKET_TEMPLATE_KEYS.includes(key)) continue;
+    texts[key] = {
+      enabled: row.enabled as boolean | null,
+      subject: row.subject as string | null,
+      intro: row.intro as string | null,
+      closing: row.closing as string | null,
+      ctaLabel: row.cta_label as string | null,
+    };
+  }
+  return texts;
 }
 
 async function loadCompany(organizationId: string): Promise<Record<string, unknown> | null> {

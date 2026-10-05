@@ -12,6 +12,9 @@ Wat de code al levert:
 - migratie `20261004000000_portal_notifications.sql` — de tabellen, de drie
   triggers op `tickets`/`ticket_notes` en de claimfunctie (plus: een wijziging
   via de openbare API met een sleutel zonder `execute_high` mailt de klant niet);
+- migratie `20261005000000_portal_ticket_email_templates.sql` — de teksten van
+  de vier meldingen zijn per organisatie aan te passen in **Instellingen →
+  E-mail → E-mailteksten aanpassen** ("Ticketmelding · …");
 - de edge function `portal-notify` (`verify_jwt = false`, zie `supabase/config.toml`);
 - de nieuwe acties in `client-portal` en de schermen in het portaal;
 - in `resend-webhook`: een harde bounce of spamklacht op een melding zet het

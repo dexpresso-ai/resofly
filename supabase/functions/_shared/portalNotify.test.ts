@@ -269,3 +269,76 @@ test('mail: een lang antwoord wordt afgekapt; het hele stuk staat in het portaal
   assert.ok(!rendered.text.includes('x'.repeat(2100)));
   assert.ok(rendered.text.includes('…'));
 });
+
+// ── Eigen teksten van de organisatie (Instellingen → E-mail) ──────────────
+
+const teamReply = { authorName: 'Studio Lopik', fromTeam: true, body: 'We kijken ernaar.', at: '2026-10-04T12:05:00Z' };
+
+test('mail: eigen tekst per soort melding, met plaatshouders', () => {
+  const rendered = renderPortalTicketUpdateEmail({
+    ...base,
+    clientName: 'De Korenaar',
+    replies: [teamReply],
+    content: {
+      'portal.ticket.reply': {
+        subject: 'Reactie van {{reply_author}} op “{{ticket_title}}”',
+        intro: 'Hoi {{recipient_name}}!\nEr is nieuws voor {{client_name}}.',
+        closing: 'Groet, {{company_name}}',
+        ctaLabel: 'Naar het portaal',
+      },
+      // Een tekst voor een andere soort melding doet hier niets.
+      'portal.ticket.status': { subject: 'NIET DEZE' },
+    },
+  });
+  assert.equal(rendered.subject, 'Reactie van Studio Lopik op “Website laadt traag”');
+  assert.ok(rendered.html.includes('Hoi Joost!<br/>Er is nieuws voor De Korenaar.'));
+  assert.ok(rendered.html.includes('Groet, Studio Lopik'));
+  assert.ok(rendered.html.includes('>Naar het portaal</a>'));
+  assert.ok(rendered.html.includes('We kijken ernaar.'), 'de antwoorden zelf blijven staan');
+  assert.ok(rendered.html.includes('Meldingen beheren'), 'de afmeldregel blijft altijd staan');
+  assert.match(rendered.text, /Hoi Joost!\nEr is nieuws voor De Korenaar\./);
+  assert.match(rendered.text, /Naar het portaal: https:\/\//);
+});
+
+test('mail: eigen tekst wordt ge-escaped; onbekende plaatshouders verdwijnen', () => {
+  const rendered = renderPortalTicketUpdateEmail({
+    ...base,
+    ticket: { title: '<img src=x>', statusLabel: 'Nieuw' },
+    confirmation: true,
+    content: { 'portal.ticket.received': { intro: '<b>Let op</b> {{bestaat_niet}}{{ticket_title}}', subject: 'Ontvangen\n{{ticket_title}}' } },
+  });
+  assert.ok(rendered.html.includes('&lt;b&gt;Let op&lt;/b&gt; &lt;img src=x&gt;'));
+  assert.ok(!rendered.html.includes('<b>Let op'));
+  assert.ok(!rendered.html.includes('{{'));
+  assert.equal(rendered.subject, 'Ontvangen <img src=x>', 'onderwerp is platte tekst op één regel');
+});
+
+test('mail: een antwoord met een statuswijziging gebruikt de tekst van het antwoord, met de statusregel erbij', () => {
+  const rendered = renderPortalTicketUpdateEmail({
+    ...base,
+    replies: [teamReply],
+    status: { fromLabel: 'Nieuw', toLabel: 'In behandeling', sentence: 'in behandeling genomen' },
+    content: { 'portal.ticket.status': { subject: 'Status: {{ticket_status}}' } },
+  });
+  assert.equal(rendered.subject, 'Nieuw antwoord: Website laadt traag');
+  assert.ok(rendered.html.includes('De status is nu ‘In behandeling’.'));
+});
+
+test('mail: een lege of uitgezette eigen tekst valt terug op de standaardtekst', () => {
+  const blank = renderPortalTicketUpdateEmail({ ...base, newTicket: true, content: { 'portal.ticket.created': { subject: '   ', ctaLabel: '{{bestaat_niet}}' } } });
+  assert.equal(blank.subject, 'Nieuw ticket: Website laadt traag');
+  assert.ok(blank.html.includes('>Bekijk het ticket</a>'), 'een knop zonder tekst wordt de standaardknop');
+  const off = renderPortalTicketUpdateEmail({ ...base, newTicket: true, content: { 'portal.ticket.created': { enabled: false, subject: 'Uit' } } });
+  assert.equal(off.subject, 'Nieuw ticket: Website laadt traag');
+});
+
+test('mail: standaardtekst per soort melding', () => {
+  const created = renderPortalTicketUpdateEmail({ ...base, newTicket: true, createdBy: 'Anja' });
+  assert.match(created.text, /Beste Joost,\nAnja heeft het ticket ‘Website laadt traag’ aangemaakt\./);
+  const byTeam = renderPortalTicketUpdateEmail({ ...base, newTicket: true });
+  assert.match(byTeam.text, /Studio Lopik heeft het ticket ‘Website laadt traag’ aangemaakt\./);
+  const status = renderPortalTicketUpdateEmail({ ...base, status: { fromLabel: 'Nieuw', toLabel: 'Goedgekeurd', sentence: 'goedgekeurd' } });
+  assert.match(status.text, /Het ticket ‘Website laadt traag’ is goedgekeurd\./);
+  const nameless = renderPortalTicketUpdateEmail({ ...base, recipientName: null, confirmation: true });
+  assert.match(nameless.text, /Beste relatie,/);
+});

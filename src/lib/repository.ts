@@ -4690,7 +4690,15 @@ export async function upsertEmailTemplate(organizationId: UUID, templateKey: Ema
     }, { onConflict: 'organization_id,template_key' })
     .select(EMAIL_TEMPLATE_COLUMNS)
     .single();
-  if (error) throw error;
+  if (error) {
+    // Een nieuwe e-mailsoort waarvan de databasemigratie hier nog niet draaide
+    // (de template_key-CHECK kent hem nog niet): zeg dat, in plaats van de
+    // kale Postgres-melding.
+    if (error.code === '23514' && /template_key/i.test(`${error.message ?? ''} ${error.details ?? ''}`)) {
+      throw new Error('Deze e-mail kan hier nog niet worden aangepast: de databasemigratie voor deze e-mailteksten moet nog draaien.');
+    }
+    throw error;
+  }
   return data as EmailTemplate;
 }
 
