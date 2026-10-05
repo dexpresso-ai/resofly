@@ -6,6 +6,7 @@ import { FinanceDocPreview } from '../components/FinanceDocPreview';
 import { Button, Select } from '../components/Ui';
 import { SearchFilterPanel } from '../components/SearchFilterPanel';
 import type { FilterField } from '../components/SearchFilterPanel';
+import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, total, lineGross } from '../lib/format';
 import { exportFinancePDF } from '../lib/pdf';
 import { safeCheckoutUrl } from '../lib/safeUrl';
@@ -462,6 +463,7 @@ function QuoteTable({
   return <>
     <div className="fin-header quote-table-header">
       <div>
+        <PageIcon page="quotes" />
         <h2>{title}</h2>
         <p>Compact overzicht met bedragen, klant- en projectcontext. Klik op een offerte voor workflow en details.</p>
       </div>
@@ -589,6 +591,7 @@ function InvoiceTable({
   return <>
     <div className="fin-header quote-table-header">
       <div>
+        <PageIcon page="invoices" />
         <h2>{title}</h2>
         <p>Volwassen factuurmodule met detailpaneel, verzendhistorie, Mollie-betaalstatus, snapshots en audit-timeline.</p>
       </div>

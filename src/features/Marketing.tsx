@@ -11,6 +11,7 @@ import type { FilterField } from '../components/SearchFilterPanel';
 import { STANDARD_MERGE_TOKENS, customFieldToken, unknownMergeTokens, type MergeFieldDefinition } from '../lib/mergeTokens';
 import { activeFieldDefinitions, distinctFieldValues } from '../components/CustomFields';
 import { RichTextEditor } from '../components/RichTextEditor';
+import { PageIcon } from '../components/PageIcon';
 import {
   loadCampaigns, loadCampaignStats, loadCampaignRecipients, loadSuppressions,
   createCampaign, updateCampaign, deleteCampaign, addSuppression, removeSuppression,
@@ -252,6 +253,7 @@ export function Marketing({ data, organizationId, canWrite, onChanged, openCampa
     <div className="mk">
       <div className="mk-head">
         <div>
+          <PageIcon page="marketing" />
           <p className="eyebrow">E-mailmarketing</p>
           <h1 className="mk-title">Campagnes & mailings</h1>
           <p className="mk-sub">Stuur gerichte mail naar je klanten en volg wie opent, klikt en antwoordt.</p>

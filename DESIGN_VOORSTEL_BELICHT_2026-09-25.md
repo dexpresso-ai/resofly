@@ -7,6 +7,10 @@ sinds dezelfde dag is het ook **ingebouwd in de app** — zie [Ingebouwd](#ingeb
 > *Eén systeem, twee lichten.* Nacht is een studio in de avond met één warme lamp (het goud);
 > Dag is dezelfde studio bij daglicht: papierwit op warm steen, haarlijnen in plaats van gloed.
 
+**Vervolg (2026-10-05):** bovenop Belicht ligt nu de Cockpit-laag — de opbouw en beeldtaal van
+Value Backlog (donker commandovlak, zwevend werkvlak, dashboard als cockpit) in dezelfde kleuren
+en letters. Zie [CHANGELOG_LOOK_AND_FEEL_COCKPIT_2026-10-05.md](CHANGELOG_LOOK_AND_FEEL_COCKPIT_2026-10-05.md).
+
 ## Bekijken
 
 | wat | waar |

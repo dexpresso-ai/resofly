@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, ChevronLeft, ChevronRight, Percent, Plus, RotateCcw, Trash2, Wallet } from 'lucide-react';
 import type { AppData, DgaInterestComputation, DgaInterestPosting, DgaInterestRate, DgaSignals } from '../types';
 import { Button, Input, Skeleton } from '../components/Ui';
+import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import { PayrollImport } from './PayrollImport';
 import {
@@ -94,7 +95,7 @@ export function DgaPage({ data, organizationId, canWrite, canAdmin, businessActi
   return (
     <div className="bk-page">
       <div className="bk-head">
-        <div>
+        <div><PageIcon page="dga" />
           <h2>DGA</h2>
           <p>Gebruikelijk loon en de rekening-courant met de eigen BV. Signalen uit je eigen administratie, met het wettelijke bedrag ernaast — geen fiscaal advies.</p>
         </div>

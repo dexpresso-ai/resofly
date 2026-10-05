@@ -10,6 +10,7 @@ import type {
 } from '../types';
 import { SIZE_CLASS_ARTICLES, SIZE_CLASS_LABELS } from '../types';
 import { Button, Input, Select, Skeleton, Textarea } from '../components/Ui';
+import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import {
   adoptAnnualAccounts, buildAnnualAccountsSnapshot, determineCompanySize, extendPreparationTerm, fileAnnualAccounts,
@@ -387,7 +388,7 @@ export function AnnualAccountsPage({ data, organizationId, canWrite, canAdmin, b
   return (
     <div className="bk-page">
       <div className="bk-head">
-        <div>
+        <div><PageIcon page="annual-accounts" />
           <h2>Jaarrekening</h2>
           <p>
             Opmaken, ondertekenen, vaststellen en deponeren — vier verschillende handelingen met vier eigen termijnen.

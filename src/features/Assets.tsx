@@ -3,6 +3,7 @@ import { CalendarClock, Landmark, Layers, Plus, Trash2 } from 'lucide-react';
 import type { AppData, AssetDepreciation, FixedAsset } from '../types';
 import { Modal } from '../components/Modal';
 import { Button, Input, Select, Textarea } from '../components/Ui';
+import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, uid } from '../lib/format';
 import {
   bookAssetAcquisition, bookAssetDisposal, deleteRow, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, postAssetDepreciation, updateRow,
@@ -81,7 +82,7 @@ export function AssetsPage({ data, organizationId, canWrite, onChanged }: PagePr
   return (
     <div className="bk-page">
       <div className="bk-head">
-        <div><h2>Activa</h2><p>Vaste activa registreren en lineair afschrijven naar de winst- en verliesrekening.</p></div>
+        <div><PageIcon page="assets" /><h2>Activa</h2><p>Vaste activa registreren en lineair afschrijven naar de winst- en verliesrekening.</p></div>
         <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Nieuw activum</Button>
       </div>
       {data.fixedAssets.length > 0 && <div className="bk-asset-kpis">

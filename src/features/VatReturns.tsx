@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Download, FileP
 import type { AppData, IcpDeclaration, VatReturn, VatReturnBox, VatReturnRubrieken } from '../types';
 import { Button, Skeleton, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
+import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import { downloadCsv } from '../lib/csv';
 import {
@@ -195,7 +196,7 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
   return (
     <div className="bk-page">
       <div className="bk-head">
-        <div><h2>Omzetbelasting</h2><p>BTW-aangifte per {view === 'monthly' ? 'maand' : 'kwartaal'}, berekend uit de geboekte journaalposten.</p></div>
+        <div><PageIcon page="vat-returns" /><h2>Omzetbelasting</h2><p>BTW-aangifte per {view === 'monthly' ? 'maand' : 'kwartaal'}, berekend uit de geboekte journaalposten.</p></div>
       </div>
 
       {kor && <div className="bk-note">Je organisatie valt onder de <strong>KOR</strong>: je brengt geen BTW in rekening en mag geen voorbelasting aftrekken. De aangifte is daarom nihil.</div>}

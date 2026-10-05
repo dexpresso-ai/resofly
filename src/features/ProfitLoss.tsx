@@ -3,6 +3,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, Download, ListChecks, Scale, Tr
 import type { AppData, BalanceSheetRow, LedgerReportGroup, OpenItemsReport, ProfitAndLossRow } from '../types';
 import { REPORT_GROUP_LABELS } from '../types';
 import { Button, Skeleton } from '../components/Ui';
+import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import { ensureDefaultLedgerAccounts, reportBalanceSheet, reportOpenItems, reportProfitAndLoss } from '../lib/repository';
 
@@ -151,7 +152,7 @@ export function ProfitLossPage({ data, organizationId, onChanged }: { data: AppD
   return (
     <div className="bk-page">
       <div className="bk-head">
-        <div><h2>Winst &amp; verlies</h2><p>Resultaat en balans, afgeleid uit de geboekte journaalposten.</p></div>
+        <div><PageIcon page="pnl" /><h2>Winst &amp; verlies</h2><p>Resultaat en balans, afgeleid uit de geboekte journaalposten.</p></div>
       </div>
 
       <div className="bk-report-controls">

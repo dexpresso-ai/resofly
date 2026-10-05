@@ -1223,6 +1223,10 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
    Goud betekent iets: zongoud is de hoofdactie, de focus en de plek waar je
    bent. Gerrie heeft een eigen laag, het poollicht (--ai-1..3).
    Elke teksttoken haalt WCAG AA (≥4,5:1) op een kaart, in beide thema's.
+
+   Bovenop Belicht ligt sinds 2026-10-05 de Cockpit-laag (look & feel naar
+   Value Backlog) in src/styles/cockpit.css, ná dit bestand geladen. Daar
+   staan ook de tokens van het donkere commandovlak (--ground, --rings, …).
    ════════════════════════════════════════════════════════════════════════ */
 :root{
   /* ── 1. Kanalen ── */

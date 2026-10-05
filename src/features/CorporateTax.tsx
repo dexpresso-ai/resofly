@@ -6,6 +6,7 @@ import type {
 } from '../types';
 import { CORPORATE_TAX_CORRECTION_LABELS } from '../types';
 import { Button, Input, Select, Skeleton } from '../components/Ui';
+import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import {
   addCorporateTaxCorrection, deleteCorporateTaxCorrection, listCorporateTaxCorrections,
@@ -175,7 +176,7 @@ export function CorporateTaxPage({ data, organizationId, canWrite, canAdmin, bus
   return (
     <div className="bk-page">
       <div className="bk-head">
-        <div>
+        <div><PageIcon page="corporate-tax" />
           <h2>Vennootschapsbelasting</h2>
           <p>Van commercieel resultaat naar belastbaar bedrag: fiscale correcties, verliesverrekening en het tarief van het boekjaar. Een hulpmiddel — indienen doe je zelf of via je accountant.</p>
         </div>

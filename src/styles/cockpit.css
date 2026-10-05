@@ -1,0 +1,874 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   COCKPIT — de look & feel van Value Backlog, in de kleuren van ResoFly
+   (2026-10-05)
+   ──────────────────────────────────────────────────────────────────────────
+   Deze laag wordt ná globals.css geladen (zie main.tsx) en wint daardoor op
+   gelijke specificiteit van Belicht. Het ontwerp leent de opbouw en de
+   beeldtaal van Value Backlog; de kleuren, letters en het poollicht van
+   Gerrie blijven van ResoFly.
+
+   Spelregels
+     • Het commandovlak is altijd donker: de zijbalk, de cockpit van het
+       dashboard, de kop van een project of klant, de dock op de telefoon en
+       het inlogscherm — ook op Dag. Grafiet met één warme lamp linksboven
+       (het zongoud) en een textuur van resonantieringen die vanuit het
+       merkteken uitwaaieren.
+     • Het werkvlak zweeft op de grond: grote ronde hoeken, licht dat van
+       boven valt. Op Dag is dat een licht papieren canvas tegen de donkere
+       grond, op Nacht een grafieten paneel met een haarlijn.
+     • Kaarten liggen zacht gelaagd en komen een tikje omhoog als je erop
+       kunt klikken. De hoofdknop is goud met een verloop en een gloed.
+     • Waar je bent, gloeit: de actieve menuregel krijgt een gouden streep
+       met gloed en het icoon licht op. Wat op je wacht is een gouden pil.
+     • De telefoon houdt zijn gemeten opbouw (tests/mobile/run.mjs): hoogtes,
+       marges en lettergroottes veranderen alleen vanaf 761px. Daaronder
+       wisselen kleur, vorm en de dock onderin.
+     • Werkruimteregels staan onder `.app`: de publieke pagina's en het
+       klantportaal (met de huisstijl van de leverancier) blijven zoals ze
+       waren.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1 · Tokens ──────────────────────────────────────────────────────────── */
+:root{
+  /* De grond onder zijbalk en werkvlak: in beide thema's donker. */
+  --ground:#09090B;
+  /* Resonantieringen: concentrische cirkels, middelpunt in het midden van
+     een vlak van 1200×1200. Met background-position leg je dat middelpunt
+     waar het licht vandaan komt (het merkteken, een hoek van de cockpit). */
+  --rings:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='1200' viewBox='0 0 1200 1200'%3E%3Cg fill='none' stroke='%23fff' stroke-opacity='.1'%3E%3Ccircle cx='600' cy='600' r='44'/%3E%3Ccircle cx='600' cy='600' r='88'/%3E%3Ccircle cx='600' cy='600' r='132'/%3E%3Ccircle cx='600' cy='600' r='176'/%3E%3Ccircle cx='600' cy='600' r='220'/%3E%3Ccircle cx='600' cy='600' r='264'/%3E%3Ccircle cx='600' cy='600' r='308'/%3E%3Ccircle cx='600' cy='600' r='352'/%3E%3Ccircle cx='600' cy='600' r='396'/%3E%3Ccircle cx='600' cy='600' r='440'/%3E%3Ccircle cx='600' cy='600' r='484'/%3E%3Ccircle cx='600' cy='600' r='528'/%3E%3Ccircle cx='600' cy='600' r='572'/%3E%3C/g%3E%3C/svg%3E");
+  /* Het donkere commandovlak: van diep grafiet linksboven naar iets lichter
+     rechtsonder, met de lamp (zongoud) en een koele tegenlamp. */
+  --cmd-surface:
+    radial-gradient(640px 300px at 0% 0%,rgba(var(--accent-rgb),.17),transparent 62%),
+    radial-gradient(560px 320px at 100% 0%,rgba(150,148,172,.13),transparent 64%),
+    linear-gradient(135deg,#0B0B0D 0%,#141417 48%,#1E1E23 100%);
+  --cmd-edge:inset 0 0 0 1px rgba(255,255,255,.07),inset 0 1px 0 rgba(255,255,255,.05);
+  --cmd-shadow:0 30px 60px -34px rgba(0,0,0,.8);
+  --glass:rgba(255,255,255,.055);
+  --glass-2:rgba(255,255,255,.09);
+  --glass-line:rgba(255,255,255,.09);
+  --gold-face:linear-gradient(150deg,#FFE08A 0%,#F6C143 48%,#E4A11C 100%);
+
+  /* Vorm: werkvlak 22 · kaart 18 · bediening 12 */
+  --r-canvas:22px;
+  --r-card:18px;
+  --r-ctl:12px;
+
+  /* Diepte: zacht en gelaagd. Via de schaduwkanalen, zodat Dag (en een
+     klanthuisstijl) vanzelf de juiste sterkte krijgt. */
+  --shadow-card:0 1px 2px rgba(var(--shade-rgb),calc(.16 * var(--shade-k))),0 10px 28px -18px rgba(var(--shade-rgb),calc(.75 * var(--shade-k))),inset 0 1px 0 var(--hi);
+  --shadow-card-hover:0 2px 6px rgba(var(--shade-rgb),calc(.2 * var(--shade-k))),0 24px 48px -24px rgba(var(--shade-rgb),calc(1.15 * var(--shade-k))),inset 0 1px 0 var(--hi);
+  --glow-accent:0 0 0 1px rgba(var(--accent-rgb),.35),0 10px 28px -8px rgba(var(--accent-rgb),.7);
+  --ease-out:cubic-bezier(.16,1,.3,1);
+}
+/* Dag: het canvas een tikje dieper, zodat witte kaarten erop liggen in
+   plaats van erin op te gaan. Alleen in de werkruimte: de publieke galerij
+   leest --bg rechtstreeks en hoort te blijven zoals hij was. */
+:root[data-theme="light"] .app{
+  --bg:#F3F2EE;
+  --bg-rgb:243,242,238;
+}
+
+/* Het commandovlak draagt op Dag de Nacht-tokens, zodat alles wat erin staat
+   (knoppen, velden, tellers, keuzelijsten) vanzelf donker wordt. Op Nacht
+   zijn dit dezelfde waarden als op :root. Ook de afgeleide tokens worden
+   opnieuw gezet: een custom property wordt opgelost waar hij staat, dus
+   --text op :root zou anders de lichte --ink blijven dragen. */
+:root[data-theme="light"] :is(.sidebar,.cockpit,.proj-dash-hero,.client-detail-hero,.bottomnav,.mobile-nav-toggle,.cmd-scope){
+  --sheen-rgb:255,255,255;
+  --shade-rgb:0,0,0;
+  --ink-rgb:244,243,240;
+  --sheen-k:1;
+  --shade-k:1;
+  --bg-rgb:15,15,17;
+  --bg-deep-rgb:9,9,10;
+  --surface-rgb:20,20,23;
+  --surface2-rgb:26,26,30;
+  --surface3-rgb:33,33,38;
+  --accent-rgb:247,197,72;
+  --two-rgb:154,174,123;
+  --ok-rgb:76,217,160;
+  --warn-rgb:255,162,76;
+  --danger-rgb:255,107,114;
+  --note-rgb:183,156,255;
+  --info-rgb:108,182,255;
+  --ai-rgb:163,146,255;
+  --accent:#F7C548;
+  --accent-hover:#FFD467;
+  --accent-ink:#F7C548;
+  --on-accent:#1A1405;
+  --two:#9AAE7B;
+  --two-ink:#9AAE7B;
+  --ok:#4CD9A0;
+  --warn:#FFA24C;
+  --danger:#FF6B72;
+  --note:#B79CFF;
+  --info:#6CB6FF;
+  --bg:#0F0F11;
+  --bg-deep:#09090A;
+  --surface:#141417;
+  --surface-2:#1A1A1E;
+  --surface-3:#212126;
+  --well:#0B0B0D;
+  --raised:#26262C;
+  --field:#0C0C0E;
+  --nav-active:#1A1A1E;
+  --line:#232327;
+  --line-2:#2F2F35;
+  --line-3:#3E3E45;
+  --line-accent:rgba(247,197,72,.34);
+  --hi:rgba(255,255,255,.045);
+  --ink:#F4F3F0;
+  --ink-2:#B5B3AD;
+  --ink-3:#908E88;
+  --ink-4:#5E5D59;
+  --ai-1:#A392FF;
+  --ai-2:#6CC4FF;
+  --ai-3:#F7C548;
+  --ai-ink:#B8AAFF;
+  --ai-glow:rgba(140,128,255,.34);
+  --ai-soft:rgba(163,146,255,.09);
+  --viz-1:#F2BE45;
+  --viz-2:#7A6230;
+  --grid:rgba(255,255,255,.06);
+  --shadow-1:inset 0 1px 0 rgba(255,255,255,.045),0 1px 2px rgba(0,0,0,.35);
+  --shadow-2:inset 0 1px 0 rgba(255,255,255,.045),0 14px 36px -14px rgba(0,0,0,.75);
+  --shadow-pop:0 0 0 1px rgba(255,255,255,.08),0 28px 70px -18px rgba(0,0,0,.85);
+  --ring:0 0 0 3px rgba(247,197,72,.32);
+  --scrim:rgba(4,4,5,.62);
+  --focus-line:rgba(247,197,72,.62);
+  --accent-edge:#F7C548;
+  --bg2:#141417;
+  --bg3:rgba(255,255,255,.055);
+  --bg4:rgba(255,255,255,.085);
+  --bg5:rgba(255,255,255,.12);
+  --panel:#141417;
+  --panel-strong:#1A1A1E;
+  --border:#232327;
+  --border2:#2F2F35;
+  --border-strong:rgba(247,197,72,.34);
+  --text:#F4F3F0;
+  --muted:#908E88;
+  --muted2:#B5B3AD;
+  --load-fill:#F7C548;
+  --load-track:rgba(255,255,255,.07);
+  --accent-soft:rgba(247,197,72,.12);
+  --accent-glow:rgba(247,197,72,.26);
+  --accent-g:#4CD9A0;
+  --accent-o:#FFA24C;
+  --accent-r:#FF6B72;
+  --accent-v:#B79CFF;
+  --accent-b:#6CB6FF;
+  --shadow:inset 0 1px 0 rgba(255,255,255,.045),0 14px 36px -14px rgba(0,0,0,.75);
+  --shadow-soft:inset 0 1px 0 rgba(255,255,255,.045),0 1px 2px rgba(0,0,0,.35);
+  --shadow-card:0 1px 2px rgba(0,0,0,.16),0 10px 28px -18px rgba(0,0,0,.75),inset 0 1px 0 rgba(255,255,255,.045);
+  --shadow-card-hover:0 2px 6px rgba(0,0,0,.2),0 24px 48px -24px rgba(0,0,0,1),inset 0 1px 0 rgba(255,255,255,.045);
+  --ag-t-quiet:rgba(163,146,255,.14);
+  --ag-t-quiet2:rgba(163,146,255,.08);
+  --ag-t-bloom:rgba(163,146,255,.26);
+  --ag-t-shade:rgba(0,0,0,.18);
+  color-scheme:dark;
+}
+
+/* ── 2 · Grond en werkvlak ───────────────────────────────────────────────── */
+/* Desktop en tablet: de zijbalk en de rand rond het werkvlak zijn één donkere
+   grond; het werkvlak zweeft erop met grote hoeken en licht van boven. */
+@media (min-width:761px){
+  .app{background:var(--ground)}
+  .app .main{
+    margin:8px 8px 8px 0;
+    border:0;
+    border-radius:var(--r-canvas);
+    background:
+      radial-gradient(1100px 420px at 8% -12%,rgba(var(--accent-rgb),.07),transparent 62%),
+      radial-gradient(900px 420px at 96% -16%,rgba(var(--sheen-rgb),calc(.045 * var(--sheen-k))),transparent 64%),
+      var(--bg);
+    box-shadow:0 0 0 1px rgba(255,255,255,.065),0 30px 80px -40px rgba(0,0,0,.9);
+  }
+  :root[data-theme="light"] .app .main{
+    background:
+      radial-gradient(1100px 420px at 8% -12%,rgba(var(--accent-rgb),.15),transparent 62%),
+      radial-gradient(900px 420px at 96% -16%,rgba(28,27,24,.055),transparent 64%),
+      var(--bg);
+    box-shadow:0 0 0 1px rgba(255,255,255,.05),0 30px 80px -40px rgba(0,0,0,.9);
+  }
+
+  /* De bovenregel (werktabs + knoppen) ligt doorzichtig op het werkvlak en
+     krijgt pas een haarlijn en schaduw als de inhoud eronder schuift. */
+  .app .main>.tabbar,.app .main>.topbar{
+    position:relative;z-index:3;
+    background:transparent;border-bottom-color:transparent;
+    transition:border-color var(--t-2) var(--ease),box-shadow var(--t-2) var(--ease),background-color var(--t-2) var(--ease);
+  }
+  .app .main.is-scrolled>.tabbar,.app .main.is-scrolled>.topbar{
+    border-bottom-color:var(--line);
+    background:color-mix(in srgb,var(--bg) 82%,transparent);
+    box-shadow:0 12px 28px -24px rgba(var(--shade-rgb),calc(1.6 * var(--shade-k)));
+  }
+
+  .app .tab{height:32px;border-radius:10px;color:var(--ink-3);font-weight:500}
+  .app .tab:hover{background:rgba(var(--sheen-rgb),calc(.055 * var(--sheen-k)));color:var(--ink)}
+  .app .tab.active{
+    background:var(--surface);color:var(--ink);font-weight:600;
+    box-shadow:inset 0 0 0 1px var(--line),0 1px 2px rgba(var(--shade-rgb),calc(.35 * var(--shade-k))),0 6px 14px -8px rgba(var(--shade-rgb),calc(1 * var(--shade-k)));
+  }
+  .app .tab.active .tab-ico{color:var(--accent-ink)}
+  .app .tab-new{border-radius:10px}
+}
+
+/* Het werkvlak zelf: dunne scrollbalken in de tint van de lijnen. */
+.app .content::-webkit-scrollbar-thumb{border-radius:999px}
+
+/* ── 3 · De zijbalk: het donkere commandovlak ────────────────────────────── */
+.app .sidebar{
+  color:var(--ink);
+  border-right:0;
+  background:
+    radial-gradient(300px 240px at 0 0,rgba(var(--accent-rgb),.15),transparent 70%),
+    linear-gradient(180deg,#131316 0%,#0C0C0E 42%,var(--ground) 100%);
+}
+:root[data-theme="light"] .app .sidebar{
+  background:
+    radial-gradient(300px 240px at 0 0,rgba(var(--accent-rgb),.15),transparent 70%),
+    linear-gradient(180deg,#131316 0%,#0C0C0E 42%,var(--ground) 100%);
+}
+/* Resonantieringen vanuit het merkteken, die naar onderen wegvloeien. */
+.app .sidebar::before{
+  display:block;content:'';position:absolute;inset:0;z-index:0;pointer-events:none;
+  background:var(--rings) no-repeat;
+  background-position:-568px -571px;
+  -webkit-mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.35) 22%,transparent 40%);
+          mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.35) 22%,transparent 40%);
+  width:auto;height:auto;border-radius:0;filter:none;opacity:1;
+}
+.app .sidebar::after{display:none}
+.app .sidebar-head,.app .sidebar-nav,.app .sidebar-user{position:relative;z-index:1}
+.app .sidebar-head{border-bottom:0}
+
+/* Het merk: het gouden blok met een halo, de naam in wit, eronder in goud. */
+.app .app-brand{gap:11px}
+.app .sidebar .brand-icon{
+  background:var(--gold-face);color:#1A1405;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 -1px 0 rgba(90,55,0,.25),0 0 0 4px rgba(var(--accent-rgb),.09),0 8px 24px -4px rgba(var(--accent-rgb),.55);
+}
+.app .sidebar .app-brand>span{display:flex;flex-direction:column;line-height:1.12;color:#fff;font-weight:750;letter-spacing:-.022em}
+.app .sidebar .app-brand small{display:block;margin-top:1px;font-size:11px;font-weight:600;letter-spacing:0;color:var(--accent)}
+
+/* Zoeken en organisatie: glas op donker. */
+.app .sidebar .gs-field{background:var(--glass);border-color:var(--glass-line);box-shadow:none}
+.app .sidebar .gs-field:hover{background:rgba(255,255,255,.075)}
+.app .sidebar .gs-field:focus-within{border-color:var(--focus-line);box-shadow:var(--ring)}
+.app .sidebar .gs-input{color:var(--ink)}
+.app .sidebar .gs-input::placeholder{color:rgba(244,243,240,.48)}
+.app .sidebar .gs-field-icon{color:rgba(244,243,240,.5)}
+.app .sidebar .org-switcher label{color:rgba(244,243,240,.45)}
+.app .sidebar .org-switcher .select-trigger{background:var(--glass);border-color:var(--glass-line);box-shadow:none;color:var(--ink)}
+.app .sidebar .org-switcher .select-trigger:hover{background:rgba(255,255,255,.075)}
+.app .sidebar .org-meta span,.app .sidebar .org-meta button{color:rgba(244,243,240,.5)}
+.app .sidebar .org-meta button:hover{color:#fff}
+.app .sidebar .sidebar-pin,.app .sidebar .sidebar-close,.app .sidebar .sidebar-refresh{border-color:transparent;background:transparent;color:rgba(244,243,240,.5)}
+.app .sidebar .sidebar-pin:hover,.app .sidebar .sidebar-close:hover,.app .sidebar .sidebar-refresh:hover{background:rgba(255,255,255,.08);color:#fff}
+.app.sidebar-pinned .sidebar .sidebar-pin{border-color:transparent;background:transparent;color:rgba(244,243,240,.5)}
+
+/* Groepskopjes: klein, in kapitalen met lucht, zoals in een cockpit. */
+.app .sidebar .nav-section,.app .sidebar .nav-group{
+  font-size:10px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:rgba(244,243,240,.4);
+}
+.app .sidebar .nav-group::after{background:rgba(255,255,255,.08)}
+
+/* Menuregels: wit op donker; wat actief is, gloeit. */
+.app .sidebar .nav-item{
+  border:0;border-radius:11px;
+  color:rgba(244,243,240,.72);font-weight:500;
+  transition:background var(--t-1) var(--ease),color var(--t-1) var(--ease),box-shadow var(--t-1) var(--ease);
+}
+.app .sidebar .nav-item svg{color:rgba(244,243,240,.5);transition:color var(--t-1) var(--ease),filter var(--t-2) var(--ease)}
+.app .sidebar .nav-item:hover{background:rgba(255,255,255,.07);color:#fff}
+.app .sidebar .nav-item:hover svg{color:rgba(244,243,240,.85)}
+.app .sidebar .nav-item.active{
+  color:#fff;font-weight:600;
+  background:linear-gradient(90deg,rgba(var(--accent-rgb),.17) 0%,rgba(255,255,255,.06) 62%,rgba(255,255,255,.03) 100%);
+  box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.17);
+}
+/* De gouden streep langs de rand. Hij hangt aan de wikkel van de regel, niet
+   aan de regel zelf: in de smalle balk knipt de regel alles af wat buiten zijn
+   vak valt (overflow:hidden, zie Belicht), en de streep staat juist daarbuiten. */
+.app .sidebar .nav-item.active::before{display:none}
+.app .sidebar .nav-item-wrap{position:relative}
+.app .sidebar .nav-item-wrap:has(>.nav-item.active)::before{
+  content:'';position:absolute;left:var(--nav-bar-x,-8px);top:var(--nav-row-mid,21px);z-index:1;
+  width:4px;height:20px;border-radius:0 999px 999px 0;
+  background:var(--accent);box-shadow:0 0 12px rgba(var(--accent-rgb),.9);
+  transform:translateY(-50%);pointer-events:none;
+}
+.app .sidebar .nav-item.active svg{color:var(--accent);filter:drop-shadow(0 0 6px rgba(var(--accent-rgb),.7))}
+.app .sidebar .nav-item-parent .nav-chevron{color:rgba(244,243,240,.4)}
+.app .sidebar .nav-item-parent:hover .nav-chevron,.app .sidebar .nav-item-parent.active .nav-chevron{color:rgba(244,243,240,.8)}
+/* Gerrie houdt zijn poollicht, ook in de gloed. */
+.app .sidebar .nav-item>svg.lucide-sparkles,.app .sidebar .nav-item.active>svg.lucide-sparkles{color:var(--ai-ink)}
+.app .sidebar .nav-item.active>svg.lucide-sparkles{filter:drop-shadow(0 0 6px var(--ai-glow))}
+
+/* Submenu's: een dunne lijn, de gekozen regel wit met een gouden icoon. */
+.app .sidebar .nav-submenu{border-left-color:rgba(255,255,255,.08)}
+.app .sidebar .nav-submenu button{color:rgba(244,243,240,.6);font-weight:500}
+.app .sidebar .nav-submenu button svg{color:rgba(244,243,240,.42)}
+.app .sidebar .nav-submenu button:hover{background:rgba(255,255,255,.06);color:#fff}
+.app .sidebar .nav-submenu button.active{background:rgba(255,255,255,.07);color:#fff;box-shadow:none}
+.app .sidebar .nav-submenu button.active svg{color:var(--accent)}
+
+/* Tellers: wat op je wacht is een gouden pil met gloed. */
+.app .sidebar .nav-item .nav-badge,.app .sidebar .nav-badge{
+  background:var(--accent);color:var(--on-accent);
+  font-weight:700;border:0;
+  box-shadow:0 0 10px rgba(var(--accent-rgb),.5);
+}
+.app .sidebar .nav-item.active .nav-badge{background:var(--accent)}
+
+/* Onderin: wie je bent. */
+.app .sidebar .sidebar-user{border-top:1px solid rgba(255,255,255,.07);background:none}
+.app .sidebar .user-trigger:hover{background:rgba(255,255,255,.06);border-color:transparent}
+.app .sidebar .user-trigger.open,.app .sidebar .user-trigger.active{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.06)}
+.app .sidebar .user-avatar{background:var(--gold-face);color:#1A1405;box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 0 0 2px rgba(255,255,255,.06)}
+.app .sidebar .user-name{color:#fff;font-weight:600}
+.app .sidebar .user-role{color:rgba(244,243,240,.5)}
+.app .sidebar .user-caret{color:rgba(244,243,240,.45)}
+
+@media (min-width:761px){
+  .app .sidebar-head{padding:16px 12px 6px 17px}
+  .app.sidebar-pinned .sidebar .org-switcher{margin-top:18px}
+  .app .sidebar .app-brand{min-height:34px}
+  .app .sidebar .brand-icon{width:30px;height:30px;border-radius:9px}
+  .app .sidebar .nav-section,.app .sidebar .nav-group{padding:14px 10px 6px 12px;font-size:10px}
+  .app .sidebar .nav-item{height:34px;min-height:34px;padding:0 8px 0 13px;font-size:13.5px}
+  .app .sidebar{--nav-row-mid:17px;--nav-bar-x:-10px}
+  .app .sidebar .nav-submenu button{min-height:30px;border-radius:9px}
+  /* Smalle balk: de teller wordt een gouden stip met een rand in de kleur
+     van de balk, zodat hij los van het icoon blijft staan. */
+  .app:not(.sidebar-pinned) .sidebar:not(:hover):not(:focus-within) .nav-item .nav-badge{
+    background:var(--accent);border:2px solid #111114;
+    box-shadow:0 0 10px rgba(var(--accent-rgb),.8);
+  }
+  /* Uitgeklapt over het werkvlak: een diepe schaduw in plaats van een rand. */
+  .app:not(.sidebar-pinned) .sidebar:hover,
+  .app:not(.sidebar-pinned) .sidebar:focus-within,
+  .app:not(.sidebar-pinned) .sidebar.user-open{box-shadow:28px 0 80px -20px rgba(0,0,0,.85)}
+}
+@media (max-width:760px){
+  /* Het uitschuifmenu: de ringen komen uit het grotere merkteken. */
+  .app .sidebar::before{background-position:-564px -566px}
+  .app .sidebar.is-open{box-shadow:34px 0 90px rgba(0,0,0,.6)}
+}
+
+/* Het accountmenu klapt uit boven de avatar, in hetzelfde donker. */
+.app .sidebar .user-menu{background:#17171B;border-color:rgba(255,255,255,.09);box-shadow:0 0 0 1px rgba(0,0,0,.4),0 28px 70px -18px rgba(0,0,0,.9)}
+.app .sidebar .user-menu-item{color:rgba(244,243,240,.75)}
+.app .sidebar .user-menu-item:hover{background:rgba(255,255,255,.07);color:#fff}
+
+/* ── 4 · Paginakoppen: groot, stevig, met een bovenregel in goud ─────────── */
+.app .eyebrow{
+  color:var(--accent-ink);
+  font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;
+}
+.app .eyebrow::before{display:none}
+.app .topbar-eyebrow,.app .proj-dash-hero-kicker,.app .quote-detail-kicker,.app .event-detail-kicker,.app .cc-plan-eyebrow{
+  font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+}
+.app :is(.clients-page-head,.fin-header,.bk-head,.settings-head,.finance-search-head,.ag-page-head,.mk-head,.ptl-head,.tt-hero) :is(h1,h2){
+  font-weight:800;letter-spacing:-.032em;color:var(--ink);
+}
+@media (min-width:761px){
+  .app :is(.clients-page-head,.fin-header,.bk-head,.settings-head,.finance-search-head,.ag-page-head,.mk-head,.ptl-head,.tt-hero) :is(h1,h2){font-size:26px;line-height:1.12}
+  .app :is(.clients-page-head,.fin-header,.bk-head,.settings-head,.finance-search-head,.ag-page-head,.mk-head) .eyebrow{margin-bottom:6px}
+  .app :is(.clients-page-head,.fin-header,.bk-head,.settings-head,.ag-page-head,.mk-head)>div:first-child>:is(p,span):not(.eyebrow){color:var(--ink-3)}
+  /* Klanten had een kader om de kop; de kop staat nu vrij op het werkvlak,
+     net als op elke andere pagina. */
+  .app .clients-page-head{border:0;background:none;box-shadow:none;padding:2px 0 0}
+}
+@media (min-width:1025px){
+  .app :is(.clients-page-head,.fin-header,.bk-head,.settings-head,.finance-search-head,.ag-page-head,.mk-head,.ptl-head,.tt-hero) :is(h1,h2){font-size:28px}
+}
+
+/* Het pictogram van de pagina in een donkere tegel met een gouden icoon:
+   dezelfde taal als de zijbalk, zodat je altijd ziet waar je bent. */
+.page-icon{
+  display:none;flex:0 0 auto;place-items:center;
+  width:46px;height:46px;border-radius:15px;
+  color:var(--accent);
+  background:
+    radial-gradient(60px 40px at 20% 0%,rgba(var(--accent-rgb),.22),transparent 70%),
+    linear-gradient(150deg,#26262C 0%,#141417 55%,#0C0C0E 100%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),inset 0 0 0 1px rgba(255,255,255,.06),0 10px 22px -10px rgba(0,0,0,.7);
+}
+.page-icon svg{width:21px;height:21px;filter:drop-shadow(0 0 6px rgba(var(--accent-rgb),.45))}
+@media (min-width:1025px){
+  .app .page-icon{display:grid;margin-top:2px}
+  /* Het tekstblok van de kop wordt twee kolommen: de tegel links, eyebrow,
+     titel en regel eronder rechts. */
+  .app :is(.clients-page-head,.fin-header,.bk-head,.settings-head,.mk-head)>div:has(>.page-icon),
+  .app :is(.fsh-text,.tt-hero-text):has(>.page-icon){
+    display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:16px;align-content:start;
+  }
+  .app :is(.clients-page-head,.fin-header,.bk-head,.settings-head,.mk-head)>div:has(>.page-icon)>.page-icon,
+  .app :is(.fsh-text,.tt-hero-text):has(>.page-icon)>.page-icon{grid-column:1;grid-row:1 / span 3}
+  .app :is(.clients-page-head,.fin-header,.bk-head,.settings-head,.mk-head)>div:has(>.page-icon)>:not(.page-icon),
+  .app :is(.fsh-text,.tt-hero-text):has(>.page-icon)>:not(.page-icon){grid-column:2}
+}
+
+/* Het kruimelpad: rustig, de huidige plek in inkt. */
+.app .crumbs-item.is-current .crumbs-plain{color:var(--ink);font-weight:600}
+
+/* ── 5 · Kaarten: zacht gelaagd, klikbaar = een tikje omhoog ─────────────── */
+.app :where(.stat-card,.proj-card,.client-card,.stats-card,.proj-fin-panel,.ticket-stat,.cd-metric,.fin-stat,.kan-col,.ticket-item,.fin-item,.notes-layout,.note-card,.related-notes-panel,.settings-card,.calendar-main-card,.connections-panel,.onboarding-card,.activity-card,.project-quote-card,.client-panel,.quote-table-card,.clients-table-card,.projects-table-card,.tk-ctable-card,.today-card,.weekactions-card,.attention-card,.finance-search-card,.project-list-card,.dash-reports,.client-kpi,.dash-report-card,.ptl){
+  border:1px solid var(--line);
+  border-radius:var(--r-card);
+  background:var(--surface);
+  box-shadow:var(--shadow-card);
+}
+.app :where(.proj-card,.client-card,.ticket-item,.fin-item,.note-card,.project-quote-card,.project-list-card,.stat-card-clickable,.client-kpi,.dash-report-card){
+  transition:transform var(--t-2) var(--ease-out),box-shadow var(--t-2) var(--ease-out),border-color var(--t-1) var(--ease),background var(--t-1) var(--ease);
+}
+.app :where(.proj-card,.client-card,.ticket-item,.fin-item,.note-card,.project-quote-card,.project-list-card,.stat-card-clickable,.client-kpi,.dash-report-card):hover{
+  transform:translateY(-2px);
+  border-color:var(--line-2);
+  background:var(--surface);
+  box-shadow:var(--shadow-card-hover);
+}
+.app .task-card{border-radius:14px}
+.app .kan-col{background:var(--surface-2)}
+:root[data-theme="light"] .app .kan-col{background:rgba(255,255,255,.6)}
+/* Een ongelezen ticket houdt zijn gouden streep links. */
+.app .ticket-item.is-unread{box-shadow:inset 3px 0 0 var(--accent),var(--shadow-card)}
+
+/* Kopjes in kaarten: stevig, met een rustig icoon ervoor. */
+.app :is(.dash-card-head h2,.attention-card h2,.dash-reports-head h2,.settings-card h3,.activity-card h3,.onboarding-head h3){font-weight:700;letter-spacing:-.015em;color:var(--ink)}
+.app :is(.dash-card-head h2,.attention-card h2,.dash-reports-head h2){display:flex;align-items:center;gap:8px}
+.app :is(.dash-card-head h2,.attention-card h2,.dash-reports-head h2)>svg{flex:0 0 auto;color:var(--ink-3)}
+
+/* ── 6 · Knoppen ─────────────────────────────────────────────────────────── */
+/* Lage specificiteit (:where): een knop die ergens bewust anders is (zoals de
+   doorzichtige knoppen in het afspraakvenster), blijft dat. */
+.app :where(.btn){border-radius:var(--r-ctl);font-weight:600}
+.app :where(.btn:not(.btn-primary):not(.btn-danger)){
+  border-color:var(--line-2);background:var(--surface);color:var(--ink);
+  box-shadow:0 1px 2px rgba(var(--shade-rgb),calc(.18 * var(--shade-k))),inset 0 1px 0 var(--hi);
+}
+.app :where(.btn:not(.btn-primary):not(.btn-danger)):hover:not(:disabled){
+  border-color:var(--line-3);background:var(--surface-2);color:var(--ink);
+}
+.app .btn-primary{
+  border-color:transparent;
+  background:linear-gradient(180deg,var(--accent-hover) 0%,var(--accent) 100%);
+  color:var(--on-accent);font-weight:650;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.5),inset 0 -1px 0 rgba(80,50,0,.16),0 1px 2px rgba(80,50,0,.25),0 8px 20px -10px rgba(var(--accent-rgb),.95);
+}
+.app .btn-primary:hover:not(:disabled){
+  border-color:transparent;
+  background:linear-gradient(180deg,#FFE08A 0%,var(--accent-hover) 100%);
+  color:var(--on-accent);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),inset 0 -1px 0 rgba(80,50,0,.14),var(--glow-accent);
+}
+.app .btn-primary:focus-visible{box-shadow:var(--ring),inset 0 1px 0 rgba(255,255,255,.5)}
+.app .btn:active:not(:disabled){transform:translateY(1px)}
+
+/* Op een donker vlak: glas. */
+.app :is(.cockpit,.proj-dash-hero,.client-detail-hero,.cmd-scope) :where(.btn:not(.btn-primary):not(.btn-danger)){
+  border-color:rgba(255,255,255,.13);background:rgba(255,255,255,.08);color:#fff;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+}
+.app :is(.cockpit,.proj-dash-hero,.client-detail-hero,.cmd-scope) :where(.btn:not(.btn-primary):not(.btn-danger)):hover:not(:disabled){
+  border-color:rgba(255,255,255,.2);background:rgba(255,255,255,.14);color:#fff;
+}
+
+/* ── 7 · Velden, keuzelijsten en schakelaars ─────────────────────────────── */
+.app :where(.form-input,.form-textarea,.form-select){
+  border-radius:var(--r-ctl);
+  box-shadow:inset 0 1px 2px rgba(var(--shade-rgb),calc(.1 * var(--shade-k)));
+}
+.app :where(.form-input,.form-textarea,.form-select):focus,.app .select-trigger.is-open{
+  border-color:var(--focus-line);
+  box-shadow:0 0 0 4px rgba(var(--accent-rgb),.2);
+}
+.app .select-menu{border-radius:14px}
+
+/* Keuzestroken: een verzonken spoor, de gekozen stand ligt er wit bovenop. */
+.app :is(.dash-scope,.wp-seg,.bk-seg,.client-view-toggle,.project-view-toggle,.finance-editor-tabs,.wp-quick-add-modes,.tt-period-tabs,.tt-scope-tog){
+  border-radius:var(--r-ctl);
+  background:rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)));
+  border-color:transparent;
+  box-shadow:inset 0 0 0 1px rgba(var(--sheen-rgb),calc(.04 * var(--sheen-k)));
+}
+.app :is(.dash-scope button.is-on,.wp-seg button.is-on,.bk-seg button.is-active,.client-view-toggle button.active,.project-view-toggle button.active,.finance-editor-tabs button.is-active,.wp-quick-add-modes button.is-on,.tt-period-tab.active,.tt-scope-tog button.active){
+  background:var(--raised);color:var(--ink);font-weight:600;
+  box-shadow:0 1px 2px rgba(var(--shade-rgb),calc(.4 * var(--shade-k))),0 4px 10px -6px rgba(var(--shade-rgb),calc(1 * var(--shade-k))),inset 0 0 0 1px var(--line);
+}
+
+/* Tabstroken van klant, project en instellingen: de gouden streep onder het
+   gekozen tabblad krijgt een gloed. */
+@media (min-width:761px){
+  .app .client-tab-btn.active::after{height:3px;border-radius:3px 3px 0 0;box-shadow:0 0 12px rgba(var(--accent-rgb),.65)}
+  .app .client-tab-btn.active{font-weight:600}
+}
+
+/* ── 8 · Tabellen en pop-ups ─────────────────────────────────────────────── */
+.app :is(.quote-table-card,.clients-table-card,.projects-table-card,.tk-ctable-card){overflow:hidden}
+.app :is(.quote-table,.clients-table,.projects-table,.bk-table,.rb-table,.tk-ctable) th{
+  font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);
+}
+
+.app .modal-bg{-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+.app .modal{border-radius:20px;box-shadow:var(--shadow-pop)}
+.app .modal-head h3{font-weight:700}
+@media (max-width:760px){
+  .app .modal{border-radius:20px 20px 0 0}
+}
+
+/* ── 9 · De cockpit van het dashboard ────────────────────────────────────── */
+.app .cockpit{
+  position:relative;isolation:isolate;overflow:hidden;
+  margin:0 0 18px;padding:26px 28px 24px;
+  border-radius:24px;
+  color:var(--ink);
+  background:var(--cmd-surface);
+  box-shadow:var(--cmd-edge),var(--cmd-shadow);
+}
+.app .cockpit::before{
+  content:'';position:absolute;inset:0;z-index:-1;pointer-events:none;
+  background:var(--rings) no-repeat;
+  background-size:1500px 1500px;background-position:-750px -750px;
+  -webkit-mask-image:radial-gradient(100% 120% at 0% 0%,#000 0%,rgba(0,0,0,.4) 40%,transparent 72%);
+          mask-image:radial-gradient(100% 120% at 0% 0%,#000 0%,rgba(0,0,0,.4) 40%,transparent 72%);
+}
+.app .cockpit-glow{
+  position:absolute;right:-70px;top:-130px;z-index:-1;
+  width:360px;height:360px;border-radius:50%;
+  background:rgba(var(--accent-rgb),.15);filter:blur(64px);
+  pointer-events:none;
+  animation:cockpit-drift 14s ease-in-out infinite;
+}
+@keyframes cockpit-drift{
+  0%,100%{transform:translate3d(0,0,0) scale(1)}
+  50%{transform:translate3d(-4%,5%,0) scale(1.07)}
+}
+
+/* De groet. */
+.app .cockpit .workspace-hero{
+  /* Geen display: op telefoon en tablet houdt globals.css de groet verborgen. */
+  align-items:flex-end;justify-content:space-between;gap:18px;
+  margin:0 0 20px;padding:0;border:0;background:none;box-shadow:none;overflow:visible;
+}
+.app .cockpit .workspace-hero::before{display:none}
+.app .cockpit .workspace-hero .eyebrow{color:var(--accent)}
+.app .cockpit .workspace-hero h1{color:#fff;font-weight:800;letter-spacing:-.035em}
+.app .cockpit .workspace-hero h1 .serif{
+  font-weight:400;
+  background:linear-gradient(90deg,#FFE7A3 0%,#F7C548 55%,#E4A11C 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  padding-right:.06em;
+}
+.app .cockpit .workspace-hero p{color:var(--ink-2)}
+.app .cockpit .workspace-hero p b{color:#fff;font-weight:600}
+.app .cockpit-actions{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex:0 0 auto}
+.app .cockpit-meta{font-size:12px;color:var(--ink-3)}
+.app .cockpit-role{text-transform:capitalize}
+.app .cockpit-btn{display:inline-flex;align-items:center;gap:8px}
+.app .cockpit-count{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:20px;height:20px;padding:0 6px;border-radius:7px;
+  background:var(--accent);color:var(--on-accent);
+  font-size:11.5px;font-weight:700;font-variant-numeric:tabular-nums;
+}
+@media (min-width:1025px){
+  .app .cockpit .workspace-hero h1{font-size:36px;line-height:1.06;margin:8px 0 8px}
+  .app .cockpit .workspace-hero p{font-size:15px}
+}
+
+/* Kerncijfers: glazen tegels op het donker. Een dun lijntje bovenaan als een
+   tegel iets te melden heeft; de betekenis zit in het label, niet in kleur. */
+.app .cockpit .dash-stats{margin:0}
+.app .cockpit .stat-card{
+  border:0;border-radius:18px;
+  background:var(--glass);
+  box-shadow:inset 0 0 0 1px var(--glass-line);
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+}
+.app .cockpit .stat-card-clickable:hover{
+  background:var(--glass-2);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.15),0 18px 36px -22px rgba(0,0,0,.9);
+}
+.app .cockpit .stat-card .sc-label{color:var(--ink-2)}
+.app .cockpit .stat-card .sc-val{color:#fff}
+.app .cockpit .stat-card-danger .sc-val{color:var(--danger)}
+.app .cockpit .stat-card .sc-val small.sc-cents{color:var(--ink-3)}
+.app .cockpit .stat-card-danger .sc-val small.sc-cents{color:inherit}
+.app .cockpit .sc-sub{color:var(--ink-3)}
+.app .cockpit .stat-card-accent::after,.app .cockpit .stat-card-danger::after{
+  content:'';position:absolute;left:0;right:0;top:0;height:2px;pointer-events:none;
+  background:linear-gradient(90deg,var(--accent),transparent 85%);
+}
+.app .cockpit .stat-card-danger::after{background:linear-gradient(90deg,var(--danger),transparent 85%)}
+
+/* De week als spoor: zeven dagen, vandaag gloeit. */
+.app .cockpit-rail{margin-top:24px}
+.cr-tracks{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin:0 0 12px}
+.cr-track{
+  grid-column:span 5;display:flex;align-items:center;gap:8px;min-width:0;
+  font-size:10px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);
+}
+.cr-track::after{content:'';flex:1;height:1px;background:rgba(var(--accent-rgb),.3)}
+.cr-track.is-weekend{grid-column:span 2;color:var(--ink-3)}
+.cr-track.is-weekend::after{background:rgba(255,255,255,.14)}
+.cr-days{position:relative;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin:0;padding:0;list-style:none}
+.cr-days::before{
+  content:'';position:absolute;left:calc(100% / 14);right:calc(100% / 14);top:17px;height:1px;pointer-events:none;
+  background:linear-gradient(90deg,rgba(255,255,255,.2),rgba(var(--accent-rgb),.5) 55%,rgba(var(--accent-rgb),.16));
+}
+.cr-day{
+  position:relative;display:flex;flex-direction:column;align-items:center;
+  width:100%;padding:0 4px 9px;border:0;border-radius:16px;
+  background:transparent;color:var(--ink-3);font:inherit;text-align:center;cursor:pointer;
+  transition:background var(--t-1) var(--ease);
+}
+.cr-day:hover{background:rgba(255,255,255,.05)}
+.cr-day:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.cr-node{
+  position:relative;z-index:1;display:grid;place-items:center;
+  width:38px;height:34px;border-radius:11px;
+  background:#232328;color:var(--ink-3);
+  font-family:var(--font-mono);font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.07);
+  transition:transform var(--t-2) var(--spring);
+}
+.cr-day:hover .cr-node{transform:scale(1.08)}
+.cr-day.has-items .cr-node{background:#303037;color:#fff}
+.cr-day.is-today .cr-node{
+  background:var(--gold-face);color:#1A1405;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 0 18px rgba(var(--accent-rgb),.55);
+  animation:cockpit-breathe 2.8s ease-in-out infinite;
+}
+.cr-name{margin-top:8px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:600;text-transform:capitalize}
+.cr-day.has-items .cr-name,.cr-day.is-today .cr-name{color:#fff}
+.cr-count{margin-top:5px;font-size:22px;font-weight:700;line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--ink-4)}
+.cr-day.has-items .cr-count{color:#fff}
+.cr-day.is-late .cr-count{color:var(--warn)}
+.cr-day.is-past:not(.is-late):not(.is-today){opacity:.6}
+.cr-dots{display:flex;flex-wrap:wrap;justify-content:center;gap:4px;min-height:8px;margin-top:8px}
+.cr-dots i{width:8px;height:8px;border-radius:50%;box-shadow:0 0 0 1px rgba(255,255,255,.35)}
+.cr-dots em{font-size:10px;font-style:normal;font-weight:600;line-height:8px;color:var(--ink-2)}
+@keyframes cockpit-breathe{
+  0%,100%{box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 0 0 0 rgba(var(--accent-rgb),0),0 0 16px rgba(var(--accent-rgb),.45)}
+  50%{box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 0 0 6px rgba(var(--accent-rgb),.16),0 0 22px rgba(var(--accent-rgb),.6)}
+}
+@media (max-width:1024px){
+  .app .cockpit-rail{display:none}
+}
+
+/* Tablet: geen groet (de kop is daar verborgen), alleen de tegels. */
+@media (min-width:761px) and (max-width:1024px){
+  .app .cockpit{padding:12px;margin-bottom:14px;border-radius:20px}
+  .app .cockpit .dash-stats{margin:0}
+}
+/* Telefoon: dezelfde opbouw als voorheen, alleen in een donker vlak. De
+   rand van 6px wordt in de tegels teruggewonnen (de eerste taak blijft onder
+   de grens van de lay-outtest). */
+@media (max-width:760px){
+  .app .cockpit{margin:0 0 10px;padding:6px;border-radius:16px}
+  .app .cockpit .dash-stats,.app .cockpit .dash-stats.dash-stats-rich{margin:0}
+  .app .cockpit .stat-card{padding:8px 9px 7px;border-radius:11px}
+  .app .cockpit-glow{width:220px;height:220px;right:-60px;top:-110px}
+}
+
+/* De kaarten eronder. */
+.app .attention-empty{border-radius:14px}
+.app .dash-group-label{font-weight:600}
+
+/* ── 10 · De kop van een project en een klant: donker, in hun eigen kleur ── */
+.app :is(.proj-dash-hero,.client-detail-hero){
+  isolation:isolate;overflow:hidden;
+  border:0;border-radius:24px;
+  color:var(--ink);
+  background:
+    radial-gradient(560px 300px at 100% 0%,rgba(150,148,172,.12),transparent 64%),
+    linear-gradient(135deg,#0B0B0D 0%,#141417 48%,#1E1E23 100%);
+  box-shadow:var(--cmd-edge),var(--cmd-shadow);
+}
+.app .client-detail-hero{position:relative}
+.app :is(.proj-dash-hero,.client-detail-hero)::before{
+  content:'';position:absolute;inset:0;z-index:-1;pointer-events:none;
+  background:var(--rings) no-repeat;
+  background-size:1400px 1400px;background-position:-700px -700px;
+  -webkit-mask-image:radial-gradient(90% 120% at 0% 0%,#000 0%,rgba(0,0,0,.35) 45%,transparent 75%);
+          mask-image:radial-gradient(90% 120% at 0% 0%,#000 0%,rgba(0,0,0,.35) 45%,transparent 75%);
+  display:block;width:auto;height:auto;border-radius:0;filter:none;opacity:1;
+}
+/* De kleur van het project of de klant als gloed linksboven. */
+.app .proj-dash-hero-accent,.app .client-detail-glow{
+  position:absolute;left:-80px;top:-150px;right:auto;bottom:auto;z-index:-1;
+  width:360px;height:360px;border-radius:50%;
+  opacity:.34;filter:blur(64px);pointer-events:none;
+}
+.app .proj-dash-hero-name,.app .client-title-row h2{color:#fff;font-weight:800;letter-spacing:-.032em}
+.app .proj-dash-hero-desc{color:var(--ink-2)}
+.app .proj-dash-hero-kicker{color:var(--accent)}
+.app .proj-dash-stats{border-top-color:rgba(255,255,255,.08)}
+.app .proj-dash-stat{border-right-color:rgba(255,255,255,.08);box-shadow:none}
+.app .proj-dash-stat-val{color:#fff}
+.app .proj-dash-stat.is-accent .proj-dash-stat-val{color:var(--accent)}
+.app .proj-dash-stat.is-danger .proj-dash-stat-val{color:var(--danger)}
+.app .proj-dash-stat-lbl,.app .proj-dash-stat-sub{color:var(--ink-3)}
+.app .proj-dash-stat-btn:hover{background:rgba(255,255,255,.05)}
+.app .client-hero-avatar{box-shadow:0 0 0 1px rgba(255,255,255,.18),0 12px 28px -8px rgba(0,0,0,.7)}
+.app .client-hero-code{color:var(--ink-3)}
+/* Terug naar het overzicht: een rustige regel boven de naam, geen knop (op
+   de telefoon was dat al zo, zie globals.css). */
+.app .client-detail-hero .client-detail-title>.btn:first-child{
+  border:0;background:none;box-shadow:none;color:var(--ink-2);
+  -webkit-backdrop-filter:none;backdrop-filter:none;
+}
+.app .client-detail-hero .client-detail-title>.btn:first-child:hover:not(:disabled){border:0;background:none;color:#fff}
+@media (min-width:761px){
+  .app .client-detail-title>.btn:first-child{
+    align-self:flex-start;width:auto;min-height:0;height:auto;
+    padding:2px 0;font-size:13px;font-weight:500;
+  }
+  .app .proj-dash-hero{padding:24px 26px 0}
+  .app .client-detail-hero{padding:22px 24px}
+  .app .proj-dash-hero-name{font-size:30px;line-height:1.1}
+  .app .client-title-row h2{font-size:30px}
+}
+
+/* ── 11 · Telefoon: de dock onderin en het merk linksboven ───────────────── */
+@media (max-width:760px){
+  /* De onderbalk wordt een zwevende dock: donker glas, ronde hoeken, het
+     gekozen icoon gloeit en draagt een gouden streepje erboven. De hoogte
+     blijft gelijk; hij zweeft alleen 8px boven de rand. */
+  .app .bottomnav{
+    left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));
+    height:var(--bottomnav-h);padding:5px;gap:2px;
+    border:0;border-radius:20px;
+    background:rgba(16,16,19,.93);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),0 18px 40px -12px rgba(0,0,0,.65);
+    -webkit-backdrop-filter:blur(18px) saturate(1.4);backdrop-filter:blur(18px) saturate(1.4);
+  }
+  .app .bn-item{position:relative;border-radius:15px;color:rgba(244,243,240,.62);font-weight:600}
+  .app .bn-item.active{background:rgba(255,255,255,.08);color:#fff}
+  .app .bn-item.active svg{color:var(--accent);filter:drop-shadow(0 0 8px rgba(var(--accent-rgb),.75))}
+  .app .bn-item.active::before{
+    content:'';position:absolute;top:-5px;left:50%;
+    width:24px;height:3px;border-radius:0 0 999px 999px;
+    background:var(--accent);box-shadow:0 0 10px rgba(var(--accent-rgb),.9);
+    transform:translateX(-50%);
+  }
+  .app .bn-item:active{background:rgba(255,255,255,.06)}
+  /* Alles wat boven de onderbalk zweeft, schuift de 8px mee omhoog. */
+  .app .main{padding-bottom:calc(var(--bottomnav-h) + 8px + env(safe-area-inset-bottom))}
+  .app .gerrie-root{bottom:calc(var(--bottomnav-h) + 20px + env(safe-area-inset-bottom))}
+  .app .tb-fab{bottom:calc(var(--bottomnav-h) + 76px + env(safe-area-inset-bottom))}
+  .app .toast-region{bottom:calc(var(--bottomnav-h) + 18px + env(safe-area-inset-bottom))}
+
+  /* De menuknop als merktegel: donker, het icoon in goud. */
+  .app .mobile-nav-toggle{
+    border:0;color:var(--accent);
+    background:linear-gradient(150deg,#26262C 0%,#141417 60%,#0C0C0E 100%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.1),inset 0 0 0 1px rgba(255,255,255,.07),0 6px 14px -6px rgba(0,0,0,.6);
+  }
+  /* Werktabs: het actieve tabblad ligt wit (of grafiet) bovenop, met goud. */
+  .app .tab.active{
+    border-color:var(--line);background:var(--surface);
+    box-shadow:0 1px 2px rgba(var(--shade-rgb),calc(.35 * var(--shade-k))),0 6px 14px -8px rgba(var(--shade-rgb),calc(1 * var(--shade-k)));
+  }
+}
+
+/* ── 12 · Inloggen en laden: het commandovlak over het hele scherm ─────── */
+/* Alleen de werkruimte: het inlogscherm van het klantportaal is ook een
+   main.login (met .portal) en draagt de huisstijl van de leverancier. */
+main.login:not(.portal),div.boot{
+  position:relative;isolation:isolate;overflow:hidden;
+  color:var(--ink);
+  background:
+    radial-gradient(720px 420px at 0% 0%,rgba(247,197,72,.16),transparent 64%),
+    radial-gradient(640px 420px at 100% 100%,rgba(150,148,172,.14),transparent 66%),
+    linear-gradient(135deg,#0A0A0C 0%,#121215 50%,#1A1A1F 100%);
+}
+:root[data-theme="light"] main.login:not(.portal),:root[data-theme="light"] div.boot{
+  background:
+    radial-gradient(720px 420px at 0% 0%,rgba(247,197,72,.16),transparent 64%),
+    radial-gradient(640px 420px at 100% 100%,rgba(150,148,172,.14),transparent 66%),
+    linear-gradient(135deg,#0A0A0C 0%,#121215 50%,#1A1A1F 100%);
+}
+main.login:not(.portal)::before,div.boot::before{
+  content:'';position:absolute;inset:0;z-index:-1;pointer-events:none;
+  background:var(--rings) no-repeat;background-size:1800px 1800px;background-position:-900px -900px;
+  -webkit-mask-image:radial-gradient(80% 90% at 0% 0%,#000 0%,transparent 70%);
+          mask-image:radial-gradient(80% 90% at 0% 0%,#000 0%,transparent 70%);
+}
+main.login:not(.portal)::after{
+  content:'';position:absolute;left:-140px;top:22%;z-index:-1;pointer-events:none;
+  width:440px;height:440px;border-radius:50%;
+  background:rgba(247,197,72,.11);filter:blur(70px);
+  animation:cockpit-drift 14s ease-in-out infinite;
+}
+/* Het loadscherm draagt Nacht-tekst, ook op Dag. */
+:root[data-theme="light"] div.boot{--text:#F4F3F0;--ink:#F4F3F0;--ink-2:#B5B3AD;--muted:#908E88;--muted2:#B5B3AD}
+div.boot .login-card{color:var(--ink)}
+
+.login-shell{display:grid;align-items:center;gap:56px;width:min(1080px,calc(100% - 40px));margin:0 auto}
+.login-story{display:none;color:#F4F3F0}
+.login-story .app-brand{gap:12px;font-size:18px}
+.login-story .brand-icon{
+  width:44px;height:44px;border-radius:14px;font-size:20px;
+  background:var(--gold-face);color:#1A1405;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 0 0 6px rgba(247,197,72,.08),0 10px 30px -6px rgba(247,197,72,.6);
+}
+.login-story .app-brand>span{display:flex;flex-direction:column;line-height:1.1;font-weight:800;letter-spacing:-.02em;color:#fff}
+.login-story .app-brand small{font-size:12.5px;font-weight:600;letter-spacing:0;color:#F7C548}
+.login-story h2{margin:52px 0 0;font-size:48px;line-height:1.04;font-weight:800;letter-spacing:-.04em;color:#fff}
+.login-story h2 span{
+  background:linear-gradient(90deg,#FFE7A3 0%,#F7C548 55%,#E4A11C 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.login-story p{margin-top:20px;max-width:30rem;font-size:15.5px;line-height:1.6;color:#B5B3AD}
+.login-flow{position:relative;display:flex;justify-content:space-between;max-width:30rem;margin:48px 0 0;padding:0;list-style:none}
+.login-flow::before{
+  content:'';position:absolute;left:19px;right:19px;top:17px;height:1px;
+  background:linear-gradient(90deg,rgba(247,197,72,.7),rgba(247,197,72,.4),rgba(255,255,255,.15));
+}
+.login-flow li{position:relative;display:flex;flex-direction:column;align-items:center;width:38px}
+.login-flow li>span{
+  display:grid;place-items:center;width:38px;height:34px;border-radius:11px;
+  background:#26262C;color:#908E88;box-shadow:inset 0 0 0 1px rgba(255,255,255,.07);
+}
+.login-flow li>span svg{width:16px;height:16px}
+.login-flow li.is-done>span{background:rgba(247,197,72,.9);color:#1A1405}
+.login-flow li.is-now>span{background:var(--gold-face);color:#1A1405;box-shadow:0 0 18px rgba(247,197,72,.7)}
+.login-flow li>small{margin-top:9px;white-space:nowrap;font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#908E88}
+.login-flow li.is-done>small{color:#E8E6E1}
+.login-flow li.is-now>small{color:#F7C548}
+@media (min-width:1025px){
+  .login-shell{grid-template-columns:1.15fr 1fr}
+  .login-story{display:block}
+}
+main.login:not(.portal) .login-card{
+  width:min(440px,100%);margin:0 auto;
+  border:0;border-radius:26px;
+  box-shadow:0 0 0 1px rgba(255,255,255,.07),0 40px 80px -30px rgba(0,0,0,.75);
+  animation:cockpit-scale-in .32s var(--ease-out);
+}
+:root[data-theme="light"] main.login:not(.portal) .login-card{box-shadow:0 40px 80px -30px rgba(0,0,0,.7)}
+main.login:not(.portal) .login-card h1{font-weight:800;letter-spacing:-.04em}
+main.login:not(.portal) .login-eyebrow{
+  color:var(--accent-ink);font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;
+}
+main.login:not(.portal) .login-eyebrow::before{display:none}
+@keyframes cockpit-scale-in{
+  from{opacity:0;transform:translateY(6px) scale(.98)}
+  to{opacity:1;transform:none}
+}
+
+/* ── 13 · Beweging ───────────────────────────────────────────────────────── */
+/* Wie minder beweging wil, krijgt die: geen drijvende gloed, geen ademende
+   dag, geen schuivende kaarten. */
+@media (prefers-reduced-motion:reduce){
+  .app .cockpit-glow,main.login:not(.portal)::after,.cr-day.is-today .cr-node,main.login:not(.portal) .login-card{animation:none}
+  .app :is(.proj-card,.client-card,.ticket-item,.fin-item,.note-card,.project-quote-card,.project-list-card,.stat-card-clickable,.client-kpi,.dash-report-card):hover{transform:none}
+}

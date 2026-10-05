@@ -16,6 +16,7 @@ import { ProjectTemplatesManager } from './ProjectTemplates';
 import { ClientFieldsManager } from './ClientFields';
 import { McpConnections } from '../components/McpConnections';
 import { ApiIntegrations } from '../components/ApiIntegrations';
+import { PageIcon } from '../components/PageIcon';
 import { LEVEL_LABELS, MODULES, parseModuleAccess, type ModuleAccess, type ModuleLevel } from '../lib/permissions';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
@@ -1927,6 +1928,7 @@ export function Settings({
   return <div className="settings-page">
     <div className="settings-head">
       <div>
+        <PageIcon page="settings" />
         <h2>Instellingen</h2>
         <p>{activeTabMeta.description}</p>
       </div>

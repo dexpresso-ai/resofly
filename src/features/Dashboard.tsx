@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, CheckCircle2, ChevronRight, Clock, FileText, FolderOpen, Landmark, ListTodo, Percent, Pin, Ticket as TicketIcon } from 'lucide-react';
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, CalendarDays, CalendarRange, CheckCircle2, ChevronRight, Clock, FileText, FolderOpen, Landmark, ListTodo, Percent, Pin, Ticket as TicketIcon } from 'lucide-react';
 import type { AppData, CalendarExternalEvent, Invoice, OrganizationContext, SavedReport, Task, TaskStatus, UUID } from '../types';
 import { coversDay, isOverdue, scopeTasks, taskDayKey, taskLastDayKey } from '../lib/workweek';
 import { euro, formatMinutes, total } from '../lib/format';
@@ -305,31 +305,41 @@ export function Dashboard({
   const taskRowProps = { data, todayKey, canWrite: canWriteTasks, openTask, onSetTaskStatus };
 
   return <>
-    <section className="workspace-hero">
-      <div>
-        <span className="eyebrow">{dateLine(now)}</span>
-        <h1>{greetingFor(now)}, <span className="serif">{activeOrganization?.name ?? 'ResoFly'}</span></h1>
-        <p>{heroLead({
-          events: showCalendar ? todaysEvents.length : null,
-          tasks: showProjects ? todayOpenCount : null,
-          overdueInvoices: showFinance ? overdueInvoices.length : 0,
-        })}</p>
+    {/* De cockpit: de stand van zaken in één oogopslag — de groet, de
+        kerncijfers en de week als spoor. Altijd donker, ook op Dag. Op de
+        telefoon en de tablet vallen de groet en het spoor weg (globals.css en
+        cockpit.css); daar blijven alleen de tegels. */}
+    <section className="cockpit" aria-label="Stand van zaken">
+      <span className="cockpit-glow" aria-hidden="true" />
+      <div className="workspace-hero">
+        <div>
+          <span className="eyebrow">Dashboard · {dateLine(now)}</span>
+          <h1>{greetingFor(now)}, <span className="serif">{activeOrganization?.name ?? 'ResoFly'}</span></h1>
+          <p>{heroLead({
+            events: showCalendar ? todaysEvents.length : null,
+            tasks: showProjects ? todayOpenCount : null,
+            overdueInvoices: showFinance ? overdueInvoices.length : 0,
+          })}</p>
+        </div>
+        <div className="cockpit-actions">
+          {showProjects && <Button className="cockpit-btn" onClick={() => openPage('weekplanner')}>
+            <CalendarRange size={15} aria-hidden="true" /> Weekplanner <span className="cockpit-count" aria-label={pl(weekTasks.length, 'open actie deze week', 'open acties deze week')}>{weekTasks.length}</span>
+          </Button>}
+          <span className="cockpit-meta"><span className="cockpit-role">{activeRole}</span> · {pl(teamMembers.length, 'actief teamlid', 'actieve teamleden')}</span>
+        </div>
       </div>
-      <div className="workspace-meta-card">
-        <span>Jouw rol</span>
-        <strong>{activeRole}</strong>
-        <small>{teamMembers.length} actief teamlid{teamMembers.length === 1 ? '' : 'en'}</small>
-      </div>
-    </section>
 
-    <div className="dash-stats dash-stats-rich">
-      {showFinance && <Stat label="Omzet deze maand" value={euro(revenueThisMonth)} tone="accent" trend={revenueTrend} sub={revenueTrend != null ? 'vs. vorige maand' : undefined} spark={revenueSeries} countTo={revenueThisMonth} countFormat={euro} onClick={() => openPage('invoices')} />}
-      {showFinance && <Stat label="Openstaand" value={euro(outstandingTotal)} sub={pl(outstandingInvoices.length, 'openstaande factuur', 'openstaande facturen')} onClick={() => openPage('invoices')} />}
-      {showFinance && <Stat label="Te laat betaald" value={euro(overdueTotal)} tone={overdueInvoices.length ? 'danger' : 'default'} sub={pl(overdueInvoices.length, 'factuur', 'facturen')} onClick={() => openPage('invoices')} />}
-      {permissions.canRead('tickets') && <Stat label="Open tickets" value={openTickets} sub={newTickets ? `${newTickets} nieuw` : undefined} onClick={() => openPage('tickets')} />}
-      {showProjects && <Stat label="Open taken" value={openTaskCount} tone={overdueTaskCount ? 'danger' : 'default'} sub={overdueTaskCount ? `${overdueTaskCount} te laat` : undefined} onClick={() => openPage('weekplanner')} />}
-      {permissions.canRead('clients') && <Stat label="Actieve klanten" value={activeClients} onClick={() => openPage('clients')} />}
-    </div>
+      <div className="dash-stats dash-stats-rich">
+        {showFinance && <Stat label="Omzet deze maand" value={euro(revenueThisMonth)} tone="accent" trend={revenueTrend} sub={revenueTrend != null ? 'vs. vorige maand' : undefined} spark={revenueSeries} countTo={revenueThisMonth} countFormat={euro} onClick={() => openPage('invoices')} />}
+        {showFinance && <Stat label="Openstaand" value={euro(outstandingTotal)} sub={pl(outstandingInvoices.length, 'openstaande factuur', 'openstaande facturen')} onClick={() => openPage('invoices')} />}
+        {showFinance && <Stat label="Te laat betaald" value={euro(overdueTotal)} tone={overdueInvoices.length ? 'danger' : 'default'} sub={pl(overdueInvoices.length, 'factuur', 'facturen')} onClick={() => openPage('invoices')} />}
+        {permissions.canRead('tickets') && <Stat label="Open tickets" value={openTickets} sub={newTickets ? `${newTickets} nieuw` : undefined} onClick={() => openPage('tickets')} />}
+        {showProjects && <Stat label="Open taken" value={openTaskCount} tone={overdueTaskCount ? 'danger' : 'default'} sub={overdueTaskCount ? `${overdueTaskCount} te laat` : undefined} onClick={() => openPage('weekplanner')} />}
+        {permissions.canRead('clients') && <Stat label="Actieve klanten" value={activeClients} onClick={() => openPage('clients')} />}
+      </div>
+
+      {showProjects && <WeekRail dayKeys={weekDayKeys} todayKey={todayKey} tasks={weekTasks} projects={data.projects} onOpen={() => openPage('weekplanner')} />}
+    </section>
 
     <div className="dash-stack">
       {/* Wat je agents hebben klaargezet staat vóór al het andere: het is het enige
@@ -357,7 +367,7 @@ export function Dashboard({
         {showToday && <div className="today-card">
           <header className="dash-card-head">
             <div>
-              <h2>Vandaag</h2>
+              <h2><CalendarDays size={16} aria-hidden="true" /> Vandaag</h2>
               <p>{capitalize(formatLongDay(startOfToday))}{showProjects ? ` · ${pl(todayOpenCount, 'actie', 'acties')}` : ''}</p>
             </div>
             {showProjects && scopeToggle}
@@ -394,7 +404,7 @@ export function Dashboard({
 
         <div className="attention-card">
           <header>
-            <h2>Vereist je aandacht</h2>
+            <h2><BellRing size={16} aria-hidden="true" /> Vereist je aandacht</h2>
             <p>Klik een regel om er direct heen te gaan</p>
           </header>
           {attention.length === 0
@@ -416,7 +426,7 @@ export function Dashboard({
       {showProjects && <div className="weekactions-card">
         <header className="dash-card-head">
           <div>
-            <h2>Weekacties</h2>
+            <h2><ListTodo size={16} aria-hidden="true" /> Weekacties</h2>
             <p>Week {isoWeekNumber(weekStart)} · {formatDayShort(weekStart)} t/m {formatDayShort(addDays(weekStart, 6))} · {pl(weekTasks.length, 'actie', 'acties')}</p>
           </div>
           <div className="dash-head-tools">
@@ -486,6 +496,59 @@ export function Dashboard({
       </section>
     </div>
   </>;
+}
+
+/**
+ * De week als spoor onderin de cockpit: zeven dagen op één lijn, vandaag licht
+ * op. Per dag het aantal open acties en een stip per taak in de kleur van zijn
+ * project. Een dag die voorbij is maar nog werk heeft, kleurt oranje — dat is
+ * wat blijft liggen. Elke dag opent de weekplanner.
+ */
+function WeekRail({ dayKeys, todayKey, tasks, projects, onOpen }: {
+  dayKeys: string[];
+  todayKey: string;
+  tasks: Task[];
+  projects: AppData['projects'];
+  onOpen: () => void;
+}) {
+  const colorOf = new Map(projects.map(project => [project.id, project.color]));
+  const byDay = new Map<string, Task[]>();
+  for (const task of tasks) {
+    const key = taskDayKey(task);
+    if (!key) continue;
+    const list = byDay.get(key);
+    if (list) list.push(task); else byDay.set(key, [task]);
+  }
+
+  return <div className="cockpit-rail">
+    <div className="cr-tracks" aria-hidden="true">
+      <span className="cr-track">Werkweek</span>
+      <span className="cr-track is-weekend">Weekend</span>
+    </div>
+    <ol className="cr-days">
+      {dayKeys.map(key => {
+        const date = new Date(`${key}T00:00:00`);
+        const list = byDay.get(key) ?? [];
+        const isToday = key === todayKey;
+        const isPast = key < todayKey;
+        const weekday = date.toLocaleDateString('nl-NL', { weekday: 'short' }).replace('.', '');
+        const label = `${capitalize(date.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' }))}${isToday ? ' (vandaag)' : ''}: ${pl(list.length, 'open actie', 'open acties')}`;
+        const className = ['cr-day', isToday && 'is-today', isPast && 'is-past', list.length > 0 && 'has-items', isPast && list.length > 0 && 'is-late']
+          .filter(Boolean).join(' ');
+        return <li key={key}>
+          <button type="button" className={className} onClick={onOpen} title={`${label} — open de weekplanner`} aria-label={`${label}. Open de weekplanner`}>
+            <span className="cr-node">{date.getDate()}</span>
+            <span className="cr-name">{isToday ? 'vandaag' : weekday}</span>
+            <span className="cr-count">{list.length}</span>
+            <span className="cr-dots" aria-hidden="true">
+              {list.slice(0, 6).map(task => <i key={task.id} style={{ background: (task.project_id && colorOf.get(task.project_id)) || 'var(--ink-3)' }} />)}
+              {list.length > 6 && <em>+{list.length - 6}</em>}
+            </span>
+          </button>
+        </li>;
+      })}
+    </ol>
+  </div>;
 }
 
 /** Eén kolom van het weekblok: taken per dag, met de dag als kopregel. */

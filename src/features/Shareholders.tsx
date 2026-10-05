@@ -6,6 +6,7 @@ import type {
 } from '../types';
 import { SHARE_ENCUMBRANCE_LABELS, SHARE_TRANSACTION_LABELS, SHAREHOLDER_KIND_LABELS } from '../types';
 import { Button, Input, Select, Skeleton } from '../components/Ui';
+import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import { Dividends } from './Dividends';
 import {
@@ -121,7 +122,7 @@ export function ShareholdersPage({ data, organizationId, canWrite, canAdmin, bus
   return (
     <div className="bk-page">
       <div className="bk-head">
-        <div>
+        <div><PageIcon page="shareholders" />
           <h2>Aandeelhouders</h2>
           <p>
             Het register dat het bestuur op grond van art. 2:194 BW bijhoudt, en de dividenduitkeringen daarop.

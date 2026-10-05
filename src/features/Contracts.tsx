@@ -7,6 +7,7 @@ import { dateNL, euro, total } from '../lib/format';
 import { supabase } from '../lib/supabase';
 import { addContractProject, insertRow, removeContractProject, setContractProjects } from '../lib/repository';
 import { RichTextEditor, RichTextViewer, richTextToPlainText } from '../components/RichTextEditor';
+import { PageIcon } from '../components/PageIcon';
 import { CONTRACT_TOKENS, buildContractTokens, fillContractTokens } from '../lib/contractTokens';
 import { buildContractDocxBlob } from '../lib/documentExport';
 import { deleteR2Object } from '../lib/r2-api';
@@ -86,7 +87,7 @@ export function Contracts({ data, organizationId, canWrite, onChanged, draft, on
   return (
     <div className="bk-page">
       <div className="bk-head">
-        <div><h2>Contracten</h2><p>Stel contracten op en laat ze digitaal ondertekenen.</p></div>
+        <div><PageIcon page="contracts" /><h2>Contracten</h2><p>Stel contracten op en laat ze digitaal ondertekenen.</p></div>
         <div style={{ display: 'flex', gap: 8 }}>
           <Button disabled={!canWrite} onClick={() => setShowTemplates(true)}><FileText size={15} /> Sjablonen</Button>
           <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Nieuw contract</Button>

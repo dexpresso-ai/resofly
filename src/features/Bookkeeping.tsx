@@ -10,6 +10,7 @@ import type { ImportColumn } from '../lib/csvImport';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { AttachmentList } from '../components/AttachmentList';
 import { formatEmailDateTime } from '../components/ClientEmailMessage';
+import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, uid } from '../lib/format';
 import {
   bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, insertRow,
@@ -112,7 +113,7 @@ export function SuppliersPage({ data, organizationId, canWrite, onChanged, draft
     <div className="bk-page">
       {data.ledgerAccounts.length === 0 && <SetupBanner organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
       <div className="bk-head">
-        <div><h2>Leveranciers</h2><p>Crediteuren voor je inkoopfacturen.</p></div>
+        <div><PageIcon page="suppliers" /><h2>Leveranciers</h2><p>Crediteuren voor je inkoopfacturen.</p></div>
         <div className="bk-head-actions">
           <Button disabled={!canWrite} onClick={() => setImporting(true)}><Upload size={15} /> Importeren</Button>
           <Button variant="primary" disabled={!canWrite} onClick={() => setEdit('new')}><Plus size={15} /> Nieuwe leverancier</Button>
@@ -308,7 +309,7 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
     <div className="bk-page">
       {notReady && <SetupBanner organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
       <div className="bk-head">
-        <div><h2>Inkoopfacturen</h2><p>Boek leveranciersfacturen in en verwerk de voorbelasting.</p></div>
+        <div><PageIcon page="purchase-invoices" /><h2>Inkoopfacturen</h2><p>Boek leveranciersfacturen in en verwerk de voorbelasting.</p></div>
         <div className="bk-head-actions">
           <Button disabled={!canWrite || notReady} onClick={() => setScan(true)} title="Lees een factuur automatisch uit: UBL-e-facturen (XML) deterministisch, PDF/foto met AI"><Sparkles size={15} /> Factuur scannen (AI / UBL)</Button>
           <Button variant="primary" disabled={!canWrite || notReady} onClick={() => { setSeed(null); setEdit('new'); }}><Plus size={15} /> Nieuwe inkoopfactuur</Button>
@@ -947,7 +948,7 @@ export function LedgerPage({ data, organizationId, canWrite, onChanged }: PagePr
   return (
     <div className="bk-page">
       <div className="bk-head">
-        <div><h2>Grootboek</h2><p>Journaalposten en rekeningschema — de basis onder je W&amp;V en BTW-aangifte.</p></div>
+        <div><PageIcon page="ledger" /><h2>Grootboek</h2><p>Journaalposten en rekeningschema — de basis onder je W&amp;V en BTW-aangifte.</p></div>
         <div className="bk-head-actions">
           <Select inline value={String(xafYear)} onChange={e => setXafYear(Number(e.target.value))}>
             {years.map(y => <option key={y} value={y}>{ledgerFiscalYearBounds(fiscalStartMonth, y).label}</option>)}

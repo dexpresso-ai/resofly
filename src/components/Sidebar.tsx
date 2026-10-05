@@ -241,7 +241,7 @@ export function Sidebar({
       <button type="button" className="sidebar-close" onClick={onCloseMobile} aria-label="Menu sluiten"><X size={20}/></button>
       {onRefresh && <button type="button" className={`sidebar-refresh${refreshing ? ' is-busy' : ''}`} onClick={onRefresh} disabled={refreshing} aria-label="Gegevens verversen" title="Verversen"><RefreshCw size={17}/></button>}
       <button type="button" className="sidebar-pin" onClick={onTogglePin} aria-pressed={pinned} aria-label={pinned ? 'Menu losmaken' : 'Menu vastzetten'} title={pinned ? 'Menu losmaken' : 'Menu vastzetten'}>{pinned ? <PinOff size={15}/> : <Pin size={15}/>}</button>
-      <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly</span></div>
+      <div className="app-brand"><div className="brand-icon">R</div><span>ResoFly<small>Werkruimte</small></span></div>
       <div className="org-switcher">
         <label>{hasEntities ? 'Administratie' : 'Organisatie'}</label>
         <Select value={activeOrganizationId ?? ''} onChange={event => onOrganization(event.target.value)}>
