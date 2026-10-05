@@ -1226,7 +1226,9 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 
    Bovenop Belicht ligt sinds 2026-10-05 de Cockpit-laag (look & feel naar
    Value Backlog) in src/styles/cockpit.css, ná dit bestand geladen. Daar
-   staan ook de tokens van het donkere commandovlak (--ground, --rings, …).
+   staan ook de tokens van het donkere commandovlak (--ground, --rings, …),
+   en de letter: zolang de werkruimte in beeld is, zijn --font-sans/-mono/
+   -serif daar Poppins. De waarden hieronder gelden voor de publieke pagina's.
    ════════════════════════════════════════════════════════════════════════ */
 :root{
   /* ── 1. Kanalen ── */

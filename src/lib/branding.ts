@@ -74,8 +74,9 @@ export const BRAND_FONTS: BrandFont[] = [
     label: 'Poppins (standaard)',
     hint: 'De huisstijl van ResoFly — vriendelijk en neutraal.',
     stack: "'Poppins', system-ui, -apple-system, 'Segoe UI', sans-serif",
-    // De werkruimte zelf staat sinds Belicht in Geist; Poppins blijft de
-    // standaardletter van wat de klant ziet en wordt daarom op aanvraag geladen.
+    // Sinds de Cockpit-laag (2026-10-05) staat ook de werkruimte weer helemaal
+    // in Poppins (index.html laadt hem); dit laden op aanvraag blijft voor de
+    // pagina's die de klant ziet, en kost niets dubbel (zelfde bestanden).
     google: 'Poppins:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600',
   },
   {

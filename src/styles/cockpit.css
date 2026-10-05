@@ -61,6 +61,24 @@
   --glow-accent:0 0 0 1px rgba(var(--accent-rgb),.35),0 10px 28px -8px rgba(var(--accent-rgb),.7);
   --ease-out:cubic-bezier(.16,1,.3,1);
 }
+/* De letter: alles in Poppins, ook de balken, de cijfers en het accent — de
+   huisletter van ResoFly (BRAND_FONTS: "De huisstijl van ResoFly") en die van
+   Value Backlog. Geldt voor de werkruimte, het inlogscherm en het laadscherm;
+   de publieke pagina's houden hun eigen letter (de huisstijl van de
+   leverancier). Na 'Poppins' staat dezelfde terugvalreeks als voorheen, zodat
+   de lay-outtest — die geen webfonts laadt — hetzelfde meet.
+   Poppins van Google Fonts heeft geen tabelcijfers (tnum): bedragen onder
+   elkaar lijnen rechts uit, niet cijfer voor cijfer. */
+:root:has(.app,main.login:not(.portal),div.boot){
+  --font-sans:'Poppins',ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-mono:'Poppins',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --font-serif:'Poppins',ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+}
+/* Het accent was Instrument Serif, cursief en een maat groter. Nu is het
+   dezelfde letter in dezelfde dikte en maat; het onderscheid zit in de kleur. */
+:is(.app,main.login:not(.portal)) .serif{font-style:normal;font-weight:inherit;font-size:inherit;line-height:inherit;letter-spacing:inherit}
+main.login:not(.portal) .login-card h1 .serif{color:var(--accent-ink)}
+
 /* Dag: het canvas een tikje dieper, zodat witte kaarten erop liggen in
    plaats van erin op te gaan. Alleen in de werkruimte: de publieke galerij
    leest --bg rechtstreeks en hoort te blijven zoals hij was. */
@@ -251,7 +269,7 @@
   background:var(--gold-face);color:#1A1405;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 -1px 0 rgba(90,55,0,.25),0 0 0 4px rgba(var(--accent-rgb),.09),0 8px 24px -4px rgba(var(--accent-rgb),.55);
 }
-.app .sidebar .app-brand>span{display:flex;flex-direction:column;line-height:1.12;color:#fff;font-weight:750;letter-spacing:-.022em}
+.app .sidebar .app-brand>span{display:flex;flex-direction:column;line-height:1.12;color:#fff;font-weight:800;letter-spacing:-.015em}
 .app .sidebar .app-brand small{display:block;margin-top:1px;font-size:11px;font-weight:600;letter-spacing:0;color:var(--accent)}
 
 /* Zoeken en organisatie: glas op donker. */
@@ -336,6 +354,10 @@
 @media (min-width:761px){
   .app .sidebar-head{padding:16px 12px 6px 17px}
   .app.sidebar-pinned .sidebar .org-switcher{margin-top:18px}
+  /* Poppins is breder dan Geist: "Owner + administratie + organisatie" past
+     net niet meer op één regel. Iets kleiner, en anders netjes eronder. */
+  .app .sidebar .org-meta{gap:2px 8px;flex-wrap:wrap}
+  .app .sidebar .org-meta span,.app .sidebar .org-meta button{font-size:11px}
   .app .sidebar .app-brand{min-height:34px}
   .app .sidebar .brand-icon{width:30px;height:30px;border-radius:9px}
   .app .sidebar .nav-section,.app .sidebar .nav-group{padding:14px 10px 6px 12px;font-size:10px}
@@ -374,7 +396,7 @@
   font-weight:700;letter-spacing:.14em;text-transform:uppercase;
 }
 .app :is(.clients-page-head,.fin-header,.bk-head,.settings-head,.finance-search-head,.ag-page-head,.mk-head,.ptl-head,.tt-hero) :is(h1,h2){
-  font-weight:800;letter-spacing:-.032em;color:var(--ink);
+  font-weight:800;letter-spacing:-.022em;color:var(--ink);
 }
 @media (min-width:761px){
   .app :is(.clients-page-head,.fin-header,.bk-head,.settings-head,.finance-search-head,.ag-page-head,.mk-head,.ptl-head,.tt-hero) :is(h1,h2){font-size:26px;line-height:1.12}
@@ -458,7 +480,7 @@
 .app .btn-primary{
   border-color:transparent;
   background:linear-gradient(180deg,var(--accent-hover) 0%,var(--accent) 100%);
-  color:var(--on-accent);font-weight:650;
+  color:var(--on-accent);font-weight:600;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.5),inset 0 -1px 0 rgba(80,50,0,.16),0 1px 2px rgba(80,50,0,.25),0 8px 20px -10px rgba(var(--accent-rgb),.95);
 }
 .app .btn-primary:hover:not(:disabled){
@@ -513,7 +535,7 @@
 /* ── 8 · Tabellen en pop-ups ─────────────────────────────────────────────── */
 .app :is(.quote-table-card,.clients-table-card,.projects-table-card,.tk-ctable-card){overflow:hidden}
 .app :is(.quote-table,.clients-table,.projects-table,.bk-table,.rb-table,.tk-ctable) th{
-  font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);
+  font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);
 }
 
 .app .modal-bg{-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
@@ -559,9 +581,9 @@
 }
 .app .cockpit .workspace-hero::before{display:none}
 .app .cockpit .workspace-hero .eyebrow{color:var(--accent)}
-.app .cockpit .workspace-hero h1{color:#fff;font-weight:800;letter-spacing:-.035em}
+.app .cockpit .workspace-hero h1{color:#fff;font-weight:800;letter-spacing:-.025em}
 .app .cockpit .workspace-hero h1 .serif{
-  font-weight:400;
+  font-weight:inherit;font-size:inherit;line-height:inherit;
   background:linear-gradient(90deg,#FFE7A3 0%,#F7C548 55%,#E4A11C 100%);
   -webkit-background-clip:text;background-clip:text;color:transparent;
   padding-right:.06em;
@@ -707,7 +729,7 @@
   width:360px;height:360px;border-radius:50%;
   opacity:.34;filter:blur(64px);pointer-events:none;
 }
-.app .proj-dash-hero-name,.app .client-title-row h2{color:#fff;font-weight:800;letter-spacing:-.032em}
+.app .proj-dash-hero-name,.app .client-title-row h2{color:#fff;font-weight:800;letter-spacing:-.022em}
 .app .proj-dash-hero-desc{color:var(--ink-2)}
 .app .proj-dash-hero-kicker{color:var(--accent)}
 .app .proj-dash-stats{border-top-color:rgba(255,255,255,.08)}
@@ -820,9 +842,9 @@ div.boot .login-card{color:var(--ink)}
   background:var(--gold-face);color:#1A1405;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 0 0 6px rgba(247,197,72,.08),0 10px 30px -6px rgba(247,197,72,.6);
 }
-.login-story .app-brand>span{display:flex;flex-direction:column;line-height:1.1;font-weight:800;letter-spacing:-.02em;color:#fff}
+.login-story .app-brand>span{display:flex;flex-direction:column;line-height:1.1;font-weight:800;letter-spacing:-.015em;color:#fff}
 .login-story .app-brand small{font-size:12.5px;font-weight:600;letter-spacing:0;color:#F7C548}
-.login-story h2{margin:52px 0 0;font-size:48px;line-height:1.04;font-weight:800;letter-spacing:-.04em;color:#fff}
+.login-story h2{margin:52px 0 0;font-size:46px;line-height:1.08;font-weight:800;letter-spacing:-.03em;color:#fff}
 .login-story h2 span{
   background:linear-gradient(90deg,#FFE7A3 0%,#F7C548 55%,#E4A11C 100%);
   -webkit-background-clip:text;background-clip:text;color:transparent;
@@ -855,7 +877,12 @@ main.login:not(.portal) .login-card{
   animation:cockpit-scale-in .32s var(--ease-out);
 }
 :root[data-theme="light"] main.login:not(.portal) .login-card{box-shadow:0 40px 80px -30px rgba(0,0,0,.7)}
-main.login:not(.portal) .login-card h1{font-weight:800;letter-spacing:-.04em}
+main.login:not(.portal) .login-card h1{font-weight:800;letter-spacing:-.03em}
+/* In Poppins 800 is de oude maat (tot 60px) te breed: "Je werkruimte" brak
+   in tweeën. Op de telefoon blijft de maat uit globals.css (26px). */
+@media (min-width:761px){
+  main.login:not(.portal) .login-card h1{font-size:40px;line-height:1.1}
+}
 main.login:not(.portal) .login-eyebrow{
   color:var(--accent-ink);font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;
 }
