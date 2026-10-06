@@ -281,6 +281,7 @@ function FinanceSearchPanel<T extends Quote | Invoice>({
   ];
 
   return <SearchFilterPanel
+    className="is-wide"
     ariaLabel={`${isQuote ? 'Offertes' : 'Facturen'} zoeken en filteren`}
     query={filters.query}
     queryPlaceholder={isQuote ? 'Zoek op offertenummer, klant, project, omschrijving, status of bedrag…' : 'Zoek op factuurnummer, klant, project, offerte, omschrijving, status of bedrag…'}
