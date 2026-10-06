@@ -3982,6 +3982,39 @@ button.chat-member:hover{background:var(--bg3)}
 }
 @media(max-width:760px){.ticket-toolbar{display:flex}.ticket-view-switch{width:100%}.ticket-view-switch button{flex:1;justify-content:center}}
 
+/* ── Financiën: de lijsten lopen tot de rand van het werkblad ──────────────
+   Offertes, facturen, contracten en alle pagina's van de administratie
+   (leveranciers, inkoopfacturen, grootboek, bank, activa, W&V, btw, boekjaren
+   …) stopten op 1180px. Op een breed scherm bleef rechts een lege baan van
+   een paar honderd pixels staan, terwijl klanten, projecten en tickets al tot
+   de rand liepen. Zelfde regel als daar: geen plafond. Het zoekblok erboven
+   krijgt `is-wide` mee (Finance.tsx, Marketing.tsx); de campagnetabel deelt
+   `.quote-table-card` en loopt dus ook mee, net als zijn kop al deed. */
+.quote-table-header,.quote-table-card,.bk-page{max-width:none}
+/* De regel onder de titel houdt wél een leesbare lengte, net als op Offertes
+   en Facturen (.quote-table-header p). Zonder plafond werd hij op Boekjaren,
+   Vpb en Aandeelhouders één regel van 1200px — en drukte hij de knop ernaast
+   in twee regels. */
+.bk-head p{max-width:720px}
+/* Offerte- en factuurtabel: de extra breedte gaat naar klant en project, het
+   enige in de rij dat lang kan zijn. Zonder verdeling kreeg elke kolom een
+   stukje — lucht achter "Concept" en tussen de bedragen — terwijl een
+   projectnaam nog steeds op 190px werd afgekapt. Nu:
+   - nummer, datums, bedragen, status en knoppen zijn zo smal als hun inhoud
+     (`width:1%` is "krimp tot de inhoud"). De knoppencel zelf is een flexbox
+     en geen tabelcel; daar zet de kolomkop erboven (`th:last-child`) het;
+   - klant en project delen de rest, en kappen pas af op de rand van hun
+     kolom in plaats van op een vaste 190px. Daarvoor telt hun naam niet mee
+     voor de kolombreedte (`width:0`, en `min-width:100%` vult de cel weer);
+     de lege `::after` van 150px houdt de kolom op een smaller scherm toch
+     leesbaar breed. Alleen vanaf 761px: daaronder is de tabel een kaart (24). */
+@media(min-width:761px){
+  .fin-doc-table td:not(.quote-row-actions),.fin-doc-table th:last-child{width:1%}
+  .fin-doc-table td:is([data-label="Klant"],[data-label="Project"]){width:auto}
+  .fin-doc-table td:is([data-label="Klant"],[data-label="Project"])::after{content:"";display:block;width:150px;height:0}
+  .fin-doc-table td:is([data-label="Klant"],[data-label="Project"]) span{display:block;width:0;min-width:100%;max-width:none}
+}
+
 /* ── Snelfilters: aanvinken in plaats van uitklappen ───────────────────────
    Echte checkboxes (spatiebalk werkt, schermlezer kondigt "aangevinkt" aan),
    maar getekend als chip. Het vinkje zelf is het enige gekleurde vlak; de chip

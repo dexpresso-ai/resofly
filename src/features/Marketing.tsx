@@ -315,6 +315,7 @@ export function Marketing({ data, organizationId, canWrite, onChanged, openCampa
       ) : view.mode === 'list' ? (
         <>
           {campaigns.length > 0 && <SearchFilterPanel
+            className="is-wide"
             ariaLabel="Campagnes zoeken en filteren"
             query={campaignFilters.query}
             queryPlaceholder="Zoek op campagnenaam, onderwerp of status…"
