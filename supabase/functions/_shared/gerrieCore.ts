@@ -9,6 +9,7 @@ import { ACTIONS } from '../_shared/actions/index.ts';
 import { getAction, searchActions } from '../_shared/actions/registry.ts';
 import { defaultInvoiceRecipient, invoiceDeliveryChannel } from '../_shared/eInvoicing.ts';
 import { ActionError, type ActionCtx, type ActionDef, type ActionPlan } from '../_shared/actions/types.ts';
+import { isOrganizationRole, memberModuleLevel, type OrganizationRole } from '../_shared/roles.ts';
 
 // ============================================================
 // gerrie-agent — Gerrie, de AI-assistent, gekoppeld aan Claude (Anthropic).
@@ -32,7 +33,6 @@ import { ActionError, type ActionCtx, type ActionDef, type ActionPlan } from '..
 //     systeemprompt). Tool-uitvoer wordt nooit als opdracht behandeld.
 // ============================================================
 
-type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
 type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502;
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
@@ -2351,11 +2351,9 @@ const MODULE_LABEL: Record<string, string> = {
   marketing: 'Marketing', finance: 'Financiën', chat: 'Teamchat', gerrie: 'Gerrie',
 };
 
+/** De gedeelde regel uit roles.ts (spiegel van org_module_level). */
 function moduleLevel(ctx: GerrieContext, module: string): 'none' | 'read' | 'write' {
-  if (ctx.role === 'owner' || ctx.role === 'admin') return 'write';
-  const stored = (ctx.moduleAccess[module] as 'none' | 'read' | 'write' | undefined) ?? 'write';
-  if (ctx.role === 'viewer') return stored === 'none' ? 'none' : 'read';
-  return stored;
+  return memberModuleLevel(ctx.role, ctx.moduleAccess, module);
 }
 
 /** Tools van modules die dichtstaan bieden we niet eens aan het model aan. */
@@ -5231,8 +5229,9 @@ async function requireOrganizationAccess(userId: string, organizationId: string)
   const { data, error } = await supabaseAdmin.from('organization_members').select('role')
     .eq('organization_id', organizationId).eq('user_id', userId).eq('status', 'active').limit(1);
   if (error) throw new HttpError(`organization_members lookup mislukt: ${error.message}`, 500);
-  const role = data?.[0]?.role as OrganizationRole | undefined;
-  if (!role) throw new HttpError('Geen toegang tot deze organisatie.', 403);
+  const role = data?.[0]?.role as unknown;
+  // Een rol die de code niet kent, krijgt geen toegang.
+  if (!isOrganizationRole(role)) throw new HttpError('Geen toegang tot deze organisatie.', 403);
   return role;
 }
 

@@ -23,7 +23,9 @@ export type InvoiceRefundStatus = 'queued' | 'pending' | 'processing' | 'refunde
 export type InvoiceChargebackStatus = 'charged_back' | 'reversed';
 export type CreditNoteStatus = 'draft' | 'issued' | 'void';
 export type InvoiceTemplateKind = 'none' | 'pdf' | 'image';
-export type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
+/** 'accountant' = de boekhouder: een gast die alleen Financiën mag lezen en
+ *  geen gebruikerslicentie gebruikt (migratie 20261011000000). */
+export type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 export type OrganizationMemberStatus = 'active' | 'disabled';
 export type InvitationStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
 export type LicenseStatus = 'trialing' | 'active' | 'past_due' | 'cancelled';

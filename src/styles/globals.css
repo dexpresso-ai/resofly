@@ -184,6 +184,18 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .settings-tabs-bar{position:sticky;top:0;z-index:5}
 .settings-tab-panel{display:flex;flex-direction:column;gap:14px;animation:settings-tab-in .18s ease}
 @keyframes settings-tab-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+/* Een fieldset alleen voor `disabled` (alleen-lezen weergave): geen eigen kader. */
+.settings-fieldset{border:0;margin:0;padding:0;min-width:0;display:flex;flex-direction:column;gap:14px}
+/* Boekhouder-toegang: wat de gast wel en niet ziet, naast elkaar (smal: onder elkaar). */
+.accountant-scope{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.accountant-scope>div{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.accountant-scope strong{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted2)}
+.accountant-scope ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px;font-size:12px;line-height:1.45;color:var(--text)}
+.accountant-scope>div:last-child ul{color:var(--muted2)}
+.team-row .accountant-actions{flex-direction:row;flex-wrap:wrap;gap:8px}
+.accountant-invite{grid-template-columns:minmax(0,1fr) auto}
+.accountant-invite .btn{white-space:nowrap}
+@media(max-width:900px){.accountant-scope{grid-template-columns:1fr}.accountant-invite{grid-template-columns:1fr}}
 .settings-save-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:12px 16px}
 .settings-save-bar .settings-help{margin:0}
 .settings-save-bar .btn{flex-shrink:0}

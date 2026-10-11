@@ -41,7 +41,7 @@ import {
 // materialiseren).
 // ============================================================================
 
-type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
+type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');

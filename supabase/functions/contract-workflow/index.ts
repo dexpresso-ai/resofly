@@ -20,7 +20,7 @@ import {
 // loopt via de gedeelde module _shared/contractPdf.ts.
 // ============================================================
 
-type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
+type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 
 type ContractRow = {
   id: string;

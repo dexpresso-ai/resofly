@@ -323,7 +323,7 @@ async function handleUserUpload(request: Request, env: Env, context: RouteContex
   if (!request.body) throw new HttpError(400, 'Lege upload.');
 
   const role = await requireMembership(env, organizationId, userId);
-  if (role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten in deze organisatie.');
+  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten in deze organisatie.');
   await requireModuleLevel(env, organizationId, userId, moduleForSegment(entityType), 'write');
   // Accountbreed opslagquotum (GB per abonnement) geldt voor álle gebruikersuploads.
   await assertStorageCapacity(env, organizationId, declaredSize);
@@ -377,7 +377,7 @@ async function handleUserDelete(
   const userId = await requireUser(request, env);
   const organizationId = organizationFromKey(key);
   const role = await requireMembership(env, organizationId, userId);
-  if (role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten in deze organisatie.');
+  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten in deze organisatie.');
   const segment = keySegment(key);
   if (IMMUTABLE_KEY_SEGMENTS.has(segment)) throw new HttpError(403, 'Een vastgelegd bewijsstuk kan niet worden verwijderd.');
   await requireModuleLevel(env, organizationId, userId, moduleForSegment(segment), 'write');
@@ -877,7 +877,7 @@ async function handleGalleryUpload(request: Request, env: Env, context: RouteCon
 
   const role = await membershipRole(env, organizationId, userId);
   if (!role) throw new HttpError(403, 'Geen toegang tot deze organisatie.');
-  if (role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten.');
   await requireGalleryAccess(env, organizationId, userId, 'write');
   await assertCreativeModule(env, organizationId);
 
@@ -944,7 +944,7 @@ async function authorizeGalleryWrite(request: Request, env: Env, organizationId:
   if (!isUuid(galleryId)) throw new HttpError(400, 'Ongeldige of ontbrekende galerij id.');
   const role = await membershipRole(env, organizationId, userId);
   if (!role) throw new HttpError(403, 'Geen toegang tot deze organisatie.');
-  if (role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten.');
   await requireGalleryAccess(env, organizationId, userId, 'write');
   await assertCreativeModule(env, organizationId);
   await fetchGalleryRow(env, galleryId, organizationId);
@@ -1162,7 +1162,7 @@ async function handleGalleryStreamUpload(request: Request, env: Env, context: Ro
   if (!Number.isFinite(fileSize) || fileSize <= 0) throw new HttpError(400, 'Ongeldige bestandsgrootte.');
 
   const role = await membershipRole(env, organizationId, userId);
-  if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten.');
   await requireGalleryAccess(env, organizationId, userId, 'write');
   await assertCreativeModule(env, organizationId);
   await fetchGalleryRow(env, galleryId, organizationId);
@@ -1297,7 +1297,7 @@ async function handleGalleryStreamDelete(request: Request, env: Env, context: Ro
   if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige organization id.');
   if (!uid || !/^[a-f0-9]{32}$/i.test(uid)) throw new HttpError(400, 'Ongeldige video-id.');
   const role = await membershipRole(env, organizationId, userId);
-  if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten.');
   await requireGalleryAccess(env, organizationId, userId, 'write');
 
   const lookup = await streamApi(env, `/stream/${uid}`);
@@ -2005,11 +2005,40 @@ async function moduleLevel(env: Env, organizationId: string, userId: string, mod
   const rows = (await res.json()) as Array<{ role?: string; module_access?: Record<string, unknown> | null }>;
   const row = Array.isArray(rows) ? rows[0] : undefined;
   if (!row?.role) return 'none';
-  if (row.role === 'owner' || row.role === 'admin') return 'write';
-  const raw = row.module_access?.[module];
+  return memberModuleLevel(row.role, row.module_access, module);
+}
+
+/** Rollen die mogen wijzigen, als de module het ook toestaat. Een allowlist:
+ *  hier stond eerst "alles behalve viewer", en dan schreef elke nieuwe rol mee. */
+const WRITER_ROLES = new Set(['owner', 'admin', 'member']);
+
+function isWriterRole(role: string | null | undefined): role is 'owner' | 'admin' | 'member' {
+  return Boolean(role && WRITER_ROLES.has(role));
+}
+
+/**
+ * Exacte spiegel van public.member_module_level (en van
+ * supabase/functions/_shared/roles.ts): owners/admins volledig, de boekhouder
+ * alleen Financiën lezen, een viewer nooit meer dan lezen, een member wat er is
+ * ingesteld (ontbrekende sleutel = volledig), en een onbekende rol niets.
+ */
+function memberModuleLevel(role: string, moduleAccess: Record<string, unknown> | null | undefined, module: string): ModuleLevel {
+  if (role === 'owner' || role === 'admin') return 'write';
+  if (role === 'accountant') return module === 'finance' ? 'read' : 'none';
+  const raw = moduleAccess?.[module];
   const stored: ModuleLevel = raw === 'none' || raw === 'read' || raw === 'write' ? raw : 'write';
-  if (row.role === 'viewer') return stored === 'none' ? 'none' : 'read';
-  return stored;
+  if (role === 'viewer') return stored === 'none' ? 'none' : 'read';
+  if (role === 'member') return stored;
+  return 'none';
+}
+
+/** Een bestand dat onder geen module valt (zoals een opname): wat de rol zelf
+ *  toelaat. Lid zijn was daar genoeg — maar niet voor de boekhouder, die alleen
+ *  Financiën ziet. */
+function levelWithoutModule(role: string | null | undefined): ModuleLevel {
+  if (isWriterRole(role)) return 'write';
+  if (role === 'viewer') return 'read';
+  return 'none';
 }
 
 /** Galerijen vallen onder de Projecten-module (zie apply_module_gate in de migratie). */
@@ -2286,11 +2315,11 @@ async function handleOfficeSession(request: Request, env: Env, context: RouteCon
   if (!role) throw new HttpError(403, 'Geen toegang tot dit bestand.');
   // Modulerecht op wat het bestand is (contract = Financiën, document = Inhoud,
   // bijlage = de module van de entiteit): 'none' = niet openen, 'read' = bekijken.
-  const level = target.module ? await moduleLevel(env, target.organization_id, userId, target.module) : 'write';
+  const level = target.module ? await moduleLevel(env, target.organization_id, userId, target.module) : levelWithoutModule(role);
   if (level === 'none') throw new HttpError(403, 'Geen toegang tot deze module.');
   // Een bevroren doel (getekend/ingetrokken contract) opent alleen-lezen: de
   // klant heeft dan een exemplaar met precies deze inhoud in handen.
-  const canWrite = role !== 'viewer' && level === 'write' && !target.locked;
+  const canWrite = isWriterRole(role) && level === 'write' && !target.locked;
 
   const ext = OFFICE_MIME_EXT[target.mime_type] || fileExt(target.name);
   if (!ext) throw new HttpError(415, 'Dit bestandstype kan niet online bewerkt worden.');
@@ -2327,7 +2356,7 @@ async function handleOfficeNew(request: Request, env: Env, context: RouteContext
   if (!OFFICE_NEW_MIME[docType]) throw new HttpError(400, 'Ongeldig documenttype.');
 
   const role = await membershipRole(env, organizationId, userId);
-  if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten.');
   await requireModuleLevel(env, organizationId, userId, 'content', 'write');
 
   const templateKey = `_office-templates/blank.${docType}`;
@@ -2374,7 +2403,7 @@ async function handleOfficeDocumentUpload(request: Request, env: Env, context: R
   if (!OFFICE_MIME_EXT[mime]) throw new HttpError(415, 'Alleen Word-, Excel- of PowerPoint-bestanden zijn toegestaan.');
 
   const role = await membershipRole(env, organizationId, userId);
-  if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten.');
   await requireModuleLevel(env, organizationId, userId, 'content', 'write');
   if (!request.body) throw new HttpError(400, 'Lege upload.');
 
@@ -2408,7 +2437,7 @@ async function handleOfficeDocumentNew(request: Request, env: Env, context: Rout
   if (!OFFICE_NEW_MIME[docType]) throw new HttpError(400, 'Ongeldig documenttype.');
 
   const role = await membershipRole(env, organizationId, userId);
-  if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten.');
   await requireModuleLevel(env, organizationId, userId, 'content', 'write');
 
   const templateKey = `_office-templates/blank.${docType}`;
@@ -2448,7 +2477,7 @@ async function handleOfficeContractUpload(request: Request, env: Env, context: R
   if (!OFFICE_MIME_EXT[mime]) throw new HttpError(415, 'Alleen Word-, Excel- of PowerPoint-bestanden zijn toegestaan.');
 
   const role = await membershipRole(env, organizationId, userId);
-  if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten.');
   await requireModuleLevel(env, organizationId, userId, 'finance', 'write');
   if (!request.body) throw new HttpError(400, 'Lege upload.');
 
@@ -2626,7 +2655,7 @@ async function handleWopiPutFile(request: Request, env: Env, context: RouteConte
   // Zelfde reden: is de bewerker intussen uit het team gehaald, teruggezet naar
   // lezen of zijn modulerecht kwijt, dan schrijft een open sessie niet meer.
   const role = await membershipRole(env, token.org, token.uid);
-  if (!role || role === 'viewer') throw new HttpError(403, 'Geen schrijfrechten.');
+  if (!isWriterRole(role)) throw new HttpError(403, 'Geen schrijfrechten.');
   await requireModuleLevel(env, token.org, token.uid, target.module, 'write');
   if (!request.body) throw new HttpError(400, 'Lege PutFile.');
 
@@ -2823,7 +2852,8 @@ function keySegment(key: string): string {
 }
 
 /** 403 tenzij het teamlid de module op het gevraagde niveau mag. Zonder module
- *  (onbekend segment) volstaat het lidmaatschap dat de aanroeper al controleerde. */
+ *  (onbekend segment) beslist de rol: lezen voor elk gewoon lid, maar niet voor
+ *  de boekhouder (zie levelWithoutModule). */
 async function requireModuleLevel(
   env: Env,
   organizationId: string,
@@ -2831,8 +2861,9 @@ async function requireModuleLevel(
   module: string | null,
   need: 'read' | 'write',
 ): Promise<void> {
-  if (!module) return;
-  const level = await moduleLevel(env, organizationId, userId, module);
+  const level = module
+    ? await moduleLevel(env, organizationId, userId, module)
+    : levelWithoutModule(await membershipRole(env, organizationId, userId));
   const ok = need === 'read' ? level !== 'none' : level === 'write';
   if (!ok) {
     throw new HttpError(403, need === 'read' ? 'Geen toegang tot deze module.' : 'Geen schrijfrechten in deze module.');

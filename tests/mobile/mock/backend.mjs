@@ -64,6 +64,8 @@ function rpc(fn) {
     case 'chat_unread_counts': return [{ conversation_id: seed.chatConversations[0].id, unread_count: 2 }];
     case 'organization_creative_status': return [{ active: true, enabled: true, included_in_plan: true, in_grace: false, grace_until: null, addon_price_cents: 900, addon_yearly_price_cents: 9000, billing_interval: 'month' }];
     case 'organization_business_status': return [{ active: true, enabled: true, included_in_plan: true, in_grace: false, grace_until: null, legal_form: 'bv', fiscal_regime: 'vpb', is_corporate: true }];
+    // Debiteuren voor wie Financiën wel en Klanten niet mag lezen (de boekhouder).
+    case 'finance_client_directory': return seed.clients.map(({ id, organization_id, name, client_code, client_kind, contact_name, email, phone, vat_number, kvk_number, address_line1, address_line2, postal_code, city, country, e_invoicing_enabled, e_invoice_email, e_invoice_channel }) => ({ id, organization_id, name, client_code, client_kind, contact_name, email, phone, vat_number, kvk_number, address_line1, address_line2, postal_code, city, country, e_invoicing_enabled, e_invoice_email, e_invoice_channel }));
     default: return [];
   }
 }

@@ -458,6 +458,33 @@ export async function setMemberModuleAccess(memberId: UUID, moduleAccess: Module
   return row as OrganizationMember;
 }
 
+/**
+ * De debiteuren zoals ze op de financiële stukken staan — voor wie Financiën
+ * mag lezen maar Klanten niet, zoals de boekhouder. Zonder deze lijst hebben
+ * facturen geen naam en de XAF-auditfile geen debiteuren. Alleen de velden van
+ * de factuur; notities, tags, opvolging en eigen velden blijven leeg. De RPC
+ * (migratie 20261011000000) geeft alleen klanten die op een factuur, offerte,
+ * contract of boeking staan.
+ */
+export async function loadFinanceClientDirectory(organizationId: UUID): Promise<Client[]> {
+  const { data, error } = await supabase.rpc('finance_client_directory', { p_organization_id: organizationId });
+  if (error) throw error;
+  type DirectoryRow = Pick<Client, 'id' | 'organization_id' | 'name' | 'client_code' | 'client_kind' | 'contact_name' | 'email' | 'phone' | 'vat_number' | 'kvk_number' | 'address_line1' | 'address_line2' | 'postal_code' | 'city' | 'country' | 'e_invoicing_enabled' | 'e_invoice_email' | 'e_invoice_channel'>;
+  return ((data ?? []) as DirectoryRow[]).map(row => ({
+    ...row,
+    created_by: null,
+    notes: null,
+    color: '#8A8A93',
+    status: 'active',
+    tags: [],
+    follow_up: null,
+    value_eur: 0,
+    custom_fields: {},
+    created_at: '',
+    updated_at: '',
+  }));
+}
+
 export async function disableOrganizationMember(memberId: UUID, organizationId: UUID): Promise<void> {
   const { error } = await supabase
     .from('organization_members')

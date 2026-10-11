@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, BookOpen, CalendarCog, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
+import { Bell, BookOpen, Calculator, CalendarCog, CreditCard, ListChecks, Mail, Palette, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Trash2, Users, Webhook } from 'lucide-react';
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
 import type { AppData, AuditLog, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationPortalSettings, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
@@ -17,7 +17,7 @@ import { ClientFieldsManager } from './ClientFields';
 import { McpConnections } from '../components/McpConnections';
 import { ApiIntegrations } from '../components/ApiIntegrations';
 import { PageIcon } from '../components/PageIcon';
-import { LEVEL_LABELS, MODULES, parseModuleAccess, type ModuleAccess, type ModuleLevel } from '../lib/permissions';
+import { isAccountantRole, LEVEL_LABELS, MODULES, parseModuleAccess, type ModuleAccess, type ModuleLevel } from '../lib/permissions';
 
 const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -77,9 +77,25 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   admin: 'Admin',
   member: 'Member',
   viewer: 'Viewer',
+  accountant: 'Boekhouder',
 };
 
-export type SettingsTab = 'organisatie' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'betalen' | 'abonnement' | 'ai' | 'api' | 'email';
+export type SettingsTab = 'organisatie' | 'sjablonen' | 'klantvelden' | 'huisstijl' | 'meldingen' | 'agenda' | 'facturatie' | 'boekhouding' | 'boekhouder' | 'betalen' | 'abonnement' | 'ai' | 'api' | 'email';
+
+/** De boekhouder ziet alleen wat bij de financiën hoort, en dan alleen-lezen. */
+export const ACCOUNTANT_SETTINGS_TABS: SettingsTab[] = ['organisatie', 'facturatie', 'boekhouding'];
+
+/**
+ * De regels per rol voor de instellingen-tabbladen, gedeeld door de pagina en
+ * het accountmenu. `null` = geen rolregel; dan beslist de aanroeper met zijn
+ * eigen regels (agenda, AI, API).
+ */
+export function settingsTabRoleRule(tab: SettingsTab, role: OrganizationRole | null | undefined): boolean | null {
+  if (isAccountantRole(role)) return ACCOUNTANT_SETTINGS_TABS.includes(tab);
+  // Een boekhouder uitnodigen of de toegang intrekken is beheer.
+  if (tab === 'boekhouder') return role === 'owner' || role === 'admin';
+  return null;
+}
 
 /**
  * Rechtenraster: per module kiezen tussen geen toegang, alleen lezen en
@@ -117,6 +133,7 @@ function ModuleAccessGrid({ value, onChange, disabled = false, readOnlyCap = fal
 /** Korte samenvatting onder een teamlid: "Financiën verborgen · Uren alleen lezen". */
 function moduleAccessSummary(role: OrganizationRole, raw: unknown): string {
   if (role === 'owner' || role === 'admin') return 'Toegang tot alle modules';
+  if (isAccountantRole(role)) return 'Alleen Financiën, alleen lezen · gastaccount';
   const access = parseModuleAccess(raw);
   const hidden = MODULES.filter(m => access[m.key] === 'none').map(m => m.label);
   const readOnly = role === 'viewer'
@@ -138,6 +155,7 @@ export const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; Icon: typeof
   { id: 'agenda', label: 'Agenda', Icon: CalendarCog, description: 'Koppel Google Calendar of Microsoft Outlook, maak eigen ResoFly-agenda\'s, abonneer op een agenda via een link en zet de sync met je telefoon aan.' },
   { id: 'facturatie', label: 'Facturatie', Icon: Receipt, description: 'Bedrijfsgegevens, factuurtemplate en betaalteksten die op je facturen en offertes verschijnen.' },
   { id: 'boekhouding', label: 'Boekhouding', Icon: BookOpen, description: 'De boekhoud-startdatum (knipdatum) en de KOR-regeling voor je grootboek en BTW-aangifte.' },
+  { id: 'boekhouder', label: 'Boekhouder', Icon: Calculator, description: 'Geef je boekhouder of accountant een gratis gastaccount dat alleen je financiën kan inzien — niets wijzigen, geen klantdossiers of projecten.' },
   { id: 'betalen', label: 'Online betalen', Icon: CreditCard, description: 'Koppel Mollie zodat klanten je facturen direct online kunnen betalen.' },
   { id: 'abonnement', label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
   { id: 'ai', label: 'AI', Icon: Sparkles, description: 'Koppel je eigen AI (Claude, ChatGPT) aan deze werkruimte, en bekijk het verbruik en de kosten van Gerrie per gebruiker.' },
@@ -1314,6 +1332,150 @@ function AiUsagePanel({ organizationId, members }: { organizationId: string; mem
   );
 }
 
+/** Wat de boekhouder wel en niet ziet. Staat zo ook in de uitnodigingsmail. */
+const ACCOUNTANT_SEES = [
+  'Offertes, contracten, facturen en creditfacturen',
+  'Inkoopfacturen (met de bonnetjes) en leveranciers',
+  'Grootboek, journaalposten, bank en activa',
+  'Winst & verlies, btw, Vpb, DGA en aandeelhouders',
+  'Boekjaren en jaarrekening',
+  'Debiteurgegevens zoals ze op de facturen staan',
+  'Downloads: PDF, e-factuur (UBL) en de XAF-auditfile',
+];
+const ACCOUNTANT_DOES_NOT_SEE = [
+  'Klantdossiers, contactpersonen en klantmail',
+  'Projecten, taken, uren en agenda',
+  'Tickets, notities en documenten',
+  'Teamchat, marketing en Gerrie',
+  'Het team, de instellingen en het abonnement',
+];
+
+/**
+ * Instellingen → Boekhouder: één gratis gastaccount per administratie voor de
+ * boekhouder. De rechten liggen vast in de rol (database: member_module_level);
+ * hier alleen uitnodigen, opnieuw sturen en intrekken.
+ */
+function AccountantAccessCard({
+  organizationContext,
+  canAdmin,
+  canOwner,
+  onInvite,
+  onRevokeInvitation,
+  onDisableMember,
+}: {
+  organizationContext: OrganizationContext;
+  canAdmin: boolean;
+  /** Een actief lid uitzetten mag alleen een owner (net als bij teamleden). */
+  canOwner: boolean;
+  onInvite: (email: string) => Promise<{ emailSent: boolean; emailError?: string }>;
+  onRevokeInvitation: (invitationId: string) => Promise<void>;
+  onDisableMember: (memberId: string) => Promise<void>;
+}) {
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState<'invite' | 'resend' | 'revoke' | 'disable' | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const organizationName = organizationContext.activeOrganization?.name ?? 'deze administratie';
+  const accountant = organizationContext.teamMembers.find(member => member.role === 'accountant' && member.status === 'active') ?? null;
+  const invitation = organizationContext.organizationInvitations.find(item => item.role === 'accountant' && item.status === 'pending') ?? null;
+  // Met een holding en werk-BV's is elke administratie apart: de boekhouder
+  // krijgt per administratie een eigen uitnodiging.
+  const hasEntities = organizationContext.organizations.some(org => org.parent_organization_id);
+
+  async function run(kind: NonNullable<typeof busy>, action: () => Promise<string | null>) {
+    setMessage(null);
+    setError(null);
+    setBusy(kind);
+    try {
+      const done = await action();
+      if (done) setMessage(done);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Dat lukte niet.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function sentMessage(address: string, result: { emailSent: boolean; emailError?: string }): string | null {
+    if (result.emailSent) return `Uitnodiging verstuurd naar ${address}. Na het inloggen met dit e-mailadres staat de uitnodiging klaar en is die met één klik te accepteren.`;
+    // De uitnodiging staat er wél; alleen de mail mislukte. Eerlijk melden.
+    setError(`De uitnodiging staat klaar, maar de e-mail naar ${address} kon niet worden verzonden${result.emailError ? ` (${result.emailError})` : ''}. Je boekhouder kan ook zelf inloggen met dit e-mailadres om de uitnodiging te accepteren.`);
+    return null;
+  }
+
+  const invite = () => run('invite', async () => {
+    const address = email.trim();
+    const result = await onInvite(address);
+    setEmail('');
+    return sentMessage(address, result);
+  });
+  const resend = () => invitation && run('resend', async () => sentMessage(invitation.email, await onInvite(invitation.email)));
+  const revoke = () => invitation && run('revoke', async () => {
+    await onRevokeInvitation(invitation.id);
+    return 'Uitnodiging ingetrokken.';
+  });
+  const disable = () => accountant && run('disable', async () => {
+    if (!confirm(`De toegang van ${accountant.email ?? 'je boekhouder'} intrekken? Daarna is er niets meer in te zien.`)) return null;
+    await onDisableMember(accountant.id);
+    return 'Toegang ingetrokken. Je kunt nu een andere boekhouder uitnodigen.';
+  });
+
+  return <section className="settings-card organization-card accountant-card">
+    <div className="settings-card-head">
+      <div>
+        <h3>Boekhouder-toegang</h3>
+        <p className="settings-help">Geef je boekhouder of accountant een eigen login om mee te kijken in de financiën van <strong>{organizationName}</strong>. Het is een gastaccount: het kost geen gebruikerslicentie, en je boekhouder kan alleen <strong>inzien</strong> — niets wijzigen, boeken of versturen.</p>
+      </div>
+    </div>
+
+    {message && <div className="success">{message}</div>}
+    {error && <div className="error">{error}</div>}
+
+    <div className="accountant-scope">
+      <div>
+        <strong>Ziet wel</strong>
+        <ul>{ACCOUNTANT_SEES.map(item => <li key={item}>{item}</li>)}</ul>
+      </div>
+      <div>
+        <strong>Ziet niet</strong>
+        <ul>{ACCOUNTANT_DOES_NOT_SEE.map(item => <li key={item}>{item}</li>)}</ul>
+      </div>
+    </div>
+
+    {accountant ? <div className="team-list">
+      <strong>Actief</strong>
+      <div className="team-row">
+        <div>
+          <span>{accountant.email ?? accountant.user_id}</span>
+          <small>Boekhouder · sinds {formatDate(accountant.joined_at)}</small>
+        </div>
+        <Button variant="danger" disabled={!canOwner || busy !== null} onClick={disable} title={canOwner ? undefined : 'Alleen een owner kan de toegang van een actieve boekhouder intrekken.'}>
+          {busy === 'disable' ? 'Bezig…' : 'Toegang intrekken'}
+        </Button>
+      </div>
+      {!canOwner && <p className="settings-help">Alleen een owner kan de toegang van een actieve boekhouder intrekken.</p>}
+    </div> : invitation ? <div className="team-list">
+      <strong>Uitgenodigd</strong>
+      <div className="team-row">
+        <div>
+          <span>{invitation.email}</span>
+          <small>Wacht op acceptatie · verloopt {formatDate(invitation.expires_at)}</small>
+        </div>
+        <div className="accountant-actions">
+          <Button disabled={!canAdmin || busy !== null} onClick={resend}>{busy === 'resend' ? 'Versturen…' : 'Opnieuw versturen'}</Button>
+          <Button variant="danger" disabled={!canAdmin || busy !== null} onClick={revoke}>{busy === 'revoke' ? 'Bezig…' : 'Intrekken'}</Button>
+        </div>
+      </div>
+    </div> : <div className="invite-row accountant-invite">
+      <Input type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="boekhouder@kantoor.nl" aria-label="E-mailadres van je boekhouder" disabled={!canAdmin || busy !== null} />
+      <Button variant="primary" onClick={invite} disabled={!canAdmin || busy !== null || !email.trim()}>{busy === 'invite' ? 'Uitnodigen…' : 'Boekhouder uitnodigen'}</Button>
+    </div>}
+
+    <p className="settings-help">Eén boekhouder per administratie. Wil je wisselen, trek dan eerst de toegang van de huidige boekhouder in.{hasEntities ? ' Werk je met meerdere administraties (holding en werk-BV)? Nodig je boekhouder dan in elke administratie apart uit.' : ''}</p>
+  </section>;
+}
+
 export function Settings({
   settings,
   data,
@@ -1406,6 +1568,8 @@ export function Settings({
   const activeOrganization = organizationContext.activeOrganization;
   const activeMembership = organizationContext.activeMembership;
   const canAdminOrganization = activeMembership ? ['owner', 'admin'].includes(activeMembership.role) : false;
+  // De boekhouder (gast) ziet hier alleen wat bij de financiën hoort, alleen-lezen.
+  const isAccountant = isAccountantRole(activeMembership?.role);
   // Het agenda-tabblad verschijnt alleen als de agenda-module openstaat. Landt
   // iemand toch op een tabblad dat er voor hem niet is (onthouden keuze, wissel
   // van organisatie), dan valt hij terug op het eerste tabblad in plaats van op
@@ -1418,17 +1582,27 @@ export function Settings({
   // API & webhooks staat daarentegen alleen open voor owners en admins: een
   // API-sleutel is een deur naar de hele organisatie, en die geeft niet elk
   // teamlid uit (api-admin weigert het ook).
+  //
+  // De boekhouder ziet alleen Organisatie, Facturatie en Boekhouding; het
+  // tabblad Boekhouder (uitnodigen, intrekken) is voor owners en admins.
   const hasCalendarSettings = Boolean(calendarSettings);
   const visibleTabs = SETTINGS_TABS.filter(tab => {
+    const roleRule = settingsTabRoleRule(tab.id, activeMembership?.role);
+    if (roleRule !== null) return roleRule;
     if (tab.id === 'agenda') return hasCalendarSettings;
     if (tab.id === 'api') return canAdminOrganization;
     return true;
   });
+  const visibleTabKey = visibleTabs.map(tab => tab.id).join(',');
   useEffect(() => {
-    if (activeTab === 'agenda' && !hasCalendarSettings) setActiveTab('organisatie');
-    if (activeTab === 'api' && !canAdminOrganization) setActiveTab('organisatie');
-  }, [activeTab, hasCalendarSettings, canAdminOrganization]);
+    if (!visibleTabs.some(tab => tab.id === activeTab)) setActiveTab('organisatie');
+    // visibleTabKey staat voor visibleTabs (een nieuwe array per render).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, visibleTabKey]);
   const canManageRoles = activeMembership?.role === 'owner';
+  // De uitnodiging voor de boekhouder staat op het tabblad Boekhouder, niet
+  // tussen de teamuitnodigingen.
+  const teamInvitations = organizationContext.organizationInvitations.filter(invitation => !isAccountantRole(invitation.role));
   const activeOwnerCount = organizationContext.teamMembers.filter(member => member.role === 'owner' && member.status === 'active').length;
   const licenseUsage = organizationContext.licenseUsage;
   const seatOverview = billingOverview ?? licenseUsage;
@@ -2022,7 +2196,9 @@ export function Settings({
         <h2>Instellingen</h2>
         <p>{activeTabMeta.description}</p>
       </div>
-      {!canAdminOrganization && <p className="settings-help">Je kunt deze instellingen bekijken, maar alleen owners en admins kunnen ze aanpassen.</p>}
+      {isAccountant
+        ? <p className="settings-help">Je bent hier boekhouder: je ziet de financiële instellingen, maar kunt ze niet aanpassen.</p>
+        : !canAdminOrganization && <p className="settings-help">Je kunt deze instellingen bekijken, maar alleen owners en admins kunnen ze aanpassen.</p>}
     </div>
 
     <div className="client-tabs-bar settings-tabs-bar" role="tablist">
@@ -2033,6 +2209,7 @@ export function Settings({
           role="tab"
           aria-selected={activeTab === tab.id}
           className={`client-tab-btn${activeTab === tab.id ? ' active' : ''}`}
+          data-settings-tab={tab.id}
           onClick={() => setActiveTab(tab.id)}
         >
           <tab.Icon size={15} aria-hidden="true" />
@@ -2068,17 +2245,26 @@ export function Settings({
       {organizationContext.pendingInvitations.length > 0 && <div className="team-list">
         <strong>Openstaande uitnodigingen voor jou</strong>
         {organizationContext.pendingInvitations.map(invitation => <div className="team-row" key={invitation.id}>
-          <div><span>{invitation.email}</span><small>Rol: {ROLE_LABELS[invitation.role]}</small></div>
+          <div><span>{invitation.email}</span><small>Rol: {ROLE_LABELS[invitation.role]}{isAccountantRole(invitation.role) ? ' · alleen-lezen toegang tot Financiën' : ''}</small></div>
           <Button variant="primary" onClick={() => acceptInvitation(invitation.id)}>Accepteren</Button>
         </div>)}
       </div>}
     </section>
 
-    <section className="settings-card organization-card">
+    {isAccountant ? <section className="settings-card organization-card">
+      <div className="settings-card-head">
+        <div>
+          <h3>Jouw toegang als boekhouder</h3>
+          <p className="settings-help">Je kijkt mee in de financiën van <strong>{activeOrganization?.name ?? 'deze administratie'}</strong>: offertes, contracten, facturen, inkoop, grootboek, bank, activa, winst &amp; verlies, btw en de jaarstukken. Downloaden kan — als PDF, e-factuur of XAF-auditfile (Grootboek → Auditfile). Wijzigen, boeken of versturen kan niet. Klantdossiers, projecten, agenda, berichten en het team zijn voor jou dicht.</p>
+          <p className="settings-help">Toegang nodig tot een andere administratie? Vraag de eigenaar om je daar ook als boekhouder uit te nodigen.</p>
+        </div>
+      </div>
+    </section> : <section className="settings-card organization-card">
       <div className="settings-card-head">
         <div>
           <h3>Rollen en modulerechten</h3>
           <p className="settings-help">Owner = volledig beheer. Admin = organisatie-instellingen en uitnodigingen. Member = werken in CRM/projecten. Viewer = alleen lezen. Per member of viewer stel je daarnaast met <strong>Rechten</strong> in welke modules diegene ziet — bijvoorbeeld wél projecten en uren, maar geen financiën. Owners en admins houden altijd toegang tot alles. Owners zijn bovendien tegen elkaar beschermd: geen enkele owner kan een andere owner degraderen, uitschakelen of verwijderen.</p>
+          <p className="settings-help">Boekhouder = een gratis gastaccount dat alleen Financiën kan inzien. Die nodig je uit onder het tabblad <strong>Boekhouder</strong>; de rechten liggen vast.</p>
         </div>
       </div>
 
@@ -2090,10 +2276,13 @@ export function Settings({
           // Owners zijn tegen elkaar beschermd: een andere owner kun je niet
           // degraderen of uitschakelen (de database blokkeert het ook).
           const isPeerOwner = member.role === 'owner' && !isSelf;
-          const roleLocked = !canManageRoles || isSelf || isLastOwner || isPeerOwner || busyMemberId === member.id;
+          // De boekhouder heeft een vaste rol en vaste rechten (database:
+          // prevent_accountant_role_change). Toegang intrekken kan wel.
+          const isAccountantMember = isAccountantRole(member.role);
+          const roleLocked = !canManageRoles || isSelf || isLastOwner || isPeerOwner || isAccountantMember || busyMemberId === member.id;
           // Rechten instellen mag een admin voor members/viewers; alleen een owner
           // mag ook een admin beperken (die beperking gaat pas gelden na degradatie).
-          const canEditAccess = canAdminOrganization && member.role !== 'owner'
+          const canEditAccess = canAdminOrganization && member.role !== 'owner' && !isAccountantMember
             && (member.role !== 'admin' || canManageRoles) && busyMemberId !== member.id;
           const accessOpen = accessMemberId === member.id;
           return <div key={member.id}>
@@ -2107,6 +2296,7 @@ export function Settings({
                 <option value="admin">Admin</option>
                 <option value="member">Member</option>
                 <option value="viewer">Viewer</option>
+                {isAccountantMember && <option value="accountant">Boekhouder</option>}
               </Select>
               <Button disabled={!canEditAccess} onClick={() => toggleAccessPanel(member)} aria-expanded={accessOpen}>{accessOpen ? 'Sluiten' : 'Rechten'}</Button>
               <Button variant="danger" disabled={!canManageRoles || isSelf || isLastOwner || isPeerOwner || busyMemberId === member.id} onClick={() => disableMember(member.id)}>Uitschakelen</Button>
@@ -2149,14 +2339,14 @@ export function Settings({
       {isBillingExempt && canAdminOrganization && <p className="settings-help">Deze organisatie is <strong>intern/onbeperkt</strong> — je kunt zonder seat-limiet teamleden uitnodigen.</p>}
       {!isBillingExempt && !hasAvailableLicense && <p className="settings-help">Er zijn geen vrije licenties meer. Trek een openstaande uitnodiging in, schakel een teamlid uit of laat billing eerst extra seats synchroniseren.</p>}
 
-      {organizationContext.organizationInvitations.length > 0 && <div className="team-list">
+      {teamInvitations.length > 0 && <div className="team-list">
         <strong>Openstaande teamuitnodigingen</strong>
-        {organizationContext.organizationInvitations.map(invitation => <div className="team-row" key={invitation.id}>
+        {teamInvitations.map(invitation => <div className="team-row" key={invitation.id}>
           <div><span>{invitation.email}</span><small>{ROLE_LABELS[invitation.role]} · {moduleAccessSummary(invitation.role, invitation.module_access)} · verloopt {formatDate(invitation.expires_at)}</small></div>
           <Button variant="danger" disabled={!canAdminOrganization || busyInvitationId === invitation.id} onClick={() => revokeInvitation(invitation.id)}>Intrekken</Button>
         </div>)}
       </div>}
-    </section>
+    </section>}
 
     <section className="settings-card activity-card">
       <div className="settings-card-head">
@@ -2205,6 +2395,8 @@ export function Settings({
     {message && <div className="success">{message}</div>}
     {templateError && <div className="error">{templateError}</div>}
 
+    {/* Wie niet mag opslaan (zoals de boekhouder), ziet de velden alleen-lezen. */}
+    <fieldset className="settings-fieldset" disabled={!canAdminOrganization}>
     <section className="settings-card">
       <h3>Bedrijfsgegevens op factuur</h3>
       <div className="settings-grid">
@@ -2362,6 +2554,7 @@ export function Settings({
       <Textarea value={form.invoice_payment_terms ?? ''} onChange={e=>set('invoice_payment_terms', e.target.value)} placeholder="Betaalinstructies" />
       <Textarea value={form.invoice_footer ?? ''} onChange={e=>set('invoice_footer', e.target.value)} placeholder="Footertekst" />
     </section>
+    </fieldset>
     </div>}
 
     {activeTab === 'boekhouding' && <div className="settings-tab-panel">
@@ -2410,6 +2603,17 @@ export function Settings({
       </div>
       <p className="settings-help">Het standaard uurtarief wordt gebruikt om de declarabele waarde van geregistreerde uren te berekenen wanneer een project geen eigen tarief heeft.</p>
     </section>
+    </div>}
+
+    {activeTab === 'boekhouder' && <div className="settings-tab-panel">
+      <AccountantAccessCard
+        organizationContext={organizationContext}
+        canAdmin={canAdminOrganization}
+        canOwner={canManageRoles}
+        onInvite={(email) => onInviteMember(email, 'accountant', {})}
+        onRevokeInvitation={onRevokeInvitation}
+        onDisableMember={onDisableMember}
+      />
     </div>}
 
     {activeTab === 'betalen' && <div className="settings-tab-panel">

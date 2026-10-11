@@ -13,7 +13,7 @@ import { AgentApprovals } from '../components/AgentApprovals';
 import { DecisionFeed } from '../components/DecisionFeed';
 import type { DecisionTarget } from '../lib/decisions-api';
 import type { GerrieActionHandlers } from '../lib/gerrie-api';
-import { FULL_PERMISSIONS, type ModuleKey, type Permissions } from '../lib/permissions';
+import { FULL_PERMISSIONS, isAccountantRole, type ModuleKey, type Permissions } from '../lib/permissions';
 
 export type DashboardNavPage =
   | 'clients' | 'projects' | 'tickets' | 'quotes' | 'invoices' | 'bank' | 'vat-returns' | 'weekplanner' | 'settings' | 'stats' | 'calendar' | 'gerrie';
@@ -155,7 +155,9 @@ export function Dashboard({
 
   // ── Mijn / team ─────────────────────────────────────────────────────────
   // Alleen zinvol zodra je niet alleen bent; in je eentje is elke taak de jouwe.
-  const teamMembers = organizationContext.teamMembers;
+  // De boekhouder is een gast en telt niet mee als teamlid.
+  const teamMembers = organizationContext.teamMembers.filter(member => !isAccountantRole(member.role));
+  const isAccountant = isAccountantRole(organizationContext.activeMembership?.role);
   const canSwitchScope = Boolean(currentUserId) && teamMembers.length > 1;
   const [scope, setScope] = useState<Scope>(() => {
     if (typeof window === 'undefined') return 'mine';
@@ -282,7 +284,7 @@ export function Dashboard({
 
   // ── Onboarding ──────────────────────────────────────────────────────────
   const activeOrganization = organizationContext.activeOrganization;
-  const activeRole = organizationContext.activeMembership?.role ?? 'geen rol';
+  const activeRole = isAccountant ? 'boekhouder' : organizationContext.activeMembership?.role ?? 'geen rol';
   const onboardingItems = [
     { label: 'Organisatie aangemaakt', done: Boolean(activeOrganization) },
     { label: 'Bedrijfsgegevens ingevuld', done: Boolean(data.companySettings?.company_name?.trim()) },
@@ -292,7 +294,8 @@ export function Dashboard({
   ];
   const onboardingDone = onboardingItems.filter(item => item.done).length;
   const onboardingPct = Math.round((onboardingDone / onboardingItems.length) * 100);
-  const showOnboarding = onboardingPct < 100;
+  // De inrichting van de werkruimte is niet aan de boekhouder.
+  const showOnboarding = onboardingPct < 100 && !isAccountant;
 
   const showToday = showProjects || showCalendar;
   const scopeToggle = canSwitchScope
@@ -325,7 +328,7 @@ export function Dashboard({
           {showProjects && <Button className="cockpit-btn" onClick={() => openPage('weekplanner')}>
             <CalendarRange size={15} aria-hidden="true" /> Weekplanner <span className="cockpit-count" aria-label={pl(weekTasks.length, 'open actie deze week', 'open acties deze week')}>{weekTasks.length}</span>
           </Button>}
-          <span className="cockpit-meta"><span className="cockpit-role">{activeRole}</span> · {pl(teamMembers.length, 'actief teamlid', 'actieve teamleden')}</span>
+          <span className="cockpit-meta"><span className="cockpit-role">{activeRole}</span> · {isAccountant ? 'alleen lezen' : pl(teamMembers.length, 'actief teamlid', 'actieve teamleden')}</span>
         </div>
       </div>
 

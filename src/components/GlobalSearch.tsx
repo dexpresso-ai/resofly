@@ -33,6 +33,13 @@ const kindMeta: Record<SearchResultKind, { label: string; badge: string; icon: L
 // Volgorde waarin de groepen/filters in het paneel verschijnen.
 const kindOrder: SearchResultKind[] = ['client', 'project', 'task', 'ticket', 'note', 'document', 'quote', 'invoice', 'supplier'];
 
+/** Op welke pagina een resultaat opent. Staat die dicht voor dit teamlid, dan
+ *  hoort het resultaat er niet tussen — anders leidt het naar "Geen toegang". */
+const KIND_PAGE: Record<SearchResultKind, string> = {
+  client: 'client', project: 'project', task: 'projects', ticket: 'tickets', note: 'notes',
+  document: 'documents', quote: 'quotes', invoice: 'invoices', supplier: 'suppliers',
+};
+
 type Filter = 'all' | SearchResultKind;
 
 /** Verwijdert simpele HTML-tags uit rich-text-velden zodat de zoek-preview leesbaar blijft. */
@@ -57,7 +64,12 @@ function Highlight({ text, query }: { text: string; query: string }) {
   </>;
 }
 
-export function GlobalSearch({ data, onNavigate }: { data: AppData; onNavigate: (result: SearchResult) => void }) {
+export function GlobalSearch({ data, onNavigate, canOpenPage }: {
+  data: AppData;
+  onNavigate: (result: SearchResult) => void;
+  /** Modulerechten: alleen resultaten die het teamlid ook mag openen. Zonder: alles. */
+  canOpenPage?: (page: string) => boolean;
+}) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
@@ -132,8 +144,10 @@ export function GlobalSearch({ data, onNavigate }: { data: AppData; onNavigate: 
       }
     }
 
-    return out;
-  }, [term, data, clientById, projectById]);
+    // Voorbeeld: bij de boekhouder staan de debiteuren van de facturen in
+    // data.clients, maar de klantenkaart is dicht.
+    return canOpenPage ? out.filter(result => canOpenPage(KIND_PAGE[result.kind])) : out;
+  }, [term, data, clientById, projectById, canOpenPage]);
 
   const countByKind = useMemo(() => {
     const counts = {} as Record<SearchResultKind, number>;

@@ -14,7 +14,7 @@ import {
 } from '../_shared/mollieSalesInvoice.ts';
 import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/approvedRecipient.ts';
 
-type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
+type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 type InvoiceLine = { id?: string; description: string; quantity: number; unit_price: number; vat?: number; vat_code?: string | null };
 type InvoiceRow = {
   id: string; organization_id: string; client_id: string | null; project_id: string | null; quote_id: string | null;

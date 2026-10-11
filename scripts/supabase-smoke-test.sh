@@ -13,6 +13,8 @@
 #   - portal-notify (klantmeldingen) op dezelfde manier: zonder secret 401, met
 #     het secret uit de taak 'portal-notify-drain' 200. Een 500 met "ontbreekt"
 #     betekent dat RESEND_API_KEY/RESEND_FROM_EMAIL of APP_PUBLIC_URL er niet staat.
+#   - het boekhouder-hek: geen organisatietabel zonder module gate én zonder hek
+#     (public.accountant_fence_gaps() is leeg). Ook alleen met SUPABASE_DB_PASSWORD.
 #
 # Draait in de workflow "Deploy Supabase (staging)" na elke deploy, en kan ook
 # vanaf een laptop: SUPABASE_PROJECT_ID=enzghpduqwaojcxgwarr bash scripts/supabase-smoke-test.sh
@@ -77,6 +79,25 @@ SQL
       -X POST "$base/portal-notify?cron=drain" -H "x-cron-secret: $notify_secret" -H 'Content-Type: application/json' --data '{}'
   else
     echo "-      klantmeldingen (portal-notify): overgeslagen (nog geen cron-taak 'portal-notify-drain')"
+  fi
+
+  # Boekhouder-hek (migratie 20261011000000): elke organisatietabel heeft een
+  # module gate of het hek. Een nieuwe tabel die het vergeet, valt hier op —
+  # anders zou de boekhouder hem gewoon kunnen lezen.
+  fence_gaps="$(PGPASSWORD="$SUPABASE_DB_PASSWORD" PGSSLMODE="${PGSSLMODE:-require}" PGCONNECT_TIMEOUT=20 \
+    psql "$pooler" -X -q -t -A -v ON_ERROR_STOP=1 <<'SQL'
+select case when to_regprocedure('public.accountant_fence_gaps()') is null then '-'
+            else coalesce((select string_agg(g, ', ') from public.accountant_fence_gaps() g), '') end;
+SQL
+)"
+  if [ "$fence_gaps" = "-" ]; then
+    echo "-      boekhouder-hek: overgeslagen (migratie 20261011000000 nog niet toegepast)"
+  elif [ -z "$fence_gaps" ]; then
+    echo "ok     boekhouder-hek: elke organisatietabel is afgeschermd"
+  else
+    problems=$((problems + 1))
+    echo "FOUT   boekhouder-hek: geen module gate en geen hek op: $fence_gaps (zie apply_accountant_fence)"
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then echo "::error title=Rooktest::Boekhouder-hek ontbreekt op: $fence_gaps"; fi
   fi
 else
   echo "-      de bezorger met cron-secret: overgeslagen (geen SUPABASE_DB_PASSWORD of psql)"

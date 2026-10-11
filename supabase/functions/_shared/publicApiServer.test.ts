@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { MODULE_KEYS } from './publicApi.ts';
+import { MODULE_KEYS as ROLE_MODULE_KEYS } from './roles.ts';
 
 /**
  * Bewaakt de grenzen van de openbare API (functies `api` en `api-admin`).
@@ -263,6 +264,9 @@ test('beide functies lopen mee in de Deno-typecheck van de CI', () => {
 test('de API kent dezelfde modules als de MCP en edgeAuth', () => {
   const mcpModules = mcp.slice(mcp.indexOf('const MODULE_KEYS = ['), mcp.indexOf('] as const;', mcp.indexOf('const MODULE_KEYS = [')));
   assert.deepEqual([...mcpModules.matchAll(/'([a-z]+)'/g)].map((m) => m[1]), [...MODULE_KEYS]);
-  const union = edgeAuth.slice(edgeAuth.indexOf('export type ModuleKey ='), edgeAuth.indexOf(';', edgeAuth.indexOf('export type ModuleKey =')));
-  assert.deepEqual([...union.matchAll(/'([a-z]+)'/g)].map((m) => m[1]).sort(), [...MODULE_KEYS].sort());
+  // edgeAuth en de openbare API halen de modules (en de regel per module) uit
+  // dezelfde bron; een eigen lijst of kopie in edgeAuth hoort er niet meer te zijn.
+  assert.match(edgeAuth, /import \{[^}]*\btype ModuleKey\b[^}]*\} from '\.\/roles\.ts';/);
+  assert.doesNotMatch(edgeAuth, /export type ModuleKey =/);
+  assert.equal(MODULE_KEYS, ROLE_MODULE_KEYS);
 });

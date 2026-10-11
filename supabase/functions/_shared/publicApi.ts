@@ -17,6 +17,7 @@ import {
   createToken, normalizeScopes, parseScopes, parseToken, sha256Hex,
   SCOPE_EXECUTE, SCOPE_EXECUTE_HIGH, SCOPE_PROPOSE, SCOPE_READ, type NewToken,
 } from './mcpAuth.ts';
+import { MODULE_KEYS, memberModuleLevel, type ModuleKey, type ModuleLevel } from './roles.ts';
 
 export const API_VERSION = '1.0.0';
 
@@ -178,15 +179,10 @@ export function levelOfScope(scope: string): AccessLevel {
 //      Een sleutel kan nooit RUIMER zijn dan zijn maker; er valt alleen af te
 //      knijpen.
 //
-// De eerste laag is een exacte spiegel van `public.org_module_level` en van
-// `getModuleLevel` in edgeAuth.ts.
+// De eerste laag is de gedeelde regel uit roles.ts — dezelfde als
+// `public.org_module_level` en `getModuleLevel` in edgeAuth.ts.
 
-export const MODULE_KEYS = [
-  'clients', 'projects', 'time', 'calendar', 'tickets', 'content', 'stats', 'marketing', 'finance', 'chat', 'gerrie',
-] as const;
-
-export type ModuleKey = typeof MODULE_KEYS[number];
-export type ModuleLevel = 'none' | 'read' | 'write';
+export { MODULE_KEYS, memberModuleLevel, type ModuleKey, type ModuleLevel };
 
 export const MODULE_LABEL: Record<ModuleKey, string> = {
   clients: 'Klanten', projects: 'Projecten', time: 'Uren', calendar: 'Agenda',
@@ -198,20 +194,6 @@ const LEVEL_RANK: Record<ModuleLevel, number> = { none: 0, read: 1, write: 2 };
 
 export function isModuleKey(value: string): value is ModuleKey {
   return (MODULE_KEYS as readonly string[]).includes(value);
-}
-
-/** Wat het TEAMLID mag in deze module. Owners en admins zijn nooit beperkt. */
-export function memberModuleLevel(
-  role: string, moduleAccess: Record<string, unknown> | null | undefined, module: string,
-): ModuleLevel {
-  if (role === 'owner' || role === 'admin') return 'write';
-  const raw = moduleAccess?.[module];
-  const stored: ModuleLevel = raw === 'none' || raw === 'read' || raw === 'write' ? raw : 'write';
-  if (role === 'viewer') return stored === 'none' ? 'none' : 'read';
-  // Een rol die we niet kennen, krijgt niets. De database kent er vier; een
-  // vijfde die er ooit bij komt, hoort hier bewust te worden toegevoegd.
-  if (role !== 'member') return 'none';
-  return stored;
 }
 
 /** Wat de SLEUTEL in deze module toestaat. Geen vermelding = geen extra beperking. */

@@ -70,6 +70,7 @@ import {
   type JsonRpcRequest,
 } from '../_shared/mcpAuth.ts';
 import { directApplier } from '../_shared/actions/apply.ts';
+import { isOrganizationRole, memberModuleLevel } from '../_shared/roles.ts';
 
 const admin = createAdminClient();
 const RESOURCE_URL = (Deno.env.get('MCP_RESOURCE_URL') || `${requiredEnv('SUPABASE_URL')}/functions/v1/mcp`).replace(/\/$/, '');
@@ -255,6 +256,7 @@ async function authenticate(req: Request): Promise<Session> {
   if (memberError) throw new Error(`Lidmaatschap opzoeken mislukt: ${memberError.message}`);
   const member = members?.[0] as { role?: string; module_access?: Record<string, unknown> } | undefined;
   if (!member?.role) throw new Error('Deze gebruiker is geen actief lid meer van deze organisatie.');
+  if (!isOrganizationRole(member.role)) throw new Error('Deze gebruiker heeft een rol die deze koppeling niet kent.');
 
   // Gerrie stond alleen bij het KOPPELEN in de weg (mcp-oauth). Zette een owner
   // die module daarna dicht, dan bleef de gekoppelde AI gewoon doorwerken —
@@ -262,7 +264,9 @@ async function authenticate(req: Request): Promise<Session> {
   // "intrekken" afnam. De deur die dicht moest, ging dus juist op slot mét de
   // AI erbinnen. Daarom hier opnieuw wegen, bij élke aanroep, net als de rol en
   // de overige modulerechten hierboven.
-  if (String((member.module_access ?? {}).gerrie ?? '') === 'none') {
+  // Ook de rol telt: de boekhouder heeft nooit Gerrie, wat er ook is opgeslagen.
+  if (String((member.module_access ?? {}).gerrie ?? '') === 'none'
+    || memberModuleLevel(member.role, member.module_access, 'gerrie') === 'none') {
     throw new Error('Deze gebruiker heeft in deze organisatie geen toegang meer tot Gerrie, dus deze koppeling werkt niet meer.');
   }
 
@@ -1225,10 +1229,9 @@ function getPrompt(params: Record<string, unknown>, session: Session): Record<st
 
 // ── Rechten ──────────────────────────────────────────────────────────────────
 //
-// Exacte spiegel van wat Gerrie doet (gerrieCore.moduleLevel). Bewust
-// overgeschreven en niet geïmporteerd: gerrieCore is de motor van de assistent
-// met alles erop en eraan, en die vijfduizend regels wil je niet in een functie
-// trekken die alleen gegevens teruggeeft.
+// Dezelfde regel als Gerrie (gerrieCore.moduleLevel): allebei lezen ze het
+// niveau uit _shared/roles.ts, dat klein en puur is. De modulelijst en de
+// labels staan hier nog wel apart.
 
 const MODULE_KEYS = ['clients', 'projects', 'time', 'calendar', 'tickets', 'content', 'stats', 'marketing', 'finance', 'chat', 'gerrie'] as const;
 
@@ -1239,10 +1242,7 @@ const MODULE_LABEL: Record<string, string> = {
 };
 
 function moduleLevel(session: Session, module: string): 'none' | 'read' | 'write' {
-  if (session.role === 'owner' || session.role === 'admin') return 'write';
-  const stored = (session.moduleAccess[module] as 'none' | 'read' | 'write' | undefined) ?? 'write';
-  if (session.role === 'viewer') return stored === 'none' ? 'none' : 'read';
-  return stored;
+  return memberModuleLevel(session.role, session.moduleAccess, module);
 }
 
 /**

@@ -13,7 +13,7 @@ import {
 
 import { renderEmailTemplate, type EmailTemplateContent } from '../_shared/emailTemplates/index.ts';
 
-type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
+type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 
 type QuoteLine = {
   id?: string;

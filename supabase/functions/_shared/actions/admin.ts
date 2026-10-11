@@ -92,10 +92,14 @@ export function visibleAuditEntityTypes(ctx: Pick<ActionCtx, 'role' | 'canRead'>
 const MODULE_LEVELS = ['none', 'read', 'write'] as const;
 const LEVEL_LABELS: Record<string, string> = { none: 'geen toegang', read: 'alleen lezen', write: 'volledig' };
 
+/** Rollen die je hier kunt toekennen. De boekhouder staat er bewust niet bij:
+ *  die komt alleen binnen via Instellingen → Boekhouder, en die rol wisselt
+ *  niet om (de database weigert het ook). */
 const ROLES = ['owner', 'admin', 'member', 'viewer'] as const;
 /** Uitnodigen kan alleen op deze drie — de RPC weigert `owner`. */
 const INVITE_ROLES = ['admin', 'member', 'viewer'] as const;
-const ROLE_LABELS: Record<string, string> = { owner: 'Owner', admin: 'Admin', member: 'Member', viewer: 'Viewer' };
+const ROLE_LABELS: Record<string, string> = { owner: 'Owner', admin: 'Admin', member: 'Member', viewer: 'Viewer', accountant: 'Boekhouder' };
+const ACCOUNTANT_FIXED = 'De boekhouder heeft vaste rechten (alleen lezen in Financiën) en die rol wissel je niet om. Zet de toegang uit onder Instellingen → Organisatie & team, en nodig opnieuw uit.';
 
 /** Spiegelt LegalForm + LEGAL_FORM_LABELS in src/types.ts. */
 const LEGAL_FORMS = ['eenmanszaak', 'vof', 'maatschap', 'cv', 'bv', 'nv', 'cooperatie', 'stichting', 'vereniging'] as const;
@@ -506,6 +510,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
       if (member.role === 'owner' && member.user_id !== ctx.userId) {
         throw new ActionError(`Owners zijn tegen elkaar beschermd: je kunt de rol van ${who} niet wijzigen.`);
       }
+      if (member.role === 'accountant') throw new ActionError(`${who} is boekhouder. ${ACCOUNTANT_FIXED}`);
       if (member.role === role) throw new ActionError(`${who} heeft die rol al.`);
       if (member.role === 'owner' && await ownerCount(ctx) <= 1) {
         throw new ActionError(`${who} is de laatste owner; maak eerst iemand anders owner.`);
@@ -552,6 +557,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
       const member = await activeMember(ctx, memberId);
       const who = member.email ?? 'dit teamlid';
       if (member.role === 'owner') throw new ActionError(`${who} is owner en heeft altijd toegang tot alles; modulerechten hebben geen effect.`);
+      if (member.role === 'accountant') throw new ActionError(`${who} is boekhouder. ${ACCOUNTANT_FIXED}`);
       const access = readModuleAccess(input, 'module_access', member.role);
       return {
         title: `Modulerechten opslaan: ${who}`,

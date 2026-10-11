@@ -476,7 +476,7 @@ function QuoteTable({
         <h2>{title}</h2>
         <p>Compact overzicht met bedragen, klant- en projectcontext. Klik op een offerte voor workflow en details.</p>
       </div>
-      <Button variant="primary" onClick={onNew}>+ Nieuw</Button>
+      <Button variant="primary" onClick={onNew} disabled={!canWrite}>+ Nieuw</Button>
     </div>
 
     <FinanceSearchPanel kind="quote" docs={quotes} data={data} filters={searchFilters} visibleCount={filteredQuotes.length} visibleTotalAmount={visibleTotalAmount} onChange={setSearchFilters} />
@@ -616,7 +616,7 @@ function InvoiceTable({
         <h2>{title}</h2>
         <p>Volwassen factuurmodule met detailpaneel, verzendhistorie, Mollie-betaalstatus, snapshots en audit-timeline.</p>
       </div>
-      <Button variant="primary" onClick={onNew}>+ Nieuw</Button>
+      <Button variant="primary" onClick={onNew} disabled={!canWrite}>+ Nieuw</Button>
     </div>
 
     {onBookAllUnbooked && unbookedInvoices.length > 0 && (

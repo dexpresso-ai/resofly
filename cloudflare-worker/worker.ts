@@ -318,11 +318,44 @@ function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+/** Mappen (tweede sleutelsegment) van financiële records: spiegel van de
+ *  finance-regels in SEGMENT_MODULE in workers/media-api/src/index.ts. */
+const FINANCE_SEGMENTS = new Set([
+  'quote', 'invoice', 'supplier', 'purchase_invoice', 'fixed_asset', 'annual_account', 'contract',
+  'invoice-pdfs', 'quote-pdfs', 'contract-pdfs', 'annual-account-pdfs', 'purchase_invoice_inbox',
+]);
+
 async function canAccessObjectKey(env: Env, request: Request, userId: string, key: string, requireWrite = false): Promise<boolean> {
   if (key.includes('..') || key.startsWith('/') || key.length > 900) return false;
   const organizationId = key.split('/')[0] || '';
   if (!isUuid(organizationId)) return false;
-  return verifyOrganizationAccess(env, request, userId, organizationId, requireWrite);
+  if (requireWrite) return verifyOrganizationAccess(env, request, userId, organizationId, true);
+  // Lezen mag elk gewoon lid. De boekhouder is een gast die alleen Financiën
+  // ziet: voor de boekhouder alleen bestanden van financiële records.
+  const role = await organizationRole(env, request, userId, organizationId);
+  if (role === 'owner' || role === 'admin' || role === 'member' || role === 'viewer') return true;
+  return role === 'accountant' && FINANCE_SEGMENTS.has(key.split('/')[1] || '');
+}
+
+async function organizationRole(env: Env, request: Request, userId: string, organizationId: string): Promise<string | null> {
+  const base = env.SUPABASE_URL.replace(/\/$/, '');
+  const query = [
+    `organization_id=eq.${encodeURIComponent(organizationId)}`,
+    `user_id=eq.${encodeURIComponent(userId)}`,
+    'status=eq.active',
+    'select=role',
+    'limit=1',
+  ].join('&');
+  const response = await fetch(`${base}/rest/v1/organization_members?${query}`, {
+    headers: {
+      apikey: env.SUPABASE_ANON_KEY,
+      authorization: request.headers.get('authorization') || '',
+      accept: 'application/json',
+    },
+  });
+  if (!response.ok) return null;
+  const rows = await response.json() as Array<{ role?: string }>;
+  return rows[0]?.role ?? null;
 }
 
 async function verifyOrganizationAccess(env: Env, request: Request, userId: string, organizationId: string, requireWrite = false): Promise<boolean> {
