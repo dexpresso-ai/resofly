@@ -5,7 +5,7 @@ import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { sanitizeEmailBodyHtml } from '../_shared/htmlSanitize.ts';
 import { approvedRecipientChanged, RECIPIENT_CHANGED_MESSAGE } from '../_shared/approvedRecipient.ts';
 
-type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
+type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 type MailHttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502;
 
 const SUPABASE_URL = requiredEnv('SUPABASE_URL');
@@ -72,6 +72,7 @@ const ROLE_LABELS: Record<OrganizationRole, string> = {
   admin: 'Beheerder',
   member: 'Teamlid',
   viewer: 'Alleen-lezen',
+  accountant: 'Boekhouder',
 };
 
 class MailHttpError extends Error {
@@ -488,10 +489,15 @@ async function sendTeamInvitation(
   const roleLabel = ROLE_LABELS[invitation.role as OrganizationRole] || 'Teamlid';
   const inviterEmail = String(user.email || '').trim();
   const appUrl = resolveAppBaseUrl(req);
+  // De boekhouder is geen teamlid maar een gast met alleen-lezen toegang tot de
+  // financiën; de mail zegt dat, zodat duidelijk is wat er wel en niet te zien is.
+  const accountant = invitation.role === 'accountant';
 
-  const subject = `Je bent uitgenodigd voor ${organizationName}`;
-  const html = buildTeamInvitationHtml({ organizationName, recipientEmail, roleLabel, inviterEmail, appUrl });
-  const text = buildTeamInvitationText({ organizationName, recipientEmail, roleLabel, inviterEmail, appUrl });
+  const subject = accountant
+    ? `Boekhouder-toegang tot de administratie van ${organizationName}`
+    : `Je bent uitgenodigd voor ${organizationName}`;
+  const html = buildTeamInvitationHtml({ organizationName, recipientEmail, roleLabel, inviterEmail, appUrl, accountant });
+  const text = buildTeamInvitationText({ organizationName, recipientEmail, roleLabel, inviterEmail, appUrl, accountant });
 
   const sender = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
 
@@ -564,21 +570,36 @@ function resolveAppBaseUrl(req: Request): string {
   return (req.headers.get('origin') || '').replace(/\/$/, '');
 }
 
+/** Wat de boekhouder wel en niet ziet — in de mail, zodat er geen verrassingen zijn. */
+const ACCOUNTANT_SCOPE_TEXT =
+  'Je ziet de financiën: offertes, facturen, inkoopfacturen, het grootboek, de bank, de btw en de jaarstukken, '
+  + 'en je kunt ze als PDF of e-factuur downloaden. Wijzigen of versturen kan niet, en klantdossiers, projecten '
+  + 'en interne berichten blijven voor je dicht.';
+
 function buildTeamInvitationHtml(input: {
   organizationName: string;
   recipientEmail: string;
   roleLabel: string;
   inviterEmail: string;
   appUrl: string;
+  accountant?: boolean;
 }): string {
   const org = escapeHtml(input.organizationName);
   const email = escapeHtml(input.recipientEmail);
   const role = escapeHtml(input.roleLabel);
   const url = escapeHtml(input.appUrl);
   const inviter = input.inviterEmail ? escapeHtml(input.inviterEmail) : '';
-  const invitedByLine = inviter
-    ? `${inviter} heeft je uitgenodigd om samen te werken in ${org}.`
-    : `Je bent uitgenodigd om samen te werken in ${org}.`;
+  const heading = input.accountant ? 'Je bent uitgenodigd als boekhouder' : 'Je bent uitgenodigd als teamlid';
+  const invitedByLine = input.accountant
+    ? (inviter
+      ? `${inviter} geeft je als boekhouder toegang tot de administratie van ${org}.`
+      : `Je krijgt als boekhouder toegang tot de administratie van ${org}.`)
+    : (inviter
+      ? `${inviter} heeft je uitgenodigd om samen te werken in ${org}.`
+      : `Je bent uitgenodigd om samen te werken in ${org}.`);
+  const roleLine = input.accountant
+    ? escapeHtml(ACCOUNTANT_SCOPE_TEXT)
+    : `Je rol wordt <strong>${role}</strong>.`;
   const button = url
     ? `<a href="${url}" style="display:inline-block;background:#FFD966;color:#1a1a1a;text-decoration:none;font-weight:bold;font-size:15px;padding:13px 22px;border-radius:10px;">
           Open ${org}
@@ -600,12 +621,12 @@ function buildTeamInvitationHtml(input: {
         </p>
 
         <h1 style="margin:0 0 16px;font-size:26px;line-height:1.2;color:#ffffff;">
-          Je bent uitgenodigd als teamlid
+          ${heading}
         </h1>
 
         <p style="margin:0 0 16px;color:#d8d8df;font-size:16px;line-height:1.6;">
           ${invitedByLine}<br/>
-          Je rol wordt <strong>${role}</strong>.
+          ${roleLine}
         </p>
 
         <p style="margin:0 0 24px;color:#d8d8df;font-size:16px;line-height:1.6;">
@@ -632,16 +653,21 @@ function buildTeamInvitationText(input: {
   roleLabel: string;
   inviterEmail: string;
   appUrl: string;
+  accountant?: boolean;
 }): string {
-  const invitedByLine = input.inviterEmail
-    ? `${input.inviterEmail} heeft je uitgenodigd om samen te werken in ${input.organizationName}.`
-    : `Je bent uitgenodigd om samen te werken in ${input.organizationName}.`;
+  const invitedByLine = input.accountant
+    ? (input.inviterEmail
+      ? `${input.inviterEmail} geeft je als boekhouder toegang tot de administratie van ${input.organizationName}.`
+      : `Je krijgt als boekhouder toegang tot de administratie van ${input.organizationName}.`)
+    : (input.inviterEmail
+      ? `${input.inviterEmail} heeft je uitgenodigd om samen te werken in ${input.organizationName}.`
+      : `Je bent uitgenodigd om samen te werken in ${input.organizationName}.`);
   return [
     input.organizationName,
-    'Je bent uitgenodigd als teamlid',
+    input.accountant ? 'Je bent uitgenodigd als boekhouder' : 'Je bent uitgenodigd als teamlid',
     '',
     invitedByLine,
-    `Je rol wordt ${input.roleLabel}.`,
+    input.accountant ? ACCOUNTANT_SCOPE_TEXT : `Je rol wordt ${input.roleLabel}.`,
     '',
     `Inloggen kan zonder wachtwoord: ga naar ${input.appUrl || 'de app'} en vul je e-mailadres (${input.recipientEmail}) in. Je ontvangt dan een veilige inloglink. Na het inloggen zie je de uitnodiging staan en kun je die accepteren.`,
     '',

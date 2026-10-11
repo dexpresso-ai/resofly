@@ -6,7 +6,7 @@ import { BottomNav } from './components/BottomNav';
 import { loadPersistedTabs, savePersistedTabs, viewTitle, PAGE_TITLES, type PersistedTab } from './lib/workspaceTabs';
 import { Breadcrumbs } from './components/Breadcrumbs';
 import type { CrumbTarget } from './lib/breadcrumbs';
-import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, MODULE_LABELS, PAGE_MODULE, type ModuleAccess } from './lib/permissions';
+import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, MODULE_LABELS, PAGE_MODULE, type ModuleAccess, type ModuleKey } from './lib/permissions';
 import type { SearchResult } from './components/GlobalSearch';
 import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
 import { RichTextEditor, sanitizeRichText } from './components/RichTextEditor';
@@ -43,6 +43,7 @@ import {
   inviteOrganizationMember,
   sendTeamInvitationEmail,
   loadAppData,
+  loadFinanceClientDirectory,
   loadOrganizationContext,
   previewNextClientCode,
   planTaskInWeek,
@@ -539,6 +540,7 @@ const ORG_ROLE_LABELS: Record<OrganizationRole, string> = {
   admin: 'Admin',
   member: 'Member',
   viewer: 'Viewer',
+  accountant: 'Boekhouder',
 };
 
 /** Getoond wanneer de ingelogde gebruiker (nog) geen actieve organisatie heeft.
@@ -574,13 +576,18 @@ function NoOrganizationScreen({
   }
 
   if (pendingInvitations.length > 0) {
+    // Een uitgenodigde boekhouder krijgt bij de eerste login geen eigen
+    // werkruimte (ensure_user_default_organization) en komt dus hier binnen.
+    const onlyAccountant = pendingInvitations.every(invitation => isAccountantRole(invitation.role));
     return <div className="boot"><div className="login-card">
       <h1>Je bent uitgenodigd</h1>
-      <p>Accepteer je uitnodiging om samen te werken in het team.</p>
+      <p>{onlyAccountant
+        ? 'Je bent uitgenodigd als boekhouder: je krijgt alleen-lezen toegang tot de financiën. Accepteer de uitnodiging om mee te kijken.'
+        : 'Accepteer je uitnodiging om samen te werken in het team.'}</p>
       {error && <div className="error">{error}</div>}
       <div className="team-list">
         {pendingInvitations.map(invitation => <div className="team-row" key={invitation.id}>
-          <div><span>{invitation.email}</span><small>Rol: {ORG_ROLE_LABELS[invitation.role]}</small></div>
+          <div><span>{invitation.email}</span><small>Rol: {ORG_ROLE_LABELS[invitation.role]}{isAccountantRole(invitation.role) ? ' · alleen Financiën, alleen lezen' : ''}</small></div>
           <Button variant="primary" disabled={busyId !== null} onClick={() => accept(invitation.id)}>
             {busyId === invitation.id ? 'Bezig…' : 'Accepteren'}
           </Button>
@@ -752,6 +759,18 @@ function App() {
   // en of er binnen een module gewijzigd mag worden. De database dwingt hetzelfde
   // af (restrictive RLS + schrijf-triggers); dit is de beleving eromheen.
   const permissions = useMemo(() => buildPermissions(activeMembership), [activeMembership]);
+  // De live abonnementen hieronder (meldingen, chat, beslislijst) horen bij een
+  // module. Staat die dicht — zoals bijna alles voor de boekhouder — dan wordt er
+  // ook niets geabonneerd: geen lege polls, en niemand verschijnt "online" in
+  // een chat die dicht staat. De database geeft sowieso niets terug.
+  const loadedOrganizationId = activeOrganization?.id ?? null;
+  const organizationFor = (module: ModuleKey) => (permissions.canRead(module) ? loadedOrganizationId : null);
+  // Collega's om werk aan toe te wijzen of mee te chatten. De boekhouder is een
+  // gast en hoort daar niet bij; in Instellingen staat de boekhouder wel bij het team.
+  const workMembers = useMemo(
+    () => (organizationContext.teamMembers ?? []).filter(member => !isAccountantRole(member.role)),
+    [organizationContext.teamMembers],
+  );
 
   // Ongelezen klant-mail (per gebruiker) + live notificaties bij nieuwe berichten.
   const {
@@ -763,7 +782,7 @@ function App() {
     toasts: clientEmailToasts,
     dismissToast: dismissClientEmailToast,
   } = useClientEmailUnread({
-    organizationId: activeOrganization?.id ?? null,
+    organizationId: organizationFor('clients'),
     currentUserId,
     resolveClientName: (clientId) => data.clients.find(c => c.id === clientId)?.name ?? '',
     // Gesprekken zitten in AppData: een gesprek dat een collega logt, is er pas
@@ -772,7 +791,7 @@ function App() {
   });
 
   // De beslislijst: badge op de menuregel Gerrie + toast zodra Gerrie een kaart klaarzet.
-  const decisionAlerts = useDecisionAlerts({ organizationId: activeOrganization?.id ?? null, currentUserId });
+  const decisionAlerts = useDecisionAlerts({ organizationId: organizationFor('gerrie'), currentUserId });
 
   // De factuur-inbox: badge op Financiën → Inkoopfacturen + live herladen van het paneel.
   const purchaseInbox = usePurchaseInvoiceInbox({
@@ -788,7 +807,7 @@ function App() {
     toasts: ticketToasts,
     dismissToast: dismissTicketToast,
   } = useTicketUnread({
-    organizationId: activeOrganization?.id ?? null,
+    organizationId: organizationFor('tickets'),
     currentUserId,
     teamMemberIds: new Set((organizationContext.teamMembers ?? []).map(m => m.user_id).filter((id): id is string => !!id)),
     resolveClientName: (clientId) => (clientId ? data.clients.find(c => c.id === clientId)?.name ?? 'Onbekende klant' : 'Geen klant'),
@@ -803,16 +822,17 @@ function App() {
   // Teamchat — één realtime-/presence-abonnement op App-niveau, gedeeld door de
   // sidebar-badge, de volledige chatpagina en het zwevende paneel.
   const teamChat = useTeamChat({
-    organizationId: activeOrganization?.id ?? null,
+    organizationId: organizationFor('chat'),
     currentUserId,
-    teamMembers: organizationContext.teamMembers ?? [],
+    teamMembers: workMembers,
   });
 
   // OS-/device-pushmeldingen (service worker + Web Push). Registreert de worker,
   // houdt het abonnement bij en biedt aan/uit + per-gebeurtenis voorkeuren aan.
-  // De UI hiervoor leeft in Instellingen → Meldingen.
+  // De UI hiervoor leeft in Instellingen → Meldingen. De boekhouder krijgt geen
+  // pushmeldingen (de database laat aanmelden ook niet toe).
   const push = usePushNotifications({
-    organizationId: activeOrganization?.id ?? null,
+    organizationId: isAccountantRole(activeMembership?.role) ? null : loadedOrganizationId,
     currentUserId,
   });
 
@@ -846,6 +866,19 @@ function App() {
       if (orgId) {
         localStorage.setItem(activeOrgStorageKey, orgId);
         const loaded = await loadAppData(orgId);
+        // Financiën open maar Klanten dicht (de boekhouder, of een teamlid dat zo
+        // is ingesteld): dan de debiteuren zoals ze op de stukken staan, zodat
+        // facturen een naam hebben. De klantenkaart zelf blijft dicht.
+        const access = buildPermissions(orgContext.activeMembership);
+        if (!access.canRead('clients') && access.canRead('finance')) {
+          try {
+            loaded.clients = await loadFinanceClientDirectory(orgId);
+          } catch (directoryError) {
+            // Migratie 20261011000000 nog niet toegepast: facturen tonen dan geen
+            // klantnaam, maar de werkruimte laadt gewoon.
+            console.warn('Debiteuren voor Financiën konden niet worden geladen.', directoryError);
+          }
+        }
         setData(loaded);
         // Herstel de open tabbladen éénmalig per organisatie (eerste load of wissel);
         // een gewone ververs laat de tabbladen ongemoeid.
@@ -3018,11 +3051,13 @@ function App() {
           <Breadcrumbs view={tab} data={data} onNavigate={navigateCrumb} />
           {tab.id === activeTab.id && error && <div className="error">{error}</div>}
           {renderPage(tab)}
-          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} onNoteHandwritingChanged={applyNoteHandwritingSummary} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}
+          {tab.edit && <EditModal edit={tab.edit} data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} onNoteHandwritingChanged={applyNoteHandwritingSummary} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}
         </section>
       ))}
     </main>
-    <GerrieChat organizationId={activeOrg.id} {...gerrieActions} />
+    {/* Gerrie en de teamchat zweven over elke pagina; met de module dicht
+        (zoals voor de boekhouder) horen ze er niet te staan. */}
+    {permissions.canRead('gerrie') && <GerrieChat organizationId={activeOrg.id} {...gerrieActions} />}
     {/* Terug uit een gesprek: één regel met de vraag of het gelogd moet worden.
         Overal in de app, want je komt terug op de pagina waar je was — niet
         per se op de pagina waar je op "bellen" tikte. */}
@@ -3054,7 +3089,7 @@ function App() {
     {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeDoc(null); refresh(); }} onDownload={officeDoc ? downloadOfficeDoc : undefined} />}
     {officeOpening && !officeSession && <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 2100, background: 'var(--panel-strong)', border: '1px solid var(--border2)', borderRadius: 10, padding: '8px 14px', fontWeight: 600 }}>Editor openen…</div>}
     {/* Zwevend teamchat-paneel — overal beschikbaar, behalve op de volledige chatpagina. */}
-    <TeamChatDock api={teamChat} hidden={page === 'chat'} />
+    <TeamChatDock api={teamChat} hidden={page === 'chat' || !permissions.canRead('chat')} />
     {/* Mobiele duim-onderbalk (alleen ≤760px, zie globals.css). Navigeert het
         actieve tabblad naar een kerndestinatie; sluit onderweg het uitschuifmenu. */}
     <BottomNav page={page} permissions={permissions} onNavigate={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} />
@@ -3119,7 +3154,7 @@ function App() {
     const canReadContracts = permissions.canRead('finance');
     const canWriteContracts = orgCanWrite && permissions.canWrite('finance');
     if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} organizationId={activeOrg.id} currentUserId={currentUserId} canWriteTasks={orgCanWrite && permissions.canWrite('projects')} permissions={permissions} gerrieActions={gerrieActions} canWriteGerrie={orgCanWrite && permissions.canWrite('gerrie')} orgCanWrite={orgCanWrite} onOpenDecisionTarget={openDecisionTarget} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} openTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} />;
-    if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} canReadContracts={canReadContracts} canWriteContracts={canWriteContracts} creativeActive={organizationContext.creativeStatus?.active ?? true} creativeGraceUntil={organizationContext.creativeStatus?.grace_until ?? null} onOpenGalleryTab={(gid) => openGalleryTab(gid, project.id)} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
+    if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={workMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} canReadContracts={canReadContracts} canWriteContracts={canWriteContracts} creativeActive={organizationContext.creativeStatus?.active ?? true} creativeGraceUntil={organizationContext.creativeStatus?.grace_until ?? null} onOpenGalleryTab={(gid) => openGalleryTab(gid, project.id)} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
     if (page === 'gallery') {
       // Het project leiden we uit de galerij zelf af: dat blijft kloppen ook als
       // de projectverwijzing van het tabblad ooit achterloopt.
@@ -3170,10 +3205,10 @@ function App() {
     if (page === 'shareholders') return <ShareholdersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'annual-accounts') return <AnnualAccountsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
-    if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={organizationContext.teamMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onPlanTaskTime={planTaskAtTime} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} onSetTaskEstimate={setTaskEstimate} onOpenProject={(id) => { setProjectId(id); setClientId(null); setPage('project'); }} onOpenCalendar={(dateKey) => { setCalendarJump(dateKey); setPage('calendar'); }} onSaveCapacity={savePlannerCapacity} onStopTimer={stopTimerForTask} onOpenTicket={(ticketId) => { const ticket = data.tickets.find(t => t.id === ticketId); if (ticket) setEdit({ kind: 'ticket', item: ticket }); }} onLinkTaskToEvent={linkTaskToEvent} onUnlinkTaskEvent={unlinkTaskEvent} onReserveTime={reserveTimeForTask}/>;
+    if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={workMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onPlanTaskTime={planTaskAtTime} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} onSetTaskEstimate={setTaskEstimate} onOpenProject={(id) => { setProjectId(id); setClientId(null); setPage('project'); }} onOpenCalendar={(dateKey) => { setCalendarJump(dateKey); setPage('calendar'); }} onSaveCapacity={savePlannerCapacity} onStopTimer={stopTimerForTask} onOpenTicket={(ticketId) => { const ticket = data.tickets.find(t => t.id === ticketId); if (ticket) setEdit({ kind: 'ticket', item: ticket }); }} onLinkTaskToEvent={linkTaskToEvent} onUnlinkTaskEvent={unlinkTaskEvent} onReserveTime={reserveTimeForTask}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" initialDate={calendarJump} key={calendarJump ?? 'today'} initialDraft={calendarDraft} onDraftConsumed={() => setCalendarDraft(null)} onMoveTask={(task, dayKey, startMin, endMin) => planTaskAtTime(task.id, dayKey, startMin, Math.max(15, endMin - startMin))} organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'meeting-booking') return <MeetingBookingManager organizationId={activeOrg.id} currentUserId={currentUserId ?? ''} data={data} canWrite={canWrite}/>;
-    if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={organizationContext.teamMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;
+    if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;
     if (page === 'stats') return <Statistics data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} openReportId={statsReportId} pendingReport={pendingReport}/>;
     if (page === 'archive') return <Archive data={data} onOpen={(id) => { setProjectId(id); setPage('project'); }} onRestore={async (project) => { if (!ensureCanWrite()) return; setError(null); try { await updateRow<Project>('projects', project.id, { archived: false }, activeOrg.id); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Herstellen mislukt'); } }}/>;
     if (page === 'settings') {

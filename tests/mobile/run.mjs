@@ -57,6 +57,9 @@ const PAGES = {
   'tickets-table': { page: 'tickets', storage: { 'resofly.tickets.view': 'table' } },
   quotes: 'quotes', invoices: 'invoices', contracts: 'contracts', ledger: 'ledger', bank: 'bank', pnl: 'pnl',
   'vat-returns': 'vat-returns', suppliers: 'suppliers', settings: 'settings', 'meeting-booking': 'meeting-booking', archive: 'archive',
+  // Instellingen → Boekhouder: de kaart met wat de gast wel en niet ziet staat
+  // op de telefoon onder elkaar.
+  'settings-boekhouder': { page: 'settings', prepare: '[data-settings-tab="boekhouder"]' },
   // Wat een klánt op zijn telefoon opent: geen werkruimte-shell, dus geen
   // chrome-grens; wel dezelfde fout- en overloopcontrole.
   'public-quote': { path: '/quote/demo-token' },

@@ -11,11 +11,13 @@
 
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { corsAllowOrigin, originRefusal } from './origins.ts';
+import { isOrganizationRole, isWriterRole, memberModuleLevel, type ModuleKey, type ModuleLevel, type OrganizationRole } from './roles.ts';
 
 // De regels voor toegestane origins staan in origins.ts (los te testen).
 export { normalizeOrigin, OPAQUE_ORIGIN, parseAllowedOrigins } from './origins.ts';
 
-export type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
+// De rollen en de regel per module staan in roles.ts (los te testen).
+export type { ModuleKey, ModuleLevel, OrganizationRole };
 export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 413 | 422 | 429 | 500 | 502;
 
 export class HttpError extends Error {
@@ -60,13 +62,14 @@ export async function requireOrganizationAccess(admin: SupabaseClient, userId: s
   const { data, error } = await admin.from('organization_members').select('role')
     .eq('organization_id', organizationId).eq('user_id', userId).eq('status', 'active').limit(1);
   if (error) throw new HttpError(`organization_members lookup mislukt: ${error.message}`, 500);
-  const role = data?.[0]?.role as OrganizationRole | undefined;
-  if (!role) throw new HttpError('Geen toegang tot deze organisatie.', 403);
+  const role = data?.[0]?.role as unknown;
+  // Een rol die de code niet kent, krijgt geen toegang — ook niet "even".
+  if (!isOrganizationRole(role)) throw new HttpError('Geen toegang tot deze organisatie.', 403);
   return role;
 }
 
 export function assertWriteRole(role: OrganizationRole): void {
-  if (!['owner', 'admin', 'member'].includes(role)) throw new HttpError('Geen schrijfrechten in deze organisatie.', 403);
+  if (!isWriterRole(role)) throw new HttpError('Geen schrijfrechten in deze organisatie.', 403);
 }
 
 // ── Modulerechten ────────────────────────────────────────────────────────────
@@ -79,20 +82,15 @@ export function assertWriteRole(role: OrganizationRole): void {
 // Deze helpers geven alleen het niveau terug; de aanroeper gooit zijn eigen
 // foutklasse, zodat de HTTP-status per functie klopt.
 
-export type ModuleKey =
-  | 'clients' | 'projects' | 'time' | 'calendar' | 'tickets'
-  | 'content' | 'stats' | 'marketing' | 'finance' | 'chat' | 'gerrie';
-
-export type ModuleLevel = 'none' | 'read' | 'write';
-
 export const MODULE_LABELS: Record<ModuleKey, string> = {
   clients: 'Klanten', projects: 'Projecten', time: 'Uren', calendar: 'Agenda',
   tickets: 'Tickets', content: 'Inhoud', stats: 'Statistieken',
   marketing: 'Marketing', finance: 'Financiën', chat: 'Teamchat', gerrie: 'Gerrie',
 };
 
-/** Exacte spiegel van `public.org_module_level`: owners/admins zijn nooit
- *  beperkt, een viewer nooit meer dan lezen, ontbrekende sleutel = volledig. */
+/** Spiegel van `public.org_module_level`, via de gedeelde regel in roles.ts:
+ *  owners/admins nooit beperkt, een viewer nooit meer dan lezen, de boekhouder
+ *  alleen Financiën lezen, en een onbekende rol niets. */
 export async function getModuleLevel(
   admin: SupabaseClient,
   userId: string,
@@ -105,11 +103,7 @@ export async function getModuleLevel(
   if (error) throw new HttpError(`organization_members lookup mislukt: ${error.message}`, 500);
   const row = data?.[0] as { role?: string; module_access?: Record<string, unknown> } | undefined;
   if (!row?.role) return 'none';
-  if (row.role === 'owner' || row.role === 'admin') return 'write';
-  const raw = row.module_access?.[module];
-  const stored: ModuleLevel = raw === 'none' || raw === 'read' || raw === 'write' ? raw : 'write';
-  if (row.role === 'viewer') return stored === 'none' ? 'none' : 'read';
-  return stored;
+  return memberModuleLevel(row.role, row.module_access, module);
 }
 
 /** Gooit een 403 wanneer het teamlid deze module niet op het vereiste niveau mag. */

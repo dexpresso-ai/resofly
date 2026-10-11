@@ -18,6 +18,7 @@ const MIGRATIONS = new URL('../../migrations/', import.meta.url);
 const migrationFiles = readdirSync(MIGRATIONS).filter((name) => name.endsWith('.sql')).sort();
 const migration = (name: string) => readFileSync(new URL(name, MIGRATIONS), 'utf8');
 const RECHECK = '20261003060000_recheck_audit_and_licenses.sql';
+const ACCOUNTANT = '20261011000000_accountant_guest_access.sql';
 
 /** De laatste definitie van een functie, over alle migraties heen. */
 function latestDefinition(fn: string): { file: string; body: string } {
@@ -91,10 +92,13 @@ test('een privé-agenda geeft in het auditlog geen titel prijs', () => {
 });
 
 test('de licentietelling werkt ook vanuit de server, en anders alleen voor leden', () => {
+  // Sinds de boekhouder (20261011000000) staat de laatste versie daar: dezelfde
+  // controle, met de boekhouder buiten de telling.
   const { file, body } = latestDefinition('organization_license_usage');
-  assert.equal(file, RECHECK);
+  assert.equal(file, ACCOUNTANT);
   assert.match(body, /if auth\.role\(\) is distinct from 'service_role' and not public\.can_read_org\(p_organization_id\) then\s+raise exception/);
-  const sql = migration(RECHECK);
+  assert.match(body, /om\.status = 'active' and om\.role <> 'accountant'/, 'een boekhouder neemt geen seat in');
+  const sql = migration(ACCOUNTANT);
   assert.match(sql, /revoke all on function public\.organization_license_usage\(uuid\) from public, anon;/);
   assert.match(sql, /grant execute on function public\.organization_license_usage\(uuid\) to authenticated, service_role;/);
 });

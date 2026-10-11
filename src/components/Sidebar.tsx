@@ -2,9 +2,9 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Inbox, Landmark, LayoutDashboard, Library, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
-import { SETTINGS_TABS, type SettingsTab } from '../features/SimplePages';
+import { SETTINGS_TABS, settingsTabRoleRule, type SettingsTab } from '../features/SimplePages';
 import { Select } from './Ui';
-import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
+import { FULL_PERMISSIONS, isAccountantRole, type Permissions } from '../lib/permissions';
 import { useTheme } from '../lib/theme';
 
 type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'pnl'|'vat-returns'|'corporate-tax'|'dga'|'shareholders'|'fiscal-years'|'annual-accounts'|'archive'|'settings'|'project'|'gallery';
@@ -175,10 +175,15 @@ export function Sidebar({
   // instellingenpagina zelf.
   const canAdmin = activeRole === 'owner' || activeRole === 'admin';
   const settingsTabs = SETTINGS_TABS.filter(tab => {
+    // Boekhouder: alleen de financiële tabbladen; Boekhouder-toegang: beheer.
+    const roleRule = settingsTabRoleRule(tab.id, activeRole);
+    if (roleRule !== null) return roleRule;
     if (tab.id === 'ai' || tab.id === 'api') return canAdmin;
     if (tab.id === 'agenda') return permissions.canRead('calendar');
     return true;
   });
+  // De rollen staan hier zoals ze in de database heten; de boekhouder in het Nederlands.
+  const roleLabel = isAccountantRole(activeRole) ? 'boekhouder' : activeRole ?? 'geen rol';
   const purchaseInboxTitle = `${purchaseInboxOpen} per e-mail binnengekomen inkoopfactu${purchaseInboxOpen === 1 ? 'ur' : 'ren'} met aandacht nodig`;
 
   // De badge op Berichten telt wat aandacht vraagt: ongelezen post én post die
@@ -254,14 +259,14 @@ export function Sidebar({
         </Select>
         {readOnly && <div className="sidebar-readonly"><Lock size={12} aria-hidden="true"/><span>Alleen lezen op deze pagina</span></div>}
         <div className="org-meta">
-          <span>{activeRole ?? 'geen rol'}</span>
+          <span>{roleLabel}</span>
           {onNewEntity && <button onClick={onNewEntity}>+ administratie</button>}
           <button onClick={onNewOrganization}>+ organisatie</button>
         </div>
       </div>
     </div>
     <nav className="sidebar-nav">
-      <GlobalSearch data={data} onNavigate={onSearchNavigate} />
+      <GlobalSearch data={data} onNavigate={onSearchNavigate} canOpenPage={permissions.canOpenPage} />
       {navGroups.map(group => {
         const visibleItems = group.items.filter(([key]) => canOpenNavItem(key, permissions));
         if (visibleItems.length === 0) return null;
@@ -421,7 +426,7 @@ export function Sidebar({
         <span className="user-avatar" aria-hidden="true">{accountInitials}</span>
         <span className="user-meta">
           <span className="user-name">{accountName}</span>
-          <span className="user-role">{activeRole ?? 'geen rol'}</span>
+          <span className="user-role">{roleLabel}</span>
         </span>
         <ChevronUp size={16} className="user-caret" aria-hidden="true"/>
       </button>

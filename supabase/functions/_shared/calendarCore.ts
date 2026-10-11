@@ -17,7 +17,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 
 export type Provider = 'google' | 'microsoft' | 'native' | 'ics';
 export type CalendarVisibility = 'private' | 'organization';
-export type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer';
+export type OrganizationRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant';
 
 export type CalendarSourceRow = {
   id: string;

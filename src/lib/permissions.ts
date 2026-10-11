@@ -9,8 +9,10 @@ import type { OrganizationRole } from '../types';
  * puur de beleving: zijbalk, pagina's en knoppen tonen niets waar het lid
  * toch niets mee kan.
  *
- * De regels hieronder zijn een exacte spiegel van `public.org_module_level`
- * in de database. Wijken ze af, dan volgt de database — dat is de waarheid.
+ * De regels hieronder zijn een exacte spiegel van `public.member_module_level`
+ * in de database (en van memberModuleLevel in supabase/functions/_shared/roles.ts;
+ * roles.test.ts houdt die twee gelijk). Wijken ze af, dan volgt de database —
+ * dat is de waarheid.
  */
 
 export type ModuleKey =
@@ -154,10 +156,24 @@ export interface Permissions {
   isRestricted: boolean;
 }
 
+/** Rollen die mogen wijzigen (als de module het ook toestaat). Een allowlist:
+ *  een viewer en de boekhouder wijzigen nergens. */
+export const WRITER_ROLES: OrganizationRole[] = ['owner', 'admin', 'member'];
+
+export function isWriterRole(role: OrganizationRole | null | undefined): boolean {
+  return Boolean(role && WRITER_ROLES.includes(role));
+}
+
+/** De boekhouder: een gast die alleen Financiën mag lezen. */
+export function isAccountantRole(role: OrganizationRole | null | undefined): boolean {
+  return role === 'accountant';
+}
+
 /**
- * Bepaal de effectieve rechten. Spiegel van `public.org_module_level`:
- * owners/admins zijn nooit beperkt, een viewer nooit meer dan lezen, en een
- * ontbrekende sleutel betekent volledige toegang.
+ * Bepaal de effectieve rechten. Spiegel van `public.member_module_level`:
+ * owners/admins zijn nooit beperkt, de boekhouder leest alleen Financiën, een
+ * viewer nooit meer dan lezen, bij een member betekent een ontbrekende sleutel
+ * volledige toegang, en een onbekende rol krijgt niets.
  */
 export function resolveModuleLevel(
   role: OrganizationRole | null | undefined,
@@ -166,9 +182,11 @@ export function resolveModuleLevel(
 ): ModuleLevel {
   if (!role) return 'none';
   if (role === 'owner' || role === 'admin') return 'write';
+  if (role === 'accountant') return module === 'finance' ? 'read' : 'none';
   const stored = access[module] ?? 'write';
   if (role === 'viewer') return stored === 'none' ? 'none' : 'read';
-  return stored;
+  if (role === 'member') return stored;
+  return 'none';
 }
 
 export function buildPermissions(membership: MembershipLike | null | undefined): Permissions {
@@ -187,9 +205,9 @@ export function buildPermissions(membership: MembershipLike | null | undefined):
       return module ? canRead(module) : Boolean(role);
     },
     canWritePage: (page: string) => {
-      // Een viewer schrijft nergens; pagina's zonder module (dashboard,
-      // instellingen) volgen verder de organisatiebrede rol.
-      if (!role || role === 'viewer') return false;
+      // Een viewer en de boekhouder schrijven nergens; pagina's zonder module
+      // (dashboard, instellingen) volgen verder de organisatiebrede rol.
+      if (!isWriterRole(role)) return false;
       const module = PAGE_MODULE[page];
       return module ? canWrite(module) : true;
     },
